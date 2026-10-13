@@ -636,3 +636,30 @@ func TestPptxCatalogueListsTheRustOnlyTools(t *testing.T) {
 		}
 	}
 }
+
+// The Rust-only tools are offered only where the Rust worker serves them: the
+// Python deployment marks the nineteen unavailable (the metadata mechanism a
+// partial family uses), the Rust deployment marks none.
+func TestPptxRustOnlyToolsAreWithheldOnAPythonDeployment(t *testing.T) {
+	t.Parallel()
+
+	unavailable := func(implementation string) []any {
+		body := getToolkitTypeCatalogue(t, catalogueOptions(t, implementation)...)
+		list, _ := metadataOf(t, body, "pptx")["unavailable_tools"].([]any)
+		return list
+	}
+	python := unavailable("python")
+	if len(python) != 19 {
+		t.Fatalf("python deployment withholds %d pptx tools, want the 19 Rust-only ones: %v", len(python), python)
+	}
+	for _, sdk := range []string{"fill_template", "translate_presentation"} {
+		for _, name := range python {
+			if name == sdk {
+				t.Errorf("the SDK tool %s must stay available on python", sdk)
+			}
+		}
+	}
+	if rust := unavailable("rust"); len(rust) != 0 {
+		t.Fatalf("rust deployment withholds pptx tools: %v", rust)
+	}
+}

@@ -16,9 +16,10 @@ use elitea_agent_runtime::platform::{
     ProjectContextWriteOutcome, ProjectContextWriteRequest, SkillWriteOutcome, SkillWriteRequest,
 };
 use elitea_agent_runtime::toolkits::{
-    ArtifactToolAuthority, OfficeModelRequest, OfficeToolHost,
+    ArtifactToolAuthority, OfficeFailure, OfficeModelRequest, OfficeToolHost,
     materialize_configured_toolsets_with_artifact_authority,
 };
+use elitea_connectors::source::Failure;
 use elitea_connectors::transport::{
     HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Transport, TransportError,
     header,
@@ -93,6 +94,7 @@ fn split_multipart(body: &[u8], boundary: &str) -> Option<(String, String, Vec<u
 }
 
 #[async_trait]
+#[allow(clippy::too_many_lines, reason = "a fake of one HTTP API")]
 impl Transport for ObjectApi {
     async fn execute(&self, request: Request) -> Result<Response, TransportError> {
         let url = request.url().clone();
@@ -119,6 +121,17 @@ impl Transport for ObjectApi {
             url.query().map(str::to_owned),
             auth,
         ));
+        // Buckets that answer a fixed status, for the classification table.
+        let fixed = match bucket.as_str() {
+            "typed" => Some(StatusCode::UNSUPPORTED_MEDIA_TYPE),
+            "invalid" => Some(StatusCode::UNPROCESSABLE_ENTITY),
+            "huge" => Some(StatusCode::PAYLOAD_TOO_LARGE),
+            "broken" => Some(StatusCode::INTERNAL_SERVER_ERROR),
+            _ => None,
+        };
+        if let Some(status) = fixed {
+            return Ok(Response::from_bytes(status, HeaderMap::new(), Vec::new()));
+        }
         if bucket == "locked" {
             return Ok(Response::from_bytes(
                 StatusCode::FORBIDDEN,
@@ -150,6 +163,16 @@ impl Transport for ObjectApi {
                     Vec::new(),
                 ));
             };
+            // A taken name is a 409 unless the write asked to replace it.
+            if store.objects.contains_key(&filename)
+                && url.query().is_none_or(|q| !q.contains("overwrite=true"))
+            {
+                return Ok(Response::from_bytes(
+                    StatusCode::CONFLICT,
+                    HeaderMap::new(),
+                    Vec::new(),
+                ));
+            }
             let size = data.len();
             store.objects.insert(filename.clone(), data);
             let mut headers = HeaderMap::new();
@@ -182,6 +205,19 @@ impl Transport for ObjectApi {
             bytes
         };
         Ok(Response::from_bytes(StatusCode::OK, headers, body))
+    }
+}
+
+struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for CaptureWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -257,6 +293,7 @@ async fn objects_are_read_and_written_as_bytes_under_the_claims_credential() {
             "q3/review.pptx",
             "application/octet-stream",
             bytes.clone(),
+            true,
         )
         .await
         .expect("written");
@@ -292,35 +329,38 @@ async fn objects_are_read_and_written_as_bytes_under_the_claims_credential() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines, reason = "one table of causes")]
 async fn failures_are_classified_and_a_large_object_is_never_buffered() {
     let api = ObjectApi::new();
     api.put("big.pptx", vec![7; 4096]);
+    api.put("taken.pptx", vec![1]);
     let (host, _) = host(&api, vec![]);
-    let code = |e: HostError| e.code();
+    let kind = |e: elitea_agent_runtime::toolkits::OfficeHostError| e.kind();
+    let any = "application/octet-stream";
     assert_eq!(
-        code(
+        kind(
             host.read_object("decks", "missing.pptx", 1 << 20)
                 .await
                 .expect_err("404")
         ),
-        HostErrorCode::NotFound
+        OfficeFailure::NotFound
     );
     assert_eq!(
-        code(
+        kind(
             host.read_object("locked", "a.pptx", 1 << 20)
                 .await
                 .expect_err("403")
         ),
-        HostErrorCode::AuthorizationFailed
+        OfficeFailure::AccessRefused
     );
     let before = api.log().len();
     assert_eq!(
-        code(
+        kind(
             host.read_object("decks", "big.pptx", 100)
                 .await
                 .expect_err("too big")
         ),
-        HostErrorCode::ResourceExhausted
+        OfficeFailure::TooLarge
     );
     let after: Vec<String> = api.log()[before..].iter().map(|r| r.0.clone()).collect();
     assert_eq!(after, ["HEAD"], "refused from the size alone, no GET");
@@ -334,23 +374,82 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
         "",
     ] {
         assert_eq!(
-            code(
-                host.write_object("decks", name, "application/octet-stream", vec![1])
+            kind(
+                host.write_object("decks", name, any, vec![1], true)
                     .await
                     .expect_err(name)
             ),
-            HostErrorCode::InvalidInput,
+            OfficeFailure::InvalidRequest,
             "{name:?}"
         );
     }
     assert!(api.get("a\"b.pptx").is_none());
-    assert_eq!(
-        code(
-            host.write_object("locked", "a.pptx", "application/octet-stream", vec![1])
+    // Each status of the object API is its own cause.
+    let write = |bucket: &'static str| {
+        let host = &host;
+        async move {
+            host.write_object(bucket, "n.pptx", any, vec![1], true)
                 .await
-                .expect_err("403")
-        ),
-        HostErrorCode::AuthorizationFailed
+        }
+    };
+    assert_eq!(
+        kind(write("locked").await.expect_err("403")),
+        OfficeFailure::AccessRefused
+    );
+    assert_eq!(
+        kind(write("typed").await.expect_err("415")),
+        OfficeFailure::UnsupportedType
+    );
+    assert_eq!(
+        kind(write("invalid").await.expect_err("422")),
+        OfficeFailure::InvalidRequest
+    );
+    assert_eq!(
+        kind(write("huge").await.expect_err("413")),
+        OfficeFailure::TooLarge
+    );
+    assert_eq!(
+        kind(write("broken").await.expect_err("500")),
+        OfficeFailure::Unreachable
+    );
+    // The caller's overwrite flag decides the query, and a 409 is "already exists".
+    let before = api.log().len();
+    let taken = host
+        .write_object("decks", "taken.pptx", any, vec![2], false)
+        .await;
+    assert_eq!(kind(taken.expect_err("409")), OfficeFailure::AlreadyExists);
+    assert_eq!(api.get("taken.pptx"), Some(vec![1]), "nothing was replaced");
+    assert_eq!(api.log()[before].2, None, "no overwrite query unless asked");
+    host.write_object("decks", "taken.pptx", any, vec![3], true)
+        .await
+        .expect("replaced when asked");
+    assert_eq!(api.get("taken.pptx"), Some(vec![3]));
+    assert_eq!(
+        api.log().last().expect("log").2.as_deref(),
+        Some("overwrite=true")
+    );
+    // Transport-level causes.
+    let refused = super::office_host::failure(&Failure::Refused);
+    assert_eq!(
+        refused.kind(),
+        OfficeFailure::AccessRefused,
+        "egress refused"
+    );
+    let client = super::office_host::failure(&Failure::Client("bad".into()));
+    assert_eq!(
+        client.kind(),
+        OfficeFailure::AccessRefused,
+        "unusable credential"
+    );
+    let down = super::office_host::failure(&Failure::Transport("reset".into()));
+    assert_eq!(down.kind(), OfficeFailure::Unreachable);
+    assert_eq!(
+        super::office_host::model_failure("the project model budget is exhausted").kind(),
+        OfficeFailure::BudgetRefused
+    );
+    assert_eq!(
+        super::office_host::model_failure("the model gateway timed out").kind(),
+        OfficeFailure::Unreachable
     );
 }
 
@@ -377,19 +476,49 @@ async fn the_model_call_sends_the_prompt_and_images_on_the_runs_model() {
     let reply = host
         .complete(OfficeModelRequest {
             prompt: "translate this".to_owned(),
-            images_png: vec![vec![0x89, b'P', b'N', b'G'], vec![0x89, b'P', b'N', b'G']],
+            images_png: std::sync::Arc::from(vec![
+                vec![0x89, b'P', b'N', b'G'],
+                vec![0x89, b'P', b'N', b'G'],
+            ]),
         })
         .await
         .expect("reply");
     assert_eq!(reply, "the reply");
     let seen = llm.1.lock().expect("seen").clone();
     assert_eq!(seen, [("translate this".to_owned(), 2)]);
-    // A binding that never succeeded is a fixed sentence, not a panic.
+    // No model bound at all (a pipeline node): a fixed sentence, not a panic,
+    // and no "model could not be bound" warning, which only a failed binding
+    // deserves.
     let runtime = Arc::new(OfficeRuntime::with_transport(
         ORIGIN,
         Arc::clone(&api) as Arc<dyn Transport>,
     ));
-    let unbound = ClaimOfficeHost::new(
+    let unbound =
+        ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
+    let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || CaptureWriter(writer.clone()))
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    let error = unbound
+        .complete(OfficeModelRequest::default())
+        .await
+        .expect_err("no model");
+    drop(guard);
+    let logged = String::from_utf8_lossy(&captured.lock().expect("log")).into_owned();
+    assert!(
+        !logged.contains("index_tools_stepback_model_unbound"),
+        "no index step-back warning for a run that binds no model: {logged}"
+    );
+    assert_eq!(error.kind(), OfficeFailure::NoModel);
+    // The capture works: a binding that FAILS is what that warning is for.
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        Arc::clone(&api) as Arc<dyn Transport>,
+    ));
+    let failing = ClaimOfficeHost::new(
         runtime,
         "pat",
         "42",
@@ -398,11 +527,21 @@ async fn the_model_call_sends_the_prompt_and_images_on_the_runs_model() {
         })),
     )
     .expect("host");
-    let error = unbound
-        .complete(OfficeModelRequest::default())
-        .await
-        .expect_err("no model");
-    assert_eq!(error.code(), HostErrorCode::InvalidConfiguration);
+    let guard = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_writer({
+                let writer = captured.clone();
+                move || CaptureWriter(writer.clone())
+            })
+            .finish(),
+    );
+    let _ = failing.complete(OfficeModelRequest::default()).await;
+    drop(guard);
+    let logged = String::from_utf8_lossy(&captured.lock().expect("log")).into_owned();
+    assert!(
+        logged.contains("index_tools_stepback_model_unbound"),
+        "{logged}"
+    );
 }
 
 struct NoPlatform;
@@ -498,7 +637,7 @@ async fn a_pptx_toolkit_round_trips_a_deck_through_the_worker_host() {
         created
             .as_str()
             .expect("sentence")
-            .starts_with("Created /decks/hello.pptx ("),
+            .starts_with("Created `hello.pptx` in bucket `decks` ("),
         "{created}"
     );
     let stored = api.get("hello.pptx").expect("stored by the host");

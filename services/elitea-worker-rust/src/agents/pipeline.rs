@@ -556,9 +556,7 @@ impl PipelineNativeAgentAssembler {
                         Arc::clone(runtime),
                         &context.model_facade_token(),
                         &context.resource_project_id().to_string(),
-                        crate::indexing::tools::LazyStepbackModel::new(Box::new(|| {
-                            Err(crate::transport::model_facade::ModelFacadeError::InvalidConfiguration)
-                        })),
+                        crate::indexing::tools::LazyStepbackModel::unbound(),
                     );
                     match host {
                         Ok(host) => authority.with_office(Arc::new(host)),

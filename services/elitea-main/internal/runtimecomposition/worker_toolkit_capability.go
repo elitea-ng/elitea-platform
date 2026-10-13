@@ -374,6 +374,17 @@ func (c *WorkerToolkitCapability) ForIndexingRuntime(config Config) *WorkerToolk
 // answer is yes, including a nil projection, for the reason
 // SupportsToolkitType gives.
 func (c *WorkerToolkitCapability) SupportsTool(toolkitType, toolName string) (bool, string) {
+	if c != nil && c.implementation == PythonWorkerImplementation {
+		// The tools only the Rust worker serves (ADR-0032 P3 pptx authoring)
+		// are merged into the pinned argument schemas, so the Python worker's
+		// catalogue would list them. Marked unavailable they stay out of reach
+		// of a selection on a deployment that cannot run them.
+		if _, rustOnly := rustOnlyToolkitToolNames()[toolkitType][toolName]; rustOnly {
+			return false, "This deployment's agent worker does not support the " +
+				toolName + " tool of the " + toolkitType + " toolkit; only the Rust worker serves it."
+		}
+		return true, ""
+	}
 	if c == nil || c.implementation != RustWorkerImplementation {
 		return true, ""
 	}

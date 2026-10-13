@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"sync"
 )
 
 // The tools the Rust worker serves that no SDK toolkit declares (ADR-0032 P3:
@@ -67,4 +68,31 @@ func applyRustOnlyToolkitTools(entries []currentToolkitSchemaSnapshotJSONEntry, 
 		}
 	}
 	return nil
+}
+
+var (
+	rustOnlyNamesOnce sync.Once
+	rustOnlyNames     map[string]map[string]struct{}
+)
+
+// rustOnlyToolkitToolNames is, per toolkit type, the set of tool names only the
+// Rust worker serves: what a Python deployment must mark unavailable in the
+// catalogue (WorkerToolkitCapability.SupportsTool), through the same
+// metadata.unavailable_tools mechanism a partial Rust family uses.
+func rustOnlyToolkitToolNames() map[string]map[string]struct{} {
+	rustOnlyNamesOnce.Do(func() {
+		rustOnlyNames = map[string]map[string]struct{}{}
+		var document rustOnlyToolkitToolsDocument
+		if json.Unmarshal(pinnedRustOnlyToolkitToolsJSON, &document) != nil {
+			return
+		}
+		for toolkitType, tools := range document.Types {
+			names := make(map[string]struct{}, len(tools))
+			for name := range tools {
+				names[name] = struct{}{}
+			}
+			rustOnlyNames[toolkitType] = names
+		}
+	})
+	return rustOnlyNames
 }

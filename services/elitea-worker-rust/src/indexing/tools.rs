@@ -87,6 +87,17 @@ impl LazyStepbackModel {
         }
     }
 
+    /// No model at all, and no binding attempt: a run that binds none (a
+    /// pipeline node) asks for it and is told so, without the "could not be
+    /// bound" warning that only a failed binding deserves.
+    #[must_use]
+    pub(crate) fn unbound() -> Self {
+        Self {
+            binder: None,
+            bound: OnceLock::new(),
+        }
+    }
+
     /// An already bound model.
     #[cfg(test)]
     #[must_use]

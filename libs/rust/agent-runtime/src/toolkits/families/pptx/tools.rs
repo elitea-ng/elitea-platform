@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use elitea_office_core::{Deck, Limits};
 use serde_json::{Map, Value, json};
 
-use crate::host::{HostError, HostErrorCode};
 use crate::toolkits::families::artifact::ArtifactToolAuthority;
 use crate::toolkits::families::office_host::{
-    MAX_OFFICE_OBJECT_BYTES, OfficeModelRequest, SharedOfficeToolHost,
+    MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError, OfficeModelRequest,
+    SharedOfficeToolHost,
 };
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
@@ -210,37 +210,60 @@ impl Tool for PptxToolImpl {
     }
 }
 
-/// A host failure as the model reads it.
-fn host_sentence(action: &str, error: &HostError) -> Sentence {
+/// A host failure as the model reads it: one sentence per real cause.
+pub(crate) fn host_sentence(action: &str, error: &OfficeHostError) -> Sentence {
     tracing::warn!(
         event = "pptx_tool_host_failed",
         reason_code = error.reason_code(),
         action,
         "a pptx tool's platform call failed"
     );
-    match error.code() {
-        HostErrorCode::AuthorizationFailed => format!(
-            "Could not {action}: this conversation is not allowed to use that bucket. Do not retry; tell the user."
-        ),
-        HostErrorCode::NotFound => {
-            format!(
-                "Could not {action}: no such file in the bucket. Check the name with list_files."
-            )
+    match error.kind() {
+        OfficeFailure::NotFound => {
+            format!("Could not {action}: no such file in the bucket. Check the file name.")
         }
-        HostErrorCode::InvalidConfiguration => format!(
+        OfficeFailure::AccessRefused => format!(
+            "Could not {action}: the platform refused access to the file store. Do not retry; tell the user."
+        ),
+        OfficeFailure::AlreadyExists => format!(
+            "Could not {action}: a file with that name already exists. Choose another name, or ask to replace it."
+        ),
+        OfficeFailure::UnsupportedType => format!(
+            "Could not {action}: the file store does not accept that type of file (a .pptx or an image is expected)."
+        ),
+        OfficeFailure::InvalidRequest => format!(
+            "Could not {action}: the file name or bucket is not valid, or the request was refused as invalid."
+        ),
+        OfficeFailure::TooLarge => {
+            format!("Could not {action}: the file is larger than the platform accepts.")
+        }
+        OfficeFailure::BudgetRefused => format!(
+            "Could not {action}: the model budget is exhausted. Do not retry; tell the user."
+        ),
+        OfficeFailure::NoModel => format!(
             "Could not {action}: this tool needs a chat model and none is bound in this run (a pipeline node binds none). Use list_placeholders and replace_placeholders with your own content, or run it from an agent."
         ),
-        HostErrorCode::InvalidInput | HostErrorCode::ResourceExhausted => format!(
-            "Could not {action}: the file is larger than this platform accepts or the model call was over budget."
-        ),
-        _ => format!(
+        OfficeFailure::Unreachable => format!(
             "Could not {action}: the platform could not be reached. Tell the user it did not happen."
         ),
     }
 }
 
-fn object_key(name: &str) -> Result<String, Sentence> {
-    let key = name.trim().trim_start_matches('/');
+/// The key a file is stored under: what the tool accepts as `file_name`. A
+/// leading slash is dropped, and so is a leading `/{bucket}/` of the
+/// toolkit's own bucket, so the path form the platform shows for a file works
+/// as the next call's name.
+fn object_key(bucket: &str, name: &str) -> Result<String, Sentence> {
+    let trimmed = name.trim();
+    let key = if let Some(rooted) = trimmed.strip_prefix('/') {
+        let rooted = rooted.trim_start_matches('/');
+        rooted
+            .strip_prefix(bucket)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .unwrap_or(rooted)
+    } else {
+        trimmed
+    };
     if key.is_empty() || key.len() > MAX_FILE_NAME_BYTES {
         return Err("The file name is empty or too long.".to_owned());
     }
@@ -250,6 +273,30 @@ fn object_key(name: &str) -> Result<String, Sentence> {
     Ok(key.to_owned())
 }
 
+/// A file the tool stored: the bucket and the key (the name every tool of the
+/// family accepts), named separately.
+struct Stored {
+    bucket: String,
+    key: String,
+    bytes: u64,
+}
+
+impl Stored {
+    fn said(&self) -> String {
+        format!(
+            "`{}` in bucket `{}` ({} bytes)",
+            self.key, self.bucket, self.bytes
+        )
+    }
+}
+
+/// The directory prefix of a key, with its trailing slash (empty for a file at
+/// the bucket's root): where an output with no name of its own goes, next to
+/// the source.
+fn directory_of(key: &str) -> &str {
+    key.rfind('/').map_or("", |i| &key[..=i])
+}
+
 fn stem(name: &str) -> &str {
     let file = name.rsplit('/').next().unwrap_or(name);
     file.rsplit_once('.').map_or(file, |(stem, _)| stem)
@@ -257,30 +304,42 @@ fn stem(name: &str) -> &str {
 
 impl PptxToolImpl {
     async fn read(&self, name: &str) -> Result<Vec<u8>, Sentence> {
-        let key = object_key(name)?;
+        let key = object_key(&self.bucket, name)?;
         self.host
             .read_object(&self.bucket, &key, MAX_OFFICE_OBJECT_BYTES)
             .await
             .map_err(|e| host_sentence(&format!("read `{key}`"), &e))
     }
 
-    /// Store `bytes` and return the path the model and the user open it by.
+    /// Store `bytes` and report where. `overwrite` is false only for a file
+    /// the caller must not replace by accident (`create_presentation`); every
+    /// other output is regenerated or an edit in place, and replaces.
     async fn write(
         &self,
         name: &str,
         media_type: &str,
         bytes: Vec<u8>,
-    ) -> Result<String, Sentence> {
-        let key = object_key(name)?;
+        overwrite: bool,
+    ) -> Result<Stored, OfficeHostError> {
+        let key = object_key(&self.bucket, name).map_err(|_| {
+            OfficeHostError::new(OfficeFailure::InvalidRequest, "office_host.invalid_name")
+        })?;
         let written = self
             .host
-            .write_object(&self.bucket, &key, media_type, bytes)
+            .write_object(&self.bucket, &key, media_type, bytes, overwrite)
+            .await?;
+        Ok(Stored {
+            bucket: written.bucket,
+            key: written.name,
+            bytes: written.byte_length,
+        })
+    }
+
+    /// `write`, the failure as the sentence the model reads.
+    async fn save(&self, name: &str, media_type: &str, bytes: Vec<u8>) -> Result<Stored, Sentence> {
+        self.write(name, media_type, bytes, true)
             .await
-            .map_err(|e| host_sentence(&format!("save `{key}`"), &e))?;
-        Ok(format!(
-            "/{}/{} ({} bytes)",
-            written.bucket, written.name, written.byte_length
-        ))
+            .map_err(|e| host_sentence(&format!("save `{name}`"), &e))
     }
 
     /// Run blocking document work off the async workers.
@@ -343,33 +402,12 @@ impl PptxToolImpl {
         let (message, saved) = self
             .blocking(move |limits| ops::run_edit(tool, &call, &bytes, image.as_deref(), limits))
             .await?;
-        let path = self.write(&output, PPTX_MEDIA_TYPE, saved).await?;
-        Ok(Value::String(format!("{message} Saved {path}.")))
+        let stored = self.save(&output, PPTX_MEDIA_TYPE, saved).await?;
+        Ok(Value::String(format!("{message} Saved {}.", stored.said())))
     }
 
     async fn create(&self, args: &Value) -> Result<Value, Sentence> {
         let file = ops::req_str(args, "file_name")?;
-        if !ops::opt_bool(args, "overwrite").unwrap_or(false) {
-            match self
-                .host
-                .read_object(&self.bucket, &object_key(&file)?, 1)
-                .await
-            {
-                // Over the 1-byte read cap means the file exists.
-                Ok(_) => {
-                    return Err(format!(
-                        "`{file}` already exists. Pass overwrite=true to replace it, or choose another name."
-                    ));
-                }
-                Err(e) if e.code() == HostErrorCode::ResourceExhausted => {
-                    return Err(format!(
-                        "`{file}` already exists. Pass overwrite=true to replace it, or choose another name."
-                    ));
-                }
-                Err(e) if e.code() == HostErrorCode::NotFound => {}
-                Err(e) => return Err(host_sentence("check whether the file exists", &e)),
-            }
-        }
         let (title, subtitle) = (ops::opt_str(args, "title"), ops::opt_str(args, "subtitle"));
         let saved = self
             .blocking(move |limits| {
@@ -402,8 +440,19 @@ impl PptxToolImpl {
                 ops::save(&deck)
             })
             .await?;
-        let path = self.write(&file, PPTX_MEDIA_TYPE, saved).await?;
-        Ok(Value::String(format!("Created {path}.")))
+        // The server refuses a taken name unless the caller asked to replace it.
+        let overwrite = ops::opt_bool(args, "overwrite").unwrap_or(false);
+        let stored = self
+            .write(&file, PPTX_MEDIA_TYPE, saved, overwrite)
+            .await
+            .map_err(|e| {
+                if e.kind() == OfficeFailure::AlreadyExists {
+                    format!("`{file}` already exists. Pass overwrite=true to replace it, or choose another name.")
+                } else {
+                    host_sentence(&format!("create `{file}`"), &e)
+                }
+            })?;
+        Ok(Value::String(format!("Created {}.", stored.said())))
     }
 
     // -- Deterministic halves ------------------------------------------------
@@ -445,10 +494,12 @@ impl PptxToolImpl {
         let (changed, unmatched, saved) = self
             .blocking(move |limits| ops::run_replace(&bytes, &replacements, limits))
             .await?;
-        let path = self.write(&output, PPTX_MEDIA_TYPE, saved).await?;
+        let stored = self.save(&output, PPTX_MEDIA_TYPE, saved).await?;
         Ok(json!({
             "status": "success",
-            "message": format!("Replaced text in {changed} place{}. Saved {path}.", if changed == 1 { "" } else { "s" }),
+            "message": format!("Replaced text in {changed} place{}. Saved {}.", if changed == 1 { "" } else { "s" }, stored.said()),
+            "file": stored.key,
+            "bucket": stored.bucket,
             "replacements_applied": changed,
             "keys_not_found": unmatched,
         }))
@@ -506,9 +557,17 @@ impl PptxToolImpl {
                 Ok((png, charts, slide))
             })
             .await?;
-        let output = ops::opt_str(args, "output_file_name")
-            .unwrap_or_else(|| format!("{}-slide-{}.png", stem(&file), slide + 1));
-        let path = self.write(&output, "image/png", png).await?;
+        // With no name of its own the preview goes next to the deck.
+        let output = ops::opt_str(args, "output_file_name").unwrap_or_else(|| {
+            let source = object_key(&self.bucket, &file).unwrap_or_else(|_| file.clone());
+            format!(
+                "{}{}-slide-{}.png",
+                directory_of(&source),
+                stem(&source),
+                slide + 1
+            )
+        });
+        let stored = self.save(&output, "image/png", png).await?;
         let mut note = String::from(
             "Approximate preview: charts are drawn as grey placeholders (their data is in `charts`), SVG pictures are not drawn, and fonts that are not bundled render with a substitute.",
         );
@@ -521,7 +580,9 @@ impl PptxToolImpl {
         Ok(json!({
             "status": "success",
             "slide": slide + 1,
-            "image": path,
+            "image": stored.key,
+            "bucket": stored.bucket,
+            "bytes": stored.bytes,
             "charts": charts,
             "note": note,
         }))
@@ -537,18 +598,25 @@ impl PptxToolImpl {
                     .map_err(|e| ops::office_sentence(&e))
             })
             .await?;
-        let output = ops::opt_str(args, "output_file_name")
-            .unwrap_or_else(|| format!("{}.pdf", stem(&file)));
-        let path = self.write(&output, "application/pdf", pdf).await?;
+        let output = ops::opt_str(args, "output_file_name").unwrap_or_else(|| {
+            let source = object_key(&self.bucket, &file).unwrap_or_else(|_| file.clone());
+            format!("{}{}.pdf", directory_of(&source), stem(&source))
+        });
+        let stored = self.save(&output, "application/pdf", pdf).await?;
         Ok(Value::String(format!(
-            "Exported {path}. The export is approximate: charts are drawn as placeholders and fonts that are not bundled render with a substitute."
+            "Exported {}. The export is approximate: charts are drawn as placeholders and fonts that are not bundled render with a substitute.",
+            stored.said()
         )))
     }
 
     // -- Model-calling tools -------------------------------------------------
 
     /// One model call, as the model-facing sentence on failure.
-    async fn ask(&self, prompt: String, images_png: Vec<Vec<u8>>) -> Result<String, Sentence> {
+    async fn ask(
+        &self,
+        prompt: String,
+        images_png: std::sync::Arc<[Vec<u8>]>,
+    ) -> Result<String, Sentence> {
         self.host
             .complete(OfficeModelRequest { prompt, images_png })
             .await
@@ -596,7 +664,7 @@ impl PptxToolImpl {
                         }
                     }
                 }
-                Ok((unique, locations.len(), ops::slide_count(deck)?, images))
+                Ok((unique, locations.len(), ops::slide_count(deck)?, std::sync::Arc::<[Vec<u8>]>::from(images)))
             })
             .await?;
         if total_locations == 0 {
@@ -609,10 +677,23 @@ impl PptxToolImpl {
         let mut content: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         let batches = texts.len().div_ceil(batch_size);
-        for batch in texts.chunks(batch_size) {
-            let reply = self
-                .ask(model::fill_prompt(batch, &description), images.clone())
-                .await?;
+        let no_images: std::sync::Arc<[Vec<u8>]> = std::sync::Arc::from(Vec::new());
+        for (n, batch) in texts.chunks(batch_size).enumerate() {
+            // The slide images go with the first batch only: they are the same
+            // for every batch, so sending them again would only repeat their
+            // tokens. Later batches say they were given.
+            let (prompt, sent) = if n == 0 || images.is_empty() {
+                (model::fill_prompt(batch, &description), images.clone())
+            } else {
+                (
+                    format!(
+                        "{}\n\n(The images of the template's slides were given with the first batch of this request.)",
+                        model::fill_prompt(batch, &description)
+                    ),
+                    std::sync::Arc::clone(&no_images),
+                )
+            };
+            let reply = self.ask(prompt, sent).await?;
             // Only this batch's own keys are taken: a key the model returns
             // that belongs to another batch (or to none) never overwrites.
             let mut parsed = model::parse_fill_reply(&reply, batch);
@@ -647,7 +728,7 @@ impl PptxToolImpl {
                 Ok((frames, cells, skipped, saved))
             })
             .await?;
-        let path = self.write(&output, PPTX_MEDIA_TYPE, saved).await?;
+        let stored = self.save(&output, PPTX_MEDIA_TYPE, saved).await?;
         let mut stats = Map::new();
         stats.insert("unique_placeholders".into(), texts.len().into());
         stats.insert("total_placeholder_locations".into(), total_locations.into());
@@ -669,7 +750,8 @@ impl PptxToolImpl {
                 "Successfully filled {} unique placeholders ({total_locations} total locations) across {slide_count} slides. Saved as {output}",
                 texts.len()
             ),
-            "url": path,
+            "url": stored.key,
+            "bucket": stored.bucket,
             "stats": Value::Object(stats),
         }))
     }
@@ -700,7 +782,10 @@ impl PptxToolImpl {
         let mut pending: Vec<String> = Vec::new();
         for batch in unique.chunks(TRANSLATE_BATCH) {
             let reply = self
-                .ask(model::translate_prompt(batch, &language, start), Vec::new())
+                .ask(
+                    model::translate_prompt(batch, &language, start),
+                    std::sync::Arc::from(Vec::new()),
+                )
                 .await?;
             for (text, done) in batch
                 .iter()
@@ -719,7 +804,10 @@ impl PptxToolImpl {
         // missing keeps its original text and is reported.
         for batch in std::mem::take(&mut pending).chunks(TRANSLATE_BATCH) {
             let reply = self
-                .ask(model::translate_prompt(batch, &language, start), Vec::new())
+                .ask(
+                    model::translate_prompt(batch, &language, start),
+                    std::sync::Arc::from(Vec::new()),
+                )
                 .await?;
             for (text, done) in batch
                 .iter()
@@ -746,14 +834,15 @@ impl PptxToolImpl {
                 ops::finish_edit(&opened, limits, &ops::Check::default())
             })
             .await?;
-        let path = self.write(&output, PPTX_MEDIA_TYPE, saved).await?;
+        let stored = self.save(&output, PPTX_MEDIA_TYPE, saved).await?;
         if untranslated > 0 {
             return Ok(json!({
                 "status": "partial",
                 "message": format!(
                     "Partially translated presentation to {language} and saved as {output}: {untranslated} of {total} paragraphs could not be translated and keep their original text."
                 ),
-                "url": path,
+                "url": stored.key,
+                "bucket": stored.bucket,
                 "untranslated_paragraphs": untranslated,
                 "translated_paragraphs": total - untranslated,
             }));
@@ -761,7 +850,8 @@ impl PptxToolImpl {
         Ok(json!({
             "status": "success",
             "message": format!("Successfully translated presentation to {language} and saved as {output}"),
-            "url": path,
+            "url": stored.key,
+            "bucket": stored.bucket,
         }))
     }
 }

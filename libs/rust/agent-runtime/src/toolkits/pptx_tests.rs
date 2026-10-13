@@ -14,13 +14,14 @@ use serde_json::{Map, Value, json};
 
 use super::families::artifact::ArtifactToolAuthority;
 use super::families::office_host::{
-    OfficeModelRequest, OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
+    OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
+    SharedOfficeToolHost,
 };
 use super::families::pptx::config::{PptxConfigErrorCode, PptxToolkitConfig};
 use super::families::pptx::model;
 use super::families::pptx::ops;
 use super::families::pptx::schema::{ALL_TOOLS, PptxTool};
-use super::families::pptx::tools::{build_pptx_toolset, build_with_host};
+use super::families::pptx::tools::{build_pptx_toolset, build_with_host, host_sentence};
 use super::materialize::materialize_configured_toolsets_with_artifact_authority;
 use super::policy::ToolAdmissionPolicy;
 use super::sdk_conformance;
@@ -44,8 +45,10 @@ const TINY_PNG: &[u8] = &[
 #[derive(Default)]
 struct FakeHost {
     objects: Mutex<BTreeMap<(String, String), Vec<u8>>>,
-    replies: Mutex<VecDeque<Result<String, HostError>>>,
+    replies: Mutex<VecDeque<Result<String, OfficeHostError>>>,
     requests: Mutex<Vec<OfficeModelRequest>>,
+    /// Every write: the name and whether it asked to overwrite.
+    writes: Mutex<Vec<(String, bool)>>,
     unreachable: bool,
 }
 
@@ -80,11 +83,11 @@ impl FakeHost {
             .push_back(Ok(text.to_owned()));
     }
 
-    fn fail_model(&self, code: HostErrorCode) {
+    fn fail_model(&self, kind: OfficeFailure) {
         self.replies
             .lock()
             .expect("replies")
-            .push_back(Err(HostError::new(code, "scripted")));
+            .push_back(Err(OfficeHostError::new(kind, "scripted")));
     }
 
     fn model_calls(&self) -> Vec<OfficeModelRequest> {
@@ -99,16 +102,16 @@ impl OfficeToolHost for FakeHost {
         bucket: &str,
         name: &str,
         max_bytes: u64,
-    ) -> Result<Vec<u8>, HostError> {
+    ) -> Result<Vec<u8>, OfficeHostError> {
         if self.unreachable {
-            return Err(HostError::new(HostErrorCode::DependencyUnavailable, "down"));
+            return Err(OfficeHostError::new(OfficeFailure::Unreachable, "down"));
         }
         let objects = self.objects.lock().expect("objects");
         let bytes = objects
             .get(&(bucket.to_owned(), name.to_owned()))
-            .ok_or_else(|| HostError::new(HostErrorCode::NotFound, "missing"))?;
+            .ok_or_else(|| OfficeHostError::new(OfficeFailure::NotFound, "missing"))?;
         if bytes.len() as u64 > max_bytes {
-            return Err(HostError::new(HostErrorCode::ResourceExhausted, "big"));
+            return Err(OfficeHostError::new(OfficeFailure::TooLarge, "big"));
         }
         Ok(bytes.clone())
     }
@@ -119,12 +122,19 @@ impl OfficeToolHost for FakeHost {
         name: &str,
         media_type: &str,
         bytes: Vec<u8>,
-    ) -> Result<OfficeObjectWritten, HostError> {
+        overwrite: bool,
+    ) -> Result<OfficeObjectWritten, OfficeHostError> {
         let byte_length = bytes.len() as u64;
-        self.objects
+        let mut objects = self.objects.lock().expect("objects");
+        let slot = (bucket.to_owned(), name.to_owned());
+        self.writes
             .lock()
-            .expect("objects")
-            .insert((bucket.to_owned(), name.to_owned()), bytes);
+            .expect("writes")
+            .push((name.to_owned(), overwrite));
+        if !overwrite && objects.contains_key(&slot) {
+            return Err(OfficeHostError::new(OfficeFailure::AlreadyExists, "taken"));
+        }
+        objects.insert(slot, bytes);
         Ok(OfficeObjectWritten {
             bucket: bucket.to_owned(),
             name: name.to_owned(),
@@ -133,18 +143,13 @@ impl OfficeToolHost for FakeHost {
         })
     }
 
-    async fn complete(&self, request: OfficeModelRequest) -> Result<String, HostError> {
+    async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError> {
         self.requests.lock().expect("requests").push(request);
         self.replies
             .lock()
             .expect("replies")
             .pop_front()
-            .unwrap_or_else(|| {
-                Err(HostError::new(
-                    HostErrorCode::DependencyUnavailable,
-                    "no reply",
-                ))
-            })
+            .unwrap_or_else(|| Err(OfficeHostError::new(OfficeFailure::Unreachable, "no reply")))
     }
 }
 
@@ -511,7 +516,10 @@ async fn a_deck_is_authored_edited_read_previewed_and_exported() {
             json!({"file_name": "q3.pptx", "title": "Q3 review", "subtitle": "Finance"}),
         )
         .await;
-    assert!(out.starts_with("Created /bucket/q3.pptx ("), "{out}");
+    assert!(
+        out.starts_with("Created `q3.pptx` in bucket `bucket` ("),
+        "{out}"
+    );
     // It will not replace a file unless asked.
     let again = rig
         .text("create_presentation", json!({"file_name": "q3.pptx"}))
@@ -741,10 +749,8 @@ async fn a_deck_is_authored_edited_read_previewed_and_exported() {
         )
         .await;
     assert_eq!(preview["status"], "success", "{preview}");
-    assert_eq!(
-        preview["image"].as_str().expect("path").split(" (").next(),
-        Some("/bucket/q3-slide-2.png")
-    );
+    assert_eq!(preview["image"], "q3-slide-2.png");
+    assert_eq!(preview["bucket"], "bucket");
     assert!(rig.host.get("q3-slide-2.png").starts_with(b"\x89PNG"));
     // Slide 2 carries the table, the chart and the picture.
     let with_chart = &preview;
@@ -780,7 +786,10 @@ async fn a_deck_is_authored_edited_read_previewed_and_exported() {
     let pdf = rig
         .text("export_pdf", json!({"file_name": "q3.pptx"}))
         .await;
-    assert!(pdf.starts_with("Exported /bucket/q3.pdf"), "{pdf}");
+    assert!(
+        pdf.starts_with("Exported `q3.pdf` in bucket `bucket`"),
+        "{pdf}"
+    );
     assert!(rig.host.get("q3.pdf").starts_with(b"%PDF"));
 
     // Output to another name leaves the source alone.
@@ -806,7 +815,7 @@ async fn apply_theme_works_on_a_plain_deck_and_set_notes_refuses_to_lose_content
         .text("apply_theme", json!({"file_name": "p.pptx", "accent": "C00000", "heading_font": "Georgia", "colors": {"dk2": "1F3864"}}))
         .await;
     assert!(
-        done.starts_with("Applied the theme. Saved /bucket/p.pptx"),
+        done.starts_with("Applied the theme. Saved `p.pptx` in bucket `bucket`"),
         "{done}"
     );
     assert!(rig.markdown("p.pptx").contains("Plain"));
@@ -1066,10 +1075,8 @@ async fn fill_template_batches_calls_the_model_and_writes_the_sdk_result() {
         )
         .await;
     assert_eq!(result["status"], "success", "{result}");
-    assert_eq!(
-        result["url"].as_str().expect("url").split(" (").next(),
-        Some("/bucket/out.pptx")
-    );
+    assert_eq!(result["url"], "out.pptx");
+    assert_eq!(result["bucket"], "bucket");
     assert_eq!(
         result["message"],
         "Successfully filled 3 unique placeholders (3 total locations) across 2 slides. Saved as out.pptx"
@@ -1167,7 +1174,7 @@ async fn fill_template_never_leaves_a_marker_silently_and_names_failures() {
     assert!(!rig.host.has("p2.pptx"));
 
     // A model failure, a missing file and a corrupt file are error results.
-    rig.host.fail_model(HostErrorCode::ResourceExhausted);
+    rig.host.fail_model(OfficeFailure::BudgetRefused);
     let budget = rig
         .call(
             "fill_template",
@@ -1264,10 +1271,7 @@ async fn translate_presentation_translates_every_paragraph_and_cell() {
         result["message"],
         "Successfully translated presentation to Spanish and saved as es.pptx"
     );
-    assert_eq!(
-        result["url"].as_str().expect("url").split(" (").next(),
-        Some("/bucket/es.pptx")
-    );
+    assert_eq!(result["url"], "es.pptx");
     let md = rig.markdown("es.pptx");
     for needle in [
         "Hola {{name}}, bienvenido",
@@ -1615,36 +1619,99 @@ async fn bullets_and_titles_reach_the_file_on_slides_that_have_no_placeholder_fo
 }
 
 #[test]
-fn a_content_edit_that_is_not_in_the_saved_file_is_refused() {
+fn a_content_edit_is_judged_on_its_target_slide() {
     let l = test_limits();
     let mut d = Deck::new(&l);
-    let s = d.add_slide(SlideLayout::Blank).unwrap();
-    d.add_text(s, "present", Rect::inches(1.0, 1.0, 3.0, 1.0))
+    let s0 = d.add_slide(SlideLayout::Blank).unwrap();
+    let s1 = d.add_slide(SlideLayout::Blank).unwrap();
+    d.add_text(s1, "Present on two", Rect::inches(1.0, 1.0, 3.0, 1.0))
+        .unwrap();
+    d.add_text(s0, "Anchor", Rect::inches(1.0, 1.0, 3.0, 1.0))
         .unwrap();
     let facts = elitea_office_core::facts_of_package(&d.save().unwrap(), &l).unwrap();
-    let before = ops::Inventory::of(&facts);
-    let expect = |tool, args: Value| ops::expected_gain(tool, &args);
-    // What is there passes, whatever the Markdown does to punctuation.
-    ops::check_expect(
+    let expect = |tool, args: Value, slides| ops::expected_gain(tool, &args, slides);
+    // The words are on slide 2, and an add_bullets that did nothing on slide 1
+    // (before == after) is refused: the same words elsewhere prove nothing.
+    let no_op = ops::check_expect(
         &facts,
-        &before,
-        &expect(PptxTool::SetText, json!({"text": "Present!"})),
-    )
-    .unwrap();
-    // What is not there is named, and so is a table that did not arrive.
-    let missing = ops::check_expect(
         &facts,
-        &before,
-        &expect(PptxTool::AddBullets, json!({"items": ["absent"]})),
+        &expect(
+            PptxTool::AddBullets,
+            json!({"slide": 1, "items": ["Present on two"]}),
+            2,
+        ),
     )
     .unwrap_err();
     assert!(
-        missing.starts_with("The text did not appear on the slide"),
-        "{missing}"
+        no_op.starts_with("The text did not appear on the slide"),
+        "{no_op}"
     );
-    let table =
-        ops::check_expect(&facts, &before, &expect(PptxTool::AddTable, json!({}))).unwrap_err();
+    // On the slide that has them it passes, whatever punctuation does.
+    ops::check_expect(
+        &facts,
+        &facts,
+        &expect(
+            PptxTool::AddBullets,
+            json!({"slide": 2, "items": ["Present on two!"]}),
+            2,
+        ),
+    )
+    .unwrap();
+    // A text box added with text already on the slide must be NEW there: the
+    // count has to go up.
+    let unchanged = ops::check_expect(
+        &facts,
+        &facts,
+        &expect(
+            PptxTool::SetText,
+            json!({"slide": 2, "text": "Present on two"}),
+            2,
+        ),
+    )
+    .unwrap_err();
+    assert!(unchanged.contains("did not appear"), "{unchanged}");
+    // Replacing the text of a named shape is judged on that shape.
+    let named = ops::check_expect(
+        &facts,
+        &facts,
+        &expect(
+            PptxTool::SetText,
+            json!({"slide": 1, "shape": 1, "text": "Present on two"}),
+            2,
+        ),
+    )
+    .unwrap_err();
+    assert!(named.contains("did not appear"), "{named}");
+    ops::check_expect(
+        &facts,
+        &facts,
+        &expect(
+            PptxTool::SetText,
+            json!({"slide": 1, "shape": 1, "text": "Anchor"}),
+            2,
+        ),
+    )
+    .unwrap();
+    // A table that did not arrive on its slide.
+    let table = ops::check_expect(
+        &facts,
+        &facts,
+        &expect(PptxTool::AddTable, json!({"slide": 2}), 2),
+    )
+    .unwrap_err();
     assert!(table.contains("did not save what was added"), "{table}");
+    // A slide added with a title is judged on the new slide alone (it has no
+    // "before"): slide 1 has no such title, so the add did not land.
+    let added = ops::check_expect(
+        &facts,
+        &facts,
+        &expect(
+            PptxTool::AddSlide,
+            json!({"title": "Present on two", "position": 1}),
+            2,
+        ),
+    );
+    assert!(added.is_err(), "{added:?}");
 }
 
 // -- Review round 1 ----------------------------------------------------------
@@ -2064,7 +2131,7 @@ async fn a_translated_cell_keeps_its_paragraphs_and_its_empty_lines() {
 async fn model_tools_say_plainly_when_no_model_is_bound() {
     let rig = Rig::new().await;
     rig.host.put("t.pptx", one_box("{{x}}"));
-    rig.host.fail_model(HostErrorCode::InvalidConfiguration);
+    rig.host.fail_model(OfficeFailure::NoModel);
     let result = rig
         .call("fill_template", json!({"file_name": "t.pptx", "output_file_name": "o.pptx", "content_description": "d"}))
         .await;
@@ -2115,4 +2182,258 @@ fn the_ui_catalogue_lists_every_tool_the_family_serves() {
         );
         assert_eq!(in_doc.contains(&tool.name()), !sdk, "{}", tool.name());
     }
+}
+
+// -- Review round 2 ------------------------------------------------------------
+
+/// Finding 2 and 6: each real cause has its own sentence, and none points at a
+/// tool the toolkit may not have.
+#[test]
+fn every_host_failure_has_its_own_sentence() {
+    let cases = [
+        (OfficeFailure::NotFound, "no such file in the bucket"),
+        (
+            OfficeFailure::AccessRefused,
+            "refused access to the file store",
+        ),
+        (OfficeFailure::AlreadyExists, "already exists"),
+        (
+            OfficeFailure::UnsupportedType,
+            "does not accept that type of file",
+        ),
+        (
+            OfficeFailure::InvalidRequest,
+            "file name or bucket is not valid",
+        ),
+        (OfficeFailure::TooLarge, "larger than the platform accepts"),
+        (OfficeFailure::BudgetRefused, "model budget is exhausted"),
+        (OfficeFailure::NoModel, "needs a chat model"),
+        (OfficeFailure::Unreachable, "could not be reached"),
+    ];
+    let mut seen = std::collections::HashSet::new();
+    for (kind, needle) in cases {
+        let sentence = host_sentence("do it", &OfficeHostError::new(kind, "test"));
+        assert!(sentence.starts_with("Could not do it:"), "{sentence}");
+        assert!(sentence.contains(needle), "{kind:?}: {sentence}");
+        assert!(!sentence.contains("list_files"), "{kind:?}: {sentence}");
+        assert!(
+            seen.insert(sentence),
+            "{kind:?} shares its sentence with another cause"
+        );
+    }
+    // Only the missing-model cause talks about pipelines.
+    for (kind, _) in cases {
+        let sentence = host_sentence("x", &OfficeHostError::new(kind, "t"));
+        assert_eq!(
+            sentence.contains("pipeline"),
+            kind == OfficeFailure::NoModel,
+            "{sentence}"
+        );
+    }
+}
+
+/// Finding 3: the name a tool reports is a name the next call accepts, with
+/// the bucket named separately; the path form works too.
+#[tokio::test]
+async fn a_reported_name_works_as_the_next_file_name() {
+    let rig = Rig::new().await;
+    let created = rig
+        .text(
+            "create_presentation",
+            json!({"file_name": "clients/acme/q3.pptx", "title": "Q3"}),
+        )
+        .await;
+    assert!(
+        created.starts_with("Created `clients/acme/q3.pptx` in bucket `bucket` ("),
+        "{created}"
+    );
+    // The reported key, the leading-slash form and the `/bucket/key` form all
+    // address the same file.
+    for name in [
+        "clients/acme/q3.pptx",
+        "/clients/acme/q3.pptx",
+        "/bucket/clients/acme/q3.pptx",
+    ] {
+        let md = rig.text("to_markdown", json!({"file_name": name})).await;
+        assert!(md.contains("Q3"), "{name}: {md}");
+    }
+    // Another bucket's prefix is not stripped: it is part of the key.
+    let other = rig
+        .text(
+            "to_markdown",
+            json!({"file_name": "/other/clients/acme/q3.pptx"}),
+        )
+        .await;
+    assert!(other.contains("no such file"), "{other}");
+    // An edit's report names the key, and that key is the next input.
+    let edited = rig
+        .text(
+            "set_notes",
+            json!({"file_name": "/bucket/clients/acme/q3.pptx", "slide": 1, "notes": "n"}),
+        )
+        .await;
+    assert!(
+        edited.contains("`clients/acme/q3.pptx` in bucket `bucket`"),
+        "{edited}"
+    );
+    let preview = rig
+        .call(
+            "render_preview",
+            json!({"file_name": "clients/acme/q3.pptx"}),
+        )
+        .await;
+    let key = preview["image"].as_str().expect("image key").to_owned();
+    assert!(rig.host.has(&key), "{key}");
+    assert_eq!(preview["bucket"], "bucket");
+}
+
+/// Finding 5: a taken name is refused unless the caller asked to replace it,
+/// and the host is told so; outputs that replace by contract say so.
+#[tokio::test]
+async fn create_presentation_does_not_overwrite_unless_asked() {
+    let rig = Rig::new().await;
+    rig.text(
+        "create_presentation",
+        json!({"file_name": "a.pptx", "title": "one"}),
+    )
+    .await;
+    let again = rig
+        .text(
+            "create_presentation",
+            json!({"file_name": "a.pptx", "title": "two"}),
+        )
+        .await;
+    assert!(
+        again.contains("already exists") && again.contains("overwrite=true"),
+        "{again}"
+    );
+    assert!(rig.markdown("a.pptx").contains("one") && !rig.markdown("a.pptx").contains("two"));
+    rig.text(
+        "create_presentation",
+        json!({"file_name": "a.pptx", "title": "three", "overwrite": true}),
+    )
+    .await;
+    assert!(rig.markdown("a.pptx").contains("three"));
+    rig.text(
+        "set_notes",
+        json!({"file_name": "a.pptx", "slide": 1, "notes": "n"}),
+    )
+    .await;
+    let writes = rig.host.writes.lock().unwrap().clone();
+    // create (new), create (taken), create (asked), then the edit in place.
+    assert_eq!(
+        writes,
+        [
+            ("a.pptx".to_owned(), false),
+            ("a.pptx".to_owned(), false),
+            ("a.pptx".to_owned(), true),
+            ("a.pptx".to_owned(), true),
+        ]
+    );
+}
+
+/// Finding 7: outputs with no name of their own go next to the source.
+#[tokio::test]
+async fn default_outputs_go_next_to_the_source() {
+    let rig = Rig::new().await;
+    rig.text(
+        "create_presentation",
+        json!({"file_name": "clients/acme/q3.pptx", "title": "Q3"}),
+    )
+    .await;
+    let preview = rig
+        .call(
+            "render_preview",
+            json!({"file_name": "clients/acme/q3.pptx"}),
+        )
+        .await;
+    assert_eq!(preview["image"], "clients/acme/q3-slide-1.png");
+    let pdf = rig
+        .text("export_pdf", json!({"file_name": "clients/acme/q3.pptx"}))
+        .await;
+    assert!(
+        pdf.starts_with("Exported `clients/acme/q3.pdf` in bucket"),
+        "{pdf}"
+    );
+    assert!(rig.host.has("clients/acme/q3.pdf") && rig.host.has("clients/acme/q3-slide-1.png"));
+    // A source at the bucket's root keeps its outputs there; an explicit name wins.
+    rig.text(
+        "create_presentation",
+        json!({"file_name": "root.pptx", "title": "R"}),
+    )
+    .await;
+    let root = rig
+        .call("render_preview", json!({"file_name": "root.pptx"}))
+        .await;
+    assert_eq!(root["image"], "root-slide-1.png");
+    let named = rig
+        .call(
+            "render_preview",
+            json!({"file_name": "root.pptx", "output_file_name": "elsewhere/p.png"}),
+        )
+        .await;
+    assert_eq!(named["image"], "elsewhere/p.png");
+}
+
+/// Finding 8: the template's slide images go with the first batch only; the
+/// later batches say they were given.
+#[tokio::test]
+async fn slide_images_are_sent_with_the_first_batch_only() {
+    let rig = Rig::new().await;
+    let mut d = Deck::new(&test_limits());
+    for text in ["{{a}}", "{{b}}", "{{c}}"] {
+        let s = d.add_slide(SlideLayout::Blank).unwrap();
+        d.add_text(s, text, Rect::inches(1.0, 1.0, 3.0, 1.0))
+            .unwrap();
+    }
+    rig.host.put(
+        "t.pptx",
+        Deck::open(&d.save().unwrap(), &test_limits())
+            .unwrap()
+            .save()
+            .unwrap(),
+    );
+    for key in ["{{a}}", "{{b}}", "{{c}}"] {
+        rig.host
+            .reply(&json!([{"key": key, "content": "x"}]).to_string());
+    }
+    let result = rig
+        .call(
+            "fill_template",
+            json!({"file_name": "t.pptx", "output_file_name": "o.pptx",
+               "content_description": "d", "batch_size": 1, "pdf_file_name": "t.pdf"}),
+        )
+        .await;
+    assert_eq!(result["status"], "success", "{result}");
+    assert_eq!(result["stats"]["visual_context_slides"], 3);
+    let calls = rig.host.model_calls();
+    let counts: Vec<usize> = calls.iter().map(|c| c.images_png.len()).collect();
+    assert_eq!(counts, [3, 0, 0], "images ride with the first batch only");
+    assert!(!calls[0].prompt.contains("given with the first batch"));
+    for later in &calls[1..] {
+        assert!(
+            later
+                .prompt
+                .contains("images of the template's slides were given with the first batch")
+        );
+    }
+    // Without a named PDF no batch has images and none has the note.
+    rig.host.replies.lock().unwrap().clear();
+    rig.host.requests.lock().unwrap().clear();
+    for key in ["{{a}}", "{{b}}", "{{c}}"] {
+        rig.host
+            .reply(&json!([{"key": key, "content": "x"}]).to_string());
+    }
+    rig.call(
+        "fill_template",
+        json!({"file_name": "t.pptx", "output_file_name": "p.pptx",
+             "content_description": "d", "batch_size": 1}),
+    )
+    .await;
+    assert!(
+        rig.host
+            .model_calls()
+            .iter()
+            .all(|c| c.images_png.is_empty() && !c.prompt.contains("given with the first batch"))
+    );
 }

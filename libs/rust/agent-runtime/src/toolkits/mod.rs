@@ -179,8 +179,8 @@ pub use families::index_tools::{
     SharedIndexCatalog, is_index_family, is_sdk_index_tool_name,
 };
 pub use families::office_host::{
-    MAX_OFFICE_OBJECT_BYTES, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
-    SharedOfficeToolHost,
+    MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError, OfficeModelRequest,
+    OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
 };
 pub use materialize::{
     ConfiguredToolsets, RefusedToolkit, ToolsetMaterializationError,

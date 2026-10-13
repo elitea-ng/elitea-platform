@@ -21,12 +21,13 @@ use std::sync::Arc;
 
 use adk_rust::Part;
 use async_trait::async_trait;
-use elitea_agent_runtime::host::{HostError, HostErrorCode};
-use elitea_agent_runtime::toolkits::{OfficeModelRequest, OfficeObjectWritten, OfficeToolHost};
+use elitea_agent_runtime::toolkits::{
+    OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
+};
 use elitea_connectors::artifact::client::{ArtifactPlatform, valid_object_key, valid_segment};
 use elitea_connectors::egress::HostAllowlist;
 use elitea_connectors::source::{Failure, SourceHttp, SourceLimits};
-use elitea_connectors::transport::{Body, Method, StatusCode, Url, header};
+use elitea_connectors::transport::{Body, Method, Url, header};
 use serde_json::Value;
 
 use crate::indexing::tools::{LazyStepbackModel, generate_text};
@@ -127,21 +128,22 @@ impl ClaimOfficeHost {
         bucket: &str,
         key: Option<&str>,
         overwrite: bool,
-    ) -> Result<elitea_connectors::transport::Request, HostError> {
+    ) -> Result<elitea_connectors::transport::Request, OfficeHostError> {
         if !valid_segment(bucket) || key.is_some_and(|k| !valid_object_key(k)) {
-            return Err(HostError::new(
-                HostErrorCode::InvalidInput,
-                "the bucket or file name is not valid",
+            return Err(OfficeHostError::new(
+                OfficeFailure::InvalidRequest,
+                "office_host.invalid_name",
             ));
         }
         let mut url = self.platform.objects_url(bucket, key);
+        // The server refuses a taken name (409) unless the write asks to replace.
         if overwrite {
             url.query_pairs_mut().append_pair("overwrite", "true");
         }
         let mut request = self.platform.get(url).map_err(|_| {
-            HostError::new(
-                HostErrorCode::InvalidConfiguration,
-                "the platform credential is unusable",
+            OfficeHostError::new(
+                OfficeFailure::AccessRefused,
+                "office_host.credential_unusable",
             )
         })?;
         *request.method_mut() = method;
@@ -149,53 +151,46 @@ impl ClaimOfficeHost {
     }
 }
 
-/// A platform object failure as the host classifies it.
-fn failure(error: &Failure) -> HostError {
-    let (code, message, reason) = match error {
+/// A platform object failure as the host classifies it: each real cause its
+/// own kind, so the tool names it.
+pub(crate) fn failure(error: &Failure) -> OfficeHostError {
+    let (kind, reason) = match error {
         Failure::Status(status) => match status.as_u16() {
-            404 => (
-                HostErrorCode::NotFound,
-                "no such object or bucket",
-                "office_host.not_found",
+            404 => (OfficeFailure::NotFound, "office_host.not_found"),
+            401 | 403 => (OfficeFailure::AccessRefused, "office_host.access_refused"),
+            409 => (OfficeFailure::AlreadyExists, "office_host.already_exists"),
+            415 => (
+                OfficeFailure::UnsupportedType,
+                "office_host.unsupported_type",
             ),
-            401 | 403 => (
-                HostErrorCode::AuthorizationFailed,
-                "the object API refused the turn's credential",
-                "office_host.authorization_failed",
-            ),
-            400 | 409 | 415 | 422 => (
-                HostErrorCode::InvalidInput,
-                "the object API refused the request",
-                "office_host.invalid_input",
-            ),
-            413 => (
-                HostErrorCode::ResourceExhausted,
-                "the object is over the project's size limit",
-                "office_host.too_large",
-            ),
+            400 | 422 => (OfficeFailure::InvalidRequest, "office_host.invalid_request"),
+            413 => (OfficeFailure::TooLarge, "office_host.too_large"),
             _ => (
-                HostErrorCode::DependencyUnavailable,
-                "the object API failed",
+                OfficeFailure::Unreachable,
                 "office_host.dependency_unavailable",
             ),
         },
-        Failure::TooLarge(_) => (
-            HostErrorCode::ResourceExhausted,
-            "the object is larger than the Office limit",
-            "office_host.too_large",
-        ),
-        Failure::Refused => (
-            HostErrorCode::InvalidConfiguration,
-            "the platform host is not allowed for object access",
-            "office_host.egress_refused",
-        ),
+        Failure::TooLarge(_) => (OfficeFailure::TooLarge, "office_host.too_large"),
+        // The egress guard does not admit the platform host, or the credential
+        // does not fit a header: the file store was refused, not unreachable.
+        Failure::Refused | Failure::Client(_) => {
+            (OfficeFailure::AccessRefused, "office_host.egress_refused")
+        }
         _ => (
-            HostErrorCode::DependencyUnavailable,
-            "the object API could not be reached",
+            OfficeFailure::Unreachable,
             "office_host.dependency_unavailable",
         ),
     };
-    HostError::new(code, message).with_reason(reason)
+    OfficeHostError::new(kind, reason)
+}
+
+/// A model-call failure: the gateway's budget refusal is its own cause.
+pub(crate) fn model_failure(message: &str) -> OfficeHostError {
+    if message.contains("budget is exhausted") {
+        OfficeHostError::new(OfficeFailure::BudgetRefused, "office_host.budget_refused")
+    } else {
+        OfficeHostError::new(OfficeFailure::Unreachable, "office_host.model_call_failed")
+    }
 }
 
 #[async_trait]
@@ -205,7 +200,7 @@ impl OfficeToolHost for ClaimOfficeHost {
         bucket: &str,
         name: &str,
         max_bytes: u64,
-    ) -> Result<Vec<u8>, HostError> {
+    ) -> Result<Vec<u8>, OfficeHostError> {
         // The size first, from a HEAD, so a large object is refused without
         // being buffered (and an existence check does not download a deck).
         let head = self.object_request(Method::HEAD, bucket, Some(name), false)?;
@@ -236,18 +231,19 @@ impl OfficeToolHost for ClaimOfficeHost {
         name: &str,
         media_type: &str,
         bytes: Vec<u8>,
-    ) -> Result<OfficeObjectWritten, HostError> {
+        overwrite: bool,
+    ) -> Result<OfficeObjectWritten, OfficeHostError> {
         // A name that could end the multipart header line is never sent.
         if !valid_object_key(name)
             || name.contains(['"', '\\', '\r', '\n'])
             || media_type.contains(['\r', '\n', '"'])
         {
-            return Err(HostError::new(
-                HostErrorCode::InvalidInput,
-                "the file name is not valid",
+            return Err(OfficeHostError::new(
+                OfficeFailure::InvalidRequest,
+                "office_host.invalid_name",
             ));
         }
-        let mut request = self.object_request(Method::POST, bucket, None, true)?;
+        let mut request = self.object_request(Method::POST, bucket, None, overwrite)?;
         let boundary = format!("elitea-office-{}", uuid::Uuid::new_v4().simple());
         let mut body = Vec::with_capacity(bytes.len() + 256);
         body.extend_from_slice(
@@ -262,10 +258,7 @@ impl OfficeToolHost for ClaimOfficeHost {
         request.headers_mut().insert(
             header::CONTENT_TYPE,
             content_type.parse().map_err(|_| {
-                HostError::new(
-                    HostErrorCode::InvalidInput,
-                    "the upload header is not valid",
-                )
+                OfficeHostError::new(OfficeFailure::InvalidRequest, "office_host.upload_header")
             })?,
         );
         *request.body_mut() = Some(Body::from(body));
@@ -275,17 +268,14 @@ impl OfficeToolHost for ClaimOfficeHost {
             .send(request)
             .await
             .map_err(|e| failure(&e))?;
-        if response.status() != StatusCode::CREATED && !response.status().is_success() {
+        if !response.status().is_success() {
             return Err(failure(&Failure::Status(response.status())));
         }
         let reply = SourceHttp::body(&mut response, 64 * 1024)
             .await
             .map_err(|e| failure(&e))?;
         let reply: Value = serde_json::from_slice(&reply).map_err(|_| {
-            HostError::new(
-                HostErrorCode::InvalidResponse,
-                "the object API reply is not JSON",
-            )
+            OfficeHostError::new(OfficeFailure::Unreachable, "office_host.reply_not_json")
         })?;
         Ok(OfficeObjectWritten {
             bucket: bucket.to_owned(),
@@ -306,21 +296,20 @@ impl OfficeToolHost for ClaimOfficeHost {
         })
     }
 
-    async fn complete(&self, request: OfficeModelRequest) -> Result<String, HostError> {
+    async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError> {
         let Some(binding) = self.model.get() else {
-            return Err(HostError::new(
-                HostErrorCode::InvalidConfiguration,
-                "no model is bound for this run",
-            )
-            .with_reason("office_host.no_model"));
+            return Err(OfficeHostError::new(
+                OfficeFailure::NoModel,
+                "office_host.no_model",
+            ));
         };
         let mut parts = vec![Part::Text {
             text: request.prompt,
         }];
-        for image in request.images_png {
+        for image in request.images_png.iter() {
             parts.push(Part::InlineData {
                 mime_type: "image/png".to_owned(),
-                data: image,
+                data: image.clone(),
                 uri: None,
                 annotations: None,
             });
@@ -331,13 +320,7 @@ impl OfficeToolHost for ClaimOfficeHost {
                 error = %message,
                 "a document tool's model call failed"
             );
-            // A budget or rate refusal arrives as the gateway's own text; the
-            // reason is kept for the log, the sentence the model reads is fixed.
-            HostError::new(
-                HostErrorCode::DependencyUnavailable,
-                "the model call failed",
-            )
-            .with_reason("office_host.model_call_failed")
+            model_failure(&message)
         })
     }
 }

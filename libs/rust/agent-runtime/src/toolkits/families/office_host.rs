@@ -23,12 +23,69 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::host::HostError;
-
 /// The most bytes an Office document read or written through the host may
 /// hold. It is `elitea-office-core`'s own input cap, restated so a host can
 /// refuse before it buffers.
 pub const MAX_OFFICE_OBJECT_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Why an Office host call failed, in the terms the tool tells the model:
+/// each cause has its own sentence, so a refused credential is not reported as
+/// an unreachable platform, nor a taken name as a bad one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OfficeFailure {
+    /// No such file or bucket.
+    NotFound,
+    /// The file store refused access: the credential is refused or unusable,
+    /// or the egress guard does not admit the platform host.
+    AccessRefused,
+    /// The name is taken and the write did not ask to replace it.
+    AlreadyExists,
+    /// The file store does not accept this type of file.
+    UnsupportedType,
+    /// The file name, the bucket or the request was refused as invalid.
+    InvalidRequest,
+    /// The file is over a size limit.
+    TooLarge,
+    /// The model call was refused for budget.
+    BudgetRefused,
+    /// The run binds no chat model (a pipeline node).
+    NoModel,
+    /// The platform or model could not be reached.
+    Unreachable,
+}
+
+/// A host failure: the cause and a data-free reason code for the log.
+#[derive(Clone, Copy, Debug)]
+pub struct OfficeHostError {
+    kind: OfficeFailure,
+    reason: &'static str,
+}
+
+impl OfficeHostError {
+    #[must_use]
+    pub const fn new(kind: OfficeFailure, reason: &'static str) -> Self {
+        Self { kind, reason }
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> OfficeFailure {
+        self.kind
+    }
+
+    /// The stable reason code for logs.
+    #[must_use]
+    pub const fn reason_code(&self) -> &'static str {
+        self.reason
+    }
+}
+
+impl std::fmt::Display for OfficeHostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason)
+    }
+}
+
+impl std::error::Error for OfficeHostError {}
 
 /// One object stored, as the host confirms it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,8 +108,9 @@ pub struct OfficeObjectWritten {
 pub struct OfficeModelRequest {
     /// The user message text.
     pub prompt: String,
-    /// PNG images sent with the prompt (low detail), in order.
-    pub images_png: Vec<Vec<u8>>,
+    /// PNG images sent with the prompt (low detail), in order. Shared, so a
+    /// tool that sends them with one batch and not the next copies nothing.
+    pub images_png: std::sync::Arc<[Vec<u8>]>,
 }
 
 /// The host side of the Office families.
@@ -67,21 +125,24 @@ pub trait OfficeToolHost: Send + Sync {
         bucket: &str,
         name: &str,
         max_bytes: u64,
-    ) -> Result<Vec<u8>, HostError>;
+    ) -> Result<Vec<u8>, OfficeHostError>;
 
-    /// Create or replace one object of the turn's project.
+    /// Create one object of the turn's project. With `overwrite` false a
+    /// name that is taken is [`OfficeFailure::AlreadyExists`] and nothing is
+    /// written; true replaces it.
     async fn write_object(
         &self,
         bucket: &str,
         name: &str,
         media_type: &str,
         bytes: Vec<u8>,
-    ) -> Result<OfficeObjectWritten, HostError>;
+        overwrite: bool,
+    ) -> Result<OfficeObjectWritten, OfficeHostError>;
 
     /// One non-streaming chat completion on the run's model, accounted and
     /// budgeted by the model gateway like every other call the run makes.
     /// Returns the reply text.
-    async fn complete(&self, request: OfficeModelRequest) -> Result<String, HostError>;
+    async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError>;
 }
 
 /// The Office host shared for one run.

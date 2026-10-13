@@ -209,7 +209,7 @@ pub(crate) fn finish_edit(
         loss_check(&opened.before, &after)?;
     }
     if let Some(expect) = check.expect {
-        check_expect(&after_facts, &opened.before, expect)?;
+        check_expect(&opened.facts, &after_facts, expect)?;
     }
     Ok(saved)
 }
@@ -252,19 +252,38 @@ fn loss_check(before: &Inventory, after: &Inventory) -> Result<(), Sentence> {
     ))
 }
 
-/// What an authoring call must have added to the file, for the check that a
-/// content-adding edit was not a silent no-op in the library (an `add_bullets`
-/// on a slide with no content placeholder reports success and adds nothing).
+/// What an authoring call must have put in the file, and where: the check that
+/// a content-adding edit was not a silent no-op in the library (an
+/// `add_bullets` on a slide with no content placeholder reports success and
+/// adds nothing). It is judged on the TARGET slide: the same words elsewhere
+/// in the deck prove nothing.
 #[derive(Debug, Default)]
 pub(crate) struct Expect {
     text: Vec<String>,
     tables: usize,
     charts: usize,
     pictures: usize,
+    /// The slide (0-based) the call acts on; `None` for a call with no target.
+    slide: Option<usize>,
+    /// The text shape the call writes into, where the call names one.
+    shape: Option<ShapeSelector>,
+    /// The text must be NEW on the slide (a slide or a text box is added);
+    /// otherwise it replaces what was there, and being present is the proof.
+    newly: bool,
+    /// The target slide is one the call adds: there is no "before" for it.
+    fresh: bool,
 }
 
-/// The text a call put on a slide, and the objects it added.
-pub(crate) fn expected_gain(tool: PptxTool, args: &Value) -> Expect {
+#[derive(Clone, Debug)]
+enum ShapeSelector {
+    /// The 0-based index among the slide's text shapes.
+    Index(usize),
+    Name(String),
+}
+
+/// The text a call put on a slide, and the objects it added. `slides_before`
+/// is the deck's slide count before the call (the target of `add_slide`).
+pub(crate) fn expected_gain(tool: PptxTool, args: &Value, slides_before: usize) -> Expect {
     let mut e = Expect::default();
     let text_of = |v: &Value| -> Option<String> {
         match v {
@@ -273,6 +292,11 @@ pub(crate) fn expected_gain(tool: PptxTool, args: &Value) -> Expect {
             _ => None,
         }
     };
+    let slide_arg = || {
+        opt_uint(args, "slide")
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|n| usize::try_from(n).ok())
+    };
     match tool {
         PptxTool::AddSlide => {
             e.text.extend(opt_str(args, "title"));
@@ -280,18 +304,57 @@ pub(crate) fn expected_gain(tool: PptxTool, args: &Value) -> Expect {
                 e.text.extend(items.iter().filter_map(text_of));
             }
             e.text.extend(opt_str(args, "notes"));
+            e.slide = Some(
+                opt_uint(args, "position")
+                    .and_then(|p| p.checked_sub(1))
+                    .and_then(|p| usize::try_from(p).ok())
+                    .unwrap_or(slides_before),
+            );
+            e.newly = true;
+            e.fresh = true;
         }
-        PptxTool::SetTitle => e.text.extend(opt_str(args, "title")),
-        PptxTool::SetText => e.text.extend(opt_str(args, "text")),
-        PptxTool::SetNotes => e.text.extend(opt_str(args, "notes")),
+        PptxTool::SetTitle => {
+            e.text.extend(opt_str(args, "title"));
+            e.slide = slide_arg();
+        }
+        PptxTool::SetText => {
+            e.text.extend(opt_str(args, "text"));
+            e.slide = slide_arg();
+            match args.get("shape") {
+                Some(Value::Number(n)) => {
+                    e.shape = n
+                        .as_u64()
+                        .and_then(|n| n.checked_sub(1))
+                        .and_then(|n| usize::try_from(n).ok())
+                        .map(ShapeSelector::Index);
+                }
+                Some(Value::String(name)) => e.shape = Some(ShapeSelector::Name(name.clone())),
+                // No shape named: a new text box is added.
+                _ => e.newly = true,
+            }
+        }
+        PptxTool::SetNotes => {
+            e.text.extend(opt_str(args, "notes"));
+            e.slide = slide_arg();
+        }
         PptxTool::AddBullets => {
             if let Some(items) = args.get("items").and_then(Value::as_array) {
                 e.text.extend(items.iter().filter_map(text_of));
             }
+            e.slide = slide_arg();
         }
-        PptxTool::AddTable => e.tables = 1,
-        PptxTool::AddChart => e.charts = 1,
-        PptxTool::AddImage => e.pictures = 1,
+        PptxTool::AddTable => {
+            e.tables = 1;
+            e.slide = slide_arg();
+        }
+        PptxTool::AddChart => {
+            e.charts = 1;
+            e.slide = slide_arg();
+        }
+        PptxTool::AddImage => {
+            e.pictures = 1;
+            e.slide = slide_arg();
+        }
         _ => {}
     }
     e
@@ -303,22 +366,71 @@ fn key_of(text: &str) -> String {
     text.chars()
         .filter(|c| c.is_alphanumeric())
         .flat_map(char::to_lowercase)
-        .take(24)
         .collect()
 }
 
-/// Confirm the call's additions are in the saved file's fact sheet.
+/// The comparison text of one slide: its shapes (or only `shape`), table cells
+/// and notes.
+fn slide_haystack(slide: &SlideFacts, shape: Option<&ShapeSelector>) -> String {
+    let mut out = String::new();
+    if let Some(selector) = shape {
+        for s in &slide.shapes {
+            let hit = match selector {
+                ShapeSelector::Index(i) => s.text_index == Some(*i),
+                ShapeSelector::Name(n) => s.name.eq_ignore_ascii_case(n.trim()),
+            };
+            if hit {
+                out.push_str(&key_of(&s.text));
+            }
+        }
+        return out;
+    }
+    for s in &slide.shapes {
+        out.push_str(&key_of(&s.text));
+    }
+    for cell in slide.tables.iter().flat_map(|t| t.cells.iter().flatten()) {
+        out.push_str(&key_of(cell));
+    }
+    out.push_str(&key_of(&slide.notes));
+    out
+}
+
+fn slide_objects(slide: Option<&SlideFacts>) -> (usize, usize, usize) {
+    slide.map_or((0, 0, 0), |s| {
+        (
+            s.tables.len(),
+            s.charts.len(),
+            s.shapes
+                .iter()
+                .filter(|x| x.kind == ShapeKind::Picture)
+                .count(),
+        )
+    })
+}
+
+/// Confirm the call's additions are on its target slide in the saved file,
+/// comparing the slide before the call with the slide after it.
 pub(crate) fn check_expect(
+    before_facts: &[SlideFacts],
     after_facts: &[SlideFacts],
-    before: &Inventory,
     expect: &Expect,
 ) -> Result<(), Sentence> {
-    let after = Inventory::of(after_facts);
-    let missing = |a: usize, b: usize, want: usize| want > 0 && a < b + want;
-    if missing(after.tables, before.tables, expect.tables)
-        || missing(after.charts, before.charts, expect.charts)
-        || missing(after.pictures, before.pictures, expect.pictures)
-    {
+    let Some(target) = expect.slide else {
+        return Ok(());
+    };
+    let Some(after) = after_facts.get(target) else {
+        return Err("The slide is not in the saved file, so nothing was saved.".to_owned());
+    };
+    // A slide the call adds has no "before"; every other call edits one that
+    // was there.
+    let before = if expect.fresh {
+        None
+    } else {
+        before_facts.get(target)
+    };
+    let (bt, bc, bp) = slide_objects(before);
+    let (at, ac, ap) = slide_objects(Some(after));
+    if at < bt + expect.tables || ac < bc + expect.charts || ap < bp + expect.pictures {
         return Err("The library did not save what was added, so nothing was saved. The slide may not accept it; try another slide.".to_owned());
     }
     let needles: Vec<String> = expect
@@ -330,35 +442,17 @@ pub(crate) fn check_expect(
     if needles.is_empty() {
         return Ok(());
     }
-    let mut haystack = String::new();
-    for slide in after_facts {
-        for shape in &slide.shapes {
-            haystack.extend(
-                shape
-                    .text
-                    .chars()
-                    .filter(|c| c.is_alphanumeric())
-                    .flat_map(char::to_lowercase),
-            );
+    let after_text = slide_haystack(after, expect.shape.as_ref());
+    let before_text = before.map_or_else(String::new, |b| slide_haystack(b, expect.shape.as_ref()));
+    let ok = needles.iter().all(|n| {
+        let now = after_text.matches(n.as_str()).count();
+        if expect.newly {
+            now > before_text.matches(n.as_str()).count()
+        } else {
+            now >= 1
         }
-        for table in &slide.tables {
-            for cell in table.cells.iter().flatten() {
-                haystack.extend(
-                    cell.chars()
-                        .filter(|c| c.is_alphanumeric())
-                        .flat_map(char::to_lowercase),
-                );
-            }
-        }
-        haystack.extend(
-            slide
-                .notes
-                .chars()
-                .filter(|c| c.is_alphanumeric())
-                .flat_map(char::to_lowercase),
-        );
-    }
-    if needles.iter().all(|n| haystack.contains(n.as_str())) {
+    });
+    if ok {
         return Ok(());
     }
     Err("The text did not appear on the slide, so nothing was saved. The slide probably has no placeholder for it: bullets and titles need a title_content (or title, section_header, two_content) slide; use set_text to put text on a blank slide.".to_owned())
@@ -377,7 +471,7 @@ pub(crate) fn run_edit(
     let mut opened = open_with_facts(bytes, limits)?;
     let slides_before = opened.facts.len();
     let message = apply_authoring(tool, args, &mut opened.deck, &opened.facts, image)?;
-    let expect = expected_gain(tool, args);
+    let expect = expected_gain(tool, args, slides_before);
     let saved = finish_edit(
         &opened,
         limits,

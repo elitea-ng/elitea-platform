@@ -826,9 +826,6 @@ struct DirectToolsets {
 /// and building the sensitive-tool and delegated-authorization catalogs from
 /// THOSE names keeps the three in agreement; building either catalog from the
 /// published name would leave a renamed tool silently unguarded.
-/// Whether any configured I1 indexing toolkit in the snapshot carries Main's
-/// frozen index catalog — the only case the index tools' host is worth
-/// building (ADR-0030 I1).
 /// Whether the snapshot has a toolkit of the Office families (ADR-0032).
 pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
@@ -836,6 +833,9 @@ pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>
     })
 }
 
+/// Whether any configured I1 indexing toolkit in the snapshot carries Main's
+/// frozen index catalog — the only case the index tools' host is worth
+/// building (ADR-0030 I1).
 pub(super) fn snapshot_carries_index_catalog(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
         reference.kind() == FrozenToolKind::Configured

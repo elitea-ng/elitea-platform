@@ -2547,7 +2547,28 @@
       ],
       "has_function_validators": false,
       "icon_url": "pptx.svg",
-      "label": "PPTX"
+      "label": "PPTX",
+      "unavailable_tools": [
+        "add_bullets",
+        "add_chart",
+        "add_image",
+        "add_slide",
+        "add_table",
+        "apply_theme",
+        "create_presentation",
+        "delete_slide",
+        "design_check",
+        "export_pdf",
+        "list_placeholders",
+        "move_slide",
+        "render_preview",
+        "replace_placeholders",
+        "set_notes",
+        "set_table_cell",
+        "set_text",
+        "set_title",
+        "to_markdown"
+      ]
     },
     "name_required": true,
     "properties": {
