@@ -61,6 +61,7 @@ use elitea_connectors::zephyr::essential::{ZephyrEssentialConfig, ZephyrEssentia
 use elitea_connectors::zephyr::scale::{
     ZephyrScaleConfig, ZephyrScaleIndexArguments, ZephyrScaleSource,
 };
+use elitea_content_source::supported::has_supported_extension;
 use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
 use serde_json::Value;
 
@@ -129,7 +130,7 @@ pub(crate) enum IndexSource {
     ZephyrEssential(ZephyrEssentialSource),
     ZephyrEnterprise(ZephyrEnterpriseSource),
     #[cfg(test)]
-    Fixture(Vec<Document>),
+    Fixture(Vec<Document>, PathFilter),
 }
 
 /// What the artifact connector needs of the platform: the object API's
@@ -327,7 +328,7 @@ impl IndexSource {
             }
             // The tests' in-memory toolkit: the documents the test staged.
             #[cfg(test)]
-            "fixture" => match super::tests::take_fixture_source() {
+            "fixture" => match super::tests::take_fixture_source(parameters) {
                 Some(source) => source,
                 None => return Err(SourceBuildError("no fixture documents staged".to_owned())),
             },
@@ -339,6 +340,30 @@ impl IndexSource {
             }
         };
         Ok(source)
+    }
+
+    /// What this run keeps of the listing: the `filter` of the toolkit
+    /// type, except for the tests' in-memory toolkit, which brings its own.
+    pub(crate) fn scoped(&self, filter: PathFilter) -> PathFilter {
+        match self {
+            #[cfg(test)]
+            Self::Fixture(_, own) => own.clone(),
+            _ => filter,
+        }
+    }
+
+    /// Whether this source's documents are repository files, which carry the
+    /// SDK's `commit_hash` (see [`commit_hash`]).
+    pub(crate) fn hashes_commit(&self) -> bool {
+        match self {
+            Self::GitHub(_) | Self::GitLab(_) | Self::Bitbucket(_) | Self::AdoRepos(_) => true,
+            // The tests' toolkit is a repository when a document says so.
+            #[cfg(test)]
+            Self::Fixture(documents, _) => documents
+                .iter()
+                .any(|document| document.metadata.contains_key("fixture_hash_commit")),
+            _ => false,
+        }
     }
 
     /// Tell the connector which document versions the index holds, before
@@ -381,7 +406,7 @@ impl IndexSource {
             Self::ZephyrEssential(source) => source.list().await,
             Self::ZephyrEnterprise(source) => source.list().await,
             #[cfg(test)]
-            Self::Fixture(documents) => Ok(documents
+            Self::Fixture(documents, _) => Ok(documents
                 .iter()
                 .map(|document| document.reference.clone())
                 .collect()),
@@ -395,10 +420,10 @@ impl IndexSource {
     /// The connector's fetch failure.
     pub(crate) async fn fetch(&self, key: &str) -> Result<Document, SourceError> {
         match self {
-            Self::GitHub(source) => source.fetch(key).await.map(with_code_metadata),
-            Self::GitLab(source) => source.fetch(key).await.map(with_code_metadata),
-            Self::Bitbucket(source) => source.fetch(key).await.map(with_code_metadata),
-            Self::AdoRepos(source) => source.fetch(key).await.map(with_code_metadata),
+            Self::GitHub(source) => source.fetch(key).await.map(with_code_paths),
+            Self::GitLab(source) => source.fetch(key).await.map(with_code_paths),
+            Self::Bitbucket(source) => source.fetch(key).await.map(with_code_paths),
+            Self::AdoRepos(source) => source.fetch(key).await.map(with_code_paths),
             Self::Artifact(source, folder) => {
                 let relative = if folder.is_empty() {
                     key
@@ -425,7 +450,7 @@ impl IndexSource {
             Self::ZephyrEssential(source) => source.fetch(key).await,
             Self::ZephyrEnterprise(source) => source.fetch(key).await,
             #[cfg(test)]
-            Self::Fixture(documents) => documents
+            Self::Fixture(documents, _) => documents
                 .iter()
                 .find(|document| document.reference.key == key)
                 .cloned()
@@ -449,119 +474,36 @@ impl IndexSource {
 /// `CodeIndexerToolkit` family.
 const GIT_FAMILIES: [&str; 4] = ["github", "gitlab", "bitbucket", "ado_repos"];
 
-/// The SDK's `SUPPORTED_EXTENSIONS` (`code_indexer_toolkit.loader`, from
-/// `chunkers/universal_chunker.py`): markdown, JSON, config, code and text
-/// extensions, lower-case with the dot. Kept verbatim; a file outside it is
-/// skipped while `skip_unsupported_extensions` is true (the default), which
-/// leaves pictures and PDFs out of a repository index. With the argument
-/// false every file is indexed (the SDK reads it as text; this worker
-/// extracts documents and describes pictures instead).
-const SUPPORTED_EXTENSIONS: &[&str] = &[
-    // MARKDOWN_EXTENSIONS
-    ".md",
-    ".markdown",
-    ".mdown",
-    ".mkd",
-    ".mdx",
-    // JSON_EXTENSIONS
-    ".json",
-    ".jsonl",
-    ".jsonc",
-    // CONFIG_EXTENSIONS
-    ".yml",
-    ".yaml",
-    ".toml",
-    ".ini",
-    ".cfg",
-    ".conf",
-    ".env",
-    // CODE_EXTENSIONS
-    ".py",
-    ".js",
-    ".jsx",
-    ".mjs",
-    ".cjs",
-    ".ts",
-    ".tsx",
-    ".java",
-    ".kt",
-    ".rs",
-    ".go",
-    ".cpp",
-    ".c",
-    ".cs",
-    ".hs",
-    ".rb",
-    ".scala",
-    ".lua",
-    ".sh",
-    ".bash",
-    ".zsh",
-    ".sql",
-    ".r",
-    ".swift",
-    ".php",
-    ".pl",
-    ".pm",
-    ".h",
-    ".hpp",
-    ".m",
-    ".bat",
-    ".pas",
-    ".asm",
-    ".dart",
-    ".groovy",
-    // TEXT_EXTENSIONS
-    ".txt",
-    ".xml",
-    ".html",
-    ".htm",
-    ".csv",
-];
-
-/// Python's `os.path.splitext(path)[1].lower()`: from the last dot of the
-/// final segment, unless the segment's dots are all leading (`.bashrc` has
-/// no extension).
-fn splitext_lower(path: &str) -> String {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    match name.rfind('.') {
-        Some(dot) if !name[..dot].bytes().all(|byte| byte == b'.') => name[dot..].to_lowercase(),
-        _ => String::new(),
-    }
-}
-
-/// Whether the SDK's allowlist admits a repository file.
-fn has_supported_extension(path: &str) -> bool {
-    SUPPORTED_EXTENSIONS.contains(&splitext_lower(path).as_str())
-}
-
 /// The SDK's code metadata on a repository file: `file_path` and `filename`
 /// (the document's identity in the SDK, and what the code search output
-/// prints) and `commit_hash`, which is the SHA-256 of the file's text, not a
-/// git commit (`CodeIndexerToolkit.loader`). A key the connector already
-/// set stays.
-pub(super) fn with_code_metadata(mut document: Document) -> Document {
+/// prints), both the object key. A key the connector already set stays. The
+/// third key, `commit_hash`, hashes the whole text and is added where the
+/// text is already being read off the async executor ([`commit_hash`]).
+pub(super) fn with_code_paths(mut document: Document) -> Document {
+    let path = Value::String(document.reference.key.clone());
+    document
+        .metadata
+        .entry("filename".to_owned())
+        .or_insert_with(|| path.clone());
+    document
+        .metadata
+        .entry("file_path".to_owned())
+        .or_insert(path);
+    document
+}
+
+/// The SDK's `commit_hash` of a repository file: the SHA-256 of the file's
+/// text, not a git commit (`CodeIndexerToolkit.loader`). The SDK decodes with
+/// `errors="ignore"` and hashes the text: valid UTF-8 hashes as it is (a real
+/// U+FFFD stays), invalid sequences drop. Nothing is copied. CPU work: call
+/// it from a blocking thread.
+pub(super) fn commit_hash(bytes: &[u8]) -> String {
     use sha2::{Digest as _, Sha256};
-    let key = document.reference.key.clone();
-    // The SDK decodes with `errors="ignore"` and hashes the text: valid
-    // UTF-8 hashes as it is (a real U+FFFD stays), invalid sequences drop.
-    // Nothing is copied either way.
     let mut hasher = Sha256::new();
-    for chunk in document.bytes.utf8_chunks() {
+    for chunk in bytes.utf8_chunks() {
         hasher.update(chunk.valid().as_bytes());
     }
-    let hash = format!("{:x}", hasher.finalize());
-    for (name, value) in [
-        ("file_path", key.clone()),
-        ("filename", key),
-        ("commit_hash", hash),
-    ] {
-        document
-            .metadata
-            .entry(name.to_owned())
-            .or_insert(Value::String(value));
-    }
-    document
+    format!("{:x}", hasher.finalize())
 }
 
 /// An artifact object's full key from the key relative to the folder.
@@ -639,6 +581,23 @@ impl PathFilter {
         }
     }
 
+    /// A filter with the family-specific rules set directly, for the tests'
+    /// in-memory toolkit (the production way in is [`Self::for_run`]).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn for_test(
+        whitelist: &[String],
+        blacklist: &[String],
+        supported_only: bool,
+        attests_empty: bool,
+    ) -> Self {
+        Self {
+            supported_only,
+            attests_empty,
+            ..Self::new(whitelist, blacklist)
+        }
+    }
+
     /// The filter of one run of toolkit `toolkit_type` with `parameters`.
     ///
     /// # Errors
@@ -666,15 +625,6 @@ impl PathFilter {
             filter.skip = pattern_list(arguments, "skip_extensions")?;
             filter.attests_empty = folder.is_empty();
             filter.folder = folder;
-        }
-        // The tests' in-memory toolkit attests an empty listing when its
-        // arguments say so.
-        #[cfg(test)]
-        if toolkit_type == "fixture" {
-            filter.supported_only =
-                arguments.get("fixture_skip_unsupported") == Some(&Value::Bool(true));
-            filter.attests_empty =
-                arguments.get("fixture_attests_empty") == Some(&Value::Bool(true));
         }
         Ok(filter)
     }

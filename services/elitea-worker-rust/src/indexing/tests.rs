@@ -18,8 +18,9 @@ use http_body_util::{BodyExt as _, Full};
 use serde_json::{Map, Value, json};
 use tonic::body::Body;
 
+use super::inputs::IndexParameters;
 use super::pipeline::{RunLiveness, failure_for_test, record_for_test};
-use super::source::IndexSource;
+use super::source::{IndexSource, PathFilter};
 use super::{
     IndexIngestRuntime, IndexRun, IndexRunFailure, IndexRunLimits, Interruption, interrupt_summary,
     run_index,
@@ -367,8 +368,25 @@ thread_local! {
     pub(super) static FIXTURE_SOURCE: Mutex<Option<Vec<Document>>> = const { Mutex::new(None) };
 }
 
-pub(super) fn take_fixture_source() -> Option<IndexSource> {
-    FIXTURE_SOURCE.with(|slot| slot.lock().expect("lock").take().map(IndexSource::Fixture))
+/// The staged documents as the `fixture` toolkit, with the scope its
+/// arguments ask for: `fixture_skip_unsupported` (the code families'
+/// file-type allowlist) and `fixture_attests_empty` (the artifact bucket's
+/// attested empty listing).
+pub(super) fn take_fixture_source(parameters: &IndexParameters) -> Option<IndexSource> {
+    let flag = |name: &str| parameters.arguments.get(name) == Some(&Value::Bool(true));
+    FIXTURE_SOURCE.with(|slot| {
+        slot.lock().expect("lock").take().map(|documents| {
+            IndexSource::Fixture(
+                documents,
+                PathFilter::for_test(
+                    &parameters.whitelist,
+                    &parameters.blacklist,
+                    flag("fixture_skip_unsupported"),
+                    flag("fixture_attests_empty"),
+                ),
+            )
+        })
+    })
 }
 
 pub(super) async fn stored(harness: &Harness) -> Vec<pb::IndexedDocument> {

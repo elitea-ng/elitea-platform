@@ -117,23 +117,28 @@ const SKIP_ENCRYPTED: &str = "encrypted";
 const SKIP_TOO_MANY_PAGES: &str = "too_many_pages";
 pub(super) const SKIP_EXTRACT_TIMEOUT: &str = "extract_timeout";
 
-/// Whether a skip makes the run `PARTLY_INDEXED`. The SDK degrades a run for
-/// lost work only (failed chunks, documents it could not read or parse,
-/// `explicitly_failed_documents`), never for documents that are not indexable
-/// by design: an unsupported type, an empty file, one excluded by a filter
-/// or a limit (`NOT_INDEXED`/`SKIPPED` in its report). So `unsupported_type`,
-/// `empty`, `too_large`, `too_many_pages` and `encrypted` leave the status
-/// `OK`; so do `no_model` and `needs_model` unless the config explicitly
-/// asked for a model step (the `proposal` or `statistical` chunker, or
-/// `use_llm: true` for pictures); the picture step that is on by default is
-/// optional. Every other
-/// reason, an unknown one included, is a lost document.
-pub(super) fn skip_loses_document(reason: &str, explicit_model_chunker: bool) -> bool {
+/// Whether a skip of `reason` makes the run `PARTLY_INDEXED`. The SDK
+/// degrades a run for lost work only (failed chunks, documents it could not
+/// read or parse, `explicitly_failed_documents`), never for documents that
+/// are not indexable by design: an unsupported type, an empty file, one
+/// excluded by a filter or a limit (`NOT_INDEXED`/`SKIPPED` in its report).
+/// So `unsupported_type`, `empty`, `too_large`, `too_many_pages` and
+/// `encrypted` leave the status `OK`, but only for a NEW document: when the
+/// skipped document is a CHANGED stored one its old points stay, stale, and
+/// that is lost work. `no_model` and `needs_model` are benign unless this
+/// document's own config asked for a model step (`explicit_model`: its
+/// extension's `proposal` or `statistical` chunker, or `use_llm: true` for
+/// its picture); the picture step that is on by default is optional. Every
+/// other reason, an unknown one included, is a lost document.
+pub(super) fn skip_loses_document(reason: &str, plan: Plan, explicit_model: bool) -> bool {
+    if matches!(plan, Plan::Changed { .. }) {
+        return true;
+    }
     match reason {
         SKIP_UNSUPPORTED | SKIP_EMPTY | SKIP_TOO_LARGE | SKIP_TOO_MANY_PAGES | SKIP_ENCRYPTED => {
             false
         }
-        SKIP_NO_MODEL | SKIP_NEEDS_MODEL => explicit_model_chunker,
+        SKIP_NO_MODEL | SKIP_NEEDS_MODEL => explicit_model,
         _ => true,
     }
 }
@@ -264,6 +269,9 @@ struct Tally {
     indexed_chunks: u64,
     failed_chunks: u64,
     skipped: BTreeMap<&'static str, u64>,
+    /// How many of the skips lost work (see [`skip_loses_document`]) and so
+    /// make the run `PARTLY_INDEXED`.
+    lost_skips: u64,
     unchanged_documents: u64,
     unchanged_chunks: u64,
     /// The documents written: key, version, chunk count.
@@ -279,8 +287,15 @@ struct Tally {
 }
 
 impl Tally {
+    /// A skip that loses work (an unknown reason, a failed embedding).
     fn skip(&mut self, reason: &'static str) {
+        self.skip_document(reason, true);
+    }
+
+    /// A skip that is lost work when `lost` (see [`skip_loses_document`]).
+    fn skip_document(&mut self, reason: &'static str, lost: bool) {
         *self.skipped.entry(reason).or_default() += 1;
+        self.lost_skips += u64::from(lost);
     }
 
     fn written_keys(&self) -> BTreeSet<&str> {
@@ -293,7 +308,7 @@ impl Tally {
 
 /// A document the run decided about.
 #[derive(Clone, Copy)]
-enum Plan {
+pub(super) enum Plan {
     New,
     /// The store holds another version (or several): its points are deleted
     /// before the new ones are written. `prior_chunks` is what it holds now,
@@ -312,6 +327,9 @@ struct Prepared {
     metadata: Map<String, Value>,
     acl: Vec<String>,
     chunks: Vec<Chunk>,
+    /// Whether this document's own config asks for a model step (see
+    /// [`skip_loses_document`]).
+    explicit_model: bool,
 }
 
 enum Preparation {
@@ -321,7 +339,8 @@ enum Preparation {
     Model(Box<Prepared>, ChunkPlan),
     /// An image file waiting for its description (ADR-0030 I4 part B).
     Vision(Box<Prepared>, RawImage),
-    Skipped(&'static str),
+    /// Not indexed, for the reason, with the plan the document had.
+    Skipped(&'static str, Plan),
     /// A chunking configuration the run cannot honour (the whole run fails).
     Configuration(String),
 }
@@ -435,10 +454,12 @@ pub(crate) async fn run_index(
         Arc::clone(&runtime.transport),
         runtime.limits,
     ) {
-        Ok(source) => Arc::new(source),
+        Ok(source) => source,
         Err(error) => return Ok(failure(&parameters, &error.0)),
     };
     drop(bearer);
+    let filter = source.scoped(filter);
+    let source = Arc::new(source);
     Runner {
         runtime,
         run: &run,
@@ -595,11 +616,11 @@ impl Runner<'_> {
         let parameters = self.parameters;
         let namespace = toolkit_namespace(&self.run.command.index_id);
         let mut prior: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
-        // Whether the store holds a document at all: a clean run reads the
-        // index only to know that (so it never wipes a populated index on a
-        // listing that was not attested empty), then diffs against nothing.
-        let mut store_populated = false;
-        {
+        // A clean run replaces the index whatever it holds, so it reads
+        // nothing of it: it may rebuild the index or empty it (an explicit
+        // user action; the summary says so). An incremental run reads the
+        // store to diff against it.
+        if !parameters.clean_index {
             // The listing is read where the index lives: the expected space's
             // collection when the index is stamped, every collection before
             // the first run stamps it. The pages are folded as they arrive
@@ -646,15 +667,7 @@ impl Runner<'_> {
                     other => halt(&vector_text(&other)),
                 })?;
             if consumed.is_break() {
-                if !parameters.clean_index {
-                    return Err(too_many());
-                }
-                // A clean run drops the whole namespace whatever its size.
-                store_populated = true;
-            }
-            store_populated |= !prior.is_empty();
-            if parameters.clean_index {
-                prior.clear();
+                return Err(too_many());
             }
         }
         self.check_liveness()?;
@@ -675,7 +688,8 @@ impl Runner<'_> {
         // A stored document the file-type allowlist now excludes (the new
         // default `skip_unsupported_extensions`: pictures, PDFs) is out of
         // scope, not vanished: a deploy must not delete what an earlier run
-        // indexed. It stays until a clean run rebuilds the index. (A
+        // indexed. It stays, and the summary says so, until a clean run
+        // rebuilds the index. (A
         // whitelist, blacklist or artifact pattern still removes what it no
         // longer lists, as before.)
         let out_of_scope_stored = |key: &str| self.filter.excluded_by_file_type(key);
@@ -693,12 +707,7 @@ impl Runner<'_> {
                 "stored documents of a file type the run no longer indexes were kept; a clean index run applies the current scope"
             );
         }
-        let at_risk = if parameters.clean_index {
-            store_populated
-        } else {
-            in_scope_stored > 0
-        };
-        self.guard_empty_listing(listed_by_source, listing.len(), at_risk)?;
+        self.guard_empty_listing(listed_by_source, listing.len(), in_scope_stored)?;
         if listing.len() > self.runtime.limits.max_documents {
             return Err(halt(&format!(
                 "the source holds {} documents after filtering; one run indexes at most {}",
@@ -744,25 +753,30 @@ impl Runner<'_> {
 
     /// An empty result must not read as "everything was deleted" (the SDK's
     /// EL-6232 guard). `listed` documents came from the connector and `kept`
-    /// passed the filters. Unless the connector attests that the source is
-    /// empty, a populated index (or a clean run about to wipe one) is left as
-    /// it is and the run fails with the reason, before the store is touched.
+    /// passed the filters. An incremental run whose listing is empty, or whose
+    /// filters keep none of it, must not delete the `in_scope_stored`
+    /// documents of a populated index: unless the connector attests that the
+    /// source is empty it fails with the reason, before the store is
+    /// touched. A clean run is the user's explicit instruction to replace
+    /// the index, so it may rebuild it or empty it (the summary says so).
     fn guard_empty_listing(
         &self,
         listed: usize,
         kept: usize,
-        index_is_populated: bool,
+        in_scope_stored: usize,
     ) -> Result<(), Halt> {
-        // Only a connector that attests an empty source may empty a
-        // populated index, clean run or not.
-        if kept > 0 || !index_is_populated || (listed == 0 && self.filter.attests_empty()) {
+        if self.parameters.clean_index
+            || kept > 0
+            || in_scope_stored == 0
+            || (listed == 0 && self.filter.attests_empty())
+        {
             return Ok(());
         }
         Err(halt(&if listed == 0 {
-            "the source listing returned no documents while the index holds data from earlier runs; nothing was deleted. Check the source (branch, query, permissions) before running again".to_owned()
+            "the source listing returned no documents while the index holds data from earlier runs; nothing was deleted. Check the source (branch, query, permissions) before running again, or run with clean_index to empty the index".to_owned()
         } else {
             format!(
-                "the source lists {listed} documents but the whitelist, blacklist and file-type filters kept none of them; the index was left untouched. Check the filters"
+                "the source lists {listed} documents but the whitelist, blacklist and file-type filters kept none of them; the index was left untouched. Check the filters, or run with clean_index to empty the index"
             )
         }))
     }
@@ -799,7 +813,10 @@ impl Runner<'_> {
                 let prepared = match joined {
                     Ok(Preparation::Ready(prepared)) => prepared,
                     Ok(Preparation::Model(mut prepared, chunk_plan)) => {
-                        match self.fulfil_model_step(chunk_plan).await {
+                        match self
+                            .fulfil_model_step(chunk_plan, prepared.plan, prepared.explicit_model)
+                            .await
+                        {
                             Ok(Some(chunks)) => {
                                 prepared.chunks = chunks;
                                 prepared
@@ -809,7 +826,10 @@ impl Runner<'_> {
                         }
                     }
                     Ok(Preparation::Vision(mut prepared, raw)) => {
-                        match self.fulfil_vision(&raw).await {
+                        match self
+                            .fulfil_vision(&raw, prepared.plan, prepared.explicit_model)
+                            .await
+                        {
                             Ok(Some(chunks)) => {
                                 prepared.chunks = chunks;
                                 prepared
@@ -818,8 +838,11 @@ impl Runner<'_> {
                             Err(halt) => break Err(halt),
                         }
                     }
-                    Ok(Preparation::Skipped(reason)) => {
-                        self.tally.skip(reason);
+                    Ok(Preparation::Skipped(reason, plan)) => {
+                        // `prepare` skips only name a model step as
+                        // `needs_model`: the chunker was asked for.
+                        self.tally
+                            .skip_document(reason, skip_loses_document(reason, plan, true));
                         continue;
                     }
                     Ok(Preparation::Configuration(reason)) => break Err(halt(&reason)),
@@ -976,7 +999,12 @@ impl Runner<'_> {
     /// Fulfils the model step of one document's chunking (ADR-0030 I4): the
     /// chunks, or `None` when the document was skipped under a reason the
     /// tally now holds.
-    async fn fulfil_model_step(&mut self, plan: ChunkPlan) -> Result<Option<Vec<Chunk>>, Halt> {
+    async fn fulfil_model_step(
+        &mut self,
+        plan: ChunkPlan,
+        decided: Plan,
+        explicit_model: bool,
+    ) -> Result<Option<Vec<Chunk>>, Halt> {
         let loader = RunChatLoader {
             runtime: self.runtime,
             run: self.run,
@@ -991,11 +1019,16 @@ impl Runner<'_> {
         let run = self.run;
         let alive = move || run_liveness(run);
         let end = self.steps.fulfil(plan, &env, &alive).await;
-        self.settle(end)
+        self.settle(end, decided, explicit_model)
     }
 
     /// [`Self::fulfil_model_step`] for an image file's description.
-    async fn fulfil_vision(&mut self, raw: &RawImage) -> Result<Option<Vec<Chunk>>, Halt> {
+    async fn fulfil_vision(
+        &mut self,
+        raw: &RawImage,
+        decided: Plan,
+        explicit_model: bool,
+    ) -> Result<Option<Vec<Chunk>>, Halt> {
         let loader = RunChatLoader {
             runtime: self.runtime,
             run: self.run,
@@ -1010,19 +1043,35 @@ impl Runner<'_> {
         let run = self.run;
         let alive = move || run_liveness(run);
         let end = self.steps.describe(raw, &env, &alive).await;
-        self.settle(end)
+        self.settle(end, decided, explicit_model)
     }
 
-    /// What a model step's end means for the run.
-    fn settle(&mut self, end: StepEnd) -> Result<Option<Vec<Chunk>>, Halt> {
+    /// What a model step's end means for the run. `decided` is the
+    /// document's plan and `explicit_model` whether its own config asked for
+    /// the step (see [`skip_loses_document`]). A `too_large` that ends a
+    /// model step is the embedding model's or the chat model's rejection,
+    /// never a limit of this worker: lost work whatever the plan.
+    fn settle(
+        &mut self,
+        end: StepEnd,
+        decided: Plan,
+        explicit_model: bool,
+    ) -> Result<Option<Vec<Chunk>>, Halt> {
         match end {
             StepEnd::Chunks(chunks) if chunks.is_empty() => {
-                self.tally.skip(SKIP_EMPTY);
+                self.tally.skip_document(
+                    SKIP_EMPTY,
+                    skip_loses_document(SKIP_EMPTY, decided, explicit_model),
+                );
                 Ok(None)
             }
             StepEnd::Chunks(chunks) => Ok(Some(chunks)),
             StepEnd::Skip(reason) => {
-                self.tally.skip(reason);
+                self.tally.skip_document(
+                    reason,
+                    reason == SKIP_TOO_LARGE
+                        || skip_loses_document(reason, decided, explicit_model),
+                );
                 Ok(None)
             }
             StepEnd::EmbeddingFailed(cause) => {
@@ -1123,13 +1172,7 @@ impl Runner<'_> {
     /// The summary of a run that went through: the counts, the store's
     /// totals and record, the stamp.
     fn summary(self, plan: &RunPlan) -> IndexIngestSummaryV1 {
-        let explicit_model = self.chunking.explicitly_needs_model();
-        let partial = self.tally.failed_chunks > 0
-            || self
-                .tally
-                .skipped
-                .keys()
-                .any(|reason| skip_loses_document(reason, explicit_model));
+        let partial = self.tally.failed_chunks > 0 || self.tally.lost_skips > 0;
         let (status, state) = if partial {
             (
                 IndexIngestStatusV1::PartlyIndexed,
@@ -1161,6 +1204,18 @@ impl Runner<'_> {
         }
         if tally.failed_chunks > 0 {
             let _ = write!(message, " {} chunks failed to embed.", tally.failed_chunks);
+        }
+        if self.parameters.clean_index && tally.indexed_documents == 0 {
+            message.push_str(
+                " clean_index replaced the index and nothing was indexed (the source lists no document the filters keep, or every one was skipped), so the index is now empty.",
+            );
+        }
+        if plan.out_of_scope.0 > 0 {
+            let _ = write!(
+                message,
+                " {} stored documents are outside the current file-type filter and were left unchanged; run with clean_index to drop them.",
+                plan.out_of_scope.0
+            );
         }
         if !self.ignored_loader_keys.is_empty() {
             let _ = write!(
@@ -1473,21 +1528,21 @@ async fn prepare(
 ) -> Preparation {
     let max_bytes = limits.max_document_bytes;
     if reference.size > max_bytes {
-        return Preparation::Skipped(SKIP_TOO_LARGE);
+        return Preparation::Skipped(SKIP_TOO_LARGE, plan);
     }
     let document = match source.fetch(&reference.key).await {
         Ok(document) => document,
         Err(SourceError::NotFound(_)) => {
             // Listed, then gone: the next run deletes it.
-            return Preparation::Skipped(SKIP_FETCH_FAILED);
+            return Preparation::Skipped(SKIP_FETCH_FAILED, plan);
         }
         Err(error) => {
             tracing::warn!(event = "index_document_fetch_failed", error = %error);
-            return Preparation::Skipped(SKIP_FETCH_FAILED);
+            return Preparation::Skipped(SKIP_FETCH_FAILED, plan);
         }
     };
     if document.bytes.len() as u64 > max_bytes {
-        return Preparation::Skipped(SKIP_TOO_LARGE);
+        return Preparation::Skipped(SKIP_TOO_LARGE, plan);
     }
     let key = reference.key.clone();
     let mime = reference.mime.clone();
@@ -1519,9 +1574,30 @@ async fn prepare(
         ..reference
     };
     let mut bytes = document.bytes;
+    let class = elitea_doc_extract::image_for_vision(&mime, &bytes);
+    // A repository file's `commit_hash` hashes its whole text: on a blocking
+    // thread, never on this task (the text routes below do it in their own
+    // blocking step).
+    let mut hash_commit = source.hashes_commit() && !metadata.contains_key("commit_hash");
+    if hash_commit
+        && (!matches!(class, VisionImage::NotAnImage)
+            || elitea_doc_extract::is_document_type(&mime))
+    {
+        hash_commit = false;
+        match hashed_off_executor(bytes).await {
+            Ok((returned, hash)) => {
+                bytes = returned;
+                metadata.insert("commit_hash".to_owned(), Value::String(hash));
+            }
+            Err(_) => {
+                return Preparation::Configuration(
+                    "the document preparation task stopped unexpectedly".to_owned(),
+                );
+            }
+        }
+    }
     // A standalone image is described by the chat model (ADR-0030 I4 part B),
     // never extracted as text.
-    let class = elitea_doc_extract::image_for_vision(&mime, &bytes);
     if !matches!(class, VisionImage::NotAnImage) {
         // Whether the step is on comes FIRST: a vision-off image is
         // `unsupported_type` whatever its bytes are.
@@ -1534,15 +1610,15 @@ async fn prepare(
         let ImagePlan::Vision(vision) =
             elitea_doc_chunk::plan_image(&settings_extension, &chunking)
         else {
-            return Preparation::Skipped(SKIP_UNSUPPORTED);
+            return Preparation::Skipped(SKIP_UNSUPPORTED, plan);
         };
         let kind = match class {
             VisionImage::Supported(media_type) => ImageKind::Native(media_type),
             VisionImage::Bmp => ImageKind::Bmp,
-            VisionImage::Corrupt => return Preparation::Skipped(SKIP_UNREADABLE),
+            VisionImage::Corrupt => return Preparation::Skipped(SKIP_UNREADABLE, plan),
             // SVG, TIFF, ...: not converted by this build.
             VisionImage::Unsupported | VisionImage::NotAnImage => {
-                return Preparation::Skipped(SKIP_UNSUPPORTED);
+                return Preparation::Skipped(SKIP_UNSUPPORTED, plan);
             }
         };
         // Fitting (decode, resize) waits for the run's loop: the chat model,
@@ -1555,6 +1631,7 @@ async fn prepare(
                 metadata,
                 acl,
                 chunks: Vec::new(),
+                explicit_model: chunking.explicitly_needs_model_for(&settings_extension),
             }),
             RawImage {
                 bytes: Bytes::from(bytes),
@@ -1569,12 +1646,19 @@ async fn prepare(
         let sent = std::mem::take(&mut bytes);
         match sidecar_text(extractor, &key, &mime, sent, limits).await {
             Ok(text) => Some(text),
-            Err(label) => return Preparation::Skipped(label),
+            Err(label) => return Preparation::Skipped(label, plan),
         }
     } else {
         None
     };
+    let explicit_model = chunking.explicitly_needs_model_for(&elitea_doc_chunk::extension_of(&key));
     let chunked = tokio::task::spawn_blocking(move || {
+        if hash_commit {
+            metadata.insert(
+                "commit_hash".to_owned(),
+                Value::String(super::source::commit_hash(&bytes)),
+            );
+        }
         let is_html = matches!(mime.as_str(), "text/html" | "application/xhtml+xml");
         let options = ExtractOptions {
             html_to_markdown: true,
@@ -1583,12 +1667,12 @@ async fn prepare(
             Some(text) => text,
             None => match elitea_doc_extract::extract_with(&mime, &bytes, &options) {
                 Extracted::Text { text, .. } => text,
-                Extracted::Unsupported => return Preparation::Skipped(SKIP_UNSUPPORTED),
-                Extracted::Unreadable(_) => return Preparation::Skipped(SKIP_UNREADABLE),
+                Extracted::Unsupported => return Preparation::Skipped(SKIP_UNSUPPORTED, plan),
+                Extracted::Unreadable(_) => return Preparation::Skipped(SKIP_UNREADABLE, plan),
             },
         };
         if text.trim().is_empty() {
-            return Preparation::Skipped(SKIP_EMPTY);
+            return Preparation::Skipped(SKIP_EMPTY, plan);
         }
         let options = ChunkOptions {
             html_converted: is_html,
@@ -1600,23 +1684,26 @@ async fn prepare(
                 metadata,
                 acl,
                 chunks,
+                explicit_model,
             })
         };
         match elitea_doc_chunk::plan_with(&text, &key, &chunking, options) {
-            Ok(ChunkPlan::Chunks(chunks)) if chunks.is_empty() => Preparation::Skipped(SKIP_EMPTY),
+            Ok(ChunkPlan::Chunks(chunks)) if chunks.is_empty() => {
+                Preparation::Skipped(SKIP_EMPTY, plan)
+            }
             Ok(ChunkPlan::Chunks(chunks)) => Preparation::Ready(prepared(chunks)),
             Ok(ChunkPlan::Proposal(proposal)) if proposal.windows().is_empty() => {
-                Preparation::Skipped(SKIP_EMPTY)
+                Preparation::Skipped(SKIP_EMPTY, plan)
             }
             Ok(ChunkPlan::Statistical(statistical)) if statistical.splits().is_empty() => {
-                Preparation::Skipped(SKIP_EMPTY)
+                Preparation::Skipped(SKIP_EMPTY, plan)
             }
             Ok(model_step @ (ChunkPlan::Proposal(_) | ChunkPlan::Statistical(_))) => {
                 Preparation::Model(prepared(Vec::new()), model_step)
             }
             // `plan_with` returns the model steps as plans, so this is a
             // defensive arm: a chunker that still needs a model skips.
-            Err(ChunkError::RequiresModel { .. }) => Preparation::Skipped(SKIP_NEEDS_MODEL),
+            Err(ChunkError::RequiresModel { .. }) => Preparation::Skipped(SKIP_NEEDS_MODEL, plan),
             Err(
                 error @ (ChunkError::UnknownChunker(_)
                 | ChunkError::Tokenizer(_)
@@ -1630,6 +1717,22 @@ async fn prepare(
     chunked.unwrap_or(Preparation::Configuration(
         "the document preparation task stopped unexpectedly".to_owned(),
     ))
+}
+
+/// The bytes of a repository file with the SDK's `commit_hash` of their
+/// text, computed on a blocking thread.
+///
+/// # Errors
+///
+/// The blocking thread stopped.
+pub(super) async fn hashed_off_executor(
+    bytes: Vec<u8>,
+) -> Result<(Vec<u8>, String), tokio::task::JoinError> {
+    tokio::task::spawn_blocking(move || {
+        let hash = super::source::commit_hash(&bytes);
+        (bytes, hash)
+    })
+    .await
 }
 
 /// One document's text from the extraction sidecar, or the summary label

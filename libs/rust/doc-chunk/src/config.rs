@@ -431,32 +431,24 @@ impl ChunkingConfig {
         self.selects("proposal")
     }
 
-    /// Whether the config EXPLICITLY selects a chunker that calls a model
-    /// (`proposal` or `statistical`), as opposed to the image-file vision
-    /// step that is on by default. A run that selects one and has no model
-    /// loses every document that chunker would have handled.
+    /// Whether the config EXPLICITLY asks the documents of `extension`
+    /// (`".md"` or `"md"`) for a step that calls a model, as opposed to the
+    /// image-file vision step that is on by default: the `proposal` or
+    /// `statistical` chunker that applies to the extension, or, for an image
+    /// extension, `use_llm: true` (on its block or at the top level). A run
+    /// with no model loses such a document; the default-on picture step
+    /// loses nothing the user asked for. Resolved per extension, so a
+    /// `proposal` chunker for `.md` does not make a skipped `.png` count.
     #[must_use]
-    pub fn selects_model_chunker(&self) -> bool {
-        self.selects("proposal") || self.selects("statistical")
-    }
-
-    /// Whether the config EXPLICITLY opts into the picture description
-    /// (`use_llm: true` at the top level or on an image extension), as
-    /// opposed to the default-on step. A run that asks for it and has no
-    /// model loses the descriptions it asked for.
-    #[must_use]
-    pub fn opts_into_vision(&self) -> bool {
-        self.base.use_llm == Some(true)
-            || self.by_extension.iter().any(|(extension, params)| {
-                params.use_llm == Some(true) && crate::vision::is_image_extension(extension)
-            })
-    }
-
-    /// Whether the config explicitly asks for any step that needs a model:
-    /// a model chunker or the picture description.
-    #[must_use]
-    pub fn explicitly_needs_model(&self) -> bool {
-        self.selects_model_chunker() || self.opts_into_vision()
+    pub fn explicitly_needs_model_for(&self, extension: &str) -> bool {
+        let params = self.params_for(extension);
+        let model_chunker = params
+            .chunker
+            .as_deref()
+            .map(normalize_chunker_name)
+            .is_some_and(|name| name == "proposal" || name == "statistical");
+        model_chunker
+            || (crate::vision::is_image_extension(extension) && params.use_llm == Some(true))
     }
 
     /// Read the SDK's JSON form. `null` is the empty config.
@@ -553,16 +545,34 @@ mod tests {
     }
 
     #[test]
-    fn an_explicit_vision_opt_in_is_not_the_default() {
+    fn an_explicit_model_request_is_resolved_per_extension() {
         let from = |v: Value| ChunkingConfig::from_value(&v).unwrap();
-        assert!(!from(Value::Null).opts_into_vision());
-        assert!(!from(serde_json::json!({"use_llm": false})).opts_into_vision());
-        assert!(from(serde_json::json!({"use_llm": true})).opts_into_vision());
-        assert!(from(serde_json::json!({".png": {"use_llm": true}})).opts_into_vision());
+        let default = from(Value::Null);
+        assert!(!default.explicitly_needs_model_for(".png"));
+        assert!(!default.explicitly_needs_model_for(".md"));
+        assert!(!from(serde_json::json!({"use_llm": false})).explicitly_needs_model_for(".png"));
+        assert!(from(serde_json::json!({"use_llm": true})).explicitly_needs_model_for(".png"));
+        assert!(
+            from(serde_json::json!({".png": {"use_llm": true}})).explicitly_needs_model_for("png")
+        );
         // A document extension's use_llm is not served: not an opt-in.
-        assert!(!from(serde_json::json!({".pdf": {"use_llm": true}})).opts_into_vision());
-        assert!(from(serde_json::json!({".md": {"chunker": "proposal"}})).explicitly_needs_model());
-        assert!(!from(Value::Null).explicitly_needs_model());
+        assert!(
+            !from(serde_json::json!({".pdf": {"use_llm": true}}))
+                .explicitly_needs_model_for(".pdf")
+        );
+        // `.md` selecting a model chunker says nothing about pictures.
+        let md = from(serde_json::json!({".md": {"chunker": "proposal"}}));
+        assert!(md.explicitly_needs_model_for(".md"));
+        assert!(!md.explicitly_needs_model_for(".png"));
+        assert!(!md.explicitly_needs_model_for(".py"));
+        // A top-level chunker applies to every extension.
+        let all = from(serde_json::json!({"chunker": " Statistical "}));
+        assert!(all.explicitly_needs_model_for(".py"));
+        assert!(all.explicitly_needs_model_for(".png"));
+        // An extension's own chunker overrides the top-level one.
+        let over = from(serde_json::json!({"chunker": "proposal", ".md": {"chunker": "markdown"}}));
+        assert!(!over.explicitly_needs_model_for(".md"));
+        assert!(over.explicitly_needs_model_for(".txt"));
     }
 
     #[test]
