@@ -65,6 +65,12 @@ func runMetadata(row Row) map[string]any {
 	if row.Error != nil {
 		metadata["error"] = *row.Error
 	}
+	if report := runReport(row); report != nil {
+		// What the web client renders the run from (normalizeIndexingReport);
+		// `skipped` below stays the flat reason-to-count map.
+		metadata["report"] = report
+		metadata["total"] = report["totals"].(map[string]any)["total"]
+	}
 	if row.Stamped() {
 		metadata["indexed_chunks"] = row.Chunks
 		metadata["failed_chunks"] = row.Failed

@@ -1,0 +1,87 @@
+{
+  "categories": [
+    {
+      "count": 3,
+      "groups": [],
+      "kind": "indexed"
+    },
+    {
+      "count": 1,
+      "groups": [
+        {
+          "count": 1,
+          "items": [],
+          "label": "Contained no indexable content",
+          "reason": "empty"
+        },
+        {
+          "count": 5,
+          "counted": false,
+          "items": [],
+          "label": "Already indexed (unchanged)",
+          "reason": "unchanged"
+        }
+      ],
+      "kind": "skipped"
+    },
+    {
+      "count": 9,
+      "groups": [
+        {
+          "count": 2,
+          "items": [],
+          "label": "Too large to index",
+          "reason": "too_large"
+        },
+        {
+          "count": 4,
+          "items": [],
+          "label": "Unsupported format",
+          "reason": "unsupported_format"
+        },
+        {
+          "count": 3,
+          "items": [],
+          "label": "Not indexed (weird_new_reason)",
+          "reason": "weird_new_reason"
+        }
+      ],
+      "kind": "not_indexed"
+    },
+    {
+      "count": 3,
+      "groups": [
+        {
+          "count": 3,
+          "items": [],
+          "label": "Could not be read",
+          "reason": "read_error"
+        }
+      ],
+      "kind": "failed"
+    }
+  ],
+  "dependent_labels": {
+    "plural": "attachments",
+    "singular": "attachment"
+  },
+  "errors": [
+    "1 chunk(s) could not be embedded or stored"
+  ],
+  "errors_total": 1,
+  "item_labels": {
+    "plural": "documents",
+    "singular": "document"
+  },
+  "status": "partly_indexed",
+  "totals": {
+    "dependent_not_indexed": 0,
+    "failed": 3,
+    "indexed": 3,
+    "not_indexed": 9,
+    "skipped": 1,
+    "total": 21,
+    "unchanged": 5
+  },
+  "version": 1
+}
