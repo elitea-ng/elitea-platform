@@ -66,7 +66,8 @@ use tokio::task::JoinSet;
 use super::image_fit::{self, ImageKind};
 use super::inputs::{self, IndexParameters};
 use super::model_steps::{
-    ChatBinding, ChatLoader, ChatUnavailable, ModelSteps, RawImage, StepEnd, StepEnv,
+    ChatBinding, ChatLoader, ChatUnavailable, ModelSteps, PictureGateNow, RawImage, StepEnd,
+    StepEnv,
 };
 use super::slug::vector_space_slug;
 use super::source::{IndexSource, PathFilter, PlatformAccess};
@@ -111,6 +112,10 @@ pub(super) const SKIP_MODEL_FAILED: &str = "model_failed";
 /// (ADR-0030 I4); its stored version is untouched.
 pub(super) const SKIP_MODEL_CAP_EXCEEDED: &str = "model_cap_exceeded";
 const SKIP_EMPTY: &str = "empty";
+/// The model's reply to one picture is not one another attempt would change
+/// (it declined, or the reply is over the size bound): final for the picture,
+/// never marks the document for another run.
+pub(super) const SKIP_REPLY_UNUSABLE: &str = "reply_unusable";
 const SKIP_FETCH_FAILED: &str = "fetch_failed";
 const SKIP_EMBEDDING_FAILED: &str = "embedding_failed";
 pub(super) const SKIP_TOO_LARGE: &str = "too_large";
@@ -127,18 +132,27 @@ const SKIP_TOO_MANY_PAGES: &str = "too_many_pages";
 const SKIP_TOO_MANY_PICTURES: &str = "too_many_pictures";
 pub(super) const SKIP_EXTRACT_TIMEOUT: &str = "extract_timeout";
 
-/// Appended to a document's stored version when some of its embedded
-/// pictures were skipped for a reason another run cures (`model_failed`,
-/// `model_cap_exceeded`, `extract_timeout`): the text is indexed, and the
-/// version no source ever lists, so the next run finds the document changed
-/// and prepares it again. Once every picture is described, or skipped for a
-/// final reason, the plain source version is stored.
+/// Appended (with a run count, `#pictures-pending-2`) to a document's stored
+/// version when some of its embedded pictures were skipped for a reason
+/// another run cures (`model_failed`, `model_cap_exceeded`,
+/// `extract_timeout`): the text is indexed, and the version no source ever
+/// lists, so the next run finds the document changed and prepares it again.
+/// Once every picture is described, or skipped for a final reason, or the
+/// mark has been carried for [`MAX_PENDING_RUNS`] runs in a row, the plain
+/// source version is stored. A stored mark without a count is a first run.
 pub(super) const PICTURES_PENDING: &str = "#pictures-pending";
+
+/// The most consecutive runs a document carries the retry mark: a picture
+/// that fails every time is given up on, not retried for ever.
+pub(super) const MAX_PENDING_RUNS: u32 = 3;
 
 /// The longest version the registry accepts.
 const MAX_VERSION_BYTES: usize = 1024;
 
-/// A picture skip that another run cures.
+/// A picture skip that another run cures: only the classes that are
+/// transient by nature (a retryable gateway error, a spent call cap, a
+/// timeout). A reply the model will not change, an unreadable or oversized
+/// picture and a refusing model are final.
 fn retryable_picture_skip(reason: &str) -> bool {
     matches!(
         reason,
@@ -146,22 +160,57 @@ fn retryable_picture_skip(reason: &str) -> bool {
     )
 }
 
-/// `version` marked as needing another run for its pictures; unmarked (and
-/// warned) when the mark would not fit the registry's limit.
-fn pictures_pending(version: &str) -> String {
-    if version.len() + PICTURES_PENDING.len() > MAX_VERSION_BYTES {
+/// `version` marked as pending for the `run`-th consecutive run; unmarked
+/// (and warned) when the mark would not fit the registry's limit or the
+/// document has carried it for [`MAX_PENDING_RUNS`] runs already.
+fn pictures_pending(version: &str, run: u32) -> String {
+    if run > MAX_PENDING_RUNS {
+        tracing::warn!(
+            event = "index_pictures_pending_given_up",
+            runs = run - 1,
+            "some of the document's pictures failed in every one of its runs; stored without the retry mark"
+        );
+        return version.to_owned();
+    }
+    let mark = format!("{PICTURES_PENDING}-{run}");
+    if version.len() + mark.len() > MAX_VERSION_BYTES {
         tracing::warn!(
             event = "index_pictures_pending_unmarked",
             "the document's version is too long to carry the retry mark; its skipped pictures are not retried"
         );
         return version.to_owned();
     }
-    format!("{version}{PICTURES_PENDING}")
+    format!("{version}{mark}")
+}
+
+/// The source's version behind a stored one, and how many consecutive runs
+/// the retry mark has been carried (`0`: none).
+fn split_version(stored: &str) -> (&str, u32) {
+    let Some(at) = stored.rfind(PICTURES_PENDING) else {
+        return (stored, 0);
+    };
+    let rest = &stored[at + PICTURES_PENDING.len()..];
+    if rest.is_empty() {
+        return (&stored[..at], 1);
+    }
+    match rest.strip_prefix('-').map(str::parse::<u32>) {
+        Some(Ok(runs)) if runs > 0 => (&stored[..at], runs),
+        _ => (stored, 0),
+    }
+}
+
+/// How many consecutive runs the one stored version has carried the retry
+/// mark while the source has not moved (`0`: none, or the source changed).
+fn prior_pending(stored: &[(String, u64)], source: &str) -> u32 {
+    match stored {
+        [(version, _)] if source_version(version) == source => split_version(version).1,
+        _ => 0,
+    }
 }
 
 /// The source's version behind a stored one (the retry mark removed).
 fn source_version(stored: &str) -> &str {
-    stored.strip_suffix(PICTURES_PENDING).unwrap_or(stored)
+    split_version(stored).0
 }
 
 /// How many of one document's pictures are described at the same time.
@@ -170,6 +219,12 @@ const PICTURES_IN_FLIGHT: usize = 4;
 /// The figure above, for the tests that pin the bound.
 #[cfg(test)]
 pub(super) const PICTURES_IN_FLIGHT_FOR_TESTS: usize = PICTURES_IN_FLIGHT;
+
+/// [`split_version`], for the tests.
+#[cfg(test)]
+pub(super) fn split_version_for_tests(stored: &str) -> (&str, u32) {
+    split_version(stored)
+}
 
 /// [`source_version`], for the tests.
 #[cfg(test)]
@@ -368,6 +423,10 @@ enum Plan {
     /// which stays the document's chunk count if it cannot be re-indexed.
     Changed {
         prior_chunks: u64,
+        /// The consecutive runs the stored version has carried the
+        /// pictures-pending mark when the source has not moved (`0`: none,
+        /// or the source changed since).
+        prior_pending: u32,
     },
 }
 
@@ -380,6 +439,9 @@ struct Prepared {
     metadata: Map<String, Value>,
     acl: Vec<String>,
     chunks: Vec<Chunk>,
+    /// What became of the document's embedded pictures: tallied only when
+    /// the document ends up indexed.
+    pictures: PictureTally,
 }
 
 /// What of a document is known before chunking, to finish it.
@@ -388,6 +450,37 @@ struct Shell {
     plan: Plan,
     metadata: Map<String, Value>,
     acl: Vec<String>,
+    pictures: PictureTally,
+}
+
+/// The picture counts of ONE document, held until its outcome is known: a
+/// document that is then skipped, or fails to embed, has told the summary
+/// nothing about its pictures, and a retried document reports only the run
+/// that finally wrote it.
+#[derive(Default)]
+struct PictureTally {
+    /// Pictures not described, by reason.
+    skipped: BTreeMap<&'static str, u64>,
+    /// The reason the document's pictures were not even asked for.
+    not_read: Option<&'static str>,
+}
+
+impl PictureTally {
+    fn skip(&mut self, reason: &'static str, count: u64) {
+        if count > 0 {
+            *self.skipped.entry(reason).or_default() += count;
+        }
+    }
+
+    /// Adds the document's counts to the run's, once, when it is indexed.
+    fn settle(self, tally: &mut Tally) {
+        for (reason, count) in self.skipped {
+            tally.picture_skip(reason, count);
+        }
+        if let Some(reason) = self.not_read {
+            tally.pictures_not_read(reason);
+        }
+    }
 }
 
 /// What became of one embedded picture.
@@ -421,6 +514,68 @@ struct EmbeddedJob {
 enum Prepare {
     Done(Preparation),
     Embedded(Box<EmbeddedJob>),
+}
+
+/// Whether a document's pictures are asked of the extractor, decided by the
+/// run's loop.
+enum PictureAsk {
+    /// Not a document with the step on.
+    No,
+    /// The run can describe pictures.
+    Yes,
+    /// The run cannot (this is the reason, counted for the document).
+    NotRead(&'static str),
+    /// The chat model is still loading: the document is fetched meanwhile,
+    /// and its preparation waits for the answer only when it comes to ask.
+    Later(tokio::sync::watch::Receiver<PictureGate>),
+}
+
+/// The run's chat model load, in flight.
+type ChatLoad<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<Option<ChatBinding>, ChatUnavailable>> + Send + 'a>,
+>;
+
+/// What the loop knows about a document's pictures without waiting.
+enum Asked {
+    Decided(PictureAsk),
+    NeedsModel,
+}
+
+/// What the loop waits for: the chat model, or a document's preparation.
+enum PrepareEvent {
+    Loaded(Result<Option<ChatBinding>, ChatUnavailable>),
+    Joined(Option<Result<Prepare, tokio::task::JoinError>>),
+}
+
+/// What the chat model's load decided for the pictures of the run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PictureGate {
+    Waiting,
+    Open,
+    Closed(&'static str),
+}
+
+impl PictureAsk {
+    /// `Ok(wanted)`, or the reason the pictures are not asked for.
+    async fn resolve(self) -> Result<bool, &'static str> {
+        match self {
+            Self::No => Ok(false),
+            Self::Yes => Ok(true),
+            Self::NotRead(reason) => Err(reason),
+            Self::Later(mut gate) => {
+                let decided = gate
+                    .wait_for(|state| *state != PictureGate::Waiting)
+                    .await
+                    .map(|state| *state);
+                match decided {
+                    Ok(PictureGate::Open) => Ok(true),
+                    Ok(PictureGate::Closed(reason)) => Err(reason),
+                    // The run ended before the model loaded.
+                    Ok(PictureGate::Waiting) | Err(_) => Ok(false),
+                }
+            }
+        }
+    }
 }
 
 impl From<Preparation> for Prepare {
@@ -807,6 +962,7 @@ impl Runner<'_> {
                     reference.clone(),
                     Plan::Changed {
                         prior_chunks: versions.iter().map(|(_, chunks)| chunks).sum(),
+                        prior_pending: prior_pending(versions, &reference.version),
                     },
                 )),
             }
@@ -837,6 +993,11 @@ impl Runner<'_> {
         let mut cleaned = !self.parameters.clean_index;
         let mut pending = plan.to_write.iter().cloned();
         let mut tasks: JoinSet<Prepare> = JoinSet::new();
+        // The run's chat model, loaded while documents are fetched: started
+        // by the first document whose pictures could be described, polled
+        // beside the preparations, never awaited by the loop that feeds them.
+        let mut loading: Option<ChatLoad<'_>> = None;
+        let (gate_tx, _gate_rx) = tokio::sync::watch::channel(PictureGate::Waiting);
         let outcome: Result<(), Halt> = async {
             loop {
                 while tasks.len() < self.runtime.limits.document_concurrency {
@@ -848,14 +1009,46 @@ impl Runner<'_> {
                     let limits = self.runtime.limits;
                     let extractor = self.runtime.extractor.clone();
                     // Whether the document's pictures are worth reading is
-                    // known BEFORE the extractor is asked for them.
-                    let pictures = self.pictures_wanted(&reference).await;
+                    // known BEFORE the extractor is asked for them, and not
+                    // by waiting here for the model to load.
+                    let pictures = match self.picture_ask(&reference) {
+                        Asked::Decided(ask) => ask,
+                        Asked::NeedsModel => {
+                            if loading.is_none() {
+                                let (runtime, run) = (self.runtime, self.run);
+                                loading = Some(Box::pin(async move {
+                                    RunChatLoader { runtime, run }.load().await
+                                }));
+                            }
+                            PictureAsk::Later(gate_tx.subscribe())
+                        }
+                    };
                     tasks.spawn(prepare(
                         source, chunking, reference, plan, limits, extractor, pictures,
                     ));
                 }
-                let Some(joined) = tasks.join_next().await else {
-                    break Ok(());
+                let event = tokio::select! {
+                    loaded = async {
+                        match loading.as_mut() {
+                            Some(load) => load.await,
+                            None => std::future::pending().await,
+                        }
+                    } => PrepareEvent::Loaded(loaded),
+                    joined = tasks.join_next() => PrepareEvent::Joined(joined),
+                };
+                let joined = match event {
+                    PrepareEvent::Loaded(loaded) => {
+                        loading = None;
+                        self.steps.install_chat(loaded);
+                        gate_tx.send_replace(match self.steps.picture_gate_now() {
+                            PictureGateNow::Open => PictureGate::Open,
+                            PictureGateNow::Closed(reason) => PictureGate::Closed(reason),
+                            PictureGateNow::Unknown => PictureGate::Waiting,
+                        });
+                        continue;
+                    }
+                    PrepareEvent::Joined(None) => break Ok(()),
+                    PrepareEvent::Joined(Some(joined)) => joined,
                 };
                 self.check_liveness()?;
                 // A document with pictures to describe: describe them, put the
@@ -969,6 +1162,9 @@ impl Runner<'_> {
                     self.tally.updated_documents += 1;
                 }
                 self.tally.indexed_chunks += count;
+                // The pictures of a document are reported once, by the run
+                // that wrote it.
+                prepared.pictures.settle(&mut self.tally);
                 self.tally.written.push(IndexIngestDocumentV1 {
                     document_key: key,
                     version: prepared.reference.version.clone(),
@@ -1058,27 +1254,31 @@ impl Runner<'_> {
     /// extractor: only a PDF, DOCX or PPTX whose `use_llm` is on, and only
     /// while a picture of this run can still be described. With no chat
     /// model, or a model that refuses images, the pictures are not read at
-    /// all (the document is counted in the summary's message).
-    async fn pictures_wanted(&mut self, reference: &DocumentRef) -> bool {
+    /// all (the document is counted in the summary's message, if it is
+    /// indexed).
+    ///
+    /// Never waits: while the chat model has not loaded the answer is
+    /// [`Asked::NeedsModel`], and the loop starts the load (once) and hands
+    /// the document a receiver for the result, which its preparation waits
+    /// on only when it comes to ask the extractor, after it was fetched.
+    fn picture_ask(&self, reference: &DocumentRef) -> Asked {
         if !elitea_doc_extract::is_document_type(&reference.mime)
             || elitea_doc_chunk::plan_embedded_for(&reference.key, &reference.mime, &self.chunking)
                 .is_none()
         {
-            return false;
+            return Asked::Decided(PictureAsk::No);
         }
-        let context = StepContext::new(self.runtime, self.run, self.model);
-        let env = context.env();
-        match self.steps.picture_gate(&env).await {
-            None => true,
-            Some(reason) => {
+        match self.steps.picture_gate_now() {
+            PictureGateNow::Open => Asked::Decided(PictureAsk::Yes),
+            PictureGateNow::Closed(reason) => {
                 tracing::info!(
                     event = "index_pictures_not_requested",
                     reason,
                     "pictures not requested: the run cannot describe them"
                 );
-                self.tally.pictures_not_read(reason);
-                false
+                Asked::Decided(PictureAsk::NotRead(reason))
             }
+            PictureGateNow::Unknown => Asked::NeedsModel,
         }
     }
 
@@ -1109,14 +1309,20 @@ impl Runner<'_> {
             dropped,
         } = job;
         // What the extractor or the client dropped is final: no later run
-        // would get those pictures either.
-        self.tally
-            .picture_skip(SKIP_TOO_MANY_PICTURES, u64::from(dropped.too_many));
-        self.tally
-            .picture_skip(SKIP_TOO_LARGE, u64::from(dropped.too_large));
-        self.tally
-            .picture_skip(SKIP_UNSUPPORTED, u64::from(dropped.unsupported));
-        let (outcomes, pending) = self.describe_pictures(&plan, &pictures).await?;
+        // would get those pictures either. Held with the document until it
+        // is indexed.
+        shell
+            .pictures
+            .skip(SKIP_TOO_MANY_PICTURES, u64::from(dropped.too_many));
+        shell
+            .pictures
+            .skip(SKIP_TOO_LARGE, u64::from(dropped.too_large));
+        shell
+            .pictures
+            .skip(SKIP_UNSUPPORTED, u64::from(dropped.unsupported));
+        let (outcomes, pending) = self
+            .describe_pictures(&plan, &text, &pictures, &mut shell.pictures)
+            .await?;
         let inline: Vec<Inline<'_>> = pictures
             .iter()
             .zip(&outcomes)
@@ -1142,7 +1348,13 @@ impl Runner<'_> {
             pending,
         );
         if pending {
-            shell.reference.version = pictures_pending(&shell.reference.version);
+            // The consecutive run this is: one more than the stored version
+            // had, given up on after `MAX_PENDING_RUNS`.
+            let prior = match shell.plan {
+                Plan::Changed { prior_pending, .. } => prior_pending,
+                Plan::New => 0,
+            };
+            shell.reference.version = pictures_pending(&shell.reference.version, prior + 1);
         }
         let text = plan.inline(&text, &inline);
         let chunked =
@@ -1155,33 +1367,44 @@ impl Runner<'_> {
 
     /// The model's description of each of `pictures`, in document order, and
     /// whether any was skipped for a reason another run cures. A picture
-    /// that could not be described is counted in the tally and is
-    /// [`PictureOutcome::Nothing`].
+    /// that could not be described is counted in `tally` (the document's, not
+    /// the run's) and is [`PictureOutcome::Nothing`].
     ///
-    /// Distinct pictures (by the sha256 of their bytes) are described
-    /// [`PICTURES_IN_FLIGHT`] at a time and their results applied in
-    /// document order; the call cap and the image budget are charged
-    /// atomically by the one description path. A picture whose bytes
-    /// repeat an earlier one's takes that one's outcome, with no call of
-    /// its own: a back-reference for DOCX, the same description otherwise.
+    /// Distinct pictures (by the sha256 of their bytes, all hashed in one
+    /// blocking task) are described [`PICTURES_IN_FLIGHT`] at a time and
+    /// their results applied in document order; the call cap and the image
+    /// budget are charged atomically by the one description path. A picture
+    /// whose bytes repeat an earlier one's takes that one's outcome, with
+    /// no call of its own: a back-reference for DOCX, the same description
+    /// otherwise. "Earlier" is the order the descriptions are WRITTEN in
+    /// (by the offset each is placed at), not the order the parser numbered
+    /// the pictures in, so a back-reference never points down the page.
     async fn describe_pictures(
         &mut self,
         plan: &EmbeddedVisionPlan,
+        text: &str,
         pictures: &[Picture],
+        tally: &mut PictureTally,
     ) -> Result<(Vec<PictureOutcome>, bool), Halt> {
         let context = StepContext::new(self.runtime, self.run, self.model);
         let (env, alive) = (context.env(), context.alive());
         self.steps.load_chat(&env).await;
-        let mut digests = Vec::with_capacity(pictures.len());
-        for picture in pictures {
-            digests.push(image_fit::digest(picture.bytes.clone()).await);
-        }
-        // The first picture of each distinct content is the one described.
+        let digests = image_fit::digests(
+            pictures
+                .iter()
+                .map(|picture| picture.bytes.clone())
+                .collect(),
+        )
+        .await;
+        let offsets: Vec<usize> = pictures.iter().map(|picture| picture.text_offset).collect();
+        let order = elitea_doc_chunk::written_order(text, &offsets);
+        // The first picture of each distinct content, in written order, is
+        // the one described.
         let mut first_of: BTreeMap<[u8; 32], usize> = BTreeMap::new();
         let mut distinct: Vec<usize> = Vec::new();
-        for (index, digest) in digests.iter().enumerate() {
-            if let Some(digest) = digest
-                && let std::collections::btree_map::Entry::Vacant(slot) = first_of.entry(*digest)
+        for index in order {
+            if let Some(digest) = digests[index]
+                && let std::collections::btree_map::Entry::Vacant(slot) = first_of.entry(digest)
             {
                 slot.insert(index);
                 distinct.push(index);
@@ -1226,7 +1449,7 @@ impl Runner<'_> {
         let mut outcomes = Vec::with_capacity(pictures.len());
         for (index, digest) in digests.iter().enumerate() {
             let Some(first) = digest.and_then(|digest| first_of.get(&digest)) else {
-                self.tally.picture_skip(SKIP_UNREADABLE, 1);
+                tally.skip(SKIP_UNREADABLE, 1);
                 outcomes.push(PictureOutcome::Nothing);
                 continue;
             };
@@ -1236,12 +1459,12 @@ impl Runner<'_> {
                 }
                 Some(Ok(description)) => outcomes.push(PictureOutcome::Text(description.clone())),
                 Some(Err(reason)) => {
-                    self.tally.picture_skip(reason, 1);
+                    tally.skip(reason, 1);
                     pending |= retryable_picture_skip(reason);
                     outcomes.push(PictureOutcome::Nothing);
                 }
                 None => {
-                    self.tally.picture_skip(SKIP_MODEL_FAILED, 1);
+                    tally.skip(SKIP_MODEL_FAILED, 1);
                     pending = true;
                     outcomes.push(PictureOutcome::Nothing);
                 }
@@ -1332,7 +1555,7 @@ impl Runner<'_> {
         let mut retained_documents = 0_u64;
         let mut retained_chunks = 0_u64;
         for (reference, decided) in &plan.to_write {
-            if let Plan::Changed { prior_chunks } = decided
+            if let Plan::Changed { prior_chunks, .. } = decided
                 && !written.contains(reference.key.as_str())
                 && !self.tally.dropped.contains(&reference.key)
             {
@@ -1710,7 +1933,7 @@ async fn prepare(
     plan: Plan,
     limits: IndexRunLimits,
     extractor: Option<Arc<ExtractorClient>>,
-    pictures: bool,
+    pictures: PictureAsk,
 ) -> Prepare {
     let max_bytes = limits.max_document_bytes;
     if reference.size > max_bytes {
@@ -1788,6 +2011,7 @@ async fn prepare(
                 metadata,
                 acl,
                 chunks: Vec::new(),
+                pictures: PictureTally::default(),
             }),
             RawImage {
                 bytes: Bytes::from(bytes),
@@ -1812,12 +2036,26 @@ async fn prepare(
     } else {
         None
     };
+    // Only when the run can still describe a picture. The decision may
+    // wait for the run's chat model to load; the document was fetched
+    // meanwhile, so no slot sat idle for the load.
+    let mut picture_tally = PictureTally::default();
+    let wanted = if embedded_plan.is_some() {
+        match pictures.resolve().await {
+            Ok(wanted) => wanted,
+            Err(reason) => {
+                picture_tally.not_read = Some(reason);
+                false
+            }
+        }
+    } else {
+        false
+    };
     let sidecar_text = if is_document {
         let sent = std::mem::take(&mut bytes);
-        // Only when the run can still describe a picture (`pictures`).
         let asked = embedded_plan
             .as_ref()
-            .filter(|_| pictures)
+            .filter(|_| wanted)
             .map(|_| PICTURE_REQUEST);
         match sidecar_text(extractor, &key, &mime, sent, limits, asked).await {
             Ok(extracted) => Some(extracted),
@@ -1839,6 +2077,7 @@ async fn prepare(
                     plan: plan_of_run,
                     metadata,
                     acl,
+                    pictures: picture_tally,
                 },
                 key,
                 chunking,
@@ -1874,6 +2113,7 @@ async fn prepare(
                 plan: plan_of_run,
                 metadata,
                 acl,
+                pictures: picture_tally,
             },
         )
     })
@@ -1929,6 +2169,7 @@ fn chunk_text(
         plan,
         metadata,
         acl,
+        pictures,
     } = shell;
     let prepared = |chunks: Vec<Chunk>| {
         Box::new(Prepared {
@@ -1937,6 +2178,7 @@ fn chunk_text(
             metadata,
             acl,
             chunks,
+            pictures,
         })
     };
     match elitea_doc_chunk::plan_with(text, key, chunking, options) {

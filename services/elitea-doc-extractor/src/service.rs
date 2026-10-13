@@ -161,10 +161,12 @@ impl Caps {
 /// runs: the media of the package are counted from its central directory and
 /// a document whose media outweigh four times these caps (in count or in
 /// declared bytes) gives no picture at all (counted `too_many` /
-/// `too_large`). For a PDF the parser can only be capped per page (a few
-/// pictures a page, over at most `max_pages` pages), which bounds the COUNT
-/// of pictures it decodes, not their bytes: those stay inside the parser's
-/// overhead share of the container limit. The defaults' per-slot figure is
+/// `too_large`). For a PDF the parser decodes every page's pictures with no
+/// document budget and cannot stop early, so its pictures are read only for
+/// a PDF of at most `PDF_PICTURE_MAX_PAGES` pages (a first, text-only pass
+/// gives the count), one picture a page; a longer one gives its text alone
+/// (counted). The parser has no byte bound of its own, so the figure takes
+/// each picture at the per-picture bound. The defaults' per-slot figure is
 /// [`crate::config::Config::picture_memory`], which a test holds under the
 /// default limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

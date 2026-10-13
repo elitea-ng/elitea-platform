@@ -89,6 +89,21 @@ pub(crate) async fn digest(original: Bytes) -> Option<[u8; 32]> {
         .ok()
 }
 
+/// [`digest`] of every one of `originals`, in order, in ONE blocking task
+/// (a document's pictures are hashed together, not one task each in turn).
+/// An entry is `None` only if the task could not run.
+pub(crate) async fn digests(originals: Vec<Bytes>) -> Vec<Option<[u8; 32]>> {
+    let count = originals.len();
+    tokio::task::spawn_blocking(move || {
+        originals
+            .iter()
+            .map(|original| Some(Sha256::digest(original).into()))
+            .collect()
+    })
+    .await
+    .unwrap_or_else(|_| vec![None; count])
+}
+
 fn permits() -> &'static Arc<Semaphore> {
     static PERMITS: OnceLock<Arc<Semaphore>> = OnceLock::new();
     PERMITS.get_or_init(|| Arc::new(Semaphore::new(DECODES_AT_ONCE)))

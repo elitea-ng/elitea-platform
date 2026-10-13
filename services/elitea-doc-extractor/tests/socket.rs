@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use elitea_doc_extract::PDF_PICTURE_MAX_PAGES;
 use elitea_doc_extractor::pb::document_extract_service_server::DocumentExtractServiceServer;
 use elitea_doc_extractor::pb::{
     ExtractHeader, ExtractImages, ExtractLimits, ExtractRequest, ExtractResponse, ExtractedText,
@@ -1470,10 +1471,10 @@ async fn a_package_whose_media_outweigh_the_work_bound_gives_its_text_and_no_pic
 #[tokio::test(flavor = "multi_thread")]
 async fn a_pdf_with_a_picture_on_every_page_returns_the_bound_and_counts_the_rest() {
     let served = serve(Caps::default(), 2);
-    let pages: Vec<(&str, bool)> = (0..30).map(|_| ("Page", true)).collect();
+    let pages: Vec<(&str, bool)> = (0..PDF_PICTURE_MAX_PAGES).map(|_| ("Page", true)).collect();
     let text = extracted(
         &served,
-        "long.pdf",
+        "short.pdf",
         "application/pdf",
         pdf_with_pictures(&pages),
         Some(asking(5, 0, 0)),
@@ -1482,10 +1483,81 @@ async fn a_pdf_with_a_picture_on_every_page_returns_the_bound_and_counts_the_res
     assert_eq!(text.images.len(), 5);
     let returned: usize = text.images.iter().map(|image| image.data.len()).sum();
     assert!(returned as u64 <= ImageCaps::default().max_total_bytes);
-    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 25);
+    assert_eq!(
+        text.images_skipped.unwrap_or_default().too_many,
+        u32::try_from(PDF_PICTURE_MAX_PAGES).expect("small") - 5
+    );
     // Document order: the first five pages.
     let pages: Vec<u32> = text.images.iter().map(|image| image.page).collect();
     assert_eq!(pages, vec![1, 2, 3, 4, 5]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pdf_over_the_page_bound_gives_its_text_and_no_picture_counted() {
+    // The parser decodes every page's pictures with no way to stop early:
+    // a longer PDF is not given to it for pictures at all.
+    let served = serve(Caps::default(), 2);
+    let pages: Vec<(&str, bool)> = (0..=PDF_PICTURE_MAX_PAGES)
+        .map(|_| ("Page", true))
+        .collect();
+    let bytes = pdf_with_pictures(&pages);
+    let plain = extracted(&served, "long.pdf", "application/pdf", bytes.clone(), None).await;
+    let text = extracted(
+        &served,
+        "long.pdf",
+        "application/pdf",
+        bytes,
+        Some(asking(0, 0, 0)),
+    )
+    .await;
+    assert!(text.images.is_empty());
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 1);
+    assert_eq!(text.text, plain.text, "the text is the plain pass's");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_of_pictures_alone_is_returned_with_them_and_without_them_is_empty() {
+    let served = serve(Caps::default(), 2);
+    let blue = png([0, 0, 255]);
+    // Image-only PDF (a scan) and image-only deck: no text, one picture each.
+    let scan = pdf_with_pictures(&[("", true), ("", true)]);
+    let text = extracted(
+        &served,
+        "scan.pdf",
+        "application/pdf",
+        scan.clone(),
+        Some(asking(0, 0, 0)),
+    )
+    .await;
+    assert!(text.text.trim().is_empty(), "{:?}", text.text);
+    assert_eq!(text.images.len(), 2, "{:?}", text.images_skipped);
+    assert!(text.images.iter().all(|image| image.text_offset == 0));
+    let deck = pptx_with(&[("", true)], std::slice::from_ref(&blue));
+    let text = extracted(
+        &served,
+        "deck.pptx",
+        PPTX,
+        deck.clone(),
+        Some(asking(0, 0, 0)),
+    )
+    .await;
+    assert!(text.text.trim().is_empty(), "{:?}", text.text);
+    assert_eq!(text.images.len(), 1, "{:?}", text.images_skipped);
+    assert_eq!(text.images[0].data.as_ref(), blue.as_slice());
+
+    // Not asked for: nothing to index, as before.
+    for (name, mime, bytes) in [
+        ("scan.pdf", "application/pdf", scan),
+        ("deck.pptx", PPTX, deck),
+    ] {
+        let mut head = header(name, mime, bytes.len());
+        head.images = None;
+        let response = client::extract(served.channel.clone(), head, bytes)
+            .await
+            .unwrap_or_else(|status| panic!("{name}: {status}"));
+        let (reason, _) = skip_of(response);
+        assert_eq!(reason, SkipReason::Empty, "{name}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

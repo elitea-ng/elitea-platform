@@ -1531,6 +1531,8 @@ pub(in crate::indexing) mod fake_extractor {
         pub(in crate::indexing) seen: Mutex<Vec<Seen>>,
         /// The `images` of each header, in arrival order.
         pub(in crate::indexing) asked: Mutex<Vec<Option<ExtractImages>>>,
+        /// When each document (by file name) arrived, in arrival order.
+        pub(in crate::indexing) arrived: Mutex<Vec<(String, std::time::Instant)>>,
         /// Answered (text, pictures) to a header that asks for pictures.
         pub(in crate::indexing) pictures: Mutex<Option<ScriptedPictures>>,
         pub(in crate::indexing) capabilities: CapabilitiesResponse,
@@ -1573,6 +1575,10 @@ pub(in crate::indexing) mod fake_extractor {
                 }
             }
             self.asked.lock().expect("lock").push(header.images);
+            self.arrived
+                .lock()
+                .expect("lock")
+                .push((header.filename.clone(), std::time::Instant::now()));
             self.seen.lock().expect("lock").push((
                 header.filename.clone(),
                 header.content_type.clone(),
@@ -1665,6 +1671,7 @@ pub(in crate::indexing) mod fake_extractor {
         let fake = Arc::new(Fake {
             seen: Mutex::new(Vec::new()),
             asked: Mutex::new(Vec::new()),
+            arrived: Mutex::new(Vec::new()),
             pictures: Mutex::new(None),
             capabilities,
             capabilities_calls: AtomicUsize::new(0),

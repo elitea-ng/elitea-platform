@@ -85,8 +85,8 @@ use super::image_fit::{self, FitError, ImageKind};
 use super::inputs::LlmSettings;
 use super::pipeline::{
     EmbedOutcome, Gated, IndexRunFailure, SKIP_EXTRACT_TIMEOUT, SKIP_MODEL_CAP_EXCEEDED,
-    SKIP_MODEL_FAILED, SKIP_NO_MODEL, SKIP_TOO_LARGE, SKIP_UNREADABLE, SKIP_VISION_REFUSED,
-    classify_embedding_error, embed_gated,
+    SKIP_MODEL_FAILED, SKIP_NO_MODEL, SKIP_REPLY_UNUSABLE, SKIP_TOO_LARGE, SKIP_UNREADABLE,
+    SKIP_VISION_REFUSED, classify_embedding_error, embed_gated,
 };
 use crate::agents::session::BoundOrdinaryAgentModel as _;
 use crate::transport::embeddings_facade::EmbeddingsClient;
@@ -301,6 +301,16 @@ pub(crate) fn image_cap(cap: u32) -> u32 {
 /// `vision_refused` images in a row after which the model is taken to accept
 /// no images.
 pub(crate) const REFUSED_IN_A_ROW: u32 = 3;
+
+/// Whether a document's embedded pictures are worth asking for, as far as
+/// the run knows now ([`ModelSteps::picture_gate_now`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PictureGateNow {
+    /// The chat model has not been loaded.
+    Unknown,
+    Open,
+    Closed(&'static str),
+}
 
 /// The state of a run's model steps.
 pub(crate) struct ModelSteps {
@@ -529,7 +539,7 @@ impl ModelSteps {
     ///
     /// Takes `&self`, so a document's pictures can be described a few at a
     /// time; the chat model must already be loaded ([`Self::ensure_chat`] /
-    /// [`Self::picture_gate`]).
+    /// [`Self::picture_gate_now`]).
     ///
     /// # Errors
     ///
@@ -631,7 +641,14 @@ impl ModelSteps {
             Err(CallFailure::Cap(_)) => Err(StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED)),
             // Not an image call's failure; reported as it is, never as the cap.
             Err(CallFailure::Stop(reason)) => Err(StepEnd::Stop(reason)),
-            Err(CallFailure::Retryable(cause) | CallFailure::Unusable(cause)) => {
+            // A reply no other attempt will change (the model ended it for
+            // a reason of its own, over the size bound): final for this
+            // picture, so no later run is scheduled for it.
+            Err(CallFailure::Unusable(cause)) => {
+                tracing::warn!(event = "index_image_reply_unusable", cause);
+                Err(StepEnd::Skip(SKIP_REPLY_UNUSABLE))
+            }
+            Err(CallFailure::Retryable(cause)) => {
                 tracing::warn!(event = "index_image_description_failed", cause);
                 Err(StepEnd::Skip(SKIP_MODEL_FAILED))
             }
@@ -639,28 +656,44 @@ impl ModelSteps {
     }
 
     /// Whether a document's embedded pictures are worth asking the extractor
-    /// for, BEFORE it is asked: `Some(reason)` when no picture of this run
-    /// can be described and reading them would be wasted work, `None` when
-    /// they can. Loads the chat model on first need.
+    /// for, BEFORE it is asked, as far as the run knows NOW: unknown while
+    /// the chat model has not been loaded (the caller starts the load and
+    /// asks again), closed (with the reason) when no picture of this run can
+    /// be described and reading them would be wasted work, open when they
+    /// can.
     ///
     /// Only the two FINAL reasons close the gate: no chat model, and a model
     /// that refuses images. A spent image budget does not: the pictures are
     /// still read, so a document that has some can be recorded as needing
     /// another run (its pictures would be described then), and a document
     /// with none is not.
-    pub(crate) async fn picture_gate(&mut self, env: &StepEnv<'_>) -> Option<&'static str> {
+    pub(crate) fn picture_gate_now(&self) -> PictureGateNow {
         if self.images_without_model.load(Ordering::SeqCst) {
-            return Some(SKIP_NO_MODEL);
+            return PictureGateNow::Closed(SKIP_NO_MODEL);
         }
-        self.ensure_chat(env).await;
+        if matches!(self.chat, ChatSlot::Unloaded) {
+            return PictureGateNow::Unknown;
+        }
         if self.chat_parts().is_none() {
             self.images_without_model.store(true, Ordering::SeqCst);
-            return Some(SKIP_NO_MODEL);
+            return PictureGateNow::Closed(SKIP_NO_MODEL);
         }
         if self.images_refused.load(Ordering::SeqCst) {
-            return Some(SKIP_VISION_REFUSED);
+            return PictureGateNow::Closed(SKIP_VISION_REFUSED);
         }
-        None
+        PictureGateNow::Open
+    }
+
+    /// Takes the chat model a load (started elsewhere, so that the run did
+    /// not wait for it) came back with. A model already loaded stays.
+    pub(crate) fn install_chat(&mut self, loaded: Result<Option<ChatBinding>, ChatUnavailable>) {
+        if !matches!(self.chat, ChatSlot::Unloaded) {
+            return;
+        }
+        self.chat = match loaded {
+            Ok(binding) => ChatSlot::Loaded(binding),
+            Err(ChatUnavailable) => ChatSlot::Failed,
+        };
     }
 
     /// Loads the chat model, for callers that describe pictures through
@@ -1062,9 +1095,17 @@ async fn complete(
             && reason != FinishReason::Stop
             && !truncated
         {
-            return Err(CallFailure::Retryable(format!(
-                "the model stopped for {reason:?}"
-            )));
+            let cause = format!("the model stopped for {reason:?}");
+            // An image the model declined to answer (its safety filter, a
+            // recitation stop) is declined again by the next run: final.
+            // Any other stop, and a document step, keep their older meaning.
+            return Err(
+                if image && matches!(reason, FinishReason::Safety | FinishReason::Recitation) {
+                    CallFailure::Unusable(cause)
+                } else {
+                    CallFailure::Retryable(cause)
+                },
+            );
         }
         let mut reply = String::new();
         if let Some(content) = &response.content {

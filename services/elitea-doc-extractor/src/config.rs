@@ -211,18 +211,46 @@ impl Config {
     }
 
     /// The memory the pictures of every slot can hold at once, at the worst
-    /// the picture bounds allow: per slot, the media a DOCX or PPTX may hold
-    /// in the parser (`MEDIA_WORK_FACTOR`, 4, times the total bound, the
-    /// work bound the parser is let in on) plus the three copies of what is
-    /// returned (the parser's, the response's, the encoded message). A PDF's
-    /// pictures are bounded in COUNT only (per page, times the page cap), not
-    /// in bytes; they are inside the parser's overhead share.
+    /// the picture bounds allow. Per slot, the larger of the two shapes plus
+    /// the three copies of what is returned (the parser's, the response's,
+    /// the encoded message):
+    ///
+    /// * a DOCX or PPTX: the media the parser may hold, `MEDIA_WORK_FACTOR`
+    ///   (4) times the total bound (the work bound it is let in on);
+    /// * a PDF: the parser decodes every page's pictures with no document
+    ///   budget and cannot be stopped early, so what it holds is bounded by
+    ///   how many pages it is let read (`PDF_PICTURE_MAX_PAGES`), the
+    ///   pictures it keeps per page (the cap, 1, plus the one more it keeps
+    ///   to show an overflow) and the bytes of one picture, taken at the
+    ///   per-picture bound (the parser has no byte bound of its own: a
+    ///   picture over it is dropped only after it was held); plus the PDF's
+    ///   own bytes a second time (the second pass reads the document again)
+    ///   and the text three times over (the page layout, the first pass's
+    ///   copy kept as the fallback).
     #[must_use]
     pub fn picture_memory(&self) -> u64 {
+        use elitea_doc_extract::{
+            MEDIA_WORK_FACTOR, PDF_PICTURE_MAX_INPUT_BYTES, PDF_PICTURE_MAX_PAGES,
+            PDF_PICTURE_MAX_TEXT_BYTES, PDF_PICTURES_PER_PAGE,
+        };
         let concurrency = u64::try_from(self.capacity.concurrency.max(1)).unwrap_or(1);
-        self.images
+        let as_u64 = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+        let office = self
+            .images
             .max_total_bytes
-            .saturating_mul(4 + 3)
+            .saturating_mul(as_u64(MEDIA_WORK_FACTOR));
+        let kept_pictures = as_u64(PDF_PICTURE_MAX_PAGES * (PDF_PICTURES_PER_PAGE + 1));
+        let pdf = kept_pictures
+            .saturating_mul(self.images.max_image_bytes)
+            .saturating_add(
+                self.caps
+                    .max_input_bytes
+                    .min(as_u64(PDF_PICTURE_MAX_INPUT_BYTES)),
+            )
+            .saturating_add(as_u64(PDF_PICTURE_MAX_TEXT_BYTES).saturating_mul(3));
+        office
+            .max(pdf)
+            .saturating_add(self.images.max_total_bytes.saturating_mul(3))
             .saturating_mul(concurrency)
     }
 
@@ -274,12 +302,11 @@ mod tests {
             config.picture_memory(),
             config.memory_limit_for_caps() / 4
         );
-        // And the figure is the real one: slots x (media held by the
-        // parser + the three copies of what is returned) x the total bound.
-        assert_eq!(
-            config.picture_memory(),
-            4 * (4 + 3) * config.images.max_total_bytes
-        );
+        // And the figure is the real one, the PDF shape being the larger at
+        // the defaults: slots x (8 pages x 2 pictures x 5 MiB held by the
+        // parser + the PDF's bytes again (16 MiB) + the text three times
+        // (3 x 4 MiB) + the three copies of what is returned (3 x 12 MiB)).
+        assert_eq!(config.picture_memory(), (4 * (80 + 16 + 12 + 36)) << 20);
         assert_eq!(config.capacity, Capacity::default());
         assert_eq!(config.capacity.concurrency, 4);
         assert_eq!(config.capacity.slot_wait, Duration::from_mins(10));

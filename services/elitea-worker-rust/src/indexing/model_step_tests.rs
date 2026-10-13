@@ -48,6 +48,8 @@ pub(super) enum Reply {
     Text(String),
     /// A reply the model cut off at `max_tokens`.
     Cut(String),
+    /// A reply the model declined to give (its safety filter).
+    Declined,
     Fail(ErrorCategory, &'static str),
 }
 
@@ -201,6 +203,14 @@ impl Llm for ScriptedLlm {
                     content: Some(Content::new("model").with_text(text)),
                     turn_complete: true,
                     finish_reason: Some(FinishReason::MaxTokens),
+                    ..Default::default()
+                })
+            }))),
+            Reply::Declined => Ok(Box::pin(stream::once(async move {
+                Ok(LlmResponse {
+                    content: Some(Content::new("model").with_text(String::new())),
+                    turn_complete: true,
+                    finish_reason: Some(FinishReason::Safety),
                     ..Default::default()
                 })
             }))),

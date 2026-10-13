@@ -893,16 +893,22 @@ oversized, too many, unsupported, text invariance),
 | No budget beyond the provider's | The image budget of the image-file step: pictures of all kinds together use at most half of `index_model_call_cap`; three `vision_refused` in a row mark the model text-only for the rest of the run; only the credential, the project and the budget stop the run | — |
 | Descriptions are computed whenever the document is loaded | The document's version is unchanged by the setting: switching `use_llm` on (or changing the prompt or model) re-describes only documents that change or a `clean_index` run | Same as every chunking setting |
 | Pictures are described one after another | A document's distinct pictures are described four at a time, results applied in document order; the cap and the image budget are charged atomically; identical bytes in one document are one call | — |
-| (no SDK equivalent) | A picture skipped for a reason another run cures (`model_failed`, `model_cap_exceeded`, `extract_timeout`) still indexes the document, stored under `<source version>#pictures-pending`; the next run finds it changed and prepares it again; once every picture is described or skipped for a final reason (`no_model`, `vision_refused`, `too_large`, `unsupported_type`, sidecar limits) the plain source version is stored. Connectors are told the source version, never the mark | The SDK re-describes on every load; here an unchanged document costs nothing |
+| (no SDK equivalent) | A picture skipped for a reason another run cures (`model_failed`, `model_cap_exceeded`, `extract_timeout`) still indexes the document, stored under `<source version>#pictures-pending-<n>` (n = the consecutive run, 1 to 3); the next run finds it changed and prepares it again; once every picture is described or skipped for a final reason (`no_model`, `vision_refused`, `reply_unusable`, `too_large`, `unsupported_type`, sidecar limits), or the document has carried the mark for 3 runs in a row, the plain source version is stored. Only retryable gateway errors, a spent call cap and timeouts are transient; a reply the model declines (safety stop) or one over the size bound is final. Connectors are told the source version, never the mark | The SDK re-describes on every load; here an unchanged document costs nothing |
 | (no SDK equivalent) | With no chat model, or a model that refuses images, a document's pictures are not requested from the sidecar at all (counted in the message as `Embedded pictures not requested for documents: N no_model`) | — |
 | Key without a file extension | Planned by the media type the source delivered it as (`application/pdf` is `.pdf`) | — |
 
 Memory in the sidecar: a returned picture is held about three times (the
-parser's copy, the response's copy, the encoded message), so the defaults
-cost at most 84 MiB per slot on top of the document (with the DOCX/PPTX
-media the parser may hold, four times the total bound), held under a quarter
-of the default container limit by a config test. The parser reads a picture
-into memory before the caps can drop it, so the extractor bounds the work
-first: a DOCX/PPTX whose media outweigh four times the caps (counted from the
-zip's central directory) gives no picture, and a PDF reads at most four
-pictures a page (xberg can only be capped per page).
+parser's copy, the response's copy, the encoded message). The defaults cost
+at most 144 MiB per slot on top of the document (a DOCX/PPTX: the media the
+parser may hold, four times the total bound; a PDF: 8 pages x 2 pictures at
+the per-picture bound, its own bytes again and its text three times), held
+under a quarter of the default container limit by a config test that fails
+if a default grows past it. The parser reads a picture into memory before
+the caps can drop it, so the extractor bounds the work first: a DOCX/PPTX
+whose media outweigh four times the caps (counted from the zip's central
+directory) gives no picture; xberg decodes the pictures of every page of a
+PDF with no way to stop early, so a PDF is read twice, text first, and its
+pictures are read only for a PDF of at most 8 pages (a longer one, or an
+image-only one, gives its text and no picture, counted `too_many`). A
+document with no text and pictures (a scan of at most 8 pages) is indexed
+from the pictures' descriptions.

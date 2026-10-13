@@ -221,10 +221,23 @@ pub fn pptx_with(slides: &[(&str, bool)], images: &[Vec<u8>]) -> Vec<u8> {
         } else {
             String::new()
         };
+        // An empty text is a slide of its picture alone.
+        let (head, tail) = if text.is_empty() {
+            (String::new(), String::new())
+        } else {
+            (
+                format!(
+                    "<p:sp><p:txBody><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"
+                ),
+                format!(
+                    "<p:sp><p:txBody><a:p><a:r><a:t>{text} tail</a:t></a:r></a:p></p:txBody></p:sp>"
+                ),
+            )
+        };
         entries.push((
             format!("ppt/slides/slide{slide_no}.xml"),
             format!(
-                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>{picture}<p:sp><p:txBody><a:p><a:r><a:t>{text} tail</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree>{head}{picture}{tail}</p:spTree></p:cSld></p:sld>"#
             )
             .into_bytes(),
         ));
@@ -267,9 +280,14 @@ pub fn pdf_with_pictures(pages: &[(&str, bool)]) -> Vec<u8> {
         } else {
             ""
         };
-        let stream = format!(
-            "BT /F1 12 Tf 72 720 Td ({text} before) Tj ET {picture}BT /F1 12 Tf 72 400 Td ({text} after) Tj ET"
-        );
+        // An empty text is a page of its picture alone (a scan).
+        let stream = if text.is_empty() {
+            picture.to_owned()
+        } else {
+            format!(
+                "BT /F1 12 Tf 72 720 Td ({text} before) Tj ET {picture}BT /F1 12 Tf 72 400 Td ({text} after) Tj ET"
+            )
+        };
         objects.push(format!(
             "<< /Length {} >>\nstream\n{stream}\nendstream",
             stream.len()

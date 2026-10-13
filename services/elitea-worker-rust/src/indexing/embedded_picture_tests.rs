@@ -17,10 +17,11 @@ use std::sync::Arc;
 
 use adk_rust::ErrorCategory;
 use bytes::Bytes;
+use elitea_content_source::Document;
 use serde_json::{Value, json};
 
 use super::model_step_tests::{
-    Reply, ScriptedChat, failed_with, run_model, search, search_host, with_chat,
+    Reply, ScriptedChat, failed_with, run_model, run_with_entries, search, search_host, with_chat,
 };
 use super::tests::{
     Harness, binary_document, document, fake_extractor, harness, parameters, socket_path,
@@ -687,7 +688,7 @@ async fn a_picture_skipped_for_a_transient_reason_is_retried_by_the_next_run() {
     );
     // Written (its text is valuable) under a version no source lists.
     assert_eq!(
-        first.documents[0].version, "v1#pictures-pending",
+        first.documents[0].version, "v1#pictures-pending-1",
         "{first:?}"
     );
     assert_eq!(world.chat.calls(), 2);
@@ -796,15 +797,24 @@ async fn a_model_failure_marks_the_document_and_the_retry_mark_never_reaches_the
     .expect("summary");
     assert_eq!(first.indexed_documents, 1, "{first:?}");
     assert_eq!(
-        first.documents[0].version, "v1#pictures-pending",
+        first.documents[0].version, "v1#pictures-pending-1",
         "{first:?}"
     );
     assert!(first.message.contains("model_failed"), "{first:?}");
     // The stored version is what the diff compares; the source's own is
     // what a connector is told it holds.
     assert_eq!(
+        super::pipeline::source_version_of("v1#pictures-pending-1"),
+        "v1"
+    );
+    // A mark without a count is a first run (stored by the earlier build).
+    assert_eq!(
         super::pipeline::source_version_of("v1#pictures-pending"),
         "v1"
+    );
+    assert_eq!(
+        super::pipeline::source_version_of("v1#pictures-pending-x"),
+        "v1#pictures-pending-x"
     );
     let _ = std::fs::remove_file(&world.socket);
 }
@@ -954,4 +964,277 @@ async fn a_key_without_an_extension_is_planned_by_the_media_type_it_arrived_as()
     assert_eq!(world.chat.calls(), 1);
     let text = world.stored_text().await;
     assert!(text.contains("DESCRIPTION-0"), "{text}");
+}
+
+// ── review round 2 ──────────────────────────────────────────────────────────
+
+fn pdf() -> Vec<Document> {
+    vec![binary_document("docs/report.pdf", b"%PDF-1.4 x")]
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_of_pictures_alone_is_indexed_from_their_descriptions_when_they_are_asked_for() {
+    let scan = || {
+        scripted(
+            "",
+            vec![
+                picture("scan-one", 0, 0, 1, ""),
+                picture("scan-two", 1, 0, 2, ""),
+            ],
+            None,
+        )
+    };
+    let world = World::new("emb-scan", scan(), numbered).await;
+    let summary = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert!(summary.skipped.is_empty(), "{:?}", summary.skipped);
+    assert_eq!(world.chat.calls(), 2);
+    let text = world.stored_text().await;
+    assert!(
+        text.contains("DESCRIPTION-0") && text.contains("DESCRIPTION-1"),
+        "{text}"
+    );
+
+    // `use_llm` off: nothing is asked for, there is no text, and the
+    // document is skipped `empty` as before.
+    let world = World::new("emb-scan-off", scan(), numbered).await;
+    let summary = run_model(
+        &world.harness,
+        pdf(),
+        None,
+        &parameters(false, json!({})),
+        Some("m"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 0, "{summary:?}");
+    assert_eq!(summary.skipped.get("empty"), Some(&1), "{summary:?}");
+    assert_eq!(world.chat.calls(), 0);
+    let _ = std::fs::remove_file(&world.socket);
+
+    // Asked for, but every picture fails for good: nothing to index, and
+    // the pictures of a document that was not indexed are not reported.
+    let world = World::new("emb-scan-fail", scan(), |_, _| Reply::Declined).await;
+    let summary = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(summary.indexed_documents, 0, "{summary:?}");
+    assert_eq!(summary.skipped.get("empty"), Some(&1), "{summary:?}");
+    assert!(
+        !summary.message.contains("Embedded pictures"),
+        "a document that was not indexed reports no picture: {summary:?}"
+    );
+    let _ = std::fs::remove_file(&world.socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reply_the_model_will_not_change_is_final_and_never_marks_the_document() {
+    let page_one = end_of(PDF_TEXT, "After.");
+    let world = World::new(
+        "emb-declined",
+        scripted(PDF_TEXT, vec![picture("one", 0, page_one, 1, "")], None),
+        |_, _| Reply::Declined,
+    )
+    .await;
+    let first = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(first.indexed_documents, 1, "{first:?}");
+    assert_eq!(first.documents[0].version, "v1", "{first:?}");
+    assert!(first.message.contains("1 reply_unusable"), "{first:?}");
+    let second = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(second.indexed_documents, 0, "{second:?}");
+    assert!(second.message.contains("1 unchanged"), "{second:?}");
+    assert_eq!(world.chat.calls(), 1, "not asked again");
+    let _ = std::fs::remove_file(&world.socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transient_failure_marks_the_document_for_a_bounded_number_of_runs() {
+    let page_one = end_of(PDF_TEXT, "After.");
+    let mut world = World::new(
+        "emb-bounded",
+        scripted(PDF_TEXT, vec![picture("one", 0, page_one, 1, "")], None),
+        |_, _| Reply::Fail(ErrorCategory::Unavailable, "model_gateway.unavailable"),
+    )
+    .await;
+    world.harness.runtime.limits.embedding_retry_backoff = std::time::Duration::ZERO;
+    // Runs 1..=3 carry the mark with their count; the 4th stores the plain
+    // source version and the document is settled.
+    for (run, version) in [
+        "v1#pictures-pending-1",
+        "v1#pictures-pending-2",
+        "v1#pictures-pending-3",
+        "v1",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let summary = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+            .await
+            .expect("summary");
+        assert_eq!(summary.indexed_documents, 1, "run {run}: {summary:?}");
+        assert_eq!(summary.documents[0].version, version, "run {run}");
+        // Each run reports its own outcome, once.
+        assert_eq!(
+            summary.message.matches("model_failed").count(),
+            1,
+            "run {run}: {summary:?}"
+        );
+    }
+    let settled = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(settled.indexed_documents, 0, "{settled:?}");
+    assert!(settled.message.contains("1 unchanged"), "{settled:?}");
+    let _ = std::fs::remove_file(&world.socket);
+}
+
+#[test]
+fn the_retry_mark_carries_its_count_and_the_old_mark_is_a_first_run() {
+    use super::pipeline::split_version_for_tests as split;
+    assert_eq!(split("v1"), ("v1", 0));
+    assert_eq!(split("v1#pictures-pending"), ("v1", 1));
+    assert_eq!(split("v1#pictures-pending-2"), ("v1", 2));
+    assert_eq!(split("v1#pictures-pending-0"), ("v1#pictures-pending-0", 0));
+    assert_eq!(split("v1#pictures-pending-x"), ("v1#pictures-pending-x", 0));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_docx_back_reference_follows_the_order_the_blocks_are_written_not_the_pictures_number() {
+    let text = "Intro.\n\n[Image: Picture 1]\n\nMiddle.\n\n[Image: Picture 2]\n\nOutro.";
+    let (one, two) = (
+        end_of(text, "[Image: Picture 1]"),
+        end_of(text, "[Image: Picture 2]"),
+    );
+    // The parser numbered the LATER place first: ordinal 0 is written
+    // second. The description goes where it is written first.
+    let world = World::new(
+        "emb-reorder",
+        scripted(
+            text,
+            vec![
+                picture("same", 0, two, 0, "image1.png"),
+                picture("same", 1, one, 0, "image2.png"),
+            ],
+            None,
+        ),
+        numbered,
+    )
+    .await;
+    let summary = run_model(
+        &world.harness,
+        vec![binary_document("docs/spec.docx", b"PK\x03\x04 x")],
+        None,
+        &on(&[".docx"]),
+        Some("m"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(world.chat.calls(), 1);
+    let stored = world.stored_text().await;
+    let normalised = stored.replace("\n\n\n", "\n\n");
+    let described = "[Image: Picture 1]\n**Image Transcript:**\nImage: image2.png, DESCRIPTION-0\n";
+    let referenced = "[Image: Picture 2]\n**Image Transcript:**\nImage: image1.png [already transcribed, see above]\n";
+    let a = normalised
+        .find(described)
+        .unwrap_or_else(|| panic!("{stored}"));
+    let b = normalised
+        .find(referenced)
+        .unwrap_or_else(|| panic!("{stored}"));
+    assert!(a < b, "the reference points up: {stored}");
+}
+
+/// Entries that take a while to fetch: the chat model's load.
+struct SlowEntries {
+    delay: std::time::Duration,
+    finished: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+#[async_trait::async_trait]
+impl crate::indexing::pipeline::ChatEntrySource for SlowEntries {
+    async fn load(
+        &self,
+    ) -> Result<crate::indexing::pipeline::ChatEntries, crate::indexing::model_steps::ChatUnavailable>
+    {
+        tokio::time::sleep(self.delay).await;
+        *self.finished.lock().expect("lock") = Some(std::time::Instant::now());
+        Ok(crate::indexing::pipeline::ChatEntries {
+            model: Some(
+                crate::transport::input_content::MaterializedInput::for_test(
+                    b"\"gpt-vision\"".to_vec(),
+                ),
+            ),
+            configuration: None,
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_slow_chat_model_load_does_not_hold_up_the_documents_that_need_no_picture() {
+    let page_one = end_of(PDF_TEXT, "After.");
+    let world = World::new(
+        "emb-slow",
+        scripted(PDF_TEXT, vec![picture("one", 0, page_one, 1, "")], None),
+        numbered,
+    )
+    .await;
+    let entries = SlowEntries {
+        delay: std::time::Duration::from_millis(700),
+        finished: std::sync::Mutex::new(None),
+    };
+    // The PDF is first and needs the model; the deck and the sheet do not
+    // (`use_llm` is on for `.pdf` only).
+    let summary = run_with_entries(
+        &world.harness,
+        vec![
+            binary_document("docs/report.pdf", b"%PDF-1.4 x"),
+            binary_document("decks/b.pptx", b"PK\x03\x04 y"),
+            binary_document("sheets/c.xlsx", b"PK\x03\x04 z"),
+        ],
+        &on(&[".pdf"]),
+        &entries,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 3, "{summary:?}");
+    let loaded = entries.finished.lock().expect("lock").expect("loaded");
+    let arrived = world.fake.arrived.lock().expect("lock").clone();
+    let at = |name: &str| {
+        arrived
+            .iter()
+            .find(|(file, _)| file == name)
+            .unwrap_or_else(|| panic!("{name} never reached the extractor: {arrived:?}"))
+            .1
+    };
+    // The others were fetched and extracted while the model loaded; the
+    // PDF's pictures were asked for only once it had.
+    assert!(at("decks/b.pptx") < loaded, "the deck waited for the model");
+    assert!(
+        at("sheets/c.xlsx") < loaded,
+        "the sheet waited for the model"
+    );
+    assert!(at("docs/report.pdf") >= loaded, "the PDF asked too early");
+    let asked = world.fake.asked.lock().expect("lock").clone();
+    assert_eq!(asked.iter().filter(|a| a.is_some()).count(), 1);
+    assert_eq!(world.chat.calls(), 1);
+    let _ = std::fs::remove_file(&world.socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_documents_pictures_are_hashed_together_and_in_order() {
+    use super::image_fit::{digest, digests};
+    let (a, b) = (Bytes::from_static(b"alpha"), Bytes::from_static(b"beta"));
+    let all = digests(vec![a.clone(), b.clone(), a.clone()]).await;
+    assert_eq!(all.len(), 3);
+    assert_eq!(all[0], digest(a).await);
+    assert_eq!(all[1], digest(b).await);
+    assert_eq!(all[0], all[2]);
+    assert_ne!(all[0], all[1]);
+    assert!(digests(Vec::new()).await.is_empty());
 }

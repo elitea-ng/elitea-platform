@@ -50,7 +50,7 @@ pub use config::{
 };
 pub use embedded::{
     Described, EMBEDDED_IMAGE_EXTENSIONS, EmbeddedVisionPlan, Inline, plan_embedded,
-    plan_embedded_for,
+    plan_embedded_for, written_order,
 };
 pub use proposal::{
     AnalysisError, ChunkDetails, PROPOSAL_WINDOW_TOKENS, parse_chunk_analysis, proposal_chunks,

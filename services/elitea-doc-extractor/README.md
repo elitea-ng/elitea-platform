@@ -69,10 +69,18 @@ PDF parsing. xberg reads a picture into memory before the caps can drop it,
 so the work is bounded BEFORE the parser runs: a DOCX or PPTX's media are
 counted from the zip's central directory (nothing is decompressed) and a
 package whose media outweigh four times the caps (in count or declared bytes)
-gives its text and no picture (counted `too_many` / `too_large`); a PDF can
-only be capped per page (xberg walks every page, up to `ELITEA_EXTRACTOR_MAX_PAGES`,
-with no document budget), so at most four pictures a page are read, and a
-page that overflows is counted as dropped (a lower bound).
+gives its text and no picture (counted `too_many` / `too_large`). xberg's PDF
+backend decodes the pictures of EVERY page in parallel, with no document
+budget and no way to stop once enough are found, so a PDF is read in two
+passes: the text alone first (which gives its page count), then, only for a
+PDF of at most 8 pages, 16 MiB and 4 MiB of text, again with the pictures
+(one a page kept, one more seen to show an overflow). A longer PDF gives its
+text and no picture, counted as one `too_many` (how many it holds is not known
+without decoding them); an image-only PDF over 8 pages therefore gives no
+text and no picture, and is skipped `empty`. A document with no text but with
+pictures (a scanned PDF of at most 8 pages, an image-only deck) is returned
+with an empty text and its pictures: the worker indexes it from their
+descriptions. With no picture to describe it is `empty` as before.
 
 `text_offset` is recovered from what xberg's plain text gives, because that
 text carries no marker for a picture: right after the picture's own
@@ -89,11 +97,13 @@ Caps (a request is lowered to them; `Capabilities.image_limits` states them):
 | `ELITEA_EXTRACTOR_MAX_IMAGE_TOTAL_BYTES` | bytes of all the pictures of one document | 12 MiB |
 
 A returned picture is held about three times (the parser's, the response's,
-the encoded message), and a DOCX or PPTX's media may weigh four times the total
-bound inside the parser, so a slot costs up to 84 MiB more than its document
-at the defaults (`Config::picture_memory`, times the real concurrency),
-inside the quarter of the container limit a config test holds it to. A PDF's
-pictures are bounded in count, not in bytes.
+the encoded message). A DOCX or PPTX's media may weigh four times the total
+bound inside the parser; a PDF holds up to 8 pages x 2 pictures at the
+per-picture bound (the parser has no byte bound of its own), its own bytes a
+second time and its text three times. A slot costs up to 144 MiB more than its
+document at the defaults (`Config::picture_memory`, times the real
+concurrency), inside the quarter of the container limit a config test holds
+it to; the test fails if a default grows past it.
 
 ## Transport and isolation
 

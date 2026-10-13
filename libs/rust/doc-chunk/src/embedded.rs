@@ -98,16 +98,11 @@ impl EmbeddedVisionPlan {
     /// later back-reference to it points at something.
     #[must_use]
     pub fn inline(&self, text: &str, pictures: &[Inline<'_>]) -> String {
-        let mut placed: Vec<(usize, usize)> = pictures
-            .iter()
-            .enumerate()
-            .map(|(index, picture)| (boundary(text, picture.offset), index))
-            .collect();
-        // Stable: equal offsets keep the order the caller gave.
-        placed.sort_by_key(|(offset, _)| *offset);
+        let offsets: Vec<usize> = pictures.iter().map(|picture| picture.offset).collect();
         let mut out = String::with_capacity(text.len());
         let mut cursor = 0;
-        for (offset, index) in placed {
+        for index in written_order(text, &offsets) {
+            let offset = boundary(text, pictures[index].offset);
             let Some(block) = self.block(&pictures[index]) else {
                 continue;
             };
@@ -154,6 +149,24 @@ impl EmbeddedVisionPlan {
     pub fn repeats_are_back_references(&self) -> bool {
         self.layout == Layout::Docx
     }
+}
+
+/// The order [`EmbeddedVisionPlan::inline`] writes the blocks of pictures
+/// whose offsets are `offsets` in: the indices, by the offset each is
+/// written at (clamped to `text` and moved to a character boundary), equal
+/// offsets keeping the order given. The FIRST picture of some bytes in this
+/// order is the one a DOCX describes; a later one with the same bytes is its
+/// back-reference ("see above" must point up).
+#[must_use]
+pub fn written_order(text: &str, offsets: &[usize]) -> Vec<usize> {
+    let mut placed: Vec<(usize, usize)> = offsets
+        .iter()
+        .enumerate()
+        .map(|(index, offset)| (boundary(text, *offset), index))
+        .collect();
+    // Stable: equal offsets keep the order the caller gave.
+    placed.sort_by_key(|(offset, _)| *offset);
+    placed.into_iter().map(|(_, index)| index).collect()
 }
 
 /// The description, or the SDK's placeholder when the model's reply is blank.
@@ -242,6 +255,13 @@ mod tests {
             number,
             described: Described::Description(text),
         }
+    }
+
+    #[test]
+    fn pictures_are_written_in_offset_order_and_equal_offsets_keep_the_given_order() {
+        // "aé" is 3 bytes: offset 2 is inside the é and moves to 3.
+        assert_eq!(written_order("aé!", &[3, 0, 2, 99, 1]), vec![1, 4, 0, 2, 3]);
+        assert!(written_order("", &[]).is_empty());
     }
 
     #[test]

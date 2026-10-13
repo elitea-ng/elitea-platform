@@ -515,8 +515,9 @@ mod documents {
 #[cfg(feature = "documents")]
 pub use documents::{
     DocumentError, DocumentLimits, DocumentText, EXTRACTION_STACK_BYTES, EmbeddedImage,
-    ImageLimits, ImagesSkipped, cooperative_timeout, extract_document,
-    extract_document_on_this_thread,
+    ImageLimits, ImagesSkipped, MEDIA_WORK_FACTOR, PDF_PICTURE_MAX_INPUT_BYTES,
+    PDF_PICTURE_MAX_PAGES, PDF_PICTURE_MAX_TEXT_BYTES, PDF_PICTURES_PER_PAGE, cooperative_timeout,
+    extract_document, extract_document_on_this_thread,
 };
 
 /// Whether `mime` is one of the formats the document extractor reads (PDF,
@@ -794,9 +795,10 @@ mod documents {
             .map_err(|error| {
                 DocumentError::Extractor(format!("no runtime for the extractor: {error}"))
             })?;
-        let mut config = xberg::ExtractionConfig {
+        let started = std::time::Instant::now();
+        let base = |timeout: Duration| xberg::ExtractionConfig {
             use_cache: false,
-            extraction_timeout_secs: Some(cooperative_timeout(limits.timeout).as_secs()),
+            extraction_timeout_secs: Some(cooperative_timeout(timeout).as_secs()),
             security_limits: Some(xberg::SecurityLimits {
                 max_pages: Some(limits.max_pages),
                 max_content_size: limits.max_content_bytes,
@@ -804,43 +806,36 @@ mod documents {
             }),
             ..xberg::ExtractionConfig::default()
         };
-        // What the pictures cost to read is decided BEFORE the parser runs:
-        // the parser reads every picture it is allowed to into memory and
-        // only then can they be dropped.
+        // What the pictures cost to read is decided BEFORE the parser reads
+        // them: it reads every picture it is allowed to into memory and only
+        // then can they be dropped.
         let mut refused = ImagesSkipped::default();
         let mut per_page = None;
+        let mut pdf_probe = false;
+        let mut config = base(limits.timeout);
         if let Some(images) = &limits.images {
             match picture_work(mime, &bytes, images) {
+                // A PDF's page count is not known before it is read: a first
+                // pass reads the text alone, and decides.
+                PictureWork::Probe => pdf_probe = true,
                 PictureWork::Extract { per_page_cap } => {
-                    // The plain text stays exactly what it was: the parser's
-                    // own placeholders (DOCX prints `[Image: ...]` for a
-                    // picture) stay on, because turning them off DROPS those
-                    // lines from the text (measured), and the page layout is
-                    // asked for only to anchor a picture to its page.
                     per_page = Some(per_page_cap);
-                    config.images = Some(xberg::ImageExtractionConfig {
-                        extract_images: true,
-                        inject_placeholders: true,
-                        // The parser keeps one more than the cap, so a page
-                        // that overflows is SEEN to (see `embedded_images`).
-                        max_images_per_page: Some(
-                            u32::try_from(per_page_cap.saturating_add(1)).unwrap_or(u32::MAX),
-                        ),
-                        ..xberg::ImageExtractionConfig::default()
-                    });
-                    config.pages = Some(xberg::PageConfig {
-                        extract_pages: true,
-                        insert_page_markers: false,
-                        ..xberg::PageConfig::default()
-                    });
+                    with_pictures(&mut config, per_page_cap);
                 }
                 PictureWork::Refuse(counted) => refused = counted,
             }
         }
-        let input = xberg::ExtractInput::from_bytes(bytes, mime.to_owned(), None);
-        match runtime.block_on(xberg::extract(input, &config)) {
+        let result = if pdf_probe {
+            let read = read_pdf(&runtime, mime, &config, bytes, limits, started);
+            per_page = read.per_page;
+            refused.too_many += read.refused;
+            read.result
+        } else {
+            run(&runtime, mime, &config, bytes)
+        };
+        match result {
             Ok(result) => match result.results.into_iter().next() {
-                Some(document) if !document.content.trim().is_empty() => {
+                Some(document) => {
                     let (images, mut images_skipped) = match (&limits.images, per_page) {
                         (Some(bounds), Some(per_page)) => {
                             embedded_images(&document, bounds, per_page)
@@ -850,6 +845,13 @@ mod documents {
                     images_skipped.too_many += refused.too_many;
                     images_skipped.too_large += refused.too_large;
                     images_skipped.unsupported += refused.unsupported;
+                    // A document of pictures alone (a scanned PDF, an
+                    // image-only deck) has no text and has pictures to
+                    // describe: it is returned with the pictures. With none
+                    // to describe it has nothing to index.
+                    if document.content.trim().is_empty() && images.is_empty() {
+                        return Err(DocumentError::NoText);
+                    }
                     Ok(DocumentText {
                         text: document.content,
                         extractor: "xberg",
@@ -857,10 +859,122 @@ mod documents {
                         images_skipped,
                     })
                 }
-                _ => Err(DocumentError::NoText),
+                None => Err(DocumentError::NoText),
             },
             Err(error) => Err(classify(&error)),
         }
+    }
+
+    /// One extraction pass over `bytes`.
+    fn run(
+        runtime: &tokio::runtime::Runtime,
+        mime: &str,
+        config: &xberg::ExtractionConfig,
+        bytes: Vec<u8>,
+    ) -> xberg::Result<xberg::ExtractionResult> {
+        let input = xberg::ExtractInput::from_bytes(bytes, mime.to_owned(), None);
+        runtime.block_on(xberg::extract(input, config))
+    }
+
+    /// What reading a PDF that asks for pictures came to.
+    struct PdfRead {
+        result: xberg::Result<xberg::ExtractionResult>,
+        /// The per-page cap the pictures were read under; `None`: none read.
+        per_page: Option<usize>,
+        /// Pictures counted as not read (see [`ImagesSkipped::too_many`]).
+        refused: u32,
+    }
+
+    /// A PDF that asks for pictures, in two passes (the parser decodes every
+    /// page's pictures and cannot stop early, so the page count has to be
+    /// known BEFORE it is let): the plain pass gives the text and the page
+    /// count; the pictures are read, in a second pass over the time that is
+    /// left, only for a PDF within the page and text bounds. A document
+    /// that is refused, or whose second pass fails, keeps the plain pass's
+    /// text and counts as one picture not read (how many it holds is not
+    /// known without decoding them).
+    fn read_pdf(
+        runtime: &tokio::runtime::Runtime,
+        mime: &str,
+        plain: &xberg::ExtractionConfig,
+        bytes: Vec<u8>,
+        limits: &DocumentLimits,
+        started: std::time::Instant,
+    ) -> PdfRead {
+        let first = match run(runtime, mime, plain, bytes.clone()) {
+            Ok(first) => first,
+            Err(error) => {
+                return PdfRead {
+                    result: Err(error),
+                    per_page: None,
+                    refused: 0,
+                };
+            }
+        };
+        let Some(document) = first.results.into_iter().next() else {
+            return PdfRead {
+                result: Ok(xberg::ExtractionResult::default()),
+                per_page: None,
+                refused: 0,
+            };
+        };
+        let cap = limits
+            .images
+            .as_ref()
+            .map_or(0, |bounds| bounds.max_images.min(PDF_PICTURES_PER_PAGE));
+        let left = limits.timeout.saturating_sub(started.elapsed());
+        if pdf_pictures_verdict(document.counts.pages, document.content.len(), left)
+            == PdfVerdict::Refuse
+        {
+            return PdfRead {
+                result: Ok(xberg::ExtractionResult::single(document)),
+                per_page: None,
+                refused: 1,
+            };
+        }
+        let mut second = xberg::ExtractionConfig {
+            extraction_timeout_secs: Some(cooperative_timeout(left).as_secs()),
+            ..plain.clone()
+        };
+        with_pictures(&mut second, cap);
+        match run(runtime, mime, &second, bytes) {
+            Ok(result) => PdfRead {
+                result: Ok(result),
+                per_page: Some(cap),
+                refused: 0,
+            },
+            // The picture pass failed after the plain pass read the text:
+            // the document keeps its text and loses its pictures.
+            Err(_) => PdfRead {
+                result: Ok(xberg::ExtractionResult::single(document)),
+                per_page: None,
+                refused: 1,
+            },
+        }
+    }
+
+    /// The parser's configuration with the picture reading switched on.
+    fn with_pictures(config: &mut xberg::ExtractionConfig, per_page_cap: usize) {
+        // The plain text stays exactly what it was: the parser's own
+        // placeholders (DOCX prints `[Image: ...]` for a picture) stay on,
+        // because turning them off DROPS those lines from the text
+        // (measured), and the page layout is asked for only to anchor a
+        // picture to its page.
+        config.images = Some(xberg::ImageExtractionConfig {
+            extract_images: true,
+            inject_placeholders: true,
+            // The parser keeps one more than the cap, so a page that
+            // overflows is SEEN to (see `embedded_images`).
+            max_images_per_page: Some(
+                u32::try_from(per_page_cap.saturating_add(1)).unwrap_or(u32::MAX),
+            ),
+            ..xberg::ImageExtractionConfig::default()
+        });
+        config.pages = Some(xberg::PageConfig {
+            extract_pages: true,
+            insert_page_markers: false,
+            ..xberg::PageConfig::default()
+        });
     }
 
     /// The typed reason behind an xberg error. The PDF backend's own errors
@@ -925,32 +1039,71 @@ mod documents {
         }
     }
 
-    /// The most pictures read from one PDF page: the parser can only be
-    /// capped per page, and walks every page (up to `max_pages`) in
-    /// parallel.
-    const PDF_PICTURES_PER_PAGE: usize = 4;
+    /// The most pictures kept from one PDF page: the parser can only be
+    /// capped per page (it keeps one more than this, to see an overflow).
+    pub const PDF_PICTURES_PER_PAGE: usize = 1;
+
+    /// The most pages of a PDF whose pictures are read. The parser decodes
+    /// the pictures of EVERY page (in parallel, with no document budget and
+    /// no way to stop once enough are found), so the only bound on what it
+    /// holds is how many pages it is let read them from: a longer PDF gives
+    /// its text and no picture (counted).
+    pub const PDF_PICTURE_MAX_PAGES: usize = 8;
+
+    /// The most text a PDF may have for its pictures to be read: the picture
+    /// pass asks for the text again, page by page, which copies it.
+    pub const PDF_PICTURE_MAX_TEXT_BYTES: usize = 4 << 20;
+
+    /// The most bytes of a PDF whose pictures are read: the picture pass
+    /// reads the document a second time, so the bytes are held twice.
+    pub const PDF_PICTURE_MAX_INPUT_BYTES: usize = 16 << 20;
 
     /// How many times the pictures' own bounds the media of a DOCX or PPTX
     /// may weigh, in count and in uncompressed bytes, before no picture is
     /// read from it at all.
-    const MEDIA_WORK_FACTOR: usize = 4;
+    pub const MEDIA_WORK_FACTOR: usize = 4;
 
     /// What the pictures of a document cost, decided before the parser runs.
     enum PictureWork {
+        /// A PDF: read its text first, then decide by its page count.
+        Probe,
         /// Ask the parser; it keeps at most this many per page.
         Extract { per_page_cap: usize },
         /// Read none; this many were found and are counted as skipped.
         Refuse(ImagesSkipped),
     }
 
+    /// What a PDF's first (text) pass decides for its pictures.
+    #[derive(Debug, PartialEq, Eq)]
+    enum PdfVerdict {
+        Read,
+        Refuse,
+    }
+
+    /// Whether the pictures of a PDF of `pages` pages and `text_bytes` of
+    /// text are read, with `time_left` to read them in. An unknown page
+    /// count (`0`) is refused: the bound cannot be shown to hold.
+    fn pdf_pictures_verdict(pages: usize, text_bytes: usize, time_left: Duration) -> PdfVerdict {
+        if pages == 0
+            || pages > PDF_PICTURE_MAX_PAGES
+            || text_bytes > PDF_PICTURE_MAX_TEXT_BYTES
+            || time_left < Duration::from_secs(2)
+        {
+            PdfVerdict::Refuse
+        } else {
+            PdfVerdict::Read
+        }
+    }
+
     fn picture_work(mime: &str, bytes: &[u8], bounds: &ImageLimits) -> PictureWork {
         if mime == "application/pdf" {
-            // PDF: the parser decodes pictures page by page with no document
-            // budget, so the work is bounded by the page count (`max_pages`)
-            // times a small per-page cap, whatever the document holds.
-            return PictureWork::Extract {
-                per_page_cap: bounds.max_images.min(PDF_PICTURES_PER_PAGE),
-            };
+            if bytes.len() > PDF_PICTURE_MAX_INPUT_BYTES {
+                return PictureWork::Refuse(ImagesSkipped {
+                    too_large: 1,
+                    ..ImagesSkipped::default()
+                });
+            }
+            return PictureWork::Probe;
         }
         if !(mime.contains("wordprocessingml") || mime.contains("presentationml")) {
             // Other types have no pictures this crate returns.
@@ -1073,6 +1226,15 @@ mod documents {
         description: Option<&'a str>,
     }
 
+    /// How far past its own length a page's text is searched for in the
+    /// whole text from where the last page ended: room for the separator
+    /// and the whitespace the parser normalises, and a bound on what a page
+    /// that is not there costs.
+    const PAGE_SEARCH_SLACK: usize = 4096;
+
+    /// The longest `[Image: ...]` description matched inline (alt text).
+    const MAX_INLINE_DESCRIPTION: usize = 1024;
+
     /// The byte offset in `text` where each picture's description belongs.
     ///
     /// The parser's plain text carries no marker for a picture, so the
@@ -1083,40 +1245,147 @@ mod documents {
     /// per-page text in the whole, in order); and one that is neither at the
     /// end of the text. An anchor is always on a character boundary. Pure:
     /// the same input gives the same offsets.
+    ///
+    /// LINEAR in the text and the pictures: the cursor over the pages only
+    /// moves forward and a page is looked for in a window of its own length
+    /// plus [`PAGE_SEARCH_SLACK`], so a page that is not in the text costs
+    /// one window, never a scan of the rest; a page that is not found takes
+    /// the start of the next page that is (else the end of the text); and
+    /// every `[Image: ...]` line is found once, up front.
     fn anchors(text: &str, pages: &[PageText<'_>], sites: &[Site<'_>]) -> Vec<usize> {
-        // (page number, start, end) of every page whose text was found.
-        let mut spans: Vec<(u32, usize, usize)> = Vec::with_capacity(pages.len());
+        // (page number -> (start, end)) of every page whose text was found.
+        let mut found: Vec<Option<(usize, usize)>> = Vec::with_capacity(pages.len());
         let mut cursor = 0;
         for page in pages {
             if page.content.is_empty() {
-                spans.push((page.number, cursor, cursor));
-            } else if let Some(found) = text[cursor..].find(page.content) {
-                let start = cursor + found;
-                cursor = start + page.content.len();
-                spans.push((page.number, start, cursor));
+                found.push(Some((cursor, cursor)));
+                continue;
             }
+            let window_end = cursor
+                .saturating_add(page.content.len())
+                .saturating_add(PAGE_SEARCH_SLACK)
+                .min(text.len());
+            let window_end = floor_boundary(text, window_end);
+            let hit = text
+                .get(cursor..window_end)
+                .and_then(|window| window.find(page.content));
+            found.push(hit.map(|at| {
+                let start = cursor + at;
+                cursor = start + page.content.len();
+                (start, cursor)
+            }));
         }
+        // A page that was not found sits, for a picture with no line of its
+        // own, where the next found one starts; a picture that names a line
+        // looks for it in the whole text.
+        let mut next_start = text.len();
+        let mut at: Vec<(usize, usize)> = vec![(0, 0); found.len()];
+        for (slot, span) in at.iter_mut().zip(&found).rev() {
+            *slot = match span {
+                Some((start, end)) => {
+                    next_start = *start;
+                    (*start, *end)
+                }
+                None => (next_start, next_start),
+            };
+        }
+        let mut spans: std::collections::HashMap<u32, (usize, usize, bool)> =
+            std::collections::HashMap::with_capacity(pages.len());
+        for ((page, span), anchor) in pages.iter().zip(&found).zip(&at) {
+            spans
+                .entry(page.number)
+                .or_insert((anchor.0, anchor.1, span.is_some()));
+        }
+        let lines = ImageLines::of(text);
         let mut inline_cursor = 0;
+        let mut tried: std::collections::HashMap<&str, (usize, usize)> =
+            std::collections::HashMap::new();
         sites
             .iter()
             .map(|site| {
-                let span = site
-                    .page
-                    .and_then(|page| spans.iter().find(|span| span.0 == page));
-                let (low, high) = span.map_or((0, text.len()), |span| (span.1, span.2));
-                if let Some(description) = site.description.filter(|d| !d.trim().is_empty()) {
+                let span = site.page.and_then(|page| spans.get(&page));
+                let (low, high) = span
+                    .filter(|span| span.2)
+                    .map_or((0, text.len()), |span| (span.0, span.1));
+                if let Some(description) = site.description.filter(|d| !d.trim().is_empty())
+                    && description.len() <= MAX_INLINE_DESCRIPTION
+                {
                     let from = inline_cursor.max(low);
-                    let needle = format!("[Image: {description}]");
-                    if from <= high
-                        && let Some(found) = text[from..high].find(&needle)
-                    {
-                        inline_cursor = from + found + needle.len();
-                        return inline_cursor;
+                    if let Some(end) = lines.find(text, description, from, high, &mut tried) {
+                        inline_cursor = end;
+                        return end;
                     }
                 }
-                span.map_or(text.len(), |span| span.2)
+                span.map_or(text.len(), |span| span.1)
             })
             .collect()
+    }
+
+    /// The largest char boundary of `text` at or below `at`.
+    fn floor_boundary(text: &str, mut at: usize) -> usize {
+        at = at.min(text.len());
+        while !text.is_char_boundary(at) {
+            at -= 1;
+        }
+        at
+    }
+
+    /// Where every `[Image: ` of a text starts, found in one pass.
+    struct ImageLines {
+        starts: Vec<usize>,
+    }
+
+    impl ImageLines {
+        const OPEN: &'static str = "[Image: ";
+
+        fn of(text: &str) -> Self {
+            Self {
+                starts: text.match_indices(Self::OPEN).map(|(at, _)| at).collect(),
+            }
+        }
+
+        /// The end of the first line `[Image: <description>]` that starts at
+        /// `from` or later and ends by `high`. `tried` remembers, per
+        /// description, the run of candidate lines already tried and failed,
+        /// so a description that is not in the text costs one pass over the
+        /// lines in all, not one per picture.
+        fn find<'d>(
+            &self,
+            text: &str,
+            description: &'d str,
+            from: usize,
+            high: usize,
+            tried: &mut std::collections::HashMap<&'d str, (usize, usize)>,
+        ) -> Option<usize> {
+            let first = self.starts.partition_point(|start| *start < from);
+            let (lo, hi) = tried.get(description).copied().unwrap_or((usize::MAX, 0));
+            let begin = if first >= lo && first < hi { hi } else { first };
+            let mut index = begin;
+            let mut matched = None;
+            while let Some(&start) = self.starts.get(index) {
+                let body = start + Self::OPEN.len();
+                let end = body + description.len() + 1;
+                if end > high {
+                    break;
+                }
+                if text[body..].starts_with(description)
+                    && text.as_bytes().get(end - 1) == Some(&b']')
+                {
+                    matched = Some(end);
+                    break;
+                }
+                index += 1;
+            }
+            // [begin, index) failed. Joined with the run already known when
+            // they touch; otherwise the newer run replaces it.
+            let run = if begin <= hi && index >= lo && lo != usize::MAX {
+                (lo.min(begin), hi.max(index))
+            } else {
+                (begin, index)
+            };
+            tried.insert(description, run);
+            matched
+        }
     }
 
     /// The pictures of `document` that fit `bounds`, in document order, each
@@ -1151,16 +1420,20 @@ mod documents {
         let mut total = 0_usize;
         let mut on_page: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
         for (image, text_offset) in found.into_iter().zip(offsets) {
+            // The parser kept one picture more than the per-page cap on a
+            // page that has more: that one is a picture dropped (the others
+            // it did not return are not known, so this is a lower bound).
+            // EVERY returned picture is counted against its page before the
+            // format is looked at, so a page whose extra picture is one a
+            // model does not take (a mask, an SVG) still shows its overflow.
+            let seen = on_page.entry(image.page_number.unwrap_or(0)).or_default();
+            *seen += 1;
+            let overflow = *seen > per_page_cap;
             let Some(media_type) = sniff_image(&image.data).filter(|_| !image.is_mask) else {
                 skipped.unsupported += 1;
                 continue;
             };
-            // The parser kept one picture more than the per-page cap on a
-            // page that has more: that one is a picture dropped (the others
-            // it did not return are not known, so this is a lower bound).
-            let seen = on_page.entry(image.page_number.unwrap_or(0)).or_default();
-            *seen += 1;
-            if *seen > per_page_cap {
+            if overflow {
                 skipped.too_many += 1;
                 continue;
             }
@@ -1296,6 +1569,151 @@ mod documents {
             let wide = "é\n\n[Image: ü]\n\nz";
             let offsets = anchors(wide, &[], &[named("ü")]);
             assert!(wide.is_char_boundary(offsets[0]));
+        }
+
+        #[test]
+        fn anchoring_is_linear_when_the_page_texts_are_not_in_the_text() {
+            // 1000 pages whose texts never occur in the 32 MiB text, each
+            // with a picture that names a line the text does not carry: a
+            // rescan of the rest of the text per miss would read ~32 GB.
+            let text = "lorem ipsum dolor sit amet ".repeat(1_200_000);
+            let contents: Vec<String> = (0..1000).map(|n| format!("never there {n}")).collect();
+            let descriptions: Vec<String> = (0..1000).map(|n| format!("absent {n}")).collect();
+            let pages: Vec<PageText<'_>> = contents
+                .iter()
+                .enumerate()
+                .map(|(n, content)| PageText {
+                    number: u32::try_from(n).expect("small") + 1,
+                    content,
+                })
+                .collect();
+            let sites: Vec<Site<'_>> = descriptions
+                .iter()
+                .enumerate()
+                .map(|(n, description)| Site {
+                    page: Some(u32::try_from(n).expect("small") + 1),
+                    description: Some(description),
+                })
+                .collect();
+            let started = std::time::Instant::now();
+            let offsets = anchors(&text, &pages, &sites);
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "anchoring took {:?}",
+                started.elapsed()
+            );
+            // No page was found: every picture falls back to the end.
+            assert_eq!(offsets.len(), 1000);
+            assert!(offsets.iter().all(|offset| *offset == text.len()));
+        }
+
+        #[test]
+        fn a_page_that_is_missing_takes_the_start_of_the_next_page_that_is_found() {
+            let whole = "One\n\nTwo\n\nFour";
+            let pages = [
+                PageText {
+                    number: 1,
+                    content: "One",
+                },
+                PageText {
+                    number: 2,
+                    content: "lost",
+                },
+                PageText {
+                    number: 3,
+                    content: "Two",
+                },
+                PageText {
+                    number: 4,
+                    content: "Four",
+                },
+            ];
+            let on = |page| Site {
+                page: Some(page),
+                description: None,
+            };
+            let offsets = anchors(whole, &pages, &[on(1), on(2), on(3), on(4)]);
+            assert_eq!(&whole[..offsets[0]], "One");
+            // Page 2 is not in the text: it sits where page 3 starts.
+            assert_eq!(&whole[offsets[1]..], "Two\n\nFour");
+            assert_eq!(&whole[..offsets[2]], "One\n\nTwo");
+            assert_eq!(offsets[3], whole.len());
+        }
+
+        #[test]
+        fn a_pdf_gives_its_pictures_only_within_the_page_and_text_bounds() {
+            let time = Duration::from_mins(1);
+            assert_eq!(pdf_pictures_verdict(1, 100, time), PdfVerdict::Read);
+            assert_eq!(
+                pdf_pictures_verdict(PDF_PICTURE_MAX_PAGES, 100, time),
+                PdfVerdict::Read
+            );
+            assert_eq!(
+                pdf_pictures_verdict(PDF_PICTURE_MAX_PAGES + 1, 100, time),
+                PdfVerdict::Refuse
+            );
+            // A page count the parser did not give cannot be shown to hold.
+            assert_eq!(pdf_pictures_verdict(0, 100, time), PdfVerdict::Refuse);
+            assert_eq!(
+                pdf_pictures_verdict(2, PDF_PICTURE_MAX_TEXT_BYTES + 1, time),
+                PdfVerdict::Refuse
+            );
+            assert_eq!(
+                pdf_pictures_verdict(2, 100, Duration::from_secs(1)),
+                PdfVerdict::Refuse
+            );
+            // The bytes of a larger PDF are not held twice.
+            let bounds = ImageLimits {
+                max_images: 4,
+                max_image_bytes: 1 << 20,
+                max_total_bytes: 4 << 20,
+            };
+            let big = vec![0_u8; PDF_PICTURE_MAX_INPUT_BYTES + 1];
+            assert!(matches!(
+                picture_work("application/pdf", &big, &bounds),
+                PictureWork::Refuse(ImagesSkipped { too_large: 1, .. })
+            ));
+            assert!(matches!(
+                picture_work("application/pdf", b"%PDF", &bounds),
+                PictureWork::Probe
+            ));
+        }
+
+        fn png_image(index: u32, page: u32) -> xberg::ExtractedImage {
+            xberg::ExtractedImage {
+                data: b"\x89PNG\r\n\x1a\nxx".to_vec().into(),
+                image_index: index,
+                page_number: Some(page),
+                ..xberg::ExtractedImage::default()
+            }
+        }
+
+        #[test]
+        fn a_page_overflow_is_seen_even_when_the_extra_picture_is_not_a_format_a_model_takes() {
+            let bounds = ImageLimits {
+                max_images: 10,
+                max_image_bytes: 1 << 20,
+                max_total_bytes: 4 << 20,
+            };
+            // Cap 1 a page: the parser keeps two. Page 1 returns a mask FIRST
+            // and then a supported picture: the supported one is the second
+            // the page returned, i.e. the parser saw more than the cap (it
+            // is the overflow, so it is not kept).
+            let mut mask = png_image(0, 1);
+            mask.is_mask = true;
+            let mut document = xberg::ExtractedDocument::default();
+            document.content = "text".to_owned();
+            document.images = Some(vec![mask, png_image(1, 1)]);
+            let (kept, skipped) = embedded_images(&document, &bounds, 1);
+            assert!(kept.is_empty());
+            assert_eq!(
+                skipped,
+                ImagesSkipped {
+                    too_many: 1,
+                    too_large: 0,
+                    unsupported: 1
+                }
+            );
         }
 
         #[test]
