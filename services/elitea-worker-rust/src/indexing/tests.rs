@@ -1268,7 +1268,9 @@ async fn whitelist_blacklist_and_the_needs_model_chunker_are_honoured() {
     assert_eq!(summary.indexed_documents, 1);
     assert_eq!(summary.documents[0].document_key, "a.md");
 
-    let needs_model = run(
+    // `use_llm` is the image-file step: it never turns a text document into
+    // one that needs a model.
+    let with_use_llm = run(
         &harness,
         vec![document("d.md", "v1", "delta")],
         &command(NS, None),
@@ -1277,12 +1279,12 @@ async fn whitelist_blacklist_and_the_needs_model_chunker_are_honoured() {
     )
     .await
     .expect("summary");
-    assert_eq!(needs_model.skipped.get("needs_model"), Some(&1));
-    assert_eq!(needs_model.indexed_documents, 0);
+    assert_eq!(with_use_llm.skipped.get("needs_model"), None);
+    assert_eq!(with_use_llm.indexed_documents, 1);
     // The earlier document is no longer listed by the source, so it is gone.
-    assert_eq!(needs_model.removed_document_keys, vec!["a.md"]);
-    assert_eq!(needs_model.total_documents, Some(0));
-    assert!(needs_model.whole_index_record);
+    assert_eq!(with_use_llm.removed_document_keys, vec!["a.md"]);
+    assert_eq!(with_use_llm.total_documents, Some(1));
+    assert!(with_use_llm.whole_index_record);
 }
 
 #[tokio::test]

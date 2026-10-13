@@ -20,12 +20,12 @@
 //! the splits or windows to send, and the caller (the worker's index run)
 //! owns the calls, their retries and their budget, then hands the answers
 //! back (`ProposalPlan::chunks`, `StatisticalPlan::chunks`). [`chunk`] keeps
-//! its model-free contract: a config that asks for one of them (or for
-//! `use_llm` on a document that is not an image file: images inside
-//! documents are not ported) gets [`ChunkError::RequiresModel`], so a caller
-//! without models reports the document as skipped with a reason. A standalone
-//! image file is planned by [`plan_image`] (ADR-0030 I4 part B), on by
-//! default as in the SDK.
+//! its model-free contract: a config that asks for one of them gets
+//! [`ChunkError::RequiresModel`], so a caller without models reports the
+//! document as skipped with a reason. `use_llm` is the image-file step only:
+//! a standalone image file is planned by [`plan_image`] (ADR-0030 I4 part B),
+//! on by default as in the SDK, and `use_llm` on any other document changes
+//! nothing (images inside documents are not ported).
 //!
 //! The entry points are [`chunk`] and [`plan`]; an indexer that converted an
 //! HTML page to markdown uses [`chunk_with`] / [`plan_with`] and says so
@@ -100,7 +100,7 @@ pub enum ChunkError {
     /// The config asks for a chunker (or a step) that calls a model, which
     /// this crate does not: report the document as skipped with `reason`.
     RequiresModel {
-        /// `statistical`, `proposal` or `use_llm`.
+        /// `statistical` or `proposal`.
         chunker: &'static str,
         reason: String,
     },

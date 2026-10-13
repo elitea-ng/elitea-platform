@@ -277,14 +277,22 @@ impl ParsedArgs {
     }
 
     /// Whether the run uses the chat model (`index.llm_model` and
-    /// `index.llm_configuration`): only the proposal chunker does today, so
-    /// a statistical-only or `use_llm`-only run neither fetches nor parses
-    /// those entries. Unreadable arguments answer no: the run refuses them
-    /// itself.
+    /// `index.llm_configuration`): the proposal chunker, or the image-file
+    /// vision step (on by default). A run that does neither (statistical
+    /// only, vision off) neither fetches nor parses those entries.
+    /// Unreadable arguments answer no: the run refuses them itself.
     pub(crate) fn needs_chat_model(&self) -> bool {
         self.chunking
             .as_ref()
             .is_ok_and(elitea_doc_chunk::ChunkingConfig::needs_chat_model)
+    }
+
+    /// Whether the proposal chunker is selected: the only case in which a
+    /// chat entry that cannot be read fails the run.
+    pub(crate) fn needs_proposal_model(&self) -> bool {
+        self.chunking
+            .as_ref()
+            .is_ok_and(elitea_doc_chunk::ChunkingConfig::needs_proposal_model)
     }
 }
 

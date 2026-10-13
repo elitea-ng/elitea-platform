@@ -410,6 +410,19 @@ impl ChunkingConfig {
         self.needs_proposal_model() || crate::vision::vision_enabled_anywhere(self)
     }
 
+    /// The non-image extensions whose block sets `use_llm: true`: the
+    /// embedded-image step they ask for is not ported, so it has no effect.
+    #[must_use]
+    pub fn unserved_use_llm_extensions(&self) -> Vec<String> {
+        self.by_extension
+            .iter()
+            .filter(|(extension, params)| {
+                params.use_llm == Some(true) && !crate::vision::is_image_extension(extension)
+            })
+            .map(|(extension, _)| extension.clone())
+            .collect()
+    }
+
     /// Whether the `proposal` chunker is selected: the one case where a
     /// chat model that cannot be read must fail the run, not just skip
     /// image documents.
@@ -509,6 +522,17 @@ mod tests {
             assert!(config.needs_chat_model(), "{spelled:?}");
             assert!(config.needs_proposal_model(), "{spelled:?}");
         }
+    }
+
+    #[test]
+    fn use_llm_on_a_document_extension_is_reported_as_unserved() {
+        let from = |v: Value| ChunkingConfig::from_value(&v).unwrap();
+        let config = from(serde_json::json!({
+            "use_llm": true, ".pdf": {"use_llm": true}, ".png": {"use_llm": true},
+            ".docx": {"use_llm": false}
+        }));
+        assert_eq!(config.unserved_use_llm_extensions(), vec![".pdf"]);
+        assert!(from(Value::Null).unserved_use_llm_extensions().is_empty());
     }
 
     #[test]

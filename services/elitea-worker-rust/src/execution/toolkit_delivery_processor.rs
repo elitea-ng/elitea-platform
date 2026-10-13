@@ -563,15 +563,24 @@ where
         let wants_chat = parsed
             .as_ref()
             .is_some_and(crate::indexing::inputs::ParsedArgs::needs_chat_model);
+        // Only the proposal chunker fails a run on a chat entry it cannot
+        // read. The image vision step (on by default) can do without one:
+        // an entry that cannot be fetched means "no chat model" and the
+        // images are skipped `no_model`.
+        let needs_proposal = parsed
+            .as_ref()
+            .is_some_and(crate::indexing::inputs::ParsedArgs::needs_proposal_model);
         let llm_model = match index.llm_model_entry_id.as_str() {
             entry_id if wants_chat && !entry_id.is_empty() => {
-                Some(self.fetch_entry(execution, lease, entry_id).await?)
+                self.fetch_chat_entry(execution, lease, entry_id, needs_proposal)
+                    .await?
             }
             _ => None,
         };
         let llm_configuration = match index.llm_configuration_entry_id.as_str() {
             entry_id if wants_chat && !entry_id.is_empty() => {
-                Some(self.fetch_entry(execution, lease, entry_id).await?)
+                self.fetch_chat_entry(execution, lease, entry_id, needs_proposal)
+                    .await?
             }
             _ => None,
         };
@@ -590,6 +599,36 @@ where
             llm_model,
             llm_configuration,
         })
+    }
+
+    /// A chat model entry. A proposal run fails on an entry it cannot read;
+    /// otherwise a failed materialisation is "no chat model" (a lease loss
+    /// or Stop still ends the run).
+    async fn fetch_chat_entry(
+        &self,
+        execution: &LeaseMonitoredAgentExecution,
+        lease: &mut ClaimLeaseMonitor,
+        entry_id: &str,
+        needs_proposal: bool,
+    ) -> Result<Option<MaterializedInput>, RuntimeFailureKind> {
+        let materialized = lease
+            .run_pre_invocation(self.input.materialize_entry(execution, entry_id))
+            .await
+            .map_err(|error| lease_failure(&error))?;
+        match materialized {
+            Ok(entry) => Ok(Some(entry)),
+            Err(_) if !needs_proposal => {
+                tracing::warn!(
+                    event = "index_vision_model_entry_unavailable",
+                    "a chat model entry could not be fetched; image files are skipped no_model"
+                );
+                Ok(None)
+            }
+            Err(error) => {
+                record_toolkit_input_failure("index_input_materialization", &error);
+                Err(input_failure(&error))
+            }
+        }
     }
 
     async fn fetch_entry(

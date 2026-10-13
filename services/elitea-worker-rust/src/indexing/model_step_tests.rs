@@ -46,6 +46,8 @@ use crate::transport::runtime_context::ClaimScopedEliteaContext;
 #[derive(Clone)]
 pub(super) enum Reply {
     Text(String),
+    /// A reply the model cut off at `max_tokens`.
+    Cut(String),
     Fail(ErrorCategory, &'static str),
 }
 
@@ -60,6 +62,8 @@ pub(super) struct ChatState {
     pub(super) binds: Mutex<Vec<(String, String)>>,
     /// Each request's image parts: (media type, bytes).
     pub(super) images: Mutex<Vec<Vec<SeenImage>>>,
+    /// `bind_chat` refuses (an unusable model name).
+    bind_fails: bool,
 }
 
 /// A chat binder whose models answer from `script(call_index, user_text)`.
@@ -75,6 +79,20 @@ impl ScriptedChat {
                 script: Box::new(script),
                 binds: Mutex::new(Vec::new()),
                 images: Mutex::new(Vec::new()),
+                bind_fails: false,
+            }),
+        })
+    }
+
+    /// A binder that cannot bind any model.
+    pub(super) fn unbindable() -> Arc<Self> {
+        Arc::new(Self {
+            state: Arc::new(ChatState {
+                calls: AtomicUsize::new(0),
+                script: Box::new(|_, _| Reply::Text(String::new())),
+                binds: Mutex::new(Vec::new()),
+                images: Mutex::new(Vec::new()),
+                bind_fails: true,
             }),
         })
     }
@@ -131,6 +149,14 @@ impl Llm for ScriptedLlm {
                     ..Default::default()
                 })
             }))),
+            Reply::Cut(text) => Ok(Box::pin(stream::once(async move {
+                Ok(LlmResponse {
+                    content: Some(Content::new("model").with_text(text)),
+                    turn_complete: true,
+                    finish_reason: Some(FinishReason::MaxTokens),
+                    ..Default::default()
+                })
+            }))),
             Reply::Fail(category, code) => Err(AdkError::new(
                 ErrorComponent::Model,
                 category,
@@ -151,6 +177,9 @@ impl ChatModelBinder for ScriptedChat {
             request.model_name.to_owned(),
             request.system_instruction.to_owned(),
         ));
+        if self.state.bind_fails {
+            return Err(ModelFacadeError::InvalidInvocation);
+        }
         Ok(Arc::new(ScriptedLlm {
             state: Arc::clone(&self.state),
         }))
@@ -887,7 +916,7 @@ async fn the_chat_entries_are_read_only_when_a_chunker_calls_a_model() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn statistical_and_use_llm_only_runs_neither_fetch_nor_parse_the_chat_entries() {
+async fn runs_without_a_proposal_chunker_are_not_failed_by_unreadable_chat_entries() {
     let harness = harness(4, None).await;
     let text = "lorem ipsum dolor sit amet. ".repeat(140);
     // A malformed `llm_model` and `llm_configuration`: only the proposal
@@ -925,14 +954,9 @@ async fn statistical_and_use_llm_only_runs_neither_fetch_nor_parse_the_chat_entr
         )
         .await
         .unwrap_or_else(|failure| panic!("{config}: {failure:?}"));
-        // `use_llm` alone is PR-B's vision step: its documents skip
-        // `needs_model` today; what matters here is the run is not refused.
-        let expected = u64::from(
-            config
-                .get("chunking_config")
-                .and_then(|c| c.get("use_llm"))
-                .is_none(),
-        );
+        // `use_llm` is the image-file step only: a markdown document is
+        // indexed whatever the entries, and whatever `use_llm` says.
+        let expected = 1_u64;
         assert_eq!(summary.indexed_documents, expected, "{config}: {summary:?}");
     }
     // The proposal chunker (any spelling) refuses the same entries clearly.

@@ -8,10 +8,12 @@
 //! per-image bound, the closed skip reasons, the failure policy shared with
 //! the proposal chunker, and that neither bytes nor descriptions are logged.
 
+use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
 use adk_rust::ErrorCategory;
 use elitea_content_source::Document;
+use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use serde_json::json;
 
 use super::model_step_tests::{
@@ -31,11 +33,32 @@ fn image(name: &str, kind: &str, tag: &str) -> Document {
         "jpeg" => vec![0xff, 0xd8, 0xff, 0xe0],
         "gif" => b"GIF89a".to_vec(),
         "webp" => b"RIFF\0\0\0\0WEBPVP8 ".to_vec(),
-        "bmp" => b"BM".to_vec(),
+        "bmp" => return real_image(name, ImageFormat::Bmp, 8, 8, tag),
         "svg" => b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec(),
         other => panic!("{other}"),
     };
     bytes.extend_from_slice(tag.as_bytes());
+    let mut document = document(name, "v1", "");
+    document.reference.size = bytes.len() as u64;
+    document.bytes = bytes;
+    document
+}
+
+/// A decodable picture of `width` x `height` whose pixels follow `tag`
+/// (two tags are two pictures), as `format`.
+fn real_image(name: &str, format: ImageFormat, width: u32, height: u32, tag: &str) -> Document {
+    let mut state = tag.bytes().fold(0x9e37_79b9_u32, |acc, b| {
+        acc.wrapping_mul(31).wrapping_add(u32::from(b))
+    });
+    let picture = RgbImage::from_fn(width, height, |_, _| {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let [a, b, c, _] = state.to_be_bytes();
+        Rgb([a, b, c])
+    });
+    let mut bytes = Vec::new();
+    DynamicImage::ImageRgb8(picture)
+        .write_to(&mut Cursor::new(&mut bytes), format)
+        .expect("encode");
     let mut document = document(name, "v1", "");
     document.reference.size = bytes.len() as u64;
     document.bytes = bytes;
@@ -224,17 +247,81 @@ async fn the_same_image_with_another_prompt_is_a_new_call() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_oversized_image_is_skipped_too_large_without_a_call() {
+async fn a_big_png_and_a_big_jpeg_are_downscaled_and_described() {
     let mut harness = harness(4, None).await;
     let chat = ScriptedChat::new(describing);
     with_chat(&mut harness, &chat);
-    let tag = "x".repeat(MAX_INLINE_IMAGE_BYTES);
+    let big_png = real_image("big.png", ImageFormat::Png, 900, 700, "p");
+    let big_jpeg = real_image("big.jpg", ImageFormat::Jpeg, 1400, 1000, "j");
+    assert!(big_png.bytes.len() > MAX_INLINE_IMAGE_BYTES);
+    assert!(big_jpeg.bytes.len() > MAX_INLINE_IMAGE_BYTES);
     let summary = run_model(
         &harness,
-        vec![
-            image("big.png", "png", &tag),
-            image("small.png", "png", "ok"),
-        ],
+        vec![big_png, big_jpeg, image("small.png", "png", "ok")],
+        None,
+        &defaults(),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{summary:?}"
+    );
+    assert_eq!(summary.indexed_documents, 3, "{summary:?}");
+    assert!(summary.skipped.is_empty(), "{summary:?}");
+    assert_eq!(chat.calls(), 3);
+    // What the model received fits the gateway's bound and is a picture.
+    for parts in chat.state.images.lock().expect("images").iter() {
+        let (media, bytes) = &parts[0];
+        assert!(bytes.len() <= MAX_INLINE_IMAGE_BYTES, "{}", bytes.len());
+        assert!(matches!(media.as_str(), "image/png" | "image/jpeg"));
+    }
+}
+
+/// A PNG header claiming `width` x `height`, then padding.
+fn bomb(width: u32, height: u32) -> Document {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0_u32;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+    let mut ihdr = b"IHDR".to_vec();
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend_from_slice(&13_u32.to_be_bytes());
+    bytes.extend_from_slice(&ihdr);
+    bytes.extend_from_slice(&crc32(&ihdr).to_be_bytes());
+    let padding = MAX_INLINE_IMAGE_BYTES + 1;
+    bytes.extend_from_slice(&u32::try_from(padding).expect("len").to_be_bytes());
+    bytes.extend_from_slice(b"IDAT");
+    bytes.extend(std::iter::repeat_n(0_u8, padding));
+    let mut document = document("bomb.png", "v1", "");
+    document.reference.size = bytes.len() as u64;
+    document.bytes = bytes;
+    document
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_decompression_bomb_is_skipped_too_large_without_a_call_and_the_run_goes_on() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(describing);
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        vec![bomb(100_000, 100_000), image("small.png", "png", "ok")],
         None,
         &defaults(),
         Some("gpt-vision"),
@@ -244,6 +331,79 @@ async fn an_oversized_image_is_skipped_too_large_without_a_call() {
     assert_eq!(summary.skipped.get("too_large"), Some(&1), "{summary:?}");
     assert_eq!(summary.indexed_documents, 1, "{summary:?}");
     assert_eq!(chat.calls(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bmp_is_rasterised_to_png_and_described() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(describing);
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        vec![image("scan.bmp", "bmp", "b")],
+        None,
+        &defaults(),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    let images = chat.state.images.lock().expect("images");
+    assert_eq!(images[0][0].0, "image/png");
+    assert!(images[0][0].1.starts_with(b"\x89PNG"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_nameless_download_is_planned_by_the_sniffed_type_whatever_alias_declared_it() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(describing);
+    with_chat(&mut harness, &chat);
+    let mut download = image("attachments/12345", "jpeg", "d");
+    download.reference.mime = "image/jpg".to_owned();
+    // The extension's block for the SNIFFED type (.jpg) governs it.
+    let summary = run_model(
+        &harness,
+        vec![download],
+        None,
+        &parameters(
+            false,
+            json!({"chunking_config": {".jpg": {"prompt": "Name the people."}}}),
+        ),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(
+        chat.state.images.lock().expect("images")[0][0].0,
+        "image/jpeg"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_extensions_own_block_sets_the_vision_window() {
+    let mut harness = harness(4, None).await;
+    let long = (0..120)
+        .map(|n| format!("word{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let chat = ScriptedChat::new(move |_, _| Reply::Text(long.clone()));
+    with_chat(&mut harness, &chat);
+    // A top-level 8-token window is for text documents; the description of a
+    // picture keeps the loader's 512.
+    let summary = run_model(
+        &harness,
+        vec![image("a.png", "png", "x")],
+        None,
+        &parameters(
+            false,
+            json!({"chunking_config": {"max_tokens": 8, "token_overlap": 2}}),
+        ),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_chunks, 1, "{summary:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -288,7 +448,7 @@ async fn no_model_skips_images_and_an_unreadable_chat_entry_does_not_fail_the_ru
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn use_llm_false_and_formats_this_build_does_not_convert_are_unsupported() {
+async fn use_llm_false_and_svg_are_unsupported_and_bmp_is_described() {
     let mut harness = harness(4, None).await;
     let chat = ScriptedChat::new(describing);
     with_chat(&mut harness, &chat);
@@ -312,11 +472,11 @@ async fn use_llm_false_and_formats_this_build_does_not_convert_are_unsupported()
     .expect("summary");
     assert_eq!(
         summary.skipped.get("unsupported_type"),
-        Some(&3),
+        Some(&2),
         "{summary:?}"
     );
-    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
-    assert_eq!(chat.calls(), 1);
+    assert_eq!(summary.indexed_documents, 2, "{summary:?}");
+    assert_eq!(chat.calls(), 2);
 
     // Off at the top level: nothing is sent.
     let summary = run_model(
@@ -333,7 +493,44 @@ async fn use_llm_false_and_formats_this_build_does_not_convert_are_unsupported()
         Some(&1),
         "{summary:?}"
     );
-    assert_eq!(chat.calls(), 1, "no new call");
+    assert_eq!(chat.calls(), 2, "no new call");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_vision_off_image_is_unsupported_whatever_its_bytes_are() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(describing);
+    with_chat(&mut harness, &chat);
+    let mut garbage = image("a.png", "png", "");
+    garbage.bytes = b"this is not a png".to_vec();
+    garbage.reference.size = garbage.bytes.len() as u64;
+    let off = parameters(false, json!({"chunking_config": {"use_llm": false}}));
+    let summary = run_model(
+        &harness,
+        vec![garbage.clone()],
+        None,
+        &off,
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.skipped.get("unsupported_type"),
+        Some(&1),
+        "{summary:?}"
+    );
+    assert_eq!(summary.skipped.get("unreadable"), None);
+    // On, the same bytes are unreadable.
+    let summary = run_model(
+        &harness,
+        vec![garbage],
+        None,
+        &defaults(),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.skipped.get("unreadable"), Some(&1), "{summary:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -352,9 +549,11 @@ async fn bytes_that_are_not_the_declared_image_are_unreadable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn every_attempt_is_charged_and_a_cap_short_of_the_retries_stops_the_run() {
+async fn every_attempt_is_charged_and_an_exhausted_cap_skips_the_image_not_the_run() {
     // Two rate limits, then a description: three real calls against a cap of
-    // three. The next distinct image finds nothing left and stops the run.
+    // three. The next distinct image finds nothing left: it is skipped
+    // `model_cap_exceeded` (a picture never stops the run) and the next run
+    // retries it.
     let mut harness = harness(4, None).await;
     harness.runtime.limits.max_model_calls = 3;
     let chat = ScriptedChat::new(|index, _| {
@@ -374,8 +573,14 @@ async fn every_attempt_is_charged_and_a_cap_short_of_the_retries_stops_the_run()
     )
     .await
     .expect("summary");
-    assert!(
-        failed_with(&summary).contains("limit of 3 model calls"),
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::PartlyIndexed as i32,
+        "{summary:?}"
+    );
+    assert_eq!(
+        summary.skipped.get("model_cap_exceeded"),
+        Some(&1),
         "{summary:?}"
     );
     assert_eq!(chat.calls(), 3);
@@ -520,4 +725,148 @@ fn vision_log_child() {
         assert_eq!(chat.calls(), 2, "one failed attempt, one answer, one hit");
     });
     println!("CHILD-RAN");
+}
+
+fn many_images(count: usize) -> Vec<Document> {
+    (0..count)
+        .map(|n| image(&format!("img-{n}.png"), "png", &format!("tag{n}")))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_model_that_rejects_images_skips_each_vision_refused_and_the_run_goes_on() {
+    // A text-only model / a provider 400: the gateway's generic rejection.
+    // Six in a row, past the proposal chunker's streak, and the text
+    // document after them is still indexed.
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(|_, _| {
+        Reply::Fail(ErrorCategory::InvalidInput, "model_gateway.rejected")
+    });
+    with_chat(&mut harness, &chat);
+    let mut documents = many_images(6);
+    documents.push(document("notes.md", "v1", "# Notes\n\nPlain text.\n"));
+    let summary = run_model(&harness, documents, None, &defaults(), Some("gpt-vision"))
+        .await
+        .expect("summary");
+    assert_eq!(
+        summary.skipped.get("vision_refused"),
+        Some(&6),
+        "{summary:?}"
+    );
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(chat.calls(), 6, "a refusal is not retried");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn credential_project_and_budget_refusals_still_stop_the_run() {
+    for (category, code) in [
+        (ErrorCategory::Unauthorized, "model_gateway.unauthorized"),
+        (ErrorCategory::Forbidden, "model_gateway.forbidden"),
+        (
+            ErrorCategory::InvalidInput,
+            "model_gateway.project_budget_exhausted",
+        ),
+    ] {
+        let mut harness = harness(4, None).await;
+        let chat = ScriptedChat::new(move |_, _| Reply::Fail(category, code));
+        with_chat(&mut harness, &chat);
+        let summary = run_model(
+            &harness,
+            many_images(3),
+            None,
+            &defaults(),
+            Some("gpt-vision"),
+        )
+        .await
+        .expect("summary");
+        assert!(failed_with(&summary).contains(code), "{code}: {summary:?}");
+        assert_eq!(chat.calls(), 1, "{code}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_over_the_gateways_size_bound_is_too_large_and_no_streak() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(|index, _| {
+        if index < 5 {
+            Reply::Fail(
+                ErrorCategory::InvalidInput,
+                "model_gateway.request_too_large",
+            )
+        } else {
+            describing(index, "")
+        }
+    });
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        many_images(6),
+        None,
+        &defaults(),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.skipped.get("too_large"), Some(&5), "{summary:?}");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn image_outages_skip_model_failed_and_never_stop_the_run() {
+    // Six images whose every attempt is unavailable: past the proposal
+    // chunker's streak of five, which images do not feed.
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(|_, _| {
+        Reply::Fail(ErrorCategory::Unavailable, "model_gateway.unavailable")
+    });
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        many_images(6),
+        None,
+        &defaults(),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.skipped.get("model_failed"), Some(&6), "{summary:?}");
+    assert_ne!(summary.status, IndexIngestStatusV1::Error as i32);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_model_that_cannot_be_bound_skips_images_no_model_and_asks_once() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::unbindable();
+    with_chat(&mut harness, &chat);
+    let mut documents = many_images(3);
+    documents.push(document("notes.md", "v1", "# Notes\n\nText.\n"));
+    let summary = run_model(&harness, documents, None, &defaults(), Some("gpt-vision"))
+        .await
+        .expect("summary");
+    assert_eq!(summary.skipped.get("no_model"), Some(&3), "{summary:?}");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(chat.calls(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_description_cut_off_by_max_tokens_is_kept() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(|_, _| Reply::Cut("# Chart\n\nThe bars rise and".to_owned()));
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        many_images(2),
+        None,
+        &defaults(),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{summary:?}"
+    );
+    assert_eq!(summary.indexed_documents, 2, "{summary:?}");
+    assert_eq!(chat.calls(), 2, "kept, not retried");
 }

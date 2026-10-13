@@ -119,14 +119,32 @@ const DOCUMENT_TYPES: &[&str] = &[
 pub enum VisionImage {
     /// Not an image media type: extraction decides.
     NotAnImage,
-    /// An image a model is sent as it is, with this media type (the bytes'
-    /// own, which wins over the declared one).
+    /// An image a model is sent as it is (when small enough), with this
+    /// media type (the bytes' own, which wins over the declared one).
     Supported(&'static str),
-    /// An image format the step does not convert (BMP, SVG, TIFF, ...):
-    /// the SDK rasterises BMP and SVG, this build does not.
+    /// A BMP: no model accepts it, so the caller rasterises it to PNG first.
+    Bmp,
+    /// An image format the step does not convert (SVG, TIFF, ...): the SDK
+    /// rasterises SVG, this build does not.
     Unsupported,
-    /// Declared PNG, JPEG, GIF or WebP, but the bytes are none of them.
+    /// Declared PNG, JPEG, GIF, WebP or BMP, but the bytes are none of them.
     Corrupt,
+}
+
+/// Whether `mime` (already lower-cased, parameters cut) names a BMP.
+fn is_bmp_type(mime: &str) -> bool {
+    matches!(mime, "image/bmp" | "image/x-bmp" | "image/x-ms-bmp")
+}
+
+/// The BMP signature plus a known DIB header size (so a text file that
+/// merely starts with `BM` is not one).
+fn is_bmp(bytes: &[u8]) -> bool {
+    bytes.len() >= 18
+        && bytes.starts_with(b"BM")
+        && matches!(
+            u32::from_le_bytes([bytes[14], bytes[15], bytes[16], bytes[17]]),
+            12 | 40 | 52 | 56 | 64 | 108 | 124
+        )
 }
 
 /// Classifies `bytes` of declared media type `mime` for the vision step.
@@ -144,8 +162,15 @@ pub fn image_for_vision(mime: &str, bytes: &[u8]) -> VisionImage {
     }
     if !matches!(
         mime.as_str(),
-        "image/png" | "image/jpeg" | "image/jpg" | "image/pjpeg" | "image/gif" | "image/webp"
-    ) {
+        "image/png"
+            | "image/x-png"
+            | "image/jpeg"
+            | "image/jpg"
+            | "image/pjpeg"
+            | "image/gif"
+            | "image/webp"
+    ) && !is_bmp_type(&mime)
+    {
         return VisionImage::Unsupported;
     }
     let sniffed = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -159,7 +184,11 @@ pub fn image_for_vision(mime: &str, bytes: &[u8]) -> VisionImage {
     } else {
         None
     };
-    sniffed.map_or(VisionImage::Corrupt, VisionImage::Supported)
+    match sniffed {
+        Some(media_type) => VisionImage::Supported(media_type),
+        None if is_bmp(bytes) => VisionImage::Bmp,
+        None => VisionImage::Corrupt,
+    }
 }
 
 /// Media types converted from HTML to markdown, when asked.
@@ -914,8 +943,27 @@ mod tests {
             image_for_vision("image/webp", b"not an image"),
             VisionImage::Corrupt
         );
+        let mut bmp = b"BM".to_vec();
+        bmp.extend_from_slice(&[0; 12]);
+        bmp.extend_from_slice(&40_u32.to_le_bytes());
+        bmp.extend_from_slice(&[0; 8]);
+        assert_eq!(image_for_vision("image/bmp", &bmp), VisionImage::Bmp);
+        assert_eq!(image_for_vision("image/x-ms-bmp", &bmp), VisionImage::Bmp);
+        assert_eq!(image_for_vision("image/png", &bmp), VisionImage::Bmp);
         assert_eq!(
-            image_for_vision("image/bmp", b"BM...."),
+            image_for_vision("image/bmp", b"BM not a bitmap at all"),
+            VisionImage::Corrupt
+        );
+        assert_eq!(
+            image_for_vision("image/x-png", b"\x89PNG\r\n\x1a\n.."),
+            VisionImage::Supported("image/png")
+        );
+        assert_eq!(
+            image_for_vision("image/jpg", &[0xff, 0xd8, 0xff, 0xdb]),
+            VisionImage::Supported("image/jpeg")
+        );
+        assert_eq!(
+            image_for_vision("image/tiff", b"II*\0"),
             VisionImage::Unsupported
         );
         assert_eq!(

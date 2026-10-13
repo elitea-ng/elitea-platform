@@ -48,6 +48,7 @@ use std::fmt::Write as _;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use super::image_fit::{self, FitError, ImageKind};
 use elitea_content_source::{Acl, DocumentRef, SourceError};
 use elitea_doc_chunk::{Chunk, ChunkError, ChunkOptions, ChunkPlan, ChunkingConfig, ImagePlan};
 use elitea_doc_extract::{ExtractOptions, Extracted, VisionImage};
@@ -102,6 +103,9 @@ const SKIP_EMPTY: &str = "empty";
 const SKIP_FETCH_FAILED: &str = "fetch_failed";
 const SKIP_EMBEDDING_FAILED: &str = "embedding_failed";
 pub(super) const SKIP_TOO_LARGE: &str = "too_large";
+/// The model refused this picture alone (a text-only model, a provider's 400
+/// for one image); the run goes on and a later run asks again.
+pub(super) const SKIP_VISION_REFUSED: &str = "vision_refused";
 /// The extraction sidecar did not answer about the document (socket, stream
 /// or sidecar failure); the document is retried by the next run.
 const SKIP_EXTRACT_FAILED: &str = "extract_failed";
@@ -343,6 +347,14 @@ pub(crate) async fn run_index(
     let chat = chat_for_run(runtime, &run, &chunking)?;
     for warning in &chunking.warnings {
         tracing::warn!(event = "index_chunking_config_setting_dropped", warning);
+    }
+    let unserved = chunking.unserved_use_llm_extensions();
+    if !unserved.is_empty() {
+        tracing::warn!(
+            event = "index_use_llm_ignored",
+            extensions = ?unserved,
+            "`use_llm` describes standalone image files only; for these extensions (images inside documents) it has no effect"
+        );
     }
     let bearer = run.context.model_facade_token();
     let project_id = run.context.resource_project_id().to_string();
@@ -1220,6 +1232,39 @@ fn expected_dimension(command: &IndexIngestCommandV1) -> Option<usize> {
         .then_some(command.expected_embedding_dimension as usize)
 }
 
+/// The extension whose settings block governs an image whose key has no image
+/// extension (a download named by its id): the bytes' own type when they are
+/// one the step reads, else the declared media type's.
+fn image_extension(class: VisionImage, declared: &str) -> String {
+    let sniffed = match class {
+        VisionImage::Supported("image/png") => ".png",
+        VisionImage::Supported("image/jpeg") => ".jpg",
+        VisionImage::Supported("image/gif") => ".gif",
+        VisionImage::Supported("image/webp") => ".webp",
+        VisionImage::Bmp => ".bmp",
+        _ => "",
+    };
+    if !sniffed.is_empty() {
+        return sniffed.to_owned();
+    }
+    let declared = declared
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match declared.as_str() {
+        "image/png" | "image/x-png" => ".png",
+        "image/jpeg" | "image/jpg" | "image/pjpeg" => ".jpg",
+        "image/gif" => ".gif",
+        "image/webp" => ".webp",
+        "image/bmp" | "image/x-bmp" | "image/x-ms-bmp" => ".bmp",
+        "image/svg+xml" | "image/svg" => ".svg",
+        _ => "",
+    }
+    .to_owned()
+}
+
 /// Fetch, extract and chunk one document. Runs as its own task; the CPU
 /// work (extraction, tokenising) is on a blocking thread. A PDF or Office
 /// document is read by the extraction sidecar when the run has one
@@ -1274,42 +1319,51 @@ async fn prepare(
     };
     let mut bytes = document.bytes;
     // A standalone image is described by the chat model (ADR-0030 I4 part B),
-    // never extracted as text. BMP and SVG are skipped: this build does not
-    // rasterise them (SOURCE_PARITY).
-    match elitea_doc_extract::image_for_vision(&mime, &bytes) {
-        VisionImage::NotAnImage => {}
-        VisionImage::Unsupported => return Preparation::Skipped(SKIP_UNSUPPORTED),
-        VisionImage::Corrupt => return Preparation::Skipped(SKIP_UNREADABLE),
-        VisionImage::Supported(media_type) => {
-            // The key's extension names the settings block; a key without
-            // one (a download) is named by its media type.
-            let by_name = elitea_doc_chunk::extension_of(&key);
-            let source = if elitea_doc_chunk::is_image_extension(&by_name) {
-                key.as_str()
-            } else {
-                mime.as_str()
-            };
-            let ImagePlan::Vision(vision) = elitea_doc_chunk::plan_image(source, &chunking) else {
+    // never extracted as text.
+    let class = elitea_doc_extract::image_for_vision(&mime, &bytes);
+    if !matches!(class, VisionImage::NotAnImage) {
+        // Whether the step is on comes FIRST: a vision-off image is
+        // `unsupported_type` whatever its bytes are.
+        let by_name = elitea_doc_chunk::extension_of(&key);
+        let settings_extension = if elitea_doc_chunk::is_image_extension(&by_name) {
+            by_name
+        } else {
+            image_extension(class, &mime)
+        };
+        let ImagePlan::Vision(vision) =
+            elitea_doc_chunk::plan_image(&settings_extension, &chunking)
+        else {
+            return Preparation::Skipped(SKIP_UNSUPPORTED);
+        };
+        let kind = match class {
+            VisionImage::Supported(media_type) => ImageKind::Native(media_type),
+            VisionImage::Bmp => ImageKind::Bmp,
+            VisionImage::Corrupt => return Preparation::Skipped(SKIP_UNREADABLE),
+            // SVG, TIFF, ...: not converted by this build.
+            VisionImage::Unsupported | VisionImage::NotAnImage => {
                 return Preparation::Skipped(SKIP_UNSUPPORTED);
-            };
-            if bytes.len() > MAX_INLINE_IMAGE_BYTES {
-                return Preparation::Skipped(SKIP_TOO_LARGE);
             }
-            return Preparation::Vision(
-                Box::new(Prepared {
-                    reference,
-                    plan,
-                    metadata,
-                    acl,
-                    chunks: Vec::new(),
-                }),
-                VisionJob {
-                    bytes,
-                    media_type,
-                    plan: vision,
-                },
-            );
-        }
+        };
+        let fitted = match image_fit::fit(bytes, kind, MAX_INLINE_IMAGE_BYTES).await {
+            Ok(fitted) => fitted,
+            Err(FitError::TooLarge) => return Preparation::Skipped(SKIP_TOO_LARGE),
+            Err(FitError::Unreadable) => return Preparation::Skipped(SKIP_UNREADABLE),
+        };
+        return Preparation::Vision(
+            Box::new(Prepared {
+                reference,
+                plan,
+                metadata,
+                acl,
+                chunks: Vec::new(),
+            }),
+            VisionJob {
+                bytes: fitted.bytes,
+                media_type: fitted.media_type,
+                digest: fitted.digest,
+                plan: vision,
+            },
+        );
     }
     // A document format (PDF, Office, e-mail) is the sidecar's to read; this
     // process extracts text and HTML itself, on the blocking thread below.
@@ -1362,7 +1416,8 @@ async fn prepare(
             Ok(model_step @ (ChunkPlan::Proposal(_) | ChunkPlan::Statistical(_))) => {
                 Preparation::Model(prepared(Vec::new()), model_step)
             }
-            // The image step (`use_llm`) is not served yet.
+            // `plan_with` returns the model steps as plans, so this is a
+            // defensive arm: a chunker that still needs a model skips.
             Err(ChunkError::RequiresModel { .. }) => Preparation::Skipped(SKIP_NEEDS_MODEL),
             Err(
                 error @ (ChunkError::UnknownChunker(_)

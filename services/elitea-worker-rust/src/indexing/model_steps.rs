@@ -34,25 +34,31 @@
 //! * liveness (Stop, the lease, the deadline) is checked before every
 //!   attempt and every retry wait;
 //! * an image file is described by ONE chat call carrying the image as an
-//!   `InlineData` part beside the prompt ([`VisionJob`]), under the same
-//!   policy (every attempt charged, liveness before each, a retryable failure
-//!   `model_failed` with the breaker, a refusal or a reply cut by `max_tokens`
-//!   stopping the run, no model `no_model`). Descriptions are cached for the
-//!   run by sha256(bytes) + sha256(prompt) + model name ([`ImageCache`], LRU
-//!   of 500, as the SDK's `ImageDescriptionCache` but sha256 and keyed by the
-//!   model); a hit costs no call and is not charged. Image bytes and
-//!   descriptions are never logged;
+//!   `InlineData` part beside the prompt ([`VisionJob`]), through the same
+//!   call helper ([`call`]: charge, bind, retry, backoff). An image NEVER
+//!   stops a run for a reason of its own and never feeds the failure streak:
+//!   a retryable failure is `model_failed`, the gateway's generic rejection
+//!   `vision_refused`, an over-size request `too_large`, an unbindable model
+//!   `no_model` (warned once), an exhausted call cap `model_cap_exceeded`;
+//!   a reply cut by `max_tokens` is kept. Only the credential, the project
+//!   and the budget stop the run. Descriptions are cached for the run by
+//!   sha256(original bytes) + sha256(prompt) + model name ([`ImageCache`],
+//!   O(1) LRU of 500, as the SDK's `ImageDescriptionCache` but sha256 and
+//!   keyed by the model); a hit costs no call and is not charged. Image
+//!   bytes and descriptions are never logged;
 //! * a document's proposal windows are asked [`WINDOWS_IN_FLIGHT`] at a time,
 //!   answers kept in window order. Documents themselves are still fulfilled
 //!   one after another by the run's loop (a follow-up, not done here).
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use adk_rust::futures::StreamExt as _;
 use adk_rust::futures::stream::FuturesOrdered;
 use adk_rust::{AdkError, Content, FinishReason, Llm, LlmRequest, Part};
+use bytes::Bytes;
 use elitea_doc_chunk::{
     Chunk, ChunkDetails, ChunkError, ChunkPlan, ProposalPlan, StatisticalPlan, VisionPlan,
     parse_chunk_analysis, proposal_system_prompt, proposal_user_message,
@@ -63,7 +69,7 @@ use super::IndexRunLimits;
 use super::inputs::LlmSettings;
 use super::pipeline::{
     EmbedOutcome, Gated, IndexRunFailure, SKIP_MODEL_CAP_EXCEEDED, SKIP_MODEL_FAILED,
-    SKIP_NO_MODEL, SKIP_TOO_LARGE, classify_embedding_error, embed_gated,
+    SKIP_NO_MODEL, SKIP_TOO_LARGE, SKIP_VISION_REFUSED, classify_embedding_error, embed_gated,
 };
 use crate::agents::session::BoundOrdinaryAgentModel as _;
 use crate::transport::embeddings_facade::EmbeddingsClient;
@@ -177,6 +183,10 @@ enum CallFailure {
     Unusable(String),
     /// Stop the run with this sentence (the cap, a reply cut by `max_tokens`).
     Stop(String),
+    /// An image call that cannot be answered for this image alone: skip it
+    /// under this closed reason. Never stops the run, never counts toward
+    /// the failure streak.
+    ImageSkip(&'static str),
     /// The lease was lost or Stop arrived.
     Liveness(IndexRunFailure),
 }
@@ -234,6 +244,9 @@ pub(crate) struct ModelSteps {
     calls: AtomicU32,
     consecutive_failures: u32,
     images: ImageCache,
+    /// The chat model could not be bound for an image: the rest of the run's
+    /// images are skipped `no_model` without asking again.
+    images_without_model: AtomicBool,
 }
 
 impl ModelSteps {
@@ -244,6 +257,7 @@ impl ModelSteps {
             calls: AtomicU32::new(0),
             consecutive_failures: 0,
             images: ImageCache::default(),
+            images_without_model: AtomicBool::new(false),
         }
     }
 
@@ -353,6 +367,8 @@ impl ModelSteps {
             )),
             Err(CallFailure::Stop(reason)) => StepEnd::Stop(reason),
             Err(CallFailure::Liveness(failure)) => StepEnd::Liveness(failure),
+            // Only an image call yields this.
+            Err(CallFailure::ImageSkip(reason)) => StepEnd::Skip(reason),
             Err(CallFailure::Retryable(cause) | CallFailure::Unusable(cause)) => {
                 self.failed_document(&cause)
             }
@@ -362,6 +378,12 @@ impl ModelSteps {
     /// Describes one image file (ADR-0030 I4 part B): the chunks of the
     /// model's description, from the run's cache when the same image was
     /// described before with the same prompt and model.
+    ///
+    /// An image never stops the run for a reason of its own: everything
+    /// image-specific is a skip with a precise reason, a failure of the model
+    /// step on an image is never counted toward the proposal chunker's
+    /// failure streak, and a success does not reset it. Only the refusals of
+    /// the credential, the project or the budget stop the run.
     pub(crate) async fn describe(
         &mut self,
         job: &VisionJob,
@@ -376,14 +398,16 @@ impl ModelSteps {
             return StepEnd::Skip(SKIP_NO_MODEL);
         };
         let (binder, model_name, settings) = chat;
-        let key = ImageKey::new(&job.bytes, job.plan.prompt(), &model_name);
+        let key = ImageKey::new(job.digest, job.plan.prompt(), &model_name);
         if let Some(description) = self.images.get(&key) {
-            // No call was made: the cap is not charged and the failure
-            // streak is neither extended nor reset.
+            // No call was made: the cap is not charged.
             return vision_chunks(&job.plan, &description);
         }
-        if let Err(end) = self.admit(1) {
-            return end;
+        if self.images_without_model.load(Ordering::SeqCst) {
+            return StepEnd::Skip(SKIP_NO_MODEL);
+        }
+        if self.cap.saturating_sub(self.calls.load(Ordering::SeqCst)) == 0 {
+            return StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED);
         }
         let outcome = {
             let gate = self.gate(alive);
@@ -391,7 +415,6 @@ impl ModelSteps {
         };
         match outcome {
             Ok(description) => {
-                self.model_step_succeeded();
                 let end = vision_chunks(&job.plan, &description);
                 self.images.put(key, description);
                 end
@@ -399,10 +422,23 @@ impl ModelSteps {
             Err(CallFailure::Fatal(code)) => StepEnd::Stop(format!(
                 "the vision model refused the run ({code}); nothing further was sent to it"
             )),
-            Err(CallFailure::Stop(reason)) => StepEnd::Stop(reason),
             Err(CallFailure::Liveness(failure)) => StepEnd::Liveness(failure),
+            Err(CallFailure::ImageSkip(reason)) => {
+                if reason == SKIP_NO_MODEL
+                    && !self.images_without_model.swap(true, Ordering::SeqCst)
+                {
+                    tracing::warn!(
+                        event = "index_vision_model_unavailable",
+                        "the chat model cannot be bound for images; the rest of the run's images are skipped no_model"
+                    );
+                }
+                StepEnd::Skip(reason)
+            }
+            // The run's cap: the picture is retried by the next run.
+            Err(CallFailure::Stop(_)) => StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED),
             Err(CallFailure::Retryable(cause) | CallFailure::Unusable(cause)) => {
-                self.failed_document(&cause)
+                tracing::warn!(event = "index_image_description_failed", cause);
+                StepEnd::Skip(SKIP_MODEL_FAILED)
             }
         }
     }
@@ -497,32 +533,57 @@ pub(crate) struct StepEnv<'a> {
 
 /// One image file waiting for its description.
 pub(crate) struct VisionJob {
-    pub(crate) bytes: Vec<u8>,
-    /// The bytes' own media type, one the facade sends (png, jpeg, gif, webp).
+    /// The picture to send (already fitted under the inline budget). Shared,
+    /// never copied per attempt: an attempt builds its request part from it.
+    pub(crate) bytes: Bytes,
+    /// The sent bytes' own media type, one the facade sends.
     pub(crate) media_type: &'static str,
+    /// sha256 of the ORIGINAL file: the cache key.
+    pub(crate) digest: [u8; 32],
     pub(crate) plan: VisionPlan,
 }
 
 fn vision_chunks(plan: &VisionPlan, description: &str) -> StepEnd {
     match plan.chunks(description) {
         Ok(chunks) => StepEnd::Chunks(chunks),
-        Err(error) => StepEnd::Stop(format!(
-            "the image description could not be chunked: {error}"
-        )),
+        Err(error) => {
+            tracing::warn!(event = "index_image_description_unchunkable", %error);
+            StepEnd::Skip(SKIP_VISION_REFUSED)
+        }
     }
 }
 
-/// The description of one image, with the attempts the policy allows: one
-/// chat call with the prompt and the image, every attempt charged before it
-/// is made, liveness checked before every attempt and every retry wait.
-async fn vision_call(
+/// What one family of calls sends and how it treats a model that says no.
+struct CallSpec<'a> {
+    system: &'a str,
+    /// The request content. Called once per attempt, so a retry builds it
+    /// again from the shared source instead of holding a copy.
+    content: &'a (dyn Fn() -> Content + Sync),
+    /// An image call: its refusals that are not the credential's, the
+    /// project's or the budget's are the image's alone, and an unbindable
+    /// model is `no_model`, never a failed run.
+    image: bool,
+}
+
+/// What a model replied: its text, and whether `max_tokens` cut it off.
+struct Reply {
+    text: String,
+    truncated: bool,
+}
+
+/// The reply to `spec`, with the attempts the policy allows: every attempt
+/// is charged before it is made, liveness is checked before every attempt
+/// and every retry wait, a retryable failure (or a reply `read` calls
+/// retryable) backs off and goes again, anything else ends the call.
+async fn call<T>(
     binder: &dyn ChatModelBinder,
     env: &StepEnv<'_>,
     gate: &Gate<'_>,
     model_name: &str,
     settings: LlmSettings,
-    job: &VisionJob,
-) -> Result<String, CallFailure> {
+    spec: &CallSpec<'_>,
+    read: impl Fn(Reply) -> Result<T, CallFailure>,
+) -> Result<T, CallFailure> {
     let mut attempt = 0_u32;
     loop {
         attempt += 1;
@@ -532,136 +593,23 @@ async fn vision_call(
                 env.context,
                 &ChatModelRequest {
                     model_name,
-                    system_instruction: "",
+                    system_instruction: spec.system,
                     max_tokens: settings.max_tokens,
                     temperature: settings.temperature,
                 },
             )
-            .map_err(|error| CallFailure::Fatal(format!("model_facade.{error:?}")))?;
-        // The SDK's single HumanMessage: the text part, then the image part.
-        let content = Content {
-            role: "user".to_owned(),
-            parts: vec![
-                Part::Text {
-                    text: job.plan.prompt().to_owned(),
-                },
-                Part::InlineData {
-                    mime_type: job.media_type.to_owned(),
-                    data: job.bytes.clone(),
-                    uri: None,
-                    annotations: None,
-                },
-            ],
-        };
-        match complete(&*model, model_name, content, settings).await {
-            Ok(description) => return Ok(description),
-            Err(CallFailure::Retryable(_)) if attempt < CHAT_ATTEMPTS => {
-                gate.check(false)?;
-                tokio::time::sleep(env.limits.embedding_retry_backoff * attempt).await;
-            }
-            Err(other) => return Err(other),
-        }
-    }
-}
-
-/// Descriptions kept for a run.
-const IMAGE_CACHE_ENTRIES: usize = 500;
-/// A description longer than this is used but not cached (500 entries of the
-/// largest reply would be 128 MiB).
-const IMAGE_CACHE_MAX_DESCRIPTION_BYTES: usize = 32 * 1024;
-
-/// sha256(bytes) + sha256(prompt) + the model's name.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct ImageKey([u8; 32], [u8; 32], String);
-
-impl ImageKey {
-    fn new(bytes: &[u8], prompt: &str, model: &str) -> Self {
-        Self(
-            Sha256::digest(bytes).into(),
-            Sha256::digest(prompt.as_bytes()).into(),
-            model.to_owned(),
-        )
-    }
-}
-
-/// The run's image descriptions: a least-recently-used map of
-/// [`IMAGE_CACHE_ENTRIES`]. Per run, in memory, never logged.
-#[derive(Default)]
-struct ImageCache {
-    entries: HashMap<ImageKey, String>,
-    /// Least recently used first.
-    order: VecDeque<ImageKey>,
-}
-
-impl ImageCache {
-    fn touch(&mut self, key: &ImageKey) {
-        if let Some(at) = self.order.iter().position(|k| k == key) {
-            self.order.remove(at);
-        }
-        self.order.push_back(key.clone());
-    }
-
-    fn get(&mut self, key: &ImageKey) -> Option<String> {
-        let hit = self.entries.get(key).cloned()?;
-        self.touch(key);
-        Some(hit)
-    }
-
-    /// Like the SDK, a blank description is not kept.
-    fn put(&mut self, key: ImageKey, description: String) {
-        if description.trim().is_empty() || description.len() > IMAGE_CACHE_MAX_DESCRIPTION_BYTES {
-            return;
-        }
-        if self.entries.len() >= IMAGE_CACHE_ENTRIES
-            && !self.entries.contains_key(&key)
-            && let Some(oldest) = self.order.pop_front()
-        {
-            self.entries.remove(&oldest);
-        }
-        self.touch(&key);
-        self.entries.insert(key, description);
-    }
-}
-
-/// The model's `ChunkDetails` for one window, with the attempts the policy
-/// allows. Every attempt is charged against the run's cap before it is made,
-/// and liveness is checked before every attempt and every retry wait.
-async fn chat_window(
-    binder: &dyn ChatModelBinder,
-    env: &StepEnv<'_>,
-    gate: &Gate<'_>,
-    model_name: &str,
-    settings: LlmSettings,
-    window: &str,
-) -> Result<Vec<ChunkDetails>, CallFailure> {
-    let system = proposal_system_prompt();
-    let user = proposal_user_message(window);
-    let mut attempt = 0_u32;
-    loop {
-        attempt += 1;
-        gate.check(true)?;
-        let model = binder
-            .bind_chat(
-                env.context,
-                &ChatModelRequest {
-                    model_name,
-                    system_instruction: &system,
-                    max_tokens: settings.max_tokens,
-                    temperature: settings.temperature,
-                },
-            )
-            .map_err(|error| CallFailure::Fatal(format!("model_facade.{error:?}")))?;
-        let failure = match complete(
-            &*model,
-            model_name,
-            Content::new("user").with_text(&user),
-            settings,
-        )
-        .await
-        {
-            Ok(reply) => match parse_chunk_analysis(&reply) {
-                Ok(details) => return Ok(details),
-                Err(error) => CallFailure::Retryable(error.to_string()),
+            .map_err(|error| {
+                if spec.image {
+                    tracing::warn!(event = "index_vision_bind_failed", ?error);
+                    CallFailure::ImageSkip(SKIP_NO_MODEL)
+                } else {
+                    CallFailure::Fatal(format!("model_facade.{error:?}"))
+                }
+            })?;
+        let failure = match complete(&*model, model_name, (spec.content)(), spec.image).await {
+            Ok(reply) => match read(reply) {
+                Ok(value) => return Ok(value),
+                Err(failure) => failure,
             },
             Err(failure) => failure,
         };
@@ -675,6 +623,184 @@ async fn chat_window(
     }
 }
 
+/// The description of one image: one chat call with the prompt and the image
+/// (the SDK's single `HumanMessage`: the text part, then the image part). A
+/// reply cut by `max_tokens` is kept, as the SDK keeps it.
+async fn vision_call(
+    binder: &dyn ChatModelBinder,
+    env: &StepEnv<'_>,
+    gate: &Gate<'_>,
+    model_name: &str,
+    settings: LlmSettings,
+    job: &VisionJob,
+) -> Result<String, CallFailure> {
+    let content = || Content {
+        role: "user".to_owned(),
+        parts: vec![
+            Part::Text {
+                text: job.plan.prompt().to_owned(),
+            },
+            Part::InlineData {
+                mime_type: job.media_type.to_owned(),
+                // The request API takes an owned buffer: the one copy an
+                // attempt makes, dropped with the request.
+                data: job.bytes.to_vec(),
+                uri: None,
+                annotations: None,
+            },
+        ],
+    };
+    let spec = CallSpec {
+        system: "",
+        content: &content,
+        image: true,
+    };
+    call(
+        binder,
+        env,
+        gate,
+        model_name,
+        settings,
+        &spec,
+        |reply: Reply| {
+            if reply.truncated {
+                tracing::warn!(
+                    event = "index_image_description_truncated",
+                    max_tokens = settings.max_tokens,
+                    "the model's description was cut off by max_tokens; kept as it is"
+                );
+            }
+            Ok(reply.text)
+        },
+    )
+    .await
+}
+
+/// Descriptions kept for a run.
+const IMAGE_CACHE_ENTRIES: usize = 500;
+/// A description longer than this is used but not cached (500 entries of the
+/// largest reply would be 128 MiB).
+const IMAGE_CACHE_MAX_DESCRIPTION_BYTES: usize = 32 * 1024;
+
+/// sha256(original bytes) + sha256(prompt) + the model's name.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ImageKey([u8; 32], [u8; 32], String);
+
+impl ImageKey {
+    fn new(digest: [u8; 32], prompt: &str, model: &str) -> Self {
+        Self(
+            digest,
+            Sha256::digest(prompt.as_bytes()).into(),
+            model.to_owned(),
+        )
+    }
+}
+
+/// The run's image descriptions: a least-recently-used map of
+/// [`IMAGE_CACHE_ENTRIES`], O(1) amortised per operation. Each entry
+/// carries the generation of its last use; the queue holds `(key,
+/// generation)` records oldest first, and a record whose generation is no
+/// longer its entry's is stale and skipped when eviction reaches it. Per
+/// run, in memory, never logged.
+#[derive(Default)]
+struct ImageCache {
+    entries: HashMap<Arc<ImageKey>, (String, u64)>,
+    order: VecDeque<(Arc<ImageKey>, u64)>,
+    generation: u64,
+}
+
+impl ImageCache {
+    fn touch(&mut self, key: &Arc<ImageKey>) -> u64 {
+        self.generation += 1;
+        self.order.push_back((Arc::clone(key), self.generation));
+        // Hits leave stale records behind: drop them before they pile up.
+        if self.order.len() > IMAGE_CACHE_ENTRIES * 4 {
+            let entries = &self.entries;
+            self.order
+                .retain(|(k, g)| entries.get(k).is_some_and(|(_, current)| current == g));
+        }
+        self.generation
+    }
+
+    fn get(&mut self, key: &ImageKey) -> Option<String> {
+        let (shared, (hit, _)) = self
+            .entries
+            .get_key_value(key)
+            .map(|(k, v)| (Arc::clone(k), v.clone()))?;
+        let generation = self.touch(&shared);
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.1 = generation;
+        }
+        Some(hit)
+    }
+
+    /// Like the SDK, a blank description is not kept.
+    fn put(&mut self, key: ImageKey, description: String) {
+        if description.trim().is_empty() || description.len() > IMAGE_CACHE_MAX_DESCRIPTION_BYTES {
+            return;
+        }
+        let key = Arc::new(key);
+        if self.entries.len() >= IMAGE_CACHE_ENTRIES && !self.entries.contains_key(&*key) {
+            while let Some((oldest, generation)) = self.order.pop_front() {
+                if self
+                    .entries
+                    .get(&oldest)
+                    .is_some_and(|(_, current)| *current == generation)
+                {
+                    self.entries.remove(&oldest);
+                    break;
+                }
+            }
+        }
+        let generation = self.touch(&key);
+        self.entries.insert(key, (description, generation));
+    }
+}
+
+/// The model's `ChunkDetails` for one window, with the attempts the policy
+/// allows (see [`call`]). An answer that is not the requested JSON is a
+/// retryable failure; a reply cut off by `max_tokens` stops the run (another
+/// attempt would be cut off too).
+async fn chat_window(
+    binder: &dyn ChatModelBinder,
+    env: &StepEnv<'_>,
+    gate: &Gate<'_>,
+    model_name: &str,
+    settings: LlmSettings,
+    window: &str,
+) -> Result<Vec<ChunkDetails>, CallFailure> {
+    let system = proposal_system_prompt();
+    let user = proposal_user_message(window);
+    let content = || Content::new("user").with_text(&user);
+    let spec = CallSpec {
+        system: &system,
+        content: &content,
+        image: false,
+    };
+    call(
+        binder,
+        env,
+        gate,
+        model_name,
+        settings,
+        &spec,
+        |reply: Reply| {
+            if reply.truncated {
+                let in_use = settings.max_tokens.map_or_else(
+                    || "unset, so the model's default".to_owned(),
+                    |n| n.to_string(),
+                );
+                return Err(CallFailure::Stop(format!(
+                    "the index model's reply was cut off by its max_tokens limit (the toolkit's llm `max_tokens` is {in_use}); raise `max_tokens` in the toolkit's llm settings and re-run"
+                )));
+            }
+            parse_chunk_analysis(&reply.text)
+                .map_err(|error| CallFailure::Retryable(error.to_string()))
+        },
+    )
+    .await
+}
+
 /// One non-streaming call, as the step-back model makes it: a streaming call
 /// would hand back partial deltas and a final response carrying the whole
 /// text.
@@ -682,8 +808,8 @@ async fn complete(
     model: &dyn Llm,
     model_name: &str,
     user: Content,
-    settings: LlmSettings,
-) -> Result<String, CallFailure> {
+    image: bool,
+) -> Result<Reply, CallFailure> {
     let request = LlmRequest {
         model: model_name.to_owned(),
         contents: vec![user],
@@ -694,10 +820,10 @@ async fn complete(
     let mut responses = model
         .generate_content(request, false)
         .await
-        .map_err(|error| classify_model_error(&error))?;
-    let mut text: Option<String> = None;
+        .map_err(|error| classify_model_error(&error, image))?;
+    let mut text: Option<Reply> = None;
     while let Some(response) = responses.next().await {
-        let response = response.map_err(|error| classify_model_error(&error))?;
+        let response = response.map_err(|error| classify_model_error(&error, image))?;
         if response.partial {
             continue;
         }
@@ -706,18 +832,10 @@ async fn complete(
                 "the model ended the reply with an error".to_owned(),
             ));
         }
-        if response.finish_reason == Some(FinishReason::MaxTokens) {
-            // Cut off by max_tokens: another attempt would be cut off too.
-            let in_use = settings.max_tokens.map_or_else(
-                || "unset, so the model's default".to_owned(),
-                |n| n.to_string(),
-            );
-            return Err(CallFailure::Stop(format!(
-                "the index model's reply was cut off by its max_tokens limit (the toolkit's llm `max_tokens` is {in_use}); raise `max_tokens` in the toolkit's llm settings and re-run"
-            )));
-        }
+        let truncated = response.finish_reason == Some(FinishReason::MaxTokens);
         if let Some(reason) = response.finish_reason
             && reason != FinishReason::Stop
+            && !truncated
         {
             return Err(CallFailure::Retryable(format!(
                 "the model stopped for {reason:?}"
@@ -728,25 +846,38 @@ async fn complete(
             for part in &content.parts {
                 if let Part::Text { text: piece } = part {
                     if reply.len().saturating_add(piece.len()) > MAX_REPLY_BYTES {
-                        return Err(CallFailure::Unusable(
-                            "the model's reply exceeds the size bound".to_owned(),
-                        ));
+                        return Err(if image {
+                            CallFailure::ImageSkip(SKIP_VISION_REFUSED)
+                        } else {
+                            CallFailure::Unusable(
+                                "the model's reply exceeds the size bound".to_owned(),
+                            )
+                        });
                     }
                     reply.push_str(piece);
                 }
             }
         }
-        text = Some(reply);
+        text = Some(Reply {
+            text: reply,
+            truncated,
+        });
     }
     text.ok_or_else(|| CallFailure::Retryable("the model returned no reply".to_owned()))
 }
 
 /// The gateway's refusal, sorted: retryable (429, 5xx, a timeout, the
-/// transport) fails the document; a size bound of this reply fails the
-/// document; anything else (the credential, the project, the budget, an
-/// unknown model, another 4xx) cannot be cured by another attempt and stops
-/// the run. The code is the facade's stable one; no provider text is read.
-fn classify_model_error(error: &AdkError) -> CallFailure {
+/// transport) fails the document; a size bound of this request or reply
+/// fails the document; anything else (the credential, the project, the
+/// budget, an unknown model, another 4xx) cannot be cured by another attempt
+/// and stops the run. The code is the facade's stable one; no provider text
+/// is read.
+///
+/// For an IMAGE call only the credential, the project and the budget stop
+/// the run: the gateway's generic rejection (a model that takes no images, a
+/// provider's 400 for one picture) is that picture's alone, `vision_refused`,
+/// and a request over the gateway's size bound is `too_large`.
+fn classify_model_error(error: &AdkError, image: bool) -> CallFailure {
     tracing::warn!(
         event = "index_model_call_failed",
         error_code = error.code,
@@ -755,10 +886,79 @@ fn classify_model_error(error: &AdkError) -> CallFailure {
     if error.is_retryable() {
         return CallFailure::Retryable(error.code.to_owned());
     }
-    match error.code {
+    let too_large = matches!(
+        error.code,
         "model_gateway.event_too_large"
-        | "model_gateway.stream_too_large"
-        | "model_gateway.request_too_large" => CallFailure::Unusable(error.code.to_owned()),
-        code => CallFailure::Fatal(code.to_owned()),
+            | "model_gateway.stream_too_large"
+            | "model_gateway.request_too_large"
+    );
+    if image {
+        return match error.code {
+            _ if too_large => CallFailure::ImageSkip(SKIP_TOO_LARGE),
+            "model_gateway.unauthorized"
+            | "model_gateway.forbidden"
+            | "model_gateway.budget_exhausted"
+            | "model_gateway.member_budget_exhausted"
+            | "model_gateway.project_budget_exhausted"
+            | "model_gateway.resource_exhausted" => CallFailure::Fatal(error.code.to_owned()),
+            _ => CallFailure::ImageSkip(SKIP_VISION_REFUSED),
+        };
+    }
+    if too_large {
+        CallFailure::Unusable(error.code.to_owned())
+    } else {
+        CallFailure::Fatal(error.code.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    fn key(n: u8) -> ImageKey {
+        ImageKey::new([n; 32], "prompt", "model")
+    }
+
+    #[test]
+    fn the_least_recently_used_description_is_evicted() {
+        let mut cache = ImageCache::default();
+        let many = |n: usize| ImageKey::new([0; 32], &format!("p{n}"), "m");
+        for n in 0..IMAGE_CACHE_ENTRIES {
+            cache.put(many(n), format!("d{n}"));
+        }
+        // Touch the oldest: the next insert evicts the second oldest.
+        assert_eq!(cache.get(&many(0)).as_deref(), Some("d0"));
+        cache.put(many(IMAGE_CACHE_ENTRIES), "new".to_owned());
+        assert_eq!(cache.entries.len(), IMAGE_CACHE_ENTRIES);
+        assert!(cache.get(&many(1)).is_none());
+        assert_eq!(cache.get(&many(0)).as_deref(), Some("d0"));
+        assert_eq!(
+            cache.get(&many(IMAGE_CACHE_ENTRIES)).as_deref(),
+            Some("new")
+        );
+    }
+
+    #[test]
+    fn hits_do_not_grow_the_queue_without_bound() {
+        let mut cache = ImageCache::default();
+        cache.put(key(1), "one".to_owned());
+        cache.put(key(2), "two".to_owned());
+        for _ in 0..50_000 {
+            assert!(cache.get(&key(1)).is_some());
+        }
+        assert!(
+            cache.order.len() <= IMAGE_CACHE_ENTRIES * 4 + 1,
+            "{}",
+            cache.order.len()
+        );
+        assert_eq!(cache.get(&key(2)).as_deref(), Some("two"));
+    }
+
+    #[test]
+    fn blank_and_huge_descriptions_are_not_kept() {
+        let mut cache = ImageCache::default();
+        cache.put(key(1), "  ".to_owned());
+        cache.put(key(2), "x".repeat(IMAGE_CACHE_MAX_DESCRIPTION_BYTES + 1));
+        assert!(cache.entries.is_empty());
     }
 }

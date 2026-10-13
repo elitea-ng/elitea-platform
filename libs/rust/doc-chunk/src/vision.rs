@@ -121,7 +121,9 @@ impl VisionPlan {
 /// Plans the vision step for the image document named `source`.
 ///
 /// `use_llm` is ON unless `config` turns it off for the extension (or at the
-/// top level). The prompt is the SDK's default unless the extension's block
+/// top level). The prompt, `max_tokens` and `token_overlap` come from the
+/// extension's own block only, defaulting to the SDK's values (512 and 10).
+/// The prompt is the SDK's default unless the extension's block
 /// sets `use_default_prompt: false` (then its `prompt`, else the loader's
 /// own multimodal prompt) or gives a `prompt` without saying
 /// `use_default_prompt` (the SDK ignores such a prompt; honouring it is the
@@ -132,20 +134,26 @@ pub fn plan_image(source: &str, config: &ChunkingConfig) -> ImagePlan {
     if !is_image_extension(&extension) || !vision_enabled(config, &extension) {
         return ImagePlan::Disabled;
     }
-    let params = config.params_for(&extension);
-    let own_prompt = params.prompt.as_deref().filter(|p| !p.trim().is_empty());
-    let prompt = match (params.use_default_prompt, own_prompt) {
+    // The loader reads its prompt and window from the extension's OWN block,
+    // as the SDK does: top-level text settings (a `max_tokens` for markdown,
+    // say) never reach it.
+    let own = config
+        .own_params_for(&extension)
+        .cloned()
+        .unwrap_or_default();
+    let own_prompt = own.prompt.as_deref().filter(|p| !p.trim().is_empty());
+    let prompt = match (own.use_default_prompt, own_prompt) {
         (Some(true), _) => IMAGE_PROCESSING_PROMPT,
         (Some(false), own) => own.unwrap_or(MULTIMODAL_PROMPT),
         (None, own) => own.unwrap_or(IMAGE_PROCESSING_PROMPT),
     };
     ImagePlan::Vision(VisionPlan {
         prompt: prompt.to_owned(),
-        max_tokens: params
+        max_tokens: own
             .max_tokens
             .filter(|n| *n > 0)
             .unwrap_or(VISION_MAX_TOKENS),
-        token_overlap: params
+        token_overlap: own
             .token_overlap
             .filter(|n| *n >= 0)
             .unwrap_or(VISION_TOKEN_OVERLAP),
@@ -238,6 +246,27 @@ mod tests {
             prompt_of(json!({".png": {"prompt": "   "}})),
             image_processing_prompt()
         );
+    }
+
+    #[test]
+    fn the_window_and_prompt_come_from_the_extensions_own_block_only() {
+        // Top-level text settings never leak into the vision step.
+        let top = config(&json!({"max_tokens": 5, "token_overlap": 3, "prompt": "top"}));
+        let ImagePlan::Vision(plan) = plan_image("a.png", &top) else {
+            panic!("disabled")
+        };
+        assert_eq!(plan.prompt(), image_processing_prompt());
+        assert_eq!(plan.max_tokens, 512);
+        assert_eq!(plan.token_overlap, 10);
+        let own = config(&json!({"max_tokens": 5, ".png": {"max_tokens": 64, "token_overlap": 0}}));
+        let ImagePlan::Vision(plan) = plan_image("a.png", &own) else {
+            panic!("disabled")
+        };
+        assert_eq!((plan.max_tokens, plan.token_overlap), (64, 0));
+        let ImagePlan::Vision(other) = plan_image("a.jpg", &own) else {
+            panic!("disabled")
+        };
+        assert_eq!((other.max_tokens, other.token_overlap), (512, 10));
     }
 
     #[test]

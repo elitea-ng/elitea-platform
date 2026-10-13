@@ -27,6 +27,7 @@
 //! `elitea-vector` token), write a vector of another embedding space than
 //! the command expects, or write index metadata.
 
+pub(crate) mod image_fit;
 pub(crate) mod inputs;
 pub(crate) mod model_steps;
 pub(crate) mod pipeline;
