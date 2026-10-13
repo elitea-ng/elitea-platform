@@ -511,7 +511,7 @@ jobs:
     # stack cannot run an agent turn at all, so this journey would fail there
     # for a reason that has nothing to do with the change under test.
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       # ── SHARDED IN FOUR, AND WHY THAT IS THE ONLY LEVER ──────────────────
       #
