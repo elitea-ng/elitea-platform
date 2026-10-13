@@ -140,6 +140,32 @@ volumes = [v.get("secret", {}).get("secretName", "") for v in dep["spec"]["templ
 assert not any("vector" in name for name in volumes), volumes
 PY
 
+# The model-call cap of a run's model steps (ADR-0030 I4): written under rust
+# indexing (the chart default, or what the operator sets), never under python.
+modelcap() {
+  python3 - "$1" <<'PY'
+import json, sys, yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+cm = next(d for d in docs
+          if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "elitea-worker-runtime")
+print(json.loads(cm["data"]["runtime.json"]).get("index_model_call_cap", "-"))
+PY
+}
+"$HELM" template t "$CHART" "${RENDER[@]}" "${RUST[@]}" \
+  --set worker.runtime.indexModelCallCap=500 \
+  >"$TMP/cap.yaml" 2>"$TMP/cap.err" \
+  || bad "an indexModelCallCap does not render: $(tail -1 "$TMP/cap.err")"
+[ "$(modelcap "$TMP/default.yaml")" = "-" ] \
+  && ok "python indexing writes no index_model_call_cap" \
+  || bad "python indexing leaked index_model_call_cap: $(modelcap "$TMP/default.yaml")"
+[ "$(modelcap "$TMP/rust.yaml")" = "2000" ] \
+  && ok "rust indexing writes the default model-call cap of 2000" \
+  || bad "rust indexing model-call cap: $(modelcap "$TMP/rust.yaml")"
+[ "$(modelcap "$TMP/cap.yaml")" = "500" ] \
+  && ok "worker.runtime.indexModelCallCap sets the cap" \
+  || bad "indexModelCallCap=500 rendered: $(modelcap "$TMP/cap.yaml")"
+
 refuses() {
   local expect="$1"; shift
   local out

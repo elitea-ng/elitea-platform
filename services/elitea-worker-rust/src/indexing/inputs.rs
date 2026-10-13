@@ -7,6 +7,11 @@
 //!   arguments as the request carried them.
 //! * The embedding binding (`index.embedding_binding`): Main's
 //!   `EmbeddingBinding.MarshalCanonical`, of which only `model_name` is read.
+//! * The chat model (`index.llm_model`, a JSON string) and its settings
+//!   (`index.llm_configuration`, an object of which `temperature` and
+//!   `max_tokens` are read), for the steps that call a chat model (ADR-0030
+//!   I4). Both are optional; an entry that is present and malformed is
+//!   refused, a setting that is unusable is left out.
 //!
 //! Every read refuses an entry that is not an object; a wrong type on an
 //! optional `index_data` argument is a run failure with a stated reason, not
@@ -150,6 +155,54 @@ fn text_list(map: &Map<String, Value>, key: &str) -> Result<Vec<String>, InputEr
     }
 }
 
+/// The settings of the chat model an index step calls, from
+/// `index.llm_configuration`. A key that is missing or unusable is `None`:
+/// the SDK's `llm_settings` carry many keys the gateway call does not take.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct LlmSettings {
+    pub(crate) max_tokens: Option<u32>,
+    pub(crate) temperature: Option<f32>,
+}
+
+/// The chat model name of the `index.llm_model` entry.
+///
+/// # Errors
+///
+/// Not a JSON string, or an empty one.
+pub(crate) fn llm_model(raw: &[u8]) -> Result<String, InputError> {
+    match serde_json::from_slice::<Value>(raw) {
+        Ok(Value::String(name)) if !name.trim().is_empty() => Ok(name.trim().to_owned()),
+        _ => Err(InputError(
+            "the llm model entry is not a model name".to_owned(),
+        )),
+    }
+}
+
+/// The settings of the `index.llm_configuration` entry.
+///
+/// # Errors
+///
+/// Not a JSON object.
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) fn llm_settings(raw: &[u8]) -> Result<LlmSettings, InputError> {
+    let map = object(raw, "llm configuration")?;
+    let max_tokens = map
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .filter(|n| *n > 0)
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| i32::try_from(*n).is_ok());
+    let temperature = map
+        .get("temperature")
+        .and_then(Value::as_f64)
+        .filter(|t| t.is_finite() && (0.0..=1.0).contains(t))
+        .map(|t| t as f32);
+    Ok(LlmSettings {
+        max_tokens,
+        temperature,
+    })
+}
+
 /// The embedding model of the binding entry (`model_name`).
 ///
 /// # Errors
@@ -200,6 +253,22 @@ mod tests {
         assert!(index_parameters(br#"{"index_name":"n","clean_index":"yes"}"#).is_err());
         assert!(index_parameters(br#"{"index_name":"n","whitelist":"*.md"}"#).is_err());
         assert!(index_parameters(br#"{"index_name":"n","chunking_config":[]}"#).is_err());
+    }
+
+    #[test]
+    fn the_chat_model_entries_are_a_name_and_usable_settings() {
+        assert_eq!(llm_model(br#""gpt-4o-mini""#).unwrap(), "gpt-4o-mini");
+        assert!(llm_model(b"{}").is_err());
+        assert!(llm_model(br#""  ""#).is_err());
+        let settings = llm_settings(
+            br#"{"temperature": 0.5, "max_tokens": 4096, "top_p": 0.9, "openai_compatible": true}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.max_tokens, Some(4096));
+        assert_eq!(settings.temperature, Some(0.5));
+        let unusable = llm_settings(br#"{"temperature": 7, "max_tokens": -1}"#).unwrap();
+        assert_eq!(unusable, LlmSettings::default());
+        assert!(llm_settings(b"[]").is_err());
     }
 
     #[test]

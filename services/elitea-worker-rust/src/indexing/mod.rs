@@ -18,6 +18,8 @@
 //! * [`source`] — the toolkit type to its connector, with the `index_data`
 //!   whitelist/blacklist.
 //! * [`pipeline`] — the run itself.
+//! * [`model_steps`] — the steps that call a model (the statistical and
+//!   proposal chunkers), their failure policy and their per-run call cap.
 //! * [`slug`] — Main's vector-space slug, so the worker writes the
 //!   collection Main's registry names.
 //!
@@ -26,6 +28,7 @@
 //! the command expects, or write index metadata.
 
 pub(crate) mod inputs;
+pub(crate) mod model_steps;
 pub(crate) mod pipeline;
 pub(crate) mod slug;
 pub(crate) mod source;
@@ -37,6 +40,8 @@ mod atlassian_tests;
 mod figma_tests;
 #[cfg(test)]
 mod microsoft_family_tests;
+#[cfg(test)]
+mod model_step_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -52,6 +57,7 @@ use elitea_vector_index::{ClientConfig, VectorClient};
 use crate::protocol::control::IndexRemovalControl;
 use crate::transport::embeddings_facade::EmbeddingsClient;
 use crate::transport::extractor_client::ExtractorClient;
+use model_steps::ChatModelBinder;
 
 pub(crate) use pipeline::{IndexRun, IndexRunFailure, Interruption, interrupt_summary, run_index};
 
@@ -74,6 +80,9 @@ pub(crate) struct IndexIngestRuntime {
     /// deployment names its socket; `None` reports a PDF or Office document
     /// skipped `unsupported_type`.
     pub(crate) extractor: Option<Arc<ExtractorClient>>,
+    /// Binds the chat model of the steps that call one (the proposal
+    /// chunker, ADR-0030 I4); `None` skips such documents `no_model`.
+    pub(crate) chat_models: Option<Arc<dyn ChatModelBinder>>,
 }
 
 /// Bounds of one run.
@@ -96,7 +105,15 @@ pub(crate) struct IndexRunLimits {
     /// The wait before the second embeddings attempt of a batch after a
     /// retryable refusal; the third waits twice that.
     pub(crate) embedding_retry_backoff: Duration,
+    /// Model calls one run may make in its model steps (a chat call per
+    /// proposal window, an embeddings request per batch of the statistical
+    /// chunker). Reaching it stops the run. The gateway's budget applies as
+    /// well. `index_model_call_cap` in the worker's runtime config.
+    pub(crate) max_model_calls: u32,
 }
+
+/// The cap when the deployment names none.
+pub(crate) const DEFAULT_MAX_MODEL_CALLS: u32 = 2_000;
 
 impl Default for IndexRunLimits {
     fn default() -> Self {
@@ -107,6 +124,7 @@ impl Default for IndexRunLimits {
             max_document_bytes: 50 * 1024 * 1024,
             extract_timeout: Duration::from_mins(2),
             embedding_retry_backoff: Duration::from_millis(500),
+            max_model_calls: DEFAULT_MAX_MODEL_CALLS,
         }
     }
 }
@@ -149,7 +167,15 @@ impl IndexIngestRuntime {
             transport: Arc::new(transport),
             limits,
             extractor: None,
+            chat_models: None,
         })
+    }
+
+    /// Bind the chat model of the model steps through `binder`.
+    #[must_use]
+    pub(crate) fn with_chat_models(mut self, binder: Arc<dyn ChatModelBinder>) -> Self {
+        self.chat_models = Some(binder);
+        self
     }
 
     /// Lend the control plane the `remove_index` tool runs Main's index

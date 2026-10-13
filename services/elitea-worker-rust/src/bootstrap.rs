@@ -303,6 +303,7 @@ impl ProductionTransportBundle {
             }))
         };
         let platform = Arc::new(PlatformClient::new(runtime_context));
+        let model_facade = Arc::new(model_facade);
         let index_runtime = match deployment.vector_target.as_deref() {
             Some(target) => {
                 let mut runtime = crate::indexing::IndexIngestRuntime::new(
@@ -314,12 +315,21 @@ impl ProductionTransportBundle {
                     elitea_connectors::egress::HostAllowlist::parse(
                         deployment.index_egress_allowlist.as_deref(),
                     ),
-                    crate::indexing::IndexRunLimits::default(),
+                    crate::indexing::IndexRunLimits {
+                        max_model_calls: deployment
+                            .index_model_call_cap
+                            .unwrap_or(crate::indexing::DEFAULT_MAX_MODEL_CALLS),
+                        ..crate::indexing::IndexRunLimits::default()
+                    },
                 )
                 .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?
                 // The `remove_index` tool asks Main over the same control
                 // plane the claim came from (ADR-0030 I1).
-                .with_removal_control(Arc::clone(&control) as Arc<dyn IndexRemovalControl>);
+                .with_removal_control(Arc::clone(&control) as Arc<dyn IndexRemovalControl>)
+                // The proposal chunker's chat model (ADR-0030 I4), bound per
+                // call over the same gateway channel.
+                .with_chat_models(Arc::clone(&model_facade)
+                    as Arc<dyn crate::indexing::model_steps::ChatModelBinder>);
                 // PDF and Office documents go to the extraction sidecar when
                 // the deployment names its socket; the dial is lazy, so a
                 // sidecar that is still starting costs nothing here.
@@ -348,7 +358,7 @@ impl ProductionTransportBundle {
             output,
             input,
             platform,
-            model_facade: Arc::new(model_facade),
+            model_facade,
             agentstate,
             index_runtime,
         })
@@ -650,6 +660,7 @@ mod tests {
             vector_target: None,
             index_egress_allowlist: None,
             extractor_socket: None,
+            index_model_call_cap: None,
             agent_model_checkpoint_recovery: false,
             agent_node_recovery: false,
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),

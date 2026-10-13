@@ -189,6 +189,7 @@ async fn harness(transport: Arc<Recorded>) -> Harness {
         calls: AtomicUsize::new(0),
     });
     let runtime = IndexIngestRuntime {
+        chat_models: None,
         vector,
         embeddings: EmbeddingsClient::with_transport(
             Arc::clone(&embeddings) as Arc<dyn ModelGatewayTransport>,
@@ -268,6 +269,8 @@ impl Harness {
                 toolkit_configuration: &configuration,
                 tool_parameters: &parameters,
                 embedding_binding: Some(&binding),
+                llm_model: None,
+                llm_configuration: None,
                 vector_token: Some(&self.token),
                 context: &self.context,
                 lease: &Always,

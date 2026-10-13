@@ -225,6 +225,27 @@ pub fn point_id(
     Uuid::new_v5(&namespace, name.as_bytes())
 }
 
+/// The chunk types that share their `chunk_id` with the `document` chunk of
+/// the same passage: the proposal chunker emits a `title`, a `summary` and a
+/// `propositions` chunk beside each `document` chunk, all numbered alike so
+/// that `extended_search` can join a hit on one of them to its document
+/// chunk by `(document_key, chunk_id)`.
+const SIBLING_CHUNK_TYPES: [&str; 4] = ["title", "summary", "propositions", "keywords"];
+
+/// The chunk id as the point id sees it. A point's identity is its
+/// (document, chunk id), so siblings of one passage would overwrite each
+/// other (and the `document` chunk, written last, would win). A sibling's
+/// identity therefore carries its type; every other chunk's is its bare id,
+/// which leaves the ids of points written before this rule unchanged.
+#[must_use]
+pub fn identity_chunk_id<'a>(chunk_id: &'a str, chunk_type: &str) -> std::borrow::Cow<'a, str> {
+    if SIBLING_CHUNK_TYPES.contains(&chunk_type) {
+        std::borrow::Cow::Owned(format!("{chunk_id}\u{1f}{chunk_type}"))
+    } else {
+        std::borrow::Cow::Borrowed(chunk_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +300,29 @@ mod tests {
             point_id(1, t, namespace, None, "ab", "c"),
             point_id(1, t, namespace, None, "a", "bc")
         );
+    }
+
+    #[test]
+    fn the_chunks_of_one_passage_have_their_own_point_ids() {
+        let namespace = Uuid::from_u128(7);
+        let t = "toolkit_index";
+        let id = |chunk_type: &str| {
+            point_id(
+                1,
+                t,
+                namespace,
+                None,
+                "doc",
+                &identity_chunk_id("3", chunk_type),
+            )
+        };
+        let types = ["document", "title", "summary", "propositions"];
+        let ids: std::collections::BTreeSet<_> = types.iter().map(|t| id(t)).collect();
+        assert_eq!(ids.len(), types.len(), "four chunks, four points");
+        // Points written before the rule keep their ids.
+        assert_eq!(id("document"), point_id(1, t, namespace, None, "doc", "3"));
+        assert_eq!(id("code"), point_id(1, t, namespace, None, "doc", "3"));
+        assert_eq!(id(""), point_id(1, t, namespace, None, "doc", "3"));
     }
 
     #[test]

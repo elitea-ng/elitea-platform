@@ -40,6 +40,54 @@ pub struct ChunkParams {
     pub unknown_chunk_overlap: Option<i64>,
     /// A loader step that calls a model (image and PDF-image descriptions).
     pub use_llm: Option<bool>,
+    /// The settings of the statistical and proposal chunkers.
+    pub model_steps: ModelStepParams,
+}
+
+/// The settings of the two chunkers that call a model, under the SDK's key
+/// names (`statistical_chunker`, `proposal_chunker`). A field left out takes
+/// the SDK's default (see `StatisticalSettings` and `PROPOSAL_WINDOW_TOKENS`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModelStepParams {
+    /// Proposal: tokens per model window (`max_doc_tokens`, SDK 1024).
+    pub max_doc_tokens: Option<i64>,
+    /// Statistical: tokens per sentence-like split (`max_doc_size`, SDK 300).
+    pub max_doc_size: Option<i64>,
+    /// Statistical: splits per embeddings request (`batch_size`, SDK 64).
+    pub batch_size: Option<i64>,
+    /// Statistical: splits the running context averages (`window_size`, 5).
+    pub window_size: Option<i64>,
+    pub dynamic_threshold: Option<bool>,
+    pub min_split_tokens: Option<i64>,
+    pub max_split_tokens: Option<i64>,
+    pub split_tokens_tolerance: Option<i64>,
+    pub threshold_adjustment: Option<f64>,
+    pub score_threshold: Option<f64>,
+}
+
+// Every float is finite: `float` refuses NaN and the infinities.
+impl Eq for ModelStepParams {}
+
+impl ModelStepParams {
+    fn merged(&self, over: &Self) -> Self {
+        macro_rules! pick {
+            ($($field:ident),*) => {
+                Self { $($field: over.$field.or(self.$field)),* }
+            };
+        }
+        pick!(
+            max_doc_tokens,
+            max_doc_size,
+            batch_size,
+            window_size,
+            dynamic_threshold,
+            min_split_tokens,
+            max_split_tokens,
+            split_tokens_tolerance,
+            threshold_adjustment,
+            score_threshold
+        )
+    }
 }
 
 impl ChunkParams {
@@ -47,7 +95,10 @@ impl ChunkParams {
     fn merged(&self, over: &Self) -> Self {
         macro_rules! pick {
             ($($field:ident),*) => {
-                Self { $($field: over.$field.clone().or_else(|| self.$field.clone())),* }
+                Self {
+                    $($field: over.$field.clone().or_else(|| self.$field.clone()),)*
+                    model_steps: self.model_steps.merged(&over.model_steps),
+                }
             };
         }
         pick!(
@@ -71,6 +122,7 @@ impl ChunkParams {
     /// is dropped (that key takes the default) and recorded in `warnings`,
     /// prefixed with `scope` (`""` or `".md"`), so one bad key does not
     /// cost the whole config.
+    #[allow(clippy::too_many_lines)] // One key per setting.
     fn from_object(
         object: &serde_json::Map<String, Value>,
         scope: &str,
@@ -109,6 +161,27 @@ impl ChunkParams {
         // (`CodeChunkerConfig`).
         let unknown_chunk_size = unknown_chunk_size.or_else(|| int("token_chunk_size"));
         let unknown_chunk_overlap = int("unknown_chunk_overlap");
+        let max_doc_tokens = int("max_doc_tokens");
+        let max_doc_size = int("max_doc_size");
+        let batch_size = int("batch_size");
+        let window_size = int("window_size");
+        let min_split_tokens = int("min_split_tokens");
+        let max_split_tokens = int("max_split_tokens");
+        let split_tokens_tolerance = int("split_tokens_tolerance");
+        let mut real = |key: &str| -> Option<f64> {
+            match object.get(key) {
+                None | Some(Value::Null) => None,
+                Some(value) => {
+                    let parsed = float(value);
+                    if parsed.is_none() {
+                        warn(key, "a finite number or a numeric string", value);
+                    }
+                    parsed
+                }
+            }
+        };
+        let threshold_adjustment = real("threshold_adjustment");
+        let score_threshold = real("score_threshold");
         let mut flag = |key: &str| -> Option<bool> {
             match object.get(key) {
                 None | Some(Value::Null) => None,
@@ -122,6 +195,7 @@ impl ChunkParams {
         let strip_header = flag("strip_header");
         let return_each_line = flag("return_each_line");
         let use_llm = flag("use_llm");
+        let dynamic_threshold = flag("dynamic_threshold");
         let mut text = |key: &str| -> Option<String> {
             match object.get(key) {
                 None | Some(Value::Null) => None,
@@ -159,8 +233,30 @@ impl ChunkParams {
             unknown_chunk_size,
             unknown_chunk_overlap,
             use_llm,
+            model_steps: ModelStepParams {
+                max_doc_tokens,
+                max_doc_size,
+                batch_size,
+                window_size,
+                dynamic_threshold,
+                min_split_tokens,
+                max_split_tokens,
+                split_tokens_tolerance,
+                threshold_adjustment,
+                score_threshold,
+            },
         }
     }
+}
+
+/// A finite number from a JSON number or a numeric string.
+fn float(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+    .filter(|f| f.is_finite())
 }
 
 /// An integer from a JSON number (`512.0` is 512) or a numeric string

@@ -107,6 +107,13 @@ pub struct RuntimeDeployConfig {
     /// existed. An absolute path in a directory the two containers share.
     #[serde(default)]
     pub extractor_socket: Option<PathBuf>,
+    /// The model calls one index run may make in its model steps (a chat
+    /// call per proposal window, an embeddings request per batch of the
+    /// statistical chunker; ADR-0030 I4). Reaching it stops the run.
+    /// Absent, 2000. Zero is refused: use the bounds of the gateway budget
+    /// to forbid model use, not a cap that fails every such document.
+    #[serde(default)]
+    pub index_model_call_cap: Option<u32>,
     pub ca_path: PathBuf,
     pub certificate_path: PathBuf,
     pub private_key_path: PathBuf,
@@ -334,6 +341,9 @@ impl RuntimeDeployConfig {
         }
         if let Some(socket) = &self.extractor_socket {
             require_absolute_path(socket)?;
+        }
+        if self.index_model_call_cap == Some(0) {
+            return Err(invalid_config());
         }
         if self.sandbox_runtimes.len() > 4 {
             return Err(invalid_config());

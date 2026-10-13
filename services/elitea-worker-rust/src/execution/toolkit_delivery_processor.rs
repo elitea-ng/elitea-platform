@@ -553,6 +553,16 @@ where
         let tool_parameters = self
             .fetch_entry(execution, lease, &index.tool_parameters_entry_id)
             .await?;
+        // The chat model of the steps that call one (ADR-0030 I4): Main ships
+        // both entries whenever the toolkit resolves a model.
+        let llm_model = match index.llm_model_entry_id.as_str() {
+            "" => None,
+            entry_id => Some(self.fetch_entry(execution, lease, entry_id).await?),
+        };
+        let llm_configuration = match index.llm_configuration_entry_id.as_str() {
+            "" => None,
+            entry_id => Some(self.fetch_entry(execution, lease, entry_id).await?),
+        };
         let embedding_binding = match index.embedding_binding.as_ref() {
             Some(binding) => Some(
                 self.fetch_entry(execution, lease, &binding.entry_id)
@@ -564,6 +574,8 @@ where
             toolkit_configuration,
             tool_parameters,
             embedding_binding,
+            llm_model,
+            llm_configuration,
         })
     }
 
@@ -624,6 +636,11 @@ where
             tool_parameters: inputs.tool_parameters.as_bytes(),
             embedding_binding: inputs
                 .embedding_binding
+                .as_ref()
+                .map(MaterializedInput::as_bytes),
+            llm_model: inputs.llm_model.as_ref().map(MaterializedInput::as_bytes),
+            llm_configuration: inputs
+                .llm_configuration
                 .as_ref()
                 .map(MaterializedInput::as_bytes),
             vector_token: execution.vector_token(),
@@ -1210,6 +1227,8 @@ struct IndexInputs {
     toolkit_configuration: MaterializedInput,
     tool_parameters: MaterializedInput,
     embedding_binding: Option<MaterializedInput>,
+    llm_model: Option<MaterializedInput>,
+    llm_configuration: Option<MaterializedInput>,
 }
 
 /// The typed result: the admitted bundle and entries restated (Main checks

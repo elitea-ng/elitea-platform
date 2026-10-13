@@ -94,6 +94,8 @@ async fn run(
             toolkit_configuration: configuration.to_string().as_bytes(),
             tool_parameters: parameters.to_string().as_bytes(),
             embedding_binding: Some(&binding()),
+            llm_model: None,
+            llm_configuration: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: &Always,

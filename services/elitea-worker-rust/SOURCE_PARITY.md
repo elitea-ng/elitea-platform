@@ -725,3 +725,38 @@ field for `project_ids`/`team_ids`/`include_comments`; point the agent-runtime
 git families did before #1249); `api.figma.com` in the deployment egress
 allowlist (`indexEgressAllowlist`, `deploy/runtime/worker-runtime.*.json`) for
 deployments that index Figma.
+
+## ADR-0030 I4 (PR-A): the model-calling chunkers, 2026-10-13
+
+The proposal and statistical chunkers are served by the Rust worker. The
+chunking crate stays model-free: `elitea_doc_chunk::plan` returns a
+`ChunkPlan` (the windows to send to a chat model, or the splits to embed) and
+`src/indexing/model_steps.rs` fulfils it; the pipeline's `prepare` task
+returns `Preparation::Model` and the runner fulfils the plan between
+documents (so Stop, the deadline and the lease are checked before every
+model call). The chat model is `index.llm_model` (a JSON string) with the
+`temperature` and `max_tokens` of `index.llm_configuration`, which Main
+already ships and the worker now reads; it is bound per call through
+`ChatModelBinder` (the model facade, OpenAI-compatible over `/llm/v1`, the
+claim's resource project as the model owner, as the step-back binder does).
+The statistical chunker embeds with the index's own embedding model through
+`EmbeddingsClient`. Proving tests: `libs/rust/doc-chunk/tests/model_steps.rs`
+(structural goldens with a fixture model: windows, chunk types, order, ids,
+metadata, boundaries) and `src/indexing/model_step_tests.rs` (a scripted
+`Llm` and the scripted embeddings gateway against the `elitea-vector` fake:
+the four chunk types stored and `extended_search` returning the document
+chunk, `no_model`, a refusal failing the run with the gateway's code, a
+retryable failure with its breaker and the stored version untouched, the
+call cap, an unchanged document making zero model calls, a changed one
+replacing its points).
+
+| SDK behaviour (`tools/chunkers/sematic/{proposal,statistical}_chunker.py`, pinned `b5113a1`) | Rust | Deliberate difference |
+| --- | --- | --- |
+| Proposal: 1024-token cl100k windows (`max_doc_tokens`), one structured-output call per window, four chunks per `ChunkDetails` (`title`, `summary`, `propositions` = lines joined, `document` = the whole window with `chunk_title` / `chunk_summary` in its metadata), the same `chunk_id` for the four, counted across windows | Same windows, prompt (verbatim `CHUNK_SUMMARY_PROMPT`), order, numbering and metadata | The model is asked for the JSON object in the prompt and the reply is read tolerantly (fenced or introduced); the gateway's strict `json_schema` response format is not used because it is labelled for continuation summaries and not every provider behind the gateway takes it. A title, summary or proposal list that is blank is not emitted (a blank text cannot be embedded); its `document` chunk is |
+| A failed model call is logged and swallowed: the window silently produces nothing | Never dropped silently. A retryable failure (429, 5xx, a timeout, the transport, an unreadable reply after three attempts, an empty `chunks` list) skips THE DOCUMENT as `model_failed` and leaves its stored version untouched, so the next run retries it; five documents in a row stop the run. A refusal no attempt cures (the credential, the project, the budget, an unknown model, any other 4xx) fails the run with the gateway's stable code in the message. No model bound: `no_model` | The SDK lost text without a trace |
+| The four chunks of a passage share a PGVector row set (random ids) | `elitea-vector` derives a point id from (project, source, namespace, generation, document, chunk id); the four would overwrite each other, the `document` chunk written last winning. The id of a `title`, `summary`, `propositions` or `keywords` point now carries its type; every other chunk's id is unchanged (`services/elitea-vector/src/layout.rs::identity_chunk_id`) | A service change the SDK's storage did not need. A worker that writes proposal chunks against an `elitea-vector` older than this change loses three of four chunks per passage: deploy the service first |
+| Statistical: 300-token splits (`max_doc_size`), embeddings in batches of 64, a running mean of the previous `window_size` (5) splits, a binary search (`dynamic_threshold`) for a threshold whose median chunk is 100-300 tokens (tolerance 10, step 0.01), else `score_threshold` 0.5, chunks joined with a space | Same arithmetic (`libs/rust/doc-chunk/src/statistical.rs`), same keys and defaults, `chunk_token_count` metadata | The whole document is planned once. The SDK planned each batch of 64 splits alone and carried the last chunk of a batch into the next batch's start: that chunk was emitted twice and the next batch repeated its text. Here `batch_size` only bounds an embeddings request (identical chunks for documents of 64 splits or fewer) and no text is emitted twice. `min_split_tokens` / `max_split_tokens` also bound the grouping (the SDK grouped with its defaults whatever the config said); a `threshold_adjustment` that is not positive takes the default (the SDK's search would not end) |
+| Both chunkers take the toolkit's `embedding` and `llm` from the toolkit instance | `index.embedding_binding` and `index.llm_model` / `index.llm_configuration` of the claim's bundle; no model bound is `no_model`, never a startup error | The claim, not the process, names the models |
+| No budget for the chunkers' calls beyond the provider's | A per-run cap on model calls (one per proposal window, one per statistical embeddings request; the final chunk embedding is not counted): `index_model_call_cap` in the worker's runtime config (default 2000; Helm `worker.runtime.indexModelCallCap`; compose `deploy/runtime/worker-runtime.rust.json`). Reaching it fails the run with a sentence; the documents written stay and a re-run continues, because unchanged versions never call a model. The gateway's budget applies as well | A guard against a surprise bill on a large source |
+| A re-index re-runs the chunker on every document | Unchanged document versions are skipped before any model call (the pipeline's existing diff). A document's version carries no prompt or model hash: changing the prompt, the chunker's settings or the model needs `clean_index` to re-chunk what the source did not change | Same as every chunking setting today |
+| The model steps of one run are serial across documents | Same: fetch and extract run `document_concurrency` ahead, the model calls one document at a time. In-document parallelism is a follow-up | Simplicity first; the cap and the breaker are exact because of it |

@@ -89,6 +89,12 @@ data:
     {{- if $r.indexEgressAllowlist }}
     {{- $_ := set $config "index_egress_allowlist" $r.indexEgressAllowlist }}
     {{- end }}
+    {{- /* The model calls one index run may make (ADR-0030 I4). Written only
+    when set, and only under the Rust indexing runtime, so the Python
+    runtime.json stays identical; the worker's default is the chart default. */}}
+    {{- if $r.indexModelCallCap }}
+    {{- $_ := set $config "index_model_call_cap" (int $r.indexModelCallCap) }}
+    {{- end }}
     {{- /* The document extraction sidecar (ADR-0030 I1): the worker streams
     PDF and Office documents to this socket, in the emptyDir the Deployment
     shares between the two containers. Written only while the sidecar renders

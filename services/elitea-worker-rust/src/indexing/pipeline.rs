@@ -49,7 +49,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use elitea_content_source::{Acl, DocumentRef, SourceError};
-use elitea_doc_chunk::{Chunk, ChunkError, ChunkOptions, ChunkingConfig};
+use elitea_doc_chunk::{Chunk, ChunkError, ChunkOptions, ChunkPlan, ChunkingConfig};
 use elitea_doc_extract::{ExtractOptions, Extracted};
 use elitea_vector_index::client::toolkit_namespace;
 use elitea_vector_index::{DeleteSelector, pb};
@@ -58,6 +58,7 @@ use serde_json::{Map, Value};
 use tokio::task::JoinSet;
 
 use super::inputs::{self, IndexParameters};
+use super::model_steps::{ChatBinding, ModelSteps, StepEnd, StepEnv};
 use super::slug::vector_space_slug;
 use super::source::{IndexSource, PathFilter, PlatformAccess};
 use super::{IndexIngestRuntime, IndexRunLimits};
@@ -88,10 +89,15 @@ pub(crate) const MAX_CONSECUTIVE_EMBEDDING_FAILURES: u32 = 5;
 const SKIP_UNSUPPORTED: &str = "unsupported_type";
 const SKIP_UNREADABLE: &str = "unreadable";
 const SKIP_NEEDS_MODEL: &str = "needs_model";
+/// A step that calls a chat model has no model bound (ADR-0030 I4).
+pub(super) const SKIP_NO_MODEL: &str = "no_model";
+/// The chat model failed for this document for a reason another run cures;
+/// its stored version is untouched (ADR-0030 I4).
+pub(super) const SKIP_MODEL_FAILED: &str = "model_failed";
 const SKIP_EMPTY: &str = "empty";
 const SKIP_FETCH_FAILED: &str = "fetch_failed";
 const SKIP_EMBEDDING_FAILED: &str = "embedding_failed";
-const SKIP_TOO_LARGE: &str = "too_large";
+pub(super) const SKIP_TOO_LARGE: &str = "too_large";
 /// The extraction sidecar did not answer about the document (socket, stream
 /// or sidecar failure); the document is retried by the next run.
 const SKIP_EXTRACT_FAILED: &str = "extract_failed";
@@ -106,6 +112,11 @@ pub(crate) struct IndexRun<'a> {
     pub(crate) toolkit_configuration: &'a [u8],
     pub(crate) tool_parameters: &'a [u8],
     pub(crate) embedding_binding: Option<&'a [u8]>,
+    /// `index.llm_model`: the chat model of the steps that call one, a JSON
+    /// string. Absent, those steps skip their documents `no_model`.
+    pub(crate) llm_model: Option<&'a [u8]>,
+    /// `index.llm_configuration`: that model's settings, a JSON object.
+    pub(crate) llm_configuration: Option<&'a [u8]>,
     pub(crate) vector_token: Option<&'a VectorClaimToken>,
     /// The redeemed claim: the PAT the gateway and the artifact API take,
     /// the project and the execution.
@@ -242,6 +253,9 @@ struct Prepared {
 
 enum Preparation {
     Ready(Box<Prepared>),
+    /// Chunking waits for a model (ADR-0030 I4): the plan to fulfil, and the
+    /// document with no chunks yet.
+    Model(Box<Prepared>, ChunkPlan),
     Skipped(&'static str),
     /// A chunking configuration the run cannot honour (the whole run fails).
     Configuration(String),
@@ -297,6 +311,7 @@ pub(crate) async fn run_index(
             ),
         ));
     }
+    let chat = chat_binding(runtime, &run)?;
     let Some(token) = run
         .vector_token
         .filter(|token| token.allows(VectorSource::ToolkitIndex))
@@ -345,10 +360,40 @@ pub(crate) async fn run_index(
         chunking: Arc::new(chunking),
         space: expected_space(run.command),
         consecutive_embedding_failures: 0,
+        steps: ModelSteps::new(chat, &runtime.limits),
         tally: Tally::default(),
     }
     .run()
     .await
+}
+
+/// The chat model of the steps that call one: the claim's `index.llm_model`
+/// entry bound through the runtime's binder. `None` when the claim names no
+/// model or the deployment has no binder (those steps skip `no_model`).
+///
+/// # Errors
+///
+/// An entry that is present and malformed.
+fn chat_binding(
+    runtime: &IndexIngestRuntime,
+    run: &IndexRun<'_>,
+) -> Result<Option<ChatBinding>, IndexRunFailure> {
+    let Some(raw) = run.llm_model else {
+        return Ok(None);
+    };
+    let model_name =
+        inputs::llm_model(raw).map_err(|error| IndexRunFailure::InvalidInput(error.0))?;
+    let settings = match run.llm_configuration {
+        Some(raw) => {
+            inputs::llm_settings(raw).map_err(|error| IndexRunFailure::InvalidInput(error.0))?
+        }
+        None => inputs::LlmSettings::default(),
+    };
+    Ok(runtime.chat_models.clone().map(|binder| ChatBinding {
+        binder,
+        model_name,
+        settings,
+    }))
 }
 
 struct Runner<'a> {
@@ -365,6 +410,9 @@ struct Runner<'a> {
     space: Option<pb::EmbeddingSpace>,
     /// Documents in a row whose embedding failed for a retryable reason.
     consecutive_embedding_failures: u32,
+    /// The model steps' state: the chat binding, the call count against the
+    /// run's cap, the failure streak.
+    steps: ModelSteps,
     tally: Tally,
 }
 
@@ -543,6 +591,16 @@ impl Runner<'_> {
                 self.check_liveness()?;
                 let prepared = match joined {
                     Ok(Preparation::Ready(prepared)) => prepared,
+                    Ok(Preparation::Model(mut prepared, chunk_plan)) => {
+                        match self.fulfil_model_step(chunk_plan).await {
+                            Ok(Some(chunks)) => {
+                                prepared.chunks = chunks;
+                                prepared
+                            }
+                            Ok(None) => continue,
+                            Err(halt) => break Err(halt),
+                        }
+                    }
                     Ok(Preparation::Skipped(reason)) => {
                         self.tally.skip(reason);
                         continue;
@@ -567,14 +625,10 @@ impl Runner<'_> {
                         continue;
                     }
                     Err(EmbedOutcome::Failed(cause)) => {
-                        self.tally.failed_chunks += prepared.chunks.len() as u64;
-                        self.tally.skip(SKIP_EMBEDDING_FAILED);
-                        self.consecutive_embedding_failures += 1;
-                        if self.consecutive_embedding_failures >= MAX_CONSECUTIVE_EMBEDDING_FAILURES {
-                            break Err(halt(&format!(
-                                "the embedding gateway failed for {} documents in a row ({cause}); the run stopped rather than skip every document, retry once the gateway is healthy",
-                                self.consecutive_embedding_failures
-                            )));
+                        if let Err(halted) = self
+                            .note_embedding_failure(&cause, prepared.chunks.len() as u64)
+                        {
+                            break Err(halted);
                         }
                         continue;
                     }
@@ -684,17 +738,53 @@ impl Runner<'_> {
 
     /// Stop and the deadline, checked between documents.
     fn check_liveness(&self) -> Result<(), IndexRunFailure> {
-        if let Err(error) = self.run.lease.ensure_running() {
-            return Err(match error.code() {
-                ClaimLeaseErrorCode::Cancelled => IndexRunFailure::Cancelled,
-                _ => IndexRunFailure::LeaseLost,
-            });
-        }
-        let now = (self.run.now_unix_millis)();
-        if now <= 0 || now >= self.run.deadline_unix_millis {
-            return Err(IndexRunFailure::DeadlineExceeded);
+        run_liveness(self.run)
+    }
+
+    /// One document whose embedding failed for a reason another run cures:
+    /// counted, skipped, and the run stops at the Nth in a row.
+    fn note_embedding_failure(&mut self, cause: &str, failed_chunks: u64) -> Result<(), Halt> {
+        self.tally.failed_chunks += failed_chunks;
+        self.tally.skip(SKIP_EMBEDDING_FAILED);
+        self.consecutive_embedding_failures += 1;
+        if self.consecutive_embedding_failures >= MAX_CONSECUTIVE_EMBEDDING_FAILURES {
+            return Err(halt(&format!(
+                "the embedding gateway failed for {} documents in a row ({cause}); the run stopped rather than skip every document, retry once the gateway is healthy",
+                self.consecutive_embedding_failures
+            )));
         }
         Ok(())
+    }
+
+    /// Fulfils the model step of one document's chunking (ADR-0030 I4): the
+    /// chunks, or `None` when the document was skipped under a reason the
+    /// tally now holds.
+    async fn fulfil_model_step(&mut self, plan: ChunkPlan) -> Result<Option<Vec<Chunk>>, Halt> {
+        let env = StepEnv {
+            embeddings: &self.runtime.embeddings,
+            context: self.run.context,
+            embedding_model: self.model,
+            limits: &self.runtime.limits,
+        };
+        let run = self.run;
+        let alive = move || run_liveness(run);
+        match self.steps.fulfil(plan, &env, &alive).await {
+            StepEnd::Chunks(chunks) if chunks.is_empty() => {
+                self.tally.skip(SKIP_EMPTY);
+                Ok(None)
+            }
+            StepEnd::Chunks(chunks) => Ok(Some(chunks)),
+            StepEnd::Skip(reason) => {
+                self.tally.skip(reason);
+                Ok(None)
+            }
+            StepEnd::EmbeddingFailed(cause) => {
+                self.note_embedding_failure(&cause, 0)?;
+                Ok(None)
+            }
+            StepEnd::Stop(reason) => Err(halt(&reason)),
+            StepEnd::Liveness(failure) => Err(Halt::Failure(failure)),
+        }
     }
 
     /// Every chunk of one document, in batches, with bounded retries for a
@@ -949,7 +1039,22 @@ pub(crate) fn interrupt_summary(summary: &mut IndexIngestSummaryV1, cause: Inter
     true
 }
 
-enum EmbedOutcome {
+/// Stop and the deadline, as the run sees them between documents and calls.
+fn run_liveness(run: &IndexRun<'_>) -> Result<(), IndexRunFailure> {
+    if let Err(error) = run.lease.ensure_running() {
+        return Err(match error.code() {
+            ClaimLeaseErrorCode::Cancelled => IndexRunFailure::Cancelled,
+            _ => IndexRunFailure::LeaseLost,
+        });
+    }
+    let now = (run.now_unix_millis)();
+    if now <= 0 || now >= run.deadline_unix_millis {
+        return Err(IndexRunFailure::DeadlineExceeded);
+    }
+    Ok(())
+}
+
+pub(super) enum EmbedOutcome {
     /// The gateway failed for this document for a reason another attempt
     /// could cure; the run goes on (up to
     /// [`MAX_CONSECUTIVE_EMBEDDING_FAILURES`] documents in a row).
@@ -965,7 +1070,7 @@ enum EmbedOutcome {
     Mismatch(String),
 }
 
-fn classify_embedding_error(error: EmbeddingsError) -> EmbedOutcome {
+pub(super) fn classify_embedding_error(error: EmbeddingsError) -> EmbedOutcome {
     match error {
         EmbeddingsError::Refused {
             code,
@@ -980,7 +1085,7 @@ fn classify_embedding_error(error: EmbeddingsError) -> EmbedOutcome {
     }
 }
 
-async fn embed_with_retry(
+pub(super) async fn embed_with_retry(
     embeddings: &EmbeddingsClient,
     context: &ClaimScopedEliteaContext,
     model: &str,
@@ -1017,6 +1122,7 @@ fn expected_dimension(command: &IndexIngestCommandV1) -> Option<usize> {
 /// work (extraction, tokenising) is on a blocking thread. A PDF or Office
 /// document is read by the extraction sidecar when the run has one
 /// (`extractor`), and skipped `unsupported_type` otherwise.
+#[allow(clippy::too_many_lines)] // One linear pass: fetch, extract, chunk.
 async fn prepare(
     source: Arc<IndexSource>,
     chunking: Arc<ChunkingConfig>,
@@ -1095,21 +1201,36 @@ async fn prepare(
         let options = ChunkOptions {
             html_converted: is_html,
         };
-        match elitea_doc_chunk::chunk_with(&text, &key, &chunking, options) {
-            Ok(chunks) if chunks.is_empty() => Preparation::Skipped(SKIP_EMPTY),
-            Ok(chunks) => Preparation::Ready(Box::new(Prepared {
+        let prepared = |chunks: Vec<Chunk>| {
+            Box::new(Prepared {
                 reference,
                 plan,
                 metadata,
                 acl,
                 chunks,
-            })),
-            Err(ChunkError::RequiresModel { .. }) => Preparation::Skipped(SKIP_NEEDS_MODEL),
-            Err(error @ (ChunkError::UnknownChunker(_) | ChunkError::Tokenizer(_))) => {
-                Preparation::Configuration(format!(
-                    "the chunking configuration cannot be used: {error}"
-                ))
+            })
+        };
+        match elitea_doc_chunk::plan_with(&text, &key, &chunking, options) {
+            Ok(ChunkPlan::Chunks(chunks)) if chunks.is_empty() => Preparation::Skipped(SKIP_EMPTY),
+            Ok(ChunkPlan::Chunks(chunks)) => Preparation::Ready(prepared(chunks)),
+            Ok(ChunkPlan::Proposal(proposal)) if proposal.windows().is_empty() => {
+                Preparation::Skipped(SKIP_EMPTY)
             }
+            Ok(ChunkPlan::Statistical(statistical)) if statistical.splits().is_empty() => {
+                Preparation::Skipped(SKIP_EMPTY)
+            }
+            Ok(model_step @ (ChunkPlan::Proposal(_) | ChunkPlan::Statistical(_))) => {
+                Preparation::Model(prepared(Vec::new()), model_step)
+            }
+            // The image step (`use_llm`) is not served yet.
+            Err(ChunkError::RequiresModel { .. }) => Preparation::Skipped(SKIP_NEEDS_MODEL),
+            Err(
+                error @ (ChunkError::UnknownChunker(_)
+                | ChunkError::Tokenizer(_)
+                | ChunkError::InvalidModelStep(_)),
+            ) => Preparation::Configuration(format!(
+                "the chunking configuration cannot be used: {error}"
+            )),
         }
     })
     .await;

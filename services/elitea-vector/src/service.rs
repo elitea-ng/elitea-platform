@@ -876,7 +876,7 @@ impl UpsertTarget {
             self.namespace,
             self.generation.as_deref(),
             &point.document_key,
-            &point.chunk_id,
+            &layout::identity_chunk_id(&point.chunk_id, &point.chunk_type),
         );
         Ok(PointStruct::new(id.to_string(), vectors, payload))
     }

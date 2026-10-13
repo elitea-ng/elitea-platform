@@ -108,7 +108,7 @@ impl ModelGatewayTransport for ScriptedEmbeddings {
     }
 }
 
-struct Always;
+pub(super) struct Always;
 
 impl RunLiveness for Always {
     fn ensure_running(&self) -> Result<(), ClaimLeaseError> {
@@ -174,7 +174,7 @@ pub(super) struct Harness {
     pub(super) embeddings: Arc<ScriptedEmbeddings>,
     pub(super) token: VectorClaimToken,
     pub(super) context: ClaimScopedEliteaContext,
-    _server: tokio::task::JoinHandle<()>,
+    pub(super) _server: tokio::task::JoinHandle<()>,
 }
 
 pub(super) async fn harness(dimension: usize, fail_with: Option<StatusCode>) -> Harness {
@@ -198,6 +198,7 @@ async fn harness_failing(
         fail_marker,
     });
     let runtime = IndexIngestRuntime {
+        chat_models: None,
         vector,
         embeddings: EmbeddingsClient::with_transport(
             Arc::clone(&embeddings) as Arc<dyn ModelGatewayTransport>,
@@ -246,7 +247,7 @@ fn unfetchable(key: &str, version: &str, text: &str) -> Document {
     document
 }
 
-fn document(key: &str, version: &str, text: &str) -> Document {
+pub(super) fn document(key: &str, version: &str, text: &str) -> Document {
     Document {
         reference: DocumentRef {
             key: key.to_owned(),
@@ -275,13 +276,13 @@ pub(super) fn command(index_id: &str, expected: Option<(&str, u32)>) -> IndexIng
     }
 }
 
-fn configuration() -> Vec<u8> {
+pub(super) fn configuration() -> Vec<u8> {
     json!({"id": 7, "type": "fixture", "toolkit_name": "repo", "settings": {}})
         .to_string()
         .into_bytes()
 }
 
-fn parameters(clean: bool, extra: Value) -> Vec<u8> {
+pub(super) fn parameters(clean: bool, extra: Value) -> Vec<u8> {
     let mut map = json!({"index_name": "docs", "clean_index": clean});
     if let Value::Object(extra) = extra {
         for (key, value) in extra {
@@ -338,6 +339,8 @@ async fn run_timed(
             toolkit_configuration: &configuration(),
             tool_parameters: parameters,
             embedding_binding: Some(&binding()),
+            llm_model: None,
+            llm_configuration: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: liveness,
@@ -1259,7 +1262,7 @@ async fn whitelist_blacklist_and_the_needs_model_chunker_are_honoured() {
         &harness,
         vec![document("d.md", "v1", "delta")],
         &command(NS, None),
-        &parameters(false, json!({"chunking_tool": "statistical"})),
+        &parameters(false, json!({"chunking_config": {"use_llm": true}})),
         &Always,
     )
     .await
@@ -1283,6 +1286,8 @@ async fn malformed_inputs_are_invalid_input_not_a_summary() {
             toolkit_configuration: b"[]",
             tool_parameters: &parameters(false, json!({})),
             embedding_binding: Some(&binding()),
+            llm_model: None,
+            llm_configuration: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: &Always,
@@ -1302,6 +1307,8 @@ async fn malformed_inputs_are_invalid_input_not_a_summary() {
             toolkit_configuration: &configuration(),
             tool_parameters: &parameters(false, json!({})),
             embedding_binding: Some(&binding()),
+            llm_model: None,
+            llm_configuration: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: &Always,
@@ -1324,6 +1331,8 @@ async fn without_a_vector_token_or_a_model_the_run_fails_with_a_reason() {
             toolkit_configuration: &configuration(),
             tool_parameters: &parameters(false, json!({})),
             embedding_binding: Some(&binding()),
+            llm_model: None,
+            llm_configuration: None,
             vector_token: None,
             context: &harness.context,
             lease: &Always,
@@ -1342,6 +1351,8 @@ async fn without_a_vector_token_or_a_model_the_run_fails_with_a_reason() {
             toolkit_configuration: &configuration(),
             tool_parameters: &parameters(false, json!({})),
             embedding_binding: None,
+            llm_model: None,
+            llm_configuration: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: &Always,

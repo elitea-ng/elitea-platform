@@ -4282,6 +4282,15 @@ worker:
     # self-hosted GitLab, Bitbucket or Azure DevOps hosts. `api.figma.com`
     # is Figma's REST API (the Figma toolkit's index runs).
     indexEgressAllowlist: "github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com api.figma.com"
+    # Rust worker, indexingRuntime=rust only (ADR-0030 I4): the model calls one
+    # index run may make in its model steps, namely one chat call per window of
+    # the `proposal` chunker and one embeddings request per batch of the
+    # `statistical` chunker (not the embedding of the chunks themselves).
+    # Reaching it stops the run FAILED with a sentence; the documents already
+    # written stay and a re-run continues (unchanged documents never call a
+    # model). The gateway's own budget applies as well. Written to runtime.json
+    # as `index_model_call_cap`; must be a positive integer.
+    indexModelCallCap: 2000
     # Broader than the current `artifact.delete_file` rule, so metadata drift
     # cannot bypass approval. `remove_index` is the indexing families' index
     # delete (ADR-0030 I1): the Rust worker runs it through elitea-main's
