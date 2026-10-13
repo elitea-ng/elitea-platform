@@ -2058,6 +2058,10 @@ services:
   worker-trust:
     # No `build:` — the mock's image is built ONCE (by mcp-mock) and reused, so
     # the trust anchor written here can only come from the mint being served.
+    # Deliberately NOT gated on mcp-mock health and not verified live: this
+    # bundle feeds the PYTHON worker, which must not depend on the mock being up
+    # (the single-image reuse already guarantees the same mint). The live check
+    # is in mcp-mock-trust, whose bundle the NATIVE worker consumes.
     image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
@@ -2066,16 +2070,12 @@ services:
         && cat /run/elitea-runtime/runtime-ca.crt /opt/mock-mcp/tls/ca.crt
         > /trust/worker-ca-bundle.pem
         && chmod 0644 /trust/worker-ca-bundle.pem
-        && python3 /opt/mock-mcp/verify-trust.py /trust/worker-ca-bundle.pem
     volumes:
       - standalone_runtime_worker:/run/elitea-runtime:ro
       - standalone_worker_trust:/trust
     depends_on:
       runtime-material:
         condition: service_completed_successfully
-      # The bundle is verified against the LIVE mock after it is written.
-      mcp-mock:
-        condition: service_healthy
     restart: "no"
 
   # ── Traefik: routes /app → elitea-web, /api → elitea-main ──────────────────

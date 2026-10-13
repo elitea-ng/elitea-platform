@@ -26,7 +26,11 @@ RUN useradd --system --uid 10103 --home-dir /nonexistent --shell /usr/sbin/nolog
 # ONE COPY for the whole key set: separate COPY lines are separate cache records
 # that a shared cache can resolve from different mints of the `tls` stage (the
 # served chain and the published ca.crt would then disagree).
-COPY --from=tls --chown=10103:10103 /pub/ /opt/oauth-emulator/tls/
+COPY --from=tls /pub/ /opt/oauth-emulator/tls/
+# Certs stay root-owned 0644; only the private key is handed to the server uid
+# (0600), the same ownership model as mock-mcp.
+RUN chown 10103:10103 /opt/oauth-emulator/tls/server.key \
+ && chmod 0600 /opt/oauth-emulator/tls/server.key
 COPY server.py /opt/oauth-emulator/server.py
 USER 10103:10103
 EXPOSE 8443
