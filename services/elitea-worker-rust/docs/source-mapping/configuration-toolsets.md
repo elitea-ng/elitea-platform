@@ -2820,6 +2820,36 @@ and update pushes, branch flows, open-PR Python text, PR diff JSON text,
 inline and query comments, commit filters, unknown outcome, argument
 validation, SDK conformance).
 
+## `pptx` (ADR-0032 P3)
+
+The SDK `pptx` toolkit has two tools, both of which call a model from inside
+the tool (`fill_template`, `translate_presentation`). The Rust family keeps
+them under the same names and arguments, exposes their deterministic halves
+and adds the authoring surface. It is a claim-scoped family like `artifact`:
+it materializes where the Office host is lent (`ArtifactToolAuthority::with_office`),
+which is the direct-agent path and the nodes of a pipeline in a worker built with `toolkit-pptx` (no model is bound in a pipeline, so the two model tools refuse there with a sentence; direct `toolkit.call_tool.v1` calls do not serve it).
+
+| Python source | Observable responsibility | Rust target |
+| --- | --- | --- |
+| `tools/pptx/__init__.py::{PPTXToolkit,toolkit_config_schema}` | `bucket_name` (required) and `selected_tools`; description cut at 1000 characters after `Toolkit: <name>` | `families/pptx/config.rs` (same rule as `artifact`: an empty selection serves every tool, an unknown name selects nothing), `schema.rs` |
+| `PPTXWrapper.fill_template` (`file_name`, `output_file_name`, `content_description`, `pdf_file_name`, `batch_size`) | Collect placeholders (`{{` or `[PLACEHOLDER]`) in text frames and table cells, ask the model for content per batch of unique texts, write back, upload; `{"status": "success"/"warning"/"error", "message", "url", "stats"}` | `tools.rs::fill_template`, `ops.rs::{placeholder_locations,write_location}`, `model.rs::{fill_prompt,parse_fill_reply}` |
+| `PPTXWrapper.translate_presentation` / `translate_batch` (`file_name`, `output_file_name`, `target_language`; chunks of 20; language-code table) | Translate every non-empty paragraph of text frames and table cells; `{"status", "message", "url"}` | `tools.rs::translate`, `ops.rs::{translation_items,apply_translations}`, `model.rs::{translate_prompt,parse_translation_reply,language_name}` |
+| `_collect_smartart_placeholders`, `edit_smartart_xml`, `_translate_smart_objects` | SmartArt text filled and translated by unzipping the package | Not ported: a stated gap until `office-core` has a raw-part editor (ADR-0032 decision 4); `smartart_updates` is 0 and `list_placeholders` says so |
+| (new) | `list_placeholders`, `replace_placeholders`: the deterministic halves, so an agent can drive them with its own model call | `tools.rs`, `ops.rs` |
+| (new) | 17 authoring tools over `elitea-office-core::Deck`; `render_preview` returns the chart data beside the PNG and says previews do not draw charts; `design_check` is deterministic heuristics over explicit geometry, font sizes and colours (text fit, empty placeholders, missing titles, text under 12 pt, WCAG contrast of explicit colours, off-slide and overlapping shapes, dense slides) | `tools.rs`, `ops.rs::design_from_facts`, `office-core/src/inspect.rs` |
+
+Model calls go through the host's `complete`, which the worker binds on the
+run's own model (the binding the step-back index tools use): the gateway
+authenticates it with the turn's credential, applies the budget and writes the
+request-log row for the execution. A call is capped at 2000 distinct texts
+(100 batches at the default size); a refused or over-budget call ends the tool
+with an error result and nothing is saved.
+
+Artifacts are bytes. The `artifact` family's runtime-context routes carry text
+only, so the Office host reads and writes through the platform object API
+(`/api/v2/artifacts/objects/{project}/{bucket}`) under the turn's credential,
+reaching only `platform_origin`. No new internal route exists.
+
 ## Special runtime toolsets
 
 | Python source | Behavior | Rust target | Status / deviation |

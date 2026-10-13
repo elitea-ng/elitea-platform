@@ -97,7 +97,9 @@ impl LazyStepbackModel {
         }
     }
 
-    fn get(&self) -> Option<&StepbackBinding> {
+    /// The bound model, binding it on the first call; `None` when there is
+    /// no binder or binding failed (logged once).
+    pub(crate) fn get(&self) -> Option<&StepbackBinding> {
         self.bound
             .get_or_init(|| {
                 let binder = self.binder.as_ref()?;
@@ -363,57 +365,70 @@ struct AdkStepbackModel<'a> {
 
 impl StepbackModel for AdkStepbackModel<'_> {
     async fn invoke(&self, prompt: &str) -> elitea_vector_index::Result<Value> {
-        let request = LlmRequest {
-            model: self.binding.model_name.clone(),
-            contents: vec![Content::new("user").with_text(prompt)],
-            config: None,
-            tools: std::collections::HashMap::new(),
-            previous_response_id: None,
-        };
-        let mut responses = self
-            .binding
-            .model
-            .generate_content(request, false)
-            .await
-            .map_err(|error| VectorError::Model(error.to_string()))?;
-        let mut text: Option<String> = None;
-        while let Some(response) = responses.next().await {
-            let response = response.map_err(|error| VectorError::Model(error.to_string()))?;
-            if response.partial {
-                // Not expected of a non-streaming call; a partial frame is
-                // never the reply.
-                continue;
-            }
-            if response.error_code.is_some() {
-                return Err(VectorError::Model(
-                    "the model ended the reply with an error".to_owned(),
-                ));
-            }
-            if let Some(reason) = response.finish_reason
-                && reason != FinishReason::Stop
-            {
-                return Err(VectorError::Model(format!(
-                    "the model stopped for {reason:?}"
-                )));
-            }
-            let mut reply = String::new();
-            if let Some(content) = &response.content {
-                for part in &content.parts {
-                    if let Part::Text { text: piece } = part {
-                        if reply.len().saturating_add(piece.len()) > MAX_MODEL_TEXT_BYTES {
-                            return Err(VectorError::Model(
-                                "the reply exceeds the step-back size bound".to_owned(),
-                            ));
-                        }
-                        reply.push_str(piece);
+        generate_text(
+            self.binding,
+            vec![Part::Text {
+                text: prompt.to_owned(),
+            }],
+        )
+        .await
+        .map(Value::String)
+        .map_err(VectorError::Model)
+    }
+}
+
+/// One non-streaming user message of `parts` on the bound model, and the text
+/// of the one complete reply. The error is a data-free sentence. Shared with
+/// the Office tools' model calls (ADR-0032), which send a prompt and images.
+pub(crate) async fn generate_text(
+    binding: &StepbackBinding,
+    parts: Vec<Part>,
+) -> Result<String, String> {
+    let request = LlmRequest {
+        model: binding.model_name.clone(),
+        contents: vec![Content {
+            role: "user".to_owned(),
+            parts,
+        }],
+        config: None,
+        tools: std::collections::HashMap::new(),
+        previous_response_id: None,
+    };
+    let mut responses = binding
+        .model
+        .generate_content(request, false)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut text: Option<String> = None;
+    while let Some(response) = responses.next().await {
+        let response = response.map_err(|error| error.to_string())?;
+        if response.partial {
+            // Not expected of a non-streaming call; a partial frame is never
+            // the reply.
+            continue;
+        }
+        if response.error_code.is_some() {
+            return Err("the model ended the reply with an error".to_owned());
+        }
+        if let Some(reason) = response.finish_reason
+            && reason != FinishReason::Stop
+        {
+            return Err(format!("the model stopped for {reason:?}"));
+        }
+        let mut reply = String::new();
+        if let Some(content) = &response.content {
+            for part in &content.parts {
+                if let Part::Text { text: piece } = part {
+                    if reply.len().saturating_add(piece.len()) > MAX_MODEL_TEXT_BYTES {
+                        return Err("the reply exceeds the step-back size bound".to_owned());
                     }
+                    reply.push_str(piece);
                 }
             }
-            // The last complete response is the reply; a non-streaming call
-            // yields exactly one.
-            text = Some(reply);
         }
-        text.map(Value::String)
-            .ok_or_else(|| VectorError::Model("the model returned no reply".to_owned()))
+        // The last complete response is the reply; a non-streaming call
+        // yields exactly one.
+        text = Some(reply);
     }
+    text.ok_or_else(|| "the model returned no reply".to_owned())
 }

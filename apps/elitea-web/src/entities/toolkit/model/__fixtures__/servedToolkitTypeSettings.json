@@ -2557,10 +2557,22 @@
       },
       "selected_tools": {
         "args_schemas": {
-          "fill_template": {
+          "add_bullets": {
             "type": "object"
           },
-          "translate_presentation": {
+          "add_chart": {
+            "type": "object"
+          },
+          "add_image": {
+            "type": "object"
+          },
+          "add_slide": {
+            "type": "object"
+          },
+          "add_table": {
+            "type": "object"
+          },
+          "apply_theme": {
             "type": "object"
           }
         },

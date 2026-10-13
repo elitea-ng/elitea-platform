@@ -136,9 +136,9 @@ func TestCapabilityVerdicts(t *testing.T) {
 
 	// No pinned catalogue type is Python-only today, so the Python-only row
 	// is exercised on the verdict table with a type the Rust worker genuinely
-	// does not dispatch (pptx): it must still read as supported, by Python.
-	require.False(t, rustNativeTypes()["pptx"], "pptx must stay unsupported on Rust for this case")
-	pythonOnly := capabilityVerdict("pptx", true, rustNativeTypes()["pptx"])
+	// does not dispatch (imagegen): it must still read as supported, by Python.
+	require.False(t, rustNativeTypes()["imagegen"], "imagegen must stay unsupported on Rust for this case")
+	pythonOnly := capabilityVerdict("imagegen", true, rustNativeTypes()["imagegen"])
 	require.True(t, pythonOnly.Python)
 	require.False(t, pythonOnly.Rust)
 	require.Equal(t, VerdictSupported, pythonOnly.Verdict)
@@ -155,7 +155,7 @@ func TestCapabilityVerdicts(t *testing.T) {
 	require.True(t, rustOnly.Rust)
 	require.Equal(t, VerdictSupported, rustOnly.Verdict)
 
-	neither := source.ToolkitCapability("pptx")
+	neither := source.ToolkitCapability("imagegen")
 	require.False(t, neither.Python)
 	require.False(t, neither.Rust)
 	require.Equal(t, VerdictUnverified, neither.Verdict)

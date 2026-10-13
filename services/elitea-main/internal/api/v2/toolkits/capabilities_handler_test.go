@@ -135,9 +135,10 @@ func TestRuntimeCapabilitiesHiddenToolkitTypesOnRust(t *testing.T) {
 	// current_toolkit_catalogue_snapshot.json, not assumed from #865's text).
 	// A family leaves this list when the Rust worker starts materializing
 	// it (even partially); the served check below then covers it. Of #865's
-	// named types only pptx is left: it needs a model lent to a toolkit.
+	// named types none is left: pptx, the last, joined with ADR-0032 P3 (the
+	// host lends it a model). These two have no native family.
 	want := []string{
-		"pptx",
+		"localgit", "delta_lake",
 	}
 	sort.Strings(want)
 	got := append([]string(nil), body.HiddenToolkitTypes...)

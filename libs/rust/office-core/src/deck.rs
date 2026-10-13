@@ -270,6 +270,7 @@ impl Deck {
     /// [`OfficeError::Unsupported`], [`OfficeError::Busy`],
     /// [`OfficeError::DeadlineExceeded`].
     pub fn open(bytes: &[u8], limits: &Limits) -> Result<Self> {
+        crate::counters::bump(crate::counters::Op::Open);
         crate::validate::precheck_len(bytes.len(), limits)?;
         let (data, l) = (bytes.to_vec(), limits.clone());
         let (pres, images, cells, max_chart) = run_guarded(limits, move || {
@@ -306,6 +307,7 @@ impl Deck {
     /// # Errors
     /// Any limit violation of the produced file, [`OfficeError::Busy`].
     pub fn save(&self) -> Result<Vec<u8>> {
+        crate::counters::bump(crate::counters::Op::Save);
         self.pres.guarded(|p, l| {
             let raw = p.save_to_buffer().map_err(map_err)?;
             finish_output(&raw, Kind::Pptx, l)
@@ -463,6 +465,28 @@ impl Deck {
             .slide_mut(slide)
             .map_err(map_err)?
             .table_set_cell_text(shape, row, col, text)
+            .map_err(map_err)
+    }
+
+    /// Set a table cell to one paragraph per entry of `lines`; an empty entry
+    /// stays an empty paragraph. The cell keeps its paragraph structure
+    /// where [`Deck::set_shape_table_cell`] writes a single paragraph.
+    ///
+    /// # Errors
+    /// [`OfficeError::NotFound`] when the shape is not a table.
+    pub fn set_cell_paragraphs(
+        &mut self,
+        slide: usize,
+        shape: usize,
+        row: usize,
+        col: usize,
+        lines: &[String],
+    ) -> Result<()> {
+        self.pres
+            .lock()?
+            .slide_mut(slide)
+            .map_err(map_err)?
+            .table_set_cell_paragraphs(shape, row, col, lines)
             .map_err(map_err)
     }
 
@@ -635,6 +659,59 @@ impl Deck {
             .map_err(map_err)
     }
 
+    /// Replace the whole text of one paragraph. The text goes into the
+    /// paragraph's first text run, which keeps its formatting; every `\n`
+    /// becomes a line-break run (never a raw newline inside a run); every
+    /// other run and line break the paragraph had is removed, so no stale
+    /// break survives after the new text. A paragraph with no text run takes
+    /// the text in a new run.
+    ///
+    /// # Errors
+    /// [`OfficeError::NotFound`] for a bad address.
+    pub fn set_paragraph_text(
+        &mut self,
+        slide: usize,
+        shape: usize,
+        paragraph: usize,
+        text: &str,
+    ) -> Result<()> {
+        let normalised = text.replace("\r\n", "\n").replace('\r', "\n");
+        let segments: Vec<&str> = normalised.split('\n').collect();
+        let runs = {
+            let infos = self.shapes(slide)?;
+            let info = infos
+                .iter()
+                .find(|s| s.index == shape)
+                .ok_or_else(|| OfficeError::NotFound(format!("shape {shape}")))?;
+            info.paragraphs
+                .get(paragraph)
+                .ok_or_else(|| OfficeError::NotFound(format!("paragraph {paragraph}")))?
+                .runs
+                .clone()
+        };
+        let first_text = runs.iter().position(|r| !r.line_break);
+        let mut p = self.pres.lock()?;
+        let mut sl = p.slide_mut(slide).map_err(map_err)?;
+        if let Some(f) = first_text {
+            sl.edit_run_text(shape, paragraph, f, segments[0])
+                .map_err(map_err)?;
+        }
+        // Remove every other run, last first so the indexes stay valid.
+        for i in (0..runs.len()).rev() {
+            if Some(i) != first_text {
+                sl.delete_run(shape, paragraph, i).map_err(map_err)?;
+            }
+        }
+        if first_text.is_none() {
+            sl.add_run(shape, paragraph, segments[0]).map_err(map_err)?;
+        }
+        for segment in &segments[1..] {
+            sl.add_line_break(shape, paragraph, None).map_err(map_err)?;
+            sl.add_run(shape, paragraph, segment).map_err(map_err)?;
+        }
+        Ok(())
+    }
+
     /// Replace `find` by `replacement` in the text shapes of every slide and
     /// return the number of occurrences replaced.
     ///
@@ -673,6 +750,21 @@ impl Deck {
         let (find, replacement) = (find.to_owned(), replacement.to_owned());
         self.pres
             .guarded_mut(move |p, _| replace_all(p, &find, &replacement))
+    }
+
+    /// A read-only fact sheet of every slide: all drawables with their
+    /// frames, font sizes and colours, the text of every table cell, and the
+    /// data of every chart. It reads the saved package (the output of
+    /// [`Deck::save`], so it has passed the gate), never writes, and covers
+    /// what [`Deck::shapes`] does not (tables, charts, geometry).
+    ///
+    /// # Errors
+    /// [`OfficeError::Busy`], or [`OfficeError::Malformed`] if the package
+    /// lacks its presentation part.
+    pub fn facts(&self) -> Result<Vec<crate::inspect::SlideFacts>> {
+        let bytes = self.save()?;
+        let l = self.limits.clone();
+        run_guarded(&self.limits, move || crate::inspect::read_facts(&bytes, &l))
     }
 
     /// Markdown for the whole deck (slides, tables, notes, chart data).

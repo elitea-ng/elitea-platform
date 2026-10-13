@@ -25,6 +25,11 @@ test-preserve-order = ["serde_json/preserve_order", "serde_json/float_roundtrip"
 # ADR-0029 decision 3), and without it a `sql` toolkit is skipped as
 # unsupported.
 toolkit-sql = ["dep:sqlx"]
+# The `pptx` toolkit family (ADR-0032 P3): Office authoring on
+# `elitea-office-core`. The cloud worker enables it; the desktop host does not
+# until P6 (the zavora libraries and their bundled fonts are about 18 MiB of
+# binary), and without it a `pptx` toolkit is skipped as unsupported.
+toolkit-pptx = ["dep:elitea-office-core"]
 
 [dependencies]
 # Tilde, not caret: adk breaks its API between minors. adk-agent and
@@ -42,6 +47,9 @@ adk-session = { version = "~2.2.0", default-features = false }
 # reqwest 0.13, whose default rustls provider is aws-lc-rs (EXTRACTION.md,
 # finding 3).
 adk-tool = { version = "~2.2.0", default-features = false, features = ["http-transport"] }
+# Leftmost-longest multi-pattern matching for `replace_placeholders` (one pass
+# over the original text). Already locked through regex.
+aho-corasick = { version = "1.1.5", default-features = false, features = ["std"] }
 async-stream = "0.3.6"
 async-trait = "0.1.92"
 base64 = "0.23.1"
@@ -51,6 +59,9 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 # connectors (ADR-0030 decision 3), over this crate's reqwest 0.12 (rustls on
 # ring): the connectors crate names no TLS stack of its own.
 elitea-connectors = { path = "../connectors", default-features = false, features = ["providers", "reqwest-012"] }
+# The one crate that names a zavora type (ADR-0032 decision 2). Optional:
+# only the `toolkit-pptx` build links the authoring libraries.
+elitea-office-core = { path = "../office-core", optional = true }
 # The Figma family applies a caller-supplied output `regexp` the way the SDK's
 # Python `re` does, lookaround included (its documented example uses one).
 fancy-regex = "0.18.0"

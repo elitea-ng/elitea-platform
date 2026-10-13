@@ -24,6 +24,7 @@ pub(crate) mod gitlab;
 pub(crate) mod gitlab_org;
 pub(crate) mod google_places;
 pub(crate) mod https_base_url;
+pub mod office_host;
 // Public only to the worker's composition suites (`test-support`).
 #[cfg(any(test, feature = "test-support"))]
 pub mod index_tools;
@@ -38,6 +39,8 @@ pub mod openapi;
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) mod openapi;
 pub(crate) mod postman;
+#[cfg(feature = "toolkit-pptx")]
+pub(crate) mod pptx;
 pub(crate) mod python_repr;
 pub(crate) mod qtest;
 pub(crate) mod rally;

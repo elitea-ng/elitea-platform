@@ -18,13 +18,23 @@
 //!
 //! Embedded fonts are emptied in the copy handed to a renderer, so no user
 //! font is parsed. `zavora-docx-layout` loads only its bundled Carlito,
-//! Caladea and Liberation fonts. **`zavora-slide-render` 0.1.1 calls
-//! `fontdb::Database::load_system_fonts()` unconditionally and has no API to
-//! turn that off**, so a pptx preview or PDF can differ between hosts with
-//! different installed fonts. This crate cannot fix that from outside; the fix
-//! is a patch of that crate under `libs/rust/vendor` (ADR-0032 Risks), left to
-//! the pptx toolkit phase. Golden previews must therefore run in an image
-//! with a fixed font set, or compare structure instead of pixels.
+//! Caladea and Liberation fonts. `zavora-slide-render` and `zavora-slide-pdf`
+//! 0.1.1 called `fontdb::Database::load_system_fonts()` unconditionally; they
+//! are vendored under `libs/rust/vendor` with those calls removed (ADR-0032
+//! Risks; `tests/vendor_patches.rs` pins it), so a pptx preview or PDF uses the
+//! bundled Liberation Sans on every host. A deck that names a font we do not
+//! bundle (Calibri, Arial, others) renders with that substitute: previews are
+//! approximate, and the same on every host.
+//!
+//! # Vendored library fixes
+//!
+//! The same vendored `zavora-slide` carries the fix that lets a table, a chart
+//! or a picture added to a deck opened from bytes survive the save beside what
+//! the file already held (see `libs/rust/vendor/README.md`). Two library save
+//! paths remain lossy for an opened deck: the first speaker notes added to a
+//! slide, and [`Deck::apply_theme`], make the library rewrite the whole file
+//! from its build model. A caller that edits opened decks must reopen the saved
+//! bytes and compare [`Deck::facts`] before and after, as the pptx toolkit does.
 //!
 //! # Not covered
 //!
@@ -34,11 +44,13 @@
 //! * `SmartArt` and other parts the libraries do not model are kept as opaque
 //!   bytes by the surgical pptx save, not edited.
 
+mod counters;
 mod deck;
 mod document;
 mod error;
 mod guard;
 mod image;
+mod inspect;
 mod limits;
 mod validate;
 mod workbook;
@@ -50,8 +62,20 @@ pub use deck::{
 pub use document::{Document, TableData};
 pub use error::{Limit, OfficeError, Result};
 pub use guard::{Health, health};
+pub use inspect::{ChartFacts, ShapeFacts, ShapeKind, SlideFacts, TableFacts, facts_of_package};
 pub use limits::{Limits, PARSE_STACK_BYTES};
 pub use workbook::{CellRange, CellValue, Workbook};
+
+/// The pixel size of a raster image (PNG, GIF, JPEG, BMP, WebP, TIFF) from its
+/// header alone, or `None` when the bytes are not one or the header is
+/// inconsistent. Nothing is decoded; the same probe the gate uses.
+#[must_use]
+pub fn image_size(bytes: &[u8]) -> Option<(u64, u64)> {
+    match image::probe(bytes) {
+        image::Probe::Raster { width, height, .. } => Some((width, height)),
+        _ => None,
+    }
+}
 
 /// Hooks for the fuzz targets and the corpus tests: the validation gate
 /// alone, without a library behind it.
@@ -114,6 +138,18 @@ pub mod testing {
             PackageKind::Xlsx => Kind::Xlsx,
         };
         validate_and_repack(bytes, k, Mode::Render { dpi: 72.0 }, limits).map(|r| r.bytes)
+    }
+
+    /// `(opens, saves, package_reads)` made on the calling thread since
+    /// [`reset_counters`]: what a test asserts a tool does not exceed.
+    #[must_use]
+    pub fn counters() -> (u64, u64, u64) {
+        crate::counters::read()
+    }
+
+    /// Zero this thread's counters.
+    pub fn reset_counters() {
+        crate::counters::reset();
     }
 
     /// Hold one parse permit for `how_long` on a parse thread, to test

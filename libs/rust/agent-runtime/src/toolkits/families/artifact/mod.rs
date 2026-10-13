@@ -33,6 +33,8 @@ use std::sync::Arc;
 
 use crate::host::PlatformWriter;
 
+use super::office_host::SharedOfficeToolHost;
+
 /// The platform-write authority the artifact family acts under, shared for
 /// one run.
 ///
@@ -44,12 +46,31 @@ use crate::host::PlatformWriter;
 #[derive(Clone)]
 pub struct ArtifactToolAuthority {
     writer: Arc<dyn PlatformWriter>,
+    office: Option<SharedOfficeToolHost>,
 }
 
 impl ArtifactToolAuthority {
     #[must_use]
     pub fn new(writer: Arc<dyn PlatformWriter>) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            office: None,
+        }
+    }
+
+    /// This authority with the Office capability (ADR-0032): binary objects
+    /// in and out and a chat model, for the families that author documents.
+    /// Without it a `pptx` toolkit is left out as unsupported.
+    #[must_use]
+    pub fn with_office(mut self, office: SharedOfficeToolHost) -> Self {
+        self.office = Some(office);
+        self
+    }
+
+    /// The Office capability, when the host lends one.
+    #[must_use]
+    pub fn office(&self) -> Option<&SharedOfficeToolHost> {
+        self.office.as_ref()
     }
 
     pub fn writer(&self) -> &dyn PlatformWriter {

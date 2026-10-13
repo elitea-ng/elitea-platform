@@ -67,8 +67,8 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 44 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 44",
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 45 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 45",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	if rust.UnsupportedNames() != nil {
@@ -118,12 +118,16 @@ func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 	if supported, _ := rust.SupportsToolkitType("github", "github"); !supported {
 		t.Error("github has a native family and was refused")
 	}
+	// pptx joined with ADR-0032 P3: the Office family runs in the Rust worker.
+	if supported, reason := rust.SupportsToolkitType("pptx", "pptx"); !supported {
+		t.Errorf("pptx has a native family and was refused: %s", reason)
+	}
 	if supported, reason := rust.SupportsToolkitType("mcp", ""); !supported {
 		t.Errorf("direct MCP runtime was refused: %s", reason)
 	}
-	if supported, reason := rust.SupportsToolkitType("pptx", "pptx"); supported ||
-		!strings.Contains(reason, "pptx") {
-		t.Errorf("pptx supported=%v reason=%q", supported, reason)
+	if supported, reason := rust.SupportsToolkitType("localgit", "localgit"); supported ||
+		!strings.Contains(reason, "localgit") {
+		t.Errorf("localgit supported=%v reason=%q", supported, reason)
 	}
 	// UI-DC-1: the reason is a sentence for a person, with no internal terms.
 	if _, reason := rust.SupportsToolkitType("example_unported", "example_unported"); reason !=
