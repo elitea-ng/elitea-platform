@@ -24,7 +24,7 @@ use crate::transport::header::{ACCEPT, AUTHORIZATION, COOKIE, HeaderName, Header
 #[cfg(feature = "content-source")]
 pub use self::listing::{
     AttachmentDownloader, COMMENT_LISTING_CONCURRENCY, DetailedListing, Details,
-    MAX_DOWNLOAD_REDIRECTS, Snapshot, authorized_json, same_origin,
+    MAX_DOWNLOAD_REDIRECTS, Snapshot, authorized_json, refused_credential, same_origin,
 };
 
 /// The longest secret a configuration carries.
@@ -783,15 +783,25 @@ mod listing {
         request: Request,
         provider: &str,
     ) -> Result<Value, Failure> {
-        match http.json(request).await {
-            Ok((_, value)) => Ok(value),
-            Err(Failure::Status(status @ (StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN))) => {
-                Err(Failure::Client(format!(
+        http.json(request)
+            .await
+            .map(|(_, value)| value)
+            .map_err(|failure| refused_credential(failure, provider))
+    }
+
+    /// A 401 or 403 as an error naming the credential (never "HTTP 401"
+    /// and never an empty result); any other failure unchanged. The one
+    /// mapping listing pages and downloads share.
+    #[must_use]
+    pub fn refused_credential(failure: Failure, provider: &str) -> Failure {
+        match failure {
+            Failure::Status(status @ (StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)) => {
+                Failure::Client(format!(
                     "{provider} refused the credential (HTTP {}); check the toolkit's token or API key",
                     status.as_u16()
-                )))
+                ))
             }
-            Err(failure) => Err(failure),
+            other => other,
         }
     }
 
