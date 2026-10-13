@@ -52,6 +52,8 @@ var skipReasonGroups = map[string]reportGroupSpec{
 	"no_model":           {kindNotIndexed, "no_model", "No chat model configured for this step"},
 	"model_cap_exceeded": {kindNotIndexed, "model_cap_exceeded", "Needs more model calls than the per-run cap"},
 	"vision_refused":     {kindNotIndexed, "vision_refused", "The model refused the image"},
+	"reply_unusable":     {kindNotIndexed, "reply_unusable", "The model's reply could not be used"},
+	"too_many_pictures":  {kindNotIndexed, "too_many_pictures", "Too many pictures to describe"},
 }
 
 // unknownReasonLabel is the label of a reason this table does not know. The raw
