@@ -14,7 +14,10 @@
 # #154) — that is deliberately NOT this script's job: pulling a build-tagged
 # image here would silently paper over a guard failure with a stale registry
 # tag instead of failing loud. `select(.build == null)` below is what keeps
-# the two scripts from overlapping.
+# the two scripts from overlapping. It is not enough on its own: a service with
+# no `build:` that REUSES another service's built image (mcp-mock-trust shares
+# mcp-mock's, so the trust anchor can only come from one mint) reads as
+# third-party too, so every image some service BUILDS is also excluded.
 #
 # Usage:
 #   scripts/ci/pull-third-party-images.sh <compose-file> [<compose-file> ...]
@@ -67,7 +70,8 @@ else
   done
 
   # shellcheck disable=SC2086
-  images="$($COMPOSE_BIN "${args[@]}" config --format json | jq -r '.services[] | select(.build == null) | .image' | sort -u)"
+  images="$($COMPOSE_BIN "${args[@]}" config --format json | jq -r '([.services[] | select(.build != null) | .image]) as $built
+    | .services[] | select(.build == null) | .image | select(. as $i | $built | index($i) | not)' | sort -u)"
 fi
 
 if [ -z "$images" ]; then

@@ -76,15 +76,9 @@ target "llm-mock" {
 target "mcp-mock" {
   cache-from = ["type=gha,scope=elitea-mock-mcp"]
 }
-target "mcp-mock-trust" {
-  cache-from = ["type=gha,scope=elitea-mock-mcp"]
-}
-// Same image, third consumer: `worker-trust` builds the python worker's
-// runtime-CA + mcp-mock-CA bundle and runs the mock's own image to reach the
-// certificate (#983).
-target "worker-trust" {
-  cache-from = ["type=gha,scope=elitea-mock-mcp"]
-}
+// `mcp-mock-trust` and `worker-trust` deliberately have NO target: they reuse
+// mcp-mock's image (compose `image:` only, no `build:`), so the mock is built
+// exactly once per run and every consumer carries the same TLS mint.
 target "qtest-mock" {
   cache-from = ["type=gha,scope=elitea-mock-qtest"]
 }
@@ -105,7 +99,7 @@ group "standalone" {
     "elitea-deepwiki-migrate",
     "elitea-inventory", "elitea-inventory-engine",
     "elitea-vector",
-    "elitea-web", "elitea-worker", "mcp-mock", "mcp-mock-trust", "worker-trust", "qtest-mock",
+    "elitea-web", "elitea-worker", "mcp-mock", "qtest-mock",
     "ado-mock",
   ]
 }
