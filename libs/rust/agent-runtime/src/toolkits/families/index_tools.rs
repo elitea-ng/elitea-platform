@@ -59,11 +59,11 @@ const MAX_DIMENSION: u64 = 65_536;
 const MAX_SELECTED_TOOLS: usize = 256;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
-/// The toolkit types whose families carry the index tools: stage I1 and stage
-/// I2 (ADR-0030). Elitea-main's `indexcatalog.Families` and the worker's
+/// The toolkit types whose families carry the index tools: stages I1, I2 and
+/// I3 (ADR-0030; I3 so far: the test-management families). Elitea-main's `indexcatalog.Families` and the worker's
 /// `SERVED_TOOLKIT_TYPES` list the same types; all three are tested against
 /// `index_served_families.json`.
-pub const INDEX_FAMILIES: [&str; 12] = [
+pub const INDEX_FAMILIES: [&str; 18] = [
     "ado_boards",
     "ado_plans",
     "ado_repos",
@@ -75,7 +75,13 @@ pub const INDEX_FAMILIES: [&str; 12] = [
     "github",
     "gitlab",
     "jira",
+    "qtest",
     "sharepoint",
+    "testrail",
+    "xray_cloud",
+    "zephyr_enterprise",
+    "zephyr_essential",
+    "zephyr_scale",
 ];
 
 /// Whether `toolkit_type` is a Rust-indexed family (I1 and I2).

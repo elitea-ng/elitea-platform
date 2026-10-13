@@ -725,3 +725,60 @@ field for `project_ids`/`team_ids`/`include_comments`; point the agent-runtime
 git families did before #1249); `api.figma.com` in the deployment egress
 allowlist (`indexEgressAllowlist`, `deploy/runtime/worker-runtime.*.json`) for
 deployments that index Figma.
+
+## ADR-0030 I3: test-management families, 2026-10-12
+
+`testrail`, `qtest`, `xray_cloud`, `zephyr_scale`, `zephyr_essential` and
+`zephyr_enterprise` are indexed by the Rust worker: `ContentSource`
+connectors in `libs/rust/connectors/src/{testrail,qtest,xray}.rs` and
+`libs/rust/connectors/src/zephyr/{scale,essential,enterprise}.rs` over
+`src/testmgmt.rs` (HTTPS base-URL rule, header-safe credentials, bounded
+arguments) and the listing scaffolding of `src/atlassian.rs`, dispatched by
+`src/indexing/source.rs`, with the five index tools attached in
+`elitea-agent-runtime` (`INDEX_FAMILIES`) and the catalog frozen by
+elitea-main (`indexcatalog.Families`). The SDK's `zephyr` and `zephyr_squad`
+toolkits have no indexer and are not served; "the three zephyr types" of
+ADR-0030 are Scale, Essential and Enterprise. Proving tests: each connector's
+suite (vendor-shaped fixtures: pagination, dependents, 401/403, 429 with
+`Retry-After`, the version pin, credentials only to the configured origin) and
+`src/indexing/testmgmt_tests.rs` (Verification (2) against the `elitea-vector`
+fake: unchanged source writes nothing and embeds nothing, one changed
+document rewrites only its chunks, a removed document's chunks go).
+
+| SDK behaviour (pinned `b5113a1`) | Rust | Deliberate difference |
+| --- | --- | --- |
+| A test case is a `Document` keyed by `id`/`key`; chunker `json` (`markdown` for qTest) | Keys carry an extension: `case/{id}.json` (TestRail), `testcase/{id}.md` (qTest), `test/{issueId}.json` (Xray), `testcase/{key}.json` (Zephyr) | The shared chunker router picks by extension; nothing stored by the SDK is read, so the key shape is free (ADR-0030 decision 6) |
+| TestRail attachments carry the case's `updated_on`; `_dependents_diverged` compares the attachment id set | Attachments are documents of their own, `case/{id}/attachment/{att}/{name}`, with `parent_key` and their own version (`id:size`) | A re-uploaded attachment rewrites only its chunks |
+| TestRail: a `StatusCodeError` on one suite or at project level is swallowed (`continue`, `logger.warning`) | A 401/403/other failure on any call fails the listing, naming the credential | An index that silently lacks a suite is wrong; fail closed |
+| Xray: attachments are dependents of the test; the bearer is sent to whatever `downloadLink` says | Same dependents, versioned by attachment id; a link is followed only on the configured origin or on Xray's documented Cloud hosts (global, `us.`, `eu.`, `au.xray.cloud.getxray.app`; the global host serves links for a regional tenant), never elsewhere (the credential goes to Xray hosts only), redirects through `atlassian::AttachmentDownloader` | SDK would send the token to any host in a response |
+| Xray: custom `graphql` runs whatever the user wrote, a mutation included | A `mutation` or `subscription` keyword refuses the run | An index run must not change Xray |
+| Xray: GraphQL errors yield `None`, a "JQL may be invalid" message | A 200 with `errors` fails with the first message, never an empty listing; a well-formed `graphql` answer with an empty list of tests is an empty listing, one with no list at all is an error | — |
+| Xray `updated_on` is the first 16 hex digits of the SHA-256 of the content | The version is the full SHA-256 of the document bytes; the document also carries the Jira key and summary | The SDK kept key and summary in metadata only, so a rename never moved the version |
+| Zephyr Essential: `list_test_cases()` is called with `max_results=None`, so the API's default page (10) is all that is indexed | Every page (`maxResults`/`startAt` until `isLast`) | SDK defect: an index of a project with more than ten cases was silently truncated |
+| Zephyr Essential hashes the steps or script alone | The version hashes the case object with its steps or script | A renamed case or a changed label moves it |
+| Zephyr Scale: `updated_on` is the last version's `createdOn`, which an in-place edit never moves | The version is the SHA-256 of the case with its steps or script (Scale stamps nothing on a case), read at listing time | An edit is seen; a listing reads each case's steps (8 at a time) |
+| Zephyr Scale: the `jql` regex parser silently ignores what it does not understand; `folder`/`folderPath` that match nothing list the whole project; `customFields` and `steps` filters | Unknown keys, malformed clauses, `customFields` and `steps` are refused; a folder filter that matches no folder is an error; `limit` cuts after sorting by name; `orderBy`/`orderDirection` are accepted and ignored | Never index more than was asked for; the two refused filters are a follow-up |
+| Zephyr Scale `text ~ "x"` matches `str(tc.values())` | Matches the case's VALUES only (nested values included), case-insensitively, never a field name | `text ~ "status"` must not match every case because each has a `status` key |
+| Paged listings stop on a short or empty page | Xray JQL, Zephyr Scale/Essential `values`, Zephyr Enterprise (`resultSize`) and qTest DQL (`total`) treat an empty page, or a missing next link, before the reported total as an error; with no total the page-size rule stays | A silently short index is wrong; fail closed |
+| TestRail attachment download: the case's `updated_on` for the attachment, redirects followed by the HTTP library | Through the shared `AttachmentDownloader` (credential to the configured origin only, shared redirect rules) with the shared 401/403 credential error; a case document is the listed case (`get_cases`), nothing is read again at fetch | One download path for every connector; no per-case `get_case` round trip |
+| Zephyr Scale folders (`TEST_CASE`, `TEST_PLAN`, `TEST_CYCLE`) are yielded with empty content | `folder/{id}.json`, the folder with its path, so folder names are searchable | — |
+| Zephyr Scale: only the Cloud API, `base_url` ignored | Only the Cloud API, from the regional origin the `base_url` names when its host is the EU Zephyr Scale API host (`eu.api.zephyrscale.smartbear.com/v2`); any other `base_url` (absent, a Jira URL, anything else) uses `api.zephyrscale.smartbear.com/v2` (US) and logs one warning naming the ignored host only (no path or query) | The SDK's required "Zephyr base URL" field may hold a Jira or other URL in existing configs, so an unknown host is ignored rather than refused; the token goes to the chosen SmartBear origin only. SmartBear's overview page documents the US origin; the EU origin (the EU residency region) is corroborated by third-party integrations, not by a page we could fetch |
+| Zephyr Enterprise: `get_testcases_by_zql` takes the first answer as everything | `offset`/`pagesize`, the offset being the result rows received (not the distinct cases kept), until `resultSize` rows are in; a server that ignores them and answers with everything is read whole; one that owes rows and serves only repeats is an error | Never a silently short listing. The paging parameters are an assumption about the Zephyr Enterprise REST API, covered by both behaviours |
+| Zephyr Enterprise indexes the steps of the last version only (via the tree id, then `testcase/versions`) | The document is the case object with the steps of its own version (`testcase.id`, which Zephyr documents as the test case version id, the id `testcase/{testcaseVersionId}/teststep` takes); its version is `lastModifiedOn`; a malformed steps body is an error, only `null`, no `steps` or a 404 is "no steps" | One id keys, fetches and reads steps, so the stamp, the case and the steps describe one version. The SDK has no other stamp; a steps-only edit that does not move `lastModifiedOn` is not seen. `GET testcase/{id}` taking that id is the SDK's usage, not a page of Zephyr's documentation we could fetch |
+| qTest `full`/`module` page with `size` 100 until a page is short; `dql` pages until no `next` link; DQL "may return incomplete results" | The same | The incompleteness cannot be detected here |
+| qTest `extract_images` transcribes images with an LLM | Accepted and ignored; embedded base64 images are removed | Model-calling steps wait for I4 |
+| qTest keys documents by `pid` (`TC-12`) | `testcase/{numeric id}.md`, versioned by the hash of the case's modified stamp and its module's name | `pid` is renumbered by moves; the numeric id is stable; `pid` is in the metadata and the text; a module rename re-indexes its cases (the stamp does not move). Modules are bounded by the directory cap, not the document cap |
+| Page-size knobs (`no_of_items_per_page`, Xray `limit`) cap nothing but a page | Page sizes only; the source's document cap bounds the run, counted against the documents kept after the TestRail/Zephyr Scale filters (rows read are bounded by the page cap) | ADR-0030 decision 3: list everything |
+| Fixed SaaS hosts | The chart's default `indexEgressAllowlist` and `deploy/runtime/worker-runtime.*.json` name the Zephyr Scale Cloud API hosts, Zephyr Essential's default SaaS host (`prod-api.zephyr4jiracloud.com`) and the Xray Cloud hosts; TestRail, qTest and Zephyr Enterprise hosts (and a custom Essential `base_url`) are tenant-specific and stay operator-configured | The egress allowlist is fail-closed |
+
+Restricted items: none of the six APIs exposes a per-test-case ACL to the
+credential that lists it (TestRail roles, qTest project permissions, Xray and
+Zephyr Jira permissions all gate the call, not the item), so every listed
+document is `Acl::Project` and a project the credential cannot read fails the
+run (401/403 named), never indexing nothing.
+
+Follow-ups: point the agent-runtime TestRail/qTest/Xray/Zephyr families at
+the connectors' config parsing (they keep their own copies, as the git
+families did before #1249); Zephyr Scale `customFields`/`steps` filters;
+Xray preconditions and test sets as documents; TestRail runs/results and
+Zephyr cycles/executions are not documents (the SDK did not index them).

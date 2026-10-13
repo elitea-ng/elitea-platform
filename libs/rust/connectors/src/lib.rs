@@ -53,6 +53,9 @@ pub mod github;
 pub mod gitlab;
 #[cfg(feature = "providers")]
 pub mod jira;
+#[cfg(feature = "content-source")]
+#[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
+pub mod qtest;
 mod reqwest_adapter;
 #[cfg(feature = "content-source")]
 pub mod sharepoint;
@@ -60,7 +63,27 @@ pub mod sharepoint;
 pub mod sharepoint_site;
 #[cfg(feature = "content-source")]
 pub mod source;
+#[cfg(feature = "content-source")]
+#[allow(
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::doc_markdown // "TestRail" is a product name, not an identifier
+)]
+pub mod testmgmt;
+#[cfg(feature = "content-source")]
+#[allow(
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::doc_markdown // "TestRail" is a product name, not an identifier
+)]
+pub mod testrail;
 pub mod transport;
+#[cfg(feature = "content-source")]
+#[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
+pub mod xray;
+#[cfg(feature = "content-source")]
+#[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
+pub mod zephyr;
 
 pub use reqwest_adapter::{BuildError, ClientPolicy};
 
