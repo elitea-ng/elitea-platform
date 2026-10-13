@@ -594,12 +594,16 @@ func (r *IndexRegistryRepository) RecordScheduledFailure(
 	})
 }
 
-// List implements indexregistry.Store.
+// List implements indexregistry.Store: newest created first, ties broken by
+// index_id descending so the order is total and stable. It is a backward scan of
+// index_registry_list_idx. This is a deliberate rule of this registry, not a
+// copy of the Python index_meta order; the Indexes tab no longer depends on the
+// order (it keeps the selection on the index the user acted on).
 func (r *IndexRegistryRepository) List(ctx context.Context, projectID, toolkitID int32) ([]indexregistryapp.Row, error) {
 	rows, err := r.pool.Query(ctx, indexRegistrySelect+`
 WHERE index_registry.project_id = $1 AND index_registry.toolkit_id = $2
   AND index_registry.deleted_at IS NULL
-ORDER BY index_registry.created_at, index_registry.index_id
+ORDER BY index_registry.created_at DESC, index_registry.index_id DESC
 LIMIT 10001`, projectID, toolkitID)
 	if err != nil {
 		return nil, fmt.Errorf("list index registry: %w", err)

@@ -102,6 +102,11 @@ on:
       # nothing under apps/elitea-web. Without this path the job that exists to
       # catch that drift would not start on the change that caused it.
       - "services/elitea-worker-rust/**"
+      # The `index-stream-rust` job (ADR-0030 Verification 3) runs the index
+      # journey on the Rust-only path: vectors in Qdrant behind elitea-vector,
+      # documents read by the extractor sidecar. Same reasoning as above.
+      - "services/elitea-vector/**"
+      - "services/elitea-doc-extractor/**"
       # The real-model lane's own subjects: the gateway's SSE relay, the
       # python worker's SDK path, and the shared build action every stack
       # job here uses. The `model-path-changes` job names these; a prefix it
@@ -133,6 +138,11 @@ on:
       # nothing under apps/elitea-web. Without this path the job that exists to
       # catch that drift would not start on the change that caused it.
       - "services/elitea-worker-rust/**"
+      # The `index-stream-rust` job (ADR-0030 Verification 3) runs the index
+      # journey on the Rust-only path: vectors in Qdrant behind elitea-vector,
+      # documents read by the extractor sidecar. Same reasoning as above.
+      - "services/elitea-vector/**"
+      - "services/elitea-doc-extractor/**"
       # The real-model lane's own subjects: the gateway's SSE relay, the
       # python worker's SDK path, and the shared build action every stack
       # job here uses. The `model-path-changes` job names these; a prefix it
@@ -1320,6 +1330,99 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-index-stream
+          path: apps/elitea-web/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  index-stream-rust:
+    name: Index journey and lifecycle on the Rust-only runtime (ADR-0030 V3)
+    # ADR-0030 Verification (3): "The Index definition-of-done journey (#93)
+    # and the index lifecycle specs pass on a Rust-only deployment."
+    #
+    # The SAME Playwright project as `index-stream` (index.streaming.spec.ts and
+    # index.lifecycle.spec.ts), against the OTHER indexing path. With
+    # STANDALONE_WORKER=rust the stack has no Python worker at all: the native
+    # worker consumes index.ingest.v1 from the agent stream, elitea-main runs
+    # ELITEA_INDEXING_RUNTIME=rust (metadata in its registry, no project
+    # pgvector database), vectors go to Qdrant through elitea-vector, and PDF
+    # and Office documents are read by the elitea-doc-extractor sidecar. Nothing
+    # in the UI selects the path, so a change that only one path admits is
+    # invisible to `index-stream` and to every unit suite.
+    #
+    # A separate job, not a matrix leg on `index-stream`: the two stacks both
+    # publish oidc-mock's fixed port 9400 and cannot share a host, and the Rust
+    # lane's cold bake (the cargo chain) needs the 60-minute budget the python
+    # lane does not.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: apps/elitea-web/package-lock.json
+      - name: Install (locked)
+        run: npm ci
+      - name: Pre-pull the pinned Playwright container (background)
+        # Started with nohup and left running while the bake below uses the
+        # CPU: the runner does not reap a step's background processes. This is
+        # fire-and-forget — nothing here waits on it. The script this job
+        # delegates to (chat-stream-e2e.sh / index-stream-e2e.sh) waits for it
+        # and retries with a bounded backoff immediately before the `docker
+        # run` that needs the image, so a slow or failed background pull
+        # costs only the overlap, never an unretried inline pull racing the
+        # registry (the mcr.microsoft.com timeout that killed PR #1001).
+        run: |
+          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
+      - name: Build the stack images (shared cache)
+        # Replaces the script's own `compose build` (STANDALONE_SKIP_BUILD=1
+        # below): every `build:` service of the compose file(s) the stack runs,
+        # baked with one shared layer cache per image and the cargo/Go/pip
+        # cache mounts restored from the previous run, then asserted present.
+        # Measured before this: 5.3 min (python worker) to 10.6 min (Rust
+        # worker, 9.6 of it one sequential cargo chain) of every such job.
+        uses: ./.github/actions/build-stack-images
+        with:
+          compose-files: |
+            docker-compose.standalone-full.yml
+            docker-compose.standalone-rust-agent.yml
+          cache-hcl: |
+            ci/bake-cache.hcl
+            ci/bake-cache-rust.hcl
+          targets: standalone-rust
+          mount-cache-suffix: rust
+      - name: Run the journey and lifecycle specs against a fresh Rust-only stack
+        # The script owns the whole lifecycle: runtime PKI, build, compose up,
+        # four seed steps, the embedding-path assertions, then Playwright. It
+        # uses its own compose project and tears down on exit.
+        #
+        # PLAYWRIGHT_CONTAINER_IMAGE containerises the test run; the tag lives
+        # HERE so scripts/check-playwright-image-tag.mjs (which only scans
+        # .github/workflows/) keeps gating it — see the `chat-stream` job.
+        working-directory: ${{ github.workspace }}
+        env:
+          COMPOSE_BIN: docker compose
+          CI: "true"
+          STANDALONE_SKIP_BUILD: "1"
+          STANDALONE_WORKER: rust
+          # The indexing runtime (ELITEA_INDEXING_RUNTIME=rust) is chosen by the
+          # overlay deploy/docker-compose.standalone-rust-agent.yml, not here.
+          INDEX_STREAM_PROJECT: elitea-indexstream-rust-ci
+          INDEX_STREAM_PORT: "8087"
+          INDEX_STREAM_MOCK_PORT: "8091"
+          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
+        run: bash apps/elitea-web/scripts/index-stream-e2e.sh
+      - name: Give the report back to the runner user
+        # Same root-owned-report trap and fix as the `e2e` and `chat-stream`
+        # jobs.
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" playwright-results playwright-report 2>/dev/null || true
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-index-stream-rust
           path: apps/elitea-web/playwright-report/
           if-no-files-found: ignore
           retention-days: 14
