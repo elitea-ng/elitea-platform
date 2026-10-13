@@ -250,7 +250,7 @@ fn chunker_named(
     }
 }
 
-fn markdown_chunks(text: &str, params: &ChunkParams) -> Result<Vec<Chunk>, ChunkError> {
+pub(crate) fn markdown_chunks(text: &str, params: &ChunkParams) -> Result<Vec<Chunk>, ChunkError> {
     let default_headers = markdown::default_headers();
     let headers = params
         .headers_to_split_on
@@ -422,7 +422,9 @@ pub fn plan_with(
     if params.use_llm == Some(true) {
         return Err(ChunkError::RequiresModel {
             chunker: "use_llm",
-            reason: format!("`use_llm` is set for {extension:?} and the image step is not ported"),
+            reason: format!(
+                "`use_llm` is set for {extension:?}: only standalone image files are described (`plan_image`); images inside documents are not ported"
+            ),
         });
     }
     let chunker = match params.chunker.as_deref() {

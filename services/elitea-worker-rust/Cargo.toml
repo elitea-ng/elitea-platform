@@ -83,6 +83,7 @@ rmcp = { version = "=3.5.0", default-features = false, features = ["auth"] }
 rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std"] }
 rustix = { version = "=1.1.5", features = ["fs", "process"] }
 serde = { version = "1.0.228", features = ["derive"] }
+sha2 = "=0.10.9"
 serde_json = { version = "=1.0.151", features = ["arbitrary_precision", "raw_value"] }
 serde_yaml_ng = "=0.10.0"
 sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql", "chrono", "bigdecimal", "json", "uuid"] }

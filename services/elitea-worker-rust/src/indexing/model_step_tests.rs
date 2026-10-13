@@ -44,36 +44,42 @@ use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
 /// What the scripted model answers for one call.
 #[derive(Clone)]
-enum Reply {
+pub(super) enum Reply {
     Text(String),
     Fail(ErrorCategory, &'static str),
 }
 
 type Script = dyn Fn(usize, &str) -> Reply + Send + Sync;
 
-struct ChatState {
+/// An image part a request carried: (media type, bytes).
+pub(super) type SeenImage = (String, Vec<u8>);
+
+pub(super) struct ChatState {
     calls: AtomicUsize,
     script: Box<Script>,
-    binds: Mutex<Vec<(String, String)>>,
+    pub(super) binds: Mutex<Vec<(String, String)>>,
+    /// Each request's image parts: (media type, bytes).
+    pub(super) images: Mutex<Vec<Vec<SeenImage>>>,
 }
 
 /// A chat binder whose models answer from `script(call_index, user_text)`.
-struct ScriptedChat {
-    state: Arc<ChatState>,
+pub(super) struct ScriptedChat {
+    pub(super) state: Arc<ChatState>,
 }
 
 impl ScriptedChat {
-    fn new(script: impl Fn(usize, &str) -> Reply + Send + Sync + 'static) -> Arc<Self> {
+    pub(super) fn new(script: impl Fn(usize, &str) -> Reply + Send + Sync + 'static) -> Arc<Self> {
         Arc::new(Self {
             state: Arc::new(ChatState {
                 calls: AtomicUsize::new(0),
                 script: Box::new(script),
                 binds: Mutex::new(Vec::new()),
+                images: Mutex::new(Vec::new()),
             }),
         })
     }
 
-    fn calls(&self) -> usize {
+    pub(super) fn calls(&self) -> usize {
         self.state.calls.load(Ordering::SeqCst)
     }
 }
@@ -95,6 +101,18 @@ impl Llm for ScriptedLlm {
     ) -> adk_rust::Result<LlmResponseStream> {
         assert!(!streaming, "the step reads one complete reply");
         let index = self.state.calls.fetch_add(1, Ordering::SeqCst);
+        let images = request
+            .contents
+            .iter()
+            .flat_map(|content| content.parts.iter())
+            .filter_map(|part| match part {
+                adk_rust::Part::InlineData {
+                    mime_type, data, ..
+                } => Some((mime_type.clone(), data.clone())),
+                _ => None,
+            })
+            .collect();
+        self.state.images.lock().expect("images").push(images);
         let user = request
             .contents
             .first()
@@ -140,7 +158,7 @@ impl ChatModelBinder for ScriptedChat {
 }
 
 /// Installs `chat` as the runtime's chat model binder.
-fn with_chat(harness: &mut Harness, chat: &Arc<ScriptedChat>) {
+pub(super) fn with_chat(harness: &mut Harness, chat: &Arc<ScriptedChat>) {
     harness.runtime.chat_models = Some(Arc::clone(chat) as Arc<dyn ChatModelBinder>);
 }
 
@@ -163,7 +181,7 @@ fn food_dates(_: usize, _: &str) -> Reply {
 }
 
 /// One run with a chat model (`llm_model`, a JSON string) or none.
-async fn run_model(
+pub(super) async fn run_model(
     harness: &Harness,
     documents: Vec<Document>,
     expected: Option<(&str, u32)>,
@@ -183,7 +201,7 @@ async fn run_model(
 }
 
 /// [`run_model`] with the `llm_model` entry as raw bytes and a lease.
-async fn run_model_raw(
+pub(super) async fn run_model_raw(
     harness: &Harness,
     documents: Vec<Document>,
     expected: Option<(&str, u32)>,
@@ -218,7 +236,7 @@ fn proposal() -> Vec<u8> {
     parameters(false, json!({"chunking_tool": "proposal"}))
 }
 
-fn search_host(
+pub(super) fn search_host(
     runtime: &Arc<super::IndexIngestRuntime>,
     token: &crate::protocol::vector_token::VectorClaimToken,
 ) -> ClaimIndexToolHost {
@@ -231,7 +249,7 @@ fn search_host(
     )
 }
 
-async fn search(host: &ClaimIndexToolHost, arguments: Value) -> Value {
+pub(super) async fn search(host: &ClaimIndexToolHost, arguments: Value) -> Value {
     let catalog = SharedIndexCatalog::new(IndexCatalog::new(vec![IndexCatalogEntry {
         name: "docs".to_owned(),
         index_id: NS.to_owned(),
@@ -347,7 +365,7 @@ async fn the_proposal_chunker_stores_four_chunks_per_entry_and_extended_search_f
     assert!(ids.contains("Dates"), "{extended}");
 }
 
-fn failed_with(summary: &IndexIngestSummaryV1) -> &str {
+pub(super) fn failed_with(summary: &IndexIngestSummaryV1) -> &str {
     assert_eq!(
         summary.status,
         IndexIngestStatusV1::Error as i32,

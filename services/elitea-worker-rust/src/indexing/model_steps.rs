@@ -1,5 +1,6 @@
 //! The index steps that call a model (ADR-0030 I4): the proposal chunker's
-//! chat calls and the statistical chunker's embeddings.
+//! chat calls, the statistical chunker's embeddings and the image-file
+//! vision descriptions.
 //!
 //! `elitea-doc-chunk` stays model-free: it returns a [`ChunkPlan`] naming the
 //! windows or splits, and this module fulfils it. What it owns:
@@ -32,10 +33,20 @@
 //!   documents are versioned). The documents already written stay;
 //! * liveness (Stop, the lease, the deadline) is checked before every
 //!   attempt and every retry wait;
+//! * an image file is described by ONE chat call carrying the image as an
+//!   `InlineData` part beside the prompt ([`VisionJob`]), under the same
+//!   policy (every attempt charged, liveness before each, a retryable failure
+//!   `model_failed` with the breaker, a refusal or a reply cut by `max_tokens`
+//!   stopping the run, no model `no_model`). Descriptions are cached for the
+//!   run by sha256(bytes) + sha256(prompt) + model name ([`ImageCache`], LRU
+//!   of 500, as the SDK's `ImageDescriptionCache` but sha256 and keyed by the
+//!   model); a hit costs no call and is not charged. Image bytes and
+//!   descriptions are never logged;
 //! * a document's proposal windows are asked [`WINDOWS_IN_FLIGHT`] at a time,
 //!   answers kept in window order. Documents themselves are still fulfilled
 //!   one after another by the run's loop (a follow-up, not done here).
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -43,9 +54,10 @@ use adk_rust::futures::StreamExt as _;
 use adk_rust::futures::stream::FuturesOrdered;
 use adk_rust::{AdkError, Content, FinishReason, Llm, LlmRequest, Part};
 use elitea_doc_chunk::{
-    Chunk, ChunkDetails, ChunkError, ChunkPlan, ProposalPlan, StatisticalPlan,
+    Chunk, ChunkDetails, ChunkError, ChunkPlan, ProposalPlan, StatisticalPlan, VisionPlan,
     parse_chunk_analysis, proposal_system_prompt, proposal_user_message,
 };
+use sha2::{Digest as _, Sha256};
 
 use super::IndexRunLimits;
 use super::inputs::LlmSettings;
@@ -211,7 +223,7 @@ impl Gate<'_> {
 
 fn cap_message(cap: u32) -> String {
     format!(
-        "the run reached its limit of {cap} model calls (every chat call per proposal window and every embeddings request of the statistical chunker, retries included); the documents written so far are kept; re-run to continue, or raise the deployment's index model call cap"
+        "the run reached its limit of {cap} model calls (every chat call per proposal window, per image description and every embeddings request of the statistical chunker, retries included); the documents written so far are kept; re-run to continue, or raise the deployment's index model call cap"
     )
 }
 
@@ -221,6 +233,7 @@ pub(crate) struct ModelSteps {
     cap: u32,
     calls: AtomicU32,
     consecutive_failures: u32,
+    images: ImageCache,
 }
 
 impl ModelSteps {
@@ -230,6 +243,7 @@ impl ModelSteps {
             cap: limits.max_model_calls,
             calls: AtomicU32::new(0),
             consecutive_failures: 0,
+            images: ImageCache::default(),
         }
     }
 
@@ -345,6 +359,54 @@ impl ModelSteps {
         }
     }
 
+    /// Describes one image file (ADR-0030 I4 part B): the chunks of the
+    /// model's description, from the run's cache when the same image was
+    /// described before with the same prompt and model.
+    pub(crate) async fn describe(
+        &mut self,
+        job: &VisionJob,
+        env: &StepEnv<'_>,
+        alive: Alive<'_>,
+    ) -> StepEnd {
+        let Some(chat) = self
+            .chat
+            .as_ref()
+            .map(|c| (Arc::clone(&c.binder), c.model_name.clone(), c.settings))
+        else {
+            return StepEnd::Skip(SKIP_NO_MODEL);
+        };
+        let (binder, model_name, settings) = chat;
+        let key = ImageKey::new(&job.bytes, job.plan.prompt(), &model_name);
+        if let Some(description) = self.images.get(&key) {
+            // No call was made: the cap is not charged and the failure
+            // streak is neither extended nor reset.
+            return vision_chunks(&job.plan, &description);
+        }
+        if let Err(end) = self.admit(1) {
+            return end;
+        }
+        let outcome = {
+            let gate = self.gate(alive);
+            vision_call(&*binder, env, &gate, &model_name, settings, job).await
+        };
+        match outcome {
+            Ok(description) => {
+                self.model_step_succeeded();
+                let end = vision_chunks(&job.plan, &description);
+                self.images.put(key, description);
+                end
+            }
+            Err(CallFailure::Fatal(code)) => StepEnd::Stop(format!(
+                "the vision model refused the run ({code}); nothing further was sent to it"
+            )),
+            Err(CallFailure::Stop(reason)) => StepEnd::Stop(reason),
+            Err(CallFailure::Liveness(failure)) => StepEnd::Liveness(failure),
+            Err(CallFailure::Retryable(cause) | CallFailure::Unusable(cause)) => {
+                self.failed_document(&cause)
+            }
+        }
+    }
+
     /// A model-step document whose step succeeded: the failure streak ends.
     fn model_step_succeeded(&mut self) {
         self.consecutive_failures = 0;
@@ -433,6 +495,134 @@ pub(crate) struct StepEnv<'a> {
     pub(crate) limits: &'a IndexRunLimits,
 }
 
+/// One image file waiting for its description.
+pub(crate) struct VisionJob {
+    pub(crate) bytes: Vec<u8>,
+    /// The bytes' own media type, one the facade sends (png, jpeg, gif, webp).
+    pub(crate) media_type: &'static str,
+    pub(crate) plan: VisionPlan,
+}
+
+fn vision_chunks(plan: &VisionPlan, description: &str) -> StepEnd {
+    match plan.chunks(description) {
+        Ok(chunks) => StepEnd::Chunks(chunks),
+        Err(error) => StepEnd::Stop(format!(
+            "the image description could not be chunked: {error}"
+        )),
+    }
+}
+
+/// The description of one image, with the attempts the policy allows: one
+/// chat call with the prompt and the image, every attempt charged before it
+/// is made, liveness checked before every attempt and every retry wait.
+async fn vision_call(
+    binder: &dyn ChatModelBinder,
+    env: &StepEnv<'_>,
+    gate: &Gate<'_>,
+    model_name: &str,
+    settings: LlmSettings,
+    job: &VisionJob,
+) -> Result<String, CallFailure> {
+    let mut attempt = 0_u32;
+    loop {
+        attempt += 1;
+        gate.check(true)?;
+        let model = binder
+            .bind_chat(
+                env.context,
+                &ChatModelRequest {
+                    model_name,
+                    system_instruction: "",
+                    max_tokens: settings.max_tokens,
+                    temperature: settings.temperature,
+                },
+            )
+            .map_err(|error| CallFailure::Fatal(format!("model_facade.{error:?}")))?;
+        // The SDK's single HumanMessage: the text part, then the image part.
+        let content = Content {
+            role: "user".to_owned(),
+            parts: vec![
+                Part::Text {
+                    text: job.plan.prompt().to_owned(),
+                },
+                Part::InlineData {
+                    mime_type: job.media_type.to_owned(),
+                    data: job.bytes.clone(),
+                    uri: None,
+                    annotations: None,
+                },
+            ],
+        };
+        match complete(&*model, model_name, content, settings).await {
+            Ok(description) => return Ok(description),
+            Err(CallFailure::Retryable(_)) if attempt < CHAT_ATTEMPTS => {
+                gate.check(false)?;
+                tokio::time::sleep(env.limits.embedding_retry_backoff * attempt).await;
+            }
+            Err(other) => return Err(other),
+        }
+    }
+}
+
+/// Descriptions kept for a run.
+const IMAGE_CACHE_ENTRIES: usize = 500;
+/// A description longer than this is used but not cached (500 entries of the
+/// largest reply would be 128 MiB).
+const IMAGE_CACHE_MAX_DESCRIPTION_BYTES: usize = 32 * 1024;
+
+/// sha256(bytes) + sha256(prompt) + the model's name.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ImageKey([u8; 32], [u8; 32], String);
+
+impl ImageKey {
+    fn new(bytes: &[u8], prompt: &str, model: &str) -> Self {
+        Self(
+            Sha256::digest(bytes).into(),
+            Sha256::digest(prompt.as_bytes()).into(),
+            model.to_owned(),
+        )
+    }
+}
+
+/// The run's image descriptions: a least-recently-used map of
+/// [`IMAGE_CACHE_ENTRIES`]. Per run, in memory, never logged.
+#[derive(Default)]
+struct ImageCache {
+    entries: HashMap<ImageKey, String>,
+    /// Least recently used first.
+    order: VecDeque<ImageKey>,
+}
+
+impl ImageCache {
+    fn touch(&mut self, key: &ImageKey) {
+        if let Some(at) = self.order.iter().position(|k| k == key) {
+            self.order.remove(at);
+        }
+        self.order.push_back(key.clone());
+    }
+
+    fn get(&mut self, key: &ImageKey) -> Option<String> {
+        let hit = self.entries.get(key).cloned()?;
+        self.touch(key);
+        Some(hit)
+    }
+
+    /// Like the SDK, a blank description is not kept.
+    fn put(&mut self, key: ImageKey, description: String) {
+        if description.trim().is_empty() || description.len() > IMAGE_CACHE_MAX_DESCRIPTION_BYTES {
+            return;
+        }
+        if self.entries.len() >= IMAGE_CACHE_ENTRIES
+            && !self.entries.contains_key(&key)
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.entries.remove(&oldest);
+        }
+        self.touch(&key);
+        self.entries.insert(key, description);
+    }
+}
+
 /// The model's `ChunkDetails` for one window, with the attempts the policy
 /// allows. Every attempt is charged against the run's cap before it is made,
 /// and liveness is checked before every attempt and every retry wait.
@@ -461,7 +651,14 @@ async fn chat_window(
                 },
             )
             .map_err(|error| CallFailure::Fatal(format!("model_facade.{error:?}")))?;
-        let failure = match complete(&*model, model_name, &user, settings).await {
+        let failure = match complete(
+            &*model,
+            model_name,
+            Content::new("user").with_text(&user),
+            settings,
+        )
+        .await
+        {
             Ok(reply) => match parse_chunk_analysis(&reply) {
                 Ok(details) => return Ok(details),
                 Err(error) => CallFailure::Retryable(error.to_string()),
@@ -484,12 +681,12 @@ async fn chat_window(
 async fn complete(
     model: &dyn Llm,
     model_name: &str,
-    user: &str,
+    user: Content,
     settings: LlmSettings,
 ) -> Result<String, CallFailure> {
     let request = LlmRequest {
         model: model_name.to_owned(),
-        contents: vec![Content::new("user").with_text(user)],
+        contents: vec![user],
         config: None,
         tools: std::collections::HashMap::new(),
         previous_response_id: None,
@@ -516,7 +713,7 @@ async fn complete(
                 |n| n.to_string(),
             );
             return Err(CallFailure::Stop(format!(
-                "the chunking model's reply was cut off by its max_tokens limit (the toolkit's llm `max_tokens` is {in_use}); raise `max_tokens` in the toolkit's llm settings and re-run"
+                "the index model's reply was cut off by its max_tokens limit (the toolkit's llm `max_tokens` is {in_use}); raise `max_tokens` in the toolkit's llm settings and re-run"
             )));
         }
         if let Some(reason) = response.finish_reason

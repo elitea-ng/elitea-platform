@@ -21,8 +21,11 @@
 //! owns the calls, their retries and their budget, then hands the answers
 //! back (`ProposalPlan::chunks`, `StatisticalPlan::chunks`). [`chunk`] keeps
 //! its model-free contract: a config that asks for one of them (or for
-//! `use_llm`, the image step) gets [`ChunkError::RequiresModel`], so a
-//! caller without models reports the document as skipped with a reason.
+//! `use_llm` on a document that is not an image file: images inside
+//! documents are not ported) gets [`ChunkError::RequiresModel`], so a caller
+//! without models reports the document as skipped with a reason. A standalone
+//! image file is planned by [`plan_image`] (ADR-0030 I4 part B), on by
+//! default as in the SDK.
 //!
 //! The entry points are [`chunk`] and [`plan`]; an indexer that converted an
 //! HTML page to markdown uses [`chunk_with`] / [`plan_with`] and says so
@@ -36,6 +39,7 @@ mod proposal;
 mod route;
 mod statistical;
 mod tokens;
+mod vision;
 
 pub use config::{
     ChunkParams, ChunkingConfig, ConfigError, ModelStepParams, normalize_chunker_name,
@@ -49,6 +53,10 @@ pub use route::{
     chunker_for, chunker_for_with, extension_of, plan, plan_with,
 };
 pub use statistical::{StatisticalSettings, statistical_chunks};
+pub use vision::{
+    EMPTY_DESCRIPTION, IMAGE_EXTENSIONS, ImagePlan, VisionPlan, image_processing_prompt,
+    is_image_extension, plan_image,
+};
 
 use serde_json::{Map, Value};
 

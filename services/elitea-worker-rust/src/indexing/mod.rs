@@ -48,6 +48,8 @@ mod testmgmt_tests;
 mod tests;
 #[cfg(test)]
 mod tools_tests;
+#[cfg(test)]
+mod vision_tests;
 
 use std::sync::Arc;
 use std::time::Duration;

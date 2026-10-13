@@ -1635,6 +1635,7 @@ dependencies = [
  "elitea-content-source",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "text-splitter",
  "tiktoken-rs",
  "tree-sitter",

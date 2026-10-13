@@ -263,6 +263,14 @@ pub(super) fn document(key: &str, version: &str, text: &str) -> Document {
     }
 }
 
+/// A PNG-signature file (a picture the vision step would describe).
+fn png_document(key: &str) -> Document {
+    let mut document = document(key, "v1", "");
+    document.bytes = b"\x89PNG\r\n\x1a\npixels".to_vec();
+    document.reference.size = document.bytes.len() as u64;
+    document
+}
+
 pub(super) fn command(index_id: &str, expected: Option<(&str, u32)>) -> IndexIngestCommandV1 {
     let (model, dimension) = expected.unwrap_or(("", 0));
     IndexIngestCommandV1 {
@@ -383,7 +391,7 @@ async fn a_first_run_writes_every_document_and_stamps_the_space() {
                 "# Title\n\nSome words about the project.\n",
             ),
             document("src/app.py", "v1", "def main():\n    return 1\n"),
-            document("logo.png", "v1", "\u{89}PNG"),
+            png_document("logo.png"),
         ],
         &command(NS, None),
         &parameters(false, json!({})),
@@ -398,7 +406,8 @@ async fn a_first_run_writes_every_document_and_stamps_the_space() {
     );
     assert_eq!(summary.indexed_documents, 2);
     assert_eq!(summary.updated, 0);
-    assert_eq!(summary.skipped.get("unsupported_type"), Some(&1));
+    // An image is described by the chat model, and this harness has none.
+    assert_eq!(summary.skipped.get("no_model"), Some(&1));
     assert_eq!(summary.embedding_model, MODEL);
     assert_eq!(summary.embedding_dimension, 4);
     assert_eq!(summary.total_documents, Some(2));

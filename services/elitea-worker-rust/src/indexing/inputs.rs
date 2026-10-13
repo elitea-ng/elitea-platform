@@ -379,15 +379,18 @@ mod tests {
                 .unwrap()
                 .needs_chat_model()
         };
-        assert!(!needs(json!({})));
-        assert!(!needs(json!({"chunking_tool": "markdown"})));
+        // The image-file vision step is on by default, so it needs the chat
+        // model unless `use_llm: false` switches it off.
+        assert!(needs(json!({})));
+        assert!(needs(json!({"chunking_tool": "markdown"})));
+        assert!(!needs(json!({"chunking_config": {"use_llm": false}})));
         assert!(needs(json!({"chunking_tool": "proposal"})));
         assert!(needs(json!({"chunking_tool": " Proposal"})));
-        // Statistical embeds only; use_llm waits for the vision step.
+        // Statistical embeds only.
         assert!(!needs(
-            json!({"chunking_config": {".md": {"chunker": "statistical"}}})
+            json!({"chunking_config": {"use_llm": false, ".md": {"chunker": "statistical"}}})
         ));
-        assert!(!needs(json!({"chunking_config": {"use_llm": true}})));
+        assert!(needs(json!({"chunking_config": {"use_llm": true}})));
         assert!(ParsedArgs::parse(b"not json").is_err());
     }
 

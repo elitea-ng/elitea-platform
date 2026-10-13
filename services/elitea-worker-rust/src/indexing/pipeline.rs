@@ -49,8 +49,8 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use elitea_content_source::{Acl, DocumentRef, SourceError};
-use elitea_doc_chunk::{Chunk, ChunkError, ChunkOptions, ChunkPlan, ChunkingConfig};
-use elitea_doc_extract::{ExtractOptions, Extracted};
+use elitea_doc_chunk::{Chunk, ChunkError, ChunkOptions, ChunkPlan, ChunkingConfig, ImagePlan};
+use elitea_doc_extract::{ExtractOptions, Extracted, VisionImage};
 use elitea_vector_index::client::toolkit_namespace;
 use elitea_vector_index::{DeleteSelector, pb};
 use prost::Message as _;
@@ -58,7 +58,7 @@ use serde_json::{Map, Value};
 use tokio::task::JoinSet;
 
 use super::inputs::{self, IndexParameters};
-use super::model_steps::{ChatBinding, ModelSteps, StepEnd, StepEnv};
+use super::model_steps::{ChatBinding, ModelSteps, StepEnd, StepEnv, VisionJob};
 use super::slug::vector_space_slug;
 use super::source::{IndexSource, PathFilter, PlatformAccess};
 use super::{IndexIngestRuntime, IndexRunLimits};
@@ -72,6 +72,7 @@ use crate::protocol::output::MAX_INDEX_RESULT_DOCUMENTS;
 use crate::protocol::vector_token::{VectorClaimToken, VectorSource};
 use crate::transport::embeddings_facade::{EmbeddingsClient, EmbeddingsError, MAX_BATCH_INPUTS};
 use crate::transport::extractor_client::{Extraction, ExtractorClient, SkipReason};
+use crate::transport::openai_compatible_facade::MAX_INLINE_IMAGE_BYTES;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
 /// The byte budget of the per-document record in the summary. The frame is
@@ -262,6 +263,8 @@ enum Preparation {
     /// Chunking waits for a model (ADR-0030 I4): the plan to fulfil, and the
     /// document with no chunks yet.
     Model(Box<Prepared>, ChunkPlan),
+    /// An image file waiting for its description (ADR-0030 I4 part B).
+    Vision(Box<Prepared>, VisionJob),
     Skipped(&'static str),
     /// A chunking configuration the run cannot honour (the whole run fails).
     Configuration(String),
@@ -337,14 +340,7 @@ pub(crate) async fn run_index(
         Ok(chunking) => chunking.clone(),
         Err(error) => return Ok(failure(&parameters, &error.to_string())),
     };
-    // The chat model entries are read only when a chunker uses the chat
-    // model (the proposal chunker): a statistical-only or `use_llm`-only run
-    // must not fail on entries it never uses.
-    let chat = if chunking.needs_chat_model() {
-        chat_binding(runtime, &run)?
-    } else {
-        None
-    };
+    let chat = chat_for_run(runtime, &run, &chunking)?;
     for warning in &chunking.warnings {
         tracing::warn!(event = "index_chunking_config_setting_dropped", warning);
     }
@@ -382,6 +378,34 @@ pub(crate) async fn run_index(
     }
     .run()
     .await
+}
+
+/// The chat model entries are read only when a step uses the chat model:
+/// the proposal chunker, or the image-file vision step (on by default). A
+/// run without the proposal chunker is not failed by entries it can do
+/// without: unreadable ones leave image files `no_model`.
+///
+/// # Errors
+///
+/// Entries that are malformed, in a run that selects the proposal chunker.
+fn chat_for_run(
+    runtime: &IndexIngestRuntime,
+    run: &IndexRun<'_>,
+    chunking: &ChunkingConfig,
+) -> Result<Option<ChatBinding>, IndexRunFailure> {
+    if !chunking.needs_chat_model() {
+        return Ok(None);
+    }
+    match chat_binding(runtime, run) {
+        Err(_) if !chunking.needs_proposal_model() => {
+            tracing::warn!(
+                event = "index_vision_model_entries_unreadable",
+                "the chat model entries are unreadable; image files are skipped no_model"
+            );
+            Ok(None)
+        }
+        other => other,
+    }
 }
 
 /// The chat model of the steps that call one: the claim's `index.llm_model`
@@ -618,6 +642,16 @@ impl Runner<'_> {
                             Err(halt) => break Err(halt),
                         }
                     }
+                    Ok(Preparation::Vision(mut prepared, job)) => {
+                        match self.fulfil_vision(&job).await {
+                            Ok(Some(chunks)) => {
+                                prepared.chunks = chunks;
+                                prepared
+                            }
+                            Ok(None) => continue,
+                            Err(halt) => break Err(halt),
+                        }
+                    }
                     Ok(Preparation::Skipped(reason)) => {
                         self.tally.skip(reason);
                         continue;
@@ -785,7 +819,27 @@ impl Runner<'_> {
         };
         let run = self.run;
         let alive = move || run_liveness(run);
-        match self.steps.fulfil(plan, &env, &alive).await {
+        let end = self.steps.fulfil(plan, &env, &alive).await;
+        self.settle(end)
+    }
+
+    /// [`Self::fulfil_model_step`] for an image file's description.
+    async fn fulfil_vision(&mut self, job: &VisionJob) -> Result<Option<Vec<Chunk>>, Halt> {
+        let env = StepEnv {
+            embeddings: &self.runtime.embeddings,
+            context: self.run.context,
+            embedding_model: self.model,
+            limits: &self.runtime.limits,
+        };
+        let run = self.run;
+        let alive = move || run_liveness(run);
+        let end = self.steps.describe(job, &env, &alive).await;
+        self.settle(end)
+    }
+
+    /// What a model step's end means for the run.
+    fn settle(&mut self, end: StepEnd) -> Result<Option<Vec<Chunk>>, Halt> {
+        match end {
             StepEnd::Chunks(chunks) if chunks.is_empty() => {
                 self.tally.skip(SKIP_EMPTY);
                 Ok(None)
@@ -1219,6 +1273,44 @@ async fn prepare(
         ..reference
     };
     let mut bytes = document.bytes;
+    // A standalone image is described by the chat model (ADR-0030 I4 part B),
+    // never extracted as text. BMP and SVG are skipped: this build does not
+    // rasterise them (SOURCE_PARITY).
+    match elitea_doc_extract::image_for_vision(&mime, &bytes) {
+        VisionImage::NotAnImage => {}
+        VisionImage::Unsupported => return Preparation::Skipped(SKIP_UNSUPPORTED),
+        VisionImage::Corrupt => return Preparation::Skipped(SKIP_UNREADABLE),
+        VisionImage::Supported(media_type) => {
+            // The key's extension names the settings block; a key without
+            // one (a download) is named by its media type.
+            let by_name = elitea_doc_chunk::extension_of(&key);
+            let source = if elitea_doc_chunk::is_image_extension(&by_name) {
+                key.as_str()
+            } else {
+                mime.as_str()
+            };
+            let ImagePlan::Vision(vision) = elitea_doc_chunk::plan_image(source, &chunking) else {
+                return Preparation::Skipped(SKIP_UNSUPPORTED);
+            };
+            if bytes.len() > MAX_INLINE_IMAGE_BYTES {
+                return Preparation::Skipped(SKIP_TOO_LARGE);
+            }
+            return Preparation::Vision(
+                Box::new(Prepared {
+                    reference,
+                    plan,
+                    metadata,
+                    acl,
+                    chunks: Vec::new(),
+                }),
+                VisionJob {
+                    bytes,
+                    media_type,
+                    plan: vision,
+                },
+            );
+        }
+    }
     // A document format (PDF, Office, e-mail) is the sidecar's to read; this
     // process extracts text and HTML itself, on the blocking thread below.
     let sidecar_text = if elitea_doc_extract::is_document_type(&mime) {

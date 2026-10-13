@@ -878,7 +878,7 @@ const RENDERABLE_IMAGE_MEDIA_TYPES: [&str; 4] =
 /// One attachment image's decoded ceiling, mirroring elitea-main's
 /// `maxInlineAttachmentImageBytes` and this runtime's own
 /// `MAX_RENDERED_ATTACHMENT_IMAGE_BYTES` (agents/attachments.rs).
-const MAX_INLINE_IMAGE_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_INLINE_IMAGE_BYTES: usize = 256 * 1024;
 
 fn valid_inline_image(mime_type: &str, data: &[u8]) -> bool {
     RENDERABLE_IMAGE_MEDIA_TYPES.contains(&mime_type)
