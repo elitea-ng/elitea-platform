@@ -66,7 +66,8 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use adk_rust::futures::StreamExt as _;
 use adk_rust::futures::stream::FuturesOrdered;
@@ -84,8 +85,8 @@ use super::image_fit::{self, FitError, ImageKind};
 use super::inputs::LlmSettings;
 use super::pipeline::{
     EmbedOutcome, Gated, IndexRunFailure, SKIP_EXTRACT_TIMEOUT, SKIP_MODEL_CAP_EXCEEDED,
-    SKIP_MODEL_FAILED, SKIP_NO_MODEL, SKIP_TOO_LARGE, SKIP_UNREADABLE, SKIP_VISION_REFUSED,
-    classify_embedding_error, embed_gated,
+    SKIP_MODEL_FAILED, SKIP_NO_MODEL, SKIP_REPLY_UNUSABLE, SKIP_TOO_LARGE, SKIP_UNREADABLE,
+    SKIP_VISION_REFUSED, classify_embedding_error, embed_gated,
 };
 use crate::agents::session::BoundOrdinaryAgentModel as _;
 use crate::transport::embeddings_facade::EmbeddingsClient;
@@ -301,6 +302,16 @@ pub(crate) fn image_cap(cap: u32) -> u32 {
 /// no images.
 pub(crate) const REFUSED_IN_A_ROW: u32 = 3;
 
+/// Whether a document's embedded pictures are worth asking for, as far as
+/// the run knows now ([`ModelSteps::picture_gate_now`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PictureGateNow {
+    /// The chat model has not been loaded.
+    Unknown,
+    Open,
+    Closed(&'static str),
+}
+
 /// The state of a run's model steps.
 pub(crate) struct ModelSteps {
     chat: ChatSlot,
@@ -309,15 +320,17 @@ pub(crate) struct ModelSteps {
     /// Calls made for images, against [`image_cap`].
     image_calls: AtomicU32,
     consecutive_failures: u32,
-    images: ImageCache,
+    /// Behind a lock (never held across an await) because a document's
+    /// pictures are described a few at a time.
+    images: Mutex<ImageCache>,
     /// The chat model is not available for images: the rest of the run's
     /// images are skipped `no_model` without asking again.
-    images_without_model: bool,
+    images_without_model: AtomicBool,
     /// Consecutive `vision_refused` images.
-    refused_in_a_row: u32,
+    refused_in_a_row: AtomicU32,
     /// The model refused [`REFUSED_IN_A_ROW`] images in a row: the rest are
     /// skipped `vision_refused` without a call.
-    images_refused: bool,
+    images_refused: AtomicBool,
 }
 
 impl ModelSteps {
@@ -334,10 +347,10 @@ impl ModelSteps {
             calls: AtomicU32::new(0),
             image_calls: AtomicU32::new(0),
             consecutive_failures: 0,
-            images: ImageCache::default(),
-            images_without_model: false,
-            refused_in_a_row: 0,
-            images_refused: false,
+            images: Mutex::new(ImageCache::default()),
+            images_without_model: AtomicBool::new(false),
+            refused_in_a_row: AtomicU32::new(0),
+            images_refused: AtomicBool::new(false),
         }
     }
 
@@ -508,79 +521,112 @@ impl ModelSteps {
         env: &StepEnv<'_>,
         alive: Alive<'_>,
     ) -> StepEnd {
-        if self.images_without_model {
-            return StepEnd::Skip(SKIP_NO_MODEL);
-        }
         self.ensure_chat(env).await;
-        let Some((binder, model_name, settings)) = self.chat_parts() else {
-            self.images_without_model = true;
-            return StepEnd::Skip(SKIP_NO_MODEL);
-        };
-        let Some(digest) = image_fit::digest(raw.bytes.clone()).await else {
-            return StepEnd::Skip(SKIP_UNREADABLE);
-        };
-        let key = ImageKey::new(digest, raw.plan.prompt(), &model_name);
-        if let Some(description) = self.images.get(&key) {
-            // No call was made: the cap is not charged.
-            return vision_chunks(&raw.plan, &description);
+        match self
+            .describe_one(&raw.bytes, raw.kind, raw.plan.prompt(), None, env, alive)
+            .await
+        {
+            Ok(description) => vision_chunks(&raw.plan, &description),
+            Err(end) => end,
         }
-        if self.images_refused {
-            return StepEnd::Skip(SKIP_VISION_REFUSED);
+    }
+
+    /// The model's description of one picture's `bytes` under `prompt`:
+    /// the single path both an image FILE and a picture EMBEDDED in a
+    /// document go through, so they share the cache, the image budget, the
+    /// refused-model breaker, the downscale and the skip reasons. `digest` is
+    /// the sha256 of `bytes` when the caller already has it.
+    ///
+    /// Takes `&self`, so a document's pictures can be described a few at a
+    /// time; the chat model must already be loaded ([`Self::ensure_chat`] /
+    /// [`Self::picture_gate_now`]).
+    ///
+    /// # Errors
+    ///
+    /// The step's end when there is no description: a skip (the picture's
+    /// own reason), or the stop of the run for the credential, the project
+    /// or the budget, or a lost lease.
+    pub(crate) async fn describe_one(
+        &self,
+        bytes: &Bytes,
+        kind: ImageKind,
+        prompt: &str,
+        digest: Option<[u8; 32]>,
+        env: &StepEnv<'_>,
+        alive: Alive<'_>,
+    ) -> Result<String, StepEnd> {
+        if self.images_without_model.load(Ordering::SeqCst) {
+            return Err(StepEnd::Skip(SKIP_NO_MODEL));
+        }
+        let Some((binder, model_name, settings)) = self.chat_parts() else {
+            self.images_without_model.store(true, Ordering::SeqCst);
+            return Err(StepEnd::Skip(SKIP_NO_MODEL));
+        };
+        let digest = match digest {
+            Some(digest) => digest,
+            None => image_fit::digest(bytes.clone())
+                .await
+                .ok_or(StepEnd::Skip(SKIP_UNREADABLE))?,
+        };
+        let key = ImageKey::new(digest, prompt, &model_name);
+        let cached = self
+            .images
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key);
+        if let Some(description) = cached {
+            // No call was made: the cap is not charged.
+            return Ok(description);
+        }
+        if self.images_refused.load(Ordering::SeqCst) {
+            return Err(StepEnd::Skip(SKIP_VISION_REFUSED));
         }
         if self.image_calls.load(Ordering::SeqCst) >= image_cap(self.cap) {
-            return StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED);
+            return Err(StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED));
         }
         match self.admit(1) {
             Ok(()) => {}
-            Err(end @ StepEnd::Skip(_)) => return end,
+            Err(end @ StepEnd::Skip(_)) => return Err(end),
             // `admit` stops only when no call is left in the run's cap.
-            Err(StepEnd::Stop(_)) => return StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED),
-            Err(other) => return other,
+            Err(StepEnd::Stop(_)) => return Err(StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED)),
+            Err(other) => return Err(other),
         }
-        let fitted = match image_fit::fit(raw.bytes.clone(), raw.kind, MAX_INLINE_IMAGE_BYTES).await
-        {
+        let fitted = match image_fit::fit(bytes.clone(), kind, MAX_INLINE_IMAGE_BYTES).await {
             Ok(fitted) => fitted,
-            Err(FitError::TooLarge) => return StepEnd::Skip(SKIP_TOO_LARGE),
-            Err(FitError::Unreadable) => return StepEnd::Skip(SKIP_UNREADABLE),
-            Err(FitError::TimedOut) => return StepEnd::Skip(SKIP_EXTRACT_TIMEOUT),
+            Err(FitError::TooLarge) => return Err(StepEnd::Skip(SKIP_TOO_LARGE)),
+            Err(FitError::Unreadable) => return Err(StepEnd::Skip(SKIP_UNREADABLE)),
+            Err(FitError::TimedOut) => return Err(StepEnd::Skip(SKIP_EXTRACT_TIMEOUT)),
         };
         let outcome = {
             let gate = self.image_gate(alive);
-            vision_call(
-                &*binder,
-                env,
-                &gate,
-                &model_name,
-                settings,
-                &raw.plan,
-                &fitted,
-            )
-            .await
+            vision_call(&*binder, env, &gate, &model_name, settings, prompt, &fitted).await
         };
         match outcome {
             Ok(description) => {
-                self.refused_in_a_row = 0;
-                let end = vision_chunks(&raw.plan, &description);
-                self.images.put(key, description);
-                end
+                self.refused_in_a_row.store(0, Ordering::SeqCst);
+                self.images
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .put(key, description.clone());
+                Ok(description)
             }
-            Err(CallFailure::Fatal(code)) => StepEnd::Stop(format!(
+            Err(CallFailure::Fatal(code)) => Err(StepEnd::Stop(format!(
                 "the vision model refused the run ({code}); nothing further was sent to it"
-            )),
-            Err(CallFailure::Liveness(failure)) => StepEnd::Liveness(failure),
+            ))),
+            Err(CallFailure::Liveness(failure)) => Err(StepEnd::Liveness(failure)),
             Err(CallFailure::ImageSkip(reason)) => {
                 if reason == SKIP_NO_MODEL {
-                    if !self.images_without_model {
+                    if !self.images_without_model.swap(true, Ordering::SeqCst) {
                         tracing::warn!(
                             event = "index_vision_model_unavailable",
                             "the chat model cannot be bound for images; the rest of the run's images are skipped no_model"
                         );
                     }
-                    self.images_without_model = true;
                 } else if reason == SKIP_VISION_REFUSED {
-                    self.refused_in_a_row += 1;
-                    if self.refused_in_a_row >= REFUSED_IN_A_ROW && !self.images_refused {
-                        self.images_refused = true;
+                    let in_a_row = self.refused_in_a_row.fetch_add(1, Ordering::SeqCst) + 1;
+                    if in_a_row >= REFUSED_IN_A_ROW
+                        && !self.images_refused.swap(true, Ordering::SeqCst)
+                    {
                         tracing::warn!(
                             event = "index_vision_model_refuses_images",
                             model = %model_name,
@@ -588,18 +634,72 @@ impl ModelSteps {
                         );
                     }
                 }
-                StepEnd::Skip(reason)
+                Err(StepEnd::Skip(reason))
             }
             // The run's cap or the images' budget: the picture is retried by
             // the next run.
-            Err(CallFailure::Cap(_)) => StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED),
+            Err(CallFailure::Cap(_)) => Err(StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED)),
             // Not an image call's failure; reported as it is, never as the cap.
-            Err(CallFailure::Stop(reason)) => StepEnd::Stop(reason),
-            Err(CallFailure::Retryable(cause) | CallFailure::Unusable(cause)) => {
+            Err(CallFailure::Stop(reason)) => Err(StepEnd::Stop(reason)),
+            // A reply no other attempt will change (the model ended it for
+            // a reason of its own, over the size bound): final for this
+            // picture, so no later run is scheduled for it.
+            Err(CallFailure::Unusable(cause)) => {
+                tracing::warn!(event = "index_image_reply_unusable", cause);
+                Err(StepEnd::Skip(SKIP_REPLY_UNUSABLE))
+            }
+            Err(CallFailure::Retryable(cause)) => {
                 tracing::warn!(event = "index_image_description_failed", cause);
-                StepEnd::Skip(SKIP_MODEL_FAILED)
+                Err(StepEnd::Skip(SKIP_MODEL_FAILED))
             }
         }
+    }
+
+    /// Whether a document's embedded pictures are worth asking the extractor
+    /// for, BEFORE it is asked, as far as the run knows NOW: unknown while
+    /// the chat model has not been loaded (the caller starts the load and
+    /// asks again), closed (with the reason) when no picture of this run can
+    /// be described and reading them would be wasted work, open when they
+    /// can.
+    ///
+    /// Only the two FINAL reasons close the gate: no chat model, and a model
+    /// that refuses images. A spent image budget does not: the pictures are
+    /// still read, so a document that has some can be recorded as needing
+    /// another run (its pictures would be described then), and a document
+    /// with none is not.
+    pub(crate) fn picture_gate_now(&self) -> PictureGateNow {
+        if self.images_without_model.load(Ordering::SeqCst) {
+            return PictureGateNow::Closed(SKIP_NO_MODEL);
+        }
+        if matches!(self.chat, ChatSlot::Unloaded) {
+            return PictureGateNow::Unknown;
+        }
+        if self.chat_parts().is_none() {
+            self.images_without_model.store(true, Ordering::SeqCst);
+            return PictureGateNow::Closed(SKIP_NO_MODEL);
+        }
+        if self.images_refused.load(Ordering::SeqCst) {
+            return PictureGateNow::Closed(SKIP_VISION_REFUSED);
+        }
+        PictureGateNow::Open
+    }
+
+    /// Takes the chat model a load (started elsewhere, so that the run did
+    /// not wait for it) came back with. A model already loaded stays.
+    pub(crate) fn install_chat(&mut self, loaded: Result<Option<ChatBinding>, ChatUnavailable>) {
+        if !matches!(self.chat, ChatSlot::Unloaded) {
+            return;
+        }
+        self.chat = match loaded {
+            Ok(binding) => ChatSlot::Loaded(binding),
+            Err(ChatUnavailable) => ChatSlot::Failed,
+        };
+    }
+
+    /// Loads the chat model, for callers that describe pictures through
+    /// [`Self::describe_one`] without going through [`Self::describe`].
+    pub(crate) async fn load_chat(&mut self, env: &StepEnv<'_>) {
+        self.ensure_chat(env).await;
     }
 
     /// A model-step document whose step succeeded: the failure streak ends.
@@ -789,14 +889,14 @@ async fn vision_call(
     gate: &Gate<'_>,
     model_name: &str,
     settings: LlmSettings,
-    plan: &VisionPlan,
+    prompt: &str,
     fitted: &image_fit::Fitted,
 ) -> Result<String, CallFailure> {
     let content = || Content {
         role: "user".to_owned(),
         parts: vec![
             Part::Text {
-                text: plan.prompt().to_owned(),
+                text: prompt.to_owned(),
             },
             Part::InlineData {
                 mime_type: fitted.media_type.to_owned(),
@@ -995,9 +1095,17 @@ async fn complete(
             && reason != FinishReason::Stop
             && !truncated
         {
-            return Err(CallFailure::Retryable(format!(
-                "the model stopped for {reason:?}"
-            )));
+            let cause = format!("the model stopped for {reason:?}");
+            // An image the model declined to answer (its safety filter, a
+            // recitation stop) is declined again by the next run: final.
+            // Any other stop, and a document step, keep their older meaning.
+            return Err(
+                if image && matches!(reason, FinishReason::Safety | FinishReason::Recitation) {
+                    CallFailure::Unusable(cause)
+                } else {
+                    CallFailure::Retryable(cause)
+                },
+            );
         }
         let mut reply = String::new();
         if let Some(content) = &response.content {

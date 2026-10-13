@@ -428,8 +428,9 @@ pub fn plan_with(
         .cloned()
         .unwrap_or_default();
     let params = config.params_for(&extension);
-    // `use_llm` is the image step (`plan_image`); on a document it has no
-    // effect here: images inside documents are not ported.
+    // `use_llm` is the picture step (`plan_image`, `plan_embedded`); it
+    // acts on the text BEFORE it reaches here, and has no effect on the
+    // chunking itself.
     let chunker = match params.chunker.as_deref() {
         Some(name) => chunker_named(name, &extension, options)?,
         None => chunker_for_with(&extension, options),
@@ -614,8 +615,8 @@ mod tests {
         ));
         // Another extension is unaffected.
         assert!(chunk("plain", "a.txt", &proposal).is_ok());
-        // `use_llm` is the image-file step: it never makes a document need a
-        // model, at the top level or for an extension.
+        // `use_llm` is the picture step: it never makes a document need a
+        // model to be chunked, at the top level or for an extension.
         for value in [json!({".pdf": {"use_llm": true}}), json!({"use_llm": true})] {
             let llm = ChunkingConfig::from_value(&value).unwrap_or_default();
             assert!(chunk("text", "a.pdf", &llm).is_ok(), "{value}");

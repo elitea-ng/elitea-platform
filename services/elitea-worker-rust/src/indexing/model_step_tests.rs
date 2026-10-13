@@ -48,6 +48,8 @@ pub(super) enum Reply {
     Text(String),
     /// A reply the model cut off at `max_tokens`.
     Cut(String),
+    /// A reply the model declined to give (its safety filter).
+    Declined,
     Fail(ErrorCategory, &'static str),
 }
 
@@ -64,7 +66,15 @@ pub(super) struct ChatState {
     pub(super) images: Mutex<Vec<Vec<SeenImage>>>,
     /// `bind_chat` refuses (an unusable model name).
     bind_fails: bool,
+    /// Answers from the image a request carried instead of `script`: the
+    /// reply, and how long the model takes to give it.
+    by_image: Option<Box<ImageScript>>,
+    in_flight: AtomicUsize,
+    /// The most requests that were being answered at the same time.
+    pub(super) max_in_flight: AtomicUsize,
 }
+
+type ImageScript = dyn Fn(&[SeenImage]) -> (u64, Reply) + Send + Sync;
 
 /// A chat binder whose models answer from `script(call_index, user_text)`.
 pub(super) struct ScriptedChat {
@@ -80,6 +90,28 @@ impl ScriptedChat {
                 binds: Mutex::new(Vec::new()),
                 images: Mutex::new(Vec::new()),
                 bind_fails: false,
+                by_image: None,
+                in_flight: AtomicUsize::new(0),
+                max_in_flight: AtomicUsize::new(0),
+            }),
+        })
+    }
+
+    /// A binder whose models answer from the picture they were sent:
+    /// `answer(images)` is the delay in milliseconds and the reply.
+    pub(super) fn by_image(
+        answer: impl Fn(&[SeenImage]) -> (u64, Reply) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            state: Arc::new(ChatState {
+                calls: AtomicUsize::new(0),
+                script: Box::new(|_, _| Reply::Text(String::new())),
+                binds: Mutex::new(Vec::new()),
+                images: Mutex::new(Vec::new()),
+                bind_fails: false,
+                by_image: Some(Box::new(answer)),
+                in_flight: AtomicUsize::new(0),
+                max_in_flight: AtomicUsize::new(0),
             }),
         })
     }
@@ -93,6 +125,9 @@ impl ScriptedChat {
                 binds: Mutex::new(Vec::new()),
                 images: Mutex::new(Vec::new()),
                 bind_fails: true,
+                by_image: None,
+                in_flight: AtomicUsize::new(0),
+                max_in_flight: AtomicUsize::new(0),
             }),
         })
     }
@@ -119,7 +154,7 @@ impl Llm for ScriptedLlm {
     ) -> adk_rust::Result<LlmResponseStream> {
         assert!(!streaming, "the step reads one complete reply");
         let index = self.state.calls.fetch_add(1, Ordering::SeqCst);
-        let images = request
+        let images: Vec<SeenImage> = request
             .contents
             .iter()
             .flat_map(|content| content.parts.iter())
@@ -130,7 +165,12 @@ impl Llm for ScriptedLlm {
                 _ => None,
             })
             .collect();
-        self.state.images.lock().expect("images").push(images);
+        self.state
+            .images
+            .lock()
+            .expect("images")
+            .push(images.clone());
+        let reply_by_image = self.state.by_image.as_ref().map(|answer| answer(&images));
         let user = request
             .contents
             .first()
@@ -140,7 +180,16 @@ impl Llm for ScriptedLlm {
                 _ => None,
             })
             .expect("a user message");
-        match (self.state.script)(index, &user) {
+        let reply = if let Some((delay, reply)) = reply_by_image {
+            let now = self.state.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.state.max_in_flight.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            self.state.in_flight.fetch_sub(1, Ordering::SeqCst);
+            reply
+        } else {
+            (self.state.script)(index, &user)
+        };
+        match reply {
             Reply::Text(text) => Ok(Box::pin(stream::once(async move {
                 Ok(LlmResponse {
                     content: Some(Content::new("model").with_text(text)),
@@ -154,6 +203,14 @@ impl Llm for ScriptedLlm {
                     content: Some(Content::new("model").with_text(text)),
                     turn_complete: true,
                     finish_reason: Some(FinishReason::MaxTokens),
+                    ..Default::default()
+                })
+            }))),
+            Reply::Declined => Ok(Box::pin(stream::once(async move {
+                Ok(LlmResponse {
+                    content: Some(Content::new("model").with_text(String::new())),
+                    turn_complete: true,
+                    finish_reason: Some(FinishReason::Safety),
                     ..Default::default()
                 })
             }))),

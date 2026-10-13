@@ -404,7 +404,10 @@ async fn a_first_run_that_keeps_nothing_is_not_a_failure() {
 
 #[test]
 fn only_lost_work_degrades_a_run() {
-    let changed = Plan::Changed { prior_chunks: 3 };
+    let changed = Plan::Changed {
+        prior_chunks: 3,
+        prior_pending: 0,
+    };
     for benign in [
         "unsupported_type",
         "empty",

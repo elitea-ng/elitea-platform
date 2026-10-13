@@ -26,6 +26,14 @@ syntax = "proto3";
 // the worker records in the run's summary. Anything that is not a statement
 // about the document (a malformed stream, no capacity, an internal failure)
 // is a gRPC status, which the worker reports as `extract_failed`.
+//
+// EMBEDDED PICTURES (ADR-0030 I4 part C). A request may ask for the pictures
+// embedded in a PDF, DOCX or PPTX (`ExtractHeader.images`); the answer then
+// carries them as bounded blobs beside the text, each with the byte offset in
+// the text where its description belongs. The text itself is exactly what an
+// extraction that did not ask would give: the pictures never add a marker to
+// it. A request that does not ask reads no picture at all. The bytes are the
+// document's own, passed through; the extractor decodes nothing it returns.
 
 package elitea.extract.v1;
 
@@ -75,6 +83,23 @@ message ExtractHeader {
   // configured default; a value above the extractor's own cap is lowered to
   // the cap (the extractor protects itself, whatever a caller asks).
   ExtractLimits limits = 4;
+  // Ask for the pictures embedded in the document (PDF, DOCX, PPTX; other
+  // types return none). Absent: none is read and none returned.
+  ExtractImages images = 5;
+}
+
+// The bounds on the pictures returned with one document. Each field at 0
+// means the extractor's configured default; a value above the extractor's own
+// cap is lowered to the cap.
+message ExtractImages {
+  // Pictures returned; later ones are counted in `ImagesSkipped.too_many`.
+  uint32 max_images = 1;
+  // Bytes of one picture; a larger one is counted in
+  // `ImagesSkipped.too_large`.
+  uint64 max_image_bytes = 2;
+  // Bytes of all returned pictures together; a picture that would cross it
+  // is counted in `ImagesSkipped.too_large`.
+  uint64 max_total_bytes = 3;
 }
 
 message ExtractLimits {
@@ -104,6 +129,43 @@ message ExtractedText {
   string text = 1;
   // Which extractor produced it (`xberg`).
   string extractor = 2;
+  // The embedded pictures, in document order. Empty unless the header asked.
+  repeated EmbeddedImage images = 3;
+  // Pictures found and not returned. Zero unless the header asked.
+  ImagesSkipped images_skipped = 4;
+}
+
+// One picture embedded in the document, as the document stores it.
+message EmbeddedImage {
+  bytes data = 1;
+  // The media type the BYTES say (`image/png`, `image/jpeg`, `image/gif`,
+  // `image/webp`, `image/bmp`), never the package's claim.
+  string media_type = 2;
+  // Position among the document's pictures, in document order.
+  uint32 ordinal = 3;
+  // Where its description belongs: a byte offset into `ExtractedText.text`,
+  // on a character boundary. Inline right after the picture's own
+  // `[Image: ...]` line when the text has one (DOCX); otherwise at the end of
+  // its page's or slide's text; otherwise at the end of the text. Several
+  // pictures may share an offset; their order is `ordinal`.
+  uint64 text_offset = 4;
+  // The page or slide (1-based) the picture is on; 0 when the format is not
+  // paged.
+  uint32 page = 5;
+  // The file name inside the package (`image1.png`); empty when the format
+  // has none.
+  string name = 6;
+}
+
+// Pictures found in the document and not returned, by reason.
+message ImagesSkipped {
+  // Over `ExtractImages.max_images`.
+  uint32 too_many = 1;
+  // Over `ExtractImages.max_image_bytes` or `max_total_bytes`.
+  uint32 too_large = 2;
+  // Not PNG, JPEG, GIF, WebP or BMP by its bytes (SVG, TIFF, EMF, ...), or a
+  // mask.
+  uint32 unsupported = 3;
 }
 
 // A document the extractor read and will not turn into text, and why. The
@@ -161,4 +223,7 @@ message CapabilitiesResponse {
   // only when the thread ends. `overruns == concurrency` is a wedged
   // process: it exits by itself, and the health probe fails on it.
   uint32 overruns = 8;
+  // The caps a request's `ExtractImages` is lowered to. All zero from an
+  // extractor that does not return pictures.
+  ExtractImages image_limits = 9;
 }
