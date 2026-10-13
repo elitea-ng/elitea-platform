@@ -66,7 +66,8 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use adk_rust::futures::StreamExt as _;
 use adk_rust::futures::stream::FuturesOrdered;
@@ -309,15 +310,17 @@ pub(crate) struct ModelSteps {
     /// Calls made for images, against [`image_cap`].
     image_calls: AtomicU32,
     consecutive_failures: u32,
-    images: ImageCache,
+    /// Behind a lock (never held across an await) because a document's
+    /// pictures are described a few at a time.
+    images: Mutex<ImageCache>,
     /// The chat model is not available for images: the rest of the run's
     /// images are skipped `no_model` without asking again.
-    images_without_model: bool,
+    images_without_model: AtomicBool,
     /// Consecutive `vision_refused` images.
-    refused_in_a_row: u32,
+    refused_in_a_row: AtomicU32,
     /// The model refused [`REFUSED_IN_A_ROW`] images in a row: the rest are
     /// skipped `vision_refused` without a call.
-    images_refused: bool,
+    images_refused: AtomicBool,
 }
 
 impl ModelSteps {
@@ -334,10 +337,10 @@ impl ModelSteps {
             calls: AtomicU32::new(0),
             image_calls: AtomicU32::new(0),
             consecutive_failures: 0,
-            images: ImageCache::default(),
-            images_without_model: false,
-            refused_in_a_row: 0,
-            images_refused: false,
+            images: Mutex::new(ImageCache::default()),
+            images_without_model: AtomicBool::new(false),
+            refused_in_a_row: AtomicU32::new(0),
+            images_refused: AtomicBool::new(false),
         }
     }
 
@@ -508,6 +511,7 @@ impl ModelSteps {
         env: &StepEnv<'_>,
         alive: Alive<'_>,
     ) -> StepEnd {
+        self.ensure_chat(env).await;
         match self
             .describe_one(&raw.bytes, raw.kind, raw.plan.prompt(), None, env, alive)
             .await
@@ -523,13 +527,17 @@ impl ModelSteps {
     /// refused-model breaker, the downscale and the skip reasons. `digest` is
     /// the sha256 of `bytes` when the caller already has it.
     ///
+    /// Takes `&self`, so a document's pictures can be described a few at a
+    /// time; the chat model must already be loaded ([`Self::ensure_chat`] /
+    /// [`Self::picture_gate`]).
+    ///
     /// # Errors
     ///
     /// The step's end when there is no description: a skip (the picture's
     /// own reason), or the stop of the run for the credential, the project
     /// or the budget, or a lost lease.
     pub(crate) async fn describe_one(
-        &mut self,
+        &self,
         bytes: &Bytes,
         kind: ImageKind,
         prompt: &str,
@@ -537,12 +545,11 @@ impl ModelSteps {
         env: &StepEnv<'_>,
         alive: Alive<'_>,
     ) -> Result<String, StepEnd> {
-        if self.images_without_model {
+        if self.images_without_model.load(Ordering::SeqCst) {
             return Err(StepEnd::Skip(SKIP_NO_MODEL));
         }
-        self.ensure_chat(env).await;
         let Some((binder, model_name, settings)) = self.chat_parts() else {
-            self.images_without_model = true;
+            self.images_without_model.store(true, Ordering::SeqCst);
             return Err(StepEnd::Skip(SKIP_NO_MODEL));
         };
         let digest = match digest {
@@ -552,11 +559,16 @@ impl ModelSteps {
                 .ok_or(StepEnd::Skip(SKIP_UNREADABLE))?,
         };
         let key = ImageKey::new(digest, prompt, &model_name);
-        if let Some(description) = self.images.get(&key) {
+        let cached = self
+            .images
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key);
+        if let Some(description) = cached {
             // No call was made: the cap is not charged.
             return Ok(description);
         }
-        if self.images_refused {
+        if self.images_refused.load(Ordering::SeqCst) {
             return Err(StepEnd::Skip(SKIP_VISION_REFUSED));
         }
         if self.image_calls.load(Ordering::SeqCst) >= image_cap(self.cap) {
@@ -581,8 +593,11 @@ impl ModelSteps {
         };
         match outcome {
             Ok(description) => {
-                self.refused_in_a_row = 0;
-                self.images.put(key, description.clone());
+                self.refused_in_a_row.store(0, Ordering::SeqCst);
+                self.images
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .put(key, description.clone());
                 Ok(description)
             }
             Err(CallFailure::Fatal(code)) => Err(StepEnd::Stop(format!(
@@ -591,17 +606,17 @@ impl ModelSteps {
             Err(CallFailure::Liveness(failure)) => Err(StepEnd::Liveness(failure)),
             Err(CallFailure::ImageSkip(reason)) => {
                 if reason == SKIP_NO_MODEL {
-                    if !self.images_without_model {
+                    if !self.images_without_model.swap(true, Ordering::SeqCst) {
                         tracing::warn!(
                             event = "index_vision_model_unavailable",
                             "the chat model cannot be bound for images; the rest of the run's images are skipped no_model"
                         );
                     }
-                    self.images_without_model = true;
                 } else if reason == SKIP_VISION_REFUSED {
-                    self.refused_in_a_row += 1;
-                    if self.refused_in_a_row >= REFUSED_IN_A_ROW && !self.images_refused {
-                        self.images_refused = true;
+                    let in_a_row = self.refused_in_a_row.fetch_add(1, Ordering::SeqCst) + 1;
+                    if in_a_row >= REFUSED_IN_A_ROW
+                        && !self.images_refused.swap(true, Ordering::SeqCst)
+                    {
                         tracing::warn!(
                             event = "index_vision_model_refuses_images",
                             model = %model_name,
@@ -621,6 +636,37 @@ impl ModelSteps {
                 Err(StepEnd::Skip(SKIP_MODEL_FAILED))
             }
         }
+    }
+
+    /// Whether a document's embedded pictures are worth asking the extractor
+    /// for, BEFORE it is asked: `Some(reason)` when no picture of this run
+    /// can be described and reading them would be wasted work, `None` when
+    /// they can. Loads the chat model on first need.
+    ///
+    /// Only the two FINAL reasons close the gate: no chat model, and a model
+    /// that refuses images. A spent image budget does not: the pictures are
+    /// still read, so a document that has some can be recorded as needing
+    /// another run (its pictures would be described then), and a document
+    /// with none is not.
+    pub(crate) async fn picture_gate(&mut self, env: &StepEnv<'_>) -> Option<&'static str> {
+        if self.images_without_model.load(Ordering::SeqCst) {
+            return Some(SKIP_NO_MODEL);
+        }
+        self.ensure_chat(env).await;
+        if self.chat_parts().is_none() {
+            self.images_without_model.store(true, Ordering::SeqCst);
+            return Some(SKIP_NO_MODEL);
+        }
+        if self.images_refused.load(Ordering::SeqCst) {
+            return Some(SKIP_VISION_REFUSED);
+        }
+        None
+    }
+
+    /// Loads the chat model, for callers that describe pictures through
+    /// [`Self::describe_one`] without going through [`Self::describe`].
+    pub(crate) async fn load_chat(&mut self, env: &StepEnv<'_>) {
+        self.ensure_chat(env).await;
     }
 
     /// A model-step document whose step succeeded: the failure streak ends.

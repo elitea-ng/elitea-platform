@@ -30,7 +30,7 @@
 
 use crate::config::ChunkingConfig;
 use crate::route::extension_of;
-use crate::vision::{IMAGE_PROCESSING_PROMPT, MULTIMODAL_PROMPT};
+use crate::vision::{EMPTY_DESCRIPTION, IMAGE_PROCESSING_PROMPT, MULTIMODAL_PROMPT};
 
 /// The extensions whose embedded pictures the SDK's loaders describe
 /// (HTML, XML and spreadsheets never do).
@@ -93,7 +93,9 @@ impl EmbeddedVisionPlan {
 
     /// `text` with a block per entry of `pictures` written at its offset.
     /// Pictures at the same offset keep the order given. A blank
-    /// description is written as nothing at all.
+    /// description is written as the SDK's placeholder sentence
+    /// ([`EMPTY_DESCRIPTION`]), as for an image file: the block exists, so a
+    /// later back-reference to it points at something.
     #[must_use]
     pub fn inline(&self, text: &str, pictures: &[Inline<'_>]) -> String {
         let mut placed: Vec<(usize, usize)> = pictures
@@ -119,9 +121,9 @@ impl EmbeddedVisionPlan {
 
     fn block(&self, picture: &Inline<'_>) -> Option<String> {
         match (self.layout, &picture.described) {
-            (_, Described::Description(description)) if description.trim().is_empty() => None,
             (Layout::Paged, Described::Description(description)) => Some(format!(
-                "\n**Image Transcript:**\n{description}\n--------------------\n"
+                "\n**Image Transcript:**\n{}\n--------------------\n",
+                or_placeholder(description)
             )),
             // A repeat is written only by the DOCX layout; the others never
             // ask for one, and describe the picture again (from the cache).
@@ -132,7 +134,10 @@ impl EmbeddedVisionPlan {
                     .map_or_else(|| format!("image_{}", picture.number), str::to_owned);
                 Some(match described {
                     Described::Description(description) => {
-                        format!("\n**Image Transcript:**\nImage: {name}, {description}\n")
+                        format!(
+                            "\n**Image Transcript:**\nImage: {name}, {}\n",
+                            or_placeholder(description)
+                        )
                     }
                     Described::Repeat => format!(
                         "\n**Image Transcript:**\nImage: {name} [already transcribed, see above]\n"
@@ -148,6 +153,15 @@ impl EmbeddedVisionPlan {
     #[must_use]
     pub fn repeats_are_back_references(&self) -> bool {
         self.layout == Layout::Docx
+    }
+}
+
+/// The description, or the SDK's placeholder when the model's reply is blank.
+fn or_placeholder(description: &str) -> &str {
+    if description.trim().is_empty() {
+        EMPTY_DESCRIPTION
+    } else {
+        description
     }
 }
 
@@ -193,6 +207,25 @@ pub fn plan_embedded(source: &str, config: &ChunkingConfig) -> Option<EmbeddedVi
     })
 }
 
+/// [`plan_embedded`] for a document that has a key AND a media type: by the
+/// key's extension when it is one of the three types, else by the media type
+/// (a key without an extension, or with a foreign one, that the source
+/// delivered as `application/pdf`). The per-extension settings are those of
+/// the media type's canonical extension (`.pdf`, `.docx`, `.pptx`).
+#[must_use]
+pub fn plan_embedded_for(
+    key: &str,
+    mime: &str,
+    config: &ChunkingConfig,
+) -> Option<EmbeddedVisionPlan> {
+    let by_key = extension_of(key);
+    if EMBEDDED_IMAGE_EXTENSIONS.contains(&by_key.as_str()) {
+        plan_embedded(key, config)
+    } else {
+        plan_embedded(mime, config)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +268,33 @@ mod tests {
         let off_pdf = config(&json!({"use_llm": true, ".pdf": {"use_llm": false}}));
         assert!(plan_embedded("a.pdf", &off_pdf).is_none());
         assert!(plan_embedded("a.docx", &off_pdf).is_some());
+    }
+
+    #[test]
+    fn a_key_without_a_type_is_planned_by_its_media_type() {
+        let on = config(&json!({".pdf": {"use_llm": true, "prompt": "Read it."}}));
+        for key in ["docs/README", "download", "a.bin"] {
+            let plan = plan_embedded_for(key, "application/pdf", &on).expect(key);
+            assert_eq!(plan.prompt(), "Read it.", "{key}");
+        }
+        // The extension that settles it is the media type's, not another's.
+        assert!(
+            plan_embedded_for(
+                "x",
+                "application/pdf",
+                &config(&json!({".docx": {"use_llm": true}}))
+            )
+            .is_none()
+        );
+        let docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        let pptx = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+        let both = config(&json!({".docx": {"use_llm": true}, ".pptx": {"use_llm": true}}));
+        assert!(plan_embedded_for("x", docx, &both).is_some());
+        assert!(plan_embedded_for("x", pptx, &both).is_some());
+        assert!(plan_embedded_for("x", "text/plain", &both).is_none());
+        // The key's own extension still decides when it is one of the three.
+        assert!(plan_embedded_for("a.pdf", pptx, &on).is_some());
+        assert!(plan_embedded_for("a.docx", "application/pdf", &on).is_none());
     }
 
     #[test]
@@ -350,7 +410,17 @@ mod tests {
         assert_eq!(out, format!("{}{}", block("one"), block("two")));
         // Nothing to write: the text is unchanged, byte for byte.
         assert_eq!(pdf.inline(text, &[]), text);
-        // A blank description writes nothing.
-        assert_eq!(pdf.inline(text, &[picture(1, 1, "  \n")]), text);
+        // A blank reply is the SDK's placeholder sentence, as for an image
+        // file, in both layouts.
+        assert_eq!(
+            pdf.inline("ab", &[picture(1, 1, "  \n")]),
+            format!("a{}b", block(EMPTY_DESCRIPTION))
+        );
+        let docx =
+            plan_embedded("a.docx", &config(&json!({".docx": {"use_llm": true}}))).expect("on");
+        assert_eq!(
+            docx.inline("", &[picture(0, 1, "")]),
+            format!("\n**Image Transcript:**\nImage: image1.png, {EMPTY_DESCRIPTION}\n")
+        );
     }
 }

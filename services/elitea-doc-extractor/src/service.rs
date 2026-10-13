@@ -154,15 +154,19 @@ impl Caps {
 /// part C). Pictures are returned only when the request asks
 /// ([`ExtractHeader::images`]); these are what an ask cannot exceed.
 ///
-/// MEMORY. A returned picture is held three times at the worst (the parser's
-/// copy, the response's copy, the encoded message), so the pictures of one
-/// in-flight document cost `3 * max_total_bytes` on top of the body; the
-/// defaults (12 MiB) make that 36 MiB per slot, inside the half of the
-/// container limit [`crate::config::Config::fit_memory`] keeps free for the
-/// process and the parser. The parser reads a picture into memory before the
-/// caps below can drop it; its own readers bound that by the declared and
-/// the decompressed size of each picture, and the input cap bounds the
-/// package.
+/// MEMORY, what is bounded and what is not. A returned picture is held three
+/// times at the worst (the parser's copy, the response's copy, the encoded
+/// message): `3 * max_total_bytes` per in-flight document. For a DOCX or
+/// PPTX the parser's own hold on the package's media is bounded BEFORE it
+/// runs: the media of the package are counted from its central directory and
+/// a document whose media outweigh four times these caps (in count or in
+/// declared bytes) gives no picture at all (counted `too_many` /
+/// `too_large`). For a PDF the parser can only be capped per page (a few
+/// pictures a page, over at most `max_pages` pages), which bounds the COUNT
+/// of pictures it decodes, not their bytes: those stay inside the parser's
+/// overhead share of the container limit. The defaults' per-slot figure is
+/// [`crate::config::Config::picture_memory`], which a test holds under the
+/// default limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImageCaps {
     /// Pictures returned for one document.

@@ -77,11 +77,18 @@ impl World {
         scripted: fake_extractor::ScriptedPictures,
         script: impl Fn(usize, &str) -> Reply + Send + Sync + 'static,
     ) -> Self {
+        Self::with_chat(name, scripted, ScriptedChat::new(script)).await
+    }
+
+    async fn with_chat(
+        name: &str,
+        scripted: fake_extractor::ScriptedPictures,
+        chat: Arc<ScriptedChat>,
+    ) -> Self {
         let socket = socket_path(name);
         let fake = fake_extractor::serve(&socket);
         *fake.pictures.lock().expect("lock") = Some(scripted);
         let mut harness = with_extractor(harness(4, None).await, &socket);
-        let chat = ScriptedChat::new(script);
         with_chat(&mut harness, &chat);
         Self {
             harness,
@@ -398,13 +405,18 @@ async fn without_a_chat_model_the_pictures_are_skipped_and_the_document_is_still
     );
     assert_eq!(summary.indexed_documents, 1);
     assert!(summary.skipped.is_empty(), "{:?}", summary.skipped);
+    // Nothing could be described, so no picture was even asked of the
+    // sidecar: the document is named in the message, not its pictures.
     assert!(
         summary
             .message
-            .contains("Embedded pictures not described: 2 no_model."),
+            .contains("Embedded pictures not requested for documents: 1 no_model."),
         "{summary:?}"
     );
+    assert_eq!(*world.fake.asked.lock().expect("lock"), vec![None]);
     assert_eq!(world.chat.calls(), 0);
+    // A final reason: the plain source version is stored, never retried.
+    assert_eq!(summary.documents[0].version, "v1");
     let text = world.stored_text().await;
     assert!(!text.contains("Image Transcript"), "{text}");
 }
@@ -638,6 +650,308 @@ async fn a_big_embedded_picture_is_downscaled_to_the_gateways_bound_like_an_imag
     let (media, bytes) = &images[0][0];
     assert!(bytes.len() <= MAX_INLINE_IMAGE_BYTES, "{}", bytes.len());
     assert!(matches!(media.as_str(), "image/png" | "image/jpeg"));
+    let text = world.stored_text().await;
+    assert!(text.contains("DESCRIPTION-0"), "{text}");
+}
+
+// ── review round 1 ──────────────────────────────────────────────────────────
+
+fn four_pictures(page_one: usize) -> Vec<EmbeddedImage> {
+    (0..4)
+        .map(|n| picture(&format!("p{n}"), n, page_one, 1, ""))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_picture_skipped_for_a_transient_reason_is_retried_by_the_next_run() {
+    let page_one = end_of(PDF_TEXT, "After.");
+    let mut world = World::new(
+        "emb-retry",
+        scripted(PDF_TEXT, four_pictures(page_one), None),
+        numbered,
+    )
+    .await;
+    let pdf = || vec![binary_document("docs/report.pdf", b"%PDF-1.4 x")];
+    // A cap of 4 calls: images may use 2; the other two are skipped
+    // `model_cap_exceeded`, a reason the next run cures.
+    world.harness.runtime.limits.max_model_calls = 4;
+    let first = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(first.indexed_documents, 1, "{first:?}");
+    assert!(
+        first
+            .message
+            .contains("Embedded pictures not described: 2 model_cap_exceeded."),
+        "{first:?}"
+    );
+    // Written (its text is valuable) under a version no source lists.
+    assert_eq!(
+        first.documents[0].version, "v1#pictures-pending",
+        "{first:?}"
+    );
+    assert_eq!(world.chat.calls(), 2);
+
+    // The next run finds it changed, describes all four, and stores the
+    // plain source version.
+    world.harness.runtime.limits.max_model_calls = 100;
+    let second = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(
+        (
+            second.indexed_documents,
+            second.updated,
+            second.skipped.len()
+        ),
+        (1, 1, 0),
+        "{second:?}"
+    );
+    assert_eq!(second.documents[0].version, "v1", "{second:?}");
+    assert!(!second.message.contains("Embedded pictures"), "{second:?}");
+    assert_eq!(world.chat.calls(), 2 + 4);
+    assert_eq!(second.total_documents, Some(1));
+
+    // Now it is settled: unchanged, no model call.
+    let third = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(third.indexed_documents, 0, "{third:?}");
+    assert!(third.message.contains("1 unchanged"), "{third:?}");
+    assert_eq!(world.chat.calls(), 2 + 4);
+    let text = world.stored_text().await;
+    assert_eq!(text.matches("Image Transcript").count(), 4, "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_picture_skipped_for_a_final_reason_is_not_retried() {
+    let page_one = end_of(PDF_TEXT, "After.");
+    // The sidecar drops pictures (too large, too many, not a format a model
+    // takes): no later run would get them either.
+    let world = World::new(
+        "emb-final",
+        scripted(
+            PDF_TEXT,
+            vec![picture("one", 0, page_one, 1, "")],
+            Some(ImagesSkipped {
+                too_many: 1,
+                too_large: 1,
+                unsupported: 1,
+            }),
+        ),
+        numbered,
+    )
+    .await;
+    let pdf = || vec![binary_document("docs/report.pdf", b"%PDF-1.4 x")];
+    let first = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(first.documents[0].version, "v1", "{first:?}");
+    let second = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(second.indexed_documents, 0, "{second:?}");
+    assert!(second.message.contains("1 unchanged"), "{second:?}");
+    assert_eq!(world.chat.calls(), 1);
+    let _ = std::fs::remove_file(&world.socket);
+
+    // A model that refuses pictures: `vision_refused` is final too.
+    let images: Vec<EmbeddedImage> = (0..4)
+        .map(|n| picture(&format!("r{n}"), n, page_one, 1, ""))
+        .collect();
+    let world = World::new("emb-final2", scripted(PDF_TEXT, images, None), |_, _| {
+        Reply::Fail(ErrorCategory::InvalidInput, "model_gateway.rejected")
+    })
+    .await;
+    let first = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(first.documents[0].version, "v1", "{first:?}");
+    let second = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(second.indexed_documents, 0, "{second:?}");
+    let _ = std::fs::remove_file(&world.socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_model_failure_marks_the_document_and_the_retry_mark_never_reaches_the_source() {
+    let page_one = end_of(PDF_TEXT, "After.");
+    let world = World::new(
+        "emb-failed",
+        scripted(PDF_TEXT, vec![picture("one", 0, page_one, 1, "")], None),
+        |_, _| Reply::Fail(ErrorCategory::Unavailable, "model_gateway.unavailable"),
+    )
+    .await;
+    let mut world = world;
+    world.harness.runtime.limits.embedding_retry_backoff = std::time::Duration::ZERO;
+    let first = run_model(
+        &world.harness,
+        vec![binary_document("docs/report.pdf", b"%PDF-1.4 x")],
+        None,
+        &on(&[".pdf"]),
+        Some("m"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(first.indexed_documents, 1, "{first:?}");
+    assert_eq!(
+        first.documents[0].version, "v1#pictures-pending",
+        "{first:?}"
+    );
+    assert!(first.message.contains("model_failed"), "{first:?}");
+    // The stored version is what the diff compares; the source's own is
+    // what a connector is told it holds.
+    assert_eq!(
+        super::pipeline::source_version_of("v1#pictures-pending"),
+        "v1"
+    );
+    let _ = std::fs::remove_file(&world.socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pictures_are_described_a_few_at_a_time_and_applied_in_document_order() {
+    // Eight distinct pictures at one place; the earlier the picture, the
+    // slower the model, so completion order is the reverse of document order.
+    let page_one = end_of(PDF_TEXT, "After.");
+    let images: Vec<EmbeddedImage> = (0..8)
+        .map(|n| picture(&format!("q{n}"), n, page_one, 1, ""))
+        .collect();
+    let chat = ScriptedChat::by_image(|images| {
+        let bytes = &images[0].1;
+        let tag = String::from_utf8_lossy(&bytes[8..]).into_owned();
+        let n: u64 = tag[1..].parse().expect("tag");
+        ((8 - n) * 25, Reply::Text(format!("DESC-{tag}")))
+    });
+    let world = World::with_chat("emb-order", scripted(PDF_TEXT, images, None), chat).await;
+    let summary = run_model(
+        &world.harness,
+        vec![binary_document("docs/report.pdf", b"%PDF-1.4 x")],
+        None,
+        &on(&[".pdf"]),
+        Some("m"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.documents[0].version, "v1", "{summary:?}");
+    assert_eq!(world.chat.calls(), 8);
+    let in_flight = world
+        .chat
+        .state
+        .max_in_flight
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        (2..=super::pipeline::PICTURES_IN_FLIGHT_FOR_TESTS).contains(&in_flight),
+        "{in_flight}"
+    );
+    let text = world.stored_text().await;
+    let at: Vec<usize> = (0..8)
+        .map(|n| text.find(&format!("DESC-q{n}")).expect(&text))
+        .collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{at:?}\n{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_blank_reply_is_the_placeholder_and_a_back_reference_follows_a_written_transcript() {
+    let text = "Intro.\n\n[Image: Picture 1]\n\nMiddle.\n\n[Image: Picture 2]\n\nOutro.";
+    let (one, two) = (
+        end_of(text, "[Image: Picture 1]"),
+        end_of(text, "[Image: Picture 2]"),
+    );
+    let world = World::new(
+        "emb-blank",
+        scripted(
+            text,
+            vec![
+                picture("same", 0, one, 0, "image1.png"),
+                picture("same", 1, two, 0, "image2.png"),
+            ],
+            None,
+        ),
+        |_, _| Reply::Text("   ".to_owned()),
+    )
+    .await;
+    let summary = run_model(
+        &world.harness,
+        vec![binary_document("docs/spec.docx", b"PK\x03\x04 x")],
+        None,
+        &on(&[".docx"]),
+        Some("m"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(world.chat.calls(), 1);
+    let stored = world.stored_text().await;
+    // The same sentence an image file with a blank reply is stored with.
+    assert!(
+        stored.contains("Image: image1.png, [No readable text detected by LLM]"),
+        "{stored}"
+    );
+    // The back-reference points at a transcript that really was written.
+    assert!(
+        stored.contains("Image: image2.png [already transcribed, see above]"),
+        "{stored}"
+    );
+
+    // A PDF with a blank reply writes the placeholder block too.
+    let page_one = end_of(PDF_TEXT, "After.");
+    let world = World::new(
+        "emb-blank2",
+        scripted(PDF_TEXT, vec![picture("x", 0, page_one, 1, "")], None),
+        |_, _| Reply::Text(String::new()),
+    )
+    .await;
+    run_model(
+        &world.harness,
+        vec![binary_document("docs/report.pdf", b"%PDF-1.4 x")],
+        None,
+        &on(&[".pdf"]),
+        Some("m"),
+    )
+    .await
+    .expect("summary");
+    let stored = world.stored_text().await;
+    assert!(
+        stored.contains("**Image Transcript:**\n[No readable text detected by LLM]\n"),
+        "{stored}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_without_an_extension_is_planned_by_the_media_type_it_arrived_as() {
+    let page_one = end_of(PDF_TEXT, "After.");
+    let world = World::new(
+        "emb-mime",
+        scripted(PDF_TEXT, vec![picture("one", 0, page_one, 1, "")], None),
+        numbered,
+    )
+    .await;
+    let mut download = binary_document("downloads/report", b"%PDF-1.4 x");
+    download.reference.mime = "application/pdf".to_owned();
+    let summary = run_model(
+        &world.harness,
+        vec![download],
+        None,
+        &on(&[".pdf"]),
+        Some("m"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    // The settings are the media type's extension's: `.pdf` is on.
+    assert_eq!(
+        world
+            .fake
+            .asked
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|a| a.is_some())
+            .count(),
+        1
+    );
+    assert_eq!(world.chat.calls(), 1);
     let text = world.stored_text().await;
     assert!(text.contains("DESCRIPTION-0"), "{text}");
 }

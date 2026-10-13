@@ -210,6 +210,22 @@ impl Config {
         None
     }
 
+    /// The memory the pictures of every slot can hold at once, at the worst
+    /// the picture bounds allow: per slot, the media a DOCX or PPTX may hold
+    /// in the parser (`MEDIA_WORK_FACTOR`, 4, times the total bound, the
+    /// work bound the parser is let in on) plus the three copies of what is
+    /// returned (the parser's, the response's, the encoded message). A PDF's
+    /// pictures are bounded in COUNT only (per page, times the page cap), not
+    /// in bytes; they are inside the parser's overhead share.
+    #[must_use]
+    pub fn picture_memory(&self) -> u64 {
+        let concurrency = u64::try_from(self.capacity.concurrency.max(1)).unwrap_or(1);
+        self.images
+            .max_total_bytes
+            .saturating_mul(4 + 3)
+            .saturating_mul(concurrency)
+    }
+
     /// The smallest container memory limit under which [`Config::fit_memory`]
     /// leaves this configuration's input cap as it is: the cap, times the
     /// concurrency, times the expansion, times two (the half kept for the
@@ -249,13 +265,20 @@ mod tests {
         );
         assert_eq!(config.caps, Caps::default());
         assert_eq!(config.images, ImageCaps::default());
-        // The pictures of every slot, held three times over, fit in the
-        // half of the default container limit the input fit keeps free.
-        let pictures =
-            u64::from(config.images.max_images.min(1)) * config.images.max_total_bytes * 3 * 4;
+        // The pictures of EVERY slot fit in the quarter of the default
+        // container limit that is neither the input fit's half nor the
+        // parser's own overhead. If a default grows past it, this fails.
         assert!(
-            pictures < config.memory_limit_for_caps() / 2 / 4,
-            "{pictures}"
+            config.picture_memory() <= config.memory_limit_for_caps() / 4,
+            "{} > {}",
+            config.picture_memory(),
+            config.memory_limit_for_caps() / 4
+        );
+        // And the figure is the real one: slots x (media held by the
+        // parser + the three copies of what is returned) x the total bound.
+        assert_eq!(
+            config.picture_memory(),
+            4 * (4 + 3) * config.images.max_total_bytes
         );
         assert_eq!(config.capacity, Capacity::default());
         assert_eq!(config.capacity.concurrency, 4);

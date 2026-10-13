@@ -870,7 +870,7 @@ come from the parser as PNG), recognised by their magic bytes, bounded in
 count and bytes, each with a byte offset into the text where its description
 belongs. Planning is pure and model-free (`elitea_doc_chunk::plan_embedded`,
 `EmbeddedVisionPlan::inline`); the worker's `prepare` task returns
-`Preparation::Embedded` and the run's loop describes the pictures, inlines
+`Prepare::Embedded` and the run's loop describes the pictures, inlines
 the descriptions and chunks (`pipeline.rs::finish_embedded`), each picture
 through `ModelSteps::describe_one`, the one path an image FILE takes.
 Proving tests: `services/elitea-doc-extractor/tests/socket.rs` (generated PDF,
@@ -887,17 +887,22 @@ oversized, too many, unsupported, text invariance),
 | PPTX: the same block at the picture shape's place among the slide's shapes | The same block at the END of the slide's text | The sidecar's plain text has no shape order to put a block by |
 | DOCX: `\n**Image Transcript:**\nImage: <file name>, <d>\n` where mammoth printed the picture; the second copy of the same bytes in the document writes `Image: <name> [already transcribed, see above]` | The same blocks. The block follows the picture's own `[Image: ...]` line (DOCX prints it for every picture); the file name is the package's (`image1.png`, else `image_<n>`); a repeat within a document is the same back-reference, and it is written only when the first copy WAS described | The SDK writes the back-reference even when the first copy failed (it then points at nothing); here a failed first copy leaves the second to try again |
 | A picture that fails to describe is skipped (PDF, PPTX) or written as `Transcript is not available` (DOCX) | The text simply has no description at that place, for all three; the summary's message names the count by reason (`Embedded pictures not described: 2 no_model, 1 too_large.`). It is not a skipped document and does not make the run `PARTLY_INDEXED` | No placeholder text is indexed for an image nobody described |
-| A blank description is written as an empty block (PDF, PPTX) | Nothing is written for a blank description | An empty block is noise in the index |
+| A blank description is written as an empty block (PDF, PPTX) | The SDK's placeholder sentence `[No readable text detected by LLM]` (as for an image file), so a DOCX back-reference always points at a transcript that was written | The placeholder keeps the block, and the parity with the image-file path |
 | Every picture is sent, in the original bytes | At most 20 pictures per document, 5 MiB each, 12 MiB together (the worker's ask; the sidecar's caps `ELITEA_EXTRACTOR_MAX_IMAGES` 24 / `_MAX_IMAGE_BYTES` / `_MAX_IMAGE_TOTAL_BYTES` lower it). Over a bound or not PNG/JPEG/GIF/WebP/BMP by its bytes (SVG, TIFF, EMF, masks): counted `too_many_pictures` / `too_large` / `unsupported_type`, not described. A picture over the gateway's 256 KiB inline bound is downscaled exactly as an image file is | The first 20 by document order win |
 | `ImageDescriptionCache` (md5 + prompt) | The run's cache of the image-file step (sha256 + prompt + model): a picture repeated in a document or across documents costs one call; a hit is not charged | — |
 | No budget beyond the provider's | The image budget of the image-file step: pictures of all kinds together use at most half of `index_model_call_cap`; three `vision_refused` in a row mark the model text-only for the rest of the run; only the credential, the project and the budget stop the run | — |
 | Descriptions are computed whenever the document is loaded | The document's version is unchanged by the setting: switching `use_llm` on (or changing the prompt or model) re-describes only documents that change or a `clean_index` run | Same as every chunking setting |
-| Pictures are described one after another | Same, one document at a time and its pictures in order; in-document parallelism is a follow-up | A document with twenty pictures holds the run's model loop for twenty calls |
+| Pictures are described one after another | A document's distinct pictures are described four at a time, results applied in document order; the cap and the image budget are charged atomically; identical bytes in one document are one call | — |
+| (no SDK equivalent) | A picture skipped for a reason another run cures (`model_failed`, `model_cap_exceeded`, `extract_timeout`) still indexes the document, stored under `<source version>#pictures-pending`; the next run finds it changed and prepares it again; once every picture is described or skipped for a final reason (`no_model`, `vision_refused`, `too_large`, `unsupported_type`, sidecar limits) the plain source version is stored. Connectors are told the source version, never the mark | The SDK re-describes on every load; here an unchanged document costs nothing |
+| (no SDK equivalent) | With no chat model, or a model that refuses images, a document's pictures are not requested from the sidecar at all (counted in the message as `Embedded pictures not requested for documents: N no_model`) | — |
+| Key without a file extension | Planned by the media type the source delivered it as (`application/pdf` is `.pdf`) | — |
 
 Memory in the sidecar: a returned picture is held about three times (the
 parser's copy, the response's copy, the encoded message), so the defaults
-cost at most 36 MiB per slot on top of the document, inside the half of the
-container limit the input cap fit keeps free. The parser reads a picture
-into memory before the caps can drop it; its own readers bound that by each
-picture's declared and decompressed size, and the input cap bounds the
-package.
+cost at most 84 MiB per slot on top of the document (with the DOCX/PPTX
+media the parser may hold, four times the total bound), held under a quarter
+of the default container limit by a config test. The parser reads a picture
+into memory before the caps can drop it, so the extractor bounds the work
+first: a DOCX/PPTX whose media outweigh four times the caps (counted from the
+zip's central directory) gives no picture, and a PDF reads at most four
+pictures a page (xberg can only be capped per page).

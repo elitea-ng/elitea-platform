@@ -65,8 +65,14 @@ returns. DOCX and PPTX pictures are the package's own files; a PDF's come
 from xberg's PDF backend, which hands them over as image files it wrote
 (PNG), so the PDF parser's own decoding of its image streams is the one place
 a picture is decoded here, inside the same process boundary as the rest of the
-PDF parsing. xberg reads a picture into memory before the caps can drop it;
-its readers bound that by each picture's declared and decompressed size.
+PDF parsing. xberg reads a picture into memory before the caps can drop it,
+so the work is bounded BEFORE the parser runs: a DOCX or PPTX's media are
+counted from the zip's central directory (nothing is decompressed) and a
+package whose media outweigh four times the caps (in count or declared bytes)
+gives its text and no picture (counted `too_many` / `too_large`); a PDF can
+only be capped per page (xberg walks every page, up to `ELITEA_EXTRACTOR_MAX_PAGES`,
+with no document budget), so at most four pictures a page are read, and a
+page that overflows is counted as dropped (a lower bound).
 
 `text_offset` is recovered from what xberg's plain text gives, because that
 text carries no marker for a picture: right after the picture's own
@@ -83,9 +89,11 @@ Caps (a request is lowered to them; `Capabilities.image_limits` states them):
 | `ELITEA_EXTRACTOR_MAX_IMAGE_TOTAL_BYTES` | bytes of all the pictures of one document | 12 MiB |
 
 A returned picture is held about three times (the parser's, the response's,
-the encoded message), so a slot costs up to 36 MiB more than its document at
-the defaults, inside the half of the container limit the input fit leaves
-free (a config test asserts it).
+the encoded message), and a DOCX or PPTX's media may weigh four times the total
+bound inside the parser, so a slot costs up to 84 MiB more than its document
+at the defaults (`Config::picture_memory`, times the real concurrency),
+inside the quarter of the container limit a config test holds it to. A PDF's
+pictures are bounded in count, not in bytes.
 
 ## Transport and isolation
 

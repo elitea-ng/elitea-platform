@@ -1408,6 +1408,86 @@ async fn the_picture_bounds_count_what_they_drop() {
     assert_eq!(text.images_skipped.unwrap_or_default().unsupported, 2);
 }
 
+/// A DOCX of `count` pictures, each its own paragraph.
+fn many_pictures(count: usize, image: &[u8]) -> Vec<u8> {
+    let mut blocks = vec![Block::Text("Before the pictures.")];
+    blocks.extend((0..count).map(|_| Block::Picture("")));
+    blocks.push(Block::Text("After the pictures."));
+    docx_with(&blocks, &vec![image.to_vec(); count])
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_package_whose_media_outweigh_the_work_bound_gives_its_text_and_no_picture() {
+    let served = serve(Caps::default(), 2);
+    let small = png([3, 3, 3]);
+    let small_len = small.len() as u64;
+    // Work bound: four times the asked count. 8 media for 2 pictures are
+    // still read (2 kept, 6 counted); 9 are not read at all.
+    let text = extracted(
+        &served,
+        "eight.docx",
+        DOCX,
+        many_pictures(8, &small),
+        Some(asking(2, 0, 0)),
+    )
+    .await;
+    assert_eq!(text.images.len(), 2);
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 6);
+    let text = extracted(
+        &served,
+        "nine.docx",
+        DOCX,
+        many_pictures(9, &small),
+        Some(asking(2, 0, 0)),
+    )
+    .await;
+    assert!(text.images.is_empty(), "no picture is read from it");
+    assert!(text.text.contains("Before the pictures."), "{}", text.text);
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 9);
+
+    // The same for the declared bytes: five pictures of `small_len` weigh
+    // more than four times a total bound of `small_len`.
+    let text = extracted(
+        &served,
+        "heavy.docx",
+        DOCX,
+        many_pictures(5, &small),
+        Some(asking(0, 0, small_len)),
+    )
+    .await;
+    assert!(text.images.is_empty());
+    assert_eq!(text.images_skipped.unwrap_or_default().too_large, 5);
+
+    // PPTX: media under `ppt/media` are counted the same way.
+    let slides: Vec<(&str, bool)> = (0..9).map(|_| ("Slide", true)).collect();
+    let deck = pptx_with(&slides, &vec![small.clone(); 9]);
+    let text = extracted(&served, "deck.pptx", PPTX, deck, Some(asking(2, 0, 0))).await;
+    assert!(text.images.is_empty());
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 9);
+    assert!(text.text.contains("Slide"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pdf_with_a_picture_on_every_page_returns_the_bound_and_counts_the_rest() {
+    let served = serve(Caps::default(), 2);
+    let pages: Vec<(&str, bool)> = (0..30).map(|_| ("Page", true)).collect();
+    let text = extracted(
+        &served,
+        "long.pdf",
+        "application/pdf",
+        pdf_with_pictures(&pages),
+        Some(asking(5, 0, 0)),
+    )
+    .await;
+    assert_eq!(text.images.len(), 5);
+    let returned: usize = text.images.iter().map(|image| image.data.len()).sum();
+    assert!(returned as u64 <= ImageCaps::default().max_total_bytes);
+    assert_eq!(text.images_skipped.unwrap_or_default().too_many, 25);
+    // Document order: the first five pages.
+    let pages: Vec<u32> = text.images.iter().map(|image| image.page).collect();
+    assert_eq!(pages, vec![1, 2, 3, 4, 5]);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_request_is_lowered_to_the_extractors_picture_caps_which_capabilities_states() {
     let caps = ImageCaps {

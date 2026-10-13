@@ -48,6 +48,8 @@ use std::fmt::Write as _;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use adk_rust::futures::StreamExt as _;
+use adk_rust::futures::stream::FuturesOrdered;
 use bytes::Bytes;
 use elitea_content_source::{Acl, DocumentRef, SourceError};
 use elitea_doc_chunk::{
@@ -124,6 +126,56 @@ const SKIP_TOO_MANY_PAGES: &str = "too_many_pages";
 /// A picture embedded in a document, over the per-document count.
 const SKIP_TOO_MANY_PICTURES: &str = "too_many_pictures";
 pub(super) const SKIP_EXTRACT_TIMEOUT: &str = "extract_timeout";
+
+/// Appended to a document's stored version when some of its embedded
+/// pictures were skipped for a reason another run cures (`model_failed`,
+/// `model_cap_exceeded`, `extract_timeout`): the text is indexed, and the
+/// version no source ever lists, so the next run finds the document changed
+/// and prepares it again. Once every picture is described, or skipped for a
+/// final reason, the plain source version is stored.
+pub(super) const PICTURES_PENDING: &str = "#pictures-pending";
+
+/// The longest version the registry accepts.
+const MAX_VERSION_BYTES: usize = 1024;
+
+/// A picture skip that another run cures.
+fn retryable_picture_skip(reason: &str) -> bool {
+    matches!(
+        reason,
+        SKIP_MODEL_FAILED | SKIP_MODEL_CAP_EXCEEDED | SKIP_EXTRACT_TIMEOUT
+    )
+}
+
+/// `version` marked as needing another run for its pictures; unmarked (and
+/// warned) when the mark would not fit the registry's limit.
+fn pictures_pending(version: &str) -> String {
+    if version.len() + PICTURES_PENDING.len() > MAX_VERSION_BYTES {
+        tracing::warn!(
+            event = "index_pictures_pending_unmarked",
+            "the document's version is too long to carry the retry mark; its skipped pictures are not retried"
+        );
+        return version.to_owned();
+    }
+    format!("{version}{PICTURES_PENDING}")
+}
+
+/// The source's version behind a stored one (the retry mark removed).
+fn source_version(stored: &str) -> &str {
+    stored.strip_suffix(PICTURES_PENDING).unwrap_or(stored)
+}
+
+/// How many of one document's pictures are described at the same time.
+const PICTURES_IN_FLIGHT: usize = 4;
+
+/// The figure above, for the tests that pin the bound.
+#[cfg(test)]
+pub(super) const PICTURES_IN_FLIGHT_FOR_TESTS: usize = PICTURES_IN_FLIGHT;
+
+/// [`source_version`], for the tests.
+#[cfg(test)]
+pub(super) fn source_version_of(stored: &str) -> &str {
+    source_version(stored)
+}
 
 /// What a run asks the extraction sidecar for, per document, when the
 /// document's `use_llm` is on: the pictures embedded in it (ADR-0030 I4
@@ -266,6 +318,10 @@ struct Tally {
     /// so these are not `skipped` documents and do not make the run
     /// `PARTLY_INDEXED`; the summary's message names them.
     pictures_skipped: BTreeMap<&'static str, u64>,
+    /// DOCUMENTS whose embedded pictures were not even read, by reason (no
+    /// chat model, a model that refuses images): nothing was asked of the
+    /// extractor for them.
+    pictures_not_read: BTreeMap<&'static str, u64>,
     unchanged_documents: u64,
     unchanged_chunks: u64,
     /// The documents written: key, version, chunk count.
@@ -283,6 +339,10 @@ struct Tally {
 impl Tally {
     fn skip(&mut self, reason: &'static str) {
         *self.skipped.entry(reason).or_default() += 1;
+    }
+
+    fn pictures_not_read(&mut self, reason: &'static str) {
+        *self.pictures_not_read.entry(reason).or_default() += 1;
     }
 
     fn picture_skip(&mut self, reason: &'static str, count: u64) {
@@ -354,6 +414,21 @@ struct EmbeddedJob {
     dropped: PicturesDropped,
 }
 
+/// What preparing one document gives the run's loop: a document that is
+/// ready to go on, or one whose embedded pictures wait for their
+/// descriptions before its text is chunked (ADR-0030 I4 part C), which the
+/// loop finishes and turns into a [`Preparation`].
+enum Prepare {
+    Done(Preparation),
+    Embedded(Box<EmbeddedJob>),
+}
+
+impl From<Preparation> for Prepare {
+    fn from(done: Preparation) -> Self {
+        Self::Done(done)
+    }
+}
+
 enum Preparation {
     Ready(Box<Prepared>),
     /// Chunking waits for a model (ADR-0030 I4): the plan to fulfil, and the
@@ -361,9 +436,6 @@ enum Preparation {
     Model(Box<Prepared>, ChunkPlan),
     /// An image file waiting for its description (ADR-0030 I4 part B).
     Vision(Box<Prepared>, RawImage),
-    /// A PDF, DOCX or PPTX whose embedded pictures wait for their
-    /// descriptions before the text is chunked (ADR-0030 I4 part C).
-    Embedded(Box<EmbeddedJob>),
     Skipped(&'static str),
     /// A chunking configuration the run cannot honour (the whole run fails).
     Configuration(String),
@@ -516,6 +588,43 @@ impl ChatLoader for RunChatLoader<'_> {
     }
 }
 
+/// What every model step of a run is handed: the loader of the run's chat
+/// model, the embeddings and limits, and the liveness probe. Built from the
+/// run's shared parts, so no step assembles its own.
+struct StepContext<'a> {
+    loader: RunChatLoader<'a>,
+    runtime: &'a IndexIngestRuntime,
+    run: &'a IndexRun<'a>,
+    model: &'a str,
+}
+
+impl<'a> StepContext<'a> {
+    fn new(runtime: &'a IndexIngestRuntime, run: &'a IndexRun<'a>, model: &'a str) -> Self {
+        Self {
+            loader: RunChatLoader { runtime, run },
+            runtime,
+            run,
+            model,
+        }
+    }
+
+    fn env(&self) -> StepEnv<'_> {
+        StepEnv {
+            embeddings: &self.runtime.embeddings,
+            context: self.run.context,
+            embedding_model: self.model,
+            limits: &self.runtime.limits,
+            chat_loader: Some(&self.loader),
+        }
+    }
+
+    /// Stop, the lease and the deadline, asked before every attempt.
+    fn alive(&self) -> impl Fn() -> Result<(), IndexRunFailure> + Sync + 'a {
+        let run = self.run;
+        move || run_liveness(run)
+    }
+}
+
 /// The chat model of the steps that call one. `Ok(None)` when the claim names
 /// no model or the deployment has no binder (those steps skip `no_model`).
 ///
@@ -576,7 +685,9 @@ fn single_versions(prior: &BTreeMap<String, Vec<(String, u64)>>) -> BTreeMap<Str
     prior
         .iter()
         .filter(|(_, versions)| versions.len() == 1)
-        .map(|(key, versions)| (key.clone(), versions[0].0.clone()))
+        // The source's own version: a connector compares it with what the
+        // source says, and the retry mark is the pipeline's, not the source's.
+        .map(|(key, versions)| (key.clone(), source_version(&versions[0].0).to_owned()))
         .collect()
 }
 
@@ -725,7 +836,7 @@ impl Runner<'_> {
     async fn write(&mut self, plan: &RunPlan) -> Result<(), Halt> {
         let mut cleaned = !self.parameters.clean_index;
         let mut pending = plan.to_write.iter().cloned();
-        let mut tasks: JoinSet<Preparation> = JoinSet::new();
+        let mut tasks: JoinSet<Prepare> = JoinSet::new();
         let outcome: Result<(), Halt> = async {
             loop {
                 while tasks.len() < self.runtime.limits.document_concurrency {
@@ -736,8 +847,11 @@ impl Runner<'_> {
                     let chunking = Arc::clone(&self.chunking);
                     let limits = self.runtime.limits;
                     let extractor = self.runtime.extractor.clone();
+                    // Whether the document's pictures are worth reading is
+                    // known BEFORE the extractor is asked for them.
+                    let pictures = self.pictures_wanted(&reference).await;
                     tasks.spawn(prepare(
-                        source, chunking, reference, plan, limits, extractor,
+                        source, chunking, reference, plan, limits, extractor, pictures,
                     ));
                 }
                 let Some(joined) = tasks.join_next().await else {
@@ -746,21 +860,21 @@ impl Runner<'_> {
                 self.check_liveness()?;
                 // A document with pictures to describe: describe them, put the
                 // descriptions into its text, chunk it; then it is any other.
-                let joined = match joined {
-                    Ok(Preparation::Embedded(job)) => match self.finish_embedded(*job).await {
-                        Ok(finished) => Ok(finished),
+                let preparation = match joined {
+                    Ok(Prepare::Done(done)) => done,
+                    Ok(Prepare::Embedded(job)) => match self.finish_embedded(*job).await {
+                        Ok(finished) => finished,
                         Err(halted) => break Err(halted),
                     },
-                    other => other,
-                };
-                let prepared = match joined {
-                    Ok(Preparation::Embedded(_)) => {
+                    Err(_) => {
                         break Err(halt(
-                            "a document's embedded pictures were described twice: an internal error",
+                            "a document could not be prepared: the preparation task stopped unexpectedly",
                         ));
                     }
-                    Ok(Preparation::Ready(prepared)) => prepared,
-                    Ok(Preparation::Model(mut prepared, chunk_plan)) => {
+                };
+                let prepared = match preparation {
+                    Preparation::Ready(prepared) => prepared,
+                    Preparation::Model(mut prepared, chunk_plan) => {
                         match self.fulfil_model_step(chunk_plan).await {
                             Ok(Some(chunks)) => {
                                 prepared.chunks = chunks;
@@ -770,7 +884,7 @@ impl Runner<'_> {
                             Err(halt) => break Err(halt),
                         }
                     }
-                    Ok(Preparation::Vision(mut prepared, raw)) => {
+                    Preparation::Vision(mut prepared, raw) => {
                         match self.fulfil_vision(&raw).await {
                             Ok(Some(chunks)) => {
                                 prepared.chunks = chunks;
@@ -780,16 +894,11 @@ impl Runner<'_> {
                             Err(halt) => break Err(halt),
                         }
                     }
-                    Ok(Preparation::Skipped(reason)) => {
+                    Preparation::Skipped(reason) => {
                         self.tally.skip(reason);
                         continue;
                     }
-                    Ok(Preparation::Configuration(reason)) => break Err(halt(&reason)),
-                    Err(_) => {
-                        break Err(halt(
-                            "a document could not be prepared: the preparation task stopped unexpectedly",
-                        ));
-                    }
+                    Preparation::Configuration(reason) => break Err(halt(&reason)),
                 };
                 let vectors = match self.embed_all(&prepared.chunks).await {
                     Ok(vectors) => {
@@ -939,21 +1048,38 @@ impl Runner<'_> {
     /// chunks, or `None` when the document was skipped under a reason the
     /// tally now holds.
     async fn fulfil_model_step(&mut self, plan: ChunkPlan) -> Result<Option<Vec<Chunk>>, Halt> {
-        let loader = RunChatLoader {
-            runtime: self.runtime,
-            run: self.run,
-        };
-        let env = StepEnv {
-            embeddings: &self.runtime.embeddings,
-            context: self.run.context,
-            embedding_model: self.model,
-            limits: &self.runtime.limits,
-            chat_loader: Some(&loader),
-        };
-        let run = self.run;
-        let alive = move || run_liveness(run);
+        let context = StepContext::new(self.runtime, self.run, self.model);
+        let (env, alive) = (context.env(), context.alive());
         let end = self.steps.fulfil(plan, &env, &alive).await;
         self.settle(end)
+    }
+
+    /// Whether `reference`'s embedded pictures are to be asked of the
+    /// extractor: only a PDF, DOCX or PPTX whose `use_llm` is on, and only
+    /// while a picture of this run can still be described. With no chat
+    /// model, or a model that refuses images, the pictures are not read at
+    /// all (the document is counted in the summary's message).
+    async fn pictures_wanted(&mut self, reference: &DocumentRef) -> bool {
+        if !elitea_doc_extract::is_document_type(&reference.mime)
+            || elitea_doc_chunk::plan_embedded_for(&reference.key, &reference.mime, &self.chunking)
+                .is_none()
+        {
+            return false;
+        }
+        let context = StepContext::new(self.runtime, self.run, self.model);
+        let env = context.env();
+        match self.steps.picture_gate(&env).await {
+            None => true,
+            Some(reason) => {
+                tracing::info!(
+                    event = "index_pictures_not_requested",
+                    reason,
+                    "pictures not requested: the run cannot describe them"
+                );
+                self.tally.pictures_not_read(reason);
+                false
+            }
+        }
     }
 
     /// Describes the pictures embedded in one document, writes the
@@ -968,9 +1094,13 @@ impl Runner<'_> {
     /// cache (a picture repeated in a document, or across documents, costs
     /// one call), its image budget, its refused-model breaker and its
     /// downscale.
+    ///
+    /// A picture skipped for a reason another run cures marks the document
+    /// (see [`PICTURES_PENDING`]): it is written, and prepared again by the
+    /// next run.
     async fn finish_embedded(&mut self, job: EmbeddedJob) -> Result<Preparation, Halt> {
         let EmbeddedJob {
-            shell,
+            mut shell,
             key,
             chunking,
             plan,
@@ -978,13 +1108,15 @@ impl Runner<'_> {
             pictures,
             dropped,
         } = job;
+        // What the extractor or the client dropped is final: no later run
+        // would get those pictures either.
         self.tally
             .picture_skip(SKIP_TOO_MANY_PICTURES, u64::from(dropped.too_many));
         self.tally
             .picture_skip(SKIP_TOO_LARGE, u64::from(dropped.too_large));
         self.tally
             .picture_skip(SKIP_UNSUPPORTED, u64::from(dropped.unsupported));
-        let outcomes = self.describe_pictures(&plan, &pictures).await?;
+        let (outcomes, pending) = self.describe_pictures(&plan, &pictures).await?;
         let inline: Vec<Inline<'_>> = pictures
             .iter()
             .zip(&outcomes)
@@ -1007,7 +1139,11 @@ impl Runner<'_> {
             pictures = pictures.len(),
             described = inline.len(),
             dropped = dropped.too_many + dropped.too_large + dropped.unsupported,
+            pending,
         );
+        if pending {
+            shell.reference.version = pictures_pending(&shell.reference.version);
+        }
         let text = plan.inline(&text, &inline);
         let chunked =
             tokio::task::spawn_blocking(move || chunk_text(&text, &key, false, &chunking, shell))
@@ -1017,94 +1153,107 @@ impl Runner<'_> {
         )))
     }
 
-    /// The model's description of each of `pictures`, in order; a picture
+    /// The model's description of each of `pictures`, in document order, and
+    /// whether any was skipped for a reason another run cures. A picture
     /// that could not be described is counted in the tally and is
     /// [`PictureOutcome::Nothing`].
+    ///
+    /// Distinct pictures (by the sha256 of their bytes) are described
+    /// [`PICTURES_IN_FLIGHT`] at a time and their results applied in
+    /// document order; the call cap and the image budget are charged
+    /// atomically by the one description path. A picture whose bytes
+    /// repeat an earlier one's takes that one's outcome, with no call of
+    /// its own: a back-reference for DOCX, the same description otherwise.
     async fn describe_pictures(
         &mut self,
         plan: &EmbeddedVisionPlan,
         pictures: &[Picture],
-    ) -> Result<Vec<PictureOutcome>, Halt> {
-        let loader = RunChatLoader {
-            runtime: self.runtime,
-            run: self.run,
-        };
-        let env = StepEnv {
-            embeddings: &self.runtime.embeddings,
-            context: self.run.context,
-            embedding_model: self.model,
-            limits: &self.runtime.limits,
-            chat_loader: Some(&loader),
-        };
-        let run = self.run;
-        let alive = move || run_liveness(run);
-        let back_references = plan.repeats_are_back_references();
-        // Pictures already described in THIS document, by sha256 of the
-        // original bytes.
-        let mut described = BTreeSet::new();
-        let mut outcomes = Vec::with_capacity(pictures.len());
+    ) -> Result<(Vec<PictureOutcome>, bool), Halt> {
+        let context = StepContext::new(self.runtime, self.run, self.model);
+        let (env, alive) = (context.env(), context.alive());
+        self.steps.load_chat(&env).await;
+        let mut digests = Vec::with_capacity(pictures.len());
         for picture in pictures {
-            let Some(digest) = image_fit::digest(picture.bytes.clone()).await else {
+            digests.push(image_fit::digest(picture.bytes.clone()).await);
+        }
+        // The first picture of each distinct content is the one described.
+        let mut first_of: BTreeMap<[u8; 32], usize> = BTreeMap::new();
+        let mut distinct: Vec<usize> = Vec::new();
+        for (index, digest) in digests.iter().enumerate() {
+            if let Some(digest) = digest
+                && let std::collections::btree_map::Entry::Vacant(slot) = first_of.entry(*digest)
+            {
+                slot.insert(index);
+                distinct.push(index);
+            }
+        }
+        let mut answers: BTreeMap<usize, Result<String, &'static str>> = BTreeMap::new();
+        {
+            let steps = &self.steps;
+            let mut pending = FuturesOrdered::new();
+            let mut queue = distinct.iter().copied();
+            loop {
+                while pending.len() < PICTURES_IN_FLIGHT {
+                    let Some(index) = queue.next() else {
+                        break;
+                    };
+                    pending.push_back(describe_picture(
+                        index,
+                        steps,
+                        &pictures[index],
+                        digests[index],
+                        plan.prompt(),
+                        &env,
+                        &alive,
+                    ));
+                }
+                let Some((index, answer)) = pending.next().await else {
+                    break;
+                };
+                let answer = match answer {
+                    Ok(description) => Ok(description),
+                    Err(StepEnd::Skip(reason)) => Err(reason),
+                    Err(StepEnd::Stop(reason)) => return Err(halt(&reason)),
+                    Err(StepEnd::Liveness(failure)) => return Err(Halt::Failure(failure)),
+                    // A picture's description is never chunks nor an embedding.
+                    Err(StepEnd::Chunks(_) | StepEnd::EmbeddingFailed(_)) => Err(SKIP_MODEL_FAILED),
+                };
+                answers.insert(index, answer);
+            }
+        }
+        let back_references = plan.repeats_are_back_references();
+        let mut pending = false;
+        let mut outcomes = Vec::with_capacity(pictures.len());
+        for (index, digest) in digests.iter().enumerate() {
+            let Some(first) = digest.and_then(|digest| first_of.get(&digest)) else {
                 self.tally.picture_skip(SKIP_UNREADABLE, 1);
                 outcomes.push(PictureOutcome::Nothing);
                 continue;
             };
-            if back_references && described.contains(&digest) {
-                outcomes.push(PictureOutcome::Repeat);
-                continue;
-            }
-            let kind = if picture.media_type == "image/bmp" {
-                ImageKind::Bmp
-            } else {
-                ImageKind::Native(picture.media_type)
-            };
-            let answer = self
-                .steps
-                .describe_one(
-                    &picture.bytes,
-                    kind,
-                    plan.prompt(),
-                    Some(digest),
-                    &env,
-                    &alive,
-                )
-                .await;
-            match answer {
-                Ok(description) => {
-                    described.insert(digest);
-                    outcomes.push(PictureOutcome::Text(description));
+            match answers.get(first) {
+                Some(Ok(_)) if *first != index && back_references => {
+                    outcomes.push(PictureOutcome::Repeat);
                 }
-                Err(StepEnd::Skip(reason)) => {
+                Some(Ok(description)) => outcomes.push(PictureOutcome::Text(description.clone())),
+                Some(Err(reason)) => {
                     self.tally.picture_skip(reason, 1);
+                    pending |= retryable_picture_skip(reason);
                     outcomes.push(PictureOutcome::Nothing);
                 }
-                Err(StepEnd::Stop(reason)) => return Err(halt(&reason)),
-                Err(StepEnd::Liveness(failure)) => return Err(Halt::Failure(failure)),
-                // A picture's description is never chunks nor an embedding.
-                Err(StepEnd::Chunks(_) | StepEnd::EmbeddingFailed(_)) => {
+                None => {
                     self.tally.picture_skip(SKIP_MODEL_FAILED, 1);
+                    pending = true;
                     outcomes.push(PictureOutcome::Nothing);
                 }
             }
         }
-        Ok(outcomes)
+        Ok((outcomes, pending))
     }
 
     /// [`Self::fulfil_model_step`] for an image file's description.
     async fn fulfil_vision(&mut self, raw: &RawImage) -> Result<Option<Vec<Chunk>>, Halt> {
-        let loader = RunChatLoader {
-            runtime: self.runtime,
-            run: self.run,
-        };
-        let env = StepEnv {
-            embeddings: &self.runtime.embeddings,
-            context: self.run.context,
-            embedding_model: self.model,
-            limits: &self.runtime.limits,
-            chat_loader: Some(&loader),
-        };
-        let run = self.run;
-        let alive = move || run_liveness(run);
+        let context = StepContext::new(self.runtime, self.run, self.model);
+        let (env, alive) = (context.env(), context.alive());
         let end = self.steps.describe(raw, &env, &alive).await;
         self.settle(end)
     }
@@ -1256,6 +1405,18 @@ impl Runner<'_> {
             let _ = write!(
                 message,
                 " Embedded pictures not described: {}.",
+                reasons.join(", ")
+            );
+        }
+        if !tally.pictures_not_read.is_empty() {
+            let reasons: Vec<String> = tally
+                .pictures_not_read
+                .iter()
+                .map(|(reason, count)| format!("{count} {reason}"))
+                .collect();
+            let _ = write!(
+                message,
+                " Embedded pictures not requested for documents: {}.",
                 reasons.join(", ")
             );
         }
@@ -1549,24 +1710,25 @@ async fn prepare(
     plan: Plan,
     limits: IndexRunLimits,
     extractor: Option<Arc<ExtractorClient>>,
-) -> Preparation {
+    pictures: bool,
+) -> Prepare {
     let max_bytes = limits.max_document_bytes;
     if reference.size > max_bytes {
-        return Preparation::Skipped(SKIP_TOO_LARGE);
+        return Preparation::Skipped(SKIP_TOO_LARGE).into();
     }
     let document = match source.fetch(&reference.key).await {
         Ok(document) => document,
         Err(SourceError::NotFound(_)) => {
             // Listed, then gone: the next run deletes it.
-            return Preparation::Skipped(SKIP_FETCH_FAILED);
+            return Preparation::Skipped(SKIP_FETCH_FAILED).into();
         }
         Err(error) => {
             tracing::warn!(event = "index_document_fetch_failed", error = %error);
-            return Preparation::Skipped(SKIP_FETCH_FAILED);
+            return Preparation::Skipped(SKIP_FETCH_FAILED).into();
         }
     };
     if document.bytes.len() as u64 > max_bytes {
-        return Preparation::Skipped(SKIP_TOO_LARGE);
+        return Preparation::Skipped(SKIP_TOO_LARGE).into();
     }
     let key = reference.key.clone();
     let mime = reference.mime.clone();
@@ -1605,15 +1767,15 @@ async fn prepare(
         let ImagePlan::Vision(vision) =
             elitea_doc_chunk::plan_image(&settings_extension, &chunking)
         else {
-            return Preparation::Skipped(SKIP_UNSUPPORTED);
+            return Preparation::Skipped(SKIP_UNSUPPORTED).into();
         };
         let kind = match class {
             VisionImage::Supported(media_type) => ImageKind::Native(media_type),
             VisionImage::Bmp => ImageKind::Bmp,
-            VisionImage::Corrupt => return Preparation::Skipped(SKIP_UNREADABLE),
+            VisionImage::Corrupt => return Preparation::Skipped(SKIP_UNREADABLE).into(),
             // SVG, TIFF, ...: not converted by this build.
             VisionImage::Unsupported | VisionImage::NotAnImage => {
-                return Preparation::Skipped(SKIP_UNSUPPORTED);
+                return Preparation::Skipped(SKIP_UNSUPPORTED).into();
             }
         };
         // Fitting (decode, resize) waits for the run's loop: the chat model,
@@ -1632,7 +1794,8 @@ async fn prepare(
                 kind,
                 plan: vision,
             },
-        );
+        )
+        .into();
     }
     let plan_of_run = plan;
     // A document format (PDF, Office, e-mail) is the sidecar's to read; this
@@ -1642,17 +1805,23 @@ async fn prepare(
     // with `use_llm` off (the SDK's default for documents), ask for none and
     // are read exactly as before.
     let is_document = elitea_doc_extract::is_document_type(&mime);
+    // Planned by the key's extension, else by the media type the source
+    // delivered it as (a key without an extension).
     let embedded_plan = if is_document {
-        elitea_doc_chunk::plan_embedded(&key, &chunking)
+        elitea_doc_chunk::plan_embedded_for(&key, &mime, &chunking)
     } else {
         None
     };
     let sidecar_text = if is_document {
         let sent = std::mem::take(&mut bytes);
-        let asked = embedded_plan.as_ref().map(|_| PICTURE_REQUEST);
+        // Only when the run can still describe a picture (`pictures`).
+        let asked = embedded_plan
+            .as_ref()
+            .filter(|_| pictures)
+            .map(|_| PICTURE_REQUEST);
         match sidecar_text(extractor, &key, &mime, sent, limits, asked).await {
             Ok(extracted) => Some(extracted),
-            Err(label) => return Preparation::Skipped(label),
+            Err(label) => return Preparation::Skipped(label).into(),
         }
     } else {
         None
@@ -1664,7 +1833,7 @@ async fn prepare(
             if !extracted.pictures.is_empty()
                 || extracted.dropped != PicturesDropped::default() =>
         {
-            return Preparation::Embedded(Box::new(EmbeddedJob {
+            return Prepare::Embedded(Box::new(EmbeddedJob {
                 shell: Shell {
                     reference,
                     plan: plan_of_run,
@@ -1709,9 +1878,35 @@ async fn prepare(
         )
     })
     .await;
-    chunked.unwrap_or(Preparation::Configuration(
-        "the document preparation task stopped unexpectedly".to_owned(),
-    ))
+    chunked
+        .unwrap_or(Preparation::Configuration(
+            "the document preparation task stopped unexpectedly".to_owned(),
+        ))
+        .into()
+}
+
+/// One embedded picture's description through the one path an image file
+/// takes, tagged with the picture's index.
+async fn describe_picture(
+    index: usize,
+    steps: &ModelSteps,
+    picture: &Picture,
+    digest: Option<[u8; 32]>,
+    prompt: &str,
+    env: &StepEnv<'_>,
+    alive: &(dyn Fn() -> Result<(), IndexRunFailure> + Sync),
+) -> (usize, Result<String, StepEnd>) {
+    let kind = if picture.media_type == "image/bmp" {
+        ImageKind::Bmp
+    } else {
+        ImageKind::Native(picture.media_type)
+    };
+    (
+        index,
+        steps
+            .describe_one(&picture.bytes, kind, prompt, digest, env, alive)
+            .await,
+    )
 }
 
 /// A document's text chunked, or what stands in the way: the chunks are

@@ -804,33 +804,52 @@ mod documents {
             }),
             ..xberg::ExtractionConfig::default()
         };
+        // What the pictures cost to read is decided BEFORE the parser runs:
+        // the parser reads every picture it is allowed to into memory and
+        // only then can they be dropped.
+        let mut refused = ImagesSkipped::default();
+        let mut per_page = None;
         if let Some(images) = &limits.images {
-            // The plain text stays exactly what it was: the parser's own
-            // placeholders (DOCX prints `[Image: ...]` for a picture) stay
-            // on, because turning them off DROPS those lines from the text
-            // (measured), and the page layout is asked for only to anchor a
-            // picture to its page.
-            config.images = Some(xberg::ImageExtractionConfig {
-                extract_images: true,
-                inject_placeholders: true,
-                max_images_per_page: u32::try_from(images.max_images).ok(),
-                ..xberg::ImageExtractionConfig::default()
-            });
-            config.pages = Some(xberg::PageConfig {
-                extract_pages: true,
-                insert_page_markers: false,
-                ..xberg::PageConfig::default()
-            });
+            match picture_work(mime, &bytes, images) {
+                PictureWork::Extract { per_page_cap } => {
+                    // The plain text stays exactly what it was: the parser's
+                    // own placeholders (DOCX prints `[Image: ...]` for a
+                    // picture) stay on, because turning them off DROPS those
+                    // lines from the text (measured), and the page layout is
+                    // asked for only to anchor a picture to its page.
+                    per_page = Some(per_page_cap);
+                    config.images = Some(xberg::ImageExtractionConfig {
+                        extract_images: true,
+                        inject_placeholders: true,
+                        // The parser keeps one more than the cap, so a page
+                        // that overflows is SEEN to (see `embedded_images`).
+                        max_images_per_page: Some(
+                            u32::try_from(per_page_cap.saturating_add(1)).unwrap_or(u32::MAX),
+                        ),
+                        ..xberg::ImageExtractionConfig::default()
+                    });
+                    config.pages = Some(xberg::PageConfig {
+                        extract_pages: true,
+                        insert_page_markers: false,
+                        ..xberg::PageConfig::default()
+                    });
+                }
+                PictureWork::Refuse(counted) => refused = counted,
+            }
         }
         let input = xberg::ExtractInput::from_bytes(bytes, mime.to_owned(), None);
         match runtime.block_on(xberg::extract(input, &config)) {
             Ok(result) => match result.results.into_iter().next() {
                 Some(document) if !document.content.trim().is_empty() => {
-                    let (images, images_skipped) = limits
-                        .images
-                        .as_ref()
-                        .map(|bounds| embedded_images(&document, bounds))
-                        .unwrap_or_default();
+                    let (images, mut images_skipped) = match (&limits.images, per_page) {
+                        (Some(bounds), Some(per_page)) => {
+                            embedded_images(&document, bounds, per_page)
+                        }
+                        _ => (Vec::new(), ImagesSkipped::default()),
+                    };
+                    images_skipped.too_many += refused.too_many;
+                    images_skipped.too_large += refused.too_large;
+                    images_skipped.unsupported += refused.unsupported;
                     Ok(DocumentText {
                         text: document.content,
                         extractor: "xberg",
@@ -904,6 +923,131 @@ mod documents {
             }
             _ => DocumentError::Extractor(detail),
         }
+    }
+
+    /// The most pictures read from one PDF page: the parser can only be
+    /// capped per page, and walks every page (up to `max_pages`) in
+    /// parallel.
+    const PDF_PICTURES_PER_PAGE: usize = 4;
+
+    /// How many times the pictures' own bounds the media of a DOCX or PPTX
+    /// may weigh, in count and in uncompressed bytes, before no picture is
+    /// read from it at all.
+    const MEDIA_WORK_FACTOR: usize = 4;
+
+    /// What the pictures of a document cost, decided before the parser runs.
+    enum PictureWork {
+        /// Ask the parser; it keeps at most this many per page.
+        Extract { per_page_cap: usize },
+        /// Read none; this many were found and are counted as skipped.
+        Refuse(ImagesSkipped),
+    }
+
+    fn picture_work(mime: &str, bytes: &[u8], bounds: &ImageLimits) -> PictureWork {
+        if mime == "application/pdf" {
+            // PDF: the parser decodes pictures page by page with no document
+            // budget, so the work is bounded by the page count (`max_pages`)
+            // times a small per-page cap, whatever the document holds.
+            return PictureWork::Extract {
+                per_page_cap: bounds.max_images.min(PDF_PICTURES_PER_PAGE),
+            };
+        }
+        if !(mime.contains("wordprocessingml") || mime.contains("presentationml")) {
+            // Other types have no pictures this crate returns.
+            return PictureWork::Refuse(ImagesSkipped::default());
+        }
+        // DOCX and PPTX: the package's media are counted from its central
+        // directory (nothing is decompressed) and the document gives its
+        // pictures only when they fit the work bound.
+        let Some(media) = scan_media(bytes) else {
+            // Not scannable (no directory, zip64): no picture is read; the
+            // text still is.
+            return PictureWork::Refuse(ImagesSkipped::default());
+        };
+        let count_bound = bounds.max_images.saturating_mul(MEDIA_WORK_FACTOR);
+        let bytes_bound = (bounds.max_total_bytes as u64).saturating_mul(MEDIA_WORK_FACTOR as u64);
+        let found = u32::try_from(media.count).unwrap_or(u32::MAX);
+        if media.count > count_bound {
+            return PictureWork::Refuse(ImagesSkipped {
+                too_many: found,
+                ..ImagesSkipped::default()
+            });
+        }
+        if media.bytes > bytes_bound {
+            return PictureWork::Refuse(ImagesSkipped {
+                too_large: found,
+                ..ImagesSkipped::default()
+            });
+        }
+        PictureWork::Extract {
+            per_page_cap: bounds.max_images,
+        }
+    }
+
+    /// The media entries of a package.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Media {
+        count: usize,
+        /// Their uncompressed sizes, as the directory declares them.
+        bytes: u64,
+    }
+
+    /// The files under `word/media/` and `ppt/media/` of a zip, from its
+    /// central directory alone. `None` when the directory cannot be read as
+    /// plain zip (no end record, truncated, zip64).
+    fn scan_media(zip: &[u8]) -> Option<Media> {
+        const END: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+        const ENTRY: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
+        let le16 = |at: usize| -> Option<usize> {
+            zip.get(at..at + 2)
+                .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
+        };
+        let le32 = |at: usize| -> Option<u64> {
+            zip.get(at..at + 4)
+                .map(|b| u64::from(u32::from_le_bytes([b[0], b[1], b[2], b[3]])))
+        };
+        // The end record is within the last 22 + 65535 bytes.
+        let from = zip.len().saturating_sub(22 + 65_535);
+        let end = (from..=zip.len().checked_sub(22)?)
+            .rev()
+            .find(|at| zip[*at..*at + 4] == END)?;
+        let entries = le16(end + 10)?;
+        let size = le32(end + 12)?;
+        let offset = le32(end + 16)?;
+        if entries == 0xFFFF || size == 0xFFFF_FFFF || offset == 0xFFFF_FFFF {
+            return None;
+        }
+        let mut at = usize::try_from(offset).ok()?;
+        let stop = at.checked_add(usize::try_from(size).ok()?)?;
+        if stop > zip.len() {
+            return None;
+        }
+        let mut media = Media { count: 0, bytes: 0 };
+        for _ in 0..entries {
+            if zip.get(at..at + 4)? != ENTRY {
+                return None;
+            }
+            let uncompressed = le32(at + 24)?;
+            let (name, extra, comment) = (le16(at + 28)?, le16(at + 30)?, le16(at + 32)?);
+            let name_bytes = zip.get(at + 46..at + 46 + name)?;
+            let in_media =
+                name_bytes.starts_with(b"word/media/") || name_bytes.starts_with(b"ppt/media/");
+            if in_media && !name_bytes.ends_with(b"/") {
+                media.count += 1;
+                // A zip64 size is a size this scan does not know: it counts
+                // as over any bound.
+                media.bytes = media.bytes.saturating_add(if uncompressed == 0xFFFF_FFFF {
+                    u64::MAX
+                } else {
+                    uncompressed
+                });
+            }
+            at += 46 + name + extra + comment;
+            if at > stop {
+                return None;
+            }
+        }
+        Some(media)
     }
 
     /// The media type the bytes of a picture say, if a model takes it.
@@ -981,6 +1125,7 @@ mod documents {
     fn embedded_images(
         document: &xberg::ExtractedDocument,
         bounds: &ImageLimits,
+        per_page_cap: usize,
     ) -> (Vec<EmbeddedImage>, ImagesSkipped) {
         let mut found: Vec<&xberg::ExtractedImage> = document.images.iter().flatten().collect();
         found.sort_by_key(|image| image.image_index);
@@ -1004,11 +1149,21 @@ mod documents {
         let mut kept = Vec::new();
         let mut skipped = ImagesSkipped::default();
         let mut total = 0_usize;
+        let mut on_page: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
         for (image, text_offset) in found.into_iter().zip(offsets) {
             let Some(media_type) = sniff_image(&image.data).filter(|_| !image.is_mask) else {
                 skipped.unsupported += 1;
                 continue;
             };
+            // The parser kept one picture more than the per-page cap on a
+            // page that has more: that one is a picture dropped (the others
+            // it did not return are not known, so this is a lower bound).
+            let seen = on_page.entry(image.page_number.unwrap_or(0)).or_default();
+            *seen += 1;
+            if *seen > per_page_cap {
+                skipped.too_many += 1;
+                continue;
+            }
             if kept.len() >= bounds.max_images {
                 skipped.too_many += 1;
                 continue;
@@ -1101,7 +1256,7 @@ mod documents {
             assert_eq!(&twice[..offsets[1]], "[Image: x]\n\nmid\n\n[Image: x]");
 
             // Pages: the end of the page the picture is on, not of the text.
-            let paged = "One a\n\nOne b\n\nTwo a\n\nTwo b";
+            let whole = "One a\n\nOne b\n\nTwo a\n\nTwo b";
             let pages = [
                 PageText {
                     number: 1,
@@ -1116,9 +1271,9 @@ mod documents {
                 page: Some(page),
                 description: None,
             };
-            let offsets = anchors(paged, &pages, &[on(1), on(2), on(1)]);
-            assert_eq!(&paged[..offsets[0]], "One a\n\nOne b");
-            assert_eq!(offsets[1], paged.len());
+            let offsets = anchors(whole, &pages, &[on(1), on(2), on(1)]);
+            assert_eq!(&whole[..offsets[0]], "One a\n\nOne b");
+            assert_eq!(offsets[1], whole.len());
             assert_eq!(offsets[2], offsets[0]);
 
             // A blank page, a page whose text cannot be found, and no page.
@@ -1132,15 +1287,44 @@ mod documents {
                     content: "never in the text",
                 },
             ];
-            let offsets = anchors(paged, &blank, &[on(1), on(2), on(3)]);
-            assert_eq!(offsets, vec![0, paged.len(), paged.len()]);
+            let offsets = anchors(whole, &blank, &[on(1), on(2), on(3)]);
+            assert_eq!(offsets, vec![0, whole.len(), whole.len()]);
             // A name the text does not carry falls back to the page's end.
-            let offsets = anchors(paged, &pages, &[named("nowhere")]);
-            assert_eq!(&paged[..offsets[0]], "One a\n\nOne b");
+            let offsets = anchors(whole, &pages, &[named("nowhere")]);
+            assert_eq!(&whole[..offsets[0]], "One a\n\nOne b");
             // Multi-byte text: every anchor is a character boundary.
             let wide = "é\n\n[Image: ü]\n\nz";
             let offsets = anchors(wide, &[], &[named("ü")]);
             assert!(wide.is_char_boundary(offsets[0]));
+        }
+
+        #[test]
+        #[allow(clippy::cast_possible_truncation, reason = "tiny test sizes")]
+        fn the_media_of_a_package_are_counted_from_its_directory_alone() {
+            // One stored entry `word/media/a.png` (3 bytes) and the end record.
+            let name = b"word/media/a.png";
+            let mut zip = Vec::new();
+            zip.extend_from_slice(&[0x50, 0x4b, 0x03, 0x04]);
+            zip.extend_from_slice(&[0; 26]);
+            zip.extend_from_slice(name);
+            zip.extend_from_slice(b"abc");
+            let directory = zip.len();
+            zip.extend_from_slice(&[0x50, 0x4b, 0x01, 0x02]);
+            let mut entry = [0_u8; 42];
+            entry[20..24].copy_from_slice(&3_u32.to_le_bytes());
+            entry[24..26].copy_from_slice(&(name.len() as u16).to_le_bytes());
+            zip.extend_from_slice(&entry);
+            zip.extend_from_slice(name);
+            let size = zip.len() - directory;
+            zip.extend_from_slice(&[0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 1, 0, 1, 0]);
+            zip.extend_from_slice(&(size as u32).to_le_bytes());
+            zip.extend_from_slice(&(directory as u32).to_le_bytes());
+            zip.extend_from_slice(&[0, 0]);
+            assert_eq!(scan_media(&zip), Some(Media { count: 1, bytes: 3 }));
+            // Anything that is not a readable plain zip gives no scan.
+            assert_eq!(scan_media(b""), None);
+            assert_eq!(scan_media(b"not a zip at all, just text"), None);
+            assert_eq!(scan_media(&zip[..zip.len() - 30]), None);
         }
 
         #[test]
