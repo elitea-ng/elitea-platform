@@ -1333,6 +1333,8 @@ async fn chunks_of_one_passage_are_separate_points_and_replacement_is_by_filter(
         point.chunk_id = "3".to_owned();
         point
     };
+    // The collection exists once something is written to it.
+    h.seed().await;
     let before = h.truth(PROJECT_A).await;
     h.upsert(
         TOKEN_A,
