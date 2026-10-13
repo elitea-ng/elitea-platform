@@ -43,6 +43,9 @@ impl std::error::Error for FigmaConfigError {}
 /// Invocation-scoped Figma authority for one index run. Non-`Clone` and
 /// non-`Debug`: the token never prints.
 pub struct FigmaConnectorConfig {
+    // Read only by the `content-source` connector; the `providers`-only build
+    // (the desktop host) parses the settings without indexing.
+    #[cfg_attr(not(feature = "content-source"), allow(dead_code))]
     token: Zeroizing<String>,
 }
 
@@ -75,6 +78,7 @@ impl FigmaConnectorConfig {
         })
     }
 
+    #[cfg_attr(not(feature = "content-source"), allow(dead_code))]
     pub(crate) fn token(&self) -> &str {
         &self.token
     }
