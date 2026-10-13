@@ -171,11 +171,20 @@ fn names_doctypes_and_read_only_follow_the_sdk() {
         "ado_boards",
         "ado_plans",
         "figma",
+        "testrail",
+        "qtest",
+        "xray_cloud",
+        "zephyr_scale",
+        "zephyr_essential",
+        "zephyr_enterprise",
     ] {
         assert_eq!(doctype_for(family), "document");
         assert!(is_index_family(family), "{family} is indexed since I2/I3");
     }
     assert!(!is_index_family("aha"), "aha has no indexing toolkit");
+    // The SDK's other Zephyr toolkits have no indexer.
+    assert!(!is_index_family("zephyr"));
+    assert!(!is_index_family("zephyr_squad"));
     for tool in IndexToolName::ALL {
         assert_eq!(IndexToolName::parse(tool.as_str()), Some(tool));
         assert_eq!(tool.is_read_only(), tool != IndexToolName::RemoveIndex);

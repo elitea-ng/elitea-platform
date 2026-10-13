@@ -44,11 +44,23 @@ use elitea_connectors::gitlab::config::GitLabToolkitConfig;
 use elitea_connectors::gitlab::source::GitLabSource;
 use elitea_connectors::jira::config::{JiraConnectorConfig, JiraIndexArguments};
 use elitea_connectors::jira::source::JiraSource;
+use elitea_connectors::qtest::{QtestConnectorConfig, QtestIndexArguments, QtestSource};
 use elitea_connectors::sharepoint::config::SharePointIndexConfig;
 use elitea_connectors::sharepoint::source::{SharePointIndexParams, SharePointSource};
 use elitea_connectors::source::SourceLimits;
 use elitea_connectors::source::glob::fnmatch;
+use elitea_connectors::testrail::{
+    TestRailConnectorConfig, TestRailIndexArguments, TestRailSource,
+};
 use elitea_connectors::transport::Transport;
+use elitea_connectors::xray::{XrayConnectorConfig, XrayIndexArguments, XraySource};
+use elitea_connectors::zephyr::enterprise::{
+    ZephyrEnterpriseConfig, ZephyrEnterpriseIndexArguments, ZephyrEnterpriseSource,
+};
+use elitea_connectors::zephyr::essential::{ZephyrEssentialConfig, ZephyrEssentialSource};
+use elitea_connectors::zephyr::scale::{
+    ZephyrScaleConfig, ZephyrScaleIndexArguments, ZephyrScaleSource,
+};
 use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
 use serde_json::Value;
 
@@ -58,7 +70,7 @@ use super::inputs::{IndexParameters, ToolkitConfiguration};
 /// The families this worker indexes (ADR-0030 I1, I2 and I3); the Go
 /// `indexcatalog.Families` and agent-runtime `INDEX_FAMILIES` list the same
 /// types (tested against `index_served_families.json`).
-pub(crate) const SERVED_TOOLKIT_TYPES: [&str; 12] = [
+pub(crate) const SERVED_TOOLKIT_TYPES: [&str; 18] = [
     "github",
     "gitlab",
     "bitbucket",
@@ -71,6 +83,12 @@ pub(crate) const SERVED_TOOLKIT_TYPES: [&str; 12] = [
     "ado_boards",
     "ado_plans",
     "figma",
+    "testrail",
+    "qtest",
+    "xray_cloud",
+    "zephyr_scale",
+    "zephyr_essential",
+    "zephyr_enterprise",
 ];
 
 /// A connector could not be built. The text names the toolkit type and the
@@ -100,6 +118,12 @@ pub(crate) enum IndexSource {
     AdoBoards(AdoBoardsSource),
     AdoPlans(AdoPlansSource),
     Figma(FigmaSource),
+    TestRail(TestRailSource),
+    Qtest(QtestSource),
+    Xray(XraySource),
+    ZephyrScale(ZephyrScaleSource),
+    ZephyrEssential(ZephyrEssentialSource),
+    ZephyrEnterprise(ZephyrEnterpriseSource),
     #[cfg(test)]
     Fixture(Vec<Document>),
 }
@@ -245,6 +269,54 @@ impl IndexSource {
                     .map_err(|e| refused(&e))?;
                 Self::Figma(source.with_limits(source_limits))
             }
+            "testrail" => {
+                let config = TestRailConnectorConfig::parse(settings).map_err(|e| refused(&e))?;
+                let arguments = TestRailIndexArguments::parse(&parameters.arguments)
+                    .map_err(|e| refused(&e))?;
+                let source = TestRailSource::new(config, arguments, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::TestRail(source.with_limits(source_limits))
+            }
+            "qtest" => {
+                let config = QtestConnectorConfig::parse(settings).map_err(|e| refused(&e))?;
+                let arguments =
+                    QtestIndexArguments::parse(&parameters.arguments).map_err(|e| refused(&e))?;
+                let source = QtestSource::new(config, arguments, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::Qtest(source.with_limits(source_limits))
+            }
+            "xray_cloud" => {
+                let config = XrayConnectorConfig::parse(settings).map_err(|e| refused(&e))?;
+                let arguments =
+                    XrayIndexArguments::parse(&parameters.arguments).map_err(|e| refused(&e))?;
+                let source = XraySource::new(config, arguments, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::Xray(source.with_limits(source_limits))
+            }
+            "zephyr_scale" => {
+                let config = ZephyrScaleConfig::parse(settings).map_err(|e| refused(&e))?;
+                let arguments = ZephyrScaleIndexArguments::parse(&parameters.arguments)
+                    .map_err(|e| refused(&e))?;
+                let source =
+                    ZephyrScaleSource::new(config, arguments, allowlist.clone(), transport)
+                        .map_err(|e| refused(&e))?;
+                Self::ZephyrScale(source.with_limits(source_limits))
+            }
+            "zephyr_essential" => {
+                let config = ZephyrEssentialConfig::parse(settings).map_err(|e| refused(&e))?;
+                let source = ZephyrEssentialSource::new(config, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::ZephyrEssential(source.with_limits(source_limits))
+            }
+            "zephyr_enterprise" => {
+                let config = ZephyrEnterpriseConfig::parse(settings).map_err(|e| refused(&e))?;
+                let arguments = ZephyrEnterpriseIndexArguments::parse(&parameters.arguments)
+                    .map_err(|e| refused(&e))?;
+                let source =
+                    ZephyrEnterpriseSource::new(config, arguments, allowlist.clone(), transport)
+                        .map_err(|e| refused(&e))?;
+                Self::ZephyrEnterprise(source.with_limits(source_limits))
+            }
             // The tests' in-memory toolkit: the documents the test staged.
             #[cfg(test)]
             "fixture" => match super::tests::take_fixture_source() {
@@ -289,6 +361,12 @@ impl IndexSource {
             Self::AdoBoards(source) => source.list().await,
             Self::AdoPlans(source) => source.list().await,
             Self::Figma(source) => source.list().await,
+            Self::TestRail(source) => source.list().await,
+            Self::Qtest(source) => source.list().await,
+            Self::Xray(source) => source.list().await,
+            Self::ZephyrScale(source) => source.list().await,
+            Self::ZephyrEssential(source) => source.list().await,
+            Self::ZephyrEnterprise(source) => source.list().await,
             #[cfg(test)]
             Self::Fixture(documents) => Ok(documents
                 .iter()
@@ -316,6 +394,12 @@ impl IndexSource {
             Self::AdoBoards(source) => source.fetch(key).await,
             Self::AdoPlans(source) => source.fetch(key).await,
             Self::Figma(source) => source.fetch(key).await,
+            Self::TestRail(source) => source.fetch(key).await,
+            Self::Qtest(source) => source.fetch(key).await,
+            Self::Xray(source) => source.fetch(key).await,
+            Self::ZephyrScale(source) => source.fetch(key).await,
+            Self::ZephyrEssential(source) => source.fetch(key).await,
+            Self::ZephyrEnterprise(source) => source.fetch(key).await,
             #[cfg(test)]
             Self::Fixture(documents) => documents
                 .iter()

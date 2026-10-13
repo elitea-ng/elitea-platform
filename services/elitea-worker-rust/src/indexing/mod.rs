@@ -43,6 +43,8 @@ mod microsoft_family_tests;
 #[cfg(test)]
 mod model_step_tests;
 #[cfg(test)]
+mod testmgmt_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tools_tests;
