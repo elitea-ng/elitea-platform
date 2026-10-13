@@ -12,6 +12,7 @@ import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { useDeleteIndexItemMutation, useIndexScheduleQuery, useIndexesListQuery } from '../api/indexesApi';
 import { IndexViewsEnum, NEW_INDEX_ID, SearchParams } from '../lib/constants/indexDetails.constants';
 import { toDisplayString } from '../lib/helpers/displayString.local';
+import { pickIndexSelection } from '../lib/helpers/indexSelection';
 import { readIndexesListErrorMessage } from '../lib/helpers/indexesListError';
 import { useSelectedProjectId } from '../lib/hooks/useSelectedProjectId';
 import { mergeIndexesOverlay, useIndexesStore } from '../model/indexesStore';
@@ -170,12 +171,9 @@ export function IndexesContainer(props: IndexesContainerProps): ReactNode {
       return;
     }
 
-    const reindexing = (currentIndex?.metadata['history'] as readonly unknown[] | undefined)?.length ?? 0;
-    const firstValidIndex = overlaidIndexesList.find((idx) => idx.metadata['indexed'] !== undefined);
-    const reindexingCurrentIndex = overlaidIndexesList.find((idx) => idx.id === currentIndex?.id);
-
-    if (firstValidIndex) setCurrentIndex(firstValidIndex);
-    if (reindexingCurrentIndex && reindexing >= 1) setCurrentIndex(reindexingCurrentIndex);
+    // Follow the index the user created or acted on, not the list order.
+    const next = pickIndexSelection(currentIndex, overlaidIndexesList);
+    if (next) setCurrentIndex(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overlaidIndexesList, isLoading, isFetching, indexNameFromUrl]);
 

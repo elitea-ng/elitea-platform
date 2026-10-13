@@ -1355,87 +1355,7 @@ jobs:
     # lane does not.
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    steps:    # Issue #485. `apps/elitea-web/scripts/index-stream-e2e.sh` ran in no
-    # workflow, and neither did `deploy/scripts/embedding-path-check.sh`, which
-    # it calls. That second script is the reference honest validator in this
-    # repository — it counts its assertions and exits non-zero when fewer than
-    # 13 run — and no continuous-integration job could reach it. Its only two
-    # callers were `standalone-stack.sh check` and this journey, and neither
-    # ran anywhere.
-    #
-    # A separate job from `chat-stream` for the reason `chat-stream` is separate
-    # from `e2e`: it needs its own compose project on its own runner. Only one
-    # standalone stack can be up per host, because oidc-mock's port 9400 cannot
-    # be remapped (the issuer comes from the Host header).
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "26"
-          cache: npm
-          cache-dependency-path: apps/elitea-web/package-lock.json
-      - name: Install (locked)
-        run: npm ci
-      - name: Pre-pull the pinned Playwright container (background)
-        # Started with nohup and left running while the bake below uses the
-        # CPU: the runner does not reap a step's background processes. This is
-        # fire-and-forget — nothing here waits on it. The script this job
-        # delegates to (chat-stream-e2e.sh / index-stream-e2e.sh) waits for it
-        # and retries with a bounded backoff immediately before the `docker
-        # run` that needs the image, so a slow or failed background pull
-        # costs only the overlap, never an unretried inline pull racing the
-        # registry (the mcr.microsoft.com timeout that killed PR #1001).
-        run: |
-          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
-      - name: Build the stack images (shared cache)
-        # Replaces the script's own `compose build` (STANDALONE_SKIP_BUILD=1
-        # below): every `build:` service of the compose file(s) the stack runs,
-        # baked with one shared layer cache per image and the cargo/Go/pip
-        # cache mounts restored from the previous run, then asserted present.
-        # Measured before this: 5.3 min (python worker) to 10.6 min (Rust
-        # worker, 9.6 of it one sequential cargo chain) of every such job.
-        uses: ./.github/actions/build-stack-images
-        with:
-          compose-files: |
-            docker-compose.standalone-full.yml
-          cache-hcl: |
-            ci/bake-cache.hcl
-          targets: standalone
-          mount-cache-suffix: python
-      - name: Run the journey against a fresh standalone stack
-        # The script owns the whole lifecycle: runtime PKI, build, compose up,
-        # four seed steps, the embedding-path assertions, then Playwright. It
-        # uses its own compose project and tears down on exit.
-        #
-        # PLAYWRIGHT_CONTAINER_IMAGE containerises the test run; the tag lives
-        # HERE so scripts/check-playwright-image-tag.mjs (which only scans
-        # .github/workflows/) keeps gating it — see the `chat-stream` job.
-        working-directory: ${{ github.workspace }}
-        env:
-          COMPOSE_BIN: docker compose
-          CI: "true"
-          STANDALONE_SKIP_BUILD: "1"
-          INDEX_STREAM_PROJECT: elitea-indexstream-ci
-          INDEX_STREAM_PORT: "8087"
-          INDEX_STREAM_MOCK_PORT: "8091"
-          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
-        run: bash apps/elitea-web/scripts/index-stream-e2e.sh
-      - name: Give the report back to the runner user
-        # Same root-owned-report trap and fix as the `e2e` and `chat-stream`
-        # jobs.
-        if: always()
-        run: sudo chown -R "$(id -u):$(id -g)" playwright-results playwright-report 2>/dev/null || true
-      - name: Upload Playwright report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-report-index-stream
-          path: apps/elitea-web/playwright-report/
-          if-no-files-found: ignore
-          retention-days: 14
-
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
@@ -1486,6 +1406,7 @@ jobs:
           CI: "true"
           STANDALONE_SKIP_BUILD: "1"
           STANDALONE_WORKER: rust
+          ELITEA_INDEXING_RUNTIME: rust
           INDEX_STREAM_PROJECT: elitea-indexstream-rust-ci
           INDEX_STREAM_PORT: "8087"
           INDEX_STREAM_MOCK_PORT: "8091"

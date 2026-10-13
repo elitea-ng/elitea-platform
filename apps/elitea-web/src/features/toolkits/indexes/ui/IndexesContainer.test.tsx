@@ -163,6 +163,26 @@ describe('IndexesContainer', () => {
     expect(await screen.findAllByText('my-index')).not.toHaveLength(0);
   });
 
+  it('defaults to the first finished row of a multi-row list, and the user can act on an older one', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1`, () =>
+        HttpResponse.json([
+          { id: '2', metadata: { collection: 'newest-index', state: 'completed', indexed: 1 } },
+          { id: '1', metadata: { collection: 'older-index', state: 'completed', indexed: 1 } },
+        ]),
+      ),
+    );
+    const user = userEvent.setup();
+    renderContainer();
+    await screen.findAllByText('newest-index');
+    await user.click(screen.getAllByText('older-index')[0]!);
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    // The confirm modal names the index the user chose, not the first row.
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('older-index');
+    expect(dialog).not.toHaveTextContent('newest-index');
+  });
+
   it('clicking "add index" selects a new local New Index row and switches to create view', async () => {
     server.use(http.get(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1`, () => HttpResponse.json([])));
     const user = userEvent.setup();

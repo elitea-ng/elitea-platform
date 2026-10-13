@@ -17,8 +17,8 @@ import (
 // Store is the persistence the Service needs. The Postgres implementation is
 // infra/db/repos.IndexRegistryRepository.
 type Store interface {
-	// List returns the live rows of one toolkit, most recently updated first
-	// (the Python index_meta list order).
+	// List returns the live rows of one toolkit, newest created first
+	// (created_at DESC, index_id DESC).
 	List(ctx context.Context, projectID, toolkitID int32) ([]Row, error)
 	// FindByName returns the live row of one index name.
 	FindByName(ctx context.Context, projectID, toolkitID int32, name string) (Row, bool, error)

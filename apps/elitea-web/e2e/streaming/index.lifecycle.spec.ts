@@ -310,10 +310,11 @@ test('an existing index can be re-indexed, and the server records the new run', 
  * for why the tick is needed and why it is not a save. Doing it afterwards
  * would mean switching tabs back and forth, and the Indexes panel unmounts
  * with the tab (`EditToolkit.tsx:367-385`): on remount `IndexesContainer`
- * re-runs its auto-select effect and picks the first ALREADY-INDEXED row of
- * the server's list, not the one this test just made. Deleting whatever that
- * happened to be would still go green here and would destroy a sibling
- * journey's fixture.
+ * re-runs its default selection, which is the first finished row of the
+ * server's list, not the one this test just made. The tab keeps the selection
+ * on the index the user created or acted on (`pickIndexSelection`), so this
+ * journey does not depend on the list's order; the typed-name guard below is
+ * what would stop it deleting a sibling journey's fixture.
  */
 test('an index can be deleted, and it is gone from the server, not only from the screen', async ({ page }) => {
   test.setTimeout(240_000);
@@ -342,6 +343,7 @@ test('an index can be deleted, and it is gone from the server, not only from the
   await expect(dialog).toBeVisible({ timeout: 15_000 });
   const confirm = dialog.getByRole('button', { name: 'Delete' });
   await expect(confirm, 'the confirm button must be gated on the typed name').toBeDisabled();
+  await expect(dialog, 'the confirm modal must name the index this test created, whatever the list order').toContainText(name);
 
   await dialog.getByRole('textbox').fill(name);
   await expect(confirm).toBeEnabled({ timeout: 10_000 });
