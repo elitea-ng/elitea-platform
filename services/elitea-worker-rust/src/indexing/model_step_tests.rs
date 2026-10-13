@@ -1007,6 +1007,10 @@ async fn runs_without_a_proposal_chunker_are_not_failed_by_unreadable_chat_entri
 #[tokio::test(flavor = "multi_thread")]
 async fn a_statistical_success_resets_the_model_failure_streak() {
     let mut harness = harness(4, None).await;
+    // The streak counts documents in the order their model steps run, which
+    // with concurrent preparation is completion order: prepare one document
+    // at a time so the listed order is the order the streak sees.
+    harness.runtime.limits.document_concurrency = 1;
     let chat = ScriptedChat::new(|_, _| {
         Reply::Fail(ErrorCategory::Unavailable, "model_gateway.unavailable")
     });
