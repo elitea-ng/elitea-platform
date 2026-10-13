@@ -22,10 +22,13 @@
 //! back (`ProposalPlan::chunks`, `StatisticalPlan::chunks`). [`chunk`] keeps
 //! its model-free contract: a config that asks for one of them gets
 //! [`ChunkError::RequiresModel`], so a caller without models reports the
-//! document as skipped with a reason. `use_llm` is the image-file step only:
-//! a standalone image file is planned by [`plan_image`] (ADR-0030 I4 part B),
-//! on by default as in the SDK, and `use_llm` on any other document changes
-//! nothing (images inside documents are not ported).
+//! document as skipped with a reason. `use_llm` is the picture step, and
+//! never makes a document need a model to be CHUNKED: a standalone image file
+//! is planned by [`plan_image`] (ADR-0030 I4 part B), on by default as in the
+//! SDK; the pictures embedded in a PDF, DOCX or PPTX by [`plan_embedded`]
+//! (part C), OFF by default as in the SDK, whose descriptions are written
+//! into the document's text before it is chunked. On any other document
+//! `use_llm` changes nothing.
 //!
 //! The entry points are [`chunk`] and [`plan`]; an indexer that converted an
 //! HTML page to markdown uses [`chunk_with`] / [`plan_with`] and says so
@@ -33,6 +36,7 @@
 
 mod code;
 mod config;
+mod embedded;
 mod json;
 mod markdown;
 mod proposal;
@@ -43,6 +47,10 @@ mod vision;
 
 pub use config::{
     ChunkParams, ChunkingConfig, ConfigError, ModelStepParams, normalize_chunker_name,
+};
+pub use embedded::{
+    Described, EMBEDDED_IMAGE_EXTENSIONS, EmbeddedVisionPlan, Inline, plan_embedded,
+    plan_embedded_for, written_order,
 };
 pub use proposal::{
     AnalysisError, ChunkDetails, PROPOSAL_WINDOW_TOKENS, parse_chunk_analysis, proposal_chunks,

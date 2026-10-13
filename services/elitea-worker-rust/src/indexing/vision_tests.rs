@@ -47,7 +47,13 @@ fn image(name: &str, kind: &str, tag: &str) -> Document {
 
 /// A decodable picture of `width` x `height` whose pixels follow `tag`
 /// (two tags are two pictures), as `format`.
-fn real_image(name: &str, format: ImageFormat, width: u32, height: u32, tag: &str) -> Document {
+pub(super) fn real_image(
+    name: &str,
+    format: ImageFormat,
+    width: u32,
+    height: u32,
+    tag: &str,
+) -> Document {
     let mut state = tag.bytes().fold(0x9e37_79b9_u32, |acc, b| {
         acc.wrapping_mul(31).wrapping_add(u32::from(b))
     });

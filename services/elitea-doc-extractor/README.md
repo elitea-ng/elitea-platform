@@ -47,6 +47,64 @@ is not. The worker maps the skips onto its summary labels: `too_large`
 `unreadable` (corrupt), `extract_timeout`, `empty`; plus `extract_failed`
 for the status case.
 
+### Embedded pictures (ADR-0030 I4 part C)
+
+A header may carry `images` (`ExtractImages`: a count, a per-picture size and
+a total size; zero is the extractor's own cap). Only then, and only for a
+PDF, DOCX or PPTX, the answer carries the document's embedded pictures beside
+the text (`ExtractedText.images`): each with its bytes, the media type its
+BYTES say (PNG, JPEG, GIF, WebP or BMP; anything else, SVG and masks
+included, is counted in `images_skipped.unsupported`), its position in
+document order, the page or slide, the package's file name where there is one
+(`image1.png`) and `text_offset`, the byte offset in the text where its
+description belongs. A header without `images` reads no picture, and the text
+is the same either way (a test asserts it for all three formats).
+
+The bytes are passed through: the extractor decodes and re-encodes nothing it
+returns. DOCX and PPTX pictures are the package's own files; a PDF's come
+from xberg's PDF backend, which hands them over as image files it wrote
+(PNG), so the PDF parser's own decoding of its image streams is the one place
+a picture is decoded here, inside the same process boundary as the rest of the
+PDF parsing. xberg reads a picture into memory before the caps can drop it,
+so the work is bounded BEFORE the parser runs: a DOCX or PPTX's media are
+counted from the zip's central directory (nothing is decompressed) and a
+package whose media outweigh four times the caps (in count or declared bytes)
+gives its text and no picture (counted `too_many` / `too_large`). xberg's PDF
+backend decodes the pictures of EVERY page in parallel, with no document
+budget and no way to stop once enough are found, so a PDF is read in two
+passes: the text alone first (which gives its page count), then, only for a
+PDF of at most 8 pages, 16 MiB and 4 MiB of text, again with the pictures
+(one a page kept, one more seen to show an overflow). A longer PDF gives its
+text and no picture, counted as one `too_many` (how many it holds is not known
+without decoding them); an image-only PDF over 8 pages therefore gives no
+text and no picture, and is skipped `empty`. A document with no text but with
+pictures (a scanned PDF of at most 8 pages, an image-only deck) is returned
+with an empty text and its pictures: the worker indexes it from their
+descriptions. With no picture to describe it is `empty` as before.
+
+`text_offset` is recovered from what xberg's plain text gives, because that
+text carries no marker for a picture: right after the picture's own
+`[Image: ...]` line when the text has one (DOCX prints one per picture), else
+the end of its page's or slide's text (the page is found in the whole by its
+page text, in order), else the end of the text. See `doc-extract::anchors`.
+
+Caps (a request is lowered to them; `Capabilities.image_limits` states them):
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `ELITEA_EXTRACTOR_MAX_IMAGES` | pictures returned for one document | 24 |
+| `ELITEA_EXTRACTOR_MAX_IMAGE_BYTES` | bytes of one returned picture | 5 MiB |
+| `ELITEA_EXTRACTOR_MAX_IMAGE_TOTAL_BYTES` | bytes of all the pictures of one document | 12 MiB |
+
+A returned picture is held about three times (the parser's, the response's,
+the encoded message). A DOCX or PPTX's media may weigh four times the total
+bound inside the parser; a PDF holds up to 8 pages x 2 pictures at the
+per-picture bound (the parser has no byte bound of its own), its own bytes a
+second time and its text three times. A slot costs up to 144 MiB more than its
+document at the defaults (`Config::picture_memory`, times the real
+concurrency), inside the quarter of the container limit a config test holds
+it to; the test fails if a default grows past it.
+
 ## Transport and isolation
 
 gRPC over a Unix domain socket in a directory the two containers share (a

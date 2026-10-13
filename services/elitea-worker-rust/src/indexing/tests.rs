@@ -1476,7 +1476,7 @@ fn a_failure_summary_names_the_index_and_is_bounded() {
 /// answers text after a short while, anything else is text at once. Every
 /// header it read is recorded with the bytes that followed; the most calls
 /// it ever had in flight at once is counted.
-mod fake_extractor {
+pub(in crate::indexing) mod fake_extractor {
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1489,18 +1489,20 @@ mod fake_extractor {
         DocumentExtractService, DocumentExtractServiceServer,
     };
     use crate::protocol::extract::{
-        CapabilitiesRequest, CapabilitiesResponse, ExtractLimits, ExtractRequest, ExtractResponse,
-        ExtractSkip, ExtractedText, SkipReason, extract_request, extract_response,
+        CapabilitiesRequest, CapabilitiesResponse, EmbeddedImage, ExtractImages, ExtractLimits,
+        ExtractRequest, ExtractResponse, ExtractSkip, ExtractedText, ImagesSkipped, SkipReason,
+        extract_request, extract_response,
     };
 
-    pub(super) const TEXT: &str = "Refunds within thirty days.\n\nExchanges within sixty days.\n";
+    pub(in crate::indexing) const TEXT: &str =
+        "Refunds within thirty days.\n\nExchanges within sixty days.\n";
 
     /// (filename, content type, declared length, bytes received, input cap,
     /// asked timeout in ms).
-    pub(super) type Seen = (String, String, u64, usize, u64, u32);
+    pub(in crate::indexing) type Seen = (String, String, u64, usize, u64, u32);
 
     /// What the real sidecar advertises by default.
-    pub(super) fn capabilities(concurrency: u32) -> CapabilitiesResponse {
+    pub(in crate::indexing) fn capabilities(concurrency: u32) -> CapabilitiesResponse {
         CapabilitiesResponse {
             content_types: vec!["application/pdf".to_owned()],
             limits: Some(ExtractLimits {
@@ -1515,15 +1517,34 @@ mod fake_extractor {
             stream_idle_millis: 30_000,
             busy: 0,
             overruns: 0,
+            image_limits: Some(ExtractImages {
+                max_images: 24,
+                max_image_bytes: 5 << 20,
+                max_total_bytes: 12 << 20,
+            }),
         }
     }
 
-    pub(super) struct Fake {
-        pub(super) seen: Mutex<Vec<Seen>>,
-        pub(super) capabilities: CapabilitiesResponse,
-        pub(super) capabilities_calls: AtomicUsize,
+    /// What a scripted document answers when the header asks for pictures.
+    #[derive(Clone)]
+    pub(in crate::indexing) struct ScriptedPictures {
+        pub(in crate::indexing) text: String,
+        pub(in crate::indexing) images: Vec<EmbeddedImage>,
+        pub(in crate::indexing) skipped: Option<ImagesSkipped>,
+    }
+
+    pub(in crate::indexing) struct Fake {
+        pub(in crate::indexing) seen: Mutex<Vec<Seen>>,
+        /// The `images` of each header, in arrival order.
+        pub(in crate::indexing) asked: Mutex<Vec<Option<ExtractImages>>>,
+        /// When each document (by file name) arrived, in arrival order.
+        pub(in crate::indexing) arrived: Mutex<Vec<(String, std::time::Instant)>>,
+        /// Answered (text, pictures) to a header that asks for pictures.
+        pub(in crate::indexing) pictures: Mutex<Option<ScriptedPictures>>,
+        pub(in crate::indexing) capabilities: CapabilitiesResponse,
+        pub(in crate::indexing) capabilities_calls: AtomicUsize,
         in_flight: AtomicUsize,
-        pub(super) max_in_flight: AtomicUsize,
+        pub(in crate::indexing) max_in_flight: AtomicUsize,
         crash: Notify,
     }
 
@@ -1559,6 +1580,11 @@ mod fake_extractor {
                     _ => return Err(Status::invalid_argument("chunks after the header")),
                 }
             }
+            self.asked.lock().expect("lock").push(header.images);
+            self.arrived
+                .lock()
+                .expect("lock")
+                .push((header.filename.clone(), std::time::Instant::now()));
             self.seen.lock().expect("lock").push((
                 header.filename.clone(),
                 header.content_type.clone(),
@@ -1587,28 +1613,37 @@ mod fake_extractor {
             if stem == "slow" {
                 tokio::time::sleep(Duration::from_millis(150)).await;
             }
-            let outcome = match stem.strip_prefix("skip-") {
-                Some(reason) => {
-                    let reason = match reason {
-                        "too_large" => SkipReason::TooLarge,
-                        "too_many_pages" => SkipReason::TooManyPages,
-                        "encrypted" => SkipReason::Encrypted,
-                        "unsupported" => SkipReason::Unsupported,
-                        "corrupt" => SkipReason::Corrupt,
-                        "timeout" => SkipReason::Timeout,
-                        "output_too_large" => SkipReason::OutputTooLarge,
-                        "empty" => SkipReason::Empty,
-                        other => panic!("unknown scripted reason {other}"),
-                    };
-                    extract_response::Outcome::Skip(ExtractSkip {
-                        reason: reason as i32,
-                        detail: format!("scripted {reason:?}"),
-                    })
-                }
-                None => extract_response::Outcome::Text(ExtractedText {
-                    text: TEXT.to_owned(),
+            let outcome = if let Some(reason) = stem.strip_prefix("skip-") {
+                let reason = match reason {
+                    "too_large" => SkipReason::TooLarge,
+                    "too_many_pages" => SkipReason::TooManyPages,
+                    "encrypted" => SkipReason::Encrypted,
+                    "unsupported" => SkipReason::Unsupported,
+                    "corrupt" => SkipReason::Corrupt,
+                    "timeout" => SkipReason::Timeout,
+                    "output_too_large" => SkipReason::OutputTooLarge,
+                    "empty" => SkipReason::Empty,
+                    other => panic!("unknown scripted reason {other}"),
+                };
+                extract_response::Outcome::Skip(ExtractSkip {
+                    reason: reason as i32,
+                    detail: format!("scripted {reason:?}"),
+                })
+            } else {
+                let scripted = self.pictures.lock().expect("lock").clone();
+                let asked = header.images.is_some();
+                let (text, images, images_skipped) = match scripted {
+                    Some(scripted) if asked => (scripted.text, scripted.images, scripted.skipped),
+                    // Asked for no pictures: the same text, none read.
+                    Some(scripted) => (scripted.text, Vec::new(), None),
+                    None => (TEXT.to_owned(), Vec::new(), None),
+                };
+                extract_response::Outcome::Text(ExtractedText {
+                    text,
                     extractor: "xberg".to_owned(),
-                }),
+                    images,
+                    images_skipped,
+                })
             };
             Ok(Response::new(ExtractResponse {
                 outcome: Some(outcome),
@@ -1630,14 +1665,20 @@ mod fake_extractor {
     /// aborting the server task alone would leave the connections alive):
     /// the client's call fails with the connection, as a crashed sidecar's
     /// would.
-    pub(super) fn serve(socket: &Path) -> Arc<Fake> {
+    pub(in crate::indexing) fn serve(socket: &Path) -> Arc<Fake> {
         serve_with(socket, capabilities(4))
     }
 
     /// [`serve`] advertising `capabilities`.
-    pub(super) fn serve_with(socket: &Path, capabilities: CapabilitiesResponse) -> Arc<Fake> {
+    pub(in crate::indexing) fn serve_with(
+        socket: &Path,
+        capabilities: CapabilitiesResponse,
+    ) -> Arc<Fake> {
         let fake = Arc::new(Fake {
             seen: Mutex::new(Vec::new()),
+            asked: Mutex::new(Vec::new()),
+            arrived: Mutex::new(Vec::new()),
+            pictures: Mutex::new(None),
             capabilities,
             capabilities_calls: AtomicUsize::new(0),
             in_flight: AtomicUsize::new(0),
@@ -1679,12 +1720,12 @@ mod fake_extractor {
     }
 }
 
-fn socket_path(name: &str) -> std::path::PathBuf {
+pub(super) fn socket_path(name: &str) -> std::path::PathBuf {
     // Short: macOS caps a socket path at 104 bytes.
     std::env::temp_dir().join(format!("wx-{}-{name}.sock", std::process::id()))
 }
 
-fn with_extractor(mut harness: Harness, socket: &std::path::Path) -> Harness {
+pub(super) fn with_extractor(mut harness: Harness, socket: &std::path::Path) -> Harness {
     let client = crate::transport::extractor_client::ExtractorClient::connect_lazy(socket)
         .expect("client")
         .with_deadline_margin(Duration::from_millis(200));
@@ -1695,7 +1736,7 @@ fn with_extractor(mut harness: Harness, socket: &std::path::Path) -> Harness {
 /// A document whose bytes are not text: what a connector fetched for a PDF
 /// or an Office file. The fake extractor does not read them; the pipeline
 /// must not try to either.
-fn binary_document(key: &str, bytes: &[u8]) -> Document {
+pub(super) fn binary_document(key: &str, bytes: &[u8]) -> Document {
     let mut document = document(key, "v1", "");
     document.reference.size = bytes.len() as u64;
     document.bytes = bytes.to_vec();

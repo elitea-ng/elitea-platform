@@ -48,8 +48,8 @@ use tower::service_fn;
 
 use crate::protocol::extract::document_extract_service_client::DocumentExtractServiceClient;
 use crate::protocol::extract::{
-    CapabilitiesRequest, CapabilitiesResponse, ExtractHeader, ExtractLimits, ExtractRequest,
-    SkipReason as WireSkipReason, extract_request, extract_response,
+    CapabilitiesRequest, CapabilitiesResponse, ExtractHeader, ExtractImages, ExtractLimits,
+    ExtractRequest, SkipReason as WireSkipReason, extract_request, extract_response,
 };
 
 /// Bytes per streamed chunk; the sidecar's message limit is 4 MiB.
@@ -82,10 +82,54 @@ pub(crate) enum SkipReason {
     Empty,
 }
 
+/// What a run asks of the sidecar for the pictures embedded in a document
+/// (ADR-0030 I4 part C). The sidecar lowers each figure to its own cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PictureRequest {
+    /// Most pictures returned for one document.
+    pub(crate) pictures: u32,
+    /// Most bytes of one picture.
+    pub(crate) picture_bytes: u64,
+    /// Most bytes of all the pictures together.
+    pub(crate) total_bytes: u64,
+}
+
+/// One picture embedded in a document, as the sidecar passed it through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Picture {
+    pub(crate) bytes: Bytes,
+    /// By the bytes: `image/png`, `image/jpeg`, `image/gif`, `image/webp`
+    /// or `image/bmp`.
+    pub(crate) media_type: &'static str,
+    /// Position among the document's pictures, in document order.
+    pub(crate) ordinal: u32,
+    /// Where its description belongs in the text (a byte offset).
+    pub(crate) text_offset: usize,
+    /// The file name inside the package, when the format has one.
+    pub(crate) name: Option<String>,
+}
+
+/// Pictures the sidecar found and did not return, by reason; plus those the
+/// client refused to take from an answer that exceeded what was asked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PicturesDropped {
+    pub(crate) too_many: u32,
+    pub(crate) too_large: u32,
+    pub(crate) unsupported: u32,
+}
+
+/// A document's text and, when the run asked, its embedded pictures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExtractedDocument {
+    pub(crate) text: String,
+    pub(crate) pictures: Vec<Picture>,
+    pub(crate) dropped: PicturesDropped,
+}
+
 /// What the sidecar answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Extraction {
-    Text(String),
+    Text(ExtractedDocument),
     Skipped(SkipReason),
 }
 
@@ -358,7 +402,9 @@ impl ExtractorClient {
 
     /// `bytes` of media type `mime`, named `filename`, as the sidecar reads
     /// them; `max_input_bytes` is this run's document cap and `timeout` the
-    /// extraction time it asks for (lowered to the sidecar's cap).
+    /// extraction time it asks for (lowered to the sidecar's cap). With
+    /// `pictures` the answer carries the document's embedded pictures too;
+    /// without, none is read.
     ///
     /// # Errors
     ///
@@ -370,6 +416,7 @@ impl ExtractorClient {
         bytes: Vec<u8>,
         max_input_bytes: u64,
         timeout: Duration,
+        pictures: Option<PictureRequest>,
     ) -> Result<Extraction, ExtractorError> {
         let sidecar = self.sidecar().await?;
         // The local queue: no more calls in flight than the sidecar has
@@ -388,8 +435,16 @@ impl ExtractorClient {
                 timeout_millis: u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX),
                 ..ExtractLimits::default()
             }),
+            // Absent unless the run asked: the sidecar then reads no picture.
+            images: pictures.map(|asked| ExtractImages {
+                max_images: asked.pictures,
+                max_image_bytes: asked.picture_bytes,
+                max_total_bytes: asked.total_bytes,
+            }),
         };
-        let result = self.call(header, Bytes::from(bytes), deadline).await;
+        let result = self
+            .call(header, Bytes::from(bytes), deadline, pictures)
+            .await;
         self.slots.release(slot);
         match result {
             Ok(Extraction::Skipped(reason)) => {
@@ -415,6 +470,7 @@ impl ExtractorClient {
         header: ExtractHeader,
         bytes: Bytes,
         deadline: Duration,
+        asked: Option<PictureRequest>,
     ) -> Result<Extraction, ExtractorError> {
         let total = bytes.len();
         let chunks = (0..total).step_by(CHUNK_BYTES).map(move |start| {
@@ -441,7 +497,14 @@ impl ExtractorClient {
             .map_err(|status| ExtractorError(format!("the extractor refused: {status}")))?
             .into_inner();
         match response.outcome {
-            Some(extract_response::Outcome::Text(text)) => Ok(Extraction::Text(text.text)),
+            Some(extract_response::Outcome::Text(text)) => {
+                let (pictures, dropped) = pictures_of(&text, asked);
+                Ok(Extraction::Text(ExtractedDocument {
+                    text: text.text,
+                    pictures,
+                    dropped,
+                }))
+            }
             Some(extract_response::Outcome::Skip(skip)) => {
                 let reason = match WireSkipReason::try_from(skip.reason) {
                     Ok(WireSkipReason::TooLarge) => SkipReason::TooLarge,
@@ -473,9 +536,62 @@ impl ExtractorClient {
     }
 }
 
+/// The pictures of an answer, held to what was asked: none when the run
+/// asked for none, never more than the asked count or bytes (a sidecar
+/// that returns more is not believed), a media type outside the five a
+/// model takes is dropped, and every dropped one is counted.
+fn pictures_of(
+    text: &crate::protocol::extract::ExtractedText,
+    asked: Option<PictureRequest>,
+) -> (Vec<Picture>, PicturesDropped) {
+    let Some(asked) = asked else {
+        return (Vec::new(), PicturesDropped::default());
+    };
+    let said = text.images_skipped.unwrap_or_default();
+    let mut dropped = PicturesDropped {
+        too_many: said.too_many,
+        too_large: said.too_large,
+        unsupported: said.unsupported,
+    };
+    let mut pictures: Vec<Picture> = Vec::with_capacity(text.images.len());
+    let mut total = 0_u64;
+    for image in &text.images {
+        let media_type = match image.media_type.as_str() {
+            "image/png" => "image/png",
+            "image/jpeg" => "image/jpeg",
+            "image/gif" => "image/gif",
+            "image/webp" => "image/webp",
+            "image/bmp" => "image/bmp",
+            _ => {
+                dropped.unsupported += 1;
+                continue;
+            }
+        };
+        let len = image.data.len() as u64;
+        if pictures.len() >= usize::try_from(asked.pictures).unwrap_or(usize::MAX) {
+            dropped.too_many += 1;
+            continue;
+        }
+        if len > asked.picture_bytes || total.saturating_add(len) > asked.total_bytes {
+            dropped.too_large += 1;
+            continue;
+        }
+        total += len;
+        pictures.push(Picture {
+            bytes: image.data.clone(),
+            media_type,
+            ordinal: image.ordinal,
+            text_offset: usize::try_from(image.text_offset).unwrap_or(usize::MAX),
+            name: Some(image.name.clone()).filter(|name| !name.is_empty()),
+        });
+    }
+    (pictures, dropped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::extract::{EmbeddedImage, ExtractedText, ImagesSkipped};
 
     fn advertised(timeout: u32, slot_wait: u32, idle: u32, concurrency: u32) -> Sidecar {
         Sidecar::from_capabilities(&CapabilitiesResponse {
@@ -490,7 +606,96 @@ mod tests {
             stream_idle_millis: idle,
             busy: 0,
             overruns: 0,
+            image_limits: None,
         })
+    }
+
+    fn answer(images: Vec<(&str, usize)>, skipped: Option<ImagesSkipped>) -> ExtractedText {
+        ExtractedText {
+            text: "t".to_owned(),
+            extractor: "xberg".to_owned(),
+            images: images
+                .into_iter()
+                .enumerate()
+                .map(|(n, (media_type, len))| EmbeddedImage {
+                    data: Bytes::from(vec![7_u8; len]),
+                    media_type: media_type.to_owned(),
+                    ordinal: u32::try_from(n).expect("small"),
+                    text_offset: 3,
+                    page: 0,
+                    name: if n == 0 {
+                        "image1.png".to_owned()
+                    } else {
+                        String::new()
+                    },
+                })
+                .collect(),
+            images_skipped: skipped,
+        }
+    }
+
+    const ASKED: PictureRequest = PictureRequest {
+        pictures: 2,
+        picture_bytes: 10,
+        total_bytes: 15,
+    };
+
+    #[test]
+    fn pictures_are_taken_only_when_asked_and_only_within_what_was_asked() {
+        let said = answer(vec![("image/png", 4), ("image/jpeg", 4)], None);
+        // Not asked: whatever the answer carries is ignored.
+        assert_eq!(
+            pictures_of(&said, None),
+            (Vec::new(), PicturesDropped::default())
+        );
+        let (pictures, dropped) = pictures_of(&said, Some(ASKED));
+        assert_eq!(pictures.len(), 2);
+        assert_eq!(pictures[0].name.as_deref(), Some("image1.png"));
+        assert_eq!(pictures[1].name, None);
+        assert_eq!(
+            (pictures[0].media_type, pictures[1].media_type),
+            ("image/png", "image/jpeg")
+        );
+        assert_eq!(pictures[0].text_offset, 3);
+        assert_eq!(dropped, PicturesDropped::default());
+
+        // A sidecar that returns more than was asked is not believed: the
+        // count, the per-picture bytes and the total each hold here too.
+        let greedy = answer(
+            vec![
+                ("image/png", 4),
+                ("image/png", 11),
+                ("image/png", 4),
+                ("image/png", 9),
+            ],
+            Some(ImagesSkipped {
+                too_many: 1,
+                too_large: 0,
+                unsupported: 2,
+            }),
+        );
+        let (pictures, dropped) = pictures_of(&greedy, Some(ASKED));
+        // #1 fits, #2 is over 10 bytes, #3 fits (8 of 15), #4 would be
+        // the third picture.
+        assert_eq!(pictures.len(), 2);
+        assert_eq!(
+            dropped,
+            PicturesDropped {
+                too_many: 2,
+                too_large: 1,
+                unsupported: 2
+            }
+        );
+        // The total bound: 9 + 9 > 15.
+        let heavy = answer(vec![("image/png", 9), ("image/png", 9)], None);
+        let (pictures, dropped) = pictures_of(&heavy, Some(ASKED));
+        assert_eq!((pictures.len(), dropped.too_large), (1, 1));
+        // A media type outside the five a model takes is dropped.
+        let odd = answer(vec![("image/svg+xml", 4), ("image/bmp", 4)], None);
+        let (pictures, dropped) = pictures_of(&odd, Some(ASKED));
+        assert_eq!(pictures.len(), 1);
+        assert_eq!(pictures[0].media_type, "image/bmp");
+        assert_eq!(dropped.unsupported, 1);
     }
 
     #[test]
