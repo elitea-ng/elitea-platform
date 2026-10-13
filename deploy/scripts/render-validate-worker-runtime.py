@@ -49,8 +49,9 @@ OVERRIDES = {
 # it would never dial it either — but a runtime document should not claim
 # what its stack does not provide). Each key must exist in the source, so a
 # key that leaves the agent document is noticed here rather than kept as a
-# stale entry.
-DROPPED = {"extractor_socket"}
+# stale entry. `index_model_call_cap` bounds the model calls of an index run,
+# which the validate worker never runs.
+DROPPED = {"extractor_socket", "index_model_call_cap"}
 
 
 def render() -> str:

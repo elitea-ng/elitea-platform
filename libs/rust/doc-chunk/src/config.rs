@@ -11,6 +11,13 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+/// The one normalization of a chunker name (trim, ASCII lower-case) shared
+/// by the router and every predicate over a config.
+#[must_use]
+pub fn normalize_chunker_name(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
+
 /// One chunker's settings. A field left out takes the chunker's SDK default.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChunkParams {
@@ -40,30 +47,93 @@ pub struct ChunkParams {
     pub unknown_chunk_overlap: Option<i64>,
     /// A loader step that calls a model (image and PDF-image descriptions).
     pub use_llm: Option<bool>,
+    /// The settings of the statistical and proposal chunkers.
+    pub model_steps: ModelStepParams,
+}
+
+/// The settings of the two chunkers that call a model, under the SDK's key
+/// names (`statistical_chunker`, `proposal_chunker`). A field left out takes
+/// the SDK's default (see `StatisticalSettings` and `PROPOSAL_WINDOW_TOKENS`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModelStepParams {
+    /// Proposal: tokens per model window (`max_doc_tokens`, SDK 1024).
+    pub max_doc_tokens: Option<i64>,
+    /// Statistical: tokens per sentence-like split (`max_doc_size`, SDK 300).
+    pub max_doc_size: Option<i64>,
+    /// Statistical: splits per embeddings request (`batch_size`, SDK 64).
+    pub batch_size: Option<i64>,
+    /// Statistical: splits the running context averages (`window_size`, 5).
+    pub window_size: Option<i64>,
+    pub dynamic_threshold: Option<bool>,
+    pub min_split_tokens: Option<i64>,
+    pub max_split_tokens: Option<i64>,
+    pub split_tokens_tolerance: Option<i64>,
+    pub threshold_adjustment: Option<f64>,
+    pub score_threshold: Option<f64>,
+}
+
+// Every float is finite: `float` refuses NaN and the infinities.
+impl Eq for ModelStepParams {}
+
+/// `over`'s value when set, else `base`'s.
+fn pick<T: Clone>(over: Option<&T>, base: Option<&T>) -> Option<T> {
+    over.or(base).cloned()
+}
+
+/// Builds `Type` from `base` with `over`'s set fields taking precedence, one
+/// field list for every settings struct (a new setting is named once here).
+macro_rules! merge_fields {
+    ($base:expr, $over:expr, $ty:ident { $($field:ident),* $(,)? } $(, $($extra:tt)*)?) => {
+        $ty {
+            $($field: pick($over.$field.as_ref(), $base.$field.as_ref()),)*
+            $($($extra)*)?
+        }
+    };
+}
+
+impl ModelStepParams {
+    fn merged(&self, over: &Self) -> Self {
+        merge_fields!(
+            self,
+            over,
+            ModelStepParams {
+                max_doc_tokens,
+                max_doc_size,
+                batch_size,
+                window_size,
+                dynamic_threshold,
+                min_split_tokens,
+                max_split_tokens,
+                split_tokens_tolerance,
+                threshold_adjustment,
+                score_threshold,
+            }
+        )
+    }
 }
 
 impl ChunkParams {
     /// `self` with `over`'s set fields taking precedence.
     fn merged(&self, over: &Self) -> Self {
-        macro_rules! pick {
-            ($($field:ident),*) => {
-                Self { $($field: over.$field.clone().or_else(|| self.$field.clone())),* }
-            };
-        }
-        pick!(
-            chunker,
-            max_tokens,
-            chunk_size,
-            token_overlap,
-            chunk_overlap,
-            min_chunk_chars,
-            strip_header,
-            return_each_line,
-            headers_to_split_on,
-            max_chunk_size,
-            unknown_chunk_size,
-            unknown_chunk_overlap,
-            use_llm
+        merge_fields!(
+            self,
+            over,
+            ChunkParams {
+                chunker,
+                max_tokens,
+                chunk_size,
+                token_overlap,
+                chunk_overlap,
+                min_chunk_chars,
+                strip_header,
+                return_each_line,
+                headers_to_split_on,
+                max_chunk_size,
+                unknown_chunk_size,
+                unknown_chunk_overlap,
+                use_llm,
+            },
+            model_steps: self.model_steps.merged(&over.model_steps),
         )
     }
 
@@ -71,73 +141,70 @@ impl ChunkParams {
     /// is dropped (that key takes the default) and recorded in `warnings`,
     /// prefixed with `scope` (`""` or `".md"`), so one bad key does not
     /// cost the whole config.
+    #[allow(clippy::too_many_lines)] // One key per setting.
     fn from_object(
         object: &serde_json::Map<String, Value>,
         scope: &str,
         warnings: &mut Vec<String>,
     ) -> Self {
-        let mut warn = |key: &str, expected: &str, value: &Value| {
-            let at = if scope.is_empty() {
-                key.to_owned()
-            } else {
-                format!("{scope}.{key}")
-            };
-            warnings.push(format!(
-                "chunking_config `{at}` must be {expected}, got {value}; using the default"
-            ));
+        let mut read = Reader {
+            object,
+            scope,
+            warnings,
         };
-        let mut int = |key: &str| -> Option<i64> {
-            match object.get(key) {
-                None | Some(Value::Null) => None,
-                Some(value) => {
-                    let parsed = number(value);
-                    if parsed.is_none() {
-                        warn(key, "a number or a numeric string", value);
-                    }
-                    parsed
-                }
-            }
-        };
-        let max_tokens = int("max_tokens");
-        let chunk_size = int("chunk_size");
-        let token_overlap = int("token_overlap");
-        let chunk_overlap = int("chunk_overlap");
-        let max_chunk_size = int("max_chunk_size");
-        let min_chunk_chars = int("min_chunk_chars").map(|n| usize::try_from(n).unwrap_or(0));
-        let unknown_chunk_size = int("unknown_chunk_size");
+        let int =
+            |r: &mut Reader<'_>, key: &str| r.typed(key, "a number or a numeric string", number);
+        let max_tokens = int(&mut read, "max_tokens");
+        let chunk_size = int(&mut read, "chunk_size");
+        let token_overlap = int(&mut read, "token_overlap");
+        let chunk_overlap = int(&mut read, "chunk_overlap");
+        let max_chunk_size = int(&mut read, "max_chunk_size");
+        let min_chunk_chars =
+            int(&mut read, "min_chunk_chars").map(|n| usize::try_from(n).unwrap_or(0));
+        let unknown_chunk_size = int(&mut read, "unknown_chunk_size");
         // `token_chunk_size` is the SDK model's name for it
         // (`CodeChunkerConfig`).
-        let unknown_chunk_size = unknown_chunk_size.or_else(|| int("token_chunk_size"));
-        let unknown_chunk_overlap = int("unknown_chunk_overlap");
-        let mut flag = |key: &str| -> Option<bool> {
-            match object.get(key) {
-                None | Some(Value::Null) => None,
-                Some(Value::Bool(b)) => Some(*b),
-                Some(value) => {
-                    warn(key, "a boolean", value);
-                    None
-                }
-            }
+        let unknown_chunk_size = unknown_chunk_size.or_else(|| int(&mut read, "token_chunk_size"));
+        let unknown_chunk_overlap = int(&mut read, "unknown_chunk_overlap");
+        let max_doc_tokens = int(&mut read, "max_doc_tokens");
+        let max_doc_size = int(&mut read, "max_doc_size");
+        let batch_size = int(&mut read, "batch_size");
+        let window_size = int(&mut read, "window_size");
+        let min_split_tokens = int(&mut read, "min_split_tokens");
+        let max_split_tokens = int(&mut read, "max_split_tokens");
+        let split_tokens_tolerance = int(&mut read, "split_tokens_tolerance");
+        let threshold_adjustment = read.typed(
+            "threshold_adjustment",
+            "a finite number or a numeric string",
+            float,
+        );
+        let score_threshold = read.typed(
+            "score_threshold",
+            "a finite number or a numeric string",
+            float,
+        );
+        let mut flag = |key: &str| {
+            read.typed(key, "a boolean", |v| match v {
+                Value::Bool(b) => Some(*b),
+                _ => None,
+            })
         };
         let strip_header = flag("strip_header");
         let return_each_line = flag("return_each_line");
         let use_llm = flag("use_llm");
-        let mut text = |key: &str| -> Option<String> {
-            match object.get(key) {
-                None | Some(Value::Null) => None,
-                Some(Value::String(s)) if s.is_empty() => None,
-                Some(Value::String(s)) => Some(s.clone()),
-                Some(value) => {
-                    warn(key, "a string", value);
-                    None
-                }
-            }
+        let dynamic_threshold = flag("dynamic_threshold");
+        let mut text = |key: &str| {
+            read.typed(key, "a string", |v| match v {
+                Value::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .filter(|s| !s.is_empty())
         };
         let chunker = text("chunking_tool").or_else(|| text("chunker"));
         let headers_to_split_on = match headers(object.get("headers_to_split_on")) {
             Ok(headers) => headers,
             Err(value) => {
-                warn(
+                read.warn(
                     "headers_to_split_on",
                     "a list of [marker, name] pairs",
                     &value,
@@ -159,8 +226,71 @@ impl ChunkParams {
             unknown_chunk_size,
             unknown_chunk_overlap,
             use_llm,
+            model_steps: ModelStepParams {
+                max_doc_tokens,
+                max_doc_size,
+                batch_size,
+                window_size,
+                dynamic_threshold,
+                min_split_tokens,
+                max_split_tokens,
+                split_tokens_tolerance,
+                threshold_adjustment,
+                score_threshold,
+            },
         }
     }
+}
+
+/// One settings object being read: a typed getter per value kind, each
+/// dropping a wrong-typed value to the default with one warning.
+struct Reader<'a> {
+    object: &'a serde_json::Map<String, Value>,
+    scope: &'a str,
+    warnings: &'a mut Vec<String>,
+}
+
+impl Reader<'_> {
+    fn warn(&mut self, key: &str, expected: &str, value: &Value) {
+        let at = if self.scope.is_empty() {
+            key.to_owned()
+        } else {
+            format!("{}.{key}", self.scope)
+        };
+        self.warnings.push(format!(
+            "chunking_config `{at}` must be {expected}, got {value}; using the default"
+        ));
+    }
+
+    /// `key` parsed by `parse`; absent or `null` is `None` without a
+    /// warning, a value `parse` refuses is `None` with one.
+    fn typed<T>(
+        &mut self,
+        key: &str,
+        expected: &str,
+        parse: impl Fn(&Value) -> Option<T>,
+    ) -> Option<T> {
+        match self.object.get(key) {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let parsed = parse(value);
+                if parsed.is_none() {
+                    self.warn(key, expected, value);
+                }
+                parsed
+            }
+        }
+    }
+}
+
+/// A finite number from a JSON number or a numeric string.
+fn float(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+    .filter(|f| f.is_finite())
 }
 
 /// An integer from a JSON number (`512.0` is 512) or a numeric string
@@ -236,6 +366,36 @@ pub struct ChunkingConfig {
 }
 
 impl ChunkingConfig {
+    /// Whether any selected chunker is `name` (normalized as the router
+    /// does), at the top level or for any extension.
+    fn selects(&self, name: &str) -> bool {
+        std::iter::once(&self.base)
+            .chain(self.by_extension.values())
+            .any(|p| p.chunker.as_deref().map(normalize_chunker_name).as_deref() == Some(name))
+    }
+
+    /// Whether any chunker this config can select calls a model at all: the
+    /// `proposal` and `statistical` chunkers, or `use_llm`, at the top level
+    /// or for any extension.
+    #[must_use]
+    pub fn needs_model_step(&self) -> bool {
+        self.needs_chat_model()
+            || self.selects("statistical")
+            || std::iter::once(&self.base)
+                .chain(self.by_extension.values())
+                .any(|p| p.use_llm == Some(true))
+    }
+
+    /// Whether the run uses the CHAT model (`index.llm_model`): the
+    /// `proposal` chunker. The statistical chunker uses embeddings only.
+    // TODO(ADR-0030 I4 part B): `use_llm` joins this once the vision step
+    // describes images with the chat model; until then `use_llm` alone must
+    // neither fetch nor parse the chat entries.
+    #[must_use]
+    pub fn needs_chat_model(&self) -> bool {
+        self.selects("proposal")
+    }
+
     /// Read the SDK's JSON form. `null` is the empty config.
     ///
     /// A setting of the wrong type is dropped for that key's default and
@@ -305,6 +465,31 @@ impl<'de> Deserialize<'de> for ChunkingConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_config_needs_a_model_step_only_when_a_selected_chunker_calls_one() {
+        let from = |v: Value| ChunkingConfig::from_value(&v).unwrap();
+        assert!(!from(Value::Null).needs_model_step());
+        assert!(!from(serde_json::json!({"chunker": "markdown"})).needs_model_step());
+        assert!(from(serde_json::json!({"chunker": "proposal"})).needs_model_step());
+        assert!(from(serde_json::json!({".md": {"chunker": "statistical"}})).needs_model_step());
+        assert!(from(serde_json::json!({".pdf": {"use_llm": true}})).needs_model_step());
+        assert!(!from(serde_json::json!({"use_llm": false})).needs_model_step());
+        for spelled in ["Proposal", " proposal", "PROPOSAL "] {
+            let config = from(serde_json::json!({ "chunker": spelled }));
+            assert!(config.needs_model_step(), "{spelled:?}");
+            assert!(config.needs_chat_model(), "{spelled:?}");
+        }
+        assert!(from(serde_json::json!({".md": {"chunker": " Statistical"}})).needs_model_step());
+    }
+
+    #[test]
+    fn only_the_proposal_chunker_needs_the_chat_model() {
+        let from = |v: Value| ChunkingConfig::from_value(&v).unwrap();
+        assert!(!from(serde_json::json!({"chunker": "statistical"})).needs_chat_model());
+        assert!(!from(serde_json::json!({"use_llm": true})).needs_chat_model());
+        assert!(from(serde_json::json!({".md": {"chunking_tool": "Proposal"}})).needs_chat_model());
+    }
+
     use super::*;
     use serde_json::json;
 

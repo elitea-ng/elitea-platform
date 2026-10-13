@@ -89,6 +89,24 @@ data:
     {{- if $r.indexEgressAllowlist }}
     {{- $_ := set $config "index_egress_allowlist" $r.indexEgressAllowlist }}
     {{- end }}
+    {{- /* The model calls one index run may make (ADR-0030 I4). Written only
+    when set, and only under the Rust indexing runtime, so the Python
+    runtime.json stays identical; the worker's default is the chart default. */}}
+    {{- /* Validated, never defaulted by accident: 0 is falsy in a template and
+    would otherwise vanish into the worker's default. */}}
+    {{- if hasKey $r "indexModelCallCap" }}
+    {{- $cap := $r.indexModelCallCap }}
+    {{- if not (kindIs "invalid" $cap) }}
+    {{- if not (or (kindIs "float64" $cap) (kindIs "int64" $cap) (kindIs "int" $cap)) }}
+    {{- fail (printf "worker.runtime.indexModelCallCap must be an integer of at least 1, not %v (%s). It bounds the model calls one index run may make; to avoid model calls set the chunker to a non-model one." $cap (kindOf $cap)) }}
+    {{- end }}
+    {{- $f := float64 $cap }}
+    {{- if or (lt $f 1.0) (ne $f (floor $f)) (gt $f 4294967295.0) }}
+    {{- fail (printf "worker.runtime.indexModelCallCap must be an integer between 1 and 4294967295, not %v. Use 1 or more: 0 does not mean \"no model calls\"; set the chunker to a non-model one (markdown, text, ...) to avoid calls." $cap) }}
+    {{- end }}
+    {{- $_ := set $config "index_model_call_cap" (int64 $cap) }}
+    {{- end }}
+    {{- end }}
     {{- /* The document extraction sidecar (ADR-0030 I1): the worker streams
     PDF and Office documents to this socket, in the emptyDir the Deployment
     shares between the two containers. Written only while the sidecar renders
