@@ -1,7 +1,7 @@
 //! SDK-parity fixes found by the indexing audit: what a run keeps of a
 //! listing (the code families' extension allowlist, the artifact folder and
 //! patterns), the attested-empty guard (EL-6232), the status of a run that
-//! skipped documents, the `chunking_tool` forms of the ado_plans toolkit,
+//! skipped documents, the `chunking_tool` forms of the `ado_plans` toolkit,
 //! the base-document-only `chunking_tool`, the code metadata keys, and the
 //! ignored loader settings.
 
@@ -15,7 +15,7 @@ use super::source::{PathFilter, with_code_metadata};
 use super::tests::{Always, NS, command, document, harness, parameters, run, stored};
 use crate::protocol::elitea::runtime::v1::IndexIngestStatusV1;
 
-fn parameters_of(arguments: Value) -> IndexParameters {
+fn parameters_of(arguments: &Value) -> IndexParameters {
     let map = arguments.as_object().cloned().unwrap_or_default();
     let list = |key: &str| -> Vec<String> {
         map.get(key)
@@ -40,8 +40,9 @@ fn parameters_of(arguments: Value) -> IndexParameters {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)] // Call sites pass `json!` literals.
 fn filter(toolkit: &str, arguments: Value) -> PathFilter {
-    PathFilter::for_run(toolkit, &parameters_of(arguments)).expect("a valid filter")
+    PathFilter::for_run(toolkit, &parameters_of(&arguments)).expect("a valid filter")
 }
 
 // ---- gap 6: skip_unsupported_extensions ---------------------------------
@@ -111,7 +112,7 @@ fn the_extension_allowlist_composes_with_the_whitelist_and_blacklist() {
 fn a_mistyped_skip_unsupported_extensions_is_refused_with_its_name() {
     let error = PathFilter::for_run(
         "github",
-        &parameters_of(json!({"skip_unsupported_extensions": "no"})),
+        &parameters_of(&json!({"skip_unsupported_extensions": "no"})),
     )
     .expect_err("refused");
     assert!(error.contains("skip_unsupported_extensions"), "{error}");
@@ -163,7 +164,7 @@ fn mistyped_artifact_arguments_are_refused_with_their_names() {
         (json!({"skip_extensions": [1]}), "skip_extensions"),
     ] {
         let error =
-            PathFilter::for_run("artifact", &parameters_of(arguments)).expect_err("refused");
+            PathFilter::for_run("artifact", &parameters_of(&arguments)).expect_err("refused");
         assert!(error.contains(name), "{error}");
     }
 }
@@ -254,11 +255,7 @@ async fn a_whitelist_typo_leaves_a_populated_index_intact_and_fails_the_run() {
     .await
     .expect("summary");
     assert_eq!(typo.status, IndexIngestStatusV1::Error as i32, "{typo:?}");
-    assert!(
-        typo.message.contains("nothing was deleted"),
-        "{}",
-        typo.message
-    );
+    assert!(typo.message.contains("left untouched"), "{}", typo.message);
     assert!(typo.message.contains("filters"), "{}", typo.message);
     assert!(typo.removed_document_keys.is_empty());
     assert_eq!(harness.fake.point_count(), points_before);

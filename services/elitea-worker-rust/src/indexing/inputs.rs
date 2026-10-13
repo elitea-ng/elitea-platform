@@ -258,7 +258,7 @@ pub(crate) fn chunking_config(
 /// extension: spreadsheets, CSV, presentations and PDFs are extracted as a
 /// whole by the extraction sidecar and chunked by the document chunkers, so
 /// a header row, a sheet name, formula evaluation, pages per chunk or image
-/// extraction cannot be honoured. Deliberate (SOURCE_PARITY.md).
+/// extraction cannot be honoured. Deliberate (`SOURCE_PARITY.md`).
 const IGNORED_LOADER_KEYS: &[(&str, &[&str])] = &[
     (
         ".xlsx",

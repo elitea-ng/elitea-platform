@@ -337,6 +337,7 @@ struct StoreRecord {
 ///
 /// A malformed input entry, Stop, the deadline, or a lost lease; every other
 /// failure is an `ERROR` summary.
+#[allow(clippy::too_many_lines)] // One linear pass: validate the inputs, then build the run.
 pub(crate) async fn run_index(
     runtime: &IndexIngestRuntime,
     run: IndexRun<'_>,
@@ -649,22 +650,7 @@ impl Runner<'_> {
             .into_iter()
             .filter(|reference| self.filter.keeps(&reference.key))
             .collect();
-        // An empty result must not read as "everything was deleted" (the
-        // SDK's EL-6232 guard): unless the connector attests that the source
-        // is empty, a populated index (or a clean run about to wipe one)
-        // is left as it is and the run fails with the reason.
-        if listing.is_empty()
-            && (!prior.is_empty() || (parameters.clean_index && listed_by_source > 0))
-            && !(listed_by_source == 0 && (self.filter.attests_empty() || parameters.clean_index))
-        {
-            return Err(halt(&if listed_by_source == 0 {
-                "the source listing returned no documents while the index holds data from earlier runs; nothing was deleted. If the source really is empty now, run again with clean index".to_owned()
-            } else {
-                format!(
-                    "the source lists {listed_by_source} documents but the whitelist, blacklist and file-type filters kept none of them, while the index holds data from earlier runs; nothing was deleted. Check the filters"
-                )
-            }));
-        }
+        self.guard_empty_listing(listed_by_source, listing.len(), !prior.is_empty())?;
         if listing.len() > self.runtime.limits.max_documents {
             return Err(halt(&format!(
                 "the source holds {} documents after filtering; one run indexes at most {}",
@@ -705,6 +691,33 @@ impl Runner<'_> {
             vanished,
             reindex: !prior.is_empty(),
         })
+    }
+
+    /// An empty result must not read as "everything was deleted" (the SDK's
+    /// EL-6232 guard). `listed` documents came from the connector and `kept`
+    /// passed the filters. Unless the connector attests that the source is
+    /// empty, a populated index (or a clean run about to wipe one) is left as
+    /// it is and the run fails with the reason, before the store is touched.
+    fn guard_empty_listing(
+        &self,
+        listed: usize,
+        kept: usize,
+        index_is_populated: bool,
+    ) -> Result<(), Halt> {
+        let clean = self.parameters.clean_index;
+        if kept > 0
+            || !(index_is_populated || (clean && listed > 0))
+            || (listed == 0 && (self.filter.attests_empty() || clean))
+        {
+            return Ok(());
+        }
+        Err(halt(&if listed == 0 {
+            "the source listing returned no documents while the index holds data from earlier runs; nothing was deleted. If the source really is empty now, run again with clean index".to_owned()
+        } else {
+            format!(
+                "the source lists {listed} documents but the whitelist, blacklist and file-type filters kept none of them; the index was left untouched. Check the filters"
+            )
+        }))
     }
 
     /// Fetches, extracts and chunks with bounded concurrency; embeds and
