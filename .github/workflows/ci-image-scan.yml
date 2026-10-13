@@ -521,7 +521,7 @@ jobs:
           # mode=max on a PUSH to main, mode=min otherwise — the daily schedule
           # also carries the main ref and must not export every layer nightly.
           # The same write policy as .github/actions/build-stack-images.
-          cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=${{ matrix.image.name }}-linux-amd64
+          cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=${{ matrix.image.name }}-linux-amd64,ignore-error=true
 
       # exit-code 0 on purpose: this step collects the report, and the step
       # below is the gate. Splitting them lets the gate print every finding.
