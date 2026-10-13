@@ -110,6 +110,10 @@ pub struct Workbook {
     /// over the sheets, then once per cell that goes from empty to written.
     cells: u64,
     inline_strings: bool,
+    /// Cells cleared since open. zavora-xlsx keeps the parsed originals of an
+    /// opened sheet and reads them back after `clear_cell`; this mask hides
+    /// them. The saved file does not have them.
+    cleared: std::collections::HashSet<(usize, u32, u16)>,
 }
 
 impl std::fmt::Debug for Workbook {
@@ -127,6 +131,7 @@ impl Workbook {
             limits: limits.clone(),
             cells: 0,
             inline_strings: false,
+            cleared: std::collections::HashSet::new(),
         }
     }
 
@@ -159,6 +164,7 @@ impl Workbook {
             limits: limits.clone(),
             cells,
             inline_strings,
+            cleared: std::collections::HashSet::new(),
         })
     }
 
@@ -217,7 +223,15 @@ impl Workbook {
     /// # Errors
     /// [`OfficeError::NotFound`] for a bad index.
     pub fn remove_sheet(&mut self, index: usize) -> Result<()> {
-        self.wb.lock()?.remove_worksheet(index).map_err(map_err)
+        self.wb.lock()?.remove_worksheet(index).map_err(map_err)?;
+        // Cleared-cell marks follow the sheets that moved down.
+        self.cleared = self
+            .cleared
+            .drain()
+            .filter(|&(sh, _, _)| sh != index)
+            .map(|(sh, r, c)| (if sh > index { sh - 1 } else { sh }, r, c))
+            .collect();
+        Ok(())
     }
 
     /// Rename a sheet.
@@ -253,15 +267,22 @@ impl Workbook {
         }
         let mut w = self.wb.lock()?;
         let ws = w.worksheet(sheet).map_err(map_err)?;
-        let was_empty = matches!(ws.read_cell(row, col), ZCell::Empty);
+        let was_empty = self.cleared.contains(&(sheet, row, col))
+            || matches!(ws.read_cell(row, col), ZCell::Empty);
         let grows = was_empty && !matches!(value, CellValue::Empty);
         if grows && self.cells + 1 > self.limits.max_cells {
             return Err(limit(Limit::Cells, self.cells + 1));
         }
         match value {
-            CellValue::Empty => ws
-                .write_blank(row, col, &zavora_xlsx::Format::new())
-                .map(|_| ()),
+            CellValue::Empty => {
+                // Clearing removes the cell; it never writes a blank.
+                ws.clear_cell(row, col);
+                self.cleared.insert((sheet, row, col));
+                if !was_empty {
+                    self.cells = self.cells.saturating_sub(1);
+                }
+                return Ok(());
+            }
             CellValue::Text(s) => ws.write(row, col, s.as_str()).map(|_| ()),
             CellValue::Number(n) => ws.write(row, col, *n).map(|_| ()),
             CellValue::Bool(b) => ws.write(row, col, *b).map(|_| ()),
@@ -278,6 +299,7 @@ impl Workbook {
             }
         }
         .map_err(map_err)?;
+        self.cleared.remove(&(sheet, row, col));
         if grows {
             self.cells += 1;
         }
@@ -309,10 +331,11 @@ impl Workbook {
     /// [`OfficeError::NotFound`] for a bad sheet.
     pub fn read_cell(&self, sheet: usize, row: u32, col: u16) -> Result<CellValue> {
         let mut w = self.wb.lock()?;
-        Ok(w.worksheet(sheet)
-            .map_err(map_err)?
-            .read_cell(row, col)
-            .into())
+        let ws = w.worksheet(sheet).map_err(map_err)?;
+        if self.cleared.contains(&(sheet, row, col)) {
+            return Ok(CellValue::Empty);
+        }
+        Ok(ws.read_cell(row, col).into())
     }
 
     /// The used range of a sheet, if any cell exists.
@@ -349,7 +372,13 @@ impl Workbook {
         Ok((range.first_row..=range.last_row)
             .map(|r| {
                 (range.first_col..=range.last_col)
-                    .map(|c| ws.read_cell(r, c).into())
+                    .map(|c| {
+                        if self.cleared.contains(&(sheet, r, c)) {
+                            CellValue::Empty
+                        } else {
+                            ws.read_cell(r, c).into()
+                        }
+                    })
                     .collect()
             })
             .collect())

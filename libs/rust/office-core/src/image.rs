@@ -7,6 +7,8 @@ pub(crate) enum Format {
     Jpeg,
     Gif,
     Bmp,
+    WebP,
+    Tiff,
 }
 
 impl Format {
@@ -18,6 +20,8 @@ impl Format {
             Format::Jpeg => "jpeg",
             Format::Gif => "gif",
             Format::Bmp => "bmp",
+            Format::WebP => "webp",
+            Format::Tiff => "tiff",
         }
     }
 }
@@ -128,7 +132,131 @@ pub(crate) fn probe(bytes: &[u8]) -> Probe {
     if bytes.starts_with(&[0xFF, 0xD8]) {
         return probe_jpeg(bytes);
     }
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        return probe_webp(bytes);
+    }
+    if bytes.starts_with(&[0x49, 0x49, 0x2A, 0x00]) || bytes.starts_with(&[0x4D, 0x4D, 0x00, 0x2A])
+    {
+        return probe_tiff(bytes);
+    }
     Probe::NotRaster
+}
+
+fn webp(width: u64, height: u64) -> Probe {
+    Probe::Raster {
+        width,
+        height,
+        format: Format::WebP,
+    }
+}
+
+/// WebP: the first chunk is `VP8 ` (lossy), `VP8L` (lossless) or `VP8X`
+/// (extended, canvas size).
+fn probe_webp(b: &[u8]) -> Probe {
+    let Some(tag) = b.get(12..16) else {
+        return Probe::Unreadable;
+    };
+    let d = 20usize; // chunk data
+    match tag {
+        b"VP8 " => {
+            // frame tag(3) start code 9d 01 2a, then 14-bit width and height.
+            if b.get(d + 3..d + 6) != Some(&[0x9D, 0x01, 0x2A]) {
+                return Probe::Unreadable;
+            }
+            match (le16(b, d + 6), le16(b, d + 8)) {
+                (Some(w), Some(h)) => webp(w & 0x3FFF, h & 0x3FFF),
+                _ => Probe::Unreadable,
+            }
+        }
+        b"VP8L" => {
+            if b.get(d) != Some(&0x2F) {
+                return Probe::Unreadable;
+            }
+            let bits: Option<[u64; 4]> = (|| {
+                Some([
+                    u64::from(*b.get(d + 1)?),
+                    u64::from(*b.get(d + 2)?),
+                    u64::from(*b.get(d + 3)?),
+                    u64::from(*b.get(d + 4)?),
+                ])
+            })();
+            match bits {
+                Some([b1, b2, b3, b4]) => {
+                    let w = 1 + (b1 | ((b2 & 0x3F) << 8));
+                    let h = 1 + ((b2 >> 6) | (b3 << 2) | ((b4 & 0x0F) << 10));
+                    webp(w, h)
+                }
+                None => Probe::Unreadable,
+            }
+        }
+        b"VP8X" => {
+            let le24 = |i: usize| -> Option<u64> {
+                Some(
+                    u64::from(*b.get(i)?)
+                        | (u64::from(*b.get(i + 1)?) << 8)
+                        | (u64::from(*b.get(i + 2)?) << 16),
+                )
+            };
+            match (le24(d + 4), le24(d + 7)) {
+                (Some(w), Some(h)) => webp(w + 1, h + 1),
+                _ => Probe::Unreadable,
+            }
+        }
+        _ => Probe::Unreadable,
+    }
+}
+
+/// TIFF: width and length from the first IFD (tags 256 and 257, SHORT or LONG).
+#[allow(clippy::many_single_char_names)]
+fn probe_tiff(b: &[u8]) -> Probe {
+    let little = b.starts_with(&[0x49, 0x49]);
+    let r16 = |i: usize| -> Option<u64> {
+        let v = [*b.get(i)?, *b.get(i + 1)?];
+        Some(u64::from(if little {
+            u16::from_le_bytes(v)
+        } else {
+            u16::from_be_bytes(v)
+        }))
+    };
+    let r32 = |i: usize| -> Option<u64> {
+        let v = [*b.get(i)?, *b.get(i + 1)?, *b.get(i + 2)?, *b.get(i + 3)?];
+        Some(u64::from(if little {
+            u32::from_le_bytes(v)
+        } else {
+            u32::from_be_bytes(v)
+        }))
+    };
+    let Some(ifd) = r32(4).and_then(|o| usize::try_from(o).ok()) else {
+        return Probe::Unreadable;
+    };
+    let Some(count) = r16(ifd) else {
+        return Probe::Unreadable;
+    };
+    let (mut w, mut h) = (None, None);
+    for k in 0..count.min(512) as usize {
+        let e = ifd + 2 + k * 12;
+        let (Some(tag), Some(ty)) = (r16(e), r16(e + 2)) else {
+            return Probe::Unreadable;
+        };
+        let v = match ty {
+            3 => r16(e + 8),
+            4 => r32(e + 8),
+            _ => None,
+        };
+        match tag {
+            256 => w = v,
+            257 => h = v,
+            _ => {}
+        }
+    }
+    match (w, h) {
+        (Some(width), Some(height)) => Probe::Raster {
+            width,
+            height,
+            format: Format::Tiff,
+        },
+        _ => Probe::Unreadable,
+    }
 }
 
 fn probe_jpeg(b: &[u8]) -> Probe {
@@ -267,5 +395,43 @@ mod tests {
         assert!(!is_known_binary(b"<?xml version=\"1.0\"?>"));
         assert!(!is_known_binary(b"\0\x01\0\0font"));
         assert!(!is_known_binary(b""));
+    }
+
+    #[test]
+    #[allow(clippy::many_single_char_names)]
+    fn webp_dimensions() {
+        // VP8 (lossy): 640 x 480
+        let mut v = b"RIFF\0\0\0\0WEBPVP8 \0\0\0\0\x10\x00\x00\x9d\x01\x2a".to_vec();
+        v.extend_from_slice(&[0x80, 0x02, 0xE0, 0x01]);
+        assert_eq!(probe(&v).pixels(), Some(640 * 480));
+        // VP8L (lossless): 1 + (w-1) with w = 300, h = 200
+        let (w, h) = (299u32, 199u32);
+        let mut l = b"RIFF\0\0\0\0WEBPVP8L\0\0\0\0\x2f".to_vec();
+        let bits = w | (h << 14);
+        l.extend_from_slice(&bits.to_le_bytes());
+        assert_eq!(probe(&l).pixels(), Some(300 * 200));
+        // VP8X: canvas (w-1, h-1) as 24-bit
+        let mut x = b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0\0\0\0\0".to_vec();
+        x.extend_from_slice(&[0x0F, 0x27, 0x00, 0x0F, 0x27, 0x00]); // 9999 + 1
+        assert_eq!(probe(&x).pixels(), Some(10_000 * 10_000));
+        assert_eq!(probe(b"RIFF\0\0\0\0WEBPVP8 ").pixels(), None);
+        assert_eq!(probe(b"RIFF\0\0\0\0WEBPVP8 "), Probe::Unreadable);
+    }
+
+    #[test]
+    fn tiff_dimensions_both_byte_orders() {
+        // little endian, IFD at 8, two entries: width 70000 (LONG), length 20 (SHORT)
+        let mut t = vec![0x49, 0x49, 0x2A, 0, 8, 0, 0, 0, 2, 0];
+        t.extend_from_slice(&[0, 1, 4, 0, 1, 0, 0, 0]);
+        t.extend_from_slice(&70_000u32.to_le_bytes());
+        t.extend_from_slice(&[1, 1, 3, 0, 1, 0, 0, 0]);
+        t.extend_from_slice(&[20, 0, 0, 0]);
+        assert_eq!(probe(&t).pixels(), Some(1_400_000));
+        // big endian
+        let mut b = vec![0x4D, 0x4D, 0, 0x2A, 0, 0, 0, 8, 0, 2];
+        b.extend_from_slice(&[1, 0, 0, 3, 0, 0, 0, 1, 0x1F, 0x40, 0, 0]); // width 8000 short
+        b.extend_from_slice(&[1, 1, 0, 3, 0, 0, 0, 1, 0x0F, 0xA0, 0, 0]); // length 4000
+        assert_eq!(probe(&b).pixels(), Some(32_000_000));
+        assert_eq!(probe(&[0x49, 0x49, 0x2A, 0, 8, 0, 0, 0]), Probe::Unreadable);
     }
 }

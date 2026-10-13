@@ -101,6 +101,10 @@ pub enum OfficeError {
     /// running on its thread and keeps its concurrency permit until it exits.
     #[error("call deadline exceeded")]
     DeadlineExceeded,
+    /// A timed-out edit may have applied, or half-applied: the document cannot
+    /// be trusted any more. Reopen it from the bytes last saved.
+    #[error("indeterminate: a timed-out edit may have applied; reopen from saved bytes")]
+    Indeterminate,
     /// All concurrency permits are held by running (or abandoned) calls.
     #[error("busy: all document-processing permits are in use")]
     Busy,

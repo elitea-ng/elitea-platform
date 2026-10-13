@@ -4,7 +4,11 @@ use zavora_docx::{Document as ZDocument, Error as ZError, Length};
 
 use crate::deck::{ChartKind, ChartSpec, Rect};
 use crate::error::{Limit, OfficeError, Result, limit};
-use crate::guard::{Shared, run_guarded};
+use crate::guard::{STATE_LOST, Shared, run_guarded};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Test hook: the next `set_paragraph_text` fails after tagging the paragraph.
+pub(crate) static PARAGRAPH_FAULT: AtomicBool = AtomicBool::new(false);
 use crate::limits::Limits;
 use crate::validate::{Kind, Mode, check_new_image, finish_output, validate_and_repack};
 
@@ -133,27 +137,46 @@ impl Document {
     /// [`OfficeError::NotFound`] for a bad index.
     pub fn set_paragraph_text(&mut self, index: usize, text: &str) -> Result<()> {
         let text = text.to_owned();
-        self.doc.guarded(move |d, _| {
-            // The library addresses body content (paragraphs, tables, raw
-            // blocks) by one index. Find the content index of the `index`th
-            // paragraph by tagging that paragraph with a unique run and asking
-            // the library where the tag is; setting the text drops the tag.
+        self.doc.guarded_mut(move |d, _| {
             const MARKER: &str = "\u{E000}office-core-marker-9c1d\u{E000}";
             if d.find_content_index(MARKER).is_some() {
                 return Err(OfficeError::Unsupported(
                     "the document contains the internal marker text".into(),
                 ));
             }
-            d.paragraph_mut(index)
-                .ok_or_else(|| OfficeError::NotFound(format!("paragraph {index}")))?
-                .add_run(MARKER);
-            let content = d.find_content_index(MARKER);
-            match content {
-                Some(c) if d.set_paragraph_text(c, &text) => Ok(()),
-                _ => Err(OfficeError::Internal(
-                    "paragraph index mapping failed".into(),
-                )),
+            // Snapshot before the tag goes in: the library cannot remove a run
+            // it added, so every failure after tagging restores this.
+            let snapshot = d.to_bytes().map_err(map_err)?;
+            let outcome = (|| {
+                d.paragraph_mut(index)
+                    .ok_or_else(|| OfficeError::NotFound(format!("paragraph {index}")))?
+                    .add_run(MARKER);
+                if PARAGRAPH_FAULT.swap(false, Ordering::SeqCst) {
+                    return Err(OfficeError::Internal("injected failure".into()));
+                }
+                // The library addresses body content (paragraphs, tables, raw
+                // blocks) by one index. The tag tells which one is ours;
+                // setting the text drops it.
+                match d.find_content_index(MARKER) {
+                    Some(c) if d.set_paragraph_text(c, &text) => Ok(()),
+                    _ => Err(OfficeError::Internal(
+                        "paragraph index mapping failed".into(),
+                    )),
+                }
+            })();
+            if let Err(e) = outcome {
+                if d.find_content_index(MARKER).is_some() {
+                    return match ZDocument::from_bytes(&snapshot) {
+                        Ok(restored) => {
+                            *d = restored;
+                            Err(e)
+                        }
+                        Err(_) => Err(OfficeError::Internal(STATE_LOST.into())),
+                    };
+                }
+                return Err(e);
             }
+            Ok(())
         })
     }
 

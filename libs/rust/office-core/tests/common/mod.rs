@@ -249,3 +249,56 @@ pub fn noise(len: usize, mut seed: u64) -> Vec<u8> {
         })
         .collect()
 }
+
+/// Insert `fragment` (e.g. an `<Override .../>`) into `[Content_Types].xml`.
+pub fn with_content_types(bytes: &[u8], fragment: &str) -> Vec<u8> {
+    let ct = String::from_utf8(
+        entries(bytes)
+            .into_iter()
+            .find(|(n, _)| n == "[Content_Types].xml")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    with_entry(
+        bytes,
+        "[Content_Types].xml",
+        ct.replacen("</Types>", &format!("{fragment}</Types>"), 1)
+            .into_bytes(),
+    )
+}
+
+/// Replace `from` by `to` in the text of entry `name`.
+pub fn patch_text(bytes: &[u8], name: &str, from: &str, to: &str) -> Vec<u8> {
+    let t = String::from_utf8(
+        entries(bytes)
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    assert!(t.contains(from), "{name} has no {from:?}");
+    with_entry(bytes, name, t.replacen(from, to, 1).into_bytes())
+}
+
+/// Rename an entry, rewriting the references the package keeps to it:
+/// `_rels/.rels`, its own rels part and its content-type override.
+pub fn rename_main(bytes: &[u8], old: &str, new: &str) -> Vec<u8> {
+    let mut e = entries(bytes);
+    let rels_of = |p: &str| {
+        let (d, f) = p.rsplit_once('/').unwrap();
+        format!("{d}/_rels/{f}.rels")
+    };
+    for (n, d) in &mut e {
+        if n == old {
+            *n = new.to_owned();
+        } else if *n == rels_of(old) {
+            *n = rels_of(new);
+        } else if n == "_rels/.rels" || n == "[Content_Types].xml" {
+            let t = String::from_utf8(d.clone()).unwrap();
+            *d = t.replace(old, new).into_bytes();
+        }
+    }
+    zip_of(&e)
+}

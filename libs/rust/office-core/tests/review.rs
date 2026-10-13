@@ -511,17 +511,26 @@ fn render_copy_shrinks_each_image_more_when_there_are_many() {
         "{px:?}"
     );
     assert!(px.iter().sum::<u64>() <= 32_000_000);
-    // 150 images of 0.36 MP: 32 MP / 150 is under the floor, so the floor applies.
+    // 500 images: only 127 fit at the floor (32 MP less 500 placeholder pixels, over 0.25 MP). The first 127
+    // (in document order) are fitted, the rest become 1x1 placeholders, and
+    // the decoded total stays inside the budget.
     let mut e = entries(&good_deck());
     let small = gray_png(600, 600);
-    for i in 0..150 {
-        e.push((format!("ppt/media/p{i}.png"), small.clone()));
+    for i in 0..500 {
+        e.push((format!("ppt/media/p{i:03}.png"), small.clone()));
     }
     let px = render_copy_pixels(&zip_of(&e), PackageKind::Pptx, &l).unwrap();
+    assert_eq!(px.len(), 500);
     assert!(
-        px.iter().all(|&p| (240_000..=250_000).contains(&p)),
-        "{px:?}"
+        px[..127].iter().all(|&p| (240_000..=250_000).contains(&p)),
+        "{:?}",
+        &px[..127]
     );
+    assert!(
+        px[127..].iter().all(|&p| p == 1),
+        "the rest are placeholders"
+    );
+    assert!(px.iter().sum::<u64>() <= 32_000_000);
 }
 
 #[test]
@@ -592,13 +601,20 @@ fn xlsx_worksheets_get_48_mib_and_other_parts_8() {
         ),
         "{r:?}"
     );
-    // The total is 96 MiB: two 48 MiB sheets fit exactly, a third part does not.
-    let mut e = entries(&g);
-    e.retain(|(n, _)| n != MAIN_XLSX);
-    e.push((MAIN_XLSX.into(), pad(47)));
-    e.push(("xl/worksheets/sheet2.xml".into(), pad(47)));
+    // The total is 96 MiB: two 47 MiB sheets (both reachable through the
+    // workbook's relationships) fit, a further 5 MiB part does not.
+    let mut w = Workbook::new(&l);
+    w.write_cell(0, 0, 0, &CellValue::Number(1.0)).unwrap();
+    w.add_sheet("Two").unwrap();
+    let two = w.save().unwrap();
+    let mut e = entries(&two);
+    for (n, d) in &mut e {
+        if n.starts_with("xl/worksheets/sheet") {
+            *d = pad(47);
+        }
+    }
     assert!(validate(&zip_of(&e), PackageKind::Xlsx, &l).is_ok());
-    e.push(("xl/worksheets/sheet3.xml".into(), pad(5)));
+    e.push(("docProps/extra.xml".into(), pad(5)));
     let r = validate(&zip_of(&e), PackageKind::Xlsx, &l);
     assert!(
         matches!(
@@ -638,4 +654,476 @@ fn chart_spec_is_checked_before_the_library() {
             value: 1_200_000
         })
     ));
+}
+
+// ============================ review round 2 ===================================
+
+fn nested_xml(prefix: &[u8], depth: usize) -> Vec<u8> {
+    let mut x = prefix.to_vec();
+    for _ in 0..depth {
+        x.extend_from_slice(b"<b>");
+    }
+    x
+}
+
+// ---- 1: classification by declared type, then bytes ---------------------------------
+
+#[test]
+fn junk_before_the_root_does_not_hide_nesting() {
+    let l = limits();
+    let g = good_deck();
+    // Undeclared part: `x<p:sld>` is not well formed, and is scanned anyway.
+    let r = validate(
+        &with_extra(&g, "ppt/slides/slide9.dat", nested_xml(b"x<p:sld>", 400)),
+        PackageKind::Pptx,
+        &l,
+    );
+    assert!(
+        matches!(
+            r,
+            Err(OfficeError::LimitExceeded {
+                limit: Limit::XmlDepth,
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    // GIF89a-prefixed XML declared as XML by its content type, under a name
+    // that says nothing: still XML-checked.
+    let mut gif_xml = nested_xml(b"GIF89a<a>", 400);
+    gif_xml.extend_from_slice(b"</a>");
+    let declared = with_content_types(
+        &with_extra(&g, "ppt/slides/slide8.dat", gif_xml),
+        r#"<Override PartName="/ppt/slides/slide8.dat" ContentType="application/vnd.foo+xml"/>"#,
+    );
+    let r = validate(&declared, PackageKind::Pptx, &l);
+    assert!(
+        matches!(
+            r,
+            Err(OfficeError::LimitExceeded {
+                limit: Limit::XmlDepth,
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    // A plain GIF with no declaration is still a GIF.
+    let mut gif = b"GIF89a".to_vec();
+    gif.extend_from_slice(&[4, 0, 4, 0, 0, 0, 0]);
+    assert!(
+        validate(
+            &with_extra(&g, "ppt/media/ok.gif", gif),
+            PackageKind::Pptx,
+            &l
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn declared_fonts_pass_and_are_emptied_in_render_copies_only() {
+    let l = limits();
+    let g = good_deck();
+    // A real-looking font by content type (the Default PowerPoint writes)...
+    let ttf = [vec![0u8, 1, 0, 0], noise(4096, 5)].concat();
+    let bytes = with_content_types(
+        &with_extra(&g, "ppt/fonts/font1.fntdata", ttf.clone()),
+        r#"<Default Extension="fntdata" ContentType="application/x-fontdata"/>"#,
+    );
+    assert!(validate(&bytes, PackageKind::Pptx, &l).is_ok());
+    // ...and the obfuscated docx kind.
+    let dx = with_content_types(
+        &with_extra(&good_docx(), "word/fonts/font1.odttf", noise(2048, 6)),
+        r#"<Default Extension="odttf" ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont"/>"#,
+    );
+    assert!(validate(&dx, PackageKind::Docx, &l).is_ok());
+    // A font declared only by a relationship, under a name nothing else gives
+    // away, and full of tags: a font is not scanned as XML.
+    let weird = nested_xml(b"", 400);
+    let px = with_extra(&g, "ppt/odd/f1.dat", weird.clone());
+    let px = patch_text(
+        &px,
+        "ppt/_rels/presentation.xml.rels",
+        "</Relationships>",
+        r#"<Relationship Id="rIdF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="odd/f1.dat"/></Relationships>"#,
+    );
+    assert!(validate(&px, PackageKind::Pptx, &l).is_ok());
+    let copy =
+        elitea_office_core::testing::render_copy_bytes(&bytes, PackageKind::Pptx, &l).unwrap();
+    assert!(
+        entries(&copy)
+            .iter()
+            .any(|(n, d)| n == "ppt/fonts/font1.fntdata" && d.is_empty())
+    );
+    let saved = entries(&Deck::open(&bytes, &l).unwrap().save().unwrap());
+    assert_eq!(
+        saved
+            .iter()
+            .find(|(n, _)| n == "ppt/fonts/font1.fntdata")
+            .unwrap()
+            .1,
+        ttf
+    );
+}
+
+// ---- 2: WebP and TIFF headers -------------------------------------------------------------
+
+fn webp_vp8x(w: u32, h: u32) -> Vec<u8> {
+    let mut v = b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0\0\0\0\0".to_vec();
+    v.extend_from_slice(&(w - 1).to_le_bytes()[..3]);
+    v.extend_from_slice(&(h - 1).to_le_bytes()[..3]);
+    v
+}
+
+fn tiff(w: u32, h: u32) -> Vec<u8> {
+    let mut t = vec![0x49, 0x49, 0x2A, 0, 8, 0, 0, 0, 2, 0];
+    t.extend_from_slice(&[0, 1, 4, 0, 1, 0, 0, 0]);
+    t.extend_from_slice(&w.to_le_bytes());
+    t.extend_from_slice(&[1, 1, 4, 0, 1, 0, 0, 0]);
+    t.extend_from_slice(&h.to_le_bytes());
+    t
+}
+
+#[test]
+fn webp_and_tiff_get_the_pixel_cap_the_count_and_fitting() {
+    let l = limits();
+    let g = good_deck();
+    for (name, data) in [
+        ("ppt/media/big.webp", webp_vp8x(10_000, 10_000)),
+        ("ppt/media/big.tif", tiff(10_000, 10_000)),
+    ] {
+        let r = validate(&with_extra(&g, name, data), PackageKind::Pptx, &l);
+        assert!(
+            matches!(
+                r,
+                Err(OfficeError::LimitExceeded {
+                    limit: Limit::ImagePixels,
+                    value: 100_000_000
+                })
+            ),
+            "{name}: {r:?}"
+        );
+    }
+    // They count toward the image limit.
+    let mut e = entries(&g);
+    e.extend((0..501).map(|i| (format!("ppt/media/w{i}.webp"), webp_vp8x(8, 8))));
+    let r = validate(&zip_of(&e), PackageKind::Pptx, &l);
+    assert!(
+        matches!(
+            r,
+            Err(OfficeError::LimitExceeded {
+                limit: Limit::Images,
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    // Render copy: a small one is untouched (1 px counted as its own size), an
+    // over-allowance one that cannot be decoded here is a placeholder, and one
+    // whose dimensions cannot be read is a placeholder too, never passed on.
+    let mut e = entries(&g);
+    e.push(("ppt/media/small.webp".into(), webp_vp8x(100, 100)));
+    e.push(("ppt/media/large.webp".into(), webp_vp8x(4000, 4000)));
+    e.push((
+        "ppt/media/broken.webp".into(),
+        b"RIFF\0\0\0\0WEBPVP8 ".to_vec(),
+    ));
+    e.push(("ppt/media/large.tif".into(), tiff(4000, 4000)));
+    let bytes = zip_of(&e);
+    let px = render_copy_pixels(&bytes, PackageKind::Pptx, &l).unwrap();
+    assert_eq!(
+        px,
+        [10_000, 1, 1, 1],
+        "small kept, the three others are placeholders"
+    );
+    // The file itself opens (the unreadable header does not stop it) and saves
+    // the originals back.
+    let d = Deck::open(&bytes, &l).unwrap();
+    assert!(
+        entries(&d.save().unwrap())
+            .iter()
+            .any(|(n, d)| n == "ppt/media/broken.webp" && d.len() == 16)
+    );
+    assert!(d.render_preview(0).unwrap().starts_with(b"\x89PNG"));
+}
+
+// ---- 3: xlsx cells are found through the workbook's relationships ---------------------------
+
+#[test]
+fn xlsx_cells_are_counted_in_whatever_part_the_workbook_calls_a_sheet() {
+    let l = limits();
+    let mut w = Workbook::new(&l);
+    w.write_row(
+        0,
+        0,
+        0,
+        &[
+            CellValue::Number(1.0),
+            CellValue::Number(2.0),
+            CellValue::Number(3.0),
+        ],
+    )
+    .unwrap();
+    let x = w.save().unwrap();
+    // Move the sheet to a name no path rule would guess, and repoint the rels.
+    let mut e = entries(&x);
+    for (n, _) in &mut e {
+        if n == "xl/worksheets/sheet1.xml" {
+            *n = "xl/odd/s.dat".to_owned();
+        }
+    }
+    let moved = patch_text(
+        &zip_of(&e),
+        "xl/_rels/workbook.xml.rels",
+        "worksheets/sheet1.xml",
+        "odd/s.dat",
+    );
+    let moved = patch_text(
+        &moved,
+        "[Content_Types].xml",
+        "/xl/worksheets/sheet1.xml",
+        "/xl/odd/s.dat",
+    );
+    let strict = Limits {
+        max_cells: 2,
+        ..limits()
+    };
+    let r = validate(&moved, PackageKind::Xlsx, &strict);
+    assert!(
+        matches!(
+            r,
+            Err(OfficeError::LimitExceeded {
+                limit: Limit::Cells,
+                value: 3
+            })
+        ),
+        "{r:?}"
+    );
+    assert!(
+        Workbook::open(&moved, &limits()).is_ok(),
+        "and it still opens normally"
+    );
+    // `c` elements elsewhere (calcChain lists formula cells) are not cells.
+    let calc = format!(
+        "<calcChain>{}</calcChain>",
+        "<c r=\"A1\" i=\"1\"/>".repeat(50)
+    );
+    let with_chain = with_extra(&x, "xl/calcChain.xml", calc.into_bytes());
+    assert!(
+        validate(
+            &with_chain,
+            PackageKind::Xlsx,
+            &Limits {
+                max_cells: 3,
+                ..limits()
+            }
+        )
+        .is_ok()
+    );
+}
+
+// ---- 4: Empty clears -----------------------------------------------------------------------------
+
+#[test]
+fn xlsx_empty_clears_the_cell_and_gives_the_count_back() {
+    let l = Limits {
+        max_cells: 2,
+        ..limits()
+    };
+    let mut w = Workbook::new(&l);
+    w.write_cell(0, 0, 0, &CellValue::Number(1.0)).unwrap();
+    w.write_cell(0, 0, 1, &CellValue::Text("x".into())).unwrap();
+    assert!(matches!(
+        w.write_cell(0, 0, 2, &CellValue::Number(3.0)),
+        Err(OfficeError::LimitExceeded {
+            limit: Limit::Cells,
+            value: 3
+        })
+    ));
+    w.write_cell(0, 0, 0, &CellValue::Empty).unwrap();
+    assert_eq!(w.read_cell(0, 0, 0).unwrap(), CellValue::Empty);
+    w.write_cell(0, 0, 2, &CellValue::Number(3.0)).unwrap(); // room again
+    // Clearing a cell that was never there neither writes nor underflows.
+    w.write_cell(0, 9, 9, &CellValue::Empty).unwrap();
+    w.write_cell(0, 9, 9, &CellValue::Empty).unwrap();
+    assert!(matches!(
+        w.write_cell(0, 5, 5, &CellValue::Number(1.0)),
+        Err(OfficeError::LimitExceeded { .. })
+    ));
+    // The saved file has no blank cell element for it.
+    let saved = w.save().unwrap();
+    let sheet = String::from_utf8(
+        entries(&saved)
+            .into_iter()
+            .find(|(n, _)| n == MAIN_XLSX)
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    assert!(
+        !sheet.contains("r=\"A1\"") && !sheet.contains("r=\"J10\""),
+        "{sheet}"
+    );
+    // And on a file that was opened (its cell is in the library's parsed map).
+    let mut o = Workbook::open(&good_xlsx(), &limits()).unwrap();
+    assert_ne!(o.read_cell(0, 0, 0).unwrap(), CellValue::Empty);
+    o.write_cell(0, 0, 0, &CellValue::Empty).unwrap();
+    assert_eq!(o.read_cell(0, 0, 0).unwrap(), CellValue::Empty);
+    let again = Workbook::open(&o.save().unwrap(), &limits()).unwrap();
+    assert_eq!(again.read_cell(0, 0, 0).unwrap(), CellValue::Empty);
+}
+
+// ---- 5: absurd part numbers --------------------------------------------------------------------------
+
+#[test]
+fn absurd_part_numbers_are_typed_errors_not_overflows() {
+    let l = limits();
+    let g = good_deck();
+    for name in [
+        "ppt/charts/chart18446744073709551615.xml",
+        "ppt/charts/chart1000001.xml",
+        "ppt/slides/slide99999999999.xml",
+        "ppt/media/image4294967296.png",
+    ] {
+        let bytes = with_extra(&g, name, b"<c/>".to_vec());
+        assert!(
+            matches!(Deck::open(&bytes, &l), Err(OfficeError::Malformed(m)) if m.contains("part number")),
+            "{name}"
+        );
+    }
+    // At the bound it is fine: one chart before the end of the range, one more
+    // can be added and saved; at the end of the range the next is a typed error.
+    let bytes = with_extra(&g, "ppt/charts/chart999999.xml", b"<c/>".to_vec());
+    let mut d = Deck::open(&bytes, &l).unwrap();
+    d.add_chart(0, &chart(), Rect::inches(0.0, 0.0, 3.0, 2.0))
+        .unwrap();
+    let saved = d.save().unwrap();
+    assert!(
+        entries(&saved)
+            .iter()
+            .any(|(n, _)| n == "ppt/charts/chart1000000.xml")
+    );
+    let mut d = Deck::open(&saved, &l).unwrap();
+    let r = d.add_chart(0, &chart(), Rect::inches(0.0, 0.0, 3.0, 2.0));
+    assert!(
+        matches!(r, Err(OfficeError::InvalidInput(ref m)) if m.contains("used up")),
+        "{r:?}"
+    );
+}
+
+// ---- 9: the main part comes from _rels/.rels --------------------------------------------------------------
+
+#[test]
+fn render_size_checks_follow_the_main_part_not_a_path() {
+    let l = limits();
+    // pptx: the relationships name ppt/pres.xml as the main part, whose slide
+    // is a million times taller than wide; ppt/presentation.xml (the path the
+    // library opens) is benign. The render gate reads the part the
+    // relationships name.
+    let g = good_deck();
+    let renamed = rename_main(&g, "ppt/presentation.xml", "ppt/pres.xml");
+    let x = String::from_utf8(
+        entries(&renamed)
+            .into_iter()
+            .find(|(n, _)| n == "ppt/pres.xml")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let start = x.find("<p:sldSz").unwrap();
+    let end = x[start..].find("/>").unwrap() + start + 2;
+    let tall = format!(
+        "{}<p:sldSz cx=\"1000\" cy=\"2147483000\"/>{}",
+        &x[..start],
+        &x[end..]
+    );
+    let bytes = with_entry(&renamed, "ppt/pres.xml", tall.into_bytes());
+    let r = elitea_office_core::testing::render_copy_bytes(&bytes, PackageKind::Pptx, &l);
+    assert!(
+        matches!(
+            r,
+            Err(OfficeError::LimitExceeded {
+                limit: Limit::RenderPixels,
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    // The other way round: benign main part by relationship, huge size at the
+    // fixed path. Also refused.
+    let x = String::from_utf8(
+        entries(&g)
+            .into_iter()
+            .find(|(n, _)| n == "ppt/presentation.xml")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let start = x.find("<p:sldSz").unwrap();
+    let end = x[start..].find("/>").unwrap() + start + 2;
+    let tall = format!(
+        "{}<p:sldSz cx=\"1000\" cy=\"2147483000\"/>{}",
+        &x[..start],
+        &x[end..]
+    );
+    let split = with_extra(
+        &rename_main(&g, "ppt/presentation.xml", "ppt/pres.xml"),
+        "ppt/presentation.xml",
+        tall.into_bytes(),
+    );
+    let r = elitea_office_core::testing::render_copy_bytes(&split, PackageKind::Pptx, &l);
+    assert!(
+        matches!(
+            r,
+            Err(OfficeError::LimitExceeded {
+                limit: Limit::RenderPixels,
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    // docx: word/document.xml renamed to word/main.xml, 2e9 twips of page.
+    let g = good_docx();
+    let renamed = rename_main(&g, "word/document.xml", "word/main.xml");
+    let x = String::from_utf8(
+        entries(&renamed)
+            .into_iter()
+            .find(|(n, _)| n == "word/main.xml")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let huge = x.replacen(
+        "</w:body>",
+        "<w:sectPr><w:pgSz w:w=\"2000000000\" w:h=\"2000000000\"/></w:sectPr></w:body>",
+        1,
+    );
+    let d = Document::open(
+        &with_entry(&renamed, "word/main.xml", huge.into_bytes()),
+        &l,
+    )
+    .unwrap();
+    let r = d.render_page_png(0, 100.0);
+    assert!(
+        matches!(
+            r,
+            Err(OfficeError::LimitExceeded {
+                limit: Limit::RenderPixels,
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    // A render copy needs a main part to check; without one it is refused.
+    let r = elitea_office_core::testing::render_copy_bytes(
+        &patch_text(
+            &g,
+            "_rels/.rels",
+            "relationships/officeDocument",
+            "relationships/other",
+        ),
+        PackageKind::Docx,
+        &l,
+    );
+    assert!(matches!(r, Err(OfficeError::Malformed(_))), "{r:?}");
 }

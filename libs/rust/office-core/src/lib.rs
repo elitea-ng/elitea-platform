@@ -147,6 +147,25 @@ pub mod testing {
         Ok(h)
     }
 
+    /// Make the next `Deck::replace_text` fail midway (`restore_fails`: and
+    /// fail to restore the snapshot too).
+    pub fn fail_next_replace(restore_fails: bool) {
+        crate::deck::REPLACE_FAULT.store(
+            if restore_fails { 2 } else { 1 },
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+
+    /// Make the next `Document::set_paragraph_text` fail after tagging.
+    pub fn fail_next_paragraph_mapping() {
+        crate::document::PARAGRAPH_FAULT.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Make the next guarded call sleep `ms` first on its parse thread.
+    pub fn delay_next_guarded_call(ms: u64) {
+        crate::guard::TEST_DELAY_MS.store(ms, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Panic inside a guarded call on the deck, poisoning its state.
     pub fn poison_deck(deck: &crate::Deck) {
         let _ = deck.poison_for_test();

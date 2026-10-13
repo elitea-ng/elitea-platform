@@ -5,9 +5,10 @@ use std::collections::HashMap;
 use zavora_slide::{Bullet as ZBullet, Emu, Layout, Presentation, RenderFormat, SlideError};
 
 use crate::error::{Limit, OfficeError, Result, limit};
-use crate::guard::{Shared, run_guarded};
+use crate::guard::{STATE_LOST, Shared, run_guarded};
 use crate::limits::Limits;
 use crate::validate::{Kind, Mode, check_new_image, finish_output, validate_and_repack};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 fn map_err(e: SlideError) -> OfficeError {
     match e {
@@ -237,6 +238,9 @@ pub struct Deck {
     images: u64,
     cells: u64,
     next_chart: usize,
+    /// Slides or tables were added in this session: their state lives in the
+    /// library's build model and does not survive a save-and-reopen.
+    authored: bool,
 }
 
 impl std::fmt::Debug for Deck {
@@ -255,6 +259,7 @@ impl Deck {
             images: 0,
             cells: 0,
             next_chart: 1,
+            authored: false,
         }
     }
 
@@ -280,7 +285,11 @@ impl Deck {
             limits: limits.clone(),
             images,
             cells,
-            next_chart: usize::try_from(max_chart).unwrap_or(0) + 1,
+            next_chart: usize::try_from(max_chart)
+                .ok()
+                .and_then(|m| m.checked_add(1))
+                .ok_or_else(|| OfficeError::Malformed("chart part number out of range".into()))?,
+            authored: false,
         })
     }
 
@@ -321,6 +330,7 @@ impl Deck {
         if n > self.limits.max_slides {
             return Err(limit(Limit::Slides, n));
         }
+        self.authored = true;
         Ok(p.add_slide(match layout {
             SlideLayout::Title => Layout::Title,
             SlideLayout::TitleContent => Layout::TitleContent,
@@ -410,6 +420,7 @@ impl Deck {
                 .0
         };
         self.cells = total;
+        self.authored = true;
         Ok(idx)
     }
 
@@ -485,6 +496,11 @@ impl Deck {
             legend_position: spec.legend_position.clone(),
             data_labels: spec.data_labels,
         };
+        if self.next_chart > 1_000_000 {
+            return Err(OfficeError::InvalidInput(
+                "chart part numbers are used up (the limit is 1000000)".into(),
+            ));
+        }
         let index = self.next_chart;
         self.pres
             .lock()?
@@ -624,13 +640,21 @@ impl Deck {
     ///
     /// All edits are planned before the first one is made, so a refusal leaves
     /// the deck untouched, and if an edit fails midway the deck is restored
-    /// from a snapshot taken before. An occurrence inside one run is replaced
+    /// from a snapshot taken before; if even that fails every later call on
+    /// the deck is an `Internal` error ("document state lost") and the caller
+    /// must reopen from saved bytes. An occurrence inside one run is replaced
     /// in place, keeping the run's formatting. An occurrence that spans runs
     /// is rewritten into the paragraph's first run and the other runs are
     /// deleted, so that paragraph keeps the first run's formatting; a
     /// paragraph with line breaks in that case is [`OfficeError::Unsupported`]
     /// (the raw-part editor of ADR-0032 P3 covers it). Tables, charts and
     /// notes are not searched.
+    ///
+    /// A deck with slides or tables added in this session is refused
+    /// ([`OfficeError::Unsupported`]): the snapshot restore reopens the deck,
+    /// and table handles from [`Deck::add_table`] would not survive it. Save
+    /// and reopen first. If the call passes its deadline the edit may have
+    /// applied: later calls return [`OfficeError::Indeterminate`].
     ///
     /// # Errors
     /// [`OfficeError::InvalidInput`] for an empty `find`;
@@ -641,9 +665,14 @@ impl Deck {
                 "the text to find is empty".into(),
             ));
         }
+        if self.authored {
+            return Err(OfficeError::Unsupported(
+                "replace_text on a deck with slides or tables added in this session; save and reopen first".into(),
+            ));
+        }
         let (find, replacement) = (find.to_owned(), replacement.to_owned());
         self.pres
-            .guarded(move |p, _| replace_all(p, &find, &replacement))
+            .guarded_mut(move |p, _| replace_all(p, &find, &replacement))
     }
 
     /// Markdown for the whole deck (slides, tables, notes, chart data).
@@ -729,6 +758,10 @@ fn shapes_of(p: &Presentation, slide: usize) -> Result<Vec<ShapeInfo>> {
         })
         .collect())
 }
+
+/// Test hook: 1 makes the next `replace_text` fail midway (restore works),
+/// 2 makes it fail and the restore fail too.
+pub(crate) static REPLACE_FAULT: AtomicU8 = AtomicU8::new(0);
 
 /// One planned edit of a paragraph.
 enum Edit {
@@ -825,8 +858,12 @@ fn replace_all(p: &mut Presentation, find: &str, replacement: &str) -> Result<us
         return Ok(0);
     }
     let snapshot = p.save_to_buffer().map_err(map_err)?;
+    let fault = REPLACE_FAULT.swap(0, Ordering::SeqCst);
     let applied = (|| -> Result<()> {
-        for e in &plan {
+        for (n, e) in plan.iter().enumerate() {
+            if fault != 0 && n == 1.min(plan.len() - 1) {
+                return Err(OfficeError::Internal("injected failure".into()));
+            }
             let mut s = p.slide_mut(e.slide).map_err(map_err)?;
             match &e.edit {
                 Edit::Runs(runs) => {
@@ -846,10 +883,13 @@ fn replace_all(p: &mut Presentation, find: &str, replacement: &str) -> Result<us
         Ok(())
     })();
     if let Err(e) = applied {
-        if let Ok(restored) = Presentation::open_from_bytes(&snapshot) {
-            *p = restored;
-        }
-        return Err(e);
+        return match Presentation::open_from_bytes(&snapshot) {
+            Ok(restored) if fault != 2 => {
+                *p = restored;
+                Err(e)
+            }
+            _ => Err(OfficeError::Internal(STATE_LOST.into())),
+        };
     }
     Ok(count)
 }
