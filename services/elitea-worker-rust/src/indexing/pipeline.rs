@@ -1115,6 +1115,7 @@ impl Runner<'_> {
             documents_truncated,
             total_documents: Some(store.total_documents),
             total_chunks: Some(store.total_chunks),
+            unchanged_documents: Some(tally.unchanged_documents),
         }
     }
 }

@@ -524,8 +524,13 @@ type IndexIngestSummaryV1 struct {
 	// list. It is a statement by the worker, never inferred from counts; when
 	// it is set, total_documents equals the length of `documents`.
 	WholeIndexRecord bool `protobuf:"varint,21,opt,name=whole_index_record,json=wholeIndexRecord,proto3" json:"whole_index_record,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Documents the run listed and found already indexed (same version), which
+	// it left alone. Exact, and present only on a run that finished listing:
+	// elitea-main shows it as the "already indexed" line of the run report and
+	// derives nothing when it is absent (an older worker).
+	UnchangedDocuments *uint64 `protobuf:"varint,22,opt,name=unchanged_documents,json=unchangedDocuments,proto3,oneof" json:"unchanged_documents,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *IndexIngestSummaryV1) Reset() {
@@ -682,6 +687,13 @@ func (x *IndexIngestSummaryV1) GetWholeIndexRecord() bool {
 		return x.WholeIndexRecord
 	}
 	return false
+}
+
+func (x *IndexIngestSummaryV1) GetUnchangedDocuments() uint64 {
+	if x != nil && x.UnchangedDocuments != nil {
+		return *x.UnchangedDocuments
+	}
+	return 0
 }
 
 // IndexIngestDocumentV1 is one indexed document as the vector store holds it
@@ -900,7 +912,7 @@ const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"\vbyte_length\x18\x04 \x01(\x04R\n" +
 	"byteLength\x123\n" +
 	"\x06digest\x18\x05 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x06digest\x12&\n" +
-	"\x0eclassification\x18\x06 \x01(\tR\x0eclassificationJ\x04\b\a\x10\x10\"\xe0\a\n" +
+	"\x0eclassification\x18\x06 \x01(\tR\x0eclassificationJ\x04\b\a\x10\x10\"\xae\b\n" +
 	"\x14IndexIngestSummaryV1\x12>\n" +
 	"\x06status\x18\x01 \x01(\x0e2&.elitea.runtime.v1.IndexIngestStatusV1R\x06status\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12T\n" +
@@ -920,14 +932,16 @@ const file_elitea_runtime_v1_indexing_proto_rawDesc = "" +
 	"\x13documents_truncated\x18\x12 \x01(\bR\x12documentsTruncated\x12,\n" +
 	"\x0ftotal_documents\x18\x13 \x01(\x04H\x01R\x0etotalDocuments\x88\x01\x01\x12&\n" +
 	"\ftotal_chunks\x18\x14 \x01(\x04H\x02R\vtotalChunks\x88\x01\x01\x12,\n" +
-	"\x12whole_index_record\x18\x15 \x01(\bR\x10wholeIndexRecord\x1a:\n" +
+	"\x12whole_index_record\x18\x15 \x01(\bR\x10wholeIndexRecord\x124\n" +
+	"\x13unchanged_documents\x18\x16 \x01(\x04H\x03R\x12unchangedDocuments\x88\x01\x01\x1a:\n" +
 	"\fSkippedEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01B\n" +
 	"\n" +
 	"\b_reindexB\x12\n" +
 	"\x10_total_documentsB\x0f\n" +
-	"\r_total_chunksJ\x04\b\r\x10\x10\"u\n" +
+	"\r_total_chunksB\x16\n" +
+	"\x14_unchanged_documentsJ\x04\b\r\x10\x10\"u\n" +
 	"\x15IndexIngestDocumentV1\x12!\n" +
 	"\fdocument_key\x18\x01 \x01(\tR\vdocumentKey\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1f\n" +
