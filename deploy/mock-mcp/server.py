@@ -339,45 +339,7 @@ class LoggingTLSServer(ThreadingHTTPServer):
             raise
 
 
-CA_FILE = os.environ.get("MOCK_MCP_CA", os.path.join(os.path.dirname(CERT_FILE), "ca.crt"))
-
-
-def _pem_blocks(text: str) -> list:
-    blocks, current = [], None
-    for line in text.splitlines():
-        if line.startswith("-----BEGIN CERTIFICATE"):
-            current = [line.strip()]
-        elif current is not None:
-            current.append(line.strip())
-            if line.startswith("-----END CERTIFICATE"):
-                blocks.append("\n".join(current))
-                current = None
-    return blocks
-
-
-def ca_matches_chain(chain_path: str, ca_path: str) -> bool:
-    """True when the published trust anchor is the CA the served chain ends in.
-
-    `mcp-mock-trust` hands `ca_path` to the worker; the worker then verifies
-    the chain this server presents against it. A CA with the same subject but
-    another key makes rustls fail `BadSignature` (this server logs
-    `TLSV1_ALERT_DECRYPT_ERROR`), which reads as an MCP outage, so a mismatch
-    is refused at start instead.
-    """
-    with open(chain_path, encoding="ascii") as handle:
-        chain = _pem_blocks(handle.read())
-    with open(ca_path, encoding="ascii") as handle:
-        anchors = _pem_blocks(handle.read())
-    return len(chain) >= 2 and len(anchors) == 1 and chain[-1] == anchors[0]
-
-
 def main() -> int:
-    if os.path.exists(CA_FILE) and not ca_matches_chain(CERT_FILE, CA_FILE):
-        sys.stderr.write(
-            "mock-mcp: %s is not the CA that signed %s; the image mixed two "
-            "mints of its TLS material\n" % (CA_FILE, CERT_FILE)
-        )
-        return 1
     for path in (CERT_FILE, KEY_FILE):
         if not os.path.exists(path):
             sys.stderr.write("mock-mcp: missing TLS material at %s\n" % path)

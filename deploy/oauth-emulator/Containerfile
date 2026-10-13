@@ -6,7 +6,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /out \
  && openssl req -x509 -newkey rsa:2048 -nodes \
-      -keyout /out/ca.key -out /out/ca.crt -days 365 \
+      -keyout /out/ca.key -out /out/ca.crt -days 3650 \
       -subj "/CN=elitea-oauth-emulator-ca" \
       -addext "basicConstraints=critical,CA:TRUE" \
       -addext "keyUsage=critical,keyCertSign,cRLSign" \
@@ -16,14 +16,17 @@ RUN mkdir -p /out \
       'subjectAltName=DNS:oauth-emulator,DNS:localhost,IP:127.0.0.1' \
       'extendedKeyUsage=serverAuth' 'keyUsage=critical,digitalSignature,keyEncipherment' > /out/leaf.ext \
  && openssl x509 -req -in /out/server.csr -CA /out/ca.crt -CAkey /out/ca.key -CAcreateserial \
-      -out /out/server.crt -days 365 -sha256 -extfile /out/leaf.ext \
- && cat /out/server.crt /out/ca.crt > /out/server-chain.crt
+      -out /out/server.crt -days 3650 -sha256 -extfile /out/leaf.ext \
+ && cat /out/server.crt /out/ca.crt > /out/server-chain.crt \
+ && mkdir -p /pub \
+ && cp /out/server-chain.crt /out/server.key /out/ca.crt /pub/
 
 FROM docker.io/library/python:3.12.14-slim-trixie
 RUN useradd --system --uid 10103 --home-dir /nonexistent --shell /usr/sbin/nologin oauthemulator
-COPY --from=tls --chown=10103:10103 /out/server.key /opt/oauth-emulator/tls/server.key
-COPY --from=tls /out/server-chain.crt /opt/oauth-emulator/tls/server-chain.crt
-COPY --from=tls /out/ca.crt /opt/oauth-emulator/tls/ca.crt
+# ONE COPY for the whole key set: separate COPY lines are separate cache records
+# that a shared cache can resolve from different mints of the `tls` stage (the
+# served chain and the published ca.crt would then disagree).
+COPY --from=tls --chown=10103:10103 /pub/ /opt/oauth-emulator/tls/
 COPY server.py /opt/oauth-emulator/server.py
 USER 10103:10103
 EXPOSE 8443
