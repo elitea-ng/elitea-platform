@@ -21,12 +21,12 @@ pub const IMAGE_EXTENSIONS: [&str; 7] = [".png", ".jpg", ".jpeg", ".gif", ".webp
 
 /// The SDK's default prompt, `image_processing_prompt` in
 /// `tools/utils/content_parser.py`, byte for byte.
-const IMAGE_PROCESSING_PROMPT: &str = include_str!("prompts/image_processing.txt");
+pub(crate) const IMAGE_PROCESSING_PROMPT: &str = include_str!("prompts/image_processing.txt");
 
 /// The SDK loader's own default, `DEFAULT_MULTIMODAL_PROMPT` in
 /// `runtime/langchain/constants.py`: used when `use_default_prompt` is false
 /// and no `prompt` is given.
-const MULTIMODAL_PROMPT: &str = include_str!("prompts/multimodal.txt");
+pub(crate) const MULTIMODAL_PROMPT: &str = include_str!("prompts/multimodal.txt");
 
 /// What the SDK stores when the model's reply is blank.
 pub const EMPTY_DESCRIPTION: &str = "[No readable text detected by LLM]";

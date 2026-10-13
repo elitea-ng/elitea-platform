@@ -508,66 +508,87 @@ impl ModelSteps {
         env: &StepEnv<'_>,
         alive: Alive<'_>,
     ) -> StepEnd {
+        match self
+            .describe_one(&raw.bytes, raw.kind, raw.plan.prompt(), None, env, alive)
+            .await
+        {
+            Ok(description) => vision_chunks(&raw.plan, &description),
+            Err(end) => end,
+        }
+    }
+
+    /// The model's description of one picture's `bytes` under `prompt`:
+    /// the single path both an image FILE and a picture EMBEDDED in a
+    /// document go through, so they share the cache, the image budget, the
+    /// refused-model breaker, the downscale and the skip reasons. `digest` is
+    /// the sha256 of `bytes` when the caller already has it.
+    ///
+    /// # Errors
+    ///
+    /// The step's end when there is no description: a skip (the picture's
+    /// own reason), or the stop of the run for the credential, the project
+    /// or the budget, or a lost lease.
+    pub(crate) async fn describe_one(
+        &mut self,
+        bytes: &Bytes,
+        kind: ImageKind,
+        prompt: &str,
+        digest: Option<[u8; 32]>,
+        env: &StepEnv<'_>,
+        alive: Alive<'_>,
+    ) -> Result<String, StepEnd> {
         if self.images_without_model {
-            return StepEnd::Skip(SKIP_NO_MODEL);
+            return Err(StepEnd::Skip(SKIP_NO_MODEL));
         }
         self.ensure_chat(env).await;
         let Some((binder, model_name, settings)) = self.chat_parts() else {
             self.images_without_model = true;
-            return StepEnd::Skip(SKIP_NO_MODEL);
+            return Err(StepEnd::Skip(SKIP_NO_MODEL));
         };
-        let Some(digest) = image_fit::digest(raw.bytes.clone()).await else {
-            return StepEnd::Skip(SKIP_UNREADABLE);
+        let digest = match digest {
+            Some(digest) => digest,
+            None => image_fit::digest(bytes.clone())
+                .await
+                .ok_or(StepEnd::Skip(SKIP_UNREADABLE))?,
         };
-        let key = ImageKey::new(digest, raw.plan.prompt(), &model_name);
+        let key = ImageKey::new(digest, prompt, &model_name);
         if let Some(description) = self.images.get(&key) {
             // No call was made: the cap is not charged.
-            return vision_chunks(&raw.plan, &description);
+            return Ok(description);
         }
         if self.images_refused {
-            return StepEnd::Skip(SKIP_VISION_REFUSED);
+            return Err(StepEnd::Skip(SKIP_VISION_REFUSED));
         }
         if self.image_calls.load(Ordering::SeqCst) >= image_cap(self.cap) {
-            return StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED);
+            return Err(StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED));
         }
         match self.admit(1) {
             Ok(()) => {}
-            Err(end @ StepEnd::Skip(_)) => return end,
+            Err(end @ StepEnd::Skip(_)) => return Err(end),
             // `admit` stops only when no call is left in the run's cap.
-            Err(StepEnd::Stop(_)) => return StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED),
-            Err(other) => return other,
+            Err(StepEnd::Stop(_)) => return Err(StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED)),
+            Err(other) => return Err(other),
         }
-        let fitted = match image_fit::fit(raw.bytes.clone(), raw.kind, MAX_INLINE_IMAGE_BYTES).await
-        {
+        let fitted = match image_fit::fit(bytes.clone(), kind, MAX_INLINE_IMAGE_BYTES).await {
             Ok(fitted) => fitted,
-            Err(FitError::TooLarge) => return StepEnd::Skip(SKIP_TOO_LARGE),
-            Err(FitError::Unreadable) => return StepEnd::Skip(SKIP_UNREADABLE),
-            Err(FitError::TimedOut) => return StepEnd::Skip(SKIP_EXTRACT_TIMEOUT),
+            Err(FitError::TooLarge) => return Err(StepEnd::Skip(SKIP_TOO_LARGE)),
+            Err(FitError::Unreadable) => return Err(StepEnd::Skip(SKIP_UNREADABLE)),
+            Err(FitError::TimedOut) => return Err(StepEnd::Skip(SKIP_EXTRACT_TIMEOUT)),
         };
         let outcome = {
             let gate = self.image_gate(alive);
-            vision_call(
-                &*binder,
-                env,
-                &gate,
-                &model_name,
-                settings,
-                &raw.plan,
-                &fitted,
-            )
-            .await
+            vision_call(&*binder, env, &gate, &model_name, settings, prompt, &fitted).await
         };
         match outcome {
             Ok(description) => {
                 self.refused_in_a_row = 0;
-                let end = vision_chunks(&raw.plan, &description);
-                self.images.put(key, description);
-                end
+                self.images.put(key, description.clone());
+                Ok(description)
             }
-            Err(CallFailure::Fatal(code)) => StepEnd::Stop(format!(
+            Err(CallFailure::Fatal(code)) => Err(StepEnd::Stop(format!(
                 "the vision model refused the run ({code}); nothing further was sent to it"
-            )),
-            Err(CallFailure::Liveness(failure)) => StepEnd::Liveness(failure),
+            ))),
+            Err(CallFailure::Liveness(failure)) => Err(StepEnd::Liveness(failure)),
             Err(CallFailure::ImageSkip(reason)) => {
                 if reason == SKIP_NO_MODEL {
                     if !self.images_without_model {
@@ -588,16 +609,16 @@ impl ModelSteps {
                         );
                     }
                 }
-                StepEnd::Skip(reason)
+                Err(StepEnd::Skip(reason))
             }
             // The run's cap or the images' budget: the picture is retried by
             // the next run.
-            Err(CallFailure::Cap(_)) => StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED),
+            Err(CallFailure::Cap(_)) => Err(StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED)),
             // Not an image call's failure; reported as it is, never as the cap.
-            Err(CallFailure::Stop(reason)) => StepEnd::Stop(reason),
+            Err(CallFailure::Stop(reason)) => Err(StepEnd::Stop(reason)),
             Err(CallFailure::Retryable(cause) | CallFailure::Unusable(cause)) => {
                 tracing::warn!(event = "index_image_description_failed", cause);
-                StepEnd::Skip(SKIP_MODEL_FAILED)
+                Err(StepEnd::Skip(SKIP_MODEL_FAILED))
             }
         }
     }
@@ -789,14 +810,14 @@ async fn vision_call(
     gate: &Gate<'_>,
     model_name: &str,
     settings: LlmSettings,
-    plan: &VisionPlan,
+    prompt: &str,
     fitted: &image_fit::Fitted,
 ) -> Result<String, CallFailure> {
     let content = || Content {
         role: "user".to_owned(),
         parts: vec![
             Part::Text {
-                text: plan.prompt().to_owned(),
+                text: prompt.to_owned(),
             },
             Part::InlineData {
                 mime_type: fitted.media_type.to_owned(),

@@ -514,8 +514,9 @@ mod documents {
 
 #[cfg(feature = "documents")]
 pub use documents::{
-    DocumentError, DocumentLimits, DocumentText, EXTRACTION_STACK_BYTES, cooperative_timeout,
-    extract_document, extract_document_on_this_thread,
+    DocumentError, DocumentLimits, DocumentText, EXTRACTION_STACK_BYTES, EmbeddedImage,
+    ImageLimits, ImagesSkipped, cooperative_timeout, extract_document,
+    extract_document_on_this_thread,
 };
 
 /// Whether `mime` is one of the formats the document extractor reads (PDF,
@@ -578,6 +579,11 @@ mod documents {
         pub max_content_bytes: usize,
         /// How long the extractor may run.
         pub timeout: Duration,
+        /// Ask for the pictures embedded in the document (PDF, DOCX, PPTX),
+        /// under these bounds. `None` (the default) asks for none: the
+        /// extraction is then exactly what it was before pictures were
+        /// asked for, and no picture is read.
+        pub images: Option<ImageLimits>,
     }
 
     impl Default for DocumentLimits {
@@ -586,16 +592,72 @@ mod documents {
                 max_pages: MAX_PAGES,
                 max_content_bytes: MAX_CONTENT_BYTES,
                 timeout: Duration::from_secs(TIMEOUT_SECONDS),
+                images: None,
             }
         }
     }
 
-    /// A document's text.
+    /// The bounds on the pictures returned with a document's text.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ImageLimits {
+        /// Pictures returned; later ones are counted in
+        /// [`ImagesSkipped::too_many`].
+        pub max_images: usize,
+        /// Bytes of one picture; a larger one is counted in
+        /// [`ImagesSkipped::too_large`].
+        pub max_image_bytes: usize,
+        /// Bytes of all the returned pictures together; a picture that would
+        /// cross it is counted in [`ImagesSkipped::too_large`].
+        pub max_total_bytes: usize,
+    }
+
+    /// One picture embedded in a document, as the parser stored it: the
+    /// bytes are passed through, never decoded or re-encoded here.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct EmbeddedImage {
+        pub data: Vec<u8>,
+        /// The media type the BYTES say (`image/png`, `image/jpeg`,
+        /// `image/gif`, `image/webp`, `image/bmp`), never the package's
+        /// claim.
+        pub media_type: &'static str,
+        /// Position among the document's pictures, in document order.
+        pub ordinal: u32,
+        /// Where in the text its description belongs: a byte offset on a
+        /// character boundary of [`DocumentText::text`]. Inline, right after
+        /// the picture's own `[Image: …]` line, when the text has one (DOCX);
+        /// otherwise at the end of its page or slide's text; otherwise at the
+        /// end of the text.
+        pub text_offset: usize,
+        /// The page or slide (1-based) the parser found it on, when it is
+        /// paged.
+        pub page: Option<u32>,
+        /// The file name inside the package (`image1.png`), when the format
+        /// has one.
+        pub name: Option<String>,
+    }
+
+    /// Pictures found and not returned, by reason.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct ImagesSkipped {
+        /// Over [`ImageLimits::max_images`].
+        pub too_many: u32,
+        /// Over [`ImageLimits::max_image_bytes`] or the total.
+        pub too_large: u32,
+        /// Not a format a model takes (PNG, JPEG, GIF, WebP, BMP), or a
+        /// mask.
+        pub unsupported: u32,
+    }
+
+    /// A document's text, and (when asked for) its embedded pictures.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct DocumentText {
         pub text: String,
         /// Which extractor produced it (`xberg`).
         pub extractor: &'static str,
+        /// The pictures, in document order. Always empty unless
+        /// [`DocumentLimits::images`] asked for them.
+        pub images: Vec<EmbeddedImage>,
+        pub images_skipped: ImagesSkipped,
     }
 
     /// Why a document gave no text. Each variant is a reason a caller can
@@ -659,7 +721,9 @@ mod documents {
     /// borrowed API; [`extract_document`] itself takes the bytes by value.
     pub(super) fn extract(mime: &str, bytes: &[u8]) -> Extracted {
         match extract_document(mime, bytes.to_vec(), &DocumentLimits::default()) {
-            Ok(DocumentText { text, extractor }) => Extracted::Text { text, extractor },
+            Ok(DocumentText {
+                text, extractor, ..
+            }) => Extracted::Text { text, extractor },
             Err(error) => error.into(),
         }
     }
@@ -730,7 +794,7 @@ mod documents {
             .map_err(|error| {
                 DocumentError::Extractor(format!("no runtime for the extractor: {error}"))
             })?;
-        let config = xberg::ExtractionConfig {
+        let mut config = xberg::ExtractionConfig {
             use_cache: false,
             extraction_timeout_secs: Some(cooperative_timeout(limits.timeout).as_secs()),
             security_limits: Some(xberg::SecurityLimits {
@@ -740,13 +804,40 @@ mod documents {
             }),
             ..xberg::ExtractionConfig::default()
         };
+        if let Some(images) = &limits.images {
+            // The plain text stays exactly what it was: the parser's own
+            // placeholders (DOCX prints `[Image: ...]` for a picture) stay
+            // on, because turning them off DROPS those lines from the text
+            // (measured), and the page layout is asked for only to anchor a
+            // picture to its page.
+            config.images = Some(xberg::ImageExtractionConfig {
+                extract_images: true,
+                inject_placeholders: true,
+                max_images_per_page: u32::try_from(images.max_images).ok(),
+                ..xberg::ImageExtractionConfig::default()
+            });
+            config.pages = Some(xberg::PageConfig {
+                extract_pages: true,
+                insert_page_markers: false,
+                ..xberg::PageConfig::default()
+            });
+        }
         let input = xberg::ExtractInput::from_bytes(bytes, mime.to_owned(), None);
         match runtime.block_on(xberg::extract(input, &config)) {
             Ok(result) => match result.results.into_iter().next() {
-                Some(document) if !document.content.trim().is_empty() => Ok(DocumentText {
-                    text: document.content,
-                    extractor: "xberg",
-                }),
+                Some(document) if !document.content.trim().is_empty() => {
+                    let (images, images_skipped) = limits
+                        .images
+                        .as_ref()
+                        .map(|bounds| embedded_images(&document, bounds))
+                        .unwrap_or_default();
+                    Ok(DocumentText {
+                        text: document.content,
+                        extractor: "xberg",
+                        images,
+                        images_skipped,
+                    })
+                }
                 _ => Err(DocumentError::NoText),
             },
             Err(error) => Err(classify(&error)),
@@ -815,6 +906,137 @@ mod documents {
         }
     }
 
+    /// The media type the bytes of a picture say, if a model takes it.
+    fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
+        match super::image_for_vision("image/png", bytes) {
+            super::VisionImage::Supported(media_type) => Some(media_type),
+            super::VisionImage::Bmp => Some("image/bmp"),
+            _ => None,
+        }
+    }
+
+    /// One page or slide of a document, as the parser split its text.
+    struct PageText<'a> {
+        number: u32,
+        content: &'a str,
+    }
+
+    /// Where a picture was found.
+    struct Site<'a> {
+        page: Option<u32>,
+        /// The text the parser prints for it in plain text, when it prints
+        /// any (`[Image: <description>]`).
+        description: Option<&'a str>,
+    }
+
+    /// The byte offset in `text` where each picture's description belongs.
+    ///
+    /// The parser's plain text carries no marker for a picture, so the
+    /// position is recovered from what it does give: a picture that the
+    /// text names (`[Image: <alt text or file name>]`, as DOCX does) is
+    /// anchored right after that line; any other picture at the end of its
+    /// page's or slide's text (the page is located by finding the parser's
+    /// per-page text in the whole, in order); and one that is neither at the
+    /// end of the text. An anchor is always on a character boundary. Pure:
+    /// the same input gives the same offsets.
+    fn anchors(text: &str, pages: &[PageText<'_>], sites: &[Site<'_>]) -> Vec<usize> {
+        // (page number, start, end) of every page whose text was found.
+        let mut spans: Vec<(u32, usize, usize)> = Vec::with_capacity(pages.len());
+        let mut cursor = 0;
+        for page in pages {
+            if page.content.is_empty() {
+                spans.push((page.number, cursor, cursor));
+            } else if let Some(found) = text[cursor..].find(page.content) {
+                let start = cursor + found;
+                cursor = start + page.content.len();
+                spans.push((page.number, start, cursor));
+            }
+        }
+        let mut inline_cursor = 0;
+        sites
+            .iter()
+            .map(|site| {
+                let span = site
+                    .page
+                    .and_then(|page| spans.iter().find(|span| span.0 == page));
+                let (low, high) = span.map_or((0, text.len()), |span| (span.1, span.2));
+                if let Some(description) = site.description.filter(|d| !d.trim().is_empty()) {
+                    let from = inline_cursor.max(low);
+                    let needle = format!("[Image: {description}]");
+                    if from <= high
+                        && let Some(found) = text[from..high].find(&needle)
+                    {
+                        inline_cursor = from + found + needle.len();
+                        return inline_cursor;
+                    }
+                }
+                span.map_or(text.len(), |span| span.2)
+            })
+            .collect()
+    }
+
+    /// The pictures of `document` that fit `bounds`, in document order, each
+    /// with its anchor in the text; and how many did not fit, by reason.
+    /// The bytes are the parser's own, copied once into the result.
+    fn embedded_images(
+        document: &xberg::ExtractedDocument,
+        bounds: &ImageLimits,
+    ) -> (Vec<EmbeddedImage>, ImagesSkipped) {
+        let mut found: Vec<&xberg::ExtractedImage> = document.images.iter().flatten().collect();
+        found.sort_by_key(|image| image.image_index);
+        let pages: Vec<PageText<'_>> = document
+            .pages
+            .iter()
+            .flatten()
+            .map(|page| PageText {
+                number: page.page_number,
+                content: &page.content,
+            })
+            .collect();
+        let sites: Vec<Site<'_>> = found
+            .iter()
+            .map(|image| Site {
+                page: image.page_number,
+                description: image.description.as_deref(),
+            })
+            .collect();
+        let offsets = anchors(&document.content, &pages, &sites);
+        let mut kept = Vec::new();
+        let mut skipped = ImagesSkipped::default();
+        let mut total = 0_usize;
+        for (image, text_offset) in found.into_iter().zip(offsets) {
+            let Some(media_type) = sniff_image(&image.data).filter(|_| !image.is_mask) else {
+                skipped.unsupported += 1;
+                continue;
+            };
+            if kept.len() >= bounds.max_images {
+                skipped.too_many += 1;
+                continue;
+            }
+            if image.data.len() > bounds.max_image_bytes
+                || total.saturating_add(image.data.len()) > bounds.max_total_bytes
+            {
+                skipped.too_large += 1;
+                continue;
+            }
+            total += image.data.len();
+            kept.push(EmbeddedImage {
+                data: image.data.to_vec(),
+                media_type,
+                ordinal: image.image_index,
+                text_offset,
+                page: image.page_number,
+                name: image
+                    .source_path
+                    .as_deref()
+                    .and_then(|path| path.rsplit('/').next())
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned),
+            });
+        }
+        (kept, skipped)
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -857,6 +1079,79 @@ mod documents {
                 source: None,
             };
             assert!(matches!(classify(&parsing), DocumentError::Corrupt(_)));
+        }
+
+        #[test]
+        fn a_picture_is_anchored_inline_when_the_text_names_it_else_at_the_end_of_its_page() {
+            let text = "Before.\n\n[Image: Picture 1]\n\nBetween.\n\n[Image: a chart]\n\nAfter.";
+            let named = |description| Site {
+                page: Some(1),
+                description: Some(description),
+            };
+            let offsets = anchors(text, &[], &[named("Picture 1"), named("a chart")]);
+            assert_eq!(&text[..offsets[0]], "Before.\n\n[Image: Picture 1]");
+            assert_eq!(
+                &text[..offsets[1]],
+                "Before.\n\n[Image: Picture 1]\n\nBetween.\n\n[Image: a chart]"
+            );
+            // The same description twice is two lines, in order.
+            let twice = "[Image: x]\n\nmid\n\n[Image: x]\n\nend";
+            let offsets = anchors(twice, &[], &[named("x"), named("x")]);
+            assert_eq!(&twice[..offsets[0]], "[Image: x]");
+            assert_eq!(&twice[..offsets[1]], "[Image: x]\n\nmid\n\n[Image: x]");
+
+            // Pages: the end of the page the picture is on, not of the text.
+            let paged = "One a\n\nOne b\n\nTwo a\n\nTwo b";
+            let pages = [
+                PageText {
+                    number: 1,
+                    content: "One a\n\nOne b",
+                },
+                PageText {
+                    number: 2,
+                    content: "Two a\n\nTwo b",
+                },
+            ];
+            let on = |page| Site {
+                page: Some(page),
+                description: None,
+            };
+            let offsets = anchors(paged, &pages, &[on(1), on(2), on(1)]);
+            assert_eq!(&paged[..offsets[0]], "One a\n\nOne b");
+            assert_eq!(offsets[1], paged.len());
+            assert_eq!(offsets[2], offsets[0]);
+
+            // A blank page, a page whose text cannot be found, and no page.
+            let blank = [
+                PageText {
+                    number: 1,
+                    content: "",
+                },
+                PageText {
+                    number: 2,
+                    content: "never in the text",
+                },
+            ];
+            let offsets = anchors(paged, &blank, &[on(1), on(2), on(3)]);
+            assert_eq!(offsets, vec![0, paged.len(), paged.len()]);
+            // A name the text does not carry falls back to the page's end.
+            let offsets = anchors(paged, &pages, &[named("nowhere")]);
+            assert_eq!(&paged[..offsets[0]], "One a\n\nOne b");
+            // Multi-byte text: every anchor is a character boundary.
+            let wide = "é\n\n[Image: ü]\n\nz";
+            let offsets = anchors(wide, &[], &[named("ü")]);
+            assert!(wide.is_char_boundary(offsets[0]));
+        }
+
+        #[test]
+        fn pictures_are_recognised_by_their_bytes_not_by_a_claim() {
+            assert_eq!(sniff_image(b"\x89PNG\r\n\x1a\n...."), Some("image/png"));
+            assert_eq!(sniff_image(&[0xff, 0xd8, 0xff, 0xe0]), Some("image/jpeg"));
+            assert_eq!(sniff_image(b"GIF89a.."), Some("image/gif"));
+            assert_eq!(sniff_image(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+            assert_eq!(sniff_image(b"<svg xmlns=\"x\"/>"), None);
+            assert_eq!(sniff_image(b"II*\0 a tiff"), None);
+            assert_eq!(sniff_image(b""), None);
         }
 
         #[test]

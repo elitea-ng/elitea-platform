@@ -30,6 +30,14 @@
 // the worker records in the run's summary. Anything that is not a statement
 // about the document (a malformed stream, no capacity, an internal failure)
 // is a gRPC status, which the worker reports as `extract_failed`.
+//
+// EMBEDDED PICTURES (ADR-0030 I4 part C). A request may ask for the pictures
+// embedded in a PDF, DOCX or PPTX (`ExtractHeader.images`); the answer then
+// carries them as bounded blobs beside the text, each with the byte offset in
+// the text where its description belongs. The text itself is exactly what an
+// extraction that did not ask would give: the pictures never add a marker to
+// it. A request that does not ask reads no picture at all. The bytes are the
+// document's own, passed through; the extractor decodes nothing it returns.
 
 package extractv1
 
@@ -220,7 +228,10 @@ type ExtractHeader struct {
 	// The limits for this document. Each field at 0 means the extractor's
 	// configured default; a value above the extractor's own cap is lowered to
 	// the cap (the extractor protects itself, whatever a caller asks).
-	Limits        *ExtractLimits `protobuf:"bytes,4,opt,name=limits,proto3" json:"limits,omitempty"`
+	Limits *ExtractLimits `protobuf:"bytes,4,opt,name=limits,proto3" json:"limits,omitempty"`
+	// Ask for the pictures embedded in the document (PDF, DOCX, PPTX; other
+	// types return none). Absent: none is read and none returned.
+	Images        *ExtractImages `protobuf:"bytes,5,opt,name=images,proto3" json:"images,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -283,6 +294,81 @@ func (x *ExtractHeader) GetLimits() *ExtractLimits {
 	return nil
 }
 
+func (x *ExtractHeader) GetImages() *ExtractImages {
+	if x != nil {
+		return x.Images
+	}
+	return nil
+}
+
+// The bounds on the pictures returned with one document. Each field at 0
+// means the extractor's configured default; a value above the extractor's own
+// cap is lowered to the cap.
+type ExtractImages struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Pictures returned; later ones are counted in `ImagesSkipped.too_many`.
+	MaxImages uint32 `protobuf:"varint,1,opt,name=max_images,json=maxImages,proto3" json:"max_images,omitempty"`
+	// Bytes of one picture; a larger one is counted in
+	// `ImagesSkipped.too_large`.
+	MaxImageBytes uint64 `protobuf:"varint,2,opt,name=max_image_bytes,json=maxImageBytes,proto3" json:"max_image_bytes,omitempty"`
+	// Bytes of all returned pictures together; a picture that would cross it
+	// is counted in `ImagesSkipped.too_large`.
+	MaxTotalBytes uint64 `protobuf:"varint,3,opt,name=max_total_bytes,json=maxTotalBytes,proto3" json:"max_total_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExtractImages) Reset() {
+	*x = ExtractImages{}
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExtractImages) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExtractImages) ProtoMessage() {}
+
+func (x *ExtractImages) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExtractImages.ProtoReflect.Descriptor instead.
+func (*ExtractImages) Descriptor() ([]byte, []int) {
+	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ExtractImages) GetMaxImages() uint32 {
+	if x != nil {
+		return x.MaxImages
+	}
+	return 0
+}
+
+func (x *ExtractImages) GetMaxImageBytes() uint64 {
+	if x != nil {
+		return x.MaxImageBytes
+	}
+	return 0
+}
+
+func (x *ExtractImages) GetMaxTotalBytes() uint64 {
+	if x != nil {
+		return x.MaxTotalBytes
+	}
+	return 0
+}
+
 type ExtractLimits struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Bytes of input accepted for one document.
@@ -304,7 +390,7 @@ type ExtractLimits struct {
 
 func (x *ExtractLimits) Reset() {
 	*x = ExtractLimits{}
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[2]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -316,7 +402,7 @@ func (x *ExtractLimits) String() string {
 func (*ExtractLimits) ProtoMessage() {}
 
 func (x *ExtractLimits) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[2]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -329,7 +415,7 @@ func (x *ExtractLimits) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtractLimits.ProtoReflect.Descriptor instead.
 func (*ExtractLimits) Descriptor() ([]byte, []int) {
-	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{2}
+	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ExtractLimits) GetMaxInputBytes() uint64 {
@@ -373,7 +459,7 @@ type ExtractResponse struct {
 
 func (x *ExtractResponse) Reset() {
 	*x = ExtractResponse{}
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[3]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -385,7 +471,7 @@ func (x *ExtractResponse) String() string {
 func (*ExtractResponse) ProtoMessage() {}
 
 func (x *ExtractResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[3]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -398,7 +484,7 @@ func (x *ExtractResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtractResponse.ProtoReflect.Descriptor instead.
 func (*ExtractResponse) Descriptor() ([]byte, []int) {
-	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{3}
+	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ExtractResponse) GetOutcome() isExtractResponse_Outcome {
@@ -446,14 +532,18 @@ type ExtractedText struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Text  string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
 	// Which extractor produced it (`xberg`).
-	Extractor     string `protobuf:"bytes,2,opt,name=extractor,proto3" json:"extractor,omitempty"`
+	Extractor string `protobuf:"bytes,2,opt,name=extractor,proto3" json:"extractor,omitempty"`
+	// The embedded pictures, in document order. Empty unless the header asked.
+	Images []*EmbeddedImage `protobuf:"bytes,3,rep,name=images,proto3" json:"images,omitempty"`
+	// Pictures found and not returned. Zero unless the header asked.
+	ImagesSkipped *ImagesSkipped `protobuf:"bytes,4,opt,name=images_skipped,json=imagesSkipped,proto3" json:"images_skipped,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExtractedText) Reset() {
 	*x = ExtractedText{}
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[4]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -465,7 +555,7 @@ func (x *ExtractedText) String() string {
 func (*ExtractedText) ProtoMessage() {}
 
 func (x *ExtractedText) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[4]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -478,7 +568,7 @@ func (x *ExtractedText) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtractedText.ProtoReflect.Descriptor instead.
 func (*ExtractedText) Descriptor() ([]byte, []int) {
-	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{4}
+	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ExtractedText) GetText() string {
@@ -495,6 +585,182 @@ func (x *ExtractedText) GetExtractor() string {
 	return ""
 }
 
+func (x *ExtractedText) GetImages() []*EmbeddedImage {
+	if x != nil {
+		return x.Images
+	}
+	return nil
+}
+
+func (x *ExtractedText) GetImagesSkipped() *ImagesSkipped {
+	if x != nil {
+		return x.ImagesSkipped
+	}
+	return nil
+}
+
+// One picture embedded in the document, as the document stores it.
+type EmbeddedImage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Data  []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	// The media type the BYTES say (`image/png`, `image/jpeg`, `image/gif`,
+	// `image/webp`, `image/bmp`), never the package's claim.
+	MediaType string `protobuf:"bytes,2,opt,name=media_type,json=mediaType,proto3" json:"media_type,omitempty"`
+	// Position among the document's pictures, in document order.
+	Ordinal uint32 `protobuf:"varint,3,opt,name=ordinal,proto3" json:"ordinal,omitempty"`
+	// Where its description belongs: a byte offset into `ExtractedText.text`,
+	// on a character boundary. Inline right after the picture's own
+	// `[Image: ...]` line when the text has one (DOCX); otherwise at the end of
+	// its page's or slide's text; otherwise at the end of the text. Several
+	// pictures may share an offset; their order is `ordinal`.
+	TextOffset uint64 `protobuf:"varint,4,opt,name=text_offset,json=textOffset,proto3" json:"text_offset,omitempty"`
+	// The page or slide (1-based) the picture is on; 0 when the format is not
+	// paged.
+	Page uint32 `protobuf:"varint,5,opt,name=page,proto3" json:"page,omitempty"`
+	// The file name inside the package (`image1.png`); empty when the format
+	// has none.
+	Name          string `protobuf:"bytes,6,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmbeddedImage) Reset() {
+	*x = EmbeddedImage{}
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmbeddedImage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmbeddedImage) ProtoMessage() {}
+
+func (x *EmbeddedImage) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmbeddedImage.ProtoReflect.Descriptor instead.
+func (*EmbeddedImage) Descriptor() ([]byte, []int) {
+	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *EmbeddedImage) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *EmbeddedImage) GetMediaType() string {
+	if x != nil {
+		return x.MediaType
+	}
+	return ""
+}
+
+func (x *EmbeddedImage) GetOrdinal() uint32 {
+	if x != nil {
+		return x.Ordinal
+	}
+	return 0
+}
+
+func (x *EmbeddedImage) GetTextOffset() uint64 {
+	if x != nil {
+		return x.TextOffset
+	}
+	return 0
+}
+
+func (x *EmbeddedImage) GetPage() uint32 {
+	if x != nil {
+		return x.Page
+	}
+	return 0
+}
+
+func (x *EmbeddedImage) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+// Pictures found in the document and not returned, by reason.
+type ImagesSkipped struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Over `ExtractImages.max_images`.
+	TooMany uint32 `protobuf:"varint,1,opt,name=too_many,json=tooMany,proto3" json:"too_many,omitempty"`
+	// Over `ExtractImages.max_image_bytes` or `max_total_bytes`.
+	TooLarge uint32 `protobuf:"varint,2,opt,name=too_large,json=tooLarge,proto3" json:"too_large,omitempty"`
+	// Not PNG, JPEG, GIF, WebP or BMP by its bytes (SVG, TIFF, EMF, ...), or a
+	// mask.
+	Unsupported   uint32 `protobuf:"varint,3,opt,name=unsupported,proto3" json:"unsupported,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImagesSkipped) Reset() {
+	*x = ImagesSkipped{}
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImagesSkipped) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImagesSkipped) ProtoMessage() {}
+
+func (x *ImagesSkipped) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImagesSkipped.ProtoReflect.Descriptor instead.
+func (*ImagesSkipped) Descriptor() ([]byte, []int) {
+	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ImagesSkipped) GetTooMany() uint32 {
+	if x != nil {
+		return x.TooMany
+	}
+	return 0
+}
+
+func (x *ImagesSkipped) GetTooLarge() uint32 {
+	if x != nil {
+		return x.TooLarge
+	}
+	return 0
+}
+
+func (x *ImagesSkipped) GetUnsupported() uint32 {
+	if x != nil {
+		return x.Unsupported
+	}
+	return 0
+}
+
 // A document the extractor read and will not turn into text, and why. The
 // caller records the reason; the detail is the extractor's own sentence,
 // for its log line, never shown as the reason itself.
@@ -508,7 +774,7 @@ type ExtractSkip struct {
 
 func (x *ExtractSkip) Reset() {
 	*x = ExtractSkip{}
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[5]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -520,7 +786,7 @@ func (x *ExtractSkip) String() string {
 func (*ExtractSkip) ProtoMessage() {}
 
 func (x *ExtractSkip) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[5]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -533,7 +799,7 @@ func (x *ExtractSkip) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtractSkip.ProtoReflect.Descriptor instead.
 func (*ExtractSkip) Descriptor() ([]byte, []int) {
-	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{5}
+	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ExtractSkip) GetReason() SkipReason {
@@ -558,7 +824,7 @@ type CapabilitiesRequest struct {
 
 func (x *CapabilitiesRequest) Reset() {
 	*x = CapabilitiesRequest{}
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[6]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -570,7 +836,7 @@ func (x *CapabilitiesRequest) String() string {
 func (*CapabilitiesRequest) ProtoMessage() {}
 
 func (x *CapabilitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[6]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -583,7 +849,7 @@ func (x *CapabilitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilitiesRequest.ProtoReflect.Descriptor instead.
 func (*CapabilitiesRequest) Descriptor() ([]byte, []int) {
-	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{6}
+	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{9}
 }
 
 type CapabilitiesResponse struct {
@@ -611,14 +877,17 @@ type CapabilitiesResponse struct {
 	// was cancelled while it ran, and that still runs. Such a slot comes back
 	// only when the thread ends. `overruns == concurrency` is a wedged
 	// process: it exits by itself, and the health probe fails on it.
-	Overruns      uint32 `protobuf:"varint,8,opt,name=overruns,proto3" json:"overruns,omitempty"`
+	Overruns uint32 `protobuf:"varint,8,opt,name=overruns,proto3" json:"overruns,omitempty"`
+	// The caps a request's `ExtractImages` is lowered to. All zero from an
+	// extractor that does not return pictures.
+	ImageLimits   *ExtractImages `protobuf:"bytes,9,opt,name=image_limits,json=imageLimits,proto3" json:"image_limits,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CapabilitiesResponse) Reset() {
 	*x = CapabilitiesResponse{}
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[7]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -630,7 +899,7 @@ func (x *CapabilitiesResponse) String() string {
 func (*CapabilitiesResponse) ProtoMessage() {}
 
 func (x *CapabilitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_extract_v1_extract_proto_msgTypes[7]
+	mi := &file_elitea_extract_v1_extract_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -643,7 +912,7 @@ func (x *CapabilitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilitiesResponse.ProtoReflect.Descriptor instead.
 func (*CapabilitiesResponse) Descriptor() ([]byte, []int) {
-	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{7}
+	return file_elitea_extract_v1_extract_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *CapabilitiesResponse) GetContentTypes() []string {
@@ -702,6 +971,13 @@ func (x *CapabilitiesResponse) GetOverruns() uint32 {
 	return 0
 }
 
+func (x *CapabilitiesResponse) GetImageLimits() *ExtractImages {
+	if x != nil {
+		return x.ImageLimits
+	}
+	return nil
+}
+
 var File_elitea_extract_v1_extract_proto protoreflect.FileDescriptor
 
 const file_elitea_extract_v1_extract_proto_rawDesc = "" +
@@ -710,12 +986,18 @@ const file_elitea_extract_v1_extract_proto_rawDesc = "" +
 	"\x0eExtractRequest\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2 .elitea.extract.v1.ExtractHeaderH\x00R\x06header\x12\x16\n" +
 	"\x05chunk\x18\x02 \x01(\fH\x00R\x05chunkB\t\n" +
-	"\amessage\"\xaf\x01\n" +
+	"\amessage\"\xe9\x01\n" +
 	"\rExtractHeader\x12\x1a\n" +
 	"\bfilename\x18\x01 \x01(\tR\bfilename\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12%\n" +
 	"\x0econtent_length\x18\x03 \x01(\x04R\rcontentLength\x128\n" +
-	"\x06limits\x18\x04 \x01(\v2 .elitea.extract.v1.ExtractLimitsR\x06limits\"\xa5\x01\n" +
+	"\x06limits\x18\x04 \x01(\v2 .elitea.extract.v1.ExtractLimitsR\x06limits\x128\n" +
+	"\x06images\x18\x05 \x01(\v2 .elitea.extract.v1.ExtractImagesR\x06images\"~\n" +
+	"\rExtractImages\x12\x1d\n" +
+	"\n" +
+	"max_images\x18\x01 \x01(\rR\tmaxImages\x12&\n" +
+	"\x0fmax_image_bytes\x18\x02 \x01(\x04R\rmaxImageBytes\x12&\n" +
+	"\x0fmax_total_bytes\x18\x03 \x01(\x04R\rmaxTotalBytes\"\xa5\x01\n" +
 	"\rExtractLimits\x12&\n" +
 	"\x0fmax_input_bytes\x18\x01 \x01(\x04R\rmaxInputBytes\x12\x1b\n" +
 	"\tmax_pages\x18\x02 \x01(\rR\bmaxPages\x12(\n" +
@@ -724,14 +1006,29 @@ const file_elitea_extract_v1_extract_proto_rawDesc = "" +
 	"\x0fExtractResponse\x126\n" +
 	"\x04text\x18\x01 \x01(\v2 .elitea.extract.v1.ExtractedTextH\x00R\x04text\x124\n" +
 	"\x04skip\x18\x02 \x01(\v2\x1e.elitea.extract.v1.ExtractSkipH\x00R\x04skipB\t\n" +
-	"\aoutcome\"A\n" +
+	"\aoutcome\"\xc4\x01\n" +
 	"\rExtractedText\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1c\n" +
-	"\textractor\x18\x02 \x01(\tR\textractor\"\\\n" +
+	"\textractor\x18\x02 \x01(\tR\textractor\x128\n" +
+	"\x06images\x18\x03 \x03(\v2 .elitea.extract.v1.EmbeddedImageR\x06images\x12G\n" +
+	"\x0eimages_skipped\x18\x04 \x01(\v2 .elitea.extract.v1.ImagesSkippedR\rimagesSkipped\"\xa5\x01\n" +
+	"\rEmbeddedImage\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x12\x1d\n" +
+	"\n" +
+	"media_type\x18\x02 \x01(\tR\tmediaType\x12\x18\n" +
+	"\aordinal\x18\x03 \x01(\rR\aordinal\x12\x1f\n" +
+	"\vtext_offset\x18\x04 \x01(\x04R\n" +
+	"textOffset\x12\x12\n" +
+	"\x04page\x18\x05 \x01(\rR\x04page\x12\x12\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\"i\n" +
+	"\rImagesSkipped\x12\x19\n" +
+	"\btoo_many\x18\x01 \x01(\rR\atooMany\x12\x1b\n" +
+	"\ttoo_large\x18\x02 \x01(\rR\btooLarge\x12 \n" +
+	"\vunsupported\x18\x03 \x01(\rR\vunsupported\"\\\n" +
 	"\vExtractSkip\x125\n" +
 	"\x06reason\x18\x01 \x01(\x0e2\x1d.elitea.extract.v1.SkipReasonR\x06reason\x12\x16\n" +
 	"\x06detail\x18\x02 \x01(\tR\x06detail\"\x15\n" +
-	"\x13CapabilitiesRequest\"\xb9\x02\n" +
+	"\x13CapabilitiesRequest\"\xfe\x02\n" +
 	"\x14CapabilitiesResponse\x12#\n" +
 	"\rcontent_types\x18\x01 \x03(\tR\fcontentTypes\x128\n" +
 	"\x06limits\x18\x02 \x01(\v2 .elitea.extract.v1.ExtractLimitsR\x06limits\x12\x18\n" +
@@ -740,7 +1037,8 @@ const file_elitea_extract_v1_extract_proto_rawDesc = "" +
 	"\x10slot_wait_millis\x18\x05 \x01(\rR\x0eslotWaitMillis\x12,\n" +
 	"\x12stream_idle_millis\x18\x06 \x01(\rR\x10streamIdleMillis\x12\x12\n" +
 	"\x04busy\x18\a \x01(\rR\x04busy\x12\x1a\n" +
-	"\boverruns\x18\b \x01(\rR\boverruns*\x87\x02\n" +
+	"\boverruns\x18\b \x01(\rR\boverruns\x12C\n" +
+	"\fimage_limits\x18\t \x01(\v2 .elitea.extract.v1.ExtractImagesR\vimageLimits*\x87\x02\n" +
 	"\n" +
 	"SkipReason\x12\x1b\n" +
 	"\x17SKIP_REASON_UNSPECIFIED\x10\x00\x12\x19\n" +
@@ -769,34 +1067,41 @@ func file_elitea_extract_v1_extract_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_extract_v1_extract_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_extract_v1_extract_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_elitea_extract_v1_extract_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_elitea_extract_v1_extract_proto_goTypes = []any{
 	(SkipReason)(0),              // 0: elitea.extract.v1.SkipReason
 	(*ExtractRequest)(nil),       // 1: elitea.extract.v1.ExtractRequest
 	(*ExtractHeader)(nil),        // 2: elitea.extract.v1.ExtractHeader
-	(*ExtractLimits)(nil),        // 3: elitea.extract.v1.ExtractLimits
-	(*ExtractResponse)(nil),      // 4: elitea.extract.v1.ExtractResponse
-	(*ExtractedText)(nil),        // 5: elitea.extract.v1.ExtractedText
-	(*ExtractSkip)(nil),          // 6: elitea.extract.v1.ExtractSkip
-	(*CapabilitiesRequest)(nil),  // 7: elitea.extract.v1.CapabilitiesRequest
-	(*CapabilitiesResponse)(nil), // 8: elitea.extract.v1.CapabilitiesResponse
+	(*ExtractImages)(nil),        // 3: elitea.extract.v1.ExtractImages
+	(*ExtractLimits)(nil),        // 4: elitea.extract.v1.ExtractLimits
+	(*ExtractResponse)(nil),      // 5: elitea.extract.v1.ExtractResponse
+	(*ExtractedText)(nil),        // 6: elitea.extract.v1.ExtractedText
+	(*EmbeddedImage)(nil),        // 7: elitea.extract.v1.EmbeddedImage
+	(*ImagesSkipped)(nil),        // 8: elitea.extract.v1.ImagesSkipped
+	(*ExtractSkip)(nil),          // 9: elitea.extract.v1.ExtractSkip
+	(*CapabilitiesRequest)(nil),  // 10: elitea.extract.v1.CapabilitiesRequest
+	(*CapabilitiesResponse)(nil), // 11: elitea.extract.v1.CapabilitiesResponse
 }
 var file_elitea_extract_v1_extract_proto_depIdxs = []int32{
-	2, // 0: elitea.extract.v1.ExtractRequest.header:type_name -> elitea.extract.v1.ExtractHeader
-	3, // 1: elitea.extract.v1.ExtractHeader.limits:type_name -> elitea.extract.v1.ExtractLimits
-	5, // 2: elitea.extract.v1.ExtractResponse.text:type_name -> elitea.extract.v1.ExtractedText
-	6, // 3: elitea.extract.v1.ExtractResponse.skip:type_name -> elitea.extract.v1.ExtractSkip
-	0, // 4: elitea.extract.v1.ExtractSkip.reason:type_name -> elitea.extract.v1.SkipReason
-	3, // 5: elitea.extract.v1.CapabilitiesResponse.limits:type_name -> elitea.extract.v1.ExtractLimits
-	1, // 6: elitea.extract.v1.DocumentExtractService.Extract:input_type -> elitea.extract.v1.ExtractRequest
-	7, // 7: elitea.extract.v1.DocumentExtractService.Capabilities:input_type -> elitea.extract.v1.CapabilitiesRequest
-	4, // 8: elitea.extract.v1.DocumentExtractService.Extract:output_type -> elitea.extract.v1.ExtractResponse
-	8, // 9: elitea.extract.v1.DocumentExtractService.Capabilities:output_type -> elitea.extract.v1.CapabilitiesResponse
-	8, // [8:10] is the sub-list for method output_type
-	6, // [6:8] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	2,  // 0: elitea.extract.v1.ExtractRequest.header:type_name -> elitea.extract.v1.ExtractHeader
+	4,  // 1: elitea.extract.v1.ExtractHeader.limits:type_name -> elitea.extract.v1.ExtractLimits
+	3,  // 2: elitea.extract.v1.ExtractHeader.images:type_name -> elitea.extract.v1.ExtractImages
+	6,  // 3: elitea.extract.v1.ExtractResponse.text:type_name -> elitea.extract.v1.ExtractedText
+	9,  // 4: elitea.extract.v1.ExtractResponse.skip:type_name -> elitea.extract.v1.ExtractSkip
+	7,  // 5: elitea.extract.v1.ExtractedText.images:type_name -> elitea.extract.v1.EmbeddedImage
+	8,  // 6: elitea.extract.v1.ExtractedText.images_skipped:type_name -> elitea.extract.v1.ImagesSkipped
+	0,  // 7: elitea.extract.v1.ExtractSkip.reason:type_name -> elitea.extract.v1.SkipReason
+	4,  // 8: elitea.extract.v1.CapabilitiesResponse.limits:type_name -> elitea.extract.v1.ExtractLimits
+	3,  // 9: elitea.extract.v1.CapabilitiesResponse.image_limits:type_name -> elitea.extract.v1.ExtractImages
+	1,  // 10: elitea.extract.v1.DocumentExtractService.Extract:input_type -> elitea.extract.v1.ExtractRequest
+	10, // 11: elitea.extract.v1.DocumentExtractService.Capabilities:input_type -> elitea.extract.v1.CapabilitiesRequest
+	5,  // 12: elitea.extract.v1.DocumentExtractService.Extract:output_type -> elitea.extract.v1.ExtractResponse
+	11, // 13: elitea.extract.v1.DocumentExtractService.Capabilities:output_type -> elitea.extract.v1.CapabilitiesResponse
+	12, // [12:14] is the sub-list for method output_type
+	10, // [10:12] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_elitea_extract_v1_extract_proto_init() }
@@ -808,7 +1113,7 @@ func file_elitea_extract_v1_extract_proto_init() {
 		(*ExtractRequest_Header)(nil),
 		(*ExtractRequest_Chunk)(nil),
 	}
-	file_elitea_extract_v1_extract_proto_msgTypes[3].OneofWrappers = []any{
+	file_elitea_extract_v1_extract_proto_msgTypes[4].OneofWrappers = []any{
 		(*ExtractResponse_Text)(nil),
 		(*ExtractResponse_Skip)(nil),
 	}
@@ -818,7 +1123,7 @@ func file_elitea_extract_v1_extract_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_extract_v1_extract_proto_rawDesc), len(file_elitea_extract_v1_extract_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
