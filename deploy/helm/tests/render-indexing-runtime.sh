@@ -121,7 +121,7 @@ echo "== the Rust worker is given its vector store only under rust indexing =="
 # The chart's own elitea-vector: <vector.service.name>:<vector.service.port>,
 # the SAN its server certificate carries and the port its Service exposes, and
 # the default allowlist naming the I1 families' public hosts.
-[ "$(vectorkeys "$TMP/rust.yaml")" = "elitea-vector:9470|github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com" ] \
+[ "$(vectorkeys "$TMP/rust.yaml")" = "elitea-vector:9470|github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com api.figma.com" ] \
   && ok "rust indexing points the worker at this chart's elitea-vector with the default egress allowlist" \
   || bad "rust indexing vector keys: $(vectorkeys "$TMP/rust.yaml")"
 # An elitea-vector deployed elsewhere, named explicitly; an emptied allowlist

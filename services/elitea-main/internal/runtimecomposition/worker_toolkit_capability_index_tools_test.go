@@ -45,11 +45,11 @@ func TestWorkerToolkitCapabilityWithRustIndexTools(t *testing.T) {
 	if ok, _ := pinned.SupportsTool("github", "search_index"); ok {
 		t.Error("WithRustIndexTools must not mutate the pinned capability")
 	}
-	// Figma (I3) stays as pinned: its index tools wait for their stage.
-	before, _ := pinned.SupportsTool("figma", "search_index")
-	after, _ := widened.SupportsTool("figma", "search_index")
+	// Aha has no indexing toolkit: it stays as pinned.
+	before, _ := pinned.SupportsTool("aha", "search_index")
+	after, _ := widened.SupportsTool("aha", "search_index")
 	if before != after {
-		t.Errorf("figma/search_index changed from %v to %v", before, after)
+		t.Errorf("aha/search_index changed from %v to %v", before, after)
 	}
 	python, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
 	if err != nil {

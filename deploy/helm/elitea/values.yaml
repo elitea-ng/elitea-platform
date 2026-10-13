@@ -4279,8 +4279,9 @@ worker:
     # REFUSES EVERY SOURCE HOST (fail-closed): an index run against github.com
     # fails with an egress refusal until the host is named here. The default
     # names the public SaaS hosts the I1 families index from; add your
-    # self-hosted GitLab, Bitbucket or Azure DevOps hosts.
-    indexEgressAllowlist: "github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com"
+    # self-hosted GitLab, Bitbucket or Azure DevOps hosts. `api.figma.com`
+    # is Figma's REST API (the Figma toolkit's index runs).
+    indexEgressAllowlist: "github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com api.figma.com"
     # Broader than the current `artifact.delete_file` rule, so metadata drift
     # cannot bypass approval. `remove_index` is the indexing families' index
     # delete (ADR-0030 I1): the Rust worker runs it through elitea-main's

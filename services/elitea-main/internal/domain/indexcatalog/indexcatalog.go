@@ -78,7 +78,8 @@ func validIndexID(value string) bool {
 
 // Families are the toolkit types whose Rust families carry the index tools:
 // stage I1 (ADR-0030: artifact, github, gitlab, bitbucket, ado_repos) and the
-// I2 families (confluence, jira, sharepoint, ado_wiki, ado_boards, ado_plans). A
+// I2 families (confluence, jira, sharepoint, ado_wiki, ado_boards, ado_plans)
+// and figma (I3). A
 // catalog is frozen only for these; the other indexing families wait for
 // I2/I3 and keep the SDK worker's index tools until then.
 var Families = []string{
@@ -89,6 +90,7 @@ var Families = []string{
 	"artifact",
 	"bitbucket",
 	"confluence",
+	"figma",
 	"github",
 	"gitlab",
 	"jira",

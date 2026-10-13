@@ -5,7 +5,8 @@
 //! `github`, `gitlab`, `bitbucket`, `ado_repos` and `artifact`; I2 adds the
 //! Atlassian pair, `confluence` and `jira` (pages or issues with their
 //! attachments and comments as dependent documents), and `sharepoint`,
-//! `ado_wiki`, `ado_boards` and `ado_plans`. Every other
+//! `ado_wiki`, `ado_boards` and `ado_plans`; I3 adds `figma` (frames, and comments on
+//! request). Every other
 //! indexing toolkit type is refused with its name, so a run on a deployment
 //! that switched too early fails with a reason instead of indexing nothing.
 //!
@@ -35,6 +36,8 @@ use elitea_connectors::bitbucket::source::BitbucketSource;
 use elitea_connectors::confluence::config::{ConfluenceConnectorConfig, ConfluenceIndexArguments};
 use elitea_connectors::confluence::source::ConfluenceSource;
 use elitea_connectors::egress::HostAllowlist;
+use elitea_connectors::figma::config::{FigmaConnectorConfig, FigmaIndexArguments};
+use elitea_connectors::figma::source::FigmaSource;
 use elitea_connectors::github::config::GitHubToolkitConfig;
 use elitea_connectors::github::source::GitHubSource;
 use elitea_connectors::gitlab::config::GitLabToolkitConfig;
@@ -52,10 +55,10 @@ use serde_json::Value;
 use super::IndexRunLimits;
 use super::inputs::{IndexParameters, ToolkitConfiguration};
 
-/// The families this worker indexes (ADR-0030 I1 and I2); the Go
+/// The families this worker indexes (ADR-0030 I1, I2 and I3); the Go
 /// `indexcatalog.Families` and agent-runtime `INDEX_FAMILIES` list the same
 /// types (tested against `index_served_families.json`).
-pub(crate) const SERVED_TOOLKIT_TYPES: [&str; 11] = [
+pub(crate) const SERVED_TOOLKIT_TYPES: [&str; 12] = [
     "github",
     "gitlab",
     "bitbucket",
@@ -67,6 +70,7 @@ pub(crate) const SERVED_TOOLKIT_TYPES: [&str; 11] = [
     "ado_wiki",
     "ado_boards",
     "ado_plans",
+    "figma",
 ];
 
 /// A connector could not be built. The text names the toolkit type and the
@@ -95,6 +99,7 @@ pub(crate) enum IndexSource {
     AdoWiki(AdoWikiSource),
     AdoBoards(AdoBoardsSource),
     AdoPlans(AdoPlansSource),
+    Figma(FigmaSource),
     #[cfg(test)]
     Fixture(Vec<Document>),
 }
@@ -232,6 +237,14 @@ impl IndexSource {
                     .map_err(|e| refused(&e))?;
                 Self::AdoPlans(source.with_limits(source_limits))
             }
+            "figma" => {
+                let config = FigmaConnectorConfig::parse(settings).map_err(|e| refused(&e))?;
+                let arguments =
+                    FigmaIndexArguments::parse(&parameters.arguments).map_err(|e| refused(&e))?;
+                let source = FigmaSource::new(config, arguments, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::Figma(source.with_limits(source_limits))
+            }
             // The tests' in-memory toolkit: the documents the test staged.
             #[cfg(test)]
             "fixture" => match super::tests::take_fixture_source() {
@@ -240,7 +253,7 @@ impl IndexSource {
             },
             other => {
                 return Err(SourceBuildError(format!(
-                    "the {other} toolkit is not indexed by this worker yet (ADR-0030 I1/I2 serve {})",
+                    "the {other} toolkit is not indexed by this worker yet (ADR-0030 I1–I3 serve {})",
                     SERVED_TOOLKIT_TYPES.join(", ")
                 )));
             }
@@ -275,6 +288,7 @@ impl IndexSource {
             Self::AdoWiki(source) => source.list().await,
             Self::AdoBoards(source) => source.list().await,
             Self::AdoPlans(source) => source.list().await,
+            Self::Figma(source) => source.list().await,
             #[cfg(test)]
             Self::Fixture(documents) => Ok(documents
                 .iter()
@@ -301,6 +315,7 @@ impl IndexSource {
             Self::AdoWiki(source) => source.fetch(key).await,
             Self::AdoBoards(source) => source.fetch(key).await,
             Self::AdoPlans(source) => source.fetch(key).await,
+            Self::Figma(source) => source.fetch(key).await,
             #[cfg(test)]
             Self::Fixture(documents) => documents
                 .iter()
@@ -394,8 +409,8 @@ mod tests {
     #[test]
     fn an_unserved_toolkit_type_is_refused_with_its_name() {
         let configuration = ToolkitConfiguration {
-            toolkit_type: "figma".to_owned(),
-            toolkit_name: "designs".to_owned(),
+            toolkit_type: "aha".to_owned(),
+            toolkit_name: "ideas".to_owned(),
             settings: serde_json::Map::new(),
         };
         let parameters = IndexParameters {
@@ -428,8 +443,8 @@ mod tests {
         )
         .err()
         .expect("refused");
-        assert!(error.0.contains("figma"), "{error}");
-        assert!(error.0.contains("ADR-0030 I1/I2"), "{error}");
+        assert!(error.0.contains("aha"), "{error}");
+        assert!(error.0.contains("ADR-0030 I1–I3"), "{error}");
         assert!(error.0.contains("confluence"), "{error}");
         assert!(error.0.contains("ado_plans"), "{error}");
     }
@@ -531,5 +546,71 @@ mod tests {
         .err()
         .expect("plain http refused");
         assert!(error.0.contains("plain HTTP"), "{error}");
+    }
+
+    /// Figma is built from the token and the `index_data` arguments; a missing
+    /// token or file, or an egress list without `api.figma.com`, is refused
+    /// with the connector's data-free reason.
+    #[test]
+    fn figma_is_built_or_refused_with_a_reason() {
+        let platform = PlatformAccess {
+            origin: "https://platform",
+            bearer: "pat",
+            project_id: "1",
+        };
+        let transport: Arc<dyn Transport> = Arc::new(
+            elitea_connectors::reqwest012::ReqwestTransport::hardened(
+                &elitea_connectors::github::client::CLIENT_POLICY,
+            )
+            .expect("client"),
+        );
+        let build = |settings: Value, arguments: Value, allowlist: &str| {
+            let configuration = ToolkitConfiguration {
+                toolkit_type: "figma".to_owned(),
+                toolkit_name: "designs".to_owned(),
+                settings: settings.as_object().cloned().unwrap_or_default(),
+            };
+            let parameters = IndexParameters {
+                index_name: "x".to_owned(),
+                clean_index: false,
+                chunking_tool: None,
+                chunking_config: Value::Null,
+                branch: None,
+                whitelist: Vec::new(),
+                blacklist: Vec::new(),
+                arguments: arguments.as_object().cloned().unwrap_or_default(),
+            };
+            IndexSource::build(
+                &configuration,
+                &parameters,
+                &platform,
+                &HostAllowlist::parse(Some(allowlist)),
+                Arc::clone(&transport),
+                IndexRunLimits::default(),
+            )
+        };
+        let settings = serde_json::json!({"figma_configuration": {"token": "figd_fixture"}});
+        let arguments = serde_json::json!({"urls_or_file_keys": "https://www.figma.com/design/K1/x?node-id=1-2"});
+        assert!(matches!(
+            build(settings.clone(), arguments.clone(), "api.figma.com"),
+            Ok(IndexSource::Figma(_))
+        ));
+        let error = build(settings.clone(), arguments.clone(), "example.com")
+            .err()
+            .expect("refused");
+        assert!(error.0.contains("egress allowlist"), "{error}");
+        let error = build(serde_json::json!({}), arguments, "*")
+            .err()
+            .expect("no token");
+        assert!(
+            error.0.starts_with("the figma toolkit cannot be indexed:"),
+            "{error}"
+        );
+        assert!(error.0.contains("figma_configuration.token"), "{error}");
+        let error = build(settings, serde_json::json!({}), "*")
+            .err()
+            .expect("no file");
+        assert!(error.0.contains("urls_or_file_keys"), "{error}");
+        assert!(!error.0.contains("figd_fixture"));
     }
 }
