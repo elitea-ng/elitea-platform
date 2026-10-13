@@ -516,7 +516,12 @@ fn render_copy_neutralises_fonts_and_svg_but_saves_keep_them() {
 #[test]
 fn files_at_the_limits_are_accepted_under_1_gib() {
     let _turn = serial();
-    let l = limits();
+    // This proves memory, not speed: an unoptimised build on a shared CI
+    // runner takes longer than the 20 s production deadline for a 1 M-cell save.
+    let l = elitea_office_core::Limits {
+        call_deadline: std::time::Duration::from_secs(600),
+        ..limits()
+    };
     // docx and pptx: two 8 MiB XML parts (16 MiB total) of ordinary text.
     for f in [Fmt::Docx, Fmt::Pptx] {
         let g = good(f);
