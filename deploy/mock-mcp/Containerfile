@@ -43,7 +43,9 @@ RUN mkdir -p /out \
       -out /out/server.crt -days 3650 -sha256 \
       -extfile /out/leaf.ext \
  && cat /out/server.crt /out/ca.crt > /out/server-chain.crt \
- && chmod 0644 /out/ca.crt /out/server-chain.crt /out/server.key
+ && mkdir -p /pub \
+ && cp /out/server-chain.crt /out/server.key /out/ca.crt /pub/ \
+ && chmod 0644 /pub/ca.crt /pub/server-chain.crt /pub/server.key
 # 0644 on the key, deliberately: the server runs as an unprivileged uid that
 # must read it, and the material is a throwaway minted for one test double on a
 # private compose network. It authenticates nothing outside this stack, and
@@ -59,11 +61,18 @@ FROM docker.io/library/python:3.12.14-slim-trixie
 # is 65532, the worker 10001, mock-llm 10101).
 RUN useradd --system --uid 10102 --home-dir /nonexistent --shell /usr/sbin/nologin mockmcp
 
-COPY --from=tls /out/server-chain.crt /opt/mock-mcp/tls/server-chain.crt
-COPY --from=tls /out/server.key /opt/mock-mcp/tls/server.key
-# The ANCHOR the consumer must trust — the CA, not the leaf. mcp-mock-trust
-# publishes this one, so rotating the leaf never invalidates a live bundle.
-COPY --from=tls /out/ca.crt /opt/mock-mcp/tls/ca.crt
+# ONE COPY for the whole key set, deliberately. Three separate COPY lines (one
+# per file) are three cache records that BuildKit resolves independently from
+# a shared remote cache; when that cache holds more than one mint of the `tls`
+# stage (concurrent jobs each export their own), the lines can come from
+# DIFFERENT mints. The image then serves a leaf signed by one CA while handing
+# `mcp-mock-trust` another CA with the same subject, rustls reports
+# `InvalidCertificate(BadSignature)`, and every MCP connection of the native
+# worker fails as native_agent.dependency_unavailable (2026-10-13: main and
+# PR #1269, same tree as a green run). One COPY is one cache record, so the
+# three files always come from one mint. ca.crt is the ANCHOR the consumer must
+# trust — the CA, not the leaf — and mcp-mock-trust publishes it.
+COPY --from=tls /pub/ /opt/mock-mcp/tls/
 COPY server.py /opt/mock-mcp/server.py
 
 USER 10102:10102
