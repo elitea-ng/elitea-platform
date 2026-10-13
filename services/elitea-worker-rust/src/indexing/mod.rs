@@ -64,7 +64,11 @@ use crate::transport::embeddings_facade::EmbeddingsClient;
 use crate::transport::extractor_client::ExtractorClient;
 use model_steps::ChatModelBinder;
 
-pub(crate) use pipeline::{IndexRun, IndexRunFailure, Interruption, interrupt_summary, run_index};
+pub(crate) use model_steps::ChatUnavailable;
+pub(crate) use pipeline::{
+    ChatEntries, ChatEntrySource, IndexRun, IndexRunFailure, Interruption, interrupt_summary,
+    run_index,
+};
 
 /// What every index run shares: the vector client, the gateway embeddings
 /// route, the platform origin for the artifact object API, the egress

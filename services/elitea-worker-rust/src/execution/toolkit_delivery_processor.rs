@@ -25,7 +25,8 @@ use super::toolkit_output::{
     replay_toolkit_terminal_with_replacement,
 };
 use crate::indexing::{
-    IndexIngestRuntime, IndexRun, IndexRunFailure, Interruption, interrupt_summary, run_index,
+    ChatEntries, ChatEntrySource, ChatUnavailable, IndexIngestRuntime, IndexRun, IndexRunFailure,
+    Interruption, interrupt_summary, run_index,
 };
 use crate::protocol::ProtocolError;
 use crate::protocol::command::{ToolkitCommandKind, VerifiedToolkitExecuteReadCommand};
@@ -553,37 +554,11 @@ where
         let tool_parameters = self
             .fetch_entry(execution, lease, &index.tool_parameters_entry_id)
             .await?;
-        // The chat model of the steps that call one (ADR-0030 I4): Main ships
-        // both entries whenever the toolkit resolves a model.
-        // Fetched only when the run selects a chunker that calls a model: a
-        // run that never does is not failed by an entry it would not read.
         // Parsed once for the claim; the run reuses it. Unreadable arguments
-        // fetch nothing and the run reports them.
+        // leave `None` and the run reports them. The chat model entries
+        // (ADR-0030 I4) are NOT fetched here: the run asks for them, both
+        // together, the first time a step needs the chat model.
         let parsed = crate::indexing::inputs::ParsedArgs::parse(tool_parameters.as_bytes()).ok();
-        let wants_chat = parsed
-            .as_ref()
-            .is_some_and(crate::indexing::inputs::ParsedArgs::needs_chat_model);
-        // Only the proposal chunker fails a run on a chat entry it cannot
-        // read. The image vision step (on by default) can do without one:
-        // an entry that cannot be fetched means "no chat model" and the
-        // images are skipped `no_model`.
-        let needs_proposal = parsed
-            .as_ref()
-            .is_some_and(crate::indexing::inputs::ParsedArgs::needs_proposal_model);
-        let llm_model = match index.llm_model_entry_id.as_str() {
-            entry_id if wants_chat && !entry_id.is_empty() => {
-                self.fetch_chat_entry(execution, lease, entry_id, needs_proposal)
-                    .await?
-            }
-            _ => None,
-        };
-        let llm_configuration = match index.llm_configuration_entry_id.as_str() {
-            entry_id if wants_chat && !entry_id.is_empty() => {
-                self.fetch_chat_entry(execution, lease, entry_id, needs_proposal)
-                    .await?
-            }
-            _ => None,
-        };
         let embedding_binding = match index.embedding_binding.as_ref() {
             Some(binding) => Some(
                 self.fetch_entry(execution, lease, &binding.entry_id)
@@ -596,39 +571,7 @@ where
             tool_parameters,
             parsed,
             embedding_binding,
-            llm_model,
-            llm_configuration,
         })
-    }
-
-    /// A chat model entry. A proposal run fails on an entry it cannot read;
-    /// otherwise a failed materialisation is "no chat model" (a lease loss
-    /// or Stop still ends the run).
-    async fn fetch_chat_entry(
-        &self,
-        execution: &LeaseMonitoredAgentExecution,
-        lease: &mut ClaimLeaseMonitor,
-        entry_id: &str,
-        needs_proposal: bool,
-    ) -> Result<Option<MaterializedInput>, RuntimeFailureKind> {
-        let materialized = lease
-            .run_pre_invocation(self.input.materialize_entry(execution, entry_id))
-            .await
-            .map_err(|error| lease_failure(&error))?;
-        match materialized {
-            Ok(entry) => Ok(Some(entry)),
-            Err(_) if !needs_proposal => {
-                tracing::warn!(
-                    event = "index_vision_model_entry_unavailable",
-                    "a chat model entry could not be fetched; image files are skipped no_model"
-                );
-                Ok(None)
-            }
-            Err(error) => {
-                record_toolkit_input_failure("index_input_materialization", &error);
-                Err(input_failure(&error))
-            }
-        }
     }
 
     async fn fetch_entry(
@@ -682,6 +625,21 @@ where
         let probe = lease.state_probe();
         let clock = Arc::clone(&self.clock);
         let now = move || clock.now_unix_millis();
+        // The chat entries are fetched lazily, together, the first time a
+        // step needs the chat model; a run that never does fetches nothing.
+        let wants_chat = inputs
+            .parsed
+            .as_ref()
+            .is_some_and(crate::indexing::inputs::ParsedArgs::needs_chat_model);
+        let chat_entries = (wants_chat
+            && !(index.llm_model_entry_id.is_empty()
+                && index.llm_configuration_entry_id.is_empty()))
+        .then(|| ClaimChatEntries {
+            input: self.input.as_ref(),
+            execution,
+            model_entry_id: &index.llm_model_entry_id,
+            configuration_entry_id: &index.llm_configuration_entry_id,
+        });
         let run = IndexRun {
             command: index,
             toolkit_configuration: inputs.toolkit_configuration.as_bytes(),
@@ -691,11 +649,11 @@ where
                 .embedding_binding
                 .as_ref()
                 .map(MaterializedInput::as_bytes),
-            llm_model: inputs.llm_model.as_ref().map(MaterializedInput::as_bytes),
-            llm_configuration: inputs
-                .llm_configuration
+            llm_model: None,
+            llm_configuration: None,
+            chat_entries: chat_entries
                 .as_ref()
-                .map(MaterializedInput::as_bytes),
+                .map(|entries| entries as &dyn ChatEntrySource),
             vector_token: execution.vector_token(),
             context: &context,
             lease: &probe,
@@ -1275,6 +1233,49 @@ where
     }
 }
 
+/// The claim's chat model entries, fetched on demand and together (the run
+/// asks the first time a step needs the chat model). A failure of either is
+/// recorded as a toolkit input failure and fails the whole load: the run then
+/// has no chat model, and never default settings for a configuration entry
+/// that exists but could not be read.
+struct ClaimChatEntries<'a, I> {
+    input: &'a I,
+    execution: &'a LeaseMonitoredAgentExecution,
+    model_entry_id: &'a str,
+    configuration_entry_id: &'a str,
+}
+
+#[async_trait::async_trait]
+impl<I: AgentInputMaterializer> ChatEntrySource for ClaimChatEntries<'_, I> {
+    async fn load(&self) -> Result<ChatEntries, ChatUnavailable> {
+        let fetch = |entry_id: &str| {
+            let entry_id = entry_id.to_owned();
+            async move {
+                if entry_id.is_empty() {
+                    return Ok(None);
+                }
+                match self
+                    .input
+                    .materialize_entry(self.execution, &entry_id)
+                    .await
+                {
+                    Ok(entry) => Ok(Some(entry)),
+                    Err(error) => {
+                        record_toolkit_input_failure("index_input_materialization", &error);
+                        Err(ChatUnavailable)
+                    }
+                }
+            }
+        };
+        let model = fetch(self.model_entry_id).await?;
+        let configuration = fetch(self.configuration_entry_id).await?;
+        Ok(ChatEntries {
+            model,
+            configuration,
+        })
+    }
+}
+
 /// The index bundle's materialized entries.
 struct IndexInputs {
     toolkit_configuration: MaterializedInput,
@@ -1282,8 +1283,6 @@ struct IndexInputs {
     /// `tool_parameters` parsed once, when they are readable.
     parsed: Option<crate::indexing::inputs::ParsedArgs>,
     embedding_binding: Option<MaterializedInput>,
-    llm_model: Option<MaterializedInput>,
-    llm_configuration: Option<MaterializedInput>,
 }
 
 /// The typed result: the admitted bundle and entries restated (Main checks

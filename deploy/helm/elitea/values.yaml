@@ -4298,6 +4298,11 @@ worker:
     # that fits the cap but not what is left of it stops the run FAILED with a
     # sentence; the documents already written stay and the next run resumes
     # (finished documents are versioned, unchanged ones never call a model).
+    # Image-file descriptions (one chat call each, retries included) may use
+    # at most HALF of the cap (rounded down, at least one when the cap is at
+    # least one): a run with many pictures skips the rest `model_cap_exceeded`
+    # (never stops) and always leaves the proposal and statistical chunkers at
+    # least half of the cap.
     # The gateway's own budget applies as well. Written to runtime.json as
     # `index_model_call_cap`; must be a positive integer.
     indexModelCallCap: 2000

@@ -41,7 +41,21 @@
 //!   `vision_refused`, an over-size request `too_large`, an unbindable model
 //!   `no_model` (warned once), an exhausted call cap `model_cap_exceeded`;
 //!   a reply cut by `max_tokens` is kept. Only the credential, the project
-//!   and the budget stop the run. Descriptions are cached for the run by
+//!   and the budget stop the run. Images have their own budget inside the
+//!   run's cap: at most half of it ([`image_cap`], at least one call when the
+//!   cap is at least one), so a run with many pictures always leaves the
+//!   proposal and statistical chunkers at least half of the cap; a spent
+//!   image budget skips the remaining images `model_cap_exceeded`. Three
+//!   `vision_refused` in a row for the run's model ([`REFUSED_IN_A_ROW`])
+//!   mark it as one that takes no images: the rest are skipped
+//!   `vision_refused` without a call. The cheap checks come before the
+//!   expensive ones: the chat model, the sha256 of the original bytes and the
+//!   cache, the budget, and only then the decode and resize of the picture;
+//! * the chat model entries are read lazily ([`ChatLoader`]): on the first
+//!   image that needs a description or the first proposal document, once per
+//!   run, both entries together. If either cannot be read the run has no chat
+//!   model (images `no_model`, a proposal document fails the run), never
+//!   default settings for a configuration that failed; Descriptions are cached for the run by
 //!   sha256(original bytes) + sha256(prompt) + model name ([`ImageCache`],
 //!   O(1) LRU of 500, as the SDK's `ImageDescriptionCache` but sha256 and
 //!   keyed by the model); a hit costs no call and is not charged. Image
@@ -52,12 +66,12 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use adk_rust::futures::StreamExt as _;
 use adk_rust::futures::stream::FuturesOrdered;
 use adk_rust::{AdkError, Content, FinishReason, Llm, LlmRequest, Part};
+use async_trait::async_trait;
 use bytes::Bytes;
 use elitea_doc_chunk::{
     Chunk, ChunkDetails, ChunkError, ChunkPlan, ProposalPlan, StatisticalPlan, VisionPlan,
@@ -66,16 +80,19 @@ use elitea_doc_chunk::{
 use sha2::{Digest as _, Sha256};
 
 use super::IndexRunLimits;
+use super::image_fit::{self, FitError, ImageKind};
 use super::inputs::LlmSettings;
 use super::pipeline::{
-    EmbedOutcome, Gated, IndexRunFailure, SKIP_MODEL_CAP_EXCEEDED, SKIP_MODEL_FAILED,
-    SKIP_NO_MODEL, SKIP_TOO_LARGE, SKIP_VISION_REFUSED, classify_embedding_error, embed_gated,
+    EmbedOutcome, Gated, IndexRunFailure, SKIP_EXTRACT_TIMEOUT, SKIP_MODEL_CAP_EXCEEDED,
+    SKIP_MODEL_FAILED, SKIP_NO_MODEL, SKIP_TOO_LARGE, SKIP_UNREADABLE, SKIP_VISION_REFUSED,
+    classify_embedding_error, embed_gated,
 };
 use crate::agents::session::BoundOrdinaryAgentModel as _;
 use crate::transport::embeddings_facade::EmbeddingsClient;
 use crate::transport::model_facade::{
     ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation,
 };
+use crate::transport::openai_compatible_facade::MAX_INLINE_IMAGE_BYTES;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
 /// Model-step documents in a row whose model step failed (skipped
@@ -181,8 +198,10 @@ enum CallFailure {
     /// This document cannot be answered (an oversized reply), the model is
     /// fine.
     Unusable(String),
-    /// Stop the run with this sentence (the cap, a reply cut by `max_tokens`).
+    /// Stop the run with this sentence (a reply cut by `max_tokens`).
     Stop(String),
+    /// The run's model call cap (or an image budget inside it) is spent.
+    Cap(String),
     /// An image call that cannot be answered for this image alone: skip it
     /// under this closed reason. Never stops the run, never counts toward
     /// the failure streak.
@@ -200,7 +219,7 @@ pub(super) enum GateStop {
 impl From<GateStop> for CallFailure {
     fn from(stop: GateStop) -> Self {
         match stop {
-            GateStop::Cap(reason) => Self::Stop(reason),
+            GateStop::Cap(reason) => Self::Cap(reason),
             GateStop::Liveness(failure) => Self::Liveness(failure),
         }
     }
@@ -213,6 +232,8 @@ type Alive<'a> = &'a (dyn Fn() -> Result<(), IndexRunFailure> + Sync);
 struct Gate<'a> {
     calls: &'a AtomicU32,
     cap: u32,
+    /// An image call is also charged against the images' own budget.
+    images: Option<(&'a AtomicU32, u32)>,
     alive: Alive<'a>,
 }
 
@@ -221,6 +242,13 @@ impl Gate<'_> {
     fn check(&self, charge: bool) -> Result<(), GateStop> {
         (self.alive)().map_err(GateStop::Liveness)?;
         if charge {
+            if let Some((spent, budget)) = self.images {
+                spent
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                        (n < budget).then_some(n + 1)
+                    })
+                    .map_err(|_| GateStop::Cap(cap_message(self.cap)))?;
+            }
             self.calls
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                     (n < self.cap).then_some(n + 1)
@@ -237,27 +265,102 @@ fn cap_message(cap: u32) -> String {
     )
 }
 
+/// Loads the chat model of a run: both `index.llm_model` and
+/// `index.llm_configuration`, together, the first time a step needs them.
+#[async_trait]
+pub(crate) trait ChatLoader: Send + Sync {
+    /// The binding (`None`: the claim names no model, or the deployment has
+    /// no binder).
+    ///
+    /// # Errors
+    ///
+    /// Either entry could not be fetched or read: the run has no chat model.
+    async fn load(&self) -> Result<Option<ChatBinding>, ChatUnavailable>;
+}
+
+/// The chat model entries could not be fetched or read.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ChatUnavailable;
+
+/// Where the run's chat model stands.
+enum ChatSlot {
+    /// Not asked for yet: no entry has been fetched.
+    Unloaded,
+    Loaded(Option<ChatBinding>),
+    /// The entries could not be read: no model, and no default settings.
+    Failed,
+}
+
+/// The most image calls of a run: half of the cap, rounded down, at least one
+/// when the cap is at least one.
+pub(crate) fn image_cap(cap: u32) -> u32 {
+    if cap == 0 { 0 } else { (cap / 2).max(1) }
+}
+
+/// `vision_refused` images in a row after which the model is taken to accept
+/// no images.
+pub(crate) const REFUSED_IN_A_ROW: u32 = 3;
+
 /// The state of a run's model steps.
 pub(crate) struct ModelSteps {
-    chat: Option<ChatBinding>,
+    chat: ChatSlot,
     cap: u32,
     calls: AtomicU32,
+    /// Calls made for images, against [`image_cap`].
+    image_calls: AtomicU32,
     consecutive_failures: u32,
     images: ImageCache,
-    /// The chat model could not be bound for an image: the rest of the run's
+    /// The chat model is not available for images: the rest of the run's
     /// images are skipped `no_model` without asking again.
-    images_without_model: AtomicBool,
+    images_without_model: bool,
+    /// Consecutive `vision_refused` images.
+    refused_in_a_row: u32,
+    /// The model refused [`REFUSED_IN_A_ROW`] images in a row: the rest are
+    /// skipped `vision_refused` without a call.
+    images_refused: bool,
 }
 
 impl ModelSteps {
-    pub(crate) fn new(chat: Option<ChatBinding>, limits: &IndexRunLimits) -> Self {
+    /// Steps whose chat model is loaded on first use through
+    /// [`StepEnv::chat_loader`].
+    pub(crate) fn lazy(limits: &IndexRunLimits) -> Self {
+        Self::with_slot(ChatSlot::Unloaded, limits)
+    }
+
+    fn with_slot(chat: ChatSlot, limits: &IndexRunLimits) -> Self {
         Self {
             chat,
             cap: limits.max_model_calls,
             calls: AtomicU32::new(0),
+            image_calls: AtomicU32::new(0),
             consecutive_failures: 0,
             images: ImageCache::default(),
-            images_without_model: AtomicBool::new(false),
+            images_without_model: false,
+            refused_in_a_row: 0,
+            images_refused: false,
+        }
+    }
+
+    /// Loads the chat model once, on first need.
+    async fn ensure_chat(&mut self, env: &StepEnv<'_>) {
+        if !matches!(self.chat, ChatSlot::Unloaded) {
+            return;
+        }
+        self.chat = match env.chat_loader {
+            None => ChatSlot::Loaded(None),
+            Some(loader) => match loader.load().await {
+                Ok(binding) => ChatSlot::Loaded(binding),
+                Err(ChatUnavailable) => ChatSlot::Failed,
+            },
+        };
+    }
+
+    fn chat_parts(&self) -> Option<(Arc<dyn ChatModelBinder>, String, LlmSettings)> {
+        match &self.chat {
+            ChatSlot::Loaded(Some(c)) => {
+                Some((Arc::clone(&c.binder), c.model_name.clone(), c.settings))
+            }
+            _ => None,
         }
     }
 
@@ -265,7 +368,15 @@ impl ModelSteps {
         Gate {
             calls: &self.calls,
             cap: self.cap,
+            images: None,
             alive,
+        }
+    }
+
+    fn image_gate<'a>(&'a self, alive: Alive<'a>) -> Gate<'a> {
+        Gate {
+            images: Some((&self.image_calls, image_cap(self.cap))),
+            ..self.gate(alive)
         }
     }
 
@@ -310,11 +421,14 @@ impl ModelSteps {
         env: &StepEnv<'_>,
         alive: Alive<'_>,
     ) -> StepEnd {
-        let Some(chat) = self
-            .chat
-            .as_ref()
-            .map(|c| (Arc::clone(&c.binder), c.model_name.clone(), c.settings))
-        else {
+        self.ensure_chat(env).await;
+        if matches!(self.chat, ChatSlot::Failed) {
+            return StepEnd::Stop(
+                "the chat model entries (`index.llm_model`, `index.llm_configuration`) could not be read, and the proposal chunker needs them; nothing was chunked with default settings"
+                    .to_owned(),
+            );
+        }
+        let Some(chat) = self.chat_parts() else {
             return StepEnd::Skip(SKIP_NO_MODEL);
         };
         if let Err(end) = self.admit(plan.windows().len()) {
@@ -365,7 +479,7 @@ impl ModelSteps {
             Err(CallFailure::Fatal(code)) => StepEnd::Stop(format!(
                 "the chunking model refused the run ({code}); nothing further was sent to it"
             )),
-            Err(CallFailure::Stop(reason)) => StepEnd::Stop(reason),
+            Err(CallFailure::Stop(reason) | CallFailure::Cap(reason)) => StepEnd::Stop(reason),
             Err(CallFailure::Liveness(failure)) => StepEnd::Liveness(failure),
             // Only an image call yields this.
             Err(CallFailure::ImageSkip(reason)) => StepEnd::Skip(reason),
@@ -384,38 +498,69 @@ impl ModelSteps {
     /// step on an image is never counted toward the proposal chunker's
     /// failure streak, and a success does not reset it. Only the refusals of
     /// the credential, the project or the budget stop the run.
+    ///
+    /// The cheap checks come first (the chat model, the digest and the cache,
+    /// the image budget); the decode and resize of the picture only when a
+    /// call will really be made.
     pub(crate) async fn describe(
         &mut self,
-        job: &VisionJob,
+        raw: &RawImage,
         env: &StepEnv<'_>,
         alive: Alive<'_>,
     ) -> StepEnd {
-        let Some(chat) = self
-            .chat
-            .as_ref()
-            .map(|c| (Arc::clone(&c.binder), c.model_name.clone(), c.settings))
-        else {
+        if self.images_without_model {
+            return StepEnd::Skip(SKIP_NO_MODEL);
+        }
+        self.ensure_chat(env).await;
+        let Some((binder, model_name, settings)) = self.chat_parts() else {
+            self.images_without_model = true;
             return StepEnd::Skip(SKIP_NO_MODEL);
         };
-        let (binder, model_name, settings) = chat;
-        let key = ImageKey::new(job.digest, job.plan.prompt(), &model_name);
+        let Some(digest) = image_fit::digest(raw.bytes.clone()).await else {
+            return StepEnd::Skip(SKIP_UNREADABLE);
+        };
+        let key = ImageKey::new(digest, raw.plan.prompt(), &model_name);
         if let Some(description) = self.images.get(&key) {
             // No call was made: the cap is not charged.
-            return vision_chunks(&job.plan, &description);
+            return vision_chunks(&raw.plan, &description);
         }
-        if self.images_without_model.load(Ordering::SeqCst) {
-            return StepEnd::Skip(SKIP_NO_MODEL);
+        if self.images_refused {
+            return StepEnd::Skip(SKIP_VISION_REFUSED);
         }
-        if self.cap.saturating_sub(self.calls.load(Ordering::SeqCst)) == 0 {
+        if self.image_calls.load(Ordering::SeqCst) >= image_cap(self.cap) {
             return StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED);
         }
+        match self.admit(1) {
+            Ok(()) => {}
+            Err(end @ StepEnd::Skip(_)) => return end,
+            // `admit` stops only when no call is left in the run's cap.
+            Err(StepEnd::Stop(_)) => return StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED),
+            Err(other) => return other,
+        }
+        let fitted = match image_fit::fit(raw.bytes.clone(), raw.kind, MAX_INLINE_IMAGE_BYTES).await
+        {
+            Ok(fitted) => fitted,
+            Err(FitError::TooLarge) => return StepEnd::Skip(SKIP_TOO_LARGE),
+            Err(FitError::Unreadable) => return StepEnd::Skip(SKIP_UNREADABLE),
+            Err(FitError::TimedOut) => return StepEnd::Skip(SKIP_EXTRACT_TIMEOUT),
+        };
         let outcome = {
-            let gate = self.gate(alive);
-            vision_call(&*binder, env, &gate, &model_name, settings, job).await
+            let gate = self.image_gate(alive);
+            vision_call(
+                &*binder,
+                env,
+                &gate,
+                &model_name,
+                settings,
+                &raw.plan,
+                &fitted,
+            )
+            .await
         };
         match outcome {
             Ok(description) => {
-                let end = vision_chunks(&job.plan, &description);
+                self.refused_in_a_row = 0;
+                let end = vision_chunks(&raw.plan, &description);
                 self.images.put(key, description);
                 end
             }
@@ -424,18 +569,32 @@ impl ModelSteps {
             )),
             Err(CallFailure::Liveness(failure)) => StepEnd::Liveness(failure),
             Err(CallFailure::ImageSkip(reason)) => {
-                if reason == SKIP_NO_MODEL
-                    && !self.images_without_model.swap(true, Ordering::SeqCst)
-                {
-                    tracing::warn!(
-                        event = "index_vision_model_unavailable",
-                        "the chat model cannot be bound for images; the rest of the run's images are skipped no_model"
-                    );
+                if reason == SKIP_NO_MODEL {
+                    if !self.images_without_model {
+                        tracing::warn!(
+                            event = "index_vision_model_unavailable",
+                            "the chat model cannot be bound for images; the rest of the run's images are skipped no_model"
+                        );
+                    }
+                    self.images_without_model = true;
+                } else if reason == SKIP_VISION_REFUSED {
+                    self.refused_in_a_row += 1;
+                    if self.refused_in_a_row >= REFUSED_IN_A_ROW && !self.images_refused {
+                        self.images_refused = true;
+                        tracing::warn!(
+                            event = "index_vision_model_refuses_images",
+                            model = %model_name,
+                            "the model refused several images in a row and is likely text-only; the rest of the run's images are skipped vision_refused without a call"
+                        );
+                    }
                 }
                 StepEnd::Skip(reason)
             }
-            // The run's cap: the picture is retried by the next run.
-            Err(CallFailure::Stop(_)) => StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED),
+            // The run's cap or the images' budget: the picture is retried by
+            // the next run.
+            Err(CallFailure::Cap(_)) => StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED),
+            // Not an image call's failure; reported as it is, never as the cap.
+            Err(CallFailure::Stop(reason)) => StepEnd::Stop(reason),
             Err(CallFailure::Retryable(cause) | CallFailure::Unusable(cause)) => {
                 tracing::warn!(event = "index_image_description_failed", cause);
                 StepEnd::Skip(SKIP_MODEL_FAILED)
@@ -529,17 +688,15 @@ pub(crate) struct StepEnv<'a> {
     pub(crate) context: &'a ClaimScopedEliteaContext,
     pub(crate) embedding_model: &'a str,
     pub(crate) limits: &'a IndexRunLimits,
+    /// Loads the chat model on first need; `None`: the run has none.
+    pub(crate) chat_loader: Option<&'a dyn ChatLoader>,
 }
 
-/// One image file waiting for its description.
-pub(crate) struct VisionJob {
-    /// The picture to send (already fitted under the inline budget). Shared,
-    /// never copied per attempt: an attempt builds its request part from it.
+/// One image file waiting for its description, as it was fetched.
+pub(crate) struct RawImage {
+    /// The ORIGINAL file. Shared: hashed and fitted without a copy.
     pub(crate) bytes: Bytes,
-    /// The sent bytes' own media type, one the facade sends.
-    pub(crate) media_type: &'static str,
-    /// sha256 of the ORIGINAL file: the cache key.
-    pub(crate) digest: [u8; 32],
+    pub(crate) kind: ImageKind,
     pub(crate) plan: VisionPlan,
 }
 
@@ -632,19 +789,20 @@ async fn vision_call(
     gate: &Gate<'_>,
     model_name: &str,
     settings: LlmSettings,
-    job: &VisionJob,
+    plan: &VisionPlan,
+    fitted: &image_fit::Fitted,
 ) -> Result<String, CallFailure> {
     let content = || Content {
         role: "user".to_owned(),
         parts: vec![
             Part::Text {
-                text: job.plan.prompt().to_owned(),
+                text: plan.prompt().to_owned(),
             },
             Part::InlineData {
-                mime_type: job.media_type.to_owned(),
+                mime_type: fitted.media_type.to_owned(),
                 // The request API takes an owned buffer: the one copy an
                 // attempt makes, dropped with the request.
-                data: job.bytes.to_vec(),
+                data: fitted.bytes.to_vec(),
                 uri: None,
                 annotations: None,
             },

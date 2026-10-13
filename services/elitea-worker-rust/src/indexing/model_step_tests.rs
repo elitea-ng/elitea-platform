@@ -251,9 +251,41 @@ pub(super) async fn run_model_raw(
             embedding_binding: Some(&binding()),
             llm_model: model,
             llm_configuration: model.map(|_| settings.as_bytes()),
+            chat_entries: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease,
+            deadline_unix_millis: i64::MAX,
+            now_unix_millis: &now,
+        },
+    )
+    .await
+}
+
+/// [`run_model_raw`] with the chat entries fetched on demand through
+/// `entries` (as a production claim does) instead of handed over.
+pub(super) async fn run_with_entries(
+    harness: &Harness,
+    documents: Vec<Document>,
+    parameters: &[u8],
+    entries: &dyn super::pipeline::ChatEntrySource,
+) -> Result<IndexIngestSummaryV1, IndexRunFailure> {
+    FIXTURE_SOURCE.with(|slot| *slot.lock().expect("lock") = Some(documents));
+    let now = || 1_700_000_000_000_i64;
+    run_index(
+        &harness.runtime,
+        IndexRun {
+            command: &command(NS, None),
+            toolkit_configuration: &configuration(),
+            tool_parameters: parameters,
+            parsed: None,
+            embedding_binding: Some(&binding()),
+            llm_model: None,
+            llm_configuration: None,
+            chat_entries: Some(entries),
+            vector_token: Some(&harness.token),
+            context: &harness.context,
+            lease: &Always,
             deadline_unix_millis: i64::MAX,
             now_unix_millis: &now,
         },
@@ -906,13 +938,10 @@ async fn the_chat_entries_are_read_only_when_a_chunker_calls_a_model() {
         Some(b"{not a model name"),
         &Always,
     )
-    .await;
-    match result {
-        Err(IndexRunFailure::InvalidInput(message)) => {
-            assert!(message.contains("llm model"), "{message}");
-        }
-        other => panic!("expected a clear refusal, got {other:?}"),
-    }
+    .await
+    .expect("summary");
+    let message = failed_with(&result);
+    assert!(message.contains("chat model entries"), "{message}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -945,6 +974,7 @@ async fn runs_without_a_proposal_chunker_are_not_failed_by_unreadable_chat_entri
                 embedding_binding: Some(&binding()),
                 llm_model: Some(b"{not a model name"),
                 llm_configuration: Some(settings_bad),
+                chat_entries: None,
                 vector_token: Some(&harness.token),
                 context: &harness.context,
                 lease: &Always,
@@ -968,11 +998,10 @@ async fn runs_without_a_proposal_chunker_are_not_failed_by_unreadable_chat_entri
         Some(b"{not a model name"),
         &Always,
     )
-    .await;
-    assert!(
-        matches!(&result, Err(IndexRunFailure::InvalidInput(m)) if m.contains("llm model")),
-        "{result:?}"
-    );
+    .await
+    .expect("summary");
+    let message = failed_with(&result);
+    assert!(message.contains("chat model entries"), "{message}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

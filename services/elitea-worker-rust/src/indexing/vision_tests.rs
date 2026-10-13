@@ -17,7 +17,8 @@ use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use serde_json::json;
 
 use super::model_step_tests::{
-    Reply, ScriptedChat, failed_with, run_model, run_model_raw, search, search_host, with_chat,
+    Reply, ScriptedChat, failed_with, run_model, run_model_raw, run_with_entries, search,
+    search_host, with_chat,
 };
 use super::tests::{Always, Harness, document, harness, parameters};
 use crate::protocol::elitea::runtime::v1::IndexIngestStatusV1;
@@ -550,12 +551,12 @@ async fn bytes_that_are_not_the_declared_image_are_unreadable() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn every_attempt_is_charged_and_an_exhausted_cap_skips_the_image_not_the_run() {
-    // Two rate limits, then a description: three real calls against a cap of
-    // three. The next distinct image finds nothing left: it is skipped
-    // `model_cap_exceeded` (a picture never stops the run) and the next run
-    // retries it.
+    // Two rate limits, then a description: three real calls against an image
+    // budget of three (half of a cap of six). The next distinct image finds
+    // nothing left: it is skipped `model_cap_exceeded` (a picture never stops
+    // the run) and the next run retries it.
     let mut harness = harness(4, None).await;
-    harness.runtime.limits.max_model_calls = 3;
+    harness.runtime.limits.max_model_calls = 6;
     let chat = ScriptedChat::new(|index, _| {
         if index < 2 {
             Reply::Fail(ErrorCategory::RateLimited, "model_gateway.rate_limited")
@@ -736,7 +737,7 @@ fn many_images(count: usize) -> Vec<Document> {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_model_that_rejects_images_skips_each_vision_refused_and_the_run_goes_on() {
     // A text-only model / a provider 400: the gateway's generic rejection.
-    // Six in a row, past the proposal chunker's streak, and the text
+    // Six in a row, past the proposal chunker's streak (the breaker ends the calls after three), and the text
     // document after them is still indexed.
     let mut harness = harness(4, None).await;
     let chat = ScriptedChat::new(|_, _| {
@@ -754,7 +755,13 @@ async fn a_model_that_rejects_images_skips_each_vision_refused_and_the_run_goes_
         "{summary:?}"
     );
     assert_eq!(summary.indexed_documents, 1, "{summary:?}");
-    assert_eq!(chat.calls(), 6, "a refusal is not retried");
+    // Three refusals in a row mark the model as text-only: the other three
+    // images are skipped without a call.
+    assert_eq!(
+        chat.calls(),
+        3,
+        "a refusal is not retried, then the breaker"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -869,4 +876,269 @@ async fn a_description_cut_off_by_max_tokens_is_kept() {
     );
     assert_eq!(summary.indexed_documents, 2, "{summary:?}");
     assert_eq!(chat.calls(), 2, "kept, not retried");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_success_resets_the_refused_streak() {
+    // fail, fail, ok, fail, fail, ok, fail, fail: never three in a row.
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(|index, _| {
+        if index % 3 == 2 {
+            Reply::Text(DESCRIPTION.to_owned())
+        } else {
+            Reply::Fail(ErrorCategory::InvalidInput, "model_gateway.rejected")
+        }
+    });
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        many_images(8),
+        None,
+        &defaults(),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(chat.calls(), 8, "every image was asked");
+    assert_eq!(
+        summary.skipped.get("vision_refused"),
+        Some(&6),
+        "{summary:?}"
+    );
+    assert_eq!(summary.indexed_documents, 2, "{summary:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_model_means_no_decode() {
+    // A big picture that would be downscaled, in a run with no chat model.
+    let harness = harness(4, None).await;
+    let big = real_image("big.png", ImageFormat::Png, 900, 700, "no-model");
+    assert!(big.bytes.len() > MAX_INLINE_IMAGE_BYTES);
+    let bytes = big.bytes.clone();
+    let summary = run_model(&harness, vec![big], None, &defaults(), Some("gpt-vision"))
+        .await
+        .expect("summary");
+    assert_eq!(summary.skipped.get("no_model"), Some(&1), "{summary:?}");
+    assert_eq!(super::image_fit::decodes::of(&bytes), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_duplicate_image_is_decoded_once() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(describing);
+    with_chat(&mut harness, &chat);
+    let first = real_image("a.png", ImageFormat::Png, 900, 700, "dup");
+    let second = real_image("copy/b.png", ImageFormat::Png, 900, 700, "dup");
+    assert_eq!(first.bytes, second.bytes);
+    let bytes = first.bytes.clone();
+    let summary = run_model(
+        &harness,
+        vec![first, second],
+        None,
+        &defaults(),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 2, "{summary:?}");
+    assert_eq!(chat.calls(), 1);
+    assert_eq!(super::image_fit::decodes::of(&bytes), 1, "one decode");
+}
+
+#[test]
+fn images_may_use_half_of_the_cap() {
+    use super::model_steps::image_cap;
+    assert_eq!(image_cap(0), 0);
+    assert_eq!(image_cap(1), 1);
+    assert_eq!(image_cap(2), 1);
+    assert_eq!(image_cap(5), 2);
+    assert_eq!(image_cap(500), 250);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn images_stop_at_half_the_cap_and_proposal_documents_proceed() {
+    let mut harness = harness(4, None).await;
+    harness.runtime.limits.max_model_calls = 500;
+    let chat = ScriptedChat::new(|_, user| {
+        if user == elitea_doc_chunk::image_processing_prompt() {
+            Reply::Text(DESCRIPTION.to_owned())
+        } else {
+            Reply::Text(
+                json!({"chunks": [{"chunk_title": "Food", "chunk_summary": "About food.",
+                    "propositions": ["Greg likes pizza."]}]})
+                .to_string(),
+            )
+        }
+    });
+    with_chat(&mut harness, &chat);
+    let mut documents = many_images(600);
+    for n in 0..5 {
+        documents.push(document(
+            &format!("guide-{n}.md"),
+            "v1",
+            &format!("Greg likes pizza {n}. Pizza is food."),
+        ));
+    }
+    let summary = run_model(
+        &harness,
+        documents,
+        None,
+        &parameters(false, json!({"chunking_tool": "proposal"})),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.skipped.get("model_cap_exceeded"),
+        Some(&350),
+        "{summary:?}"
+    );
+    // 250 images + 5 proposal documents (one window each).
+    assert_eq!(chat.calls(), 255);
+    assert_eq!(summary.indexed_documents, 255, "{summary:?}");
+}
+
+mod lazy_entries {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::indexing::model_steps::ChatUnavailable;
+    use crate::indexing::pipeline::{ChatEntries, ChatEntrySource};
+    use crate::transport::input_content::MaterializedInput;
+
+    /// Entries the claim would fetch, counted.
+    struct Entries {
+        loads: AtomicUsize,
+        model: Option<&'static str>,
+        configuration: Option<&'static str>,
+        /// The fetch of the configuration entry fails.
+        fail: bool,
+    }
+
+    impl Entries {
+        fn ok() -> Self {
+            Self {
+                loads: AtomicUsize::new(0),
+                model: Some("\"gpt-vision\""),
+                configuration: Some("{\"temperature\": 0.2}"),
+                fail: false,
+            }
+        }
+
+        fn loads(&self) -> usize {
+            self.loads.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl ChatEntrySource for Entries {
+        async fn load(&self) -> Result<ChatEntries, ChatUnavailable> {
+            self.loads.fetch_add(1, Ordering::SeqCst);
+            if self.fail {
+                return Err(ChatUnavailable);
+            }
+            let entry = |text: Option<&str>| {
+                text.map(|text| MaterializedInput::for_test(text.as_bytes().to_vec()))
+            };
+            Ok(ChatEntries {
+                model: entry(self.model),
+                configuration: entry(self.configuration),
+            })
+        }
+    }
+
+    fn notes() -> Document {
+        document("notes.md", "v1", "# Notes\n\nPlain text.\n")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_that_never_needs_the_model_fetches_no_entry() {
+        let mut harness = harness(4, None).await;
+        let chat = ScriptedChat::new(describing);
+        with_chat(&mut harness, &chat);
+        let entries = Entries::ok();
+        let summary = run_with_entries(&harness, vec![notes()], &defaults(), &entries)
+            .await
+            .expect("summary");
+        assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+        assert_eq!(entries.loads(), 0, "text only: nothing fetched");
+        assert_eq!(chat.calls(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn images_fetch_both_entries_once_on_first_need() {
+        let mut harness = harness(4, None).await;
+        let chat = ScriptedChat::new(describing);
+        with_chat(&mut harness, &chat);
+        let entries = Entries::ok();
+        let mut documents = many_images(3);
+        documents.push(notes());
+        let summary = run_with_entries(&harness, documents, &defaults(), &entries)
+            .await
+            .expect("summary");
+        assert_eq!(summary.indexed_documents, 4, "{summary:?}");
+        assert_eq!(entries.loads(), 1);
+        assert_eq!(chat.calls(), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_load_leaves_images_no_model_and_asks_once() {
+        let mut harness = harness(4, None).await;
+        let chat = ScriptedChat::new(describing);
+        with_chat(&mut harness, &chat);
+        let entries = Entries {
+            fail: true,
+            ..Entries::ok()
+        };
+        let mut documents = many_images(3);
+        documents.push(notes());
+        let summary = run_with_entries(&harness, documents, &defaults(), &entries)
+            .await
+            .expect("summary");
+        assert_eq!(summary.skipped.get("no_model"), Some(&3), "{summary:?}");
+        assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+        assert_eq!(entries.loads(), 1);
+        assert_eq!(chat.calls(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreadable_configuration_is_no_model_never_default_settings() {
+        let mut harness = harness(4, None).await;
+        let chat = ScriptedChat::new(describing);
+        with_chat(&mut harness, &chat);
+        let entries = Entries {
+            configuration: Some("[]"),
+            ..Entries::ok()
+        };
+        let summary = run_with_entries(&harness, many_images(2), &defaults(), &entries)
+            .await
+            .expect("summary");
+        assert_eq!(summary.skipped.get("no_model"), Some(&2), "{summary:?}");
+        assert_eq!(chat.calls(), 0, "no call with default settings");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_proposal_run_with_entries_it_cannot_read_fails_clearly() {
+        let mut harness = harness(4, None).await;
+        let chat = ScriptedChat::new(describing);
+        with_chat(&mut harness, &chat);
+        let entries = Entries {
+            fail: true,
+            ..Entries::ok()
+        };
+        let summary = run_with_entries(
+            &harness,
+            vec![document("guide.md", "v1", "Greg likes pizza.")],
+            &parameters(false, json!({"chunking_tool": "proposal"})),
+            &entries,
+        )
+        .await
+        .expect("summary");
+        let message = failed_with(&summary);
+        assert!(message.contains("chat model entries"), "{message}");
+        assert_eq!(entries.loads(), 1);
+        assert_eq!(chat.calls(), 0);
+    }
 }

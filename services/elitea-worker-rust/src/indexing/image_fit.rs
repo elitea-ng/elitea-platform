@@ -12,10 +12,15 @@
 //! * the pixel count is read from the header first and refused above
 //!   [`MAX_PIXELS`] (a decompression bomb is a few bytes of header);
 //! * the decoder runs under an allocation limit ([`MAX_DECODE_BYTES`]);
-//! * at most [`DECODES_AT_ONCE`] pictures are decoded at the same time (the
-//!   run prepares documents concurrently, a decoded 40 MP picture is 160 MB);
-//! * the work is on the blocking pool and the wait for it is bounded by
-//!   [`FIT_TIMEOUT`].
+//! * at most [`DECODES_AT_ONCE`] pictures are decoded at the same time (a
+//!   decoded 40 MP picture is 160 MB). The permit is owned by the blocking
+//!   closure itself and released only when that work really ends, so a
+//!   timed-out decode keeps its permit and the limit holds even after
+//!   timeouts;
+//! * the work is on the blocking pool and the caller's wait for it is
+//!   bounded by [`FIT_TIMEOUT`] (a timeout is [`FitError::TimedOut`]);
+//! * the decoded buffer and the one RGB copy a JPEG needs are counted
+//!   against [`MAX_DECODE_BYTES`] together.
 //!
 //! The picture is resized proportionally and re-encoded as PNG when it has
 //! transparency (or was a BMP) and as JPEG (quality [`JPEG_QUALITY`])
@@ -24,7 +29,7 @@
 //! skip.
 
 use std::io::Cursor;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -32,7 +37,7 @@ use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView as _, ImageFormat, ImageReader, Limits};
 use sha2::{Digest as _, Sha256};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// The most pixels of a picture that is decoded.
 pub(crate) const MAX_PIXELS: u64 = 40_000_000;
@@ -65,19 +70,28 @@ pub(crate) enum FitError {
     TooLarge,
     /// The decoder refused the bytes: the skip `unreadable`.
     Unreadable,
+    /// The decode did not end within [`FIT_TIMEOUT`]: the skip
+    /// `extract_timeout`.
+    TimedOut,
 }
 
-/// A picture ready to send, and the digest of the ORIGINAL bytes (the cache
-/// key: the same file is the same key whatever the fit made of it).
+/// A picture ready to send.
 pub(crate) struct Fitted {
     pub(crate) bytes: Bytes,
     pub(crate) media_type: &'static str,
-    pub(crate) digest: [u8; 32],
 }
 
-fn permits() -> &'static Semaphore {
-    static PERMITS: OnceLock<Semaphore> = OnceLock::new();
-    PERMITS.get_or_init(|| Semaphore::new(DECODES_AT_ONCE))
+/// sha256 of the ORIGINAL bytes: the description cache's key (the same file
+/// is the same key whatever the fit makes of it). Hashed off the reactor.
+pub(crate) async fn digest(original: Bytes) -> Option<[u8; 32]> {
+    tokio::task::spawn_blocking(move || Sha256::digest(&original).into())
+        .await
+        .ok()
+}
+
+fn permits() -> &'static Arc<Semaphore> {
+    static PERMITS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    PERMITS.get_or_init(|| Arc::new(Semaphore::new(DECODES_AT_ONCE)))
 }
 
 /// `original` as a picture of at most `budget` bytes.
@@ -86,9 +100,31 @@ fn permits() -> &'static Semaphore {
 ///
 /// [`FitError`] when it cannot be read or cannot be made to fit.
 pub(crate) async fn fit(
-    original: Vec<u8>,
+    original: Bytes,
     kind: ImageKind,
     budget: usize,
+) -> Result<Fitted, FitError> {
+    fit_with(
+        original,
+        kind,
+        budget,
+        Arc::clone(permits()),
+        FIT_TIMEOUT,
+        shrink,
+    )
+    .await
+}
+
+/// The decode work of one picture, as [`shrink`].
+type Work = fn(&[u8], ImageKind, usize) -> Result<(Vec<u8>, &'static str), FitError>;
+
+async fn fit_with(
+    original: Bytes,
+    kind: ImageKind,
+    budget: usize,
+    permits: Arc<Semaphore>,
+    timeout: Duration,
+    work: Work,
 ) -> Result<Fitted, FitError> {
     let needs_decode = matches!(kind, ImageKind::Bmp)
         || matches!(kind, ImageKind::Native(_)) && original.len() > budget;
@@ -96,38 +132,33 @@ pub(crate) async fn fit(
         let ImageKind::Native(media_type) = kind else {
             return Err(FitError::Unreadable);
         };
-        // Hashing a small picture is quick, but it is still off the reactor.
-        let work = tokio::task::spawn_blocking(move || {
-            let digest = Sha256::digest(&original).into();
-            Fitted {
-                bytes: Bytes::from(original),
-                media_type,
-                digest,
-            }
+        return Ok(Fitted {
+            bytes: original,
+            media_type,
         });
-        return work.await.map_err(|_| FitError::Unreadable);
     }
-    let _permit = permits()
-        .acquire()
+    let permit: OwnedSemaphorePermit = permits
+        .acquire_owned()
         .await
         .map_err(|_| FitError::Unreadable)?;
-    let work = tokio::task::spawn_blocking(move || {
-        let digest: [u8; 32] = Sha256::digest(&original).into();
-        shrink(&original, kind, budget).map(|(bytes, media_type)| Fitted {
+    // The permit moves INTO the blocking closure: it is released when the
+    // decode really ends, not when the caller gives up waiting for it.
+    let job = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work(&original, kind, budget).map(|(bytes, media_type)| Fitted {
             bytes: Bytes::from(bytes),
             media_type,
-            digest,
         })
     });
-    match tokio::time::timeout(FIT_TIMEOUT, work).await {
+    match tokio::time::timeout(timeout, job).await {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => Err(FitError::Unreadable),
         Err(_) => {
             tracing::warn!(
                 event = "index_image_fit_timed_out",
-                "a picture took too long to decode; skipped too_large"
+                "a picture took too long to decode; skipped extract_timeout"
             );
-            Err(FitError::TooLarge)
+            Err(FitError::TimedOut)
         }
     }
 }
@@ -144,6 +175,8 @@ fn format_of(kind: ImageKind) -> ImageFormat {
 
 /// The decoded picture, within the limits.
 fn decode(original: &[u8], format: ImageFormat) -> Result<DynamicImage, FitError> {
+    #[cfg(test)]
+    decodes::record(original);
     let (width, height) = ImageReader::with_format(Cursor::new(original), format)
         .into_dimensions()
         .map_err(|_| FitError::Unreadable)?;
@@ -160,9 +193,26 @@ fn decode(original: &[u8], format: ImageFormat) -> Result<DynamicImage, FitError
     })
 }
 
-/// Whether any pixel is not fully opaque.
+/// Whether any pixel is not fully opaque. Scans the picture's own buffer by
+/// reference: no converted copy of a full-size picture.
 fn has_transparency(picture: &DynamicImage) -> bool {
-    picture.color().has_alpha() && picture.to_rgba8().pixels().any(|pixel| pixel.0[3] < 255)
+    match picture {
+        DynamicImage::ImageLumaA8(image) => image.pixels().any(|pixel| pixel.0[1] < u8::MAX),
+        DynamicImage::ImageRgba8(image) => image.pixels().any(|pixel| pixel.0[3] < u8::MAX),
+        DynamicImage::ImageLumaA16(image) => image.pixels().any(|pixel| pixel.0[1] < u16::MAX),
+        DynamicImage::ImageRgba16(image) => image.pixels().any(|pixel| pixel.0[3] < u16::MAX),
+        DynamicImage::ImageRgba32F(image) => image.pixels().any(|pixel| pixel.0[3] < 1.0),
+        _ => false,
+    }
+}
+
+/// The picture a JPEG is encoded from: RGB, converted at most ONCE (an
+/// already-RGB picture is moved, not copied).
+fn into_rgb(picture: DynamicImage) -> DynamicImage {
+    match picture {
+        rgb @ DynamicImage::ImageRgb8(_) => rgb,
+        other => DynamicImage::ImageRgb8(other.to_rgb8()),
+    }
 }
 
 fn encode(picture: &DynamicImage, png: bool) -> Result<Vec<u8>, FitError> {
@@ -172,9 +222,9 @@ fn encode(picture: &DynamicImage, png: bool) -> Result<Vec<u8>, FitError> {
             .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
             .map_err(|_| FitError::Unreadable)?;
     } else {
-        // JPEG has no alpha channel.
-        let rgb = DynamicImage::ImageRgb8(picture.to_rgb8());
-        rgb.write_with_encoder(JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY))
+        // JPEG has no alpha channel; `picture` is RGB already ([`into_rgb`]).
+        picture
+            .write_with_encoder(JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY))
             .map_err(|_| FitError::Unreadable)?;
     }
     Ok(out)
@@ -202,8 +252,18 @@ fn shrink(
 ) -> Result<(Vec<u8>, &'static str), FitError> {
     let picture = decode(original, format_of(kind))?;
     let png = matches!(kind, ImageKind::Bmp) || has_transparency(&picture);
-    let media_type = if png { "image/png" } else { "image/jpeg" };
+    // The decoded buffer and the RGB copy a JPEG needs live together once:
+    // both count against the decode budget.
     let (width, height) = picture.dimensions();
+    if !png && !matches!(picture, DynamicImage::ImageRgb8(_)) {
+        let rgb_copy = u64::from(width) * u64::from(height) * 3;
+        if u64::try_from(picture.as_bytes().len()).unwrap_or(u64::MAX) + rgb_copy > MAX_DECODE_BYTES
+        {
+            return Err(FitError::TooLarge);
+        }
+    }
+    let picture = if png { picture } else { into_rgb(picture) };
+    let media_type = if png { "image/png" } else { "image/jpeg" };
     // The first guess follows the file's own compression; a BMP (raw pixels)
     // is first tried whole.
     let mut scale = if matches!(kind, ImageKind::Bmp) {
@@ -227,6 +287,39 @@ fn shrink(
         scale *= (ratio(budget, encoded.len()).sqrt() * 0.9).min(0.85);
     }
     Err(FitError::TooLarge)
+}
+
+/// Test hook: how many times the bytes of a given picture were decoded
+/// (keyed by their sha256, so tests of one process do not see each other).
+#[cfg(test)]
+pub(crate) mod decodes {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    use sha2::{Digest as _, Sha256};
+
+    static COUNTS: Mutex<Option<HashMap<[u8; 32], usize>>> = Mutex::new(None);
+
+    pub(super) fn record(original: &[u8]) {
+        let key: [u8; 32] = Sha256::digest(original).into();
+        *COUNTS
+            .lock()
+            .expect("counts")
+            .get_or_insert_with(HashMap::new)
+            .entry(key)
+            .or_default() += 1;
+    }
+
+    /// Decodes of exactly these bytes so far.
+    pub(crate) fn of(original: &[u8]) -> usize {
+        let key: [u8; 32] = Sha256::digest(original).into();
+        COUNTS
+            .lock()
+            .expect("counts")
+            .as_ref()
+            .and_then(|counts| counts.get(&key).copied())
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]
@@ -257,12 +350,15 @@ mod tests {
     #[tokio::test]
     async fn a_picture_within_the_budget_is_sent_as_it_is() {
         let png = encoded(&DynamicImage::ImageRgb8(noisy(16, 16)), ImageFormat::Png);
-        let fitted = fit(png.clone(), ImageKind::Native("image/png"), BUDGET)
+        let fitted = fit(png.clone().into(), ImageKind::Native("image/png"), BUDGET)
             .await
             .expect("fits");
         assert_eq!(fitted.bytes.as_ref(), png.as_slice());
         assert_eq!(fitted.media_type, "image/png");
-        assert_eq!(fitted.digest, <[u8; 32]>::from(Sha256::digest(&png)));
+        assert_eq!(
+            digest(Bytes::from(png.clone())).await,
+            Some(<[u8; 32]>::from(Sha256::digest(&png)))
+        );
     }
 
     #[tokio::test]
@@ -274,13 +370,12 @@ mod tests {
         ] {
             let original = encoded(&picture, format);
             assert!(original.len() > BUDGET, "{media}: {}", original.len());
-            let fitted = fit(original.clone(), ImageKind::Native(media), BUDGET)
+            let fitted = fit(original.clone().into(), ImageKind::Native(media), BUDGET)
                 .await
                 .unwrap_or_else(|error| panic!("{media}: {error:?}"));
             assert!(fitted.bytes.len() <= BUDGET, "{}", fitted.bytes.len());
-            // Opaque pictures become JPEG; the digest is the original's.
+            // Opaque pictures become JPEG.
             assert_eq!(fitted.media_type, "image/jpeg");
-            assert_eq!(fitted.digest, <[u8; 32]>::from(Sha256::digest(&original)));
             let back = image::load_from_memory(&fitted.bytes).expect("decodes");
             let (w, h) = back.dimensions();
             assert!(w < 900 && h < 700 && w * 700 / 900 >= h - 2, "{w}x{h}");
@@ -298,7 +393,7 @@ mod tests {
         }
         let original = encoded(&DynamicImage::ImageRgba8(rgba), ImageFormat::Png);
         assert!(original.len() > BUDGET);
-        let fitted = fit(original, ImageKind::Native("image/png"), BUDGET)
+        let fitted = fit(original.into(), ImageKind::Native("image/png"), BUDGET)
             .await
             .expect("fits");
         assert_eq!(fitted.media_type, "image/png");
@@ -308,15 +403,19 @@ mod tests {
     #[tokio::test]
     async fn a_bmp_is_rasterised_to_png() {
         let bmp = encoded(&DynamicImage::ImageRgb8(noisy(40, 30)), ImageFormat::Bmp);
-        let fitted = fit(bmp, ImageKind::Bmp, BUDGET).await.expect("fits");
+        let fitted = fit(bmp.into(), ImageKind::Bmp, BUDGET).await.expect("fits");
         assert_eq!(fitted.media_type, "image/png");
         let back = image::load_from_memory(&fitted.bytes).expect("decodes");
         assert_eq!(back.dimensions(), (40, 30));
         // A BMP that is not one.
         assert_eq!(
-            fit(b"BM not a bitmap".to_vec(), ImageKind::Bmp, BUDGET)
-                .await
-                .err(),
+            fit(
+                Bytes::from_static(b"BM not a bitmap"),
+                ImageKind::Bmp,
+                BUDGET
+            )
+            .await
+            .err(),
             Some(FitError::Unreadable)
         );
     }
@@ -359,7 +458,7 @@ mod tests {
         // 100,000 x 100,000 = 10 gigapixels in a header.
         assert_eq!(
             fit(
-                bomb(100_000, 100_000),
+                bomb(100_000, 100_000).into(),
                 ImageKind::Native("image/png"),
                 BUDGET
             )
@@ -369,15 +468,19 @@ mod tests {
         );
         // Just over the limit is refused, too.
         assert_eq!(
-            fit(bomb(7_000, 6_000), ImageKind::Native("image/png"), BUDGET)
-                .await
-                .err(),
+            fit(
+                bomb(7_000, 6_000).into(),
+                ImageKind::Native("image/png"),
+                BUDGET
+            )
+            .await
+            .err(),
             Some(FitError::TooLarge)
         );
         // Bytes that are not the format are unreadable, not too large.
         assert_eq!(
             fit(
-                vec![0xff; BUDGET + 1],
+                vec![0xff; BUDGET + 1].into(),
                 ImageKind::Native("image/jpeg"),
                 BUDGET
             )
@@ -385,5 +488,74 @@ mod tests {
             .err(),
             Some(FitError::Unreadable)
         );
+    }
+
+    #[test]
+    fn transparency_is_read_from_the_pictures_own_buffer_in_every_alpha_layout() {
+        let mut rgba = RgbaImage::from_pixel(4, 4, Rgba([1, 2, 3, 255]));
+        assert!(!has_transparency(&DynamicImage::ImageRgba8(rgba.clone())));
+        rgba.put_pixel(2, 2, Rgba([1, 2, 3, 254]));
+        assert!(has_transparency(&DynamicImage::ImageRgba8(rgba)));
+        let luma_a = image::GrayAlphaImage::from_pixel(2, 2, image::LumaA([9, 0]));
+        assert!(has_transparency(&DynamicImage::ImageLumaA8(luma_a)));
+        assert!(!has_transparency(&DynamicImage::ImageRgb8(noisy(4, 4))));
+    }
+
+    #[test]
+    fn an_rgb_picture_is_moved_to_the_jpeg_encoder_not_copied() {
+        let rgb = DynamicImage::ImageRgb8(noisy(64, 64));
+        let before = rgb.as_bytes().as_ptr();
+        let moved = into_rgb(rgb);
+        assert_eq!(
+            moved.as_bytes().as_ptr(),
+            before,
+            "no second full-size buffer"
+        );
+        // An opaque RGBA picture is converted once, to RGB.
+        let rgba = DynamicImage::ImageRgba8(RgbaImage::from_pixel(8, 8, Rgba([1, 2, 3, 255])));
+        assert!(matches!(into_rgb(rgba), DynamicImage::ImageRgb8(_)));
+    }
+
+    static RUNNING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static PEAK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// A decode that takes far longer than the test's timeout.
+    fn slow_work(_: &[u8], _: ImageKind, _: usize) -> Result<(Vec<u8>, &'static str), FitError> {
+        use std::sync::atomic::Ordering;
+        let now = RUNNING.fetch_add(1, Ordering::SeqCst) + 1;
+        PEAK.fetch_max(now, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(250));
+        RUNNING.fetch_sub(1, Ordering::SeqCst);
+        Err(FitError::Unreadable)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn decodes_at_once_stay_within_the_limit_even_after_timeouts() {
+        use std::sync::atomic::Ordering;
+        let permits = Arc::new(Semaphore::new(2));
+        let mut calls = Vec::new();
+        for _ in 0..6 {
+            calls.push(tokio::spawn(fit_with(
+                Bytes::from_static(b"BM"),
+                ImageKind::Bmp,
+                BUDGET,
+                Arc::clone(&permits),
+                Duration::from_millis(30),
+                slow_work,
+            )));
+        }
+        for call in calls {
+            // The caller returns at its timeout, whatever the decode does.
+            assert_eq!(call.await.expect("joined").err(), Some(FitError::TimedOut));
+        }
+        // Wait for the abandoned decodes to end.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(
+            PEAK.load(Ordering::SeqCst) <= 2,
+            "{}",
+            PEAK.load(Ordering::SeqCst)
+        );
+        assert_eq!(RUNNING.load(Ordering::SeqCst), 0);
+        assert_eq!(permits.available_permits(), 2, "every permit came back");
     }
 }

@@ -286,14 +286,6 @@ impl ParsedArgs {
             .as_ref()
             .is_ok_and(elitea_doc_chunk::ChunkingConfig::needs_chat_model)
     }
-
-    /// Whether the proposal chunker is selected: the only case in which a
-    /// chat entry that cannot be read fails the run.
-    pub(crate) fn needs_proposal_model(&self) -> bool {
-        self.chunking
-            .as_ref()
-            .is_ok_and(elitea_doc_chunk::ChunkingConfig::needs_proposal_model)
-    }
 }
 
 /// The embedding model of the binding entry (`model_name`).
