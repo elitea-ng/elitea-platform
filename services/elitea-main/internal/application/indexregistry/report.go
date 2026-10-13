@@ -1,8 +1,11 @@
 package indexregistry
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
+
+	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 )
 
 // ReportVersion is the SDK's REPORT_VERSION
@@ -51,130 +54,268 @@ var skipReasonGroups = map[string]reportGroupSpec{
 	"vision_refused":     {kindNotIndexed, "vision_refused", "The model refused the image"},
 }
 
-// groupForSkipReason is the group of a skip reason. A reason this table does
-// not know (a newer worker) is never dropped: it lands in not_indexed under its
-// own token.
-func groupForSkipReason(reason string) reportGroupSpec {
+// unknownReasonLabel is the label of a reason this table does not know. The raw
+// token is carried beside it as the group's `code`, never as the label.
+const unknownReasonLabel = "Not indexed (other)"
+
+// groupForSkipReason is the group of a skip reason. known is false for a
+// reason this table does not know (a newer worker): it is never dropped, it
+// lands in not_indexed under its own token as the group key, with a generic
+// label.
+func groupForSkipReason(reason string) (spec reportGroupSpec, known bool) {
 	if spec, ok := skipReasonGroups[reason]; ok {
-		return spec
+		return spec, true
 	}
-	return reportGroupSpec{kindNotIndexed, reason, "Not indexed (" + reason + ")"}
+	return reportGroupSpec{kindNotIndexed, reason, unknownReasonLabel}, false
 }
 
-// terminalState reports whether a run has ended and so has a report.
-func terminalState(state State) bool {
-	switch state {
-	case StateCompleted, StatePartlyIndexed, StateFailed, StateCancelled:
-		return true
-	}
-	return false
+// Run statuses of a report. ok, partly_indexed and error are the SDK's; the web
+// client also knows cancelled.
+const (
+	statusOK            = "ok"
+	statusPartlyIndexed = "partly_indexed"
+	statusError         = "error"
+	statusCancelled     = "cancelled"
+)
+
+const (
+	// runRecordKey is where a history entry keeps its runRecord.
+	runRecordKey = "run_record"
+	// cancelledMessage is the message of a run that was stopped.
+	cancelledMessage = "Indexing was stopped before it finished."
+)
+
+// runRecord is what a history entry stores of a run's report: only the parts
+// that vary. The labels, the empty categories and the other constants are
+// added when the metadata is served (Report), so a history of many runs stays
+// small. A record exists only for a run that ended: it is written by the
+// transition that ended it (a typed result, a failure, a cancel, a dead run, a
+// failed schedule), so a row's report is gated on "this run ended", never on
+// the index's embedding stamp.
+type runRecord struct {
+	Status string `json:"status"`
+	// Indexed is the documents THIS run wrote.
+	Indexed uint64 `json:"indexed"`
+	// Unchanged is the documents the run listed and found already indexed. It
+	// is zero for a run that did not complete.
+	Unchanged    uint64            `json:"unchanged,omitempty"`
+	Skipped      map[string]uint64 `json:"skipped,omitempty"`
+	FailedChunks uint64            `json:"failed_chunks,omitempty"`
+	Errors       []string          `json:"errors,omitempty"`
 }
 
-// runReport builds the SDK-shaped report of the row's last run, or nil when
-// there is none to build: the run is still going, or it ended without ever
-// reporting (a row the Python path owns), where an invented all-zero report
-// would read as a clean run.
+// failedRun reports a run that did not complete (error or cancelled).
+func (r runRecord) failedRun() bool { return r.Status == statusError || r.Status == statusCancelled }
+
+// failureRecord is the record of a run that ended without a typed result, or
+// with one that was refused: nothing was counted, the message says why.
+func failureRecord(status, message string) runRecord {
+	record := runRecord{Status: status}
+	if message != "" {
+		record.Errors = []string{message}
+	}
+	return record
+}
+
+func cancelledRecord() runRecord { return failureRecord(statusCancelled, cancelledMessage) }
+
+// resultRecord is the record of a run whose typed result was applied.
 //
-// `indexed` is the documents this run wrote; documents the index holds that
-// the run did not touch are the SDK's "unchanged" (total_documents minus
-// indexed), reported beside the categories and never inside `skipped`.
-func runReport(row Row) map[string]any {
-	failedRun := row.State == StateFailed || row.State == StateCancelled
-	if !terminalState(row.State) || (!row.Stamped() && !failedRun) {
-		return nil
+// Unchanged is derived, because the worker's summary has no unchanged count:
+// the index's documents after the run (TotalDocuments) minus the documents
+// this run wrote minus every document the run counted under a skip reason. A
+// skipped document may still be in the store (its previous version), so it is
+// subtracted too; the number can therefore under-state the unchanged
+// documents, but never counts one twice, and is never negative. It is only
+// derived for a run that finished listing and reported the store's totals; a
+// failed or cancelled run says nothing about what was left alone.
+func resultRecord(summary outputapp.IndexIngestSummary, status string) runRecord {
+	indexed := summary.Indexed
+	if summary.HasTypedResult() {
+		indexed = summary.IndexedDocuments
 	}
+	record := runRecord{
+		Status:       status,
+		Indexed:      indexed,
+		Skipped:      summary.Skipped(),
+		FailedChunks: summary.FailedChunks,
+	}
+	switch status {
+	case statusError:
+		record.Errors = []string{summary.Message}
+	case statusCancelled:
+		record.Errors = []string{cancelledMessage}
+	}
+	if !record.failedRun() && summary.TotalsPresent {
+		accounted := indexed
+		for _, count := range record.Skipped {
+			accounted += count
+		}
+		if summary.TotalDocuments > accounted {
+			record.Unchanged = summary.TotalDocuments - accounted
+		}
+	}
+	return record
+}
 
-	counts := map[string]int64{}
-	groups := map[string][]any{}
-	merged := map[string]map[string]any{}
-	reasons := make([]string, 0, len(row.Skipped))
-	for reason := range row.Skipped {
+// lastRecord is the newest history entry's record, when it has one. It decodes
+// through JSON: an entry read back from the database holds generic values.
+func lastRecord(history []map[string]any) (runRecord, bool) {
+	if len(history) == 0 {
+		return runRecord{}, false
+	}
+	return recordOf(history[len(history)-1])
+}
+
+func recordOf(entry map[string]any) (runRecord, bool) {
+	raw, ok := entry[runRecordKey]
+	if !ok || raw == nil {
+		return runRecord{}, false
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return runRecord{}, false
+	}
+	var record runRecord
+	if err := json.Unmarshal(encoded, &record); err != nil || record.Status == "" {
+		return runRecord{}, false
+	}
+	return record, true
+}
+
+// ReportLabels are the nouns a report counts in.
+type ReportLabels struct {
+	Singular string `json:"singular"`
+	Plural   string `json:"plural"`
+}
+
+// ReportTotals are a report's counts.
+type ReportTotals struct {
+	Indexed             uint64 `json:"indexed"`
+	Skipped             uint64 `json:"skipped"`
+	NotIndexed          uint64 `json:"not_indexed"`
+	Failed              uint64 `json:"failed"`
+	Unchanged           uint64 `json:"unchanged"`
+	DependentNotIndexed uint64 `json:"dependent_not_indexed"`
+	Total               uint64 `json:"total"`
+}
+
+// ReportGroup is one reason within a category. Code is the raw skip token of a
+// reason the mapping table does not know: the label is generic and the token
+// is the detail.
+type ReportGroup struct {
+	Reason  string   `json:"reason"`
+	Label   string   `json:"label"`
+	Code    string   `json:"code,omitempty"`
+	Count   uint64   `json:"count"`
+	Items   []string `json:"items"`
+	Counted bool     `json:"counted"`
+}
+
+// ReportCategory is one kind of outcome.
+type ReportCategory struct {
+	Kind   string        `json:"kind"`
+	Count  uint64        `json:"count"`
+	Groups []ReportGroup `json:"groups"`
+}
+
+// Report is the SDK-shaped report the web client's normalizeIndexingReport
+// reads from `report`.
+type Report struct {
+	Version         int              `json:"version"`
+	Status          string           `json:"status"`
+	ItemLabels      ReportLabels     `json:"item_labels"`
+	DependentLabels ReportLabels     `json:"dependent_labels"`
+	Totals          ReportTotals     `json:"totals"`
+	Categories      []ReportCategory `json:"categories"`
+	Errors          []string         `json:"errors"`
+	ErrorsTotal     int              `json:"errors_total"`
+}
+
+// Report builds the full canonical report of a record.
+func (r runRecord) Report() Report {
+	counts := map[string]uint64{}
+	groups := map[string][]ReportGroup{}
+	index := map[string]int{}
+	reasons := make([]string, 0, len(r.Skipped))
+	for reason := range r.Skipped {
 		reasons = append(reasons, reason)
 	}
 	sort.Strings(reasons)
 	for _, reason := range reasons {
-		count := int64(row.Skipped[reason])
+		count := r.Skipped[reason]
 		if count == 0 {
 			continue
 		}
-		spec := groupForSkipReason(reason)
+		spec, known := groupForSkipReason(reason)
 		key := spec.kind + "/" + spec.reason
-		if group, ok := merged[key]; ok {
-			group["count"] = group["count"].(int64) + count
+		if at, ok := index[key]; ok {
+			groups[spec.kind][at].Count += count
 		} else {
-			group = map[string]any{
-				"reason": spec.reason,
-				"label":  spec.label,
-				"count":  count,
-				"items":  []any{},
+			group := ReportGroup{Reason: spec.reason, Label: spec.label, Count: count, Items: []string{}, Counted: true}
+			if !known {
+				group.Code = reason
 			}
-			merged[key] = group
+			index[key] = len(groups[spec.kind])
 			groups[spec.kind] = append(groups[spec.kind], group)
 		}
 		counts[spec.kind] += count
 	}
-
-	unchanged := int64(0)
-	if row.Stamped() && row.TotalDocuments > row.Indexed {
-		unchanged = row.TotalDocuments - row.Indexed
-	}
-	if unchanged > 0 {
-		groups[kindSkipped] = append(groups[kindSkipped], map[string]any{
-			"reason":  "unchanged",
-			"label":   "Already indexed (unchanged)",
-			"count":   unchanged,
-			"items":   []any{},
-			"counted": false,
+	if r.Unchanged > 0 {
+		groups[kindSkipped] = append(groups[kindSkipped], ReportGroup{
+			Reason: "unchanged", Label: "Already indexed (unchanged)", Count: r.Unchanged, Items: []string{}, Counted: false,
 		})
 	}
 
-	categories := make([]any, 0, len(reportKindOrder))
-	total := unchanged
+	categories := make([]ReportCategory, 0, len(reportKindOrder))
+	total := r.Unchanged
 	for _, kind := range reportKindOrder {
 		count := counts[kind]
 		if kind == kindIndexed {
-			count = row.Indexed
+			count = r.Indexed
 		}
 		total += count
 		list := groups[kind]
 		if list == nil {
-			list = []any{}
+			list = []ReportGroup{}
 		}
-		categories = append(categories, map[string]any{"kind": kind, "count": count, "groups": list})
+		categories = append(categories, ReportCategory{Kind: kind, Count: count, Groups: list})
 	}
 
-	errors := []any{}
-	if row.Error != nil && *row.Error != "" {
-		errors = append(errors, *row.Error)
+	errors := append([]string{}, r.Errors...)
+	if r.FailedChunks > 0 {
+		errors = append(errors, fmt.Sprintf("%d chunk(s) could not be embedded or stored", r.FailedChunks))
 	}
-	if row.Failed > 0 {
-		errors = append(errors, fmt.Sprintf("%d chunk(s) could not be embedded or stored", row.Failed))
-	}
-
-	status := "ok"
-	switch row.State {
-	case StatePartlyIndexed:
-		status = "partly_indexed"
-	case StateFailed, StateCancelled:
-		status = "error"
-	}
-
-	return map[string]any{
-		"version":          ReportVersion,
-		"status":           status,
-		"item_labels":      map[string]any{"singular": "document", "plural": "documents"},
-		"dependent_labels": map[string]any{"singular": "attachment", "plural": "attachments"},
-		"totals": map[string]any{
-			"indexed":               row.Indexed,
-			"skipped":               counts[kindSkipped],
-			"not_indexed":           counts[kindNotIndexed],
-			"failed":                counts[kindFailed],
-			"unchanged":             unchanged,
-			"dependent_not_indexed": 0,
-			"total":                 total,
+	return Report{
+		Version:         ReportVersion,
+		Status:          r.Status,
+		ItemLabels:      ReportLabels{Singular: "document", Plural: "documents"},
+		DependentLabels: ReportLabels{Singular: "attachment", Plural: "attachments"},
+		Totals: ReportTotals{
+			Indexed: r.Indexed, Skipped: counts[kindSkipped], NotIndexed: counts[kindNotIndexed],
+			Failed: counts[kindFailed], Unchanged: r.Unchanged, Total: total,
 		},
-		"categories":   categories,
-		"errors":       errors,
-		"errors_total": len(errors),
+		Categories:  categories,
+		Errors:      errors,
+		ErrorsTotal: len(errors),
 	}
+}
+
+// expandEntry is a history entry as served: the stored record becomes the
+// canonical report. The stored entry is not changed.
+func expandEntry(entry map[string]any) map[string]any {
+	record, ok := recordOf(entry)
+	if !ok {
+		if _, has := entry[runRecordKey]; !has {
+			return entry
+		}
+	}
+	out := copyObject(entry)
+	delete(out, runRecordKey)
+	if ok {
+		report := record.Report()
+		out["report"] = report
+		out["total"] = report.Totals.Total
+	}
+	return out
 }

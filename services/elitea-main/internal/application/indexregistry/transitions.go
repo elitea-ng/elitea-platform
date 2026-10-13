@@ -19,10 +19,14 @@ import (
 // The response shape has no separate "total" and "last run" keys, so the
 // existing keys are mapped as follows:
 //
+//   - `report` (and `total`) is the canonical report of the last run that
+//     ended (runRecord.Report); `skipped` stays the flat reason-to-count map.
 //   - `indexed` and `indexed_chunks` are the INDEX's totals as the last
 //     applied result reported them (row.TotalDocuments, row.TotalChunks, from
-//     IndexIngestSummaryV1.total_documents/total_chunks). An incremental run
-//     that changed nothing reports the same totals again.
+//     IndexIngestSummaryV1.total_documents/total_chunks), also under
+//     `index_total_documents` and `index_total_chunks`. An incremental run
+//     that changed nothing reports the same totals again. When the last run
+//     failed or was stopped, `indexed` is that run's own count instead.
 //   - `updated`, `failed_chunks` and `skipped` are the LAST run's counts.
 //   - every `history` entry carries its own run's counts (`indexed` is the
 //     documents that run wrote, `indexed_chunks` its chunks), and so does the
@@ -30,12 +34,25 @@ import (
 func Metadata(row Row) map[string]any {
 	metadata := runMetadata(row)
 	metadata["indexed"] = row.TotalDocuments
+	metadata["index_total_documents"] = row.TotalDocuments
 	if row.Stamped() {
 		metadata["indexed_chunks"] = row.TotalChunks
+		metadata["index_total_chunks"] = row.TotalChunks
+	}
+	if record, ok := lastRecord(row.History); ok {
+		report := record.Report()
+		metadata["report"] = report
+		metadata["total"] = report.Totals.Total
+		if record.failedRun() {
+			// A run that did not complete reports its own count as `indexed`
+			// (the web client shows it beside the failure); the index's totals
+			// stay in index_total_documents/_chunks.
+			metadata["indexed"] = record.Indexed
+		}
 	}
 	history := make([]any, len(row.History))
 	for i, entry := range row.History {
-		history[i] = entry
+		history[i] = expandEntry(entry)
 	}
 	metadata["history"] = history
 	return metadata
@@ -64,12 +81,6 @@ func runMetadata(row Row) map[string]any {
 	}
 	if row.Error != nil {
 		metadata["error"] = *row.Error
-	}
-	if report := runReport(row); report != nil {
-		// What the web client renders the run from (normalizeIndexingReport);
-		// `skipped` below stays the flat reason-to-count map.
-		metadata["report"] = report
-		metadata["total"] = report["totals"].(map[string]any)["total"]
 	}
 	if row.Stamped() {
 		metadata["indexed_chunks"] = row.Chunks
@@ -134,8 +145,11 @@ func currentRunCreatedOn(row Row) any {
 // history itself and without the chunking configuration, which index_meta
 // repeats once per run and which made the list response grow linearly
 // (issue #297).
-func snapshot(row Row) map[string]any {
+func snapshot(row Row, record *runRecord) map[string]any {
 	entry := runMetadata(row)
+	if record != nil {
+		entry[runRecordKey] = *record
+	}
 	if configuration, ok := entry["index_configuration"].(map[string]any); ok {
 		// Copied first: the map is the row's own, and the row keeps its
 		// chunking configuration.
@@ -148,7 +162,7 @@ func snapshot(row Row) map[string]any {
 
 // createdMarker is the permanent, run-neutral first entry of a new index.
 func createdMarker(row Row) map[string]any {
-	marker := snapshot(row)
+	marker := snapshot(row, nil)
 	marker["state"] = string(StateCreated)
 	marker["task_id"] = nil
 	marker["conversation_id"] = nil
@@ -246,21 +260,25 @@ func EndDeadRun(row Row) Row {
 		next.UpdatedAt = row.ObservedAt.UTC()
 	}
 	reason := ""
+	var record runRecord
 	switch row.RunStatus() {
 	case RunEndedCancelled:
 		next.State = StateCancelled
 		next.TaskID = nil
 		next.Error = nil
+		record = cancelledRecord()
 	case RunEndedFailed:
 		reason = executionFailedReason
 		next.State = StateFailed
 		next.Error = ptr("the indexing run failed")
+		record = failureRecord(statusError, *next.Error)
 	default:
 		reason = abandonedReason
 		next.State = StateFailed
 		next.Error = ptr(abandonedReason)
+		record = failureRecord(statusError, abandonedReason)
 	}
-	finishRun(&next)
+	finishRun(&next, record)
 	if reason != "" {
 		// finishRun replaced (or appended) the newest entry with a fresh map.
 		next.History[len(next.History)-1]["reason"] = reason
@@ -337,7 +355,7 @@ func StartRun(existing *Row, run indexingapp.RegistryInitialRun) (Row, bool, err
 	next.UpdatedAt = admitted
 
 	runEntry := func() map[string]any {
-		entry := snapshot(next)
+		entry := snapshot(next, nil)
 		entry["created_on"] = unixSeconds(admitted)
 		return entry
 	}
@@ -365,8 +383,8 @@ func fenceMatches(row Row, executionID string, generation, indexGeneration int64
 // top level. When the run has no entry (the initializer never ran for it) one
 // is appended, which is what the pgvector writer does when "the SDK never
 // started".
-func finishRun(row *Row) {
-	entry := snapshot(*row)
+func finishRun(row *Row, record runRecord) {
+	entry := snapshot(*row, &record)
 	if len(row.History) > 0 && matchesRun(row.History[len(row.History)-1], row.ExecutionID, row.ExecutionGeneration) {
 		if created, ok := row.History[len(row.History)-1]["created_on"]; ok {
 			entry["created_on"] = created
@@ -394,18 +412,21 @@ func ApplyTerminal(row Row, terminal indexingapp.RegistryTerminal) (Row, bool, e
 	}
 	next := row.clone()
 	next.UpdatedAt = terminal.OccurredAt.UTC()
+	var record runRecord
 	switch terminal.State {
 	case indexingapp.CurrentIndexMetaFailed:
 		next.State = StateFailed
 		next.Error = ptr(terminal.SafeError)
+		record = failureRecord(statusError, terminal.SafeError)
 	case indexingapp.CurrentIndexMetaCancelled:
 		next.State = StateCancelled
 		next.TaskID = nil
 		next.Error = nil
+		record = cancelledRecord()
 	default:
 		return Row{}, false, indexingapp.ErrCurrentIndexMetaInitializationInvalid
 	}
-	finishRun(&next)
+	finishRun(&next, record)
 	return next, true, nil
 }
 
@@ -554,7 +575,7 @@ func ApplyResult(row Row, result Result) (next Row, changed bool, err error) {
 	if overridden {
 		next.State = StateFailed
 		next.Error = ptr(summary.Message)
-		finishRun(&next)
+		finishRun(&next, failureRecord(statusError, summary.Message))
 		return next, true, nil
 	}
 	if stampsEmbedding(summary) && !next.Stamped() {
@@ -577,24 +598,28 @@ func ApplyResult(row Row, result Result) (next Row, changed bool, err error) {
 	next.Failed = int64(summary.FailedChunks)
 	next.Skipped = summary.Skipped()
 
+	status := statusOK
 	switch {
 	case summary.TerminalState == outputapp.IndexIngestTerminalCancelled:
+		status = statusCancelled
 		// Stopped after touching the store: the counts and totals above are
 		// the store's; the row ends as ApplyTerminal ends a cancelled run.
 		next.State = StateCancelled
 		next.TaskID = nil
 		next.Error = nil
 	case summary.Status == outputapp.IndexIngestStatusError:
+		status = statusError
 		next.State = StateFailed
 		next.Error = ptr(summary.Message)
 	case summary.Status == outputapp.IndexIngestStatusPartlyIndexed:
+		status = statusPartlyIndexed
 		next.State = StatePartlyIndexed
 		next.Error = nil
 	default:
 		next.State = StateCompleted
 		next.Error = nil
 	}
-	finishRun(&next)
+	finishRun(&next, resultRecord(summary, status))
 	return next, true, nil
 }
 
@@ -631,7 +656,13 @@ func RecordScheduledFailure(row Row, effectID, safeReason string, occurredAt tim
 	next.State = StateFailed
 	next.Error = ptr(safeReason)
 	next.UpdatedAt = occurredAt.UTC()
-	entry := snapshot(next)
+	// The entry describes this failed schedule only: the previous run's counts
+	// are not carried into it, and its report holds the failure alone.
+	failed := next
+	failed.Indexed, failed.Updated, failed.Chunks, failed.Failed = 0, 0, 0, 0
+	failed.Skipped = map[string]uint64{}
+	record := failureRecord(statusError, safeReason)
+	entry := snapshot(failed, &record)
 	entry["schedule_effect_id"] = effectID
 	next.History = boundHistory(append(next.History, entry))
 	return next, true

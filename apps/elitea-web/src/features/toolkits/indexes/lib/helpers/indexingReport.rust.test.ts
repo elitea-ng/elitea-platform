@@ -60,3 +60,37 @@ describe('normalizeIndexingReport on a Rust run', () => {
     expect(normalizeIndexingReport(rustRow)?.isUpToDate).toBe(false);
   });
 });
+
+describe('normalizeIndexingReport on a stopped or failed Rust run', () => {
+  const stopped = {
+    metadata: {
+      state: 'cancelled',
+      indexed: 2,
+      total: 2,
+      index_total_documents: 30,
+      report: {
+        version: 1,
+        status: 'cancelled',
+        totals: { indexed: 2, skipped: 0, not_indexed: 0, failed: 0, unchanged: 0, dependent_not_indexed: 0, total: 2 },
+        categories: [],
+        errors: ['Indexing was stopped before it finished.'],
+        errors_total: 1,
+      },
+    },
+  };
+
+  it('keeps the run-facing counts and the stop message', () => {
+    const report = normalizeIndexingReport(stopped);
+    expect(report?.status).toBe('cancelled');
+    expect(report?.totals).toMatchObject({ indexed: 2, total: 2, unchanged: 0 });
+    expect(report?.errors).toEqual(['Indexing was stopped before it finished.']);
+  });
+
+  it('labels an unknown skip reason generically and keeps the token as code', () => {
+    const report = normalizeIndexingReport(rustRow);
+    const group = report?.categories
+      .find((category) => category.kind === IndexingReportKind.notIndexed)
+      ?.groups.find((g) => g.reason === 'weird_new_reason');
+    expect(group?.label).toBe('Not indexed (other)');
+  });
+});
