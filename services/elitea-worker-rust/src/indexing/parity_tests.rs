@@ -126,13 +126,14 @@ fn artifact_patterns_are_the_sdks_case_insensitive_fnmatch_over_the_full_key() {
         "artifact",
         json!({"folder": "docs", "include_extensions": ["docs/*.MD", "*.pdf"], "skip_extensions": ["docs/draft/*", "*.TMP"]}),
     );
-    // Keys are relative to the folder; the patterns meet `docs/<key>`.
-    assert!(docs.keeps("guide.md"));
-    assert!(docs.keeps("GUIDE.Md"));
-    assert!(docs.keeps("deep/er/report.pdf"));
-    assert!(!docs.keeps("draft/idea.md"), "skip wins");
-    assert!(!docs.keeps("guide.txt"), "not included");
-    assert!(!docs.keeps("scratch.tmp"));
+    // Keys are the FULL object keys (folder included) and every pattern
+    // meets that key.
+    assert!(docs.keeps("docs/guide.md"));
+    assert!(docs.keeps("docs/GUIDE.Md"));
+    assert!(docs.keeps("docs/deep/er/report.pdf"));
+    assert!(!docs.keeps("docs/draft/idea.md"), "skip wins");
+    assert!(!docs.keeps("docs/guide.txt"), "not included");
+    assert!(!docs.keeps("docs/scratch.tmp"));
     // A bare extension is not `*.ext` here, as in the SDK.
     let bare = filter("artifact", json!({"include_extensions": ["pdf"]}));
     assert!(!bare.keeps("a.pdf"));
@@ -144,6 +145,31 @@ fn artifact_patterns_are_the_sdks_case_insensitive_fnmatch_over_the_full_key() {
     let skip_only = filter("artifact", json!({"skip_extensions": ["tmp/*"]}));
     assert!(skip_only.keeps("a.bin"));
     assert!(!skip_only.keeps("tmp/a.bin"));
+}
+
+#[test]
+fn the_whitelist_blacklist_and_extension_patterns_meet_the_same_full_key() {
+    // A folder-qualified pattern means the same thing in all four lists.
+    let scoped = filter(
+        "artifact",
+        json!({
+            "folder": "reports",
+            "whitelist": ["reports/*"],
+            "blacklist": ["reports/old/*"],
+            "include_extensions": ["reports/*.md"],
+            "skip_extensions": ["reports/*/draft.md"],
+        }),
+    );
+    assert!(scoped.keeps("reports/q1.md"));
+    assert!(!scoped.keeps("reports/old/q0.md"), "blacklist");
+    assert!(!scoped.keeps("reports/q1/draft.md"), "skip_extensions");
+    assert!(!scoped.keeps("reports/q1.csv"), "include_extensions");
+    // The folder-relative spelling matches nothing: the key is the full one.
+    let relative = filter(
+        "artifact",
+        json!({"folder": "reports", "whitelist": ["q1.md"], "include_extensions": ["q1.md"]}),
+    );
+    assert!(!relative.keeps("reports/q1.md"));
 }
 
 #[test]
@@ -339,12 +365,29 @@ async fn an_empty_listing_deletes_only_when_the_connector_attests_it() {
         "{}",
         refused.message
     );
+    assert_eq!(harness.fake.point_count(), points_before);
+    // A clean run is no way round it: it needs the same attestation.
+    let clean_refused = run(
+        &harness,
+        Vec::new(),
+        &command(NS, Some((super::tests::MODEL, 4))),
+        &parameters(true, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        clean_refused.status,
+        IndexIngestStatusV1::Error as i32,
+        "{clean_refused:?}"
+    );
     assert!(
-        refused.message.contains("clean index"),
+        clean_refused.message.contains("returned no documents"),
         "{}",
-        refused.message
+        clean_refused.message
     );
     assert_eq!(harness.fake.point_count(), points_before);
+    assert_eq!(stored(&harness).await.len(), 2, "the index is intact");
     // Attested (the artifact bucket): the index follows the source.
     let attested = run(
         &harness,
@@ -577,5 +620,312 @@ async fn the_summary_names_the_ignored_loader_settings_once() {
         summary.message.contains(".pdf.extract_images"),
         "{}",
         summary.message
+    );
+}
+
+// ---- review round 1 ---------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_new_default_file_type_filter_keeps_stored_documents_until_a_clean_run() {
+    let harness = harness(4, None).await;
+    let both = || {
+        vec![
+            document("a.md", "v1", "# A\n\nalpha text\n"),
+            document("notes.rst", "v1", "logged words here\n"),
+        ]
+    };
+    // An earlier run (before the allowlist existed) indexed both.
+    let first = run(
+        &harness,
+        both(),
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("first");
+    assert_eq!(first.indexed_documents, 2, "{first:?}");
+    let points_before = harness.fake.point_count();
+
+    // Now the allowlist applies: `.rst` is out of scope. It is neither
+    // re-indexed nor deleted, while it stays in the source or after it left.
+    for listing in [both(), vec![document("a.md", "v1", "# A\n\nalpha text\n")]] {
+        let again = run(
+            &harness,
+            listing,
+            &command(NS, Some((super::tests::MODEL, 4))),
+            &parameters(false, json!({"fixture_skip_unsupported": true})),
+            &Always,
+        )
+        .await
+        .expect("summary");
+        assert_eq!(again.status, IndexIngestStatusV1::Ok as i32, "{again:?}");
+        assert!(again.removed_document_keys.is_empty(), "{again:?}");
+        assert_eq!(again.total_documents, Some(2), "{again:?}");
+        assert!(!again.whole_index_record, "the kept document is unnamed");
+        assert_eq!(harness.fake.point_count(), points_before);
+        assert_eq!(stored(&harness).await.len(), 2);
+    }
+
+    // A clean run applies the current scope.
+    let clean = run(
+        &harness,
+        both(),
+        &command(NS, Some((super::tests::MODEL, 4))),
+        &parameters(true, json!({"fixture_skip_unsupported": true})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(clean.status, IndexIngestStatusV1::Ok as i32, "{clean:?}");
+    let keys: Vec<String> = stored(&harness)
+        .await
+        .into_iter()
+        .map(|point| point.document_key)
+        .collect();
+    assert_eq!(keys, vec!["a.md"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_clean_run_wipes_a_populated_index_only_when_the_empty_source_is_attested() {
+    let harness = harness(4, None).await;
+    run(
+        &harness,
+        two_documents(),
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("first");
+    let points_before = harness.fake.point_count();
+    let refused = run(
+        &harness,
+        Vec::new(),
+        &command(NS, Some((super::tests::MODEL, 4))),
+        &parameters(true, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(refused.status, IndexIngestStatusV1::Error as i32);
+    assert_eq!(harness.fake.point_count(), points_before);
+    assert_eq!(stored(&harness).await.len(), 2);
+
+    let attested = run(
+        &harness,
+        Vec::new(),
+        &command(NS, Some((super::tests::MODEL, 4))),
+        &parameters(true, json!({"fixture_attests_empty": true})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        attested.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{attested:?}"
+    );
+    assert_eq!(harness.fake.point_count(), 0);
+
+    // A clean run over an index that was empty already is no failure.
+    let again = run(
+        &harness,
+        Vec::new(),
+        &command(NS, None),
+        &parameters(true, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(again.status, IndexIngestStatusV1::Ok as i32, "{again:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_explicit_use_llm_without_a_model_degrades_the_run_and_the_default_does_not() {
+    for (extra, expected) in [
+        (json!({}), IndexIngestStatusV1::Ok),
+        (
+            json!({"chunking_config": {"use_llm": false}}),
+            IndexIngestStatusV1::Ok,
+        ),
+        (
+            json!({"chunking_config": {"use_llm": true}}),
+            IndexIngestStatusV1::PartlyIndexed,
+        ),
+        (
+            json!({"chunking_config": {".png": {"use_llm": true}}}),
+            IndexIngestStatusV1::PartlyIndexed,
+        ),
+    ] {
+        let harness = harness(4, None).await;
+        let summary = run(
+            &harness,
+            vec![
+                document("a.md", "v1", "# A\n\nalpha text\n"),
+                super::tests::png_document("logo.png"),
+            ],
+            &command(NS, None),
+            &parameters(false, extra.clone()),
+            &Always,
+        )
+        .await
+        .expect("summary");
+        assert_eq!(summary.indexed_documents, 1, "{extra}: {summary:?}");
+        assert_eq!(summary.status, expected as i32, "{extra}: {summary:?}");
+    }
+}
+
+#[test]
+fn commit_hash_hashes_valid_utf8_as_it_is_and_drops_invalid_bytes() {
+    let hash_of = |bytes: &[u8]| {
+        let mut fetched = document("a.txt", "v", "");
+        fetched.bytes = bytes.to_vec();
+        with_code_metadata(fetched).metadata["commit_hash"]
+            .as_str()
+            .expect("hash")
+            .to_owned()
+    };
+    // A real U+FFFD in valid UTF-8 stays in the hashed text.
+    assert_eq!(hash_of("a\u{FFFD}b".as_bytes()), sha256_hex("a\u{FFFD}b"));
+    assert_ne!(hash_of("a\u{FFFD}b".as_bytes()), sha256_hex("ab"));
+    // Python's `decode("utf-8", errors="ignore")` drops invalid sequences.
+    assert_eq!(hash_of(b"a\xFFb\xE2\x82"), sha256_hex("ab"));
+    assert_eq!(hash_of(b"a\xC3\xA9\x80"), sha256_hex("a\u{e9}"));
+    assert_eq!(hash_of(b""), sha256_hex(""));
+}
+
+#[test]
+fn a_dependent_document_config_drops_only_the_base_chunker() {
+    let config = elitea_doc_chunk::ChunkingConfig::from_value(
+        &json!({"chunking_tool": "markdown", ".md": {"chunker": "text"}}),
+    )
+    .expect("config");
+    let dependent = super::pipeline::dependent_chunking(&config);
+    assert_eq!(dependent.base.chunker, None);
+    assert_eq!(
+        dependent.by_extension[".md"].chunker.as_deref(),
+        Some("text"),
+        "the per-extension settings stay"
+    );
+}
+
+/// The artifact object API, scripted: a list under a prefix, and the bytes.
+struct Objects {
+    objects: Vec<(&'static str, &'static str)>,
+    requests: std::sync::Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl elitea_connectors::transport::Transport for Objects {
+    async fn execute(
+        &self,
+        request: elitea_connectors::transport::Request,
+    ) -> Result<elitea_connectors::transport::Response, elitea_connectors::transport::TransportError>
+    {
+        use elitea_connectors::transport::{HeaderMap, HeaderValue, Response, StatusCode};
+        let path = request.url().path().to_owned();
+        self.requests.lock().expect("lock").push(path.clone());
+        let mut headers = HeaderMap::new();
+        let bucket_root = "/api/v2/artifacts/objects/1/docs";
+        if path == bucket_root {
+            let prefix = request
+                .url()
+                .query_pairs()
+                .find(|(name, _)| name == "prefix")
+                .map(|(_, value)| value.into_owned())
+                .unwrap_or_default();
+            let rows: Vec<Value> = self
+                .objects
+                .iter()
+                .filter(|(key, _)| key.starts_with(&prefix))
+                .map(|(key, text)| json!({"key": key, "size_bytes": text.len(), "etag": "\"same-etag\""}))
+                .collect();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            return Ok(Response::from_bytes(
+                StatusCode::OK,
+                headers,
+                json!({"objects": rows}).to_string().into_bytes(),
+            ));
+        }
+        let key = path
+            .trim_start_matches(&format!("{bucket_root}/"))
+            .to_owned();
+        let text = self
+            .objects
+            .iter()
+            .find(|(candidate, _)| *candidate == key)
+            .map(|(_, text)| *text)
+            .expect("a listed object");
+        headers.insert("etag", HeaderValue::from_static("\"same-etag\""));
+        Ok(Response::from_bytes(
+            StatusCode::OK,
+            headers,
+            text.as_bytes().to_vec(),
+        ))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn artifact_documents_keep_the_full_key_so_two_folders_do_not_collide() {
+    let mut harness = harness(4, None).await;
+    let transport = std::sync::Arc::new(Objects {
+        objects: vec![
+            ("a/readme.md", "# A\n\nfrom folder a\n"),
+            ("b/readme.md", "# B\n\nfrom folder b\n"),
+        ],
+        requests: std::sync::Mutex::new(Vec::new()),
+    });
+    harness.runtime.transport = transport.clone();
+    let configuration = json!({"id": 7, "type": "artifact", "toolkit_name": "files", "settings": {"bucket": "docs"}});
+    let now = || 1_700_000_000_000_i64;
+    let mut last = None;
+    for (n, folder) in ["a", "b"].into_iter().enumerate() {
+        let expected = (n > 0).then_some((super::tests::MODEL, 4));
+        let summary = super::run_index(
+            &harness.runtime,
+            super::IndexRun {
+                command: &command(NS, expected),
+                toolkit_configuration: configuration.to_string().as_bytes(),
+                tool_parameters:
+                    json!({"index_name": "docs", "clean_index": false, "folder": folder})
+                        .to_string()
+                        .as_bytes(),
+                parsed: None,
+                embedding_binding: Some(&super::tests::binding()),
+                llm_model: None,
+                llm_configuration: None,
+                chat_entries: None,
+                vector_token: Some(&harness.token),
+                context: &harness.context,
+                lease: &Always,
+                deadline_unix_millis: i64::MAX,
+                now_unix_millis: &now,
+            },
+        )
+        .await
+        .expect("summary");
+        assert_eq!(summary.indexed_documents, 1, "{folder}: {summary:?}");
+        last = Some(summary);
+    }
+    // The two objects share name and etag; only the full key tells them
+    // apart, so run b indexed its own document (it was not "unchanged") and
+    // the index follows the folder it was run over.
+    let keys: Vec<String> = stored(&harness)
+        .await
+        .into_iter()
+        .map(|point| point.document_key)
+        .collect();
+    assert_eq!(keys, vec!["b/readme.md"]);
+    let last = last.expect("ran");
+    assert_eq!(last.removed_document_keys, vec!["a/readme.md"]);
+    assert_eq!(last.documents[0].document_key, "b/readme.md");
+    // The folder is the list prefix; the fetch asks for the full key.
+    let requests = transport.requests.lock().expect("lock").clone();
+    assert!(
+        requests
+            .iter()
+            .any(|path| path.ends_with("/docs/a/readme.md")),
+        "{requests:?}"
     );
 }

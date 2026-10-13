@@ -633,12 +633,25 @@ mod tests {
     fn the_ado_plans_form_chunking_tools_do_not_fail() {
         // The ado_plans toolkit form offers `xml` (its default) and `''`.
         // The SDK parses `xml` by its extension and treats `''` as no tool.
-        for tool in ["xml", "", "XML", "html", "csv", "txt"] {
-            let config =
-                ChunkingConfig::from_value(&json!({ "chunking_tool": tool })).unwrap_or_default();
-            let chunks = chunk("<steps><step>one</step></steps>", "case.md", &config);
-            assert!(chunks.is_ok(), "{tool:?}: {chunks:?}");
-            assert!(!chunks.unwrap_or_default().is_empty(), "{tool:?}");
+        let text = "<steps><step>one</step></steps>";
+        let mut configs: Vec<(String, ChunkingConfig)> = ["xml", "XML", "html", "csv", "txt"]
+            .iter()
+            .map(|tool| {
+                let config = ChunkingConfig::from_value(&json!({ "chunking_tool": tool }))
+                    .expect("a valid config");
+                ((*tool).to_owned(), config)
+            })
+            .collect();
+        // The config reader drops an empty `chunking_tool`; the worker's
+        // `IndexParameters` path (`chunking_tool = Some("")`) sets it
+        // straight on the base chunker, which is the only way to reach the
+        // router's `""` arm.
+        let mut empty = ChunkingConfig::default();
+        empty.base.chunker = Some(String::new());
+        configs.push((String::new(), empty));
+        for (tool, config) in &configs {
+            let chunks = chunk(text, "case.md", config).expect(tool);
+            assert!(!chunks.is_empty(), "{tool:?}");
         }
     }
 

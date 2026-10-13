@@ -124,8 +124,9 @@ pub(super) const SKIP_EXTRACT_TIMEOUT: &str = "extract_timeout";
 /// or a limit (`NOT_INDEXED`/`SKIPPED` in its report). So `unsupported_type`,
 /// `empty`, `too_large`, `too_many_pages` and `encrypted` leave the status
 /// `OK`; so do `no_model` and `needs_model` unless the config explicitly
-/// selected a model chunker (`proposal`, `statistical`), because the picture
-/// step that also needs a model is on by default and optional. Every other
+/// asked for a model step (the `proposal` or `statistical` chunker, or
+/// `use_llm: true` for pictures); the picture step that is on by default is
+/// optional. Every other
 /// reason, an unknown one included, is a lost document.
 pub(super) fn skip_loses_document(reason: &str, explicit_model_chunker: bool) -> bool {
     match reason {
@@ -249,6 +250,9 @@ struct RunPlan {
     /// Documents the source no longer lists, with their stored chunk count,
     /// deleted last and in order.
     vanished: Vec<(String, u64)>,
+    /// Stored documents (and their chunks) the current filters exclude: kept,
+    /// not deleted, and counted in the store's totals.
+    out_of_scope: (u64, u64),
     reindex: bool,
 }
 
@@ -421,6 +425,7 @@ pub(crate) async fn run_index(
     let source = match IndexSource::build(
         &configuration,
         &parameters,
+        &filter,
         &PlatformAccess {
             origin: &runtime.platform_origin,
             bearer: &bearer,
@@ -444,6 +449,7 @@ pub(crate) async fn run_index(
         source,
         filter,
         ignored_loader_keys: ignored,
+        dependent_chunking: Arc::new(dependent_chunking(&chunking)),
         chunking: Arc::new(chunking),
         space: expected_space(run.command),
         consecutive_embedding_failures: 0,
@@ -534,6 +540,9 @@ struct Runner<'a> {
     /// read; named in the summary.
     ignored_loader_keys: Vec<String>,
     chunking: Arc<ChunkingConfig>,
+    /// The config of dependent documents (attachments): `chunking`
+    /// without the base chunker, built once.
+    dependent_chunking: Arc<ChunkingConfig>,
     /// The embedding space the run writes into: the command's expected space,
     /// or the one the first embeddings answer fixed.
     space: Option<pb::EmbeddingSpace>,
@@ -581,11 +590,16 @@ impl Runner<'_> {
 
     /// Lists the source, reads what the store holds and diffs the two
     /// (ADR-0030 decision 3).
+    #[allow(clippy::too_many_lines)] // One linear pass: read the store, list, diff.
     async fn plan(&mut self) -> Result<RunPlan, Halt> {
         let parameters = self.parameters;
         let namespace = toolkit_namespace(&self.run.command.index_id);
         let mut prior: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
-        if !parameters.clean_index {
+        // Whether the store holds a document at all: a clean run reads the
+        // index only to know that (so it never wipes a populated index on a
+        // listing that was not attested empty), then diffs against nothing.
+        let mut store_populated = false;
+        {
             // The listing is read where the index lives: the expected space's
             // collection when the index is stamped, every collection before
             // the first run stamps it. The pages are folded as they arrive
@@ -632,7 +646,15 @@ impl Runner<'_> {
                     other => halt(&vector_text(&other)),
                 })?;
             if consumed.is_break() {
-                return Err(too_many());
+                if !parameters.clean_index {
+                    return Err(too_many());
+                }
+                // A clean run drops the whole namespace whatever its size.
+                store_populated = true;
+            }
+            store_populated |= !prior.is_empty();
+            if parameters.clean_index {
+                prior.clear();
             }
         }
         self.check_liveness()?;
@@ -650,7 +672,33 @@ impl Runner<'_> {
             .into_iter()
             .filter(|reference| self.filter.keeps(&reference.key))
             .collect();
-        self.guard_empty_listing(listed_by_source, listing.len(), !prior.is_empty())?;
+        // A stored document the file-type allowlist now excludes (the new
+        // default `skip_unsupported_extensions`: pictures, PDFs) is out of
+        // scope, not vanished: a deploy must not delete what an earlier run
+        // indexed. It stays until a clean run rebuilds the index. (A
+        // whitelist, blacklist or artifact pattern still removes what it no
+        // longer lists, as before.)
+        let out_of_scope_stored = |key: &str| self.filter.excluded_by_file_type(key);
+        let out_of_scope = prior.keys().filter(|key| out_of_scope_stored(key)).count();
+        let in_scope_stored = prior.len() - out_of_scope;
+        let out_of_scope_chunks: u64 = prior
+            .iter()
+            .filter(|(key, _)| out_of_scope_stored(key))
+            .flat_map(|(_, versions)| versions.iter().map(|(_, chunks)| *chunks))
+            .sum();
+        if out_of_scope > 0 {
+            tracing::info!(
+                event = "index_out_of_scope_documents_kept",
+                documents = out_of_scope,
+                "stored documents of a file type the run no longer indexes were kept; a clean index run applies the current scope"
+            );
+        }
+        let at_risk = if parameters.clean_index {
+            store_populated
+        } else {
+            in_scope_stored > 0
+        };
+        self.guard_empty_listing(listed_by_source, listing.len(), at_risk)?;
         if listing.len() > self.runtime.limits.max_documents {
             return Err(halt(&format!(
                 "the source holds {} documents after filtering; one run indexes at most {}",
@@ -677,7 +725,7 @@ impl Runner<'_> {
         }
         let vanished: Vec<(String, u64)> = prior
             .iter()
-            .filter(|(key, _)| !listed.contains(key.as_str()))
+            .filter(|(key, _)| !listed.contains(key.as_str()) && !out_of_scope_stored(key))
             .map(|(key, versions)| {
                 (
                     key.clone(),
@@ -689,6 +737,7 @@ impl Runner<'_> {
             namespace,
             to_write,
             vanished,
+            out_of_scope: (out_of_scope as u64, out_of_scope_chunks),
             reindex: !prior.is_empty(),
         })
     }
@@ -704,15 +753,13 @@ impl Runner<'_> {
         kept: usize,
         index_is_populated: bool,
     ) -> Result<(), Halt> {
-        let clean = self.parameters.clean_index;
-        if kept > 0
-            || !(index_is_populated || (clean && listed > 0))
-            || (listed == 0 && (self.filter.attests_empty() || clean))
-        {
+        // Only a connector that attests an empty source may empty a
+        // populated index, clean run or not.
+        if kept > 0 || !index_is_populated || (listed == 0 && self.filter.attests_empty()) {
             return Ok(());
         }
         Err(halt(&if listed == 0 {
-            "the source listing returned no documents while the index holds data from earlier runs; nothing was deleted. If the source really is empty now, run again with clean index".to_owned()
+            "the source listing returned no documents while the index holds data from earlier runs; nothing was deleted. Check the source (branch, query, permissions) before running again".to_owned()
         } else {
             format!(
                 "the source lists {listed} documents but the whitelist, blacklist and file-type filters kept none of them; the index was left untouched. Check the filters"
@@ -735,7 +782,10 @@ impl Runner<'_> {
                         break;
                     };
                     let source = Arc::clone(&self.source);
-                    let chunking = Arc::clone(&self.chunking);
+                    let chunking = Chunkings {
+                        base: Arc::clone(&self.chunking),
+                        dependent: Arc::clone(&self.dependent_chunking),
+                    };
                     let limits = self.runtime.limits;
                     let extractor = self.runtime.extractor.clone();
                     tasks.spawn(prepare(
@@ -1049,6 +1099,8 @@ impl Runner<'_> {
             retained_documents += 1;
             retained_chunks += chunks;
         }
+        retained_documents += plan.out_of_scope.0;
+        retained_chunks += plan.out_of_scope.1;
         StoreRecord {
             total_documents: self.tally.unchanged_documents
                 + self.tally.written.len() as u64
@@ -1071,7 +1123,7 @@ impl Runner<'_> {
     /// The summary of a run that went through: the counts, the store's
     /// totals and record, the stamp.
     fn summary(self, plan: &RunPlan) -> IndexIngestSummaryV1 {
-        let explicit_model = self.chunking.selects_model_chunker();
+        let explicit_model = self.chunking.explicitly_needs_model();
         let partial = self.tally.failed_chunks > 0
             || self
                 .tally
@@ -1392,6 +1444,20 @@ fn image_extension(class: VisionImage, declared: &str) -> String {
     .to_owned()
 }
 
+/// The chunking configs one document can be parsed with.
+struct Chunkings {
+    base: Arc<ChunkingConfig>,
+    dependent: Arc<ChunkingConfig>,
+}
+
+/// The config of a dependent document: the SDK applies `chunking_tool` to
+/// the base document only; an attachment is parsed by its own extension.
+pub(super) fn dependent_chunking(chunking: &ChunkingConfig) -> ChunkingConfig {
+    let mut dependent = chunking.clone();
+    dependent.base.chunker = None;
+    dependent
+}
+
 /// Fetch, extract and chunk one document. Runs as its own task; the CPU
 /// work (extraction, tokenising) is on a blocking thread. A PDF or Office
 /// document is read by the extraction sidecar when the run has one
@@ -1399,7 +1465,7 @@ fn image_extension(class: VisionImage, declared: &str) -> String {
 #[allow(clippy::too_many_lines)] // One linear pass: fetch, extract, chunk.
 async fn prepare(
     source: Arc<IndexSource>,
-    chunking: Arc<ChunkingConfig>,
+    chunkings: Chunkings,
     reference: DocumentRef,
     plan: Plan,
     limits: IndexRunLimits,
@@ -1429,12 +1495,10 @@ async fn prepare(
     // The SDK applies `chunking_tool` to the base document only; a dependent
     // document (an attachment) is parsed by its own extension with the
     // per-extension settings.
-    let chunking = if metadata.contains_key("parent_key") && chunking.base.chunker.is_some() {
-        let mut dependent = (*chunking).clone();
-        dependent.base.chunker = None;
-        Arc::new(dependent)
+    let chunking = if metadata.contains_key("parent_key") {
+        chunkings.dependent
     } else {
-        chunking
+        chunkings.base
     };
     metadata.insert("source".to_owned(), Value::String(key.clone()));
     if !document.title.is_empty() {

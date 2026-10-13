@@ -264,7 +264,7 @@ pub(super) fn document(key: &str, version: &str, text: &str) -> Document {
 }
 
 /// A PNG-signature file (a picture the vision step would describe).
-fn png_document(key: &str) -> Document {
+pub(super) fn png_document(key: &str) -> Document {
     let mut document = document(key, "v1", "");
     document.bytes = b"\x89PNG\r\n\x1a\npixels".to_vec();
     document.reference.size = document.bytes.len() as u64;

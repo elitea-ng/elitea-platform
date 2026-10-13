@@ -253,6 +253,16 @@ pub(crate) fn chunking_config(
     Ok(chunking)
 }
 
+/// The per-page settings `.xls` and `.xlsx` share.
+const SPREADSHEET_KEYS: &[&str] = &[
+    "add_header_to_chunks",
+    "header_row_number",
+    "sheet_name",
+    "evaluate_formulas",
+    "skip_size_check",
+    "excel_by_sheets",
+];
+
 /// The SDK's per-page loader settings (`allowed_to_override` in
 /// `document_loaders/constants.py`) that this worker does not read, per
 /// extension: spreadsheets, CSV, presentations and PDFs are extracted as a
@@ -260,28 +270,8 @@ pub(crate) fn chunking_config(
 /// a header row, a sheet name, formula evaluation, pages per chunk or image
 /// extraction cannot be honoured. Deliberate (`SOURCE_PARITY.md`).
 const IGNORED_LOADER_KEYS: &[(&str, &[&str])] = &[
-    (
-        ".xlsx",
-        &[
-            "add_header_to_chunks",
-            "header_row_number",
-            "sheet_name",
-            "evaluate_formulas",
-            "skip_size_check",
-            "excel_by_sheets",
-        ],
-    ),
-    (
-        ".xls",
-        &[
-            "add_header_to_chunks",
-            "header_row_number",
-            "sheet_name",
-            "evaluate_formulas",
-            "skip_size_check",
-            "excel_by_sheets",
-        ],
-    ),
+    (".xlsx", SPREADSHEET_KEYS),
+    (".xls", SPREADSHEET_KEYS),
     (
         ".csv",
         &[

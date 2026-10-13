@@ -440,6 +440,25 @@ impl ChunkingConfig {
         self.selects("proposal") || self.selects("statistical")
     }
 
+    /// Whether the config EXPLICITLY opts into the picture description
+    /// (`use_llm: true` at the top level or on an image extension), as
+    /// opposed to the default-on step. A run that asks for it and has no
+    /// model loses the descriptions it asked for.
+    #[must_use]
+    pub fn opts_into_vision(&self) -> bool {
+        self.base.use_llm == Some(true)
+            || self.by_extension.iter().any(|(extension, params)| {
+                params.use_llm == Some(true) && crate::vision::is_image_extension(extension)
+            })
+    }
+
+    /// Whether the config explicitly asks for any step that needs a model:
+    /// a model chunker or the picture description.
+    #[must_use]
+    pub fn explicitly_needs_model(&self) -> bool {
+        self.selects_model_chunker() || self.opts_into_vision()
+    }
+
     /// Read the SDK's JSON form. `null` is the empty config.
     ///
     /// A setting of the wrong type is dropped for that key's default and
@@ -531,6 +550,19 @@ mod tests {
             assert!(config.needs_chat_model(), "{spelled:?}");
             assert!(config.needs_proposal_model(), "{spelled:?}");
         }
+    }
+
+    #[test]
+    fn an_explicit_vision_opt_in_is_not_the_default() {
+        let from = |v: Value| ChunkingConfig::from_value(&v).unwrap();
+        assert!(!from(Value::Null).opts_into_vision());
+        assert!(!from(serde_json::json!({"use_llm": false})).opts_into_vision());
+        assert!(from(serde_json::json!({"use_llm": true})).opts_into_vision());
+        assert!(from(serde_json::json!({".png": {"use_llm": true}})).opts_into_vision());
+        // A document extension's use_llm is not served: not an opt-in.
+        assert!(!from(serde_json::json!({".pdf": {"use_llm": true}})).opts_into_vision());
+        assert!(from(serde_json::json!({".md": {"chunker": "proposal"}})).explicitly_needs_model());
+        assert!(!from(Value::Null).explicitly_needs_model());
     }
 
     #[test]
