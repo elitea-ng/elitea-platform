@@ -164,7 +164,9 @@ describe('AdminNativeClientsEditor', () => {
       min_client_version: '',
     });
     await waitFor(() => expect(screen.queryByTestId('native-client-dialog')).not.toBeInTheDocument());
-  });
+    // About seventy keystrokes through three MUI fields: well under a second
+    // locally, but past vitest's 5 s default on a loaded CI runner.
+  }, 20_000);
 
   it('keeps the dialog open and places each 422 reason beside the URI it refused', async () => {
     useHandlers({
