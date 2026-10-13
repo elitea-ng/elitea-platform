@@ -170,11 +170,12 @@ fn names_doctypes_and_read_only_follow_the_sdk() {
         "ado_wiki",
         "ado_boards",
         "ado_plans",
+        "figma",
     ] {
         assert_eq!(doctype_for(family), "document");
-        assert!(is_index_family(family), "{family} is indexed since I2");
+        assert!(is_index_family(family), "{family} is indexed since I2/I3");
     }
-    assert!(!is_index_family("figma"), "figma waits for I3");
+    assert!(!is_index_family("aha"), "aha has no indexing toolkit");
     for tool in IndexToolName::ALL {
         assert_eq!(IndexToolName::parse(tool.as_str()), Some(tool));
         assert_eq!(tool.is_read_only(), tool != IndexToolName::RemoveIndex);
@@ -850,16 +851,16 @@ async fn an_index_only_selection_is_accepted_only_when_the_index_toolset_is_comp
             );
         }
     }
-    // A family that is not an indexing family yet (figma, I3) keeps refusing
-    // it whatever the toolkit carries: a catalog on `figma` is not a catalog
-    // this stage reads.
+    // A family that is not an indexing family (aha) keeps refusing it
+    // whatever the toolkit carries: a catalog on `aha` is not a catalog this
+    // stage reads.
     let version = json!({"tools": [{
         "id": 7,
-        "type": "figma",
-        "toolkit_name": "designs",
+        "type": "aha",
+        "toolkit_name": "ideas",
         "indexes": catalog_value(),
         "settings": {
-            "figma_configuration": {"token": "fixture-token"},
+            "aha_configuration": {"base_url": "https://acme.aha.io", "api_key": "fixture-key"},
             "selected_tools": ["search_index"]
         }
     }]});
@@ -875,7 +876,7 @@ async fn an_index_only_selection_is_accepted_only_when_the_index_toolset_is_comp
     )
     .await
     .expect("materialized");
-    assert!(toolsets.is_empty(), "figma never composes index tools");
+    assert!(toolsets.is_empty(), "aha never composes index tools");
 }
 
 /// Review round 1, finding 4: on a path that lends no artifact authority

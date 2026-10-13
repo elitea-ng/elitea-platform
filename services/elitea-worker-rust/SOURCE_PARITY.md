@@ -686,3 +686,42 @@ Follow-ups: point the agent-runtime `confluence`/`jira` families at
 `elitea_connectors::atlassian` (they keep their own copies of the credential
 and base-URL logic today, as the git families did before #1249); Confluence
 child-page trees (`ancestors`) as `parent_key` when a CQL selects a subtree.
+
+## ADR-0030 I3: Figma, 2026-10-12
+
+`figma` is indexed by the Rust worker: a `ContentSource` connector in
+`libs/rust/connectors/src/figma` (`config.rs` the token and `index_data`
+arguments, `text.rs` the node-text extraction, `source.rs` the listing),
+dispatched by `src/indexing/source.rs`, with the index tools attached in
+`elitea-agent-runtime` (`INDEX_FAMILIES`) and the catalog frozen by
+elitea-main (`indexcatalog.Families`). Proving tests: the connector suites
+(documented REST shapes, batching and bisection, the page-too-large fallback,
+401/403/404, 429 with `Retry-After`, the token-origin check, selection,
+subframe extraction, projects/teams, comments, caps) and
+`src/indexing/figma_tests.rs` (Verification (2) against the `elitea-vector`
+fake: an unchanged file, even one saved again, writes nothing; one frame whose
+text changed rewrites only its chunks; a resolved comment rewrites only the
+comment; a deleted frame's chunks are removed; a refused token is an error
+summary, never an empty index).
+
+| SDK behaviour (`elitea_sdk/tools/figma`, working tree of 2026-10-12) | Rust | Deliberate difference |
+| --- | --- | --- |
+| A document is one leaf frame: a page's top-level node with a size (vectors without text skipped), or, when larger than `subframe_extract_threshold` (15000 px), its children, recursively; at most 50 frames a page | Same frames and the same extraction; **no 50-frame cap** (the cap bounds model calls, and none are made yet); the run is bounded by `SourceLimits::max_documents` | A cap that silently drops frames is a deletion hazard once an incremental run reads absence as removal. Ordering by position is not kept (documents are keyed, not ordered) |
+| The frame's text is the TOON header (`FRAME: name [x,y WxH] type/state #id`), the model's Purpose/Goal/Visual lines, then `Headings`, `Buttons` (with an inferred destination) and `Inputs` (typed form-field heuristics); body, label, error and placeholder text is **not indexed** without a model | The header without `type/state`, then **every text node's text** by the SDK's role rules (`extract_text_by_role`: font size/weight, red or grey fill, node and path names; button and input modes come from the whole words of nested container names only, not the indexed frame's own name): Headings, Buttons, Labels, Body, Errors, Placeholders, duplicates ignoring case removed | "Text content of nodes" is in scope; the SDK keeps it only in the model's description. Inputs/CTA-destination/type/state heuristics are not ported (their labels appear under Labels/Buttons). The SDK's `000`, `xxx`, `placeholder` and `{{` text filters are dropped (they removed real text such as `1000`); `lorem ipsum` is still skipped |
+| Image frames get a vision description (text-only nodes none); `type` is `image` or `text` | No model call: `needs_model` work waits for I4. `type` keeps its meaning (`text` for TEXT nodes and frames extraction could not split, `image` otherwise); `image_url` is not recorded. A frame with no text is **not listed** (its document would be a header only) | I4 adds the descriptions and lists the image-only frames then |
+| Version: none per frame; the SDK re-embeds everything every run | Figma versions the whole file, so a frame's version is the SHA-256 of what is indexed (file name, page id and name, frame name and size, `type`, the text). A new file `version` with no text change writes nothing. **Stored metadata never drifts from the version:** the file's own `version` and `lastModified` (they move on every save, and would rewrite every frame) are not stored on any point; what is stored is the file key and name, the page, the frame's id, name, size, `type` and the URL with its `node-id`, all of which the version covers (a comment's version covers its text and resolved state, file name, pinned node and `parent_key`) | Incremental per ADR-0030 decision 6. Every run reads every page (Figma gives no cheaper change signal), so a run's cost is the reads, not the embeddings |
+| Pages are fetched ten ids to a request; a batch that errors is bisected; a page that still fails falls back to the shallow page (`depth=1`) and its frames; a frame that fails is skipped (logged) | Same batching and bisection (400/408/413/5xx or no answer). A page that fails alone is read as its frames; also a body over the response cap; **a frame that fails, and any page or frame the listing discovered that Figma answers `null` for (`"nodes": {"id": null}`, missing or unrenderable), fail the listing**; a node the user named (URL `node-id`, `node_ids_include`) that Figma has no node for in a file is skipped with a warning, as the SDK skips a missing id | A skipped frame would read as deleted on the next run and lose its chunks |
+| `node_ids_include` / `node_ids_exclude` / URL `node-id` select pages (a URL's ids win; exclude applies only without an include list); `-` or `:` spelling | Same; entries naming one file are merged (node ids unioned; a bare key, or a file a `project_ids`/`team_ids` entry reaches, widens it to the whole file); URLs must be on `figma.com`/`www.figma.com`, and a branch URL (`/design/:fileKey/branch/:branchKey/...`) indexes the branch key; a named id that is a frame rather than a page is read as a container, as in the SDK; URL spellings of instance sublayers (`I5-10;20-30`) are converted per `;` segment; layers with `visible: false` are not indexed | — |
+| Text extraction stops at depth 10 | Not kept: text is read to a depth of 256 (one safety bound for every walk) and at most as many nodes as the listing page cap, so deeply nested text is indexed | The SDK's cut dropped real text of nested designs |
+| `node_types_include` / `node_types_exclude` are accepted but the TOON loader never reads them | Honoured on a page's top-level nodes (include list wins over exclude) | The SDK's argument was dead |
+| `number_of_threads`, `image_max_dimension`, `frame_spatial_order`, `scale_to_limit_threshold` | Accepted and ignored | Image rendering/scaling and thread fan-out wait for I4 or have no counterpart |
+| Not in the SDK: `project_ids`, `team_ids`, `include_comments` | **Additions.** `project_ids`/`team_ids` expand to the files of the project (`GET /v1/projects/:id/files`) or of the team's projects (`GET /v1/teams/:id/projects`); `include_comments` lists `GET /v1/files/:key/comments` as `file/{key}/comment/{id}.txt` documents (author, time, resolved state, message) with `parent_key` the frame a comment is pinned to when that frame is listed; when the selection is restricted (URL/include node ids, excluded pages) only comments pinned inside the selected pages or frames (a reply follows its thread) are listed; versioned by their text, resolved state, pinned node and `parent_key` | The Figma API gives these cheaply; the toolkit form does not offer them yet (arguments only) |
+| Auth: `X-Figma-Token` (or an OAuth bearer on the wrapper); `FigmaPy` base `https://api.figma.com/v1/` | `figma_configuration.token` as `X-Figma-Token` (sensitive header), to `api.figma.com` only: requests are built from that fixed origin and no URL in an answer is followed; the egress allowlist must name `api.figma.com` | The toolkit has no OAuth setting; none is read |
+| A 4xx/5xx is a `ToolException` with the status | 401/403 (Figma answers a bad token with 403) is an error naming the credential; 404 names the file; 429 backs off within the shared bound honouring `Retry-After`, and a wait longer than the bound (Figma's can be hours) fails the run as rate limited | Fail-closed: no failure is an empty listing |
+
+Follow-ups: I4 (vision descriptions for image frames, then list them); a form
+field for `project_ids`/`team_ids`/`include_comments`; point the agent-runtime
+`figma` family at `elitea_connectors::figma` (it keeps its own client, as the
+git families did before #1249); `api.figma.com` in the deployment egress
+allowlist (`indexEgressAllowlist`, `deploy/runtime/worker-runtime.*.json`) for
+deployments that index Figma.

@@ -63,7 +63,7 @@ const MAX_DESCRIPTION_BYTES: usize = 1_000;
 /// I2 (ADR-0030). Elitea-main's `indexcatalog.Families` and the worker's
 /// `SERVED_TOOLKIT_TYPES` list the same types; all three are tested against
 /// `index_served_families.json`.
-pub const INDEX_FAMILIES: [&str; 11] = [
+pub const INDEX_FAMILIES: [&str; 12] = [
     "ado_boards",
     "ado_plans",
     "ado_repos",
@@ -71,6 +71,7 @@ pub const INDEX_FAMILIES: [&str; 11] = [
     "artifact",
     "bitbucket",
     "confluence",
+    "figma",
     "github",
     "gitlab",
     "jira",

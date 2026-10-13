@@ -17,7 +17,8 @@
 //!   zeroized), its errors (data-free), its wire layer and its request
 //!   building and authentication — [`ado`], [`bitbucket`], [`github`], [`gitlab`];
 //!   [`artifact`], the platform's own object API; and the Atlassian pair
-//!   [`confluence`] and [`jira`] over what [`atlassian`] shares (ADR-0030 I2).
+//!   [`confluence`] and [`jira`] over what [`atlassian`] shares (ADR-0030 I2);
+//!   and [`figma`] (ADR-0030 I3).
 //! * `ContentSource` connectors over those clients (feature
 //!   `content-source`): [`source`] holds what they share (egress guard,
 //!   bounded 429 backoff, listing and fetch caps); each provider module holds
@@ -40,6 +41,8 @@ pub mod bitbucket;
 #[cfg(feature = "providers")]
 pub mod confluence;
 pub mod egress;
+#[cfg(feature = "providers")]
+pub mod figma;
 #[cfg(any(feature = "providers", feature = "content-source"))]
 mod git_id;
 #[cfg(feature = "providers")]
