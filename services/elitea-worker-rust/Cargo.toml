@@ -39,7 +39,7 @@ elitea-llm-wire = { path = "../../libs/rust/llm-wire" }
 # `preserve_order` from elsewhere changes them.
 # `toolkit-sql`: the worker serves the `sql` toolkit family (sqlx postgres +
 # mysql), which the desktop host never links.
-elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["toolkit-sql", "toolkit-pptx"] }
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["toolkit-sql", "toolkit-office"] }
 # ADR-0032: the Office families run in this process; the worker also reads
 # `elitea_office_core::health()` and drains and exits when a library call will
 # not give its thread back (production.rs, `office_core_stuck`).
@@ -124,7 +124,7 @@ harness = false
 required-features = ["graph-shaping-bench"]
 
 [dev-dependencies]
-elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support", "toolkit-sql", "toolkit-pptx"] }
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support", "toolkit-sql", "toolkit-office"] }
 # The in-process fake of elitea-vector the index handler's tests run against.
 elitea-vector-index = { path = "../../libs/rust/vector-index", features = ["test-server"] }
 http-body = "=1.1.0"

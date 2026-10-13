@@ -140,18 +140,18 @@ jobs:
       - name: Agent runtime — digests with and without preserve_order
         working-directory: libs/rust
         run: |
-          cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-pptx
-          cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql,toolkit-pptx
+          cargo test --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office
+          cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order,toolkit-sql,toolkit-office
 
       # The workspace Clippy run above uses --all-features, which turns on
       # `test-support`, and that switches off the crate's
       # deny(clippy::expect_used, panic, unwrap_used, ...) guard. Lint the
       # two production feature sets with the guard on: the worker's
-      # (`toolkit-sql`, `toolkit-pptx`) and the desktop host's (no features).
+      # (`toolkit-sql`, `toolkit-office`) and the desktop host's (no features).
       - name: Agent runtime — production feature sets (panic guard on)
         working-directory: libs/rust
         run: |
-          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-pptx -- -D warnings
+          cargo clippy --locked -p elitea-agent-runtime --all-targets --features toolkit-sql,toolkit-office -- -D warnings
           cargo clippy --locked -p elitea-agent-runtime --all-targets -- -D warnings
 
       - name: Check formatting

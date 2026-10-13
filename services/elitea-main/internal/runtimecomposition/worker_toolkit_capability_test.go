@@ -67,8 +67,8 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 45 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 45",
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 47 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 47",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	if rust.UnsupportedNames() != nil {
@@ -121,6 +121,19 @@ func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 	// pptx joined with ADR-0032 P3: the Office family runs in the Rust worker.
 	if supported, reason := rust.SupportsToolkitType("pptx", "pptx"); !supported {
 		t.Errorf("pptx has a native family and was refused: %s", reason)
+	}
+	// docx and xlsx joined with ADR-0032 P4 and have no SDK counterpart: the
+	// Rust worker serves them, the Python worker cannot, whatever import key
+	// (none) the catalogue gives them.
+	for _, toolkitType := range []string{"docx", "xlsx"} {
+		if supported, reason := rust.SupportsToolkitType(toolkitType, ""); !supported {
+			t.Errorf("%s has a native family and was refused: %s", toolkitType, reason)
+		}
+		supported, reason := python.SupportsToolkitType(toolkitType, "")
+		if supported || !strings.Contains(reason, toolkitType) ||
+			!strings.Contains(reason, "only the Rust worker serves it") {
+			t.Errorf("%s on python: supported=%v reason=%q", toolkitType, supported, reason)
+		}
 	}
 	if supported, reason := rust.SupportsToolkitType("mcp", ""); !supported {
 		t.Errorf("direct MCP runtime was refused: %s", reason)

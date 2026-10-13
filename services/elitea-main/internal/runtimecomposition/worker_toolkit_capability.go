@@ -294,6 +294,12 @@ func (c *WorkerToolkitCapability) SupportsToolkitType(
 	}
 	switch c.implementation {
 	case PythonWorkerImplementation:
+		if _, rustOnly := rustOnlyToolkitTypeNames()[toolkitType]; rustOnly {
+			// A type the SDK does not have (ADR-0032 P4: docx, xlsx): only the
+			// Rust worker serves it, whatever its import key says.
+			return false, "This deployment's agent worker does not support the " +
+				toolkitType + " toolkit; only the Rust worker serves it."
+		}
 		if importKey == "" {
 			// A runtime toolkit: artifact, memory, mcp, sandbox, vectorstore.
 			// The SDK imports these with itself, so no import of them can fail.

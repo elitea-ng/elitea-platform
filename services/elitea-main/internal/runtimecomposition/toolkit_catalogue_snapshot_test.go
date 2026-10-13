@@ -15,8 +15,8 @@ func TestPinnedToolkitCatalogueSnapshotLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load pinned toolkit catalogue snapshot: %v", err)
 	}
-	if catalogue.EntryCount() != 53 {
-		t.Errorf("entry count=%d, want 53", catalogue.EntryCount())
+	if catalogue.EntryCount() != 55 {
+		t.Errorf("entry count=%d, want 55", catalogue.EntryCount())
 	}
 	if catalogue.SDKRevision() == "" {
 		t.Error("catalogue names no SDK revision")
@@ -204,5 +204,39 @@ func TestNilCatalogueSnapshotAnswersSafely(t *testing.T) {
 	}
 	if _, _, found, err := loaded.ToolkitCatalogueEntry("absent_type"); found || err != nil {
 		t.Errorf("an absent type returned found=%v err=%v", found, err)
+	}
+}
+
+// docx and xlsx have no SDK counterpart (ADR-0032 P4): the pinned catalogue
+// holds them from the Rust-only document, with no import key, and the plain
+// SDK projection does not.
+func TestPinnedToolkitCatalogueHoldsTheRustOnlyTypes(t *testing.T) {
+	t.Parallel()
+
+	catalogue, err := runtimecomposition.LoadPinnedCurrentToolkitCatalogueSnapshot()
+	if err != nil {
+		t.Fatalf("load pinned toolkit catalogue snapshot: %v", err)
+	}
+	for toolkitType, label := range map[string]string{"docx": "DOCX", "xlsx": "XLSX"} {
+		settings, metadata, found, err := catalogue.ToolkitCatalogueEntry(toolkitType)
+		if err != nil || !found {
+			t.Fatalf("%s: found=%v err=%v", toolkitType, found, err)
+		}
+		if metadata["label"] != label {
+			t.Errorf("%s label=%v, want %s", toolkitType, metadata["label"], label)
+		}
+		if importKey, ok := catalogue.ToolkitImportKey(toolkitType); !ok || importKey != "" {
+			t.Errorf("%s import key=%q found=%v, want none", toolkitType, importKey, ok)
+		}
+		properties, _ := settings["properties"].(map[string]any)
+		if _, ok := properties["bucket_name"]; !ok {
+			t.Errorf("%s has no bucket_name setting", toolkitType)
+		}
+	}
+	types := catalogue.ToolkitTypes()
+	for i := 1; i < len(types); i++ {
+		if types[i-1] >= types[i] {
+			t.Fatalf("types are not sorted: %v", types)
+		}
 	}
 }

@@ -50,6 +50,17 @@ var pythonUnsupportedTypes = []string{
 	"kubernetes", "localgit", "yagmail",
 }
 
+// rustOnlyTypes are the types the SDK does not have and only the Rust worker
+// serves (ADR-0032 P4). A Python deployment withholds them whole.
+var rustOnlyTypes = []string{"docx", "xlsx"}
+
+// pythonWithheldTypes is every type a Python deployment serves as unavailable.
+func pythonWithheldTypes() []string {
+	all := append(append([]string(nil), pythonUnsupportedTypes...), rustOnlyTypes...)
+	sort.Strings(all)
+	return all
+}
+
 func pinnedCatalogue(t *testing.T) *runtimecomposition.CurrentToolkitCatalogueSnapshot {
 	t.Helper()
 	catalogue, err := runtimecomposition.LoadPinnedCurrentToolkitCatalogueSnapshot()
@@ -146,7 +157,7 @@ func TestEveryServedTypeHasSchemaMetadataAndCapabilityVerdict(t *testing.T) {
 	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
 	catalogue := pinnedCatalogue(t)
 	unsupported := map[string]struct{}{}
-	for _, toolkitType := range pythonUnsupportedTypes {
+	for _, toolkitType := range pythonWithheldTypes() {
 		unsupported[toolkitType] = struct{}{}
 	}
 
@@ -246,8 +257,8 @@ func TestPythonWorkerCapabilityWithholdsTheTypesItCannotImport(t *testing.T) {
 		}
 	}
 	sort.Strings(withheld)
-	if !equalStrings(withheld, pythonUnsupportedTypes) {
-		t.Errorf("withheld %v, want %v", withheld, pythonUnsupportedTypes)
+	if !equalStrings(withheld, pythonWithheldTypes()) {
+		t.Errorf("withheld %v, want %v", withheld, pythonWithheldTypes())
 	}
 
 	// The reason names the toolkit the operator has to act on, and names the
@@ -271,6 +282,7 @@ func TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize(t *testing.
 	// creatable under the rust worker instead of withheld.
 	for _, toolkitType := range []string{
 		"github", "openapi", "sharepoint", "sql", "artifact", "bitbucket", "testrail", "qtest", "pptx",
+		"docx", "xlsx",
 	} {
 		metadata := metadataOf(t, body, toolkitType)
 		if unavailable, _ := metadata["unavailable"].(bool); unavailable {
@@ -661,5 +673,47 @@ func TestPptxRustOnlyToolsAreWithheldOnAPythonDeployment(t *testing.T) {
 	}
 	if rust := unavailable("rust"); len(rust) != 0 {
 		t.Fatalf("rust deployment withholds pptx tools: %v", rust)
+	}
+}
+
+// docx and xlsx have no SDK counterpart (ADR-0032 P4): the Rust worker's tools
+// are merged into the catalogue as whole types. The editor lists every tool of
+// each; a Python deployment withholds the type, with a reason that says only
+// the Rust worker serves it; a Rust deployment offers it.
+func TestDocxAndXlsxAreRustOnlyTypes(t *testing.T) {
+	t.Parallel()
+
+	for toolkitType, want := range map[string]int{"docx": 13, "xlsx": 10} {
+		rust := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
+		properties, _ := typeSchemaOf(t, rust, toolkitType)["properties"].(map[string]any)
+		if _, ok := properties["bucket_name"]; !ok {
+			t.Errorf("%s has no bucket_name setting: %v", toolkitType, properties)
+		}
+		selected, _ := properties["selected_tools"].(map[string]any)
+		schemas, _ := selected["args_schemas"].(map[string]any)
+		if len(schemas) != want {
+			t.Errorf("%s lists %d tools, want %d", toolkitType, len(schemas), want)
+		}
+		metadata := metadataOf(t, rust, toolkitType)
+		if unavailable, _ := metadata["unavailable"].(bool); unavailable {
+			t.Errorf("%s is withheld on the Rust worker: %v", toolkitType, metadata["unavailable_reason"])
+		}
+		if withheld, _ := metadata["unavailable_tools"].([]any); len(withheld) != 0 {
+			t.Errorf("%s withholds tools on the Rust worker: %v", toolkitType, withheld)
+		}
+		if label, _ := metadata["label"].(string); label == "" {
+			t.Errorf("%s has no label", toolkitType)
+		}
+
+		python := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
+		metadata = metadataOf(t, python, toolkitType)
+		reason, _ := metadata["unavailable_reason"].(string)
+		if unavailable, _ := metadata["unavailable"].(bool); !unavailable ||
+			!contains(reason, "only the Rust worker serves it") {
+			t.Errorf("%s on python: unavailable=%v reason=%q", toolkitType, metadata["unavailable"], reason)
+		}
+		if hidden, _ := metadata["hidden"].(bool); !hidden {
+			t.Errorf("%s is offered as a tile on a Python deployment", toolkitType)
+		}
 	}
 }

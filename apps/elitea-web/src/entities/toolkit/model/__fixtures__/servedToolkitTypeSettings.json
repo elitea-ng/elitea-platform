@@ -1410,6 +1410,72 @@
     "title": "delta_lake",
     "type": "object"
   },
+  "docx": {
+    "metadata": {
+      "categories": [
+        "office"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "document",
+        "word",
+        "office automation"
+      ],
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": null,
+      "label": "DOCX",
+      "unavailable": true,
+      "unavailable_reason": "This deployment's agent worker does not support the docx toolkit; only the Rust worker serves it."
+    },
+    "name_required": true,
+    "properties": {
+      "bucket_name": {
+        "title": "Bucket Name",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_chart": {
+            "type": "object"
+          },
+          "add_heading": {
+            "type": "object"
+          },
+          "add_image": {
+            "type": "object"
+          },
+          "add_paragraph": {
+            "type": "object"
+          },
+          "add_table": {
+            "type": "object"
+          },
+          "create_document": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "add_chart",
+            "add_heading",
+            "add_image",
+            "add_paragraph",
+            "add_table",
+            "create_document"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "bucket_name"
+    ],
+    "title": "docx",
+    "type": "object"
+  },
   "elastic": {
     "metadata": {
       "check_connection_supported": false,
@@ -3542,6 +3608,72 @@
       "vectorstore_params"
     ],
     "title": "vectorstore",
+    "type": "object"
+  },
+  "xlsx": {
+    "metadata": {
+      "categories": [
+        "office"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "spreadsheet",
+        "excel",
+        "office automation"
+      ],
+      "has_function_validators": false,
+      "hidden": true,
+      "icon_url": null,
+      "label": "XLSX",
+      "unavailable": true,
+      "unavailable_reason": "This deployment's agent worker does not support the xlsx toolkit; only the Rust worker serves it."
+    },
+    "name_required": true,
+    "properties": {
+      "bucket_name": {
+        "title": "Bucket Name",
+        "type": "string"
+      },
+      "selected_tools": {
+        "args_schemas": {
+          "add_chart": {
+            "type": "object"
+          },
+          "add_sheet": {
+            "type": "object"
+          },
+          "clear_range": {
+            "type": "object"
+          },
+          "create_workbook": {
+            "type": "object"
+          },
+          "delete_sheet": {
+            "type": "object"
+          },
+          "list_sheets": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "add_chart",
+            "add_sheet",
+            "clear_range",
+            "create_workbook",
+            "delete_sheet",
+            "list_sheets"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "required": [
+      "bucket_name"
+    ],
+    "title": "xlsx",
     "type": "object"
   },
   "xray_cloud": {
