@@ -117,6 +117,26 @@ const SKIP_ENCRYPTED: &str = "encrypted";
 const SKIP_TOO_MANY_PAGES: &str = "too_many_pages";
 pub(super) const SKIP_EXTRACT_TIMEOUT: &str = "extract_timeout";
 
+/// Whether a skip makes the run `PARTLY_INDEXED`. The SDK degrades a run for
+/// lost work only (failed chunks, documents it could not read or parse,
+/// `explicitly_failed_documents`), never for documents that are not indexable
+/// by design: an unsupported type, an empty file, one excluded by a filter
+/// or a limit (`NOT_INDEXED`/`SKIPPED` in its report). So `unsupported_type`,
+/// `empty`, `too_large`, `too_many_pages` and `encrypted` leave the status
+/// `OK`; so do `no_model` and `needs_model` unless the config explicitly
+/// selected a model chunker (`proposal`, `statistical`), because the picture
+/// step that also needs a model is on by default and optional. Every other
+/// reason, an unknown one included, is a lost document.
+pub(super) fn skip_loses_document(reason: &str, explicit_model_chunker: bool) -> bool {
+    match reason {
+        SKIP_UNSUPPORTED | SKIP_EMPTY | SKIP_TOO_LARGE | SKIP_TOO_MANY_PAGES | SKIP_ENCRYPTED => {
+            false
+        }
+        SKIP_NO_MODEL | SKIP_NEEDS_MODEL => explicit_model_chunker,
+        _ => true,
+    }
+}
+
 /// What one run is given.
 pub(crate) struct IndexRun<'a> {
     pub(crate) command: &'a IndexIngestCommandV1,
@@ -383,6 +403,18 @@ pub(crate) async fn run_index(
             "`use_llm` describes standalone image files only; for these extensions (images inside documents) it has no effect"
         );
     }
+    let filter = match PathFilter::for_run(&configuration.toolkit_type, &parameters) {
+        Ok(filter) => filter,
+        Err(reason) => return Ok(failure(&parameters, &reason)),
+    };
+    let ignored = inputs::ignored_loader_keys(&parameters.chunking_config);
+    if !ignored.is_empty() {
+        tracing::warn!(
+            event = "index_loader_keys_ignored",
+            keys = ?ignored,
+            "per-page loader settings of spreadsheets, presentations and PDFs are not read by this worker"
+        );
+    }
     let bearer = run.context.model_facade_token();
     let project_id = run.context.resource_project_id().to_string();
     let source = match IndexSource::build(
@@ -409,6 +441,8 @@ pub(crate) async fn run_index(
         model: &model,
         token,
         source,
+        filter,
+        ignored_loader_keys: ignored,
         chunking: Arc::new(chunking),
         space: expected_space(run.command),
         consecutive_embedding_failures: 0,
@@ -492,6 +526,12 @@ struct Runner<'a> {
     model: &'a str,
     token: &'a VectorClaimToken,
     source: Arc<IndexSource>,
+    /// What the run keeps of the listing (whitelist, blacklist, the
+    /// family's own filters).
+    filter: PathFilter,
+    /// `.ext.key` settings of the per-page loaders that this worker does not
+    /// read; named in the summary.
+    ignored_loader_keys: Vec<String>,
     chunking: Arc<ChunkingConfig>,
     /// The embedding space the run writes into: the command's expected space,
     /// or the one the first embeddings answer fixed.
@@ -544,7 +584,6 @@ impl Runner<'_> {
         let parameters = self.parameters;
         let namespace = toolkit_namespace(&self.run.command.index_id);
         let mut prior: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
-        let filter = PathFilter::new(&parameters.whitelist, &parameters.blacklist);
         if !parameters.clean_index {
             // The listing is read where the index lives: the expected space's
             // collection when the index is stamped, every collection before
@@ -605,10 +644,27 @@ impl Runner<'_> {
             .await
             .map_err(|error| halt(&source_text(&error)))?;
         self.check_liveness()?;
+        let listed_by_source = listing.len();
         let listing: Vec<DocumentRef> = listing
             .into_iter()
-            .filter(|reference| filter.keeps(&reference.key))
+            .filter(|reference| self.filter.keeps(&reference.key))
             .collect();
+        // An empty result must not read as "everything was deleted" (the
+        // SDK's EL-6232 guard): unless the connector attests that the source
+        // is empty, a populated index (or a clean run about to wipe one)
+        // is left as it is and the run fails with the reason.
+        if listing.is_empty()
+            && (!prior.is_empty() || (parameters.clean_index && listed_by_source > 0))
+            && !(listed_by_source == 0 && (self.filter.attests_empty() || parameters.clean_index))
+        {
+            return Err(halt(&if listed_by_source == 0 {
+                "the source listing returned no documents while the index holds data from earlier runs; nothing was deleted. If the source really is empty now, run again with clean index".to_owned()
+            } else {
+                format!(
+                    "the source lists {listed_by_source} documents but the whitelist, blacklist and file-type filters kept none of them, while the index holds data from earlier runs; nothing was deleted. Check the filters"
+                )
+            }));
+        }
         if listing.len() > self.runtime.limits.max_documents {
             return Err(halt(&format!(
                 "the source holds {} documents after filtering; one run indexes at most {}",
@@ -1002,7 +1058,13 @@ impl Runner<'_> {
     /// The summary of a run that went through: the counts, the store's
     /// totals and record, the stamp.
     fn summary(self, plan: &RunPlan) -> IndexIngestSummaryV1 {
-        let partial = self.tally.failed_chunks > 0 || !self.tally.skipped.is_empty();
+        let explicit_model = self.chunking.selects_model_chunker();
+        let partial = self.tally.failed_chunks > 0
+            || self
+                .tally
+                .skipped
+                .keys()
+                .any(|reason| skip_loses_document(reason, explicit_model));
         let (status, state) = if partial {
             (
                 IndexIngestStatusV1::PartlyIndexed,
@@ -1034,6 +1096,13 @@ impl Runner<'_> {
         }
         if tally.failed_chunks > 0 {
             let _ = write!(message, " {} chunks failed to embed.", tally.failed_chunks);
+        }
+        if !self.ignored_loader_keys.is_empty() {
+            let _ = write!(
+                message,
+                " Ignored chunking settings this worker does not read: {}.",
+                self.ignored_loader_keys.join(", ")
+            );
         }
         self.with_record(status, state, message, plan)
     }
@@ -1344,6 +1413,16 @@ async fn prepare(
     let key = reference.key.clone();
     let mime = reference.mime.clone();
     let mut metadata = document.metadata;
+    // The SDK applies `chunking_tool` to the base document only; a dependent
+    // document (an attachment) is parsed by its own extension with the
+    // per-extension settings.
+    let chunking = if metadata.contains_key("parent_key") && chunking.base.chunker.is_some() {
+        let mut dependent = (*chunking).clone();
+        dependent.base.chunker = None;
+        Arc::new(dependent)
+    } else {
+        chunking
+    };
     metadata.insert("source".to_owned(), Value::String(key.clone()));
     if !document.title.is_empty() {
         metadata

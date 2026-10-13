@@ -308,7 +308,7 @@ pub(super) fn binding() -> Vec<u8> {
 
 /// Runs the pipeline against `documents` with the fixture source swapped in
 /// for the toolkit's connector.
-async fn run(
+pub(super) async fn run(
     harness: &Harness,
     documents: Vec<Document>,
     command: &IndexIngestCommandV1,
@@ -400,14 +400,16 @@ async fn a_first_run_writes_every_document_and_stamps_the_space() {
     )
     .await
     .expect("summary");
+    // An image is described by the chat model, and this harness has none:
+    // the picture step is on by default and optional, so the skip is
+    // reported but does not degrade the run.
     assert_eq!(
         summary.status,
-        IndexIngestStatusV1::PartlyIndexed as i32,
+        IndexIngestStatusV1::Ok as i32,
         "{summary:?}"
     );
     assert_eq!(summary.indexed_documents, 2);
     assert_eq!(summary.updated, 0);
-    // An image is described by the chat model, and this harness has none.
     assert_eq!(summary.skipped.get("no_model"), Some(&1));
     assert_eq!(summary.embedding_model, MODEL);
     assert_eq!(summary.embedding_dimension, 4);
@@ -982,7 +984,8 @@ async fn a_run_that_only_removes_documents_reports_zero_totals_present() {
         &harness,
         Vec::new(),
         &command(NS, Some((MODEL, 4))),
-        &parameters(false, json!({})),
+        // A source that attests it is empty (the artifact bucket).
+        &parameters(false, json!({"fixture_attests_empty": true})),
         &Always,
     )
     .await

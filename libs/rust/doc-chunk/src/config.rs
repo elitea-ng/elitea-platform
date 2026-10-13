@@ -431,6 +431,15 @@ impl ChunkingConfig {
         self.selects("proposal")
     }
 
+    /// Whether the config EXPLICITLY selects a chunker that calls a model
+    /// (`proposal` or `statistical`), as opposed to the image-file vision
+    /// step that is on by default. A run that selects one and has no model
+    /// loses every document that chunker would have handled.
+    #[must_use]
+    pub fn selects_model_chunker(&self) -> bool {
+        self.selects("proposal") || self.selects("statistical")
+    }
+
     /// Read the SDK's JSON form. `null` is the empty config.
     ///
     /// A setting of the wrong type is dropped for that key's default and

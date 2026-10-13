@@ -847,3 +847,62 @@ log-safety child process), the prompt digests in `doc-chunk/src/vision.rs`.
 
 Follow-ups: SVG only if a font-free renderer that fetches nothing is
 accepted; PR-C.
+
+## Indexing parity audit and re-pin to SDK `026e4e7`, 2026-10-13
+
+The indexing rows above were written against SDK `b5113a1` and `1b335d5`.
+**The indexing pin is now `elitea-sdk` `origin/main` `026e4e7`** (read:
+`tools/{base_indexer_toolkit,code_indexer_toolkit,non_code_indexer_toolkit,index_params}.py`,
+`runtime/tools/artifact.py`, `runtime/langchain/document_loaders/constants.py`,
+`tools/chunkers/universal_chunker.py`, `tools/ado/test_plan/test_plan_wrapper.py`).
+An audit of the live Rust indexing against it found the gaps fixed below;
+`src/indexing/parity_tests.rs` pins each.
+
+### Gaps fixed
+
+| Gap | SDK (`026e4e7`) | Rust now |
+| --- | --- | --- |
+| ado_plans `chunking_tool` `xml` (the form's default) and `''` failed the run (`unknown chunker`) | `Literal['xml', '']`; a truthy tool is resolved by `file_extension_by_chunker` (`xml` is `.xml`, parsed by extension); `''` is "no tool" | `doc-chunk` `route.rs::chunker_named`: `xml`, `html`, `csv` route as that file type, `txt` as `text`, the empty name as `universal` (by extension) |
+| Code search printed `unknown -> ...` | the loader's metadata holds `file_path`, `filename`, `source` and `commit_hash` | git families' fetched documents carry `filename`, `file_path` and `commit_hash` (SHA-256 of the file text, as the SDK; not a git commit; a key the connector set stays). `vector-index` `code_page_content` falls back to `source` when `filename` is absent (points already in an index) |
+| Artifact ignored `folder`, `include_extensions`, `skip_extensions` | list under the folder prefix; case-insensitive `fnmatch` of the lower-cased FULL key (folder included), skip first, patterns used as given (a bare `pdf` is not `*.pdf`) | same, through `connectors::source::glob::fnmatch`; the connector lists under the folder, documents stay keyed relative to it |
+| Any skip made the run `PARTLY_INDEXED` | partial only for failed chunks and lost documents (`explicitly_failed_documents`: read and parse errors); unsupported, empty, filtered, unchanged are `OK` | `OK` for `unsupported_type`, `empty`, `too_large`, `too_many_pages`, `encrypted`, and for `no_model` / `needs_model` unless `proposal` / `statistical` was chosen explicitly (the default picture step is optional). `PARTLY_INDEXED` for failed chunks, `fetch_failed`, `unreadable`, `extract_failed`, `extract_timeout`, `embedding_failed`, `model_failed`, `model_cap_exceeded`, `vision_refused` and any unclassified reason |
+| `skip_unsupported_extensions` ignored for the git families | default true: only `SUPPORTED_EXTENSIONS` (markdown, json, config, code, text sets of `universal_chunker.py`) by `os.path.splitext(...).lower()`; images and PDFs are therefore not indexed from a repository; false indexes everything | the list ported verbatim (`source.rs::SUPPORTED_EXTENSIONS`, Python `splitext` rules: `.bashrc`, `Makefile`, `.env` have no extension). False indexes everything, and there this worker extracts documents and describes pictures where the SDK decoded bytes as text. Deliberate: a repository's images are no longer described by default |
+| A wrong whitelist (or an empty listing) deleted the index | EL-6232: a loader that returns nothing over an index that has runs fails the run and keeps the data; only a toolkit that attests a complete listing may empty its index, and the artifact toolkit is the only one (whole bucket, no folder) | same rule in `pipeline.rs::plan`: nothing kept (or nothing listed) over a populated index, or a `clean_index` run whose filters kept nothing of a non-empty listing, fails the run with `nothing was deleted` and the reason, before the store is touched. A listing the connector says is empty is honoured for the artifact whole bucket, and for `clean_index`. Deliberate differences: only the all-or-nothing case is guarded (the SDK has no "most" rule), and the SDK never deletes vanished documents for non-attesting toolkits whereas this worker does for every non-empty listing (connectors fail on an incomplete listing instead of returning a short one) |
+| `chunking_tool` applied to attachments | base document only; an attachment is parsed by its own extension with the per-extension settings | a document with `parent_key` (an attachment, a comment) ignores the config's base chunker |
+
+### Deliberate differences (not bugs)
+
+- **Per-page loader settings are ignored**: Excel/CSV (`add_header_to_chunks`,
+  `header_row_number`, `sheet_name`, `evaluate_formulas`, `skip_size_check`,
+  `excel_by_sheets`, `encoding`, `raw_content`, `cleanse`), PowerPoint (`mode`,
+  `pages_per_chunk`, `extract_images`) and PDF (`extract_images`). Spreadsheets,
+  presentations and PDFs are extracted whole by the extraction sidecar and
+  chunked by the document chunkers. A run that sets any of them logs
+  `index_loader_keys_ignored` once and ends its summary message with
+  `Ignored chunking settings this worker does not read: .xlsx.sheet_name, ...`
+  (`inputs.rs::ignored_loader_keys`).
+- **No Haskell or Ruby grammar**: `.hs` and `.rb` are in the supported list and
+  indexed, but chunked by the unknown-language split (`method_name: text`), not
+  by functions (`doc-chunk/src/code.rs`). The grammars are not vendored.
+- **ADO `workers` is ignored**: concurrency is the worker's own
+  `document_concurrency`, not a per-toolkit setting.
+
+### SDK indexing changes since the old pin (`b5113a1`..`026e4e7`)
+
+| SDK change | Verdict | Reason |
+| --- | --- | --- |
+| `86911b9` EL-6232 preserve the active index when a reindex fails; staging generation with an atomic promote | **Deliberately different** | No staging generation: a document is replaced in place (its old points deleted, then the new ones written), so a failure leaves documents not yet reached untouched but a changed document whose write failed is gone until the next run (the summary lists it in `removed_document_keys`, `whole_index_record` false). The guard above is the part that protects an index from an empty or mis-filtered run |
+| `5ab729e` EL-6232 an attested empty source may empty its index | **Adopted** | See the gap table |
+| `b343df2` / `62d229f` EL-5261 resume an interrupted run by adopting its staged rows; report the reused chunk count | **Dropped** (no staging) | Documents are committed one by one; the next run's diff sees them as unchanged and skips them, so nothing is embedded twice. No adoption means no reuse report |
+| `2856e38` EL-6863 reuse adopted rows only if the current model embeds alike | **Dropped** | Nothing is adopted. The embedding-space fence already refuses a run with a different model or dimension |
+| `c274771` EL-6592 overlap the source fetch with the embed phase (loader prefetch) | **Adopted, different shape** | `document_concurrency` documents are fetched, extracted and chunked ahead of the embed/write step (`pipeline.rs::write`); there is no prefetch depth setting |
+| `ad1abcf` skip re-downloading unchanged repository files | **Adopted** | The listing's version (blob sha) is compared with the store before any fetch; an unchanged document is never downloaded. The version is the blob sha, not the SDK's content `commit_hash` |
+| `3cec816` EL-6585 a failed document must not abort the run | **Adopted** | A fetch, extract, parse or embedding failure skips that document with a closed reason; only a run-wide cause (credential, budget, five embedding failures in a row) stops the run |
+| `23ec846` report a returned index_data failure as a failure | **Adopted** | A failed run is an `ERROR` summary with the reason; a store-touching failure still carries the store's record |
+| `10aef6d` EL-6588 unreadable files mark the run partly indexed | **Adopted** | `unreadable`, `extract_failed` and `extract_timeout` degrade the run (classification above) |
+| `828a7fa` the canonical `IndexingReport` | **Partly adopted** | The summary carries the counts, the per-reason `skipped` map and the bounded per-document record; building the canonical `report` / `total` for Index History from it is Main's (`indexregistry`), changed separately |
+| `21a8ba5` EL-6584 a no-change code reindex reports "Up to date" | **Adopted, different wording** | `OK`, 0 indexed, N unchanged; no "Up to date" sentence in the worker message |
+| `aebe0b5` write `index_meta` without an embedding call | **Not applicable** | Main owns the registry; the worker never writes it |
+| `39d2931` EL-6876 a rate-limited index fails with its cause | **Adopted** | Gateway refusals fail the run with the gateway's stable code; retryable ones retry, then skip with a breaker (I4 rows above) |
+| `fe33772` serialize tool results as JSON, not a Python repr | **Not applicable** | The Rust index tools answer JSON natively |
+| `3aa5c3f` chunked read of JSON with late non-ASCII bytes; `d280da0` `user_prompt` for image vision in `read_file`; `c47ff7e` artifact `list_files` public link; `870cad0` / `e1944e7` tool groups; `11ffbc4` / `5b2f592` whitelist tooltip | **Not applicable** | Agent-side tools and UI text, not the indexing worker |

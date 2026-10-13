@@ -253,6 +253,74 @@ pub(crate) fn chunking_config(
     Ok(chunking)
 }
 
+/// The SDK's per-page loader settings (`allowed_to_override` in
+/// `document_loaders/constants.py`) that this worker does not read, per
+/// extension: spreadsheets, CSV, presentations and PDFs are extracted as a
+/// whole by the extraction sidecar and chunked by the document chunkers, so
+/// a header row, a sheet name, formula evaluation, pages per chunk or image
+/// extraction cannot be honoured. Deliberate (SOURCE_PARITY.md).
+const IGNORED_LOADER_KEYS: &[(&str, &[&str])] = &[
+    (
+        ".xlsx",
+        &[
+            "add_header_to_chunks",
+            "header_row_number",
+            "sheet_name",
+            "evaluate_formulas",
+            "skip_size_check",
+            "excel_by_sheets",
+        ],
+    ),
+    (
+        ".xls",
+        &[
+            "add_header_to_chunks",
+            "header_row_number",
+            "sheet_name",
+            "evaluate_formulas",
+            "skip_size_check",
+            "excel_by_sheets",
+        ],
+    ),
+    (
+        ".csv",
+        &[
+            "add_header_to_chunks",
+            "header_row_number",
+            "encoding",
+            "raw_content",
+            "cleanse",
+        ],
+    ),
+    (".pptx", &["mode", "pages_per_chunk", "extract_images"]),
+    (".pdf", &["extract_images"]),
+];
+
+/// The `<extension>.<key>` names of the loader settings a `chunking_config`
+/// sets that the run ignores, in a fixed order, each once.
+pub(crate) fn ignored_loader_keys(chunking_config: &Value) -> Vec<String> {
+    let Some(config) = chunking_config.as_object() else {
+        return Vec::new();
+    };
+    let mut ignored = Vec::new();
+    for (extension, keys) in IGNORED_LOADER_KEYS {
+        let block = config
+            .iter()
+            .find(|(name, _)| {
+                name.trim().to_ascii_lowercase().trim_start_matches('.')
+                    == extension.trim_start_matches('.')
+            })
+            .and_then(|(_, value)| value.as_object());
+        let Some(block) = block else { continue };
+        for key in *keys {
+            if block.get(*key).is_some_and(|value| !value.is_null()) {
+                ignored.push(format!("{extension}.{key}"));
+            }
+        }
+    }
+    ignored
+}
+
 /// The `index_data` arguments, parsed once per claim: the typed parameters
 /// and the chunking config they select. The delivery processor parses to
 /// decide which entries to fetch and hands the same value to the run.
