@@ -2,14 +2,16 @@
 //! path filters.
 //!
 //! I1 serves the five families whose connectors exist (ADR-0030 decision 7):
-//! `github`, `gitlab`, `bitbucket`, `ado_repos` and `artifact`; I2 adds
-//! `sharepoint`, `ado_wiki`, `ado_boards` and `ado_plans`. Every other
+//! `github`, `gitlab`, `bitbucket`, `ado_repos` and `artifact`; I2 adds the
+//! Atlassian pair, `confluence` and `jira` (pages or issues with their
+//! attachments and comments as dependent documents), and `sharepoint`,
+//! `ado_wiki`, `ado_boards` and `ado_plans`. Every other
 //! indexing toolkit type is refused with its name, so a run on a deployment
 //! that switched too early fails with a reason instead of indexing nothing.
 //!
 //! The family-specific `index_data` arguments (`wiql`, `plan_id`,
 //! `wiki_identifier`, `path`, …) reach the connector as the raw argument map
-//! (`IndexParameters::raw`); each connector reads its own strictly.
+//! (`IndexParameters::arguments`); each connector reads its own strictly.
 //!
 //! The whitelist and blacklist keep the SDK's rule (`CodeIndexerToolkit`):
 //! a path is kept when it matches any whitelist pattern (or the whitelist is
@@ -30,11 +32,15 @@ use elitea_connectors::artifact::client::ArtifactPlatform;
 use elitea_connectors::artifact::source::ArtifactSource;
 use elitea_connectors::bitbucket::config::BitbucketToolkitConfig;
 use elitea_connectors::bitbucket::source::BitbucketSource;
+use elitea_connectors::confluence::config::{ConfluenceConnectorConfig, ConfluenceIndexArguments};
+use elitea_connectors::confluence::source::ConfluenceSource;
 use elitea_connectors::egress::HostAllowlist;
 use elitea_connectors::github::config::GitHubToolkitConfig;
 use elitea_connectors::github::source::GitHubSource;
 use elitea_connectors::gitlab::config::GitLabToolkitConfig;
 use elitea_connectors::gitlab::source::GitLabSource;
+use elitea_connectors::jira::config::{JiraConnectorConfig, JiraIndexArguments};
+use elitea_connectors::jira::source::JiraSource;
 use elitea_connectors::sharepoint::config::SharePointIndexConfig;
 use elitea_connectors::sharepoint::source::{SharePointIndexParams, SharePointSource};
 use elitea_connectors::source::SourceLimits;
@@ -46,14 +52,17 @@ use serde_json::Value;
 use super::IndexRunLimits;
 use super::inputs::{IndexParameters, ToolkitConfiguration};
 
-/// The families this worker indexes (ADR-0030 I1, and I2's Microsoft
-/// families).
-pub(crate) const SERVED_TOOLKIT_TYPES: [&str; 9] = [
+/// The families this worker indexes (ADR-0030 I1 and I2); the Go
+/// `indexcatalog.Families` and agent-runtime `INDEX_FAMILIES` list the same
+/// types (tested against `index_served_families.json`).
+pub(crate) const SERVED_TOOLKIT_TYPES: [&str; 11] = [
     "github",
     "gitlab",
     "bitbucket",
     "ado_repos",
     "artifact",
+    "confluence",
+    "jira",
     "sharepoint",
     "ado_wiki",
     "ado_boards",
@@ -80,6 +89,8 @@ pub(crate) enum IndexSource {
     Bitbucket(BitbucketSource),
     AdoRepos(AdoReposSource),
     Artifact(ArtifactSource),
+    Confluence(ConfluenceSource),
+    Jira(JiraSource),
     SharePoint(SharePointSource),
     AdoWiki(AdoWikiSource),
     AdoBoards(AdoBoardsSource),
@@ -173,9 +184,25 @@ impl IndexSource {
                     .map_err(|e| refused(&e))?;
                 Self::Artifact(source.with_limits(source_limits))
             }
+            "confluence" => {
+                let config = ConfluenceConnectorConfig::parse(settings).map_err(|e| refused(&e))?;
+                let arguments = ConfluenceIndexArguments::parse(&parameters.arguments)
+                    .map_err(|e| refused(&e))?;
+                let source = ConfluenceSource::new(config, arguments, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::Confluence(source.with_limits(source_limits))
+            }
+            "jira" => {
+                let config = JiraConnectorConfig::parse(settings).map_err(|e| refused(&e))?;
+                let arguments =
+                    JiraIndexArguments::parse(&parameters.arguments).map_err(|e| refused(&e))?;
+                let source = JiraSource::new(config, arguments, allowlist.clone(), transport)
+                    .map_err(|e| refused(&e))?;
+                Self::Jira(source.with_limits(source_limits))
+            }
             "sharepoint" => {
                 let config = SharePointIndexConfig::parse(settings).map_err(|e| refused(&e))?;
-                let params = SharePointIndexParams::from_arguments(&parameters.raw)
+                let params = SharePointIndexParams::from_arguments(&parameters.arguments)
                     .map_err(|e| refused(&e))?;
                 let source = SharePointSource::new(config, params, allowlist.clone(), transport)
                     .map_err(|e| refused(&e))?;
@@ -183,15 +210,15 @@ impl IndexSource {
             }
             "ado_wiki" => {
                 let config = AdoToolkitConfig::parse(settings).map_err(|e| refused(&e))?;
-                let params =
-                    AdoWikiIndexParams::from_arguments(&parameters.raw).map_err(|e| refused(&e))?;
+                let params = AdoWikiIndexParams::from_arguments(&parameters.arguments)
+                    .map_err(|e| refused(&e))?;
                 let source = AdoWikiSource::new(config, params, allowlist.clone(), transport)
                     .map_err(|e| refused(&e))?;
                 Self::AdoWiki(source.with_limits(source_limits))
             }
             "ado_boards" => {
                 let config = AdoToolkitConfig::parse(settings).map_err(|e| refused(&e))?;
-                let params = AdoBoardsIndexParams::from_arguments(&parameters.raw)
+                let params = AdoBoardsIndexParams::from_arguments(&parameters.arguments)
                     .map_err(|e| refused(&e))?;
                 let source = AdoBoardsSource::new(config, params, allowlist.clone(), transport)
                     .map_err(|e| refused(&e))?;
@@ -199,7 +226,7 @@ impl IndexSource {
             }
             "ado_plans" => {
                 let config = AdoToolkitConfig::parse(settings).map_err(|e| refused(&e))?;
-                let params = AdoPlansIndexParams::from_arguments(&parameters.raw)
+                let params = AdoPlansIndexParams::from_arguments(&parameters.arguments)
                     .map_err(|e| refused(&e))?;
                 let source = AdoPlansSource::new(config, params, allowlist.clone(), transport)
                     .map_err(|e| refused(&e))?;
@@ -242,6 +269,8 @@ impl IndexSource {
             Self::Bitbucket(source) => source.list().await,
             Self::AdoRepos(source) => source.list().await,
             Self::Artifact(source) => source.list().await,
+            Self::Confluence(source) => source.list().await,
+            Self::Jira(source) => source.list().await,
             Self::SharePoint(source) => source.list().await,
             Self::AdoWiki(source) => source.list().await,
             Self::AdoBoards(source) => source.list().await,
@@ -266,6 +295,8 @@ impl IndexSource {
             Self::Bitbucket(source) => source.fetch(key).await,
             Self::AdoRepos(source) => source.fetch(key).await,
             Self::Artifact(source) => source.fetch(key).await,
+            Self::Confluence(source) => source.fetch(key).await,
+            Self::Jira(source) => source.fetch(key).await,
             Self::SharePoint(source) => source.fetch(key).await,
             Self::AdoWiki(source) => source.fetch(key).await,
             Self::AdoBoards(source) => source.fetch(key).await,
@@ -324,6 +355,26 @@ impl PathFilter {
 mod tests {
     use super::*;
 
+    /// The served families have one source of truth, shared with the Go
+    /// `indexcatalog` and the agent-runtime tests (review round 1).
+    #[test]
+    fn the_served_families_match_the_shared_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../libs/rust/agent-runtime/src/toolkits/families/index_served_families.json");
+        let fixture: Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("the fixture is readable"))
+                .expect("the fixture is JSON");
+        let expected: Vec<&str> = fixture["families"]
+            .as_array()
+            .expect("families")
+            .iter()
+            .map(|family| family.as_str().expect("a name"))
+            .collect();
+        let mut served: Vec<&str> = SERVED_TOOLKIT_TYPES.into_iter().collect();
+        served.sort_unstable();
+        assert_eq!(served, expected);
+    }
+
     #[test]
     fn the_filter_keeps_the_sdk_rule() {
         let filter = PathFilter::new(
@@ -343,8 +394,8 @@ mod tests {
     #[test]
     fn an_unserved_toolkit_type_is_refused_with_its_name() {
         let configuration = ToolkitConfiguration {
-            toolkit_type: "confluence".to_owned(),
-            toolkit_name: "wiki".to_owned(),
+            toolkit_type: "figma".to_owned(),
+            toolkit_name: "designs".to_owned(),
             settings: serde_json::Map::new(),
         };
         let parameters = IndexParameters {
@@ -355,7 +406,7 @@ mod tests {
             branch: None,
             whitelist: Vec::new(),
             blacklist: Vec::new(),
-            raw: serde_json::Map::new(),
+            arguments: serde_json::Map::new(),
         };
         let platform = PlatformAccess {
             origin: "https://platform",
@@ -377,7 +428,108 @@ mod tests {
         )
         .err()
         .expect("refused");
+        assert!(error.0.contains("figma"), "{error}");
+        assert!(error.0.contains("ADR-0030 I1/I2"), "{error}");
         assert!(error.0.contains("confluence"), "{error}");
-        assert!(error.0.contains("ADR-0030 I1"), "{error}");
+        assert!(error.0.contains("ado_plans"), "{error}");
+    }
+
+    /// The Atlassian families are built from the toolkit settings and the
+    /// `index_data` arguments; a refused configuration or argument names the
+    /// toolkit type and the connector's data-free reason.
+    #[test]
+    fn the_atlassian_families_are_built_or_refused_with_a_reason() {
+        let platform = PlatformAccess {
+            origin: "https://platform",
+            bearer: "pat",
+            project_id: "1",
+        };
+        let transport: Arc<dyn Transport> = Arc::new(
+            elitea_connectors::reqwest012::ReqwestTransport::hardened(
+                &elitea_connectors::github::client::CLIENT_POLICY,
+            )
+            .expect("client"),
+        );
+        let build = |kind: &str, settings: Value, arguments: Value| {
+            let configuration = ToolkitConfiguration {
+                toolkit_type: kind.to_owned(),
+                toolkit_name: "kit".to_owned(),
+                settings: settings.as_object().cloned().unwrap_or_default(),
+            };
+            let parameters = IndexParameters {
+                index_name: "x".to_owned(),
+                clean_index: false,
+                chunking_tool: None,
+                chunking_config: Value::Null,
+                branch: None,
+                whitelist: Vec::new(),
+                blacklist: Vec::new(),
+                arguments: arguments.as_object().cloned().unwrap_or_default(),
+            };
+            IndexSource::build(
+                &configuration,
+                &parameters,
+                &platform,
+                &HostAllowlist::parse(Some("*")),
+                Arc::clone(&transport),
+                IndexRunLimits::default(),
+            )
+        };
+        let confluence = serde_json::json!({
+            "space": "DOCS",
+            "confluence_configuration": {"base_url": "https://acme.atlassian.net/wiki", "token": "t"},
+        });
+        assert!(matches!(
+            build(
+                "confluence",
+                confluence.clone(),
+                serde_json::json!({"include_attachments": true})
+            ),
+            Ok(IndexSource::Confluence(_))
+        ));
+        // No space and nothing selecting pages: refused before any request.
+        let error = build(
+            "confluence",
+            serde_json::json!({"confluence_configuration": {"base_url": "https://acme.atlassian.net", "token": "t"}}),
+            serde_json::json!({}),
+        )
+        .err()
+        .expect("refused");
+        assert!(
+            error
+                .0
+                .starts_with("the confluence toolkit cannot be indexed:"),
+            "{error}"
+        );
+        assert!(error.0.contains("`space`"), "{error}");
+        // A bad argument is refused with the connector's reason.
+        let error = build(
+            "confluence",
+            confluence,
+            serde_json::json!({"content_format": "pdf"}),
+        )
+        .err()
+        .expect("refused");
+        assert!(error.0.contains("configuration is invalid"), "{error}");
+
+        let jira = serde_json::json!({
+            "jira_configuration": {"base_url": "https://jira.corp.example", "username": "u", "api_key": "k"},
+        });
+        assert!(matches!(
+            build(
+                "jira",
+                jira,
+                serde_json::json!({"jql": "project = X", "include_comments": true})
+            ),
+            Ok(IndexSource::Jira(_))
+        ));
+        let error = build(
+            "jira",
+            serde_json::json!({"jira_configuration": {"base_url": "http://jira.corp.example", "token": "t"}}),
+            serde_json::json!({}),
+        )
+        .err()
+        .expect("plain http refused");
+        assert!(error.0.contains("plain HTTP"), "{error}");
     }
 }

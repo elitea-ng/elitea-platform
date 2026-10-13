@@ -32,6 +32,8 @@ pub(crate) mod source;
 pub(crate) mod tools;
 
 #[cfg(test)]
+mod atlassian_tests;
+#[cfg(test)]
 mod microsoft_family_tests;
 #[cfg(test)]
 mod tests;

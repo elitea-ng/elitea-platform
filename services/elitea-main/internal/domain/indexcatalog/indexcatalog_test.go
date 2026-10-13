@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"testing"
 )
 
@@ -56,5 +58,28 @@ func TestFamilyAndToolNames(t *testing.T) {
 	}
 	if len(ToolNames) != 5 {
 		t.Fatalf("five index tools are served, not %d", len(ToolNames))
+	}
+}
+
+// The served-family list has one source of truth, read by the Rust runtime
+// and worker tests too: a family added to one list and not the others fails
+// here or there (review round 1).
+func TestFamiliesAgreeWithTheSharedServedFamiliesFixture(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join("..", "..", "..", "..", "..", "libs", "rust", "agent-runtime", "src", "toolkits", "families", "index_served_families.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the shared families fixture must be readable: %v", err)
+	}
+	var fixture struct {
+		Families []string `json:"families"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	got := append([]string(nil), Families...)
+	sort.Strings(got)
+	if !slices.Equal(got, fixture.Families) {
+		t.Fatalf("Families = %v, fixture = %v", got, fixture.Families)
 	}
 }

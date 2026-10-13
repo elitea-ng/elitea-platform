@@ -36,16 +36,16 @@ use crate::transport::openai_compatible_facade::{
 };
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
-const NS: &str = "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b";
+pub(super) const NS: &str = "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b";
 const TOKEN: &str = "elvc_0123456789abcdef0123456789abcdef0123456789a";
-const MODEL: &str = "text-embedding-3-small";
+pub(super) const MODEL: &str = "text-embedding-3-small";
 
 /// A gateway that answers every embeddings request with a deterministic
 /// vector per input (its byte sum), and counts the calls. `fail_with` makes
 /// it answer with that status instead: for every request, or only for a
 /// request whose inputs contain `fail_marker`.
-struct ScriptedEmbeddings {
-    calls: AtomicUsize,
+pub(super) struct ScriptedEmbeddings {
+    pub(super) calls: AtomicUsize,
     dimension: usize,
     fail_with: Option<StatusCode>,
     fail_marker: Option<&'static str>,
@@ -168,16 +168,16 @@ fn deadline_after(calls: usize) -> (i64, impl Fn() -> i64) {
     })
 }
 
-struct Harness {
-    runtime: IndexIngestRuntime,
-    fake: FakeVector,
-    embeddings: Arc<ScriptedEmbeddings>,
-    token: VectorClaimToken,
-    context: ClaimScopedEliteaContext,
+pub(super) struct Harness {
+    pub(super) runtime: IndexIngestRuntime,
+    pub(super) fake: FakeVector,
+    pub(super) embeddings: Arc<ScriptedEmbeddings>,
+    pub(super) token: VectorClaimToken,
+    pub(super) context: ClaimScopedEliteaContext,
     _server: tokio::task::JoinHandle<()>,
 }
 
-async fn harness(dimension: usize, fail_with: Option<StatusCode>) -> Harness {
+pub(super) async fn harness(dimension: usize, fail_with: Option<StatusCode>) -> Harness {
     harness_failing(dimension, fail_with, None).await
 }
 
@@ -262,7 +262,7 @@ fn document(key: &str, version: &str, text: &str) -> Document {
     }
 }
 
-fn command(index_id: &str, expected: Option<(&str, u32)>) -> IndexIngestCommandV1 {
+pub(super) fn command(index_id: &str, expected: Option<(&str, u32)>) -> IndexIngestCommandV1 {
     let (model, dimension) = expected.unwrap_or(("", 0));
     IndexIngestCommandV1 {
         toolkit_configuration_entry_id: "c".into(),
@@ -291,7 +291,7 @@ fn parameters(clean: bool, extra: Value) -> Vec<u8> {
     map.to_string().into_bytes()
 }
 
-fn binding() -> Vec<u8> {
+pub(super) fn binding() -> Vec<u8> {
     json!({"schema_version": "v2", "model_name": MODEL, "resolved_model_group": MODEL, "route": "raw"})
         .to_string()
         .into_bytes()
@@ -358,7 +358,7 @@ pub(super) fn take_fixture_source() -> Option<IndexSource> {
     FIXTURE_SOURCE.with(|slot| slot.lock().expect("lock").take().map(IndexSource::Fixture))
 }
 
-async fn stored(harness: &Harness) -> Vec<pb::IndexedDocument> {
+pub(super) async fn stored(harness: &Harness) -> Vec<pb::IndexedDocument> {
     harness
         .runtime
         .vector

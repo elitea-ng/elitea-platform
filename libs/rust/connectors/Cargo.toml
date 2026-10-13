@@ -52,7 +52,8 @@ url = "2.5.8"
 base64 = { version = "0.23.1", optional = true }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"], optional = true }
 elitea-content-source = { path = "../content-source", optional = true }
-# Bounded concurrency over a listing's per-item reads (`buffer_unordered`).
+# Bounded concurrency over a listing's per-item reads and per-issue comment
+# listings (`buffer_unordered`; ADR-0030 I2).
 futures-util = { version = "0.3.34", default-features = false, features = ["std"], optional = true }
 # RS256 for the GitHub App JWT only; it is not a TLS provider.
 ring = { version = "0.17.14", optional = true }

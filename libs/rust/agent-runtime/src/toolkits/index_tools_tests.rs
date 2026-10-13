@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
 use super::families::index_tools::{
-    I1_INDEX_FAMILIES, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
+    INDEX_FAMILIES, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
     IndexToolFailure, IndexToolHost, IndexToolName, IndexToolSupport, IndexToolsWithheld,
     MAX_CATALOG_ENTRIES, SharedIndexCatalog, all_index_tools, build_index_toolset, doctype_for,
     is_index_family,
@@ -143,7 +143,7 @@ const INDEX_TOOL_NAMES: [&str; 5] = [
 #[test]
 fn the_index_tools_keep_the_sdk_schema_contract_in_every_i1_family() {
     let (authority, _) = lend(false);
-    for family in I1_INDEX_FAMILIES {
+    for family in INDEX_FAMILIES {
         let tools = all_index_tools("kit", family, &authority);
         let served: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
         assert_eq!(served, INDEX_TOOL_NAMES, "{family}");
@@ -163,7 +163,18 @@ fn names_doctypes_and_read_only_follow_the_sdk() {
     }
     assert_eq!(doctype_for("artifact"), "document");
     assert!(is_index_family("artifact"));
-    assert!(!is_index_family("jira"), "jira waits for I2");
+    for family in [
+        "confluence",
+        "jira",
+        "sharepoint",
+        "ado_wiki",
+        "ado_boards",
+        "ado_plans",
+    ] {
+        assert_eq!(doctype_for(family), "document");
+        assert!(is_index_family(family), "{family} is indexed since I2");
+    }
+    assert!(!is_index_family("figma"), "figma waits for I3");
     for tool in IndexToolName::ALL {
         assert_eq!(IndexToolName::parse(tool.as_str()), Some(tool));
         assert_eq!(tool.is_read_only(), tool != IndexToolName::RemoveIndex);
@@ -984,4 +995,25 @@ fn withheld_reasons_name_the_cause() {
             .authority()
             .is_none()
     );
+}
+
+/// The served families have one source of truth, shared with the Go
+/// `indexcatalog` tests and the worker's: a list that drifts fails.
+#[test]
+fn the_served_families_match_the_shared_fixture() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("families/index_served_families.json"))
+            .expect("the fixture is JSON");
+    let expected: Vec<&str> = fixture["families"]
+        .as_array()
+        .expect("families")
+        .iter()
+        .map(|family| family.as_str().expect("a name"))
+        .collect();
+    let mut served: Vec<&str> = INDEX_FAMILIES.into_iter().collect();
+    served.sort_unstable();
+    assert_eq!(served, expected);
+    for family in &expected {
+        assert!(is_index_family(family), "{family}");
+    }
 }
