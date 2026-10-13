@@ -170,7 +170,6 @@ export function IndexesContainer(props: IndexesContainerProps): ReactNode {
       skipAutoSelection.current = false;
       return;
     }
-
     // Follow the index the user created or acted on, not the list order.
     const next = pickIndexSelection(currentIndex, overlaidIndexesList);
     if (next) setCurrentIndex(next);
@@ -186,10 +185,10 @@ export function IndexesContainer(props: IndexesContainerProps): ReactNode {
    * `currentIndex` is local state written at selection time, so every later
    * change to that row — a progress patch, a terminal state, and since issue
    * 940/A5 the `index_configuration` a successful Save writes — reached the
-   * LIST and not the detail panel. The auto-select effect above happens to
-   * re-select the first valid row when the overlay changes, which hid the
-   * gap for the common single-index case, but it bails out while the list is
-   * refetching — which is exactly when a just-saved configuration is in
+   * LIST and not the detail panel. The auto-select effect above now adopts
+   * the listed row whenever it differs from the selection, but it bails out
+   * while the list is refetching, which is exactly when a just-saved
+   * configuration is in
    * flight. Measured: "Save & Reindex" stored the new configuration and then
    * dispatched the run with the one from before the save, because
    * `useToolkitChat`'s `resolveRunInputVariables` reads
@@ -207,10 +206,10 @@ export function IndexesContainer(props: IndexesContainerProps): ReactNode {
     if (currentIndex && currentIndex.id === NEW_INDEX_ID) {
       return mergeIndexesOverlay(indexesList, [currentIndex, ...tempIndexes], indexPatches);
     }
-    if (currentIndex && currentIndex.id !== NEW_INDEX_ID) {
+    if (selectedIndex && selectedIndex.id !== NEW_INDEX_ID) {
       const patchedList = indexesList.map((item) => ({
         ...item,
-        metadata: { ...item.metadata, ...(item.id === currentIndex.id ? { state: currentIndex.metadata['state'] } : {}) },
+        metadata: { ...item.metadata, ...(item.id === selectedIndex.id ? { state: selectedIndex.metadata['state'] } : {}) },
       }));
       return mergeIndexesOverlay(patchedList, tempIndexes, indexPatches);
     }
@@ -222,7 +221,6 @@ export function IndexesContainer(props: IndexesContainerProps): ReactNode {
       setCurrentIndex((prev) => {
         if (prev?.id === NEW_INDEX_ID && prev.metadata['state'] === 'in_progress') {
           addTempLocalIndex({ ...prev, id: crypto.randomUUID() });
-          skipAutoSelection.current = true;
         }
         if (prev?.id === NEW_INDEX_ID && index.id === NEW_INDEX_ID) detailsKeyRef.current += 1;
         return index;

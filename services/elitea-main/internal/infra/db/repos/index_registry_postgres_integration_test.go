@@ -211,7 +211,7 @@ func TestIndexRegistryListIsScopedAndNewestCreatedFirst(t *testing.T) {
 		"c": "2026-01-02T00:00:00Z",
 		"b": "2026-01-03T00:00:00Z",
 	} {
-		if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.index_registry SET created_at = $1::timestamptz WHERE name = $2 AND toolkit_id = 19`, ts, name); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.index_registry SET created_at = $1::timestamptz WHERE name = $2 AND toolkit_id = 19 AND project_id = 1`, ts, name); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -220,7 +220,7 @@ func TestIndexRegistryListIsScopedAndNewestCreatedFirst(t *testing.T) {
 		t.Fatalf("list = %+v err=%v", rows, err)
 	}
 	// Equal created_at falls back to index_id DESC.
-	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.index_registry SET created_at = '2026-01-01T00:00:00Z' WHERE toolkit_id = 19`); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.index_registry SET created_at = '2026-01-01T00:00:00Z' WHERE toolkit_id = 19 AND project_id = 1`); err != nil {
 		t.Fatal(err)
 	}
 	tied, err := repo.List(ctx, 1, 19)

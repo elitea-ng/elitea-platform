@@ -1,7 +1,7 @@
 import { ThemeProvider } from '@mui/material/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from '@tanstack/react-router';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -181,6 +181,27 @@ describe('IndexesContainer', () => {
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent('older-index');
     expect(dialog).not.toHaveTextContent('newest-index');
+  });
+
+  it('a selected in-progress row shows completed once the list reports it, without re-selecting', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/index_meta/prompt_lib/proj-1/tk-1`, () =>
+        HttpResponse.json([{ id: '1', metadata: { collection: 'still-going', state: 'in_progress' } }]),
+      ),
+    );
+    const seen: string[] = [];
+    const useToolkitChat = (params: UseToolkitChatParams): UseToolkitChatResult => {
+      seen.push(String(params.index?.metadata['state']));
+      return toolkitChatResult;
+    };
+    const user = userEvent.setup();
+    renderContainer({ useToolkitChat });
+    await user.click(await screen.findByText('still-going'));
+    expect(seen.at(-1)).toBe('in_progress');
+    act(() => {
+      useIndexesStore.getState().updateIndexDepMeta('1', { state: 'completed' });
+    });
+    await waitFor(() => expect(seen.at(-1)).toBe('completed'));
   });
 
   it('clicking "add index" selects a new local New Index row and switches to create view', async () => {

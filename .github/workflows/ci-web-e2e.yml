@@ -1406,7 +1406,8 @@ jobs:
           CI: "true"
           STANDALONE_SKIP_BUILD: "1"
           STANDALONE_WORKER: rust
-          ELITEA_INDEXING_RUNTIME: rust
+          # The indexing runtime (ELITEA_INDEXING_RUNTIME=rust) is chosen by the
+          # overlay deploy/docker-compose.standalone-rust-agent.yml, not here.
           INDEX_STREAM_PROJECT: elitea-indexstream-rust-ci
           INDEX_STREAM_PORT: "8087"
           INDEX_STREAM_MOCK_PORT: "8091"

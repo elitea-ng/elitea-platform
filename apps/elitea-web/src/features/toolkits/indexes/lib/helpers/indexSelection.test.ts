@@ -29,15 +29,41 @@ describe('pickIndexSelection', () => {
     expect(pickIndexSelection(current, [newest, fresh])).toBe(fresh);
   });
 
-  it('moves from the create stub to the row the user just created, wherever it sorts', () => {
-    const stub = row(NEW_INDEX_ID, 'older', { state: 'in_progress' });
+  it('adopts the fresh row when an in-progress selection completed (no history yet)', () => {
+    const current = row('r', 'run', { state: 'in_progress' });
+    const fresh = row('r', 'run', { state: 'completed', indexed: 2 });
+    expect(pickIndexSelection(current, [fresh])).toBe(fresh);
+    expect(pickIndexSelection(fresh, [fresh])).toBeNull();
+  });
+
+  it('moves from a started create stub to the row the user just created, wherever it sorts', () => {
+    const stub = row(NEW_INDEX_ID, 'older', { state: 'in_progress', task_id: 't1' });
     expect(pickIndexSelection(stub, [newest, older])).toBe(older);
   });
 
-  it('keeps the create stub while its index is not finished or not listed', () => {
-    const stub = row(NEW_INDEX_ID, 'mine', { state: 'in_progress' });
+  it('prefers the created index id over the name when the stub has one', () => {
+    const stub = row(NEW_INDEX_ID, 'dup', { task_id: 't1', index_id: 'b' });
+    const a = row('a', 'dup', { indexed: 1 });
+    const b = row('b', 'dup', { state: 'completed', indexed: 1 });
+    expect(pickIndexSelection(stub, [a, b])).toBe(b);
+  });
+
+  it('does not let an existing finished row steal a fresh or rejected stub', () => {
+    const existing = row('e', 'New Index', { state: 'completed', indexed: 1 });
+    expect(pickIndexSelection(row(NEW_INDEX_ID, 'New Index', { state: '' }), [existing])).toBeNull();
+    expect(pickIndexSelection(row(NEW_INDEX_ID, 'New Index', { state: 'failed' }), [existing])).toBeNull();
+  });
+
+  it('moves a started stub to its created row when the run failed', () => {
+    const stub = row(NEW_INDEX_ID, 'mine', { state: 'in_progress', task_id: 't1' });
+    const failed = row('m', 'mine', { state: 'failed' });
+    expect(pickIndexSelection(stub, [newest, failed])).toBe(failed);
+  });
+
+  it('keeps the create stub while its index is not terminal or not listed', () => {
+    const stub = row(NEW_INDEX_ID, 'mine', { state: 'in_progress', task_id: 't1' });
     expect(pickIndexSelection(stub, [newest, older])).toBeNull();
-    expect(pickIndexSelection(stub, [newest, row('m', 'mine')])).toBeNull();
+    expect(pickIndexSelection(stub, [newest, row('m', 'mine', { state: 'in_progress' })])).toBeNull();
   });
 
   it('keeps a nameless create stub', () => {
