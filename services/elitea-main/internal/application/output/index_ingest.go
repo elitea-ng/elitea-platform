@@ -190,6 +190,12 @@ type IndexIngestSummary struct {
 	// make its per-document rows exactly that list. It is never inferred from
 	// counts; when set, TotalDocuments equals the number of Documents.
 	WholeIndexRecord bool
+	// UnchangedDocuments is the worker's exact count of documents the run
+	// listed and found already indexed. UnchangedPresent is its explicit
+	// presence: an older worker does not send it, and the report then omits
+	// the unchanged line rather than guess.
+	UnchangedPresent   bool
+	UnchangedDocuments uint64
 }
 
 const (
@@ -281,6 +287,14 @@ func (s IndexIngestSummary) validateTyped() error {
 	if !s.TotalsPresent && (s.TotalDocuments != 0 || s.TotalChunks != 0 || s.WholeIndexRecord) {
 		return ErrInvalidIndexIngestOutput
 	}
+	// Unchanged documents are documents the store holds: the count needs known
+	// totals and cannot exceed them.
+	if s.UnchangedPresent && (!s.TotalsPresent || s.UnchangedDocuments > s.TotalDocuments) {
+		return ErrInvalidIndexIngestOutput
+	}
+	if !s.UnchangedPresent && s.UnchangedDocuments != 0 {
+		return ErrInvalidIndexIngestOutput
+	}
 	if s.SkippedJSON != "" {
 		var decoded map[string]uint64
 		if err := json.Unmarshal([]byte(s.SkippedJSON), &decoded); err != nil || len(decoded) == 0 {
@@ -326,7 +340,7 @@ func (s IndexIngestSummary) SettlementOutcome() executionapp.SettlementOutcome {
 func (s IndexIngestSummary) HasTypedResult() bool {
 	return s.IndexedDocuments != 0 || s.IndexedChunks != 0 || s.FailedChunks != 0 ||
 		s.SkippedJSON != "" || s.EmbeddingModel != "" ||
-		s.TotalsPresent || s.WholeIndexRecord
+		s.TotalsPresent || s.WholeIndexRecord || s.UnchangedPresent
 }
 
 func (s IndexIngestSummary) Validate() error {

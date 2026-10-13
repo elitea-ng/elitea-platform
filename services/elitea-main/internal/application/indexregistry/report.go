@@ -121,14 +121,10 @@ func cancelledRecord() runRecord { return failureRecord(statusCancelled, cancell
 
 // resultRecord is the record of a run whose typed result was applied.
 //
-// Unchanged is derived, because the worker's summary has no unchanged count:
-// the index's documents after the run (TotalDocuments) minus the documents
-// this run wrote minus every document the run counted under a skip reason. A
-// skipped document may still be in the store (its previous version), so it is
-// subtracted too; the number can therefore under-state the unchanged
-// documents, but never counts one twice, and is never negative. It is only
-// derived for a run that finished listing and reported the store's totals; a
-// failed or cancelled run says nothing about what was left alone.
+// Unchanged is the worker's exact count of listed-but-unchanged documents
+// (IndexIngestSummary.UnchangedPresent). A worker that does not report it (an
+// older one) leaves the line out: nothing is derived from the totals. A run
+// that did not complete says nothing about what was left alone.
 func resultRecord(summary outputapp.IndexIngestSummary, status string) runRecord {
 	indexed := summary.Indexed
 	if summary.HasTypedResult() {
@@ -142,35 +138,28 @@ func resultRecord(summary outputapp.IndexIngestSummary, status string) runRecord
 	}
 	switch status {
 	case statusError:
-		record.Errors = []string{summary.Message}
+		if summary.Message != "" {
+			record.Errors = []string{summary.Message}
+		}
 	case statusCancelled:
 		record.Errors = []string{cancelledMessage}
 	}
-	if !record.failedRun() && summary.TotalsPresent {
-		accounted := indexed
-		for _, count := range record.Skipped {
-			accounted += count
-		}
-		if summary.TotalDocuments > accounted {
-			record.Unchanged = summary.TotalDocuments - accounted
-		}
+	if !record.failedRun() && summary.UnchangedPresent {
+		record.Unchanged = summary.UnchangedDocuments
 	}
 	return record
-}
-
-// lastRecord is the newest history entry's record, when it has one. It decodes
-// through JSON: an entry read back from the database holds generic values.
-func lastRecord(history []map[string]any) (runRecord, bool) {
-	if len(history) == 0 {
-		return runRecord{}, false
-	}
-	return recordOf(history[len(history)-1])
 }
 
 func recordOf(entry map[string]any) (runRecord, bool) {
 	raw, ok := entry[runRecordKey]
 	if !ok || raw == nil {
 		return runRecord{}, false
+	}
+	switch typed := raw.(type) {
+	case runRecord:
+		return typed, typed.Status != ""
+	case *runRecord:
+		return *typed, typed.Status != ""
 	}
 	encoded, err := json.Marshal(raw)
 	if err != nil {
@@ -248,7 +237,12 @@ func (r runRecord) Report() Report {
 			continue
 		}
 		spec, known := groupForSkipReason(reason)
+		// An unknown token is keyed apart from every known group, so it can
+		// never be merged into one whatever its text.
 		key := spec.kind + "/" + spec.reason
+		if !known {
+			key = "?" + key
+		}
 		if at, ok := index[key]; ok {
 			groups[spec.kind][at].Count += count
 		} else {
@@ -262,9 +256,11 @@ func (r runRecord) Report() Report {
 		counts[spec.kind] += count
 	}
 	if r.Unchanged > 0 {
-		groups[kindSkipped] = append(groups[kindSkipped], ReportGroup{
+		// First, as the SDK lists it.
+		unchanged := ReportGroup{
 			Reason: "unchanged", Label: "Already indexed (unchanged)", Count: r.Unchanged, Items: []string{}, Counted: false,
-		})
+		}
+		groups[kindSkipped] = append([]ReportGroup{unchanged}, groups[kindSkipped]...)
 	}
 
 	categories := make([]ReportCategory, 0, len(reportKindOrder))
@@ -301,20 +297,49 @@ func (r runRecord) Report() Report {
 	}
 }
 
-// expandEntry is a history entry as served: the stored record becomes the
-// canonical report. The stored entry is not changed.
-func expandEntry(entry map[string]any) map[string]any {
-	record, ok := recordOf(entry)
-	if !ok {
+// Slim is the report without what the web client defaults and without the
+// empty categories: the form history entries take in a list response, which
+// repeats one per run. normalizeIndexingReport renders it the same.
+func (r Report) Slim() map[string]any {
+	categories := make([]map[string]any, 0, len(r.Categories))
+	for _, category := range r.Categories {
+		if category.Count == 0 && len(category.Groups) == 0 {
+			continue
+		}
+		groups := make([]map[string]any, 0, len(category.Groups))
+		for _, group := range category.Groups {
+			slim := map[string]any{"reason": group.Reason, "label": group.Label, "count": group.Count, "counted": group.Counted}
+			if group.Code != "" {
+				slim["code"] = group.Code
+			}
+			groups = append(groups, slim)
+		}
+		categories = append(categories, map[string]any{"kind": category.Kind, "count": category.Count, "groups": groups})
+	}
+	return map[string]any{
+		"version": r.Version, "status": r.Status, "totals": r.Totals, "categories": categories,
+		"errors": r.Errors, "errors_total": r.ErrorsTotal,
+	}
+}
+
+// expandEntry is a history entry as served: its stored record (already
+// decoded by the caller) becomes a report, the full canonical one when full,
+// else the slim one. The stored entry is not changed.
+func expandEntry(entry map[string]any, record runRecord, decoded, full bool) map[string]any {
+	if !decoded {
 		if _, has := entry[runRecordKey]; !has {
 			return entry
 		}
 	}
 	out := copyObject(entry)
 	delete(out, runRecordKey)
-	if ok {
+	if decoded {
 		report := record.Report()
-		out["report"] = report
+		if full {
+			out["report"] = report
+		} else {
+			out["report"] = report.Slim()
+		}
 		out["total"] = report.Totals.Total
 	}
 	return out

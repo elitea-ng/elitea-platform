@@ -180,7 +180,7 @@ func (s *Service) find(ctx context.Context, projectID, toolkitID int32, collecti
 	// The effective state, so the scheduler (which skips an `in_progress`
 	// index) admits the next run of an index whose run is dead; StartRun then
 	// records the dead run's outcome.
-	return indexmetaapp.Item{ID: row.IndexID, Metadata: Metadata(row.Effective())}, true, nil
+	return indexmetaapp.Item{ID: row.IndexID, Metadata: MetadataExact(row.Effective())}, true, nil
 }
 
 // Delete removes an index: the registry row is tombstoned (and its name freed),

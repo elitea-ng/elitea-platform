@@ -994,6 +994,8 @@ func indexIngestSummaryDomain(summary *runtimev1.IndexIngestSummaryV1) (outputap
 		TotalDocuments:     summary.GetTotalDocuments(),
 		TotalChunks:        summary.GetTotalChunks(),
 		WholeIndexRecord:   summary.GetWholeIndexRecord(),
+		UnchangedPresent:   summary.UnchangedDocuments != nil,
+		UnchangedDocuments: summary.GetUnchangedDocuments(),
 	}
 	if err := mapped.Validate(); err != nil {
 		return outputapp.IndexIngestSummary{}, err

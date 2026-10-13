@@ -40,6 +40,8 @@ const FAILED_STATES: readonly string[] = ['failed', 'cancelled'];
 export interface IndexingReportGroup {
   readonly reason: string;
   readonly label: string;
+  /** The raw worker token of a reason the server has no label for; `''` for a known reason. */
+  readonly code: string;
   readonly count: number;
   readonly items: readonly string[];
   /** How many names exist beyond the sampled ones. `0` when no names were recorded at all. */
@@ -127,6 +129,7 @@ export function isUpToDateRun(totals: Partial<IndexingReportTotals> | UnknownRec
 interface BuildGroupInput {
   readonly reason: string;
   readonly label: string;
+  readonly code?: string;
   readonly count: number;
   readonly items?: readonly string[];
   readonly dependent?: boolean;
@@ -140,6 +143,7 @@ function buildGroup(input: BuildGroupInput): IndexingReportGroup {
   return {
     reason: input.reason,
     label: input.label,
+    code: input.code ?? '',
     count: input.count,
     items: shown,
     // A group whose names were never recorded is fully described by its count.
@@ -164,6 +168,7 @@ function normalizeCategories(categories: unknown, dependentLabels: IndexingItemL
         return buildGroup({
           reason: textOf(group['reason']),
           label: textOf(group['label']),
+          code: textOf(group['code']),
           count: countOf(group['count']),
           items: stringsOf(group['items']),
           dependent,
@@ -203,23 +208,19 @@ function contradictsState(report: UnknownRecord, state: unknown): boolean {
   return typeof state === 'string' && FAILED_STATES.includes(state) && report['status'] === IndexingReportStatus.ok;
 }
 
-function fromCanonicalReport(report: UnknownRecord, entry: UnknownRecord): IndexingReport {
+function fromCanonicalReport(report: UnknownRecord): IndexingReport {
   const itemLabels = labelsOf(report['item_labels'], DEFAULT_INDEXING_ITEM_LABELS);
   const dependentLabels = labelsOf(report['dependent_labels'], DEFAULT_INDEXING_DEPENDENT_LABELS);
   const totals = normalizeTotals(report['totals']);
-
-  // An error report never ran far enough to produce meaningful counts.
-  const carriedTotals: IndexingReportTotals =
-    report['status'] === IndexingReportStatus.error
-      ? { ...totals, indexed: countOf(entry['indexed']), total: countOf(entry['total']) }
-      : totals;
 
   const status = report['status'];
   return {
     status: typeof status === 'string' ? (status as IndexingReportStatusValue) : IndexingReportStatus.ok,
     itemLabels,
     dependentLabels,
-    totals: carriedTotals,
+    // A failed or stopped run's counts are the report's own: the row's
+    // `indexed` is what the index holds, not what this run did.
+    totals,
     categories: normalizeCategories(report['categories'], dependentLabels),
     errors: stringsOf(report['errors']),
     errorsTotal: countOf(report['errors_total']),
@@ -371,7 +372,7 @@ export function normalizeIndexingReport(source: unknown): IndexingReport | null 
   const entry = asRecord(root['metadata']) ?? root;
   const report = parseIndexEntryJson(entry['report']);
 
-  if (report !== null && !contradictsState(report, entry['state'])) return fromCanonicalReport(report, entry);
+  if (report !== null && !contradictsState(report, entry['state'])) return fromCanonicalReport(report);
   if (entry['skipped'] !== undefined || entry['indexed'] !== undefined || entry['state'] !== undefined || entry['error'] !== undefined) {
     return fromLegacyEntry(entry);
   }

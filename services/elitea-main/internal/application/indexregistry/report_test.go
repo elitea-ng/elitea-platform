@@ -29,6 +29,8 @@ func rustRunRow(t *testing.T) Row {
 		s.TotalsPresent = true
 		s.TotalDocuments = 21
 		s.TotalChunks = 40
+		s.UnchangedPresent = true
+		s.UnchangedDocuments = 5
 	})))
 	if err != nil || mismatch != nil {
 		t.Fatalf("apply: %v %v", err, mismatch)
@@ -38,7 +40,7 @@ func rustRunRow(t *testing.T) Row {
 
 func reportOf(t *testing.T, row Row) Report {
 	t.Helper()
-	record, ok := lastRecord(row.History)
+	record, ok := recordOf(row.History[len(row.History)-1])
 	if !ok {
 		t.Fatalf("no run record on the newest history entry: %v", row.History[len(row.History)-1])
 	}
@@ -140,40 +142,75 @@ func TestRunReportCountsAndMergesGroups(t *testing.T) {
 	}
 }
 
-func TestUnchangedIsDerivedWithoutDoubleCounting(t *testing.T) {
+func TestUnchangedIsTheWorkersExactCount(t *testing.T) {
 	cases := []struct {
 		name      string
-		indexed   uint64
-		skipped   string
-		total     uint64
 		present   bool
 		unchanged uint64
+		want      uint64
 	}{
-		{"plain", 3, ``, 8, true, 5},
-		{"skipped documents still stored are not unchanged", 3, `{"too_large":2}`, 8, true, 3},
-		{"never negative", 3, `{"too_large":9}`, 8, true, 0},
-		{"stale totals are not read", 3, ``, 8, false, 0},
+		{"exact", true, 5, 5},
+		{"skipped documents are not subtracted", true, 2, 2},
+		{"absent from an older worker: no line, nothing derived", false, 0, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			row := started(t, nil, 1)
 			next, _, _, err := applyResult(row, resultFor(1, okSummary(func(s *outputapp.IndexIngestSummary) {
-				s.IndexedDocuments = tc.indexed
+				s.IndexedDocuments = 3
 				s.FailedChunks = 0
-				s.SkippedJSON = tc.skipped
-				s.TotalsPresent = tc.present
-				if tc.present {
-					s.TotalDocuments = tc.total
-					s.TotalChunks = 40
-				}
+				s.SkippedJSON = `{"too_large":2}`
+				s.TotalsPresent = true
+				s.TotalDocuments = 30
+				s.TotalChunks = 40
+				s.UnchangedPresent = tc.present
+				s.UnchangedDocuments = tc.unchanged
 			})))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := reportOf(t, next).Totals.Unchanged; got != tc.unchanged {
-				t.Fatalf("unchanged = %d, want %d", got, tc.unchanged)
+			report := reportOf(t, next)
+			if report.Totals.Unchanged != tc.want {
+				t.Fatalf("unchanged = %d, want %d", report.Totals.Unchanged, tc.want)
+			}
+			hasLine := false
+			for _, group := range report.Categories[1].Groups {
+				hasLine = hasLine || group.Reason == "unchanged"
+			}
+			if hasLine != tc.present {
+				t.Fatalf("unchanged line present = %v, want %v", hasLine, tc.present)
 			}
 		})
+	}
+}
+
+func TestUnchangedGroupComesFirstAndUnknownTokensStayApart(t *testing.T) {
+	report := runRecord{
+		Status: statusOK, Unchanged: 4,
+		// "unsupported_format" is a group KEY of a known reason, not a known
+		// token: as a token it is unknown and must not merge into that group.
+		Skipped: map[string]uint64{"empty": 1, "unsupported_type": 2, "unsupported_format": 3, "zzz": 1},
+	}.Report()
+	if got := report.Categories[1].Groups; got[0].Reason != "unchanged" || got[1].Reason != "empty" {
+		t.Fatalf("skipped groups: %+v", got)
+	}
+	var reasons []string
+	for _, group := range report.Categories[2].Groups {
+		reasons = append(reasons, group.Reason+":"+group.Code)
+	}
+	if strings.Join(reasons, ",") != "unsupported_format:unsupported_format,unsupported_format:,zzz:zzz" {
+		t.Fatalf("not-indexed groups: %v", reasons)
+	}
+	if report.Categories[2].Groups[0].Count != 3 || report.Categories[2].Groups[1].Count != 2 {
+		t.Fatalf("counts: %+v", report.Categories[2].Groups)
+	}
+}
+
+func TestErrorRunWithoutAMessageHasNoBlankErrorLine(t *testing.T) {
+	record := resultRecord(outputapp.IndexIngestSummary{Status: outputapp.IndexIngestStatusError}, statusError)
+	report := record.Report()
+	if len(record.Errors) != 0 || report.ErrorsTotal != 0 || len(report.Errors) != 0 {
+		t.Fatalf("record %+v report %+v", record, report)
 	}
 }
 
@@ -192,8 +229,14 @@ func TestFailedAndCancelledRunsHaveNoUnchangedAndNoStaleTotals(t *testing.T) {
 		t.Fatalf("a failed run reports nothing it did not do: %+v", totals)
 	}
 	// The run-facing count is the run's own; the index totals are separate.
-	if metadata["indexed"] != uint64(0) || metadata["index_total_documents"] != done.TotalDocuments {
-		t.Fatalf("indexed=%v index_total_documents=%v", metadata["indexed"], metadata["index_total_documents"])
+	if metadata["indexed"] != done.TotalDocuments {
+		t.Fatalf("indexed = %v: the list badge shows what the store holds", metadata["indexed"])
+	}
+	if _, has := metadata["index_total_documents"]; has {
+		t.Fatal("index_total_documents is gone")
+	}
+	if metadata["updated"] != int64(0) || metadata["failed_chunks"] != int64(0) || len(metadata["skipped"].(map[string]any)) != 0 {
+		t.Fatalf("the flat per-run keys describe the failed run: %v %v %v", metadata["updated"], metadata["failed_chunks"], metadata["skipped"])
 	}
 	if metadata["total"] != uint64(0) {
 		t.Fatalf("total = %v", metadata["total"])
@@ -271,10 +314,17 @@ func TestScheduledFailureDoesNotReuseThePreviousRunsCounts(t *testing.T) {
 		len(record.Errors) != 1 || record.Errors[0] != "schedule refused" {
 		t.Fatalf("record: %+v", record)
 	}
-	if entry["indexed"] != int64(0) {
-		t.Fatalf("the entry's own count: %v", entry["indexed"])
+	for _, key := range []string{"indexed", "indexed_chunks", "failed_chunks", "skipped"} {
+		if _, dup := entry[key]; dup {
+			t.Fatalf("%s duplicates the run record", key)
+		}
 	}
-	report := Metadata(failed)["report"].(Report)
+	metadata := Metadata(failed)
+	if metadata["indexed"] != done.TotalDocuments || metadata["updated"] != int64(0) ||
+		metadata["failed_chunks"] != int64(0) || len(metadata["skipped"].(map[string]any)) != 0 {
+		t.Fatalf("top-level keys must describe the failed schedule: %v", metadata)
+	}
+	report := metadata["report"].(Report)
 	if report.Totals.Total != 0 || len(report.Categories[2].Groups) != 0 || report.Status != statusError {
 		t.Fatalf("report: %+v", report)
 	}
@@ -286,7 +336,7 @@ func TestMetadataCarriesReportAndTotalInRowAndHistory(t *testing.T) {
 	if metadata["report"] == nil || metadata["total"] != uint64(21) {
 		t.Fatalf("report/total missing: %v %v", metadata["report"], metadata["total"])
 	}
-	if metadata["indexed"] != int64(21) || metadata["index_total_documents"] != int64(21) {
+	if metadata["indexed"] != int64(21) {
 		t.Fatalf("a completed run keeps the index total as indexed: %v", metadata["indexed"])
 	}
 	if _, ok := metadata["skipped"].(map[string]any)["too_large"]; !ok {
@@ -294,8 +344,16 @@ func TestMetadataCarriesReportAndTotalInRowAndHistory(t *testing.T) {
 	}
 	history := metadata["history"].([]any)
 	entry := history[len(history)-1].(map[string]any)
-	if entry["report"] == nil || entry["total"] != uint64(21) {
-		t.Fatalf("the history entry lacks the report: %v", entry)
+	slim, ok := entry["report"].(map[string]any)
+	if !ok || entry["total"] != uint64(21) {
+		t.Fatalf("the history entry lacks the slim report: %v", entry)
+	}
+	if _, labels := slim["item_labels"]; labels {
+		t.Fatal("a list response's history entries carry the slim report")
+	}
+	exact := MetadataExact(row)["history"].([]any)
+	if _, full := exact[len(exact)-1].(map[string]any)["report"].(Report); !full {
+		t.Fatal("an exact read expands every entry in full")
 	}
 	if _, stored := entry[runRecordKey]; stored {
 		t.Fatal("the stored record is not served")
@@ -311,7 +369,7 @@ func TestStoredHistoryEntryStaysSmall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	served, err := json.Marshal(expandEntry(row.History[len(row.History)-1]))
+	served, err := json.Marshal(expandEntry(row.History[len(row.History)-1], runRecordOf(t, row.History[len(row.History)-1]), true, true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,5 +410,55 @@ func TestMetadataReportGolden(t *testing.T) {
 	gb, _ := json.Marshal(b)
 	if string(ga) != string(gb) {
 		t.Fatalf("report drifted from the golden file:\n%s", got)
+	}
+}
+
+func runRecordOf(t *testing.T, entry map[string]any) runRecord {
+	t.Helper()
+	record, ok := recordOf(entry)
+	if !ok {
+		t.Fatal("no record")
+	}
+	return record
+}
+
+// A list of indexes with deep histories must not carry a full report per run.
+func TestListPayloadWithDeepHistoriesStaysSmall(t *testing.T) {
+	row := rustRunRow(t)
+	for run := 2; run < 2+MaxHistoryEntries; run++ {
+		next := started(t, &row, run)
+		done, _, _, err := applyResult(next, resultFor(run, okSummary(func(s *outputapp.IndexIngestSummary) {
+			s.IndexedDocuments = 1
+			s.SkippedJSON = `{"too_large":2,"unsupported_type":1}`
+			s.TotalsPresent = true
+			s.TotalDocuments = 21
+			s.TotalChunks = 40
+			s.UnchangedPresent = true
+			s.UnchangedDocuments = 17
+		})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		row = done
+	}
+	list, err := json.Marshal(Metadata(row))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact, err := json.Marshal(MetadataExact(row))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) >= len(exact)*9/10 {
+		t.Fatalf("list %d bytes vs exact %d: history entries are not slim", len(list), len(exact))
+	}
+	if n := strings.Count(string(list), "dependent_labels"); n != 1 {
+		t.Fatalf("only the newest report is full; %d full reports in the list", n)
+	}
+	// Each stored entry holds the run's counts once.
+	for _, entry := range row.History[1:] {
+		if _, dup := entry["skipped"]; dup {
+			t.Fatalf("duplicated counts in a stored entry: %v", entry)
+		}
 	}
 }

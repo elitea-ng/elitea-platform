@@ -29,18 +29,18 @@
       "count": 1,
       "groups": [
         {
-          "reason": "empty",
-          "label": "Contained no indexable content",
-          "count": 1,
-          "items": [],
-          "counted": true
-        },
-        {
           "reason": "unchanged",
           "label": "Already indexed (unchanged)",
           "count": 5,
           "items": [],
           "counted": false
+        },
+        {
+          "reason": "empty",
+          "label": "Contained no indexable content",
+          "count": 1,
+          "items": [],
+          "counted": true
         }
       ]
     },

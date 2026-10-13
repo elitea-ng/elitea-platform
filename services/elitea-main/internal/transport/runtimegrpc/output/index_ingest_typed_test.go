@@ -136,6 +136,7 @@ func TestOutputServerMapsTypedIndexDocumentsAndTotals(t *testing.T) {
 		DocumentsTruncated:  true,
 		TotalDocuments:      proto.Uint64(40),
 		TotalChunks:         proto.Uint64(120),
+		UnchangedDocuments:  proto.Uint64(37),
 	})
 	if len(stream.acks) != 2 || stream.acks[1].GetRejection() != nil || len(indexes.frames) != 1 {
 		t.Fatalf("typed documents were not accepted: acks=%v frames=%d", stream.acks, len(indexes.frames))
@@ -148,6 +149,9 @@ func TestOutputServerMapsTypedIndexDocumentsAndTotals(t *testing.T) {
 	}
 	if !result.ResultSummary.TotalsPresent || result.ResultSummary.TotalDocuments != 40 || result.ResultSummary.TotalChunks != 120 {
 		t.Fatalf("totals changed during mapping: %+v", result.ResultSummary)
+	}
+	if !result.ResultSummary.UnchangedPresent || result.ResultSummary.UnchangedDocuments != 37 {
+		t.Fatalf("unchanged count changed during mapping: %+v", result.ResultSummary)
 	}
 	if result.ReportsWholeIndex() {
 		t.Fatal("a truncated list of 2 in an index of 40 is not the whole index")

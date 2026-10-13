@@ -65,9 +65,9 @@ describe('normalizeIndexingReport on a stopped or failed Rust run', () => {
   const stopped = {
     metadata: {
       state: 'cancelled',
-      indexed: 2,
+      // The row's `indexed` is what the index holds, whatever the run did.
+      indexed: 30,
       total: 2,
-      index_total_documents: 30,
       report: {
         version: 1,
         status: 'cancelled',
@@ -92,5 +92,42 @@ describe('normalizeIndexingReport on a stopped or failed Rust run', () => {
       .find((category) => category.kind === IndexingReportKind.notIndexed)
       ?.groups.find((g) => g.reason === 'weird_new_reason');
     expect(group?.label).toBe('Not indexed (other)');
+    expect(group?.code).toBe('weird_new_reason');
+  });
+});
+
+describe('normalizeIndexingReport on a slim history entry', () => {
+  // What a list response carries for a history entry: no labels, no empty
+  // categories, no item arrays.
+  const slim = {
+    state: 'completed',
+    total: 6,
+    report: {
+      version: 1,
+      status: 'ok',
+      totals: { indexed: 1, skipped: 0, not_indexed: 2, failed: 0, unchanged: 3, dependent_not_indexed: 0, total: 6 },
+      categories: [
+        { kind: 'indexed', count: 1, groups: [] },
+        { kind: 'skipped', count: 0, groups: [{ reason: 'unchanged', label: 'Already indexed (unchanged)', count: 3, counted: false }] },
+        { kind: 'not_indexed', count: 2, groups: [{ reason: 'too_large', label: 'Too large to index', count: 2, counted: true }] },
+      ],
+      errors: [],
+      errors_total: 0,
+    },
+  };
+
+  it('renders with the default nouns and the missing categories empty', () => {
+    const report = normalizeIndexingReport(slim);
+    expect(report?.itemLabels).toEqual({ singular: 'document', plural: 'documents' });
+    expect(report?.categories.map((category) => category.kind)).toEqual(['indexed', 'skipped', 'not_indexed', 'failed']);
+    expect(report?.categories.find((c) => c.kind === 'failed')).toMatchObject({ count: 0, groups: [] });
+    expect(report?.categories.find((c) => c.kind === 'not_indexed')?.groups[0]).toMatchObject({
+      label: 'Too large to index',
+      count: 2,
+      items: [],
+      more: 0,
+      code: '',
+    });
+    expect(report?.totals).toMatchObject({ indexed: 1, unchanged: 3, total: 6 });
   });
 });
