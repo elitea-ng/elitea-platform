@@ -1271,6 +1271,7 @@ dependencies = [
  "adk-runner",
  "adk-session",
  "adk-tool",
+ "aho-corasick",
  "async-stream",
  "async-trait",
  "base64 0.23.1",
