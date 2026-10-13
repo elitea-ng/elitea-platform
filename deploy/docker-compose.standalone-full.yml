@@ -2014,22 +2014,25 @@ services:
   # (rustls-native-certs-0.8.4/src/lib.rs:50-57), so a bundle holding only the
   # mock would silently strip every public root from the consumer.
   mcp-mock-trust:
+    # No `build:` — the mock's image is built ONCE (by mcp-mock) and reused, so
+    # the trust anchor written here can only come from the mint being served.
     image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
-    build:
-      context: ./mock-mcp
-      dockerfile: Containerfile
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - cat /etc/ssl/certs/ca-certificates.crt /opt/mock-mcp/tls/ca.crt /runtime/runtime-ca.crt
         > /trust/mcp-mock-ca-bundle.pem
         && chmod 0644 /trust/mcp-mock-ca-bundle.pem
+        && python3 /opt/mock-mcp/verify-trust.py /trust/mcp-mock-ca-bundle.pem
     volumes:
       - standalone_mcp_mock_trust:/trust
       - standalone_runtime_worker:/runtime:ro
     depends_on:
       runtime-material:
         condition: service_completed_successfully
+      # The bundle is verified against the LIVE mock after it is written.
+      mcp-mock:
+        condition: service_healthy
     restart: "no"
 
   # The trust store the PYTHON worker runs on: runtime CA + mcp-mock CA (#983).
@@ -2053,10 +2056,13 @@ services:
   # that trusts only the mock, and the worker would then fail every INTERNAL
   # dial with a certificate error that reads like a platform outage.
   worker-trust:
+    # No `build:` — the mock's image is built ONCE (by mcp-mock) and reused, so
+    # the trust anchor written here can only come from the mint being served.
+    # Deliberately NOT gated on mcp-mock health and not verified live: this
+    # bundle feeds the PYTHON worker, which must not depend on the mock being up
+    # (the single-image reuse already guarantees the same mint). The live check
+    # is in mcp-mock-trust, whose bundle the NATIVE worker consumes.
     image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
-    build:
-      context: ./mock-mcp
-      dockerfile: Containerfile
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
