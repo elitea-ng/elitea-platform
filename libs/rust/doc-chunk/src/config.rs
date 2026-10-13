@@ -47,6 +47,11 @@ pub struct ChunkParams {
     pub unknown_chunk_overlap: Option<i64>,
     /// A loader step that calls a model (image and PDF-image descriptions).
     pub use_llm: Option<bool>,
+    /// Image files: `true` sends the SDK default prompt, `false` the
+    /// extension's `prompt` (see `plan_image`).
+    pub use_default_prompt: Option<bool>,
+    /// Image files: the prompt sent with the image.
+    pub prompt: Option<String>,
     /// The settings of the statistical and proposal chunkers.
     pub model_steps: ModelStepParams,
 }
@@ -132,6 +137,8 @@ impl ChunkParams {
                 unknown_chunk_size,
                 unknown_chunk_overlap,
                 use_llm,
+                use_default_prompt,
+                prompt,
             },
             model_steps: self.model_steps.merged(&over.model_steps),
         )
@@ -192,6 +199,7 @@ impl ChunkParams {
         let strip_header = flag("strip_header");
         let return_each_line = flag("return_each_line");
         let use_llm = flag("use_llm");
+        let use_default_prompt = flag("use_default_prompt");
         let dynamic_threshold = flag("dynamic_threshold");
         let mut text = |key: &str| {
             read.typed(key, "a string", |v| match v {
@@ -201,6 +209,7 @@ impl ChunkParams {
             .filter(|s| !s.is_empty())
         };
         let chunker = text("chunking_tool").or_else(|| text("chunker"));
+        let prompt = text("prompt");
         let headers_to_split_on = match headers(object.get("headers_to_split_on")) {
             Ok(headers) => headers,
             Err(value) => {
@@ -226,6 +235,8 @@ impl ChunkParams {
             unknown_chunk_size,
             unknown_chunk_overlap,
             use_llm,
+            use_default_prompt,
+            prompt,
             model_steps: ModelStepParams {
                 max_doc_tokens,
                 max_doc_size,
@@ -374,9 +385,10 @@ impl ChunkingConfig {
             .any(|p| p.chunker.as_deref().map(normalize_chunker_name).as_deref() == Some(name))
     }
 
-    /// Whether any chunker this config can select calls a model at all: the
-    /// `proposal` and `statistical` chunkers, or `use_llm`, at the top level
-    /// or for any extension.
+    /// Whether any step this config can select calls a model at all: the
+    /// `proposal` and `statistical` chunkers, `use_llm` at the top level or
+    /// for any extension, or the image-file vision step (on by default, so
+    /// true unless the config switches it off everywhere).
     #[must_use]
     pub fn needs_model_step(&self) -> bool {
         self.needs_chat_model()
@@ -387,12 +399,35 @@ impl ChunkingConfig {
     }
 
     /// Whether the run uses the CHAT model (`index.llm_model`): the
-    /// `proposal` chunker. The statistical chunker uses embeddings only.
-    // TODO(ADR-0030 I4 part B): `use_llm` joins this once the vision step
-    // describes images with the chat model; until then `use_llm` alone must
-    // neither fetch nor parse the chat entries.
+    /// `proposal` chunker, or the image-file vision step (ADR-0030 I4 part
+    /// B), which is ON by default for `.png .jpg .jpeg .gif .webp .bmp .svg`
+    /// and so applies unless `use_llm: false` switches it off for all of
+    /// them. The statistical chunker uses embeddings only. `use_llm` on
+    /// another extension (images inside PDF/Office files) is not served and
+    /// does not need the model.
     #[must_use]
     pub fn needs_chat_model(&self) -> bool {
+        self.needs_proposal_model() || crate::vision::vision_enabled_anywhere(self)
+    }
+
+    /// The non-image extensions whose block sets `use_llm: true`: the
+    /// embedded-image step they ask for is not ported, so it has no effect.
+    #[must_use]
+    pub fn unserved_use_llm_extensions(&self) -> Vec<String> {
+        self.by_extension
+            .iter()
+            .filter(|(extension, params)| {
+                params.use_llm == Some(true) && !crate::vision::is_image_extension(extension)
+            })
+            .map(|(extension, _)| extension.clone())
+            .collect()
+    }
+
+    /// Whether the `proposal` chunker is selected: the one case where a
+    /// chat model that cannot be read must fail the run, not just skip
+    /// image documents.
+    #[must_use]
+    pub fn needs_proposal_model(&self) -> bool {
         self.selects("proposal")
     }
 
@@ -466,28 +501,65 @@ impl<'de> Deserialize<'de> for ChunkingConfig {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn a_config_needs_a_model_step_only_when_a_selected_chunker_calls_one() {
+    fn a_config_needs_a_model_step_when_a_selected_step_calls_one() {
         let from = |v: Value| ChunkingConfig::from_value(&v).unwrap();
-        assert!(!from(Value::Null).needs_model_step());
-        assert!(!from(serde_json::json!({"chunker": "markdown"})).needs_model_step());
-        assert!(from(serde_json::json!({"chunker": "proposal"})).needs_model_step());
-        assert!(from(serde_json::json!({".md": {"chunker": "statistical"}})).needs_model_step());
-        assert!(from(serde_json::json!({".pdf": {"use_llm": true}})).needs_model_step());
+        // The image-file vision step is on by default (SDK parity).
+        assert!(from(Value::Null).needs_model_step());
+        assert!(from(serde_json::json!({"chunker": "markdown"})).needs_model_step());
         assert!(!from(serde_json::json!({"use_llm": false})).needs_model_step());
+        assert!(from(serde_json::json!({"chunker": "proposal"})).needs_model_step());
+        assert!(
+            from(serde_json::json!({"use_llm": false, ".md": {"chunker": "statistical"}}))
+                .needs_model_step()
+        );
+        assert!(
+            from(serde_json::json!({"use_llm": false, ".pdf": {"use_llm": true}}))
+                .needs_model_step()
+        );
         for spelled in ["Proposal", " proposal", "PROPOSAL "] {
             let config = from(serde_json::json!({ "chunker": spelled }));
             assert!(config.needs_model_step(), "{spelled:?}");
             assert!(config.needs_chat_model(), "{spelled:?}");
+            assert!(config.needs_proposal_model(), "{spelled:?}");
         }
-        assert!(from(serde_json::json!({".md": {"chunker": " Statistical"}})).needs_model_step());
     }
 
     #[test]
-    fn only_the_proposal_chunker_needs_the_chat_model() {
+    fn use_llm_on_a_document_extension_is_reported_as_unserved() {
         let from = |v: Value| ChunkingConfig::from_value(&v).unwrap();
-        assert!(!from(serde_json::json!({"chunker": "statistical"})).needs_chat_model());
-        assert!(!from(serde_json::json!({"use_llm": true})).needs_chat_model());
-        assert!(from(serde_json::json!({".md": {"chunking_tool": "Proposal"}})).needs_chat_model());
+        let config = from(serde_json::json!({
+            "use_llm": true, ".pdf": {"use_llm": true}, ".png": {"use_llm": true},
+            ".docx": {"use_llm": false}
+        }));
+        assert_eq!(config.unserved_use_llm_extensions(), vec![".pdf"]);
+        assert!(from(Value::Null).unserved_use_llm_extensions().is_empty());
+    }
+
+    #[test]
+    fn the_chat_model_is_needed_by_the_proposal_chunker_and_the_vision_step() {
+        let from = |v: Value| ChunkingConfig::from_value(&v).unwrap();
+        let off = serde_json::json!({"use_llm": false});
+        assert!(!from(off.clone()).needs_chat_model());
+        assert!(
+            !from(serde_json::json!({"use_llm": false, "chunker": "statistical"}))
+                .needs_chat_model()
+        );
+        // use_llm on a non-image extension is the embedded-image step, not served.
+        assert!(
+            !from(serde_json::json!({"use_llm": false, ".pdf": {"use_llm": true}}))
+                .needs_chat_model()
+        );
+        // Default on; one image extension left on is enough.
+        assert!(from(Value::Null).needs_chat_model());
+        assert!(!from(Value::Null).needs_proposal_model());
+        let mut one = serde_json::json!({"use_llm": false, ".png": {"use_llm": true}});
+        assert!(from(one.clone()).needs_chat_model());
+        one[".png"]["use_llm"] = Value::Bool(false);
+        assert!(!from(one).needs_chat_model());
+        assert!(
+            from(serde_json::json!({"use_llm": false, ".md": {"chunking_tool": "Proposal"}}))
+                .needs_chat_model()
+        );
     }
 
     use super::*;

@@ -59,6 +59,11 @@ elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["to
 # are extracted and chunked here.
 elitea-connectors = { path = "../../libs/rust/connectors", default-features = false, features = ["providers", "content-source", "reqwest-012"] }
 elitea-content-source = { path = "../../libs/rust/content-source" }
+# ADR-0030 I4 part B: fit a large picture under the gateway's inline image
+# budget (decode, downscale, re-encode) and rasterise BMP. Only the formats
+# the vision step reads; pure Rust, no system library, no default features
+# (no rayon, no avif/exr/tiff codecs).
+image = { version = "=0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 elitea-doc-chunk = { path = "../../libs/rust/doc-chunk" }
 elitea-doc-extract = { path = "../../libs/rust/doc-extract", features = ["html"] }
 elitea-vector-index = { path = "../../libs/rust/vector-index" }
@@ -83,6 +88,7 @@ rmcp = { version = "=3.5.0", default-features = false, features = ["auth"] }
 rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std"] }
 rustix = { version = "=1.1.5", features = ["fs", "process"] }
 serde = { version = "1.0.228", features = ["derive"] }
+sha2 = "=0.10.9"
 serde_json = { version = "=1.0.151", features = ["arbitrary_precision", "raw_value"] }
 serde_yaml_ng = "=0.10.0"
 sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql", "chrono", "bigdecimal", "json", "uuid"] }

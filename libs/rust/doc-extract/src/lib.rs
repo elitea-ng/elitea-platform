@@ -112,6 +112,85 @@ const DOCUMENT_TYPES: &[&str] = &[
     "application/vnd.ms-outlook",
 ];
 
+/// What a standalone image file is to the vision step (ADR-0030 I4 part B).
+/// Extraction never turns an image into text; a caller that can ask a model
+/// to describe it asks [`image_for_vision`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisionImage {
+    /// Not an image media type: extraction decides.
+    NotAnImage,
+    /// An image a model is sent as it is (when small enough), with this
+    /// media type (the bytes' own, which wins over the declared one).
+    Supported(&'static str),
+    /// A BMP: no model accepts it, so the caller rasterises it to PNG first.
+    Bmp,
+    /// An image format the step does not convert (SVG, TIFF, ...): the SDK
+    /// rasterises SVG, this build does not.
+    Unsupported,
+    /// Declared PNG, JPEG, GIF, WebP or BMP, but the bytes are none of them.
+    Corrupt,
+}
+
+/// Whether `mime` (already lower-cased, parameters cut) names a BMP.
+fn is_bmp_type(mime: &str) -> bool {
+    matches!(mime, "image/bmp" | "image/x-bmp" | "image/x-ms-bmp")
+}
+
+/// The BMP signature plus a known DIB header size (so a text file that
+/// merely starts with `BM` is not one).
+fn is_bmp(bytes: &[u8]) -> bool {
+    bytes.len() >= 18
+        && bytes.starts_with(b"BM")
+        && matches!(
+            u32::from_le_bytes([bytes[14], bytes[15], bytes[16], bytes[17]]),
+            12 | 40 | 52 | 56 | 64 | 108 | 124
+        )
+}
+
+/// Classifies `bytes` of declared media type `mime` for the vision step.
+/// Pure and cheap: it reads the magic bytes and nothing else.
+#[must_use]
+pub fn image_for_vision(mime: &str, bytes: &[u8]) -> VisionImage {
+    let mime = mime
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !mime.starts_with("image/") {
+        return VisionImage::NotAnImage;
+    }
+    if !matches!(
+        mime.as_str(),
+        "image/png"
+            | "image/x-png"
+            | "image/jpeg"
+            | "image/jpg"
+            | "image/pjpeg"
+            | "image/gif"
+            | "image/webp"
+    ) && !is_bmp_type(&mime)
+    {
+        return VisionImage::Unsupported;
+    }
+    let sniffed = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    };
+    match sniffed {
+        Some(media_type) => VisionImage::Supported(media_type),
+        None if is_bmp(bytes) => VisionImage::Bmp,
+        None => VisionImage::Corrupt,
+    }
+}
+
 /// Media types converted from HTML to markdown, when asked.
 fn is_html(mime: &str) -> bool {
     matches!(mime, "text/html" | "application/xhtml+xml")
@@ -843,6 +922,58 @@ mod tests {
             }
         );
         assert_eq!(extract("image/png", b"\x89PNG"), Extracted::Unsupported);
+        // An image is never text; the vision step classifies it separately.
+        assert_eq!(
+            image_for_vision("image/png", b"\x89PNG\r\n\x1a\n...."),
+            VisionImage::Supported("image/png")
+        );
+        assert_eq!(
+            image_for_vision("image/png", b"GIF89a.."),
+            VisionImage::Supported("image/gif")
+        );
+        assert_eq!(
+            image_for_vision("IMAGE/JPEG; q=1", &[0xff, 0xd8, 0xff, 0xe0]),
+            VisionImage::Supported("image/jpeg")
+        );
+        assert_eq!(
+            image_for_vision("image/webp", b"RIFF\0\0\0\0WEBPVP8 "),
+            VisionImage::Supported("image/webp")
+        );
+        assert_eq!(
+            image_for_vision("image/webp", b"not an image"),
+            VisionImage::Corrupt
+        );
+        let mut bmp = b"BM".to_vec();
+        bmp.extend_from_slice(&[0; 12]);
+        bmp.extend_from_slice(&40_u32.to_le_bytes());
+        bmp.extend_from_slice(&[0; 8]);
+        assert_eq!(image_for_vision("image/bmp", &bmp), VisionImage::Bmp);
+        assert_eq!(image_for_vision("image/x-ms-bmp", &bmp), VisionImage::Bmp);
+        assert_eq!(image_for_vision("image/png", &bmp), VisionImage::Bmp);
+        assert_eq!(
+            image_for_vision("image/bmp", b"BM not a bitmap at all"),
+            VisionImage::Corrupt
+        );
+        assert_eq!(
+            image_for_vision("image/x-png", b"\x89PNG\r\n\x1a\n.."),
+            VisionImage::Supported("image/png")
+        );
+        assert_eq!(
+            image_for_vision("image/jpg", &[0xff, 0xd8, 0xff, 0xdb]),
+            VisionImage::Supported("image/jpeg")
+        );
+        assert_eq!(
+            image_for_vision("image/tiff", b"II*\0"),
+            VisionImage::Unsupported
+        );
+        assert_eq!(
+            image_for_vision("image/svg+xml", b"<svg/>"),
+            VisionImage::Unsupported
+        );
+        assert_eq!(
+            image_for_vision("text/plain", b"x"),
+            VisionImage::NotAnImage
+        );
         assert!(can_extract("application/json") && can_extract("text/html"));
         assert_eq!(can_extract("application/pdf"), cfg!(feature = "documents"));
     }

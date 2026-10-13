@@ -92,6 +92,7 @@ async fn run(
             embedding_binding: Some(&binding()),
             llm_model: None,
             llm_configuration: None,
+            chat_entries: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: &Always,

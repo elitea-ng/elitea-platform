@@ -277,10 +277,10 @@ impl ParsedArgs {
     }
 
     /// Whether the run uses the chat model (`index.llm_model` and
-    /// `index.llm_configuration`): only the proposal chunker does today, so
-    /// a statistical-only or `use_llm`-only run neither fetches nor parses
-    /// those entries. Unreadable arguments answer no: the run refuses them
-    /// itself.
+    /// `index.llm_configuration`): the proposal chunker, or the image-file
+    /// vision step (on by default). A run that does neither (statistical
+    /// only, vision off) neither fetches nor parses those entries.
+    /// Unreadable arguments answer no: the run refuses them itself.
     pub(crate) fn needs_chat_model(&self) -> bool {
         self.chunking
             .as_ref()
@@ -379,15 +379,18 @@ mod tests {
                 .unwrap()
                 .needs_chat_model()
         };
-        assert!(!needs(json!({})));
-        assert!(!needs(json!({"chunking_tool": "markdown"})));
+        // The image-file vision step is on by default, so it needs the chat
+        // model unless `use_llm: false` switches it off.
+        assert!(needs(json!({})));
+        assert!(needs(json!({"chunking_tool": "markdown"})));
+        assert!(!needs(json!({"chunking_config": {"use_llm": false}})));
         assert!(needs(json!({"chunking_tool": "proposal"})));
         assert!(needs(json!({"chunking_tool": " Proposal"})));
-        // Statistical embeds only; use_llm waits for the vision step.
+        // Statistical embeds only.
         assert!(!needs(
-            json!({"chunking_config": {".md": {"chunker": "statistical"}}})
+            json!({"chunking_config": {"use_llm": false, ".md": {"chunker": "statistical"}}})
         ));
-        assert!(!needs(json!({"chunking_config": {"use_llm": true}})));
+        assert!(needs(json!({"chunking_config": {"use_llm": true}})));
         assert!(ParsedArgs::parse(b"not json").is_err());
     }
 

@@ -272,6 +272,7 @@ impl Harness {
                 embedding_binding: Some(&binding),
                 llm_model: None,
                 llm_configuration: None,
+                chat_entries: None,
                 vector_token: Some(&self.token),
                 context: &self.context,
                 lease: &Always,

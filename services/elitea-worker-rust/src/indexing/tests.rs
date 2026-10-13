@@ -263,6 +263,14 @@ pub(super) fn document(key: &str, version: &str, text: &str) -> Document {
     }
 }
 
+/// A PNG-signature file (a picture the vision step would describe).
+fn png_document(key: &str) -> Document {
+    let mut document = document(key, "v1", "");
+    document.bytes = b"\x89PNG\r\n\x1a\npixels".to_vec();
+    document.reference.size = document.bytes.len() as u64;
+    document
+}
+
 pub(super) fn command(index_id: &str, expected: Option<(&str, u32)>) -> IndexIngestCommandV1 {
     let (model, dimension) = expected.unwrap_or(("", 0));
     IndexIngestCommandV1 {
@@ -342,6 +350,7 @@ async fn run_timed(
             embedding_binding: Some(&binding()),
             llm_model: None,
             llm_configuration: None,
+            chat_entries: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: liveness,
@@ -383,7 +392,7 @@ async fn a_first_run_writes_every_document_and_stamps_the_space() {
                 "# Title\n\nSome words about the project.\n",
             ),
             document("src/app.py", "v1", "def main():\n    return 1\n"),
-            document("logo.png", "v1", "\u{89}PNG"),
+            png_document("logo.png"),
         ],
         &command(NS, None),
         &parameters(false, json!({})),
@@ -398,7 +407,8 @@ async fn a_first_run_writes_every_document_and_stamps_the_space() {
     );
     assert_eq!(summary.indexed_documents, 2);
     assert_eq!(summary.updated, 0);
-    assert_eq!(summary.skipped.get("unsupported_type"), Some(&1));
+    // An image is described by the chat model, and this harness has none.
+    assert_eq!(summary.skipped.get("no_model"), Some(&1));
     assert_eq!(summary.embedding_model, MODEL);
     assert_eq!(summary.embedding_dimension, 4);
     assert_eq!(summary.total_documents, Some(2));
@@ -1259,7 +1269,9 @@ async fn whitelist_blacklist_and_the_needs_model_chunker_are_honoured() {
     assert_eq!(summary.indexed_documents, 1);
     assert_eq!(summary.documents[0].document_key, "a.md");
 
-    let needs_model = run(
+    // `use_llm` is the image-file step: it never turns a text document into
+    // one that needs a model.
+    let with_use_llm = run(
         &harness,
         vec![document("d.md", "v1", "delta")],
         &command(NS, None),
@@ -1268,12 +1280,12 @@ async fn whitelist_blacklist_and_the_needs_model_chunker_are_honoured() {
     )
     .await
     .expect("summary");
-    assert_eq!(needs_model.skipped.get("needs_model"), Some(&1));
-    assert_eq!(needs_model.indexed_documents, 0);
+    assert_eq!(with_use_llm.skipped.get("needs_model"), None);
+    assert_eq!(with_use_llm.indexed_documents, 1);
     // The earlier document is no longer listed by the source, so it is gone.
-    assert_eq!(needs_model.removed_document_keys, vec!["a.md"]);
-    assert_eq!(needs_model.total_documents, Some(0));
-    assert!(needs_model.whole_index_record);
+    assert_eq!(with_use_llm.removed_document_keys, vec!["a.md"]);
+    assert_eq!(with_use_llm.total_documents, Some(1));
+    assert!(with_use_llm.whole_index_record);
 }
 
 #[tokio::test]
@@ -1290,6 +1302,7 @@ async fn malformed_inputs_are_invalid_input_not_a_summary() {
             embedding_binding: Some(&binding()),
             llm_model: None,
             llm_configuration: None,
+            chat_entries: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: &Always,
@@ -1312,6 +1325,7 @@ async fn malformed_inputs_are_invalid_input_not_a_summary() {
             embedding_binding: Some(&binding()),
             llm_model: None,
             llm_configuration: None,
+            chat_entries: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: &Always,
@@ -1337,6 +1351,7 @@ async fn without_a_vector_token_or_a_model_the_run_fails_with_a_reason() {
             embedding_binding: Some(&binding()),
             llm_model: None,
             llm_configuration: None,
+            chat_entries: None,
             vector_token: None,
             context: &harness.context,
             lease: &Always,
@@ -1358,6 +1373,7 @@ async fn without_a_vector_token_or_a_model_the_run_fails_with_a_reason() {
             embedding_binding: None,
             llm_model: None,
             llm_configuration: None,
+            chat_entries: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: &Always,

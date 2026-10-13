@@ -250,7 +250,7 @@ fn chunker_named(
     }
 }
 
-fn markdown_chunks(text: &str, params: &ChunkParams) -> Result<Vec<Chunk>, ChunkError> {
+pub(crate) fn markdown_chunks(text: &str, params: &ChunkParams) -> Result<Vec<Chunk>, ChunkError> {
     let default_headers = markdown::default_headers();
     let headers = params
         .headers_to_split_on
@@ -354,7 +354,8 @@ fn code_chunks(
 ///
 /// # Errors
 /// [`ChunkError::RequiresModel`] for the statistical and proposal chunkers
-/// and for `use_llm` (a caller that can run model steps uses [`plan`]);
+/// (a caller that can run model steps uses [`plan`]); `use_llm` is the
+/// image-file step ([`crate::plan_image`]) and has no effect on a document;
 /// [`ChunkError::UnknownChunker`] for a `chunking_tool` that names none;
 /// [`ChunkError::Tokenizer`] if the encoding is unavailable.
 pub fn chunk(
@@ -419,12 +420,8 @@ pub fn plan_with(
         .cloned()
         .unwrap_or_default();
     let params = config.params_for(&extension);
-    if params.use_llm == Some(true) {
-        return Err(ChunkError::RequiresModel {
-            chunker: "use_llm",
-            reason: format!("`use_llm` is set for {extension:?} and the image step is not ported"),
-        });
-    }
+    // `use_llm` is the image step (`plan_image`); on a document it has no
+    // effect here: images inside documents are not ported.
     let chunker = match params.chunker.as_deref() {
         Some(name) => chunker_named(name, &extension, options)?,
         None => chunker_for_with(&extension, options),
@@ -588,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn model_chunkers_and_use_llm_are_typed_outcomes() {
+    fn model_chunkers_are_typed_outcomes_and_use_llm_is_not_one() {
         let statistical = ChunkingConfig::from_value(&json!({"chunking_tool": "statistical"}))
             .unwrap_or_default();
         assert!(matches!(
@@ -609,15 +606,13 @@ mod tests {
         ));
         // Another extension is unaffected.
         assert!(chunk("plain", "a.txt", &proposal).is_ok());
-        let llm =
-            ChunkingConfig::from_value(&json!({".pdf": {"use_llm": true}})).unwrap_or_default();
-        assert!(matches!(
-            chunk("text", "a.pdf", &llm),
-            Err(ChunkError::RequiresModel {
-                chunker: "use_llm",
-                ..
-            })
-        ));
+        // `use_llm` is the image-file step: it never makes a document need a
+        // model, at the top level or for an extension.
+        for value in [json!({".pdf": {"use_llm": true}}), json!({"use_llm": true})] {
+            let llm = ChunkingConfig::from_value(&value).unwrap_or_default();
+            assert!(chunk("text", "a.pdf", &llm).is_ok(), "{value}");
+            assert!(plan("text", "a.pdf", &llm).is_ok(), "{value}");
+        }
         let nonsense =
             ChunkingConfig::from_value(&json!({"chunking_tool": "nope"})).unwrap_or_default();
         assert!(matches!(

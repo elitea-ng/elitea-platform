@@ -148,9 +148,10 @@ fn chunk_alone_still_reports_the_model_chunkers_as_requiring_a_model() {
             "{tool}"
         );
     }
-    // `use_llm` (the image step) is still not served by a plan.
+    // `use_llm` is the image-file step (`plan_image`): on a text document it
+    // changes nothing, so the plan is the ordinary chunks.
     let result = plan("text", "a.txt", &config(&json!({"use_llm": true})));
-    assert!(matches!(result, Err(ChunkError::RequiresModel { .. })));
+    assert!(matches!(result, Ok(ChunkPlan::Chunks(_))));
 }
 
 #[test]

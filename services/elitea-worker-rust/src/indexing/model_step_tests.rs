@@ -44,36 +44,60 @@ use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
 /// What the scripted model answers for one call.
 #[derive(Clone)]
-enum Reply {
+pub(super) enum Reply {
     Text(String),
+    /// A reply the model cut off at `max_tokens`.
+    Cut(String),
     Fail(ErrorCategory, &'static str),
 }
 
 type Script = dyn Fn(usize, &str) -> Reply + Send + Sync;
 
-struct ChatState {
+/// An image part a request carried: (media type, bytes).
+pub(super) type SeenImage = (String, Vec<u8>);
+
+pub(super) struct ChatState {
     calls: AtomicUsize,
     script: Box<Script>,
-    binds: Mutex<Vec<(String, String)>>,
+    pub(super) binds: Mutex<Vec<(String, String)>>,
+    /// Each request's image parts: (media type, bytes).
+    pub(super) images: Mutex<Vec<Vec<SeenImage>>>,
+    /// `bind_chat` refuses (an unusable model name).
+    bind_fails: bool,
 }
 
 /// A chat binder whose models answer from `script(call_index, user_text)`.
-struct ScriptedChat {
-    state: Arc<ChatState>,
+pub(super) struct ScriptedChat {
+    pub(super) state: Arc<ChatState>,
 }
 
 impl ScriptedChat {
-    fn new(script: impl Fn(usize, &str) -> Reply + Send + Sync + 'static) -> Arc<Self> {
+    pub(super) fn new(script: impl Fn(usize, &str) -> Reply + Send + Sync + 'static) -> Arc<Self> {
         Arc::new(Self {
             state: Arc::new(ChatState {
                 calls: AtomicUsize::new(0),
                 script: Box::new(script),
                 binds: Mutex::new(Vec::new()),
+                images: Mutex::new(Vec::new()),
+                bind_fails: false,
             }),
         })
     }
 
-    fn calls(&self) -> usize {
+    /// A binder that cannot bind any model.
+    pub(super) fn unbindable() -> Arc<Self> {
+        Arc::new(Self {
+            state: Arc::new(ChatState {
+                calls: AtomicUsize::new(0),
+                script: Box::new(|_, _| Reply::Text(String::new())),
+                binds: Mutex::new(Vec::new()),
+                images: Mutex::new(Vec::new()),
+                bind_fails: true,
+            }),
+        })
+    }
+
+    pub(super) fn calls(&self) -> usize {
         self.state.calls.load(Ordering::SeqCst)
     }
 }
@@ -95,6 +119,18 @@ impl Llm for ScriptedLlm {
     ) -> adk_rust::Result<LlmResponseStream> {
         assert!(!streaming, "the step reads one complete reply");
         let index = self.state.calls.fetch_add(1, Ordering::SeqCst);
+        let images = request
+            .contents
+            .iter()
+            .flat_map(|content| content.parts.iter())
+            .filter_map(|part| match part {
+                adk_rust::Part::InlineData {
+                    mime_type, data, ..
+                } => Some((mime_type.clone(), data.clone())),
+                _ => None,
+            })
+            .collect();
+        self.state.images.lock().expect("images").push(images);
         let user = request
             .contents
             .first()
@@ -110,6 +146,14 @@ impl Llm for ScriptedLlm {
                     content: Some(Content::new("model").with_text(text)),
                     turn_complete: true,
                     finish_reason: Some(FinishReason::Stop),
+                    ..Default::default()
+                })
+            }))),
+            Reply::Cut(text) => Ok(Box::pin(stream::once(async move {
+                Ok(LlmResponse {
+                    content: Some(Content::new("model").with_text(text)),
+                    turn_complete: true,
+                    finish_reason: Some(FinishReason::MaxTokens),
                     ..Default::default()
                 })
             }))),
@@ -133,6 +177,9 @@ impl ChatModelBinder for ScriptedChat {
             request.model_name.to_owned(),
             request.system_instruction.to_owned(),
         ));
+        if self.state.bind_fails {
+            return Err(ModelFacadeError::InvalidInvocation);
+        }
         Ok(Arc::new(ScriptedLlm {
             state: Arc::clone(&self.state),
         }))
@@ -140,7 +187,7 @@ impl ChatModelBinder for ScriptedChat {
 }
 
 /// Installs `chat` as the runtime's chat model binder.
-fn with_chat(harness: &mut Harness, chat: &Arc<ScriptedChat>) {
+pub(super) fn with_chat(harness: &mut Harness, chat: &Arc<ScriptedChat>) {
     harness.runtime.chat_models = Some(Arc::clone(chat) as Arc<dyn ChatModelBinder>);
 }
 
@@ -163,7 +210,7 @@ fn food_dates(_: usize, _: &str) -> Reply {
 }
 
 /// One run with a chat model (`llm_model`, a JSON string) or none.
-async fn run_model(
+pub(super) async fn run_model(
     harness: &Harness,
     documents: Vec<Document>,
     expected: Option<(&str, u32)>,
@@ -183,7 +230,7 @@ async fn run_model(
 }
 
 /// [`run_model`] with the `llm_model` entry as raw bytes and a lease.
-async fn run_model_raw(
+pub(super) async fn run_model_raw(
     harness: &Harness,
     documents: Vec<Document>,
     expected: Option<(&str, u32)>,
@@ -204,9 +251,41 @@ async fn run_model_raw(
             embedding_binding: Some(&binding()),
             llm_model: model,
             llm_configuration: model.map(|_| settings.as_bytes()),
+            chat_entries: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease,
+            deadline_unix_millis: i64::MAX,
+            now_unix_millis: &now,
+        },
+    )
+    .await
+}
+
+/// [`run_model_raw`] with the chat entries fetched on demand through
+/// `entries` (as a production claim does) instead of handed over.
+pub(super) async fn run_with_entries(
+    harness: &Harness,
+    documents: Vec<Document>,
+    parameters: &[u8],
+    entries: &dyn super::pipeline::ChatEntrySource,
+) -> Result<IndexIngestSummaryV1, IndexRunFailure> {
+    FIXTURE_SOURCE.with(|slot| *slot.lock().expect("lock") = Some(documents));
+    let now = || 1_700_000_000_000_i64;
+    run_index(
+        &harness.runtime,
+        IndexRun {
+            command: &command(NS, None),
+            toolkit_configuration: &configuration(),
+            tool_parameters: parameters,
+            parsed: None,
+            embedding_binding: Some(&binding()),
+            llm_model: None,
+            llm_configuration: None,
+            chat_entries: Some(entries),
+            vector_token: Some(&harness.token),
+            context: &harness.context,
+            lease: &Always,
             deadline_unix_millis: i64::MAX,
             now_unix_millis: &now,
         },
@@ -218,7 +297,7 @@ fn proposal() -> Vec<u8> {
     parameters(false, json!({"chunking_tool": "proposal"}))
 }
 
-fn search_host(
+pub(super) fn search_host(
     runtime: &Arc<super::IndexIngestRuntime>,
     token: &crate::protocol::vector_token::VectorClaimToken,
 ) -> ClaimIndexToolHost {
@@ -231,7 +310,7 @@ fn search_host(
     )
 }
 
-async fn search(host: &ClaimIndexToolHost, arguments: Value) -> Value {
+pub(super) async fn search(host: &ClaimIndexToolHost, arguments: Value) -> Value {
     let catalog = SharedIndexCatalog::new(IndexCatalog::new(vec![IndexCatalogEntry {
         name: "docs".to_owned(),
         index_id: NS.to_owned(),
@@ -347,7 +426,7 @@ async fn the_proposal_chunker_stores_four_chunks_per_entry_and_extended_search_f
     assert!(ids.contains("Dates"), "{extended}");
 }
 
-fn failed_with(summary: &IndexIngestSummaryV1) -> &str {
+pub(super) fn failed_with(summary: &IndexIngestSummaryV1) -> &str {
     assert_eq!(
         summary.status,
         IndexIngestStatusV1::Error as i32,
@@ -859,17 +938,14 @@ async fn the_chat_entries_are_read_only_when_a_chunker_calls_a_model() {
         Some(b"{not a model name"),
         &Always,
     )
-    .await;
-    match result {
-        Err(IndexRunFailure::InvalidInput(message)) => {
-            assert!(message.contains("llm model"), "{message}");
-        }
-        other => panic!("expected a clear refusal, got {other:?}"),
-    }
+    .await
+    .expect("summary");
+    let message = failed_with(&result);
+    assert!(message.contains("chat model entries"), "{message}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn statistical_and_use_llm_only_runs_neither_fetch_nor_parse_the_chat_entries() {
+async fn runs_without_a_proposal_chunker_are_not_failed_by_unreadable_chat_entries() {
     let harness = harness(4, None).await;
     let text = "lorem ipsum dolor sit amet. ".repeat(140);
     // A malformed `llm_model` and `llm_configuration`: only the proposal
@@ -898,6 +974,7 @@ async fn statistical_and_use_llm_only_runs_neither_fetch_nor_parse_the_chat_entr
                 embedding_binding: Some(&binding()),
                 llm_model: Some(b"{not a model name"),
                 llm_configuration: Some(settings_bad),
+                chat_entries: None,
                 vector_token: Some(&harness.token),
                 context: &harness.context,
                 lease: &Always,
@@ -907,14 +984,9 @@ async fn statistical_and_use_llm_only_runs_neither_fetch_nor_parse_the_chat_entr
         )
         .await
         .unwrap_or_else(|failure| panic!("{config}: {failure:?}"));
-        // `use_llm` alone is PR-B's vision step: its documents skip
-        // `needs_model` today; what matters here is the run is not refused.
-        let expected = u64::from(
-            config
-                .get("chunking_config")
-                .and_then(|c| c.get("use_llm"))
-                .is_none(),
-        );
+        // `use_llm` is the image-file step only: a markdown document is
+        // indexed whatever the entries, and whatever `use_llm` says.
+        let expected = 1_u64;
         assert_eq!(summary.indexed_documents, expected, "{config}: {summary:?}");
     }
     // The proposal chunker (any spelling) refuses the same entries clearly.
@@ -926,16 +998,19 @@ async fn statistical_and_use_llm_only_runs_neither_fetch_nor_parse_the_chat_entr
         Some(b"{not a model name"),
         &Always,
     )
-    .await;
-    assert!(
-        matches!(&result, Err(IndexRunFailure::InvalidInput(m)) if m.contains("llm model")),
-        "{result:?}"
-    );
+    .await
+    .expect("summary");
+    let message = failed_with(&result);
+    assert!(message.contains("chat model entries"), "{message}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_statistical_success_resets_the_model_failure_streak() {
     let mut harness = harness(4, None).await;
+    // The streak counts documents in the order their model steps run, which
+    // with concurrent preparation is completion order: prepare one document
+    // at a time so the listed order is the order the streak sees.
+    harness.runtime.limits.document_concurrency = 1;
     let chat = ScriptedChat::new(|_, _| {
         Reply::Fail(ErrorCategory::Unavailable, "model_gateway.unavailable")
     });

@@ -48,17 +48,21 @@ use std::fmt::Write as _;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use elitea_content_source::{Acl, DocumentRef, SourceError};
-use elitea_doc_chunk::{Chunk, ChunkError, ChunkOptions, ChunkPlan, ChunkingConfig};
-use elitea_doc_extract::{ExtractOptions, Extracted};
+use elitea_doc_chunk::{Chunk, ChunkError, ChunkOptions, ChunkPlan, ChunkingConfig, ImagePlan};
+use elitea_doc_extract::{ExtractOptions, Extracted, VisionImage};
 use elitea_vector_index::client::toolkit_namespace;
 use elitea_vector_index::{DeleteSelector, pb};
 use prost::Message as _;
 use serde_json::{Map, Value};
 use tokio::task::JoinSet;
 
+use super::image_fit::ImageKind;
 use super::inputs::{self, IndexParameters};
-use super::model_steps::{ChatBinding, ModelSteps, StepEnd, StepEnv};
+use super::model_steps::{
+    ChatBinding, ChatLoader, ChatUnavailable, ModelSteps, RawImage, StepEnd, StepEnv,
+};
 use super::slug::vector_space_slug;
 use super::source::{IndexSource, PathFilter, PlatformAccess};
 use super::{IndexIngestRuntime, IndexRunLimits};
@@ -72,6 +76,7 @@ use crate::protocol::output::MAX_INDEX_RESULT_DOCUMENTS;
 use crate::protocol::vector_token::{VectorClaimToken, VectorSource};
 use crate::transport::embeddings_facade::{EmbeddingsClient, EmbeddingsError, MAX_BATCH_INPUTS};
 use crate::transport::extractor_client::{Extraction, ExtractorClient, SkipReason};
+use crate::transport::input_content::MaterializedInput;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
 /// The byte budget of the per-document record in the summary. The frame is
@@ -87,7 +92,7 @@ const EMBEDDING_ATTEMPTS: u32 = 3;
 pub(crate) const MAX_CONSECUTIVE_EMBEDDING_FAILURES: u32 = 5;
 /// Closed skip reasons (`IndexIngestSummaryV1.skipped`).
 const SKIP_UNSUPPORTED: &str = "unsupported_type";
-const SKIP_UNREADABLE: &str = "unreadable";
+pub(super) const SKIP_UNREADABLE: &str = "unreadable";
 const SKIP_NEEDS_MODEL: &str = "needs_model";
 /// A step that calls a chat model has no model bound (ADR-0030 I4).
 pub(super) const SKIP_NO_MODEL: &str = "no_model";
@@ -101,13 +106,16 @@ const SKIP_EMPTY: &str = "empty";
 const SKIP_FETCH_FAILED: &str = "fetch_failed";
 const SKIP_EMBEDDING_FAILED: &str = "embedding_failed";
 pub(super) const SKIP_TOO_LARGE: &str = "too_large";
+/// The model refused this picture alone (a text-only model, a provider's 400
+/// for one image); the run goes on and a later run asks again.
+pub(super) const SKIP_VISION_REFUSED: &str = "vision_refused";
 /// The extraction sidecar did not answer about the document (socket, stream
 /// or sidecar failure); the document is retried by the next run.
 const SKIP_EXTRACT_FAILED: &str = "extract_failed";
 /// The sidecar's typed reasons that have no older label.
 const SKIP_ENCRYPTED: &str = "encrypted";
 const SKIP_TOO_MANY_PAGES: &str = "too_many_pages";
-const SKIP_EXTRACT_TIMEOUT: &str = "extract_timeout";
+pub(super) const SKIP_EXTRACT_TIMEOUT: &str = "extract_timeout";
 
 /// What one run is given.
 pub(crate) struct IndexRun<'a> {
@@ -123,6 +131,10 @@ pub(crate) struct IndexRun<'a> {
     pub(crate) llm_model: Option<&'a [u8]>,
     /// `index.llm_configuration`: that model's settings, a JSON object.
     pub(crate) llm_configuration: Option<&'a [u8]>,
+    /// Both chat entries, fetched together on the first step that needs the
+    /// chat model (instead of `llm_model` / `llm_configuration`). A run that
+    /// never needs the model fetches nothing.
+    pub(crate) chat_entries: Option<&'a dyn ChatEntrySource>,
     pub(crate) vector_token: Option<&'a VectorClaimToken>,
     /// The redeemed claim: the PAT the gateway and the artifact API take,
     /// the project and the execution.
@@ -130,6 +142,27 @@ pub(crate) struct IndexRun<'a> {
     pub(crate) lease: &'a dyn RunLiveness,
     pub(crate) deadline_unix_millis: i64,
     pub(crate) now_unix_millis: &'a (dyn Fn() -> i64 + Send + Sync),
+}
+
+/// The chat model entries of a claim, fetched on demand.
+#[async_trait::async_trait]
+pub(crate) trait ChatEntrySource: Send + Sync {
+    /// `index.llm_model` and `index.llm_configuration`, TOGETHER: either
+    /// entry that is named and cannot be fetched fails the whole load, so a
+    /// run never goes on with default settings for a configuration that
+    /// failed. Implementations record the failure.
+    ///
+    /// # Errors
+    ///
+    /// An entry could not be fetched.
+    async fn load(&self) -> Result<ChatEntries, ChatUnavailable>;
+}
+
+/// The fetched chat model entries; `None` is an entry the claim does not
+/// carry.
+pub(crate) struct ChatEntries {
+    pub(crate) model: Option<MaterializedInput>,
+    pub(crate) configuration: Option<MaterializedInput>,
 }
 
 /// What the run asks between documents: is the claim still ours and not
@@ -262,6 +295,8 @@ enum Preparation {
     /// Chunking waits for a model (ADR-0030 I4): the plan to fulfil, and the
     /// document with no chunks yet.
     Model(Box<Prepared>, ChunkPlan),
+    /// An image file waiting for its description (ADR-0030 I4 part B).
+    Vision(Box<Prepared>, RawImage),
     Skipped(&'static str),
     /// A chunking configuration the run cannot honour (the whole run fails).
     Configuration(String),
@@ -337,16 +372,16 @@ pub(crate) async fn run_index(
         Ok(chunking) => chunking.clone(),
         Err(error) => return Ok(failure(&parameters, &error.to_string())),
     };
-    // The chat model entries are read only when a chunker uses the chat
-    // model (the proposal chunker): a statistical-only or `use_llm`-only run
-    // must not fail on entries it never uses.
-    let chat = if chunking.needs_chat_model() {
-        chat_binding(runtime, &run)?
-    } else {
-        None
-    };
     for warning in &chunking.warnings {
         tracing::warn!(event = "index_chunking_config_setting_dropped", warning);
+    }
+    let unserved = chunking.unserved_use_llm_extensions();
+    if !unserved.is_empty() {
+        tracing::warn!(
+            event = "index_use_llm_ignored",
+            extensions = ?unserved,
+            "`use_llm` describes standalone image files only; for these extensions (images inside documents) it has no effect"
+        );
     }
     let bearer = run.context.model_facade_token();
     let project_id = run.context.resource_project_id().to_string();
@@ -377,33 +412,69 @@ pub(crate) async fn run_index(
         chunking: Arc::new(chunking),
         space: expected_space(run.command),
         consecutive_embedding_failures: 0,
-        steps: ModelSteps::new(chat, &runtime.limits),
+        steps: ModelSteps::lazy(&runtime.limits),
         tally: Tally::default(),
     }
     .run()
     .await
 }
 
-/// The chat model of the steps that call one: the claim's `index.llm_model`
-/// entry bound through the runtime's binder. `None` when the claim names no
-/// model or the deployment has no binder (those steps skip `no_model`).
+/// Loads the run's chat model on first need: the claim's `index.llm_model`
+/// entry bound through the runtime's binder, with `index.llm_configuration`'s
+/// settings. Entries come from the claim's [`ChatEntrySource`] (fetched
+/// together, once) or, without one, from the run's own bytes.
+struct RunChatLoader<'a> {
+    runtime: &'a IndexIngestRuntime,
+    run: &'a IndexRun<'a>,
+}
+
+#[async_trait::async_trait]
+impl ChatLoader for RunChatLoader<'_> {
+    async fn load(&self) -> Result<Option<ChatBinding>, ChatUnavailable> {
+        let fetched;
+        let (model, configuration) = match self.run.chat_entries {
+            Some(source) => {
+                fetched = source.load().await?;
+                (
+                    fetched.model.as_ref().map(MaterializedInput::as_bytes),
+                    fetched
+                        .configuration
+                        .as_ref()
+                        .map(MaterializedInput::as_bytes),
+                )
+            }
+            None => (self.run.llm_model, self.run.llm_configuration),
+        };
+        chat_binding(self.runtime, model, configuration)
+    }
+}
+
+/// The chat model of the steps that call one. `Ok(None)` when the claim names
+/// no model or the deployment has no binder (those steps skip `no_model`).
 ///
 /// # Errors
 ///
-/// An entry that is present and malformed.
+/// An entry that is present and malformed: no model, and never default
+/// settings in place of a configuration that cannot be read.
 fn chat_binding(
     runtime: &IndexIngestRuntime,
-    run: &IndexRun<'_>,
-) -> Result<Option<ChatBinding>, IndexRunFailure> {
-    let Some(raw) = run.llm_model else {
+    model: Option<&[u8]>,
+    configuration: Option<&[u8]>,
+) -> Result<Option<ChatBinding>, ChatUnavailable> {
+    let unreadable = |error: inputs::InputError| {
+        tracing::warn!(
+            event = "index_chat_model_entries_unreadable",
+            reason = %error.0,
+            "the chat model entries are unreadable; images are skipped no_model and a proposal run fails"
+        );
+        ChatUnavailable
+    };
+    let Some(raw) = model else {
         return Ok(None);
     };
-    let model_name =
-        inputs::llm_model(raw).map_err(|error| IndexRunFailure::InvalidInput(error.0))?;
-    let settings = match run.llm_configuration {
-        Some(raw) => {
-            inputs::llm_settings(raw).map_err(|error| IndexRunFailure::InvalidInput(error.0))?
-        }
+    let model_name = inputs::llm_model(raw).map_err(unreadable)?;
+    let settings = match configuration {
+        Some(raw) => inputs::llm_settings(raw).map_err(unreadable)?,
         None => inputs::LlmSettings::default(),
     };
     Ok(runtime.chat_models.clone().map(|binder| ChatBinding {
@@ -618,6 +689,16 @@ impl Runner<'_> {
                             Err(halt) => break Err(halt),
                         }
                     }
+                    Ok(Preparation::Vision(mut prepared, raw)) => {
+                        match self.fulfil_vision(&raw).await {
+                            Ok(Some(chunks)) => {
+                                prepared.chunks = chunks;
+                                prepared
+                            }
+                            Ok(None) => continue,
+                            Err(halt) => break Err(halt),
+                        }
+                    }
                     Ok(Preparation::Skipped(reason)) => {
                         self.tally.skip(reason);
                         continue;
@@ -777,15 +858,45 @@ impl Runner<'_> {
     /// chunks, or `None` when the document was skipped under a reason the
     /// tally now holds.
     async fn fulfil_model_step(&mut self, plan: ChunkPlan) -> Result<Option<Vec<Chunk>>, Halt> {
+        let loader = RunChatLoader {
+            runtime: self.runtime,
+            run: self.run,
+        };
         let env = StepEnv {
             embeddings: &self.runtime.embeddings,
             context: self.run.context,
             embedding_model: self.model,
             limits: &self.runtime.limits,
+            chat_loader: Some(&loader),
         };
         let run = self.run;
         let alive = move || run_liveness(run);
-        match self.steps.fulfil(plan, &env, &alive).await {
+        let end = self.steps.fulfil(plan, &env, &alive).await;
+        self.settle(end)
+    }
+
+    /// [`Self::fulfil_model_step`] for an image file's description.
+    async fn fulfil_vision(&mut self, raw: &RawImage) -> Result<Option<Vec<Chunk>>, Halt> {
+        let loader = RunChatLoader {
+            runtime: self.runtime,
+            run: self.run,
+        };
+        let env = StepEnv {
+            embeddings: &self.runtime.embeddings,
+            context: self.run.context,
+            embedding_model: self.model,
+            limits: &self.runtime.limits,
+            chat_loader: Some(&loader),
+        };
+        let run = self.run;
+        let alive = move || run_liveness(run);
+        let end = self.steps.describe(raw, &env, &alive).await;
+        self.settle(end)
+    }
+
+    /// What a model step's end means for the run.
+    fn settle(&mut self, end: StepEnd) -> Result<Option<Vec<Chunk>>, Halt> {
+        match end {
             StepEnd::Chunks(chunks) if chunks.is_empty() => {
                 self.tally.skip(SKIP_EMPTY);
                 Ok(None)
@@ -1166,6 +1277,39 @@ fn expected_dimension(command: &IndexIngestCommandV1) -> Option<usize> {
         .then_some(command.expected_embedding_dimension as usize)
 }
 
+/// The extension whose settings block governs an image whose key has no image
+/// extension (a download named by its id): the bytes' own type when they are
+/// one the step reads, else the declared media type's.
+fn image_extension(class: VisionImage, declared: &str) -> String {
+    let sniffed = match class {
+        VisionImage::Supported("image/png") => ".png",
+        VisionImage::Supported("image/jpeg") => ".jpg",
+        VisionImage::Supported("image/gif") => ".gif",
+        VisionImage::Supported("image/webp") => ".webp",
+        VisionImage::Bmp => ".bmp",
+        _ => "",
+    };
+    if !sniffed.is_empty() {
+        return sniffed.to_owned();
+    }
+    let declared = declared
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match declared.as_str() {
+        "image/png" | "image/x-png" => ".png",
+        "image/jpeg" | "image/jpg" | "image/pjpeg" => ".jpg",
+        "image/gif" => ".gif",
+        "image/webp" => ".webp",
+        "image/bmp" | "image/x-bmp" | "image/x-ms-bmp" => ".bmp",
+        "image/svg+xml" | "image/svg" => ".svg",
+        _ => "",
+    }
+    .to_owned()
+}
+
 /// Fetch, extract and chunk one document. Runs as its own task; the CPU
 /// work (extraction, tokenising) is on a blocking thread. A PDF or Office
 /// document is read by the extraction sidecar when the run has one
@@ -1219,6 +1363,50 @@ async fn prepare(
         ..reference
     };
     let mut bytes = document.bytes;
+    // A standalone image is described by the chat model (ADR-0030 I4 part B),
+    // never extracted as text.
+    let class = elitea_doc_extract::image_for_vision(&mime, &bytes);
+    if !matches!(class, VisionImage::NotAnImage) {
+        // Whether the step is on comes FIRST: a vision-off image is
+        // `unsupported_type` whatever its bytes are.
+        let by_name = elitea_doc_chunk::extension_of(&key);
+        let settings_extension = if elitea_doc_chunk::is_image_extension(&by_name) {
+            by_name
+        } else {
+            image_extension(class, &mime)
+        };
+        let ImagePlan::Vision(vision) =
+            elitea_doc_chunk::plan_image(&settings_extension, &chunking)
+        else {
+            return Preparation::Skipped(SKIP_UNSUPPORTED);
+        };
+        let kind = match class {
+            VisionImage::Supported(media_type) => ImageKind::Native(media_type),
+            VisionImage::Bmp => ImageKind::Bmp,
+            VisionImage::Corrupt => return Preparation::Skipped(SKIP_UNREADABLE),
+            // SVG, TIFF, ...: not converted by this build.
+            VisionImage::Unsupported | VisionImage::NotAnImage => {
+                return Preparation::Skipped(SKIP_UNSUPPORTED);
+            }
+        };
+        // Fitting (decode, resize) waits for the run's loop: the chat model,
+        // the cache and the image budget are checked first, and only a call
+        // that will really be made pays for the decode.
+        return Preparation::Vision(
+            Box::new(Prepared {
+                reference,
+                plan,
+                metadata,
+                acl,
+                chunks: Vec::new(),
+            }),
+            RawImage {
+                bytes: Bytes::from(bytes),
+                kind,
+                plan: vision,
+            },
+        );
+    }
     // A document format (PDF, Office, e-mail) is the sidecar's to read; this
     // process extracts text and HTML itself, on the blocking thread below.
     let sidecar_text = if elitea_doc_extract::is_document_type(&mime) {
@@ -1270,7 +1458,8 @@ async fn prepare(
             Ok(model_step @ (ChunkPlan::Proposal(_) | ChunkPlan::Statistical(_))) => {
                 Preparation::Model(prepared(Vec::new()), model_step)
             }
-            // The image step (`use_llm`) is not served yet.
+            // `plan_with` returns the model steps as plans, so this is a
+            // defensive arm: a chunker that still needs a model skips.
             Err(ChunkError::RequiresModel { .. }) => Preparation::Skipped(SKIP_NEEDS_MODEL),
             Err(
                 error @ (ChunkError::UnknownChunker(_)
