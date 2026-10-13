@@ -587,7 +587,7 @@ pub(crate) fn build_toolkit_execute_read_terminal_output_frame(
             let bytes = result.encode_to_vec();
             (
                 ExecutionOutputEventTypeV1::IndexIngestResult,
-                execution_output_frame_v1::Payload::IndexIngest(*result),
+                execution_output_frame_v1::Payload::IndexIngest(result),
                 bytes,
                 outcome,
             )
