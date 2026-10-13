@@ -208,3 +208,67 @@ fn unsafe_code_is_forbidden() {
         }
     }
 }
+
+#[test]
+fn every_locked_zavora_package_is_at_the_pinned_version() {
+    // Exact pins on the three top-level crates do not pin their sub-crates:
+    // the lock does. This fails when a sub-crate moves (a `cargo update`, or
+    // a Dependabot grouped bump that slipped past the ignore rule) without
+    // the reviewed PR that reruns the hostile corpus.
+    let lock = fs::read_to_string(crate_dir().join("../Cargo.lock")).unwrap();
+    let mut found: Vec<(String, String)> = Vec::new();
+    let mut name = None;
+    for line in lock.lines() {
+        if let Some(n) = line.strip_prefix("name = \"") {
+            name = Some(n.trim_end_matches('"').to_owned());
+        } else if let (Some(v), Some(n)) = (line.strip_prefix("version = \""), name.take())
+            && n.starts_with("zavora-")
+        {
+            found.push((n, v.trim_end_matches('"').to_owned()));
+        }
+    }
+    found.sort();
+    let expected: Vec<(String, String)> = [
+        ("zavora-docx", "0.1.4"),
+        ("zavora-docx-html", "0.1.4"),
+        ("zavora-docx-layout", "0.1.4"),
+        ("zavora-docx-opc", "0.1.4"),
+        ("zavora-docx-oxml", "0.1.4"),
+        ("zavora-docx-pdf", "0.1.4"),
+        ("zavora-slide", "0.1.1"),
+        ("zavora-slide-layout", "0.1.1"),
+        ("zavora-slide-opc", "0.1.1"),
+        ("zavora-slide-oxml", "0.1.1"),
+        ("zavora-slide-pdf", "0.1.1"),
+        ("zavora-slide-render", "0.1.1"),
+        ("zavora-slide-xlsx", "0.1.1"),
+        ("zavora-xlsx", "0.1.2"),
+    ]
+    .iter()
+    .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+    .collect();
+    assert_eq!(
+        found, expected,
+        "a zavora-* package moved in libs/rust/Cargo.lock"
+    );
+}
+
+#[test]
+fn dependabot_ignores_zavora_for_libs_rust() {
+    let cfg = fs::read_to_string(crate_dir().join("../../../.github/dependabot.yml")).unwrap();
+    let at = cfg
+        .find("package-ecosystem: cargo")
+        .expect("a cargo ecosystem");
+    let block_end = cfg[at..]
+        .find("\n  - package-ecosystem")
+        .map_or(cfg.len(), |i| at + i);
+    let block = &cfg[at..block_end];
+    assert!(
+        block.contains("- /libs/rust\n"),
+        "the cargo entry must be the one that scans libs/rust"
+    );
+    assert!(
+        block.contains("ignore:") && block.contains("dependency-name: \"zavora-*\""),
+        "the libs/rust cargo entry must ignore zavora-*:\n{block}"
+    );
+}

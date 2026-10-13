@@ -2,12 +2,11 @@
 //! library; those calls return [`OfficeError::Unsupported`].
 
 use std::fmt::Write as _;
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 use zavora_xlsx::{CellValue as ZCell, Error as ZError, Workbook as ZWorkbook};
 
 use crate::error::{Limit, OfficeError, Result, limit};
-use crate::guard::run_guarded;
+use crate::guard::{Shared, run_guarded};
 use crate::limits::Limits;
 use crate::validate::{Kind, Mode, finish_output, validate_and_repack};
 
@@ -105,9 +104,11 @@ impl CellRange {
 
 /// An xlsx workbook.
 pub struct Workbook {
-    wb: Arc<Mutex<ZWorkbook>>,
+    wb: Shared<ZWorkbook>,
     limits: Limits,
-    cells_written: u64,
+    /// Distinct cells holding a value: counted at open from the gate's pass
+    /// over the sheets, then once per cell that goes from empty to written.
+    cells: u64,
     inline_strings: bool,
 }
 
@@ -122,34 +123,41 @@ impl Workbook {
     #[must_use]
     pub fn new(limits: &Limits) -> Self {
         Self {
-            wb: Arc::new(Mutex::new(ZWorkbook::new())),
+            wb: Shared::new(ZWorkbook::new(), limits),
             limits: limits.clone(),
-            cells_written: 0,
+            cells: 0,
             inline_strings: false,
         }
     }
 
     /// Validate `bytes` (see [`crate::Limits`]) and open them for editing.
+    /// Every sheet is parsed here, on the parse thread, so later reads and
+    /// writes never trigger a parse on the caller's thread.
     ///
     /// # Errors
-    /// [`OfficeError::LimitExceeded`], [`OfficeError::Malformed`],
+    /// [`OfficeError::LimitExceeded`] (including [`Limit::Cells`] for a file
+    /// with more cells than `max_cells`), [`OfficeError::Malformed`],
     /// [`OfficeError::Unsupported`], [`OfficeError::Busy`],
     /// [`OfficeError::DeadlineExceeded`].
     pub fn open(bytes: &[u8], limits: &Limits) -> Result<Self> {
         crate::validate::precheck_len(bytes.len(), limits)?;
         let (data, l) = (bytes.to_vec(), limits.clone());
-        let (wb, inline_strings) = run_guarded(limits, move || {
+        let (wb, cells, inline_strings) = run_guarded(limits, move || {
             let r = validate_and_repack(&data, Kind::Xlsx, Mode::Keep, &l)?;
-            let wb = ZWorkbook::open_from_buffer(&r.bytes).map_err(map_err)?;
+            let mut wb = ZWorkbook::open_from_buffer(&r.bytes).map_err(map_err)?;
             if wb.sheet_count() as u64 > l.max_sheets {
                 return Err(limit(Limit::Sheets, wb.sheet_count() as u64));
             }
-            Ok((wb, r.inline_strings))
+            // zavora-xlsx parses a sheet on first access: do all of it now.
+            for i in 0..wb.sheet_count() {
+                wb.worksheet(i).map_err(map_err)?;
+            }
+            Ok((wb, r.cells, r.inline_strings))
         })?;
         Ok(Self {
-            wb: Arc::new(Mutex::new(wb)),
+            wb: Shared::new(wb, limits),
             limits: limits.clone(),
-            cells_written: 0,
+            cells,
             inline_strings,
         })
     }
@@ -164,29 +172,14 @@ impl Workbook {
         self.inline_strings
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, ZWorkbook>> {
-        self.wb.try_lock().map_err(|e| match e {
-            TryLockError::WouldBlock => OfficeError::Busy,
-            TryLockError::Poisoned(_) => {
-                OfficeError::Internal("workbook state poisoned by a panic".into())
-            }
-        })
-    }
-
     /// Serialise to a validated, canonical xlsx.
     ///
     /// # Errors
     /// Any limit violation of the produced file.
     pub fn save(&self) -> Result<Vec<u8>> {
-        let (wb, l) = (self.wb.clone(), self.limits.clone());
-        run_guarded(&self.limits, move || {
-            let mut g = wb.try_lock().map_err(|_| OfficeError::Busy)?;
-            let raw = g.save_to_buffer().map_err(map_err)?;
-            let out = finish_output(&raw, Kind::Xlsx, &l)?;
-            if out.len() as u64 > l.max_input_bytes {
-                return Err(limit(Limit::InputBytes, out.len() as u64));
-            }
-            Ok(out)
+        self.wb.guarded(|w, l| {
+            let raw = w.save_to_buffer().map_err(map_err)?;
+            finish_output(&raw, Kind::Xlsx, l)
         })
     }
 
@@ -196,6 +189,7 @@ impl Workbook {
     /// [`OfficeError::Busy`].
     pub fn sheet_names(&self) -> Result<Vec<String>> {
         Ok(self
+            .wb
             .lock()?
             .sheet_names()
             .into_iter()
@@ -209,7 +203,7 @@ impl Workbook {
     /// [`Limit::Sheets`] past `max_sheets`; [`OfficeError::InvalidInput`] for a
     /// bad or duplicate name.
     pub fn add_sheet(&mut self, name: &str) -> Result<usize> {
-        let mut w = self.lock()?;
+        let mut w = self.wb.lock()?;
         let n = w.sheet_count() as u64 + 1;
         if n > self.limits.max_sheets {
             return Err(limit(Limit::Sheets, n));
@@ -223,7 +217,7 @@ impl Workbook {
     /// # Errors
     /// [`OfficeError::NotFound`] for a bad index.
     pub fn remove_sheet(&mut self, index: usize) -> Result<()> {
-        self.lock()?.remove_worksheet(index).map_err(map_err)
+        self.wb.lock()?.remove_worksheet(index).map_err(map_err)
     }
 
     /// Rename a sheet.
@@ -231,15 +225,20 @@ impl Workbook {
     /// # Errors
     /// [`OfficeError::NotFound`] or [`OfficeError::InvalidInput`].
     pub fn rename_sheet(&mut self, index: usize, name: &str) -> Result<()> {
-        self.lock()?.rename_worksheet(index, name).map_err(map_err)
+        self.wb
+            .lock()?
+            .rename_worksheet(index, name)
+            .map_err(map_err)
     }
 
-    /// Write one cell (0-based row and column).
+    /// Write one cell (0-based row and column). A cell counts against
+    /// `max_cells` once, when it goes from empty to written; overwriting does
+    /// not, and a failed write does not.
     ///
     /// # Errors
-    /// [`Limit::Cells`] past `max_cells` writes, [`OfficeError::InvalidInput`]
-    /// outside the sheet grid, [`OfficeError::Unsupported`] for `DateTime`
-    /// (write a number with a date format once styles are exposed).
+    /// [`Limit::Cells`] past `max_cells`, [`OfficeError::InvalidInput`]
+    /// outside the sheet grid, [`OfficeError::Unsupported`] for `Error` and
+    /// `DateTime` values (zavora-xlsx 0.1.2 has no way to write either).
     pub fn write_cell(
         &mut self,
         sheet: usize,
@@ -252,12 +251,13 @@ impl Workbook {
                 "cell ({row},{col}) is outside the sheet grid"
             )));
         }
-        self.cells_written += 1;
-        if self.cells_written > self.limits.max_cells {
-            return Err(limit(Limit::Cells, self.cells_written));
-        }
-        let mut w = self.lock()?;
+        let mut w = self.wb.lock()?;
         let ws = w.worksheet(sheet).map_err(map_err)?;
+        let was_empty = matches!(ws.read_cell(row, col), ZCell::Empty);
+        let grows = was_empty && !matches!(value, CellValue::Empty);
+        if grows && self.cells + 1 > self.limits.max_cells {
+            return Err(limit(Limit::Cells, self.cells + 1));
+        }
         match value {
             CellValue::Empty => ws
                 .write_blank(row, col, &zavora_xlsx::Format::new())
@@ -266,14 +266,22 @@ impl Workbook {
             CellValue::Number(n) => ws.write(row, col, *n).map(|_| ()),
             CellValue::Bool(b) => ws.write(row, col, *b).map(|_| ()),
             CellValue::Formula { formula, .. } => ws.write_formula(row, col, formula).map(|_| ()),
-            CellValue::Error(e) => ws.write(row, col, e.as_str()).map(|_| ()),
+            CellValue::Error(_) => {
+                return Err(OfficeError::Unsupported(
+                    "zavora-xlsx 0.1.2 cannot write an error cell (t=\"e\")".into(),
+                ));
+            }
             _ => {
                 return Err(OfficeError::Unsupported(
                     "this cell value kind cannot be written".into(),
                 ));
             }
         }
-        .map_err(map_err)
+        .map_err(map_err)?;
+        if grows {
+            self.cells += 1;
+        }
+        Ok(())
     }
 
     /// Write a row of cells starting at `col`.
@@ -300,7 +308,7 @@ impl Workbook {
     /// # Errors
     /// [`OfficeError::NotFound`] for a bad sheet.
     pub fn read_cell(&self, sheet: usize, row: u32, col: u16) -> Result<CellValue> {
-        let mut w = self.lock()?;
+        let mut w = self.wb.lock()?;
         Ok(w.worksheet(sheet)
             .map_err(map_err)?
             .read_cell(row, col)
@@ -312,7 +320,7 @@ impl Workbook {
     /// # Errors
     /// [`OfficeError::NotFound`] for a bad sheet.
     pub fn used_range(&self, sheet: usize) -> Result<Option<CellRange>> {
-        let mut w = self.lock()?;
+        let mut w = self.wb.lock()?;
         Ok(w.worksheet(sheet).map_err(map_err)?.used_range().map(
             |(first_row, first_col, last_row, last_col)| CellRange {
                 first_row,
@@ -336,7 +344,7 @@ impl Workbook {
         if n > self.limits.max_cells {
             return Err(limit(Limit::Cells, n));
         }
-        let mut w = self.lock()?;
+        let mut w = self.wb.lock()?;
         let ws = w.worksheet(sheet).map_err(map_err)?;
         Ok((range.first_row..=range.last_row)
             .map(|r| {

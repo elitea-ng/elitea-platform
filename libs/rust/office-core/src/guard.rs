@@ -12,7 +12,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -71,9 +71,19 @@ pub struct Health {
     /// Age of the oldest live parse thread.
     pub longest_held: Duration,
     /// True when some thread has lived more than three of its call's
-    /// deadlines: a runaway library call. The worker should report itself not
-    /// ready so the orchestrator recycles it.
+    /// deadlines: a runaway library call. See [`Health::stuck`].
     pub degraded: bool,
+}
+
+impl Health {
+    /// A parse thread outlived three deadlines and the library will not give
+    /// it back. The worker should stop claiming new work, let its other
+    /// in-flight calls finish within its drain timeout, and exit non-zero so
+    /// the orchestrator restarts the pod (ADR-0032 decision 3).
+    #[must_use]
+    pub fn stuck(&self) -> bool {
+        self.degraded
+    }
 }
 
 /// The current state of the process-wide permit gate.
@@ -126,20 +136,95 @@ where
     }
 }
 
+/// Lock a mutex without waiting: `Busy` when a running or abandoned call holds
+/// it, `Internal` when a panic poisoned it (the state may be half-edited).
+pub(crate) fn try_lock<T>(m: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
+    m.try_lock().map_err(|e| match e {
+        TryLockError::WouldBlock => OfficeError::Busy,
+        TryLockError::Poisoned(_) => {
+            OfficeError::Internal("document state poisoned by a panic".into())
+        }
+    })
+}
+
+/// A document shared with the parse thread: the one place that locks it and
+/// the one place that runs a guarded call on it.
+pub(crate) struct Shared<T> {
+    inner: Arc<Mutex<T>>,
+    limits: Limits,
+}
+
+impl<T: Send + 'static> Shared<T> {
+    pub(crate) fn new(value: T, limits: &Limits) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(value)),
+            limits: limits.clone(),
+        }
+    }
+
+    /// Lock for a small edit on the caller's thread.
+    pub(crate) fn lock(&self) -> Result<MutexGuard<'_, T>> {
+        try_lock(&self.inner)
+    }
+
+    /// Run `f` on the parse thread with the document locked.
+    pub(crate) fn guarded<R, F>(&self, f: F) -> Result<R>
+    where
+        R: Send + 'static,
+        F: FnOnce(&mut T, &Limits) -> Result<R> + Send + 'static,
+    {
+        let (inner, l) = (self.inner.clone(), self.limits.clone());
+        run_guarded(&self.limits, move || {
+            let mut g = try_lock(&inner)?;
+            f(&mut g, &l)
+        })
+    }
+
+    pub(crate) fn limits(&self) -> &Limits {
+        &self.limits
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn panics_become_internal_errors_and_release_the_permit() {
-        let l = Limits::default();
+        let l = roomy();
         let r: Result<()> = run_guarded(&l, || panic!("boom"));
         assert!(matches!(r, Err(OfficeError::Internal(_))));
     }
 
+    fn roomy() -> Limits {
+        Limits {
+            max_concurrent: 64,
+            ..Limits::default()
+        }
+    }
+
+    #[test]
+    fn a_panic_poisons_the_document_and_reads_as_internal_not_busy() {
+        let s = Shared::new(1u32, &roomy());
+        let r: Result<()> = s.guarded(|_, _| panic!("boom"));
+        assert!(matches!(r, Err(OfficeError::Internal(_))));
+        assert!(matches!(s.lock(), Err(OfficeError::Internal(_))));
+        assert!(matches!(
+            s.guarded(|_, _| Ok(())),
+            Err(OfficeError::Internal(_))
+        ));
+    }
+
+    #[test]
+    fn a_held_document_reads_as_busy() {
+        let s = Shared::new(1u32, &roomy());
+        let _held = s.lock().unwrap();
+        assert!(matches!(s.lock(), Err(OfficeError::Busy)));
+    }
+
     #[test]
     fn the_thread_has_the_fixed_stack_and_name() {
-        let l = Limits::default();
+        let l = roomy();
         let name = run_guarded(&l, || Ok(thread::current().name().map(str::to_owned))).unwrap();
         assert_eq!(name.as_deref(), Some("office-core-parse"));
     }

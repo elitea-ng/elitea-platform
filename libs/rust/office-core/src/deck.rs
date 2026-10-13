@@ -1,12 +1,11 @@
 //! `Deck`: a pptx presentation (over `zavora-slide`).
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, TryLockError};
 
 use zavora_slide::{Bullet as ZBullet, Emu, Layout, Presentation, RenderFormat, SlideError};
 
 use crate::error::{Limit, OfficeError, Result, limit};
-use crate::guard::run_guarded;
+use crate::guard::{Shared, run_guarded};
 use crate::limits::Limits;
 use crate::validate::{Kind, Mode, check_new_image, finish_output, validate_and_repack};
 
@@ -140,7 +139,8 @@ pub struct ChartSpec {
 }
 
 impl ChartSpec {
-    pub(crate) fn check(&self, l: &Limits) -> Result<()> {
+    /// Validate shape and size; returns the number of data points.
+    pub(crate) fn check(&self, l: &Limits) -> Result<u64> {
         let points = (self.categories.len() as u64).saturating_mul(self.series.len().max(1) as u64);
         if points > l.max_cells {
             return Err(limit(Limit::Cells, points));
@@ -154,7 +154,7 @@ impl ChartSpec {
                 "every series needs one value per category".into(),
             ));
         }
-        Ok(())
+        Ok(points)
     }
 }
 
@@ -232,9 +232,10 @@ pub struct PlaceholderRef {
 /// caller's thread. All calls are synchronous: from async code, wrap them in
 /// `spawn_blocking`.
 pub struct Deck {
-    pres: Arc<Mutex<Presentation>>,
+    pres: Shared<Presentation>,
     limits: Limits,
     images: u64,
+    cells: u64,
     next_chart: usize,
 }
 
@@ -249,9 +250,10 @@ impl Deck {
     #[must_use]
     pub fn new(limits: &Limits) -> Self {
         Self {
-            pres: Arc::new(Mutex::new(Presentation::new())),
+            pres: Shared::new(Presentation::new(), limits),
             limits: limits.clone(),
             images: 0,
+            cells: 0,
             next_chart: 1,
         }
     }
@@ -265,44 +267,29 @@ impl Deck {
     pub fn open(bytes: &[u8], limits: &Limits) -> Result<Self> {
         crate::validate::precheck_len(bytes.len(), limits)?;
         let (data, l) = (bytes.to_vec(), limits.clone());
-        let (pres, images, max_chart) = run_guarded(limits, move || {
+        let (pres, images, cells, max_chart) = run_guarded(limits, move || {
             let r = validate_and_repack(&data, Kind::Pptx, Mode::Keep, &l)?;
             let p = Presentation::open_from_bytes(&r.bytes).map_err(map_err)?;
             if p.slide_count() as u64 > l.max_slides {
                 return Err(limit(Limit::Slides, p.slide_count() as u64));
             }
-            Ok((p, r.images, r.max_chart_index))
+            Ok((p, r.images, r.cells, r.max_chart_index))
         })?;
         Ok(Self {
-            pres: Arc::new(Mutex::new(pres)),
+            pres: Shared::new(pres, limits),
             limits: limits.clone(),
             images,
+            cells,
             next_chart: usize::try_from(max_chart).unwrap_or(0) + 1,
         })
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Presentation>> {
-        self.pres.try_lock().map_err(|e| match e {
-            TryLockError::WouldBlock => OfficeError::Busy,
-            TryLockError::Poisoned(_) => {
-                OfficeError::Internal("deck state poisoned by a panic".into())
-            }
-        })
-    }
-
-    fn guarded<R, F>(&self, f: F) -> Result<R>
-    where
-        R: Send + 'static,
-        F: FnOnce(&Presentation, &Limits) -> Result<R> + Send + 'static,
-    {
-        let (pres, l) = (self.pres.clone(), self.limits.clone());
-        run_guarded(&self.limits, move || {
-            let g = pres.try_lock().map_err(|e| match e {
-                TryLockError::WouldBlock => OfficeError::Busy,
-                TryLockError::Poisoned(_) => OfficeError::Internal("deck state poisoned".into()),
-            })?;
-            f(&g, &l)
-        })
+    fn charge_cells(&self, more: u64) -> Result<u64> {
+        let total = self.cells.saturating_add(more);
+        if total > self.limits.max_cells {
+            return Err(limit(Limit::Cells, total));
+        }
+        Ok(total)
     }
 
     /// Serialise to a validated, canonical pptx.
@@ -310,13 +297,9 @@ impl Deck {
     /// # Errors
     /// Any limit violation of the produced file, [`OfficeError::Busy`].
     pub fn save(&self) -> Result<Vec<u8>> {
-        self.guarded(|p, l| {
+        self.pres.guarded(|p, l| {
             let raw = p.save_to_buffer().map_err(map_err)?;
-            let out = finish_output(&raw, Kind::Pptx, l)?;
-            if out.len() as u64 > l.max_input_bytes {
-                return Err(limit(Limit::InputBytes, out.len() as u64));
-            }
-            Ok(out)
+            finish_output(&raw, Kind::Pptx, l)
         })
     }
 
@@ -325,7 +308,7 @@ impl Deck {
     /// # Errors
     /// [`OfficeError::Busy`] when a runaway call holds the deck.
     pub fn slide_count(&self) -> Result<usize> {
-        Ok(self.lock()?.slide_count())
+        Ok(self.pres.lock()?.slide_count())
     }
 
     /// Append a slide; returns its 0-based index.
@@ -333,7 +316,7 @@ impl Deck {
     /// # Errors
     /// [`Limit::Slides`] past `max_slides`.
     pub fn add_slide(&mut self, layout: SlideLayout) -> Result<usize> {
-        let mut p = self.lock()?;
+        let mut p = self.pres.lock()?;
         let n = p.slide_count() as u64 + 1;
         if n > self.limits.max_slides {
             return Err(limit(Limit::Slides, n));
@@ -352,7 +335,7 @@ impl Deck {
     /// # Errors
     /// [`OfficeError::NotFound`] for a bad index.
     pub fn delete_slide(&mut self, index: usize) -> Result<()> {
-        self.lock()?.delete_slide(index).map_err(map_err)
+        self.pres.lock()?.delete_slide(index).map_err(map_err)
     }
 
     /// Move slide `from` so that it ends up at index `to`.
@@ -360,7 +343,7 @@ impl Deck {
     /// # Errors
     /// [`OfficeError::NotFound`] for a bad index.
     pub fn move_slide(&mut self, from: usize, to: usize) -> Result<()> {
-        self.lock()?.move_slide(from, to).map_err(map_err)
+        self.pres.lock()?.move_slide(from, to).map_err(map_err)
     }
 
     /// Set the title placeholder text.
@@ -368,7 +351,8 @@ impl Deck {
     /// # Errors
     /// [`OfficeError::NotFound`] when the slide has no title placeholder.
     pub fn set_title(&mut self, slide: usize, text: &str) -> Result<()> {
-        self.lock()?
+        self.pres
+            .lock()?
             .slide_mut(slide)
             .map_err(map_err)?
             .set_title(text)
@@ -380,7 +364,7 @@ impl Deck {
     /// # Errors
     /// [`OfficeError::NotFound`] for a bad slide.
     pub fn add_text(&mut self, slide: usize, text: &str, at: Rect) -> Result<()> {
-        let mut p = self.lock()?;
+        let mut p = self.pres.lock()?;
         let mut s = p.slide_mut(slide).map_err(map_err)?;
         s.add_text_box(text, Emu(at.x), Emu(at.y), Emu(at.w), Emu(at.h));
         Ok(())
@@ -399,7 +383,8 @@ impl Deck {
                 bold: b.bold,
             })
             .collect();
-        self.lock()?
+        self.pres
+            .lock()?
             .slide_mut(slide)
             .map_err(map_err)?
             .add_bullets(&z)
@@ -410,23 +395,22 @@ impl Deck {
     /// tables created in this session, for [`Deck::set_table_cell`].
     ///
     /// # Errors
-    /// [`Limit::Cells`] when `rows * cols` exceeds `max_cells`.
+    /// [`Limit::Cells`] when the deck's cells would exceed `max_cells`.
     pub fn add_table(&mut self, slide: usize, rows: usize, cols: usize, at: Rect) -> Result<usize> {
         if rows == 0 || cols == 0 {
             return Err(OfficeError::InvalidInput(
                 "a table needs at least one row and column".into(),
             ));
         }
-        let cells = (rows as u64).saturating_mul(cols as u64);
-        if cells > self.limits.max_cells {
-            return Err(limit(Limit::Cells, cells));
-        }
-        let mut p = self.lock()?;
-        let mut s = p.slide_mut(slide).map_err(map_err)?;
-        Ok(
+        let total = self.charge_cells((rows as u64).saturating_mul(cols as u64))?;
+        let idx = {
+            let mut p = self.pres.lock()?;
+            let mut s = p.slide_mut(slide).map_err(map_err)?;
             s.add_table(rows, cols, Emu(at.x), Emu(at.y), Emu(at.w), Emu(at.h))
-                .0,
-        )
+                .0
+        };
+        self.cells = total;
+        Ok(idx)
     }
 
     /// Set a cell of a table added with [`Deck::add_table`].
@@ -442,7 +426,8 @@ impl Deck {
         col: usize,
         text: &str,
     ) -> Result<()> {
-        self.lock()?
+        self.pres
+            .lock()?
             .slide_mut(slide)
             .map_err(map_err)?
             .set_table_cell(zavora_slide::TableId(table), row, col, text)
@@ -462,7 +447,8 @@ impl Deck {
         col: usize,
         text: &str,
     ) -> Result<()> {
-        self.lock()?
+        self.pres
+            .lock()?
             .slide_mut(slide)
             .map_err(map_err)?
             .table_set_cell_text(shape, row, col, text)
@@ -474,7 +460,8 @@ impl Deck {
     /// # Errors
     /// [`Limit::Cells`] for a chart with too many points.
     pub fn add_chart(&mut self, slide: usize, spec: &ChartSpec, at: Rect) -> Result<()> {
-        spec.check(&self.limits)?;
+        let points = spec.check(&self.limits)?;
+        let total = self.charge_cells(points)?;
         let kind = match spec.kind {
             ChartKind::ClusteredBar => zavora_slide::ChartKind::ClusteredBar,
             ChartKind::StackedBar => zavora_slide::ChartKind::StackedBar,
@@ -499,25 +486,29 @@ impl Deck {
             data_labels: spec.data_labels,
         };
         let index = self.next_chart;
-        self.lock()?
+        self.pres
+            .lock()?
             .slide_mut(slide)
             .map_err(map_err)?
             .add_chart(&z, Emu(at.x), Emu(at.y), Emu(at.w), Emu(at.h), index)
             .map_err(map_err)?;
         self.next_chart += 1;
+        self.cells = total;
         Ok(())
     }
 
-    /// Insert a PNG, JPEG or GIF. The header is read first: more than
-    /// `max_image_pixels` pixels, or an unreadable header, is refused before
-    /// the library sees the bytes.
+    /// Insert a PNG, JPEG or GIF. The signature and header are checked first
+    /// (the same gate as an image inside an opened file): more than
+    /// `max_image_pixels` pixels, an unreadable header or an unknown format is
+    /// refused before the library sees the bytes.
     ///
     /// # Errors
     /// [`Limit::ImagePixels`], [`Limit::Images`], [`Limit::MediaPartBytes`],
     /// [`OfficeError::InvalidInput`].
     pub fn add_image(&mut self, slide: usize, data: &[u8], at: Rect) -> Result<()> {
         check_new_image(data, self.images, &self.limits)?;
-        self.lock()?
+        self.pres
+            .lock()?
             .slide_mut(slide)
             .map_err(map_err)?
             .insert_image_bytes(data, Emu(at.x), Emu(at.y), Emu(at.w), Emu(at.h))
@@ -531,7 +522,8 @@ impl Deck {
     /// # Errors
     /// [`OfficeError::NotFound`] for a bad slide.
     pub fn set_notes(&mut self, slide: usize, text: &str) -> Result<()> {
-        self.lock()?
+        self.pres
+            .lock()?
             .slide_mut(slide)
             .map_err(map_err)?
             .set_notes(text);
@@ -544,6 +536,7 @@ impl Deck {
     /// [`OfficeError::NotFound`] for a bad slide.
     pub fn notes(&self, slide: usize) -> Result<Option<String>> {
         Ok(self
+            .pres
             .lock()?
             .slide(slide)
             .map_err(map_err)?
@@ -562,7 +555,7 @@ impl Deck {
             body_font: theme.body_font.clone(),
             colors: theme.colors.clone(),
         };
-        self.lock()?.apply_theme(&z);
+        self.pres.lock()?.apply_theme(&z);
         Ok(())
     }
 
@@ -571,33 +564,7 @@ impl Deck {
     /// # Errors
     /// [`OfficeError::NotFound`] for a bad slide.
     pub fn shapes(&self, slide: usize) -> Result<Vec<ShapeInfo>> {
-        let p = self.lock()?;
-        let fallback = p.slide(slide).map_err(map_err)?.shapes();
-        if let Some((_, xml)) = p.slide_dom_debug(slide) {
-            return Ok(read_shapes(&xml));
-        }
-        Ok(fallback
-            .into_iter()
-            .enumerate()
-            .map(|(index, i)| ShapeInfo {
-                index,
-                name: String::new(),
-                is_placeholder: i.kind != "textbox" && i.kind != "shape",
-                paragraphs: i
-                    .text
-                    .split('\n')
-                    .map(|t| ParagraphInfo {
-                        text: t.to_owned(),
-                        runs: vec![RunInfo {
-                            text: t.to_owned(),
-                            line_break: false,
-                        }],
-                    })
-                    .collect(),
-                kind: i.kind,
-                text: i.text,
-            })
-            .collect())
+        self.pres.guarded(move |p, _| shapes_of(p, slide))
     }
 
     /// Every layout placeholder of the deck, with its slide.
@@ -605,17 +572,18 @@ impl Deck {
     /// # Errors
     /// [`OfficeError::Busy`].
     pub fn list_placeholders(&self) -> Result<Vec<PlaceholderRef>> {
-        let n = self.slide_count()?;
-        let mut out = Vec::new();
-        for slide in 0..n {
-            out.extend(
-                self.shapes(slide)?
-                    .into_iter()
-                    .filter(|s| s.is_placeholder)
-                    .map(|shape| PlaceholderRef { slide, shape }),
-            );
-        }
-        Ok(out)
+        self.pres.guarded(|p, _| {
+            let mut out = Vec::new();
+            for slide in 0..p.slide_count() {
+                out.extend(
+                    shapes_of(p, slide)?
+                        .into_iter()
+                        .filter(|s| s.is_placeholder)
+                        .map(|shape| PlaceholderRef { slide, shape }),
+                );
+            }
+            Ok(out)
+        })
     }
 
     /// Number of runs in a paragraph.
@@ -623,7 +591,8 @@ impl Deck {
     /// # Errors
     /// [`OfficeError::NotFound`] for a bad address.
     pub fn run_count(&self, slide: usize, shape: usize, paragraph: usize) -> Result<usize> {
-        self.lock()?
+        self.pres
+            .lock()?
             .slide_mut(slide)
             .map_err(map_err)?
             .run_count(shape, paragraph)
@@ -642,7 +611,8 @@ impl Deck {
         run: usize,
         text: &str,
     ) -> Result<()> {
-        self.lock()?
+        self.pres
+            .lock()?
             .slide_mut(slide)
             .map_err(map_err)?
             .edit_run_text(shape, paragraph, run, text)
@@ -652,12 +622,15 @@ impl Deck {
     /// Replace `find` by `replacement` in the text shapes of every slide and
     /// return the number of occurrences replaced.
     ///
-    /// Each occurrence inside one run is replaced in place, keeping the run's
-    /// formatting. An occurrence split across runs is rewritten into the
-    /// paragraph's first run and the other runs are deleted, so that paragraph
-    /// keeps the first run's formatting; a paragraph with line breaks in that
-    /// case is [`OfficeError::Unsupported`] (the raw-part editor of ADR-0032 P3
-    /// covers it). Tables, charts and notes are not searched.
+    /// All edits are planned before the first one is made, so a refusal leaves
+    /// the deck untouched, and if an edit fails midway the deck is restored
+    /// from a snapshot taken before. An occurrence inside one run is replaced
+    /// in place, keeping the run's formatting. An occurrence that spans runs
+    /// is rewritten into the paragraph's first run and the other runs are
+    /// deleted, so that paragraph keeps the first run's formatting; a
+    /// paragraph with line breaks in that case is [`OfficeError::Unsupported`]
+    /// (the raw-part editor of ADR-0032 P3 covers it). Tables, charts and
+    /// notes are not searched.
     ///
     /// # Errors
     /// [`OfficeError::InvalidInput`] for an empty `find`;
@@ -668,53 +641,9 @@ impl Deck {
                 "the text to find is empty".into(),
             ));
         }
-        let mut count = 0;
-        for slide in 0..self.slide_count()? {
-            for shape in self.shapes(slide)? {
-                for (pi, para) in shape.paragraphs.iter().enumerate() {
-                    if !para.text.contains(find) {
-                        continue;
-                    }
-                    let total = para.text.matches(find).count();
-                    count += total;
-                    let in_runs: usize =
-                        para.runs.iter().map(|r| r.text.matches(find).count()).sum();
-                    if in_runs == total {
-                        for (ri, run) in para.runs.iter().enumerate() {
-                            if run.text.contains(find) {
-                                self.set_run_text(
-                                    slide,
-                                    shape.index,
-                                    pi,
-                                    ri,
-                                    &run.text.replace(find, replacement),
-                                )?;
-                            }
-                        }
-                        continue;
-                    }
-                    // An occurrence spans runs: rewrite the paragraph into its first run.
-                    if para.runs.iter().any(|r| r.line_break) {
-                        return Err(OfficeError::Unsupported(
-                            "an occurrence spans runs in a paragraph with line breaks".into(),
-                        ));
-                    }
-                    self.set_run_text(
-                        slide,
-                        shape.index,
-                        pi,
-                        0,
-                        &para.text.replace(find, replacement),
-                    )?;
-                    let mut p = self.lock()?;
-                    let mut s = p.slide_mut(slide).map_err(map_err)?;
-                    for r in (1..para.runs.len()).rev() {
-                        s.delete_run(shape.index, pi, r).map_err(map_err)?;
-                    }
-                }
-            }
-        }
-        Ok(count)
+        let (find, replacement) = (find.to_owned(), replacement.to_owned());
+        self.pres
+            .guarded(move |p, _| replace_all(p, &find, &replacement))
     }
 
     /// Markdown for the whole deck (slides, tables, notes, chart data).
@@ -722,17 +651,19 @@ impl Deck {
     /// # Errors
     /// [`OfficeError::Busy`].
     pub fn to_markdown(&self) -> Result<String> {
-        self.guarded(|p, _| Ok(p.to_markdown()))
+        self.pres.guarded(|p, _| Ok(p.to_markdown()))
     }
 
     /// Render one slide to PNG at the fixed 1280 px width. Approximate: charts
-    /// draw as placeholders, SVG images draw as nothing, and system fonts can
-    /// change the text metrics (see the crate documentation, "Determinism").
+    /// draw as placeholders, SVG images draw as nothing, images are fitted
+    /// down to the render budget, and system fonts can change the text metrics
+    /// (see the crate documentation, "Determinism").
     ///
     /// # Errors
-    /// [`Limit::RenderPixels`], [`OfficeError::NotFound`].
+    /// [`Limit::RenderPixels`] for an absurd slide size,
+    /// [`OfficeError::NotFound`].
     pub fn render_preview(&self, slide: usize) -> Result<Vec<u8>> {
-        self.guarded(move |p, l| {
+        self.pres.guarded(move |p, l| {
             let copy = render_copy(p, l)?;
             copy.render_slide(slide, RenderFormat::Png).map_err(map_err)
         })
@@ -741,18 +672,186 @@ impl Deck {
     /// Render the whole deck to PDF, one page per slide.
     ///
     /// # Errors
-    /// [`Limit::RenderPixels`].
+    /// [`Limit::RenderPixels`] for an absurd slide size.
     pub fn export_pdf(&self) -> Result<Vec<u8>> {
-        self.guarded(|p, l| render_copy(p, l)?.to_pdf_bytes().map_err(map_err))
+        self.pres
+            .guarded(|p, l| render_copy(p, l)?.to_pdf_bytes().map_err(map_err))
+    }
+
+    /// Test hook: panic on the parse thread while holding the deck.
+    #[doc(hidden)]
+    pub fn poison_for_test(&self) -> Result<()> {
+        self.pres.guarded(|_, _| -> Result<()> { panic!("poison") })
+    }
+
+    /// The limits this deck was opened with.
+    #[must_use]
+    pub fn limits(&self) -> &Limits {
+        self.pres.limits()
     }
 }
 
-/// Save, re-validate in render mode (fonts emptied, SVG neutralised, pixel
-/// budget) and reopen: the renderer only ever sees the sanitised copy.
-fn render_copy(p: &Presentation, l: &Limits) -> Result<Presentation> {
+/// Save, re-validate in render mode (images fitted, fonts emptied, SVG
+/// neutralised) and reopen: the renderer only ever sees the sanitised copy.
+fn render_copy(p: &mut Presentation, l: &Limits) -> Result<Presentation> {
     let raw = p.save_to_buffer().map_err(map_err)?;
     let r = validate_and_repack(&raw, Kind::Pptx, Mode::Render { dpi: 0.0 }, l)?;
     Presentation::open_from_bytes(&r.bytes).map_err(map_err)
+}
+
+/// `p:sp` inventory of a slide: from its own XML when it was opened from a
+/// file, else the library's coarser list.
+fn shapes_of(p: &Presentation, slide: usize) -> Result<Vec<ShapeInfo>> {
+    let fallback = p.slide(slide).map_err(map_err)?.shapes();
+    if let Some((_, xml)) = p.slide_dom_debug(slide) {
+        return Ok(read_shapes(&xml));
+    }
+    Ok(fallback
+        .into_iter()
+        .enumerate()
+        .map(|(index, i)| ShapeInfo {
+            index,
+            name: String::new(),
+            is_placeholder: i.kind != "textbox" && i.kind != "shape",
+            paragraphs: i
+                .text
+                .split('\n')
+                .map(|t| ParagraphInfo {
+                    text: t.to_owned(),
+                    runs: vec![RunInfo {
+                        text: t.to_owned(),
+                        line_break: false,
+                    }],
+                })
+                .collect(),
+            kind: i.kind,
+            text: i.text,
+        })
+        .collect())
+}
+
+/// One planned edit of a paragraph.
+enum Edit {
+    /// Replace the text of these runs (`run index`, `new text`).
+    Runs(Vec<(usize, String)>),
+    /// Rewrite the whole paragraph into its first run and delete the others.
+    Collapse { text: String, runs: usize },
+}
+
+struct Planned {
+    slide: usize,
+    shape: usize,
+    para: usize,
+    edit: Edit,
+}
+
+/// Plan the edits for one paragraph: match offsets are mapped onto runs, and a
+/// match is "in a run" only when its whole range lies inside one text run.
+fn plan_paragraph(para: &ParagraphInfo, find: &str, replacement: &str) -> Result<Edit> {
+    let matches: Vec<(usize, usize)> = para
+        .text
+        .match_indices(find)
+        .map(|(s, m)| (s, s + m.len()))
+        .collect();
+    // Run ranges in paragraph offsets; a line break is one `\n`.
+    let mut ranges = Vec::with_capacity(para.runs.len());
+    let mut at = 0usize;
+    for r in &para.runs {
+        let len = if r.line_break { 1 } else { r.text.len() };
+        ranges.push((at, at + len));
+        at += len;
+    }
+    let run_of = |s: usize, e: usize| {
+        ranges
+            .iter()
+            .enumerate()
+            .find(|&(i, &(a, b))| s >= a && e <= b && !para.runs[i].line_break)
+            .map(|(i, _)| i)
+    };
+    let owners: Vec<Option<usize>> = matches.iter().map(|&(s, e)| run_of(s, e)).collect();
+    if owners.iter().all(Option::is_some) {
+        let mut edits = Vec::new();
+        for (ri, run) in para.runs.iter().enumerate() {
+            let (a, _) = ranges[ri];
+            let mut text = String::new();
+            let mut last = 0usize;
+            let mut touched = false;
+            for (k, &(s, e)) in matches.iter().enumerate() {
+                if owners[k] == Some(ri) {
+                    text.push_str(&run.text[last..s - a]);
+                    text.push_str(replacement);
+                    last = e - a;
+                    touched = true;
+                }
+            }
+            if touched {
+                text.push_str(&run.text[last..]);
+                edits.push((ri, text));
+            }
+        }
+        return Ok(Edit::Runs(edits));
+    }
+    if para.runs.iter().any(|r| r.line_break) {
+        return Err(OfficeError::Unsupported(
+            "an occurrence spans runs in a paragraph with line breaks".into(),
+        ));
+    }
+    Ok(Edit::Collapse {
+        text: para.text.replace(find, replacement),
+        runs: para.runs.len(),
+    })
+}
+
+/// Atomic `replace_text`: plan everything, snapshot, apply, restore on error.
+fn replace_all(p: &mut Presentation, find: &str, replacement: &str) -> Result<usize> {
+    let mut plan = Vec::new();
+    let mut count = 0usize;
+    for slide in 0..p.slide_count() {
+        for shape in shapes_of(p, slide)? {
+            for (pi, para) in shape.paragraphs.iter().enumerate() {
+                if para.text.contains(find) {
+                    count += para.text.matches(find).count();
+                    plan.push(Planned {
+                        slide,
+                        shape: shape.index,
+                        para: pi,
+                        edit: plan_paragraph(para, find, replacement)?,
+                    });
+                }
+            }
+        }
+    }
+    if plan.is_empty() {
+        return Ok(0);
+    }
+    let snapshot = p.save_to_buffer().map_err(map_err)?;
+    let applied = (|| -> Result<()> {
+        for e in &plan {
+            let mut s = p.slide_mut(e.slide).map_err(map_err)?;
+            match &e.edit {
+                Edit::Runs(runs) => {
+                    for (ri, text) in runs {
+                        s.edit_run_text(e.shape, e.para, *ri, text)
+                            .map_err(map_err)?;
+                    }
+                }
+                Edit::Collapse { text, runs } => {
+                    s.edit_run_text(e.shape, e.para, 0, text).map_err(map_err)?;
+                    for r in (1..*runs).rev() {
+                        s.delete_run(e.shape, e.para, r).map_err(map_err)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    })();
+    if let Err(e) = applied {
+        if let Ok(restored) = Presentation::open_from_bytes(&snapshot) {
+            *p = restored;
+        }
+        return Err(e);
+    }
+    Ok(count)
 }
 
 /// The text shapes (`p:sp`) of an opened slide, from its serialised XML.

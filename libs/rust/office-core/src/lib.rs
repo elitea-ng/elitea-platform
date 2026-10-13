@@ -85,6 +85,73 @@ pub mod testing {
         validate_and_repack(bytes, k, Mode::Keep, limits).map(|r| r.bytes)
     }
 
+    /// Decoded pixel counts of the raster images in the copy a renderer would
+    /// get (after fitting): proves the render budget is met by fitting.
+    ///
+    /// # Errors
+    /// Whatever the gate refuses.
+    pub fn render_copy_pixels(
+        bytes: &[u8],
+        kind: PackageKind,
+        limits: &Limits,
+    ) -> Result<Vec<u64>> {
+        let k = match kind {
+            PackageKind::Pptx => Kind::Pptx,
+            PackageKind::Docx => Kind::Docx,
+            PackageKind::Xlsx => Kind::Xlsx,
+        };
+        validate_and_repack(bytes, k, Mode::Render { dpi: 72.0 }, limits).map(|r| r.raster_pixels)
+    }
+
+    /// The raster images' bytes of the render copy, for decoding in tests.
+    ///
+    /// # Errors
+    /// Whatever the gate refuses.
+    pub fn render_copy_bytes(bytes: &[u8], kind: PackageKind, limits: &Limits) -> Result<Vec<u8>> {
+        let k = match kind {
+            PackageKind::Pptx => Kind::Pptx,
+            PackageKind::Docx => Kind::Docx,
+            PackageKind::Xlsx => Kind::Xlsx,
+        };
+        validate_and_repack(bytes, k, Mode::Render { dpi: 72.0 }, limits).map(|r| r.bytes)
+    }
+
+    /// Hold one parse permit for `how_long` on a parse thread, to test
+    /// `Busy` and the permit lifetime.
+    ///
+    /// # Errors
+    /// [`crate::OfficeError::Busy`] when no permit is free.
+    pub fn hold_permit(
+        limits: &Limits,
+        how_long: std::time::Duration,
+        deadline: std::time::Duration,
+    ) -> Result<std::thread::JoinHandle<()>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let l = limits.clone();
+        let h = std::thread::spawn(move || {
+            let r = crate::guard::run_guarded(
+                &Limits {
+                    call_deadline: deadline,
+                    ..l
+                },
+                move || {
+                    let _ = tx.send(());
+                    std::thread::sleep(how_long);
+                    Ok(())
+                },
+            );
+            drop(r);
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(2))
+            .map_err(|_| crate::OfficeError::Busy)?;
+        Ok(h)
+    }
+
+    /// Panic inside a guarded call on the deck, poisoning its state.
+    pub fn poison_deck(deck: &crate::Deck) {
+        let _ = deck.poison_for_test();
+    }
+
     /// Limits for fuzzing and corpus replay: small enough that one input
     /// cannot take a fuzzer worker down, with room on the permit gate.
     #[must_use]
@@ -93,6 +160,7 @@ pub mod testing {
             max_input_bytes: 2 << 20,
             max_xml_part_bytes: 1 << 20,
             max_xml_total_bytes: 2 << 20,
+            max_xml_large_part_bytes_xlsx: 2 << 20,
             max_xml_total_bytes_xlsx: 4 << 20,
             max_media_part_bytes: 1 << 20,
             max_media_total_bytes: 4 << 20,

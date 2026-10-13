@@ -21,9 +21,12 @@ pub struct Limits {
     pub max_entries: u64,
     /// One XML part, uncompressed. Default 8 MiB.
     pub max_xml_part_bytes: u64,
+    /// An xlsx worksheet or `sharedStrings.xml`, uncompressed. Default 48 MiB,
+    /// which holds the 1 M cell cap in one dense sheet.
+    pub max_xml_large_part_bytes_xlsx: u64,
     /// All XML parts of a docx or pptx. Default 16 MiB.
     pub max_xml_total_bytes: u64,
-    /// All XML parts of an xlsx. Default 64 MiB.
+    /// All XML parts of an xlsx. Default 96 MiB.
     pub max_xml_total_bytes_xlsx: u64,
     /// One media or opaque part, uncompressed. Default 32 MiB.
     pub max_media_part_bytes: u64,
@@ -33,9 +36,17 @@ pub struct Limits {
     pub max_xml_depth: u64,
     /// Pixels of one raster image, from its header. Default 40 MP.
     pub max_image_pixels: u64,
-    /// Pixels of every raster image in a document, charged to one render or
-    /// export call, plus the pixels of the page being drawn. Default 100 MP.
+    /// Pixels of the page or slide a render draws (docx page at the requested
+    /// dpi, pptx slide at the fixed 1280 px width). Default 100 MP.
     pub max_render_pixels: u64,
+    /// Decoded-pixel budget of one render or export call, met by fitting, not
+    /// refusing: images in the render copy are downscaled one at a time so
+    /// that together they fit. Default 32 MP.
+    pub render_decoded_pixels: u64,
+    /// Most pixels one image keeps in a render copy. Default 2 MP.
+    pub render_image_max_pixels: u64,
+    /// Fewest pixels an image is fitted down to. Default 0.25 MP.
+    pub render_image_min_pixels: u64,
     /// Raster images per document. Default 500.
     pub max_images: u64,
     /// Slides per deck. Default 500.
@@ -62,13 +73,17 @@ impl Default for Limits {
             max_input_bytes: 50 * MIB,
             max_entries: 10_000,
             max_xml_part_bytes: 8 * MIB,
+            max_xml_large_part_bytes_xlsx: 48 * MIB,
             max_xml_total_bytes: 16 * MIB,
-            max_xml_total_bytes_xlsx: 64 * MIB,
+            max_xml_total_bytes_xlsx: 96 * MIB,
             max_media_part_bytes: 32 * MIB,
             max_media_total_bytes: 128 * MIB,
             max_xml_depth: 256,
             max_image_pixels: 40_000_000,
             max_render_pixels: 100_000_000,
+            render_decoded_pixels: 32_000_000,
+            render_image_max_pixels: 2_000_000,
+            render_image_min_pixels: 250_000,
             max_images: 500,
             max_slides: 500,
             max_sheets: 64,

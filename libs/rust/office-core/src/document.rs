@@ -1,12 +1,10 @@
 //! `Document`: a docx (over `zavora-docx`).
 
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
-
 use zavora_docx::{Document as ZDocument, Error as ZError, Length};
 
 use crate::deck::{ChartKind, ChartSpec, Rect};
 use crate::error::{Limit, OfficeError, Result, limit};
-use crate::guard::run_guarded;
+use crate::guard::{Shared, run_guarded};
 use crate::limits::Limits;
 use crate::validate::{Kind, Mode, check_new_image, finish_output, validate_and_repack};
 
@@ -34,9 +32,10 @@ pub struct TableData {
 /// Parse, save, export and render calls run on the dedicated parse thread;
 /// small edits run on the caller's thread.
 pub struct Document {
-    doc: Arc<Mutex<ZDocument>>,
+    doc: Shared<ZDocument>,
     limits: Limits,
     images: u64,
+    cells: u64,
 }
 
 impl std::fmt::Debug for Document {
@@ -50,9 +49,10 @@ impl Document {
     #[must_use]
     pub fn new(limits: &Limits) -> Self {
         Self {
-            doc: Arc::new(Mutex::new(ZDocument::new())),
+            doc: Shared::new(ZDocument::new(), limits),
             limits: limits.clone(),
             images: 0,
+            cells: 0,
         }
     }
 
@@ -65,41 +65,28 @@ impl Document {
     pub fn open(bytes: &[u8], limits: &Limits) -> Result<Self> {
         crate::validate::precheck_len(bytes.len(), limits)?;
         let (data, l) = (bytes.to_vec(), limits.clone());
-        let (doc, images) = run_guarded(limits, move || {
+        let (doc, images, cells) = run_guarded(limits, move || {
             let r = validate_and_repack(&data, Kind::Docx, Mode::Keep, &l)?;
-            Ok((ZDocument::from_bytes(&r.bytes).map_err(map_err)?, r.images))
+            Ok((
+                ZDocument::from_bytes(&r.bytes).map_err(map_err)?,
+                r.images,
+                r.cells,
+            ))
         })?;
         Ok(Self {
-            doc: Arc::new(Mutex::new(doc)),
+            doc: Shared::new(doc, limits),
             limits: limits.clone(),
             images,
+            cells,
         })
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, ZDocument>> {
-        self.doc.try_lock().map_err(|e| match e {
-            TryLockError::WouldBlock => OfficeError::Busy,
-            TryLockError::Poisoned(_) => {
-                OfficeError::Internal("document state poisoned by a panic".into())
-            }
-        })
-    }
-
-    fn guarded<R, F>(&self, f: F) -> Result<R>
-    where
-        R: Send + 'static,
-        F: FnOnce(&mut ZDocument, &Limits) -> Result<R> + Send + 'static,
-    {
-        let (doc, l) = (self.doc.clone(), self.limits.clone());
-        run_guarded(&self.limits, move || {
-            let mut g = doc.try_lock().map_err(|e| match e {
-                TryLockError::WouldBlock => OfficeError::Busy,
-                TryLockError::Poisoned(_) => {
-                    OfficeError::Internal("document state poisoned".into())
-                }
-            })?;
-            f(&mut g, &l)
-        })
+    fn charge_cells(&self, more: u64) -> Result<u64> {
+        let total = self.cells.saturating_add(more);
+        if total > self.limits.max_cells {
+            return Err(limit(Limit::Cells, total));
+        }
+        Ok(total)
     }
 
     /// Serialise to a validated, canonical docx.
@@ -107,13 +94,9 @@ impl Document {
     /// # Errors
     /// Any limit violation of the produced file.
     pub fn save(&self) -> Result<Vec<u8>> {
-        self.guarded(|d, l| {
+        self.doc.guarded(|d, l| {
             let raw = d.to_bytes().map_err(map_err)?;
-            let out = finish_output(&raw, Kind::Docx, l)?;
-            if out.len() as u64 > l.max_input_bytes {
-                return Err(limit(Limit::InputBytes, out.len() as u64));
-            }
-            Ok(out)
+            finish_output(&raw, Kind::Docx, l)
         })
     }
 
@@ -122,7 +105,7 @@ impl Document {
     /// # Errors
     /// [`OfficeError::Busy`].
     pub fn add_paragraph(&mut self, text: &str) -> Result<()> {
-        self.lock()?.add_paragraph(text);
+        self.doc.lock()?.add_paragraph(text);
         Ok(())
     }
 
@@ -136,22 +119,42 @@ impl Document {
                 "heading level must be 1 to 9".into(),
             ));
         }
-        self.lock()?
+        self.doc
+            .lock()?
             .add_paragraph(text)
             .style(&format!("Heading{level}"));
         Ok(())
     }
 
-    /// Replace the text of the `index`th paragraph.
+    /// Replace the text of the `index`th paragraph (0-based, tables and
+    /// other body content do not count). The first run's formatting is kept.
     ///
     /// # Errors
     /// [`OfficeError::NotFound`] for a bad index.
     pub fn set_paragraph_text(&mut self, index: usize, text: &str) -> Result<()> {
-        if self.lock()?.set_paragraph_text(index, text) {
-            Ok(())
-        } else {
-            Err(OfficeError::NotFound(format!("content index {index}")))
-        }
+        let text = text.to_owned();
+        self.doc.guarded(move |d, _| {
+            // The library addresses body content (paragraphs, tables, raw
+            // blocks) by one index. Find the content index of the `index`th
+            // paragraph by tagging that paragraph with a unique run and asking
+            // the library where the tag is; setting the text drops the tag.
+            const MARKER: &str = "\u{E000}office-core-marker-9c1d\u{E000}";
+            if d.find_content_index(MARKER).is_some() {
+                return Err(OfficeError::Unsupported(
+                    "the document contains the internal marker text".into(),
+                ));
+            }
+            d.paragraph_mut(index)
+                .ok_or_else(|| OfficeError::NotFound(format!("paragraph {index}")))?
+                .add_run(MARKER);
+            let content = d.find_content_index(MARKER);
+            match content {
+                Some(c) if d.set_paragraph_text(c, &text) => Ok(()),
+                _ => Err(OfficeError::Internal(
+                    "paragraph index mapping failed".into(),
+                )),
+            }
+        })
     }
 
     /// Append a `rows` by `cols` table; returns its index among the tables.
@@ -164,13 +167,14 @@ impl Document {
                 "a table needs at least one row and column".into(),
             ));
         }
-        let cells = (rows as u64).saturating_mul(cols as u64);
-        if cells > self.limits.max_cells {
-            return Err(limit(Limit::Cells, cells));
-        }
-        let mut d = self.lock()?;
-        let idx = d.table_count();
-        d.add_table(rows, cols);
+        let total = self.charge_cells((rows as u64).saturating_mul(cols as u64))?;
+        let idx = {
+            let mut d = self.doc.lock()?;
+            let idx = d.table_count();
+            d.add_table(rows, cols);
+            idx
+        };
+        self.cells = total;
         Ok(idx)
     }
 
@@ -185,7 +189,7 @@ impl Document {
         col: usize,
         text: &str,
     ) -> Result<()> {
-        let mut d = self.lock()?;
+        let mut d = self.doc.lock()?;
         let mut t = d
             .table_mut(table)
             .ok_or_else(|| OfficeError::NotFound(format!("table {table}")))?;
@@ -201,7 +205,7 @@ impl Document {
     /// # Errors
     /// [`OfficeError::Busy`].
     pub fn tables(&self) -> Result<Vec<TableData>> {
-        let d = self.lock()?;
+        let d = self.doc.lock()?;
         Ok(d.tables()
             .iter()
             .map(|t| TableData {
@@ -227,7 +231,7 @@ impl Document {
                 "the text to find is empty".into(),
             ));
         }
-        Ok(self.lock()?.replace_text(find, replacement))
+        Ok(self.doc.lock()?.replace_text(find, replacement))
     }
 
     /// The heading outline as `(level, text)`.
@@ -235,18 +239,24 @@ impl Document {
     /// # Errors
     /// [`OfficeError::Busy`].
     pub fn headings(&self) -> Result<Vec<(u32, String)>> {
-        Ok(self.lock()?.headings())
+        Ok(self.doc.lock()?.headings())
     }
 
-    /// Insert an inline PNG, JPEG or GIF (header-checked first).
+    /// Insert an inline PNG, JPEG or GIF. The signature and header are
+    /// checked first, and the part name and content type come from the
+    /// sniffed format, never from the caller.
     ///
     /// # Errors
     /// [`Limit::ImagePixels`], [`Limit::Images`], [`Limit::MediaPartBytes`],
     /// [`OfficeError::InvalidInput`].
-    pub fn add_image(&mut self, data: &[u8], filename: &str, size: Rect) -> Result<()> {
-        check_new_image(data, self.images, &self.limits)?;
-        self.lock()?
-            .add_picture(data, filename, Length::emu(size.w), Length::emu(size.h));
+    pub fn add_image(&mut self, data: &[u8], size: Rect) -> Result<()> {
+        let ext = check_new_image(data, self.images, &self.limits)?;
+        self.doc.lock()?.add_picture(
+            data,
+            &format!("image.{ext}"),
+            Length::emu(size.w),
+            Length::emu(size.h),
+        );
         self.images += 1;
         Ok(())
     }
@@ -258,7 +268,8 @@ impl Document {
     /// # Errors
     /// [`OfficeError::Unsupported`] for stacked bars and doughnuts.
     pub fn add_chart(&mut self, spec: &ChartSpec, size: Rect) -> Result<()> {
-        spec.check(&self.limits)?;
+        let points = spec.check(&self.limits)?;
+        let total = self.charge_cells(points)?;
         let kind = match spec.kind {
             ChartKind::ClusteredBar => zavora_docx::ChartKind::Bar,
             ChartKind::ClusteredColumn => zavora_docx::ChartKind::Column,
@@ -286,8 +297,10 @@ impl Document {
                 .collect(),
             labels: None,
         };
-        self.lock()?
+        self.doc
+            .lock()?
             .add_chart(&chart, Length::emu(size.w), Length::emu(size.h));
+        self.cells = total;
         Ok(())
     }
 
@@ -296,7 +309,7 @@ impl Document {
     /// # Errors
     /// [`OfficeError::Busy`].
     pub fn to_plain_text(&self) -> Result<String> {
-        Ok(self.lock()?.to_plain_text())
+        Ok(self.doc.lock()?.to_plain_text())
     }
 
     /// The document as Markdown.
@@ -304,7 +317,7 @@ impl Document {
     /// # Errors
     /// [`OfficeError::Busy`].
     pub fn to_markdown(&self) -> Result<String> {
-        self.guarded(|d, _| Ok(d.to_markdown()))
+        self.doc.guarded(|d, _| Ok(d.to_markdown()))
     }
 
     /// Export to PDF. Uses the bundled font set only (Carlito, Caladea,
@@ -314,7 +327,8 @@ impl Document {
     /// # Errors
     /// [`Limit::RenderPixels`].
     pub fn export_pdf(&self) -> Result<Vec<u8>> {
-        self.guarded(|d, l| render_copy(d, l, 0.0)?.to_pdf().map_err(map_err))
+        self.doc
+            .guarded(|d, l| render_copy(d, l, 0.0)?.to_pdf().map_err(map_err))
     }
 
     /// Render one page (0-based) to PNG at `dpi` (36 to 300).
@@ -326,7 +340,7 @@ impl Document {
         if !(36.0..=300.0).contains(&dpi) {
             return Err(OfficeError::InvalidInput("dpi must be 36 to 300".into()));
         }
-        self.guarded(move |d, l| {
+        self.doc.guarded(move |d, l| {
             render_copy(d, l, dpi)?
                 .render_page_to_png(page, dpi)
                 .map_err(map_err)?

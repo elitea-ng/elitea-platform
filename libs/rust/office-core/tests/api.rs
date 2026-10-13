@@ -185,7 +185,7 @@ fn document_basics() {
     d.add_paragraph("Dear {{NAME}}, hello.").unwrap();
     let t = d.add_table(2, 2).unwrap();
     d.set_table_cell(t, 1, 1, "x").unwrap();
-    d.add_image(TINY_PNG, "t.png", Rect::inches(0.0, 0.0, 1.0, 1.0))
+    d.add_image(TINY_PNG, Rect::inches(0.0, 0.0, 1.0, 1.0))
         .unwrap();
     d.add_chart(&chart(), Rect::inches(0.0, 0.0, 4.0, 3.0))
         .unwrap();

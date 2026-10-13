@@ -2,7 +2,7 @@
 //! here (nothing multi-MiB is committed), opened through the real wrappers
 //! on the production parse thread (16 MiB stack, dedicated thread), and must
 //! be refused with the expected typed error within 1 s and under 512 MiB of
-//! peak heap. Files at each limit's maximum must be accepted under 1 GiB.
+//! peak heap. Files at each limit's maximum must be accepted under 1.5 GiB.
 //!
 //! One `#[test]` on purpose: the allocator counter is process-wide, so cases
 //! run one after the other and each peak is its own.
@@ -463,10 +463,12 @@ fn huge_declared_dimensions_are_bounded() {
 }
 
 #[test]
-fn render_pixel_budget_is_charged_per_call() {
+fn render_budget_is_met_by_fitting_not_refusing() {
     let _turn = serial();
-    // Three header-only 6244x6244 (39 MP) images each pass the 40 MP check,
-    // together they are 117 MP: opening works, a render does not.
+    // Three header-only 6244x6244 (39 MP) images each pass the 40 MP check.
+    // Header-only means a renderer could not decode them, so the render copy
+    // replaces each with a placeholder: opening, saving, rendering and PDF
+    // export all succeed, where the first version of this crate refused.
     let l = limits();
     let g = good_deck();
     let mut e = entries(&g);
@@ -475,17 +477,17 @@ fn render_pixel_budget_is_charged_per_call() {
     }
     let bytes = zip_of(&e);
     let d = Deck::open(&bytes, &l).expect("each image is within the per-image cap");
-    assert!(
-        matches!(d.render_preview(0), Err(OfficeError::LimitExceeded { limit: Limit::RenderPixels, value }) if value > 100_000_000)
-    );
-    assert!(matches!(
-        d.export_pdf(),
-        Err(OfficeError::LimitExceeded {
-            limit: Limit::RenderPixels,
-            ..
-        })
-    ));
-    assert!(d.save().is_ok());
+    let (r, run) = measure(|| d.render_preview(0));
+    assert!(r.unwrap().starts_with(b"\x89PNG"));
+    assert!(run.peak < 512 * MIB, "peak {} MiB", run.peak / MIB);
+    assert!(d.export_pdf().unwrap().starts_with(b"%PDF"));
+    // Saved files keep the originals.
+    let saved = entries(&d.save().unwrap());
+    let kept = saved
+        .iter()
+        .filter(|(n, d)| n.starts_with("ppt/media/m") && d.len() == png_header(1, 1).len())
+        .count();
+    assert_eq!(kept, 3);
 }
 
 #[test]
@@ -544,19 +546,18 @@ fn files_at_the_limits_are_accepted_under_1_gib() {
         });
         let n = r.unwrap_or_else(|e| panic!("{f:?}: {e:?}"));
         assert!(n > 4 * MIB, "{f:?}: the big text survived ({n})");
-        assert!(run.peak < 1024 * MIB, "{f:?}: peak {} MiB", run.peak / MIB);
+        assert!(run.peak < 1536 * MIB, "{f:?}: peak {} MiB", run.peak / MIB);
         println!(
             "{f:?} at the XML cap: {:?}, {} MiB",
             run.elapsed,
             run.peak / MIB
         );
     }
-    // xlsx: a dense sheet at the 8 MiB XML cap. About 27 bytes per numeric
-    // cell, so about 300 000 cells fit: the 1 000 000 cell cap is not
-    // reachable through a single saved sheet (reported in the PR).
+    // xlsx: the 1 000 000 cell cap fits in one dense sheet under the 48 MiB
+    // worksheet cap (about 27 bytes per numeric cell).
     let mut w = Workbook::new(&l);
-    for r in 0..500u32 {
-        for c in 0..560u16 {
+    for r in 0..1000u32 {
+        for c in 0..1000u16 {
             w.write_cell(
                 0,
                 r,
@@ -568,7 +569,7 @@ fn files_at_the_limits_are_accepted_under_1_gib() {
     }
     let (bytes, run) = measure(|| w.save().unwrap());
     assert!(
-        run.peak < 1024 * MIB,
+        run.peak < 1536 * MIB,
         "xlsx save peak {} MiB",
         run.peak / MIB
     );
@@ -577,44 +578,26 @@ fn files_at_the_limits_are_accepted_under_1_gib() {
     });
     assert!(r.unwrap() > MIB);
     assert!(
-        run.peak < 1024 * MIB,
+        run.peak < 1536 * MIB,
         "xlsx open+dump peak {} MiB",
         run.peak / MIB
     );
     println!(
-        "xlsx at the XML cap: {} bytes, {:?}, {} MiB",
+        "xlsx at the cell cap: {} bytes, {:?}, {} MiB",
         bytes.len(),
         run.elapsed,
         run.peak / MIB
     );
-    // One more row would not save.
-    for c in 0..560u16 {
-        w.write_cell(
-            0,
-            500,
-            c,
-            &elitea_office_core::CellValue::Number(1234567.0 + f64::from(c)),
-        )
-        .unwrap();
-    }
-    for r in 501..900u32 {
-        for c in 0..560u16 {
-            w.write_cell(
-                0,
-                r,
-                c,
-                &elitea_office_core::CellValue::Number(f64::from(r) * 1000.5 + f64::from(c)),
-            )
-            .unwrap();
-        }
-    }
+    // The 1 000 001st distinct cell is refused; overwriting is not.
     assert!(matches!(
-        w.save(),
+        w.write_cell(0, 1000, 0, &elitea_office_core::CellValue::Number(1.0)),
         Err(OfficeError::LimitExceeded {
-            limit: Limit::XmlPartBytes,
-            ..
+            limit: Limit::Cells,
+            value: 1_000_001
         })
     ));
+    w.write_cell(0, 0, 0, &elitea_office_core::CellValue::Number(7.0))
+        .unwrap();
 }
 
 #[test]
