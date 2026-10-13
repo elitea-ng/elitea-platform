@@ -130,6 +130,11 @@ updates:
       # zip alone is a red build there until xberg moves.
       - dependency-name: zip
         update-types: ["version-update:semver-major"]
+      # libs/rust/office-core pins zavora-slide, zavora-docx and zavora-xlsx
+      # exactly, and its sub-crates move only with them (ADR-0032 decision 5):
+      # a bump is a reviewed PR that reruns the hostile corpus, never a scanner
+      # PR. tests/isolation.rs asserts the locked version of every zavora-*.
+      - dependency-name: "zavora-*"
       # sqlx 0.x minors change the query/executor associated types the SQL
       # client and the checkpointer are written against (0.9 broke both, #661).
       - dependency-name: sqlx

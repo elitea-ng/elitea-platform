@@ -34,6 +34,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut prost_config = tonic_prost_build::Config::new();
     prost_config.protoc_executable(protoc_bin_vendored::protoc_bin_path()?);
+    // The index result is the largest output payload by far (920 of a 1440-byte
+    // frame inline). Boxing it keeps every frame, and every future that holds
+    // one, small enough for the bounded HITL stack the output tests pin.
+    prost_config.boxed(".elitea.runtime.v1.ExecutionOutputFrameV1.payload.index_ingest");
 
     println!("cargo:rerun-if-changed={}", proto_root.display());
     println!("cargo:rerun-if-changed=build.rs");

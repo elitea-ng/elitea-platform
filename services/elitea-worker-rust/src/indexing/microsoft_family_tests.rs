@@ -346,7 +346,7 @@ async fn verify_incremental<S: Send + 'static>(
         .await;
     assert_eq!(second.status, IndexIngestStatusV1::Ok as i32, "{second:?}");
     assert_eq!(second.indexed_documents, 0);
-    assert_eq!(second.unchanged_documents(), expected_keys.len() as u64);
+    assert_eq!(second.unchanged_documents, Some(expected_keys.len() as u64));
     assert!(
         harness.writes_since(before).is_empty(),
         "{toolkit_type}: an unchanged source writes nothing"
@@ -380,17 +380,6 @@ async fn verify_incremental<S: Send + 'static>(
         if key != changed && key != removed {
             assert_eq!(&after[key], &(version.clone(), *chunks), "{key} untouched");
         }
-    }
-}
-
-trait Unchanged {
-    fn unchanged_documents(&self) -> u64;
-}
-
-impl Unchanged for IndexIngestSummaryV1 {
-    fn unchanged_documents(&self) -> u64 {
-        // The store's total less what this run wrote: the unchanged documents.
-        self.total_documents.unwrap_or(0) - self.indexed_documents
     }
 }
 

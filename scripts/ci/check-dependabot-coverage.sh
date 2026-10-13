@@ -56,6 +56,8 @@ libs/rust/content-source/Cargo.toml member of the libs/rust workspace: the /libs
 libs/rust/conversation/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/doc-extract/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/doc-chunk/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/office-core/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member; the zavora pins are exact on purpose (ADR-0032 decision 5) and move only by a reviewed PR that reruns the hostile corpus
+libs/rust/office-core/fuzz/Cargo.toml cargo-fuzz harness of office-core, not a workspace member and never built by CI (needs nightly and libFuzzer); it has no dependencies beyond libfuzzer-sys and office-core itself
 libs/rust/pg-migrate/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/repo-ingest/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/vector-index/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member

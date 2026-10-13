@@ -167,6 +167,11 @@ message IndexIngestSummaryV1 {
   // list. It is a statement by the worker, never inferred from counts; when
   // it is set, total_documents equals the length of `documents`.
   bool whole_index_record = 21;
+  // Documents the run listed and found already indexed (same version), which
+  // it left alone. Exact, and present only on a run that finished listing:
+  // elitea-main shows it as the "already indexed" line of the run report and
+  // derives nothing when it is absent (an older worker).
+  optional uint64 unchanged_documents = 22;
 }
 
 // IndexIngestDocumentV1 is one indexed document as the vector store holds it

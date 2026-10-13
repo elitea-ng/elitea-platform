@@ -1,0 +1,43 @@
+[package]
+name = "elitea-office-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+elitea-office-core = { path = ".." }
+
+# Not a member of the libs/rust workspace: cargo-fuzz builds it on its own.
+[workspace]
+
+[[bin]]
+name = "fuzz_gate"
+path = "fuzz_targets/fuzz_gate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_deck"
+path = "fuzz_targets/fuzz_deck.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_document"
+path = "fuzz_targets/fuzz_document.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_workbook"
+path = "fuzz_targets/fuzz_workbook.rs"
+test = false
+doc = false
+bench = false
