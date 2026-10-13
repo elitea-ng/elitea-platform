@@ -151,8 +151,14 @@ func TestIndexIngestSummaryTotalsAreTypedAndBounded(t *testing.T) {
 		t.Fatal("a whole-index statement without totals was accepted")
 	}
 	for name, mutate := range map[string]func(*IndexIngestSummary){
-		"documents beyond int64":     func(s *IndexIngestSummary) { s.TotalDocuments = math.MaxInt64 + 1 },
-		"chunks beyond int64":        func(s *IndexIngestSummary) { s.TotalChunks = math.MaxInt64 + 1 },
+		"documents beyond int64":      func(s *IndexIngestSummary) { s.TotalDocuments = math.MaxInt64 + 1 },
+		"chunks beyond int64":         func(s *IndexIngestSummary) { s.TotalChunks = math.MaxInt64 + 1 },
+		"unchanged beyond the totals": func(s *IndexIngestSummary) { s.UnchangedPresent, s.UnchangedDocuments = true, 13 },
+		"unchanged without presence":  func(s *IndexIngestSummary) { s.UnchangedDocuments = 1 },
+		"unchanged without totals": func(s *IndexIngestSummary) {
+			s.TotalsPresent, s.TotalDocuments, s.TotalChunks = false, 0, 0
+			s.UnchangedPresent = true
+		},
 		"documents without presence": func(s *IndexIngestSummary) { s.TotalsPresent = false },
 		"chunks without presence": func(s *IndexIngestSummary) {
 			s.TotalsPresent, s.TotalDocuments = false, 0

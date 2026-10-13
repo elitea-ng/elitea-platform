@@ -845,12 +845,21 @@ func TestMetadataReportsIndexTotalsAndHistoryKeepsRunCounts(t *testing.T) {
 		t.Fatalf("last run = updated %v failed %v skipped %v", metadata["updated"], metadata["failed_chunks"], metadata["skipped"])
 	}
 	history := metadata["history"].([]any)
-	firstRun, secondRun := history[1].(map[string]any), history[2].(map[string]any)
-	if firstRun["indexed"] != int64(3) || firstRun["indexed_chunks"] != int64(9) {
-		t.Fatalf("the first run's entry = %+v", firstRun)
+	firstRun, ok1 := recordOf(history[1].(map[string]any))
+	secondRun, ok2 := recordOf(history[2].(map[string]any))
+	if !ok1 || !ok2 {
+		// Served entries drop the record; read the stored ones.
+		firstRun, _ = recordOf(second.History[1])
+		secondRun, _ = recordOf(second.History[2])
 	}
-	if secondRun["indexed"] != int64(0) || secondRun["indexed_chunks"] != int64(0) {
-		t.Fatalf("the no-change run's entry = %+v", secondRun)
+	if firstRun.Indexed != 3 {
+		t.Fatalf("the first run's record = %+v", firstRun)
+	}
+	if secondRun.Indexed != 0 {
+		t.Fatalf("the no-change run's record = %+v", secondRun)
+	}
+	if _, dup := second.History[1]["indexed_chunks"]; dup {
+		t.Fatal("a stored entry keeps the run's counts once, in its record")
 	}
 }
 

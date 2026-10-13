@@ -74,6 +74,20 @@ describe('IndexListItem', () => {
     expect(getByText('7')).toBeInTheDocument();
   });
 
+  it('keeps showing what the index holds after a stopped run whose report counts fewer', () => {
+    const index: IndexRow = {
+      id: '1',
+      metadata: {
+        collection: 'my-index',
+        state: 'cancelled',
+        indexed: 30,
+        report: { status: 'cancelled', totals: { indexed: 2, total: 2 }, errors: ['stopped'], errors_total: 1 },
+      },
+    };
+    const { getByText } = renderWithTheme(<IndexListItem index={index} />);
+    expect(getByText('30')).toBeInTheDocument();
+  });
+
   it('keeps the red error/stale styling even when the row is also selected (baseline: error wins over selected)', () => {
     const index: IndexRow = { id: '1', metadata: { collection: 'my-index', state: 'in_progress' }, stale: true };
     const { getByText } = renderWithTheme(

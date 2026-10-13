@@ -1857,6 +1857,15 @@ fn a_stopped_index_run_with_the_stores_record_proposes_cancelled() {
             s.whole_index_record = false;
         }) as fn(&mut IndexIngestSummaryV1),
         |s| s.status = IndexIngestStatusV1::Ok as i32,
+        // Unchanged documents are documents the store holds: more than its
+        // total is a lie, and a count without totals is unanchored.
+        |s| s.unchanged_documents = Some(s.total_documents.unwrap_or(0) + 1),
+        |s| {
+            s.total_documents = None;
+            s.total_chunks = None;
+            s.whole_index_record = false;
+            s.unchanged_documents = Some(0);
+        },
     ] {
         let mut malformed = stopped.clone();
         mutate(&mut malformed);

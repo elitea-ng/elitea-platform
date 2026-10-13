@@ -453,6 +453,7 @@ async fn an_incremental_run_skips_unchanged_rewrites_changed_and_deletes_vanishe
     .await
     .expect("first");
     assert_eq!(first.total_documents, Some(3));
+    assert_eq!(first.unchanged_documents, Some(0));
     let calls_after_first = harness.embeddings.calls.load(Ordering::SeqCst);
 
     let second = run(
@@ -472,6 +473,11 @@ async fn an_incremental_run_skips_unchanged_rewrites_changed_and_deletes_vanishe
     assert_eq!(second.updated, 1);
     assert_eq!(second.removed_document_keys, vec!["c.md"]);
     assert_eq!(second.total_documents, Some(2));
+    assert_eq!(
+        second.unchanged_documents,
+        Some(1),
+        "a.md was listed and left alone"
+    );
     assert_eq!(second.reindex, Some(true));
     assert_eq!(second.documents.len(), 1);
     assert_eq!(second.documents[0].document_key, "b.md");
