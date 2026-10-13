@@ -594,12 +594,17 @@ func (r *IndexRegistryRepository) RecordScheduledFailure(
 	})
 }
 
-// List implements indexregistry.Store.
+// List implements indexregistry.Store: most recently updated first, then by id.
+// That is the order the Python path's index_meta list has (updated_on DESC,
+// id ASC), and the Indexes tab depends on it: it selects the FIRST indexed row
+// of the list on load and after every change, so oldest-first made it select
+// the stalest index and Delete asked for that index's name rather than the one
+// just created (ADR-0030 Verification 3, index.lifecycle.spec.ts).
 func (r *IndexRegistryRepository) List(ctx context.Context, projectID, toolkitID int32) ([]indexregistryapp.Row, error) {
 	rows, err := r.pool.Query(ctx, indexRegistrySelect+`
 WHERE index_registry.project_id = $1 AND index_registry.toolkit_id = $2
   AND index_registry.deleted_at IS NULL
-ORDER BY index_registry.created_at, index_registry.index_id
+ORDER BY index_registry.updated_at DESC, index_registry.index_id
 LIMIT 10001`, projectID, toolkitID)
 	if err != nil {
 		return nil, fmt.Errorf("list index registry: %w", err)

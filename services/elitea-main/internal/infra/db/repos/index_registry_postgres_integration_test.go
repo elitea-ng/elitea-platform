@@ -191,8 +191,8 @@ func TestIndexRegistryConcurrentFirstInitializeAdmitsExactlyOneRun(t *testing.T)
 	}
 }
 
-func TestIndexRegistryListIsScopedAndOldestFirst(t *testing.T) {
-	repo, _ := newRegistryTestRepo(t)
+func TestIndexRegistryListIsScopedAndNewestUpdatedFirst(t *testing.T) {
+	repo, pool := newRegistryTestRepo(t)
 	ctx := context.Background()
 	for _, name := range []string{"b", "a", "c"} {
 		if err := repo.InitializeRegistryRun(ctx, registryRun(1, name)); err != nil {
@@ -205,8 +205,17 @@ func TestIndexRegistryListIsScopedAndOldestFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows, err := repo.List(ctx, 1, 19)
-	if err != nil || len(rows) != 3 || rows[0].Name != "b" || rows[1].Name != "a" || rows[2].Name != "c" {
+	if err != nil || len(rows) != 3 || rows[0].Name != "c" || rows[1].Name != "a" || rows[2].Name != "b" {
 		t.Fatalf("list = %+v err=%v", rows, err)
+	}
+	// Touching the oldest row moves it to the front: the order is by update,
+	// not by creation, as the Python index_meta list is.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.index_registry SET updated_at = clock_timestamp() WHERE name = 'b'`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = repo.List(ctx, 1, 19)
+	if err != nil || len(rows) != 3 || rows[0].Name != "b" {
+		t.Fatalf("list after updating b = %+v err=%v", rows, err)
 	}
 	empty, err := repo.List(ctx, 2, 19)
 	if err != nil || empty == nil || len(empty) != 0 {
