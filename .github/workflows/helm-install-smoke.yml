@@ -125,13 +125,13 @@ jobs:
             elitea-main.target=e2e
             elitea-main.tags=ghcr.io/elitea-ng/elitea-main:kind
             elitea-main.cache-from=type=gha,scope=elitea-main-linux-amd64
-            elitea-main.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-main-linux-amd64
+            elitea-main.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-main-linux-amd64,ignore-error=true
             elitea-subapp-host.tags=ghcr.io/elitea-ng/elitea-subapp-host:kind
             elitea-subapp-host.cache-from=type=gha,scope=elitea-subapp-host-linux-amd64
-            elitea-subapp-host.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-subapp-host-linux-amd64
+            elitea-subapp-host.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-subapp-host-linux-amd64,ignore-error=true
             elitea-deepwiki-engine-native.tags=ghcr.io/elitea-ng/elitea-deepwiki-engine-native:kind
             elitea-deepwiki-engine-native.cache-from=type=gha,scope=elitea-deepwiki-engine-native-linux-amd64
-            elitea-deepwiki-engine-native.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-deepwiki-engine-native-linux-amd64
+            elitea-deepwiki-engine-native.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-deepwiki-engine-native-linux-amd64,ignore-error=true
 
       - name: Pin Helm to the version helm-lint renders with
         # Same pin as helm-lint.yml, so the chart is INSTALLED by the Helm

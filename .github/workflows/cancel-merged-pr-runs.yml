@@ -22,6 +22,9 @@ name: Cancel runs of a merged PR
 # keeps its checks. Accepted limit: fork runs carry no PR link, so two open
 # PRs from the same fork branch at the same sha cannot be told apart.
 #
+# A second job deletes the PR ref's Actions caches when the PR closes, merged
+# or not (see the job's comment).
+#
 # pull_request_target, not pull_request: a Dependabot or fork PR gets a
 # read-only GITHUB_TOKEN under pull_request, and cancelling needs
 # `actions: write`. This is safe here because the workflow never checks out
@@ -31,9 +34,13 @@ on:
   pull_request_target:
     types:
       - closed
+  # Daily sweep for PR-ref caches written AFTER the close-time pass (a run of
+  # a closed-unmerged PR is not cancelled and may still export when it ends).
+  schedule:
+    - cron: "17 3 * * *"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'sweep' }}
   cancel-in-progress: false
 
 permissions:
@@ -155,4 +162,57 @@ jobs:
 
             for (const run of pending) await post('force-cancel', run);
 
+            if (failures.length > 0) core.setFailed(failures.join('\n'));
+
+  delete-caches:
+    name: Delete closed pull requests' Actions caches
+    # On close (merged or not) for this PR, after the cancel job settled its
+    # runs; daily for every closed PR whose ref still holds entries. The
+    # repository cache is capped at 10 GB and evicts the least recently used
+    # entries first, so PR-ref entries nothing will read again push main's
+    # warm layers out and make BuildKit exports fail mid-write ("cache entry
+    # no longer exists").
+    needs: cancel
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Delete every cache entry scoped to a closed PR's refs/pull/<n>/merge
+        # Same pin and the same reason as above.
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          retries: 3
+          # 404 is an answer (already evicted), never retried.
+          retry-exempt-status-codes: 400,401,403,404,409,422
+          script: |
+            const { owner, repo } = context.repo;
+            let refs;
+            if (context.payload.pull_request) {
+              refs = [`refs/pull/${context.payload.pull_request.number}/merge`];
+            } else {
+              // Sweep: every PR ref that holds entries, kept only when its PR is closed.
+              const all = await github.paginate('GET /repos/{owner}/{repo}/actions/caches', { owner, repo, per_page: 100 });
+              const numbers = [...new Set(all.map((c) => c.ref.match(/^refs\/pull\/(\d+)\/merge$/)?.[1]).filter(Boolean))];
+              refs = [];
+              for (const n of numbers) {
+                const { data } = await github.rest.pulls.get({ owner, repo, pull_number: Number(n) });
+                if (data.state === 'closed') refs.push(`refs/pull/${n}/merge`);
+              }
+            }
+            const failures = [];
+            let deleted = 0, gone = 0, bytes = 0;
+            for (const ref of refs) {
+              const caches = await github.paginate('GET /repos/{owner}/{repo}/actions/caches', { owner, repo, ref, per_page: 100 });
+              for (const c of caches) {
+                try {
+                  await github.request('DELETE /repos/{owner}/{repo}/actions/caches/{cache_id}', { owner, repo, cache_id: c.id });
+                  deleted += 1;
+                  bytes += c.size_in_bytes;
+                } catch (err) {
+                  if (err.status === 404) gone += 1;
+                  else failures.push(`${ref} ${c.id} ${c.key}: ${err.status} ${err.message}`);
+                }
+              }
+            }
+            core.info(`${refs.length} closed PR ref(s): deleted ${deleted} entries (${(bytes / 1048576).toFixed(0)} MiB), ${gone} already evicted, ${failures.length} failed`);
             if (failures.length > 0) core.setFailed(failures.join('\n'));

@@ -349,7 +349,7 @@ jobs:
             org.opencontainers.image.version=${{ needs.release.outputs.new_release_version }}
           platforms: ${{ matrix.platform.arch }}
           cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.suffix }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.suffix }},ignore-error=true
 
   # ── Job 3: Scan, manifest and sign each image this release pushed ────────────
   #
