@@ -332,6 +332,19 @@ pub struct ChunkingConfig {
 }
 
 impl ChunkingConfig {
+    /// Whether any chunker this config can select calls a model: the
+    /// `proposal` and `statistical` chunkers, or `use_llm`, at the top level
+    /// or for any extension.
+    #[must_use]
+    pub fn needs_model_step(&self) -> bool {
+        std::iter::once(&self.base)
+            .chain(self.by_extension.values())
+            .any(|p| {
+                p.use_llm == Some(true)
+                    || matches!(p.chunker.as_deref(), Some("proposal" | "statistical"))
+            })
+    }
+
     /// Read the SDK's JSON form. `null` is the empty config.
     ///
     /// A setting of the wrong type is dropped for that key's default and
@@ -401,6 +414,17 @@ impl<'de> Deserialize<'de> for ChunkingConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_config_needs_a_model_step_only_when_a_selected_chunker_calls_one() {
+        let from = |v: Value| ChunkingConfig::from_value(&v).unwrap();
+        assert!(!from(Value::Null).needs_model_step());
+        assert!(!from(serde_json::json!({"chunker": "markdown"})).needs_model_step());
+        assert!(from(serde_json::json!({"chunker": "proposal"})).needs_model_step());
+        assert!(from(serde_json::json!({".md": {"chunker": "statistical"}})).needs_model_step());
+        assert!(from(serde_json::json!({".pdf": {"use_llm": true}})).needs_model_step());
+        assert!(!from(serde_json::json!({"use_llm": false})).needs_model_step());
+    }
+
     use super::*;
     use serde_json::json;
 

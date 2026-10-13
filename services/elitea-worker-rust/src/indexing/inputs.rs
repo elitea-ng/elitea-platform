@@ -178,29 +178,89 @@ pub(crate) fn llm_model(raw: &[u8]) -> Result<String, InputError> {
     }
 }
 
-/// The settings of the `index.llm_configuration` entry.
+/// The settings of the `index.llm_configuration` entry. A usable
+/// `temperature` is 0.0 to 2.0, a usable `max_tokens` a positive integer (an
+/// integral float such as `4096.0` is one); anything else is warned about and
+/// left to the model's default.
 ///
 /// # Errors
 ///
 /// Not a JSON object.
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub(crate) fn llm_settings(raw: &[u8]) -> Result<LlmSettings, InputError> {
     let map = object(raw, "llm configuration")?;
-    let max_tokens = map
-        .get("max_tokens")
-        .and_then(Value::as_u64)
-        .filter(|n| *n > 0)
-        .and_then(|n| u32::try_from(n).ok())
-        .filter(|n| i32::try_from(*n).is_ok());
-    let temperature = map
-        .get("temperature")
-        .and_then(Value::as_f64)
-        .filter(|t| t.is_finite() && (0.0..=1.0).contains(t))
-        .map(|t| t as f32);
+    let max_tokens = match map.get("max_tokens") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let parsed = value
+                .as_u64()
+                .or_else(|| {
+                    value
+                        .as_f64()
+                        .filter(|f| {
+                            f.is_finite() && f.fract() == 0.0 && *f >= 1.0 && *f <= 2_147_483_647.0
+                        })
+                        .map(|f| f as u64)
+                })
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| *n > 0 && i32::try_from(*n).is_ok());
+            if parsed.is_none() {
+                tracing::warn!(
+                    event = "index_llm_setting_dropped",
+                    key = "max_tokens",
+                    "the llm configuration's `max_tokens` is not a positive integer; the model's default applies"
+                );
+            }
+            parsed
+        }
+    };
+    let temperature = match map.get("temperature") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let parsed = value
+                .as_f64()
+                .filter(|t| t.is_finite() && (0.0..=2.0).contains(t))
+                .map(|t| t as f32);
+            if parsed.is_none() {
+                tracing::warn!(
+                    event = "index_llm_setting_dropped",
+                    key = "temperature",
+                    "the llm configuration's `temperature` is not between 0.0 and 2.0; the model's default applies"
+                );
+            }
+            parsed
+        }
+    };
     Ok(LlmSettings {
         max_tokens,
         temperature,
     })
+}
+
+/// The run's chunking config: `chunking_config` with the `chunking_tool`
+/// argument as its base chunker.
+///
+/// # Errors
+///
+/// A `chunking_config` that is not an object.
+pub(crate) fn chunking_config(
+    parameters: &IndexParameters,
+) -> Result<elitea_doc_chunk::ChunkingConfig, elitea_doc_chunk::ConfigError> {
+    let mut chunking = elitea_doc_chunk::ChunkingConfig::from_value(&parameters.chunking_config)?;
+    if let Some(tool) = &parameters.chunking_tool {
+        chunking.base.chunker = Some(tool.clone());
+    }
+    Ok(chunking)
+}
+
+/// Whether the `index_data` arguments select a chunker that calls a model
+/// (so the claim's chat model entries are worth fetching). Arguments that
+/// cannot be read answer no: the run refuses them itself.
+pub(crate) fn needs_chat_model(tool_parameters: &[u8]) -> bool {
+    index_parameters(tool_parameters)
+        .ok()
+        .and_then(|parameters| chunking_config(&parameters).ok())
+        .is_some_and(|chunking| chunking.needs_model_step())
 }
 
 /// The embedding model of the binding entry (`model_name`).
@@ -268,7 +328,41 @@ mod tests {
         assert_eq!(settings.temperature, Some(0.5));
         let unusable = llm_settings(br#"{"temperature": 7, "max_tokens": -1}"#).unwrap();
         assert_eq!(unusable, LlmSettings::default());
+        let wide = llm_settings(br#"{"temperature": 1.7, "max_tokens": 4096.0}"#).unwrap();
+        assert_eq!(wide.temperature, Some(1.7));
+        assert_eq!(wide.max_tokens, Some(4096));
+        let edges = llm_settings(br#"{"temperature": 2.0001, "max_tokens": 10.5}"#).unwrap();
+        assert_eq!(edges, LlmSettings::default(), "warned about, model default");
+        assert_eq!(
+            llm_settings(br#"{"temperature": 0.0, "max_tokens": 1e20}"#).unwrap(),
+            LlmSettings {
+                max_tokens: None,
+                temperature: Some(0.0)
+            }
+        );
         assert!(llm_settings(b"[]").is_err());
+    }
+
+    #[test]
+    fn only_a_model_chunker_makes_the_chat_entries_worth_fetching() {
+        let params = |extra: Value| {
+            let mut m = json!({"index_name": "n"});
+            m.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            m.to_string().into_bytes()
+        };
+        assert!(!needs_chat_model(&params(json!({}))));
+        assert!(!needs_chat_model(&params(
+            json!({"chunking_tool": "markdown"})
+        )));
+        assert!(needs_chat_model(&params(
+            json!({"chunking_tool": "proposal"})
+        )));
+        assert!(needs_chat_model(&params(
+            json!({"chunking_config": {".md": {"chunker": "statistical"}}})
+        )));
+        assert!(!needs_chat_model(b"not json"));
     }
 
     #[test]

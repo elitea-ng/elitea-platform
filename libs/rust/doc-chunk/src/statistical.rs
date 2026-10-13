@@ -25,6 +25,7 @@
 //!   SDK's search would not end).
 
 use crate::config::ModelStepParams;
+use crate::route::positive;
 use crate::tokens::{self, Encoding};
 use crate::{Chunk, ChunkError};
 use std::collections::BTreeSet;
@@ -67,12 +68,6 @@ impl Default for StatisticalSettings {
     }
 }
 
-fn positive(value: Option<i64>) -> Option<usize> {
-    value
-        .and_then(|n| usize::try_from(n).ok())
-        .filter(|n| *n > 0)
-}
-
 impl StatisticalSettings {
     /// The settings a chunking config names, defaults for the rest.
     #[must_use]
@@ -101,7 +96,9 @@ impl StatisticalSettings {
 }
 
 /// `text` as the statistical chunker's splits: cl100k windows of
-/// `split_tokens`, no overlap. Empty text gives none.
+/// `split_tokens`, no overlap, each an exact slice of `text` (a split never
+/// cuts a character; the splits concatenate back to the text). Empty text
+/// gives none.
 ///
 /// # Errors
 /// [`ChunkError::Tokenizer`] if the encoding is unavailable.
@@ -109,7 +106,7 @@ pub(crate) fn split_text(
     text: &str,
     settings: &StatisticalSettings,
 ) -> Result<Vec<String>, ChunkError> {
-    tokens::split(text, Encoding::Cl100k, settings.split_tokens, 0)
+    tokens::split_exact(text, Encoding::Cl100k, settings.split_tokens)
 }
 
 /// The chunks of `splits` given their embedding `vectors` (one per split, in
@@ -265,7 +262,8 @@ fn optimal_threshold(counts: &[usize], similarities: &[f64], s: &StatisticalSett
 /// `_split_documents`: accumulate splits until a break (when the chunk so far
 /// holds at least `min` and under `max` tokens) or until the next split would
 /// pass `max` (when it holds at least `min`). The chunk's text is its splits
-/// joined by a space, as the SDK's `Chunk.content`.
+/// concatenated: the splits are slices of the original text, so no separator
+/// is inserted (the SDK joined decoded splits by a space).
 fn group(
     splits: &[String],
     counts: &[usize],
@@ -282,13 +280,13 @@ fn group(
         {
             current.push(split);
             tokens += size;
-            chunks.push((current.join(" "), tokens));
+            chunks.push((current.concat(), tokens));
             current.clear();
             tokens = 0;
             continue;
         }
         if tokens + size > s.max_split_tokens && tokens >= s.min_split_tokens {
-            chunks.push((current.join(" "), tokens));
+            chunks.push((current.concat(), tokens));
             current.clear();
             tokens = 0;
         }
@@ -296,7 +294,7 @@ fn group(
         tokens += size;
     }
     if !current.is_empty() {
-        chunks.push((current.join(" "), tokens));
+        chunks.push((current.concat(), tokens));
     }
     chunks
 }
@@ -336,8 +334,25 @@ mod tests {
         assert_eq!(chunks[0].chunk_id, 1);
         assert_eq!(chunks[1].chunk_id, 2);
         assert!(chunks.iter().all(|c| c.chunk_type == "document"));
-        assert_eq!(chunks[0].text, text[..3].join(" "));
-        assert_eq!(chunks[1].text, text[3..].join(" "));
+        assert_eq!(chunks[0].text, text[..3].concat());
+        assert_eq!(chunks[1].text, text[3..].concat());
+    }
+
+    #[test]
+    fn splits_are_original_slices_with_no_replacement_character_and_chunks_add_no_space() {
+        let text = "日本語のテキストです😀😀😀 unbelievably long words 😀 end. ".repeat(30);
+        let settings = StatisticalSettings {
+            split_tokens: 7,
+            ..StatisticalSettings::default()
+        };
+        let splits = split_text(&text, &settings).unwrap();
+        assert!(splits.len() > 3);
+        assert_eq!(splits.concat(), text);
+        assert!(splits.iter().all(|s| !s.contains('\u{FFFD}')));
+        let vectors: Vec<Vec<f32>> = (0..splits.len()).map(|i| unit(i % 2, 2)).collect();
+        let chunks = statistical_chunks(&splits, &vectors, &settings).unwrap();
+        let rejoined: String = chunks.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(rejoined, text, "no space inserted between splits");
     }
 
     #[test]
@@ -346,12 +361,8 @@ mod tests {
         let text = splits(&[40; 70]);
         let vectors: Vec<Vec<f32>> = (0..70).map(|i| unit(i % 3, 3)).collect();
         let chunks = statistical_chunks(&text, &vectors, &StatisticalSettings::default()).unwrap();
-        let joined = chunks
-            .iter()
-            .map(|c| c.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert_eq!(joined, text.join(" "));
+        let joined = chunks.iter().map(|c| c.text.as_str()).collect::<String>();
+        assert_eq!(joined, text.concat());
         let total: usize = chunks
             .iter()
             .map(|c| usize::try_from(c.metadata["chunk_token_count"].as_u64().unwrap()).unwrap())
@@ -381,12 +392,8 @@ mod tests {
             .collect();
         let chunks = statistical_chunks(&text, &vectors, &StatisticalSettings::default()).unwrap();
         assert!(!chunks.is_empty());
-        let joined = chunks
-            .iter()
-            .map(|c| c.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert_eq!(joined, text.join(" "));
+        let joined = chunks.iter().map(|c| c.text.as_str()).collect::<String>();
+        assert_eq!(joined, text.concat());
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //! code; the call cap), and that an unchanged document never calls a model.
 
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use adk_rust::futures::stream;
@@ -27,12 +27,14 @@ use elitea_content_source::Document;
 use serde_json::{Value, json};
 
 use super::model_steps::{ChatModelBinder, ChatModelRequest};
+use super::pipeline::RunLiveness;
 use super::tests::{
     Always, FIXTURE_SOURCE, Harness, MODEL, NS, binding, command, configuration, document, harness,
     parameters, stored,
 };
 use super::tools::ClaimIndexToolHost;
 use super::{IndexRun, IndexRunFailure, run_index};
+use crate::execution::ClaimLeaseError;
 use crate::protocol::control::IndexRemovalBinding;
 use crate::protocol::elitea::runtime::v1::{
     IndexIngestStatusV1, IndexIngestSummaryV1, IndexIngestTerminalStateV1,
@@ -168,9 +170,29 @@ async fn run_model(
     parameters: &[u8],
     llm_model: Option<&str>,
 ) -> Result<IndexIngestSummaryV1, IndexRunFailure> {
+    let model = llm_model.map(|name| json!(name).to_string().into_bytes());
+    run_model_raw(
+        harness,
+        documents,
+        expected,
+        parameters,
+        model.as_deref(),
+        &Always,
+    )
+    .await
+}
+
+/// [`run_model`] with the `llm_model` entry as raw bytes and a lease.
+async fn run_model_raw(
+    harness: &Harness,
+    documents: Vec<Document>,
+    expected: Option<(&str, u32)>,
+    parameters: &[u8],
+    model: Option<&[u8]>,
+    lease: &dyn RunLiveness,
+) -> Result<IndexIngestSummaryV1, IndexRunFailure> {
     FIXTURE_SOURCE.with(|slot| *slot.lock().expect("lock") = Some(documents));
     let now = || 1_700_000_000_000_i64;
-    let model = llm_model.map(|name| json!(name).to_string().into_bytes());
     let settings = json!({"temperature": 0.5, "max_tokens": 2048, "top_p": 1}).to_string();
     run_index(
         &harness.runtime,
@@ -179,11 +201,11 @@ async fn run_model(
             toolkit_configuration: &configuration(),
             tool_parameters: parameters,
             embedding_binding: Some(&binding()),
-            llm_model: model.as_deref(),
-            llm_configuration: model.as_ref().map(|_| settings.as_bytes()),
+            llm_model: model,
+            llm_configuration: model.map(|_| settings.as_bytes()),
             vector_token: Some(&harness.token),
             context: &harness.context,
-            lease: &Always,
+            lease,
             deadline_unix_millis: i64::MAX,
             now_unix_millis: &now,
         },
@@ -585,7 +607,68 @@ async fn the_per_run_model_call_cap_stops_the_run_with_a_sentence() {
     );
     assert_eq!(harness.fake.point_count(), 16);
 
-    // The statistical chunker's embeddings requests count too.
+    // The statistical chunker's embeddings requests count too: two documents
+    // of three requests each against a cap of four. The first is written;
+    // the second fits the cap but not what remains, so the run stops.
+    let mut harness = super::tests::harness(4, None).await;
+    harness.runtime.limits.max_model_calls = 4;
+    let text = "lorem ipsum dolor sit amet. ".repeat(140);
+    let stat = parameters(
+        false,
+        json!({"chunking_tool": "statistical", "chunking_config": {"batch_size": 1}}),
+    );
+    let summary = run_model(
+        &harness,
+        vec![document("a.md", "v1", &text), document("b.md", "v1", &text)],
+        None,
+        &stat,
+        None,
+    )
+    .await
+    .expect("summary");
+    let message = failed_with(&summary);
+    assert!(message.contains("limit of 4 model calls"), "{message}");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_that_alone_exceeds_the_whole_cap_is_skipped_and_the_run_goes_on() {
+    let mut harness = harness(4, None).await;
+    harness.runtime.limits.max_model_calls = 2;
+    let chat = ScriptedChat::new(food_dates);
+    with_chat(&mut harness, &chat);
+    // Three windows of 16 tokens do not fit a cap of two calls; the small
+    // document after it does.
+    let big = "alpha beta gamma delta epsilon zeta ".repeat(40);
+    let params = parameters(
+        false,
+        json!({"chunking_tool": "proposal", "chunking_config": {"max_doc_tokens": 100}}),
+    );
+    let summary = run_model(
+        &harness,
+        vec![
+            document("big.md", "v1", &big),
+            document("small.md", "v1", "tiny text"),
+        ],
+        None,
+        &params,
+        Some("gpt-test"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.skipped.get("model_cap_exceeded"),
+        Some(&1),
+        "{summary:?}"
+    );
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(chat.calls(), 1, "the oversized document made no call");
+    assert_ne!(
+        summary.terminal_state,
+        IndexIngestTerminalStateV1::Failed as i32
+    );
+
+    // The statistical chunker: three requests against a cap of two.
     let mut harness = super::tests::harness(4, None).await;
     harness.runtime.limits.max_model_calls = 2;
     let text = "lorem ipsum dolor sit amet. ".repeat(140);
@@ -601,8 +684,265 @@ async fn the_per_run_model_call_cap_stops_the_run_with_a_sentence() {
     )
     .await
     .expect("summary");
+    assert_eq!(
+        summary.skipped.get("model_cap_exceeded"),
+        Some(&1),
+        "{summary:?}"
+    );
+    assert_eq!(harness.fake.point_count(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn retries_are_charged_against_the_cap_one_per_real_call() {
+    // A flaky gateway: two rate limits, then an answer. Three real calls.
+    let mut harness = harness(4, None).await;
+    harness.runtime.limits.max_model_calls = 3;
+    let chat = ScriptedChat::new(|index, _| {
+        if index < 2 {
+            Reply::Fail(ErrorCategory::RateLimited, "model_gateway.rate_limited")
+        } else {
+            food_dates(index, "")
+        }
+    });
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        vec![document("a.md", "v1", GUIDE)],
+        None,
+        &proposal(),
+        Some("gpt-test"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(chat.calls(), 3);
+
+    // One call short of that, the third attempt is refused by the cap, not
+    // made: the charged attempts equal the real calls.
+    let mut harness = super::tests::harness(4, None).await;
+    harness.runtime.limits.max_model_calls = 2;
+    let chat = ScriptedChat::new(|index, _| {
+        if index < 2 {
+            Reply::Fail(ErrorCategory::RateLimited, "model_gateway.rate_limited")
+        } else {
+            food_dates(index, "")
+        }
+    });
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        vec![document("a.md", "v1", GUIDE)],
+        None,
+        &proposal(),
+        Some("gpt-test"),
+    )
+    .await
+    .expect("summary");
+    assert!(failed_with(&summary).contains("limit of 2 model calls"));
+    assert_eq!(chat.calls(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reply_cut_by_max_tokens_fails_the_run_naming_the_setting() {
+    struct Truncated;
+    #[async_trait]
+    impl Llm for Truncated {
+        fn name(&self) -> &'static str {
+            "truncated"
+        }
+        async fn generate_content(
+            &self,
+            _: LlmRequest,
+            _: bool,
+        ) -> adk_rust::Result<LlmResponseStream> {
+            Ok(Box::pin(stream::once(async {
+                Ok(LlmResponse {
+                    content: Some(Content::new("model").with_text("{\"chunks\": [")),
+                    turn_complete: true,
+                    finish_reason: Some(FinishReason::MaxTokens),
+                    ..Default::default()
+                })
+            })))
+        }
+    }
+    struct Binder(AtomicUsize);
+    impl ChatModelBinder for Binder {
+        fn bind_chat(
+            &self,
+            _: &ClaimScopedEliteaContext,
+            _: &ChatModelRequest<'_>,
+        ) -> Result<Arc<dyn Llm>, ModelFacadeError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Arc::new(Truncated))
+        }
+    }
+    let mut harness = harness(4, None).await;
+    let binder = Arc::new(Binder(AtomicUsize::new(0)));
+    harness.runtime.chat_models = Some(Arc::clone(&binder) as Arc<dyn ChatModelBinder>);
+    let summary = run_model(
+        &harness,
+        vec![document("a.md", "v1", GUIDE)],
+        None,
+        &proposal(),
+        Some("gpt-test"),
+    )
+    .await
+    .expect("summary");
     let message = failed_with(&summary);
-    assert!(message.contains("limit of 2 model calls"), "{message}");
+    assert!(message.contains("max_tokens"), "{message}");
+    assert!(message.contains("2048"), "the value in use: {message}");
+    assert_eq!(binder.0.load(Ordering::SeqCst), 1, "not retried");
+}
+
+/// Reports Stop once `flag` is raised.
+struct FlagLease(Arc<AtomicBool>);
+
+impl RunLiveness for FlagLease {
+    fn ensure_running(&self) -> Result<(), ClaimLeaseError> {
+        if self.0.load(Ordering::SeqCst) {
+            Err(ClaimLeaseError::Cancelled("stop requested"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_during_an_attempt_ends_the_retries() {
+    let mut harness = harness(4, None).await;
+    let flag = Arc::new(AtomicBool::new(false));
+    let raise = Arc::clone(&flag);
+    let chat = ScriptedChat::new(move |_, _| {
+        raise.store(true, Ordering::SeqCst);
+        Reply::Fail(ErrorCategory::Unavailable, "model_gateway.unavailable")
+    });
+    with_chat(&mut harness, &chat);
+    let result = run_model_raw(
+        &harness,
+        vec![document("a.md", "v1", GUIDE)],
+        None,
+        &proposal(),
+        Some(br#""gpt-test""#),
+        &FlagLease(flag),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(IndexRunFailure::Cancelled)),
+        "{result:?}"
+    );
+    assert_eq!(chat.calls(), 1, "no further attempt after Stop");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_chat_entries_are_read_only_when_a_chunker_calls_a_model() {
+    let harness = harness(4, None).await;
+    // Malformed `llm_model`, but the markdown chunker needs no model.
+    let summary = run_model_raw(
+        &harness,
+        vec![document("a.md", "v1", "alpha text")],
+        None,
+        &parameters(false, json!({})),
+        Some(b"{not a model name"),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+
+    // The same entry when the proposal chunker is selected: refused clearly.
+    let result = run_model_raw(
+        &harness,
+        vec![document("b.md", "v1", "alpha text")],
+        None,
+        &proposal(),
+        Some(b"{not a model name"),
+        &Always,
+    )
+    .await;
+    match result {
+        Err(IndexRunFailure::InvalidInput(message)) => {
+            assert!(message.contains("llm model"), "{message}");
+        }
+        other => panic!("expected a clear refusal, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_documents_windows_are_asked_together_and_kept_in_order() {
+    let mut harness = harness(4, None).await;
+    // Each window's answer echoes a marker taken from its own text.
+    let chat = ScriptedChat::new(|_, user| {
+        let marker = user
+            .split_whitespace()
+            .find(|w| w.starts_with("MARK"))
+            .unwrap_or("none")
+            .to_owned();
+        Reply::Text(analysis(&[(&marker, "s", &["p"])]))
+    });
+    with_chat(&mut harness, &chat);
+    let mut body = String::new();
+    for n in 0..6 {
+        body.push_str(&["MARK", &n.to_string(), " "].concat());
+        body.push_str(&"filler word ".repeat(60));
+    }
+    let params = parameters(
+        false,
+        json!({"chunking_tool": "proposal", "chunking_config": {"max_doc_tokens": 130}}),
+    );
+    let summary = run_model(
+        &harness,
+        vec![document("a.md", "v1", &body)],
+        None,
+        &params,
+        Some("gpt-test"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    let windows = chat.calls();
+    assert!(windows >= 5, "{windows}");
+    let Harness {
+        runtime,
+        token,
+        _server,
+        ..
+    } = harness;
+    let runtime = Arc::new(runtime);
+    let host = search_host(&runtime, &token);
+    // A window's chunk_id is its position, whatever order the answers came
+    // back in; each window's text carries its own marker, and that marker
+    // is the title the model returned for it.
+    for id in 1..=windows {
+        let found = search(
+            &host,
+            json!({"query": "MARK", "index_name": "docs", "cut_off": 0,
+                   "filter": {"chunk_type": "document", "chunk_id": id.to_string()},
+                   "output_fields": ["page_content"]}),
+        )
+        .await;
+        let text = found[0]["page_content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let titled = search(
+            &host,
+            json!({"query": "MARK", "index_name": "docs", "cut_off": 0,
+                   "filter": {"chunk_type": "title", "chunk_id": id.to_string()},
+                   "output_fields": ["page_content"]}),
+        )
+        .await;
+        let title = titled[0]["page_content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        if text.contains("MARK") {
+            let first = text
+                .split_whitespace()
+                .find(|w| w.starts_with("MARK"))
+                .unwrap();
+            assert_eq!(title, first, "window {id}");
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

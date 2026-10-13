@@ -94,6 +94,9 @@ pub(super) const SKIP_NO_MODEL: &str = "no_model";
 /// The chat model failed for this document for a reason another run cures;
 /// its stored version is untouched (ADR-0030 I4).
 pub(super) const SKIP_MODEL_FAILED: &str = "model_failed";
+/// One document alone needs more model calls than the whole per-run cap
+/// (ADR-0030 I4); its stored version is untouched.
+pub(super) const SKIP_MODEL_CAP_EXCEEDED: &str = "model_cap_exceeded";
 const SKIP_EMPTY: &str = "empty";
 const SKIP_FETCH_FAILED: &str = "fetch_failed";
 const SKIP_EMBEDDING_FAILED: &str = "embedding_failed";
@@ -311,7 +314,6 @@ pub(crate) async fn run_index(
             ),
         ));
     }
-    let chat = chat_binding(runtime, &run)?;
     let Some(token) = run
         .vector_token
         .filter(|token| token.allows(VectorSource::ToolkitIndex))
@@ -321,13 +323,17 @@ pub(crate) async fn run_index(
             "the vector store is not available to this run: the claim carries no project token for toolkit indexes",
         ));
     };
-    let mut chunking = match ChunkingConfig::from_value(&parameters.chunking_config) {
+    let chunking = match inputs::chunking_config(&parameters) {
         Ok(chunking) => chunking,
         Err(error) => return Ok(failure(&parameters, &error.to_string())),
     };
-    if let Some(tool) = &parameters.chunking_tool {
-        chunking.base.chunker = Some(tool.clone());
-    }
+    // The chat model entries are read only when a chunker can call a model:
+    // a run that never does must not fail on them.
+    let chat = if chunking.needs_model_step() {
+        chat_binding(runtime, &run)?
+    } else {
+        None
+    };
     for warning in &chunking.warnings {
         tracing::warn!(event = "index_chunking_config_setting_dropped", warning);
     }
@@ -1092,15 +1098,46 @@ pub(super) async fn embed_with_retry(
     inputs: &[String],
     backoff: std::time::Duration,
 ) -> Result<crate::transport::embeddings_facade::Embedded, EmbeddingsError> {
+    match embed_gated(embeddings, context, model, inputs, backoff, &|_| {
+        Ok::<(), std::convert::Infallible>(())
+    })
+    .await
+    {
+        Ok(embedded) => Ok(embedded),
+        Err(Gated::Embeddings(error)) => Err(error),
+        Err(Gated::Gate(never)) => match never {},
+    }
+}
+
+/// Why a gated embeddings call ended.
+pub(super) enum Gated<E> {
+    /// The gate refused an attempt (or a wait).
+    Gate(E),
+    Embeddings(EmbeddingsError),
+}
+
+/// [`embed_with_retry`] with a gate asked before every attempt (`true`: the
+/// attempt is about to be made, so charge it) and before every retry wait
+/// (`false`: only liveness).
+pub(super) async fn embed_gated<E>(
+    embeddings: &EmbeddingsClient,
+    context: &ClaimScopedEliteaContext,
+    model: &str,
+    inputs: &[String],
+    backoff: std::time::Duration,
+    gate: &(dyn Fn(bool) -> Result<(), E> + Sync),
+) -> Result<crate::transport::embeddings_facade::Embedded, Gated<E>> {
     let mut attempt = 0;
     loop {
+        gate(true).map_err(Gated::Gate)?;
         match embeddings.embed(context, model, inputs).await {
             Ok(embedded) => return Ok(embedded),
             Err(error) if error.retryable() && attempt + 1 < EMBEDDING_ATTEMPTS => {
                 attempt += 1;
+                gate(false).map_err(Gated::Gate)?;
                 tokio::time::sleep(backoff * attempt).await;
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(Gated::Embeddings(error)),
         }
     }
 }

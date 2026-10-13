@@ -555,13 +555,20 @@ where
             .await?;
         // The chat model of the steps that call one (ADR-0030 I4): Main ships
         // both entries whenever the toolkit resolves a model.
+        // Fetched only when the run selects a chunker that calls a model: a
+        // run that never does is not failed by an entry it would not read.
+        let wants_chat = crate::indexing::inputs::needs_chat_model(tool_parameters.as_bytes());
         let llm_model = match index.llm_model_entry_id.as_str() {
-            "" => None,
-            entry_id => Some(self.fetch_entry(execution, lease, entry_id).await?),
+            entry_id if wants_chat && !entry_id.is_empty() => {
+                Some(self.fetch_entry(execution, lease, entry_id).await?)
+            }
+            _ => None,
         };
         let llm_configuration = match index.llm_configuration_entry_id.as_str() {
-            "" => None,
-            entry_id => Some(self.fetch_entry(execution, lease, entry_id).await?),
+            entry_id if wants_chat && !entry_id.is_empty() => {
+                Some(self.fetch_entry(execution, lease, entry_id).await?)
+            }
+            _ => None,
         };
         let embedding_binding = match index.embedding_binding.as_ref() {
             Some(binding) => Some(

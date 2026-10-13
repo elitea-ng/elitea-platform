@@ -220,7 +220,7 @@ pub fn extension_of(source: &str) -> String {
 
 /// A set size: a positive number (zero and negative mean "default": the CSV
 /// and Excel loaders use -1 for "no limit").
-fn positive(value: Option<i64>) -> Option<usize> {
+pub(crate) fn positive(value: Option<i64>) -> Option<usize> {
     value
         .and_then(|n| usize::try_from(n).ok())
         .filter(|n| *n > 0)
@@ -340,14 +340,6 @@ fn code_chunks(
     code::code(text, extension, &code_settings(params, own))
 }
 
-/// What a model-step chunker needs a model for, in the words of a skip.
-fn model_reason(chunker: &'static str) -> String {
-    match chunker {
-        "statistical" => "it embeds sentences to find topic boundaries".to_owned(),
-        _ => "it asks a model to restate the text as propositions".to_owned(),
-    }
-}
-
 /// Chunk `document_text`. `source` says what the document is: a file name
 /// or path, an extension (`md`, `.md`) or a media type (`text/markdown`).
 ///
@@ -386,11 +378,11 @@ pub fn chunk_with(
         ChunkPlan::Chunks(chunks) => Ok(chunks),
         ChunkPlan::Proposal(_) => Err(ChunkError::RequiresModel {
             chunker: "proposal",
-            reason: model_reason("proposal"),
+            reason: "it asks a model to restate the text as propositions".to_owned(),
         }),
         ChunkPlan::Statistical(_) => Err(ChunkError::RequiresModel {
             chunker: "statistical",
-            reason: model_reason("statistical"),
+            reason: "it embeds sentences to find topic boundaries".to_owned(),
         }),
     }
 }

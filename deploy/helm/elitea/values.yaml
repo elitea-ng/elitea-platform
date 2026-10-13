@@ -4289,13 +4289,17 @@ worker:
     # tenant hosts.
     indexEgressAllowlist: "github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com api.zephyrscale.smartbear.com eu.api.zephyrscale.smartbear.com prod-api.zephyr4jiracloud.com xray.cloud.getxray.app us.xray.cloud.getxray.app eu.xray.cloud.getxray.app au.xray.cloud.getxray.app api.figma.com"
     # Rust worker, indexingRuntime=rust only (ADR-0030 I4): the model calls one
-    # index run may make in its model steps, namely one chat call per window of
-    # the `proposal` chunker and one embeddings request per batch of the
-    # `statistical` chunker (not the embedding of the chunks themselves).
-    # Reaching it stops the run FAILED with a sentence; the documents already
-    # written stay and a re-run continues (unchanged documents never call a
-    # model). The gateway's own budget applies as well. Written to runtime.json
-    # as `index_model_call_cap`; must be a positive integer.
+    # index run may make in its model steps, namely every chat call per window
+    # of the `proposal` chunker (a retry is a call) and every embeddings
+    # request per batch of the `statistical` chunker (not the embedding of the
+    # chunks themselves). A document whose calls alone exceed this whole cap is
+    # skipped `model_cap_exceeded` (its stored version untouched, a warning
+    # names the cap, the run goes on): raise the cap to index it. A document
+    # that fits the cap but not what is left of it stops the run FAILED with a
+    # sentence; the documents already written stay and the next run resumes
+    # (finished documents are versioned, unchanged ones never call a model).
+    # The gateway's own budget applies as well. Written to runtime.json as
+    # `index_model_call_cap`; must be a positive integer.
     indexModelCallCap: 2000
     # Broader than the current `artifact.delete_file` rule, so metadata drift
     # cannot bypass approval. `remove_index` is the indexing families' index

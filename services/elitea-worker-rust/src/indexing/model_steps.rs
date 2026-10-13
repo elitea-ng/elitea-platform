@@ -22,23 +22,34 @@
 //!     without model access) skips the proposal chunker's documents as
 //!     `no_model`;
 //! * the per-run cap on model calls ([`IndexRunLimits::max_model_calls`]):
-//!   one call per proposal window and per statistical embeddings request.
-//!   Reaching it stops the run. The documents already written stay.
+//!   every actual call counts, a retry included (charged before the attempt,
+//!   atomically, so windows in flight share it). A document whose calls alone
+//!   exceed the whole cap is skipped `model_cap_exceeded` (its stored
+//!   version untouched, the run goes on); one that fits the cap but not what
+//!   remains of it stops the run, and the next run resumes (finished
+//!   documents are versioned). The documents already written stay;
+//! * liveness (Stop, the lease, the deadline) is checked before every
+//!   attempt and every retry wait;
+//! * a document's proposal windows are asked [`WINDOWS_IN_FLIGHT`] at a time,
+//!   answers kept in window order. Documents themselves are still fulfilled
+//!   one after another by the run's loop (a follow-up, not done here).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use adk_rust::futures::StreamExt as _;
+use adk_rust::futures::stream::FuturesOrdered;
 use adk_rust::{AdkError, Content, FinishReason, Llm, LlmRequest, Part};
 use elitea_doc_chunk::{
-    AnalysisError, Chunk, ChunkDetails, ChunkError, ChunkPlan, ProposalPlan, StatisticalPlan,
+    Chunk, ChunkDetails, ChunkError, ChunkPlan, ProposalPlan, StatisticalPlan,
     parse_chunk_analysis, proposal_system_prompt, proposal_user_message,
 };
 
 use super::IndexRunLimits;
 use super::inputs::LlmSettings;
 use super::pipeline::{
-    EmbedOutcome, IndexRunFailure, SKIP_MODEL_FAILED, SKIP_NO_MODEL, SKIP_TOO_LARGE,
-    classify_embedding_error, embed_with_retry,
+    EmbedOutcome, Gated, IndexRunFailure, SKIP_MODEL_CAP_EXCEEDED, SKIP_MODEL_FAILED,
+    SKIP_NO_MODEL, SKIP_TOO_LARGE, classify_embedding_error, embed_gated,
 };
 use crate::agents::session::BoundOrdinaryAgentModel as _;
 use crate::transport::embeddings_facade::EmbeddingsClient;
@@ -53,6 +64,8 @@ pub(crate) const MAX_CONSECUTIVE_MODEL_FAILURES: u32 = 5;
 /// Attempts per proposal window for a retryable failure or an unreadable
 /// answer.
 const CHAT_ATTEMPTS: u32 = 3;
+/// Proposal windows of one document asked at the same time.
+const WINDOWS_IN_FLIGHT: usize = 4;
 /// The most bytes of one model reply.
 const MAX_REPLY_BYTES: usize = 256 * 1024;
 
@@ -141,13 +154,63 @@ enum CallFailure {
     /// This document cannot be answered (an oversized reply), the model is
     /// fine.
     Unusable(String),
+    /// Stop the run with this sentence (the cap, a reply cut by `max_tokens`).
+    Stop(String),
+    /// The lease was lost or Stop arrived.
+    Liveness(IndexRunFailure),
+}
+
+/// Why a gate refused an attempt.
+pub(super) enum GateStop {
+    Cap(String),
+    Liveness(IndexRunFailure),
+}
+
+impl From<GateStop> for CallFailure {
+    fn from(stop: GateStop) -> Self {
+        match stop {
+            GateStop::Cap(reason) => Self::Stop(reason),
+            GateStop::Liveness(failure) => Self::Liveness(failure),
+        }
+    }
+}
+
+type Alive<'a> = &'a (dyn Fn() -> Result<(), IndexRunFailure> + Sync);
+
+/// What stands before every model attempt: liveness, then (for an attempt)
+/// one atomic charge against the run's cap.
+struct Gate<'a> {
+    calls: &'a AtomicU32,
+    cap: u32,
+    alive: Alive<'a>,
+}
+
+impl Gate<'_> {
+    /// Liveness, and when `charge` one call against the cap.
+    fn check(&self, charge: bool) -> Result<(), GateStop> {
+        (self.alive)().map_err(GateStop::Liveness)?;
+        if charge {
+            self.calls
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                    (n < self.cap).then_some(n + 1)
+                })
+                .map_err(|_| GateStop::Cap(cap_message(self.cap)))?;
+        }
+        Ok(())
+    }
+}
+
+fn cap_message(cap: u32) -> String {
+    format!(
+        "the run reached its limit of {cap} model calls (every chat call per proposal window and every embeddings request of the statistical chunker, retries included); the documents written so far are kept; re-run to continue, or raise the deployment's index model call cap"
+    )
 }
 
 /// The state of a run's model steps.
 pub(crate) struct ModelSteps {
     chat: Option<ChatBinding>,
     cap: u32,
-    calls: u32,
+    calls: AtomicU32,
     consecutive_failures: u32,
 }
 
@@ -156,28 +219,46 @@ impl ModelSteps {
         Self {
             chat,
             cap: limits.max_model_calls,
-            calls: 0,
+            calls: AtomicU32::new(0),
             consecutive_failures: 0,
         }
     }
 
-    fn charge(&mut self) -> Result<(), String> {
-        if self.calls >= self.cap {
-            return Err(format!(
-                "the run reached its limit of {} model calls (one per proposal window and per statistical embeddings request); the documents written so far are kept; re-run to continue, or raise the deployment's index model call cap",
-                self.cap
-            ));
+    fn gate<'a>(&'a self, alive: Alive<'a>) -> Gate<'a> {
+        Gate {
+            calls: &self.calls,
+            cap: self.cap,
+            alive,
         }
-        self.calls += 1;
+    }
+
+    /// What `required` calls come to: fine, a document that alone exceeds the
+    /// whole cap (skipped), or more than the run has left (the run stops, the
+    /// next run resumes).
+    fn admit(&self, required: usize) -> Result<(), StepEnd> {
+        let required = u64::try_from(required).unwrap_or(u64::MAX);
+        if required > u64::from(self.cap) {
+            tracing::warn!(
+                event = "index_document_exceeds_model_call_cap",
+                required,
+                cap = self.cap,
+                "a document needs more model calls than the whole per-run cap; skipped model_cap_exceeded; raise the deployment's index model call cap to index it"
+            );
+            return Err(StepEnd::Skip(SKIP_MODEL_CAP_EXCEEDED));
+        }
+        let left = u64::from(self.cap.saturating_sub(self.calls.load(Ordering::SeqCst)));
+        if required > left {
+            return Err(StepEnd::Stop(cap_message(self.cap)));
+        }
         Ok(())
     }
 
-    /// Fulfils `plan`. `alive` is checked before every call.
+    /// Fulfils `plan`. `alive` is checked before every attempt.
     pub(crate) async fn fulfil(
         &mut self,
         plan: ChunkPlan,
         env: &StepEnv<'_>,
-        alive: &(dyn Fn() -> Result<(), IndexRunFailure> + Sync),
+        alive: Alive<'_>,
     ) -> StepEnd {
         match plan {
             ChunkPlan::Chunks(chunks) => StepEnd::Chunks(chunks),
@@ -190,7 +271,7 @@ impl ModelSteps {
         &mut self,
         plan: &ProposalPlan,
         env: &StepEnv<'_>,
-        alive: &(dyn Fn() -> Result<(), IndexRunFailure> + Sync),
+        alive: Alive<'_>,
     ) -> StepEnd {
         let Some(chat) = self
             .chat
@@ -199,33 +280,59 @@ impl ModelSteps {
         else {
             return StepEnd::Skip(SKIP_NO_MODEL);
         };
+        if let Err(end) = self.admit(plan.windows().len()) {
+            return end;
+        }
         let (binder, model_name, settings) = chat;
-        let mut answers: Vec<Vec<ChunkDetails>> = Vec::with_capacity(plan.windows().len());
-        for window in plan.windows() {
-            if let Err(failure) = alive() {
-                return StepEnd::Liveness(failure);
-            }
-            if let Err(reason) = self.charge() {
-                return StepEnd::Stop(reason);
-            }
-            match chat_window(&*binder, env, &model_name, settings, window).await {
-                Ok(details) => answers.push(details),
-                Err(CallFailure::Fatal(code)) => {
-                    return StepEnd::Stop(format!(
-                        "the chunking model refused the run ({code}); nothing further was sent to it"
+        let outcome = {
+            let gate = self.gate(alive);
+            let mut pending = FuturesOrdered::new();
+            let mut windows = plan.windows().iter();
+            let mut answers: Vec<Vec<ChunkDetails>> = Vec::with_capacity(plan.windows().len());
+            let mut failure = None;
+            loop {
+                while pending.len() < WINDOWS_IN_FLIGHT {
+                    let Some(window) = windows.next() else {
+                        break;
+                    };
+                    pending.push_back(chat_window(
+                        &*binder,
+                        env,
+                        &gate,
+                        &model_name,
+                        settings,
+                        window,
                     ));
                 }
-                Err(CallFailure::Retryable(cause) | CallFailure::Unusable(cause)) => {
-                    return self.failed_document(&cause);
+                let Some(result) = pending.next().await else {
+                    break;
+                };
+                match result {
+                    Ok(details) => answers.push(details),
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
                 }
             }
-        }
-        match plan.chunks(&answers) {
-            Ok(chunks) => {
-                self.consecutive_failures = 0;
-                StepEnd::Chunks(chunks)
+            failure.map_or(Ok(answers), Err)
+        };
+        match outcome {
+            Ok(answers) => match plan.chunks(&answers) {
+                Ok(chunks) => {
+                    self.consecutive_failures = 0;
+                    StepEnd::Chunks(chunks)
+                }
+                Err(error) => self.failed_document(&error.to_string()),
+            },
+            Err(CallFailure::Fatal(code)) => StepEnd::Stop(format!(
+                "the chunking model refused the run ({code}); nothing further was sent to it"
+            )),
+            Err(CallFailure::Stop(reason)) => StepEnd::Stop(reason),
+            Err(CallFailure::Liveness(failure)) => StepEnd::Liveness(failure),
+            Err(CallFailure::Retryable(cause) | CallFailure::Unusable(cause)) => {
+                self.failed_document(&cause)
             }
-            Err(error) => self.failed_document(&error.to_string()),
         }
     }
 
@@ -252,30 +359,33 @@ impl ModelSteps {
         &mut self,
         plan: &StatisticalPlan,
         env: &StepEnv<'_>,
-        alive: &(dyn Fn() -> Result<(), IndexRunFailure> + Sync),
+        alive: Alive<'_>,
     ) -> StepEnd {
         let batch = plan
             .batch_size()
             .clamp(1, crate::transport::embeddings_facade::MAX_BATCH_INPUTS);
+        if let Err(end) = self.admit(plan.splits().len().div_ceil(batch)) {
+            return end;
+        }
+        let gate = self.gate(alive);
         let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(plan.splits().len());
         for inputs in plan.splits().chunks(batch) {
-            if let Err(failure) = alive() {
-                return StepEnd::Liveness(failure);
-            }
-            if let Err(reason) = self.charge() {
-                return StepEnd::Stop(reason);
-            }
-            let embedded = embed_with_retry(
+            let embedded = embed_gated(
                 env.embeddings,
                 env.context,
                 env.embedding_model,
                 inputs,
                 env.limits.embedding_retry_backoff,
+                &|charge| gate.check(charge),
             )
             .await;
             match embedded {
                 Ok(embedded) => vectors.extend(embedded.vectors),
-                Err(error) => {
+                Err(Gated::Gate(GateStop::Cap(reason))) => return StepEnd::Stop(reason),
+                Err(Gated::Gate(GateStop::Liveness(failure))) => {
+                    return StepEnd::Liveness(failure);
+                }
+                Err(Gated::Embeddings(error)) => {
                     return match classify_embedding_error(error) {
                         EmbedOutcome::Fatal(message) | EmbedOutcome::Mismatch(message) => {
                             StepEnd::Stop(message)
@@ -307,10 +417,12 @@ pub(crate) struct StepEnv<'a> {
 }
 
 /// The model's `ChunkDetails` for one window, with the attempts the policy
-/// allows.
+/// allows. Every attempt is charged against the run's cap before it is made,
+/// and liveness is checked before every attempt and every retry wait.
 async fn chat_window(
     binder: &dyn ChatModelBinder,
     env: &StepEnv<'_>,
+    gate: &Gate<'_>,
     model_name: &str,
     settings: LlmSettings,
     window: &str,
@@ -320,6 +432,7 @@ async fn chat_window(
     let mut attempt = 0_u32;
     loop {
         attempt += 1;
+        gate.check(true)?;
         let model = binder
             .bind_chat(
                 env.context,
@@ -331,15 +444,16 @@ async fn chat_window(
                 },
             )
             .map_err(|error| CallFailure::Fatal(format!("model_facade.{error:?}")))?;
-        let failure = match complete(&*model, model_name, &user).await {
+        let failure = match complete(&*model, model_name, &user, settings).await {
             Ok(reply) => match parse_chunk_analysis(&reply) {
                 Ok(details) => return Ok(details),
-                Err(error) => CallFailure::Retryable(analysis_text(&error)),
+                Err(error) => CallFailure::Retryable(error.to_string()),
             },
             Err(failure) => failure,
         };
         match failure {
             CallFailure::Retryable(_) if attempt < CHAT_ATTEMPTS => {
+                gate.check(false)?;
                 tokio::time::sleep(env.limits.embedding_retry_backoff * attempt).await;
             }
             other => return Err(other),
@@ -347,14 +461,15 @@ async fn chat_window(
     }
 }
 
-fn analysis_text(error: &AnalysisError) -> String {
-    error.to_string()
-}
-
 /// One non-streaming call, as the step-back model makes it: a streaming call
 /// would hand back partial deltas and a final response carrying the whole
 /// text.
-async fn complete(model: &dyn Llm, model_name: &str, user: &str) -> Result<String, CallFailure> {
+async fn complete(
+    model: &dyn Llm,
+    model_name: &str,
+    user: &str,
+    settings: LlmSettings,
+) -> Result<String, CallFailure> {
     let request = LlmRequest {
         model: model_name.to_owned(),
         contents: vec![Content::new("user").with_text(user)],
@@ -376,6 +491,16 @@ async fn complete(model: &dyn Llm, model_name: &str, user: &str) -> Result<Strin
             return Err(CallFailure::Retryable(
                 "the model ended the reply with an error".to_owned(),
             ));
+        }
+        if response.finish_reason == Some(FinishReason::MaxTokens) {
+            // Cut off by max_tokens: another attempt would be cut off too.
+            let in_use = settings.max_tokens.map_or_else(
+                || "unset, so the model's default".to_owned(),
+                |n| n.to_string(),
+            );
+            return Err(CallFailure::Stop(format!(
+                "the chunking model's reply was cut off by its max_tokens limit (the toolkit's llm `max_tokens` is {in_use}); raise `max_tokens` in the toolkit's llm settings and re-run"
+            )));
         }
         if let Some(reason) = response.finish_reason
             && reason != FinishReason::Stop

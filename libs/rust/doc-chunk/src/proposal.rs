@@ -83,7 +83,7 @@ pub fn split_windows(text: &str, size: usize) -> Result<Vec<String>, ChunkError>
         // Whole, byte for byte: a window decoded from tokens is not.
         return Ok(vec![text.to_owned()]);
     }
-    tokens::split_ids(&ids, Encoding::Cl100k, size, 0)
+    tokens::split_ids_exact(text, &ids, Encoding::Cl100k, size)
 }
 
 /// One entry of the model's answer (the SDK's `ChunkDetails`).
@@ -119,22 +119,81 @@ impl std::fmt::Display for AnalysisError {
 
 impl std::error::Error for AnalysisError {}
 
-/// The [`ChunkDetails`] of a model's reply. The reply may be wrapped in a
-/// code fence or a sentence: the text from the first `{` to the last `}` is
-/// read.
+/// The [`ChunkDetails`] of a model's reply. A reasoning model's
+/// `<think>…</think>` blocks are dropped first; the reply may then be wrapped
+/// in a code fence or a sentence. Every balanced JSON object in what is left
+/// is tried (braces inside strings do not count) and the last one that reads
+/// as the requested shape (a `chunks` list) is taken.
 ///
 /// # Errors
 /// [`AnalysisError`] when the reply is not the object or lists no chunk.
 pub fn parse_chunk_analysis(reply: &str) -> Result<Vec<ChunkDetails>, AnalysisError> {
-    let start = reply.find('{').ok_or(AnalysisError::Unreadable)?;
-    let end = reply.rfind('}').ok_or(AnalysisError::Unreadable)?;
-    let object = reply.get(start..=end).ok_or(AnalysisError::Unreadable)?;
-    let analysis: ChunkAnalysis =
-        serde_json::from_str(object).map_err(|_| AnalysisError::Unreadable)?;
-    if analysis.chunks.is_empty() {
-        return Err(AnalysisError::NoChunks);
+    let visible = strip_think_blocks(reply);
+    let mut found: Option<Vec<ChunkDetails>> = None;
+    for object in balanced_objects(&visible) {
+        if let Ok(analysis) = serde_json::from_str::<ChunkAnalysis>(object) {
+            found = Some(analysis.chunks);
+        }
     }
-    Ok(analysis.chunks)
+    match found {
+        None => Err(AnalysisError::Unreadable),
+        Some(chunks) if chunks.is_empty() => Err(AnalysisError::NoChunks),
+        Some(chunks) => Ok(chunks),
+    }
+}
+
+/// `text` without its `<think>…</think>` blocks (an unclosed one runs to the
+/// end).
+fn strip_think_blocks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find("<think>") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + "<think>".len()..];
+        match after.find("</think>") {
+            Some(close) => rest = &after[close + "</think>".len()..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The top-level balanced `{…}` slices of `text`, in order. Braces inside a
+/// JSON string (and escaped quotes in it) do not count.
+fn balanced_objects(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0_usize;
+    let mut start = 0_usize;
+    let (mut in_string, mut escaped) = (false, false);
+    for (at, c) in text.char_indices() {
+        if in_string {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' if depth > 0 => in_string = true,
+            '{' => {
+                if depth == 0 {
+                    start = at;
+                }
+                depth += 1;
+            }
+            '}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push(&text[start..=at]);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The chunks of one window: per entry a `title`, a `summary`, a
@@ -211,6 +270,34 @@ mod tests {
             let parsed = parse_chunk_analysis(&reply).unwrap();
             assert_eq!(parsed, [entry("T", "S", &["a", "b"])]);
         }
+    }
+
+    #[test]
+    fn a_reasoning_models_think_text_with_braces_is_skipped() {
+        let json = r#"{"chunks":[{"chunk_title":"T {x}","chunk_summary":"S \"}\"","propositions":["a"]}]}"#;
+        let reply = format!(
+            "<think>The shape is {{\"chunks\": [...]}} and maybe {{ broken</think>\n```json\n{json}\n```\nDone {{ok}}."
+        );
+        let parsed = parse_chunk_analysis(&reply).unwrap();
+        assert_eq!(parsed, [entry("T {x}", "S \"}\"", &["a"])]);
+        // The last parseable object wins; an earlier draft is ignored.
+        let two = format!(
+            "{{\"chunks\":[{{\"chunk_title\":\"old\",\"chunk_summary\":\"s\",\"propositions\":[]}}]}} then {json}"
+        );
+        assert_eq!(parse_chunk_analysis(&two).unwrap()[0].chunk_title, "T {x}");
+        assert_eq!(
+            parse_chunk_analysis("<think>{\"chunks\":[]} never closed"),
+            Err(AnalysisError::Unreadable)
+        );
+    }
+
+    #[test]
+    fn a_proposal_window_never_cuts_a_character() {
+        let text = "日本語の文章😀😀😀 ".repeat(200);
+        let windows = split_windows(&text, 16).unwrap();
+        assert!(windows.len() > 2);
+        assert_eq!(windows.concat(), text);
+        assert!(windows.iter().all(|w| !w.contains('\u{FFFD}')));
     }
 
     #[test]
