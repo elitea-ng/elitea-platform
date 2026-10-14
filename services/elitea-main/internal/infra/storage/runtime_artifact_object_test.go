@@ -228,3 +228,101 @@ func artifactCall[T any](t *testing.T, server *ContentServer, operation, body st
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 	return decoded
 }
+
+// attachmentArtifactSourceStub also lists a conversation's attachments.
+type attachmentArtifactSourceStub struct {
+	artifactSourceStub
+	policyBucket string
+	records      []RuntimeArtifactRecord
+	truncated    bool
+	limit        int32
+}
+
+func (stub *attachmentArtifactSourceStub) AttachmentBucket(context.Context, int64) (string, error) {
+	return stub.policyBucket, nil
+}
+
+func (stub *attachmentArtifactSourceStub) ListAttachmentsNewestFirst(
+	_ context.Context, projectID, actorID int64, bucket, prefix string, limit int32,
+) ([]RuntimeArtifactRecord, bool, error) {
+	stub.projectID, stub.actorID, stub.bucket, stub.prefix, stub.limit = projectID, actorID, bucket, prefix, limit
+	return stub.records, stub.truncated, nil
+}
+
+// An empty bucket is the conversation attachment listing: the project's
+// attachment bucket (its policy, else the one default), the CLAIM's own
+// conversation as the prefix whatever the request says (so a numeric id or a
+// malformed one cannot send the worker to an empty listing), and an answer that
+// names the bucket used.
+func TestArtifactListWithoutABucketListsTheClaimsConversationInTheProjectsBucket(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ policy, want string }{
+		{"team-files", "team-files"},
+		{"", DefaultAttachmentBucket},
+	} {
+		source := &attachmentArtifactSourceStub{policyBucket: tc.policy}
+		server := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+		listed := artifactCall[RuntimeArtifactListContext](
+			t, server, "list", `{"bucket":"","prefix":"42/","recursive":true,"limit":500}`,
+		)
+		require.Equal(t, tc.want, listed.Bucket)
+		require.Equal(t, tc.want, source.bucket)
+		require.Equal(t, "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/", source.prefix,
+			"the claim's conversation, not the request's prefix")
+		require.Equal(t, int64(7), source.projectID)
+		require.Equal(t, int64(11), source.actorID)
+		require.Equal(t, int32(500), source.limit)
+	}
+}
+
+// A project that has never had an upload has no attachment bucket yet: that is
+// an empty listing, not a refusal.
+func TestArtifactListOfAFreshProjectIsEmptyNotRefused(t *testing.T) {
+	t.Parallel()
+
+	source := &attachmentArtifactSourceStub{} // no records: the source found no bucket
+	server := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+	listed := artifactCall[RuntimeArtifactListContext](
+		t, server, "list", `{"bucket":"","prefix":"","recursive":false,"limit":500}`,
+	)
+	require.Empty(t, listed.Files)
+	require.False(t, listed.Truncated)
+	require.Equal(t, DefaultAttachmentBucket, listed.Bucket)
+}
+
+// The order the source returns (newest upload first) is the order served, and
+// the truncated flag it sets reaches the worker.
+func TestArtifactListKeepsTheSourcesNewestFirstOrderAndTruncatedFlag(t *testing.T) {
+	t.Parallel()
+
+	source := &attachmentArtifactSourceStub{
+		records: []RuntimeArtifactRecord{
+			{Name: "c/new.txt", ByteLength: 1, ModifiedAt: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)},
+			{Name: "c/old.txt", ByteLength: 1, ModifiedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)},
+		},
+		truncated: true,
+	}
+	server := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+	listed := artifactCall[RuntimeArtifactListContext](
+		t, server, "list", `{"bucket":"","prefix":"","recursive":false,"limit":500}`,
+	)
+	require.Equal(t, []string{"c/new.txt", "c/old.txt"}, []string{listed.Files[0].Name, listed.Files[1].Name})
+	require.True(t, listed.Truncated)
+}
+
+// A source that cannot list attachments refuses a bucketless listing rather
+// than guessing a name, and a bucketless READ is never resolved at all.
+func TestArtifactListWithoutABucketIsRefusedWhenTheSourceCannotResolveIt(t *testing.T) {
+	t.Parallel()
+
+	server := newArtifactTestServer(t, builderAuthorizerForProject(7), &artifactSourceStub{})
+	for _, call := range []struct{ operation, body string }{
+		{"list", `{"bucket":"","prefix":"conv/"}`},
+		{"read", `{"bucket":"","name":"conv/a.txt"}`},
+	} {
+		response := httptest.NewRecorder()
+		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+call.operation, call.body))
+		require.GreaterOrEqual(t, response.Code, 400, call.operation)
+	}
+}

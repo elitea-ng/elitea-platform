@@ -10,9 +10,12 @@ const RUST: RuntimeCapabilities = {
     image_generation: false,
     data_analysis: false,
     internal_mcp: false,
-    planner: false,
     swarm: false,
-    lazy_tools_mode: false,
+    // Served natively by the Rust worker (planner, Smart Tools Selection and
+    // attachments port), so not marked unavailable there.
+    planner: true,
+    lazy_tools_mode: true,
+    attachments: true,
   },
   hidden_toolkit_types: ['jira', 'confluence', 'testio'],
 };
@@ -26,14 +29,21 @@ const PYTHON: RuntimeCapabilities = {
     planner: true,
     swarm: true,
     lazy_tools_mode: true,
+    attachments: true,
   },
   hidden_toolkit_types: ['aws', 'azure'],
 };
 
 describe('isInternalToolAvailable', () => {
-  it('reports false for one of the six tools on a Rust deployment (#866)', () => {
-    expect(isInternalToolAvailable(RUST, 'planner')).toBe(false);
+  it('reports false for a tool the Rust worker still skips on a Rust deployment (#866)', () => {
     expect(isInternalToolAvailable(RUST, 'swarm')).toBe(false);
+    expect(isInternalToolAvailable(RUST, 'data_analysis')).toBe(false);
+  });
+
+  it('reports true on a Rust deployment for the tools it serves natively', () => {
+    expect(isInternalToolAvailable(RUST, 'planner')).toBe(true);
+    expect(isInternalToolAvailable(RUST, 'lazy_tools_mode')).toBe(true);
+    expect(isInternalToolAvailable(RUST, 'attachments')).toBe(true);
   });
 
   it('reports true for the same tools on a Python deployment', () => {
@@ -41,11 +51,11 @@ describe('isInternalToolAvailable', () => {
     expect(isInternalToolAvailable(PYTHON, 'swarm')).toBe(true);
   });
 
-  // pyodide/attachments are deliberately out of #866's scope and never appear
-  // in internal_tools — must not read as unavailable just because absent.
+  // pyodide is deliberately out of #866's scope and never appears in
+  // internal_tools — must not read as unavailable just because absent.
   it('defaults to available for a tool name the capabilities response does not mention', () => {
     expect(isInternalToolAvailable(RUST, 'pyodide')).toBe(true);
-    expect(isInternalToolAvailable(RUST, 'attachments')).toBe(true);
+    expect(isInternalToolAvailable(RUST, 'a_tool_this_endpoint_has_not_been_taught')).toBe(true);
   });
 
   it('defaults to available while the query has not resolved', () => {

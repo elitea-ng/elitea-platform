@@ -32,18 +32,24 @@ type internalToolCapability struct {
 // platformInternalTools is the source of truth RuntimeCapabilities reports
 // from, restated here rather than imported: the names are the agent-form
 // toggle catalogue apps/elitea-web/src/features/agents/lib/internalTools.ts
-// keys them by, and the Rust availability is
-// services/elitea-worker-rust/src/agents/internal_tools.rs's
-// PLATFORM_INTERNAL_TOOLS — as of #866, that list recognizes the first six below
-// and SKIPS every one of them (agent_internal_tool_skipped), so every entry
-// here is rustAvailable: false. ask_user, the Rust worker's one real internal
-// tool, is not a user-facing Modules toggle and is intentionally not listed.
-// attachments and pyodide are PLATFORM_INTERNAL_TOOLS entries too, but #866
-// tracks them separately (pyodide runs a real Deno sandbox on the Python
-// worker only — see the toolkit-catalogue doc's Python Sandbox note; both are
-// out of scope for the six this endpoint reports on).
+// keys them by, and the Rust availability is what
+// services/elitea-worker-rust/src/agents/internal_tools.rs actually serves:
 //
-// A Rust port that lands one of these six moves it to rustAvailable: true
+//   - planner, lazy_tools_mode (Smart Tools Selection) and attachments are
+//     served by BOTH workers (libs/rust/agent-runtime planner.rs and
+//     lazy_tools.rs; the worker's attachment_tools.rs), so the form shows
+//     them enabled on either deployment;
+//   - image_generation, data_analysis, internal_mcp and swarm are still
+//     recognized and SKIPPED there (PLATFORM_INTERNAL_TOOLS,
+//     agent_internal_tool_skipped), so they are rustAvailable: false;
+//   - skills_builder and project_context_builder run the other way round
+//     (native only), below.
+//
+// ask_user, the Rust worker's clarification tool, is not a user-facing
+// Modules toggle and is intentionally not listed. pyodide runs a real Deno
+// sandbox on the Python worker only and is tracked separately.
+//
+// A Rust port that lands another of these moves it to rustAvailable: true
 // HERE — the same change internal_tools.rs itself needs, so a partial port
 // cannot silently under-report through this endpoint by one release lagging
 // the other.
@@ -51,9 +57,10 @@ var platformInternalTools = []internalToolCapability{
 	{name: "image_generation", pythonAvailable: true, rustAvailable: false},
 	{name: "data_analysis", pythonAvailable: true, rustAvailable: false},
 	{name: "internal_mcp", pythonAvailable: true, rustAvailable: false},
-	{name: "planner", pythonAvailable: true, rustAvailable: false},
+	{name: "planner", pythonAvailable: true, rustAvailable: true},
 	{name: "swarm", pythonAvailable: true, rustAvailable: false},
-	{name: "lazy_tools_mode", pythonAvailable: true, rustAvailable: false},
+	{name: "lazy_tools_mode", pythonAvailable: true, rustAvailable: true},
+	{name: "attachments", pythonAvailable: true, rustAvailable: true},
 	// #940 A8's two builder modules run the OTHER way round: they are
 	// implemented in the native runtime (services/elitea-worker-rust/src/
 	// agents/internal_tools.rs's SkillsBuilderTool/ProjectContextBuilderTool,
@@ -99,7 +106,7 @@ type RuntimeCapabilitiesResponse struct {
 // this endpoint and that column cannot disagree about which worker is
 // running or which types it hides.
 //
-// internal_tools defaults every one of the six tools to AVAILABLE when
+// internal_tools defaults every listed tool to AVAILABLE when
 // workerImplementation is "" (WithWorkerImplementation never wired) — the
 // same "unset means most permissive, not most restrictive" rule
 // WithWorkerCapability's own nil case follows (see its doc comment): only
