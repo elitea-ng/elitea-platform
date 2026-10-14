@@ -1004,8 +1004,10 @@ fn toolkit_needs_office_host(
 pub(super) fn snapshot_carries_index_catalog(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
         reference.kind() == FrozenToolKind::Configured
-            && crate::toolkits::is_index_family(reference.tool_type())
-            && reference.indexes().is_some()
+            && ((crate::toolkits::is_index_family(reference.tool_type())
+                && reference.indexes().is_some())
+                // The `memory` toolkit acts under the same authority (M9).
+                || reference.tool_type() == elitea_agent_runtime::toolkits::MEMORY_TOOLKIT_TYPE)
     })
 }
 

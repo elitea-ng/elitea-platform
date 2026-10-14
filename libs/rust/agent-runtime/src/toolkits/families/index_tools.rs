@@ -585,6 +585,22 @@ pub trait IndexToolHost: Send + Sync {
     /// `{page_content, metadata, score}` dicts or a message string for
     /// `search_index`, a string for the others.
     async fn call(&self, call: IndexToolCall<'_>) -> Result<Value, IndexToolFailure>;
+
+    /// Whether this host runs the `memory` toolkit's tools (worker unit M9):
+    /// it needs the same vector token plus a deployment memory embedding
+    /// model. A host without them leaves the toolkit unserved.
+    fn serves_memory(&self) -> bool {
+        false
+    }
+
+    /// Runs one `memory` tool and returns its SDK-shaped result, a string.
+    /// Only called where [`Self::serves_memory`] is true.
+    async fn memory(
+        &self,
+        _call: super::memory::MemoryToolCall<'_>,
+    ) -> Result<Value, IndexToolFailure> {
+        Err(super::memory::memory_not_served())
+    }
 }
 
 /// The authority the index tools act under, shared for one run.
@@ -836,6 +852,13 @@ fn tool_description(toolkit_name: &str, sentence: &str) -> Box<str> {
 /// every tool. An unknown name selects nothing, as in the artifact family: a
 /// stored selection must not turn a partial port into a dead toolkit.
 fn selected_tools(settings: &Map<String, Value>) -> Result<Vec<String>, IndexToolsetError> {
+    selected_tool_names(settings)
+}
+
+/// [`selected_tools`] for the other families that lend this authority.
+pub(crate) fn selected_tool_names(
+    settings: &Map<String, Value>,
+) -> Result<Vec<String>, IndexToolsetError> {
     let Some(value) = settings.get("selected_tools") else {
         return Ok(Vec::new());
     };

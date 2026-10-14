@@ -28,3 +28,13 @@ Suggested next steps in a compaction record are continuation hints, not new user
 
 Scheduling: after built-in runtime modules and before indexing, preserving indexing as the final gate.
 No memory dependency, schema change, or runtime behavior is activated by this planning entry.
+
+## Addendum 2026-10-14: the SDK `memory` toolkit (worker unit M9)
+
+The agent-callable `memory` toolkit (`manage_memory`, `search_memory`, `get_memory`,
+`delete_memory`) is a separate feature from the personal long-term memory this gate
+scopes: it is a toolkit a person attaches, scoped to a project and a toolkit-chosen
+`namespace`, not a per-user store the platform recalls into the prompt. It is served
+natively over `elitea-vector` (see `SOURCE_PARITY.md`, the `memory` row) and does not
+close or change gate 7b: Main's memories repository remains the only store of
+personal long-term memory, and the two never share data.

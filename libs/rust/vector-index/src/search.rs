@@ -96,8 +96,8 @@ pub trait QueryEmbedder: Send + Sync {
 /// A [`VectorClient`] bound to the claim's token.
 #[derive(Clone, Copy)]
 pub struct VectorSession<'a> {
-    client: &'a VectorClient,
-    token: &'a dyn ClaimToken,
+    pub(crate) client: &'a VectorClient,
+    pub(crate) token: &'a dyn ClaimToken,
 }
 
 impl<'a> VectorSession<'a> {

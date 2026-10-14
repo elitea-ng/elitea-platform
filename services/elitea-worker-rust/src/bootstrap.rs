@@ -352,6 +352,10 @@ impl ProductionTransportBundle {
                 if let Some(extractor) = extractor.as_ref() {
                     runtime = runtime.with_extractor(Arc::clone(extractor));
                 }
+                // The `memory` toolkit's embedding model (unit M9).
+                if let Some(model) = deployment.memory_embedding_model.as_deref() {
+                    runtime = runtime.with_memory_embedding_model(model);
+                }
                 Some(Arc::new(runtime))
             }
             None => None,
@@ -699,6 +703,7 @@ mod tests {
             index_egress_allowlist: None,
             extractor_socket: None,
             index_model_call_cap: None,
+            memory_embedding_model: None,
             agent_model_checkpoint_recovery: false,
             agent_node_recovery: false,
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),

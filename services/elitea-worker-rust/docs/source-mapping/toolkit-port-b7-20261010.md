@@ -80,7 +80,15 @@ botocore service models with a SigV4 signer and a model-driven serializer, or
 (b) a new tool contract (generic SigV4 request) under a new name, with the SDK
 schema left unserved.
 
-## `memory` (blocked pending an ownership decision)
+## `memory` (ported 2026-10-14, worker unit M9; this section recorded the research)
+
+The ownership decision this section asked for was taken by the owner: neither
+option below, but a third. The four tools keep their names and schemas and run
+over `elitea-vector` (ADR-0030/0031), not over Main's memories repository and
+not over the LangGraph `store` table. See `SOURCE_PARITY.md` (the `memory` row)
+for the port; no data is migrated from the Python store. What follows is the
+research as it stood before the port.
+
 
 SDK: `tools/memory/__init__.py`, dispatched by `runtime/toolkits/tools.py`
 (`tool['type'] == 'memory'`). Settings `namespace` (default: the toolkit id),

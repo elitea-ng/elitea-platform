@@ -166,6 +166,32 @@ PY
   && ok "worker.runtime.indexModelCallCap sets the cap" \
   || bad "indexModelCallCap=500 rendered: $(modelcap "$TMP/cap.yaml")"
 
+# The memory toolkit's embedding model (worker unit M9): written under rust
+# indexing when set, never otherwise, and refused where nothing could use it.
+memorymodel() {
+  python3 - "$1" <<'PY'
+import json, sys, yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+cm = next(d for d in docs
+          if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "elitea-worker-runtime")
+print(json.loads(cm["data"]["runtime.json"]).get("memory_embedding_model", "-"))
+PY
+}
+"$HELM" template t "$CHART" "${RENDER[@]}" "${RUST[@]}" \
+  --set-string worker.runtime.memoryEmbeddingModel=text-embedding-3-small \
+  >"$TMP/memory.yaml" 2>"$TMP/memory.err" \
+  || bad "a memoryEmbeddingModel does not render: $(tail -1 "$TMP/memory.err")"
+[ "$(memorymodel "$TMP/rust.yaml")" = "-" ] \
+  && ok "rust indexing writes no memory_embedding_model by default (the memory toolkit stays unserved)" \
+  || bad "rust indexing leaked a memory model: $(memorymodel "$TMP/rust.yaml")"
+[ "$(memorymodel "$TMP/memory.yaml")" = "text-embedding-3-small" ] \
+  && ok "worker.runtime.memoryEmbeddingModel is written as memory_embedding_model" \
+  || bad "memoryEmbeddingModel rendered: $(memorymodel "$TMP/memory.yaml")"
+[ "$(memorymodel "$TMP/default.yaml")" = "-" ] \
+  && ok "python indexing writes no memory_embedding_model" \
+  || bad "python indexing leaked a memory model: $(memorymodel "$TMP/default.yaml")"
+
 refuses() {
   local expect="$1"; shift
   local out
@@ -193,6 +219,14 @@ refuses 'worker.indexingRuntime=rust needs a vector store' \
   --set worker.implementation=rust --set worker.indexingRuntime=rust \
   && ok "indexingRuntime=rust without a vector store is refused" \
   || bad "indexingRuntime=rust without a vector store is not refused"
+
+# A memory model with nothing to use it: the Python indexing runtime has no
+# vector_target and no claim vector token, and the Python worker reads no such
+# key (runtime.json is deny_unknown_fields on the Rust side only).
+refuses 'worker.runtime.memoryEmbeddingModel needs' \
+  --set-string worker.runtime.memoryEmbeddingModel=text-embedding-3-small \
+  && ok "memoryEmbeddingModel without the Rust indexing runtime is refused" \
+  || bad "memoryEmbeddingModel without the Rust indexing runtime is not refused"
 
 # The runtime plane itself (main.runtime.enabled) is already required by the
 # worker.enabled guard that indexingRuntime=rust implies, so only the dispatch

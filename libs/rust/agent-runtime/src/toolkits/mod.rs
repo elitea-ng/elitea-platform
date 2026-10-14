@@ -117,6 +117,8 @@ mod keycloak_tests;
 mod kubernetes_tests;
 #[cfg(test)]
 mod mcp_tests;
+#[cfg(test)]
+mod memory_tests;
 #[cfg(all(test, feature = "toolkit-office"))]
 mod office_test_support;
 #[cfg(test)]
@@ -203,6 +205,9 @@ pub use families::index_tools::{
     INDEXES_KEY, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
     IndexToolFailure, IndexToolHost, IndexToolName, IndexToolSupport, IndexToolsWithheld,
     SharedIndexCatalog, is_index_family, is_sdk_index_tool_name,
+};
+pub use families::memory::{
+    MAX_NAMESPACE_BYTES, MEMORY_TOOLKIT_TYPE, MemoryToolCall, MemoryToolName, memory_namespace,
 };
 pub use families::office_host::{
     ImageEditInput, ImageEditRequest, ImageGenerateRequest, MAX_IMAGE_EDIT_INPUT_BYTES,

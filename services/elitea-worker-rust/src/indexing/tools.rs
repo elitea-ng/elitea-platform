@@ -36,9 +36,12 @@ use adk_rust::{Content, FinishReason, Llm, LlmRequest, Part};
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
     IndexCatalog as FrozenCatalog, IndexToolCall, IndexToolFailure, IndexToolHost, IndexToolName,
-    SharedIndexCatalog,
+    MemoryToolCall, MemoryToolName, SharedIndexCatalog,
 };
 use elitea_vector_index::format::{Doctype, index_not_found_message};
+use elitea_vector_index::memory::{
+    self, ManageArgs, MemoryEmbedder, MemoryTools, SearchMemoryArgs,
+};
 use elitea_vector_index::{
     Error as VectorError, IndexCatalog, IndexEntry, IndexTools, QueryEmbedder, SearchArgs,
     StepbackModel, VectorSession, pb,
@@ -260,6 +263,80 @@ impl ClaimIndexToolHost {
 
 #[async_trait]
 impl IndexToolHost for ClaimIndexToolHost {
+    fn serves_memory(&self) -> bool {
+        self.runtime.memory_model.is_some() && self.token.allows(VectorSource::ToolkitIndex)
+    }
+
+    /// The `memory` toolkit's tools (worker unit M9) over the claim's vector
+    /// token and the gateway embeddings route, with the deployment's memory
+    /// embedding model. The project is the token's; the namespace is the
+    /// toolkit's, hashed by `elitea-vector-index`.
+    async fn memory(&self, call: MemoryToolCall<'_>) -> Result<Value, IndexToolFailure> {
+        let (prefix, memory_model) = (
+            match call.tool {
+                MemoryToolName::ManageMemory => "Failed to store memory",
+                MemoryToolName::SearchMemory => "Failed to search memory",
+                MemoryToolName::GetMemory => "Failed to retrieve memory",
+                MemoryToolName::DeleteMemory => "Failed to delete memory",
+            },
+            self.runtime.memory_model.as_ref(),
+        );
+        let Some(memory_model) = memory_model else {
+            return Err(IndexToolFailure::new(format!(
+                "{prefix}: this deployment has no memory embedding model configured"
+            )));
+        };
+        if !self.token.allows(VectorSource::ToolkitIndex) {
+            return Err(IndexToolFailure::new(format!(
+                "{prefix}: the vector store is not available to this run: the claim carries no project token"
+            )));
+        }
+        let invalid = |error: serde_json::Error| {
+            IndexToolFailure::new(format!("{prefix}: the tool arguments are invalid: {error}"))
+        };
+        let session = VectorSession::new(&self.runtime.vector, &self.token);
+        let embedder = GatewayMemoryEmbedder {
+            embeddings: &self.runtime.embeddings,
+            context: self.context.as_ref(),
+            model: &memory_model.name,
+        };
+        let tools = MemoryTools::new(&session, &embedder, &memory_model.slug, call.namespace);
+        let outcome = match call.tool {
+            MemoryToolName::ManageMemory => {
+                let args = serde_json::from_value::<ManageArgs>(call.arguments.clone())
+                    .map_err(invalid)?;
+                tools.manage_memory(&args).await
+            }
+            MemoryToolName::SearchMemory => {
+                let args = serde_json::from_value::<SearchMemoryArgs>(call.arguments.clone())
+                    .map_err(invalid)?;
+                tools.search_memory(&args).await
+            }
+            MemoryToolName::GetMemory | MemoryToolName::DeleteMemory => {
+                #[derive(serde::Deserialize)]
+                struct KeyArgs {
+                    key: String,
+                }
+                let KeyArgs { key } =
+                    serde_json::from_value(call.arguments.clone()).map_err(invalid)?;
+                if call.tool == MemoryToolName::GetMemory {
+                    tools.get_memory(&key).await
+                } else {
+                    tools.delete_memory(&key).await
+                }
+            }
+        };
+        outcome.map(Value::String).map_err(|error| {
+            tracing::warn!(
+                event = "memory_tool_failed",
+                tool = call.tool.as_str(),
+                retryable = error.is_retryable(),
+                "a memory tool failed"
+            );
+            IndexToolFailure::new(format!("{prefix}: {}", memory::describe(&error)))
+        })
+    }
+
     async fn call(&self, call: IndexToolCall<'_>) -> Result<Value, IndexToolFailure> {
         if !self.token.allows(VectorSource::ToolkitIndex) {
             return Err(IndexToolFailure::new(
@@ -348,6 +425,29 @@ impl QueryEmbedder for GatewayQueryEmbedder<'_> {
         let embedded = self
             .embeddings
             .embed(self.context, model, &[text.to_owned()])
+            .await
+            .map_err(|error| VectorError::Embedding(embedding_reason(&error)))?;
+        embedded
+            .vectors
+            .into_iter()
+            .next()
+            .ok_or_else(|| VectorError::Embedding("the gateway returned no vector".to_owned()))
+    }
+}
+
+/// Embeds memories and memory queries through the gateway with the
+/// deployment's memory model.
+struct GatewayMemoryEmbedder<'a> {
+    embeddings: &'a EmbeddingsClient,
+    context: &'a ClaimScopedEliteaContext,
+    model: &'a str,
+}
+
+impl MemoryEmbedder for GatewayMemoryEmbedder<'_> {
+    async fn embed(&self, text: &str) -> elitea_vector_index::Result<Vec<f32>> {
+        let embedded = self
+            .embeddings
+            .embed(self.context, self.model, &[text.to_owned()])
             .await
             .map_err(|error| VectorError::Embedding(embedding_reason(&error)))?;
         embedded

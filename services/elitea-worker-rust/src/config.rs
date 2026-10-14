@@ -107,6 +107,13 @@ pub struct RuntimeDeployConfig {
     /// source host (fail-closed), so a deployment names what it indexes.
     #[serde(default)]
     pub index_egress_allowlist: Option<String>,
+    /// The gateway embedding model the `memory` toolkit embeds memories and
+    /// queries with (worker unit M9). Needs `vector_target`. Absent, the
+    /// toolkit is skipped on this worker, as it was before it had a family.
+    /// Changing it strands the memories written under the old model: they
+    /// stay in the old model's vector space and are not searched.
+    #[serde(default)]
+    pub memory_embedding_model: Option<String>,
     /// The Unix socket of `elitea-doc-extractor`, the document extraction
     /// sidecar (ADR-0030 I1): where an index run sends a PDF or Office
     /// document to be read, over `elitea.extract.v1`. Absent, such documents
@@ -342,6 +349,12 @@ impl RuntimeDeployConfig {
         validate_grpc_target(&self.output_target)?;
         if let Some(target) = &self.vector_target {
             validate_grpc_target(target)?;
+        }
+        if let Some(model) = &self.memory_embedding_model {
+            require_bounded_text(model, 256)?;
+            if self.vector_target.is_none() {
+                return Err(invalid_config());
+            }
         }
         if let Some(allowlist) = &self.index_egress_allowlist {
             require_bounded_text(allowlist, MAX_ORIGIN_BYTES)?;
@@ -876,6 +889,26 @@ mod tests {
         value["agent_checkpoint_connection_path"] = Value::Null;
         let loaded: super::RuntimeDeployConfig = serde_json::from_value(value).expect("no storage");
         assert!(loaded.validate().is_err());
+    }
+
+    #[test]
+    fn the_memory_embedding_model_is_optional_bounded_and_needs_a_vector_store() {
+        let mut value = config(Path::new("/runtime"));
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(loaded.memory_embedding_model, None);
+        assert!(loaded.validate().is_ok());
+        // A model with no vector store is a misconfiguration, not a quiet no-op.
+        value["memory_embedding_model"] = json!("text-embedding-3-small");
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(loaded.validate().is_err());
+        value["vector_target"] = json!("vector.internal:9470");
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(loaded.validate().is_ok());
+        for invalid in [json!(""), json!("a\nb"), json!("m".repeat(257))] {
+            value["memory_embedding_model"] = invalid;
+            let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+            assert!(loaded.validate().is_err());
+        }
     }
 
     #[test]

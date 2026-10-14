@@ -35,6 +35,7 @@ pub mod error;
 pub mod filter;
 pub mod format;
 pub mod hit;
+pub mod memory;
 mod prompts;
 mod pyfmt;
 pub mod rerank;

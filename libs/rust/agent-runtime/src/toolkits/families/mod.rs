@@ -39,7 +39,12 @@ pub mod index_tools;
 pub(crate) mod index_tools;
 pub(crate) mod jira;
 pub(crate) mod keycloak;
+// Public only to the worker's composition suites (`test-support`).
 pub(crate) mod kubernetes;
+#[cfg(any(test, feature = "test-support"))]
+pub mod memory;
+#[cfg(not(any(test, feature = "test-support")))]
+pub(crate) mod memory;
 // Public only to the worker's composition suites (`test-support`).
 pub(crate) mod integer_like;
 #[cfg(any(test, feature = "test-support"))]

@@ -375,7 +375,36 @@ func (c *WorkerToolkitCapability) ForIndexingRuntime(config Config) *WorkerToolk
 	if config.RustIndexing() {
 		return c.WithRustIndexTools()
 	}
-	return c
+	return c.withoutVectorBackedTypes()
+}
+
+// vectorBackedToolkitTypes are the toolkit types the Rust worker serves only
+// through elitea-vector: it holds their data there and the claim's vector
+// token (minted only under the Rust indexing runtime) is their credential.
+var vectorBackedToolkitTypes = []string{"memory"}
+
+// withoutVectorBackedTypes is a Rust capability without the types that need
+// the vector store, for a deployment that does not index with the Rust
+// runtime: its worker has no vector_target, so it would skip them in silence
+// while the catalogue offered the tile. A Python capability is returned
+// unchanged (the SDK serves memory from the toolkit's own pgvector database).
+func (c *WorkerToolkitCapability) withoutVectorBackedTypes() *WorkerToolkitCapability {
+	if c == nil || c.implementation != RustWorkerImplementation {
+		return c
+	}
+	types := make(map[string]struct{}, len(c.supportedToolTypes))
+	for toolkitType := range c.supportedToolTypes {
+		types[toolkitType] = struct{}{}
+	}
+	for _, toolkitType := range vectorBackedToolkitTypes {
+		delete(types, toolkitType)
+	}
+	return &WorkerToolkitCapability{
+		implementation:        c.implementation,
+		unsupportedImportKeys: c.unsupportedImportKeys,
+		supportedToolTypes:    types,
+		supportedTools:        c.supportedTools,
+	}
 }
 
 // SupportsTool reports whether the configured worker serves one TOOL of a

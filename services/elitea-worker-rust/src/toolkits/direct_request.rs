@@ -257,8 +257,13 @@ impl DirectToolkitRequest {
     /// `toolkit.call_tool.v1` run. A `github` `read_file` on a toolkit with
     /// a catalog is not one.
     pub(crate) fn calls_index_tool(&self) -> bool {
-        self.carries_index_catalog()
-            && elitea_agent_runtime::toolkits::IndexToolName::parse(self.tool_name()).is_some()
+        (self.carries_index_catalog()
+            && elitea_agent_runtime::toolkits::IndexToolName::parse(self.tool_name()).is_some())
+            // A `memory` toolkit's tool (worker unit M9) acts under the same
+            // authority.
+            || (self.toolkit_type() == elitea_agent_runtime::toolkits::MEMORY_TOOLKIT_TYPE
+                && elitea_agent_runtime::toolkits::MemoryToolName::parse(self.tool_name())
+                    .is_some())
     }
 
     pub(crate) fn tokens(&self) -> &Map<String, Value> {

@@ -44,6 +44,8 @@ mod embedded_picture_tests;
 #[cfg(test)]
 mod figma_tests;
 #[cfg(test)]
+mod memory_host_tests;
+#[cfg(test)]
 mod microsoft_family_tests;
 #[cfg(test)]
 mod model_step_tests;
@@ -98,6 +100,19 @@ pub(crate) struct IndexIngestRuntime {
     /// Binds the chat model of the steps that call one (the proposal
     /// chunker, ADR-0030 I4); `None` skips such documents `no_model`.
     pub(crate) chat_models: Option<Arc<dyn ChatModelBinder>>,
+    /// The deployment's memory embedding model (`memory_embedding_model`):
+    /// what the `memory` toolkit embeds its memories and queries with. `None`
+    /// leaves the toolkit unserved.
+    pub(crate) memory_model: Option<MemoryModel>,
+}
+
+/// The model the `memory` toolkit embeds with, and the vector space it names.
+#[derive(Clone, Debug)]
+pub(crate) struct MemoryModel {
+    /// The gateway model name.
+    pub(crate) name: String,
+    /// `elitea-vector`'s model slug for it.
+    pub(crate) slug: String,
 }
 
 /// Bounds of one run.
@@ -183,7 +198,19 @@ impl IndexIngestRuntime {
             limits,
             extractor: None,
             chat_models: None,
+            memory_model: None,
         })
+    }
+
+    /// Serve the `memory` toolkit, embedding with `model` (a gateway model
+    /// name).
+    #[must_use]
+    pub(crate) fn with_memory_embedding_model(mut self, model: &str) -> Self {
+        self.memory_model = Some(MemoryModel {
+            name: model.to_owned(),
+            slug: slug::vector_space_slug(model),
+        });
+        self
     }
 
     /// Bind the chat model of the model steps through `binder`.

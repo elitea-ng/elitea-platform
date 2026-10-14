@@ -70,7 +70,7 @@ The [pending preparation Stop case](source-mapping/code-pending-stop-owner-recov
 | 6 | Effectful toolkit operations | Require durable intent, effect receipts, idempotency, approval, fencing, and crash reconciliation before writes. |
 | 7 | Artifact-backed capabilities | Complete attachment authority, object grants, storage behavior, and affected toolkit operations. |
 | 7a | Built-in runtime modules | Complete Attachments, Data Analysis, Image Creation, Ask User, Planner, Python Sandbox, and Smart Tools Selection. Reuse builder contracts and exclude Swarm. Verify runtime behavior and UI controls before indexing. Status 2026-10-13: Ask User, Planner, Attachments and Smart Tools Selection are served natively (see `source-mapping/builtin-runtime-modules.md`; browser acceptance still owed); Data Analysis, Image Creation and Python Sandbox remain. |
-| 7b | Long-term user memory | Audit existing memory CRUD/recall and ADK memory/graph-memory integrations. Complete persistent cross-conversation recall, user control, isolation, provenance, and recovery. Keep it separate from execution compaction. |
+| 7b | Long-term user memory | (The SDK `memory` toolkit is a separate, attachable feature and is served on Rust since 2026-10-14; see `source-mapping/long-term-memory.md`.) Audit existing memory CRUD/recall and ADK memory/graph-memory integrations. Complete persistent cross-conversation recall, user control, isolation, provenance, and recovery. Keep it separate from execution compaction. |
 | 8 | Indexing | Implement indexing after the agent and artifact gates. Indexing remains last. |
 
 Read-only runtime tool binding already works for supported native families.

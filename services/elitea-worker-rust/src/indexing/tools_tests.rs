@@ -191,6 +191,7 @@ async fn harness_with(
     let vector = VectorClient::connect_lazy(&config).expect("client");
     let runtime = IndexIngestRuntime {
         chat_models: None,
+        memory_model: None,
         vector,
         embeddings: EmbeddingsClient::with_transport(embeddings, Duration::from_secs(5)),
         removal: removal

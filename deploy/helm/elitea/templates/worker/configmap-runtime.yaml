@@ -101,6 +101,13 @@ data:
     {{- if $r.indexEgressAllowlist }}
     {{- $_ := set $config "index_egress_allowlist" $r.indexEgressAllowlist }}
     {{- end }}
+    {{- /* The `memory` toolkit's embedding model (worker unit M9). Written only
+    when set, and only under the Rust indexing runtime (the claim's vector token
+    and the worker's vector_target exist only there; guards.yaml refuses the
+    value elsewhere), so the other runtime.json documents are unchanged. */}}
+    {{- if $r.memoryEmbeddingModel }}
+    {{- $_ := set $config "memory_embedding_model" ($r.memoryEmbeddingModel | toString) }}
+    {{- end }}
     {{- /* The model calls one index run may make (ADR-0030 I4). Written only
     when set, and only under the Rust indexing runtime, so the Python
     runtime.json stays identical; the worker's default is the chart default. */}}

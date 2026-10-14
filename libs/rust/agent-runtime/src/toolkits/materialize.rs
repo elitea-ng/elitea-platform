@@ -42,6 +42,7 @@ use super::families::index_tools::{
     build_index_toolset, is_index_family, selection_is_index_only,
 };
 use super::families::jira;
+use super::families::memory::{MemoryToolsetError, build_memory_toolset};
 use super::families::qtest;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
@@ -348,6 +349,15 @@ async fn materialize_all(
         .iter()
         .filter(|reference| reference.kind() == FrozenToolKind::Configured)
     {
+        // The `memory` toolkit (unit M9) has no family half: its authority is
+        // the lent vector token, like the index tools.
+        // (Spelled as a literal: the Go drift check reads this dispatch.)
+        if reference.tool_type() == "memory" {
+            if let Some(toolset) = memory_toolset_for(reference, policy, index_tools)? {
+                toolsets.push(Arc::new(toolset) as Arc<dyn Toolset>);
+            }
+            continue;
+        }
         let index_toolset = index_toolset_for(reference, policy, index_tools)?;
         // With the index toolset composed, two toolkits have no family half
         // to build: one whose stored selection names index tools only (none
@@ -421,6 +431,62 @@ async fn materialize_all(
         toolsets,
         delegated_authorization,
         refused: Vec::new(),
+    })
+}
+
+/// The `memory` toolkit's toolset when the host lends an authority that
+/// serves memory; `None` otherwise, logged with the reason (the toolkit is
+/// then skipped, as it was before the family existed).
+fn memory_toolset_for(
+    reference: &FrozenToolReference<'_>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    index_tools: IndexToolSupport<'_>,
+) -> Result<Option<adk_tool::BasicToolset>, ToolsetMaterializationError> {
+    let authority = match index_tools {
+        IndexToolSupport::Lent(authority) if authority.host().serves_memory() => authority,
+        IndexToolSupport::Lent(_) => {
+            tracing::warn!(
+                event = "agent_toolkit_skipped",
+                reason_code = "no_memory_embedding_model",
+                toolkit_type = reference.tool_type(),
+                toolkit_id = reference.tool_id(),
+                "the memory toolkit needs the deployment's memory embedding model (runtime.json memory_embedding_model); it was skipped"
+            );
+            return Ok(None);
+        }
+        IndexToolSupport::Withheld(reason) => {
+            if reason.is_warning() {
+                tracing::warn!(
+                    event = "agent_toolkit_skipped",
+                    reason_code = reason.reason_code(),
+                    toolkit_type = reference.tool_type(),
+                    toolkit_id = reference.tool_id(),
+                    "the memory toolkit needs the vector store and the claim's vector token; it was skipped"
+                );
+            } else {
+                tracing::info!(
+                    event = "agent_toolkit_skipped",
+                    reason_code = reason.reason_code(),
+                    toolkit_type = reference.tool_type(),
+                    toolkit_id = reference.tool_id(),
+                    "the memory toolkit is not served on this path; it was skipped"
+                );
+            }
+            return Ok(None);
+        }
+    };
+    let settings = reference.settings().ok_or_else(invalid_configuration)?;
+    build_memory_toolset(
+        reference.toolkit_name(),
+        reference.tool_id(),
+        settings,
+        policy,
+        authority,
+    )
+    .map(Some)
+    .map_err(|error| match error {
+        MemoryToolsetError::Invalid => invalid_configuration(),
+        MemoryToolsetError::ResourceExhausted => resource_exhausted(),
     })
 }
 
