@@ -71,7 +71,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use adk_rust::futures::StreamExt as _;
 use adk_rust::futures::stream::FuturesOrdered;
-use adk_rust::{AdkError, Content, FinishReason, GenerateContentConfig, Llm, LlmRequest, Part};
+use adk_rust::{AdkError, Content, FinishReason, Part};
 use async_trait::async_trait;
 use bytes::Bytes;
 use elitea_doc_chunk::{
@@ -88,11 +88,11 @@ use super::pipeline::{
     SKIP_MODEL_FAILED, SKIP_NO_MODEL, SKIP_REPLY_UNUSABLE, SKIP_TOO_LARGE, SKIP_UNREADABLE,
     SKIP_VISION_REFUSED, classify_embedding_error, embed_gated,
 };
-use crate::agents::session::BoundOrdinaryAgentModel as _;
 use crate::transport::embeddings_facade::EmbeddingsClient;
 use crate::transport::model_facade::{
     ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation,
 };
+use crate::transport::model_text::{AdmittedChat, TextFailure, stream_text};
 use crate::transport::openai_compatible_facade::MAX_INLINE_IMAGE_BYTES;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
@@ -133,7 +133,7 @@ pub(crate) trait ChatModelBinder: Send + Sync {
         &self,
         context: &ClaimScopedEliteaContext,
         request: &ChatModelRequest<'_>,
-    ) -> Result<Arc<dyn Llm>, ModelFacadeError>;
+    ) -> Result<AdmittedChat, ModelFacadeError>;
 }
 
 impl ChatModelBinder for ModelFacade {
@@ -141,7 +141,7 @@ impl ChatModelBinder for ModelFacade {
         &self,
         context: &ClaimScopedEliteaContext,
         request: &ChatModelRequest<'_>,
-    ) -> Result<Arc<dyn Llm>, ModelFacadeError> {
+    ) -> Result<AdmittedChat, ModelFacadeError> {
         let invocation = ModelInvocation {
             response_schema: None,
             allow_text_continuation: false,
@@ -164,7 +164,7 @@ impl ChatModelBinder for ModelFacade {
             owner,
             invocation,
         )
-        .map(|bound| bound.adk_model())
+        .map(|bound| bound.admitted_chat())
     }
 }
 
@@ -826,6 +826,8 @@ struct CallSpec<'a> {
 struct Reply {
     text: String,
     truncated: bool,
+    /// Nothing but reasoning came back (see `TextReply::reasoning_only`).
+    reasoning_only: bool,
 }
 
 /// The reply to `spec`, with the attempts the policy allows: every attempt
@@ -845,7 +847,7 @@ async fn call<T>(
     loop {
         attempt += 1;
         gate.check(true)?;
-        let model = binder
+        let chat = binder
             .bind_chat(
                 env.context,
                 &ChatModelRequest {
@@ -863,14 +865,13 @@ async fn call<T>(
                     CallFailure::Fatal(format!("model_facade.{error:?}"))
                 }
             })?;
-        let failure =
-            match complete(&*model, model_name, (spec.content)(), spec.image, settings).await {
-                Ok(reply) => match read(reply) {
-                    Ok(value) => return Ok(value),
-                    Err(failure) => failure,
-                },
+        let failure = match complete(&chat, model_name, (spec.content)(), spec.image).await {
+            Ok(reply) => match read(reply) {
+                Ok(value) => return Ok(value),
                 Err(failure) => failure,
-            };
+            },
+            Err(failure) => failure,
+        };
         match failure {
             CallFailure::Retryable(_) if attempt < CHAT_ATTEMPTS => {
                 gate.check(false)?;
@@ -929,50 +930,27 @@ async fn vision_call(
                     "the model's description was cut off by max_tokens; kept as it is"
                 );
             }
-            // A reasoning model that writes its thinking into the reply
-            // (`<think>…</think>`) is described by what follows it.
-            let description = strip_inline_reasoning(&reply.text);
-            // A reply cut off by `max_tokens` with nothing but thinking in it:
-            // the model spent its whole budget before it began to describe.
-            // Another attempt does the same; the picture is final for this
-            // run and the log says what to raise. (A blank reply that was
-            // not cut off keeps the SDK's placeholder.)
-            if description.is_empty() && reply.truncated {
+            // Reasoning the model wrote into its reply is already removed.
+            // A reply that held nothing but reasoning (cut off by
+            // `max_tokens` while thinking, or a `<think>` never closed): the
+            // model spent its budget before it began to describe. A later
+            // run with more `max_tokens` cures it, so the picture is marked
+            // for another run (`model_failed`, like a gateway outage), and
+            // the log says what to raise. Another attempt now would be cut
+            // off the same way.
+            if reply.reasoning_only {
                 tracing::warn!(
-                    event = "index_image_description_empty",
+                    event = "index_image_description_reasoning_only",
                     max_tokens = settings.max_tokens,
-                    "the model spent its max_tokens thinking and described nothing; raise `max_tokens` in the toolkit's llm settings"
+                    "the model spent its max_tokens thinking and described nothing; raise `max_tokens` in the toolkit's llm settings, the picture is retried by the next run"
                 );
-                return Err(CallFailure::Unusable(
-                    "the model's reply was cut off before any description".to_owned(),
-                ));
+                return Err(CallFailure::ImageSkip(SKIP_MODEL_FAILED));
             }
+            let description = reply.text;
             Ok(description)
         },
     )
     .await
-}
-
-/// `text` without its `<think>…</think>` blocks, trimmed. A block that is
-/// never closed (the reply was cut inside it) runs to the end and is dropped
-/// with it.
-pub(super) fn strip_inline_reasoning(text: &str) -> String {
-    const OPEN: &str = "<think>";
-    const CLOSE: &str = "</think>";
-    let mut kept = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find(OPEN) {
-        kept.push_str(&rest[..start]);
-        let after_open = &rest[start + OPEN.len()..];
-        if let Some(end) = after_open.find(CLOSE) {
-            rest = &after_open[end + CLOSE.len()..];
-        } else {
-            rest = "";
-            break;
-        }
-    }
-    kept.push_str(rest);
-    kept.trim().to_owned()
 }
 
 /// Descriptions kept for a run.
@@ -1100,87 +1078,46 @@ async fn chat_window(
     .await
 }
 
-/// One chat call, the way the gateway facade admits it: a streaming request
-/// that carries the generation config the model was bound with. The
-/// facade refuses anything else (`model_gateway.invalid_request`) before a
-/// byte reaches the gateway, so a call without the config, or a non-streaming
-/// one, never gets an answer. The reply's text is every text delta of the
-/// stream, in order; a provider's reasoning deltas are not part of it.
+/// One chat call through the shared admitted-request helper
+/// ([`stream_text`]): streaming, with the config the bound model admits.
 async fn complete(
-    model: &dyn Llm,
+    chat: &AdmittedChat,
     model_name: &str,
     user: Content,
     image: bool,
-    settings: LlmSettings,
 ) -> Result<Reply, CallFailure> {
-    let request = LlmRequest {
-        model: model_name.to_owned(),
-        contents: vec![user],
-        config: Some(GenerateContentConfig {
-            temperature: settings.temperature,
-            max_output_tokens: settings.max_tokens.and_then(|n| i32::try_from(n).ok()),
-            ..GenerateContentConfig::default()
+    match stream_text(chat, model_name, user, MAX_REPLY_BYTES).await {
+        Ok(reply) => Ok(Reply {
+            text: reply.text,
+            truncated: reply.length_cut,
+            reasoning_only: reply.reasoning_only,
         }),
-        tools: std::collections::HashMap::new(),
-        previous_response_id: None,
-    };
-    let mut responses = model
-        .generate_content(request, true)
-        .await
-        .map_err(|error| classify_model_error(&error, image))?;
-    let mut reply = String::new();
-    let mut terminal: Option<bool> = None;
-    while let Some(response) = responses.next().await {
-        let response = response.map_err(|error| classify_model_error(&error, image))?;
-        if response.error_code.is_some() {
-            return Err(CallFailure::Retryable(
-                "the model ended the reply with an error".to_owned(),
-            ));
-        }
-        if let Some(content) = &response.content {
-            for part in &content.parts {
-                if let Part::Text { text: piece } = part {
-                    if reply.len().saturating_add(piece.len()) > MAX_REPLY_BYTES {
-                        return Err(if image {
-                            CallFailure::ImageSkip(SKIP_VISION_REFUSED)
-                        } else {
-                            CallFailure::Unusable(
-                                "the model's reply exceeds the size bound".to_owned(),
-                            )
-                        });
-                    }
-                    reply.push_str(piece);
-                }
-            }
-        }
-        if response.partial {
-            continue;
-        }
-        let truncated = response.finish_reason == Some(FinishReason::MaxTokens);
-        if let Some(reason) = response.finish_reason
-            && reason != FinishReason::Stop
-            && !truncated
-        {
+        Err(TextFailure::Model(error)) => Err(classify_model_error(&error, image)),
+        Err(TextFailure::ErrorCode) => Err(CallFailure::Retryable(
+            "the model ended the reply with an error".to_owned(),
+        )),
+        Err(TextFailure::Stopped(reason)) => {
             let cause = format!("the model stopped for {reason:?}");
             // An image the model declined to answer (its safety filter, a
             // recitation stop) is declined again by the next run: final.
             // Any other stop, and a document step, keep their older meaning.
-            return Err(
+            Err(
                 if image && matches!(reason, FinishReason::Safety | FinishReason::Recitation) {
                     CallFailure::Unusable(cause)
                 } else {
                     CallFailure::Retryable(cause)
                 },
-            );
+            )
         }
-        terminal = Some(truncated);
+        Err(TextFailure::TooLarge) => Err(if image {
+            CallFailure::ImageSkip(SKIP_VISION_REFUSED)
+        } else {
+            CallFailure::Unusable("the model's reply exceeds the size bound".to_owned())
+        }),
+        Err(TextFailure::NoReply) => Err(CallFailure::Retryable(
+            "the model returned no reply".to_owned(),
+        )),
     }
-    terminal
-        .map(|truncated| Reply {
-            text: reply,
-            truncated,
-        })
-        .ok_or_else(|| CallFailure::Retryable("the model returned no reply".to_owned()))
 }
 
 /// The gateway's refusal, sorted: retryable (429, 5xx, a timeout, the

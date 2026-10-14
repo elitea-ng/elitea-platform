@@ -699,7 +699,7 @@ impl OfficeToolHost for ClaimOfficeHost {
     }
 
     async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError> {
-        let Some(binding) = self.model.get() else {
+        let Some(binding) = self.model.bind() else {
             return Err(OfficeHostError::new(
                 OfficeFailure::NoModel,
                 "office_host.no_model",
@@ -720,7 +720,7 @@ impl OfficeToolHost for ClaimOfficeHost {
                 annotations: None,
             });
         }
-        generate_text(binding, parts).await.map_err(|message| {
+        generate_text(&binding, parts).await.map_err(|message| {
             tracing::warn!(
                 event = "office_model_call_failed",
                 error = %message,

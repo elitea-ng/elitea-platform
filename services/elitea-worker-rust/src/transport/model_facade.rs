@@ -144,6 +144,21 @@ enum BoundProviderModel {
     Anthropic(BoundAnthropicFacade),
 }
 
+impl BoundModelFacade {
+    /// The model with the generation config its facade admits: what a caller
+    /// that builds its own request (`model_text::stream_text`) sends.
+    pub(crate) fn admitted_chat(&self) -> super::model_text::AdmittedChat {
+        let config = match &self.primary {
+            BoundProviderModel::OpenAiCompatible(model) => model.admitted_config(),
+            BoundProviderModel::Anthropic(model) => model.admitted_config(),
+        };
+        super::model_text::AdmittedChat {
+            model: BoundOrdinaryAgentModel::adk_model(self),
+            config,
+        }
+    }
+}
+
 impl BoundOrdinaryAgentModel for BoundModelFacade {
     fn summarization_model(&self) -> Option<Arc<dyn adk_rust::Llm>> {
         if let Some(summary) = &self.summary {

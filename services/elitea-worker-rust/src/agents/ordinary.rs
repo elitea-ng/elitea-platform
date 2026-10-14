@@ -30,8 +30,8 @@ use super::sensitive_tools::{
     SensitiveToolCatalog, policy_for_guardrails, sensitive_tools_for_kind,
 };
 use super::session::{
-    ApplicationRuntimeProjection, BoundOrdinaryAgentModel as _, NativeSessionBackend,
-    NativeToolExecutionMode, OrdinaryAgentCompletion, OrdinaryRuntimeBindings,
+    ApplicationRuntimeProjection, NativeSessionBackend, NativeToolExecutionMode,
+    OrdinaryAgentCompletion, OrdinaryRuntimeBindings,
     assemble_delegated_authorization_resume_with_sessions,
     assemble_direct_hitl_resume_with_sessions_and_applications,
     assemble_ordinary_native_with_sessions_and_runtime_catalogs,
@@ -729,9 +729,11 @@ impl OrdinaryNativeAgentAssembler {
             };
             let bound: Result<BoundModelFacade, ModelFacadeError> =
                 facade.bind(adapter, context.as_ref(), model_project_id, invocation);
+            let chat = bound?.admitted_chat();
             Ok(StepbackBinding {
-                model: bound?.adk_model(),
+                model: chat.model,
                 model_name: model_name.clone(),
+                config: chat.config,
             })
         })
     }

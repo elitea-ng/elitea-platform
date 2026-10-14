@@ -346,6 +346,11 @@ pub(crate) struct BoundOpenAiCompatibleFacade {
 }
 
 impl BoundOpenAiCompatibleFacade {
+    /// The generation config this model's requests must carry.
+    pub(super) fn admitted_config(&self) -> GenerateContentConfig {
+        admitted_generation_config(&self.model.invocation)
+    }
+
     pub(super) fn summary_model_with_output(&self, output_cap: Option<u32>) -> Arc<dyn Llm> {
         let source = self.model.clone();
         Arc::new(super::summary_model::SummaryModel::new(
@@ -1137,15 +1142,29 @@ fn instruction_role(model_name: &str) -> &'static str {
     }
 }
 
+/// The generation config the facade admits for `invocation`: the one
+/// [`generation_config_matches`] checks every request against. A caller that
+/// builds its own request takes it from the bound model, never by hand.
+pub(super) fn admitted_generation_config(
+    invocation: &ModelFacadeInvocation,
+) -> GenerateContentConfig {
+    GenerateContentConfig {
+        temperature: invocation.temperature,
+        max_output_tokens: invocation
+            .max_tokens
+            .and_then(|value| i32::try_from(value).ok()),
+        response_schema: invocation.response_schema.clone(),
+        ..GenerateContentConfig::default()
+    }
+}
+
 fn generation_config_matches(
     config: &GenerateContentConfig,
     invocation: &ModelFacadeInvocation,
 ) -> bool {
-    config.temperature == invocation.temperature
-        && config.max_output_tokens
-            == invocation
-                .max_tokens
-                .and_then(|value| i32::try_from(value).ok())
+    let admitted = admitted_generation_config(invocation);
+    config.temperature == admitted.temperature
+        && config.max_output_tokens == admitted.max_output_tokens
         && config.top_p.is_none()
         && config.top_k.is_none()
         && config.frequency_penalty.is_none()

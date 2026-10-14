@@ -806,6 +806,7 @@ fn fixture_batch(spec: &Value) -> PictureBatch {
     for (reason, count) in spec["skipped"].as_object().into_iter().flatten() {
         let reason: &'static str = match reason.as_str() {
             "fetch_failed" => "fetch_failed",
+            "rate_limited" => "rate_limited",
             "unsupported_type" => "unsupported_type",
             "too_large" => "too_large",
             _ => "unreadable",

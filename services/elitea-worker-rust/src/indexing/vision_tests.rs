@@ -1259,16 +1259,24 @@ async fn a_reasoning_models_thinking_is_not_the_description() {
                 delta("content", " It is blue.</think>\n\nA blue square."),
                 finish("stop"),
             ]),
+            // The chat template put the opening tag in the prompt: only the
+            // closing one comes back.
+            gateway_answer(&[
+                delta("content", "It is green.</think>"),
+                delta("content", "A green square."),
+                finish("stop"),
+            ]),
         ],
     );
     let documents = vec![
         real_image("shots/a.png", ImageFormat::Png, 32, 32, "a"),
         real_image("shots/b.png", ImageFormat::Png, 32, 32, "b"),
+        real_image("shots/c.png", ImageFormat::Png, 32, 32, "c"),
     ];
     let summary = run_model(&harness, documents, None, &defaults(), Some("Qwen3.8"))
         .await
         .expect("summary");
-    assert_eq!(summary.indexed_documents, 2, "{summary:?}");
+    assert_eq!(summary.indexed_documents, 3, "{summary:?}");
     let Harness { runtime, token, .. } = harness;
     let runtime = Arc::new(runtime);
     let host = search_host(&runtime, &token);
@@ -1281,12 +1289,14 @@ async fn a_reasoning_models_thinking_is_not_the_description() {
     let text = found.to_string();
     assert!(text.contains("A red square."), "{text}");
     assert!(text.contains("A blue square."), "{text}");
+    assert!(text.contains("A green square."), "{text}");
+    assert!(!text.contains("It is green"), "{text}");
     assert!(!text.contains("think"), "{text}");
     assert!(!text.contains("Let me look"), "{text}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_model_that_spends_max_tokens_thinking_is_not_a_refusal() {
+async fn a_model_that_spends_max_tokens_thinking_is_retryable_not_a_refusal() {
     let mut harness = harness(4, None).await;
     with_real_facade(
         &mut harness,
@@ -1300,20 +1310,42 @@ async fn a_model_that_spends_max_tokens_thinking_is_not_a_refusal() {
         .await
         .expect("summary");
     assert_eq!(summary.indexed_documents, 0, "{summary:?}");
-    assert_eq!(
-        summary.skipped.get("reply_unusable"),
-        Some(&1),
-        "{summary:?}"
-    );
+    // Retryable (more max_tokens cures it), and never a refusal.
+    assert_eq!(summary.skipped.get("model_failed"), Some(&1), "{summary:?}");
+    assert_eq!(summary.skipped.get("reply_unusable"), None, "{summary:?}");
     assert_eq!(summary.skipped.get("vision_refused"), None, "{summary:?}");
 }
 
-#[test]
-fn inline_reasoning_is_stripped() {
-    use super::model_steps::strip_inline_reasoning as strip;
-    assert_eq!(strip("<think>a</think>\nB"), "B");
-    assert_eq!(strip("x <think>a</think> y <think>b</think> z"), "x  y  z");
-    assert_eq!(strip("kept<think>cut off"), "kept");
-    assert_eq!(strip("<think>only"), "");
-    assert_eq!(strip("plain"), "plain");
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unclosed_think_block_at_the_start_is_reasoning_only_and_retryable() {
+    let mut harness = harness(4, None).await;
+    with_real_facade(
+        &mut harness,
+        vec![gateway_answer(&[
+            delta("content", "<think>Let me think about this for a long while"),
+            finish("stop"),
+        ])],
+    );
+    let tiny = real_image("shots/tiny.png", ImageFormat::Png, 32, 32, "tiny");
+    let summary = run_model(&harness, vec![tiny], None, &defaults(), Some("Qwen3.8"))
+        .await
+        .expect("summary");
+    assert_eq!(summary.skipped.get("model_failed"), Some(&1), "{summary:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_think_tag_in_the_middle_of_a_description_is_kept() {
+    let mut harness = harness(4, None).await;
+    with_real_facade(
+        &mut harness,
+        vec![gateway_answer(&[
+            delta("content", "A diagram of the <think> tag"),
+            finish("stop"),
+        ])],
+    );
+    let tiny = real_image("shots/tiny.png", ImageFormat::Png, 32, 32, "tiny");
+    let summary = run_model(&harness, vec![tiny], None, &defaults(), Some("Qwen3.8"))
+        .await
+        .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
 }
