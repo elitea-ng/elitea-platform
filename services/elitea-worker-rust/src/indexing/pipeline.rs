@@ -1515,7 +1515,7 @@ impl Runner<'_> {
                 }
             };
             pictures.push(Picture {
-                bytes: Bytes::from(source.bytes.clone()),
+                bytes: source.bytes.clone(),
                 media_type,
                 ordinal: u32::try_from(index).unwrap_or(u32::MAX),
                 text_offset: index,
@@ -1680,8 +1680,8 @@ impl Runner<'_> {
     /// that could not be described is counted in `tally` (the document's, not
     /// the run's) and is [`PictureOutcome::Nothing`].
     ///
-    /// Distinct pictures (by the sha256 of their bytes, all hashed in one
-    /// blocking task) are described [`PICTURES_IN_FLIGHT`] at a time and
+    /// Distinct pictures (by the sha256 of their bytes and their prompt, all
+    /// hashed in one blocking task) are described [`PICTURES_IN_FLIGHT`] at a time and
     /// their results applied in document order; the call cap and the image
     /// budget are charged atomically by the one description path. A picture
     /// whose bytes repeat an earlier one's takes that one's outcome, with
@@ -1711,11 +1711,12 @@ impl Runner<'_> {
         let order = elitea_doc_chunk::written_order(text, &offsets);
         // The first picture of each distinct content, in written order, is
         // the one described.
-        let mut first_of: BTreeMap<[u8; 32], usize> = BTreeMap::new();
+        let mut first_of: BTreeMap<([u8; 32], &str), usize> = BTreeMap::new();
         let mut distinct: Vec<usize> = Vec::new();
         for index in order {
             if let Some(digest) = digests[index]
-                && let std::collections::btree_map::Entry::Vacant(slot) = first_of.entry(digest)
+                && let std::collections::btree_map::Entry::Vacant(slot) =
+                    first_of.entry((digest, prompts[index]))
             {
                 slot.insert(index);
                 distinct.push(index);
@@ -1758,7 +1759,8 @@ impl Runner<'_> {
         let mut pending = false;
         let mut outcomes = Vec::with_capacity(pictures.len());
         for (index, digest) in digests.iter().enumerate() {
-            let Some(first) = digest.and_then(|digest| first_of.get(&digest)) else {
+            let Some(first) = digest.and_then(|digest| first_of.get(&(digest, prompts[index])))
+            else {
                 tally.skip(SKIP_UNREADABLE, 1);
                 outcomes.push(PictureOutcome::Nothing);
                 continue;
@@ -2344,6 +2346,9 @@ async fn prepare(
     let key = reference.key.clone();
     let mime = reference.mime.clone();
     let mut metadata = document.metadata;
+    // What a connector's picture pass needs from the fetch travels in the
+    // document and goes no further: off before anything is stored.
+    let picture_context = metadata.remove(elitea_connectors::pictures::CONTEXT_KEY);
     // The SDK applies `chunking_tool` to the base document only; a dependent
     // document (an attachment) is parsed by its own extension with the
     // per-extension settings.
@@ -2454,13 +2459,16 @@ async fn prepare(
     // The pictures the text of a connector's document links: read through
     // the connector, described by the run's loop.
     if let Some(PictureStep::Inline { prompt }) = step
-        && source.may_have_pictures(&key, &bytes)
+        && source.may_have_pictures(&key, &bytes, picture_context.as_ref())
     {
         // These pictures are reported as the document's LINKED ones.
         picture_tally.linked = true;
         match pictures.clone().resolve().await {
             Ok(true) => {
-                if let Some(batch) = source.pictures(&key, &bytes).await {
+                if let Some(batch) = source
+                    .pictures(&key, &bytes, picture_context.as_ref())
+                    .await
+                {
                     let explicit_model =
                         chunking.explicitly_needs_model_for(&elitea_doc_chunk::extension_of(&key));
                     return Prepare::Connector(Box::new(ConnectorJob {

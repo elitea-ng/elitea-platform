@@ -394,10 +394,15 @@ impl IndexSource {
     /// Whether a fetched document has anything a picture could be read
     /// for. Asked before the run's model is waited for, so a document
     /// without a picture link neither waits nor is counted.
-    pub(crate) fn may_have_pictures(&self, key: &str, bytes: &[u8]) -> bool {
+    pub(crate) fn may_have_pictures(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        context: Option<&Value>,
+    ) -> bool {
         match self {
             Self::AdoWiki(source) => source.may_have_pictures(bytes),
-            Self::AdoBoards(source) => source.may_have_pictures(key),
+            Self::AdoBoards(source) => source.may_have_pictures(context),
             Self::Jira(source) => source.may_have_pictures(key, bytes),
             #[cfg(test)]
             Self::Fixture(documents, _) => documents.iter().any(|document| {
@@ -409,10 +414,15 @@ impl IndexSource {
 
     /// The pictures a fetched document links, read through the connector's
     /// own authenticated transport; `None` when there is nothing to read.
-    pub(crate) async fn pictures(&self, key: &str, bytes: &[u8]) -> Option<PictureBatch> {
+    pub(crate) async fn pictures(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        context: Option<&Value>,
+    ) -> Option<PictureBatch> {
         match self {
             Self::AdoWiki(source) => source.pictures(key, bytes).await,
-            Self::AdoBoards(source) => source.pictures(key, bytes).await,
+            Self::AdoBoards(source) => source.pictures(key, bytes, context).await,
             Self::Jira(source) => source.pictures(key, bytes).await,
             #[cfg(test)]
             Self::Fixture(documents, _) => {
@@ -774,6 +784,7 @@ fn fixture_batch(spec: &Value) -> PictureBatch {
     {
         let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
         bytes.extend_from_slice(text(picture, "tag").as_bytes());
+        let bytes = bytes::Bytes::from(bytes);
         batch.pictures.push(SourcePicture {
             token: token(index),
             name: text(picture, "tag"),

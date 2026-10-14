@@ -57,7 +57,7 @@ use super::text::{
 };
 use crate::egress::HostAllowlist;
 use crate::pictures::{
-    self, Budget, Escape, PictureBatch, PictureStep, SourcePicture, UNREADABLE, UNSUPPORTED,
+    self, Escape, PictureBatch, PictureStep, Reads, SourcePicture, UNREADABLE, UNSUPPORTED,
 };
 use crate::source::{
     Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, Timeouts, references,
@@ -75,10 +75,9 @@ const WIQL_PAGE: usize = 2_000;
 /// The server's ceiling on one WIQL answer, asked for a link query.
 const WIQL_CEILING: usize = 20_000;
 /// Ids per `workitemsbatch` call (the server's maximum).
-/// `<img>` tags of a work item that get a picture, at most (the SDK's bound).
-const MAX_IMG_OCCURRENCES: usize = 200;
 /// Bytes under which a download is no picture.
 const MIN_PICTURE_BYTES: usize = 8;
+/// Ids per `workitemsbatch` call (the server's maximum).
 const BATCH: usize = 200;
 /// Comments per page (the server's maximum).
 const COMMENTS_PAGE: usize = 200;
@@ -169,10 +168,6 @@ pub struct AdoBoardsSource {
     extras: Mutex<Arc<BTreeMap<String, Extra>>>,
     /// The versions the index holds, by key (see the module notes).
     known: Mutex<BTreeMap<String, String>>,
-    /// The bodies of the work items fetched with `<img>` in a kept field,
-    /// until `pictures` takes them: the picture pass reads no work item
-    /// again.
-    bodies: Mutex<BTreeMap<String, Value>>,
 }
 
 impl AdoBoardsSource {
@@ -200,7 +195,6 @@ impl AdoBoardsSource {
             cache: ListingCache::default(),
             extras: Mutex::new(Arc::new(BTreeMap::new())),
             known: Mutex::new(BTreeMap::new()),
-            bodies: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -575,16 +569,17 @@ impl AdoBoardsSource {
         Ok(body)
     }
 
-    /// The work item as the document, keeping the body for the picture pass when a
-    /// kept field has an `<img>` and `process_images` is on.
-    async fn work_item_stashing(
+    /// The work item as the document. With `process_images` on and an
+    /// `<img>` in a kept field, the metadata also carries the body the
+    /// picture pass works from, under [`pictures::CONTEXT_KEY`]: it is the
+    /// document's own, and the run takes it off before anything is stored.
+    async fn work_item(
         &self,
-        key: &str,
         id: u64,
         listed_rev: u64,
     ) -> Result<(Vec<u8>, Map<String, Value>), Failure> {
         let body = self.work_item_body(id, listed_rev).await?;
-        if self.params.process_images
+        let wants_pictures = self.params.process_images
             && body
                 .get("fields")
                 .and_then(Value::as_object)
@@ -593,20 +588,30 @@ impl AdoBoardsSource {
                         (self.params.fields.is_empty() || self.params.fields.contains(name))
                             && value.as_str().is_some_and(|html| html.contains("<img"))
                     })
-                })
-        {
-            self.bodies
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(key.to_owned(), body.clone());
-        }
-        self.render_work_item(id, &body, &mut |_, value| {
+                });
+        let (bytes, mut metadata) = self.render_work_item(id, &body, &mut |_, value| {
             if self.params.sanitize {
                 sanitize_field(value)
             } else {
                 value.clone()
             }
-        })
+        })?;
+        if wants_pictures {
+            // Only the kept fields, as the picture pass renders them.
+            let mut fields = Map::new();
+            if let Some(all) = body.get("fields").and_then(Value::as_object) {
+                for (name, value) in all {
+                    if self.params.fields.is_empty() || self.params.fields.contains(name) {
+                        fields.insert(name.clone(), value.clone());
+                    }
+                }
+            }
+            metadata.insert(
+                pictures::CONTEXT_KEY.to_owned(),
+                json!({"rev": body.get("rev"), "fields": fields}),
+            );
+        }
+        Ok((bytes, metadata))
     }
 
     /// The document of a work item whose `body` was read. `field` turns each
@@ -677,15 +682,11 @@ impl AdoBoardsSource {
         })
     }
 
-    /// Whether the work item `key`, just fetched, has a picture to read.
+    /// Whether a fetched work item has a picture to read: its metadata
+    /// carries the picture context.
     #[must_use]
-    pub fn may_have_pictures(&self, key: &str) -> bool {
-        self.params.process_images
-            && self
-                .bodies
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .contains_key(key)
+    pub fn may_have_pictures(&self, context: Option<&Value>) -> bool {
+        self.params.process_images && context.is_some()
     }
 
     /// The pictures in the HTML fields of a work item (the SDK's field pass
@@ -694,11 +695,16 @@ impl AdoBoardsSource {
     /// its description goes where the tag was, as `[image: …]` text (the
     /// default `sanitize`) or an `image-description` attribute. A picture
     /// that cannot be read leaves its `alt` text, as in the SDK. Works from
-    /// the body `fetch` read (no second request for the work item); `bytes`
-    /// is the document as fetched, which a failed read leaves as it is.
-    /// `None`: the work item has no HTML picture.
-    #[allow(clippy::too_many_lines)] // Read the sources, then one pass over the fields.
-    pub async fn pictures(&self, key: &str, bytes: &[u8]) -> Option<PictureBatch> {
+    /// the `context` `fetch` put in the document's metadata (no second
+    /// request for the work item). A picture that was not read ends as it
+    /// would had it been read and not described. `None`: the work item has no
+    /// HTML picture.
+    pub async fn pictures(
+        &self,
+        key: &str,
+        _bytes: &[u8],
+        context: Option<&Value>,
+    ) -> Option<PictureBatch> {
         if !self.params.process_images {
             return None;
         }
@@ -706,19 +712,11 @@ impl AdoBoardsSource {
         let Some(Extra::WorkItem { id, .. }) = extras.get(key) else {
             return None;
         };
-        let body = self
-            .bodies
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(key)?;
-        // Pass 1: the distinct sources, in document order, of the fields the
-        // document keeps.
+        let body = context?;
+        // Pass 1: the distinct sources, in document order.
         let mut sources: Vec<String> = Vec::new();
         let fields = body.get("fields").and_then(Value::as_object)?;
-        for (name, value) in fields {
-            if !self.params.fields.is_empty() && !self.params.fields.iter().any(|f| f == name) {
-                continue;
-            }
+        for value in fields.values() {
             if let Value::String(html) = value
                 && html.contains("<img")
             {
@@ -735,29 +733,20 @@ impl AdoBoardsSource {
         if sources.is_empty() || sources.iter().any(|src| pictures::holds_token(src)) {
             return None;
         }
-        // Read them (once each).
-        let mut batch = PictureBatch::default();
-        let mut budget = Budget::default();
-        let mut read: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        // Read them: once each, charged once each.
+        let mut reads = Reads::default();
+        let mut read: BTreeMap<String, bytes::Bytes> = BTreeMap::new();
         for src in &sources {
-            match self.read_picture(src, &mut budget).await {
-                Ok(Some(bytes)) => {
-                    read.insert(src.clone(), bytes);
-                }
-                Ok(None) => {}
-                Err(reason) => batch.skip(reason),
+            if src.is_empty() {
+                continue;
+            }
+            let outcome = reads.get(src, || self.read_picture(src)).await;
+            if let Some(data) = outcome {
+                read.insert(src.clone(), data);
             }
         }
-        if read.is_empty() && batch.skipped.is_empty() {
+        if read.is_empty() && !reads.has_skips() {
             return None;
-        }
-        if read.is_empty() {
-            // Nothing to describe; the skips are counted (and a retryable
-            // one marks the document) and the text stays as it was.
-            return Some(PictureBatch::with_skips(
-                String::from_utf8_lossy(bytes).into_owned(),
-                batch.skipped,
-            ));
         }
         // Pass 2: the document with a token for each `<img>` of a read
         // picture (each keeps its own markup and `alt`; equal bytes cost the
@@ -765,7 +754,7 @@ impl AdoBoardsSource {
         // where nothing was read.
         let sanitize = self.params.sanitize;
         let mut occurrences: Vec<SourcePicture> = Vec::new();
-        let rendered = self.render_work_item(*id, &body, &mut |_, value| {
+        let rendered = self.render_work_item(*id, body, &mut |_, value| {
             let Value::String(html) = value else {
                 return if sanitize {
                     sanitize_field(value)
@@ -790,12 +779,12 @@ impl AdoBoardsSource {
                 let Some(data) = tag.src.as_ref().and_then(|src| read.get(src)) else {
                     return fallback;
                 };
-                if occurrences.len() >= MAX_IMG_OCCURRENCES {
+                if occurrences.len() >= pictures::MAX_OCCURRENCES {
                     return fallback;
                 }
                 let token = pictures::token(occurrences.len());
                 let mut picture = describe_tag(tag, token.clone(), &fallback, sanitize);
-                picture.bytes.clone_from(data);
+                picture.bytes = data.clone();
                 if let Some(name) = tag.src.as_deref().and_then(file_name_of) {
                     picture.name = name;
                 }
@@ -809,22 +798,19 @@ impl AdoBoardsSource {
             }
         });
         let (template, _) = rendered.ok()?;
-        batch.template = String::from_utf8(template).ok()?;
-        batch.pictures = occurrences;
+        let mut batch = PictureBatch {
+            template: String::from_utf8(template).ok()?,
+            pictures: occurrences,
+            skipped: reads.into_skipped(),
+            ..PictureBatch::default()
+        };
+        batch.pictures.shrink_to_fit();
         (!batch.pictures.is_empty() || !batch.skipped.is_empty()).then_some(batch)
     }
 
     /// One `<img src>`: its bytes when it is an attachment of this
-    /// organization with an image file name; `Ok(None)` when the tag is not
-    /// a picture reference at all (no source); `Err` the skip reason.
-    async fn read_picture(
-        &self,
-        src: &str,
-        budget: &mut Budget,
-    ) -> Result<Option<Vec<u8>>, &'static str> {
-        if src.is_empty() {
-            return Ok(None);
-        }
+    /// organization with an image file name; `Err` the skip reason.
+    async fn read_picture(&self, src: &str) -> Result<Vec<u8>, &'static str> {
         // `data:` pictures are inline already; a link elsewhere is not read
         // with this connector's credential.
         let Ok(url) = Url::parse(src) else {
@@ -842,7 +828,6 @@ impl AdoBoardsSource {
         if !pictures::has_image_extension(&name) {
             return Err(UNSUPPORTED);
         }
-        budget.may_read()?;
         let bytes = match self
             .attachment(&url, Some(pictures::MAX_PICTURE_BYTES))
             .await
@@ -854,8 +839,7 @@ impl AdoBoardsSource {
         if bytes.len() < MIN_PICTURE_BYTES {
             return Err(UNREADABLE);
         }
-        budget.take(bytes.len() as u64)?;
-        Ok(Some(bytes))
+        Ok(bytes)
     }
 
     /// The discussion: its version (a hash over every comment's id, version
@@ -944,6 +928,14 @@ fn file_name_of(src: &str) -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
+/// What `fallback` (the tag's replacement HTML) becomes once its field is
+/// sanitised, as it does for a picture that was not read.
+fn sanitized_fallback(fallback: &str) -> String {
+    html_to_text(&format!("<p>{fallback}</p>"))
+        .trim()
+        .to_owned()
+}
+
 /// The picture a tag becomes: `[image: …]` text under `sanitize`, else the
 /// tag with an `image-description` attribute.
 fn describe_tag(tag: &ImgTag, token: String, fallback: &str, sanitize: bool) -> SourcePicture {
@@ -951,12 +943,13 @@ fn describe_tag(tag: &ImgTag, token: String, fallback: &str, sanitize: bool) -> 
         return SourcePicture {
             token,
             name: String::new(),
-            bytes: Vec::new(),
+            bytes: bytes::Bytes::new(),
             prompt: None,
             before: "[image: ".to_owned(),
             after: "]".to_owned(),
-            // Written into the serialised document: JSON text.
-            fallback: pictures::json_contents(fallback),
+            // The text the unread case ends as: the same sanitising, then
+            // written into the serialised document (JSON text).
+            fallback: pictures::json_contents(&sanitized_fallback(fallback)),
             escapes: &[Escape::Lines, Escape::Json],
         };
     }
@@ -967,7 +960,7 @@ fn describe_tag(tag: &ImgTag, token: String, fallback: &str, sanitize: bool) -> 
     SourcePicture {
         token,
         name: String::new(),
-        bytes: Vec::new(),
+        bytes: bytes::Bytes::new(),
         prompt: None,
         before: pictures::json_contents(&format!("{open} image-description=\"")),
         after: pictures::json_contents(&format!("\"{close}")),
@@ -1125,10 +1118,7 @@ impl ContentSource for AdoBoardsSource {
             .ok_or_else(|| SourceError::NotFound(key.to_owned()))?;
         let (bytes, title, mut metadata) = match extra {
             Extra::WorkItem { id, rev, title, .. } => {
-                let (bytes, metadata) = self
-                    .work_item_stashing(key, *id, *rev)
-                    .await
-                    .map_err(failed)?;
+                let (bytes, metadata) = self.work_item(*id, *rev).await.map_err(failed)?;
                 (bytes, title.clone(), metadata)
             }
             Extra::Comments { id, title, version } => {
@@ -1963,18 +1953,15 @@ mod tests {
             source.picture_step("work_items/1.json"),
             Some(PictureStep::Inline { .. })
         ));
-        assert!(
-            !source.may_have_pictures("work_items/1.json"),
-            "before fetch"
-        );
         let fetched = source.fetch("work_items/1.json").await.expect("fetch");
-        assert!(source.may_have_pictures("work_items/1.json"));
+        let context = fetched.metadata.get(pictures::CONTEXT_KEY).cloned();
+        assert!(source.may_have_pictures(context.as_ref()));
         let batch = source
-            .pictures("work_items/1.json", &fetched.bytes)
+            .pictures("work_items/1.json", &fetched.bytes, context.as_ref())
             .await
             .expect("batch");
         assert_eq!(batch.pictures.len(), 1);
-        assert_eq!(batch.pictures[0].bytes, b"PNGDATA-0123");
+        assert_eq!(&batch.pictures[0].bytes[..], b"PNGDATA-0123");
         assert_eq!(batch.pictures[0].name, "shot.png");
         assert_eq!(
             batch.skipped.get(UNSUPPORTED),
@@ -2005,9 +1992,13 @@ mod tests {
         off.list().await.expect("listing");
         assert!(off.picture_step("work_items/1.json").is_none());
         let fetched = off.fetch("work_items/1.json").await.expect("fetch");
-        assert!(!off.may_have_pictures("work_items/1.json"));
         assert!(
-            off.pictures("work_items/1.json", &fetched.bytes)
+            !fetched.metadata.contains_key(pictures::CONTEXT_KEY),
+            "nothing is carried when the step is off"
+        );
+        assert!(!off.may_have_pictures(None));
+        assert!(
+            off.pictures("work_items/1.json", &fetched.bytes, None)
                 .await
                 .is_none()
         );
@@ -2024,8 +2015,9 @@ mod tests {
         .expect("source");
         source.list().await.expect("listing");
         let fetched = source.fetch("work_items/1.json").await.expect("fetch");
+        let context = fetched.metadata.get(pictures::CONTEXT_KEY).cloned();
         let batch = source
-            .pictures("work_items/1.json", &fetched.bytes)
+            .pictures("work_items/1.json", &fetched.bytes, context.as_ref())
             .await
             .expect("batch");
         let value: Value =
@@ -2079,7 +2071,10 @@ mod tests {
         .expect("source");
         source.list().await.expect("listing");
         let fetched = source.fetch("work_items/1.json").await.expect("fetch");
-        let batch = source.pictures("work_items/1.json", &fetched.bytes).await;
+        let context = fetched.metadata.get(pictures::CONTEXT_KEY).cloned();
+        let batch = source
+            .pictures("work_items/1.json", &fetched.bytes, context.as_ref())
+            .await;
         (batch, fixture)
     }
 
@@ -2149,5 +2144,87 @@ mod tests {
             [(pictures::FORBIDDEN, 1)]
         );
         assert_eq!(reason(StatusCode::NOT_FOUND).await, [(UNREADABLE, 1)]);
+    }
+
+    #[tokio::test]
+    async fn two_hundred_tags_of_one_big_image_share_one_buffer() {
+        let five = usize::try_from(pictures::MAX_PICTURE_BYTES).unwrap();
+        let tag = r#"<img src="https://dev.azure.com/contoso/p-guid/_apis/wit/attachments/img1?fileName=shot.png" alt="s">"#;
+        let html: &'static str = Box::leak(tag.repeat(250).into_boxed_str());
+        let fixture = Scripted::new(move |request, _| match request.url().path() {
+            "/contoso/Fabrikam/_apis/wit/wiql" => Reply::json(&json!({"workItems": [{"id": 1}]})),
+            "/contoso/Fabrikam/_apis/wit/workitemsbatch" => Reply::json(
+                &json!({"value": [{"id": 1, "rev": 3, "fields": {"System.Title": "T", "System.CommentCount": 0}}]}),
+            ),
+            "/contoso/Fabrikam/_apis/wit/workitems/1" => Reply::json(&json!({
+                "id": 1, "rev": 3,
+                "fields": {"System.Title": "T", "System.WorkItemType": "Bug", "System.Description": html}
+            })),
+            "/contoso/p-guid/_apis/wit/attachments/img1" => Reply::bytes(&vec![9; five]),
+            other => panic!("unexpected request {other}"),
+        });
+        let source = AdoBoardsSource::new(
+            config(),
+            params(&json!({"wiql": "SELECT [System.Id] FROM WorkItems", "process_images": true, "include_attachments": false, "include_comments": false})),
+            allow(),
+            fixture.clone(),
+        )
+        .expect("source");
+        source.list().await.expect("listing");
+        let fetched = source.fetch("work_items/1.json").await.expect("fetch");
+        let context = fetched.metadata.get(pictures::CONTEXT_KEY).cloned();
+        let batch = source
+            .pictures("work_items/1.json", &fetched.bytes, context.as_ref())
+            .await
+            .expect("batch");
+        assert_eq!(batch.pictures.len(), pictures::MAX_OCCURRENCES);
+        let first = batch.pictures[0].bytes.as_ptr();
+        assert!(
+            batch.pictures.iter().all(|p| p.bytes.as_ptr() == first),
+            "one buffer"
+        );
+        assert_eq!(
+            fixture
+                .seen()
+                .iter()
+                .filter(|s| s.contains("attachments/img1"))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_picture_that_was_read_but_not_described_reads_like_one_never_read() {
+        const READ: &str = r#"<p>Look <img src="https://dev.azure.com/contoso/p-guid/_apis/wit/attachments/img1?fileName=shot.png" alt="A &amp; B &lt;x&gt;  two   spaces"> end</p>"#;
+        const UNREAD: &str = r#"<p>Look <img src="https://example.com/x.png" alt="A &amp; B &lt;x&gt;  two   spaces"> end</p>"#;
+        let (read, _) = pictured(READ, StatusCode::OK).await;
+        let (unread, _) = pictured(UNREAD, StatusCode::OK).await;
+        let read: Value = serde_json::from_str(&read.expect("read").render(&[None])).expect("JSON");
+        let unread: Value =
+            serde_json::from_str(&unread.expect("unread").render(&[])).expect("JSON");
+        assert_eq!(
+            read["fields"]["System.Description"],
+            unread["fields"]["System.Description"]
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_about_a_work_item_outlives_its_document() {
+        // The step on, a picture present: the context is in the fetched
+        // document's metadata and nowhere else; with the step off, nowhere.
+        let fixture = html_fixture(TWICE_HTML, StatusCode::OK);
+        let source = AdoBoardsSource::new(
+            config(),
+            params(&json!({"wiql": "SELECT [System.Id] FROM WorkItems", "process_images": true, "include_attachments": false, "include_comments": false})),
+            allow(),
+            fixture,
+        )
+        .expect("source");
+        source.list().await.expect("listing");
+        let mut fetched = source.fetch("work_items/1.json").await.expect("fetch");
+        assert!(fetched.metadata.remove(pictures::CONTEXT_KEY).is_some());
+        // Taking it off (as the run does) leaves a source that can hand
+        // nothing out: a second fetch carries its own.
+        assert!(!source.may_have_pictures(fetched.metadata.get(pictures::CONTEXT_KEY)));
     }
 }

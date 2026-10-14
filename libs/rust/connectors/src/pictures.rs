@@ -18,10 +18,18 @@ use std::collections::BTreeMap;
 
 /// Pictures read for one document, at most.
 pub const MAX_PICTURES: usize = 20;
+/// Occurrences of pictures in one document that are given a picture, at
+/// most (the SDK's bound for work items; the same for every connector).
+pub const MAX_OCCURRENCES: usize = 200;
 /// Bytes of one picture, at most.
 pub const MAX_PICTURE_BYTES: u64 = 5 << 20;
 /// Bytes of all of a document's pictures together, at most.
 pub const MAX_TOTAL_PICTURE_BYTES: u64 = 12 << 20;
+
+/// The metadata key under which a connector hands the worker what its
+/// picture pass needs from the fetch; the run removes it before anything is
+/// stored.
+pub const CONTEXT_KEY: &str = "elitea.picture_context";
 
 /// Skip reasons, the worker's closed labels.
 pub const FETCH_FAILED: &str = "fetch_failed";
@@ -57,7 +65,8 @@ pub struct SourcePicture {
     pub token: String,
     /// The picture's file name, for the log and for the prompt.
     pub name: String,
-    pub bytes: Vec<u8>,
+    /// Shared with every other occurrence of the same read.
+    pub bytes: bytes::Bytes,
     /// This picture's whole prompt, when it differs from the document's.
     pub prompt: Option<String>,
     /// The text before and after the description.
@@ -226,6 +235,73 @@ pub fn holds_token(text: &str) -> bool {
     text.contains("\u{F8FF}elitea-picture-")
 }
 
+/// The distinct reads of one document's pictures, keyed by the connector's
+/// own source identity (a Jira attachment id, a wiki path after
+/// normalisation, a boards `src`). Each is downloaded once, held once
+/// (occurrences clone the cheap [`bytes::Bytes`] handle) and charged against
+/// the document's budget once; a failure is counted once. Every connector
+/// reads through this, so they all behave alike.
+#[derive(Debug, Default)]
+pub struct Reads {
+    budget: Budget,
+    known: BTreeMap<String, Option<bytes::Bytes>>,
+    skipped: BTreeMap<&'static str, u32>,
+}
+
+impl Reads {
+    /// The bytes of the picture `identity`, downloading it with `read` the
+    /// first time only. `None`: it could not be read (counted once, under the
+    /// reason `read` gave, or the budget's).
+    pub async fn get<F, Fut>(&mut self, identity: &str, read: F) -> Option<bytes::Bytes>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<u8>, &'static str>>,
+    {
+        if let Some(known) = self.known.get(identity) {
+            return known.clone();
+        }
+        let outcome = match self.budget.may_read() {
+            Err(reason) => Err(reason),
+            Ok(()) => match read().await {
+                Ok(data) => self.budget.take(data.len() as u64).map(|()| data),
+                Err(reason) => Err(reason),
+            },
+        };
+        let bytes = match outcome {
+            Ok(data) => Some(bytes::Bytes::from(data)),
+            Err(reason) => {
+                self.skip(reason);
+                None
+            }
+        };
+        self.known.insert(identity.to_owned(), bytes.clone());
+        bytes
+    }
+
+    /// Counts a reference that was not a picture to read.
+    pub fn skip(&mut self, reason: &'static str) {
+        *self.skipped.entry(reason).or_default() += 1;
+    }
+
+    /// How many distinct pictures were read.
+    #[must_use]
+    pub fn read_count(&self) -> usize {
+        self.known.values().flatten().count()
+    }
+
+    /// Whether anything was counted.
+    #[must_use]
+    pub fn has_skips(&self) -> bool {
+        !self.skipped.is_empty()
+    }
+
+    /// The counts, for the batch.
+    #[must_use]
+    pub fn into_skipped(self) -> BTreeMap<&'static str, u32> {
+        self.skipped
+    }
+}
+
 /// The bounds one document's pictures are read under.
 #[derive(Debug, Default)]
 pub struct Budget {
@@ -262,34 +338,13 @@ impl Budget {
     }
 }
 
-/// `%XX` escapes decoded (invalid ones kept), as Python's `unquote`.
+/// `%XX` escapes decoded (invalid ones kept, bytes that are not UTF-8
+/// replaced), as Python's `unquote`.
 #[must_use]
 pub fn percent_decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%'
-            && index + 2 < bytes.len()
-            && let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2]))
-        {
-            out.push(high * 16 + low);
-            index += 3;
-            continue;
-        }
-        out.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+    percent_encoding::percent_decode_str(text)
+        .decode_utf8_lossy()
+        .into_owned()
 }
 
 /// Whether `name` ends in an extension an image model takes by name
@@ -313,7 +368,7 @@ mod tests {
         SourcePicture {
             token: token(index),
             name: format!("p{index}.png"),
-            bytes: vec![1],
+            bytes: bytes::Bytes::from_static(&[1]),
             prompt: None,
             before: "[image: ".to_owned(),
             after: "]".to_owned(),
@@ -361,6 +416,55 @@ mod tests {
             Escape::MarkdownLink.apply("A (chart)\n\nof [x] \\ ok"),
             "A (chart\\) of [x\\] \\\\ ok"
         );
+    }
+
+    #[tokio::test]
+    async fn a_picture_is_downloaded_held_and_charged_once() {
+        let calls = std::cell::Cell::new(0);
+        let mut reads = Reads::default();
+        let big = || async {
+            calls.set(calls.get() + 1);
+            Ok(vec![1_u8; usize::try_from(MAX_PICTURE_BYTES).unwrap()])
+        };
+        let first = reads.get("a", big).await.expect("read");
+        let second = reads.get("a", big).await.expect("again");
+        let third = reads.get("a", big).await.expect("and again");
+        assert_eq!(calls.get(), 1, "one download");
+        assert_eq!(first.as_ptr(), third.as_ptr(), "one buffer");
+        assert_eq!(second.len(), first.len());
+        // Charged once: two more distinct 5 MiB pictures fit the 12 MiB total
+        // only once more, so the third distinct picture is refused, not the
+        // repeats of the first.
+        reads
+            .get("b", || async { Ok(vec![2_u8; 5 << 20]) })
+            .await
+            .expect("b");
+        assert!(
+            reads
+                .get("c", || async { Ok(vec![3_u8; 5 << 20]) })
+                .await
+                .is_none()
+        );
+        assert!(
+            reads.get("a", big).await.is_some(),
+            "a repeat is never refused"
+        );
+        assert_eq!(reads.read_count(), 2);
+        assert_eq!(reads.into_skipped().get(TOO_LARGE), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn a_failed_picture_is_counted_once() {
+        let mut reads = Reads::default();
+        for _ in 0..3 {
+            assert!(
+                reads
+                    .get("x", || async { Err(FETCH_FAILED) })
+                    .await
+                    .is_none()
+            );
+        }
+        assert_eq!(reads.into_skipped().get(FETCH_FAILED), Some(&1));
     }
 
     #[test]
@@ -412,6 +516,7 @@ mod tests {
     fn percent_decoding_and_extensions() {
         assert_eq!(percent_decode("a%20b%2Fc%zz%4"), "a b/c%zz%4");
         assert_eq!(percent_decode("caf%C3%A9"), "café");
+        assert_eq!(percent_decode("a%FFb"), "a\u{FFFD}b");
         assert!(has_image_extension(".attachments/A%20b.PNG?x=1"));
         assert!(!has_image_extension(".attachments/doc.pdf"));
     }

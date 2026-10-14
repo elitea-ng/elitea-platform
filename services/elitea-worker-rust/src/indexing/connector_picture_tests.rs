@@ -322,3 +322,81 @@ async fn linked_and_embedded_pictures_are_reported_apart() {
         "{summary:?}"
     );
 }
+
+/// A page whose two pictures hold the same bytes and carry `prompts`.
+fn twin(prompts: [&str; 2]) -> Document {
+    let mut document = page("page.md", &["same", "same"], None, &json!({}));
+    let spec = document.metadata.get_mut("fixture_pictures").expect("spec");
+    for (index, prompt) in prompts.iter().enumerate() {
+        spec["pictures"][index]["prompt"] = json!(prompt);
+    }
+    document
+}
+
+async fn twin_calls(prompts: [&str; 2]) -> (usize, String) {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(|_, user| Reply::Text(format!("saw: {user}")));
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        vec![twin(prompts)],
+        None,
+        &parameters(false, json!({})),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    (chat.calls(), stored_text(harness).await)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn identical_bytes_with_different_prompts_are_described_apart() {
+    let (same, text) = twin_calls(["Context A.", "Context A."]).await;
+    assert_eq!(same, 1, "same bytes, same prompt: one call");
+    assert!(!text.contains("!same!"), "{text}");
+    let (apart, text) = twin_calls(["Context A.", "Context B."]).await;
+    assert_eq!(apart, 2, "each reference has its own context");
+    assert!(
+        text.contains("Context A.") && text.contains("Context B."),
+        "{text}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_a_connector_carries_in_the_document_is_never_stored() {
+    // The picture gate is closed (no chat model); the context key the
+    // connector put in the metadata must not reach the chunks.
+    let harness = harness(4, None).await;
+    let mut document = page("page.md", &["one"], None, &json!({}));
+    document.metadata.insert(
+        elitea_connectors::pictures::CONTEXT_KEY.to_owned(),
+        json!({"fields": {"System.Description": "<img src=x>"}}),
+    );
+    let summary = run_model(
+        &harness,
+        vec![document],
+        None,
+        &parameters(false, json!({})),
+        None,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    let Harness {
+        runtime,
+        token,
+        fake,
+        ..
+    } = harness;
+    assert!(fake.point_count() >= 1);
+    let runtime = Arc::new(runtime);
+    let host = search_host(&runtime, &token);
+    let found = search(
+        &host,
+        json!({"query": "before", "index_name": "docs", "cut_off": 0,
+               "output_fields": ["page_content", "metadata"]}),
+    )
+    .await;
+    assert!(!found.to_string().contains("picture_context"), "{found}");
+}

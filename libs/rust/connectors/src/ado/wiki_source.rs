@@ -36,7 +36,7 @@ use super::config::{AdoFamilySettings, AdoToolkitConfig};
 use super::text::{optional_bool, optional_text, optional_text_list};
 use crate::egress::HostAllowlist;
 use crate::pictures::{
-    self, Budget, Escape, PictureBatch, PictureStep, SourcePicture, TOO_LARGE, UNREADABLE,
+    self, Escape, PictureBatch, PictureStep, Reads, SourcePicture, TOO_LARGE, UNREADABLE,
     UNSUPPORTED,
 };
 use crate::source::glob::NameFilter;
@@ -485,19 +485,18 @@ impl AdoWikiSource {
             template: text.to_owned(),
             ..PictureBatch::default()
         };
-        let mut budget = Budget::default();
+        let mut reads = Reads::default();
         for link in links {
+            if batch.pictures.len() >= pictures::MAX_OCCURRENCES {
+                break;
+            }
             // The target without Azure DevOps' ` =WxH` size, `?query`, `#fragment`.
             let target = attachment_target(&link.url);
             if !target.starts_with("/.attachments/") || !pictures::has_image_extension(target) {
                 // An external link (the SDK fetched it unauthenticated; no
                 // request leaves for a host the toolkit is not configured
                 // for), or a file that is not a picture.
-                batch.skip(UNSUPPORTED);
-                continue;
-            }
-            if let Err(reason) = budget.may_read() {
-                batch.skip(reason);
+                reads.skip(UNSUPPORTED);
                 continue;
             }
             let relative = pictures::percent_decode(target.trim_start_matches('/'));
@@ -506,50 +505,47 @@ impl AdoWikiSource {
             } else {
                 format!("{prefix}/{relative}")
             };
-            let Some((object_id, size)) = images.get(&path) else {
-                tracing::debug!(
-                    page = key,
-                    "a wiki picture link names no file; left as it is"
-                );
-                batch.skip(UNREADABLE);
+            // The normalised path is the read's identity: every spelling of
+            // the link reads the file once.
+            let data = reads
+                .get(&path, || async {
+                    let Some((object_id, size)) = images.get(&path) else {
+                        tracing::debug!(
+                            page = key,
+                            "a wiki picture link names no file; left as it is"
+                        );
+                        return Err(UNREADABLE);
+                    };
+                    if *size > pictures::MAX_PICTURE_BYTES {
+                        return Err(TOO_LARGE);
+                    }
+                    let segments = [
+                        "git",
+                        "repositories",
+                        repository.as_str(),
+                        "blobs",
+                        object_id.as_str(),
+                    ];
+                    let Ok(mut request) = self
+                        .build(AdoRequest::get(&segments, GIT_API).query("$format", "octetstream"))
+                    else {
+                        return Err(UNSUPPORTED);
+                    };
+                    request
+                        .headers_mut()
+                        .insert(ACCEPT, HeaderValue::from_static("application/octet-stream"));
+                    self.http
+                        .raw_within(request, pictures::MAX_PICTURE_BYTES)
+                        .await
+                        .map_err(|failure| {
+                            tracing::debug!(page = key, "a wiki picture could not be read");
+                            pictures::skip_reason(&failure)
+                        })
+                })
+                .await;
+            let Some(data) = data else {
                 continue;
             };
-            if *size > pictures::MAX_PICTURE_BYTES {
-                batch.skip(TOO_LARGE);
-                continue;
-            }
-            let segments = [
-                "git",
-                "repositories",
-                repository.as_str(),
-                "blobs",
-                object_id.as_str(),
-            ];
-            let Ok(mut request) =
-                self.build(AdoRequest::get(&segments, GIT_API).query("$format", "octetstream"))
-            else {
-                batch.skip(UNSUPPORTED);
-                continue;
-            };
-            request
-                .headers_mut()
-                .insert(ACCEPT, HeaderValue::from_static("application/octet-stream"));
-            let data = match self
-                .http
-                .raw_within(request, pictures::MAX_PICTURE_BYTES)
-                .await
-            {
-                Ok(data) => data,
-                Err(failure) => {
-                    tracing::debug!(page = key, "a wiki picture could not be read");
-                    batch.skip(pictures::skip_reason(&failure));
-                    continue;
-                }
-            };
-            if let Err(reason) = budget.take(data.len() as u64) {
-                batch.skip(reason);
-                continue;
-            }
             let token = pictures::token(batch.pictures.len());
             let markup = format!("![{}]({})", link.alt, link.url);
             batch.template = batch.template.replace(&markup, &token);
@@ -564,6 +560,7 @@ impl AdoWikiSource {
                 escapes: &[Escape::MarkdownLink],
             });
         }
+        batch.skipped = reads.into_skipped();
         (!batch.pictures.is_empty() || !batch.skipped.is_empty()).then_some(batch)
     }
 
@@ -1111,7 +1108,7 @@ and ![gone](/.attachments/missing.png) and ![doc](/.attachments/spec.pdf) end ![
             .await
             .expect("batch");
         assert_eq!(batch.pictures.len(), 1, "one distinct readable picture");
-        assert_eq!(batch.pictures[0].bytes, b"PNGDATA");
+        assert_eq!(&batch.pictures[0].bytes[..], b"PNGDATA");
         assert_eq!(
             batch.skipped.get(UNSUPPORTED),
             Some(&2),
@@ -1163,7 +1160,7 @@ and ![gone](/.attachments/missing.png) and ![doc](/.attachments/spec.pdf) end ![
             .await
             .expect("batch");
         assert_eq!(batch.pictures.len(), 4, "{:?}", batch.skipped);
-        assert!(batch.pictures.iter().all(|p| p.bytes == b"PNGDATA"));
+        assert!(batch.pictures.iter().all(|p| &p.bytes[..] == b"PNGDATA"));
         assert_eq!(batch.skipped.get(UNSUPPORTED), Some(&1), "the txt, counted");
         // Each link is replaced as written, size suffix and all.
         assert_eq!(
@@ -1220,5 +1217,29 @@ and ![gone](/.attachments/missing.png) and ![doc](/.attachments/spec.pdf) end ![
         let batch = denied.pictures("Home.md", text).await.expect("counted");
         assert_eq!(batch.skipped.get(pictures::FORBIDDEN), Some(&1));
         assert_eq!(batch.skipped.get(pictures::FETCH_FAILED), None);
+    }
+
+    #[tokio::test]
+    async fn three_spellings_of_one_blob_are_one_download() {
+        let fixture = wiki_fixture();
+        let source = AdoWikiSource::new(
+            config(),
+            params(&json!({"process_images": true})),
+            allow(),
+            fixture.clone(),
+        )
+        .expect("source");
+        source.list().await.expect("listing");
+        let text = "![a](/.attachments/diagram.png) ![b](/.attachments/diagram.png =10x10) ![c](/.attachments/diagram.png?x=1#y) ![d](/.attachments/./diagram.png)";
+        let batch = source
+            .pictures("Home.md", text.as_bytes())
+            .await
+            .expect("batch");
+        let blob = format!("/blobs/{IMAGE}");
+        let reads = fixture.seen().iter().filter(|s| s.contains(&blob)).count();
+        assert_eq!(reads, 1, "one download");
+        assert_eq!(batch.pictures.len(), 3, "{:?}", batch.skipped);
+        let first = batch.pictures[0].bytes.as_ptr();
+        assert!(batch.pictures.iter().all(|p| p.bytes.as_ptr() == first));
     }
 }

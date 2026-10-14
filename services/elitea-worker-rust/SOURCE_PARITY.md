@@ -680,6 +680,20 @@ asks for a document's pictures (and waits for the model) only when the
 document has picture markup, and reports them as "Linked pictures not
 described" / "not requested", apart from "Embedded pictures".
 
+Review round 2 moved the shared work into `elitea_connectors::pictures`:
+`Reads` owns the distinct reads of a document (keyed by the connector's own
+source identity: Jira attachment id, wiki path after normalisation, boards
+`src`), downloads each once, holds it once as `Bytes` (occurrences clone the
+handle; the worker passes it on without a copy) and charges the count and
+size budget once. The worker describes per distinct (bytes, prompt), so Jira
+references with different context get their own description and the same
+bytes with the same prompt cost one call. Boards no longer keeps any side
+state: the body the picture pass needs travels in the fetched document's
+metadata under `pictures::CONTEXT_KEY` and the run removes it before anything
+is stored. Jira replaces markup by the spans it found, never by searching the
+text. A boards picture that was read but not described ends as one that was
+never read.
+
 Proving tests: the connector suites
 (pagination, dependents, selection, restricted pages, 401/403, 429 with
 `Retry-After`, the version pin) and `src/indexing/atlassian_tests.rs`
