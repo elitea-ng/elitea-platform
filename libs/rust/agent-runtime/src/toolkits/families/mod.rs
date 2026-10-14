@@ -41,6 +41,7 @@ pub(crate) mod jira;
 pub(crate) mod keycloak;
 pub(crate) mod kubernetes;
 // Public only to the worker's composition suites (`test-support`).
+pub(crate) mod integer_like;
 #[cfg(any(test, feature = "test-support"))]
 pub mod openapi;
 #[cfg(not(any(test, feature = "test-support")))]

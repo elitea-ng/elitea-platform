@@ -17,6 +17,7 @@ use crate::transport::header::{ACCEPT, AUTHORIZATION};
 use crate::transport::{HeaderValue, Method, Request, Url};
 
 const OBJECTS_ROUTE: [&str; 4] = ["api", "v2", "artifacts", "objects"];
+const BUCKETS_ROUTE: [&str; 4] = ["api", "v2", "artifacts", "buckets"];
 const MAX_BEARER_BYTES: usize = 16 * 1_024;
 const MAX_NAME_BYTES: usize = 1_024;
 
@@ -116,6 +117,19 @@ impl ArtifactPlatform {
             if let Some(key) = key {
                 segments.extend(key.split('/'));
             }
+        }
+        url
+    }
+
+    /// `{base}/api/v2/artifacts/buckets/{project}`: the project's bucket
+    /// collection (`POST` creates one).
+    #[must_use]
+    pub fn buckets_url(&self) -> Url {
+        let mut url = self.base.clone();
+        if let Ok(mut segments) = url.path_segments_mut() {
+            segments.pop_if_empty();
+            segments.extend(BUCKETS_ROUTE);
+            segments.push(&self.project_id);
         }
         url
     }

@@ -39,8 +39,10 @@ func TestWorkerToolkitCapabilityWithRustIndexTools(t *testing.T) {
 	if ok, _ := widened.SupportsTool("github", "read_file"); !ok {
 		t.Error("github/read_file must stay served")
 	}
-	if ok, _ := widened.SupportsTool("github", "create_pull_request"); ok {
-		t.Error("github/create_pull_request must stay refused")
+	// A tool the family does not serve (PyGithub's method dispatcher) stays
+	// refused; the widening is the five index tools and nothing else.
+	if ok, _ := widened.SupportsTool("github", "generic_github_api_call"); ok {
+		t.Error("github/generic_github_api_call must stay refused")
 	}
 	if ok, _ := pinned.SupportsTool("github", "search_index"); ok {
 		t.Error("WithRustIndexTools must not mutate the pinned capability")
