@@ -66,9 +66,20 @@ type PrebuiltSecretStore interface {
 // `configurations.WithSecretSealer` states for project configuration secrets.
 func WithPrebuiltMCPCatalogue(store *mcpregistry.PrebuiltStore, vault PrebuiltSecretStore) Option {
 	return func(h *Handler) {
-		h.prebuiltMCP = store
+		if store != nil {
+			h.prebuiltMCP = store
+		}
 		h.prebuiltMCPVault = vault
 	}
+}
+
+// prebuiltCatalogue is the part of the catalogue store the admin routes use; an
+// interface so a test can stand in for the database.
+type prebuiltCatalogue interface {
+	List(ctx context.Context) ([]mcpregistry.PrebuiltServer, error)
+	Lookup(ctx context.Context, nameOrType string) (mcpregistry.PrebuiltServer, error)
+	Upsert(ctx context.Context, entry mcpregistry.PrebuiltServer) (mcpregistry.PrebuiltServer, error)
+	Delete(ctx context.Context, nameOrType string) (string, error)
 }
 
 // prebuiltSecretFeature namespaces the vault names this surface derives, so a
@@ -94,7 +105,9 @@ type prebuiltServerBody struct {
 	ClientID    string `json:"client_id"`
 	// TokenURL pins the OAuth token endpoint the entry's client secret may be
 	// sent to; see migration 0165. Operators must set it for a URL template.
-	TokenURL     string            `json:"token_url"`
+	// Tri-state like ClientSecret: absent keeps the pin, "" clears it, a value
+	// sets it. A client that does not know the field must not wipe the pin.
+	TokenURL     *string           `json:"token_url"`
 	ClientSecret *string           `json:"client_secret"`
 	Timeout      int               `json:"timeout"`
 	Headers      map[string]string `json:"headers"`
@@ -106,17 +119,21 @@ type prebuiltServerBody struct {
 // prebuiltServerView is the wire shape a read returns. It never carries a
 // plaintext secret.
 type prebuiltServerView struct {
-	Key          string            `json:"key"`
-	DisplayName  string            `json:"display_name"`
-	URL          string            `json:"url"`
-	BaseURL      string            `json:"base_url"`
-	ClientID     string            `json:"client_id"`
-	TokenURL     string            `json:"token_url"`
-	ClientSecret string            `json:"client_secret,omitempty"`
-	Timeout      int               `json:"timeout"`
-	Headers      map[string]string `json:"headers"`
-	ConfigSchema map[string]any    `json:"config_schema"`
-	Enabled      bool              `json:"enabled"`
+	Key         string `json:"key"`
+	DisplayName string `json:"display_name"`
+	URL         string `json:"url"`
+	BaseURL     string `json:"base_url"`
+	ClientID    string `json:"client_id"`
+	TokenURL    string `json:"token_url"`
+	// TokenURLRequired marks an entry whose client secret sits behind a URL
+	// template with no pinned token endpoint: the secret cannot be used until an
+	// operator pins one.
+	TokenURLRequired bool              `json:"token_url_required,omitempty"`
+	ClientSecret     string            `json:"client_secret,omitempty"`
+	Timeout          int               `json:"timeout"`
+	Headers          map[string]string `json:"headers"`
+	ConfigSchema     map[string]any    `json:"config_schema"`
+	Enabled          bool              `json:"enabled"`
 }
 
 func prebuiltView(entry mcpregistry.PrebuiltServer) prebuiltServerView {
@@ -125,16 +142,17 @@ func prebuiltView(entry mcpregistry.PrebuiltServer) prebuiltServerView {
 		headers = map[string]string{}
 	}
 	view := prebuiltServerView{
-		Key:          entry.Key,
-		DisplayName:  entry.DisplayName,
-		URL:          entry.ServerURL,
-		BaseURL:      entry.BaseURL,
-		ClientID:     entry.ClientID,
-		TokenURL:     entry.TokenURL,
-		Timeout:      entry.TimeoutSeconds,
-		Headers:      headers,
-		ConfigSchema: entry.ConfigSchema,
-		Enabled:      entry.Enabled,
+		Key:              entry.Key,
+		DisplayName:      entry.DisplayName,
+		URL:              entry.ServerURL,
+		BaseURL:          entry.BaseURL,
+		ClientID:         entry.ClientID,
+		TokenURL:         entry.TokenURL,
+		TokenURLRequired: entry.TokenURLRequired(),
+		Timeout:          entry.TimeoutSeconds,
+		Headers:          headers,
+		ConfigSchema:     entry.ConfigSchema,
+		Enabled:          entry.Enabled,
 	}
 	if view.ConfigSchema == nil {
 		view.ConfigSchema = map[string]any{"properties": map[string]any{}}
@@ -243,27 +261,47 @@ func (h *Handler) PrebuiltMCPSave(w http.ResponseWriter, r *http.Request) {
 	if configSchema == nil {
 		configSchema = existing.ConfigSchema
 	}
+	tokenURL := existing.TokenURL
+	if body.TokenURL != nil {
+		tokenURL = *body.TokenURL
+	}
 	candidate := mcpregistry.PrebuiltServer{
 		Key:            key,
 		DisplayName:    display,
 		ServerURL:      body.URL,
 		BaseURL:        body.BaseURL,
 		ClientID:       body.ClientID,
-		TokenURL:       body.TokenURL,
+		TokenURL:       tokenURL,
 		TimeoutSeconds: body.Timeout,
 		Headers:        body.Headers,
 		ConfigSchema:   configSchema,
 		Enabled:        true,
 	}
-	if err := mcpregistry.ValidatePrebuiltTokenURL(body.TokenURL); err != nil {
+	if err := mcpregistry.ValidatePrebuiltServer(candidate); err != nil {
+		if errors.Is(err, mcpregistry.ErrInvalidPrebuiltTokenURL) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": "token_url must be an exact https URL with no placeholders",
+			})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": "token_url must be an exact https URL with no placeholders",
+			"error": "the pre-built MCP parameter schema or template is invalid",
 		})
 		return
 	}
-	if err := mcpregistry.ValidatePrebuiltServer(candidate); err != nil {
+
+	// A client secret behind a URL template can only be released to a pinned
+	// token endpoint (the user's own values choose the host, so nothing else is
+	// safe). Refuse the save rather than store a secret that can never be used,
+	// and before anything is sealed in the vault.
+	willHaveSecret := existing.ClientSecretRef != ""
+	if body.ClientSecret != nil {
+		willHaveSecret = *body.ClientSecret != ""
+	}
+	if willHaveSecret && strings.ContainsAny(body.URL, "{}") && strings.TrimSpace(tokenURL) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": "the pre-built MCP parameter schema or template is invalid",
+			"error": "a server URL with placeholders and a client secret needs a token_url: " +
+				"pin the OAuth token endpoint the secret may be sent to",
 		})
 		return
 	}
@@ -304,7 +342,7 @@ func (h *Handler) PrebuiltMCPSave(w http.ResponseWriter, r *http.Request) {
 		ServerURL:       body.URL,
 		BaseURL:         body.BaseURL,
 		ClientID:        body.ClientID,
-		TokenURL:        body.TokenURL,
+		TokenURL:        tokenURL,
 		ClientSecretRef: secretRef,
 		TimeoutSeconds:  body.Timeout,
 		Headers:         body.Headers,

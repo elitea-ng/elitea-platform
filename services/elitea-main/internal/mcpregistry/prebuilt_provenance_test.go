@@ -46,3 +46,65 @@ func TestPinnedTokenURLMustBeAnExactHTTPSAddress(t *testing.T) {
 		require.Error(t, ValidatePrebuiltTokenURL(bad), bad)
 	}
 }
+
+type fakeRows struct {
+	rows    []func(dest ...any) error
+	current int
+	err     error
+}
+
+func (f *fakeRows) Next() bool { f.current++; return f.current <= len(f.rows) }
+func (f *fakeRows) Err() error { return f.err }
+func (f *fakeRows) Scan(dest ...any) error {
+	return f.rows[f.current-1](dest...)
+}
+
+func goodRow(key, serverURL string) func(dest ...any) error {
+	return func(dest ...any) error {
+		*(dest[0].(*string)) = key
+		*(dest[1].(*string)) = key
+		*(dest[2].(*string)) = serverURL
+		*(dest[9].(*bool)) = true
+		return nil
+	}
+}
+
+func TestOneBadCatalogueRowDoesNotTakeDownTheRest(t *testing.T) {
+	badSchema := func(dest ...any) error {
+		*(dest[0].(*string)) = "broken"
+		*(dest[8].(*[]byte)) = []byte("{not json")
+		return nil
+	}
+	badPin := func(dest ...any) error {
+		*(dest[0].(*string)) = "badpin"
+		*(dest[10].(*string)) = "https://{x}.example/token"
+		return nil
+	}
+	rows := &fakeRows{rows: []func(dest ...any) error{
+		goodRow("first", "https://a.example/mcp"), badSchema, badPin, goodRow("last", "https://b.example/mcp"),
+	}}
+	entries, err := readPrebuiltRows(rows)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	require.Equal(t, "first", entries[0].Key)
+	require.Equal(t, "last", entries[1].Key)
+
+	// A failure of the result set itself is still an error.
+	_, err = readPrebuiltRows(&fakeRows{err: ErrNoPool})
+	require.ErrorIs(t, err, ErrNoPool)
+}
+
+func TestTokenURLUsesTheSharedEndpointRules(t *testing.T) {
+	require.NoError(t, ValidatePrebuiltTokenURL("http://localhost:9000/token"), "loopback http is allowed")
+	require.NoError(t, ValidatePrebuiltTokenURL("http://127.0.0.1/token"))
+	for _, bad := range []string{"https://idp.example/a/../token", "https://idp.example/./token", "http://idp.example/token"} {
+		require.ErrorIs(t, ValidatePrebuiltTokenURL(bad), ErrInvalidPrebuiltTokenURL, bad)
+	}
+}
+
+func TestTokenURLRequiredMarksTemplatedSecretsWithoutAPin(t *testing.T) {
+	require.True(t, PrebuiltServer{ClientSecretRef: "r", ServerURL: "https://{w}.example/mcp"}.TokenURLRequired())
+	require.False(t, PrebuiltServer{ClientSecretRef: "r", ServerURL: "https://{w}.example/mcp", TokenURL: "https://i.example/t"}.TokenURLRequired())
+	require.False(t, PrebuiltServer{ServerURL: "https://{w}.example/mcp"}.TokenURLRequired(), "no secret, nothing to release")
+	require.False(t, PrebuiltServer{ClientSecretRef: "r", ServerURL: "https://a.example/mcp"}.TokenURLRequired())
+}

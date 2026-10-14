@@ -83,17 +83,23 @@ func ValidatePrebuiltServer(entry PrebuiltServer) error {
 	return ValidatePrebuiltTokenURL(entry.TokenURL)
 }
 
-// ValidatePrebuiltTokenURL accepts an empty pin or one absolute https URL with
-// no credentials, fragment or placeholder: the pin is an exact address.
+// ErrInvalidPrebuiltTokenURL marks a token_url the catalogue refuses.
+var ErrInvalidPrebuiltTokenURL = errors.New("mcpregistry: token_url must be an exact https URL with no placeholders")
+
+// ValidatePrebuiltTokenURL accepts an empty pin or one exact endpoint under the
+// same rules every MCP authorization destination follows (ValidateEndpointURL:
+// https, or http to loopback; no credentials, fragment or dot segment), plus no
+// placeholder: a pin is an address, not a template.
 func ValidatePrebuiltTokenURL(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
 	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil ||
-		parsed.Fragment != "" || len(raw) > 4096 || strings.ContainsAny(raw, "{}\\\x00\r\n \t") {
-		return invalidPrebuiltParameter("token_url must be an exact https URL")
+	if len(raw) > 4096 || strings.ContainsAny(raw, "{}#\\\x00\r\n \t") {
+		return ErrInvalidPrebuiltTokenURL
+	}
+	if _, err := ValidateEndpointURL(raw); err != nil {
+		return ErrInvalidPrebuiltTokenURL
 	}
 	return nil
 }

@@ -236,3 +236,115 @@ func TestPrebuiltSecretNamesAreDistinctPerKey(t *testing.T) {
 			"keys %q and %q must not share a vault name", pair[0], pair[1])
 	}
 }
+
+// fakeCatalogue is an in-memory catalogue: Upsert stores what it is given, so a
+// test can read back what a save actually wrote.
+type fakeCatalogue struct {
+	entries map[string]mcpregistry.PrebuiltServer
+}
+
+func (f *fakeCatalogue) List(context.Context) ([]mcpregistry.PrebuiltServer, error) {
+	out := make([]mcpregistry.PrebuiltServer, 0, len(f.entries))
+	for _, entry := range f.entries {
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+func (f *fakeCatalogue) Lookup(_ context.Context, key string) (mcpregistry.PrebuiltServer, error) {
+	entry, ok := f.entries[mcpregistry.NormalizeCatalogueKey(key)]
+	if !ok {
+		return mcpregistry.PrebuiltServer{}, mcpregistry.ErrPrebuiltNotFound
+	}
+	return entry, nil
+}
+
+func (f *fakeCatalogue) Upsert(_ context.Context, entry mcpregistry.PrebuiltServer) (mcpregistry.PrebuiltServer, error) {
+	f.entries[entry.Key] = entry
+	return entry, nil
+}
+
+func (f *fakeCatalogue) Delete(context.Context, string) (string, error) { return "", nil }
+
+func fakeHandler(catalogue *fakeCatalogue, vault *recordingVault) *Handler {
+	handler := NewHandler(nil)
+	handler.prebuiltMCP = catalogue
+	handler.prebuiltMCPVault = vault
+	return handler
+}
+
+func TestPrebuiltMCPSaveTreatsAnAbsentTokenURLAsKeepAndEmptyAsClear(t *testing.T) {
+	catalogue := &fakeCatalogue{entries: map[string]mcpregistry.PrebuiltServer{
+		"ado": {Key: "ado", DisplayName: "ADO", ServerURL: "https://a.example/mcp", TokenURL: "https://idp.example/token"},
+	}}
+	handler := fakeHandler(catalogue, newRecordingVault())
+
+	// A client that does not know the field (or an old form) must not wipe the pin.
+	recorder := httptest.NewRecorder()
+	handler.PrebuiltMCPSave(recorder, request(http.MethodPut, "ado", `{"display_name":"ADO","url":"https://a.example/mcp"}`))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "https://idp.example/token", catalogue.entries["ado"].TokenURL)
+
+	recorder = httptest.NewRecorder()
+	handler.PrebuiltMCPSave(recorder, request(http.MethodPut, "ado",
+		`{"display_name":"ADO","url":"https://a.example/mcp","token_url":"https://idp2.example/token"}`))
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "https://idp2.example/token", catalogue.entries["ado"].TokenURL)
+
+	recorder = httptest.NewRecorder()
+	handler.PrebuiltMCPSave(recorder, request(http.MethodPut, "ado", `{"display_name":"ADO","url":"https://a.example/mcp","token_url":""}`))
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Empty(t, catalogue.entries["ado"].TokenURL)
+}
+
+func TestPrebuiltMCPSaveValidatesTokenURLWithTheSharedRules(t *testing.T) {
+	catalogue := &fakeCatalogue{entries: map[string]mcpregistry.PrebuiltServer{}}
+	handler := fakeHandler(catalogue, newRecordingVault())
+	for _, bad := range []string{"https://idp.example/a/../token", "http://idp.example/token", "https://{x}.example/t"} {
+		recorder := httptest.NewRecorder()
+		handler.PrebuiltMCPSave(recorder, request(http.MethodPut, "x", `{"display_name":"X","token_url":"`+bad+`"}`))
+		require.Equal(t, http.StatusBadRequest, recorder.Code, bad)
+		require.Contains(t, recorder.Body.String(), "token_url")
+	}
+	recorder := httptest.NewRecorder()
+	handler.PrebuiltMCPSave(recorder, request(http.MethodPut, "x", `{"display_name":"X","token_url":"http://localhost:9/token"}`))
+	require.Equal(t, http.StatusOK, recorder.Code, "loopback http is allowed")
+}
+
+func TestPrebuiltMCPSaveRefusesATemplateWithASecretAndNoPinBeforeSealing(t *testing.T) {
+	catalogue := &fakeCatalogue{entries: map[string]mcpregistry.PrebuiltServer{}}
+	vault := newRecordingVault()
+	handler := fakeHandler(catalogue, vault)
+	schema := `"config_schema":{"properties":{"org":{"type":"string","required":true}}}`
+
+	recorder := httptest.NewRecorder()
+	handler.PrebuiltMCPSave(recorder, request(http.MethodPut, "ado",
+		`{"display_name":"ADO","url":"https://x.example.test/{org}/mcp","client_secret":"s3cret",`+schema+`}`))
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "token_url")
+	require.Empty(t, vault.stored, "nothing is sealed for a refused save")
+
+	recorder = httptest.NewRecorder()
+	handler.PrebuiltMCPSave(recorder, request(http.MethodPut, "ado",
+		`{"display_name":"ADO","url":"https://x.example.test/{org}/mcp","client_secret":"s3cret",`+
+			`"token_url":"https://idp.example/token",`+schema+`}`))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	// A template with no secret is fine without a pin.
+	recorder = httptest.NewRecorder()
+	handler.PrebuiltMCPSave(recorder, request(http.MethodPut, "plain",
+		`{"display_name":"Plain","url":"https://x.example.test/{org}/mcp",`+schema+`}`))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+}
+
+func TestPrebuiltViewMarksLegacyTemplateRowsAsNeedingATokenURL(t *testing.T) {
+	legacy := prebuiltView(mcpregistry.PrebuiltServer{Key: "old", ServerURL: "https://{w}.example/mcp", ClientSecretRef: "ref"})
+	require.True(t, legacy.TokenURLRequired)
+	encoded, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"token_url_required":true`)
+
+	pinned := prebuiltView(mcpregistry.PrebuiltServer{Key: "ok", ServerURL: "https://{w}.example/mcp", ClientSecretRef: "ref", TokenURL: "https://i.example/t"})
+	require.False(t, pinned.TokenURLRequired)
+	require.Equal(t, "https://i.example/t", pinned.TokenURL)
+}

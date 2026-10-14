@@ -81,6 +81,7 @@ type idp struct {
 	token    url.Values
 	delay    time.Duration
 	slowHost string
+	slowPath string
 }
 
 func (p *idp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +91,9 @@ func (p *idp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.mu.Unlock()
 	if p.delay > 0 {
 		time.Sleep(p.delay)
+	}
+	if p.slowPath != "" && r.URL.Path == p.slowPath {
+		time.Sleep(600 * time.Millisecond)
 	}
 	if p.slowHost != "" && r.Host == p.slowHost {
 		time.Sleep(600 * time.Millisecond)
@@ -299,18 +303,31 @@ func TestDiscoveryFetchesTimeOutIndividually(t *testing.T) {
 	require.Less(t, time.Since(started), 3*time.Second)
 }
 
-func TestExchangeSharesTheOverallBudgetWithDiscovery(t *testing.T) {
+func TestDiscoveryCannotConsumeTheExchangeWindow(t *testing.T) {
 	f := newBindingFixture(t, "mcp",
 		map[string]any{"url": "https://own.example/mcp", "client_secret": "own-secret"}, nil)
-	f.handler.mcpProxyBudget = 500 * time.Millisecond
+	// Discovery (two fetches) takes ~300ms of a 400ms window; the exchange then
+	// takes ~150ms of its OWN 400ms window. Under one shared 400ms budget the
+	// whole call (~450ms) could not finish.
+	f.handler.mcpDiscoveryBudget = 400 * time.Millisecond
+	f.handler.mcpExchangeBudget = 400 * time.Millisecond
+	f.provider.delay = 150 * time.Millisecond
+	recorder := f.exchange(t, exchangeBody("https://own.example/token", ""))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "own-secret", f.provider.token.Get("client_secret"))
+}
+
+func TestDiscoveryIsBoundedByItsOwnShare(t *testing.T) {
+	f := newBindingFixture(t, "mcp",
+		map[string]any{"url": "https://own.example/mcp", "client_secret": "own-secret"}, nil)
+	f.handler.mcpDiscoveryBudget = 250 * time.Millisecond
+	f.handler.mcpExchangeBudget = 5 * time.Second
 	f.provider.delay = 200 * time.Millisecond
-	// Two discovery fetches fit in the budget; the exchange then gets only the
-	// remainder, not a fresh allowance, and cannot finish.
 	started := time.Now()
 	recorder := f.exchange(t, exchangeBody("https://own.example/token", ""))
-	require.NotEqual(t, http.StatusOK, recorder.Code)
+	require.Equal(t, http.StatusGatewayTimeout, recorder.Code, recorder.Body.String())
 	require.Less(t, time.Since(started), 2*time.Second)
-	require.Empty(t, f.provider.token.Get("client_secret"))
+	require.Empty(t, f.provider.token)
 }
 
 func TestAuthorizationServerListIsCapped(t *testing.T) {
@@ -367,23 +384,114 @@ func TestSyncAndBindingRejectTheSameBadDiscoveryDocuments(t *testing.T) {
 	}
 }
 
-func TestAdvertisedMetadataURLIsHonouredOnlyWhenSameOriginAndFallsBackWhenItFails(t *testing.T) {
+// A hint never steers a released secret. On a multi-tenant origin another
+// tenant's path can publish metadata that names the requested resource and an
+// attacker's token endpoint; with a secret in play the hint is not even fetched.
+func TestAHintNeverSteersAReleasedSecret(t *testing.T) {
+	for name, hint := range map[string]string{
+		"same-origin other tenant": "https://saas.example/tenantB/md",
+		"cross-origin":             "https://evil.example/md",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newBindingFixture(t, "mcp",
+				map[string]any{"url": "https://saas.example/tenantA/mcp", "client_secret": "own-secret"}, nil)
+			f.provider.metadata = func(host, path string) (int, string) {
+				switch path {
+				case "/tenantB/md":
+					return 200, `{"resource":"https://saas.example/tenantA/mcp","authorization_servers":["https://evil.example"]}`
+				case "/.well-known/oauth-protected-resource/tenantA/mcp":
+					return 200, `{"resource":"https://saas.example/tenantA/mcp","authorization_servers":["https://saas.example"]}`
+				case "/.well-known/oauth-authorization-server":
+					if host == "evil.example" {
+						return 200, `{"issuer":"https://evil.example","authorization_endpoint":"https://evil.example/a","token_endpoint":"https://evil.example/token"}`
+					}
+					return 200, `{"issuer":"https://saas.example","authorization_endpoint":"https://saas.example/a","token_endpoint":"https://saas.example/token"}`
+				}
+				return 404, `{}`
+			}
+			recorder := f.exchange(t, exchangeBody("https://evil.example/token", `,"resource_metadata_url":"`+hint+`"`))
+			require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+			f.attackerContacted(t)
+			f.provider.mu.Lock()
+			require.NotContains(t, f.provider.paths, "/tenantB/md")
+			f.provider.mu.Unlock()
+
+			// ...and the real endpoint still binds, from the well-known paths.
+			recorder = f.exchange(t, exchangeBody("https://saas.example/token", `,"resource_metadata_url":"`+hint+`"`))
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		})
+	}
+}
+
+// Hints stay usable for a public client (no secret is at stake), and fall back
+// to the well-known locations when they fail or do not name the endpoint asked
+// about.
+func TestAPublicClientsHintFallsBackToWellKnown(t *testing.T) {
+	f := newBindingFixture(t, "mcp", map[string]any{"url": "https://own.example/mcp"}, nil)
+	endpoint, err := url.Parse("https://own.example/token")
+	require.NoError(t, err)
+	bind := func(hint string) bindingOutcome {
+		return f.handler.mcpDiscoveryBindsTokenEndpoint(context.Background(), mcpBindingRequest{
+			projectID: 7, toolkitID: 19, startURL: "https://own.example/mcp", tokenEndpoint: endpoint, advertised: hint,
+		})
+	}
+
+	// A hint that fails.
+	require.Equal(t, bindingBound, bind("https://own.example/missing-md"))
+
+	// A hint that succeeds but advertises a different endpoint.
+	f2 := newBindingFixture(t, "mcp", map[string]any{"url": "https://own.example/mcp"}, nil)
+	f2.provider.metadata = func(host, path string) (int, string) {
+		if path == "/other-md" {
+			return 200, `{"resource":"https://` + host + `/mcp","authorization_servers":["https://decoy.example"]}`
+		}
+		if host == "decoy.example" && path == "/.well-known/oauth-authorization-server" {
+			return 200, `{"issuer":"https://decoy.example","authorization_endpoint":"https://decoy.example/a","token_endpoint":"https://decoy.example/token"}`
+		}
+		return goodMetadata(host, path)
+	}
+	f = f2
+	require.Equal(t, bindingBound, bind("https://own.example/other-md"))
+	f.provider.mu.Lock()
+	require.Contains(t, f.provider.paths, "/other-md", "the public client's hint was tried first")
+	f.provider.mu.Unlock()
+}
+
+func TestATimeoutOnThePathSpecificDocumentStillTriesTheRootDocument(t *testing.T) {
 	f := newBindingFixture(t, "mcp",
 		map[string]any{"url": "https://own.example/mcp", "client_secret": "own-secret"}, nil)
-	recorder := f.exchange(t, exchangeBody("https://own.example/token",
-		`,"resource_metadata_url":"https://evil.example/md"`))
-	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.False(t, f.provider.sawHost("evil.example"), "a cross-origin hint is ignored")
-
-	// A same-origin hint that does not work falls back to the well-known paths.
-	f = newBindingFixture(t, "mcp",
-		map[string]any{"url": "https://own.example/mcp", "client_secret": "own-secret"}, nil)
-	recorder = f.exchange(t, exchangeBody("https://own.example/token",
-		`,"resource_metadata_url":"https://own.example/custom-md"`))
+	f.provider.slowPath = "/.well-known/oauth-protected-resource/mcp"
+	f.handler.mcpDiscoveryFetchTimeout = 100 * time.Millisecond
+	recorder := f.exchange(t, exchangeBody("https://own.example/token", ""))
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	f.provider.mu.Lock()
 	defer f.provider.mu.Unlock()
-	require.Contains(t, f.provider.paths, "/custom-md", "the hint was tried first")
+	require.Contains(t, f.provider.paths, "/.well-known/oauth-protected-resource", "the root document was tried")
+}
+
+func TestUnpinnedCatalogueRefusalTellsTheUserWhatToDo(t *testing.T) {
+	f := newBindingFixture(t, "mcp_github", map[string]any{"url": "https://x.example/acme/mcp"},
+		catalogueEntry("https://x.example/{workspace}/mcp"))
+	recorder := f.exchange(t, exchangeBody("https://x.example/token", ""))
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "catalogue_token_endpoint_not_pinned")
+	require.Contains(t, recorder.Body.String(), "operator must pin")
+}
+
+func TestCatalogueAndOwnBindingsDoNotEvictEachOther(t *testing.T) {
+	f := newBindingFixture(t, "mcp_github", map[string]any{"url": ""}, catalogueEntry("https://good.example/mcp"))
+	f.handler.mcpBindings.capacity = 1
+	require.Equal(t, http.StatusOK, f.exchange(t, exchangeBody("https://good.example/token", "")).Code)
+
+	// Churn the own-secret cache far past its capacity.
+	now := time.Now()
+	for toolkit := int32(100); toolkit < 110; toolkit++ {
+		f.handler.mcpBindings.store(mcpBindingKey{projectID: 7, toolkitID: toolkit, startURL: "https://t.example/mcp"},
+			[]string{"https://i.example/token"}, now)
+	}
+	// The catalogue binding survived: a metadata outage still releases.
+	f.provider.metadata = func(string, string) (int, string) { return 503, `{}` }
+	require.Equal(t, http.StatusOK, f.exchange(t, exchangeBody("https://good.example/token", "")).Code)
 }
 
 func twoServerMetadata(first, second string) func(host, path string) (int, string) {

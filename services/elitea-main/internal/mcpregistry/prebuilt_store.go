@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -52,9 +53,32 @@ func (s *PrebuiltStore) List(ctx context.Context) ([]PrebuiltServer, error) {
 	}
 	defer rows.Close()
 
+	return readPrebuiltRows(rows)
+}
+
+// prebuiltRows is the part of a result set List reads.
+type prebuiltRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
+// errInvalidCatalogueRow marks a row that was read but cannot be used: its
+// stored JSON does not decode or it fails the entry's own validation.
+var errInvalidCatalogueRow = errors.New("mcpregistry: invalid catalogue row")
+
+// readPrebuiltRows collects every usable row. One bad row must not take the
+// whole catalogue (and every toolkit form that lists it) down: it is logged by
+// key and skipped, and the rest are returned. A failure to read the result set
+// itself is still an error.
+func readPrebuiltRows(rows prebuiltRows) ([]PrebuiltServer, error) {
 	entries := make([]PrebuiltServer, 0)
 	for rows.Next() {
 		entry, err := scanPrebuilt(rows)
+		if errors.Is(err, errInvalidCatalogueRow) {
+			slog.Error("mcp prebuilt catalogue: skipping an invalid row", "err", err)
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -296,7 +320,7 @@ func scanPrebuilt(row scanRow) (PrebuiltServer, error) {
 	if len(encodedHeaders) > 0 {
 		if err := json.Unmarshal(encodedHeaders, &entry.Headers); err != nil {
 			return PrebuiltServer{}, fmt.Errorf(
-				"mcpregistry: catalogue entry %q has undecodable headers: %w", entry.Key, err)
+				"%w: catalogue entry %q has undecodable headers: %w", errInvalidCatalogueRow, entry.Key, err)
 		}
 	}
 	if len(encodedSchema) > 0 {
@@ -304,11 +328,11 @@ func scanPrebuilt(row scanRow) (PrebuiltServer, error) {
 		decoder.UseNumber()
 		if err := decoder.Decode(&entry.ConfigSchema); err != nil {
 			return PrebuiltServer{}, fmt.Errorf(
-				"mcpregistry: catalogue entry %q has undecodable config schema: %w", entry.Key, err)
+				"%w: catalogue entry %q has undecodable config schema: %w", errInvalidCatalogueRow, entry.Key, err)
 		}
 	}
 	if err := ValidatePrebuiltServer(entry); err != nil {
-		return PrebuiltServer{}, err
+		return PrebuiltServer{}, fmt.Errorf("%w: catalogue entry %q: %w", errInvalidCatalogueRow, entry.Key, err)
 	}
 	return entry, nil
 }

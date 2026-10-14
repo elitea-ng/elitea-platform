@@ -176,10 +176,17 @@ func (s mcpMetadataSource) protected(ctx context.Context, endpoint *url.URL, adv
 		base := endpoint.Scheme + "://" + endpoint.Host
 		candidates = []string{base + "/.well-known/oauth-protected-resource" + endpoint.EscapedPath(), base + "/.well-known/oauth-protected-resource"}
 	}
+	timedOut := false
 	for _, candidate := range candidates {
 		metadata, err := s.read(ctx, candidate)
 		if errors.Is(err, errMCPDiscoveryTimeout) {
-			return nil, "", err
+			// The path-specific document being slow does not excuse skipping
+			// the root one; both are tried while the budget lasts.
+			timedOut = true
+			if ctx.Err() != nil {
+				break
+			}
+			continue
 		}
 		if err != nil {
 			continue
@@ -189,6 +196,9 @@ func (s mcpMetadataSource) protected(ctx context.Context, endpoint *url.URL, adv
 			return nil, "", errMCPDiscoveryMetadata
 		}
 		return metadata, candidate, nil
+	}
+	if timedOut {
+		return nil, "", errMCPDiscoveryTimeout
 	}
 	return nil, "", errMCPDiscoveryMetadata
 }
@@ -203,10 +213,15 @@ func (s mcpMetadataSource) authorizationServer(ctx context.Context, rawIssuer st
 	base := issuer.Scheme + "://" + issuer.Host
 	path := strings.TrimRight(issuer.EscapedPath(), "/")
 	candidates := []string{base + "/.well-known/oauth-authorization-server" + path, base + path + "/.well-known/openid-configuration"}
+	timedOut := false
 	for _, candidate := range candidates {
 		metadata, err := s.read(ctx, candidate)
 		if errors.Is(err, errMCPDiscoveryTimeout) {
-			return nil, err
+			timedOut = true
+			if ctx.Err() != nil {
+				break
+			}
+			continue
 		}
 		if err != nil {
 			continue
@@ -240,6 +255,9 @@ func (s mcpMetadataSource) authorizationServer(ctx context.Context, rawIssuer st
 			}
 		}
 		return projected, nil
+	}
+	if timedOut {
+		return nil, errMCPDiscoveryTimeout
 	}
 	return nil, errMCPDiscoveryMetadata
 }
