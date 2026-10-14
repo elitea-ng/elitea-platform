@@ -136,9 +136,8 @@ func TestCapabilityVerdicts(t *testing.T) {
 
 	// No pinned catalogue type is Python-only today, so the Python-only row
 	// is exercised on the verdict table with a type the Rust worker genuinely
-	// does not dispatch (imagegen): it must still read as supported, by Python.
-	require.False(t, rustNativeTypes()["imagegen"], "imagegen must stay unsupported on Rust for this case")
-	pythonOnly := capabilityVerdict("imagegen", true, rustNativeTypes()["imagegen"])
+	// does not dispatch: it must still read as supported, by Python.
+	pythonOnly := capabilityVerdict("python_only_demo", true, false)
 	require.True(t, pythonOnly.Python)
 	require.False(t, pythonOnly.Rust)
 	require.Equal(t, VerdictSupported, pythonOnly.Verdict)
@@ -155,7 +154,12 @@ func TestCapabilityVerdicts(t *testing.T) {
 	require.True(t, rustOnly.Rust)
 	require.Equal(t, VerdictSupported, rustOnly.Verdict)
 
-	neither := source.ToolkitCapability("imagegen")
+	// imagegen (#864) is carried by the Rust worker's native family.
+	imagegen := source.ToolkitCapability("imagegen")
+	require.True(t, imagegen.Rust)
+	require.Equal(t, VerdictSupported, imagegen.Verdict)
+
+	neither := source.ToolkitCapability("unlisted_demo")
 	require.False(t, neither.Python)
 	require.False(t, neither.Rust)
 	require.Equal(t, VerdictUnverified, neither.Verdict)

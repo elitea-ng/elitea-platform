@@ -2568,34 +2568,31 @@ already exists. A port is a host change first: lend a bound model (for
 example a `ToolModelAuthority` beside `ArtifactToolAuthority` through
 `materialize_configured_toolsets_with_artifact_authority`), then the family.
 
-#### `imagegen` (blocked)
+#### `imagegen` (ported)
 
 `imagegen` (#864, pinned SDK patch `afff2349`) has `generate_image(prompt,
 size?, n?)` and `edit_image(image, prompt, mask?)`. Both POST to the
 gateway's OpenAI-compatible images API (`/llm/v1/images/generations` as
 JSON, `/llm/v1/images/edits` as multipart) with the TOOLKIT's own
-`image_generation_model`, decode `b64_json` (or fetch `url`) results, and
-save each image as `{name_prefix}{generate|edit}-{i}.png` in the toolkit's
-`bucket`, answering `{"artifacts": [{"filepath", "filename"}]}`.
+`image_generation_model`, decode `b64_json` results, and save each image as
+`{name_prefix}{generate|edit}-{i}.png` in the toolkit's `bucket`, answering
+`{"artifacts": [{"filepath", "filename"}]}`.
 
-Blocked on the model half only:
+The Rust family keeps all of that. Its two missing halves came from the Office
+host (ADR-0032): the family reads and writes objects through
+`OfficeToolHost` (the platform object API under the turn's credential), and
+the host gained `generate_images` / `edit_images`, which the worker serves
+through `ImagesClient` (`transport/images_facade.rs`) on the model facade's
+mTLS channel: the claim PAT, the project selector and the execution id, so the
+gateway's budget gate and request log apply as for a chat call. `llm-wire`
+gained the two image routes. No new internal REST; both are existing `/llm`
+edge routes.
 
-1. `libs/rust/llm-wire/src/route.rs` declares the chat, embeddings and
-   messages routes; there is no images route or response type.
-2. The worker reaches the gateway only through `transport::model_facade`,
-   which consumes one claim-scoped credential into ONE bound chat model
-   (`ModelGatewayClient`, mTLS, origin-bound). Nothing exposes a second,
-   non-chat call on that channel, and `host::ModelTransport::bind` returns
-   an ADK `Llm`, not an images client.
-3. `materialize.rs` lends families only the artifact authority; an image
-   family needs an image-generation authority lent the same way (and Main
-   must freeze `image_generation_model` into the snapshot the claim serves).
-
-The artifact half is already there: `ArtifactToolAuthority` reads the
-`edit_image` source and mask and writes the results under the live claim.
-elitea-main already models the gap: `nativeWorkerGatedToolkitTypes` hides
-`imagegen` on a Rust-worker deployment, and the `image_generation` internal
-tool reports `rustAvailable: false`.
+Differences, stated: an answer item that is only a `url` is not downloaded;
+`n` is capped at 10; failures are sentences, one per cause. Main lists the type
+under the Rust worker (`rustNativeToolTypes`, the pinned Rust capability
+snapshot). The `image_generation` internal tool is **dropped: no SDK implementation**
+(owner programme decision): it stays recognized-and-skipped, see SOURCE_PARITY.
 
 #### `data_analysis` (blocked)
 

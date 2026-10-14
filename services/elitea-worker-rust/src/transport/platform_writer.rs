@@ -132,6 +132,61 @@ impl PlatformWriter for ClaimPlatformWriter {
     }
 }
 
+/// The platform writer of a path that lends the Office host and nothing else
+/// (`toolkit.call_tool.v1` of `pptx` / `imagegen`): those families act only
+/// through the host, and the runtime-context writes are not part of that
+/// path, so every one is refused rather than silently routed anywhere.
+pub(crate) struct HostOnlyPlatformWriter;
+
+fn not_on_this_path() -> HostError {
+    HostError::new(
+        HostErrorCode::InvalidConfiguration,
+        "this path lends no runtime-context writes",
+    )
+}
+
+#[async_trait]
+impl PlatformWriter for HostOnlyPlatformWriter {
+    async fn list_artifacts(
+        &self,
+        _: &ArtifactListRequest,
+    ) -> Result<ArtifactListOutcome, HostError> {
+        Err(not_on_this_path())
+    }
+
+    async fn read_artifact(
+        &self,
+        _: &ArtifactReadRequest,
+    ) -> Result<ArtifactReadOutcome, HostError> {
+        Err(not_on_this_path())
+    }
+
+    async fn write_artifact(
+        &self,
+        _: &ArtifactWriteRequest,
+    ) -> Result<ArtifactWriteOutcome, HostError> {
+        Err(not_on_this_path())
+    }
+
+    async fn delete_artifact(
+        &self,
+        _: &ArtifactDeleteRequest,
+    ) -> Result<ArtifactDeleteOutcome, HostError> {
+        Err(not_on_this_path())
+    }
+
+    async fn write_skill(&self, _: &SkillWriteRequest) -> Result<SkillWriteOutcome, HostError> {
+        Err(not_on_this_path())
+    }
+
+    async fn write_project_context(
+        &self,
+        _: &ProjectContextWriteRequest,
+    ) -> Result<ProjectContextWriteOutcome, HostError> {
+        Err(not_on_this_path())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use elitea_agent_runtime::host::HostErrorCode;

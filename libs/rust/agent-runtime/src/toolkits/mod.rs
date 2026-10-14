@@ -98,6 +98,8 @@ mod gitlab_tests;
 #[cfg(test)]
 mod google_places_tests;
 #[cfg(test)]
+mod imagegen_tests;
+#[cfg(test)]
 mod index_tools_tests;
 #[cfg(test)]
 mod invocation_tests;
@@ -185,8 +187,10 @@ pub use families::index_tools::{
     SharedIndexCatalog, is_index_family, is_sdk_index_tool_name,
 };
 pub use families::office_host::{
-    MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError, OfficeModelRequest,
-    OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
+    ImageEditInput, ImageEditRequest, ImageGenerateRequest, MAX_IMAGE_EDIT_INPUT_BYTES,
+    MAX_IMAGES_PER_REQUEST, MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError,
+    OfficeModelRequest, OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
+    valid_upload_file_name,
 };
 pub use materialize::{
     ConfiguredToolsets, RefusedToolkit, ToolsetMaterializationError,

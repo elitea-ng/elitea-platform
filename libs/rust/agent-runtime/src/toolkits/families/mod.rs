@@ -26,6 +26,7 @@ pub(crate) mod gitlab;
 pub(crate) mod gitlab_org;
 pub(crate) mod google_places;
 pub(crate) mod https_base_url;
+pub(crate) mod imagegen;
 #[cfg(feature = "toolkit-office")]
 pub(crate) mod office_common;
 pub mod office_host;

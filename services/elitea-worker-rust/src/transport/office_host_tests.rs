@@ -60,7 +60,7 @@ impl ObjectApi {
             .insert(key.to_owned(), bytes);
     }
 
-    fn get(&self, key: &str) -> Option<Vec<u8>> {
+    pub(crate) fn get(&self, key: &str) -> Option<Vec<u8>> {
         self.store.lock().expect("store").objects.get(key).cloned()
     }
 
@@ -544,7 +544,7 @@ async fn the_model_call_sends_the_prompt_and_images_on_the_runs_model() {
     );
 }
 
-struct NoPlatform;
+pub(crate) struct NoPlatform;
 
 #[async_trait]
 impl PlatformWriter for NoPlatform {

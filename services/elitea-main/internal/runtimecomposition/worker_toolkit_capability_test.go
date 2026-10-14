@@ -67,8 +67,8 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 47 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 47",
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 48 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 48",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	if rust.UnsupportedNames() != nil {
@@ -365,6 +365,34 @@ func repositoryRoot(t *testing.T) string {
 	}
 	t.Fatal("repository root not found from the test working directory")
 	return ""
+}
+
+// Real pinned data for the two verdict shapes that matter once imagegen is
+// carried by both workers: a type only Python builds (memory: absent from the
+// Rust allow list, absent from the Python deny list), and imagegen itself,
+// which both build.
+func TestPinnedCapabilityRealPythonOnlyAndBothWorkerTypes(t *testing.T) {
+	t.Parallel()
+
+	python, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
+	if err != nil {
+		t.Fatalf("load python capability: %v", err)
+	}
+	rust, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("rust")
+	if err != nil {
+		t.Fatalf("load rust capability: %v", err)
+	}
+	if ok, reason := python.SupportsToolkitType("memory", "memory"); !ok {
+		t.Errorf("memory is built by the Python worker: %q", reason)
+	}
+	if ok, reason := rust.SupportsToolkitType("memory", "memory"); ok || reason == "" {
+		t.Errorf("memory has no Rust family and must say why: ok=%v reason=%q", ok, reason)
+	}
+	for name, worker := range map[string]*runtimecomposition.WorkerToolkitCapability{"python": python, "rust": rust} {
+		if ok, reason := worker.SupportsToolkitType("imagegen", "imagegen"); !ok {
+			t.Errorf("%s must build imagegen: %q", name, reason)
+		}
+	}
 }
 
 // Absence of a capability projection must not advertise what only the Rust
