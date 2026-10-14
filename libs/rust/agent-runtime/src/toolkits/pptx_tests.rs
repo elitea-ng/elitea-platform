@@ -1963,7 +1963,7 @@ async fn model_tools_say_plainly_when_no_model_is_bound() {
 fn the_ui_catalogue_lists_every_tool_the_family_serves() {
     const PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../services/elitea-main/internal/runtimecomposition/rust_only_toolkit_tools.json"
+        "/../../../services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
     );
     let want = super::families::rust_only_catalogue_document();
     if std::env::var("ELITEA_WRITE_RUST_ONLY_TOOLS").as_deref() == Ok("1") {

@@ -248,7 +248,8 @@ fn read_body(xml: &[u8]) -> DocFacts {
     let mut in_t = false;
     // Only a tab or break INSIDE a run is text; `w:tab` also defines a tab stop
     // in `w:pPr/w:tabs`.
-    let mut in_run = false;
+    // A depth, not a flag: a run can hold runs (ruby text and base).
+    let mut run_depth = 0usize;
     // Text boxes and fallbacks hold paragraphs of their own, or copies.
     let mut skip_from: Option<usize> = None;
     // Whether the `w:p` being read is a direct child of the body.
@@ -301,14 +302,16 @@ fn read_body(xml: &[u8]) -> DocFacts {
                             t.cell = Vec::new();
                         }
                     }
-                    b"r" => in_run = true,
+                    b"r" => run_depth += 1,
                     b"t" if para.is_some() => in_t = true,
                     b"drawing" | b"pict" | b"object" => {}
                     b"blip" => note_picture(&mut para, &mut out),
                     b"chart" => note_chart(e, &mut para, &mut out),
                     b"pStyle" if para_is_body => set_style(e, &mut para),
-                    b"tab" if para.is_some() && in_run && !in_t => push_char(&mut para, '\t'),
-                    b"br" | b"cr" if para.is_some() && in_run => push_char(&mut para, '\n'),
+                    b"tab" if para.is_some() && run_depth > 0 && !in_t => {
+                        push_char(&mut para, '\t');
+                    }
+                    b"br" | b"cr" if para.is_some() && run_depth > 0 => push_char(&mut para, '\n'),
                     _ => {
                         if at_body && tbl.is_none() && para.is_none() {
                             other_from = Some(depth);
@@ -340,8 +343,10 @@ fn read_body(xml: &[u8]) -> DocFacts {
                     b"blip" => note_picture(&mut para, &mut out),
                     b"chart" => note_chart(e, &mut para, &mut out),
                     b"pStyle" if para_is_body => set_style(e, &mut para),
-                    b"tab" if para.is_some() && in_run && !in_t => push_char(&mut para, '\t'),
-                    b"br" | b"cr" if para.is_some() && in_run => push_char(&mut para, '\n'),
+                    b"tab" if para.is_some() && run_depth > 0 && !in_t => {
+                        push_char(&mut para, '\t');
+                    }
+                    b"br" | b"cr" if para.is_some() && run_depth > 0 => push_char(&mut para, '\n'),
                     _ => {
                         // A body-level empty element that is not a paragraph or
                         // a table (a bookmark, a section break, ...).
@@ -374,7 +379,7 @@ fn read_body(xml: &[u8]) -> DocFacts {
                     continue;
                 }
                 match name {
-                    b"r" => in_run = false,
+                    b"r" => run_depth = run_depth.saturating_sub(1),
                     b"t" => in_t = false,
                     b"p" if para.is_some() && depth == para_at => {
                         let p = para.take().unwrap_or_default();

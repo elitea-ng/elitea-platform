@@ -39,7 +39,7 @@ on:
       # (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs).
       - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
       - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
-      - "services/elitea-main/internal/runtimecomposition/rust_only_toolkit_tools.json"
+      - "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"
@@ -57,7 +57,7 @@ on:
       # (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs).
       - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
       - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
-      - "services/elitea-main/internal/runtimecomposition/rust_only_toolkit_tools.json"
+      - "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"

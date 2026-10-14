@@ -7,6 +7,13 @@
 //! reopened the result. This reads the canonical archive (it has passed the
 //! validation gate) as a stream and keeps only what was asked for, and it reads
 //! inline strings (`t="inlineStr"`), which the library reads back as empty.
+//!
+//! What a rename or a delete of a sheet would break is found by a generic scan:
+//! every text node and every attribute value of the workbook's XML parts is
+//! matched against the sheet-reference grammar (see [`XlsxFacts::sheet_mentioned`]),
+//! so a producer's extension element is covered without being listed. The
+//! relationship walks (what only one sheet reaches) run only when the query
+//! names a sheet.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Cursor, Read};
@@ -44,10 +51,17 @@ pub struct XlsxSheet {
     pub value_cells: u64,
     /// The smallest rectangle holding them, `None` for an empty sheet.
     pub used_range: Option<CellRange>,
-    /// The parts only this sheet reaches (its own part, and through its
-    /// relationships the drawings, charts, comments, tables and media no other
-    /// sheet uses), counted by kind. What deleting the sheet takes with it.
-    pub owned_parts: BTreeMap<String, usize>,
+}
+
+/// A defined name of the workbook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefinedName {
+    /// Its name (`_xlnm.Print_Area`).
+    pub name: String,
+    /// The sheet it is scoped to, by position (`localSheetId`).
+    pub local: Option<usize>,
+    /// What it refers to.
+    pub text: String,
 }
 
 /// What to read besides the sheets and charts.
@@ -57,8 +71,11 @@ pub struct XlsxQuery<'a> {
     pub cells: &'a [(usize, u32, u16)],
     /// `(sheet, range)` rectangles whose every value cell is read.
     pub ranges: &'a [(usize, CellRange)],
-    /// A sheet name to look for in every formula and chart reference.
+    /// A sheet name to look for references to (compared ignoring case).
     pub sheet_mention: Option<&'a str>,
+    /// With `sheet_mention`: the sheet is about to be deleted, so work out the
+    /// parts only it reaches ([`XlsxFacts::delete_exempt`]).
+    pub for_delete: bool,
 }
 
 /// What an xlsx package holds.
@@ -69,23 +86,51 @@ pub struct XlsxFacts {
     /// The queried cells that hold something (absent means empty). A formula
     /// carries its cached value.
     pub cells: HashMap<(usize, u32, u16), CellValue>,
-    /// Whether the sheet named by [`XlsxQuery::sheet_mention`] (compared
-    /// ignoring case) is referred to anywhere: a cell formula, a defined name,
-    /// a data validation, a conditional format, a hyperlink location, a chart
-    /// reference or a pivot cache source. Quoted names (`'My Sheet'!A1`, a
-    /// doubled quote for an apostrophe) and 3-D ranges (`Sheet1:Sheet3!A1`,
-    /// which names every sheet in the span by position) are understood.
+    /// Whether the sheet named by [`XlsxQuery::sheet_mention`] is referred to
+    /// anywhere: any text node or attribute value of the workbook's XML parts
+    /// (worksheets, charts, drawings, pivot caches and tables, tables, and
+    /// whatever an extension list holds) that names it as `Name!A1` or
+    /// `'Name'!A1` (a doubled quote for an apostrophe), or as a 3-D span
+    /// `Sheet1:Sheet3!A1` that covers it by position; a pivot cache sourced by
+    /// the sheet's name, by one of its tables or by a defined name that refers
+    /// to it; a defined name that is not scoped to the sheet itself. Cell
+    /// values are not scanned.
     pub sheet_mentioned: bool,
-    /// The same, not counting what belongs to the named sheet itself (its own
-    /// cells, validations, hyperlinks and charts, which a delete takes with
-    /// it): defined names, other sheets and pivot caches only.
+    /// The same, not counting what only the named sheet reaches (its own cells
+    /// and charts, which a delete takes with it). Only with
+    /// [`XlsxQuery::for_delete`]; otherwise the same as `sheet_mentioned`.
     pub sheet_mentioned_elsewhere: bool,
-    /// The `localSheetId` of every defined name that has one (a name or print
-    /// area scoped to a sheet, by position).
-    pub local_name_sheet_ids: Vec<usize>,
+    /// The workbook's defined names.
+    pub defined_names: Vec<DefinedName>,
     /// How many package parts of each kind the file holds (`xl/charts/chart`,
     /// `xl/media/image`, ...). What a save must not lose.
     pub parts: BTreeMap<String, usize>,
+    /// With [`XlsxQuery::for_delete`]: the parts, counted by kind, that only
+    /// the named sheet reaches: reachable from it, and from no other sheet and
+    /// not from the workbook's own relationships (so a pivot cache, shared
+    /// media and everything else the workbook holds are never in it).
+    pub delete_exempt: BTreeMap<String, usize>,
+    /// How many parts the relationship walks visited: 0 unless the query names
+    /// a sheet.
+    pub walked_parts: usize,
+}
+
+/// The gate shared by every read: count it, check the length, copy the bytes
+/// onto the guarded parse thread, validate and re-pack them, and run `read` on
+/// the canonical archive.
+fn gated<R, F>(bytes: &[u8], limits: &Limits, read: F) -> Result<R>
+where
+    R: Send + 'static,
+    F: FnOnce(&[u8], &Limits) -> Result<R> + Send + 'static,
+{
+    use crate::validate::{Kind, Mode, precheck_len, validate_and_repack};
+    crate::counters::bump(crate::counters::Op::PackageRead);
+    precheck_len(bytes.len(), limits)?;
+    let (data, l) = (bytes.to_vec(), limits.clone());
+    crate::guard::run_guarded(limits, move || {
+        let repacked = validate_and_repack(&data, Kind::Xlsx, Mode::Keep, &l)?;
+        read(&repacked.bytes, &l)
+    })
 }
 
 /// The fact sheet of an xlsx package given as bytes, without opening it in the
@@ -98,22 +143,19 @@ pub fn facts_of_xlsx_package(
     limits: &Limits,
     query: &XlsxQuery<'_>,
 ) -> Result<XlsxFacts> {
-    use crate::validate::{Kind, Mode, precheck_len, validate_and_repack};
-    crate::counters::bump(crate::counters::Op::PackageRead);
-    precheck_len(bytes.len(), limits)?;
-    let (data, l) = (bytes.to_vec(), limits.clone());
     let cells = query.cells.to_vec();
     let ranges = query.ranges.to_vec();
     let mention = query.sheet_mention.map(str::to_owned);
-    crate::guard::run_guarded(limits, move || {
-        let repacked = validate_and_repack(&data, Kind::Xlsx, Mode::Keep, &l)?;
+    let for_delete = query.for_delete;
+    gated(bytes, limits, move |package, l| {
         read_xlsx_facts(
-            &repacked.bytes,
-            &l,
+            package,
+            l,
             &XlsxQuery {
                 cells: &cells,
                 ranges: &ranges,
                 sheet_mention: mention.as_deref(),
+                for_delete,
             },
         )
     })
@@ -136,15 +178,10 @@ pub fn facts_of_xlsx_package_choosing<F>(
 where
     F: FnOnce(&[String]) -> Result<(usize, Option<CellRange>)> + Send + 'static,
 {
-    use crate::validate::{Kind, Mode, precheck_len, validate_and_repack};
-    crate::counters::bump(crate::counters::Op::PackageRead);
-    precheck_len(bytes.len(), limits)?;
-    let (data, l) = (bytes.to_vec(), limits.clone());
-    crate::guard::run_guarded(limits, move || {
-        let repacked = validate_and_repack(&data, Kind::Xlsx, Mode::Keep, &l)?;
+    gated(bytes, limits, move |package, l| {
         let (facts, sheet) = read_xlsx_facts_with(
-            &repacked.bytes,
-            &l,
+            package,
+            l,
             &XlsxQuery::default(),
             Some((cap, Box::new(choose))),
         )?;
@@ -233,6 +270,55 @@ pub(crate) fn read_xlsx_facts(
     read_xlsx_facts_with(package, limits, query, None).map(|(facts, _)| facts)
 }
 
+/// The workbook part: its sheets (name, relationship id) and defined names.
+fn read_workbook(xml: &[u8]) -> (Vec<(String, String)>, Vec<DefinedName>) {
+    let (mut sheets, mut defined) = (Vec::new(), Vec::new());
+    let mut r = Reader::from_reader(xml);
+    let mut open: Option<DefinedName> = None;
+    loop {
+        match r.read_event() {
+            Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == b"sheet" => {
+                sheets.push((
+                    attr(&e, b"name").unwrap_or_default(),
+                    rel_attr(&e, b"id").unwrap_or_default(),
+                ));
+            }
+            Ok(Event::Start(e)) if e.local_name().as_ref() == b"definedName" => {
+                open = Some(DefinedName {
+                    name: attr(&e, b"name").unwrap_or_default(),
+                    local: attr(&e, b"localSheetId").and_then(|v| v.trim().parse().ok()),
+                    text: String::new(),
+                });
+            }
+            Ok(Event::Empty(e)) if e.local_name().as_ref() == b"definedName" => {
+                defined.push(DefinedName {
+                    name: attr(&e, b"name").unwrap_or_default(),
+                    local: attr(&e, b"localSheetId").and_then(|v| v.trim().parse().ok()),
+                    text: String::new(),
+                });
+            }
+            Ok(Event::Text(t)) => {
+                if let (Some(n), Ok(s)) = (open.as_mut(), t.decode()) {
+                    n.text.push_str(&s);
+                }
+            }
+            Ok(Event::GeneralRef(t)) => {
+                if let (Some(n), Ok(name)) = (open.as_mut(), t.decode())
+                    && let Some(c) = crate::docx_facts::entity(&name)
+                {
+                    n.text.push(c);
+                }
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref() == b"definedName" => {
+                defined.extend(open.take());
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            Ok(_) => {}
+        }
+    }
+    (sheets, defined)
+}
+
 #[allow(clippy::too_many_lines)]
 fn read_xlsx_facts_with(
     package: &[u8],
@@ -251,71 +337,17 @@ fn read_xlsx_facts_with(
     let wb_rels = entry(&mut zip, &rels_path(&main), small)?
         .map(|b| read_rels(&b))
         .unwrap_or_default();
-    let mut names: Vec<(String, String)> = Vec::new();
-    let mut defined: Vec<String> = Vec::new();
-    let mut local_ids: Vec<usize> = Vec::new();
-    {
-        let mut r = Reader::from_reader(workbook.as_slice());
-        let mut in_name: Option<String> = None;
-        loop {
-            match r.read_event() {
-                Ok(Event::Empty(e) | Event::Start(e)) if e.local_name().as_ref() == b"sheet" => {
-                    let name = attr(&e, b"name").unwrap_or_default();
-                    let rid = rel_attr(&e, b"id").unwrap_or_default();
-                    names.push((name, rid));
-                }
-                Ok(Event::Start(e)) if e.local_name().as_ref() == b"definedName" => {
-                    if let Some(id) = attr(&e, b"localSheetId").and_then(|v| v.trim().parse().ok())
-                    {
-                        local_ids.push(id);
-                    }
-                    in_name = Some(String::new());
-                }
-                Ok(Event::Empty(e)) if e.local_name().as_ref() == b"definedName" => {
-                    if let Some(id) = attr(&e, b"localSheetId").and_then(|v| v.trim().parse().ok())
-                    {
-                        local_ids.push(id);
-                    }
-                }
-                Ok(Event::Text(t)) => {
-                    if let (Some(n), Ok(s)) = (in_name.as_mut(), t.decode()) {
-                        n.push_str(&s);
-                    }
-                }
-                Ok(Event::GeneralRef(t)) => {
-                    if let (Some(n), Ok(name)) = (in_name.as_mut(), t.decode())
-                        && let Some(c) = crate::docx_facts::entity(&name)
-                    {
-                        n.push(c);
-                    }
-                }
-                Ok(Event::End(e)) if e.local_name().as_ref() == b"definedName" => {
-                    defined.extend(in_name.take());
-                }
-                Ok(Event::Eof) | Err(_) => break,
-                Ok(_) => {}
-            }
-        }
-    }
+    let (names, defined) = read_workbook(&workbook);
     let sheet_names: Vec<String> = names.iter().map(|(n, _)| n.clone()).collect();
     let target = query.sheet_mention.and_then(|m| {
         sheet_names
             .iter()
             .position(|n| n.to_lowercase() == m.to_lowercase())
     });
-    let mention = target.map(|target| Mention {
-        names: &sheet_names,
-        target,
-    });
     let mut out = XlsxFacts {
-        local_name_sheet_ids: local_ids,
+        defined_names: defined,
         ..XlsxFacts::default()
     };
-    if let Some(m) = &mention {
-        let hit = defined.iter().any(|d| m.refers(d));
-        out.sheet_mentioned |= hit;
-        out.sheet_mentioned_elsewhere |= hit;
-    }
     // One read: the caller picks the sheet and range once the names are known.
     let mut chosen: Option<usize> = None;
     let mut chosen_rect: Vec<(usize, CellRange)> = Vec::new();
@@ -332,29 +364,27 @@ fn read_xlsx_facts_with(
         chosen_rect.push((sheet, rect));
         range_cap = Some(cap.saturating_add(1));
     }
-    let mut reach_sets: Vec<BTreeSet<String>> = Vec::new();
     let wanted: HashSet<(usize, u32, u16)> = query.cells.iter().copied().collect();
     let mut shared_wanted: Vec<SharedRef> = Vec::new();
+    let mut sheet_paths: Vec<Option<String>> = Vec::new();
     for (index, (name, rid)) in names.iter().enumerate() {
         let mut sheet = XlsxSheet {
             name: name.clone(),
             charts: Vec::new(),
             value_cells: 0,
             used_range: None,
-            owned_parts: BTreeMap::new(),
         };
         let Some(target_rel) = wb_rels.get(rid) else {
             out.sheets.push(sheet);
-            reach_sets.push(BTreeSet::new());
+            sheet_paths.push(None);
             continue;
         };
         let path = resolve(&dir, target_rel);
+        sheet_paths.push(Some(path.clone()));
         let Some(xml) = entry(&mut zip, &path, large)? else {
             out.sheets.push(sheet);
-            reach_sets.push(BTreeSet::new());
             continue;
         };
-        reach_sets.push(reach(&mut zip, &path, small)?);
         let rects: Vec<CellRange> = query
             .ranges
             .iter()
@@ -369,13 +399,10 @@ fn read_xlsx_facts_with(
                 wanted: &wanted,
                 rects: &rects,
                 range_cap,
-                mention: mention.as_ref(),
             },
         );
         sheet.value_cells = scan.value_cells;
         sheet.used_range = scan.used;
-        out.sheet_mentioned |= scan.mentioned;
-        out.sheet_mentioned_elsewhere |= scan.mentioned && target != Some(index);
         out.cells.extend(scan.cells);
         shared_wanted.extend(scan.shared);
         if scan.drawing.is_some() {
@@ -393,13 +420,7 @@ fn read_xlsx_facts_with(
                 {
                     let chart_path = resolve(parent(&drawing), &t);
                     if let Some(bytes) = entry(&mut zip, &chart_path, small)? {
-                        let chart = read_chart(&bytes);
-                        if let Some(m) = &mention {
-                            let hit = chart.refs.iter().any(|f| m.refers(f));
-                            out.sheet_mentioned |= hit;
-                            out.sheet_mentioned_elsewhere |= hit && target != Some(index);
-                        }
-                        sheet.charts.push(chart);
+                        sheet.charts.push(read_chart(&bytes));
                     }
                 }
             }
@@ -423,32 +444,139 @@ fn read_xlsx_facts_with(
         }
     }
     out.parts = crate::docx_facts::part_kinds(&mut zip);
-    for (i, sheet) in out.sheets.iter_mut().enumerate() {
-        for part in &reach_sets[i] {
-            let shared = reach_sets
-                .iter()
-                .enumerate()
-                .any(|(j, other)| j != i && other.contains(part));
-            if !shared && let Some(kind) = crate::docx_facts::kind_of(part) {
-                *sheet.owned_parts.entry(kind).or_insert(0) += 1;
-            }
-        }
-    }
-    if let Some(m) = &mention {
-        let pivots: Vec<String> = zip
-            .file_names()
-            .filter(|n| n.starts_with("xl/pivotCache/pivotCacheDefinition"))
-            .map(str::to_owned)
-            .collect();
-        for name in pivots {
-            if let Some(bytes) = entry(&mut zip, &name, small)? {
-                let hit = pivot_names_sheet(&bytes, &m.names[m.target]);
-                out.sheet_mentioned |= hit;
-                out.sheet_mentioned_elsewhere |= hit;
-            }
-        }
+    if let Some(t) = target {
+        find_mentions(
+            &mut zip,
+            &mut out,
+            &Walk {
+                main: &main,
+                names: &sheet_names,
+                target: t,
+                sheet_paths: &sheet_paths,
+                for_delete: query.for_delete,
+                small,
+                large,
+            },
+        )?;
     }
     Ok((out, chosen))
+}
+
+/// What the relationship walks and the mention scan need to know.
+struct Walk<'a> {
+    main: &'a str,
+    names: &'a [String],
+    target: usize,
+    sheet_paths: &'a [Option<String>],
+    for_delete: bool,
+    small: u64,
+    large: u64,
+}
+
+/// Fill in the mention facts for the named sheet: what refers to it, and (for a
+/// delete) which parts only it reaches. Runs only when the query names a sheet.
+fn find_mentions(zip: &mut Zip<'_>, out: &mut XlsxFacts, w: &Walk<'_>) -> Result<()> {
+    let none: BTreeSet<String> = BTreeSet::new();
+    let mut walked = 0usize;
+    let mut target_reach = BTreeSet::new();
+    let mut exempt: BTreeSet<String> = BTreeSet::new();
+    if let Some(Some(path)) = w.sheet_paths.get(w.target) {
+        target_reach = reach(zip, path, w.small, false, &none)?;
+        walked += target_reach.len();
+        if w.for_delete {
+            let mut others = BTreeSet::new();
+            for (i, p) in w.sheet_paths.iter().enumerate() {
+                if i != w.target
+                    && let Some(p) = p
+                {
+                    others.extend(reach(zip, p, w.small, false, &none)?);
+                }
+            }
+            // The workbook's own relationships, not through the deleted sheet:
+            // pivot caches and anything else the workbook holds stay.
+            let skip = BTreeSet::from([path.clone()]);
+            let workbook = reach(zip, w.main, w.small, true, &skip)?;
+            walked += others.len() + workbook.len();
+            exempt = target_reach
+                .iter()
+                .filter(|p| !others.contains(*p) && !workbook.contains(*p))
+                .cloned()
+                .collect();
+            for part in &exempt {
+                if let Some(kind) = crate::docx_facts::kind_of(part) {
+                    *out.delete_exempt.entry(kind).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    out.walked_parts = walked;
+    let mention = Mention {
+        names: w.names,
+        target: w.target,
+    };
+    let hit = |out: &mut XlsxFacts, part: Option<&str>| {
+        out.sheet_mentioned = true;
+        out.sheet_mentioned_elsewhere |= part.is_none_or(|p| !exempt.contains(p));
+    };
+    // Defined names: one scoped to the sheet itself is rewritten or dropped
+    // with it, so only the others count.
+    let named: Vec<(String, bool)> = out
+        .defined_names
+        .iter()
+        .map(|d| (d.name.clone(), mention.refers(&d.text)))
+        .collect();
+    if out
+        .defined_names
+        .iter()
+        .any(|d| d.local != Some(w.target) && mention.refers(&d.text))
+    {
+        hit(out, None);
+    }
+    // The tables on the sheet, for a pivot cache sourced by table name.
+    let mut tables: Vec<String> = Vec::new();
+    for part in &target_reach {
+        if crate::docx_facts::kind_of(part).as_deref() == Some("xl/tables/table")
+            && let Some(xml) = entry(zip, part, w.small)?
+        {
+            tables.extend(table_names(&xml));
+        }
+    }
+    let sheet = w.names[w.target].to_lowercase();
+    let candidates: Vec<String> = zip
+        .file_names()
+        .filter(|n| scannable(n))
+        .map(str::to_owned)
+        .collect();
+    for name in candidates {
+        let cap = if name.starts_with("xl/worksheets/") {
+            w.large
+        } else {
+            w.small
+        };
+        let Some(xml) = entry(zip, &name, cap)? else {
+            continue;
+        };
+        let mut found = scan_mentions(&xml, &mention);
+        if name.starts_with("xl/pivotCache/pivotCacheDefinition") {
+            found |= pivot_sources(&xml, &sheet, &tables, &named);
+        }
+        if found {
+            hit(out, Some(&name));
+        }
+    }
+    Ok(())
+}
+
+/// A part the mention scan reads: workbook XML other than the value tables.
+fn scannable(name: &str) -> bool {
+    name.starts_with("xl/")
+        && crate::defined_names::ext_is(name, "xml")
+        && !name.contains("/_rels/")
+        && !name.starts_with("xl/theme/")
+        && !matches!(
+            name,
+            "xl/sharedStrings.xml" | "xl/styles.xml" | "xl/calcChain.xml"
+        )
 }
 
 /// The sheets the workbook's formulas can name, and the one a call asks about.
@@ -459,77 +587,137 @@ struct Mention<'a> {
 
 impl Mention<'_> {
     /// Whether `text` (a formula, a defined name's value, a hyperlink
-    /// location) refers to the target sheet: `Name!A1`, `'Name'!A1` with a
-    /// doubled quote for an apostrophe, or a 3-D range `A:C!A1` that spans it
-    /// by position. Names compare ignoring case.
+    /// location, any attribute) refers to the target sheet: `Name!A1`,
+    /// `'Name'!A1` with a doubled quote for an apostrophe, or a 3-D range
+    /// `A:C!A1` that spans it by position. Names compare ignoring case.
     fn refers(&self, text: &str) -> bool {
         let chars: Vec<char> = text.chars().collect();
-        for (i, &c) in chars.iter().enumerate() {
-            if c != '!' || i == 0 {
-                continue;
-            }
-            let token = if chars[i - 1] == '\'' {
-                let mut out = Vec::new();
-                let mut p = i - 1;
-                let mut closed = false;
-                while p > 0 {
-                    p -= 1;
-                    if chars[p] == '\'' {
-                        if p > 0 && chars[p - 1] == '\'' {
-                            out.push('\'');
-                            p -= 1;
-                        } else {
-                            closed = true;
-                            break;
-                        }
-                    } else {
-                        out.push(chars[p]);
-                    }
-                }
-                if !closed {
-                    continue;
-                }
-                out.iter().rev().collect::<String>()
-            } else {
-                let mut p = i;
-                while p > 0
-                    && (chars[p - 1].is_alphanumeric() || matches!(chars[p - 1], '_' | '.' | ':'))
-                {
-                    p -= 1;
-                }
-                chars[p..i].iter().collect::<String>()
-            };
-            let index_of = |name: &str| {
-                self.names
-                    .iter()
-                    .position(|n| n.to_lowercase() == name.to_lowercase())
-            };
-            let parts: Vec<&str> = token.split(':').collect();
-            let hit = match parts[..] {
+        let index_of = |name: &str| {
+            self.names
+                .iter()
+                .position(|n| n.to_lowercase() == name.to_lowercase())
+        };
+        crate::sheetrefs::prefixes(&chars).iter().any(|p| {
+            let parts: Vec<&str> = p.token.split(':').collect();
+            match parts[..] {
                 [one] => index_of(one) == Some(self.target),
                 [a, b] => match (index_of(a), index_of(b)) {
                     (Some(x), Some(y)) => (x.min(y)..=x.max(y)).contains(&self.target),
                     (x, y) => x == Some(self.target) || y == Some(self.target),
                 },
                 _ => false,
-            };
-            if hit {
-                return true;
             }
-        }
-        false
+        })
     }
 }
 
-fn pivot_names_sheet(xml: &[u8], sheet: &str) -> bool {
+/// Whether any text node or attribute value of `xml` refers to the sheet. Cell
+/// values (`v`, inline strings) and defined names (handled by scope) are not
+/// read. Text is gathered across entity references, so `&apos;My Sheet&apos;!A1`
+/// is one token.
+fn scan_mentions(xml: &[u8], m: &Mention<'_>) -> bool {
+    let mut r = Reader::from_reader(xml);
+    let mut skip = 0usize;
+    let mut buf = String::new();
+    let flush = |buf: &mut String| -> bool {
+        let hit = buf.contains('!') && m.refers(buf);
+        buf.clear();
+        hit
+    };
+    let skipped = |name: &[u8]| matches!(name, b"v" | b"is" | b"definedName");
+    loop {
+        match r.read_event() {
+            Ok(Event::Start(e)) => {
+                if flush(&mut buf) {
+                    return true;
+                }
+                if skip > 0 || skipped(e.local_name().as_ref()) {
+                    skip += 1;
+                } else if attrs_mention(&e, m) {
+                    return true;
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                if flush(&mut buf) {
+                    return true;
+                }
+                if skip == 0 && !skipped(e.local_name().as_ref()) && attrs_mention(&e, m) {
+                    return true;
+                }
+            }
+            Ok(Event::End(_)) => {
+                if flush(&mut buf) {
+                    return true;
+                }
+                skip = skip.saturating_sub(1);
+            }
+            Ok(Event::Text(t)) if skip == 0 => {
+                if let Ok(s) = t.decode() {
+                    buf.push_str(&s);
+                }
+            }
+            Ok(Event::GeneralRef(t)) if skip == 0 => {
+                if let Ok(name) = t.decode()
+                    && let Some(c) = crate::docx_facts::entity(&name)
+                {
+                    buf.push(c);
+                }
+            }
+            Ok(Event::Eof) | Err(_) => return flush(&mut buf),
+            Ok(_) => {}
+        }
+    }
+}
+
+fn attrs_mention(e: &quick_xml::events::BytesStart<'_>, m: &Mention<'_>) -> bool {
+    e.attributes().flatten().any(|a| {
+        a.value.contains(&b'!') && {
+            let raw = String::from_utf8_lossy(&a.value);
+            let text = quick_xml::escape::unescape(&raw).unwrap_or_else(|_| raw.clone());
+            m.refers(&text)
+        }
+    })
+}
+
+fn table_names(xml: &[u8]) -> Vec<String> {
+    let mut r = Reader::from_reader(xml);
+    loop {
+        match r.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                return [b"name".as_slice(), b"displayName".as_slice()]
+                    .iter()
+                    .filter_map(|k| attr(&e, k))
+                    .map(|n| n.to_lowercase())
+                    .collect();
+            }
+            Ok(Event::Eof) | Err(_) => return Vec::new(),
+            Ok(_) => {}
+        }
+    }
+}
+
+/// Whether a pivot cache is sourced from the sheet: by `sheet=` (its name), or
+/// by `name=` when that is a table on the sheet or a defined name that refers
+/// to it.
+fn pivot_sources(xml: &[u8], sheet: &str, tables: &[String], named: &[(String, bool)]) -> bool {
     let mut r = Reader::from_reader(xml);
     loop {
         match r.read_event() {
             Ok(Event::Empty(e) | Event::Start(e))
                 if e.local_name().as_ref() == b"worksheetSource" =>
             {
-                if attr(&e, b"sheet").is_some_and(|s| s.to_lowercase() == sheet.to_lowercase()) {
+                if attr(&e, b"sheet").is_some_and(|s| s.to_lowercase() == sheet) {
                     return true;
+                }
+                if let Some(n) = attr(&e, b"name") {
+                    let n = n.to_lowercase();
+                    if tables.contains(&n)
+                        || named
+                            .iter()
+                            .any(|(dn, mentions)| *mentions && dn.to_lowercase() == n)
+                    {
+                        return true;
+                    }
                 }
             }
             Ok(Event::Eof) | Err(_) => return false,
@@ -538,14 +726,20 @@ fn pivot_names_sheet(xml: &[u8], sheet: &str) -> bool {
     }
 }
 
-/// Every part a sheet reaches through relationships (its drawings, charts,
-/// comments, tables, media, ...), itself included. Other sheets, shared
-/// workbook parts and external targets are not followed.
-fn reach(zip: &mut Zip<'_>, sheet_path: &str, cap: u64) -> Result<BTreeSet<String>> {
+/// Every part reachable from `start` through relationships (itself included).
+/// Other sheets (unless `worksheets`), shared workbook parts and external
+/// targets are not followed; `skip` parts are never entered.
+fn reach(
+    zip: &mut Zip<'_>,
+    start: &str,
+    cap: u64,
+    worksheets: bool,
+    skip: &BTreeSet<String>,
+) -> Result<BTreeSet<String>> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut queue = vec![sheet_path.to_owned()];
+    let mut queue = vec![start.to_owned()];
     while let Some(part) = queue.pop() {
-        if !seen.insert(part.clone()) || seen.len() > 500 {
+        if skip.contains(&part) || !seen.insert(part.clone()) || seen.len() > 1000 {
             continue;
         }
         let Some(rels) = entry(zip, &rels_path(&part), cap)? else {
@@ -559,9 +753,7 @@ fn reach(zip: &mut Zip<'_>, sheet_path: &str, cap: u64) -> Result<BTreeSet<Strin
                 {
                     let kind = attr(&e, b"Type").unwrap_or_default();
                     let external = attr(&e, b"TargetMode").is_some_and(|m| m == "External");
-                    let skip = [
-                        "/worksheet",
-                        "/chartsheet",
+                    let mut skipped = [
                         "/externalLink",
                         "/theme",
                         "/styles",
@@ -571,9 +763,12 @@ fn reach(zip: &mut Zip<'_>, sheet_path: &str, cap: u64) -> Result<BTreeSet<Strin
                     ]
                     .iter()
                     .any(|s| kind.ends_with(s));
+                    if !worksheets {
+                        skipped |= kind.ends_with("/worksheet") || kind.ends_with("/chartsheet");
+                    }
                     if let Some(t) = attr(&e, b"Target")
                         && !external
-                        && !skip
+                        && !skipped
                     {
                         queue.push(resolve(parent(&part), &t));
                     }
@@ -606,7 +801,6 @@ struct SheetScan {
     cells: Vec<((usize, u32, u16), CellValue)>,
     shared: Vec<SharedRef>,
     drawing: Option<String>,
-    mentioned: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -623,21 +817,18 @@ struct Scan<'a> {
     rects: &'a [CellRange],
     /// At most this many cells are taken for the rectangles.
     range_cap: Option<usize>,
-    mention: Option<&'a Mention<'a>>,
 }
 
 #[allow(clippy::too_many_lines)]
 fn scan_sheet(xml: &[u8], sheet: usize, scan_for: &Scan<'_>) -> SheetScan {
-    let (wanted, rects, mention) = (scan_for.wanted, scan_for.rects, scan_for.mention);
+    let (wanted, rects) = (scan_for.wanted, scan_for.rects);
     let mut taken = 0usize;
-    let mut mtext: Option<String> = None;
     let mut scan = SheetScan {
         value_cells: 0,
         used: None,
         cells: Vec::new(),
         shared: Vec::new(),
         drawing: None,
-        mentioned: false,
     };
     let mut r = Reader::from_reader(xml);
     let mut coord: Option<(u32, u16)> = None;
@@ -668,21 +859,15 @@ fn scan_sheet(xml: &[u8], sheet: usize, scan_for: &Scan<'_>) -> SheetScan {
                     is.get_or_insert_with(String::new);
                 }
                 b"drawing" => scan.drawing = rel_attr(&e, b"id").or(Some(String::new())),
-                b"formula" | b"formula1" | b"formula2" => mtext = Some(String::new()),
-                b"hyperlink" => note_location(&e, mention, &mut scan.mentioned),
                 _ => {}
             },
             Ok(Event::Empty(e)) => match e.local_name().as_ref() {
                 b"f" if in_c => f = Some(String::new()),
                 b"drawing" => scan.drawing = rel_attr(&e, b"id").or(Some(String::new())),
-                b"hyperlink" => note_location(&e, mention, &mut scan.mentioned),
                 _ => {}
             },
             Ok(Event::Text(t)) => {
                 if let Ok(s) = t.decode() {
-                    if let Some(m) = mtext.as_mut() {
-                        m.push_str(&s);
-                    }
                     push(&mut f, &mut v, &mut is, into, &s);
                 }
             }
@@ -690,29 +875,14 @@ fn scan_sheet(xml: &[u8], sheet: usize, scan_for: &Scan<'_>) -> SheetScan {
                 if let Ok(name) = t.decode()
                     && let Some(c) = crate::docx_facts::entity(&name)
                 {
-                    if let Some(m) = mtext.as_mut() {
-                        m.push(c);
-                    }
                     push(&mut f, &mut v, &mut is, into, &c.to_string());
                 }
             }
             Ok(Event::End(e)) => match e.local_name().as_ref() {
                 b"f" | b"v" | b"t" => into = Target::Nowhere,
-                b"formula" | b"formula1" | b"formula2" => {
-                    if let (Some(m), Some(text)) = (mention, mtext.take())
-                        && m.refers(&text)
-                    {
-                        scan.mentioned = true;
-                    }
-                }
                 b"rPh" => in_phonetic = false,
                 b"c" => {
                     in_c = false;
-                    if let (Some(m), Some(formula)) = (mention, f.as_deref())
-                        && m.refers(formula)
-                    {
-                        scan.mentioned = true;
-                    }
                     let holds = f.as_deref().is_some_and(|t| !t.is_empty())
                         || v.as_deref().is_some_and(|t| !t.is_empty())
                         || is.as_deref().is_some_and(|t| !t.is_empty());
@@ -786,14 +956,6 @@ fn scan_sheet(xml: &[u8], sheet: usize, scan_for: &Scan<'_>) -> SheetScan {
         }
     }
     scan
-}
-
-fn note_location(e: &quick_xml::events::BytesStart<'_>, m: Option<&Mention<'_>>, hit: &mut bool) {
-    if let (Some(m), Some(loc)) = (m, attr(e, b"location"))
-        && m.refers(&loc)
-    {
-        *hit = true;
-    }
 }
 
 fn push(

@@ -66,6 +66,7 @@ pub(super) fn facts(bytes: &[u8], limits: &Limits, query: &Query) -> Result<Xlsx
             cells: &query.cells,
             ranges: &query.ranges,
             sheet_mention: query.mention.as_deref(),
+            for_delete: query.for_delete,
         },
     )
     .map_err(oe)
@@ -77,6 +78,7 @@ pub(super) struct Query {
     cells: Vec<(usize, u32, u16)>,
     ranges: Vec<(usize, CellRange)>,
     mention: Option<String>,
+    for_delete: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -529,6 +531,34 @@ fn apply(wb: &mut Workbook, plan: &Plan) -> Result<(), Sentence> {
     Ok(())
 }
 
+/// The defined names the saved file must hold.
+fn expected_names(
+    before: &[elitea_office_core::DefinedName],
+    plan: &Plan,
+    names: &[String],
+) -> Vec<elitea_office_core::DefinedName> {
+    let mut out: Vec<elitea_office_core::DefinedName> = before.to_vec();
+    match plan {
+        Plan::Delete { sheet } => {
+            out.retain(|d| d.local != Some(*sheet));
+            for d in &mut out {
+                if let Some(l) = d.local
+                    && l > *sheet
+                {
+                    d.local = Some(l - 1);
+                }
+            }
+        }
+        Plan::Rename { sheet, name } => {
+            for d in out.iter_mut().filter(|d| d.local == Some(*sheet)) {
+                d.text = elitea_office_core::rename_in_formula(&d.text, &names[*sheet], name);
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
 fn unplanned(what: &str) -> Sentence {
     format!(
         "Nothing was saved: after the edit {what}, which is not what was asked. The spreadsheet library did not carry the edit through as planned."
@@ -563,10 +593,10 @@ pub(crate) fn verify(
     let before_names: Vec<&str> = before.sheets.iter().map(|s| s.name.as_str()).collect();
     let after_names: Vec<&str> = after.sheets.iter().map(|s| s.name.as_str()).collect();
     // Nothing the file held may be gone: no part of a kind fewer. Deleting a
-    // sheet takes the parts ONLY that sheet reaches with it (its drawings,
-    // charts, comments, tables and media); every other part must stay.
+    // sheet takes the parts that ONLY it reaches (not another sheet, not the
+    // workbook's own relationships) with it; every other part must stay.
     let exempt: BTreeMap<String, usize> = match plan {
-        Plan::Delete { sheet } => before.sheets[*sheet].owned_parts.clone(),
+        Plan::Delete { .. } => before.delete_exempt.clone(),
         _ => BTreeMap::new(),
     };
     {
@@ -589,14 +619,20 @@ pub(crate) fn verify(
             }
         }
     }
+    // The defined names follow the sheet: a delete drops the ones scoped to it
+    // and moves later scopes down, a rename rewrites the references inside the
+    // ones scoped to it, and every other edit leaves them all as they were.
+    let want_names = expected_names(&before.defined_names, plan, names);
+    if want_names != after.defined_names {
+        return Err(unplanned(
+            "the defined names do not follow the sheet as planned",
+        ));
+    }
     // The sheets other than the target are as they were: same cell count,
     // same charts.
     let same_sheet = |b: usize, a: usize| -> Result<(), Sentence> {
         let (bs, as_) = (&before.sheets[b], &after.sheets[a]);
-        if bs.value_cells != as_.value_cells
-            || bs.charts.len() != as_.charts.len()
-            || bs.owned_parts != as_.owned_parts
-        {
+        if bs.value_cells != as_.value_cells || bs.charts.len() != as_.charts.len() {
             return Err(unplanned(&format!("sheet `{}` had changed", bs.name)));
         }
         Ok(())
@@ -809,8 +845,10 @@ pub(crate) fn run_edit(
     let mut plan = plan(tool, args, &names)?;
     let mut query = plan.query();
     match &plan {
-        Plan::Rename { sheet, .. } | Plan::Delete { sheet } => {
+        Plan::Rename { sheet, .. } => query.mention = Some(names[*sheet].clone()),
+        Plan::Delete { sheet } => {
             query.mention = Some(names[*sheet].clone());
+            query.for_delete = true;
         }
         _ => {}
     }
@@ -830,12 +868,6 @@ pub(crate) fn run_edit(
         Plan::Delete { sheet } if before.sheet_mentioned_elsewhere => {
             return Err(format!(
                 "Sheet `{}` is referred to by name from a formula or chart of another sheet, a defined name, a validation, a conditional format, a hyperlink or a pivot table, and those references are not rewritten, so the edit would break them. Nothing was changed.",
-                names[*sheet]
-            ));
-        }
-        Plan::Delete { sheet } if before.local_name_sheet_ids.iter().any(|id| *id >= *sheet) => {
-            return Err(format!(
-                "A defined name or print area is scoped to sheet `{}` or to a sheet after it by position, and those scopes are not renumbered when a sheet is deleted, so the edit would move them to the wrong sheets. Nothing was changed.",
                 names[*sheet]
             ));
         }

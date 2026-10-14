@@ -2,11 +2,11 @@ package runtimecomposition
 
 import (
 	"bytes"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"sort"
-	"sync"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/rustonly"
 )
 
 // What the Rust worker serves that no SDK toolkit declares (ADR-0032):
@@ -33,9 +33,7 @@ import (
 // serve (it writes the file when ELITEA_WRITE_RUST_ONLY_TOOLS=1), and
 // TestRustOnlyToolsDoNotShadowSDKTools fails if the SDK ever declares one of
 // these names or types.
-//
-//go:embed rust_only_toolkit_tools.json
-var pinnedRustOnlyToolkitToolsJSON []byte
+var pinnedRustOnlyToolkitToolsJSON = rustonly.JSON
 
 const rustOnlyToolkitToolsVersion = "elitea.rust-only-toolkit-tools.v1"
 
@@ -164,41 +162,16 @@ func validateRustOnlyNewType(toolkitType string, entry rustOnlyNewType) error {
 	return nil
 }
 
-var (
-	rustOnlyNamesOnce sync.Once
-	rustOnlyNames     map[string]map[string]struct{}
-	rustOnlyTypes     map[string]struct{}
-)
-
 // rustOnlyToolkitToolNames is, per toolkit type, the set of tool names only the
 // Rust worker serves: what a Python deployment must mark unavailable in the
 // catalogue (WorkerToolkitCapability.SupportsTool), through the same
 // metadata.unavailable_tools mechanism a partial Rust family uses.
 func rustOnlyToolkitToolNames() map[string]map[string]struct{} {
-	rustOnlyNamesOnce.Do(func() {
-		rustOnlyNames = map[string]map[string]struct{}{}
-		var document rustOnlyToolkitToolsDocument
-		if json.Unmarshal(pinnedRustOnlyToolkitToolsJSON, &document) != nil {
-			return
-		}
-		for toolkitType, tools := range document.Types {
-			names := make(map[string]struct{}, len(tools))
-			for name := range tools {
-				names[name] = struct{}{}
-			}
-			rustOnlyNames[toolkitType] = names
-		}
-		rustOnlyTypes = map[string]struct{}{}
-		for toolkitType := range document.NewTypes {
-			rustOnlyTypes[toolkitType] = struct{}{}
-		}
-	})
-	return rustOnlyNames
+	return rustonly.ToolNames()
 }
 
 // rustOnlyToolkitTypeNames is the set of toolkit types only the Rust worker
 // serves: what a Python deployment must withhold whole.
 func rustOnlyToolkitTypeNames() map[string]struct{} {
-	rustOnlyToolkitToolNames()
-	return rustOnlyTypes
+	return rustonly.TypeNames()
 }

@@ -152,6 +152,8 @@ pub struct Workbook {
     /// opened sheet and reads them back after `clear_cell`; this mask hides
     /// them. The saved file does not have them.
     cleared: std::collections::HashSet<(usize, u32, u16)>,
+    /// Renames and deletes since open, for the defined names to follow at save.
+    name_ops: Vec<crate::defined_names::NameOp>,
 }
 
 impl std::fmt::Debug for Workbook {
@@ -170,6 +172,7 @@ impl Workbook {
             cells: 0,
             inline_strings: false,
             cleared: std::collections::HashSet::new(),
+            name_ops: Vec::new(),
         }
     }
 
@@ -204,6 +207,7 @@ impl Workbook {
             cells,
             inline_strings,
             cleared: std::collections::HashSet::new(),
+            name_ops: Vec::new(),
         })
     }
 
@@ -223,8 +227,12 @@ impl Workbook {
     /// Any limit violation of the produced file.
     pub fn save(&self) -> Result<Vec<u8>> {
         crate::counters::bump(crate::counters::Op::Save);
-        self.wb.guarded(|w, l| {
-            let raw = w.save_to_buffer().map_err(map_err)?;
+        let ops = self.name_ops.clone();
+        self.wb.guarded(move |w, l| {
+            let mut raw = w.save_to_buffer().map_err(map_err)?;
+            if !ops.is_empty() {
+                raw = crate::defined_names::apply(&raw, &ops, l)?;
+            }
             finish_output(&raw, Kind::Xlsx, l)
         })
     }
@@ -264,6 +272,8 @@ impl Workbook {
     /// [`OfficeError::NotFound`] for a bad index.
     pub fn remove_sheet(&mut self, index: usize) -> Result<()> {
         self.wb.lock()?.remove_worksheet(index).map_err(map_err)?;
+        self.name_ops
+            .push(crate::defined_names::NameOp::Delete(index));
         // Cleared-cell marks follow the sheets that moved down.
         self.cleared = self
             .cleared
@@ -279,10 +289,19 @@ impl Workbook {
     /// # Errors
     /// [`OfficeError::NotFound`] or [`OfficeError::InvalidInput`].
     pub fn rename_sheet(&mut self, index: usize, name: &str) -> Result<()> {
+        let old = self.sheet_names()?.get(index).cloned();
         self.wb
             .lock()?
             .rename_worksheet(index, name)
-            .map_err(map_err)
+            .map_err(map_err)?;
+        if let Some(old) = old {
+            self.name_ops.push(crate::defined_names::NameOp::Rename {
+                index,
+                old,
+                new: name.to_owned(),
+            });
+        }
+        Ok(())
     }
 
     /// Write one cell (0-based row and column). A cell counts against

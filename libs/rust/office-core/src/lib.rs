@@ -47,6 +47,7 @@
 mod a1;
 mod counters;
 mod deck;
+mod defined_names;
 mod document;
 mod docx_facts;
 mod error;
@@ -54,6 +55,7 @@ mod guard;
 mod image;
 mod inspect;
 mod limits;
+mod sheetrefs;
 mod validate;
 mod workbook;
 mod xlsx_facts;
@@ -69,9 +71,10 @@ pub use error::{Limit, OfficeError, Result};
 pub use guard::{Health, health};
 pub use inspect::{ChartFacts, ShapeFacts, ShapeKind, SlideFacts, TableFacts, facts_of_package};
 pub use limits::{Limits, PARSE_STACK_BYTES};
+pub use sheetrefs::rename_in_formula;
 pub use workbook::{CellRange, CellValue, SheetChartSpec, SheetSeries, Workbook};
 pub use xlsx_facts::{
-    XlsxChart, XlsxFacts, XlsxQuery, XlsxSheet, facts_of_xlsx_package,
+    DefinedName, XlsxChart, XlsxFacts, XlsxQuery, XlsxSheet, facts_of_xlsx_package,
     facts_of_xlsx_package_choosing,
 };
 
@@ -356,6 +359,7 @@ pub mod testing {
                     cells: &[(0, 0, 0), (0, 1, 1)],
                     ranges: &[],
                     sheet_mention: Some("Sheet1"),
+                    for_delete: false,
                 },
             ),
         );

@@ -308,6 +308,7 @@ fn xlsx_clear_range_clears_only_values_and_is_bounded() {
             cells: &[(0, 0, 0), (0, 9, 9)],
             ranges: &[],
             sheet_mention: None,
+            for_delete: false,
         },
     )
     .unwrap();
@@ -350,6 +351,7 @@ fn xlsx_package_facts_read_values_formulas_and_strings() {
             cells: &want,
             ranges: &[],
             sheet_mention: None,
+            for_delete: false,
         },
     )
     .unwrap();
@@ -504,6 +506,7 @@ fn xlsx_sheet_mentions_are_found_in_formulas_and_charts() {
                 cells: &[],
                 ranges: &[],
                 sheet_mention: Some(name),
+                for_delete: false,
             },
         )
         .unwrap();
@@ -634,6 +637,7 @@ fn xlsx_facts_read_shared_inline_phonetic_and_error_cells() {
             cells: &want,
             ranges: &[],
             sheet_mention: None,
+            for_delete: false,
         },
     )
     .unwrap();
@@ -733,6 +737,7 @@ fn mentioned_after(
             cells: &[],
             ranges: &[],
             sheet_mention: Some(name),
+            for_delete: false,
         },
     )
     .unwrap()
@@ -848,7 +853,7 @@ fn xlsx_sheet_references_are_found_in_every_formula_bearing_place() {
 }
 
 #[test]
-fn xlsx_local_sheet_ids_of_defined_names_are_reported() {
+fn xlsx_defined_names_are_read_with_their_scope() {
     let l = limits();
     let mut w = Workbook::new(&l);
     w.add_sheet("B").unwrap();
@@ -859,57 +864,351 @@ fn xlsx_local_sheet_ids_of_defined_names_are_reported() {
         "</sheets><definedNames><definedName name=\"_xlnm.Print_Area\" localSheetId=\"1\">B!$A$1:$C$5</definedName><definedName name=\"G\">B!$A$1</definedName></definedNames>",
     ));
     let facts = facts_of_xlsx_package(&edited, &l, &XlsxQuery::default()).unwrap();
-    assert_eq!(facts.local_name_sheet_ids, [1]);
+    let got: Vec<(String, Option<usize>, String)> = facts
+        .defined_names
+        .iter()
+        .map(|d| (d.name.clone(), d.local, d.text.clone()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                "_xlnm.Print_Area".to_owned(),
+                Some(1),
+                "B!$A$1:$C$5".to_owned()
+            ),
+            ("G".to_owned(), None, "B!$A$1".to_owned())
+        ]
+    );
+}
+
+/// The facts of an edited two-sheet package asked about the sheet `name`.
+fn facts_for(
+    edit: impl Fn(Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)>,
+    name: &str,
+    for_delete: bool,
+) -> elitea_office_core::XlsxFacts {
+    let l = limits();
+    let mut w = Workbook::new(&l);
+    w.add_sheet("Data").unwrap();
+    w.write_cells(0, &[(0, 0, CellValue::Number(1.0))]).unwrap();
+    let edited = zip_of(&edit(entries(&w.save().unwrap())));
+    facts_of_xlsx_package(
+        &edited,
+        &l,
+        &XlsxQuery {
+            cells: &[],
+            ranges: &[],
+            sheet_mention: Some(name),
+            for_delete,
+        },
+    )
+    .unwrap()
+}
+
+const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+fn with_rels(
+    entries: Vec<(String, Vec<u8>)>,
+    part: &str,
+    rels: &[(&str, &str)],
+) -> Vec<(String, Vec<u8>)> {
+    let body: String = rels
+        .iter()
+        .enumerate()
+        .map(|(i, (kind, target))| {
+            format!("<Relationship Id=\"rIdX{i}\" Type=\"{REL}/{kind}\" Target=\"{target}\"/>")
+        })
+        .collect();
+    let rels_name = {
+        let (dir, file) = part.rsplit_once('/').unwrap();
+        format!("{dir}/_rels/{file}.rels")
+    };
+    let xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{body}</Relationships>"
+    );
+    let mut out: Vec<(String, Vec<u8>)> = entries
+        .into_iter()
+        .filter(|(n, _)| *n != rels_name)
+        .collect();
+    out.push((rels_name, xml.into_bytes()));
+    out
+}
+
+fn add(mut e: Vec<(String, Vec<u8>)>, name: &str, data: &str) -> Vec<(String, Vec<u8>)> {
+    e.push((name.to_owned(), data.as_bytes().to_vec()));
+    e
 }
 
 #[test]
-fn xlsx_a_sheet_owns_the_parts_only_it_reaches() {
+fn xlsx_extension_content_sparklines_and_pivot_by_table_or_name_count_as_references() {
+    let sheet1 = "xl/worksheets/sheet1.xml";
+    let ext = |inner: &str| format!("<extLst><ext uri=\"u\">{inner}</ext></extLst></worksheet>");
+    let x14cf = ext(
+        "<x14:conditionalFormattings xmlns:x14=\"http://x14\" xmlns:xm=\"http://xm\"><x14:conditionalFormatting><x14:cfRule type=\"expression\" id=\"{1}\"><xm:f>Data!$A$1&gt;0</xm:f></x14:cfRule></x14:conditionalFormatting></x14:conditionalFormattings>",
+    );
+    let cfvo = ext(
+        "<x14:conditionalFormattings xmlns:x14=\"http://x14\" xmlns:xm=\"http://xm\"><x14:conditionalFormatting><x14:cfRule type=\"dataBar\" id=\"{2}\"><x14:dataBar><x14:cfvo type=\"formula\"><xm:f>'Data'!$B$1</xm:f></x14:cfvo></x14:dataBar></x14:cfRule></x14:conditionalFormatting></x14:conditionalFormattings>",
+    );
+    let spark = ext(
+        "<x14:sparklineGroups xmlns:x14=\"http://x14\" xmlns:xm=\"http://xm\"><x14:sparklineGroup><x14:sparklines><x14:sparkline><xm:f>data!A1:A5</xm:f><xm:sqref>B1</xm:sqref></x14:sparkline></x14:sparklines></x14:sparklineGroup></x14:sparklineGroups>",
+    );
+    for (what, tail) in [
+        ("x14 cf rule", x14cf),
+        ("x14 cfvo", cfvo),
+        ("sparkline", spark),
+    ] {
+        let f = facts_for(|e| patched(e, sheet1, "</worksheet>", &tail), "Data", false);
+        assert!(f.sheet_mentioned, "{what}");
+        let f = facts_for(
+            |e| patched(e, sheet1, "</worksheet>", &tail),
+            "Sheet1",
+            false,
+        );
+        assert!(!f.sheet_mentioned, "{what}: Sheet1 is not named");
+    }
+    // A pivot cache sourced by the name of a table on the sheet.
+    let by_table = |e: Vec<(String, Vec<u8>)>| {
+        let e = add(
+            e,
+            "xl/tables/table1.xml",
+            "<table xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" id=\"1\" name=\"Sales\" displayName=\"SalesTbl\" ref=\"A1:B3\"/>",
+        );
+        let e = with_rels(
+            e,
+            "xl/worksheets/sheet2.xml",
+            &[("table", "../tables/table1.xml")],
+        );
+        add(
+            e,
+            "xl/pivotCache/pivotCacheDefinition1.xml",
+            "<pivotCacheDefinition xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><cacheSource type=\"worksheet\"><worksheetSource name=\"salestbl\"/></cacheSource></pivotCacheDefinition>",
+        )
+    };
+    assert!(
+        facts_for(by_table, "Data", false).sheet_mentioned,
+        "pivot by table name"
+    );
+    assert!(
+        !facts_for(by_table, "Sheet1", false).sheet_mentioned,
+        "the table is not on Sheet1"
+    );
+    // ... or by a defined name whose text refers to the sheet.
+    let by_name = |e: Vec<(String, Vec<u8>)>| {
+        let e = patched(
+            e,
+            "xl/workbook.xml",
+            "</sheets>",
+            "</sheets><definedNames><definedName name=\"Rng\" localSheetId=\"1\">Data!$A$1:$B$3</definedName><definedName name=\"Other\">Sheet1!$A$1</definedName></definedNames>",
+        );
+        add(
+            e,
+            "xl/pivotCache/pivotCacheDefinition1.xml",
+            "<pivotCacheDefinition xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><cacheSource type=\"worksheet\"><worksheetSource name=\"Rng\"/></cacheSource></pivotCacheDefinition>",
+        )
+    };
+    let f = facts_for(by_name, "Data", false);
+    assert!(
+        f.sheet_mentioned && f.sheet_mentioned_elsewhere,
+        "pivot by defined name"
+    );
+    // A name scoped to the sheet itself is not a reference that blocks; the
+    // same name used by nothing else leaves the sheet free.
+    let scoped_only = |e: Vec<(String, Vec<u8>)>| {
+        patched(
+            e,
+            "xl/workbook.xml",
+            "</sheets>",
+            "</sheets><definedNames><definedName name=\"_xlnm._FilterDatabase\" localSheetId=\"1\">Data!$A$1:$B$3</definedName></definedNames>",
+        )
+    };
+    assert!(!facts_for(scoped_only, "Data", false).sheet_mentioned);
+    // Cell values are not references: a text that merely contains `Data!`.
+    let text_cell = |e: Vec<(String, Vec<u8>)>| {
+        patched(
+            e,
+            "xl/worksheets/sheet1.xml",
+            "<v>1</v>",
+            "<v>see Data! here</v>",
+        )
+    };
+    assert!(!facts_for(text_cell, "Data", false).sheet_mentioned);
+}
+
+#[test]
+fn xlsx_a_delete_exempts_only_what_no_other_root_reaches() {
+    let sheet2 = "xl/worksheets/sheet2.xml";
+    // Sheet1 and Data share an image; only Sheet1 has comments.
+    let shared = |e: Vec<(String, Vec<u8>)>| {
+        let mut e = with_rels(
+            e,
+            "xl/worksheets/sheet1.xml",
+            &[
+                ("image", "../media/image1.png"),
+                ("comments", "../comments1.xml"),
+            ],
+        );
+        e = with_rels(e, sheet2, &[("image", "../media/image1.png")]);
+        e.push(("xl/media/image1.png".to_owned(), TINY_PNG.to_vec()));
+        add(
+            e,
+            "xl/comments1.xml",
+            "<comments xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>",
+        )
+    };
+    let f = facts_for(shared, "Sheet1", true);
+    assert_eq!(
+        f.delete_exempt.get("xl/comments"),
+        Some(&1),
+        "{:?}",
+        f.delete_exempt
+    );
+    assert_eq!(
+        f.delete_exempt.get("xl/worksheets/sheet"),
+        Some(&1),
+        "{:?}",
+        f.delete_exempt
+    );
+    assert!(
+        !f.delete_exempt.contains_key("xl/media/image"),
+        "a shared image is never exempt: {:?}",
+        f.delete_exempt
+    );
+    // A pivot cache that the workbook holds is not exempt, though the deleted
+    // sheet's pivot table reaches it; the pivot table itself goes.
+    let pivot = |e: Vec<(String, Vec<u8>)>| {
+        let e = with_rels(
+            e,
+            "xl/worksheets/sheet1.xml",
+            &[("pivotTable", "../pivotTables/pivotTable1.xml")],
+        );
+        let e = with_rels(
+            e,
+            "xl/pivotTables/pivotTable1.xml",
+            &[(
+                "pivotCacheDefinition",
+                "../pivotCache/pivotCacheDefinition1.xml",
+            )],
+        );
+        let e = add(
+            e,
+            "xl/pivotTables/pivotTable1.xml",
+            "<pivotTableDefinition xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>",
+        );
+        let e = add(
+            e,
+            "xl/pivotCache/pivotCacheDefinition1.xml",
+            "<pivotCacheDefinition xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>",
+        );
+        let rels = "xl/_rels/workbook.xml.rels";
+        patched(
+            e,
+            rels,
+            "</Relationships>",
+            &format!(
+                "<Relationship Id=\"rIdP\" Type=\"{REL}/pivotCacheDefinition\" Target=\"pivotCache/pivotCacheDefinition1.xml\"/></Relationships>"
+            ),
+        )
+    };
+    let f = facts_for(pivot, "Sheet1", true);
+    assert_eq!(
+        f.delete_exempt.get("xl/pivotTables/pivotTable"),
+        Some(&1),
+        "{:?}",
+        f.delete_exempt
+    );
+    assert!(
+        !f.delete_exempt
+            .contains_key("xl/pivotCache/pivotCacheDefinition"),
+        "{:?}",
+        f.delete_exempt
+    );
+    // The walks run only when asked: no sheet named, or not for a delete.
+    let l = limits();
+    let bytes = good_xlsx();
+    let plain = facts_of_xlsx_package(&bytes, &l, &XlsxQuery::default()).unwrap();
+    assert_eq!(plain.walked_parts, 0);
+    assert!(plain.delete_exempt.is_empty());
+    let rename = facts_for(|e| e, "Data", false);
+    assert!(rename.walked_parts > 0 && rename.delete_exempt.is_empty());
+    assert!(facts_for(|e| e, "Data", true).walked_parts > rename.walked_parts);
+}
+
+#[test]
+fn xlsx_a_rename_and_a_delete_carry_the_sheet_scoped_defined_names() {
     let l = limits();
     let mut w = Workbook::new(&l);
-    w.add_sheet("Two").unwrap();
-    w.write_cells(
-        1,
-        &[
-            (0, 0, CellValue::Number(1.0)),
-            (1, 0, CellValue::Number(2.0)),
-        ],
-    )
-    .unwrap();
-    w.add_chart(
-        1,
-        &SheetChartSpec {
-            kind: ChartKind::Line,
-            title: None,
-            categories: None,
-            series: vec![SheetSeries {
-                name: None,
-                values: "A1:A2".into(),
-            }],
-            legend: false,
-            data_labels: false,
-            anchor_row: 0,
-            anchor_col: 3,
-            width_px: 300,
-            height_px: 200,
-        },
-    )
-    .unwrap();
-    let facts = facts_of_xlsx_package(&w.save().unwrap(), &l, &XlsxQuery::default()).unwrap();
-    assert!(
-        facts.sheets[0]
-            .owned_parts
-            .keys()
-            .all(|k| !k.contains("chart") && !k.contains("drawing")),
-        "{:?}",
-        facts.sheets[0].owned_parts
+    w.add_sheet("Data").unwrap();
+    w.add_sheet("Last").unwrap();
+    let names = "</sheets><definedNames>\
+        <definedName name=\"_xlnm._FilterDatabase\" localSheetId=\"1\">Data!$A$1:$C$5</definedName>\
+        <definedName name=\"_xlnm.Print_Area\" localSheetId=\"2\">Last!$A$1:$D$9</definedName>\
+        <definedName name=\"Everywhere\">Last!$A$1</definedName></definedNames>";
+    let base = elitea_office_core::testing::replace_in_part(
+        &w.save().unwrap(),
+        "xl/workbook.xml",
+        "</sheets>",
+        names,
     );
-    let owned = &facts.sheets[1].owned_parts;
-    assert_eq!(owned.get("xl/charts/chart"), Some(&1), "{owned:?}");
-    assert!(
-        owned.keys().any(|k| k.starts_with("xl/drawings/drawing")),
-        "{owned:?}"
+    let read = |bytes: &[u8]| -> Vec<(String, Option<usize>, String)> {
+        facts_of_xlsx_package(bytes, &l, &XlsxQuery::default())
+            .unwrap()
+            .defined_names
+            .into_iter()
+            .map(|d| (d.name, d.local, d.text))
+            .collect()
+    };
+    // Rename: the autofilter's name follows to the new, quoted name.
+    let mut a = Workbook::open(&base, &l).unwrap();
+    a.rename_sheet(1, "My Data").unwrap();
+    let got = read(&a.save().unwrap());
+    assert_eq!(
+        got[0],
+        (
+            "_xlnm._FilterDatabase".into(),
+            Some(1),
+            "'My Data'!$A$1:$C$5".into()
+        )
     );
-    assert_eq!(owned.get("xl/worksheets/sheet"), Some(&1), "{owned:?}");
+    assert_eq!(got[1].2, "Last!$A$1:$D$9");
+    assert_eq!(
+        got[2].2, "Last!$A$1",
+        "a workbook-scoped name is the tools' to refuse, not ours to rewrite"
+    );
+    // Delete the sheet that has the autofilter: its name goes, a later scope moves down.
+    let mut b = Workbook::open(&base, &l).unwrap();
+    b.remove_sheet(1).unwrap();
+    let got = read(&b.save().unwrap());
+    assert_eq!(
+        got,
+        [
+            (
+                "_xlnm.Print_Area".to_owned(),
+                Some(1),
+                "Last!$A$1:$D$9".to_owned()
+            ),
+            ("Everywhere".to_owned(), None, "Last!$A$1".to_owned())
+        ]
+    );
+    // Delete an EARLIER sheet: both scopes move down.
+    let mut c = Workbook::open(&base, &l).unwrap();
+    c.remove_sheet(0).unwrap();
+    let got = read(&c.save().unwrap());
+    assert_eq!(got[0].1, Some(0));
+    assert_eq!(got[1].1, Some(1));
+    // Two operations in a row apply in order.
+    let mut d = Workbook::open(&base, &l).unwrap();
+    d.rename_sheet(2, "Final").unwrap();
+    d.remove_sheet(0).unwrap();
+    let got = read(&d.save().unwrap());
+    assert_eq!(
+        got[1],
+        (
+            "_xlnm.Print_Area".to_owned(),
+            Some(1),
+            "'Final'!$A$1:$D$9".replace('\'', "")
+        )
+    );
 }
 
 #[test]
@@ -952,4 +1251,17 @@ fn xlsx_choosing_reads_one_range_in_one_scan() {
         )),
         Err(OfficeError::InvalidInput(_))
     ));
+}
+
+// -- review round 2 -----------------------------------------------------------------
+
+#[test]
+fn docx_a_tab_after_ruby_text_is_still_in_its_run() {
+    let l = limits();
+    // A run that holds runs (ruby text and base), then its own tab and text.
+    let bytes = docx_with_body(
+        "<w:p><w:r><w:ruby><w:rt><w:r><w:t>r</w:t></w:r></w:rt><w:rubyBase><w:r><w:t>b</w:t></w:r></w:rubyBase></w:ruby><w:tab/><w:t>x</w:t><w:br/><w:t>y</w:t></w:r></w:p>",
+    );
+    let facts = facts_of_docx_package(&bytes, &l).unwrap();
+    assert_eq!(facts.paragraphs()[0].text, "rb\tx\ny");
 }

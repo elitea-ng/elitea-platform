@@ -87,6 +87,7 @@ impl Rig {
                 cells,
                 ranges: &[],
                 sheet_mention: None,
+                for_delete: false,
             },
         )
         .expect("a valid workbook")
@@ -251,7 +252,7 @@ fn the_rust_only_document_carries_pptx_tools_and_both_new_types() {
 fn the_ui_catalogue_lists_every_tool_the_families_serve() {
     const PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../services/elitea-main/internal/runtimecomposition/rust_only_toolkit_tools.json"
+        "/../../../services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
     );
     let want = super::families::rust_only_catalogue_document();
     if std::env::var("ELITEA_WRITE_RUST_ONLY_TOOLS").as_deref() == Ok("1") {
@@ -914,6 +915,7 @@ fn the_saved_bytes_are_judged_cell_by_cell_not_workbook_wide() {
             cells: &[(0, 0, 3), (0, 0, 4)],
             ranges: &[],
             sheet_mention: None,
+            for_delete: false,
         },
     )
     .unwrap();
@@ -984,82 +986,83 @@ async fn materialization_needs_the_office_capability_on_the_artifact_authority()
 
 // -- review round 1 -----------------------------------------------------------------
 
-fn facts_with_sheets(sheets: &[(&str, &[(&str, usize)])], parts: &[(&str, usize)]) -> XlsxFacts {
+fn facts_with_sheets(
+    sheets: &[&str],
+    parts: &[(&str, usize)],
+    exempt: &[(&str, usize)],
+) -> XlsxFacts {
     use elitea_office_core::XlsxSheet;
+    let kinds = |list: &[(&str, usize)]| list.iter().map(|(k, n)| ((*k).to_owned(), *n)).collect();
     XlsxFacts {
         sheets: sheets
             .iter()
-            .map(|(name, owned)| XlsxSheet {
+            .map(|name| XlsxSheet {
                 name: (*name).to_owned(),
                 charts: Vec::new(),
                 value_cells: 1,
                 used_range: None,
-                owned_parts: owned.iter().map(|(k, n)| ((*k).to_owned(), *n)).collect(),
             })
             .collect(),
-        parts: parts.iter().map(|(k, n)| ((*k).to_owned(), *n)).collect(),
+        parts: kinds(parts),
+        delete_exempt: kinds(exempt),
         ..XlsxFacts::default()
     }
 }
 
 #[test]
-fn deleting_a_sheet_exempts_only_the_parts_that_sheet_owns() {
-    let names = vec!["Sheet1".to_owned(), "Sheet2".to_owned()];
-    let plan = ops::Plan::Delete { sheet: 1 };
-    // Sheet1 has an image of its own; Sheet2 has a chart and a drawing.
+fn deleting_a_sheet_exempts_only_what_no_other_root_reaches() {
+    let names = vec!["A".to_owned(), "B".to_owned()];
+    let plan = ops::Plan::Delete { sheet: 0 };
+    // A and B share an image; A alone has a chart; the workbook holds a pivot
+    // cache that A's pivot table also reaches.
     let before = facts_with_sheets(
-        &[
-            (
-                "Sheet1",
-                &[("xl/media/image", 1), ("xl/worksheets/sheet", 1)],
-            ),
-            (
-                "Sheet2",
-                &[("xl/charts/chart", 1), ("xl/worksheets/sheet", 1)],
-            ),
-        ],
+        &["A", "B"],
         &[
             ("xl/media/image", 1),
             ("xl/charts/chart", 1),
             ("xl/worksheets/sheet", 2),
+            ("xl/pivotCache/pivotCacheDefinition", 1),
         ],
+        &[("xl/charts/chart", 1), ("xl/worksheets/sheet", 1)],
     );
-    // Right: Sheet2's chart and sheet part are gone, Sheet1 is whole.
+    // Right: A's chart and sheet part are gone; the shared image and the pivot
+    // cache stay.
     let right = facts_with_sheets(
-        &[(
-            "Sheet1",
-            &[("xl/media/image", 1), ("xl/worksheets/sheet", 1)],
-        )],
-        &[("xl/media/image", 1), ("xl/worksheets/sheet", 1)],
-    );
-    ops::verify(&before, &right, &plan, &names).expect("only Sheet2's parts went");
-    // Wrong: the library also dropped Sheet1's image. Sheet2's exemption does
-    // not cover it, whatever the totals say.
-    let lost = facts_with_sheets(
-        &[("Sheet1", &[("xl/worksheets/sheet", 1)])],
-        &[("xl/worksheets/sheet", 1)],
-    );
-    let said = ops::verify(&before, &lost, &plan, &names).expect_err("Sheet1 lost its image");
-    assert!(said.contains("Nothing was saved"), "{said}");
-    assert!(said.contains("xl/media/image"), "{said}");
-    // And a change to Sheet1's own parts with the totals still adding up is
-    // caught per sheet.
-    let swapped = facts_with_sheets(
-        &[(
-            "Sheet1",
-            &[
-                ("xl/media/image", 1),
-                ("xl/worksheets/sheet", 1),
-                ("xl/charts/chart", 1),
-            ],
-        )],
+        &["B"],
         &[
             ("xl/media/image", 1),
             ("xl/worksheets/sheet", 1),
-            ("xl/charts/chart", 1),
+            ("xl/pivotCache/pivotCacheDefinition", 1),
         ],
+        &[],
     );
-    assert!(ops::verify(&before, &swapped, &plan, &names).is_err());
+    ops::verify(&before, &right, &plan, &names).expect("only A's own parts went");
+    // The library also dropped the shared image: refused, whatever else.
+    let lost_image = facts_with_sheets(
+        &["B"],
+        &[
+            ("xl/worksheets/sheet", 1),
+            ("xl/pivotCache/pivotCacheDefinition", 1),
+        ],
+        &[],
+    );
+    let said = ops::verify(&before, &lost_image, &plan, &names).expect_err("a shared image");
+    assert!(
+        said.contains("Nothing was saved") && said.contains("xl/media/image"),
+        "{said}"
+    );
+    // The library dropped a workbook-level part (the pivot cache).
+    let lost_cache = facts_with_sheets(
+        &["B"],
+        &[("xl/media/image", 1), ("xl/worksheets/sheet", 1)],
+        &[],
+    );
+    let said = ops::verify(&before, &lost_cache, &plan, &names).expect_err("a workbook part");
+    assert!(said.contains("pivotCacheDefinition"), "{said}");
+    // The remaining sheet is whole: its cells and charts are unchanged.
+    let mut changed = right.clone();
+    changed.sheets[0].value_cells = 0;
+    assert!(ops::verify(&before, &changed, &plan, &names).is_err());
 }
 
 #[tokio::test]
@@ -1098,7 +1101,8 @@ async fn a_sheet_with_a_chart_of_its_own_can_be_deleted_and_the_rest_is_untouche
 }
 
 #[tokio::test]
-async fn a_sheet_named_anywhere_is_not_renamed_or_deleted_and_scoped_names_block_a_delete() {
+#[allow(clippy::too_many_lines)]
+async fn a_sheet_named_anywhere_is_not_renamed_or_deleted_and_scoped_names_follow_the_sheet() {
     use elitea_office_core::testing::replace_in_part;
     let rig = Rig::new().await;
     let l = test_limits();
@@ -1154,24 +1158,67 @@ async fn a_sheet_named_anywhere_is_not_renamed_or_deleted_and_scoped_names_block
         }
         assert_eq!(rig.host.get("b.xlsx"), bytes);
     }
-    // A name scoped to a sheet by position, at or after the deleted sheet.
+    // Names scoped to sheets by position no longer block: the autofilter's name
+    // on `Data` goes with it on a delete, the print area on `Last` moves down.
     let scoped = replace_in_part(
         &base,
         "xl/workbook.xml",
         "</sheets>",
-        "</sheets><definedNames><definedName name=\"_xlnm.Print_Area\" localSheetId=\"2\">Last!$A$1:$C$3</definedName></definedNames>",
+        "</sheets><definedNames><definedName name=\"_xlnm._FilterDatabase\" localSheetId=\"1\">Data!$A$1:$C$5</definedName><definedName name=\"_xlnm.Print_Area\" localSheetId=\"2\">Last!$A$1:$C$3</definedName></definedNames>",
     );
+    let names_of = |rig: &Rig, file: &str| -> Vec<(String, Option<usize>, String)> {
+        rig.facts(file, &[])
+            .defined_names
+            .into_iter()
+            .map(|d| (d.name, d.local, d.text))
+            .collect()
+    };
     rig.host.put("s.xlsx", scoped.clone());
-    // Deleting sheet 2 (index 1) would shift the scope of sheet index 2.
     let said = rig
-        .text("delete_sheet", json!({"file_name": "s.xlsx", "sheet": 2}))
+        .text(
+            "rename_sheet",
+            json!({"file_name": "s.xlsx", "sheet": "Data", "new_name": "My Data"}),
+        )
         .await;
-    assert!(said.contains("scoped to sheet"), "{said}");
-    assert_eq!(rig.host.get("s.xlsx"), scoped);
-    // Renaming does not move a scope.
-    rig.text(
-        "rename_sheet",
-        json!({"file_name": "s.xlsx", "sheet": 2, "new_name": "Fine"}),
-    )
-    .await;
+    assert!(said.contains("Renamed sheet 2"), "{said}");
+    assert_eq!(
+        names_of(&rig, "s.xlsx")[0],
+        (
+            "_xlnm._FilterDatabase".to_owned(),
+            Some(1),
+            "'My Data'!$A$1:$C$5".to_owned()
+        )
+    );
+    rig.host.put("s.xlsx", scoped);
+    let said = rig
+        .text(
+            "delete_sheet",
+            json!({"file_name": "s.xlsx", "sheet": "Data"}),
+        )
+        .await;
+    assert!(said.contains("Deleted sheet `Data`"), "{said}");
+    assert_eq!(
+        names_of(&rig, "s.xlsx"),
+        [(
+            "_xlnm.Print_Area".to_owned(),
+            Some(1),
+            "Last!$A$1:$C$3".to_owned()
+        )]
+    );
+    // A workbook-scoped name that refers to the sheet still blocks.
+    let global = replace_in_part(
+        &base,
+        "xl/workbook.xml",
+        "</sheets>",
+        "</sheets><definedNames><definedName name=\"G\">Data!$A$1</definedName></definedNames>",
+    );
+    rig.host.put("g.xlsx", global.clone());
+    let said = rig
+        .text(
+            "delete_sheet",
+            json!({"file_name": "g.xlsx", "sheet": "Data"}),
+        )
+        .await;
+    assert!(said.contains("referred to by name"), "{said}");
+    assert_eq!(rig.host.get("g.xlsx"), global);
 }

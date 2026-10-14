@@ -2958,4 +2958,4 @@ refused and nothing is written.
 | `xlsx` tools and schemas | `families/xlsx/{schema,ops,tools,config}.rs` |
 | `xlsx` fact sheet (named cells and ranges, used range, charts per sheet, sheet-name mentions, inline strings) | `office-core/src/xlsx_facts.rs` |
 | Batch writes counted by distinct cell, clear, chart from cell ranges | `office-core/src/workbook.rs::{write_cells,clear_range,add_chart}` |
-| Catalogue: the types are not in the SDK snapshot | `runtimecomposition/rust_only_toolkit_tools.json` `new_types` (checked by `xlsx_tests::the_ui_catalogue_lists_every_tool_the_families_serve`) |
+| Catalogue: the types are not in the SDK snapshot | `rustonly/rust_only_toolkit_tools.json` `new_types` (checked by `xlsx_tests::the_ui_catalogue_lists_every_tool_the_families_serve`) |

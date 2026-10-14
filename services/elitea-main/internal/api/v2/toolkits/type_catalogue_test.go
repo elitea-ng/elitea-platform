@@ -236,6 +236,14 @@ func TestCatalogueWithoutAWorkerCapabilityOffersEveryType(t *testing.T) {
 	if len(body) < 52 {
 		t.Errorf("served %d types with no capability source", len(body))
 	}
+	// ... except the types only the Rust worker serves: absence of a statement
+	// is not a statement that a Rust worker is there.
+	for _, toolkitType := range rustOnlyTypes {
+		metadata := metadataOf(t, body, toolkitType)
+		if unavailable, _ := metadata["unavailable"].(bool); !unavailable {
+			t.Errorf("%s is offered with no capability source", toolkitType)
+		}
+	}
 }
 
 // The Python image installs a measured subset of elitea-sdk[all]. These nine
@@ -718,26 +726,31 @@ func TestDocxAndXlsxAreRustOnlyTypes(t *testing.T) {
 	}
 }
 
-// A catalogue served with a nil capability projection (the deployment has not
-// stated its worker) offers the SDK's types and withholds docx and xlsx and
-// pptx's Rust-only tools.
-func TestANilCapabilityWithholdsTheRustOnlyTypesAndTools(t *testing.T) {
+// A handler with NO capability source at all (an untyped nil) applies the same
+// rule as a nil projection: the SDK's types are offered, docx and xlsx and
+// pptx's Rust-only tools are withheld, with a reason.
+func TestNoCapabilitySourceWithholdsTheRustOnlyTypesAndTools(t *testing.T) {
 	t.Parallel()
 
-	options := append(catalogueOptions(t, ""),
-		toolkits.WithWorkerCapability((*runtimecomposition.WorkerToolkitCapability)(nil)))
-	body := getToolkitTypeCatalogue(t, options...)
-	for _, toolkitType := range rustOnlyTypes {
-		metadata := metadataOf(t, body, toolkitType)
-		if unavailable, _ := metadata["unavailable"].(bool); !unavailable {
-			t.Errorf("%s is offered with no capability: %v", toolkitType, metadata)
+	for name, options := range map[string][]toolkits.Option{
+		"untyped nil": catalogueOptions(t, ""),
+		"typed nil": append(catalogueOptions(t, ""),
+			toolkits.WithWorkerCapability((*runtimecomposition.WorkerToolkitCapability)(nil))),
+	} {
+		body := getToolkitTypeCatalogue(t, options...)
+		for _, toolkitType := range rustOnlyTypes {
+			metadata := metadataOf(t, body, toolkitType)
+			reason, _ := metadata["unavailable_reason"].(string)
+			if unavailable, _ := metadata["unavailable"].(bool); !unavailable || reason == "" {
+				t.Errorf("%s: %s is offered with no capability: %v", name, toolkitType, metadata)
+			}
 		}
-	}
-	if unavailable, _ := metadataOf(t, body, "github")["unavailable"].(bool); unavailable {
-		t.Error("github is withheld with no capability")
-	}
-	withheld, _ := metadataOf(t, body, "pptx")["unavailable_tools"].([]any)
-	if len(withheld) != 19 {
-		t.Errorf("pptx withholds %d tools with no capability, want the 19 Rust-only ones", len(withheld))
+		if unavailable, _ := metadataOf(t, body, "github")["unavailable"].(bool); unavailable {
+			t.Errorf("%s: github is withheld with no capability", name)
+		}
+		withheld, _ := metadataOf(t, body, "pptx")["unavailable_tools"].([]any)
+		if len(withheld) != 19 {
+			t.Errorf("%s: pptx withholds %d tools, want the 19 Rust-only ones", name, len(withheld))
+		}
 	}
 }

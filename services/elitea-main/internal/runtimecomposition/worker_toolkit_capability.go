@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/rustonly"
 )
 
 const (
@@ -293,11 +294,7 @@ func (c *WorkerToolkitCapability) SupportsToolkitType(
 	importKey string,
 ) (bool, string) {
 	if c == nil {
-		if _, rustOnly := rustOnlyToolkitTypeNames()[toolkitType]; rustOnly {
-			return false, "This deployment has not stated which agent worker it runs, so the " +
-				toolkitType + " toolkit, which only the Rust worker serves, is not offered."
-		}
-		return true, ""
+		return rustonly.AbsentTypeVerdict(toolkitType)
 	}
 	switch c.implementation {
 	case PythonWorkerImplementation:
@@ -382,10 +379,10 @@ func (c *WorkerToolkitCapability) ForIndexingRuntime(config Config) *WorkerToolk
 }
 
 // SupportsTool reports whether the configured worker serves one TOOL of a
-// type it supports (SupportsToolkitType answers for the type). Only a Rust
-// family that serves a subset of the SDK's tools refuses one; every other
-// answer is yes, including a nil projection, for the reason
-// SupportsToolkitType gives.
+// type it supports (SupportsToolkitType answers for the type). It refuses:
+// a tool only the Rust worker serves, on a Python projection and on a nil one
+// (a deployment that has not stated its worker); and a tool a partial Rust
+// family does not serve. Every other answer is yes.
 func (c *WorkerToolkitCapability) SupportsTool(toolkitType, toolName string) (bool, string) {
 	if c != nil && c.implementation == PythonWorkerImplementation {
 		// The tools only the Rust worker serves (ADR-0032 P3 pptx authoring)
@@ -402,11 +399,7 @@ func (c *WorkerToolkitCapability) SupportsTool(toolkitType, toolName string) (bo
 		// The same reading of absence as SupportsToolkitType: the tools only the
 		// Rust worker serves are not offered on a deployment that has not said
 		// it runs one.
-		if _, rustOnly := rustOnlyToolkitToolNames()[toolkitType][toolName]; rustOnly {
-			return false, "This deployment has not stated which agent worker it runs, so the " +
-				toolName + " tool of the " + toolkitType + " toolkit, which only the Rust worker serves, is not offered."
-		}
-		return true, ""
+		return rustonly.AbsentToolVerdict(toolkitType, toolName)
 	}
 	if c.implementation != RustWorkerImplementation {
 		return true, ""
