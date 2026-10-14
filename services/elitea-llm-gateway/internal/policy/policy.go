@@ -557,6 +557,14 @@ type Diagnostics struct {
 	Inert            []InertRow    `json:"inert"`
 }
 
+// RateLimitCount is how many authored rate-limit rules the snapshot holds.
+func (s *Snapshot) RateLimitCount() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.rateLimits)
+}
+
 // Diagnostics renders the snapshot's operator-facing report.
 func (s *Snapshot) Diagnostics() Diagnostics {
 	if s == nil {

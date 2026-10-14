@@ -29,7 +29,8 @@ type fakeRepo struct {
 	// tests) — this is what lets a test genuinely exercise the S12 quota
 	// rollback path (upload, observe SumProjectBytes grow, delete, observe
 	// it shrink) through the real handler rather than a seeded number.
-	objects map[string]fakeObjectRecord
+	objects      map[string]fakeObjectRecord
+	lastUpserted repos.ObjectRow
 	// grants backs CreateTransferGrant/GetTransferGrant/MarkTransferGrantConsumed
 	// (S15), keyed by grant ID.
 	grants map[string]repos.TransferGrantRow
@@ -57,6 +58,7 @@ type fakeObjectRecord struct {
 	key        string
 	byteLength int64
 	expiresAt  *time.Time
+	createdAt  time.Time
 }
 
 func fakeObjectKey(bucketID int64, key string) string {
@@ -253,13 +255,21 @@ func (r *fakeRepo) UpsertObject(_ context.Context, input repos.NewObjectInput) (
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
-	r.objects[fakeObjectKey(input.BucketID, input.Key)] = fakeObjectRecord{
-		bucketID: input.BucketID, key: input.Key, byteLength: input.ByteLength, expiresAt: input.ExpiresAt,
+	k := fakeObjectKey(input.BucketID, input.Key)
+	created := now
+	if prev, ok := r.objects[k]; ok {
+		created = prev.createdAt // mirrors ON CONFLICT: created_at is kept
 	}
-	return repos.ObjectRow{
+	r.objects[k] = fakeObjectRecord{
+		bucketID: input.BucketID, key: input.Key, byteLength: input.ByteLength, expiresAt: input.ExpiresAt,
+		createdAt: created,
+	}
+	row := repos.ObjectRow{
 		BucketID: input.BucketID, Key: input.Key, ByteLength: input.ByteLength,
-		MediaType: input.MediaType, ExpiresAt: input.ExpiresAt, CreatedAt: now, UpdatedAt: now,
-	}, nil
+		MediaType: input.MediaType, ExpiresAt: input.ExpiresAt, CreatedAt: created, UpdatedAt: now,
+	}
+	r.lastUpserted = row
+	return row, nil
 }
 
 func (r *fakeRepo) DeleteObjects(_ context.Context, bucketID int64, keys []string) error {

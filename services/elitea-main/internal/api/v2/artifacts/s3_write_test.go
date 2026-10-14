@@ -704,12 +704,10 @@ func (s timelessPutStore) Put(ctx context.Context, ref storage.ObjectRef, body i
 	return info, err
 }
 
-// TestUploadObjectS3_OmitsUnknownLastModified proves the PUT envelope leaves
-// the field out rather than asserting the year 1 as the object's modification
-// time. A client cannot tell a fabricated timestamp from a real one, and the
-// listing (which does know the time) would then disagree with the write that
-// produced it.
-func TestUploadObjectS3_OmitsUnknownLastModified(t *testing.T) {
+// TestUploadObjectS3_FallsBackToRowUpdatedAt proves the PUT envelope never
+// carries the year-1 zero time: when the backend reports no time, lastModified
+// is the persisted row's updated_at.
+func TestUploadObjectS3_FallsBackToRowUpdatedAt(t *testing.T) {
 	repo := newFakeRepo()
 	if _, err := repo.CreateBucket(t.Context(), repos.NewBucketInput{
 		ProjectID: 1, Name: "reports", DisplayName: "reports", BucketType: "local",
@@ -723,11 +721,14 @@ func TestUploadObjectS3_OmitsUnknownLastModified(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
 	body := decodeS3JSON(t, rr)
-	if got, ok := body["lastModified"]; ok {
-		t.Errorf(`body["lastModified"] = %v, want the key absent when the backend reports no time`, got)
+	got, ok := body["lastModified"].(string)
+	if !ok {
+		t.Fatalf("lastModified missing; body=%v", body)
 	}
-	// The rest of the envelope must still be there — omitting the timestamp
-	// must not mean omitting the answer.
+	lm, err := time.Parse(time.RFC3339Nano, got)
+	if err != nil || !lm.Equal(repo.lastUpserted.UpdatedAt) {
+		t.Errorf("lastModified = %q (%v), want the row's updated_at %v", got, err, repo.lastUpserted.UpdatedAt)
+	}
 	if body["key"] != "a.txt" || body["size"] != float64(1) {
 		t.Errorf("envelope = %v, want key a.txt of size 1", body)
 	}
