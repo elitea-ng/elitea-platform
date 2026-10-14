@@ -13,7 +13,7 @@
  */
 import type { ChatMessage } from './convertMessagesToChatHistory.types';
 
-export type SkippedCapabilityKind = 'toolkit' | 'internal_tool' | 'application';
+type SkippedCapabilityKind = 'toolkit' | 'internal_tool' | 'application';
 
 export interface SkippedCapability {
   readonly kind: SkippedCapabilityKind;
