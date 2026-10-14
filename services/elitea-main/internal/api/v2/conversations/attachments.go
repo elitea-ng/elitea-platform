@@ -90,7 +90,6 @@ const (
 	defaultAttachmentMaxFileMB  = 150
 	defaultAttachmentMaxImageMB = 3
 	defaultAttachmentRetention  = 365
-	defaultAttachmentBucketName = "chat-attachments"
 	attachmentMaxChunkBytes     = 5 << 20 // wire contract: 5 MiB per chunk
 	attachmentMultipartMemLimit = 8 << 20 // in-memory part threshold before ParseMultipartForm spills to temp files
 )
@@ -119,7 +118,7 @@ type AttachmentStore interface {
 	// AttachmentPolicy resolves the elitea_storage.project_storage_policy
 	// fields this stage's limits can legitimately be sourced from for
 	// projectID: attachment_bucket (bucketName, "" when unset — the caller
-	// falls back to defaultAttachmentBucketName), max_object_bytes
+	// falls back to storage.DefaultAttachmentBucket), max_object_bytes
 	// (maxFileBytes, nil when unset — matches objects.go's own
 	// policy-first-env-fallback-second precedent for the identical concept,
 	// "cap on one uploaded object"), and retention_default_days
@@ -462,7 +461,7 @@ func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context,
 		return
 	}
 	if bucketName == "" {
-		bucketName = defaultAttachmentBucketName
+		bucketName = storage.DefaultAttachmentBucket
 	}
 
 	isImage := isImageAttachment(fileName)

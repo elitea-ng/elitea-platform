@@ -847,17 +847,20 @@ fn validate_application_meta(value: Option<&Value>) -> Result<(), NativeAgentAss
     match meta.get("lazy_tools_mode") {
         None | Some(Value::Bool(false)) => {}
         Some(Value::Bool(true)) => {
-            // Smart Tools Selection — a form toggle, not a protocol field. The
-            // runtime exposes every tool unconditionally, which is the mode's
-            // SAFE side (lazy mode narrows exposure; ignoring it widens
-            // nothing the author did not already attach), so this degrades
-            // with a log instead of refusing the turn — the same contract as
-            // `InternalToolCatalog`'s platform-name skip.
+            // The BOOLEAN form of Smart Tools Selection is not a protocol
+            // field: the form stores the toggle as the `lazy_tools_mode` entry
+            // of `internal_tools`, which this runtime serves
+            // (`libs/rust/agent-runtime/src/lazy_tools.rs`), and the SDK's
+            // `client.application()` ignores `meta.lazy_tools_mode` the same
+            // way (it passes the entry's presence explicitly). Ignoring it
+            // exposes every tool, which is the mode's SAFE side (lazy mode
+            // narrows exposure), so it degrades with a log instead of
+            // refusing the turn.
             tracing::warn!(
                 event = "agent_internal_tool_skipped",
                 reason_code = "internal_tool_unsupported",
                 internal_tool = "lazy_tools_mode",
-                "smart tools selection is unavailable in this runtime; every attached tool stays exposed"
+                "meta.lazy_tools_mode is not read; smart tools selection is turned on by the lazy_tools_mode entry of internal_tools, so every attached tool stays exposed"
             );
         }
         Some(_) => return Err(invalid_profile()),

@@ -320,7 +320,7 @@ fn sheet() -> Value {
 }
 
 fn bucket() -> Value {
-    json!({"type": "string", "default": DEFAULT_BUCKET, "description": "The bucket the file is in (default: the conversation attachments bucket)."})
+    json!({"type": "string", "description": "The bucket the file is in (default: the project's conversation attachments bucket)."})
 }
 
 fn columns(description: &str) -> Value {

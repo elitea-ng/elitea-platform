@@ -48,6 +48,17 @@ pub struct FrozenToolset {
 }
 
 impl FrozenToolset {
+    /// A toolset whose tools are already enumerated, for a caller that
+    /// composes one from other toolsets' tools (the Smart Tools Selection
+    /// meta-tools).
+    #[must_use]
+    pub fn new(name: impl Into<String>, tools: Vec<Arc<dyn Tool>>) -> Self {
+        Self {
+            name: name.into(),
+            tools,
+        }
+    }
+
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name

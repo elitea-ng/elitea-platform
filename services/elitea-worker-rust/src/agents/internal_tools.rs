@@ -39,9 +39,18 @@ const PROJECT_CONTEXT_BUILDER_TOOLSET_NAME: &str = "project_context_builder";
 const CREATE_SKILL_TOOL_NAME: &str = "create_or_update_skill";
 const WRITE_PROJECT_CONTEXT_TOOL_NAME: &str = "write_project_context";
 
+/// The three first-class platform toggles that `PLATFORM_INTERNAL_TOOLS` used
+/// to skip and this runtime now serves. They are recognized here by name only;
+/// what each does lives in its own module.
+pub(crate) const PLANNER_TOOL_NAME: &str = "planner";
+pub(crate) const LAZY_TOOLS_TOOL_NAME: &str = "lazy_tools_mode";
+pub(crate) const ATTACHMENTS_TOOL_NAME: &str = "attachments";
+
 /// The platform's authorable internal-tool names this runtime does NOT
 /// implement yet — the create-agent form's own catalogue
-/// (`apps/elitea-web/src/features/agents/lib/internalTools.ts`).
+/// (`apps/elitea-web/src/features/agents/lib/internalTools.ts`), less what it
+/// serves: `ask_user`, the two builders, and (since the planner / attachments /
+/// Smart Tools Selection port) `planner`, `attachments` and `lazy_tools_mode`.
 ///
 /// The Python worker is NOT the runtime that serves all of these, whatever
 /// this comment used to claim. It skips `pyodide` for the same reason and with
@@ -58,15 +67,13 @@ const WRITE_PROJECT_CONTEXT_TOOL_NAME: &str = "write_project_context";
 /// previous UI seeded `internal_mcp` into every version and every one of
 /// those agents was dead on this runtime.
 ///
-/// A string OUTSIDE this list is still an unsupported capability: it names
-/// nothing the platform can do, so the honest answer stays a refusal.
+/// A string OUTSIDE this list (and outside the served names) is still an
+/// unsupported capability: it names nothing the platform can do, so the honest
+/// answer stays a refusal.
 const PLATFORM_INTERNAL_TOOLS: &[&str] = &[
-    "attachments",
     "data_analysis",
     "image_generation",
     "internal_mcp",
-    "lazy_tools_mode",
-    "planner",
     "pyodide",
     "swarm",
 ];
@@ -99,16 +106,17 @@ fn log_skipped(name: &str) {
 /// Strict, frozen set of runtime-owned internal tool capabilities.
 ///
 /// `skipped` is a bitmask over `PLATFORM_INTERNAL_TOOLS`' own indices (it has
-/// 8 entries, so a `u8` is exact) rather than a `Vec<&str>`: this type stays
+/// 5 entries, so a `u8` is exact) rather than a `Vec<&str>`: this type stays
 /// `Copy`, which every existing caller already relies on
 /// (`OrdinaryRuntimeBindings::with_internal_tools` takes it by value, and
 /// `session.rs` reads a copy out of a struct it is about to move — see
 /// `assemble_ordinary_native_with_sessions_and_runtime_catalogs`). A `Vec`
 /// field would force every one of those call sites to clone or restructure.
-// Flags beside the `skipped` bitmask by design (see the type's doc): an
-// implemented capability must not be a bit in the "not served" mask.
-#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent, Copy toggles: the catalog is read by value at every call site"
+)]
 pub(crate) struct InternalToolCatalog {
     ask_user: bool,
     /// #940 A8's two modules. Plain flags beside `ask_user` rather than bits in
@@ -119,6 +127,11 @@ pub(crate) struct InternalToolCatalog {
     project_context_builder: bool,
     /// ADR-0033: the data tools, bound when the run can read the bucket.
     data_analysis: bool,
+    /// The planner, Smart Tools Selection and attachments toggles. Flags
+    /// beside the others, for the same reason: they are served, not skipped.
+    planner: bool,
+    lazy_tools: bool,
+    attachments: bool,
     skipped: u8,
 }
 
@@ -130,6 +143,9 @@ impl InternalToolCatalog {
             skills_builder: false,
             project_context_builder: false,
             data_analysis: false,
+            planner: false,
+            lazy_tools: false,
+            attachments: false,
             skipped: 0,
         }
     }
@@ -145,6 +161,9 @@ impl InternalToolCatalog {
                 Some(ASK_USER_TOOL_NAME) => catalog.ask_user = true,
                 Some(SKILLS_BUILDER_TOOL_NAME) => catalog.skills_builder = true,
                 Some(PROJECT_CONTEXT_BUILDER_TOOL_NAME) => catalog.project_context_builder = true,
+                Some(PLANNER_TOOL_NAME) => catalog.planner = true,
+                Some(LAZY_TOOLS_TOOL_NAME) => catalog.lazy_tools = true,
+                Some(ATTACHMENTS_TOOL_NAME) => catalog.attachments = true,
                 Some(name) if PLATFORM_INTERNAL_TOOLS.contains(&name) => {
                     if name == DATA_ANALYSIS_TOOL_NAME {
                         catalog.data_analysis = true;
@@ -168,7 +187,7 @@ impl InternalToolCatalog {
                         .iter()
                         .position(|candidate| *candidate == name)
                     {
-                        // PLATFORM_INTERNAL_TOOLS has 8 entries; `skipped` is
+                        // PLATFORM_INTERNAL_TOOLS has 5 entries; `skipped` is
                         // a u8, so every valid index fits in one bit.
                         catalog.skipped |= 1 << index;
                     }
@@ -192,6 +211,9 @@ impl InternalToolCatalog {
             skills_builder: self.skills_builder || other.skills_builder,
             project_context_builder: self.project_context_builder || other.project_context_builder,
             data_analysis: self.data_analysis || other.data_analysis,
+            planner: self.planner || other.planner,
+            lazy_tools: self.lazy_tools || other.lazy_tools,
+            attachments: self.attachments || other.attachments,
             skipped: self.skipped | other.skipped,
         }
     }
@@ -267,12 +289,34 @@ impl InternalToolCatalog {
     }
 
     #[must_use]
+    pub(crate) const fn lazy_tools_enabled(self) -> bool {
+        self.lazy_tools
+    }
+
+    #[must_use]
+    pub(crate) const fn attachments_enabled(self) -> bool {
+        self.attachments
+    }
+
+    #[must_use]
     pub(crate) const fn is_empty(self) -> bool {
         !self.ask_user
             && !self.skills_builder
             && !self.project_context_builder
             && !self.data_analysis
+            && !self.planner
+            && !self.lazy_tools
+            && !self.attachments
             && self.skipped == 0
+    }
+
+    /// The text appended to the agent's own instructions, after the SDK's
+    /// `\n\n---\n\n` separator: the planning guidance when the planner is on.
+    /// `None` when no enabled tool contributes any.
+    #[must_use]
+    pub(crate) fn instruction_addendum(self) -> Option<&'static str> {
+        self.planner
+            .then_some(elitea_agent_runtime::planner::PLAN_ADDON)
     }
 
     /// The platform-catalogue names this runtime skipped, in
@@ -342,6 +386,13 @@ impl InternalToolCatalog {
         let Some(builders) = builders else {
             return toolsets;
         };
+        // The planner keeps its plan in session state and its tools must run
+        // in call order; only the ordinary agent path owns such a session, so
+        // it is bound where the builders are and nowhere else (a nested child
+        // or a pipeline node gets no plan tools).
+        if self.planner {
+            toolsets.push(elitea_agent_runtime::planner::toolset());
+        }
         if self.skills_builder_enabled() {
             toolsets.push(Arc::new(BasicToolset::new(
                 SKILLS_BUILDER_TOOLSET_NAME,
@@ -1032,10 +1083,12 @@ mod tests {
     }
 
     #[test]
-    fn platform_internal_tools_are_skipped_and_only_ask_user_is_served() {
+    fn platform_internal_tools_are_skipped_or_served_and_never_refused() {
         // Every name the agent form can author, at once — the catalogue must
-        // come back with ask_user alone and no refusal, because a toggle a
-        // user can reach must not stop the agent answering.
+        // come back without a refusal, because a toggle a user can reach must
+        // not stop the agent answering. `ask_user` is a toolset on its own;
+        // `planner` is bound only where builders are (the ordinary agent
+        // path), so with no authority to lend there is still exactly one.
         let all_platform = [
             "ask_user",
             "attachments",
@@ -1051,13 +1104,20 @@ mod tests {
         let catalog = InternalToolCatalog::from_names(&all_platform).expect("catalog");
         assert!(catalog.ask_user_enabled());
         assert_eq!(catalog.toolsets(None).len(), 1);
-        // data_analysis is skipped unless the ordinary assembly serves it.
-        assert!(catalog.data_analysis_enabled());
-        assert!(
-            catalog
-                .skipped_platform_tools()
-                .any(|name| name == "data_analysis")
+        // The three served toggles are NOT reported as skipped; the rest are.
+        assert_eq!(
+            catalog.skipped_platform_tools().collect::<Vec<_>>(),
+            [
+                "data_analysis",
+                "image_generation",
+                "internal_mcp",
+                "pyodide",
+                "swarm"
+            ]
         );
+        assert!(catalog.lazy_tools_enabled());
+        assert!(catalog.attachments_enabled());
+        assert!(catalog.data_analysis_enabled());
 
         // Outside the platform catalogue is still a refusal: it names nothing
         // the product can do, so skipping it would hide malformed config.
@@ -1071,19 +1131,91 @@ mod tests {
         );
     }
 
+    /// The planner, Smart Tools Selection and Attachments toggles are served:
+    /// no skip warning, no notice line, and each is its own independent flag.
+    #[test]
+    fn planner_lazy_tools_and_attachments_are_served_not_skipped() {
+        for (name, planner, lazy, attachments) in [
+            ("planner", true, false, false),
+            ("lazy_tools_mode", false, true, false),
+            ("attachments", false, false, true),
+        ] {
+            let catalog = InternalToolCatalog::from_names(&[name.to_owned()]).expect("catalog");
+            assert_eq!(catalog.skipped_platform_tools().count(), 0, "{name}");
+            assert_eq!(catalog.skipped_tools_notice_text(), None, "{name}");
+            assert_eq!(catalog.instruction_addendum().is_some(), planner, "{name}");
+            assert_eq!(catalog.lazy_tools_enabled(), lazy, "{name}");
+            assert_eq!(catalog.attachments_enabled(), attachments, "{name}");
+            assert!(!catalog.is_empty(), "{name} is not an empty catalog");
+            // A merge keeps the flag from either side.
+            assert_eq!(
+                InternalToolCatalog::empty().merge(catalog),
+                catalog,
+                "{name}"
+            );
+            assert_eq!(
+                catalog.merge(InternalToolCatalog::empty()),
+                catalog,
+                "{name}"
+            );
+        }
+    }
+
+    /// The planner is bound where builders are (the ordinary agent path) and
+    /// only when its toggle is on: five tools in one toolset.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_planner_toolset_is_bound_only_with_its_toggle_and_an_authority() {
+        let authority = BuilderToolAuthority::new(FakeWriter::new(None));
+        let on = InternalToolCatalog::from_names(&["planner".to_owned()]).expect("catalog");
+        let off =
+            InternalToolCatalog::from_names(&["lazy_tools_mode".to_owned()]).expect("catalog");
+
+        let toolsets = on.toolsets(Some(&authority));
+        assert_eq!(toolsets.len(), 1);
+        assert_eq!(toolsets[0].name(), "planner");
+        let tools = toolsets[0]
+            .tools(Arc::new(SimpleToolContext::new("internal-tools-test")))
+            .await
+            .expect("planner tools");
+        assert_eq!(
+            tools.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
+            [
+                "update_plan",
+                "start_step",
+                "complete_step",
+                "get_plan_status",
+                "delete_plan"
+            ]
+        );
+        assert!(
+            on.toolsets(None).is_empty(),
+            "no authority, no session: nothing bound"
+        );
+        assert!(
+            off.toolsets(Some(&authority)).is_empty(),
+            "other toggles bind no planner"
+        );
+        assert!(
+            InternalToolCatalog::empty()
+                .toolsets(Some(&authority))
+                .is_empty()
+        );
+    }
+
     // #866: a skipped platform tool is no longer traceable ONLY through the
     // server log — the catalog now records it, in the exact shape session.rs
     // seeds into the conversation as a visible notice.
     #[test]
     fn a_skipped_platform_tool_is_recorded_with_the_exact_866_notice_text() {
-        let catalog = InternalToolCatalog::from_names(&["planner".to_owned()]).expect("catalog");
+        let catalog =
+            InternalToolCatalog::from_names(&["data_analysis".to_owned()]).expect("catalog");
         assert_eq!(
             catalog.skipped_platform_tools().collect::<Vec<_>>(),
-            ["planner"]
+            ["data_analysis"]
         );
         assert_eq!(
             catalog.skipped_tools_notice_text().as_deref(),
-            Some("internal tool 'planner' is not available on this worker")
+            Some("internal tool 'data_analysis' is not available on this worker")
         );
         // ask_user is real and served, and this request never named it.
         assert!(!catalog.ask_user_enabled());
@@ -1115,19 +1247,19 @@ mod tests {
     fn multiple_skipped_tools_are_reported_one_per_line_in_a_stable_order() {
         let listed_swarm_first = InternalToolCatalog::from_names(&[
             "swarm".to_owned(),
-            "planner".to_owned(),
+            "pyodide".to_owned(),
             "data_analysis".to_owned(),
         ])
         .expect("catalog");
         let listed_data_analysis_first = InternalToolCatalog::from_names(&[
             "data_analysis".to_owned(),
-            "planner".to_owned(),
+            "pyodide".to_owned(),
             "swarm".to_owned(),
         ])
         .expect("catalog");
 
         let expected = "internal tool 'data_analysis' is not available on this worker\n\
-             internal tool 'planner' is not available on this worker\n\
+             internal tool 'pyodide' is not available on this worker\n\
              internal tool 'swarm' is not available on this worker";
         assert_eq!(
             listed_swarm_first.skipped_tools_notice_text().as_deref(),
@@ -1145,7 +1277,7 @@ mod tests {
     /// way `ask_user_enabled` already does, not overwrite or drop one side.
     #[test]
     fn merge_unions_the_skipped_set_from_both_sides() {
-        let mine = InternalToolCatalog::from_names(&["planner".to_owned()]).expect("catalog");
+        let mine = InternalToolCatalog::from_names(&["pyodide".to_owned()]).expect("catalog");
         let theirs = InternalToolCatalog::from_names(&["swarm".to_owned()]).expect("catalog");
 
         let mut merged = mine
@@ -1153,14 +1285,14 @@ mod tests {
             .skipped_platform_tools()
             .collect::<Vec<_>>();
         merged.sort_unstable();
-        assert_eq!(merged, ["planner", "swarm"]);
+        assert_eq!(merged, ["pyodide", "swarm"]);
 
         // Merging with an empty catalog is a no-op, same as ask_user_enabled.
         assert_eq!(
             mine.merge(InternalToolCatalog::empty())
                 .skipped_platform_tools()
                 .collect::<Vec<_>>(),
-            ["planner"]
+            ["pyodide"]
         );
     }
 
@@ -1170,11 +1302,11 @@ mod tests {
     #[test]
     fn a_duplicated_skipped_toggle_produces_one_notice_line_not_two() {
         let catalog =
-            InternalToolCatalog::from_names(&["planner".to_owned(), "planner".to_owned()])
+            InternalToolCatalog::from_names(&["pyodide".to_owned(), "pyodide".to_owned()])
                 .expect("catalog");
         assert_eq!(
             catalog.skipped_tools_notice_text().as_deref(),
-            Some("internal tool 'planner' is not available on this worker")
+            Some("internal tool 'pyodide' is not available on this worker")
         );
     }
 
@@ -1509,12 +1641,12 @@ mod tests {
         assert_eq!(served.skipped_tools_notice_text(), None);
         // Serving it leaves every other skipped tool in the notice.
         let both =
-            InternalToolCatalog::from_names(&["data_analysis".to_owned(), "planner".to_owned()])
+            InternalToolCatalog::from_names(&["data_analysis".to_owned(), "swarm".to_owned()])
                 .unwrap()
                 .serving_data_analysis();
         assert_eq!(
             both.skipped_tools_notice_text().as_deref(),
-            Some("internal tool 'planner' is not available on this worker")
+            Some("internal tool 'swarm' is not available on this worker")
         );
         // A catalog that never named it is untouched; serving twice is a no-op.
         assert_eq!(
@@ -1645,7 +1777,7 @@ mod tests {
         // Another skipped tool is still logged at parse, as before.
         assert!(
             logged(|| {
-                let _ = InternalToolCatalog::from_names(&["planner".to_owned()]).unwrap();
+                let _ = InternalToolCatalog::from_names(&["swarm".to_owned()]).unwrap();
             })
             .contains("agent_internal_tool_skipped")
         );

@@ -22,7 +22,9 @@ use super::families::data_analysis::code::{
 };
 use super::families::data_analysis::schema::ALL_TOOLS;
 use super::families::data_analysis::table::Limits;
-use super::families::data_analysis::tools::{AnalysisGate, DataAnalysisAuthority, build_with};
+use super::families::data_analysis::tools::{
+    AnalysisGate, AttachmentBucketResolver, DataAnalysisAuthority, build_with,
+};
 use super::families::office_host::{
     OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
     SharedOfficeToolHost,
@@ -45,6 +47,13 @@ impl FakeHost {
             .lock()
             .expect("objects")
             .insert((BUCKET.to_owned(), name.to_owned()), bytes.into());
+    }
+
+    fn put_in(&self, bucket: &str, name: &str, bytes: impl Into<Vec<u8>>) {
+        self.objects
+            .lock()
+            .expect("objects")
+            .insert((bucket.to_owned(), name.to_owned()), bytes.into());
     }
 
     fn get(&self, name: &str) -> Vec<u8> {
@@ -1709,6 +1718,75 @@ async fn a_result_over_the_answer_budget_is_shown_cut_and_says_so() {
         )
         .await;
     assert_eq!(out["result"], json!({"n": 3}));
+}
+
+struct FixedBucket(Option<&'static str>);
+
+#[async_trait]
+impl AttachmentBucketResolver for FixedBucket {
+    async fn attachment_bucket(&self) -> Option<String> {
+        self.0.map(str::to_owned)
+    }
+}
+
+async fn rig_resolving(bucket: Option<&'static str>) -> Rig {
+    let host = Arc::new(FakeHost::default());
+    let shared: SharedOfficeToolHost = Arc::clone(&host) as SharedOfficeToolHost;
+    let authority = DataAnalysisAuthority::new(shared)
+        .with_gate(AnalysisGate::new(4))
+        .with_bucket_resolver(Arc::new(FixedBucket(bucket)));
+    let toolset = build_with(&authority, &policy(), test_limits())
+        .expect("toolset")
+        .expect("not blocked");
+    let tools = toolset
+        .tools(context() as Arc<dyn ReadonlyContext>)
+        .await
+        .expect("tools");
+    Rig { host, tools }
+}
+
+#[tokio::test]
+async fn the_default_bucket_is_the_projects_attachment_bucket_when_the_platform_names_it() {
+    let rig = rig_resolving(Some("project-files")).await;
+    rig.host.put_in("project-files", "c1/a.csv", "x\n1\n");
+    rig.host.put_in("chat-attachments", "c1/b.csv", "y\n2\n");
+    let out = rig
+        .ok("describe_data", json!({"filename": "c1/a.csv"}))
+        .await;
+    assert_eq!(out["source"]["bucket"], "project-files");
+    // An explicit bucket still wins over the resolved default.
+    let out = rig
+        .ok(
+            "describe_data",
+            json!({"filename": "c1/b.csv", "bucket_name": "chat-attachments"}),
+        )
+        .await;
+    assert_eq!(out["source"]["bucket"], "chat-attachments");
+    // Results are written to the bucket the source was read from.
+    rig.ok(
+        "filter_data",
+        json!({"filename": "c1/a.csv", "output_file": "out.csv"}),
+    )
+    .await;
+    assert!(
+        rig.host
+            .objects
+            .lock()
+            .unwrap()
+            .contains_key(&("project-files".to_owned(), "c1/out.csv".to_owned()))
+    );
+}
+
+#[tokio::test]
+async fn an_unresolvable_or_invalid_bucket_falls_back_to_the_platform_default_name() {
+    for resolved in [None, Some("Bad Bucket!")] {
+        let rig = rig_resolving(resolved).await;
+        rig.host.put("c1/a.csv", "x\n1\n");
+        let out = rig
+            .ok("describe_data", json!({"filename": "c1/a.csv"}))
+            .await;
+        assert_eq!(out["source"]["bucket"], "chat-attachments", "{resolved:?}");
+    }
 }
 
 #[tokio::test]

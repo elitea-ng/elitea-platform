@@ -153,9 +153,11 @@ impl ContentFormat {
 /// The `index_data` arguments the connector honours (the SDK's
 /// `_index_tool_params`). `limit` and `max_pages` are accepted and ignored:
 /// the connector lists everything (ADR-0030 decision 3) under the source's
-/// document cap. `keep_markdown_format`, `keep_newlines`, `ocr_languages`
-/// and `bins_with_llm` are accepted and ignored too: HTML becomes markdown
-/// in the worker's extraction step, and model-calling steps wait for I4.
+/// document cap. `keep_markdown_format`, `keep_newlines` and `ocr_languages`
+/// are accepted and ignored too: HTML becomes markdown in the worker's
+/// extraction step, and nothing here runs OCR. `bins_with_llm` asks the
+/// worker to describe the page's image and PDF attachments with the chat
+/// model (ADR-0030 I4, PR-C2).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -173,6 +175,9 @@ pub struct ConfluenceIndexArguments {
     pub skip_extensions: Vec<String>,
     pub include_comments: bool,
     pub include_labels: bool,
+    /// Describe PNG and JPEG attachments, and the pictures in PDF
+    /// attachments, with the chat model (the SDK's `bins_with_llm`).
+    pub bins_with_llm: bool,
 }
 
 impl ConfluenceIndexArguments {
@@ -237,6 +242,7 @@ impl ConfluenceIndexArguments {
             skip_extensions: text_list(arguments, "skip_extensions", PROVIDER)?,
             include_comments: flag("include_comments")?,
             include_labels: flag("include_labels")?,
+            bins_with_llm: flag("bins_with_llm")?,
         })
     }
 

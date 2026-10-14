@@ -2624,8 +2624,9 @@ What the Rust worker serves instead, behind the same toggle and the same
 | `save_dataframe` | Converts between `.csv`, `.tsv`, `.json` and `.xlsx` (SDK wrapper name and arguments) |
 | `run_analysis_code` | Python or JavaScript on up to 50,000 cells (fewer when bytes or JSON nodes run out first), in the platform code sandbox; offered only when the run has a sandbox runtime |
 
-Files are read from the conversation attachments bucket (`chat-attachments`
-unless `bucket_name` says otherwise) through the Office object host that the
+Files are read from the project's conversation attachments bucket (resolved
+from the platform the way the Attachments module resolves it, `chat-attachments`
+if the platform cannot say, unless `bucket_name` says otherwise) through the Office object host that the
 `pptx` family already uses: the turn's own credential, the platform's object
 API, no new route. A result file is written only when `output_file` is given,
 next to the source for a bare name, refused when the name is taken unless

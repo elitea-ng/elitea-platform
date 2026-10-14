@@ -74,6 +74,7 @@ use crate::atlassian::{
     strip_base64_images, text_of,
 };
 use crate::egress::HostAllowlist;
+use crate::pictures::PictureStep;
 use crate::source::{
     Backoff, Failure, Listed, SourceHttp, SourceLimits, Timeouts, references, web_url,
 };
@@ -81,6 +82,8 @@ use crate::transport::{Method, Request, StatusCode, Transport, Url};
 
 /// Results asked per listing page (Confluence caps at 100, or lower).
 const PAGE_SIZE: usize = 100;
+/// `EliteAConfluenceLoader`'s `prompt`, byte for byte.
+const BINARY_PROMPT: &str = include_str!("prompts/binary_prompt.txt");
 /// The media type a page or comment body is handed over as.
 const HTML: &str = "text/html";
 
@@ -150,6 +153,23 @@ pub struct ConfluenceSource {
 }
 
 impl ConfluenceSource {
+    /// The picture step for `reference`: with `bins_with_llm`, an
+    /// attachment the SDK's loader describes with the model (media types
+    /// `image/png`, `image/jpg`, `image/jpeg`, and `application/pdf`, whose
+    /// pages it rendered and described). The prompt is the loader's own.
+    /// Page bodies carry no step: the SDK never described the pictures a
+    /// page links when indexing.
+    #[must_use]
+    pub fn picture_step(&self, reference: &DocumentRef) -> Option<PictureStep> {
+        if !self.arguments.bins_with_llm || !reference.key.contains("/attachment/") {
+            return None;
+        }
+        Some(PictureStep::Binary {
+            extensions: &[".png", ".jpg", ".jpeg", ".pdf"],
+            prompt: BINARY_PROMPT.to_owned(),
+        })
+    }
+
     /// The toolkit `config` indexed with the `index_data` `arguments`, every
     /// request through `allowlist` (fail-closed) and then `transport`.
     ///
@@ -2059,5 +2079,56 @@ mod tests {
             b"<p>stored <img src=\"[Image Removed]\"/></p>"
         );
         assert_eq!(document.metadata["labels"], json!(["guide"]));
+    }
+
+    #[test]
+    fn bins_with_llm_describes_image_and_pdf_attachments_with_the_loaders_prompt() {
+        let on = ConfluenceIndexArguments {
+            bins_with_llm: true,
+            ..ConfluenceIndexArguments::default()
+        };
+        let source = |arguments| {
+            let config = ConfluenceConnectorConfig::parse(
+                json!({"confluence_configuration": {"base_url": "https://acme.atlassian.net/wiki", "token": "t"}, "space": "DOC"})
+                    .as_object()
+                    .expect("object"),
+            )
+            .expect("config");
+            ConfluenceSource::new(
+                config,
+                arguments,
+                HostAllowlist::parse(Some("acme.atlassian.net")),
+                crate::source::fixture::Scripted::new(|_, _| panic!("no request")),
+            )
+            .expect("source")
+        };
+        let reference = |key: &str| DocumentRef {
+            key: key.to_owned(),
+            version: "1".to_owned(),
+            mime: "image/png".to_owned(),
+            size: 1,
+            acl: Acl::Project,
+        };
+        let step = source(on).picture_step(&reference("page/1/attachment/9/shot.png"));
+        let Some(PictureStep::Binary { extensions, prompt }) = step else {
+            panic!("a binary step");
+        };
+        assert!(extensions.contains(&".png") && extensions.contains(&".pdf"));
+        assert!(prompt.starts_with("\n## Image Type: Diagrams"), "{prompt}");
+        assert!(prompt.ends_with("for user.\n    "), "{prompt:?}");
+        let on = ConfluenceIndexArguments {
+            bins_with_llm: true,
+            ..ConfluenceIndexArguments::default()
+        };
+        assert!(
+            source(on).picture_step(&reference("page/1.html")).is_none(),
+            "a page body has none"
+        );
+        assert!(
+            source(ConfluenceIndexArguments::default())
+                .picture_step(&reference("page/1/attachment/9/shot.png"))
+                .is_none(),
+            "off by default"
+        );
     }
 }

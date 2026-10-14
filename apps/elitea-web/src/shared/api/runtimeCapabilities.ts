@@ -30,13 +30,16 @@ export function useRuntimeCapabilities(): RuntimeCapabilities | undefined {
 }
 
 /**
- * Whether the CONFIGURED worker runs one of the six toggleable internal
- * chat tools (`features/agents/lib/internalTools.ts`'s `INTERNAL_TOOLS_LIST`
- * names) for real, per #866.
+ * Whether the CONFIGURED worker runs one of the toggleable internal chat
+ * tools (`features/agents/lib/internalTools.ts`'s `INTERNAL_TOOLS_LIST`
+ * names) for real, per #866. The Rust worker serves `planner`,
+ * `lazy_tools_mode` and `attachments` itself, so they read available on either
+ * worker; only what it still skips (`image_generation`, `data_analysis`,
+ * `internal_mcp`, `swarm`) reads unavailable there.
  *
  * Returns `true` — available — for a tool name this deployment's
- * capabilities response does not mention at all (`attachments`, `pyodide`,
- * any tool this endpoint has not been taught yet) and while the query has
+ * capabilities response does not mention at all (`pyodide`, any tool this
+ * endpoint has not been taught yet) and while the query has
  * not resolved, matching this app's existing "unset means offered, not
  * withheld" convention (`ToolkitCapabilitySource`'s own nil case, the
  * generated `metadata.hidden` default) — never disable a toggle on missing

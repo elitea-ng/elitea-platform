@@ -26,8 +26,9 @@
 //! * **Fetch.** `drives/{drive}/items/{item}/content`, following Graph's
 //!   redirect to the site host, under the document cap.
 //! * Lists, list items and OneNote are not indexed (the SDK indexes no
-//!   lists either; OneNote needs a delegated user token and image
-//!   descriptions, and `include_onenote` is refused with that reason).
+//!   lists either; OneNote needs a delegated user token, because Microsoft
+//!   retired app-only access to its Graph API, and `include_onenote` is
+//!   refused with that reason).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -79,7 +80,7 @@ impl SharePointIndexParams {
     /// An argument of the wrong type, or `include_onenote`.
     pub fn from_arguments(arguments: &Map<String, Value>) -> Result<Self, String> {
         if optional_bool(arguments, "include_onenote")?.unwrap_or(false) {
-            return Err("`include_onenote` is not supported by this worker: OneNote pages need a delegated user token and image descriptions (ADR-0030 I4)".to_owned());
+            return Err("`include_onenote` is not supported by this worker: the SDK reads OneNote only with a delegated user token (`token` + `scopes`, refreshed), Microsoft retired app-only access to the OneNote Graph API on 2025-03-31 (MC1011142; `Notes.Read.All` as an application permission no longer works), and an index run authenticates app-only with the toolkit's client credential. Indexing OneNote needs a delegated-token flow for index runs".to_owned());
         }
         Ok(Self {
             limit_files: optional_u64(arguments, "limit_files")?,

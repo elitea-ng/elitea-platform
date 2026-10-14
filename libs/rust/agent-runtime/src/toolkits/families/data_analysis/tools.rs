@@ -110,6 +110,16 @@ const PNG_MEDIA_TYPE: &str = "image/png";
 
 type Sentence = String;
 
+/// The conversation's attachment bucket, as the platform names it for this
+/// project (its storage policy, else the platform default). The worker lends
+/// the resolver the Attachments module already uses, so a project whose
+/// attachments live in another bucket is read from it.
+#[async_trait]
+pub trait AttachmentBucketResolver: Send + Sync {
+    /// The bucket name, or `None` when the platform cannot say right now.
+    async fn attachment_bucket(&self) -> Option<String>;
+}
+
 /// What the host lends the tool set for one run: the object store (and a link
 /// to its objects), and, when the deployment has one, the code sandbox.
 #[derive(Clone)]
@@ -117,6 +127,8 @@ pub struct DataAnalysisAuthority {
     host: SharedOfficeToolHost,
     runner: Option<Arc<dyn AnalysisCodeRunner>>,
     gate: AnalysisGate,
+    buckets: Option<Arc<dyn AttachmentBucketResolver>>,
+    resolved: Arc<tokio::sync::OnceCell<String>>,
 }
 
 impl DataAnalysisAuthority {
@@ -126,6 +138,8 @@ impl DataAnalysisAuthority {
             host,
             runner: None,
             gate: AnalysisGate::process(),
+            buckets: None,
+            resolved: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
@@ -139,6 +153,14 @@ impl DataAnalysisAuthority {
     #[cfg(test)]
     pub(crate) fn gate_is_process(&self) -> bool {
         Arc::ptr_eq(&self.gate.semaphore, &AnalysisGate::process().semaphore)
+    }
+
+    /// Resolve the default bucket from the platform instead of assuming its
+    /// name.
+    #[must_use]
+    pub fn with_bucket_resolver(mut self, resolver: Arc<dyn AttachmentBucketResolver>) -> Self {
+        self.buckets = Some(resolver);
+        self
     }
 
     /// Use a gate of its own instead of the worker-wide one.
@@ -207,6 +229,8 @@ pub(crate) fn build_with(
                 runner: authority.runner.clone(),
                 limits: Arc::clone(&limits),
                 gate: authority.gate.clone(),
+                buckets: authority.buckets.clone(),
+                resolved: Arc::clone(&authority.resolved),
             })
         })
         .collect();
@@ -221,6 +245,8 @@ struct DataToolImpl {
     runner: Option<Arc<dyn AnalysisCodeRunner>>,
     limits: Arc<Limits>,
     gate: AnalysisGate,
+    buckets: Option<Arc<dyn AttachmentBucketResolver>>,
+    resolved: Arc<tokio::sync::OnceCell<String>>,
 }
 
 #[async_trait]
@@ -324,9 +350,9 @@ fn bool_arg(args: &Value, key: &str) -> bool {
     args.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
-fn bucket_arg(args: &Value, key: &str) -> Result<String, Sentence> {
+fn bucket_arg(args: &Value, key: &str, default_bucket: &str) -> Result<String, Sentence> {
     match text_arg(args, key) {
-        None => Ok(DEFAULT_BUCKET.to_owned()),
+        None => Ok(default_bucket.to_owned()),
         Some(bucket) if valid_bucket_name(&bucket) => Ok(bucket),
         Some(bucket) => Err(format!(
             "`{bucket}` is not a valid bucket name (lowercase letters, digits and hyphens, starting with a letter)."
@@ -406,12 +432,13 @@ struct Source {
 }
 
 fn source(
+    default_bucket: &str,
     args: &Value,
     name_key: &str,
     bucket_key: &str,
     sheet_key: &str,
 ) -> Result<Source, Sentence> {
-    let bucket = bucket_arg(args, bucket_key)?;
+    let bucket = bucket_arg(args, bucket_key, default_bucket)?;
     let key = object_key(&bucket, &required(args, name_key)?)?;
     let format = Format::from_name(&key).map_err(|e| e.to_string())?;
     Ok(Source {
@@ -477,12 +504,16 @@ impl DataToolImpl {
             return Err("The arguments must be a JSON object.".to_owned());
         }
         let deadline = Deadline::after(self.limits.deadline);
+        let default_bucket = self.default_bucket().await;
         let primary = match self.tool {
-            DataTool::SaveDataframe => source(args, "source_df", "bucket_name", "sheet")?,
-            _ => source(args, "filename", "bucket_name", "sheet")?,
+            DataTool::SaveDataframe => {
+                source(&default_bucket, args, "source_df", "bucket_name", "sheet")?
+            }
+            _ => source(&default_bucket, args, "filename", "bucket_name", "sheet")?,
         };
         let second = if self.tool == DataTool::JoinData {
             Some(source(
+                &default_bucket,
                 args,
                 "right_filename",
                 "right_bucket_name",
@@ -631,6 +662,26 @@ impl DataToolImpl {
         }
         answer.insert("status".into(), json!("success"));
         Ok(Value::Object(answer))
+    }
+
+    /// The bucket a call without `bucket_name` reads from: the platform's
+    /// attachment bucket for this project when it can be resolved (once per
+    /// run), else the platform default name.
+    async fn default_bucket(&self) -> String {
+        if let Some(resolver) = &self.buckets {
+            return self
+                .resolved
+                .get_or_init(|| async {
+                    resolver
+                        .attachment_bucket()
+                        .await
+                        .filter(|bucket| valid_bucket_name(bucket))
+                        .unwrap_or_else(|| DEFAULT_BUCKET.to_owned())
+                })
+                .await
+                .clone();
+        }
+        DEFAULT_BUCKET.to_owned()
     }
 
     async fn read(&self, source: Source, deadline: &Deadline) -> Result<Input, Sentence> {
@@ -1548,6 +1599,8 @@ mod tests {
             runner: None,
             limits: Arc::new(Limits::default()),
             gate: gate.clone(),
+            buckets: None,
+            resolved: Arc::new(tokio::sync::OnceCell::new()),
         };
         let deadline = Deadline::after(std::time::Duration::from_secs(20));
         let permit = tool.admit(&deadline).await.expect("slot");

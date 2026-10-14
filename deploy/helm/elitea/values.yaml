@@ -3850,16 +3850,17 @@ worker:
   #       aha attach_file, testrail add_file_to_case). The capability
   #       snapshot's `supported_tools` lists exactly what is served; the
   #       remaining tools are shown greyed with a reason (#865).
-  #     - five internal chat-agent tools that
+  #     - three internal chat-agent tools that
   #       `services/elitea-worker-rust/src/agents/internal_tools.rs` recognizes
   #       and then skips rather than runs (#866): image_generation (Image
-  #       creation), internal_mcp (Elitea MCP Tools), planner (Planner), swarm
-  #       (Swarm Mode), lazy_tools_mode (Smart Tools Selection). A run that
-  #       hits one of these now gets a visible assistant-facing notice instead
-  #       of the tool silently doing nothing. A sixth, data_analysis (Data
-  #       Analysis), is served by the Rust worker (ADR-0033) as structured
-  #       table tools over CSV, JSON and Excel attachments plus the code
-  #       sandbox, not as the SDK's model-written pandas.
+  #       creation), internal_mcp (Elitea MCP Tools), swarm (Swarm Mode);
+  #       pyodide (Python sandbox) is skipped too. A run that hits one of
+  #       these gets a visible assistant-facing notice instead of the tool
+  #       silently doing nothing. planner (Planner), lazy_tools_mode (Smart
+  #       Tools Selection) and attachments (Attachments) are served natively
+  #       and work as on Python, and so is data_analysis (Data Analysis,
+  #       ADR-0033): structured table tools over CSV, JSON and Excel
+  #       attachments plus the code sandbox, not the SDK's model-written pandas.
   #   The Rust worker's other toolkit families (45 dispatched types: the
   #   original azure, azure_search, elastic, gcp, github, gitlab_org,
   #   google_places, k8s, keycloak, openapi, postman, rally, report_portal,

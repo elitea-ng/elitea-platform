@@ -60,7 +60,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use elitea_content_source::{
     Acl, ContentSource, Document, DocumentRef, Principal, PrincipalKind, SourceError,
@@ -74,6 +74,9 @@ use crate::atlassian::{
     authorized_json, id_of, key_segment, safe_identifier, same_origin, size_of, text_of,
 };
 use crate::egress::HostAllowlist;
+use crate::pictures::{
+    self, PictureBatch, PictureStep, Reads, SourcePicture, TOO_LARGE, UNSUPPORTED,
+};
 use crate::source::{
     Backoff, Failure, Listed, SourceHttp, SourceLimits, Timeouts, references, web_url,
 };
@@ -114,6 +117,9 @@ pub struct JiraSource {
     http: SourceHttp,
     downloads: AttachmentDownloader,
     listing: DetailedListing,
+    /// Each issue's attachment list, read once for the issue and its
+    /// comment documents (`process_images`).
+    attachment_lists: Mutex<BTreeMap<String, Arc<Vec<Value>>>>,
 }
 
 impl JiraSource {
@@ -161,6 +167,7 @@ impl JiraSource {
             http,
             downloads,
             listing: DetailedListing::default(),
+            attachment_lists: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -646,6 +653,186 @@ impl JiraSource {
         content
     }
 
+    /// The picture step for `key`: an issue or a comment, with
+    /// `process_images` (the SDK describes the pictures of the description
+    /// and of the comments, not those of attachments).
+    #[must_use]
+    pub fn picture_step(&self, key: &str) -> Option<PictureStep> {
+        if !self.arguments.process_images {
+            return None;
+        }
+        issue_of_key(key).map(|_| PictureStep::Inline { prompt: None })
+    }
+
+    /// The pictures a description or a comment links with wiki markup
+    /// (`!name.png|thumbnail!`, `!attachment id!`; the ADF renderer writes
+    /// the same form), read from the issue's attachments through the
+    /// authenticated client (the SDK's `process_image_match`). Each picture
+    /// is described with the SDK's default analysis prompt plus the 500
+    /// characters of text around it and its file name. A reference that
+    /// names no attachment of the issue stays as written: the SDK replaced
+    /// it with a failure note, which is not indexed here. The SDK also
+    /// fetched an `http(s)` reference with an unauthenticated request; no
+    /// request leaves for a host the toolkit is not configured for.
+    pub async fn pictures(&self, key: &str, bytes: &[u8]) -> Option<PictureBatch> {
+        let (issue_id, text, spans) = self.picture_candidates(key, bytes)?;
+        let attachments = match self.issue_attachments(issue_id).await {
+            Ok(attachments) => attachments,
+            // The document is indexed as written; a failure another run
+            // cures marks it for one, a final one is only counted.
+            Err(failure) => {
+                return Some(PictureBatch::unread(text, pictures::skip_reason(&failure)));
+            }
+        };
+        let resolver = Resolver::new(&attachments);
+        let mut batch = PictureBatch::default();
+        let mut reads = Reads::default();
+        // Each occurrence (a span of the text) with its picture.
+        let mut placed: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+        for span in spans {
+            if placed.len() >= pictures::MAX_OCCURRENCES {
+                break;
+            }
+            let markup = &text[span.clone()];
+            let reference = markup_reference(markup);
+            let Some(attachment) = resolver.find(reference) else {
+                continue;
+            };
+            let filename = text_of(attachment, "/filename").unwrap_or(reference);
+            let image = text_of(attachment, "/mimeType")
+                .is_some_and(|mime| mime.starts_with("image/"))
+                || pictures::has_image_extension(filename);
+            if !image {
+                reads.skip(UNSUPPORTED);
+                continue;
+            }
+            let Some(attachment_id) = id_of(attachment, "/id").filter(|id| safe_identifier(id))
+            else {
+                reads.skip(pictures::UNREADABLE);
+                continue;
+            };
+            let declared = size_of(attachment, "/size");
+            let data = reads
+                .get(&attachment_id, || async {
+                    if declared > pictures::MAX_PICTURE_BYTES {
+                        return Err(TOO_LARGE);
+                    }
+                    match self.read_attachment(attachment, &attachment_id).await {
+                        // The SDK treats a body under 100 bytes as a failed
+                        // download; here it is no picture, for good.
+                        Ok(data) if data.len() < 100 => Err(pictures::UNREADABLE),
+                        Ok(data) => Ok(data),
+                        Err(failure) => {
+                            tracing::debug!(issue = issue_id, "a Jira picture could not be read");
+                            Err(pictures::skip_reason(&failure))
+                        }
+                    }
+                })
+                .await;
+            let Some(data) = data else {
+                continue;
+            };
+            let token = pictures::token(batch.pictures.len());
+            batch.pictures.push(SourcePicture {
+                token: token.clone(),
+                name: filename.to_owned(),
+                bytes: data,
+                // Each reference has the context around it: its own prompt.
+                prompt: Some(analysis_prompt(filename, &context_around(text, markup))),
+                before: format!("[Image {filename} Description: "),
+                after: "]".to_owned(),
+                fallback: markup.to_owned(),
+                escapes: &[],
+            });
+            placed.push((span, token));
+        }
+        // By the spans found, right to left: a text is never searched.
+        let mut template = text.to_owned();
+        for (span, token) in placed.iter().rev() {
+            template.replace_range(span.clone(), token);
+        }
+        batch.template = template;
+        batch.skipped = reads.into_skipped();
+        (!batch.pictures.is_empty() || !batch.skipped.is_empty()).then_some(batch)
+    }
+
+    /// Whether `bytes` (the document `key`) hold markup that can name an
+    /// image attachment: asked before anything else is, so a document
+    /// without it costs no request and no wait for the model.
+    #[must_use]
+    pub fn may_have_pictures(&self, key: &str, bytes: &[u8]) -> bool {
+        self.picture_candidates(key, bytes).is_some()
+    }
+
+    /// The issue id, the text and the `!ref!` markup in it that can name an
+    /// image attachment.
+    fn picture_candidates<'a>(
+        &self,
+        key: &'a str,
+        bytes: &'a [u8],
+    ) -> Option<(&'a str, &'a str, Vec<std::ops::Range<usize>>)> {
+        if !self.arguments.process_images {
+            return None;
+        }
+        let issue_id = issue_of_key(key)?;
+        let text = std::str::from_utf8(bytes).ok()?;
+        if pictures::holds_token(text) {
+            return None;
+        }
+        let references: Vec<std::ops::Range<usize>> = wiki_image_spans(text)
+            .into_iter()
+            .filter(|span| image_candidate(markup_reference(&text[span.clone()])))
+            .collect();
+        (!references.is_empty()).then_some((issue_id, text, references))
+    }
+
+    /// The issue's `attachment` field, read once per issue for the run.
+    async fn issue_attachments(&self, issue_id: &str) -> Result<Arc<Vec<Value>>, Failure> {
+        if let Some(known) = self
+            .attachment_lists
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(issue_id)
+        {
+            return Ok(Arc::clone(known));
+        }
+        let mut url = self.api(&["issue", issue_id])?;
+        url.query_pairs_mut().append_pair("fields", "attachment");
+        let issue = self.json(url).await?;
+        let list = Arc::new(
+            issue
+                .pointer("/fields/attachment")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        self.attachment_lists
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(issue_id.to_owned(), Arc::clone(&list));
+        Ok(list)
+    }
+
+    async fn read_attachment(
+        &self,
+        attachment: &Value,
+        attachment_id: &str,
+    ) -> Result<Vec<u8>, Failure> {
+        let mut details = Map::new();
+        for (from, to) in [
+            ("/content", "content_url"),
+            ("/filename", "filename"),
+            ("/mimeType", "mimeType"),
+        ] {
+            if let Some(value) = text_of(attachment, from) {
+                details.insert(to.into(), Value::String(value.to_owned()));
+            }
+        }
+        let listed = Listed::new(String::new(), String::new(), 0, attachment_id.to_owned());
+        self.download(&listed, &details, pictures::MAX_PICTURE_BYTES)
+            .await
+    }
+
     /// An attachment's bytes, from the Jira origin only: the listed
     /// `content` URL when it is on the base URL's origin (a link elsewhere
     /// is refused, so the credential never leaves the configured origin),
@@ -657,6 +844,7 @@ impl JiraSource {
         &self,
         listed: &Listed,
         details: &Map<String, Value>,
+        limit: u64,
     ) -> Result<Vec<u8>, Failure> {
         let url = match details.get("content_url").and_then(Value::as_str) {
             Some(content) => {
@@ -691,12 +879,13 @@ impl JiraSource {
             .and_then(Value::as_str)
             .unwrap_or("attachment");
         self.downloads
-            .download(
+            .download_within(
                 &self.http,
                 url,
                 |url| self.get(url),
                 filename,
                 details.get("mimeType").and_then(Value::as_str),
+                limit,
             )
             .await
     }
@@ -736,7 +925,10 @@ impl ContentSource for JiraSource {
                 self.http
                     .check_size(listed.reference.size)
                     .map_err(failed)?;
-                let bytes = self.download(listed, &metadata).await.map_err(failed)?;
+                let bytes = self
+                    .download(listed, &metadata, u64::MAX)
+                    .await
+                    .map_err(failed)?;
                 let title = metadata
                     .get("filename")
                     .and_then(Value::as_str)
@@ -841,6 +1033,199 @@ fn fields_pointer<'a>(fields: &'a Map<String, Value>, pointer: &str) -> Option<&
     .filter(|text| !text.is_empty())
 }
 
+/// The issue id in a document key: `issue/{id}.md` or
+/// `issue/{id}/comment/{comment}.md`.
+fn issue_of_key(key: &str) -> Option<&str> {
+    let rest = key.strip_prefix("issue/")?;
+    let (id, tail) = rest.split_once('/').unwrap_or((rest, ""));
+    let id = id.strip_suffix(".md").unwrap_or(id);
+    let is_md = |name: &str| name.len() > 3 && name[name.len() - 3..].eq_ignore_ascii_case(".md");
+    let comment = tail.starts_with("comment/") && is_md(tail);
+    ((tail.is_empty() && is_md(rest)) || comment).then_some(id)
+}
+
+/// Every `!ref!` / `!ref|options!` of `text` (the SDK's
+/// `!([^!|]+)(?:\|[^!]*)?!`), left to right, as byte spans.
+fn wiki_image_spans(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(offset) = text[at..].find('!') {
+        let start = at + offset;
+        let rest = &text[start + 1..];
+        // 1+ characters that are neither `!` nor `|`.
+        let name_len = rest.find(['!', '|']).unwrap_or(rest.len());
+        if name_len == 0 || name_len == rest.len() {
+            at = start + 1;
+            continue;
+        }
+        let tail = &rest[name_len..];
+        let end = if tail.starts_with('!') {
+            Some(name_len + 1)
+        } else {
+            // `|` then anything but `!`, then the closing `!`.
+            tail[1..].find('!').map(|close| name_len + 1 + close + 1)
+        };
+        match end {
+            Some(end) => {
+                found.push(start..start + 1 + end);
+                at = start + 1 + end;
+            }
+            None => at = start + 1,
+        }
+    }
+    found
+}
+
+/// The distinct markups of `text`, in the order they first appear.
+#[cfg(test)]
+fn wiki_images(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for span in wiki_image_spans(text) {
+        let markup = text[span].to_owned();
+        if !found.contains(&markup) {
+            found.push(markup);
+        }
+    }
+    found
+}
+
+/// Whether `!reference!` can name an image attachment: a file name with an
+/// image extension, an attachment id, or `attachment:id`. Prose between two
+/// exclamation marks ("Done! Thanks!") is not.
+fn image_candidate(reference: &str) -> bool {
+    let name = reference.trim();
+    pictures::has_image_extension(name)
+        || (!name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit()))
+        || (name.starts_with("attachment")
+            && name
+                .split_once(':')
+                .is_some_and(|(_, id)| !id.trim().is_empty()))
+}
+
+/// The `ref` of `!ref|options!`.
+fn markup_reference(markup: &str) -> &str {
+    let inner = &markup[1..markup.len() - 1];
+    inner.split('|').next().unwrap_or(inner)
+}
+
+/// The SDK's `_collect_context_for_image`: `radius` characters either side of
+/// the first occurrence, with an ellipsis where the text goes on.
+fn context_around(text: &str, marker: &str) -> String {
+    const RADIUS: usize = 500;
+    let Some(at) = text.find(marker) else {
+        return String::new();
+    };
+    let before: Vec<(usize, char)> = text[..at].char_indices().collect();
+    let start = before
+        .len()
+        .checked_sub(RADIUS)
+        .map_or(0, |skip| before[skip].0);
+    let after_marker = at + marker.len();
+    let end = text[after_marker..]
+        .char_indices()
+        .nth(RADIUS)
+        .map_or(text.len(), |(index, _)| after_marker + index);
+    let mut context = String::new();
+    if start > 0 {
+        context.push_str("...");
+    }
+    context.push_str(&text[start..end]);
+    if end < text.len() {
+        context.push_str("...");
+    }
+    context
+}
+
+/// The SDK's `_process_image_with_llm` prompt: the default analysis prompt,
+/// then the image name and the surrounding text.
+fn analysis_prompt(name: &str, context: &str) -> String {
+    let mut prompt = DEFAULT_ANALYSIS_PROMPT.to_owned();
+    prompt.push_str("\n\n## Additional Context Information:\n");
+    if !name.is_empty() {
+        let _ = writeln!(prompt, "- Image Name/Reference: {name}");
+    }
+    if !context.is_empty() {
+        let _ = writeln!(prompt, "- Surrounding Content: {context}");
+    }
+    prompt.push_str(
+        "\nPlease incorporate this contextual information in your description when relevant.",
+    );
+    prompt
+}
+
+/// `_get_default_image_analysis_prompt`, byte for byte.
+const DEFAULT_ANALYSIS_PROMPT: &str = include_str!("prompts/image_analysis.txt");
+
+/// The SDK's `AttachmentResolver.find_attachment` over the issue's
+/// attachments: by id (`12345`, `attachment:12345`), then by file name
+/// (path and options dropped), exactly, case-insensitively, by suffix; the
+/// name also without its extension.
+struct Resolver<'a> {
+    by_id: BTreeMap<String, &'a Value>,
+    /// In insertion order; a later attachment with the same key replaces
+    /// the value and keeps the place (a Python `dict`).
+    by_name: Vec<(String, &'a Value)>,
+}
+
+impl<'a> Resolver<'a> {
+    fn new(attachments: &'a [Value]) -> Self {
+        let mut resolver = Self {
+            by_id: BTreeMap::new(),
+            by_name: Vec::new(),
+        };
+        for attachment in attachments {
+            if let Some(id) = id_of(attachment, "/id") {
+                resolver.by_id.insert(id, attachment);
+            }
+            if let Some(filename) = text_of(attachment, "/filename") {
+                resolver.name(filename.to_owned(), attachment);
+                let stem = filename.rsplit_once('.').map_or(filename, |(stem, _)| stem);
+                resolver.name(stem.to_owned(), attachment);
+            }
+        }
+        resolver
+    }
+
+    fn name(&mut self, name: String, attachment: &'a Value) {
+        match self.by_name.iter_mut().find(|(known, _)| *known == name) {
+            Some(entry) => entry.1 = attachment,
+            None => self.by_name.push((name, attachment)),
+        }
+    }
+
+    fn find(&self, reference: &str) -> Option<&'a Value> {
+        if !reference.is_empty()
+            && reference.bytes().all(|byte| byte.is_ascii_digit())
+            && let Some(found) = self.by_id.get(reference)
+        {
+            return Some(found);
+        }
+        if reference.starts_with("attachment")
+            && let Some((_, id)) = reference.split_once(':')
+            && let Some(found) = self.by_id.get(id.trim())
+        {
+            return Some(found);
+        }
+        let name = reference.rsplit('/').next().unwrap_or(reference);
+        let name = name.split('|').next().unwrap_or(name);
+        if let Some((_, found)) = self.by_name.iter().find(|(known, _)| known == name) {
+            return Some(found);
+        }
+        let lower = name.to_lowercase();
+        if let Some((_, found)) = self
+            .by_name
+            .iter()
+            .find(|(known, _)| known.to_lowercase() == lower)
+        {
+            return Some(found);
+        }
+        self.by_name
+            .iter()
+            .find(|(known, _)| known.ends_with(name))
+            .map(|(_, found)| *found)
+    }
+}
+
 /// Python truthiness of a JSON value.
 fn truthy(value: &Value) -> bool {
     match value {
@@ -889,6 +1274,7 @@ fn field_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pictures::FETCH_FAILED;
     use crate::source::fixture::{Reply, Scripted, query};
     use crate::transport::StatusCode;
     use serde_json::json;
@@ -1783,5 +2169,302 @@ mod tests {
         assert!(
             !truthy(&json!("")) && !truthy(&json!([])) && truthy(&json!("a")) && truthy(&json!(1))
         );
+    }
+
+    #[test]
+    fn wiki_image_references_are_found_like_the_sdk_regex() {
+        assert_eq!(
+            wiki_images("a !x.png|thumbnail! b !9001! c !y|alt=\"z\"! !x.png|thumbnail! !|bad! !"),
+            ["!x.png|thumbnail!", "!9001!", "!y|alt=\"z\"!", "! !"],
+            "a stray `! !` matches the SDK's regex too; only resolved references are used"
+        );
+        assert_eq!(markup_reference("!x.png|thumbnail!"), "x.png");
+        assert_eq!(markup_reference("!9001!"), "9001");
+        assert_eq!(issue_of_key("issue/12.md"), Some("12"));
+        assert_eq!(issue_of_key("issue/12/comment/5.md"), Some("12"));
+        assert_eq!(issue_of_key("issue/12/attachment/5/a.png"), None);
+        assert_eq!(issue_of_key("other"), None);
+    }
+
+    #[test]
+    fn the_context_is_five_hundred_characters_either_side_with_ellipses() {
+        let text = format!("{}!m!{}", "a".repeat(600), "b".repeat(600));
+        let context = context_around(&text, "!m!");
+        assert_eq!(
+            context,
+            format!("...{}!m!{}...", "a".repeat(500), "b".repeat(500))
+        );
+        assert_eq!(context_around("short !m! text", "!m!"), "short !m! text");
+        assert_eq!(context_around("none", "!m!"), "");
+    }
+
+    fn attachment_fixture() -> Arc<Scripted> {
+        Scripted::new(|request, _| match request.url().path() {
+            "/rest/api/3/issue/1" => {
+                assert_eq!(query(request, "fields").as_deref(), Some("attachment"));
+                Reply::json(&json!({"fields": {"attachment": [
+                    {"id": "9001", "filename": "spec.pdf", "size": 9, "mimeType": "application/pdf"},
+                    {"id": "9002", "filename": "shot.PNG", "size": 200, "mimeType": "image/png",
+                     "content": "https://acme.atlassian.net/rest/api/3/attachment/content/9002"},
+                    {"id": "9003", "filename": "huge.png", "size": 6_000_000, "mimeType": "image/png"},
+                    {"id": "9004", "filename": "tiny.png", "size": 50, "mimeType": "image/png"},
+                    {"id": "9005", "filename": "gone.png", "size": 200, "mimeType": "image/png"},
+                ]}}))
+            }
+            "/rest/api/3/attachment/content/9002" => Reply::bytes(&[7; 200]),
+            "/rest/api/3/attachment/content/9004" => Reply::bytes(&[7; 50]),
+            "/rest/api/3/attachment/content/9005" | "/rest/api/3/issue/3" => {
+                Reply::status(StatusCode::NOT_FOUND)
+            }
+            "/rest/api/3/issue/2" => Reply::status(StatusCode::BAD_GATEWAY),
+            other => panic!("unexpected request {other}"),
+        })
+    }
+
+    fn picture_source(fixture: Arc<Scripted>) -> JiraSource {
+        JiraSource::new(
+            cloud(),
+            arguments(&json!({"process_images": true})),
+            allow(),
+            fixture,
+        )
+        .expect("source")
+    }
+
+    #[tokio::test]
+    async fn the_attachment_list_is_read_once_per_issue_and_each_file_once_per_document() {
+        let fixture = attachment_fixture();
+        let source = picture_source(fixture.clone());
+        let text = "!shot.png|thumbnail! !shot.png|width=10! !9002! !attachment:9002!";
+        let batch = source
+            .pictures("issue/1.md", text.as_bytes())
+            .await
+            .expect("batch");
+        assert_eq!(
+            batch.pictures.len(),
+            4,
+            "every markup keeps its own context"
+        );
+        source
+            .pictures("issue/1/comment/5.md", b"again !shot.png!")
+            .await
+            .expect("comment");
+        let seen = fixture.seen();
+        let count = |what: &str| seen.iter().filter(|s| s.contains(what)).count();
+        assert_eq!(count("/rest/api/3/issue/1"), 1, "{seen:?}");
+        assert_eq!(
+            count("attachment/content/9002"),
+            2,
+            "once per document: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prose_between_exclamation_marks_costs_no_request() {
+        let source = picture_source(Scripted::new(|request, _| {
+            panic!("no request expected, got {}", request.url())
+        }));
+        let text = "Done! Thanks! See !this, and that! also !notes.txt!";
+        assert!(!source.may_have_pictures("issue/1.md", text.as_bytes()));
+        assert!(
+            source
+                .pictures("issue/1.md", text.as_bytes())
+                .await
+                .is_none()
+        );
+        assert!(source.may_have_pictures("issue/1.md", b"a !9002! b"));
+        assert!(source.may_have_pictures("issue/1.md", b"a !x.PNG|thumbnail! b"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_attachment_list_leaves_the_text_and_is_retried_only_when_transient() {
+        let source = picture_source(attachment_fixture());
+        let transient = source
+            .pictures("issue/2.md", b"a !x.png! b")
+            .await
+            .expect("counted");
+        assert_eq!(transient.template, "a !x.png! b");
+        assert_eq!(transient.skipped.get(FETCH_FAILED), Some(&1));
+        let permanent = source
+            .pictures("issue/3.md", b"a !x.png! b")
+            .await
+            .expect("counted");
+        assert_eq!(permanent.skipped.get(FETCH_FAILED), None);
+        assert_eq!(permanent.skipped.get(pictures::UNREADABLE), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn a_download_is_bounded_whatever_the_listing_declared() {
+        let big = vec![7_u8; usize::try_from(pictures::MAX_PICTURE_BYTES).unwrap() + 1];
+        let fixture = Scripted::new(move |request, _| match request.url().path() {
+            "/rest/api/3/issue/1" => Reply::json(&json!({"fields": {"attachment": [
+                {"id": "7", "filename": "nosize.png", "mimeType": "image/png"},
+                {"id": "8", "filename": "denied.png", "size": 200},
+                {"id": "9", "filename": "flaky.png", "size": 200},
+            ]}})),
+            "/rest/api/3/attachment/content/7" => Reply::bytes(&big),
+            "/rest/api/3/attachment/content/8" => Reply::status(StatusCode::FORBIDDEN),
+            "/rest/api/3/attachment/content/9" => Reply::status(StatusCode::SERVICE_UNAVAILABLE),
+            other => panic!("unexpected request {other}"),
+        });
+        let source = picture_source(fixture);
+        let batch = source
+            .pictures("issue/1.md", b"!nosize.png! !denied.png! !flaky.png!")
+            .await
+            .expect("batch");
+        assert!(batch.pictures.is_empty());
+        assert_eq!(
+            batch.skipped.get(TOO_LARGE),
+            Some(&1),
+            "{:?}",
+            batch.skipped
+        );
+        assert_eq!(batch.skipped.get(pictures::FORBIDDEN), Some(&1));
+        assert_eq!(
+            batch.skipped.get(FETCH_FAILED),
+            Some(&1),
+            "only the 503 is retried"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_images_reads_the_issues_image_attachments_with_context_prompts() {
+        let source = JiraSource::new(
+            cloud(),
+            arguments(&json!({"process_images": true})),
+            allow(),
+            attachment_fixture(),
+        )
+        .expect("source");
+        assert!(matches!(
+            source.picture_step("issue/1.md"),
+            Some(PictureStep::Inline { prompt: None })
+        ));
+        assert!(source.picture_step("issue/1/comment/5.md").is_some());
+        assert!(source.picture_step("issue/1/attachment/2/a.png").is_none());
+        let text = "# Description\nSee !shot.png|thumbnail! and !9001! and !nothing.png! then !huge.png! !tiny.png! !gone.png! and !shot.png|width=10! again.";
+        let batch = source
+            .pictures("issue/1.md", text.as_bytes())
+            .await
+            .expect("batch");
+        assert_eq!(batch.pictures.len(), 2, "two markups, one attachment");
+        let first = &batch.pictures[0];
+        assert_eq!(first.name, "shot.PNG");
+        let prompt = first.prompt.as_deref().expect("a prompt of its own");
+        assert!(
+            prompt.starts_with("\n        ## Image Analysis Task:"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("\n\n## Additional Context Information:\n- Image Name/Reference: shot.PNG\n- Surrounding Content: # Description\nSee !shot.png|thumbnail! and"));
+        assert!(prompt.ends_with(
+            "\nPlease incorporate this contextual information in your description when relevant."
+        ));
+        assert_eq!(batch.skipped.get(UNSUPPORTED), Some(&1), "the pdf");
+        assert_eq!(batch.skipped.get(TOO_LARGE), Some(&1), "huge");
+        assert_eq!(
+            batch.skipped.get(FETCH_FAILED),
+            None,
+            "nothing is retryable"
+        );
+        assert_eq!(
+            batch.skipped.get(pictures::UNREADABLE),
+            Some(&2),
+            "the 50 byte download (no picture) and the 404"
+        );
+        let rendered = batch.render(&[Some("A login form"), Some("A login form")]);
+        assert!(
+            rendered.contains(
+                "See [Image shot.PNG Description: A login form] and !9001! and !nothing.png!"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.ends_with("and [Image shot.PNG Description: A login form] again."),
+            "{rendered}"
+        );
+        assert_eq!(
+            batch.render(&[None, None]),
+            text,
+            "undescribed pictures stay as written"
+        );
+        // Off by default.
+        let off = JiraSource::new(
+            cloud(),
+            arguments(&json!({})),
+            allow(),
+            attachment_fixture(),
+        )
+        .expect("source");
+        assert!(off.picture_step("issue/1.md").is_none());
+        assert!(off.pictures("issue/1.md", text.as_bytes()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn one_picture_referenced_three_times_is_downloaded_held_and_charged_once() {
+        let five = usize::try_from(pictures::MAX_PICTURE_BYTES).unwrap();
+        let fixture = Scripted::new(move |request, _| match request.url().path() {
+            "/rest/api/3/issue/1" => Reply::json(&json!({"fields": {"attachment": [
+                {"id": "1", "filename": "a.png", "size": five, "mimeType": "image/png"},
+                {"id": "2", "filename": "b.png", "size": five, "mimeType": "image/png"},
+                {"id": "3", "filename": "c.png", "size": five, "mimeType": "image/png"},
+            ]}})),
+            "/rest/api/3/attachment/content/1" => Reply::bytes(&vec![1; five]),
+            "/rest/api/3/attachment/content/2" => Reply::bytes(&vec![2; five]),
+            "/rest/api/3/attachment/content/3" => Reply::bytes(&vec![3; five]),
+            other => panic!("unexpected request {other}"),
+        });
+        let source = picture_source(fixture.clone());
+        let text = "!a.png! x !a.png|thumbnail! y !1! z !b.png! w !c.png!";
+        let batch = source
+            .pictures("issue/1.md", text.as_bytes())
+            .await
+            .expect("batch");
+        let seen = fixture.seen();
+        assert_eq!(
+            seen.iter().filter(|s| s.contains("content/1")).count(),
+            1,
+            "one download: {seen:?}"
+        );
+        // 5 + 5 MiB fit the 12 MiB total; the third distinct picture does not.
+        // The repeats of the first were never refused.
+        assert_eq!(batch.pictures.len(), 4, "a x3 and b");
+        assert_eq!(batch.skipped.get(TOO_LARGE), Some(&1), "c");
+        let first = batch.pictures[0].bytes.as_ptr();
+        assert!(
+            batch.pictures[..3]
+                .iter()
+                .all(|p| p.bytes.as_ptr() == first),
+            "one buffer"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_markup_inside_another_is_replaced_by_its_span_not_by_its_text() {
+        let fixture = Scripted::new(|request, _| match request.url().path() {
+            "/rest/api/3/issue/1" => Reply::json(&json!({"fields": {"attachment": [
+                {"id": "1", "filename": "a.png", "size": 200, "mimeType": "image/png"},
+                {"id": "2", "filename": "b.png", "size": 200, "mimeType": "image/png"},
+            ]}})),
+            "/rest/api/3/attachment/content/1" | "/rest/api/3/attachment/content/2" => {
+                Reply::bytes(&[7; 200])
+            }
+            other => panic!("unexpected request {other}"),
+        });
+        let source = picture_source(fixture);
+        let text = "!b.png! see !a.png!b.png!";
+        let batch = source
+            .pictures("issue/1.md", text.as_bytes())
+            .await
+            .expect("batch");
+        assert_eq!(batch.pictures.len(), 2);
+        assert_eq!(
+            batch.template,
+            format!(
+                "{} see {}b.png!",
+                batch.pictures[0].token, batch.pictures[1].token
+            )
+        );
+        assert_eq!(batch.pictures[1].fallback, "!a.png!");
+        assert_eq!(batch.render(&[None, None]), text);
     }
 }
