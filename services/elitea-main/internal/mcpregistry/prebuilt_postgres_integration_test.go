@@ -35,6 +35,7 @@ func TestPrebuiltStoreRoundTrip(t *testing.T) {
 		ServerURL:       "https://api.githubcopilot.com/mcp/",
 		BaseURL:         "https://api.githubcopilot.com",
 		ClientID:        "catalogue-client",
+		TokenURL:        "https://idp.example/oauth/token",
 		ClientSecretRef: "mcp_prebuilt__github_copilot_1a2b3c4d__client_secret",
 		TimeoutSeconds:  30,
 		Headers:         map[string]string{"X-Catalogue": "yes"},
@@ -60,6 +61,7 @@ func TestPrebuiltStoreRoundTrip(t *testing.T) {
 	require.Equal(t, map[string]string{"X-Catalogue": "yes"}, found.Headers)
 	require.Contains(t, found.ConfigSchema["properties"], "tenant")
 	require.Equal(t, 30, found.TimeoutSeconds)
+	require.Equal(t, "https://idp.example/oauth/token", found.TokenURL, "the pinned token endpoint survives the round trip")
 }
 
 // The lookup normalises BOTH sides, which is the whole point of the key: an
@@ -316,6 +318,7 @@ func newCataloguePool(t *testing.T) *pgxpool.Pool {
 	for _, name := range []string{
 		"0094_mcp_prebuilt_catalogue.sql",
 		"0128_mcp_prebuilt_parameter_schema.sql",
+		"0165_mcp_prebuilt_token_url.sql",
 	} {
 		migration, err := os.ReadFile("../../migrations/shared/" + name)
 		require.NoError(t, err, "the migration file must be readable: this test proves it, not a copy")
