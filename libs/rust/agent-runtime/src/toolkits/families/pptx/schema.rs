@@ -11,8 +11,10 @@
 
 use serde_json::{Value, json};
 
-const MAX_FILE_NAME_BYTES: usize = 1_024;
-const MAX_TEXT_CHARS: usize = 16_000;
+use super::super::office_common::{
+    MAX_FILE_NAME_BYTES, MAX_TEXT_CHARS, OfficeTool, catalogue_schema, catalogue_tools, file_param,
+    object, out_param, text_param,
+};
 
 /// One tool of the family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -544,92 +546,33 @@ impl PptxTool {
 }
 
 impl PptxTool {
-    /// The argument schema as the toolkit editor's catalogue carries it: the
-    /// shape of the SDK's pydantic schemas (a `title` on the object and on every
-    /// property, no `additionalProperties`, `anyOf` for a union), so the form and
-    /// the test pane render it like any SDK tool.
+    /// The argument schema as the toolkit editor's catalogue carries it.
     pub(crate) fn catalogue_schema(self) -> Value {
-        let mut schema = self.parameters_schema();
-        let Some(object) = schema.as_object_mut() else {
-            return schema;
-        };
-        object.remove("additionalProperties");
-        let camel: String = self
-            .name()
-            .split('_')
-            .map(|w| {
-                let mut c = w.chars();
-                c.next().map_or_else(String::new, |f| {
-                    f.to_uppercase().collect::<String>() + c.as_str()
-                })
-            })
-            .collect();
-        object.insert("title".into(), format!("{camel}Args").into());
-        if let Some(props) = object.get_mut("properties").and_then(Value::as_object_mut) {
-            for (name, prop) in props.iter_mut() {
-                if let Some(p) = prop.as_object_mut() {
-                    let title: Vec<String> = name
-                        .split('_')
-                        .map(|w| {
-                            let mut c = w.chars();
-                            c.next().map_or_else(String::new, |f| {
-                                f.to_uppercase().collect::<String>() + c.as_str()
-                            })
-                        })
-                        .collect();
-                    p.insert("title".into(), title.join(" ").into());
-                    if let Some(Value::Array(kinds)) = p.get("type").cloned() {
-                        p.remove("type");
-                        p.insert(
-                            "anyOf".into(),
-                            Value::Array(kinds.into_iter().map(|k| json!({"type": k})).collect()),
-                        );
-                    }
-                }
-            }
-        }
-        schema
+        catalogue_schema(self.name(), self.parameters_schema())
+    }
+}
+
+impl OfficeTool for PptxTool {
+    const FAMILY: &'static str = "pptx";
+    const ALL: &'static [Self] = &ALL_TOOLS;
+
+    fn name(self) -> &'static str {
+        PptxTool::name(self)
+    }
+
+    fn description(self) -> &'static str {
+        PptxTool::description(self)
     }
 }
 
 /// The Rust-only tools' catalogue document (the file elitea-main embeds as
 /// `rust_only_toolkit_tools.json`): every tool of the family the SDK's
 /// `pptx` toolkit does not declare.
-pub(crate) fn rust_only_catalogue_document() -> Value {
-    let tools: serde_json::Map<String, Value> = ALL_TOOLS
-        .into_iter()
-        .filter(|t| !matches!(t, PptxTool::FillTemplate | PptxTool::TranslatePresentation))
-        .map(|t| (t.name().to_owned(), t.catalogue_schema()))
-        .collect();
-    json!({
-        "schema_version": "elitea.rust-only-toolkit-tools.v1",
-        "types": {"pptx": Value::Object(tools)},
-    })
-}
-
-fn object(properties: &[(&str, Value)], required: &[&str]) -> Value {
-    let props: serde_json::Map<String, Value> = properties
-        .iter()
-        .map(|(name, schema)| ((*name).to_owned(), schema.clone()))
-        .collect();
-    json!({
-        "type": "object",
-        "properties": props,
-        "required": required,
-        "additionalProperties": false
-    })
-}
-
-fn file_param(description: &str) -> Value {
-    json!({"type": "string", "minLength": 1, "maxLength": MAX_FILE_NAME_BYTES, "description": description})
-}
-
-fn out_param(description: &str) -> Value {
-    json!({"type": "string", "maxLength": MAX_FILE_NAME_BYTES, "description": description})
-}
-
-fn text_param(description: &str, max: usize) -> Value {
-    json!({"type": "string", "maxLength": max, "description": description})
+pub(crate) fn rust_only_catalogue_tools() -> serde_json::Map<String, Value> {
+    catalogue_tools::<PptxTool>(
+        |t| matches!(t, PptxTool::FillTemplate | PptxTool::TranslatePresentation),
+        PptxTool::parameters_schema,
+    )
 }
 
 fn slide_param(description: &str) -> Value {

@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fmt;
 use std::sync::Arc;
 
 use adk_core::{Tool, ToolContext};
@@ -9,30 +8,25 @@ use elitea_office_core::{Deck, Limits};
 use serde_json::{Map, Value, json};
 
 use crate::toolkits::families::artifact::ArtifactToolAuthority;
-use crate::toolkits::families::office_host::{
-    MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError, OfficeModelRequest,
-    SharedOfficeToolHost,
+use crate::toolkits::families::office_common::{
+    OfficeIo, OfficeToolsetError, OfficeToolsetErrorCode, Stored, beside, build_toolset,
 };
-use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
+use crate::toolkits::families::office_host::{
+    OfficeHostError, OfficeModelRequest, SharedOfficeToolHost,
+};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
-use super::config::{PptxConfigError, PptxConfigErrorCode, PptxToolkitConfig};
+use super::config::PptxToolkitConfig;
 use super::model;
 use super::ops::{self, Sentence};
 use super::schema::PptxTool;
 
-const MAX_DESCRIPTION_BYTES: usize = 1_000;
-const MAX_FILE_NAME_BYTES: usize = 1_024;
 const DEFAULT_BATCH_SIZE: usize = 20;
 /// The most unique placeholders or paragraphs one call sends to the model.
 /// With the batch cap it bounds the model calls a single tool call can make
 /// (`MAX_MODEL_ITEMS / batch size`, 2000 / 20 = 100 by default).
 const MAX_MODEL_ITEMS: usize = 2_000;
 const TRANSLATE_BATCH: usize = 20;
-/// How long a call waits for a free document slot: up to 8 retries at
-/// 250 ms, 500 ms, ... (9 s in all), under the engine's 20 s call deadline.
-const BUSY_RETRIES: u32 = 8;
-const BUSY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(250);
 /// The slides sent to the model as visual context when `pdf_file_name` is
 /// given (the SDK sends at most three PDF pages).
 const MAX_CONTEXT_IMAGES: usize = 3;
@@ -41,68 +35,8 @@ const MAX_MARKDOWN_CHARS: usize = 200_000;
 const PPTX_MEDIA_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
-/// Stable family-toolset construction failure category.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PptxToolsetErrorCode {
-    InvalidConfiguration,
-    ResourceExhausted,
-    InvalidDefinition,
-}
-
-pub(crate) struct PptxToolsetError {
-    code: PptxToolsetErrorCode,
-}
-
-impl PptxToolsetError {
-    pub(crate) const fn code(&self) -> PptxToolsetErrorCode {
-        self.code
-    }
-}
-
-impl fmt::Debug for PptxToolsetError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PptxToolsetError")
-            .field("code", &self.code)
-            .finish_non_exhaustive()
-    }
-}
-
-impl fmt::Display for PptxToolsetError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self.code {
-            PptxToolsetErrorCode::InvalidConfiguration => {
-                "the pptx toolkit configuration is invalid"
-            }
-            PptxToolsetErrorCode::ResourceExhausted => {
-                "the pptx toolkit configuration exceeds its approved limit"
-            }
-            PptxToolsetErrorCode::InvalidDefinition => "the pptx ADK tool definition is invalid",
-        })
-    }
-}
-
-impl std::error::Error for PptxToolsetError {}
-
-impl From<PptxConfigError> for PptxToolsetError {
-    fn from(source: PptxConfigError) -> Self {
-        Self {
-            code: match source.code() {
-                PptxConfigErrorCode::InvalidConfiguration => {
-                    PptxToolsetErrorCode::InvalidConfiguration
-                }
-                PptxConfigErrorCode::ResourceExhausted => PptxToolsetErrorCode::ResourceExhausted,
-            },
-        }
-    }
-}
-
-impl From<MaterializedToolsetError> for PptxToolsetError {
-    fn from(_: MaterializedToolsetError) -> Self {
-        Self {
-            code: PptxToolsetErrorCode::InvalidDefinition,
-        }
-    }
-}
+pub(crate) type PptxToolsetErrorCode = OfficeToolsetErrorCode;
+pub(crate) type PptxToolsetError = OfficeToolsetError;
 
 /// Build the claim-scoped pptx toolset. `None` when the authority lends no
 /// Office host: the toolkit is then left out as unsupported, never bound to
@@ -126,39 +60,24 @@ pub(crate) fn build_with_host(
     host: &SharedOfficeToolHost,
     limits: Limits,
 ) -> Result<BasicToolset, PptxToolsetError> {
-    let bucket: Arc<str> = Arc::from(config.bucket());
-    let limits = Arc::new(limits);
-    let tools: Vec<Arc<dyn Tool>> = config
-        .tools()
-        .into_iter()
-        .map(|tool| -> Arc<dyn Tool> {
-            Arc::new(PptxToolImpl {
-                tool,
-                bucket: Arc::clone(&bucket),
-                host: Arc::clone(host),
-                limits: Arc::clone(&limits),
-                description: tool_description(toolkit_name, tool.description()),
-            })
+    let io = Arc::new(OfficeIo {
+        kind: ops::KIND,
+        bucket: Arc::from(config.bucket()),
+        host: Arc::clone(host),
+        limits: Arc::new(limits),
+    });
+    build_toolset(toolkit_name, config, policy, |tool, description| {
+        Arc::new(PptxToolImpl {
+            tool,
+            io: Arc::clone(&io),
+            description,
         })
-        .collect();
-    admit_materialized_toolset(toolkit_name, "pptx", policy, tools).map_err(Into::into)
-}
-
-/// The SDK's description rule: `Toolkit: <name>\n` before the description,
-/// cut at 1000 characters.
-fn tool_description(toolkit_name: &str, text: &str) -> Box<str> {
-    format!("Toolkit: {toolkit_name}\n{text}")
-        .chars()
-        .take(MAX_DESCRIPTION_BYTES)
-        .collect::<String>()
-        .into_boxed_str()
+    })
 }
 
 struct PptxToolImpl {
     tool: PptxTool,
-    bucket: Arc<str>,
-    host: SharedOfficeToolHost,
-    limits: Arc<Limits>,
+    io: Arc<OfficeIo>,
     description: Box<str>,
 }
 
@@ -212,163 +131,24 @@ impl Tool for PptxToolImpl {
 
 /// A host failure as the model reads it: one sentence per real cause.
 pub(crate) fn host_sentence(action: &str, error: &OfficeHostError) -> Sentence {
-    tracing::warn!(
-        event = "pptx_tool_host_failed",
-        reason_code = error.reason_code(),
-        action,
-        "a pptx tool's platform call failed"
-    );
-    match error.kind() {
-        OfficeFailure::NotFound => {
-            format!("Could not {action}: no such file in the bucket. Check the file name.")
-        }
-        OfficeFailure::AccessRefused => format!(
-            "Could not {action}: the platform refused access to the file store. Do not retry; tell the user."
-        ),
-        OfficeFailure::AlreadyExists => format!(
-            "Could not {action}: a file with that name already exists. Choose another name, or ask to replace it."
-        ),
-        OfficeFailure::UnsupportedType => format!(
-            "Could not {action}: the file store does not accept that type of file (a .pptx or an image is expected)."
-        ),
-        OfficeFailure::InvalidRequest => format!(
-            "Could not {action}: the file name or bucket is not valid, or the request was refused as invalid."
-        ),
-        OfficeFailure::TooLarge => {
-            format!("Could not {action}: the file is larger than the platform accepts.")
-        }
-        OfficeFailure::BudgetRefused => format!(
-            "Could not {action}: the model budget is exhausted. Do not retry; tell the user."
-        ),
-        OfficeFailure::NoModel => format!(
-            "Could not {action}: this tool needs a chat model and none is bound in this run (a pipeline node binds none). Use list_placeholders and replace_placeholders with your own content, or run it from an agent."
-        ),
-        OfficeFailure::Unreachable => format!(
-            "Could not {action}: the platform could not be reached. Tell the user it did not happen."
-        ),
-    }
-}
-
-/// The key a file is stored under: what the tool accepts as `file_name`. A
-/// leading slash is dropped, and so is a leading `/{bucket}/` of the
-/// toolkit's own bucket, so the path form the platform shows for a file works
-/// as the next call's name.
-fn object_key(bucket: &str, name: &str) -> Result<String, Sentence> {
-    let trimmed = name.trim();
-    let key = if let Some(rooted) = trimmed.strip_prefix('/') {
-        let rooted = rooted.trim_start_matches('/');
-        rooted
-            .strip_prefix(bucket)
-            .and_then(|rest| rest.strip_prefix('/'))
-            .unwrap_or(rooted)
-    } else {
-        trimmed
-    };
-    if key.is_empty() || key.len() > MAX_FILE_NAME_BYTES {
-        return Err("The file name is empty or too long.".to_owned());
-    }
-    if key.split('/').any(|segment| segment == "..") {
-        return Err("The file name may not contain `..`.".to_owned());
-    }
-    Ok(key.to_owned())
-}
-
-/// A file the tool stored: the bucket and the key (the name every tool of the
-/// family accepts), named separately.
-struct Stored {
-    bucket: String,
-    key: String,
-    bytes: u64,
-}
-
-impl Stored {
-    fn said(&self) -> String {
-        format!(
-            "`{}` in bucket `{}` ({} bytes)",
-            self.key, self.bucket, self.bytes
-        )
-    }
-}
-
-/// The directory prefix of a key, with its trailing slash (empty for a file at
-/// the bucket's root): where an output with no name of its own goes, next to
-/// the source.
-fn directory_of(key: &str) -> &str {
-    key.rfind('/').map_or("", |i| &key[..=i])
-}
-
-fn stem(name: &str) -> &str {
-    let file = name.rsplit('/').next().unwrap_or(name);
-    file.rsplit_once('.').map_or(file, |(stem, _)| stem)
+    super::super::office_common::host_sentence(action, error, &ops::KIND)
 }
 
 impl PptxToolImpl {
     async fn read(&self, name: &str) -> Result<Vec<u8>, Sentence> {
-        let key = object_key(&self.bucket, name)?;
-        self.host
-            .read_object(&self.bucket, &key, MAX_OFFICE_OBJECT_BYTES)
-            .await
-            .map_err(|e| host_sentence(&format!("read `{key}`"), &e))
+        self.io.read(name).await
     }
 
-    /// Store `bytes` and report where. `overwrite` is false only for a file
-    /// the caller must not replace by accident (`create_presentation`); every
-    /// other output is regenerated or an edit in place, and replaces.
-    async fn write(
-        &self,
-        name: &str,
-        media_type: &str,
-        bytes: Vec<u8>,
-        overwrite: bool,
-    ) -> Result<Stored, OfficeHostError> {
-        let key = object_key(&self.bucket, name).map_err(|_| {
-            OfficeHostError::new(OfficeFailure::InvalidRequest, "office_host.invalid_name")
-        })?;
-        let written = self
-            .host
-            .write_object(&self.bucket, &key, media_type, bytes, overwrite)
-            .await?;
-        Ok(Stored {
-            bucket: written.bucket,
-            key: written.name,
-            bytes: written.byte_length,
-        })
-    }
-
-    /// `write`, the failure as the sentence the model reads.
     async fn save(&self, name: &str, media_type: &str, bytes: Vec<u8>) -> Result<Stored, Sentence> {
-        self.write(name, media_type, bytes, true)
-            .await
-            .map_err(|e| host_sentence(&format!("save `{name}`"), &e))
+        self.io.save(name, media_type, bytes).await
     }
 
-    /// Run blocking document work off the async workers.
-    ///
-    /// The engine admits a few documents at a time per process
-    /// (`Limits::max_concurrent`, ADR-0032 decision 3) and answers `Busy`
-    /// at once rather than queueing; a call waits its turn here instead, a
-    /// short while, before it tells the model to try again. `work` runs once
-    /// per attempt and borrows what it needs.
     async fn blocking<T, F>(&self, work: F) -> Result<T, Sentence>
     where
         T: Send + 'static,
         F: Fn(&Limits) -> Result<T, Sentence> + Send + Sync + 'static,
     {
-        let work = Arc::new(work);
-        let mut attempt = 0u32;
-        loop {
-            let (limits, run) = (Arc::clone(&self.limits), Arc::clone(&work));
-            let outcome = tokio::task::spawn_blocking(move || run(&limits))
-                .await
-                .map_err(|_| "The document engine stopped unexpectedly on this file.".to_owned())?;
-            match outcome {
-                Err(sentence) if sentence == ops::BUSY && attempt < BUSY_RETRIES => {
-                    attempt += 1;
-                    tokio::time::sleep(BUSY_BACKOFF * attempt).await;
-                }
-                other => return other,
-            }
-        }
+        self.io.blocking(work).await
     }
 
     async fn run(&self, args: &Value) -> Result<Value, Sentence> {
@@ -443,15 +223,9 @@ impl PptxToolImpl {
         // The server refuses a taken name unless the caller asked to replace it.
         let overwrite = ops::opt_bool(args, "overwrite").unwrap_or(false);
         let stored = self
-            .write(&file, PPTX_MEDIA_TYPE, saved, overwrite)
-            .await
-            .map_err(|e| {
-                if e.kind() == OfficeFailure::AlreadyExists {
-                    format!("`{file}` already exists. Pass overwrite=true to replace it, or choose another name.")
-                } else {
-                    host_sentence(&format!("create `{file}`"), &e)
-                }
-            })?;
+            .io
+            .create(&file, PPTX_MEDIA_TYPE, saved, overwrite)
+            .await?;
         Ok(Value::String(format!("Created {}.", stored.said())))
     }
 
@@ -559,13 +333,7 @@ impl PptxToolImpl {
             .await?;
         // With no name of its own the preview goes next to the deck.
         let output = ops::opt_str(args, "output_file_name").unwrap_or_else(|| {
-            let source = object_key(&self.bucket, &file).unwrap_or_else(|_| file.clone());
-            format!(
-                "{}{}-slide-{}.png",
-                directory_of(&source),
-                stem(&source),
-                slide + 1
-            )
+            beside(&self.io.bucket, &file, &format!("-slide-{}.png", slide + 1))
         });
         let stored = self.save(&output, "image/png", png).await?;
         let mut note = String::from(
@@ -598,10 +366,8 @@ impl PptxToolImpl {
                     .map_err(|e| ops::office_sentence(&e))
             })
             .await?;
-        let output = ops::opt_str(args, "output_file_name").unwrap_or_else(|| {
-            let source = object_key(&self.bucket, &file).unwrap_or_else(|_| file.clone());
-            format!("{}{}.pdf", directory_of(&source), stem(&source))
-        });
+        let output = ops::opt_str(args, "output_file_name")
+            .unwrap_or_else(|| beside(&self.io.bucket, &file, ".pdf"));
         let stored = self.save(&output, "application/pdf", pdf).await?;
         Ok(Value::String(format!(
             "Exported {}. The export is approximate: charts are drawn as placeholders and fonts that are not bundled render with a substitute.",
@@ -617,7 +383,8 @@ impl PptxToolImpl {
         prompt: String,
         images_png: std::sync::Arc<[Vec<u8>]>,
     ) -> Result<String, Sentence> {
-        self.host
+        self.io
+            .host
             .complete(OfficeModelRequest { prompt, images_png })
             .await
             .map_err(|e| host_sentence("call the model", &e))

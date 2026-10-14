@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/rustonly"
 )
 
 // ToolkitCatalogueSource supplies the SETTINGS schema and the METADATA of every
@@ -55,8 +57,9 @@ func WithCatalogue(source ToolkitCatalogueSource) Option {
 }
 
 // WithWorkerCapability supplies the worker capability projection. Without it
-// every catalogued type is offered, which is the honest answer when the
-// deployment has not said which worker it runs.
+// every catalogued type is offered. The composition root always supplies one
+// (a nil *WorkerToolkitCapability is a valid projection that offers the SDK's
+// types and withholds the ones only the Rust worker serves).
 func WithWorkerCapability(source ToolkitCapabilitySource) Option {
 	return func(h *Handler) { h.workerCapability = source }
 }
@@ -234,18 +237,22 @@ type ToolCapabilitySource interface {
 // in the schema — a saved selection holding one must still validate — and
 // metadata.unavailable_tools tells the client which of them to disable.
 func (h *Handler) unavailableTools(toolkitType string, typeSchema map[string]any) []string {
-	if h == nil || h.workerCapability == nil {
+	if h == nil {
 		return nil
 	}
-	tools, ok := h.workerCapability.(ToolCapabilitySource)
-	if !ok {
-		return nil
+	supports := rustonly.AbsentToolVerdict
+	if h.workerCapability != nil {
+		tools, ok := h.workerCapability.(ToolCapabilitySource)
+		if !ok {
+			return nil
+		}
+		supports = tools.SupportsTool
 	}
 	properties, _ := typeSchema["properties"].(map[string]any)
 	selected, _ := properties["selected_tools"].(map[string]any)
 	var unavailable []string
 	for _, name := range toolNamesFromSelectedTools(selected) {
-		if served, _ := tools.SupportsTool(toolkitType, name); !served {
+		if served, _ := supports(toolkitType, name); !served {
 			unavailable = append(unavailable, name)
 		}
 	}
@@ -322,11 +329,17 @@ func (h *Handler) toolkitTypeMetadata(
 }
 
 func (h *Handler) supportsToolkitType(toolkitType string) (bool, string) {
-	if h == nil || h.workerCapability == nil || h.catalogue == nil {
-		return true, ""
+	if h == nil || h.workerCapability == nil {
+		// No statement of the worker: the SDK's types are offered, the ones only
+		// the Rust worker serves are not (the same rule a nil projection applies).
+		return rustonly.AbsentTypeVerdict(toolkitType)
 	}
-	importKey, found := h.catalogue.ToolkitImportKey(toolkitType)
-	if !found {
+	importKey := ""
+	found := false
+	if h.catalogue != nil {
+		importKey, found = h.catalogue.ToolkitImportKey(toolkitType)
+	}
+	if !found && !rustonly.IsType(toolkitType) {
 		return true, ""
 	}
 	return h.workerCapability.SupportsToolkitType(toolkitType, importKey)
@@ -338,7 +351,7 @@ func (h *Handler) supportsToolkitType(toolkitType string) (bool, string) {
 // entry to look it up from.
 func (h *Handler) supportsToolkitTypeByImportKey(toolkitType, importKey string) (bool, string) {
 	if h == nil || h.workerCapability == nil {
-		return true, ""
+		return rustonly.AbsentTypeVerdict(toolkitType)
 	}
 	return h.workerCapability.SupportsToolkitType(toolkitType, importKey)
 }
