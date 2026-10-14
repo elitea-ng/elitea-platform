@@ -921,3 +921,17 @@ pub(in crate::toolkits) fn test_catalog() -> Vec<(&'static str, &'static str)> {
         .map(|kind| (kind.name(), kind.group()))
         .collect()
 }
+
+/// The stored selection's tools this family does not serve, for the run's
+/// notice: `(name, needs_file_store)`.
+pub(crate) fn omitted_selection(selected: &[Box<str>], _file_store: bool) -> Vec<(String, bool)> {
+    selected
+        .iter()
+        .filter(|name| {
+            !BitbucketToolKind::ALL
+                .iter()
+                .any(|kind| kind.name() == name.as_ref())
+        })
+        .map(|name| (name.to_string(), false))
+        .collect()
+}

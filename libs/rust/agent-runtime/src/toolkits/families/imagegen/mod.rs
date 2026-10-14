@@ -439,7 +439,10 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> String {
         OfficeFailure::Unsupported => {
             format!("Could not {action}: this runtime does not offer that operation.")
         }
-        OfficeFailure::ReplyUnusable => format!(
+        OfficeFailure::ReplyUnusable
+        | OfficeFailure::ReplyCutOff
+        | OfficeFailure::ReplyDeclined
+        | OfficeFailure::ReplyEmpty => format!(
             "Could not {action}: the image model answered but its reply was unusable (it may have been billed). Do not retry without telling the user."
         ),
         OfficeFailure::ReplyTooLarge => format!(

@@ -1292,3 +1292,17 @@ fn resource_exhausted() -> AdkError {
         "the BigQuery tool arguments exceed the approved limit",
     )
 }
+
+/// The stored selection's tools this family does not serve, for the run's
+/// notice: `(name, needs_file_store)`.
+pub(crate) fn omitted_selection(selected: &[Box<str>], _file_store: bool) -> Vec<(String, bool)> {
+    selected
+        .iter()
+        .filter(|name| {
+            !BigQueryToolKind::ALL
+                .iter()
+                .any(|kind| kind.name() == name.as_ref())
+        })
+        .map(|name| (name.to_string(), false))
+        .collect()
+}

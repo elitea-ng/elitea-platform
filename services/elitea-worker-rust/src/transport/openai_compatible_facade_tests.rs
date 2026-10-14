@@ -2381,3 +2381,76 @@ async fn never_ending_budget_refusal_body_returns_the_unscoped_refusal_in_time()
     };
     assert_eq!(error.code, "model_gateway.budget_exhausted");
 }
+
+/// Review round 1 (blocker): toolkit completions share neither the agent's
+/// single-use completion capture nor its turn budget. Three completions on
+/// the real facade, each on its own one-turn binding, all succeed, and the
+/// agent's own binding (one turn) still serves its call afterwards.
+#[tokio::test(flavor = "current_thread")]
+async fn toolkit_completions_bind_fresh_and_leave_the_agents_turn_budget_alone() {
+    use super::toolkit_completion::{
+        FreshModelBinder, ToolkitCallBudget, toolkit_completion_model,
+    };
+    let reply = |text: &str| {
+        let raw = format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            serde_json::json!({"choices":[{"delta":{"content":text},"finish_reason":"stop"}]})
+        );
+        TestModelGatewayOutcome::Response(test_model_gateway_response(stream_body(vec![
+            Bytes::from(raw),
+        ])))
+    };
+    let (client, _) = test_model_gateway_client(
+        vec![reply("one"), reply("two"), reply("three"), reply("agent")],
+        test_model_gateway_config(),
+    )
+    .unwrap();
+    let client = std::sync::Arc::new(client);
+    let mut one_turn = test_model_facade_invocation();
+    one_turn.max_model_turns = 1;
+    one_turn.system_instruction = String::new();
+    one_turn.reasoning_effort = None;
+    let bind: FreshModelBinder = {
+        let (client, invocation) = (std::sync::Arc::clone(&client), one_turn.clone());
+        std::sync::Arc::new(move || {
+            client
+                .bind_ordinary(
+                    &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                    23,
+                    invocation.clone(),
+                )
+                .map(|bound| bound.adk_model())
+                .map_err(|_| unreachable!("binds"))
+        })
+    };
+    let model = toolkit_completion_model(bind, &one_turn, ToolkitCallBudget::new(10));
+    let ask = || {
+        let mut request = test_model_request("go");
+        request.config = None;
+        request
+    };
+    for expected in ["one", "two", "three"] {
+        let responses = drain(model.generate_content(ask(), false).await.unwrap())
+            .await
+            .unwrap();
+        let text: String = responses
+            .iter()
+            .flat_map(|response| response.content.iter().flat_map(|c| &c.parts))
+            .filter_map(|part| match part {
+                adk_rust::Part::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, expected);
+    }
+    // The agent's own binding (a single turn) is untouched by all of that.
+    let agent = client
+        .bind_ordinary(&ClaimScopedEliteaContext::fixture(17, TOKEN), 23, one_turn)
+        .unwrap();
+    let mut request = test_model_request("agent turn");
+    request.model = "fixture-model".to_owned();
+    drain(agent.generate_for_test(request).await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(agent.take_completion_for_test().unwrap(), "agent");
+}

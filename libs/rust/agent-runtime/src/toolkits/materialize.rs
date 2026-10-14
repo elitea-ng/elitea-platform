@@ -170,7 +170,7 @@ pub struct LeftOutToolkit {
 }
 
 /// Why a configured toolkit (or part of it) was left out of the run.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum LeftOutReason {
     /// The toolkit's family is not served by this runtime at all.
     UnsupportedFamily,
@@ -182,6 +182,8 @@ pub enum LeftOutReason {
     /// The toolkit is built, but one tool of its stored selection is not
     /// served by this runtime (not ported, or not available on this path).
     ToolNotServed,
+    /// A tool of the stored selection is blocked by the deployment's policy.
+    ToolBlockedByPolicy,
 }
 
 impl LeftOutReason {
@@ -193,6 +195,7 @@ impl LeftOutReason {
             Self::FamilyNotPortedIndexToolsKept => "index_tools_only",
             Self::UnsupportedSetting => "unsupported_setting",
             Self::ToolNotServed => "unsupported_tool_selection",
+            Self::ToolBlockedByPolicy => "tool_blocked_by_policy",
         }
     }
 }
@@ -201,17 +204,27 @@ impl LeftOutReason {
 #[derive(Clone, Copy)]
 enum ToolkitSkip<'a> {
     Setting(UnsupportedSetting),
-    UnsupportedFamily { index_tools_kept: bool },
-    Tool { name: &'a str, reason: &'static str },
+    UnsupportedFamily {
+        index_tools_kept: bool,
+    },
+    Tool {
+        name: &'a str,
+        cause: LeftOutReason,
+        reason: &'static str,
+    },
 }
 
 impl LeftOutToolkit {
     fn new(reference: &FrozenToolReference<'_>, skip: ToolkitSkip<'_>) -> Self {
         let mut tool_name = None;
         let (cause, reason) = match skip {
-            ToolkitSkip::Tool { name, reason } => {
+            ToolkitSkip::Tool {
+                name,
+                cause,
+                reason,
+            } => {
                 tool_name = Some(bounded_label(name));
-                (LeftOutReason::ToolNotServed, reason)
+                (cause, reason)
             }
             ToolkitSkip::Setting(setting) => (LeftOutReason::UnsupportedSetting, setting.reason()),
             ToolkitSkip::UnsupportedFamily {
@@ -338,32 +351,62 @@ const MAX_NOTICE_LINES: usize = 32;
 /// the order the version listed the toolkits in.
 #[must_use]
 pub fn left_out_toolkits_notice_text(left_out: &[LeftOutToolkit]) -> Option<String> {
-    if left_out.is_empty() {
-        return None;
-    }
-    let mut lines = left_out
-        .iter()
-        .map(|toolkit| {
-            if let Some(tool) = &toolkit.tool_name {
-                return format!(
-                    "tool '{}.{}' ({}) is not enabled on this worker: {}",
-                    toolkit.toolkit_name, tool, toolkit.toolkit_type, toolkit.reason
-                );
+    // Whole-toolkit lines come first, then per-tool lines; when the cap cuts
+    // the list, the two kinds are taken round-robin (as the chat notice
+    // does), so many omitted tools cannot push a whole toolkit out. A tool
+    // blocked by the deployment's policy is NOT named to the model: the
+    // notice never listed blocked names, and still does not.
+    let mut toolkits = Vec::new();
+    let mut tools = Vec::new();
+    for toolkit in left_out {
+        if let Some(tool) = &toolkit.tool_name {
+            if toolkit.cause == LeftOutReason::ToolBlockedByPolicy {
+                continue;
             }
+            tools.push(format!(
+                "tool '{}.{}' ({}) is not enabled on this worker: {}",
+                toolkit.toolkit_name, tool, toolkit.toolkit_type, toolkit.reason
+            ));
+        } else {
             let state = if toolkit.cause == LeftOutReason::FamilyNotPortedIndexToolsKept {
                 "only partly enabled"
             } else {
                 "not enabled"
             };
-            format!(
+            toolkits.push(format!(
                 "toolkit '{}' ({}) is {state} on this worker: {}",
                 toolkit.toolkit_name, toolkit.toolkit_type, toolkit.reason
-            )
-        })
-        .collect::<Vec<_>>();
-    lines.sort_unstable();
-    lines.dedup();
-    Some(capped_notice_lines(lines, MAX_NOTICE_LINES))
+            ));
+        }
+    }
+    for lines in [&mut toolkits, &mut tools] {
+        lines.sort_unstable();
+        lines.dedup();
+    }
+    let total = toolkits.len() + tools.len();
+    if total == 0 {
+        return None;
+    }
+    let (mut kept_toolkits, mut kept_tools) = (0, 0);
+    let mut rank = 0;
+    while kept_toolkits + kept_tools < MAX_NOTICE_LINES
+        && (rank < toolkits.len() || rank < tools.len())
+    {
+        if rank < toolkits.len() {
+            kept_toolkits += 1;
+        }
+        if kept_toolkits + kept_tools < MAX_NOTICE_LINES && rank < tools.len() {
+            kept_tools += 1;
+        }
+        rank += 1;
+    }
+    let mut lines: Vec<String> = toolkits.into_iter().take(kept_toolkits).collect();
+    lines.extend(tools.into_iter().take(kept_tools));
+    let hidden = total - lines.len();
+    if hidden > 0 {
+        lines.push(format!("({hidden} more not shown)"));
+    }
+    Some(lines.join("\n"))
 }
 
 /// The configured toolsets one pass built, and the toolkits it refused.
@@ -520,11 +563,11 @@ async fn materialize_all(
                         .map_err(|()| invalid_configuration())?;
                     report_unserved_selected_tools(
                         reference,
-                        &toolset,
+                        policy,
+                        artifacts,
                         index_toolset.is_some(),
                         on_refused,
-                    )
-                    .await;
+                    );
                     Some(toolset)
                 }
                 Err(ToolsetMaterializationError {
@@ -586,85 +629,103 @@ async fn materialize_all(
     })
 }
 
-/// The families whose stored `selected_tools` may name tools the runtime does
-/// not serve, and which keep the served ones (`unsupported_tool_selection`).
-/// Their toolsets are static, so enumerating them here costs no I/O.
-const SELECTION_REPORTING_FAMILIES: [&str; 8] = [
-    "aha",
-    "bigquery",
-    "bitbucket",
-    "confluence",
-    "figma",
-    "github",
-    "gitlab",
-    "jira",
-];
+const REASON_NOT_PORTED: &str = "this tool is not available on this worker yet, so it was left out";
+const REASON_NEEDS_FILE_STORE: &str =
+    "this tool needs the platform file store, which this run does not lend, so it was left out";
+const REASON_INDEX_RUN: &str =
+    "starting an index run is not a chat tool on this worker; use the toolkit's index action";
+const REASON_INDEX_TOOLS: &str = "the index tools are not available for this toolkit on this path";
+const REASON_POLICY: &str = "this tool is blocked by this deployment's policy";
 
-/// Why a selected tool the family did not serve is missing, as one fixed
-/// sentence (no stored value in it).
-fn unserved_tool_reason(name: &str) -> &'static str {
-    if name == "index_data" {
-        "starting an index run is not a chat tool on this worker; use the toolkit's index action"
-    } else if super::families::index_tools::is_sdk_index_tool_name(name) {
-        "the index tools are not available for this toolkit on this path"
-    } else {
-        "this tool is not available on this worker yet, so it was left out"
-    }
+/// The stored selection's tools a family does not serve, from the family's
+/// own predicate (`omitted_selection`; no toolset is enumerated):
+/// `(name, needs_file_store)`. `None` for a family that reports none.
+fn family_omissions(
+    tool_type: &str,
+    selected: &[Box<str>],
+    file_store: bool,
+) -> Option<Vec<(String, bool)>> {
+    Some(match tool_type {
+        "aha" => aha::tools::omitted_selection(selected, file_store),
+        "bigquery" => bigquery::tools::omitted_selection(selected, file_store),
+        "bitbucket" => bitbucket::tools::omitted_selection(selected, file_store),
+        "confluence" => confluence::tools::omitted_selection(selected, file_store),
+        "figma" => figma::tools::omitted_selection(selected, file_store),
+        "github" => github::tools::omitted_selection(selected, file_store),
+        "gitlab" => gitlab::tools::omitted_selection(selected, file_store),
+        "jira" => jira::tools::omitted_selection(selected, file_store),
+        _ => return None,
+    })
 }
 
 /// Report each tool of the stored selection that the built toolkit does not
-/// serve. Before this the only trace was one worker log line with COUNTS
-/// (`selected_count=5 materialized_count=2`): the person who enabled five
-/// tools saw an agent with two, and nobody could say which three.
+/// serve, and each one the deployment's policy blocks. Before this the only
+/// trace was one worker log line with COUNTS (`selected_count=5
+/// materialized_count=2`): the person who enabled five tools saw an agent
+/// with two, and nobody could say which three.
 ///
-/// Best effort: a toolset that cannot be enumerated reports nothing here
-/// (the run's own binding enumerates it again and fails loudly). Index tools
-/// the composed index toolset serves are not omissions.
-async fn report_unserved_selected_tools(
+/// Run by the reporting materializer ONLY; other callers (direct, pipeline)
+/// neither collect nor compute it. Index tools the composed index toolset
+/// serves are not omissions.
+fn report_unserved_selected_tools(
     reference: &FrozenToolReference<'_>,
-    toolset: &Arc<dyn Toolset>,
+    policy: &ToolAdmissionPolicy,
+    artifacts: Option<&ArtifactToolAuthority>,
     index_tools_composed: bool,
     on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip<'_>) + Send),
 ) {
-    if !SELECTION_REPORTING_FAMILIES.contains(&reference.tool_type()) {
-        return;
-    }
-    let selected: Vec<&str> = reference
+    let selected: Vec<Box<str>> = reference
         .settings()
         .and_then(|settings| settings.get("selected_tools"))
         .and_then(serde_json::Value::as_array)
-        .map(|names| names.iter().filter_map(serde_json::Value::as_str).collect())
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(Box::from)
+                .collect()
+        })
         .unwrap_or_default();
-    if selected.is_empty() {
-        return;
-    }
-    let Ok(frozen) =
-        super::tool_binding::freeze_toolsets(vec![Arc::clone(toolset)], "elitea-selection-report")
-            .await
-    else {
+    let file_store = artifacts.and_then(ArtifactToolAuthority::office).is_some();
+    let Some(unserved) = family_omissions(reference.tool_type(), &selected, file_store) else {
         return;
     };
-    let served: std::collections::BTreeSet<&str> = frozen
-        .iter()
-        .flat_map(|toolset| toolset.tools().iter().map(|tool| tool.name()))
-        .collect();
-    let mut omitted: Vec<&str> = selected
-        .into_iter()
-        .filter(|name| !served.contains(name))
-        .filter(|name| {
-            !(index_tools_composed
-                && *name != "index_data"
-                && super::families::index_tools::is_sdk_index_tool_name(name))
-        })
-        .collect();
-    omitted.sort_unstable();
+    let mut omitted: Vec<(String, LeftOutReason, &'static str)> = Vec::new();
+    for (name, needs_file_store) in unserved {
+        if super::families::index_tools::is_sdk_index_tool_name(&name) {
+            if name == "index_data" {
+                omitted.push((name, LeftOutReason::ToolNotServed, REASON_INDEX_RUN));
+            } else if !index_tools_composed {
+                omitted.push((name, LeftOutReason::ToolNotServed, REASON_INDEX_TOOLS));
+            }
+        } else if needs_file_store {
+            omitted.push((name, LeftOutReason::ToolNotServed, REASON_NEEDS_FILE_STORE));
+        } else {
+            omitted.push((name, LeftOutReason::ToolNotServed, REASON_NOT_PORTED));
+        }
+    }
+    // Served but blocked by policy: its own cause, not "not ported".
+    for name in &selected {
+        if !omitted.iter().any(|(omitted, ..)| omitted == name.as_ref())
+            && policy.tool_decision(reference.tool_type(), name)
+                != crate::toolkits::policy::ToolAdmissionDecision::Allowed
+        {
+            omitted.push((
+                name.to_string(),
+                LeftOutReason::ToolBlockedByPolicy,
+                REASON_POLICY,
+            ));
+        }
+    }
+    omitted.sort();
     omitted.dedup();
-    for name in omitted {
+    for (name, cause, reason) in &omitted {
         on_refused(
             reference,
             ToolkitSkip::Tool {
                 name,
-                reason: unserved_tool_reason(name),
+                cause: *cause,
+                reason,
             },
         );
     }

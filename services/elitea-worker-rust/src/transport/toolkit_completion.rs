@@ -14,6 +14,17 @@
 //! it through the provider's streaming path, and folds the stream into the one
 //! complete reply the caller asked for. Admission of every other caller is
 //! unchanged.
+//!
+//! Every completion binds its OWN provider model (fresh completion capture,
+//! fresh turn counter, one turn): a bound facade is single-use by design
+//! (`completion_reused`) and counts against the agent's `max_model_turns`, so
+//! a model shared by two completions would fail the second, and one used by
+//! many would eat the agent's turn budget. The gateway's own budget
+//! accounting still applies to every call.
+//!
+//! NOTE: the streaming-with-bound-config fold below has a twin in the
+//! indexing completion (PR #1291). When that lands, switch to its shared
+//! helper and delete this copy of the fold and of `strip_think`.
 
 use std::sync::Arc;
 
@@ -29,13 +40,53 @@ use super::openai_compatible_facade::ModelFacadeInvocation;
 /// The most reply text one toolkit completion folds.
 const MAX_REPLY_BYTES: usize = 256 * 1024;
 
-/// Wrap a bound provider model so a toolkit tool can ask it for one reply.
+/// The reasons a completion is refused after the provider answered. They are
+/// the sentences `office_host::model_failure` recognises, so each reaches the
+/// person as its own cause.
+pub(crate) const REPLY_CUT_AT_LIMIT: &str =
+    "the model's reply was cut off at its length limit; raise max_tokens";
+pub(crate) const REPLY_CUT_WHILE_REASONING: &str =
+    "the model ran out of tokens while reasoning; raise max_tokens";
+pub(crate) const REPLY_DECLINED: &str = "the model declined to reply";
+pub(crate) const REPLY_EMPTY: &str = "the model's reply held no usable text";
+
+/// Completions one run may make through toolkit tools (step-back, Office,
+/// image description share one budget). Mirrors the default of PR #1291's
+/// `toolkit_model_call_cap`; switch to its handle when it lands.
+pub(crate) const DEFAULT_TOOLKIT_MODEL_CALL_CAP: u32 = 200;
+
+/// The run's budget of toolkit-internal model calls. Clones share it.
+#[derive(Clone)]
+pub(crate) struct ToolkitCallBudget(Arc<std::sync::atomic::AtomicU32>);
+
+impl ToolkitCallBudget {
+    pub(crate) fn new(cap: u32) -> Self {
+        Self(Arc::new(std::sync::atomic::AtomicU32::new(cap)))
+    }
+
+    fn take(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+    }
+}
+
+/// Binds a fresh provider model for ONE completion.
+pub(crate) type FreshModelBinder = Arc<dyn Fn() -> Result<Arc<dyn Llm>, AdkError> + Send + Sync>;
+
+/// A model a toolkit tool can ask for one reply. `bind` runs once per
+/// completion; `invocation` is the profile the bound models are built from.
 pub(crate) fn toolkit_completion_model(
-    inner: Arc<dyn Llm>,
+    bind: FreshModelBinder,
     invocation: &ModelFacadeInvocation,
+    budget: ToolkitCallBudget,
 ) -> Arc<dyn Llm> {
     Arc::new(ToolkitCompletionModel {
-        inner,
+        bind,
+        budget,
         model_name: invocation.model_name.clone(),
         temperature: invocation.temperature,
         max_output_tokens: invocation
@@ -45,7 +96,8 @@ pub(crate) fn toolkit_completion_model(
 }
 
 struct ToolkitCompletionModel {
-    inner: Arc<dyn Llm>,
+    bind: FreshModelBinder,
+    budget: ToolkitCallBudget,
     model_name: String,
     temperature: Option<f32>,
     max_output_tokens: Option<i32>,
@@ -80,80 +132,45 @@ impl Llm for ToolkitCompletionModel {
             max_output_tokens: self.max_output_tokens,
             ..GenerateContentConfig::default()
         });
-        let mut responses = self.inner.generate_content(request, true).await?;
-        let mut text = String::new();
-        let mut terminal: Option<LlmResponse> = None;
-        while let Some(response) = responses.next().await {
-            let response = response?;
-            if terminal.is_some() {
-                return Err(refused(
-                    "toolkit_completion.after_terminal",
-                    "the model replied after its reply was complete",
-                ));
-            }
-            if let Some(content) = &response.content {
-                for part in &content.parts {
-                    match part {
-                        Part::Text { text: delta } => {
-                            if text.len().saturating_add(delta.len()) > MAX_REPLY_BYTES {
-                                return Err(refused(
-                                    "toolkit_completion.reply_size",
-                                    "the model's reply exceeds the toolkit completion bound",
-                                ));
-                            }
-                            text.push_str(delta);
-                        }
-                        // Provider reasoning is not the reply.
-                        Part::Thinking { .. } => {}
-                        _ => {
-                            return Err(refused(
-                                "toolkit_completion.reply_part",
-                                "the model's reply carries a part a toolkit completion cannot use",
-                            ));
-                        }
-                    }
-                }
-            }
-            if !response.partial {
-                terminal = Some(response);
-            }
-        }
-        let mut response = terminal.ok_or_else(|| {
-            refused(
-                "toolkit_completion.no_terminal",
-                "the model returned no complete reply",
-            )
-        })?;
-        if response.error_code.is_some() || response.finish_reason != Some(FinishReason::Stop) {
-            // A reply cut short (length, safety) is not a reply; the caller
-            // names the reason it reads from the finish.
-            let reason = response.finish_reason;
-            if reason == Some(FinishReason::MaxTokens) && strip_think(&text).is_empty() {
-                return Err(refused(
-                    "toolkit_completion.reasoning_cut",
-                    "the model ran out of tokens while reasoning; raise max_tokens",
-                ));
-            }
-            return Err(refused(
-                "toolkit_completion.finish",
-                match reason {
-                    Some(FinishReason::MaxTokens) => {
-                        "the model's reply was cut off at its length limit"
-                    }
-                    Some(FinishReason::Safety) => "the model declined to reply",
-                    _ => "the model ended the reply abnormally",
-                },
+        if !self.budget.take() {
+            return Err(unusable(
+                "toolkit_completion.budget",
+                "the toolkit model call budget is exhausted for this run",
             ));
         }
-        // Models that think inline (Qwen3) put <think>...</think> in the text
-        // channel; it is not the reply. (The indexing completion strips the
-        // same way: dedupe with it into one helper when both have landed.)
+        let inner = (self.bind)()?;
+        let responses = inner.generate_content(request, true).await?;
+        let (text, mut response) = fold_reply(responses).await?;
         let text = strip_think(&text);
-        if text.trim().is_empty() {
-            return Err(refused(
-                "toolkit_completion.empty",
-                "the model's reply held no usable text",
+        if response.error_code.is_some() {
+            return Err(unusable(
+                "toolkit_completion.finish",
+                "the model's reply could not be used: the model ended it abnormally",
             ));
+        }
+        match response.finish_reason {
+            Some(FinishReason::Stop) => {}
+            Some(FinishReason::MaxTokens) if text.is_empty() => {
+                return Err(unusable(
+                    "toolkit_completion.cut_while_reasoning",
+                    REPLY_CUT_WHILE_REASONING,
+                ));
+            }
+            Some(FinishReason::MaxTokens) => {
+                return Err(unusable("toolkit_completion.cut", REPLY_CUT_AT_LIMIT));
+            }
+            Some(FinishReason::Safety) => {
+                return Err(unusable("toolkit_completion.declined", REPLY_DECLINED));
+            }
+            _ => {
+                return Err(unusable(
+                    "toolkit_completion.finish",
+                    "the model's reply could not be used: the model ended it abnormally",
+                ));
+            }
+        }
+        if text.is_empty() {
+            return Err(unusable("toolkit_completion.empty", REPLY_EMPTY));
         }
         response.content = Some(Content::new("model").with_text(text));
         response.partial = false;
@@ -161,29 +178,91 @@ impl Llm for ToolkitCompletionModel {
     }
 }
 
-/// `text` without its `<think>...</think>` spans; an unclosed span drops the
-/// rest (a reply cut inside its thinking has no answer).
-fn strip_think(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    // A reply that only has the closing tag: the opening one was in the
-    // prompt template, so everything before it is reasoning.
-    if let Some(close) = rest.find("</think>")
-        && rest.find("<think>").is_none_or(|open| open > close)
-    {
-        rest = &rest[close + "</think>".len()..];
-    }
-    while let Some(start) = rest.find("<think>") {
-        out.push_str(&rest[..start]);
-        match rest[start..].find("</think>") {
-            Some(end) => rest = &rest[start + end + "</think>".len()..],
-            None => return out.trim().to_owned(),
+/// The stream's text (reasoning parts skipped) and its terminal frame.
+async fn fold_reply(mut responses: LlmResponseStream) -> adk_rust::Result<(String, LlmResponse)> {
+    let mut text = String::new();
+    let mut terminal: Option<LlmResponse> = None;
+    while let Some(response) = responses.next().await {
+        let response = response?;
+        if terminal.is_some() {
+            return Err(unusable(
+                "toolkit_completion.after_terminal",
+                "the model's reply could not be used: it continued after completing",
+            ));
+        }
+        if let Some(content) = &response.content {
+            for part in &content.parts {
+                match part {
+                    Part::Text { text: delta } => {
+                        if text.len().saturating_add(delta.len()) > MAX_REPLY_BYTES {
+                            return Err(unusable(
+                                "toolkit_completion.reply_size",
+                                "the model's reply could not be used: it exceeds the toolkit completion bound",
+                            ));
+                        }
+                        text.push_str(delta);
+                    }
+                    // Provider reasoning is not the reply.
+                    Part::Thinking { .. } => {}
+                    _ => {
+                        return Err(unusable(
+                            "toolkit_completion.reply_part",
+                            "the model's reply could not be used: it carries a part a toolkit completion cannot use",
+                        ));
+                    }
+                }
+            }
+        }
+        if !response.partial {
+            terminal = Some(response);
         }
     }
-    out.push_str(rest);
-    out.trim().to_owned()
+    let response = terminal.ok_or_else(|| {
+        unusable(
+            "toolkit_completion.no_terminal",
+            "the model's reply could not be used: it never completed",
+        )
+    })?;
+    Ok((text, response))
 }
 
+/// `text` without its reasoning. Only a LEADING `<think>…</think>` (after
+/// whitespace; an unclosed one makes the whole reply reasoning) is removed, or,
+/// when the reply does not open one, everything up to a first bare
+/// `</think>` (a server with no reasoning parser leaves one). A tag anywhere
+/// else is the model's own text and stays.
+pub(crate) fn strip_think(text: &str) -> String {
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+    let mut rest = text.trim_start();
+    let mut opened = false;
+    while let Some(after) = rest.strip_prefix(OPEN) {
+        opened = true;
+        match after.find(CLOSE) {
+            Some(close) => rest = after[close + CLOSE.len()..].trim_start(),
+            None => return String::new(),
+        }
+    }
+    if !opened
+        && let Some(close) = rest.find(CLOSE)
+        && !rest[..close].contains(OPEN)
+    {
+        rest = &rest[close + CLOSE.len()..];
+    }
+    rest.trim().to_owned()
+}
+
+/// The provider answered, but the reply cannot be used (a cause of its own).
+fn unusable(code: &'static str, message: &'static str) -> AdkError {
+    AdkError::new(
+        ErrorComponent::Model,
+        ErrorCategory::Internal,
+        code,
+        message,
+    )
+}
+
+/// The request itself is outside the admitted profile.
 fn refused(code: &'static str, message: &'static str) -> AdkError {
     AdkError::new(
         ErrorComponent::Model,
@@ -196,6 +275,7 @@ fn refused(code: &'static str, message: &'static str) -> AdkError {
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use adk_rust::{Content, GenerateContentConfig, LlmRequest, LlmResponse};
 
@@ -204,11 +284,23 @@ mod tests {
         test_model_facade_invocation, validate_llm_request,
     };
 
-    /// Records what reached the provider and streams two deltas then a
-    /// terminal, as the real facade does (the terminal carries no text).
+    /// A SINGLE-USE provider, as a bound facade is: it records what reached
+    /// it, streams its deltas then a terminal (which carries no text, as the
+    /// real facade's does) and refuses a second call.
     struct Provider {
         seen: Mutex<Vec<(LlmRequest, bool)>>,
+        deltas: Vec<&'static str>,
         finish: FinishReason,
+    }
+
+    impl Provider {
+        fn new(deltas: &[&'static str], finish: FinishReason) -> Arc<Self> {
+            Arc::new(Self {
+                seen: Mutex::new(Vec::new()),
+                deltas: deltas.to_vec(),
+                finish,
+            })
+        }
     }
 
     #[async_trait]
@@ -222,23 +314,52 @@ mod tests {
             request: LlmRequest,
             streaming: bool,
         ) -> adk_rust::Result<LlmResponseStream> {
-            self.seen.lock().expect("seen").push((request, streaming));
-            let delta = |text: &str| LlmResponse {
-                content: Some(Content::new("model").with_text(text)),
-                partial: true,
-                ..LlmResponse::default()
-            };
-            let terminal = LlmResponse {
+            let mut seen = self.seen.lock().expect("seen");
+            if !seen.is_empty() {
+                return Err(refused(
+                    "model_gateway.completion_reused",
+                    "the model completion was produced more than once",
+                ));
+            }
+            seen.push((request, streaming));
+            let mut frames: Vec<adk_rust::Result<LlmResponse>> = self
+                .deltas
+                .iter()
+                .map(|text| {
+                    Ok(LlmResponse {
+                        content: Some(Content::new("model").with_text(*text)),
+                        partial: true,
+                        ..LlmResponse::default()
+                    })
+                })
+                .collect();
+            frames.push(Ok(LlmResponse {
                 finish_reason: Some(self.finish),
                 turn_complete: true,
                 ..LlmResponse::default()
-            };
-            Ok(Box::pin(stream::iter(vec![
-                Ok(delta("Hello, ")),
-                Ok(delta("world")),
-                Ok(terminal),
-            ])))
+            }));
+            Ok(Box::pin(stream::iter(frames)))
         }
+    }
+
+    /// A binder that hands out a new single-use provider per completion and
+    /// counts the binds.
+    type Made = Arc<Mutex<Vec<Arc<Provider>>>>;
+
+    fn binder(
+        deltas: &'static [&'static str],
+        finish: FinishReason,
+    ) -> (FreshModelBinder, Arc<AtomicUsize>, Made) {
+        let binds = Arc::new(AtomicUsize::new(0));
+        let made = Arc::new(Mutex::new(Vec::new()));
+        let (counter, kept) = (Arc::clone(&binds), Arc::clone(&made));
+        let bind: FreshModelBinder = Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let provider = Provider::new(deltas, finish);
+            kept.lock().expect("made").push(Arc::clone(&provider));
+            Ok(provider as Arc<dyn Llm>)
+        });
+        (bind, binds, made)
     }
 
     fn request() -> LlmRequest {
@@ -277,12 +398,10 @@ mod tests {
     #[tokio::test]
     async fn a_toolkit_completion_reaches_the_provider_inside_the_admitted_profile() {
         let invocation = test_model_facade_invocation();
-        let provider = Arc::new(Provider {
-            seen: Mutex::new(Vec::new()),
-            finish: FinishReason::Stop,
-        });
-        let model = toolkit_completion_model(provider.clone() as Arc<dyn Llm>, &invocation);
+        let (bind, _, made) = binder(&["Hello, ", "world"], FinishReason::Stop);
+        let model = toolkit_completion_model(bind, &invocation, ToolkitCallBudget::new(100));
         assert_eq!(run(&model, request()).await.expect("reply"), "Hello, world");
+        let provider = made.lock().expect("made")[0].clone();
         let seen = provider.seen.lock().expect("seen");
         let (sent, streaming) = &seen[0];
         assert!(*streaming);
@@ -290,14 +409,39 @@ mod tests {
         assert!(validate_llm_request(sent, *streaming, &invocation).is_ok());
     }
 
+    /// Review round 1: a shared single-use binding failed the second
+    /// completion (`completion_reused`) and spent the agent's turns. Each
+    /// completion binds its own, so any number in one turn succeed.
     #[tokio::test]
-    async fn anything_but_one_plain_user_message_is_refused_before_the_provider() {
+    async fn every_completion_binds_its_own_single_use_model() {
         let invocation = test_model_facade_invocation();
-        let provider = Arc::new(Provider {
-            seen: Mutex::new(Vec::new()),
-            finish: FinishReason::Stop,
-        });
-        let model = toolkit_completion_model(provider.clone() as Arc<dyn Llm>, &invocation);
+        let (bind, binds, _) = binder(&["ok"], FinishReason::Stop);
+        let model = toolkit_completion_model(bind, &invocation, ToolkitCallBudget::new(100));
+        for _ in 0..4 {
+            assert_eq!(run(&model, request()).await.expect("reply"), "ok");
+        }
+        assert_eq!(binds.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn the_run_budget_is_shared_and_spent_completions_are_refused() {
+        let invocation = test_model_facade_invocation();
+        let (bind, binds, _) = binder(&["ok"], FinishReason::Stop);
+        let budget = ToolkitCallBudget::new(2);
+        let first = toolkit_completion_model(bind.clone(), &invocation, budget.clone());
+        let second = toolkit_completion_model(bind, &invocation, budget);
+        assert!(run(&first, request()).await.is_ok());
+        assert!(run(&second, request()).await.is_ok());
+        let spent = run(&first, request()).await.expect_err("budget spent");
+        assert!(spent.to_string().contains("budget is exhausted"), "{spent}");
+        assert_eq!(binds.load(Ordering::SeqCst), 2, "nothing bound once spent");
+    }
+
+    #[tokio::test]
+    async fn anything_but_one_plain_user_message_is_refused_before_binding() {
+        let invocation = test_model_facade_invocation();
+        let (bind, binds, _) = binder(&["x"], FinishReason::Stop);
+        let model = toolkit_completion_model(bind, &invocation, ToolkitCallBudget::new(100));
         let mut with_config = request();
         with_config.config = Some(GenerateContentConfig::default());
         let mut with_tool = request();
@@ -313,27 +457,69 @@ mod tests {
         }
         // A streaming ask is not this profile either.
         assert!(model.generate_content(request(), true).await.is_err());
-        assert!(provider.seen.lock().expect("seen").is_empty());
+        assert_eq!(binds.load(Ordering::SeqCst), 0);
     }
 
-    #[test]
-    fn inline_thinking_is_not_the_reply() {
-        assert_eq!(strip_think("<think>hm</think>\nAnswer"), "Answer");
-        assert_eq!(strip_think("a<think>x</think>b<think>y"), "ab");
-        assert_eq!(strip_think("<think>only"), "");
-        assert_eq!(strip_think("reasoning</think>\nAnswer"), "Answer");
+    async fn failure(deltas: &'static [&'static str], finish: FinishReason) -> String {
+        let (bind, _, _) = binder(deltas, finish);
+        let model = toolkit_completion_model(
+            bind,
+            &test_model_facade_invocation(),
+            ToolkitCallBudget::new(100),
+        );
+        run(&model, request())
+            .await
+            .expect_err("refused")
+            .to_string()
+    }
+
+    /// Item 5: each cause is its own sentence, which `model_failure` maps to
+    /// its own `OfficeFailure`.
+    #[tokio::test]
+    async fn every_unusable_reply_names_its_own_cause() {
+        let cut = failure(&["partial answer"], FinishReason::MaxTokens).await;
+        assert!(cut.contains(REPLY_CUT_AT_LIMIT), "{cut}");
+        let reasoning = failure(&["<think>still thinking"], FinishReason::MaxTokens).await;
+        assert!(reasoning.contains(REPLY_CUT_WHILE_REASONING), "{reasoning}");
+        let nothing = failure(&[], FinishReason::MaxTokens).await;
+        assert!(nothing.contains(REPLY_CUT_WHILE_REASONING), "{nothing}");
+        let declined = failure(&[], FinishReason::Safety).await;
+        assert!(declined.contains(REPLY_DECLINED), "{declined}");
+        let empty = failure(&["<think>done</think>"], FinishReason::Stop).await;
+        assert!(empty.contains(REPLY_EMPTY), "{empty}");
+        let odd = failure(&["x"], FinishReason::Other).await;
+        assert!(odd.contains("ended it abnormally"), "{odd}");
     }
 
     #[tokio::test]
-    async fn a_reply_cut_short_is_not_a_reply() {
-        let invocation = test_model_facade_invocation();
-        let provider = Arc::new(Provider {
-            seen: Mutex::new(Vec::new()),
-            finish: FinishReason::MaxTokens,
-        });
-        let model = toolkit_completion_model(provider as Arc<dyn Llm>, &invocation);
-        let error = run(&model, request()).await.expect_err("cut off");
-        // Only deltas "Hello, world" came back: visible text cut at length.
-        assert!(error.to_string().contains("length limit"), "{error}");
+    async fn reasoning_before_the_answer_is_not_the_answer() {
+        let (bind, _, _) = binder(&["<think>hm", "</think>\n", "Answer"], FinishReason::Stop);
+        let model = toolkit_completion_model(
+            bind,
+            &test_model_facade_invocation(),
+            ToolkitCallBudget::new(100),
+        );
+        assert_eq!(run(&model, request()).await.expect("reply"), "Answer");
+    }
+
+    #[test]
+    fn only_leading_reasoning_is_stripped() {
+        assert_eq!(strip_think("<think>hm</think>\nAnswer"), "Answer");
+        assert_eq!(
+            strip_think("  <think>a</think><think>b</think> Answer"),
+            "Answer"
+        );
+        assert_eq!(strip_think("<think>only"), "");
+        assert_eq!(strip_think("reasoning</think>\nAnswer"), "Answer");
+        // Literal tags elsewhere are the model's own text.
+        assert_eq!(
+            strip_think("Use <think>x</think> tags like this."),
+            "Use <think>x</think> tags like this."
+        );
+        assert_eq!(
+            strip_think("<think>r</think>Answer mentions </think> literally"),
+            "Answer mentions </think> literally"
+        );
+        assert_eq!(strip_think("plain"), "plain");
     }
 }

@@ -247,19 +247,31 @@ pub(crate) fn model_failure(message: &str) -> OfficeHostError {
     // model gateway refused as invalid is not "the platform could not be
     // reached" (live defect D3): nothing was unreachable, and trying again
     // cannot help.
+    use super::toolkit_completion::{
+        REPLY_CUT_AT_LIMIT, REPLY_CUT_WHILE_REASONING, REPLY_DECLINED, REPLY_EMPTY,
+    };
+    let kind = |kind, reason| OfficeHostError::new(kind, reason);
     if message.contains("budget is exhausted") {
-        OfficeHostError::new(OfficeFailure::BudgetRefused, "office_host.budget_refused")
+        kind(OfficeFailure::BudgetRefused, "office_host.budget_refused")
+    } else if message.contains(REPLY_CUT_AT_LIMIT) || message.contains(REPLY_CUT_WHILE_REASONING) {
+        kind(OfficeFailure::ReplyCutOff, "office_host.reply_cut_off")
+    } else if message.contains(REPLY_DECLINED) {
+        kind(OfficeFailure::ReplyDeclined, "office_host.reply_declined")
+    } else if message.contains(REPLY_EMPTY) {
+        kind(OfficeFailure::ReplyEmpty, "office_host.reply_empty")
+    } else if message.contains("the model's reply could not be used") {
+        kind(OfficeFailure::ReplyUnusable, "office_host.reply_unusable")
     } else if message.starts_with("model.invalid_input") {
-        OfficeHostError::new(
+        kind(
             OfficeFailure::InvalidRequest,
             "office_host.model_invalid_request",
         )
     } else if message.starts_with("model.rate_limited") {
-        OfficeHostError::new(OfficeFailure::RateLimited, "office_host.model_rate_limited")
+        kind(OfficeFailure::RateLimited, "office_host.model_rate_limited")
     } else if message.starts_with("model.timeout") {
-        OfficeHostError::new(OfficeFailure::Timeout, "office_host.model_timeout")
+        kind(OfficeFailure::Timeout, "office_host.model_timeout")
     } else {
-        OfficeHostError::new(OfficeFailure::Unreachable, "office_host.model_call_failed")
+        kind(OfficeFailure::Unreachable, "office_host.model_call_failed")
     }
 }
 

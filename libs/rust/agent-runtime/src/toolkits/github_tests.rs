@@ -2268,6 +2268,83 @@ async fn omitted_selected_tools_are_reported_by_name() {
     assert!(!notice.contains("fixture-token"));
 }
 
+/// Review round 1: a tool the deployment's policy blocks is its own cause
+/// (`tool_blocked_by_policy`), not "not ported", and the model-visible notice
+/// never names it. The notice lists whole toolkits before tools and a flood of
+/// tools cannot push a toolkit out of a capped list.
+#[tokio::test]
+async fn policy_blocked_tools_have_their_own_cause_and_stay_out_of_the_model_notice() {
+    use super::materialize::{LeftOutReason, materialize_configured_toolsets_reporting_refusals};
+    use super::{IndexToolSupport, IndexToolsWithheld, left_out_toolkits_notice_text};
+    let version = json!({
+        "tools":[{
+            "id":1, "type":"github", "toolkit_name":"repo",
+            "settings":settings(
+                &json!({
+                    "configuration_type":"github",
+                    "base_url":"https://github.example.test/api/v3/",
+                    "access_token":"fixture-token"
+                }),
+                &["get_me", "read_file", "generic_github_api_call"]
+            )
+        }]
+    });
+    let version = version.as_object().expect("version details");
+    let blocking = policy(&[("github", &["read_file"])]);
+    let snapshot = FrozenToolSnapshot::from_version_details(version)
+        .expect("GitHub snapshot")
+        .apply_policy(blocking.as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &blocking,
+        &Map::new(),
+        None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NotRequested),
+    )
+    .await
+    .expect("GitHub materialization");
+    let by_name: BTreeMap<_, _> = materialized
+        .left_out
+        .iter()
+        .map(|entry| (entry.tool_name().expect("tool").to_owned(), entry.cause()))
+        .collect();
+    assert_eq!(
+        by_name["generic_github_api_call"],
+        LeftOutReason::ToolNotServed
+    );
+    assert_eq!(by_name["read_file"], LeftOutReason::ToolBlockedByPolicy);
+    let blocked = materialized
+        .left_out
+        .iter()
+        .find(|entry| entry.tool_name() == Some("read_file"))
+        .expect("blocked entry");
+    assert_eq!(blocked.reason_code(), "tool_blocked_by_policy");
+    let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
+    assert!(notice.contains("generic_github_api_call"));
+    assert!(!notice.contains("read_file"), "{notice}");
+}
+
+#[test]
+fn the_model_notice_lists_toolkits_first_and_tools_cannot_crowd_them_out() {
+    use super::left_out_toolkits_notice_text;
+    use super::materialize::{LeftOutReason, LeftOutToolkit};
+    let mut left_out: Vec<LeftOutToolkit> = (0..60)
+        .map(|index| LeftOutToolkit::unserved_tool("a", "github", &format!("t{index:02}"), "r"))
+        .collect();
+    left_out.push(LeftOutToolkit::fixture(
+        "z-toolkit",
+        "jira",
+        LeftOutReason::UnsupportedFamily,
+        "gone",
+    ));
+    let notice = left_out_toolkits_notice_text(&left_out).expect("a notice");
+    let lines: Vec<&str> = notice.lines().collect();
+    assert!(lines[0].starts_with("toolkit 'z-toolkit'"), "{notice}");
+    assert!(lines[1].starts_with("tool 'a.t00'"), "{notice}");
+    assert_eq!(lines.len(), 33, "32 lines and the hidden count");
+    assert_eq!(lines[32], "(29 more not shown)");
+}
+
 #[tokio::test]
 async fn provider_tool_schemas_do_not_emit_an_unportable_integer_ceiling() {
     let selected = vec!["get_issue".to_owned(), "get_pull_request".to_owned()];

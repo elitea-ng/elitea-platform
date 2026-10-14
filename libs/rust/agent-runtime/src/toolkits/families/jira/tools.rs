@@ -1013,3 +1013,24 @@ const fn unsupported_selection() -> JiraToolsetError {
         code: JiraToolsetErrorCode::UnsupportedSelection,
     }
 }
+
+/// The stored selection's tools this family does not serve, for the run's
+/// notice: `(name, needs_file_store)`. The attachment tools need the file
+/// store.
+pub(crate) fn omitted_selection(selected: &[Box<str>], file_store: bool) -> Vec<(String, bool)> {
+    selected
+        .iter()
+        .filter_map(|name| {
+            match JiraToolKind::ALL
+                .iter()
+                .find(|kind| kind.name() == name.as_ref())
+            {
+                None => Some((name.to_string(), false)),
+                Some(kind) if kind.needs_attachments() && !file_store => {
+                    Some((name.to_string(), true))
+                }
+                Some(_) => None,
+            }
+        })
+        .collect()
+}

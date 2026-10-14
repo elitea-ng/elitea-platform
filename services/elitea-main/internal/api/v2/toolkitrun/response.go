@@ -38,6 +38,7 @@ import (
 
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // UseCase is the seam both handlers hold. A nil one means this deployment
@@ -212,17 +213,20 @@ func WriteOutcome(w http.ResponseWriter, outcome toolkitcalltoolapp.RunOutcome) 
 	case toolkitcalltoolapp.RunStatusUnknownTool:
 		body["reason"] = "unknown_tool"
 		body["error"] = outcome.ErrorMessage
-		writeJSON(w, http.StatusUnprocessableEntity, body)
-	default:
-		// A worker refusal before any provider work is a statement about the
-		// tool, not a server fault: the generic runtime sentence ("Configuration
-		// type is not supported.") named the wrong thing and the 500 told the
-		// person to retry. The synchronous path runs read-only, non-sensitive
-		// tools only, so a write tool lands here by design.
-		if reason, sentence, refused := workerRefusal(outcome); refused {
+		if reason, sentence, refused := refusedTool(outcome); refused {
 			body["reason"] = reason
 			body["error"] = sentence
-			writeJSON(w, http.StatusUnprocessableEntity, body)
+		}
+		writeJSON(w, http.StatusUnprocessableEntity, body)
+	default:
+		// A runtime failure that is a statement about the RUN or the tool, not
+		// a server fault, gets its own answer: the generic runtime sentence
+		// ("Configuration type is not supported.") named the wrong thing and
+		// the 500 told the person to retry.
+		if status, reason, sentence, refused := workerRefusal(outcome); refused {
+			body["reason"] = reason
+			body["error"] = sentence
+			writeJSON(w, status, body)
 			return
 		}
 		body["reason"] = "runtime_failure"
@@ -231,27 +235,49 @@ func WriteOutcome(w http.ResponseWriter, outcome toolkitcalltoolapp.RunOutcome) 
 	}
 }
 
-// Reasons of a tool the synchronous path will not run.
+// Reasons a tool is not run, beyond unsupported_toolkit and unknown_tool.
 const (
 	ReasonEffectfulToolUnavailable = "effectful_tool_unavailable"
 	ReasonToolRefused              = "tool_refused"
+	ReasonAuthorizationFailed      = "authorization_failed"
 )
 
-// workerRefusal classifies a runtime failure that is the worker declining the
-// tool (UNSUPPORTED_CAPABILITY: an effectful tool; AUTHORIZATION_FAILED: a
-// blocked or sensitive one) as opposed to a fault.
-func workerRefusal(outcome toolkitcalltoolapp.RunOutcome) (reason, sentence string, refused bool) {
-	name := strconv.Quote(outcome.ToolName)
-	switch outcome.FailureCode {
-	case "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY":
+// toolSubject is "The tool "x"" or, with no name, "This tool".
+func toolSubject(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return "This tool"
+	}
+	return "The tool " + strconv.Quote(name)
+}
+
+// refusedTool classifies an UNKNOWN_TOOL result that is the worker declining a
+// tool rather than the toolkit lacking it.
+func refusedTool(outcome toolkitcalltoolapp.RunOutcome) (reason, sentence string, ok bool) {
+	switch outcome.ErrorMessage {
+	case executiondomain.ToolkitEffectfulToolMessage:
 		return ReasonEffectfulToolUnavailable,
-			"The tool " + name + " changes data, so it cannot be run from the tool test panel, " +
-				"which only runs read-only tools. Run it from an agent instead.", true
-	case "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED":
+			toolSubject(outcome.ToolName) + " changes data, and this route only runs read-only tools.", true
+	case executiondomain.ToolkitPolicyRefusedMessage:
 		return ReasonToolRefused,
-			"The tool " + name + " is blocked or sensitive, so it cannot be run from the tool test panel.", true
+			toolSubject(outcome.ToolName) + " is blocked or sensitive under this deployment's policy, so it cannot be run here.", true
 	}
 	return "", "", false
+}
+
+// workerRefusal classifies a runtime failure. UNSUPPORTED_CAPABILITY on this
+// path is an older worker refusing an effectful tool; AUTHORIZATION_FAILED is
+// the run's own credentials or context being refused, which is not a verdict
+// on the tool.
+func workerRefusal(outcome toolkitcalltoolapp.RunOutcome) (status int, reason, sentence string, ok bool) {
+	switch outcome.FailureCode {
+	case "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY":
+		return http.StatusUnprocessableEntity, ReasonEffectfulToolUnavailable,
+			toolSubject(outcome.ToolName) + " changes data, and this route only runs read-only tools.", true
+	case "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED":
+		return http.StatusForbidden, ReasonAuthorizationFailed,
+			"The platform could not authorize this run's credentials or context. Try again; if it persists, ask an administrator.", true
+	}
+	return 0, "", "", false
 }
 
 // WriteError maps a run that never settled. It is the only place a tool-run

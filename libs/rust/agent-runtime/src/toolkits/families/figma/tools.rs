@@ -1031,3 +1031,13 @@ fn invalid_arguments() -> AdkError {
         "the Figma tool arguments are invalid",
     )
 }
+
+/// The stored selection's tools this family does not serve, for the run's
+/// notice: `(name, needs_file_store)`.
+pub(crate) fn omitted_selection(selected: &[Box<str>], _file_store: bool) -> Vec<(String, bool)> {
+    selected
+        .iter()
+        .filter(|name| FigmaToolKind::from_name(name).is_none())
+        .map(|name| (name.to_string(), false))
+        .collect()
+}

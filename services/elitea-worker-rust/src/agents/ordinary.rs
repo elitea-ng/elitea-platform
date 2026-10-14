@@ -714,8 +714,16 @@ impl OrdinaryNativeAgentAssembler {
         let context_budget = profile.context_budget();
         let max_tokens = profile.max_tokens();
         let temperature = profile.temperature();
-        let max_model_turns = profile.step_limit();
+        // One budget for every toolkit-internal call of the run (step-back
+        // and Office share this binding).
+        let budget = crate::transport::toolkit_completion::ToolkitCallBudget::new(
+            crate::transport::toolkit_completion::DEFAULT_TOOLKIT_MODEL_CALL_CAP,
+        );
         Box::new(move || {
+            // ONE turn per completion: every toolkit completion binds its own
+            // model (fresh completion capture and turn counter), so it never
+            // spends the agent's `max_model_turns` and a second one is not a
+            // `completion_reused`.
             let invocation = ModelInvocation {
                 response_schema: None,
                 allow_text_continuation: false,
@@ -725,17 +733,41 @@ impl OrdinaryNativeAgentAssembler {
                 max_tokens,
                 reasoning_effort: None,
                 temperature,
-                max_model_turns,
+                max_model_turns: 1,
             };
-            let invocation_profile = invocation.clone();
-            let bound: Result<BoundModelFacade, ModelFacadeError> =
-                facade.bind(adapter, context.as_ref(), model_project_id, invocation);
-            // The toolkit tools ask this model for one plain reply, which the
-            // provider admits only through the toolkit-completion profile.
+            let bind_one = {
+                let (facade, context, invocation) = (
+                    Arc::clone(&facade),
+                    Arc::clone(&context),
+                    invocation.clone(),
+                );
+                move || -> Result<BoundModelFacade, ModelFacadeError> {
+                    facade.bind(
+                        adapter,
+                        context.as_ref(),
+                        model_project_id,
+                        invocation.clone(),
+                    )
+                }
+            };
+            // Refuse a profile that cannot bind at all up front, as before.
+            bind_one()?;
+            let bind: crate::transport::toolkit_completion::FreshModelBinder =
+                Arc::new(move || {
+                    bind_one().map(|bound| bound.adk_model()).map_err(|_| {
+                        adk_rust::AdkError::new(
+                            adk_rust::ErrorComponent::Model,
+                            adk_rust::ErrorCategory::Unavailable,
+                            "toolkit_completion.bind",
+                            "the model for a toolkit completion could not be bound",
+                        )
+                    })
+                });
             Ok(StepbackBinding {
                 model: crate::transport::toolkit_completion::toolkit_completion_model(
-                    bound?.adk_model(),
-                    &invocation_profile,
+                    bind,
+                    &invocation,
+                    budget.clone(),
                 ),
                 model_name: model_name.clone(),
             })

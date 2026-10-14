@@ -12,6 +12,16 @@ import (
 
 const ToolkitAuthorizationMessage = "Authorization is required to run this tool."
 
+// The worker's two refusals of a tool on the synchronous tool-run path, sent as
+// an UNKNOWN_TOOL result with exactly this message (the wire has no detail
+// code, and an older reader still shows a readable sentence). They are
+// distinct from a run whose own credentials could not be authorized, which is
+// a runtime failure. The Rust worker carries the same literals.
+const (
+	ToolkitEffectfulToolMessage = "This tool changes data, and this path runs read-only tools only."
+	ToolkitPolicyRefusedMessage = "This tool is blocked or sensitive under this deployment's policy and cannot run here."
+)
+
 // ToolkitAuthorizationRequired contains public consent metadata, never credentials.
 type ToolkitAuthorizationRequired struct {
 	ToolkitName         string          `json:"toolkit_name"`

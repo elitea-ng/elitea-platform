@@ -332,7 +332,11 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> Sentence {
         OfficeFailure::RateLimited | OfficeFailure::Timeout | OfficeFailure::Conflict => {
             format!("Could not {action}: the platform is busy or timed out. Try again shortly.")
         }
-        OfficeFailure::ReplyUnusable | OfficeFailure::ReplyTooLarge => {
+        OfficeFailure::ReplyUnusable
+        | OfficeFailure::ReplyCutOff
+        | OfficeFailure::ReplyDeclined
+        | OfficeFailure::ReplyEmpty
+        | OfficeFailure::ReplyTooLarge => {
             format!("Could not {action}: the platform's answer could not be used. Tell the user.")
         }
         OfficeFailure::Unreachable => format!(

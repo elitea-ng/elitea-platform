@@ -414,6 +414,15 @@ pub(crate) fn host_sentence(action: &str, error: &OfficeHostError, kind: &Office
         OfficeFailure::ReplyUnusable | OfficeFailure::ReplyTooLarge => format!(
             "Could not {action}: the model's reply could not be used. Do not retry without telling the user."
         ),
+        OfficeFailure::ReplyCutOff => format!(
+            "Could not {action}: the model's reply was cut off at its length limit, or it used the whole limit reasoning and never answered. Tell the user to raise the model's max_tokens (or pick a model that does not reason at length)."
+        ),
+        OfficeFailure::ReplyDeclined => format!(
+            "Could not {action}: the model declined to answer (its safety filter ended the reply). Tell the user; do not retry unchanged."
+        ),
+        OfficeFailure::ReplyEmpty => format!(
+            "Could not {action}: the model answered with no usable text. Tell the user; it may work if tried again."
+        ),
         OfficeFailure::RateLimited => format!(
             "Could not {action}: the model gateway is rate-limiting this call. Try again shortly."
         ),

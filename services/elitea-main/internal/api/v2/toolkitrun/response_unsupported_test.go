@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // UI-DC-1: the 422 `error` is the capability reason as one sentence. It used
@@ -39,41 +40,60 @@ func TestWriteErrorAnswersTheUnsupportedTypeAsASentence(t *testing.T) {
 	}
 }
 
-// A worker declining a tool is a 422 naming the tool, never the generic
+// Worker refusals are typed answers, never the generic
 // "Configuration type is not supported." 500 (live defect D2).
-func TestWriteOutcomeWorkerRefusalsAreTypedClientErrors(t *testing.T) {
+func TestWriteOutcomeWorkerRefusalsAreTyped(t *testing.T) {
+	refusal := func(status toolkitcalltoolapp.RunStatus, code, message, tool string) toolkitcalltoolapp.RunOutcome {
+		return toolkitcalltoolapp.RunOutcome{
+			ExecutionID: "exec-9", Status: status, FailureCode: code, ErrorMessage: message, ToolName: tool,
+		}
+	}
 	cases := []struct {
-		code, reason string
+		name    string
+		outcome toolkitcalltoolapp.RunOutcome
+		status  int
+		reason  string
+		has     string
 	}{
-		{"RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY", ReasonEffectfulToolUnavailable},
-		{"RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED", ReasonToolRefused},
+		{"effectful (worker result)", refusal(toolkitcalltoolapp.RunStatusUnknownTool, "", executiondomain.ToolkitEffectfulToolMessage, "add_slide"),
+			http.StatusUnprocessableEntity, ReasonEffectfulToolUnavailable, `The tool "add_slide" changes data`},
+		{"policy (worker result)", refusal(toolkitcalltoolapp.RunStatusUnknownTool, "", executiondomain.ToolkitPolicyRefusedMessage, "x"),
+			http.StatusUnprocessableEntity, ReasonToolRefused, "blocked or sensitive"},
+		{"effectful, no tool name", refusal(toolkitcalltoolapp.RunStatusUnknownTool, "", executiondomain.ToolkitEffectfulToolMessage, " "),
+			http.StatusUnprocessableEntity, ReasonEffectfulToolUnavailable, "This tool changes data"},
+		{"older worker effectful", refusal(toolkitcalltoolapp.RunStatusRuntimeFailure, "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY", "Configuration type is not supported.", "add_slide"),
+			http.StatusUnprocessableEntity, ReasonEffectfulToolUnavailable, "changes data"},
+		{"run credentials refused", refusal(toolkitcalltoolapp.RunStatusRuntimeFailure, "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED", "Execution authorization failed.", "add_slide"),
+			http.StatusForbidden, ReasonAuthorizationFailed, "credentials or context"},
+		{"a genuinely unknown tool stays unknown", refusal(toolkitcalltoolapp.RunStatusUnknownTool, "", "no such tool", "nope"),
+			http.StatusUnprocessableEntity, "unknown_tool", "no such tool"},
+		{"other failures stay 500", refusal(toolkitcalltoolapp.RunStatusRuntimeFailure, "RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE", "x", "t"),
+			http.StatusInternalServerError, "runtime_failure", "x"},
 	}
 	for _, c := range cases {
-		recorder := httptest.NewRecorder()
-		WriteOutcome(recorder, toolkitcalltoolapp.RunOutcome{
-			ExecutionID: "exec-9", Status: toolkitcalltoolapp.RunStatusRuntimeFailure,
-			ErrorMessage: "Configuration type is not supported.", FailureCode: c.code,
-			ToolName: "add_slide", ToolkitType: "pptx",
+		t.Run(c.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			WriteOutcome(recorder, c.outcome)
+			if recorder.Code != c.status {
+				t.Fatalf("status %d, want %d", recorder.Code, c.status)
+			}
+			body := decodeBody(t, recorder)
+			sentence, _ := body["error"].(string)
+			if body["reason"] != c.reason || body["ok"] != false || !strings.Contains(sentence, c.has) {
+				t.Fatalf("body %v", body)
+			}
+			if strings.Contains(sentence, "test panel") || strings.Contains(sentence, "Configuration type") {
+				t.Fatalf("caller-specific or generic wording: %q", sentence)
+			}
 		})
-		if recorder.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("%s: status %d, want 422", c.code, recorder.Code)
-		}
-		body := decodeBody(t, recorder)
-		if body["reason"] != c.reason || body["ok"] != false {
-			t.Fatalf("%s: body %v", c.code, body)
-		}
-		sentence, _ := body["error"].(string)
-		if !strings.Contains(sentence, `"add_slide"`) || strings.Contains(sentence, "Configuration type") {
-			t.Fatalf("%s: sentence %q", c.code, sentence)
-		}
 	}
-	// Any other failure code stays a 500.
-	recorder := httptest.NewRecorder()
-	WriteOutcome(recorder, toolkitcalltoolapp.RunOutcome{
-		Status: toolkitcalltoolapp.RunStatusRuntimeFailure, FailureCode: "RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE",
-		ErrorMessage: "x",
-	})
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("status %d, want 500", recorder.Code)
+}
+
+// The Rust worker (execution/toolkit_delivery_processor.rs) sends these exact
+// literals; this pins Main's side of the pair.
+func TestWorkerRefusalLiteralsMatchTheWorker(t *testing.T) {
+	if executiondomain.ToolkitEffectfulToolMessage != "This tool changes data, and this path runs read-only tools only." ||
+		executiondomain.ToolkitPolicyRefusedMessage != "This tool is blocked or sensitive under this deployment's policy and cannot run here." {
+		t.Fatal("the worker's refusal literals changed")
 	}
 }

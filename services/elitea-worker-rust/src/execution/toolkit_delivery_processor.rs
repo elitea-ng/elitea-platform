@@ -1583,6 +1583,12 @@ fn bind_call_result(
     })
 }
 
+/// Main's `ToolkitEffectfulToolMessage` and `ToolkitPolicyRefusedMessage`.
+pub(crate) const EFFECTFUL_TOOL_MESSAGE: &str =
+    "This tool changes data, and this path runs read-only tools only.";
+pub(crate) const POLICY_REFUSED_MESSAGE: &str =
+    "This tool is blocked or sensitive under this deployment's policy and cannot run here.";
+
 fn call_summary(
     result: Result<serde_json::Value, crate::toolkits::DirectToolkitRuntimeError>,
 ) -> Result<ToolkitCallToolSummaryV1, RuntimeFailureKind> {
@@ -1598,6 +1604,22 @@ fn call_summary(
                 ToolkitCallToolStatusV1::UnknownTool,
                 None,
                 "The toolkit operation is not selected.",
+            ),
+            // A policy refusal of THIS tool is a verdict on the tool, not a
+            // failure of the run: it is its own result (Main's two literals,
+            // `ToolkitEffectfulToolMessage` / `ToolkitPolicyRefusedMessage`),
+            // so it is never confused with the run's credentials being
+            // refused (a runtime failure, AuthorizationFailed).
+            DirectToolkitRuntimeErrorCode::EffectfulToolUnavailable => (
+                ToolkitCallToolStatusV1::UnknownTool,
+                None,
+                EFFECTFUL_TOOL_MESSAGE,
+            ),
+            DirectToolkitRuntimeErrorCode::ToolBlocked
+            | DirectToolkitRuntimeErrorCode::SensitiveToolUnavailable => (
+                ToolkitCallToolStatusV1::UnknownTool,
+                None,
+                POLICY_REFUSED_MESSAGE,
             ),
             DirectToolkitRuntimeErrorCode::UnsupportedToolkit => (
                 ToolkitCallToolStatusV1::UnsupportedToolkit,
@@ -2084,6 +2106,26 @@ mod shared_result_tests {
             );
             assert!(!summary.truncated);
         }
+    }
+
+    /// A policy refusal of the tool is the tool's own result with Main's
+    /// literal; the run's credentials being refused stays a runtime failure.
+    #[test]
+    fn tool_refusals_are_results_and_a_refused_run_is_a_failure() {
+        use crate::toolkits::{DirectToolkitRuntimeErrorCode as Code, test_error};
+        for (code, message) in [
+            (Code::EffectfulToolUnavailable, EFFECTFUL_TOOL_MESSAGE),
+            (Code::ToolBlocked, POLICY_REFUSED_MESSAGE),
+            (Code::SensitiveToolUnavailable, POLICY_REFUSED_MESSAGE),
+        ] {
+            let summary = call_summary(Err(test_error(code))).expect("a result");
+            assert_eq!(summary.status, ToolkitCallToolStatusV1::UnknownTool as i32);
+            assert_eq!(summary.error_message, message);
+        }
+        assert!(matches!(
+            call_summary(Err(test_error(Code::AuthorizationRequired))),
+            Err(RuntimeFailureKind::AuthorizationFailed)
+        ));
     }
 
     #[test]

@@ -487,6 +487,30 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
         ("model.rate_limited: slow down", OfficeFailure::RateLimited),
         ("model.timeout: timed out", OfficeFailure::Timeout),
         ("model.unavailable: 503", OfficeFailure::Unreachable),
+        (
+            "model.internal: the model ran out of tokens while reasoning; raise max_tokens",
+            OfficeFailure::ReplyCutOff,
+        ),
+        (
+            "model.internal: the model's reply was cut off at its length limit; raise max_tokens",
+            OfficeFailure::ReplyCutOff,
+        ),
+        (
+            "model.internal: the model declined to reply",
+            OfficeFailure::ReplyDeclined,
+        ),
+        (
+            "model.internal: the model's reply held no usable text",
+            OfficeFailure::ReplyEmpty,
+        ),
+        (
+            "model.internal: the toolkit model call budget is exhausted for this run",
+            OfficeFailure::BudgetRefused,
+        ),
+        (
+            "model.internal: the model's reply could not be used: it never completed",
+            OfficeFailure::ReplyUnusable,
+        ),
     ] {
         assert_eq!(
             super::office_host::model_failure(message).kind(),

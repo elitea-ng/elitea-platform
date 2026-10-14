@@ -80,6 +80,13 @@ pub enum OfficeFailure {
     /// The model answered, but its reply could not be used. The call may have
     /// been billed.
     ReplyUnusable,
+    /// The model's reply was cut at its length limit, or the model spent the
+    /// whole limit reasoning and never answered: raising `max_tokens` helps.
+    ReplyCutOff,
+    /// The model declined to reply (its safety filter ended the reply).
+    ReplyDeclined,
+    /// The model answered with no usable text at all.
+    ReplyEmpty,
     /// The model's answer was larger than the platform accepts.
     ReplyTooLarge,
     /// The model gateway reported a conflict; trying again may work.

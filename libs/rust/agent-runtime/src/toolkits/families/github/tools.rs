@@ -1626,3 +1626,14 @@ pub(in crate::toolkits) fn test_build_with_writer(
 pub(in crate::toolkits) fn test_served_names() -> Vec<String> {
     served_names()
 }
+
+/// The stored selection's tools this family does not serve, for the run's
+/// notice: `(name, needs_file_store)`. Index tools are classified by the
+/// caller, which knows whether the index toolset is composed.
+pub(crate) fn omitted_selection(selected: &[Box<str>], _file_store: bool) -> Vec<(String, bool)> {
+    selected
+        .iter()
+        .filter(|name| !is_supported(name))
+        .map(|name| (name.to_string(), false))
+        .collect()
+}

@@ -148,7 +148,10 @@ impl AttachmentError {
                     (ErrorCategory::RateLimited, "attachment.rate_limited")
                 }
                 OfficeFailure::Timeout => (ErrorCategory::Timeout, "attachment.timeout"),
-                OfficeFailure::ReplyUnusable => {
+                OfficeFailure::ReplyUnusable
+                | OfficeFailure::ReplyCutOff
+                | OfficeFailure::ReplyDeclined
+                | OfficeFailure::ReplyEmpty => {
                     (ErrorCategory::Internal, "attachment.reply_unusable")
                 }
                 OfficeFailure::Unreachable => {
@@ -205,7 +208,7 @@ fn model_sentence(failure: OfficeFailure) -> String {
         OfficeFailure::RateLimited => "The model gateway is rate-limiting this call. Try again shortly.".to_owned(),
         OfficeFailure::Timeout => "The model call timed out. It may work if tried again.".to_owned(),
         OfficeFailure::Conflict => "The model gateway reported a conflict. It may work if tried again.".to_owned(),
-        OfficeFailure::ReplyUnusable | OfficeFailure::ReplyTooLarge => "The model's reply could not be used. Do not retry without telling the user.".to_owned(),
+        OfficeFailure::ReplyUnusable | OfficeFailure::ReplyCutOff | OfficeFailure::ReplyDeclined | OfficeFailure::ReplyEmpty | OfficeFailure::ReplyTooLarge => "The model's reply could not be used. Do not retry without telling the user.".to_owned(),
         OfficeFailure::AccessRefused => "The model gateway refused the call. Do not retry; tell the user.".to_owned(),
         _ => "The model gateway could not be reached. Trying again may work.".to_owned(),
     }
