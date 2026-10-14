@@ -66,7 +66,10 @@ const rateLimitOpTimeout = 2 * time.Second
 // decision. Every fail-open is counted in Degraded() and logged, so the gap is
 // measurable rather than assumed.
 type Limiter struct {
-	counter RateCounter
+	// counter is bound late: a gateway that boots while NATS is down starts
+	// with none, and the background recovery loop calls Bind when NATS comes
+	// up. Read atomically because Admit runs on every /llm request goroutine.
+	counter atomic.Pointer[counterBox]
 	subject SubjectBuilder
 	log     *slog.Logger
 	now     func() time.Time
@@ -76,6 +79,93 @@ type Limiter struct {
 	degraded atomic.Int64
 	// refused counts admissions the limiter blocked.
 	refused atomic.Int64
+	// state is the operator-facing health (RateStatus). It has ONE writer
+	// family — Bind and Probe, both called only from the gateway's rate-limit
+	// monitor goroutine. Request-path outcomes never write it: a client that
+	// cancels mid-call, or one slow request, must not make the gateway claim
+	// its limits are down. Degraded() still counts per-request fail-opens.
+	state atomic.Int32
+}
+
+// counterBox lets an interface value live in an atomic.Pointer.
+type counterBox struct{ c RateCounter }
+
+// RateStatus is the limiter's operator-facing state.
+type RateStatus string
+
+const (
+	// RateStatusUnbound: no counter has been bound; limits are NOT enforced.
+	RateStatusUnbound RateStatus = "unbound"
+	// RateStatusDegraded: bound, but the last health probe failed; requests are
+	// admitted without their ceiling (fail open).
+	RateStatusDegraded RateStatus = "degraded"
+	// RateStatusEnforced: bound and the last health probe succeeded.
+	RateStatusEnforced RateStatus = "enforced"
+)
+
+const (
+	stateUnbound int32 = iota
+	stateDegraded
+	stateEnforced
+)
+
+// Bind installs the counter after construction. It is how a gateway that
+// started without NATS begins enforcing when NATS appears, without a restart.
+//
+// Bind never reports enforced on faith: the state starts degraded and one
+// Probe runs immediately, so "enforced" always means a read succeeded. A nil
+// counter is ignored. Call it only from the monitor goroutine (single writer),
+// or before the limiter is shared.
+func (l *Limiter) Bind(c RateCounter) {
+	if l == nil || c == nil {
+		return
+	}
+	l.state.Store(stateDegraded)
+	l.counter.Store(&counterBox{c: c})
+	l.Probe(context.Background())
+}
+
+// Probe performs one cheap counter read with the caller's own context and
+// records the result as the limiter's health. A failure caused by ctx itself
+// being cancelled or timing out is ignored entirely — that is the prober
+// shutting down, not NATS failing. Single writer: monitor goroutine only.
+func (l *Limiter) Probe(ctx context.Context) {
+	if l == nil {
+		return
+	}
+	c := l.rateCounter()
+	if c == nil || l.subject == nil {
+		return
+	}
+	pctx, cancel := context.WithTimeout(ctx, rateLimitOpTimeout)
+	defer cancel()
+	_, err := c.ReadRateLimit(pctx, l.subject(kindRequests, "_health", 0))
+	switch {
+	case err == nil:
+		l.state.Store(stateEnforced)
+	case ctx.Err() != nil:
+		// our own shutdown; say nothing
+	default:
+		l.state.Store(stateDegraded)
+	}
+}
+
+// Status reports whether per-minute limits are actually being kept.
+func (l *Limiter) Status() RateStatus {
+	if !l.Enabled() {
+		return RateStatusUnbound
+	}
+	if l.state.Load() == stateDegraded {
+		return RateStatusDegraded
+	}
+	return RateStatusEnforced
+}
+
+func (l *Limiter) rateCounter() RateCounter {
+	if b := l.counter.Load(); b != nil {
+		return b.c
+	}
+	return nil
 }
 
 // LimiterConfig configures a Limiter.
@@ -98,12 +188,19 @@ func NewLimiter(cfg LimiterConfig) *Limiter {
 	if nowFn == nil {
 		nowFn = time.Now
 	}
-	return &Limiter{counter: cfg.Counter, subject: cfg.Subject, log: log, now: nowFn}
+	l := &Limiter{subject: cfg.Subject, log: log, now: nowFn}
+	if cfg.Counter != nil {
+		// Configured counters start unprobed (degraded) and do not read at
+		// construction; the monitor's first Probe promotes them to enforced.
+		l.counter.Store(&counterBox{c: cfg.Counter})
+		l.state.Store(stateDegraded)
+	}
+	return l
 }
 
 // Enabled reports whether the limiter can enforce anything at all.
 func (l *Limiter) Enabled() bool {
-	return l != nil && l.counter != nil && l.subject != nil
+	return l != nil && l.rateCounter() != nil && l.subject != nil
 }
 
 // Degraded returns how many admissions skipped enforcement because the counter
@@ -241,13 +338,13 @@ func (l *Limiter) RecordTokens(ctx context.Context, def RateLimitDef, sub Subjec
 func (l *Limiter) read(ctx context.Context, kind, key string, window int64) (int64, error) {
 	opCtx, cancel := context.WithTimeout(ctx, rateLimitOpTimeout)
 	defer cancel()
-	return l.counter.ReadRateLimit(opCtx, l.subject(kind, key, window))
+	return l.rateCounter().ReadRateLimit(opCtx, l.subject(kind, key, window))
 }
 
 func (l *Limiter) incr(ctx context.Context, kind, key string, window, delta int64) (int64, error) {
 	opCtx, cancel := context.WithTimeout(ctx, rateLimitOpTimeout)
 	defer cancel()
-	return l.counter.IncrRateLimit(opCtx, l.subject(kind, key, window), delta)
+	return l.rateCounter().IncrRateLimit(opCtx, l.subject(kind, key, window), delta)
 }
 
 func (l *Limiter) failOpen(bucket string, def RateLimitDef, sub Subject, err error) {

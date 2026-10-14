@@ -75,7 +75,17 @@ func defaultNATSConnector(ctx context.Context, cfg natsinfra.Config) (NATSClient
 type Option func(*options)
 
 type options struct {
-	natsConnect natsConnector
+	natsConnect   natsConnector
+	redialTimeout time.Duration
+}
+
+// DefaultRedialTimeout bounds one RedialNATS dial attempt, so a black-holed
+// NATS cannot hang the (single) recovery loop.
+const DefaultRedialTimeout = 10 * time.Second
+
+// WithRedialTimeout overrides the per-attempt re-dial timeout (tests).
+func WithRedialTimeout(d time.Duration) Option {
+	return func(o *options) { o.redialTimeout = d }
 }
 
 // WithNATSConnector overrides the NATS connector (tests inject a fake).
@@ -103,6 +113,12 @@ type Server struct {
 	// natsConnect is the connector New used. It is kept so a re-dial goes
 	// through the SAME seam a test injects (issue #315).
 	natsConnect natsConnector
+	// redialTimeout bounds one RedialNATS dial.
+	redialTimeout time.Duration
+	// dialMu serialises dials so only one connection is ever opened. It is
+	// separate from natsMu on purpose: natsMu is never held across a dial, so
+	// NATS() and shutdown never wait on a hanging connect.
+	dialMu sync.Mutex
 
 	// natsMu guards nats and closed. The client is dialled once in New, but a
 	// gateway that started without one re-dials in the background, so the field
@@ -125,7 +141,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger, level *slo
 		account = newBootstrapAccount(cfg.ProviderConcurrency)
 	}
 
-	o := options{natsConnect: defaultNATSConnector}
+	o := options{natsConnect: defaultNATSConnector, redialTimeout: DefaultRedialTimeout}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -176,12 +192,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger, level *slo
 	}
 
 	return &Server{
-		cfg:         cfg,
-		core:        core,
-		http:        srv,
-		logger:      logger,
-		natsConnect: o.natsConnect,
-		nats:        natsClient,
+		cfg:           cfg,
+		core:          core,
+		http:          srv,
+		logger:        logger,
+		natsConnect:   o.natsConnect,
+		redialTimeout: o.redialTimeout,
+		nats:          natsClient,
 	}, nil
 }
 
@@ -207,25 +224,47 @@ func (s *Server) NATS() NATSClient {
 // back on its own (issues #304, #315). A caller polls this method, and installs
 // enforcement on the running handler when it returns a client.
 //
-// It never opens a second connection: the whole method holds one mutex, and a
-// caller that arrives after another succeeded gets the same client back.
+// It never opens a second connection: dials are serialised by dialMu, and a
+// caller that arrives after another succeeded gets the same client back. A
+// dial is bounded by the re-dial timeout and never holds natsMu, so NATS() and
+// shutdown stay responsive while NATS is unreachable.
 func (s *Server) RedialNATS(ctx context.Context) (NATSClient, error) {
 	if s.cfg.NATSURL == "" {
 		return nil, ErrNATSNotConfigured
 	}
+	s.dialMu.Lock()
+	defer s.dialMu.Unlock()
+
 	s.natsMu.Lock()
-	defer s.natsMu.Unlock()
-	if s.closed {
+	closed, existing := s.closed, s.nats
+	s.natsMu.Unlock()
+	if closed {
 		return nil, ErrServerClosed
 	}
-	if s.nats != nil {
-		return s.nats, nil
+	if existing != nil {
+		return existing, nil
 	}
-	nc, err := s.natsConnect(ctx, natsClientConfig(s.cfg))
+
+	// The dial runs WITHOUT natsMu and under its own deadline.
+	timeout := s.redialTimeout
+	if timeout <= 0 {
+		timeout = DefaultRedialTimeout
+	}
+	dctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	nc, err := s.natsConnect(dctx, natsClientConfig(s.cfg))
 	if err != nil {
 		return nil, fmt.Errorf("server: re-dial NATS: %w", err)
 	}
+
+	s.natsMu.Lock()
+	if s.closed {
+		s.natsMu.Unlock()
+		nc.Close()
+		return nil, ErrServerClosed
+	}
 	s.nats = nc
+	s.natsMu.Unlock()
 	logNATSPosture(s.logger, "NATS budget path reconnected", s.cfg)
 	return nc, nil
 }
