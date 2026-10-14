@@ -44,6 +44,7 @@ use elitea_connectors::gitlab::config::GitLabToolkitConfig;
 use elitea_connectors::gitlab::source::GitLabSource;
 use elitea_connectors::jira::config::{JiraConnectorConfig, JiraIndexArguments};
 use elitea_connectors::jira::source::JiraSource;
+use elitea_connectors::pictures::{PictureBatch, PictureStep};
 use elitea_connectors::qtest::{QtestConnectorConfig, QtestIndexArguments, QtestSource};
 use elitea_connectors::sharepoint::config::SharePointIndexConfig;
 use elitea_connectors::sharepoint::source::{SharePointIndexParams, SharePointSource};
@@ -366,6 +367,51 @@ impl IndexSource {
         }
     }
 
+    /// What the connector asks of the run for `reference`'s pictures
+    /// (ADR-0030 I4, PR-C2): `None` unless the toolkit's picture setting
+    /// (`process_images`, `bins_with_llm`) is on for this document.
+    pub(crate) fn picture_step(&self, reference: &DocumentRef) -> Option<PictureStep> {
+        match self {
+            Self::AdoWiki(source) => source.picture_step(&reference.key),
+            Self::AdoBoards(source) => source.picture_step(&reference.key),
+            Self::Jira(source) => source.picture_step(&reference.key),
+            Self::Confluence(source) => source.picture_step(reference),
+            #[cfg(test)]
+            Self::Fixture(documents, _) => documents
+                .iter()
+                .find(|document| document.reference.key == reference.key)
+                .and_then(|document| document.metadata.get("fixture_pictures"))
+                .map(|spec| PictureStep::Inline {
+                    prompt: spec
+                        .get("prompt")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                }),
+            _ => None,
+        }
+    }
+
+    /// The pictures a fetched document links, read through the connector's
+    /// own authenticated transport; `None` when there is nothing to read.
+    pub(crate) async fn pictures(&self, key: &str, bytes: &[u8]) -> Option<PictureBatch> {
+        match self {
+            Self::AdoWiki(source) => source.pictures(key, bytes).await,
+            Self::AdoBoards(source) => source.pictures(key).await,
+            Self::Jira(source) => source.pictures(key, bytes).await,
+            #[cfg(test)]
+            Self::Fixture(documents, _) => {
+                let spec = documents
+                    .iter()
+                    .find(|document| document.reference.key == key)?
+                    .metadata
+                    .get("fixture_pictures")?
+                    .clone();
+                Some(fixture_batch(&spec))
+            }
+            _ => None,
+        }
+    }
+
     /// Tell the connector which document versions the index holds, before
     /// it lists. Only the boards connector uses them (to skip re-reading
     /// the comments of a work item that has not moved).
@@ -685,6 +731,59 @@ impl PathFilter {
         }
         true
     }
+}
+
+/// The tests' connector picture batch, from a document's
+/// `fixture_pictures` metadata: `template`, `pictures` (`tag`, optional
+/// `prompt`, `before`, `after`, `fallback`) and `skipped` (reason to count).
+#[cfg(test)]
+fn fixture_batch(spec: &Value) -> PictureBatch {
+    use elitea_connectors::pictures::{SourcePicture, token};
+    let text = |value: &Value, name: &str| {
+        value
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let mut batch = PictureBatch {
+        template: text(spec, "template"),
+        ..PictureBatch::default()
+    };
+    for (index, picture) in spec["pictures"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(text(picture, "tag").as_bytes());
+        batch.pictures.push(SourcePicture {
+            token: token(index),
+            name: text(picture, "tag"),
+            bytes,
+            prompt: picture
+                .get("prompt")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            before: text(picture, "before"),
+            after: text(picture, "after"),
+            fallback: text(picture, "fallback"),
+            escapes: &[],
+        });
+    }
+    for (reason, count) in spec["skipped"].as_object().into_iter().flatten() {
+        let reason: &'static str = match reason.as_str() {
+            "fetch_failed" => "fetch_failed",
+            "unsupported_type" => "unsupported_type",
+            "too_large" => "too_large",
+            _ => "unreadable",
+        };
+        for _ in 0..count.as_u64().unwrap_or(0) {
+            batch.skip(reason);
+        }
+    }
+    batch
 }
 
 #[cfg(test)]

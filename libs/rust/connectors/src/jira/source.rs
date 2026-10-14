@@ -74,6 +74,9 @@ use crate::atlassian::{
     authorized_json, id_of, key_segment, safe_identifier, same_origin, size_of, text_of,
 };
 use crate::egress::HostAllowlist;
+use crate::pictures::{
+    self, Budget, FETCH_FAILED, PictureBatch, PictureStep, SourcePicture, TOO_LARGE, UNSUPPORTED,
+};
 use crate::source::{
     Backoff, Failure, Listed, SourceHttp, SourceLimits, Timeouts, references, web_url,
 };
@@ -646,6 +649,145 @@ impl JiraSource {
         content
     }
 
+    /// The picture step for `key`: an issue or a comment, with
+    /// `process_images` (the SDK describes the pictures of the description
+    /// and of the comments, not those of attachments).
+    #[must_use]
+    pub fn picture_step(&self, key: &str) -> Option<PictureStep> {
+        if !self.arguments.process_images {
+            return None;
+        }
+        issue_of_key(key).map(|_| PictureStep::Inline { prompt: None })
+    }
+
+    /// The pictures a description or a comment links with wiki markup
+    /// (`!name.png|thumbnail!`, `!attachment id!`; the ADF renderer writes
+    /// the same form), read from the issue's attachments through the
+    /// authenticated client (the SDK's `process_image_match`). Each picture
+    /// is described with the SDK's default analysis prompt plus the 500
+    /// characters of text around it and its file name. A reference that
+    /// names no attachment of the issue stays as written: the SDK replaced
+    /// it with a failure note, which is not indexed here. The SDK also
+    /// fetched an `http(s)` reference with an unauthenticated request; no
+    /// request leaves for a host the toolkit is not configured for.
+    pub async fn pictures(&self, key: &str, bytes: &[u8]) -> Option<PictureBatch> {
+        if !self.arguments.process_images {
+            return None;
+        }
+        let issue_id = issue_of_key(key)?;
+        let text = std::str::from_utf8(bytes).ok()?;
+        if pictures::holds_token(text) {
+            return None;
+        }
+        let references = wiki_images(text);
+        if references.is_empty() {
+            return None;
+        }
+        let attachments = self.issue_attachments(issue_id).await.ok()?;
+        let resolver = Resolver::new(&attachments);
+        let mut batch = PictureBatch {
+            template: text.to_owned(),
+            ..PictureBatch::default()
+        };
+        let mut budget = Budget::default();
+        for markup in references {
+            let reference = markup_reference(&markup);
+            let Some(attachment) = resolver.find(reference) else {
+                continue;
+            };
+            let filename = text_of(attachment, "/filename").unwrap_or(reference);
+            let image = text_of(attachment, "/mimeType")
+                .is_some_and(|mime| mime.starts_with("image/"))
+                || pictures::has_image_extension(filename);
+            if !image {
+                batch.skip(UNSUPPORTED);
+                continue;
+            }
+            if let Err(reason) = budget.may_read() {
+                batch.skip(reason);
+                continue;
+            }
+            if size_of(attachment, "/size") > pictures::MAX_PICTURE_BYTES {
+                batch.skip(TOO_LARGE);
+                continue;
+            }
+            let Some(attachment_id) = id_of(attachment, "/id").filter(|id| safe_identifier(id))
+            else {
+                batch.skip(FETCH_FAILED);
+                continue;
+            };
+            let data = match self.read_attachment(attachment, &attachment_id).await {
+                Ok(data) => data,
+                Err(Failure::TooLarge(_)) => {
+                    batch.skip(TOO_LARGE);
+                    continue;
+                }
+                Err(Failure::Status(crate::transport::StatusCode::NOT_FOUND)) => {
+                    batch.skip(pictures::UNREADABLE);
+                    continue;
+                }
+                Err(_) => {
+                    tracing::debug!(issue = issue_id, "a Jira picture could not be read");
+                    batch.skip(FETCH_FAILED);
+                    continue;
+                }
+            };
+            // The SDK treats a body under 100 bytes as a failed download.
+            if data.len() < 100 {
+                batch.skip(FETCH_FAILED);
+                continue;
+            }
+            if let Err(reason) = budget.take(data.len() as u64) {
+                batch.skip(reason);
+                continue;
+            }
+            let token = pictures::token(batch.pictures.len());
+            batch.template = batch.template.replace(&markup, &token);
+            batch.pictures.push(SourcePicture {
+                token,
+                name: filename.to_owned(),
+                bytes: data,
+                prompt: Some(analysis_prompt(filename, &context_around(text, &markup))),
+                before: format!("[Image {filename} Description: "),
+                after: "]".to_owned(),
+                fallback: markup,
+                escapes: &[],
+            });
+        }
+        (!batch.pictures.is_empty() || !batch.skipped.is_empty()).then_some(batch)
+    }
+
+    /// The issue's `attachment` field.
+    async fn issue_attachments(&self, issue_id: &str) -> Result<Vec<Value>, Failure> {
+        let mut url = self.api(&["issue", issue_id])?;
+        url.query_pairs_mut().append_pair("fields", "attachment");
+        let issue = self.json(url).await?;
+        Ok(issue
+            .pointer("/fields/attachment")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn read_attachment(
+        &self,
+        attachment: &Value,
+        attachment_id: &str,
+    ) -> Result<Vec<u8>, Failure> {
+        let mut details = Map::new();
+        for (from, to) in [
+            ("/content", "content_url"),
+            ("/filename", "filename"),
+            ("/mimeType", "mimeType"),
+        ] {
+            if let Some(value) = text_of(attachment, from) {
+                details.insert(to.into(), Value::String(value.to_owned()));
+            }
+        }
+        let listed = Listed::new(String::new(), String::new(), 0, attachment_id.to_owned());
+        self.download(&listed, &details).await
+    }
+
     /// An attachment's bytes, from the Jira origin only: the listed
     /// `content` URL when it is on the base URL's origin (a link elsewhere
     /// is refused, so the credential never leaves the configured origin),
@@ -839,6 +981,176 @@ fn fields_pointer<'a>(fields: &'a Map<String, Value>, pointer: &str) -> Option<&
     }
     .map(str::trim)
     .filter(|text| !text.is_empty())
+}
+
+/// The issue id in a document key: `issue/{id}.md` or
+/// `issue/{id}/comment/{comment}.md`.
+fn issue_of_key(key: &str) -> Option<&str> {
+    let rest = key.strip_prefix("issue/")?;
+    let (id, tail) = rest.split_once('/').unwrap_or((rest, ""));
+    let id = id.strip_suffix(".md").unwrap_or(id);
+    let is_md = |name: &str| name.len() > 3 && name[name.len() - 3..].eq_ignore_ascii_case(".md");
+    let comment = tail.starts_with("comment/") && is_md(tail);
+    ((tail.is_empty() && is_md(rest)) || comment).then_some(id)
+}
+
+/// The distinct `!ref!` / `!ref|options!` references of `text` (the SDK's
+/// `!([^!|]+)(?:\|[^!]*)?!`), in order, as written.
+fn wiki_images(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut at = 0;
+    while let Some(offset) = text[at..].find('!') {
+        let start = at + offset;
+        let rest = &text[start + 1..];
+        // 1+ characters that are neither `!` nor `|`.
+        let name_len = rest.find(['!', '|']).unwrap_or(rest.len());
+        if name_len == 0 || name_len == rest.len() {
+            at = start + 1;
+            continue;
+        }
+        let tail = &rest[name_len..];
+        let end = if tail.starts_with('!') {
+            Some(name_len + 1)
+        } else {
+            // `|` then anything but `!`, then the closing `!`.
+            tail[1..].find('!').map(|close| name_len + 1 + close + 1)
+        };
+        match end {
+            Some(end) => {
+                let markup = text[start..start + 1 + end].to_owned();
+                if !found.contains(&markup) {
+                    found.push(markup);
+                }
+                at = start + 1 + end;
+            }
+            None => at = start + 1,
+        }
+    }
+    found
+}
+
+/// The `ref` of `!ref|options!`.
+fn markup_reference(markup: &str) -> &str {
+    let inner = &markup[1..markup.len() - 1];
+    inner.split('|').next().unwrap_or(inner)
+}
+
+/// The SDK's `_collect_context_for_image`: `radius` characters either side of
+/// the first occurrence, with an ellipsis where the text goes on.
+fn context_around(text: &str, marker: &str) -> String {
+    const RADIUS: usize = 500;
+    let Some(at) = text.find(marker) else {
+        return String::new();
+    };
+    let before: Vec<(usize, char)> = text[..at].char_indices().collect();
+    let start = before
+        .len()
+        .checked_sub(RADIUS)
+        .map_or(0, |skip| before[skip].0);
+    let after_marker = at + marker.len();
+    let end = text[after_marker..]
+        .char_indices()
+        .nth(RADIUS)
+        .map_or(text.len(), |(index, _)| after_marker + index);
+    let mut context = String::new();
+    if start > 0 {
+        context.push_str("...");
+    }
+    context.push_str(&text[start..end]);
+    if end < text.len() {
+        context.push_str("...");
+    }
+    context
+}
+
+/// The SDK's `_process_image_with_llm` prompt: the default analysis prompt,
+/// then the image name and the surrounding text.
+fn analysis_prompt(name: &str, context: &str) -> String {
+    let mut prompt = DEFAULT_ANALYSIS_PROMPT.to_owned();
+    prompt.push_str("\n\n## Additional Context Information:\n");
+    if !name.is_empty() {
+        let _ = writeln!(prompt, "- Image Name/Reference: {name}");
+    }
+    if !context.is_empty() {
+        let _ = writeln!(prompt, "- Surrounding Content: {context}");
+    }
+    prompt.push_str(
+        "\nPlease incorporate this contextual information in your description when relevant.",
+    );
+    prompt
+}
+
+/// `_get_default_image_analysis_prompt`, byte for byte.
+const DEFAULT_ANALYSIS_PROMPT: &str = include_str!("prompts/image_analysis.txt");
+
+/// The SDK's `AttachmentResolver.find_attachment` over the issue's
+/// attachments: by id (`12345`, `attachment:12345`), then by file name
+/// (path and options dropped), exactly, case-insensitively, by suffix; the
+/// name also without its extension.
+struct Resolver<'a> {
+    by_id: BTreeMap<String, &'a Value>,
+    /// In insertion order; a later attachment with the same key replaces
+    /// the value and keeps the place (a Python `dict`).
+    by_name: Vec<(String, &'a Value)>,
+}
+
+impl<'a> Resolver<'a> {
+    fn new(attachments: &'a [Value]) -> Self {
+        let mut resolver = Self {
+            by_id: BTreeMap::new(),
+            by_name: Vec::new(),
+        };
+        for attachment in attachments {
+            if let Some(id) = id_of(attachment, "/id") {
+                resolver.by_id.insert(id, attachment);
+            }
+            if let Some(filename) = text_of(attachment, "/filename") {
+                resolver.name(filename.to_owned(), attachment);
+                let stem = filename.rsplit_once('.').map_or(filename, |(stem, _)| stem);
+                resolver.name(stem.to_owned(), attachment);
+            }
+        }
+        resolver
+    }
+
+    fn name(&mut self, name: String, attachment: &'a Value) {
+        match self.by_name.iter_mut().find(|(known, _)| *known == name) {
+            Some(entry) => entry.1 = attachment,
+            None => self.by_name.push((name, attachment)),
+        }
+    }
+
+    fn find(&self, reference: &str) -> Option<&'a Value> {
+        if !reference.is_empty()
+            && reference.bytes().all(|byte| byte.is_ascii_digit())
+            && let Some(found) = self.by_id.get(reference)
+        {
+            return Some(found);
+        }
+        if reference.starts_with("attachment")
+            && let Some((_, id)) = reference.split_once(':')
+            && let Some(found) = self.by_id.get(id.trim())
+        {
+            return Some(found);
+        }
+        let name = reference.rsplit('/').next().unwrap_or(reference);
+        let name = name.split('|').next().unwrap_or(name);
+        if let Some((_, found)) = self.by_name.iter().find(|(known, _)| known == name) {
+            return Some(found);
+        }
+        let lower = name.to_lowercase();
+        if let Some((_, found)) = self
+            .by_name
+            .iter()
+            .find(|(known, _)| known.to_lowercase() == lower)
+        {
+            return Some(found);
+        }
+        self.by_name
+            .iter()
+            .find(|(known, _)| known.ends_with(name))
+            .map(|(_, found)| *found)
+    }
 }
 
 /// Python truthiness of a JSON value.
@@ -1783,5 +2095,120 @@ mod tests {
         assert!(
             !truthy(&json!("")) && !truthy(&json!([])) && truthy(&json!("a")) && truthy(&json!(1))
         );
+    }
+
+    #[test]
+    fn wiki_image_references_are_found_like_the_sdk_regex() {
+        assert_eq!(
+            wiki_images("a !x.png|thumbnail! b !9001! c !y|alt=\"z\"! !x.png|thumbnail! !|bad! !"),
+            ["!x.png|thumbnail!", "!9001!", "!y|alt=\"z\"!", "! !"],
+            "a stray `! !` matches the SDK's regex too; only resolved references are used"
+        );
+        assert_eq!(markup_reference("!x.png|thumbnail!"), "x.png");
+        assert_eq!(markup_reference("!9001!"), "9001");
+        assert_eq!(issue_of_key("issue/12.md"), Some("12"));
+        assert_eq!(issue_of_key("issue/12/comment/5.md"), Some("12"));
+        assert_eq!(issue_of_key("issue/12/attachment/5/a.png"), None);
+        assert_eq!(issue_of_key("other"), None);
+    }
+
+    #[test]
+    fn the_context_is_five_hundred_characters_either_side_with_ellipses() {
+        let text = format!("{}!m!{}", "a".repeat(600), "b".repeat(600));
+        let context = context_around(&text, "!m!");
+        assert_eq!(
+            context,
+            format!("...{}!m!{}...", "a".repeat(500), "b".repeat(500))
+        );
+        assert_eq!(context_around("short !m! text", "!m!"), "short !m! text");
+        assert_eq!(context_around("none", "!m!"), "");
+    }
+
+    fn attachment_fixture() -> Arc<Scripted> {
+        Scripted::new(|request, _| match request.url().path() {
+            "/rest/api/3/issue/1" => {
+                assert_eq!(query(request, "fields").as_deref(), Some("attachment"));
+                Reply::json(&json!({"fields": {"attachment": [
+                    {"id": "9001", "filename": "spec.pdf", "size": 9, "mimeType": "application/pdf"},
+                    {"id": "9002", "filename": "shot.PNG", "size": 200, "mimeType": "image/png",
+                     "content": "https://acme.atlassian.net/rest/api/3/attachment/content/9002"},
+                    {"id": "9003", "filename": "huge.png", "size": 6_000_000, "mimeType": "image/png"},
+                    {"id": "9004", "filename": "tiny.png", "size": 50, "mimeType": "image/png"},
+                    {"id": "9005", "filename": "gone.png", "size": 200, "mimeType": "image/png"},
+                ]}}))
+            }
+            "/rest/api/3/attachment/content/9002" => Reply::bytes(&[7; 200]),
+            "/rest/api/3/attachment/content/9004" => Reply::bytes(&[7; 50]),
+            "/rest/api/3/attachment/content/9005" => Reply::status(StatusCode::NOT_FOUND),
+            other => panic!("unexpected request {other}"),
+        })
+    }
+
+    #[tokio::test]
+    async fn process_images_reads_the_issues_image_attachments_with_context_prompts() {
+        let source = JiraSource::new(
+            cloud(),
+            arguments(&json!({"process_images": true})),
+            allow(),
+            attachment_fixture(),
+        )
+        .expect("source");
+        assert!(matches!(
+            source.picture_step("issue/1.md"),
+            Some(PictureStep::Inline { prompt: None })
+        ));
+        assert!(source.picture_step("issue/1/comment/5.md").is_some());
+        assert!(source.picture_step("issue/1/attachment/2/a.png").is_none());
+        let text = "# Description\nSee !shot.png|thumbnail! and !9001! and !nothing! then !huge.png! !tiny.png! !gone.png! and !shot.png|width=10! again.";
+        let batch = source
+            .pictures("issue/1.md", text.as_bytes())
+            .await
+            .expect("batch");
+        assert_eq!(batch.pictures.len(), 2, "two markups, one attachment");
+        let first = &batch.pictures[0];
+        assert_eq!(first.name, "shot.PNG");
+        let prompt = first.prompt.as_deref().expect("a prompt of its own");
+        assert!(
+            prompt.starts_with("\n        ## Image Analysis Task:"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("\n\n## Additional Context Information:\n- Image Name/Reference: shot.PNG\n- Surrounding Content: # Description\nSee !shot.png|thumbnail! and"));
+        assert!(prompt.ends_with(
+            "\nPlease incorporate this contextual information in your description when relevant."
+        ));
+        assert_eq!(batch.skipped.get(UNSUPPORTED), Some(&1), "the pdf");
+        assert_eq!(
+            batch.skipped.get(TOO_LARGE),
+            Some(&1),
+            "huge and the 50 byte download is a failure"
+        );
+        assert_eq!(batch.skipped.get(FETCH_FAILED), Some(&1), "tiny");
+        assert_eq!(batch.skipped.get(pictures::UNREADABLE), Some(&1), "gone");
+        let rendered = batch.render(&[Some("A login form"), Some("A login form")]);
+        assert!(
+            rendered.contains(
+                "See [Image shot.PNG Description: A login form] and !9001! and !nothing!"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.ends_with("and [Image shot.PNG Description: A login form] again."),
+            "{rendered}"
+        );
+        assert_eq!(
+            batch.render(&[None, None]),
+            text,
+            "undescribed pictures stay as written"
+        );
+        // Off by default.
+        let off = JiraSource::new(
+            cloud(),
+            arguments(&json!({})),
+            allow(),
+            attachment_fixture(),
+        )
+        .expect("source");
+        assert!(off.picture_step("issue/1.md").is_none());
+        assert!(off.pictures("issue/1.md", text.as_bytes()).await.is_none());
     }
 }

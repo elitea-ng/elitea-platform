@@ -35,6 +35,10 @@ use super::client::{AdoClient, AdoRequest};
 use super::config::{AdoFamilySettings, AdoToolkitConfig};
 use super::text::{optional_bool, optional_text, optional_text_list};
 use crate::egress::HostAllowlist;
+use crate::pictures::{
+    self, Budget, FETCH_FAILED, PictureBatch, PictureStep, SourcePicture, TOO_LARGE, UNREADABLE,
+    UNSUPPORTED,
+};
 use crate::source::glob::NameFilter;
 use crate::source::{
     Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, Timeouts, references,
@@ -61,6 +65,12 @@ pub struct AdoWikiIndexParams {
     pub path_contains: Option<String>,
     pub include_attachments: bool,
     pub attachments: NameFilter,
+    /// Describe the pictures a page links (`![alt](/.attachments/x.png)`)
+    /// with the chat model and put the description in the link's place
+    /// (the SDK's `process_images`, off by default for an index).
+    pub process_images: bool,
+    /// The prompt for those descriptions (`image_description_prompt`).
+    pub image_description_prompt: Option<String>,
 }
 
 impl AdoWikiIndexParams {
@@ -78,6 +88,9 @@ impl AdoWikiIndexParams {
                 optional_text_list(arguments, "include_extensions")?,
                 optional_text_list(arguments, "skip_extensions")?,
             ),
+            process_images: optional_bool(arguments, "process_images")?.unwrap_or(false),
+            image_description_prompt: optional_text(arguments, "image_description_prompt")?
+                .filter(|prompt| !prompt.trim().is_empty()),
         })
     }
 }
@@ -108,6 +121,12 @@ struct Side {
     repository_id: String,
     wiki_name: String,
     extras: Arc<BTreeMap<String, Extra>>,
+    /// With `process_images`: the picture files of the wiki's
+    /// `.attachments/` folder, by repository path, to their blob id and
+    /// size. The tree is read for the listing anyway.
+    images: Arc<BTreeMap<String, (String, u64)>>,
+    /// The mapped folder of a code wiki (`docs`), else empty.
+    prefix: String,
 }
 
 impl AdoWikiSource {
@@ -358,14 +377,25 @@ impl AdoWikiSource {
             ));
             self.http.check_count(listed.len())?;
         }
+        // `.attachments/` sits at the wiki's root: inside the mapped
+        // folder of a code wiki, not at the repository's.
+        let attachments_dir = if prefix.is_empty() {
+            ATTACHMENTS_DIR.to_owned()
+        } else {
+            format!("{prefix}/{ATTACHMENTS_DIR}")
+        };
+        let images: BTreeMap<String, (String, u64)> = if self.params.process_images {
+            files
+                .iter()
+                .filter(|(path, _)| {
+                    path.starts_with(&attachments_dir) && pictures::has_image_extension(path)
+                })
+                .map(|(path, entry)| (path.clone(), entry.clone()))
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
         if self.params.include_attachments {
-            // `.attachments/` sits at the wiki's root: inside the mapped
-            // folder of a code wiki, not at the repository's.
-            let attachments_dir = if prefix.is_empty() {
-                ATTACHMENTS_DIR.to_owned()
-            } else {
-                format!("{prefix}/{ATTACHMENTS_DIR}")
-            };
             for (path, (object_id, size)) in &files {
                 if !path.starts_with(&attachments_dir) {
                     continue;
@@ -400,8 +430,162 @@ impl AdoWikiSource {
             repository_id: repository,
             wiki_name,
             extras: Arc::new(extras),
+            images: Arc::new(images),
+            prefix: prefix.clone(),
         };
         Ok(listed)
+    }
+
+    /// The picture step for `key`: only a page, and only with
+    /// `process_images` (an attachment is its own document).
+    #[must_use]
+    pub fn picture_step(&self, key: &str) -> Option<PictureStep> {
+        if !self.params.process_images {
+            return None;
+        }
+        let (_, _, extras) = self.side();
+        extras
+            .get(key)
+            .is_some_and(|extra| extra.kind == "page")
+            .then(|| PictureStep::Inline {
+                prompt: self.params.image_description_prompt.clone(),
+            })
+    }
+
+    /// The pictures a page links, read from the wiki's repository (the
+    /// SDK's `_process_images`): `![alt](/.attachments/x.png)` links whose
+    /// target has an image extension and names a file of the wiki's
+    /// `.attachments/` folder. The SDK also fetched any other `http(s)` link
+    /// with an unauthenticated `requests.get`; this connector sends no
+    /// request to a host the toolkit is not configured for, so those links
+    /// stay as they are (counted `unsupported_type`). `None`: the page has
+    /// no picture to read.
+    #[allow(clippy::too_many_lines)] // One pass over the page's links.
+    pub async fn pictures(&self, key: &str, bytes: &[u8]) -> Option<PictureBatch> {
+        if !self.params.process_images {
+            return None;
+        }
+        let text = std::str::from_utf8(bytes).ok()?;
+        if pictures::holds_token(text) {
+            return None;
+        }
+        let links = markdown_images(text);
+        if links.is_empty() {
+            return None;
+        }
+        let (repository, _, _) = self.side();
+        let images = self
+            .side
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .images
+            .clone();
+        let prefix = self.mapped_prefix();
+        let mut batch = PictureBatch {
+            template: text.to_owned(),
+            ..PictureBatch::default()
+        };
+        let mut budget = Budget::default();
+        for link in links {
+            if link.url.is_empty() {
+                continue;
+            }
+            let local = link.url.starts_with("/.attachments/");
+            if !local {
+                if link.url.starts_with("http://") || link.url.starts_with("https://") {
+                    batch.skip(UNSUPPORTED);
+                }
+                continue;
+            }
+            // A link to a file that is not a picture is the attachment
+            // path's business (`include_attachments`).
+            if !pictures::has_image_extension(&link.url) {
+                continue;
+            }
+            if let Err(reason) = budget.may_read() {
+                batch.skip(reason);
+                continue;
+            }
+            let relative = pictures::percent_decode(link.url.trim_start_matches('/'));
+            let path = if prefix.is_empty() {
+                relative
+            } else {
+                format!("{prefix}/{relative}")
+            };
+            let Some((object_id, size)) = images.get(&path) else {
+                tracing::debug!(
+                    page = key,
+                    "a wiki picture link names no file; left as it is"
+                );
+                batch.skip(UNREADABLE);
+                continue;
+            };
+            if *size > pictures::MAX_PICTURE_BYTES {
+                batch.skip(TOO_LARGE);
+                continue;
+            }
+            let segments = [
+                "git",
+                "repositories",
+                repository.as_str(),
+                "blobs",
+                object_id.as_str(),
+            ];
+            let Ok(mut request) =
+                self.build(AdoRequest::get(&segments, GIT_API).query("$format", "octetstream"))
+            else {
+                batch.skip(FETCH_FAILED);
+                continue;
+            };
+            request
+                .headers_mut()
+                .insert(ACCEPT, HeaderValue::from_static("application/octet-stream"));
+            let data = match self
+                .http
+                .raw_within(request, pictures::MAX_PICTURE_BYTES)
+                .await
+            {
+                Ok(data) => data,
+                Err(Failure::TooLarge(_)) => {
+                    batch.skip(TOO_LARGE);
+                    continue;
+                }
+                Err(error) => {
+                    tracing::debug!(page = key, "a wiki picture could not be read");
+                    let _ = error;
+                    batch.skip(FETCH_FAILED);
+                    continue;
+                }
+            };
+            if let Err(reason) = budget.take(data.len() as u64) {
+                batch.skip(reason);
+                continue;
+            }
+            let token = pictures::token(batch.pictures.len());
+            let markup = format!("![{}]({})", link.alt, link.url);
+            batch.template = batch.template.replace(&markup, &token);
+            batch.pictures.push(SourcePicture {
+                token,
+                name: link.alt.clone(),
+                bytes: data,
+                prompt: None,
+                before: format!("![{}](", link.alt),
+                after: ")".to_owned(),
+                fallback: markup,
+                escapes: &[],
+            });
+        }
+        (!batch.pictures.is_empty() || !batch.skipped.is_empty()).then_some(batch)
+    }
+
+    /// The repository folder a code wiki shows, without slashes at the ends
+    /// (empty for a project wiki).
+    fn mapped_prefix(&self) -> String {
+        self.side
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .prefix
+            .clone()
     }
 
     fn side(&self) -> (String, String, Arc<BTreeMap<String, Extra>>) {
@@ -435,6 +619,41 @@ impl AdoWikiSource {
             })
             .await
     }
+}
+
+/// One `![alt](url)` the SDK's `!\[(.*?)\]\((.*?)\)` finds: neither part
+/// crosses a line, and the first `](` and the first `)` after it close them.
+struct ImageLink {
+    alt: String,
+    url: String,
+}
+
+/// The distinct links of `text`, in the order they first appear.
+fn markdown_images(text: &str) -> Vec<ImageLink> {
+    let mut found: Vec<ImageLink> = Vec::new();
+    let mut at = 0;
+    while let Some(offset) = text[at..].find("![") {
+        let start = at + offset;
+        let rest = &text[start + 2..];
+        let line = rest.find('\n').unwrap_or(rest.len());
+        let Some(close) = rest[..line].find("](") else {
+            at = start + 2;
+            continue;
+        };
+        let after = &rest[close + 2..];
+        let line_after = after.find('\n').unwrap_or(after.len());
+        let Some(end) = after[..line_after].find(')') else {
+            at = start + 2;
+            continue;
+        };
+        let alt = rest[..close].to_owned();
+        let url = after[..end].to_owned();
+        if !found.iter().any(|f| f.alt == alt && f.url == url) {
+            found.push(ImageLink { alt, url });
+        }
+        at = start + 2 + close + 2 + end + 1;
+    }
+    found
 }
 
 /// One page of the wiki tree.
@@ -643,6 +862,11 @@ mod tests {
                     Reply::bytes(b"# Child")
                 }
                 p if p
+                    == format!("/contoso/Fabrikam/_apis/git/repositories/{REPO}/blobs/{IMAGE}") =>
+                {
+                    Reply::bytes(b"PNGDATA")
+                }
+                p if p
                     == format!("/contoso/Fabrikam/_apis/git/repositories/{REPO}/blobs/{SPEC}") =>
                 {
                     Reply::bytes(b"%PDF-")
@@ -832,5 +1056,69 @@ mod tests {
                 .all(|path| !path.ends_with(&format!("/trees/{ROOT}"))),
             "the repository's own tree is never read"
         );
+    }
+
+    #[tokio::test]
+    async fn process_images_reads_attachment_pictures_and_leaves_every_other_link() {
+        let source = AdoWikiSource::new(
+            config(),
+            params(&json!({"process_images": true, "image_description_prompt": "Read it."})),
+            allow(),
+            wiki_fixture(),
+        )
+        .expect("source");
+        source.list().await.expect("listing");
+        assert_eq!(
+            source.picture_step("Home.md"),
+            Some(PictureStep::Inline {
+                prompt: Some("Read it.".to_owned())
+            })
+        );
+        let off = AdoWikiSource::new(config(), params(&json!({})), allow(), wiki_fixture())
+            .expect("source");
+        off.list().await.expect("listing");
+        assert_eq!(off.picture_step("Home.md"), None, "off by default");
+        assert!(
+            off.pictures("Home.md", b"![a](/.attachments/diagram.png)")
+                .await
+                .is_none()
+        );
+
+        let text = "intro ![diagram](/.attachments/diagram.png) and ![ext](https://example.com/x.png) \
+and ![gone](/.attachments/missing.png) and ![doc](/.attachments/spec.pdf) end ![diagram](/.attachments/diagram.png)";
+        let batch = source
+            .pictures("Home.md", text.as_bytes())
+            .await
+            .expect("batch");
+        assert_eq!(batch.pictures.len(), 1, "one distinct readable picture");
+        assert_eq!(batch.pictures[0].bytes, b"PNGDATA");
+        assert_eq!(
+            batch.skipped.get(UNSUPPORTED),
+            Some(&1),
+            "the external link"
+        );
+        assert_eq!(batch.skipped.get(UNREADABLE), Some(&1), "the missing file");
+        assert!(!batch.skipped.contains_key(FETCH_FAILED));
+        assert_eq!(
+            batch.render(&[Some("A chart")]),
+            "intro ![diagram](A chart) and ![ext](https://example.com/x.png) \
+and ![gone](/.attachments/missing.png) and ![doc](/.attachments/spec.pdf) end ![diagram](A chart)",
+            "every occurrence of the link takes the description"
+        );
+        assert_eq!(
+            batch.render(&[None]),
+            text,
+            "an undescribed picture is the link"
+        );
+    }
+
+    #[test]
+    fn image_links_are_found_like_the_sdk_regex() {
+        let links = markdown_images("![a](x) ![b]( y z ) ![no close](q\n) ![c](x) ![a](x) [d](e)");
+        let pairs: Vec<(&str, &str)> = links
+            .iter()
+            .map(|l| (l.alt.as_str(), l.url.as_str()))
+            .collect();
+        assert_eq!(pairs, [("a", "x"), ("b", " y z "), ("c", "x")]);
     }
 }

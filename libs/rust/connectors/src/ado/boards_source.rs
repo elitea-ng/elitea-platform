@@ -52,15 +52,20 @@ use serde_json::{Map, Value, json};
 use super::client::{AdoClient, AdoRequest, AdoScope};
 use super::config::AdoToolkitConfig;
 use super::text::{
-    html_to_text, optional_bool, optional_text, optional_text_list, safe_name, sanitize_field,
+    ImgTag, html_to_text, optional_bool, optional_text, optional_text_list, rewrite_images,
+    safe_name, sanitize_field,
 };
 use crate::egress::HostAllowlist;
+use crate::pictures::{
+    self, Budget, Escape, FETCH_FAILED, PictureBatch, PictureStep, SourcePicture, TOO_LARGE,
+    UNREADABLE, UNSUPPORTED,
+};
 use crate::source::{
     Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, Timeouts, references,
     valid_key,
 };
 use crate::transport::header::ACCEPT;
-use crate::transport::{HeaderValue, Method, Request, Transport, Url};
+use crate::transport::{HeaderValue, Method, Request, StatusCode, Transport, Url};
 
 const PROVIDER: &str = "Azure DevOps";
 const WIQL_API: &str = "7.1";
@@ -83,6 +88,10 @@ const KEY_PREFIX: &str = "work_items";
 /// The `index_data` arguments of the `ado_boards` family
 /// (`ado/work_item/ado_wrapper.py::_index_tool_params`), plus
 /// `include_comments` (this connector's; see the module notes).
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the SDK's index_data form is these flags"
+)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdoBoardsIndexParams {
     pub wiql: String,
@@ -91,6 +100,11 @@ pub struct AdoBoardsIndexParams {
     pub sanitize: bool,
     pub include_attachments: bool,
     pub include_comments: bool,
+    /// Describe the `<img>` pictures of the work item's HTML fields with the
+    /// chat model (the SDK's `process_images`, off by default).
+    pub process_images: bool,
+    /// The prompt for those descriptions (`image_description_prompt`).
+    pub image_description_prompt: Option<String>,
 }
 
 impl AdoBoardsIndexParams {
@@ -112,6 +126,9 @@ impl AdoBoardsIndexParams {
             sanitize: optional_bool(arguments, "sanitize")?.unwrap_or(true),
             include_attachments: optional_bool(arguments, "include_attachments")?.unwrap_or(true),
             include_comments: optional_bool(arguments, "include_comments")?.unwrap_or(true),
+            process_images: optional_bool(arguments, "process_images")?.unwrap_or(false),
+            image_description_prompt: optional_text(arguments, "image_description_prompt")?
+                .filter(|prompt| !prompt.trim().is_empty()),
         })
     }
 }
@@ -533,13 +550,8 @@ impl AdoBoardsSource {
         )
     }
 
-    /// The work item's fields as the document: filtered to `fields` when
-    /// given, sanitised when asked, as pretty JSON.
-    async fn work_item(
-        &self,
-        id: u64,
-        listed_rev: u64,
-    ) -> Result<(Vec<u8>, Map<String, Value>), Failure> {
+    /// The work item as the API answers it, pinned to the listed revision.
+    async fn work_item_body(&self, id: u64, listed_rev: u64) -> Result<Value, Failure> {
         let id_text = id.to_string();
         let segments = ["wit", "workitems", id_text.as_str()];
         let request =
@@ -552,6 +564,39 @@ impl AdoBoardsSource {
         if rev != listed_rev {
             return Err(Failure::Changed);
         }
+        Ok(body)
+    }
+
+    /// The work item's fields as the document: filtered to `fields` when
+    /// given, sanitised when asked, as pretty JSON.
+    async fn work_item(
+        &self,
+        id: u64,
+        listed_rev: u64,
+    ) -> Result<(Vec<u8>, Map<String, Value>), Failure> {
+        let body = self.work_item_body(id, listed_rev).await?;
+        self.render_work_item(id, &body, &mut |_, value| {
+            if self.params.sanitize {
+                sanitize_field(value)
+            } else {
+                value.clone()
+            }
+        })
+    }
+
+    /// The document of a work item whose `body` was read. `field` turns each
+    /// kept field into its value in the document.
+    fn render_work_item(
+        &self,
+        id: u64,
+        body: &Value,
+        field: &mut dyn FnMut(&str, &Value) -> Value,
+    ) -> Result<(Vec<u8>, Map<String, Value>), Failure> {
+        let id_text = id.to_string();
+        let rev = body
+            .get("rev")
+            .and_then(Value::as_u64)
+            .ok_or(Failure::InvalidResponse("the work item has no rev"))?;
         let fields = body
             .get("fields")
             .and_then(Value::as_object)
@@ -561,12 +606,7 @@ impl AdoBoardsSource {
             if !self.params.fields.is_empty() && !self.params.fields.iter().any(|f| f == name) {
                 continue;
             }
-            let value = if self.params.sanitize {
-                sanitize_field(value)
-            } else {
-                value.clone()
-            };
-            kept.insert(name.clone(), value);
+            kept.insert(name.clone(), field(name, value));
         }
         let text = |name: &str| {
             fields
@@ -597,6 +637,172 @@ impl AdoBoardsSource {
         let bytes = serde_json::to_vec_pretty(&document)
             .map_err(|_| Failure::InvalidResponse("the work item cannot be serialised"))?;
         Ok((bytes, metadata))
+    }
+
+    /// The picture step for `key`: a work item, with `process_images`.
+    #[must_use]
+    pub fn picture_step(&self, key: &str) -> Option<PictureStep> {
+        if !self.params.process_images {
+            return None;
+        }
+        matches!(self.extras().get(key), Some(Extra::WorkItem { .. })).then(|| {
+            PictureStep::Inline {
+                prompt: self.params.image_description_prompt.clone(),
+            }
+        })
+    }
+
+    /// The pictures in the HTML fields of a work item (the SDK's field pass
+    /// of `_fetch_work_item_document`): each `<img src>` that is an
+    /// attachment of this organization with an image file name is read, and
+    /// its description goes where the tag was, as `[image: …]` text (the
+    /// default `sanitize`) or an `image-description` attribute. A picture
+    /// that cannot be read leaves its `alt` text, as in the SDK. `None`: the
+    /// work item has no HTML picture, or moved since it was listed.
+    pub async fn pictures(&self, key: &str) -> Option<PictureBatch> {
+        if !self.params.process_images {
+            return None;
+        }
+        let extras = self.extras();
+        let Some(Extra::WorkItem { id, rev, .. }) = extras.get(key) else {
+            return None;
+        };
+        let body = self.work_item_body(*id, *rev).await.ok()?;
+        // Pass 1: the distinct sources, in document order, of the fields the
+        // document keeps.
+        let mut sources: Vec<String> = Vec::new();
+        let fields = body.get("fields").and_then(Value::as_object)?;
+        for (name, value) in fields {
+            if !self.params.fields.is_empty() && !self.params.fields.iter().any(|f| f == name) {
+                continue;
+            }
+            if let Value::String(html) = value
+                && html.contains("<img")
+            {
+                rewrite_images(html, &mut |tag| {
+                    if let Some(src) = tag.src.as_ref()
+                        && !sources.contains(src)
+                    {
+                        sources.push(src.clone());
+                    }
+                    String::new()
+                });
+            }
+        }
+        if sources.is_empty() || sources.iter().any(|src| pictures::holds_token(src)) {
+            return None;
+        }
+        // Read them (once each).
+        let mut batch = PictureBatch::default();
+        let mut budget = Budget::default();
+        let mut read: BTreeMap<String, (usize, Vec<u8>)> = BTreeMap::new();
+        for src in &sources {
+            match self.read_picture(src, &mut budget).await {
+                Ok(Some(bytes)) => {
+                    read.insert(src.clone(), (read.len(), bytes));
+                }
+                Ok(None) => {}
+                Err(reason) => batch.skip(reason),
+            }
+        }
+        if read.is_empty() && batch.skipped.is_empty() {
+            return None;
+        }
+        // Pass 2: the document with a token where a read picture stands and
+        // the SDK's `alt` text where one does not.
+        let sanitize = self.params.sanitize;
+        let mut pictures_by_source: BTreeMap<usize, SourcePicture> = BTreeMap::new();
+        let rendered = self.render_work_item(*id, &body, &mut |_, value| {
+            let Value::String(html) = value else {
+                return if sanitize {
+                    sanitize_field(value)
+                } else {
+                    value.clone()
+                };
+            };
+            if !html.contains("<img") {
+                return if sanitize {
+                    sanitize_field(value)
+                } else {
+                    value.clone()
+                };
+            }
+            let rewritten = rewrite_images(html, &mut |tag| {
+                let alt = tag.alt.clone().filter(|alt| !alt.is_empty());
+                let fallback = if sanitize {
+                    alt.map_or_else(String::new, |alt| format!("[image: {alt}]"))
+                } else {
+                    tag.raw.clone()
+                };
+                let Some((index, _)) = tag.src.as_ref().and_then(|src| read.get(src)) else {
+                    return fallback;
+                };
+                let token = pictures::token(*index);
+                pictures_by_source
+                    .entry(*index)
+                    .or_insert_with(|| describe_tag(tag, token.clone(), &fallback, sanitize));
+                token
+            });
+            if sanitize {
+                sanitize_field(&Value::String(rewritten))
+            } else {
+                Value::String(rewritten)
+            }
+        });
+        let (template, _) = rendered.ok()?;
+        batch.template = String::from_utf8(template).ok()?;
+        for (src, (index, bytes)) in read {
+            if let Some(mut picture) = pictures_by_source.remove(&index) {
+                picture.bytes = bytes;
+                if let Some(name) = file_name_of(&src) {
+                    picture.name = name;
+                }
+                batch.pictures.push(picture);
+            }
+        }
+        (!batch.pictures.is_empty() || !batch.skipped.is_empty()).then_some(batch)
+    }
+
+    /// One `<img src>`: its bytes when it is an attachment of this
+    /// organization with an image file name; `Ok(None)` when the tag is not
+    /// a picture reference at all (no source); `Err` the skip reason.
+    async fn read_picture(
+        &self,
+        src: &str,
+        budget: &mut Budget,
+    ) -> Result<Option<Vec<u8>>, &'static str> {
+        if src.is_empty() {
+            return Ok(None);
+        }
+        // `data:` pictures are inline already; a link elsewhere is not read
+        // with this connector's credential.
+        let Ok(url) = Url::parse(src) else {
+            return Err(UNSUPPORTED);
+        };
+        let attachment = url
+            .path_segments()
+            .is_some_and(|mut segments| segments.any(|segment| segment == "attachments"));
+        if !attachment || !self.client.owns(&url) {
+            return Err(UNSUPPORTED);
+        }
+        let Some(name) = file_name_of(src) else {
+            return Err(UNSUPPORTED);
+        };
+        if !pictures::has_image_extension(&name) {
+            return Err(UNSUPPORTED);
+        }
+        budget.may_read()?;
+        let bytes = match self
+            .attachment(&url, Some(pictures::MAX_PICTURE_BYTES))
+            .await
+        {
+            Ok(bytes) => bytes,
+            Err(Failure::TooLarge(_)) => return Err(TOO_LARGE),
+            Err(Failure::Status(StatusCode::NOT_FOUND)) => return Err(UNREADABLE),
+            Err(_) => return Err(FETCH_FAILED),
+        };
+        budget.take(bytes.len() as u64)?;
+        Ok(Some(bytes))
     }
 
     /// The discussion: its version (a hash over every comment's id, version
@@ -656,7 +862,7 @@ impl AdoBoardsSource {
         }
     }
 
-    async fn attachment(&self, url: &Url) -> Result<Vec<u8>, Failure> {
+    async fn attachment(&self, url: &Url, within: Option<u64>) -> Result<Vec<u8>, Failure> {
         let mut url = url.clone();
         if !url.query_pairs().any(|(name, _)| name == "api-version") {
             url.query_pairs_mut()
@@ -669,7 +875,51 @@ impl AdoBoardsSource {
         request
             .headers_mut()
             .insert(ACCEPT, HeaderValue::from_static("application/octet-stream"));
-        self.http.raw(request).await
+        match within {
+            Some(limit) => self.http.raw_within(request, limit).await,
+            None => self.http.raw(request).await,
+        }
+    }
+}
+
+/// The `fileName` query parameter of an attachment URL.
+fn file_name_of(src: &str) -> Option<String> {
+    let url = Url::parse(src).ok()?;
+    url.query_pairs()
+        .find(|(name, _)| name == "fileName")
+        .map(|(_, value)| value.into_owned())
+        .filter(|name| !name.is_empty())
+}
+
+/// The picture a tag becomes: `[image: …]` text under `sanitize`, else the
+/// tag with an `image-description` attribute.
+fn describe_tag(tag: &ImgTag, token: String, fallback: &str, sanitize: bool) -> SourcePicture {
+    if sanitize {
+        return SourcePicture {
+            token,
+            name: String::new(),
+            bytes: Vec::new(),
+            prompt: None,
+            before: "[image: ".to_owned(),
+            after: "]".to_owned(),
+            // Written into the serialised document: JSON text.
+            fallback: pictures::json_contents(fallback),
+            escapes: &[Escape::Lines, Escape::Json],
+        };
+    }
+    let open = tag.raw.trim_end_matches('>');
+    let (open, close) = open
+        .strip_suffix('/')
+        .map_or((open, ">"), |without| (without.trim_end(), "/>"));
+    SourcePicture {
+        token,
+        name: String::new(),
+        bytes: Vec::new(),
+        prompt: None,
+        before: pictures::json_contents(&format!("{open} image-description=\"")),
+        after: pictures::json_contents(&format!("\"{close}")),
+        fallback: pictures::json_contents(fallback),
+        escapes: &[Escape::HtmlAttribute, Escape::Json],
     }
 }
 
@@ -840,7 +1090,7 @@ impl ContentSource for AdoBoardsSource {
                 (bytes, format!("Comments on {title}"), metadata)
             }
             Extra::Attachment { id, name, url } => {
-                let bytes = self.attachment(url).await.map_err(failed)?;
+                let bytes = self.attachment(url, None).await.map_err(failed)?;
                 let mut metadata = Map::new();
                 metadata.insert("id".to_owned(), Value::String(format!("{id}::{name}")));
                 metadata.insert("type".to_owned(), Value::String("attachment".to_owned()));
@@ -1623,5 +1873,98 @@ mod tests {
         );
         client.authorize(&mut own).expect("inside the organization");
         assert!(own.headers().get("authorization").is_some());
+    }
+
+    const IMG_HTML: &str = r#"<div>Crash <img src="https://dev.azure.com/contoso/p-guid/_apis/wit/attachments/img1?fileName=shot.png" alt="shot"> then <img src="https://example.com/x.png" alt="ext"> and <img src="data:image/png;base64,AAAA" alt="inline"><img src="https://dev.azure.com/contoso/p-guid/_apis/wit/attachments/img2?fileName=gone.png"></div>"#;
+
+    fn image_fixture() -> Arc<Scripted> {
+        Scripted::new(|request, _| match request.url().path() {
+            "/contoso/Fabrikam/_apis/wit/wiql" => Reply::json(&json!({"workItems": [{"id": 1}]})),
+            "/contoso/Fabrikam/_apis/wit/workitemsbatch" => Reply::json(
+                &json!({"value": [{"id": 1, "rev": 3, "fields": {"System.Title": "T", "System.CommentCount": 0}}]}),
+            ),
+            "/contoso/Fabrikam/_apis/wit/workitems/1" => Reply::json(&json!({
+                "id": 1, "rev": 3,
+                "fields": {"System.Title": "T", "System.WorkItemType": "Bug", "System.Description": IMG_HTML}
+            })),
+            "/contoso/p-guid/_apis/wit/attachments/img1" => Reply::bytes(b"PNGDATA"),
+            "/contoso/p-guid/_apis/wit/attachments/img2" => Reply::status(StatusCode::NOT_FOUND),
+            other => panic!("unexpected request {other}"),
+        })
+    }
+
+    #[tokio::test]
+    async fn process_images_describes_img_tags_and_keeps_alt_text_for_the_rest() {
+        let source = AdoBoardsSource::new(
+            config(),
+            params(&json!({"wiql": "SELECT [System.Id] FROM WorkItems", "process_images": true, "include_attachments": false, "include_comments": false})),
+            allow(),
+            image_fixture(),
+        )
+        .expect("source");
+        source.list().await.expect("listing");
+        assert!(matches!(
+            source.picture_step("work_items/1.json"),
+            Some(PictureStep::Inline { .. })
+        ));
+        let batch = source.pictures("work_items/1.json").await.expect("batch");
+        assert_eq!(batch.pictures.len(), 1);
+        assert_eq!(batch.pictures[0].bytes, b"PNGDATA");
+        assert_eq!(batch.pictures[0].name, "shot.png");
+        assert_eq!(
+            batch.skipped.get(UNSUPPORTED),
+            Some(&2),
+            "external and data: sources"
+        );
+        assert_eq!(batch.skipped.get(UNREADABLE), Some(&1), "the 404");
+        let described = batch.render(&[Some("A \"crash\" dialog.\n\n  Red.")]);
+        let value: Value = serde_json::from_str(&described).expect("still JSON");
+        assert_eq!(
+            value["fields"]["System.Description"],
+            "Crash [image: A \"crash\" dialog.\nRed.] then [image: ext] and [image: inline]"
+        );
+        let plain: Value = serde_json::from_str(&batch.render(&[None])).expect("JSON");
+        assert_eq!(
+            plain["fields"]["System.Description"],
+            "Crash [image: shot] then [image: ext] and [image: inline]",
+            "the SDK keeps alt text where nothing was described"
+        );
+        // Off by default: the plain fetch is the SDK's `sanitize` without images.
+        let off = AdoBoardsSource::new(
+            config(),
+            params(&json!({"wiql": "SELECT [System.Id] FROM WorkItems", "include_attachments": false, "include_comments": false})),
+            allow(),
+            image_fixture(),
+        )
+        .expect("source");
+        off.list().await.expect("listing");
+        assert!(off.picture_step("work_items/1.json").is_none());
+        assert!(off.pictures("work_items/1.json").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn unsanitised_fields_get_an_image_description_attribute() {
+        let source = AdoBoardsSource::new(
+            config(),
+            params(&json!({"wiql": "SELECT [System.Id] FROM WorkItems", "process_images": true, "sanitize": false, "include_attachments": false, "include_comments": false})),
+            allow(),
+            image_fixture(),
+        )
+        .expect("source");
+        source.list().await.expect("listing");
+        let batch = source.pictures("work_items/1.json").await.expect("batch");
+        let value: Value =
+            serde_json::from_str(&batch.render(&[Some("A \"x\" <b>")])).expect("still JSON");
+        let html = value["fields"]["System.Description"]
+            .as_str()
+            .expect("html");
+        assert!(
+            html.contains(r#"<img src="https://dev.azure.com/contoso/p-guid/_apis/wit/attachments/img1?fileName=shot.png" alt="shot" image-description="A &quot;x&quot; &lt;b&gt;">"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<img src="https://example.com/x.png" alt="ext">"#),
+            "{html}"
+        );
     }
 }

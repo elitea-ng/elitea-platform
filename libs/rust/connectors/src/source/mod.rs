@@ -419,6 +419,19 @@ impl SourceHttp {
         self.raw_with_headers(request).await.map(|(_, bytes)| bytes)
     }
 
+    /// A picture's raw bytes: 2xx, within `limit` (and the document cap).
+    ///
+    /// # Errors
+    ///
+    /// See [`SourceHttp::raw`]; a body over `limit`.
+    pub async fn raw_within(&self, request: Request, limit: u64) -> Result<Vec<u8>, Failure> {
+        let mut response = self.send(request).await?;
+        if !response.status().is_success() {
+            return Err(Failure::Status(response.status()));
+        }
+        Self::body(&mut response, limit.min(self.limits.max_document_bytes)).await
+    }
+
     /// A document's raw bytes and the response headers (for a connector
     /// that verifies the version it was sent).
     ///
