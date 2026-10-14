@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
@@ -31,6 +33,7 @@ type CurrentRuntimeArtifactRepository struct {
 	objects     *ArtifactObjectsRepository
 	permissions *ArtifactBucketPermissionsRepository
 	store       storage.ObjectStore
+	pool        *pgxpool.Pool
 }
 
 func NewCurrentRuntimeArtifactRepository(
@@ -57,7 +60,37 @@ func NewCurrentRuntimeArtifactRepository(
 		objects:     objects,
 		permissions: permissions,
 		store:       store,
+		pool:        pool,
 	}, nil
+}
+
+// AttachmentBucket names the project's chat attachment bucket from its storage
+// policy, or "" when the project has no policy row or the policy names none
+// (the caller then uses the default). It is the same field the upload path
+// reads (`attachment_bucket`), so a listing and an upload cannot disagree.
+func (repository *CurrentRuntimeArtifactRepository) AttachmentBucket(
+	ctx context.Context,
+	projectID int64,
+) (string, error) {
+	if repository == nil || repository.pool == nil || projectID <= 0 {
+		return "", errors.New("current runtime artifact repository is unavailable")
+	}
+	var bucket *string
+	err := repository.pool.QueryRow(
+		ctx,
+		`SELECT attachment_bucket FROM elitea_storage.project_storage_policy WHERE project_id = $1`,
+		projectID,
+	).Scan(&bucket)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get runtime attachment bucket policy: %w", err)
+	}
+	if bucket == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(*bucket), nil
 }
 
 // authorizeBucket resolves one bucket inside the claimed project and applies

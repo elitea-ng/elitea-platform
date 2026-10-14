@@ -511,11 +511,12 @@ pub(crate) async fn read_attachment_documents(
     reads
 }
 
-/// The bucket every chat upload is stored in
-/// (`internal/api/v2/conversations/attachments.go`).
-const CONVERSATION_ATTACHMENT_BUCKET: &str = "chat-attachments";
-/// The most objects one conversation listing asks for.
-const CONVERSATION_LISTING_LIMIT: i32 = 200;
+/// The bucket a conversation's attachments live in when nothing else says
+/// (`defaultAttachmentBucketName` in main's conversations handler).
+const DEFAULT_CONVERSATION_ATTACHMENT_BUCKET: &str = "chat-attachments";
+/// The most objects one conversation listing asks for; main serves at most
+/// this many per call and says when it left more out.
+const CONVERSATION_LISTING_LIMIT: i32 = 500;
 
 /// The Attachments module's channel to the conversation's stored files, over
 /// the same live claim that read this turn's own attachments.
@@ -526,12 +527,22 @@ const CONVERSATION_LISTING_LIMIT: i32 = 200;
 /// the claim's own conversation). Neither names a project. No new internal
 /// route: both are the ones the `artifact` toolkit family and the turn's input
 /// already use.
+///
+/// WHICH BUCKET. A project can name its own attachment bucket in its storage
+/// policy. The bucket is the turn's own attachment references' when there are
+/// any; otherwise the listing asks for the PROJECT's attachment bucket by
+/// sending an empty bucket name, which main resolves from that policy (its
+/// default when unset) and answers with the bucket it used. Nothing here
+/// assumes a name.
 pub(crate) struct ClaimAttachmentSource {
     platform: Arc<PlatformClient>,
     authority: Arc<ClaimBoundRuntimeContextAuthority>,
     /// The `{conversation uuid}` every stored key starts with.
     prefix: Option<String>,
     current_turn: Vec<AttachmentReference>,
+    /// The bucket in use: known from the turn's references, else learned from
+    /// the first listing.
+    bucket: std::sync::Mutex<Option<String>>,
 }
 
 impl ClaimAttachmentSource {
@@ -552,12 +563,20 @@ impl ClaimAttachmentSource {
                     .and_then(|reference| reference.name.split_once('/'))
                     .map(|(prefix, _)| prefix.to_owned())
             });
+        let bucket = current_turn
+            .first()
+            .map(|reference| reference.bucket.clone());
         Self {
             platform,
             authority,
             prefix,
             current_turn,
+            bucket: std::sync::Mutex::new(bucket),
         }
+    }
+
+    fn known_bucket(&self) -> Option<String> {
+        self.bucket.lock().ok().and_then(|bucket| bucket.clone())
     }
 }
 
@@ -576,14 +595,15 @@ fn looks_like_uuid(value: &str) -> bool {
 impl super::attachment_tools::AttachmentSource for ClaimAttachmentSource {
     async fn list(
         &self,
-    ) -> Result<Vec<super::attachment_tools::ListedAttachment>, super::attachment_tools::SourceError>
-    {
-        use super::attachment_tools::{ListedAttachment, SourceError};
-        let mut found: BTreeMap<AttachmentReference, u64> = BTreeMap::new();
+    ) -> Result<super::attachment_tools::Listing, super::attachment_tools::SourceError> {
+        use super::attachment_tools::{ListedAttachment, Listing, SourceError};
+        let mut found: BTreeMap<AttachmentReference, (u64, String)> = BTreeMap::new();
         let mut failure = None;
+        let mut truncated = false;
         if let Some(prefix) = &self.prefix {
             let request = crate::transport::runtime_context::ArtifactListRequest {
-                bucket: CONVERSATION_ATTACHMENT_BUCKET.to_owned(),
+                // Empty: "the project's attachment bucket" (see the type doc).
+                bucket: self.known_bucket().unwrap_or_default(),
                 prefix: format!("{prefix}/"),
                 recursive: false,
                 limit: CONVERSATION_LISTING_LIMIT,
@@ -594,6 +614,10 @@ impl super::attachment_tools::AttachmentSource for ClaimAttachmentSource {
                 .await
             {
                 Ok(outcome) => {
+                    truncated = outcome.truncated;
+                    if let Ok(mut bucket) = self.bucket.lock() {
+                        bucket.get_or_insert_with(|| outcome.bucket.clone());
+                    }
                     for file in outcome.files {
                         let name = if file.name.starts_with(&format!("{prefix}/")) {
                             file.name
@@ -602,10 +626,10 @@ impl super::attachment_tools::AttachmentSource for ClaimAttachmentSource {
                         };
                         found.insert(
                             AttachmentReference {
-                                bucket: CONVERSATION_ATTACHMENT_BUCKET.to_owned(),
+                                bucket: outcome.bucket.clone(),
                                 name,
                             },
-                            file.byte_length,
+                            (file.byte_length, file.modified_at),
                         );
                     }
                 }
@@ -613,8 +637,7 @@ impl super::attachment_tools::AttachmentSource for ClaimAttachmentSource {
                     tracing::info!(
                         event = "agent_attachments_listing_failed",
                         error_code = error.code(),
-                        "the conversation's attachments could not be listed; \
-                         only this message's own attachments are named"
+                        "the conversation's attachments could not be listed"
                     );
                     failure = Some(match error {
                         RuntimeContextError::AuthorizationFailed(_)
@@ -624,19 +647,48 @@ impl super::attachment_tools::AttachmentSource for ClaimAttachmentSource {
                 }
             }
         }
+        // A failed listing is a failure, not an empty conversation: this
+        // message's own files do not stand in for the rest.
+        if let Some(failure) = failure {
+            return Err(failure);
+        }
         for reference in &self.current_turn {
-            found.entry(reference.clone()).or_insert(0);
+            found
+                .entry(reference.clone())
+                .or_insert_with(|| (0, String::new()));
         }
-        if found.is_empty() {
-            return failure.map_or_else(|| Ok(Vec::new()), Err);
+        Ok(Listing {
+            attachments: found
+                .into_iter()
+                .map(|(reference, (size_bytes, modified_at))| ListedAttachment {
+                    reference,
+                    size_bytes,
+                    modified_at,
+                })
+                .collect(),
+            truncated,
+        })
+    }
+
+    async fn reference_for(&self, name: &str) -> Option<AttachmentReference> {
+        let prefix = self.prefix.as_ref()?;
+        // A bare file name only: the key is `{conversation}/{file name}`.
+        if name.is_empty() || name.contains(['/', '\\']) || name.chars().any(char::is_control) {
+            return None;
         }
-        Ok(found
-            .into_iter()
-            .map(|(reference, size_bytes)| ListedAttachment {
-                reference,
-                size_bytes,
-            })
-            .collect())
+        let bucket = if let Some(bucket) = self.known_bucket() {
+            bucket
+        } else {
+            // The bucket is learned from a listing; if that fails the
+            // default is the best statement of where uploads go.
+            let _ = super::attachment_tools::AttachmentSource::list(self).await;
+            self.known_bucket()
+                .unwrap_or_else(|| DEFAULT_CONVERSATION_ATTACHMENT_BUCKET.to_owned())
+        };
+        Some(AttachmentReference {
+            bucket,
+            name: format!("{prefix}/{name}"),
+        })
     }
 
     async fn read(&self, reference: &AttachmentReference) -> AttachmentRead {

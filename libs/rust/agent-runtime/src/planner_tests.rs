@@ -297,3 +297,178 @@ fn the_plan_addon_is_the_sdks_text() {
     assert!(PLAN_ADDON.contains("   ☑ 1. Reproduce the failing test locally ✓"));
     assert!(PLAN_ADDON.ends_with("are not acceptable.\n"));
 }
+
+// ---------------------------------------------------------------------------
+// A stored entry the tool cannot read.
+// ---------------------------------------------------------------------------
+
+struct FixedState(HashMap<String, Value>);
+
+impl adk_core::State for FixedState {
+    fn get(&self, key: &str) -> Option<Value> {
+        self.0.get(key).cloned()
+    }
+
+    fn set(&mut self, key: String, value: Value) {
+        self.0.insert(key, value);
+    }
+
+    fn all(&self) -> HashMap<String, Value> {
+        self.0.clone()
+    }
+}
+
+struct FixedSession(FixedState);
+
+impl adk_core::Session for FixedSession {
+    fn id(&self) -> &'static str {
+        "session-1"
+    }
+
+    fn app_name(&self) -> &'static str {
+        "planner-test"
+    }
+
+    fn user_id(&self) -> &'static str {
+        "user"
+    }
+
+    fn state(&self) -> &dyn adk_core::State {
+        &self.0
+    }
+
+    fn conversation_history(&self) -> Vec<adk_core::Content> {
+        Vec::new()
+    }
+}
+
+/// A tool context whose session already holds `stored` under the planner key.
+struct SessionContext {
+    inner: SimpleToolContext,
+    session: FixedSession,
+}
+
+impl SessionContext {
+    fn with_entry(value: Value) -> Arc<dyn ToolContext> {
+        let inner = SimpleToolContext::new("planner-test").with_session_id("session-1");
+        let key = state_key(&scope_of(&inner));
+        Arc::new(Self {
+            inner,
+            session: FixedSession(FixedState(HashMap::from([(key, value)]))),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl adk_core::ReadonlyContext for SessionContext {
+    fn invocation_id(&self) -> &str {
+        self.inner.invocation_id()
+    }
+    fn agent_name(&self) -> &str {
+        self.inner.agent_name()
+    }
+    fn user_id(&self) -> &str {
+        self.inner.user_id()
+    }
+    fn app_name(&self) -> &str {
+        self.inner.app_name()
+    }
+    fn session_id(&self) -> &str {
+        self.inner.session_id()
+    }
+    fn branch(&self) -> &str {
+        self.inner.branch()
+    }
+    fn user_content(&self) -> &adk_core::Content {
+        self.inner.user_content()
+    }
+}
+
+#[async_trait::async_trait]
+impl adk_core::CallbackContext for SessionContext {
+    fn artifacts(&self) -> Option<Arc<dyn adk_core::Artifacts>> {
+        None
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolContext for SessionContext {
+    fn function_call_id(&self) -> &str {
+        self.inner.function_call_id()
+    }
+    fn actions(&self) -> adk_core::EventActions {
+        self.inner.actions()
+    }
+    fn set_actions(&self, actions: adk_core::EventActions) {
+        self.inner.set_actions(actions);
+    }
+    async fn search_memory(&self, query: &str) -> adk_core::Result<Vec<adk_core::MemoryEntry>> {
+        self.inner.search_memory(query).await
+    }
+    fn session(&self) -> Option<&dyn adk_core::Session> {
+        Some(&self.session)
+    }
+}
+
+fn corrupt_entry() -> Value {
+    json!({"schema": 1, "scope": "session-1:planner-test", "plan": {"title": 7}})
+}
+
+#[tokio::test]
+async fn tools_that_only_read_say_the_stored_plan_is_unreadable_instead_of_failing_the_turn() {
+    for name in ["get_plan_status", "start_step", "complete_step"] {
+        let tools = tools().await;
+        let ctx = SessionContext::with_entry(corrupt_entry());
+        let answer = call(&tools, &ctx, name, json!({"step_number": 1})).await;
+        assert!(
+            answer.starts_with("The stored plan is unreadable."),
+            "{name}: {answer}"
+        );
+        assert!(answer.contains("update_plan") && answer.contains("delete_plan"));
+        assert!(delta(&ctx).is_empty(), "{name} must write nothing");
+    }
+}
+
+#[tokio::test]
+async fn update_and_delete_do_not_need_the_old_value_and_clear_an_unreadable_one() {
+    let tools = tools().await;
+    let ctx = SessionContext::with_entry(corrupt_entry());
+    let created = call(
+        &tools,
+        &ctx,
+        "update_plan",
+        json!({"title": "Fresh", "steps": ["a"]}),
+    )
+    .await;
+    assert!(
+        created.starts_with("Plan updated:\n\n📋 Fresh"),
+        "{created}"
+    );
+    let (key, value) = delta(&ctx).into_iter().next().expect("replacement written");
+    assert!(valid_state_entry(&key, &value));
+
+    let tools = self::tools().await;
+    let ctx = SessionContext::with_entry(corrupt_entry());
+    assert_eq!(
+        call(&tools, &ctx, "delete_plan", json!({})).await,
+        "The unreadable stored plan was deleted."
+    );
+    let (key, value) = delta(&ctx).into_iter().next().expect("removal written");
+    assert!(value["plan"].is_null() && valid_state_entry(&key, &value));
+    // After the removal the run sees no plan, not an unreadable one.
+    assert_eq!(
+        call(&tools, &ctx, "get_plan_status", json!({})).await,
+        "No plan exists for the current conversation."
+    );
+}
+
+#[test]
+fn the_state_key_uses_the_shared_content_digest() {
+    assert_eq!(
+        state_key("s:a"),
+        format!(
+            "{STATE_PREFIX}{}",
+            crate::instruction_authority::content_digest("s:a")
+        )
+    );
+}

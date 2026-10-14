@@ -3217,6 +3217,20 @@ fn pipeline_configuration_error(error: &PipelineConfigurationError) -> NativeAge
     )
 }
 
+/// Whether the Smart Tools Selection `index` fits in the system prompt beside
+/// the agent's `instructions` and the other internal tools' guidance.
+#[must_use]
+pub(crate) fn lazy_index_fits(
+    instructions: &str,
+    internal_tools: InternalToolCatalog,
+    index: &str,
+) -> bool {
+    let guidance = internal_tools.instruction_addendum().map_or(0, str::len);
+    // The two separators `instruction_suffix` writes are at most 8 bytes.
+    instructions.len() + guidance + index.len() + 8
+        <= elitea_agent_runtime::request::MAX_AGENT_INSTRUCTION_BYTES
+}
+
 #[cfg(test)]
 mod public_application_metadata_tests {
     use super::*;

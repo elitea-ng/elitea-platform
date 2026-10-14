@@ -475,7 +475,7 @@ impl OrdinaryNativeAgentAssembler {
         // Smart Tools Selection: a tool that needs a confirmation or a
         // delegated authorization stays bound directly, because both are
         // properties of the call the model makes (see `lazy_tools`).
-        let (frozen, lazy_tools_index) = if internal_tools.lazy_tools_enabled() {
+        let (frozen, lazy_tools_index, lazy_directory) = if internal_tools.lazy_tools_enabled() {
             let kinds: BTreeMap<String, String> = tool_snapshot
                 .iter()
                 .filter(|reference| reference.kind() != FrozenToolKind::Application)
@@ -486,6 +486,7 @@ impl OrdinaryNativeAgentAssembler {
                     )
                 })
                 .collect();
+            let unpartitioned = frozen.clone();
             let partition = elitea_agent_runtime::lazy_tools::partition(
                 frozen,
                 |toolset| configured_toolsets.contains(toolset),
@@ -497,9 +498,37 @@ impl OrdinaryNativeAgentAssembler {
                 },
                 |toolset| kinds.get(toolset).cloned(),
             );
-            (partition.toolsets, partition.index)
+            match partition.index {
+                // The index goes into the system prompt. If it cannot fit
+                // beside the agent's own instructions, do not hide the tools:
+                // a model with meta-tools and no index cannot find anything.
+                Some(index)
+                    if !super::session::lazy_index_fits(
+                        profile.instructions(),
+                        internal_tools,
+                        &index,
+                    ) =>
+                {
+                    tracing::warn!(
+                        event = "agent_internal_tool_lazy_tools_skipped",
+                        reason_code = "instruction_budget",
+                        index_bytes = index.len(),
+                        "smart tools selection is off for this turn: its tool index does not fit beside the agent's instructions, so every tool stays bound"
+                    );
+                    (
+                        unpartitioned,
+                        None,
+                        elitea_agent_runtime::lazy_tools::Directory::default(),
+                    )
+                }
+                index => (partition.toolsets, index, partition.directory),
+            }
         } else {
-            (frozen, None)
+            (
+                frozen,
+                None,
+                elitea_agent_runtime::lazy_tools::Directory::default(),
+            )
         };
         let binding =
             bind_frozen_toolsets(&frozen, &reserved_toolsets).map_err(tool_binding_error)?;
@@ -520,7 +549,7 @@ impl OrdinaryNativeAgentAssembler {
         // tool-call record Main writes (and the Analytics Tools tab) is not
         // left with an empty toolkit. Nested applications carry their own
         // presentation and are not toolkits here.
-        let toolkit_attribution = ToolkitAttributionCatalog::from_bindings(
+        let attributable = || {
             tool_snapshot
                 .iter()
                 .filter(|reference| reference.kind() != FrozenToolKind::Application)
@@ -530,9 +559,13 @@ impl OrdinaryNativeAgentAssembler {
                         reference.tool_id(),
                         reference.tool_type(),
                     )
-                }),
-            binding.bindings(),
-        );
+                })
+        };
+        // Calls made through `invoke_tool` are recorded against the toolkit and
+        // tool they resolve to (`with_lazy_tools`).
+        let toolkit_attribution =
+            ToolkitAttributionCatalog::from_bindings(attributable(), binding.bindings())
+                .with_lazy_tools(lazy_directory, attributable());
         let toolsets = binding.into_toolsets();
         if !skipped_applications.is_empty() {
             tracing::warn!(

@@ -236,105 +236,171 @@ async fn the_index_is_the_sdks_text() {
     assert_eq!(index, expected);
 }
 
+async fn two_github_toolkits() -> (Partition, Arc<Mutex<Vec<Value>>>, Arc<Mutex<Vec<Value>>>) {
+    let seen_a = Arc::default();
+    let seen_b = Arc::default();
+    let a = frozen("github-a", numbered("gh", 12, &seen_a)).await;
+    let b = frozen("github-b", numbered("gh", 12, &seen_b)).await;
+    (
+        partition(vec![a, b], |_| true, never_direct, kind),
+        seen_a,
+        seen_b,
+    )
+}
+
+async fn schema_of(partition: &Partition, args: Value) -> Value {
+    meta_tool(partition, GET_TOOL_SCHEMA)
+        .execute(ctx(), args)
+        .await
+        .expect("schema answer")
+}
+
+async fn invoke(partition: &Partition, args: Value) -> adk_core::Result<Value> {
+    meta_tool(partition, INVOKE_TOOL).execute(ctx(), args).await
+}
+
 #[tokio::test]
-async fn get_tool_schema_answers_exact_misplaced_and_unknown_lookups() {
+async fn get_tool_schema_answers_exact_and_refused_lookups_and_names_the_toolkit() {
     let seen = Arc::default();
     let result = registry_of(&seen).await;
-    let tool = meta_tool(&result, GET_TOOL_SCHEMA);
-    let run = |args: Value| {
-        let tool = Arc::clone(&tool);
-        async move { tool.execute(ctx(), args).await.expect("schema answer") }
-    };
-    let exact = run(json!({"toolkit": "github-main", "tool": "gh_03"})).await;
+    let exact = schema_of(&result, json!({"toolkit": "github-main", "tool": "gh_03"})).await;
     assert_eq!(exact["name"], "gh_03");
+    assert_eq!(exact["toolkit"], "github-main");
     assert_eq!(exact["parameters"]["required"], json!(["path"]));
     assert!(exact.get("note").is_none());
 
-    let misplaced = run(json!({"toolkit": "jira-main", "tool": "gh_03"})).await;
-    assert_eq!(misplaced["name"], "gh_03");
+    // A tool of ANOTHER toolkit is not borrowed when a toolkit is named.
+    let misplaced = schema_of(&result, json!({"toolkit": "jira-main", "tool": "gh_03"})).await;
     assert_eq!(
-        misplaced["note"],
-        "Tool found in toolkit 'github-main' (not 'jira-main')"
-    );
-
-    let missing_tool = run(json!({"toolkit": "jira-main", "tool": "nope"})).await;
-    assert_eq!(
-        missing_tool["error"],
-        "Tool 'nope' not found in toolkit 'jira-main'"
+        misplaced["error"],
+        "Tool 'gh_03' not found in toolkit 'jira-main'"
     );
     assert_eq!(
-        missing_tool["available_tools"]
-            .as_array()
-            .expect("list")
-            .len(),
+        misplaced["available_tools"].as_array().expect("list").len(),
         10
     );
+    assert!(misplaced.get("name").is_none());
 
-    let missing_toolkit = run(json!({"toolkit": "wiki", "tool": "nope"})).await;
+    let missing_toolkit = schema_of(&result, json!({"toolkit": "wiki", "tool": "gh_03"})).await;
     assert_eq!(missing_toolkit["error"], "Toolkit 'wiki' not found");
     assert_eq!(
         missing_toolkit["available_toolkits"],
         json!(["github-main", "jira-main"])
     );
+
+    // No toolkit given: an unambiguous tool name resolves, and says where.
+    let unnamed = schema_of(&result, json!({"tool": "jr_02"})).await;
+    assert_eq!(unnamed["toolkit"], "jira-main");
+
+    // Letter case alone is normalised, with a note.
+    let cased = schema_of(&result, json!({"toolkit": "GitHub-Main", "tool": "gh_03"})).await;
+    assert_eq!(cased["toolkit"], "github-main");
+    assert_eq!(
+        cased["note"],
+        "Toolkit 'GitHub-Main' resolved to 'github-main'"
+    );
 }
 
 #[tokio::test]
-async fn invoke_tool_runs_the_tool_drops_null_arguments_and_serialises_the_result() {
+async fn a_typo_in_the_toolkit_runs_nothing_even_when_another_toolkit_has_the_tool() {
+    let (result, seen_a, seen_b) = two_github_toolkits().await;
+    let answer = invoke(
+        &result,
+        json!({"toolkit": "github-c", "tool": "gh_01", "arguments": {"path": "x"}}),
+    )
+    .await
+    .expect("a refusal is an answer");
+    assert_eq!(answer["error"], "Toolkit 'github-c' not found");
+    assert_eq!(
+        answer["available_toolkits"],
+        json!(["github-a", "github-b"])
+    );
+    assert!(seen_a.lock().expect("a").is_empty() && seen_b.lock().expect("b").is_empty());
+    let schema = schema_of(&result, json!({"toolkit": "github-c", "tool": "gh_01"})).await;
+    assert_eq!(schema["error"], "Toolkit 'github-c' not found");
+}
+
+#[tokio::test]
+async fn an_ambiguous_tool_name_without_a_toolkit_is_refused_and_lists_the_candidates() {
+    let (result, seen_a, seen_b) = two_github_toolkits().await;
+    let answer = invoke(
+        &result,
+        json!({"tool": "gh_01", "arguments": {"path": "x"}}),
+    )
+    .await
+    .expect("a refusal is an answer");
+    assert!(
+        answer["error"]
+            .as_str()
+            .expect("error")
+            .contains("more than one toolkit")
+    );
+    assert_eq!(
+        answer["toolkits_with_this_tool"],
+        json!(["github-a", "github-b"])
+    );
+    assert!(seen_a.lock().expect("a").is_empty() && seen_b.lock().expect("b").is_empty());
+    // The same name with a toolkit runs exactly that toolkit's tool.
+    let ran = invoke(
+        &result,
+        json!({"toolkit": "github-b", "tool": "gh_01", "arguments": {"path": "x"}}),
+    )
+    .await
+    .expect("invocation");
+    assert_eq!(ran["toolkit"], "github-b");
+    assert!(seen_a.lock().expect("a").is_empty());
+    assert_eq!(seen_b.lock().expect("b").len(), 1);
+}
+
+#[tokio::test]
+async fn invoke_tool_runs_the_tool_drops_null_arguments_and_states_which_toolkit_ran() {
     let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
     let result = registry_of(&seen).await;
-    let invoke = meta_tool(&result, INVOKE_TOOL);
-    let out = invoke
-        .execute(
-            ctx(),
-            json!({"toolkit": "github-main", "tool": "gh_01",
-                   "arguments": {"path": "a.rs", "limit": null}}),
-        )
-        .await
-        .expect("invocation");
-    assert_eq!(out, json!({"echo": {"path": "a.rs"}}));
+    let out = invoke(
+        &result,
+        json!({"toolkit": "github-main", "tool": "gh_01",
+               "arguments": {"path": "a.rs", "limit": null}}),
+    )
+    .await
+    .expect("invocation");
+    assert_eq!(
+        out,
+        json!({"toolkit": "github-main", "tool": "gh_01",
+               "result": {"echo": {"path": "a.rs"}}})
+    );
     assert_eq!(
         seen.lock().expect("seen").as_slice(),
         [json!({"path": "a.rs"})],
         "an explicit null never reaches the tool"
     );
 
-    // A wrong toolkit still finds the tool by name.
-    let by_name = invoke
-        .execute(
-            ctx(),
-            json!({"toolkit": "jira-main", "tool": "gh_01", "arguments": {"path": "b"}}),
-        )
-        .await
-        .expect("invocation");
-    assert_eq!(by_name, json!({"echo": {"path": "b"}}));
+    let unnamed = invoke(
+        &result,
+        json!({"tool": "jr_01", "arguments": {"path": "b"}}),
+    )
+    .await
+    .expect("invocation");
+    assert_eq!(unnamed["toolkit"], "jira-main");
 
-    let unknown_tool = invoke
-        .execute(ctx(), json!({"toolkit": "jira-main", "tool": "nope"}))
-        .await
-        .expect("answer");
-    let text = unknown_tool.as_str().expect("text");
-    assert!(text.starts_with(
-        "Tool 'nope' not found in toolkit 'jira-main'. Available tools in jira-main: jr_00,"
-    ));
-    let unknown_toolkit = invoke
-        .execute(ctx(), json!({"toolkit": "wiki", "tool": "nope"}))
+    let unknown_tool = invoke(&result, json!({"toolkit": "jira-main", "tool": "nope"}))
         .await
         .expect("answer");
     assert_eq!(
-        unknown_toolkit,
-        Value::String(
-            "Toolkit 'wiki' not found. Available toolkits: github-main, jira-main".to_owned()
-        )
+        unknown_tool["error"],
+        "Tool 'nope' not found in toolkit 'jira-main'"
     );
+    let unknown_name = invoke(&result, json!({"tool": "nope"}))
+        .await
+        .expect("answer");
+    assert_eq!(unknown_name["error"], "Tool 'nope' not found");
 }
 
 #[tokio::test]
-async fn invoke_tool_passes_results_through_and_names_an_empty_one() {
+async fn invoke_tool_names_an_empty_result_and_passes_every_value_through() {
     let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
     let mut tools = numbered("gh", 20, &seen);
     tools.push(with_outcome("null_tool", &seen, |_| Ok(Value::Null)));
     tools.push(with_outcome("text_tool", &seen, |_| Ok(json!("plain"))));
-    tools.push(with_outcome("true_tool", &seen, |_| Ok(json!(true))));
     tools.push(with_outcome("number_tool", &seen, |_| Ok(json!(7))));
     let result = partition(
         vec![frozen("github-main", tools).await],
@@ -342,77 +408,159 @@ async fn invoke_tool_passes_results_through_and_names_an_empty_one() {
         never_direct,
         kind,
     );
-    let invoke = meta_tool(&result, INVOKE_TOOL);
     let run = |name: &'static str| {
-        let invoke = Arc::clone(&invoke);
+        let result = &result;
         async move {
-            invoke
-                .execute(ctx(), json!({"toolkit": "github-main", "tool": name}))
+            invoke(result, json!({"toolkit": "github-main", "tool": name}))
                 .await
-                .expect("invocation")
+                .expect("invocation")["result"]
+                .clone()
         }
     };
     assert_eq!(
         run("null_tool").await,
         Value::String("Tool executed successfully (no output)".to_owned())
     );
-    assert_eq!(run("text_tool").await, Value::String("plain".to_owned()));
-    // Values other than the SDK's "no output" sentence pass through as they
-    // are; the facade encodes them once, as it does for a bound tool.
-    assert_eq!(run("true_tool").await, json!(true));
+    assert_eq!(run("text_tool").await, json!("plain"));
     assert_eq!(run("number_tool").await, json!(7));
 }
 
-#[tokio::test]
-async fn a_failing_tool_answers_with_the_expected_parameters_and_an_example() {
+fn failing(category: ErrorCategory) -> fn(&Value) -> adk_core::Result<Value> {
+    match category {
+        ErrorCategory::InvalidInput => |_| {
+            Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::InvalidInput,
+                "test.invalid",
+                "path is required",
+            ))
+        },
+        ErrorCategory::Unauthorized => |_| {
+            Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::Unauthorized,
+                "test.unauthorized",
+                "sign in first",
+            ))
+        },
+        ErrorCategory::Forbidden => |_| {
+            Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::Forbidden,
+                "test.forbidden",
+                "admission refused this tool",
+            ))
+        },
+        ErrorCategory::Unavailable => |_| {
+            Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::Unavailable,
+                "test.unavailable",
+                "backend down",
+            ))
+        },
+        ErrorCategory::Timeout => |_| {
+            Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::Timeout,
+                "test.timeout",
+                "too slow",
+            ))
+        },
+        ErrorCategory::Cancelled => |_| {
+            Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::Cancelled,
+                "test.cancelled",
+                "stop",
+            ))
+        },
+        _ => |_| {
+            Err(AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::Internal,
+                "test.internal",
+                "the tool itself failed",
+            ))
+        },
+    }
+}
+
+async fn with_failing_tool(category: ErrorCategory) -> Partition {
     let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
     let mut tools = numbered("gh", 22, &seen);
-    tools.push(fake("strict", &seen));
-    tools.push(with_outcome("boom", &seen, |_| {
-        Err(AdkError::new(
-            ErrorComponent::Tool,
-            ErrorCategory::InvalidInput,
-            "test.boom",
-            "path is required",
-        ))
-    }));
-    tools.push(with_outcome("cancelled", &seen, |_| {
-        Err(AdkError::new(
-            ErrorComponent::Tool,
-            ErrorCategory::Cancelled,
-            "test.cancelled",
-            "stop",
-        ))
-    }));
-    let result = partition(
+    tools.push(with_outcome("boom", &seen, failing(category)));
+    partition(
         vec![frozen("github-main", tools).await],
         |_| true,
         never_direct,
         kind,
-    );
-    let invoke = meta_tool(&result, INVOKE_TOOL);
-    let failed = invoke
-        .execute(
-            ctx(),
-            json!({"toolkit": "github-main", "tool": "boom", "arguments": {"x": 1}}),
-        )
-        .await
-        .expect("a tool failure is an answer");
+    )
+}
+
+#[tokio::test]
+async fn only_a_rejected_argument_set_becomes_the_invalid_arguments_answer() {
+    let result = with_failing_tool(ErrorCategory::InvalidInput).await;
+    let failed = invoke(
+        &result,
+        json!({"toolkit": "github-main", "tool": "boom", "arguments": {"x": 1}}),
+    )
+    .await
+    .expect("an invalid argument set is an answer");
     assert_eq!(
         failed.as_str().expect("text"),
         "ERROR: Invalid arguments for github-main.boom\n\nYou provided: {\"x\": 1}\n\nREQUIRED parameters:\n  - path (string)\n\nCORRECT usage:\ninvoke_tool(toolkit=\"github-main\", tool=\"boom\", arguments={\"path\": \"<path>\"})"
     );
-    // A cancellation is not an answer: it ends the turn like a direct call.
-    let cancelled = invoke
-        .execute(
-            ctx(),
-            json!({"toolkit": "github-main", "tool": "cancelled"}),
-        )
-        .await;
+}
+
+/// Every other category reaches the loop with its own category and text, as
+/// it would from a bound tool: it is not dressed up as an argument mistake.
+#[tokio::test]
+async fn every_other_failure_passes_through_with_its_own_category_and_text() {
+    for (category, text) in [
+        (ErrorCategory::Unauthorized, "sign in first"),
+        (ErrorCategory::Forbidden, "admission refused this tool"),
+        (ErrorCategory::Unavailable, "backend down"),
+        (ErrorCategory::Timeout, "too slow"),
+        (ErrorCategory::Cancelled, "stop"),
+        (ErrorCategory::Internal, "the tool itself failed"),
+    ] {
+        let result = with_failing_tool(category).await;
+        let error = invoke(&result, json!({"toolkit": "github-main", "tool": "boom"}))
+            .await
+            .expect_err("the failure is not an answer");
+        assert_eq!(error.category, category);
+        assert_eq!(error.message, text);
+    }
+}
+
+#[tokio::test]
+async fn a_toolkit_normalised_by_case_is_noted_in_the_invalid_arguments_answer() {
+    let result = with_failing_tool(ErrorCategory::InvalidInput).await;
+    let failed = invoke(
+        &result,
+        json!({"toolkit": "GITHUB-MAIN", "tool": "boom", "arguments": {}}),
+    )
+    .await
+    .expect("answer");
+    let text = failed.as_str().expect("text");
+    assert!(text.starts_with("ERROR: Invalid arguments for github-main.boom\n(Note: toolkit 'GITHUB-MAIN' resolved to 'github-main')"), "{text}");
+    // The usage example names the toolkit that ran.
+    assert!(text.contains("invoke_tool(toolkit=\"github-main\""));
+}
+
+#[tokio::test]
+async fn the_partition_directory_resolves_like_invoke_tool() {
+    let (result, _, _) = two_github_toolkits().await;
     assert_eq!(
-        cancelled.expect_err("cancellation propagates").category,
-        ErrorCategory::Cancelled
+        result
+            .directory
+            .resolve("GITHUB-B", "gh_01")
+            .expect("resolved"),
+        ("github-b".to_owned(), "gh_01".to_owned())
     );
+    assert!(result.directory.resolve("", "gh_01").is_err());
+    assert!(result.directory.resolve("github-c", "gh_01").is_err());
 }
 
 #[test]

@@ -264,6 +264,18 @@ type RuntimeArtifactSource interface {
 	) error
 }
 
+// DefaultAttachmentBucket is the chat attachment bucket of a project whose
+// storage policy names none (main's conversations handler uses the same name).
+const DefaultAttachmentBucket = "chat-attachments"
+
+// AttachmentBucketResolver is implemented by a RuntimeArtifactSource that can
+// name a project's chat attachment bucket from its storage policy ("" when the
+// policy names none). It is optional: a source without it refuses a listing
+// that does not name a bucket.
+type AttachmentBucketResolver interface {
+	AttachmentBucket(ctx context.Context, projectID int64) (string, error)
+}
+
 // RuntimeArtifactObjectService serves all four artifact operations under one
 // durable claim.
 //
@@ -347,7 +359,19 @@ func (service *RuntimeArtifactObjectService) List(
 ) (RuntimeArtifactListContext, error) {
 	bucket := strings.TrimSpace(request.Bucket)
 	prefix := strings.TrimPrefix(strings.TrimSpace(request.Prefix), "/")
-	if !addressableAttachmentBucket(bucket) || !addressableArtifactPrefix(prefix) {
+	// An EMPTY bucket asks for the project's chat attachment bucket: the one
+	// its storage policy names, or the default when it names none. The worker
+	// cannot know that name (it is project policy, not claim data), and the
+	// answer says which bucket was used.
+	wantsAttachmentBucket := bucket == ""
+	if wantsAttachmentBucket {
+		if _, ok := service.artifacts.(AttachmentBucketResolver); !ok {
+			return RuntimeArtifactListContext{}, ErrContentRejected
+		}
+	} else if !addressableAttachmentBucket(bucket) {
+		return RuntimeArtifactListContext{}, ErrContentRejected
+	}
+	if !addressableArtifactPrefix(prefix) {
 		return RuntimeArtifactListContext{}, ErrContentRejected
 	}
 	limit := int32(maxRuntimeArtifactListFiles)
@@ -357,6 +381,19 @@ func (service *RuntimeArtifactObjectService) List(
 	principal, err := service.authorize(ctx, claim, runtimeContextStageArtifactList)
 	if err != nil {
 		return RuntimeArtifactListContext{}, err
+	}
+	if wantsAttachmentBucket {
+		resolver, _ := service.artifacts.(AttachmentBucketResolver)
+		bucket, err = resolver.AttachmentBucket(ctx, principal.projectID)
+		if err != nil {
+			return RuntimeArtifactListContext{}, service.sourceError(ctx, err, runtimeContextStageArtifactList)
+		}
+		if bucket == "" {
+			bucket = DefaultAttachmentBucket
+		}
+		if !addressableAttachmentBucket(bucket) {
+			return RuntimeArtifactListContext{}, ErrContentRejected
+		}
 	}
 	records, truncated, err := service.artifacts.ListRuntimeArtifacts(
 		ctx, principal.projectID, principal.actorID, bucket, prefix, request.Recursive, limit,

@@ -36,7 +36,6 @@ use std::sync::{Arc, Mutex};
 use adk_core::{AdkError, ReadonlyContext, Tool, ToolContext, Toolset};
 use adk_tool::BasicToolset;
 use async_trait::async_trait;
-use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -206,13 +205,10 @@ fn scope_of(ctx: &dyn ReadonlyContext) -> String {
 }
 
 fn state_key(scope: &str) -> String {
-    let mut key = String::with_capacity(STATE_PREFIX.len() + 64);
-    key.push_str(STATE_PREFIX);
-    for byte in digest::digest(&digest::SHA256, scope.as_bytes()).as_ref() {
-        use std::fmt::Write as _;
-        let _ = write!(key, "{byte:02x}");
-    }
-    key
+    format!(
+        "{STATE_PREFIX}{}",
+        crate::instruction_authority::content_digest(scope)
+    )
 }
 
 fn bounded(plan: &Plan) -> bool {
@@ -249,6 +245,14 @@ pub fn is_state_key(key: &str) -> bool {
     key.starts_with(STATE_PREFIX)
 }
 
+/// What a scope's state key held.
+enum Stored {
+    Plan(Option<Plan>),
+    Unreadable,
+}
+
+const UNREADABLE: &str = "The stored plan is unreadable. Create a new plan with update_plan, or remove the stored one with delete_plan.";
+
 struct Live {
     scope: String,
     plan: Option<Plan>,
@@ -261,32 +265,35 @@ struct Shared {
 
 impl Shared {
     /// Read the plan, writing nothing. The first access of a run seeds the
-    /// live copy from session state.
-    fn current(&self, ctx: &dyn ToolContext) -> Result<(String, Option<Plan>), AdkError> {
+    /// live copy from session state. A stored entry that cannot be read is
+    /// reported as [`Stored::Unreadable`], never as a turn-failing error: the
+    /// tools that only read say so, and the two that replace or remove the plan
+    /// (`update_plan`, `delete_plan`) do not need the old value at all.
+    fn current(&self, ctx: &dyn ToolContext) -> Result<(String, Stored), AdkError> {
         let scope = scope_of(ctx);
         let mut live = self.live.lock().map_err(|_| unavailable())?;
         if let Some(existing) = live.as_ref().filter(|existing| existing.scope == scope) {
-            return Ok((scope, existing.plan.clone()));
+            return Ok((scope, Stored::Plan(existing.plan.clone())));
         }
-        let stored = ctx
-            .session()
-            .and_then(|session| session.state().get(&state_key(&scope)));
+        let key = state_key(&scope);
+        let stored = ctx.session().and_then(|session| session.state().get(&key));
         let plan = match stored {
             None => None,
             Some(value) => {
-                if !valid_state_entry(&state_key(&scope), &value) {
-                    return Err(corrupt());
+                if !valid_state_entry(&key, &value) {
+                    return Ok((scope, Stored::Unreadable));
                 }
-                serde_json::from_value::<Envelope>(value)
-                    .map_err(|_| corrupt())?
-                    .plan
+                match serde_json::from_value::<Envelope>(value) {
+                    Ok(envelope) => envelope.plan,
+                    Err(_) => return Ok((scope, Stored::Unreadable)),
+                }
             }
         };
         *live = Some(Live {
             scope: scope.clone(),
             plan: plan.clone(),
         });
-        Ok((scope, plan))
+        Ok((scope, Stored::Plan(plan)))
     }
 
     /// Make `plan` the live plan and carry it on the tool-result event.
@@ -465,7 +472,9 @@ impl PlanTool {
                 "Error updating plan: a step is longer than {MAX_STEP_BYTES} bytes."
             ));
         }
-        let (scope, existing) = self.shared.current(ctx)?;
+        let (scope, stored) = self.shared.current(ctx)?;
+        // An unreadable old plan is simply replaced.
+        let existing = !matches!(stored, Stored::Plan(None));
         let plan = Plan {
             title: title.to_owned(),
             status: IN_PROGRESS.to_owned(),
@@ -477,11 +486,7 @@ impl PlanTool {
                 })
                 .collect(),
         };
-        let action = if existing.is_some() {
-            "updated"
-        } else {
-            "created"
-        };
+        let action = if existing { "updated" } else { "created" };
         let rendered = plan.render();
         self.shared.commit(ctx, &scope, Some(plan))?;
         Ok(format!("Plan {action}:\n\n{rendered}"))
@@ -492,7 +497,11 @@ impl PlanTool {
         let Some(number) = args.get("step_number").and_then(Value::as_i64) else {
             return Ok(format!("Error {verb} step: step_number must be an integer"));
         };
-        let (scope, plan) = self.shared.current(ctx)?;
+        let (scope, stored) = self.shared.current(ctx)?;
+        let plan = match stored {
+            Stored::Plan(plan) => plan,
+            Stored::Unreadable => return Ok(UNREADABLE.to_owned()),
+        };
         let Some(mut plan) = plan.filter(|plan| !plan.steps.is_empty()) else {
             return Ok("No plan exists. Use update_plan first to create a plan.".to_owned());
         };
@@ -552,7 +561,11 @@ impl PlanTool {
     }
 
     fn get_plan_status(&self, ctx: &dyn ToolContext) -> Result<String, AdkError> {
-        let (_, plan) = self.shared.current(ctx)?;
+        let (_, stored) = self.shared.current(ctx)?;
+        let plan = match stored {
+            Stored::Plan(plan) => plan,
+            Stored::Unreadable => return Ok(UNREADABLE.to_owned()),
+        };
         Ok(plan.map_or_else(
             || "No plan exists for the current conversation.".to_owned(),
             |plan| plan.render(),
@@ -560,7 +573,14 @@ impl PlanTool {
     }
 
     fn delete_plan(&self, ctx: &dyn ToolContext) -> Result<String, AdkError> {
-        let (scope, plan) = self.shared.current(ctx)?;
+        let (scope, stored) = self.shared.current(ctx)?;
+        let plan = match stored {
+            Stored::Plan(plan) => plan,
+            Stored::Unreadable => {
+                self.shared.commit(ctx, &scope, None)?;
+                return Ok("The unreadable stored plan was deleted.".to_owned());
+            }
+        };
         let Some(plan) = plan else {
             return Ok("No plan exists for the current conversation.".to_owned());
         };

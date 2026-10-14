@@ -5026,9 +5026,14 @@ mod internal_tools_graph {
                 schema["parameters"]["required"],
                 serde_json::json!(["release"])
             );
+            // The answer states which toolkit ran and wraps the tool's result.
+            let invoked: serde_json::Value =
+                serde_json::from_str(&tool_results(&seen[2])[1]).expect("invoke answer json");
+            assert_eq!(invoked["tool"], "read_release_07");
+            assert_eq!(invoked["toolkit"], "release intelligence");
             assert_eq!(
-                tool_results(&seen[2])[1],
-                r#"{"release":"1.2","tool":"read_release_07"}"#
+                invoked["result"],
+                serde_json::json!({"release": "1.2", "tool": "read_release_07"})
             );
             assert_eq!(
                 calls.lock().expect("calls").as_slice(),
@@ -5128,8 +5133,12 @@ mod internal_tools_graph {
     }
 
     fn attachment_id_of(name: &str) -> String {
+        attachment_id_in("chat-attachments", name)
+    }
+
+    fn attachment_id_in(bucket: &str, name: &str) -> String {
         use std::fmt::Write as _;
-        let mut identity = b"chat-attachments".to_vec();
+        let mut identity = bucket.as_bytes().to_vec();
         identity.push(0);
         identity.extend_from_slice(name.as_bytes());
         let hash = ring::digest::digest(&ring::digest::SHA256, &identity);
@@ -5237,5 +5246,180 @@ mod internal_tools_graph {
             run(&assembler, &with_toggles(kind, &[])).await;
             assert!(tool_names(&requests(&captured)[0]).is_empty());
         }
+    }
+
+    /// Every public event of a turn, as the JSON Main receives it.
+    async fn run_collecting(
+        assembler: &OrdinaryNativeAgentAssembler,
+        request: &super::super::request::AgentExecutionRequest,
+    ) -> Vec<String> {
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                request,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .expect("assembly");
+        invocation.project_start(chrono::Utc::now()).expect("start");
+        let (mut native, mut projector, completion) = invocation.start().expect("native start");
+        let mut public = Vec::new();
+        while let Some(event) = native.next_event().await.expect("event") {
+            for projected in projector.project(&event).expect("projected event") {
+                public.push(
+                    String::from_utf8(encode_current_node_event_json(&projected).expect("encode"))
+                        .expect("utf8"),
+                );
+            }
+        }
+        let completed = completion.select().await.expect("completion");
+        for projected in projector
+            .finish_after_eos(completed, chrono::Utc::now())
+            .expect("finish")
+        {
+            public.push(
+                String::from_utf8(encode_current_node_event_json(&projected).expect("encode"))
+                    .expect("utf8"),
+            );
+        }
+        public
+    }
+
+    /// A call made through `invoke_tool` is recorded against the toolkit and the
+    /// tool it ran (so analytics show the real tool), never as a meta-tool row.
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_invoke_tool_call_is_recorded_against_the_inner_toolkit_and_tool() {
+        let names = release_names(24);
+        let (runtime_context, _) = runtime_context_client();
+        let (assembler, _) = assembler_with(
+            vec![
+                TestModelGatewayOutcome::Response(call_response(
+                    "call_invoke",
+                    "invoke_tool",
+                    &serde_json::json!({"toolkit": "release intelligence",
+                                        "tool": "read_release_07",
+                                        "arguments": {"release": "1.2"}}),
+                )),
+                TestModelGatewayOutcome::Response(text_response("Done.")),
+            ],
+            runtime_context,
+            Arc::new(InMemorySessionService::new()),
+        );
+        let assembler = assembler.with_mcp_connector(Arc::new(ManyToolsConnector {
+            names: names.clone(),
+            calls: Arc::default(),
+        }));
+        let public = run_collecting(
+            &assembler,
+            &many_tool_request(AgentExecutionKind::Adhoc, &["lazy_tools_mode"], &names),
+        )
+        .await;
+        let starts: Vec<&String> = public
+            .iter()
+            .filter(|event| event.contains("agent_tool_start"))
+            .collect();
+        assert!(!starts.is_empty(), "{public:?}");
+        for event in starts {
+            assert!(
+                event.contains("\"tool_name\":\"read_release_07\""),
+                "{event}"
+            );
+            assert!(
+                event.contains("\"toolkit_name\":\"release intelligence\""),
+                "{event}"
+            );
+            assert!(event.contains("\"toolkit_type\":\"mcp\""), "{event}");
+            assert!(!event.contains("\"tool_name\":\"invoke_tool\""), "{event}");
+        }
+    }
+
+    #[test]
+    fn the_index_fit_check_counts_instructions_guidance_and_index() {
+        use super::super::internal_tools::InternalToolCatalog;
+        use super::super::session::lazy_index_fits;
+        let max = elitea_agent_runtime::request::MAX_AGENT_INSTRUCTION_BYTES;
+        let planner = InternalToolCatalog::from_names(&["planner".to_owned()]).expect("catalog");
+        let lazy =
+            InternalToolCatalog::from_names(&["lazy_tools_mode".to_owned()]).expect("catalog");
+        let index = "i".repeat(1_000);
+        assert!(lazy_index_fits("short", lazy, &index));
+        assert!(lazy_index_fits(&"x".repeat(max - 1_100), lazy, &index));
+        assert!(!lazy_index_fits(&"x".repeat(max - 900), lazy, &index));
+        // The planner's guidance shares the same budget.
+        let room = max - 1_000 - 8 - elitea_agent_runtime::planner::PLAN_ADDON.len();
+        assert!(lazy_index_fits(&"x".repeat(room), planner, &index));
+        assert!(!lazy_index_fits(&"x".repeat(room + 1), planner, &index));
+    }
+
+    /// A project that names its own attachment bucket: the listing asks for the
+    /// project's bucket (empty name), uses the one main answers with, and reads
+    /// from it. No bucket name is assumed.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_attachments_toggle_follows_the_projects_own_attachment_bucket() {
+        let key = format!("{UUID}/notes.txt");
+        let id = attachment_id_in("team-files", &key);
+        let redeem = runtime_context_response(&serde_json::json!({
+            "schema_version": "elitea.runtime.elitea-client-token.v1",
+            "project_id": 17,
+            "token": TOKEN,
+        }));
+        let listing = runtime_context_response(&serde_json::json!({
+            "schema_version": "elitea.runtime.artifact-list.v1",
+            "project_id": 17,
+            "bucket": "team-files",
+            "files": [{"name": key, "byte_length": 31, "media_type": "text/plain",
+                       "modified_at": "2026-10-01T00:00:00Z"}],
+            "truncated": false,
+        }));
+        let document = runtime_context_response(&serde_json::json!({
+            "schema_version": "elitea.runtime.attachment-object.v1",
+            "project_id": 17,
+            "bucket": "team-files",
+            "name": key,
+            "media_type": "text/plain",
+            "byte_length": 31,
+            "content": "The launch word is QUOKKAWORD.\n",
+        }));
+        let runtime_context = runtime_context_client_from(
+            VecDeque::from([redeem, listing, document]),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let (assembler, captured) = assembler_with(
+            vec![
+                TestModelGatewayOutcome::Response(call_response(
+                    "call_list",
+                    "list_attachments",
+                    &serde_json::json!({}),
+                )),
+                TestModelGatewayOutcome::Response(call_response(
+                    "call_read",
+                    "read_attachment",
+                    &serde_json::json!({"attachment_id": id}),
+                )),
+                TestModelGatewayOutcome::Response(text_response("Read.")),
+            ],
+            runtime_context,
+            Arc::new(InMemorySessionService::new()),
+        );
+        let mut request = with_toggles(AgentExecutionKind::Adhoc, &["attachments"]);
+        request.payload.conversation_id = Some(UUID.to_owned());
+        run(&assembler, &request).await;
+        let seen = requests(&captured);
+        let listed: serde_json::Value =
+            serde_json::from_str(&tool_results(&seen[1])[0]).expect("listing json");
+        assert_eq!(listed["attachments"][0]["attachment_id"], id);
+        assert_eq!(
+            listed["attachments"][0]["uploaded_at"],
+            "2026-10-01T00:00:00Z"
+        );
+        let read: serde_json::Value =
+            serde_json::from_str(&tool_results(&seen[2])[1]).expect("read json");
+        assert!(
+            read["content"]
+                .as_str()
+                .is_some_and(|c| c.contains("QUOKKAWORD")),
+            "{read}"
+        );
     }
 }

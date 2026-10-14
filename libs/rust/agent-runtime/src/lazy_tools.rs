@@ -61,6 +61,82 @@ pub const INVOKE_TOOL: &str = "invoke_tool";
 /// (`LAZY_TOOLS_MIN_THRESHOLD` in `langraph_agent.py`).
 pub const MIN_TOOLS: usize = 20;
 
+/// Which tools live in which toolkit, by name only.
+///
+/// It is the one place the model's `(toolkit, tool)` is resolved, and it is
+/// public so the worker can attribute an `invoke_tool` call to the toolkit and
+/// tool it will actually run (tool-call records and analytics).
+#[derive(Clone, Debug, Default)]
+pub struct Directory {
+    pub toolkits: Vec<(String, Vec<String>)>,
+}
+
+impl Directory {
+    /// Resolve the model's `(toolkit, tool)` to exactly one `(toolkit, tool)`.
+    ///
+    /// A toolkit named by the model is NEVER abandoned: an unknown name is
+    /// refused (a typo must not run the tool of a different repository). The
+    /// only leniency is letter case, taken only when it names one toolkit. With
+    /// no toolkit given, a tool name resolves only if it is in exactly one
+    /// toolkit. A refusal is the answer the model reads and runs nothing.
+    ///
+    /// # Errors
+    ///
+    /// The refusal body for the model.
+    pub fn resolve(&self, toolkit: &str, tool: &str) -> Result<(String, String), Value> {
+        let names: Vec<&str> = self
+            .toolkits
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        if toolkit.trim().is_empty() {
+            let holders: Vec<&str> = self
+                .toolkits
+                .iter()
+                .filter(|(_, tools)| tools.iter().any(|candidate| candidate == tool))
+                .map(|(name, _)| name.as_str())
+                .collect();
+            return match holders.as_slice() {
+                [only] => Ok(((*only).to_owned(), tool.to_owned())),
+                [] => Err(json!({
+                    "error": format!("Tool '{tool}' not found"),
+                    "available_toolkits": names,
+                })),
+                many => Err(json!({
+                    "error": format!("Tool '{tool}' is in more than one toolkit; say which toolkit to use"),
+                    "toolkits_with_this_tool": many,
+                })),
+            };
+        }
+        let exact = self.toolkits.iter().find(|(name, _)| name == toolkit);
+        let known = exact.or_else(|| {
+            let mut matches = self
+                .toolkits
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case(toolkit));
+            match (matches.next(), matches.next()) {
+                (Some(only), None) => Some(only),
+                _ => None,
+            }
+        });
+        let Some((name, tools)) = known else {
+            return Err(json!({
+                "error": format!("Toolkit '{toolkit}' not found"),
+                "available_toolkits": names,
+                "hint": "Use the exact toolkit name from the index; nothing was run.",
+            }));
+        };
+        if tools.iter().any(|candidate| candidate == tool) {
+            return Ok((name.clone(), tool.to_owned()));
+        }
+        Err(json!({
+            "error": format!("Tool '{tool}' not found in toolkit '{name}'"),
+            "available_tools": tools.iter().take(30).collect::<Vec<_>>(),
+            "hint": "Nothing was run; pick one of the tools of this toolkit.",
+        }))
+    }
+}
+
 struct Toolkit {
     name: String,
     kind: String,
@@ -84,22 +160,31 @@ impl Registry {
             .find(|candidate| candidate.name() == tool)
     }
 
-    /// The SDK's `get_tool_by_name`: the toolkit that registered `tool` last.
-    fn find_by_name(&self, tool: &str) -> Option<(&str, &Arc<dyn Tool>)> {
-        self.toolkits.iter().rev().find_map(|toolkit| {
-            toolkit
-                .tools
+    fn directory(&self) -> Directory {
+        Directory {
+            toolkits: self
+                .toolkits
                 .iter()
-                .find(|candidate| candidate.name() == tool)
-                .map(|found| (toolkit.name.as_str(), found))
-        })
+                .map(|toolkit| {
+                    (
+                        toolkit.name.clone(),
+                        toolkit
+                            .tools
+                            .iter()
+                            .map(|tool| tool.name().to_owned())
+                            .collect(),
+                    )
+                })
+                .collect(),
+        }
     }
 
-    fn toolkit_names(&self) -> Vec<&str> {
-        self.toolkits
-            .iter()
-            .map(|toolkit| toolkit.name.as_str())
-            .collect()
+    fn resolve(&self, toolkit: &str, tool: &str) -> Result<(String, &Arc<dyn Tool>), Value> {
+        let (actual, name) = self.directory().resolve(toolkit, tool)?;
+        let found = self.tool(&actual, &name).ok_or_else(
+            || json!({"error": format!("Tool '{tool}' not found"), "hint": "Nothing was run."}),
+        )?;
+        Ok((actual, found))
     }
 
     fn tool_count(&self) -> usize {
@@ -230,6 +315,9 @@ pub struct Partition {
     /// `None` when the mode switched itself off: bind `toolsets` as they are
     /// and add nothing to the prompt.
     pub index: Option<String>,
+    /// What `invoke_tool` can reach, for attributing its calls. Empty when
+    /// the mode is off.
+    pub directory: Directory,
 }
 
 /// Move the lazily-bindable tools behind the meta-tools.
@@ -285,9 +373,11 @@ pub fn partition(
         return Partition {
             toolsets: frozen,
             index: None,
+            directory: Directory::default(),
         };
     }
     let index = registry.index();
+    let directory = registry.directory();
     let registry = Arc::new(registry);
     let meta: Vec<Arc<dyn Tool>> = vec![
         Arc::new(GetToolSchema {
@@ -299,6 +389,7 @@ pub fn partition(
     Partition {
         toolsets: direct,
         index: Some(index),
+        directory,
     }
 }
 
@@ -348,35 +439,22 @@ impl Tool for GetToolSchema {
 
 impl GetToolSchema {
     fn lookup(&self, toolkit: &str, tool: &str) -> Value {
-        if let Some(found) = self.registry.tool(toolkit, tool) {
-            return Registry::schema(found);
-        }
-        // The toolkit may be wrong or unknown: find the tool by name only.
-        if let Some((actual, found)) = self.registry.find_by_name(tool) {
-            let mut schema = Registry::schema(found);
-            if let Some(object) = schema.as_object_mut() {
-                object.insert(
-                    "note".to_owned(),
-                    Value::String(format!(
-                        "Tool found in toolkit '{actual}' (not '{toolkit}')"
-                    )),
-                );
+        match self.registry.resolve(toolkit, tool) {
+            Ok((actual, found)) => {
+                let mut schema = Registry::schema(found);
+                if let Some(object) = schema.as_object_mut() {
+                    object.insert("toolkit".to_owned(), Value::String(actual.clone()));
+                    if !toolkit.is_empty() && actual != toolkit {
+                        object.insert(
+                            "note".to_owned(),
+                            Value::String(format!("Toolkit '{toolkit}' resolved to '{actual}'")),
+                        );
+                    }
+                }
+                schema
             }
-            return schema;
+            Err(refusal) => refusal,
         }
-        if let Some(known) = self.registry.toolkit(toolkit) {
-            let available: Vec<&str> = known.tools.iter().take(30).map(|t| t.name()).collect();
-            return json!({
-                "error": format!("Tool '{tool}' not found in toolkit '{toolkit}'"),
-                "available_tools": available,
-                "hint": "Use list_toolkits() to see all toolkits or get_toolkit_tools(toolkit) for all tools",
-            });
-        }
-        json!({
-            "error": format!("Toolkit '{toolkit}' not found"),
-            "available_toolkits": self.registry.toolkit_names(),
-            "hint": "Use list_toolkits() to see all available toolkits",
-        })
     }
 }
 
@@ -440,33 +518,29 @@ impl Tool for InvokeTool {
             })
             .unwrap_or_default();
 
-        let (toolkit, tool) = if let Some(tool) = self.registry.tool(toolkit, tool_name) {
-            (toolkit, tool)
-        } else if let Some((actual, tool)) = self.registry.find_by_name(tool_name) {
-            (actual, tool)
-        } else if let Some(known) = self.registry.toolkit(toolkit) {
-            let names: Vec<&str> = known.tools.iter().take(20).map(|t| t.name()).collect();
-            let more = if known.tools.len() > 20 { "..." } else { "" };
-            return Ok(Value::String(format!(
-                "Tool '{tool_name}' not found in toolkit '{toolkit}'. Available tools in {toolkit}: {}{more}",
-                names.join(", ")
-            )));
-        } else {
-            return Ok(Value::String(format!(
-                "Toolkit '{toolkit}' not found. Available toolkits: {}",
-                self.registry.toolkit_names().join(", ")
-            )));
+        let (actual, tool) = match self.registry.resolve(toolkit, tool_name) {
+            Ok(found) => found,
+            Err(refusal) => return Ok(refusal),
         };
 
         match tool.execute(ctx, Value::Object(arguments.clone())).await {
-            Ok(Value::Null) => Ok(Value::String(
-                "Tool executed successfully (no output)".to_owned(),
+            Ok(result) => Ok(json!({
+                "toolkit": &actual,
+                "tool": tool_name,
+                "result": if result.is_null() {
+                    Value::String("Tool executed successfully (no output)".to_owned())
+                } else {
+                    result
+                },
+            })),
+            // Only a rejected argument set is the SDK's "Invalid arguments"
+            // text. Every other failure (authorization, admission, an
+            // unavailable or slow dependency, the tool's own error) reaches
+            // the loop with its own category and text, as for a bound tool.
+            Err(error) if error.category == ErrorCategory::InvalidInput => Ok(Value::String(
+                self.invocation_error(toolkit, &actual, tool_name, &arguments, &error),
             )),
-            Ok(result) => Ok(result),
-            Err(error) if error.category == ErrorCategory::Cancelled => Err(error),
-            Err(error) => Ok(Value::String(
-                self.invocation_error(toolkit, tool_name, &arguments, &error),
-            )),
+            Err(error) => Err(error),
         }
     }
 }
@@ -475,25 +549,19 @@ impl InvokeTool {
     /// The SDK's `_format_invocation_error`.
     fn invocation_error(
         &self,
-        toolkit: &str,
+        requested: &str,
+        actual_toolkit: &str,
         tool_name: &str,
         provided: &Map<String, Value>,
         error: &AdkError,
     ) -> String {
-        let mut actual_toolkit = toolkit;
-        let mut found = self.registry.tool(toolkit, tool_name);
-        if found.is_none()
-            && let Some((actual, tool)) = self.registry.find_by_name(tool_name)
-        {
-            actual_toolkit = actual;
-            found = Some(tool);
-        }
+        let found = self.registry.tool(actual_toolkit, tool_name);
         let mut lines = vec![format!(
             "ERROR: Invalid arguments for {actual_toolkit}.{tool_name}"
         )];
-        if actual_toolkit != toolkit {
+        if !requested.is_empty() && actual_toolkit != requested {
             lines.push(format!(
-                "(Note: toolkit '{toolkit}' resolved to '{actual_toolkit}')"
+                "(Note: toolkit '{requested}' resolved to '{actual_toolkit}')"
             ));
         }
         lines.push(String::new());
@@ -505,7 +573,7 @@ impl InvokeTool {
         let Some(tool) = found else {
             lines.push(format!("Original error: {}", error.message));
             lines.push(format!(
-                "(Could not retrieve schema for {toolkit}.{tool_name})"
+                "(Could not retrieve schema for {actual_toolkit}.{tool_name})"
             ));
             return lines.join("\n");
         };
@@ -561,7 +629,7 @@ impl InvokeTool {
         }
         lines.push("CORRECT usage:".to_owned());
         lines.push(format!(
-            "invoke_tool(toolkit=\"{toolkit}\", tool=\"{tool_name}\", arguments={})",
+            "invoke_tool(toolkit=\"{actual_toolkit}\", tool=\"{tool_name}\", arguments={})",
             py_dumps(&Value::Object(example))
         ));
         lines.join("\n")

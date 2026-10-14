@@ -228,3 +228,50 @@ func artifactCall[T any](t *testing.T, server *ContentServer, operation, body st
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 	return decoded
 }
+
+// resolvingArtifactSourceStub also names the project's attachment bucket.
+type resolvingArtifactSourceStub struct {
+	artifactSourceStub
+	policyBucket string
+}
+
+func (stub *resolvingArtifactSourceStub) AttachmentBucket(context.Context, int64) (string, error) {
+	return stub.policyBucket, nil
+}
+
+// An empty bucket on a listing means "the project's chat attachment bucket":
+// the one its storage policy names, the default when it names none, and the
+// answer says which. A custom bucket is therefore listed, not a hard-coded name.
+func TestArtifactListWithoutABucketUsesTheProjectsAttachmentBucket(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ policy, want string }{
+		{"team-files", "team-files"},
+		{"", DefaultAttachmentBucket},
+	} {
+		source := &resolvingArtifactSourceStub{policyBucket: tc.policy}
+		server := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+		listed := artifactCall[RuntimeArtifactListContext](
+			t, server, "list", `{"bucket":"","prefix":"conv/","recursive":false,"limit":500}`,
+		)
+		require.Equal(t, tc.want, listed.Bucket)
+		require.Equal(t, tc.want, source.bucket, "the source lists the resolved bucket")
+		require.Equal(t, int64(7), source.projectID)
+	}
+}
+
+// A source that cannot resolve the policy refuses a bucketless listing rather
+// than guessing a name, and a bucketless READ is never resolved at all.
+func TestArtifactListWithoutABucketIsRefusedWhenTheSourceCannotResolveIt(t *testing.T) {
+	t.Parallel()
+
+	server := newArtifactTestServer(t, builderAuthorizerForProject(7), &artifactSourceStub{})
+	for _, call := range []struct{ operation, body string }{
+		{"list", `{"bucket":"","prefix":"conv/"}`},
+		{"read", `{"bucket":"","name":"conv/a.txt"}`},
+	} {
+		response := httptest.NewRecorder()
+		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+call.operation, call.body))
+		require.GreaterOrEqual(t, response.Code, 400, call.operation)
+	}
+}
