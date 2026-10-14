@@ -559,7 +559,16 @@ impl PipelineNativeAgentAssembler {
                         crate::indexing::tools::LazyStepbackModel::unbound(),
                     );
                     match host {
-                        Ok(host) => authority.with_office(Arc::new(host)),
+                        Ok(host) => {
+                            // The `imagegen` toolkit's images API (#864): lent
+                            // wherever the worker holds a model facade.
+                            let host = if let Some(facade) = self.model_facade.as_ref() {
+                                host.with_images(facade.images(), Arc::clone(context))
+                            } else {
+                                host
+                            };
+                            authority.with_office(Arc::new(host))
+                        }
                         Err(_) => authority,
                     }
                 }

@@ -1870,7 +1870,7 @@ func (h *Handler) DeleteAttachments(w http.ResponseWriter, r *http.Request) {
 
 // deleteStoredAttachments removes the object bytes and metadata rows
 // finalizeAttachment wrote for one conversation, and resolves the bucket the
-// same way finalizeAttachment does (policy first, defaultAttachmentBucketName
+// same way finalizeAttachment does (policy first, storage.DefaultAttachmentBucket
 // fallback) so the delete reads the same bucket the upload wrote.
 //
 // A returned error is meant to reach the client as a 500 rather than being
@@ -1896,7 +1896,7 @@ func (h *Handler) deleteStoredAttachments(ctx context.Context, projectIDStr, con
 		return apierr.Internal("get project storage policy: " + err.Error())
 	}
 	if bucketName == "" {
-		bucketName = defaultAttachmentBucketName
+		bucketName = storage.DefaultAttachmentBucket
 	}
 
 	// Lookup, never create — a delete that mints a bucket row as a side

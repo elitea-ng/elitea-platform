@@ -281,6 +281,9 @@ pub(crate) struct OrdinaryRuntimeBindings {
     toolkit_attribution: ToolkitAttributionCatalog,
     application_runtime: ApplicationRuntimeProjection,
     instruction_plan: super::instruction_authority::InstructionPlan,
+    /// The Smart Tools Selection index for the system prompt, when the mode
+    /// is on and has enough tools to be worth it.
+    lazy_tools_index: Option<String>,
 }
 
 impl OrdinaryRuntimeBindings {
@@ -302,7 +305,37 @@ impl OrdinaryRuntimeBindings {
             refused_toolkits: Vec::new(),
             toolkit_attribution: ToolkitAttributionCatalog::default(),
             application_runtime,
+            lazy_tools_index: None,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_lazy_tools_index(mut self, index: Option<String>) -> Self {
+        self.lazy_tools_index = index;
+        self
+    }
+
+    /// What the system prompt gets after the agent's own instructions, in the
+    /// SDK's order and with its separators: the internal tools' guidance
+    /// joined by `\n\n---\n\n`, and then the Smart Tools Selection index
+    /// after a blank line (the SDK appends it per call, to the system message).
+    #[must_use]
+    pub(crate) fn instruction_suffix(&self, instructions: &str) -> String {
+        let text = compose_instructions(
+            instructions,
+            self.internal_tools.instruction_addendum(),
+            self.lazy_tools_index.as_deref(),
+        );
+        if text.len() > elitea_agent_runtime::request::MAX_AGENT_INSTRUCTION_BYTES {
+            // Instructions admitted at their own bound leave no room for the
+            // guidance: serve the agent's own text rather than fail the turn.
+            tracing::warn!(
+                event = "agent_internal_tool_guidance_omitted",
+                "the agent's instructions leave no room for the internal tools' guidance"
+            );
+            return instructions.to_owned();
+        }
+        text
     }
 
     #[must_use]
@@ -2313,6 +2346,8 @@ fn build_runtime_agent(
         toolkit_attribution,
         application_runtime,
         instruction_plan,
+        // Already part of the bound model's system instruction (ordinary.rs).
+        lazy_tools_index: _,
     } = runtime;
     let mut delegated_authorization = delegated_authorization;
     let (model, toolsets) = crate::toolkits::bind_authorization_model_tools(
@@ -2508,6 +2543,8 @@ async fn prepare_direct_resume(
         toolkit_attribution,
         application_runtime,
         instruction_plan,
+        // Already part of the bound model's system instruction (ordinary.rs).
+        lazy_tools_index: _,
     } = runtime;
     let resolved = match start {
         DirectResumeStart::Sensitive(decisions) => decisions
@@ -3168,6 +3205,53 @@ fn pipeline_configuration_error(error: &PipelineConfigurationError) -> NativeAge
         error,
         "the stored pipeline could not be compiled",
     )
+}
+
+/// The system instruction: the agent's own `instructions`, then the internal
+/// tools' guidance after the SDK's separator, then the Smart Tools Selection
+/// index after a blank line. The ONE function that builds it, and the one the
+/// fit check measures, so the check and the build cannot disagree.
+#[must_use]
+pub(crate) fn compose_instructions(
+    instructions: &str,
+    guidance: Option<&str>,
+    index: Option<&str>,
+) -> String {
+    let mut text = instructions.to_owned();
+    if let Some(guidance) = guidance {
+        if text.is_empty() {
+            text.push_str(guidance.trim_start_matches('\n'));
+        } else {
+            text.push_str("\n\n---\n\n");
+            text.push_str(guidance);
+        }
+    }
+    if let Some(index) = index {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(index);
+    }
+    text
+}
+
+/// Whether the Smart Tools Selection `index` fits in the system prompt beside
+/// the agent's `instructions` and the other internal tools' guidance: the
+/// length of the string [`compose_instructions`] would build, against the cap
+/// [`OrdinaryRuntimeBindings::instruction_suffix`] enforces.
+#[must_use]
+pub(crate) fn lazy_index_fits(
+    instructions: &str,
+    internal_tools: InternalToolCatalog,
+    index: &str,
+) -> bool {
+    compose_instructions(
+        instructions,
+        internal_tools.instruction_addendum(),
+        Some(index),
+    )
+    .len()
+        <= elitea_agent_runtime::request::MAX_AGENT_INSTRUCTION_BYTES
 }
 
 #[cfg(test)]

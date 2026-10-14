@@ -34,25 +34,18 @@ const GITHUB_ACCEPT: &str = "application/vnd.github+json";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const USER_AGENT: &str = "elitea-worker-rust/0.1";
 
-/// The client the family builds: HTTPS only, no redirect, these timeouts.
-/// reqwest's own protocol-level retries stay at their default, as the
-/// family always had them.
+/// The client the family builds: HTTPS only, no redirect, these timeouts, and
+/// reqwest's protocol-level retries OFF for everything it sends (as ado,
+/// bitbucket and gitlab do): a retried POST or PUT is a second effect, and a
+/// retry that finishes after the first answer was lost hides the unknown
+/// outcome.
 pub const CLIENT_POLICY: ClientPolicy = ClientPolicy {
     connect_timeout: CONNECT_TIMEOUT,
     request_timeout: REQUEST_TIMEOUT,
     pool_idle_timeout: POOL_IDLE_TIMEOUT,
     max_idle_per_host: MAX_IDLE_PER_HOST,
     user_agent: USER_AGENT,
-    disable_retries: false,
-};
-
-/// The client the WRITES use: the same, with reqwest's protocol-level retries
-/// off. A retried POST or PUT is a second effect, and a retry that finishes
-/// after the first answer was lost hides the unknown outcome; ado, bitbucket
-/// and gitlab do the same.
-pub const EFFECT_POLICY: ClientPolicy = ClientPolicy {
     disable_retries: true,
-    ..CLIENT_POLICY
 };
 
 /// Stable, data-free failure categories for GitHub transport and response use.
@@ -161,9 +154,6 @@ pub enum GitHubRequestKind {
 /// arguments cannot select another origin.
 pub struct GitHubRest {
     transport: Arc<dyn Transport>,
-    /// Carries writes ([`Self::send_effect`], [`Self::execute_effect`]); the
-    /// host builds it to [`EFFECT_POLICY`]. The same transport unless given.
-    effect_transport: Arc<dyn Transport>,
     config: GitHubToolkitConfig,
 }
 
@@ -178,19 +168,7 @@ impl GitHubRest {
             let (_, key) = config.auth().app().ok_or_else(invalid_configuration)?;
             let _ = parse_rsa_key(key)?;
         }
-        Ok(Self {
-            effect_transport: Arc::clone(&transport),
-            transport,
-            config,
-        })
-    }
-
-    /// This client with writes sent over `transport` (built with
-    /// [`EFFECT_POLICY`]), reads staying on the one given to [`Self::new`].
-    #[must_use]
-    pub fn with_effect_transport(mut self, transport: Arc<dyn Transport>) -> Self {
-        self.effect_transport = transport;
-        self
+        Ok(Self { transport, config })
     }
 
     pub fn config(&self) -> &GitHubToolkitConfig {
@@ -381,7 +359,7 @@ impl GitHubRest {
         max_response_bytes: usize,
     ) -> Result<EffectReply, GitHubClientError> {
         let mut response = self
-            .effect_transport
+            .transport
             .execute(request)
             .await
             .map_err(|source| {

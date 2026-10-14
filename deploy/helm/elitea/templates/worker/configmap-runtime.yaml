@@ -45,6 +45,18 @@ data:
       "agent_checkpoint_connection_path" (printf "%s/agent-checkpoint-connection" $material)
       "limits" $r.limits
     }}
+    {{- /* The deployment's PUBLIC base URL, for links the Rust worker puts in an
+    answer (a chart's Markdown image): platformOrigin is the in-cluster edge,
+    which a browser cannot open. Written only when set, and only for the Rust
+    worker (the Python worker's config refuses unknown keys), so the default
+    runtime.json stays identical for both implementations (render-worker.sh).
+    Links are root-relative without it. */}}
+    {{- if $r.publicBaseUrl }}
+    {{- if ne (include "elitea-worker.isRust" .) "true" }}
+    {{- fail "worker.runtime.publicBaseUrl requires the Rust worker" }}
+    {{- end }}
+    {{- $_ := set $config "public_base_url" $r.publicBaseUrl }}
+    {{- end }}
     {{- if .Values.nats.tls.enabled }}
     {{- $_ := set $config "nats_ca_path" (printf "%s/ca.crt" (trimSuffix "/" .Values.nats.tls.mountPath)) }}
     {{- $_ := set $config "nats_certificate_path" (printf "%s/tls.crt" (trimSuffix "/" .Values.nats.tls.mountPath)) }}

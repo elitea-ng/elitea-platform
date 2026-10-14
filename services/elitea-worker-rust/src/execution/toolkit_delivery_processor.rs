@@ -24,6 +24,7 @@ use super::toolkit_output::{
     ToolkitTerminalRecovery, prepare_empty_toolkit_recovery, prepare_toolkit_output,
     replay_toolkit_terminal_with_replacement,
 };
+use crate::indexing::tools::LazyStepbackModel;
 use crate::indexing::{
     ChatEntries, ChatEntrySource, ChatUnavailable, IndexIngestRuntime, IndexRun, IndexRunFailure,
     Interruption, interrupt_summary, run_index,
@@ -50,10 +51,53 @@ use crate::toolkits::{
 use crate::transport::command_bus::{
     CommandBusError, CommandDelivery, CommandRetirementClient, CommandRetirer,
 };
+use crate::transport::office_host::{ClaimOfficeHost, NoRoundTripImagesHost, OfficeRuntime};
 use crate::transport::platform_client::PlatformClient;
+use crate::transport::platform_writer::HostOnlyPlatformWriter;
 use crate::transport::runtime_context::RuntimeContextError;
 use crate::transport::{ControlRpc, InputContentError, MaterializedInput};
 use crate::validation::SettingsRefusal;
+
+/// What a direct toolkit call is lent for its Office host.
+#[derive(Debug, PartialEq, Eq)]
+enum DirectLending {
+    /// A host that does nothing: no claim redemption, no platform call.
+    NoRoundTrip,
+    /// The claim's PAT redeemed for the platform object API.
+    Claim,
+    /// Nothing: the toolkit is unsupported on this path.
+    None,
+}
+
+/// What to lend a direct call of `toolkit_type`. `imagegen`'s tools are all
+/// effectful and refused on this path, so it never needs the claim; `pptx`
+/// reads objects, so it does (when this worker has the Office runtime).
+fn direct_lending(toolkit_type: &str, has_office_runtime: bool) -> DirectLending {
+    match toolkit_type {
+        "imagegen" => DirectLending::NoRoundTrip,
+        "pptx" if has_office_runtime => DirectLending::Claim,
+        _ => DirectLending::None,
+    }
+}
+
+#[cfg(test)]
+mod direct_lending_tests {
+    use super::{DirectLending, direct_lending};
+
+    #[test]
+    fn imagegen_is_lent_without_redeeming_the_claim() {
+        // Whether or not the worker has an Office runtime: no round trip.
+        for runtime in [true, false] {
+            assert_eq!(
+                direct_lending("imagegen", runtime),
+                DirectLending::NoRoundTrip
+            );
+        }
+        assert_eq!(direct_lending("pptx", true), DirectLending::Claim);
+        assert_eq!(direct_lending("pptx", false), DirectLending::None);
+        assert_eq!(direct_lending("github", true), DirectLending::None);
+    }
+}
 
 pub(super) struct ToolkitDeliveryProcessor<R, RC, T, K, I> {
     router: ToolkitDeliveryRouter<R, RC>,
@@ -73,6 +117,10 @@ pub(super) struct ToolkitDeliveryProcessor<R, RC, T, K, I> {
     /// `index.ingest.v1` (ADR-0030 I1); `None` on a deployment without a
     /// vector target, which refuses the capability.
     index_runtime: Option<Arc<IndexIngestRuntime>>,
+    /// The platform object client, for a `toolkit.call_tool.v1` of a toolkit
+    /// that reads platform objects (`pptx`); `None` leaves it unsupported on
+    /// this path.
+    office: Option<Arc<OfficeRuntime>>,
 }
 
 impl<R, RC, T, K, I> ToolkitDeliveryProcessor<R, RC, T, K, I>
@@ -112,7 +160,15 @@ where
             runtime,
             platform,
             index_runtime,
+            office: None,
         }
+    }
+
+    /// Lend the Office runtime to direct toolkit calls.
+    #[must_use]
+    pub(super) fn with_office(mut self, runtime: Option<Arc<OfficeRuntime>>) -> Self {
+        self.office = runtime;
+        self
     }
 
     pub(super) async fn process_verified(
@@ -905,6 +961,58 @@ where
         ))))
     }
 
+    /// The Office-host authority for a direct call of a `pptx` or `imagegen`
+    /// toolkit. `pptx` redeems the claim's PAT for the platform object API,
+    /// with no chat model (a direct call binds none, as in a pipeline node).
+    /// `imagegen` redeems nothing and calls nothing: its tools write
+    /// artifacts, this path runs read-only tools only, and the runtime
+    /// answers `EffectfulToolUnavailable` before one runs. `None` for any
+    /// other toolkit, or `pptx` on a worker with no Office runtime; the
+    /// toolkit is then unsupported here.
+    async fn office_authority(
+        &self,
+        authorized: &AuthorizedToolkitExecution,
+        lease: &mut ClaimLeaseMonitor,
+        request: &DirectToolkitRequest,
+    ) -> Result<Option<crate::toolkits::ArtifactToolAuthority>, RuntimeFailureKind> {
+        match direct_lending(request.toolkit_type(), self.office.is_some()) {
+            DirectLending::NoRoundTrip => Ok(Some(
+                crate::toolkits::ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter))
+                    .with_office(Arc::new(NoRoundTripImagesHost)),
+            )),
+            DirectLending::Claim => {
+                let Some(runtime) = self.office.as_ref() else {
+                    return Ok(None);
+                };
+                let context = lease
+                    .run_pre_invocation(
+                        self.platform
+                            .redeem_elitea_context(authorized.runtime_context()),
+                    )
+                    .await
+                    .map_err(|error| lease_failure(&error))?
+                    .map_err(|error| runtime_context_failure(&error))?;
+                let Ok(host) = ClaimOfficeHost::new(
+                    Arc::clone(runtime),
+                    &context.model_facade_token(),
+                    &context.resource_project_id().to_string(),
+                    LazyStepbackModel::unbound(),
+                ) else {
+                    tracing::warn!(
+                        event = "office_host_unavailable",
+                        "a direct toolkit call is left out: the object API client could not be built"
+                    );
+                    return Ok(None);
+                };
+                Ok(Some(
+                    crate::toolkits::ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter))
+                        .with_office(Arc::new(host)),
+                ))
+            }
+            DirectLending::None => Ok(None),
+        }
+    }
+
     async fn execute_shared(
         &self,
         verified: &VerifiedToolkitExecuteReadCommand,
@@ -933,6 +1041,7 @@ where
             Ok(authority) => IndexToolSupport::Lent(authority),
             Err(reason) => IndexToolSupport::Withheld(*reason),
         };
+        let office = self.office_authority(authorized, lease, request).await?;
         let operation = async {
             if is_call {
                 self.runtime
@@ -941,10 +1050,11 @@ where
                         &command.execution_id,
                         &command.command_id,
                         index_tools,
+                        office.as_ref(),
                     )
                     .await
             } else {
-                self.runtime.discover(request).await
+                self.runtime.discover(request, office.as_ref()).await
             }
         };
         let result = lease

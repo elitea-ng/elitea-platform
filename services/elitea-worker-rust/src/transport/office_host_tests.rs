@@ -60,7 +60,7 @@ impl ObjectApi {
             .insert(key.to_owned(), bytes);
     }
 
-    fn get(&self, key: &str) -> Option<Vec<u8>> {
+    pub(crate) fn get(&self, key: &str) -> Option<Vec<u8>> {
         self.store.lock().expect("store").objects.get(key).cloned()
     }
 
@@ -571,7 +571,7 @@ async fn the_model_call_sends_the_prompt_and_images_on_the_runs_model() {
     );
 }
 
-struct NoPlatform;
+pub(crate) struct NoPlatform;
 
 #[async_trait]
 impl PlatformWriter for NoPlatform {
@@ -725,4 +725,48 @@ async fn a_bucket_is_created_through_the_platform_api_under_the_claims_credentia
         );
     }
     assert_eq!(api.log().len(), before, "an invalid name sends nothing");
+}
+
+#[test]
+fn an_object_link_is_root_relative_and_never_the_in_cluster_origin() {
+    let api = ObjectApi::new();
+    let (host, _) = host(&api, vec![]);
+    let link = host
+        .object_link("chat-attachments", "conv 1/chart_ab.png")
+        .expect("link");
+    assert_eq!(
+        link,
+        "/api/v2/artifacts/artifact/default/42/chat-attachments/conv%201/chart_ab.png"
+    );
+    assert!(!link.contains("platform.internal") && !link.contains("://"));
+    assert!(host.object_link("chat-attachments", "../x.png").is_none());
+    assert!(host.object_link("bad/bucket", "x.png").is_none());
+}
+
+#[test]
+fn with_a_public_base_url_the_link_is_absolute_on_it_and_never_the_edge() {
+    let api = ObjectApi::new();
+    let runtime = Arc::new(
+        OfficeRuntime::with_transport(ORIGIN, Arc::clone(&api) as Arc<dyn Transport>)
+            .with_public_base_url(Some("https://elitea.example.com".to_owned())),
+    );
+    let model = LazyStepbackModel::unbound();
+    let host = ClaimOfficeHost::new(runtime, "pat-token", "42", model).expect("host");
+    let link = host
+        .object_link("chat-attachments", "conv 1/chart_ab.png")
+        .expect("link");
+    assert_eq!(
+        link,
+        "https://elitea.example.com/api/v2/artifacts/artifact/default/42/chat-attachments/conv%201/chart_ab.png"
+    );
+    assert!(!link.contains("platform.internal"));
+}
+
+/// Object writes and bucket creation are effects: the host's HTTP client is
+/// built without protocol-level retries.
+#[test]
+fn the_host_client_is_built_without_protocol_retries() {
+    let retries_disabled = std::hint::black_box(super::office_host::OFFICE_POLICY.disable_retries);
+    assert!(retries_disabled);
+    assert!(super::office_host::OfficeRuntime::new(ORIGIN).is_ok());
 }

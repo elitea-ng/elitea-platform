@@ -710,6 +710,7 @@ impl ExtraTool {
             prefix: key.clone(),
             recursive: true,
             limit: 500,
+            bucket_only: false,
         };
         let listed = match self.authority.writer().list_artifacts(&listing).await {
             Ok(listed) => listed,

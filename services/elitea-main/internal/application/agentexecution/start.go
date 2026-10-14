@@ -551,9 +551,10 @@ const maxCurrentAgentStepLimit = 1024
 // (apps/elitea-web/src/features/agents/lib/internalTools.ts) plus `ask_user`.
 // Membership here means "the product can do this", not "every worker can":
 // BOTH runtimes skip what they cannot serve, with a logged
-// `agent_internal_tool_skipped` — the native one for six of these it has not
-// implemented, `pyodide` included (services/elitea-worker-rust/src/agents/
-// internal_tools.rs). The Python worker's image now ships everything in this
+// `agent_internal_tool_skipped` — the native one for the five it has not
+// implemented (data_analysis, image_generation, internal_mcp, pyodide, swarm;
+// services/elitea-worker-rust/src/agents/internal_tools.rs). It serves
+// planner, lazy_tools_mode (Smart Tools Selection) and attachments itself. The Python worker's image now ships everything in this
 // map (#872 gave it a pinned Deno runtime plus the SDK's own sandbox
 // entrypoint, closing the one gap it had —
 // services/elitea-worker-python/src/elitea_worker/agents/internal_tools.py).

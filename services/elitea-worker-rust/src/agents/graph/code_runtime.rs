@@ -122,6 +122,27 @@ pub(in crate::agents) struct CodeInvocation<'a> {
     pub(super) workspace: Option<super::code_workspace::CodeWorkspaceInvocation>,
 }
 
+/// Why a tool's sandbox run produced no receipt, as a value: what the
+/// supervisor or the control plane said, not what a message happened to read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::agents) enum ToolCodeError {
+    /// No runtime is configured for the language.
+    Unavailable,
+    /// The supervisor finished the job as failed; `code` is its failure code
+    /// (`sandbox.deadline_exceeded`, `sandbox.memory_limit`, ...).
+    Sandbox { code: String },
+    /// The job was cancelled.
+    Cancelled,
+    /// Completion cannot be confirmed either way.
+    Uncertain,
+    /// Main refused to authorize or accept the job, or the request was invalid.
+    Refused,
+    /// The submission itself failed (transport, status).
+    Submission,
+    /// An error this layer does not type (preparation, journal, trace).
+    Untyped(String),
+}
+
 #[async_trait]
 pub(in crate::agents) trait CodeSandboxRuntime: Send + Sync {
     /// Bind only the actual Main registered saved family at the compiler seam.
@@ -138,6 +159,14 @@ pub(in crate::agents) trait CodeSandboxRuntime: Send + Sync {
     /// must authorize each submission and reconcile pending jobs without minting
     /// a replacement identity. Failure/cancellation must return an error.
     async fn execute(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError>;
+
+    /// The raw invocation as a tool uses it: the failure arrives as a typed
+    /// cause, not as error text. The default has no cause to report.
+    async fn execute_tool(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, ToolCodeError> {
+        self.execute(invocation)
+            .await
+            .map_err(|error| ToolCodeError::Untyped(error.to_string()))
+    }
 
     /// Use typed facts. The default cannot establish safe replay from `GraphError` text.
     async fn execute_attempt(

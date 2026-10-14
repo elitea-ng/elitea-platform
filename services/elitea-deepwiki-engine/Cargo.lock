@@ -552,6 +552,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "http",
+ "percent-encoding",
  "thiserror",
  "tokio",
  "url",

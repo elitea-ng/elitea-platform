@@ -3833,8 +3833,7 @@ worker:
   #   LOSES, as of this release:
   #     - whole toolkit types the Rust worker has no family for (checked
   #       against `current_toolkit_catalogue_snapshot.json` and
-  #       `current_rust_worker_toolkit_capability_snapshot.json`): pptx,
-  #       imagegen and data_analysis (need a model lent to a toolkit),
+  #       `current_rust_worker_toolkit_capability_snapshot.json`):
   #       memory, vectorstore, sandbox, delta_lake, aws and localgit (each
   #       blocked on a platform decision recorded in the worker's
   #       SOURCE_PARITY.md). #865's other 17 types are now Rust families.
@@ -3850,13 +3849,17 @@ worker:
   #       aha attach_file, testrail add_file_to_case). The capability
   #       snapshot's `supported_tools` lists exactly what is served; the
   #       remaining tools are shown greyed with a reason (#865).
-  #     - six internal chat-agent tools that
+  #     - three internal chat-agent tools that
   #       `services/elitea-worker-rust/src/agents/internal_tools.rs` recognizes
   #       and then skips rather than runs (#866): image_generation (Image
-  #       creation), data_analysis (Data Analysis), internal_mcp (Elitea MCP
-  #       Tools), planner (Planner), swarm (Swarm Mode), lazy_tools_mode (Smart
-  #       Tools Selection). A run that hits one of these now gets a visible
-  #       assistant-facing notice instead of the tool silently doing nothing.
+  #       creation), internal_mcp (Elitea MCP Tools), swarm (Swarm Mode);
+  #       pyodide (Python sandbox) is skipped too. A run that hits one of
+  #       these gets a visible assistant-facing notice instead of the tool
+  #       silently doing nothing. planner (Planner), lazy_tools_mode (Smart
+  #       Tools Selection) and attachments (Attachments) are served natively
+  #       and work as on Python, and so is data_analysis (Data Analysis,
+  #       ADR-0033): structured table tools over CSV, JSON and Excel
+  #       attachments plus the code sandbox, not the SDK's model-written pandas.
   #   The Rust worker's other toolkit families (45 dispatched types: the
   #   original azure, azure_search, elastic, gcp, github, gitlab_org,
   #   google_places, k8s, keycloak, openapi, postman, rally, report_portal,
@@ -4237,6 +4240,13 @@ worker:
     # elitea-main serves its product API over cleartext HTTP inside the cluster.
     # platformEdge below bridges that.
     platformOrigin: "https://elitea-platform-edge"
+    # The deployment's public base URL (an http(s) origin a browser opens), for
+    # links the Rust worker puts in answers such as a chart's Markdown image.
+    # Set it to the same value as main.env.DEPLOYMENT_URL. Empty, links are
+    # root-relative and the chat UI resolves them against its own origin.
+    # Rust worker only (the Python worker's config refuses unknown keys).
+    # Never platformOrigin: that is the in-cluster edge.
+    publicBaseUrl: ""
     spoolRoot: /var/lib/elitea-worker/output-spool
     spoolSizeLimit: 2Gi
     # Rust-only. Enable checkpoint recovery after verifying the deployment contract.

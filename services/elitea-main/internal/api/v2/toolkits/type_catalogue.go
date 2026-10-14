@@ -102,16 +102,14 @@ var nativeToolkitTypeMetadata = map[string]map[string]any{
 
 // nativeWorkerGatedToolkitTypes names hand-written (non-catalogued) types that
 // must still report the worker-capability verdict a catalogued type gets for
-// free in toolkitTypeMetadata's other branch. imagegen is Python-worker-only
-// by construction (elitea_sdk/tools/imagegen ships no Rust family, #864) and
-// has to render hidden on a deployment running the Rust worker the same way a
-// catalogued type would — not because it is unsafe to run, but because
-// nothing there would ever build it. The value is the import key passed to
-// ToolkitCapabilitySource.SupportsToolkitType: Python's answer is a deny list
-// keyed on import key (absence = supported), Rust's is an allow list keyed on
-// the toolkit type itself (absence = unsupported), so an import key that
-// exists in neither pinned snapshot answers exactly "Python yes, Rust no"
-// without either snapshot needing an imagegen entry.
+// free in toolkitTypeMetadata's other branch. imagegen is built by both
+// workers (elitea_sdk/tools/imagegen on Python, the native imagegen family on
+// Rust, #864); a deployment whose worker cannot build it would render it
+// hidden the way a catalogued type would. The value is the import key passed
+// to ToolkitCapabilitySource.SupportsToolkitType: Python's answer is a deny
+// list keyed on import key (absence = supported), Rust's is an allow list
+// keyed on the toolkit type itself (absence = unsupported, so the type must be
+// in rustNativeToolTypes and the pinned Rust snapshot).
 var nativeWorkerGatedToolkitTypes = map[string]string{
 	"imagegen": "imagegen",
 }

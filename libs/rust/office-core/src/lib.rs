@@ -55,6 +55,7 @@ mod guard;
 mod image;
 mod inspect;
 mod limits;
+mod raster;
 mod sheetrefs;
 mod validate;
 mod workbook;
@@ -71,6 +72,7 @@ pub use error::{Limit, OfficeError, Result};
 pub use guard::{Health, health};
 pub use inspect::{ChartFacts, ShapeFacts, ShapeKind, SlideFacts, TableFacts, facts_of_package};
 pub use limits::{Limits, PARSE_STACK_BYTES};
+pub use raster::svg_to_png;
 pub use sheetrefs::rename_in_formula;
 pub use workbook::{CellRange, CellValue, SheetChartSpec, SheetSeries, Workbook};
 pub use xlsx_facts::{

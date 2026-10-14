@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 #[cfg(test)]
 use elitea_connectors::github::client::project_tree_sha;
 use elitea_connectors::github::client::{
-    CLIENT_POLICY, EFFECT_POLICY, GitHubRest, MAX_RESPONSE_BYTES, invalid_configuration,
+    CLIENT_POLICY, GitHubRest, MAX_RESPONSE_BYTES, invalid_configuration,
 };
 #[allow(unused_imports)] // The family's submodules and suites each use a subset.
 pub(in crate::toolkits) use elitea_connectors::github::client::{
@@ -166,11 +166,8 @@ pub(crate) struct GitHubClient {
 
 impl GitHubClient {
     pub(crate) fn new(config: GitHubToolkitConfig) -> Result<Self, GitHubClientError> {
-        let reads = transport(&CLIENT_POLICY).map_err(|_| invalid_configuration())?;
-        let effects = transport(&EFFECT_POLICY).map_err(|_| invalid_configuration())?;
-        Ok(Self::over(
-            GitHubRest::new(config, reads)?.with_effect_transport(effects),
-        ))
+        let transport = transport(&CLIENT_POLICY).map_err(|_| invalid_configuration())?;
+        Ok(Self::over(GitHubRest::new(config, transport)?))
     }
 
     fn over(rest: GitHubRest) -> Self {
@@ -1281,17 +1278,6 @@ impl GitHubClient {
         transport: std::sync::Arc<dyn elitea_connectors::transport::Transport>,
     ) -> Result<Self, GitHubClientError> {
         Ok(Self::over(GitHubRest::new(config, transport)?))
-    }
-
-    /// A client whose reads and writes go to different fixtures.
-    pub(in crate::toolkits) fn test_with_transports(
-        config: GitHubToolkitConfig,
-        reads: std::sync::Arc<dyn elitea_connectors::transport::Transport>,
-        effects: std::sync::Arc<dyn elitea_connectors::transport::Transport>,
-    ) -> Result<Self, GitHubClientError> {
-        Ok(Self::over(
-            GitHubRest::new(config, reads)?.with_effect_transport(effects),
-        ))
     }
 
     pub(in crate::toolkits) fn test_request(

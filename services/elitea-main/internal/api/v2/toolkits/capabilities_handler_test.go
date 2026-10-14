@@ -1,7 +1,7 @@
 package toolkits_test
 
 // RuntimeCapabilities (#865, #866): which worker this deployment runs, which
-// of the six toggleable internal chat tools it actually runs, and which
+// of the toggleable internal chat tools it actually runs, and which
 // catalogued toolkit types it hides for capability reasons.
 //
 // getCapabilities below reuses catalogueOptions (type_catalogue_test.go),
@@ -35,12 +35,23 @@ func getCapabilities(t *testing.T, opts ...toolkits.Option) toolkits.RuntimeCapa
 	return body
 }
 
-// The six internal-tool toggles (apps/elitea-web's internalTools.ts) named by
-// #866.
-var sixInternalTools = []string{
-	"image_generation", "data_analysis", "internal_mcp",
-	"planner", "swarm", "lazy_tools_mode",
-}
+// The internal-tool toggles (apps/elitea-web's internalTools.ts) #866 named,
+// split by what the Rust worker does with them today: skipped, or served.
+var (
+	// Still skipped by internal_tools.rs's PLATFORM_INTERNAL_TOOLS.
+	rustSkippedInternalTools = []string{
+		"image_generation", "internal_mcp", "swarm",
+	}
+	// Served natively since the planner / Smart Tools Selection / attachments
+	// port (libs/rust/agent-runtime planner.rs and lazy_tools.rs, the
+	// worker's attachment_tools.rs).
+	rustServedInternalTools = []string{"planner", "lazy_tools_mode", "attachments", "data_analysis"}
+	// Every toggle the Python worker runs.
+	allInternalTools = []string{
+		"image_generation", "data_analysis", "internal_mcp",
+		"planner", "swarm", "lazy_tools_mode", "attachments",
+	}
+)
 
 func TestRuntimeCapabilitiesReportsTheConfiguredWorker(t *testing.T) {
 	t.Parallel()
@@ -60,8 +71,10 @@ func TestRuntimeCapabilitiesReportsTheConfiguredWorker(t *testing.T) {
 	}
 }
 
-// #866's core claim: on Rust, every one of the six toggles the agent form
-// offers is a no-op, and this endpoint is the one place that says so.
+// #866's core claim: a toggle the Rust worker skips is a no-op there, and this
+// endpoint is the one place that says so. The four it still skips are
+// reported false; the three it now serves (planner, Smart Tools Selection,
+// attachments) are reported true, so the form stops marking them unavailable.
 func TestRuntimeCapabilitiesInternalToolsOnRust(t *testing.T) {
 	t.Parallel()
 
@@ -70,7 +83,7 @@ func TestRuntimeCapabilitiesInternalToolsOnRust(t *testing.T) {
 		toolkits.WithWorkerImplementation("rust"),
 	)...)
 
-	for _, name := range sixInternalTools {
+	for _, name := range rustSkippedInternalTools {
 		available, found := body.InternalTools[name]
 		if !found {
 			t.Errorf("internal_tools has no entry for %q", name)
@@ -80,9 +93,19 @@ func TestRuntimeCapabilitiesInternalToolsOnRust(t *testing.T) {
 			t.Errorf("internal_tools[%q]=true on rust, want false (#866)", name)
 		}
 	}
+	for _, name := range rustServedInternalTools {
+		available, found := body.InternalTools[name]
+		if !found {
+			t.Errorf("internal_tools has no entry for %q", name)
+			continue
+		}
+		if !available {
+			t.Errorf("internal_tools[%q]=false on rust, want true: the native runtime serves it", name)
+		}
+	}
 }
 
-// On Python every one of the six runs for real.
+// On Python every toggle runs for real.
 func TestRuntimeCapabilitiesInternalToolsOnPython(t *testing.T) {
 	t.Parallel()
 
@@ -91,7 +114,7 @@ func TestRuntimeCapabilitiesInternalToolsOnPython(t *testing.T) {
 		toolkits.WithWorkerImplementation("python"),
 	)...)
 
-	for _, name := range sixInternalTools {
+	for _, name := range allInternalTools {
 		available, found := body.InternalTools[name]
 		if !found {
 			t.Errorf("internal_tools has no entry for %q", name)
@@ -103,8 +126,9 @@ func TestRuntimeCapabilitiesInternalToolsOnPython(t *testing.T) {
 	}
 }
 
-// ask_user (the Rust worker's one real internal tool), attachments and
-// pyodide are deliberately not among the six #866 reports on.
+// ask_user (the Rust worker's clarification tool, not a Modules toggle) and
+// pyodide (a Deno sandbox only the Python worker ships) are deliberately not
+// reported on.
 func TestRuntimeCapabilitiesInternalToolsExcludesOutOfScopeNames(t *testing.T) {
 	t.Parallel()
 
@@ -113,7 +137,7 @@ func TestRuntimeCapabilitiesInternalToolsExcludesOutOfScopeNames(t *testing.T) {
 		toolkits.WithWorkerImplementation("rust"),
 	)...)
 
-	for _, name := range []string{"ask_user", "attachments", "pyodide"} {
+	for _, name := range []string{"ask_user", "pyodide"} {
 		if _, found := body.InternalTools[name]; found {
 			t.Errorf("internal_tools unexpectedly reports on %q", name)
 		}

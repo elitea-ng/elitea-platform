@@ -8,7 +8,7 @@
 
 #![allow(dead_code)] // Capability registration remains intentionally disabled.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -47,8 +47,8 @@ use crate::toolkits::{
     AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority, FrozenToolKind,
     IndexToolAuthority, IndexToolSupport, IndexToolsWithheld, McpConnector,
     McpMaterializationError, McpMaterializationErrorCode, RefusedToolkit, ToolAdmissionPolicy,
-    ToolBindingError, ToolsetMaterializationError, ToolsetMaterializationErrorCode, bind_toolsets,
-    materialize_configured_toolsets_reporting_refusals,
+    ToolBindingError, ToolsetMaterializationError, ToolsetMaterializationErrorCode,
+    bind_frozen_toolsets, freeze_toolsets, materialize_configured_toolsets_reporting_refusals,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 use crate::transport::model_facade::{
@@ -60,6 +60,7 @@ use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use elitea_agent_runtime::host::PlatformWriter;
+use elitea_agent_runtime::toolkits::DataAnalysisAuthority;
 use sqlx::PgPool;
 
 /// Shared ordinary application/ad-hoc assembler used after `AUTHORIZED_NOW`.
@@ -236,6 +237,8 @@ impl OrdinaryNativeAgentAssembler {
         checkpoint_recovery: bool,
     ) -> Result<OrdinaryRunnerInputs, NativeAgentAssemblyError> {
         let RedeemedOrdinaryNativeAssembly {
+            current_attachments,
+            attachment_read_tokens,
             attachment_library,
             sandbox_authority,
             profile,
@@ -259,6 +262,28 @@ impl OrdinaryNativeAgentAssembler {
         };
         let context = Arc::new(claim_context);
         let runtime_context = Arc::new(runtime_context);
+        // The Attachments module (`attachments`): the same tools as an
+        // overview turn gets, bound on every turn and reaching every stored
+        // file of the conversation, not only this message's.
+        let attachment_library = if profile.internal_tools().attachments_enabled() {
+            let library = attachment_library.unwrap_or_else(|| {
+                Arc::new(super::attachment_tools::AttachmentLibrary::new(
+                    Vec::new(),
+                    attachment_read_tokens,
+                ))
+            });
+            library.attach_source(
+                Arc::new(super::attachments::ClaimAttachmentSource::new(
+                    Arc::clone(&self.platform),
+                    Arc::clone(&runtime_context),
+                    current_attachments.clone(),
+                )),
+                &current_attachments,
+            );
+            Some(library)
+        } else {
+            attachment_library
+        };
         tracing::Span::current().record("stage", "toolsets");
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
@@ -279,7 +304,12 @@ impl OrdinaryNativeAgentAssembler {
             .await?;
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
         tracing::Span::current().record("output_continuation", output_continuation);
-        let model = self.bind_model(&profile, context.as_ref(), output_continuation)?;
+        let model = self.bind_model(
+            &profile,
+            &runtime.instruction_suffix(profile.instructions()),
+            context.as_ref(),
+            output_continuation,
+        )?;
         tracing::Span::current().record("stage", "runner");
         Ok(OrdinaryRunnerInputs {
             model,
@@ -343,10 +373,33 @@ impl OrdinaryNativeAgentAssembler {
         // The Office host (ADR-0032) rides on the artifact authority, built
         // only when the snapshot has an Office toolkit: it mints a credential
         // and binds nothing until a tool calls the model.
-        if snapshot_carries_office_family(tool_snapshot)
+        let carries_office_family = snapshot_carries_office_family(tool_snapshot);
+        // The Data Analysis toggle (ADR-0033) reads the attachment bucket
+        // through the same host, and runs free-form code on the sandbox the
+        // pipeline `code` nodes use, when this run has one.
+        let wants_data_analysis = profile.internal_tools().data_analysis_enabled();
+        let mut data_analysis_authority: Option<DataAnalysisAuthority> = None;
+        if (carries_office_family || wants_data_analysis)
             && let Some(office) = self.office_host(&context, profile)
         {
-            artifact_authority = artifact_authority.with_office(office);
+            if wants_data_analysis {
+                let mut authority = DataAnalysisAuthority::new(Arc::clone(&office));
+                authority = authority.with_bucket_resolver(Arc::new(
+                    super::attachments::ClaimAttachmentBucket::new(
+                        Arc::clone(&self.platform),
+                        Arc::clone(runtime_context),
+                    ),
+                ));
+                if let Some(runtime) = code.clone() {
+                    authority = authority.with_code_runner(Arc::new(
+                        super::graph::SandboxAnalysisRunner::new(runtime),
+                    ));
+                }
+                data_analysis_authority = Some(authority);
+            }
+            if carries_office_family {
+                artifact_authority = artifact_authority.with_office(office);
+            }
         }
         // The index tools (ADR-0030 I1) act under the same claim: its vector
         // token, its redeemed context for the query embedding, and a chat
@@ -377,8 +430,22 @@ impl OrdinaryNativeAgentAssembler {
             index_support,
         )
         .await?;
-        let internal_tools = profile.internal_tools();
+        // The configured toolkits and MCP connections, by name: the only
+        // toolsets Smart Tools Selection may move behind its meta-tools.
+        let configured_toolsets: BTreeSet<String> = toolsets
+            .iter()
+            .map(|toolset| toolset.name().to_owned())
+            .collect();
+        let mut internal_tools = profile.internal_tools();
+        // Bound only when the run has the host and the tool policy consents; a
+        // toggle that binds nothing keeps its "not available" notice.
+        let data_toolset =
+            internal_tools.data_analysis_toolset(data_analysis_authority.as_ref(), tool_policy);
+        if data_toolset.is_some() {
+            internal_tools = internal_tools.serving_data_analysis();
+        }
         toolsets.extend(internal_tools.toolsets(Some(&BuilderToolAuthority::new(platform_writer))));
+        toolsets.extend(data_toolset);
         toolsets.extend(profile.instruction_plan().toolsets());
         // The attachment tools exist only when a document of this turn was
         // shown as an overview; the note in the prompt offers them by name.
@@ -428,11 +495,73 @@ impl OrdinaryNativeAgentAssembler {
             ASK_USER_TOOLSET_NAME.to_owned(),
             super::instruction_authority::TOOLSET_NAME.to_owned(),
             super::attachment_tools::TOOLSET_NAME.to_owned(),
+            elitea_agent_runtime::planner::TOOLSET_NAME.to_owned(),
+            elitea_agent_runtime::lazy_tools::TOOLSET_NAME.to_owned(),
             "elitea_nested_applications".to_owned(),
         ]);
-        let binding = bind_toolsets(toolsets, &reserved_toolsets, "elitea_ordinary_tool_binding")
+        let frozen = freeze_toolsets(toolsets, "elitea_ordinary_tool_binding")
             .await
             .map_err(tool_binding_error)?;
+        // Smart Tools Selection: a tool that needs a confirmation or a
+        // delegated authorization stays bound directly, because both are
+        // properties of the call the model makes (see `lazy_tools`).
+        let (frozen, lazy_tools_index, lazy_directory) = if internal_tools.lazy_tools_enabled() {
+            let kinds: BTreeMap<String, String> = tool_snapshot
+                .iter()
+                .filter(|reference| reference.kind() != FrozenToolKind::Application)
+                .map(|reference| {
+                    (
+                        reference.toolkit_name().to_owned(),
+                        reference.tool_type().to_owned(),
+                    )
+                })
+                .collect();
+            let unpartitioned = frozen.clone();
+            let partition = elitea_agent_runtime::lazy_tools::partition(
+                frozen,
+                |toolset| configured_toolsets.contains(toolset),
+                |toolset, tool| {
+                    sensitive_tools.policy_for_scoped(toolset, tool).is_some()
+                        || delegated_authorization
+                            .requirement_for_direct(toolset, tool)
+                            .is_some()
+                },
+                |toolset| kinds.get(toolset).cloned(),
+            );
+            match partition.index {
+                // The index goes into the system prompt. If it cannot fit
+                // beside the agent's own instructions, do not hide the tools:
+                // a model with meta-tools and no index cannot find anything.
+                Some(index)
+                    if !super::session::lazy_index_fits(
+                        profile.instructions(),
+                        internal_tools,
+                        &index,
+                    ) =>
+                {
+                    tracing::warn!(
+                        event = "agent_internal_tool_lazy_tools_skipped",
+                        reason_code = "instruction_budget",
+                        index_bytes = index.len(),
+                        "smart tools selection is off for this turn: its tool index does not fit beside the agent's instructions, so every tool stays bound"
+                    );
+                    (
+                        unpartitioned,
+                        None,
+                        elitea_agent_runtime::lazy_tools::Directory::default(),
+                    )
+                }
+                index => (partition.toolsets, index, partition.directory),
+            }
+        } else {
+            (
+                frozen,
+                None,
+                elitea_agent_runtime::lazy_tools::Directory::default(),
+            )
+        };
+        let binding =
+            bind_frozen_toolsets(&frozen, &reserved_toolsets).map_err(tool_binding_error)?;
         let sensitive_tools = sensitive_tools.bind_provider_names(&binding)?;
         let delegated_authorization = delegated_authorization
             .bind_provider_names(&binding)
@@ -450,7 +579,7 @@ impl OrdinaryNativeAgentAssembler {
         // tool-call record Main writes (and the Analytics Tools tab) is not
         // left with an empty toolkit. Nested applications carry their own
         // presentation and are not toolkits here.
-        let toolkit_attribution = ToolkitAttributionCatalog::from_bindings(
+        let attributable = || {
             tool_snapshot
                 .iter()
                 .filter(|reference| reference.kind() != FrozenToolKind::Application)
@@ -460,9 +589,13 @@ impl OrdinaryNativeAgentAssembler {
                         reference.tool_id(),
                         reference.tool_type(),
                     )
-                }),
-            binding.bindings(),
-        );
+                })
+        };
+        // Calls made through `invoke_tool` are recorded against the toolkit and
+        // tool they resolve to (`with_lazy_tools`).
+        let toolkit_attribution =
+            ToolkitAttributionCatalog::from_bindings(attributable(), binding.bindings())
+                .with_lazy_tools(lazy_directory, attributable());
         let toolsets = binding.into_toolsets();
         if !skipped_applications.is_empty() {
             tracing::warn!(
@@ -490,6 +623,7 @@ impl OrdinaryNativeAgentAssembler {
                 application_runtime,
             )
             .with_internal_tools(internal_tools)
+            .with_lazy_tools_index(lazy_tools_index)
             .with_instruction_plan(profile.instruction_plan().clone())
             .with_skipped_application_children(skipped_applications)
             .with_renamed_tools(renamed_tools)
@@ -547,6 +681,9 @@ impl OrdinaryNativeAgentAssembler {
             model,
         );
         if let Ok(host) = host {
+            // The `imagegen` toolkit's images API rides on the same host and
+            // the same credential (#864).
+            let host = host.with_images(self.model_facade.images(), Arc::clone(context));
             return Some(Arc::new(host));
         }
         tracing::warn!(
@@ -602,6 +739,7 @@ impl OrdinaryNativeAgentAssembler {
     fn bind_model(
         &self,
         profile: &super::assembly::OrdinaryNoToolProfile,
+        system_instruction: &str,
         context: &crate::transport::runtime_context::ClaimScopedEliteaContext,
         output_continuation: bool,
     ) -> Result<BoundModelFacade, NativeAgentAssemblyError> {
@@ -610,7 +748,7 @@ impl OrdinaryNativeAgentAssembler {
             allow_text_continuation: false,
             context_budget: profile.context_budget(),
             model_name: profile.model_name().to_owned(),
-            system_instruction: profile.instructions().to_owned(),
+            system_instruction: system_instruction.to_owned(),
             max_tokens: profile.max_tokens(),
             reasoning_effort: profile.reasoning_effort().map(|effort| {
                 if output_continuation {
@@ -831,7 +969,7 @@ struct DirectToolsets {
 pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
         reference.kind() == FrozenToolKind::Configured
-            && matches!(reference.tool_type(), "pptx" | "docx" | "xlsx")
+            && matches!(reference.tool_type(), "pptx" | "docx" | "xlsx" | "imagegen")
     })
 }
 

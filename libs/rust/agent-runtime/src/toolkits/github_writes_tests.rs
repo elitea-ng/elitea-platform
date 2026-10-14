@@ -285,29 +285,11 @@ fn context() -> Arc<SimpleToolContext> {
     )
 }
 
+
 async fn rig_with(script: Arc<Script>, store: Option<Arc<Store>>) -> Rig {
-    rig_over(script, None, store).await
-}
-
-/// Reads go to `reads`, writes to `effects` (the client keeps the two apart
-/// so the host can build the write transport without retries).
-async fn rig_split(reads: &Arc<Script>, effects: &Arc<Script>) -> Rig {
-    rig_over(reads.clone(), Some(effects.clone()), None).await
-}
-
-async fn rig_over(
-    script: Arc<Script>,
-    effects: Option<Arc<Script>>,
-    store: Option<Arc<Store>>,
-) -> Rig {
     let config = GitHubToolkitConfig::parse(&settings(&[])).expect("config");
-    let client = Arc::new(
-        match effects {
-            Some(effects) => GitHubClient::test_with_transports(config, script.clone(), effects),
-            None => GitHubClient::test_with_transport(config, script.clone()),
-        }
-        .expect("client"),
-    );
+    let client =
+        Arc::new(GitHubClient::test_with_transport(config, script.clone()).expect("client"));
     let api: Arc<dyn GitHubApi> = client.clone();
     let writer = WriteBinding {
         client: client.clone(),
@@ -2556,70 +2538,13 @@ async fn a_lost_conversion_answer_may_have_applied_and_only_a_refusal_is_not_con
     assert!(says.contains("was not converted"), "{says}");
 }
 
-/// Lookups use the retrying read transport; every write goes over the one
-/// built without retries.
-#[tokio::test]
-async fn writes_go_over_the_effect_transport_and_reads_over_the_read_one() {
-    use elitea_connectors::github::client::{CLIENT_POLICY, EFFECT_POLICY};
-    let (effects_retry, reads_retry) = std::hint::black_box((
-        !EFFECT_POLICY.disable_retries,
-        !CLIENT_POLICY.disable_retries,
-    ));
-    assert!(!effects_retry, "a retried write is a second effect");
-    assert!(reads_retry, "reads keep reqwest's retries");
-
-    let reads = Arc::new(Script::default());
-    let effects = Arc::new(Script::default());
-    reads.json(
-        "GET",
-        "/branches/feature%2Fruntime",
-        200,
-        json!({"commit": {"sha": sha('c')}}),
-    );
-    effects.json("POST", "/git/refs", 201, json!({}));
-    let rig = rig_split(&reads, &effects).await;
-    rig.says("create_branch", json!({"proposed_branch_name": "work"}))
-        .await;
-    assert_eq!(
-        reads
-            .hits()
-            .iter()
-            .map(|hit| hit.method.as_str())
-            .collect::<Vec<_>>(),
-        ["GET"]
-    );
-    assert_eq!(
-        effects
-            .hits()
-            .iter()
-            .map(|hit| hit.method.as_str())
-            .collect::<Vec<_>>(),
-        ["POST"]
-    );
-
-    // The board is looked up on the read transport; its mutations on the other.
-    let reads = Arc::new(Script::default());
-    let effects = Arc::new(Script::default());
-    reads.data("EliteaBoard(", board_data());
-    effects.data(
-        "EliteaDraft",
-        json!({"addProjectV2DraftIssue": {"projectItem": {"id": "DRAFT"}}}),
-    );
-    effects.data(
-        "EliteaConvert",
-        json!({"convertProjectV2DraftIssueItemToIssue": {"item": {"id": "I", "content": {"id": "C", "number": 1}}}}),
-    );
-    let rig = rig_split(&reads, &effects).await;
-    rig.says(
-        "create_issue_on_project",
-        json!({"board_repo": "EliteaAI/board", "project_title": "WebApp Redesign", "title": "t", "body": "b"}),
-    )
-    .await;
-    assert_eq!(names(&reads.operations()), ["EliteaBoard"]);
-    assert_eq!(
-        names(&effects.operations()),
-        ["EliteaDraft", "EliteaConvert"]
-    );
+/// One GitHub HTTP client for everything, built without protocol retries: a
+/// retried POST or PUT is a second effect and hides a lost answer.
+#[test]
+fn the_github_client_is_built_without_protocol_retries() {
+    use elitea_connectors::github::client::CLIENT_POLICY;
+    let retries_disabled = std::hint::black_box(CLIENT_POLICY.disable_retries);
+    assert!(retries_disabled);
 }
 
 #[tokio::test]

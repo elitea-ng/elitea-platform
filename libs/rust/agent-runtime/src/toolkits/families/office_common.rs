@@ -410,6 +410,18 @@ pub(crate) fn host_sentence(action: &str, error: &OfficeHostError, kind: &Office
         OfficeFailure::NoModel => format!(
             "Could not {action}: this tool needs a chat model and none is bound in this run (a pipeline node binds none). Use list_placeholders and replace_placeholders with your own content, or run it from an agent."
         ),
+        OfficeFailure::ReplyUnusable | OfficeFailure::ReplyTooLarge => format!(
+            "Could not {action}: the model's reply could not be used. Do not retry without telling the user."
+        ),
+        OfficeFailure::RateLimited => format!(
+            "Could not {action}: the model gateway is rate-limiting this call. Try again shortly."
+        ),
+        OfficeFailure::Timeout => {
+            format!("Could not {action}: the model call timed out. It may work if tried again.")
+        }
+        OfficeFailure::Conflict => format!(
+            "Could not {action}: the model gateway reported a conflict. It may work if tried again."
+        ),
         OfficeFailure::Unreachable => format!(
             "Could not {action}: the platform could not be reached. Tell the user it did not happen."
         ),

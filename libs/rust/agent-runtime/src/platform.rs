@@ -48,6 +48,10 @@ pub struct ArtifactListRequest {
     pub prefix: String,
     pub recursive: bool,
     pub limit: i32,
+    /// With an empty `bucket`: answer the bucket name alone, listing nothing
+    /// (Main resolves it exactly as it does for the conversation listing).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bucket_only: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]

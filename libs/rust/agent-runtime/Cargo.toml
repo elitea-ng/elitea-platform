@@ -31,6 +31,10 @@ toolkit-sql = ["dep:sqlx"]
 # are about 18 MiB of binary), and without it these toolkits are skipped as
 # unsupported.
 toolkit-office = ["dep:elitea-office-core"]
+# The `data_analysis` internal tool (ADR-0033): tables, charts and Excel I/O
+# over `elitea-office-core`. The cloud worker enables it; the desktop host does
+# not, and without it the internal tool is recognized and skipped.
+toolkit-data-analysis = ["dep:elitea-office-core"]
 
 [dependencies]
 # Tilde, not caret: adk breaks its API between minors. adk-agent and

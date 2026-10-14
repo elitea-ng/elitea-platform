@@ -89,6 +89,13 @@ pub struct RuntimeDeployConfig {
     pub output_target: String,
     pub content_origin: String,
     pub platform_origin: String,
+    /// The deployment's PUBLIC base URL (`DEPLOYMENT_URL` on elitea-main), an
+    /// `http(s)` origin a person's browser can open. `platform_origin` is the
+    /// in-cluster edge and is never shown to a person; links the worker puts
+    /// in an answer (a chart's Markdown image) use this one, and are
+    /// root-relative when it is absent.
+    #[serde(default)]
+    pub public_base_url: Option<String>,
     /// `host:port` of elitea-vector (ADR-0031), reached with this worker's
     /// mTLS identity. Absent, the worker refuses `index.ingest.v1` as
     /// unsupported; an agent-only or validate-only deployment needs none.
@@ -420,6 +427,9 @@ impl RuntimeDeployConfig {
 
         self.content_origin = canonical_https_origin(&self.content_origin)?;
         self.platform_origin = canonical_https_origin(&self.platform_origin)?;
+        if let Some(public) = &self.public_base_url {
+            self.public_base_url = Some(canonical_public_origin(public)?);
+        }
         for path in [
             &self.ca_path,
             &self.certificate_path,
@@ -679,6 +689,24 @@ fn canonical_https_origin(value: &str) -> Result<String, RuntimeConfigError> {
         return Err(invalid_config());
     }
     Ok(format!("https://{authority}"))
+}
+
+/// An `http` or `https` origin without credentials, path or query: what a
+/// browser opens. Unlike the worker's own endpoints it may be plain `http`
+/// (a development install behind no TLS).
+fn canonical_public_origin(value: &str) -> Result<String, RuntimeConfigError> {
+    require_bounded_text(value, MAX_ORIGIN_BYTES)?;
+    let uri = value.parse::<Uri>().map_err(|_| invalid_config())?;
+    let authority = uri.authority().ok_or_else(invalid_config)?;
+    if !matches!(uri.scheme_str(), Some("http" | "https")) {
+        return Err(invalid_config());
+    }
+    let scheme = uri.scheme_str().unwrap_or("https");
+    if authority.as_str().contains('@') || uri.query().is_some() || !matches!(uri.path(), "" | "/")
+    {
+        return Err(invalid_config());
+    }
+    Ok(format!("{scheme}://{authority}"))
 }
 
 fn require_bounded_text(value: &str, maximum: usize) -> Result<(), RuntimeConfigError> {
@@ -1005,6 +1033,44 @@ mod tests {
         assert_eq!(loaded.limits.grpc_max_request_bytes(), 64 * 1024);
         assert_eq!(loaded.limits.grpc_max_response_bytes(), 80 * 1024);
         assert_eq!(loaded.limits.output_max_frame_bytes(), 64 * 1024);
+    }
+
+    #[test]
+    fn the_public_base_url_is_an_optional_http_origin() {
+        let root = tempdir().expect("temporary directory");
+        let root_path = root.path().canonicalize().expect("canonical root");
+        let path = root_path.join("runtime.json");
+        // Absent: links are root-relative.
+        write_config(&path, &config(&root_path));
+        assert_eq!(load_deploy_config(&path).unwrap().public_base_url, None);
+        for (given, canonical) in [
+            ("https://elitea.example.com", "https://elitea.example.com"),
+            ("https://elitea.example.com/", "https://elitea.example.com"),
+            ("http://localhost:8082", "http://localhost:8082"),
+        ] {
+            let mut value = config(&root_path);
+            value["public_base_url"] = json!(given);
+            write_config(&path, &value);
+            assert_eq!(
+                load_deploy_config(&path)
+                    .unwrap()
+                    .public_base_url
+                    .as_deref(),
+                Some(canonical)
+            );
+        }
+        for bad in [
+            "ftp://x.example",
+            "https://user@x.example",
+            "https://x.example/app",
+            "https://x.example?q=1",
+            "not a url",
+        ] {
+            let mut value = config(&root_path);
+            value["public_base_url"] = json!(bad);
+            write_config(&path, &value);
+            assert!(load_deploy_config(&path).is_err(), "{bad}");
+        }
     }
 
     #[test]
