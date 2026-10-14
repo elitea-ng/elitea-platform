@@ -69,15 +69,35 @@ enum DirectLending {
     None,
 }
 
+/// The families whose tools act through the Office host (ADR-0032).
+fn is_office_family(toolkit_type: &str) -> bool {
+    matches!(toolkit_type, "pptx" | "docx" | "xlsx")
+}
+
 /// What to lend a direct call of `toolkit_type`. `imagegen`'s tools are all
-/// effectful and refused on this path, so it never needs the claim; `pptx`
-/// reads objects, so it does (when this worker has the Office runtime);
-/// `sharepoint` is lent the host only for the tools that read text, whose
-/// document reader it carries. Its uploads are effects and are refused here.
-fn direct_lending(toolkit_type: &str, tool_name: &str, has_office_runtime: bool) -> DirectLending {
+/// effectful and refused on this path, so it never needs the claim; the Office
+/// families (`pptx`, `docx`, `xlsx`) read objects, so a call needs it (when
+/// this worker has the Office runtime); `sharepoint` is lent the host only
+/// for the tools that read text, whose document reader it carries. Its
+/// uploads are effects and are refused here.
+///
+/// A discovery (`toolkit.available_tools.v1`) lists tools and runs none, so
+/// it needs no claim: every family that is built on a host (Office,
+/// `imagegen`) and `artifact` are lent the do-nothing host, whatever this
+/// worker carries. That is what keeps the tool list reachable when a call
+/// would be refused (a deployment with no Office runtime still lists them).
+fn direct_lending(
+    toolkit_type: &str,
+    tool_name: &str,
+    has_office_runtime: bool,
+    discovery: bool,
+) -> DirectLending {
+    if discovery && (is_office_family(toolkit_type) || toolkit_type == "artifact") {
+        return DirectLending::NoRoundTrip;
+    }
     match toolkit_type {
         "imagegen" => DirectLending::NoRoundTrip,
-        "pptx" if has_office_runtime => DirectLending::Claim,
+        office if is_office_family(office) && has_office_runtime => DirectLending::Claim,
         "sharepoint"
             if has_office_runtime
                 && elitea_agent_runtime::toolkits::sharepoint_tool_reads_text(tool_name) =>
@@ -97,29 +117,69 @@ mod direct_lending_tests {
         // Whether or not the worker has an Office runtime: no round trip.
         for runtime in [true, false] {
             assert_eq!(
-                direct_lending("imagegen", "", runtime),
+                direct_lending("imagegen", "", runtime, false),
                 DirectLending::NoRoundTrip
             );
         }
-        assert_eq!(direct_lending("pptx", "", true), DirectLending::Claim);
-        assert_eq!(direct_lending("pptx", "", false), DirectLending::None);
-        assert_eq!(direct_lending("github", "", true), DirectLending::None);
+        assert_eq!(github_none(), DirectLending::None);
         // SharePoint is lent the host for its text readers only.
         assert_eq!(
-            direct_lending("sharepoint", "read_document", true),
+            direct_lending("sharepoint", "read_document", true, false),
             DirectLending::Claim
         );
         assert_eq!(
-            direct_lending("sharepoint", "read_document", false),
+            direct_lending("sharepoint", "read_document", false, false),
             DirectLending::None
         );
         for tool in ["get_lists", "upload_file", "onenote_get_page_content", ""] {
             assert_eq!(
-                direct_lending("sharepoint", tool, true),
+                direct_lending("sharepoint", tool, true, false),
                 DirectLending::None,
                 "{tool}"
             );
         }
+    }
+
+    fn github_none() -> DirectLending {
+        direct_lending("github", "", true, false)
+    }
+
+    /// D2: `docx` and `xlsx` were refused as an unsupported family because
+    /// only `pptx` was lent the host.
+    #[test]
+    fn every_office_family_is_lent_the_claim_for_a_call() {
+        for family in ["pptx", "docx", "xlsx"] {
+            assert_eq!(
+                direct_lending(family, "read_document", true, false),
+                DirectLending::Claim,
+                "{family}"
+            );
+            assert_eq!(
+                direct_lending(family, "read_document", false, false),
+                DirectLending::None,
+                "{family} without an Office runtime"
+            );
+        }
+    }
+
+    /// D2: a discovery lists tools and runs none, so it redeems nothing and
+    /// needs no Office runtime; `artifact` was a 500 here for want of a lent
+    /// authority.
+    #[test]
+    fn discovery_is_lent_the_do_nothing_host_without_a_claim() {
+        for family in ["pptx", "docx", "xlsx", "artifact", "imagegen"] {
+            for runtime in [true, false] {
+                assert_eq!(
+                    direct_lending(family, "", runtime, true),
+                    DirectLending::NoRoundTrip,
+                    "{family} runtime={runtime}"
+                );
+            }
+        }
+        assert_eq!(
+            direct_lending("github", "", true, true),
+            DirectLending::None
+        );
     }
 }
 
@@ -995,14 +1055,17 @@ where
     /// toolkit is then unsupported here.
     async fn office_authority(
         &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
         authorized: &AuthorizedToolkitExecution,
         lease: &mut ClaimLeaseMonitor,
         request: &DirectToolkitRequest,
     ) -> Result<Option<crate::toolkits::ArtifactToolAuthority>, RuntimeFailureKind> {
+        let discovery = verified.kind() == ToolkitCommandKind::AvailableTools;
         match direct_lending(
             request.toolkit_type(),
             request.tool_name(),
             self.office.is_some(),
+            discovery,
         ) {
             DirectLending::NoRoundTrip => Ok(Some(
                 crate::toolkits::ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter))
@@ -1069,7 +1132,9 @@ where
             Ok(authority) => IndexToolSupport::Lent(authority),
             Err(reason) => IndexToolSupport::Withheld(*reason),
         };
-        let office = self.office_authority(authorized, lease, request).await?;
+        let office = self
+            .office_authority(verified, authorized, lease, request)
+            .await?;
         let operation = async {
             if is_call {
                 self.runtime

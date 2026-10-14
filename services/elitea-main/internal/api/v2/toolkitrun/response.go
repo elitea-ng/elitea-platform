@@ -214,10 +214,44 @@ func WriteOutcome(w http.ResponseWriter, outcome toolkitcalltoolapp.RunOutcome) 
 		body["error"] = outcome.ErrorMessage
 		writeJSON(w, http.StatusUnprocessableEntity, body)
 	default:
+		// A worker refusal before any provider work is a statement about the
+		// tool, not a server fault: the generic runtime sentence ("Configuration
+		// type is not supported.") named the wrong thing and the 500 told the
+		// person to retry. The synchronous path runs read-only, non-sensitive
+		// tools only, so a write tool lands here by design.
+		if reason, sentence, refused := workerRefusal(outcome); refused {
+			body["reason"] = reason
+			body["error"] = sentence
+			writeJSON(w, http.StatusUnprocessableEntity, body)
+			return
+		}
 		body["reason"] = "runtime_failure"
 		body["error"] = outcome.ErrorMessage
 		writeJSON(w, http.StatusInternalServerError, body)
 	}
+}
+
+// Reasons of a tool the synchronous path will not run.
+const (
+	ReasonEffectfulToolUnavailable = "effectful_tool_unavailable"
+	ReasonToolRefused              = "tool_refused"
+)
+
+// workerRefusal classifies a runtime failure that is the worker declining the
+// tool (UNSUPPORTED_CAPABILITY: an effectful tool; AUTHORIZATION_FAILED: a
+// blocked or sensitive one) as opposed to a fault.
+func workerRefusal(outcome toolkitcalltoolapp.RunOutcome) (reason, sentence string, refused bool) {
+	name := strconv.Quote(outcome.ToolName)
+	switch outcome.FailureCode {
+	case "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY":
+		return ReasonEffectfulToolUnavailable,
+			"The tool " + name + " changes data, so it cannot be run from the tool test panel, " +
+				"which only runs read-only tools. Run it from an agent instead.", true
+	case "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED":
+		return ReasonToolRefused,
+			"The tool " + name + " is blocked or sensitive, so it cannot be run from the tool test panel.", true
+	}
+	return "", "", false
 }
 
 // WriteError maps a run that never settled. It is the only place a tool-run

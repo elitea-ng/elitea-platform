@@ -242,8 +242,22 @@ pub(crate) fn failure(error: &Failure) -> OfficeHostError {
 
 /// A model-call failure: the gateway's budget refusal is its own cause.
 pub(crate) fn model_failure(message: &str) -> OfficeHostError {
+    // `message` is an `AdkError`'s display: "model.<category>: <sentence>".
+    // The category decides the sentence the person reads. A request the
+    // model gateway refused as invalid is not "the platform could not be
+    // reached" (live defect D3): nothing was unreachable, and trying again
+    // cannot help.
     if message.contains("budget is exhausted") {
         OfficeHostError::new(OfficeFailure::BudgetRefused, "office_host.budget_refused")
+    } else if message.starts_with("model.invalid_input") {
+        OfficeHostError::new(
+            OfficeFailure::InvalidRequest,
+            "office_host.model_invalid_request",
+        )
+    } else if message.starts_with("model.rate_limited") {
+        OfficeHostError::new(OfficeFailure::RateLimited, "office_host.model_rate_limited")
+    } else if message.starts_with("model.timeout") {
+        OfficeHostError::new(OfficeFailure::Timeout, "office_host.model_timeout")
     } else {
         OfficeHostError::new(OfficeFailure::Unreachable, "office_host.model_call_failed")
     }

@@ -161,6 +161,10 @@ impl std::error::Error for ToolsetMaterializationError {}
 pub struct LeftOutToolkit {
     toolkit_name: String,
     toolkit_type: String,
+    /// Set when only this one tool of an otherwise built toolkit was left
+    /// out (`unsupported_tool_selection`): the toolkit's other selected tools
+    /// are served.
+    tool_name: Option<String>,
     cause: LeftOutReason,
     reason: &'static str,
 }
@@ -175,6 +179,9 @@ pub enum LeftOutReason {
     FamilyNotPortedIndexToolsKept,
     /// The configuration asks for a setting this runtime refuses.
     UnsupportedSetting,
+    /// The toolkit is built, but one tool of its stored selection is not
+    /// served by this runtime (not ported, or not available on this path).
+    ToolNotServed,
 }
 
 impl LeftOutReason {
@@ -185,20 +192,27 @@ impl LeftOutReason {
             Self::UnsupportedFamily => "unsupported_toolkit_family",
             Self::FamilyNotPortedIndexToolsKept => "index_tools_only",
             Self::UnsupportedSetting => "unsupported_setting",
+            Self::ToolNotServed => "unsupported_tool_selection",
         }
     }
 }
 
 /// What the materializer found for a toolkit it did not fully build.
 #[derive(Clone, Copy)]
-enum ToolkitSkip {
+enum ToolkitSkip<'a> {
     Setting(UnsupportedSetting),
     UnsupportedFamily { index_tools_kept: bool },
+    Tool { name: &'a str, reason: &'static str },
 }
 
 impl LeftOutToolkit {
-    fn new(reference: &FrozenToolReference<'_>, skip: ToolkitSkip) -> Self {
+    fn new(reference: &FrozenToolReference<'_>, skip: ToolkitSkip<'_>) -> Self {
+        let mut tool_name = None;
         let (cause, reason) = match skip {
+            ToolkitSkip::Tool { name, reason } => {
+                tool_name = Some(bounded_label(name));
+                (LeftOutReason::ToolNotServed, reason)
+            }
             ToolkitSkip::Setting(setting) => (LeftOutReason::UnsupportedSetting, setting.reason()),
             ToolkitSkip::UnsupportedFamily {
                 index_tools_kept: false,
@@ -216,6 +230,7 @@ impl LeftOutToolkit {
         Self {
             toolkit_name: bounded_label(reference.toolkit_name()),
             toolkit_type: bounded_label(reference.tool_type()),
+            tool_name,
             cause,
             reason,
         }
@@ -231,9 +246,28 @@ impl LeftOutToolkit {
         Self {
             toolkit_name: bounded_label(name),
             toolkit_type: bounded_label(kind),
+            tool_name: None,
             cause,
             reason,
         }
+    }
+
+    /// One tool of a built toolkit that the runtime does not serve.
+    #[must_use]
+    pub fn unserved_tool(toolkit: &str, kind: &str, tool: &str, reason: &'static str) -> Self {
+        Self {
+            toolkit_name: bounded_label(toolkit),
+            toolkit_type: bounded_label(kind),
+            tool_name: Some(bounded_label(tool)),
+            cause: LeftOutReason::ToolNotServed,
+            reason,
+        }
+    }
+
+    /// The one tool left out, when only a tool (not the toolkit) was.
+    #[must_use]
+    pub fn tool_name(&self) -> Option<&str> {
+        self.tool_name.as_deref()
     }
 
     /// Machine-readable cause, for the structured run notice.
@@ -310,6 +344,12 @@ pub fn left_out_toolkits_notice_text(left_out: &[LeftOutToolkit]) -> Option<Stri
     let mut lines = left_out
         .iter()
         .map(|toolkit| {
+            if let Some(tool) = &toolkit.tool_name {
+                return format!(
+                    "tool '{}.{}' ({}) is not enabled on this worker: {}",
+                    toolkit.toolkit_name, tool, toolkit.toolkit_type, toolkit.reason
+                );
+            }
             let state = if toolkit.cause == LeftOutReason::FamilyNotPortedIndexToolsKept {
                 "only partly enabled"
             } else {
@@ -446,7 +486,7 @@ async fn materialize_all(
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
     index_tools: IndexToolSupport<'_>,
-    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip) + Send),
+    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip<'_>) + Send),
 ) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     if snapshot.len() > MAX_AGENT_TOOLSETS {
         return Err(resource_exhausted());
@@ -478,6 +518,13 @@ async fn materialize_all(
                     delegated_authorization
                         .merge(authorization)
                         .map_err(|()| invalid_configuration())?;
+                    report_unserved_selected_tools(
+                        reference,
+                        &toolset,
+                        index_toolset.is_some(),
+                        on_refused,
+                    )
+                    .await;
                     Some(toolset)
                 }
                 Err(ToolsetMaterializationError {
@@ -537,6 +584,90 @@ async fn materialize_all(
         delegated_authorization,
         left_out: Vec::new(),
     })
+}
+
+/// The families whose stored `selected_tools` may name tools the runtime does
+/// not serve, and which keep the served ones (`unsupported_tool_selection`).
+/// Their toolsets are static, so enumerating them here costs no I/O.
+const SELECTION_REPORTING_FAMILIES: [&str; 8] = [
+    "aha",
+    "bigquery",
+    "bitbucket",
+    "confluence",
+    "figma",
+    "github",
+    "gitlab",
+    "jira",
+];
+
+/// Why a selected tool the family did not serve is missing, as one fixed
+/// sentence (no stored value in it).
+fn unserved_tool_reason(name: &str) -> &'static str {
+    if name == "index_data" {
+        "starting an index run is not a chat tool on this worker; use the toolkit's index action"
+    } else if super::families::index_tools::is_sdk_index_tool_name(name) {
+        "the index tools are not available for this toolkit on this path"
+    } else {
+        "this tool is not available on this worker yet, so it was left out"
+    }
+}
+
+/// Report each tool of the stored selection that the built toolkit does not
+/// serve. Before this the only trace was one worker log line with COUNTS
+/// (`selected_count=5 materialized_count=2`): the person who enabled five
+/// tools saw an agent with two, and nobody could say which three.
+///
+/// Best effort: a toolset that cannot be enumerated reports nothing here
+/// (the run's own binding enumerates it again and fails loudly). Index tools
+/// the composed index toolset serves are not omissions.
+async fn report_unserved_selected_tools(
+    reference: &FrozenToolReference<'_>,
+    toolset: &Arc<dyn Toolset>,
+    index_tools_composed: bool,
+    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip<'_>) + Send),
+) {
+    if !SELECTION_REPORTING_FAMILIES.contains(&reference.tool_type()) {
+        return;
+    }
+    let selected: Vec<&str> = reference
+        .settings()
+        .and_then(|settings| settings.get("selected_tools"))
+        .and_then(serde_json::Value::as_array)
+        .map(|names| names.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
+    if selected.is_empty() {
+        return;
+    }
+    let Ok(frozen) =
+        super::tool_binding::freeze_toolsets(vec![Arc::clone(toolset)], "elitea-selection-report")
+            .await
+    else {
+        return;
+    };
+    let served: std::collections::BTreeSet<&str> = frozen
+        .iter()
+        .flat_map(|toolset| toolset.tools().iter().map(|tool| tool.name()))
+        .collect();
+    let mut omitted: Vec<&str> = selected
+        .into_iter()
+        .filter(|name| !served.contains(name))
+        .filter(|name| {
+            !(index_tools_composed
+                && *name != "index_data"
+                && super::families::index_tools::is_sdk_index_tool_name(name))
+        })
+        .collect();
+    omitted.sort_unstable();
+    omitted.dedup();
+    for name in omitted {
+        on_refused(
+            reference,
+            ToolkitSkip::Tool {
+                name,
+                reason: unserved_tool_reason(name),
+            },
+        );
+    }
 }
 
 /// Whether, with the index toolset composed, this toolkit has no family

@@ -2202,6 +2202,72 @@ async fn configured_materializer_keeps_served_tools_from_mixed_sdk_selection() {
     assert_eq!(tools[0].name(), "list_branches_in_repo");
 }
 
+/// D4: three of five selected tools were dropped and only a log line with
+/// COUNTS said so. The reporting materializer names each one, with a reason
+/// that is a fixed sentence (no stored value), and does not call an index tool
+/// an omission when the index toolset serves it.
+#[tokio::test]
+async fn omitted_selected_tools_are_reported_by_name() {
+    use super::materialize::{LeftOutReason, materialize_configured_toolsets_reporting_refusals};
+    use super::{IndexToolSupport, IndexToolsWithheld, left_out_toolkits_notice_text};
+    let version = json!({
+        "tools":[{
+            "id":1,
+            "type":"github",
+            "toolkit_name":"repo",
+            "settings":settings(
+                &json!({
+                    "configuration_type":"github",
+                    "base_url":"https://github.example.test/api/v3/",
+                    "access_token":"fixture-token"
+                }),
+                &["get_me", "read_file", "generic_github_api_call", "index_data", "search_index"]
+            )
+        }]
+    });
+    let version = version.as_object().expect("version details");
+    let snapshot = FrozenToolSnapshot::from_version_details(version)
+        .expect("GitHub snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy(&[]),
+        &Map::new(),
+        None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NotRequested),
+    )
+    .await
+    .expect("GitHub materialization");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let served = materialized.toolsets[0]
+        .tools(readonly)
+        .await
+        .expect("tools");
+    assert_eq!(served.len(), 2, "get_me and read_file are served");
+    let mut omitted: Vec<_> = materialized
+        .left_out
+        .iter()
+        .map(|entry| {
+            assert_eq!(entry.cause(), LeftOutReason::ToolNotServed);
+            assert_eq!(entry.reason_code(), "unsupported_tool_selection");
+            (
+                entry.tool_name().expect("a tool entry").to_owned(),
+                entry.reason(),
+            )
+        })
+        .collect();
+    omitted.sort();
+    let names: Vec<&str> = omitted.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["generic_github_api_call", "index_data", "search_index"]
+    );
+    assert!(omitted[1].1.contains("index action"), "{}", omitted[1].1);
+    let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
+    assert!(notice.contains("tool 'repo.generic_github_api_call' (github) is not enabled"));
+    assert!(!notice.contains("fixture-token"));
+}
+
 #[tokio::test]
 async fn provider_tool_schemas_do_not_emit_an_unportable_integer_ceiling() {
     let selected = vec!["get_issue".to_owned(), "get_pull_request".to_owned()];

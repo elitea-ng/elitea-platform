@@ -400,7 +400,7 @@ pub(crate) fn host_sentence(action: &str, error: &OfficeHostError, kind: &Office
             kind.accepts
         ),
         OfficeFailure::InvalidRequest => format!(
-            "Could not {action}: the file name or bucket is not valid, or the request was refused as invalid."
+            "Could not {action}: the file name or bucket is not valid, or a request it needed (to the file store or to the model) was refused as invalid."
         ),
         OfficeFailure::TooLarge => {
             format!("Could not {action}: the file is larger than the platform accepts.")

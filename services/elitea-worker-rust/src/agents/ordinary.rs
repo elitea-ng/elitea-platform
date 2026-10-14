@@ -727,10 +727,16 @@ impl OrdinaryNativeAgentAssembler {
                 temperature,
                 max_model_turns,
             };
+            let invocation_profile = invocation.clone();
             let bound: Result<BoundModelFacade, ModelFacadeError> =
                 facade.bind(adapter, context.as_ref(), model_project_id, invocation);
+            // The toolkit tools ask this model for one plain reply, which the
+            // provider admits only through the toolkit-completion profile.
             Ok(StepbackBinding {
-                model: bound?.adk_model(),
+                model: crate::transport::toolkit_completion::toolkit_completion_model(
+                    bound?.adk_model(),
+                    &invocation_profile,
+                ),
                 model_name: model_name.clone(),
             })
         })

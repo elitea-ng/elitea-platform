@@ -32,6 +32,7 @@ mod runtime_context_tests;
 mod summary_model;
 #[cfg(test)]
 mod summary_selection_tests;
+pub(crate) mod toolkit_completion;
 
 pub use control_grpc::{
     ControlGrpcClient, ControlGrpcConfig, ControlGrpcError, ControlRpc, TonicControlRpc,

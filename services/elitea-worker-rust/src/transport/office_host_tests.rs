@@ -478,6 +478,22 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
         super::office_host::model_failure("the model gateway timed out").kind(),
         OfficeFailure::Unreachable
     );
+    // D3: the live refusal read as "the platform could not be reached".
+    for (message, kind) in [
+        (
+            "model.invalid_input: the ADK model request is outside the admitted ordinary profile",
+            OfficeFailure::InvalidRequest,
+        ),
+        ("model.rate_limited: slow down", OfficeFailure::RateLimited),
+        ("model.timeout: timed out", OfficeFailure::Timeout),
+        ("model.unavailable: 503", OfficeFailure::Unreachable),
+    ] {
+        assert_eq!(
+            super::office_host::model_failure(message).kind(),
+            kind,
+            "{message}"
+        );
+    }
 }
 
 #[test]
@@ -887,5 +903,143 @@ fn a_file_is_refused_by_its_name_before_it_is_downloaded() {
     assert_eq!(
         host.can_read_text("a.pdf"),
         Err(TextExtractionFailure::NoExtractor)
+    );
+}
+
+/// D2: a synchronous tool run (the UI's "test tool" panel) of each Office
+/// family. The read tool reaches the tool through the lent claim host (here a
+/// fake store without the file, so the tool answers its own "not found"
+/// sentence); the write tool is refused with the typed read-only reason, never
+/// an unsupported family; and the tools are listed whether or not a host does
+/// any work (the do-nothing host a discovery is lent).
+#[tokio::test]
+async fn a_direct_run_serves_each_office_family_reads_and_refuses_its_writes() {
+    use crate::toolkits::{
+        DirectToolkitRequest, DirectToolkitRuntime, DirectToolkitRuntimeErrorCode,
+        IndexToolSupport, IndexToolsWithheld,
+    };
+    use crate::transport::office_host::NoRoundTripImagesHost;
+    use crate::transport::platform_writer::HostOnlyPlatformWriter;
+    use elitea_agent_runtime::host::PlatformWriter;
+    use elitea_agent_runtime::toolkits::ArtifactToolAuthority;
+
+    let withheld = || IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath);
+    let api = ObjectApi::new();
+    let (claim_host, _) = host(&api, vec![]);
+    let claimed =
+        ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter) as Arc<dyn PlatformWriter>)
+            .with_office(claim_host);
+    let idle =
+        ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter) as Arc<dyn PlatformWriter>)
+            .with_office(Arc::new(NoRoundTripImagesHost));
+    let cases = [
+        ("pptx", "list_placeholders", "add_slide", "x.pptx"),
+        ("docx", "read_document", "add_heading", "x.docx"),
+        ("xlsx", "list_sheets", "write_cells", "x.xlsx"),
+    ];
+    for (family, read, write, file) in cases {
+        let config = serde_json::to_vec(&json!({
+            "id": 5, "type": family, "toolkit_name": "office",
+            "settings": {"bucket_name": "decks", "selected_tools": []}
+        }))
+        .expect("config");
+        let call = |tool: &str| {
+            DirectToolkitRequest::parse_call(
+                family,
+                "5",
+                tool,
+                &config,
+                json!({"file_name": file}).to_string().as_bytes(),
+                br#"{"toolkit_security":{}}"#,
+            )
+            .expect("request")
+        };
+        let runtime = DirectToolkitRuntime::default();
+        // No host lent: the family is unsupported on the path.
+        assert_eq!(
+            runtime
+                .execute_test(&call(read), "e", "c", withheld(), None)
+                .await
+                .expect_err("no host")
+                .code(),
+            DirectToolkitRuntimeErrorCode::UnsupportedToolkit,
+            "{family}"
+        );
+        // The read tool runs.
+        runtime
+            .execute_test(&call(read), "e", "c", withheld(), Some(&claimed))
+            .await
+            .unwrap_or_else(|error| panic!("{family} {read}: {error}"));
+        // The write tool is refused as an effect, with the typed reason.
+        assert_eq!(
+            runtime
+                .execute_test(&call(write), "e", "c", withheld(), Some(&claimed))
+                .await
+                .expect_err("a write on the read-only path")
+                .code(),
+            DirectToolkitRuntimeErrorCode::EffectfulToolUnavailable,
+            "{family} {write}"
+        );
+        // Tools are listed on the do-nothing host.
+        let settings = serde_json::to_vec(&json!({"bucket_name": "decks", "selected_tools": []}))
+            .expect("settings");
+        let discovery = DirectToolkitRequest::parse_discovery(
+            family,
+            "5",
+            &settings,
+            br#"{"toolkit_security":{}}"#,
+        )
+        .expect("discovery");
+        let listed = runtime
+            .discover(&discovery, Some(&idle))
+            .await
+            .unwrap_or_else(|error| panic!("{family} discovery: {error}"));
+        let names: Vec<&str> = listed["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("name"))
+            .collect();
+        assert!(
+            names.contains(&read) && names.contains(&write),
+            "{family}: {names:?}"
+        );
+    }
+}
+
+/// D2: the artifact toolkit's tools are listed on a host-only authority (its
+/// discovery was a 500 for want of any authority).
+#[tokio::test]
+async fn artifact_tools_are_listed_without_a_claim() {
+    use crate::toolkits::{DirectToolkitRequest, DirectToolkitRuntime};
+    use crate::transport::platform_writer::HostOnlyPlatformWriter;
+    use elitea_agent_runtime::host::PlatformWriter;
+    use elitea_agent_runtime::toolkits::ArtifactToolAuthority;
+    let authority =
+        ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter) as Arc<dyn PlatformWriter>);
+    let settings =
+        serde_json::to_vec(&json!({"bucket": "files", "selected_tools": []})).expect("settings");
+    let discovery = DirectToolkitRequest::parse_discovery(
+        "artifact",
+        "6",
+        &settings,
+        br#"{"toolkit_security":{}}"#,
+    )
+    .expect("discovery");
+    let runtime = DirectToolkitRuntime::default();
+    assert!(runtime.discover(&discovery, None).await.is_err());
+    let listed = runtime
+        .discover(&discovery, Some(&authority))
+        .await
+        .expect("listed");
+    let names: Vec<&str> = listed["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("name"))
+        .collect();
+    assert!(
+        names.contains(&"list_files") && names.contains(&"read_file"),
+        "{names:?}"
     );
 }
