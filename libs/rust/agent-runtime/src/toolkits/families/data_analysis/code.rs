@@ -10,6 +10,10 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+/// The one result limit: a program's JSON answer above this is refused, by the
+/// worker's runner and by the tool alike, and the tool description says so.
+pub const MAX_ANALYSIS_RESULT_BYTES: usize = 100 * 1024;
+
 /// The languages the tool offers (the sandbox has more; these two have a
 /// result convention a model can use without knowing the adapter).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,6 +42,10 @@ pub enum AnalysisCodeFailure {
     Rejected,
     /// The program failed or ran out of time or memory.
     Failed,
+    /// The program ran out of time, steps or memory.
+    Overrun,
+    /// The program's result is over [`MAX_ANALYSIS_RESULT_BYTES`].
+    ResultTooLarge,
     /// The run was stopped.
     Cancelled,
     /// Completion could not be confirmed; the program may have run.
@@ -61,7 +69,13 @@ pub(crate) fn failure_sentence(failure: AnalysisCodeFailure) -> &'static str {
             "The code sandbox refused the job (it is not authorized, or the code or data is over its size limit). Send fewer rows or shorter code."
         }
         AnalysisCodeFailure::Failed => {
-            "The program failed, or ran out of time or memory, in the sandbox. Check the code for errors, and send fewer rows if it is heavy. The sandbox has no pandas, no network and no files."
+            "The program failed in the sandbox. Check the code for errors. The sandbox has no pandas, no network and no files."
+        }
+        AnalysisCodeFailure::Overrun => {
+            "The program ran out of time, steps or memory in the sandbox. Send fewer rows (use `columns`, `filters` or `max_rows`) or make the code cheaper."
+        }
+        AnalysisCodeFailure::ResultTooLarge => {
+            "The program's result is over 100 KiB and was refused. Return a summary, not the data."
         }
         AnalysisCodeFailure::Cancelled => "The run was cancelled before it finished.",
         AnalysisCodeFailure::Uncertain => {

@@ -950,6 +950,17 @@ pub(crate) fn parse_columns(table: &Table, args: &Value, key: &str) -> DataResul
     Ok(out)
 }
 
+/// Refuse a result of `rows` x `columns` cells over the limit, before it exists.
+fn over_cell_limit(rows: usize, columns: usize, limits: &Limits) -> DataResult<()> {
+    if rows.saturating_mul(columns) > limits.max_cells {
+        return Err(DataError::Limit(format!(
+            "The result would have {rows} rows by {columns} columns, over the {} cell limit. Filter first, group by fewer columns, or ask for fewer aggregations.",
+            limits.max_cells
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn aggregate(
     table: &Table,
     group_by: &[usize],
@@ -958,6 +969,8 @@ pub(crate) fn aggregate(
     deadline: &Deadline,
 ) -> DataResult<Table> {
     let groups = group_rows(table, group_by, limits, deadline)?;
+    // The result's size is known now; refuse before any column is allocated.
+    over_cell_limit(groups.len(), group_by.len() + specs.len(), limits)?;
     let mut names: Vec<String> = group_by.iter().map(|k| table.names[*k].clone()).collect();
     let firsts: Vec<Option<usize>> = groups.iter().map(|g| g.first().copied()).collect();
     let mut columns: Vec<Column> = group_by
@@ -965,6 +978,7 @@ pub(crate) fn aggregate(
         .map(|k| table.columns[*k].gather(&firsts))
         .collect();
     for spec in specs {
+        deadline.check()?;
         let mut values = Vec::with_capacity(groups.len());
         for (n, group) in groups.iter().enumerate() {
             if n % 256 == 0 {
@@ -1053,6 +1067,9 @@ pub(crate) fn pivot(
     for (position, original) in order.iter().enumerate() {
         slot_of[*original] = position;
     }
+    // groups x (index columns + pivot columns) is known: refuse before the
+    // first cell is allocated, not after the table is built.
+    over_cell_limit(groups.len(), spec.index.len() + order.len(), limits)?;
     let mut cells: Vec<Vec<Val>> = (0..order.len())
         .map(|_| Vec::with_capacity(groups.len()))
         .collect();
@@ -1082,6 +1099,7 @@ pub(crate) fn pivot(
         .map(|k| table.columns[*k].gather(&firsts))
         .collect();
     for (position, values) in cells.into_iter().enumerate() {
+        deadline.check()?;
         let original = order[position];
         names.push(pivot_column.cell(representatives[original]).text());
         let mut column = column_of(dtype, values);
@@ -1622,6 +1640,52 @@ mod tests {
         let args = json!({"filters": [{"column": "region", "operator": "matches", "value": "("}]});
         let spec = parse_filter(&args).unwrap().unwrap();
         assert!(matching_rows(&table, &spec, &clock()).is_err());
+    }
+
+    /// A million distinct groups: the result's size is refused from the group
+    /// count, before any result column exists.
+    fn million_groups() -> Table {
+        let n = 1_000_000usize;
+        Table::new(
+            vec!["id".into(), "kind".into(), "v".into()],
+            vec![
+                Column::Int((0..n as i64).map(Some).collect()),
+                Column::Int((0..n as i64).map(|i| Some(i % 6)).collect()),
+                Column::Float((0..n).map(|i| Some(i as f64)).collect()),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_result_over_the_cell_limit_is_refused_before_it_is_built() {
+        let table = million_groups();
+        let specs: Vec<AggSpec> = (0..6)
+            .map(|i| AggSpec {
+                column: Some(2),
+                func: Func::Sum,
+                name: format!("s{i}"),
+            })
+            .collect();
+        // 1,000,000 groups x (1 + 6) columns = 7,000,000 > 5,000,000.
+        let e = aggregate(&table, &[0], &specs, &Limits::default(), &clock()).unwrap_err();
+        assert!(e.to_string().contains("1000000 rows by 7 columns"), "{e}");
+        let e = pivot(
+            &table,
+            &PivotSpec {
+                index: &[0],
+                columns: 1,
+                values: 2,
+                func: Func::Sum,
+                fill: Some(0.0),
+            },
+            &Limits::default(),
+            &clock(),
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("1000000 rows by 7 columns"), "{e}");
+        // Under the limit the same shapes still work.
+        let ok = aggregate(&table, &[0], &specs[..2], &Limits::default(), &clock()).unwrap();
+        assert_eq!(ok.rows, 1_000_000);
     }
 
     #[test]

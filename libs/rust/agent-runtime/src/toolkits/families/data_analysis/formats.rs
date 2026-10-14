@@ -684,7 +684,12 @@ fn delimited_bytes(
         if i > 0 {
             out.push(delimiter);
         }
-        field(&mut out, name, delimiter);
+        if looks_like_formula(name) {
+            notes.neutralized_cells += 1;
+            field(&mut out, &format!("'{name}"), delimiter);
+        } else {
+            field(&mut out, name, delimiter);
+        }
     }
     out.push(b'\n');
     for row in 0..table.rows {

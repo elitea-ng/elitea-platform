@@ -121,9 +121,8 @@ impl OfficeToolHost for FakeHost {
     }
 
     fn object_link(&self, bucket: &str, name: &str) -> Option<String> {
-        self.link.then(|| {
-            format!("https://platform.test/api/v2/artifacts/artifact/default/7/{bucket}/{name}")
-        })
+        self.link
+            .then(|| format!("/api/v2/artifacts/artifact/default/7/{bucket}/{name}"))
     }
 }
 
@@ -827,7 +826,8 @@ async fn every_chart_kind_saves_a_png_with_an_embeddable_link() {
         assert!(bytes.len() > 1_000, "{kind}: {} bytes", bytes.len());
         let markdown = out["markdown"].as_str().unwrap();
         assert!(
-            markdown.starts_with("![T](https://platform.test/"),
+            markdown.starts_with("![T](/api/v2/artifacts/artifact/default/7/")
+                && !markdown.contains("://"),
             "{markdown}"
         );
         assert!(markdown.contains(file));
@@ -1273,6 +1273,168 @@ async fn every_sandbox_failure_has_its_own_sentence() {
         )
         .await;
     assert!(m.contains("`language` must be python or javascript"), "{m}");
+}
+
+fn json_nodes(value: &Value) -> usize {
+    1 + match value {
+        Value::Array(items) => items.iter().map(json_nodes).sum(),
+        Value::Object(map) => map.values().map(json_nodes).sum(),
+        _ => 0,
+    }
+}
+
+#[tokio::test]
+async fn the_default_sandbox_payload_fits_the_bytes_and_the_node_budget() {
+    let runner = Arc::new(FakeRunner::default());
+    let rig = Rig::with(
+        FakeHost::default(),
+        test_limits(),
+        Some(Arc::clone(&runner)),
+    )
+    .await;
+    // One column, 50,000 rows: 100,000 scalar nodes alone would break the
+    // sandbox's count, so the list is trimmed, never rejected.
+    rig.host
+        .put("one.csv", "a\n".to_owned() + &"1\n".repeat(50_000));
+    let out = rig
+        .ok(
+            "run_analysis_code",
+            json!({"filename": "one.csv", "code": "x"}),
+        )
+        .await;
+    assert_eq!(out["rows_total"], 50_000);
+    let sent = out["rows_sent"].as_u64().unwrap();
+    assert!(sent > 49_000 && sent < 50_000, "{sent}");
+    assert_eq!(out["truncated"], true);
+    // Text-heavy: 200 rows of 20 KB strings (4 MB) are cut by bytes.
+    let mut csv = String::from("t\n");
+    for i in 0..200 {
+        csv.push_str(&format!("{}{i}\n", "x".repeat(20_000)));
+    }
+    rig.host.put("text.csv", csv);
+    let long_code = "y".repeat(50_000);
+    let out = rig
+        .ok(
+            "run_analysis_code",
+            json!({"filename": "text.csv", "code": long_code}),
+        )
+        .await;
+    assert!(out["rows_sent"].as_u64().unwrap() < 200);
+    assert!(out["note"].as_str().unwrap().contains("rows were sent"));
+    {
+        let seen = runner.seen.lock().unwrap();
+        for request in seen.iter() {
+            let nodes = json_nodes(&request.input["data"]);
+            let bytes = request.input.to_string().len() + request.source.len();
+            assert!(nodes <= 100_000, "{nodes} nodes");
+            assert!(bytes <= 1024 * 1024, "{bytes} bytes");
+        }
+        assert_eq!(seen.len(), 2);
+    }
+    // A first row that cannot fit at all is a sentence, not a failed job.
+    let tiny = Rig::with(
+        FakeHost::default(),
+        tight(|l| l.max_sandbox_bytes = 4_200),
+        Some(Arc::clone(&runner)),
+    )
+    .await;
+    tiny.host.put("one.csv", "a\n1\n");
+    let m = tiny
+        .err(
+            "run_analysis_code",
+            json!({"filename": "one.csv", "code": "x"}),
+        )
+        .await;
+    assert!(m.contains("Not even one row fits"), "{m}");
+}
+
+#[tokio::test]
+async fn one_result_limit_is_stated_everywhere() {
+    for tool in ALL_TOOLS {
+        assert!(!tool.description().contains("256 KiB"), "{}", tool.name());
+    }
+    assert!(
+        ALL_TOOLS
+            .iter()
+            .any(|t| t.description().contains("at most 100 KiB"))
+    );
+    assert_eq!(
+        super::families::data_analysis::code::MAX_ANALYSIS_RESULT_BYTES,
+        100 * 1024
+    );
+}
+
+#[tokio::test]
+async fn bar_sort_by_orders_the_aggregated_groups() {
+    let rig = Rig::new().await;
+    rig.host.put("s.csv", SALES);
+    let plain = rig
+        .ok(
+            "chart_data",
+            json!({"filename": "s.csv", "chart_type": "bar", "x": "region", "y": ["units"]}),
+        )
+        .await;
+    assert_eq!(plain["plotted_rows"][0][0], "east");
+    let sorted = rig
+        .ok(
+            "chart_data",
+            json!({"filename": "s.csv", "chart_type": "bar", "x": "region", "y": ["units"],
+                "sort_by": [{"column": "units", "descending": true}]}),
+        )
+        .await;
+    // north has the most units (17) once the groups are summed.
+    assert_eq!(sorted["plotted_rows"][0], json!(["north", 17.0]));
+    assert_eq!(sorted["plotted_rows"][2][0], "east");
+    // Scatter orders rows, before drawing.
+    rig.ok(
+        "chart_data",
+        json!({"filename": "s.csv", "chart_type": "scatter", "x": "units", "y": ["price"],
+            "sort_by": ["units"]}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn formula_like_header_names_are_neutralized_too() {
+    let rig = Rig::new().await;
+    rig.host
+        .put("h.csv", "=cmd,\"\r+x\",ok,-5\nz,\"\rv\",3,4\n");
+    let out = rig
+        .ok(
+            "filter_data",
+            json!({"filename": "h.csv", "output_file": "h2.csv"}),
+        )
+        .await;
+    let saved = String::from_utf8(rig.host.get("h2.csv")).unwrap();
+    // Headers get the rule too (the reader trims a header's leading CR); a
+    // cell that starts with CR is a formula start to a spreadsheet.
+    assert!(saved.starts_with("'=cmd,'+x,ok,-5\n"), "{saved:?}");
+    assert!(
+        saved.contains("\n\"'\rv\"") || saved.contains("'\rv"),
+        "{saved:?}"
+    );
+    assert_eq!(out["saved"]["csv_formula_cells_prefixed"], 3);
+}
+
+#[tokio::test]
+async fn the_analysis_limit_is_worker_wide_not_per_tool_set() {
+    use super::families::data_analysis::tools::analysis_gate;
+    let first = Rig::new().await;
+    let second = Rig::new().await;
+    second.host.put("s.csv", SALES);
+    first.host.put("s.csv", SALES);
+    let held = analysis_gate().acquire_many(2).await.expect("gate");
+    let args =
+        json!({"filename": "s.csv", "aggregations": [{"column": "units", "function": "sum"}]});
+    let mut a = Box::pin(first.call("aggregate_data", args.clone()));
+    let mut b = Box::pin(second.call("aggregate_data", args));
+    let wait = std::time::Duration::from_millis(250);
+    // Both tool sets wait on the one gate while it is held.
+    assert!(tokio::time::timeout(wait, &mut a).await.is_err());
+    assert!(tokio::time::timeout(wait, &mut b).await.is_err());
+    drop(held);
+    assert_eq!(a.await["status"], "success");
+    assert_eq!(b.await["status"], "success");
 }
 
 #[tokio::test]

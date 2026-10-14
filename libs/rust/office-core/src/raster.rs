@@ -7,6 +7,8 @@
 //! upload: raster images and external references are off, so a stray `href`
 //! in a label cannot fetch or decode anything.
 
+use std::sync::{Arc, OnceLock};
+
 use resvg::{tiny_skia, usvg};
 
 use crate::error::{Limit, OfficeError, Result, limit};
@@ -17,6 +19,19 @@ const REGULAR: &[u8] =
     include_bytes!("../../vendor/zavora-slide-render/fonts/LiberationSans-Regular.ttf");
 const BOLD: &[u8] =
     include_bytes!("../../vendor/zavora-slide-render/fonts/LiberationSans-Bold.ttf");
+
+/// The font database, parsed once: two faces and the default family. Every
+/// call shares it (read-only) instead of re-parsing 700 KiB of font data.
+fn fonts() -> &'static Arc<usvg::fontdb::Database> {
+    static FONTS: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
+    FONTS.get_or_init(|| {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_font_data(REGULAR.to_vec());
+        db.load_font_data(BOLD.to_vec());
+        db.set_sans_serif_family("Liberation Sans");
+        Arc::new(db)
+    })
+}
 
 /// Draw `svg` as a PNG of at most `max_pixels` pixels, on the dedicated parse
 /// thread (so it holds a document permit like every other call).
@@ -31,18 +46,15 @@ pub fn svg_to_png(svg: &str, max_pixels: u64, limits: &Limits) -> Result<Vec<u8>
     }
     let svg = svg.to_owned();
     run_guarded(limits, move || {
-        let mut options = usvg::Options {
+        let options = usvg::Options {
             image_href_resolver: usvg::ImageHrefResolver {
                 // Neither a data: image nor a file path is followed.
                 resolve_data: Box::new(|_, _, _| None),
                 resolve_string: Box::new(|_, _| None),
             },
+            fontdb: Arc::clone(fonts()),
             ..usvg::Options::default()
         };
-        let fonts = options.fontdb_mut();
-        fonts.load_font_data(REGULAR.to_vec());
-        fonts.load_font_data(BOLD.to_vec());
-        fonts.set_sans_serif_family("Liberation Sans");
         let tree = usvg::Tree::from_str(&svg, &options)
             .map_err(|e| OfficeError::InvalidInput(format!("svg: {e}")))?;
         let size = tree.size().to_int_size();

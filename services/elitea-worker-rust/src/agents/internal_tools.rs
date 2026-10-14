@@ -87,6 +87,15 @@ const MAX_ANSWER_BYTES: usize = 16 * 1_024;
 
 const ASK_USER_DESCRIPTION: &str = "Ask the user a clarifying question when information is missing or the requested choice is ambiguous instead of guessing. Present 1-4 questions, each with a short header and selectable options; the user can choose an option or provide another answer when allowed. Use this only for genuine decision points, not to request permission to run another tool.";
 
+fn log_skipped(name: &str) {
+    tracing::warn!(
+        event = "agent_internal_tool_skipped",
+        reason_code = "internal_tool_unsupported",
+        internal_tool = name,
+        "internal tool is unavailable in this runtime and was omitted from the agent"
+    );
+}
+
 /// Strict, frozen set of runtime-owned internal tool capabilities.
 ///
 /// `skipped` is a bitmask over `PLATFORM_INTERNAL_TOOLS`' own indices (it has
@@ -149,12 +158,12 @@ impl InternalToolCatalog {
                     // `skipped_tools_notice_text` (below) turns it into a
                     // message `session.rs` seeds into the conversation
                     // itself, so the run says so, not only the server log.
-                    tracing::warn!(
-                        event = "agent_internal_tool_skipped",
-                        reason_code = "internal_tool_unsupported",
-                        internal_tool = name,
-                        "internal tool is unavailable in this runtime and was omitted from the agent"
-                    );
+                    // data_analysis is logged where it is actually omitted
+                    // (`toolsets`, `data_analysis_toolset`): the ordinary
+                    // assembly serves it.
+                    if name != DATA_ANALYSIS_TOOL_NAME {
+                        log_skipped(name);
+                    }
                     if let Some(index) = PLATFORM_INTERNAL_TOOLS
                         .iter()
                         .position(|candidate| *candidate == name)
@@ -232,7 +241,10 @@ impl InternalToolCatalog {
         if !self.data_analysis {
             return None;
         }
-        let authority = authority?;
+        let Some(authority) = authority else {
+            log_skipped(DATA_ANALYSIS_TOOL_NAME);
+            return None;
+        };
         match elitea_agent_runtime::toolkits::build_data_analysis_toolset(authority, policy) {
             Ok(Some(toolset)) => Some(Arc::new(toolset)),
             Ok(None) => {
@@ -316,6 +328,11 @@ impl InternalToolCatalog {
     /// knew.
     pub(crate) fn toolsets(self, builders: Option<&BuilderToolAuthority>) -> Vec<Arc<dyn Toolset>> {
         let mut toolsets: Vec<Arc<dyn Toolset>> = Vec::new();
+        if builders.is_none() && self.data_analysis {
+            // Pipelines and nested agents: the data tools are bound by the
+            // ordinary assembly only.
+            log_skipped(DATA_ANALYSIS_TOOL_NAME);
+        }
         if self.ask_user {
             toolsets.push(Arc::new(BasicToolset::new(
                 ASK_USER_TOOLSET_NAME,
@@ -1572,5 +1589,65 @@ mod tests {
         assert!(names.contains(&"describe_data") && names.contains(&"chart_data"));
         // No sandbox lent: free-form code is not offered.
         assert!(!names.contains(&"run_analysis_code"));
+    }
+    /// The "omitted" warning is for runs that omit the tool: not for a parse
+    /// whose assembly then serves it.
+    #[tokio::test]
+    async fn data_analysis_is_logged_as_skipped_only_where_it_is_omitted() {
+        use std::sync::Mutex;
+
+        #[derive(Clone)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        fn logged(work: impl FnOnce()) -> String {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = Capture(Arc::clone(&buffer));
+            let guard = tracing::subscriber::set_default(
+                tracing_subscriber::fmt()
+                    .with_writer(move || writer.clone())
+                    .finish(),
+            );
+            work();
+            drop(guard);
+            String::from_utf8_lossy(&buffer.lock().unwrap()).into_owned()
+        }
+        let names = ["data_analysis".to_owned()];
+        // Parsing alone logs nothing: the ordinary assembly may serve it.
+        assert!(
+            !logged(|| {
+                let _ = InternalToolCatalog::from_names(&names).unwrap();
+            })
+            .contains("agent_internal_tool_skipped")
+        );
+        let catalog = InternalToolCatalog::from_names(&names).unwrap();
+        // The paths that never bind it (pipelines, nested agents) say so.
+        assert!(logged(|| drop(catalog.toolsets(None))).contains("agent_internal_tool_skipped"));
+        // The ordinary assembly without a host says so; it logs it once, here.
+        let allow = Arc::new(
+            elitea_agent_runtime::toolkits::ToolAdmissionPolicy::new(
+                &[],
+                &std::collections::BTreeMap::new(),
+            )
+            .unwrap(),
+        );
+        assert!(
+            logged(|| drop(catalog.data_analysis_toolset(None, &allow)))
+                .contains("agent_internal_tool_skipped")
+        );
+        // Another skipped tool is still logged at parse, as before.
+        assert!(
+            logged(|| {
+                let _ = InternalToolCatalog::from_names(&["planner".to_owned()]).unwrap();
+            })
+            .contains("agent_internal_tool_skipped")
+        );
     }
 }

@@ -298,14 +298,17 @@ impl OfficeToolHost for ClaimOfficeHost {
         })
     }
 
-    /// The link the SDK's chart answer used: the platform origin and the
-    /// artifact route of the turn's project (`pandas_analyze_data` printed
-    /// `{base_url}/api/v2/artifacts/artifact/default/{project}/{bucket}/{file}`).
+    /// The path the SDK's chart answer used
+    /// (`/api/v2/artifacts/artifact/default/{project}/{bucket}/{file}`),
+    /// root-relative on purpose: the platform origin this host reaches is the
+    /// in-cluster edge, which a person's browser cannot open. The chat UI
+    /// resolves the path against the origin it was served from.
     fn object_link(&self, bucket: &str, name: &str) -> Option<String> {
         if !valid_segment(bucket) || !valid_object_key(name) {
             return None;
         }
-        let mut url = Url::parse(&self.runtime.origin).ok()?;
+        // Percent-encoding comes from the URL type's path-segment rules.
+        let mut url = Url::parse("https://relative.invalid/").ok()?;
         {
             let mut segments = url.path_segments_mut().ok()?;
             segments.pop_if_empty().extend([
@@ -319,7 +322,7 @@ impl OfficeToolHost for ClaimOfficeHost {
             ]);
             segments.extend(name.split('/'));
         }
-        Some(url.to_string())
+        Some(url.path().to_owned())
     }
 
     async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError> {

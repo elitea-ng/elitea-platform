@@ -25,7 +25,7 @@ use crate::toolkits::policy::{ToolAdmissionDecision, ToolAdmissionPolicy};
 use super::chart::{self, Chart, Kind, Series};
 use super::code::{
     AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner, AnalysisLanguage,
-    failure_sentence,
+    MAX_ANALYSIS_RESULT_BYTES, failure_sentence,
 };
 use super::formats::{self, Format, Loaded, SourceInfo, WriteNotes};
 use super::ops::{self, Func, How, JoinSpec, PivotSpec};
@@ -37,12 +37,26 @@ pub(crate) const TOOLKIT_TYPE: &str = "data_analysis";
 const MAX_NAME_BYTES: usize = 1_024;
 const MAX_CELL_CHARS: usize = 500;
 const DEFAULT_PREVIEW_ROWS: usize = 20;
-const MAX_RESULT_BYTES: usize = 100 * 1024;
-/// Analyses that may run at once in one tool set: each can hold millions of
-/// cells.
+/// Analyses that may run at once in the whole worker process, whatever number
+/// of runs and tool sets exist: each can hold millions of cells, so the bound
+/// on memory must not grow with the number of conversations.
 const CONCURRENT_ANALYSES: usize = 2;
+static ANALYSIS_GATE: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(CONCURRENT_ANALYSES);
+
+/// The gate, for the tests that hold it.
+#[cfg(test)]
+pub(crate) fn analysis_gate() -> &'static tokio::sync::Semaphore {
+    &ANALYSIS_GATE
+}
 const MAX_CHART_CATEGORIES: usize = 100;
 const MAX_SCATTER_POINTS: usize = 5_000;
+/// Bytes of the request around the data: the job envelope and key names.
+const SANDBOX_ENVELOPE_BYTES: usize = 4 * 1024;
+/// Bytes of the `total_rows`/`truncated` keys and the object punctuation.
+const SANDBOX_HEAD_BYTES: usize = 200;
+/// Nodes held back from the sandbox's count for the `data` wrapper.
+const SANDBOX_NODE_MARGIN: usize = 16;
 const PNG_MEDIA_TYPE: &str = "image/png";
 
 type Sentence = String;
@@ -109,7 +123,6 @@ pub(crate) fn build_with(
         return Ok(None);
     }
     let limits = Arc::new(limits);
-    let gate = Arc::new(tokio::sync::Semaphore::new(CONCURRENT_ANALYSES));
     let tools: Vec<Arc<dyn Tool>> = ALL_TOOLS
         .iter()
         .copied()
@@ -120,7 +133,6 @@ pub(crate) fn build_with(
                 host: Arc::clone(&authority.host),
                 runner: authority.runner.clone(),
                 limits: Arc::clone(&limits),
-                gate: Arc::clone(&gate),
             })
         })
         .collect();
@@ -134,7 +146,6 @@ struct DataToolImpl {
     host: SharedOfficeToolHost,
     runner: Option<Arc<dyn AnalysisCodeRunner>>,
     limits: Arc<Limits>,
-    gate: Arc<tokio::sync::Semaphore>,
 }
 
 #[async_trait]
@@ -427,9 +438,9 @@ impl DataToolImpl {
                     .await
                     .map_err(|f| failure_sentence(f).to_owned())?;
                 let size = serde_json::to_vec(&result).map_or(usize::MAX, |b| b.len());
-                if size > MAX_RESULT_BYTES {
+                if size > MAX_ANALYSIS_RESULT_BYTES {
                     return Err(format!(
-                        "The program returned {size} bytes; return at most {MAX_RESULT_BYTES}. Summarise inside the program."
+                        "The program returned {size} bytes; return at most {MAX_ANALYSIS_RESULT_BYTES}. Summarise inside the program."
                     ));
                 }
                 answer.insert("result".into(), result);
@@ -528,8 +539,7 @@ impl DataToolImpl {
     where
         F: FnOnce(&Limits, &Deadline) -> DataResult<Pending> + Send + 'static,
     {
-        let _permit = self
-            .gate
+        let _permit = ANALYSIS_GATE
             .acquire()
             .await
             .map_err(|_| "The analysis engine is shutting down.".to_owned())?;
@@ -939,9 +949,13 @@ fn chart_tool(
     if table.rows == 0 {
         return Err(argument("No rows are left to draw after the filters."));
     }
-    let keys = ops::parse_sort(&table, args)?;
-    if !keys.is_empty() {
-        table = ops::sort_table(&table, &keys, deadline)?;
+    // Scatter and histogram draw rows, so `sort_by` orders the rows. Bar, line
+    // and pie draw groups: there it orders the aggregated groups, below.
+    if matches!(kind, Kind::Scatter | Kind::Histogram) {
+        let keys = ops::parse_sort(&table, args)?;
+        if !keys.is_empty() {
+            table = ops::sort_table(&table, &keys, deadline)?;
+        }
     }
     let y = ops::parse_columns(&table, args, "y")?;
     let numeric = |c: usize| -> DataResult<()> {
@@ -1054,6 +1068,10 @@ fn chart_tool(
                     grouped.names[1]
                 ));
                 grouped = grouped.take_rows(&kept);
+            }
+            let keys = ops::parse_sort(&grouped, args)?;
+            if !keys.is_empty() {
+                grouped = ops::sort_table(&grouped, &keys, deadline)?;
             }
             if grouped.rows > MAX_CHART_CATEGORIES {
                 return Err(argument(format!(
@@ -1234,10 +1252,40 @@ fn code_job(
             limits.max_sandbox_cells
         )));
     }
-    let sent = total.min(wanted);
-    let rows: Vec<Value> = (0..sent)
-        .map(|r| Value::Array(table.columns.iter().map(|c| c.cell(r).json()).collect()))
-        .collect();
+    // Rows go in one at a time against three budgets: the cell count, the
+    // request's bytes (the source takes its share) and the sandbox's JSON node
+    // count, in which every array, object and scalar counts. The first row that
+    // would break one ends the list, and the answer says how many were sent.
+    let names_json = json!(table.names);
+    let types_json = json!(formats::dtype_names(&table));
+    let head_bytes =
+        names_json.to_string().len() + types_json.to_string().len() + SANDBOX_HEAD_BYTES;
+    let byte_budget = limits
+        .max_sandbox_bytes
+        .saturating_sub(source.len() + SANDBOX_ENVELOPE_BYTES);
+    // data object, columns + types arrays and their names, rows array,
+    // total_rows, truncated.
+    let fixed_nodes = 6 + 2 * table.width();
+    let node_budget = limits.max_sandbox_nodes.saturating_sub(SANDBOX_NODE_MARGIN);
+    let (mut bytes, mut nodes) = (head_bytes, fixed_nodes);
+    let mut rows: Vec<Value> = Vec::new();
+    for r in 0..total.min(wanted) {
+        let row = Value::Array(table.columns.iter().map(|c| c.cell(r).json()).collect());
+        let row_bytes = row.to_string().len() + 1;
+        let row_nodes = 1 + table.width();
+        if bytes + row_bytes > byte_budget || nodes + row_nodes > node_budget {
+            break;
+        }
+        bytes += row_bytes;
+        nodes += row_nodes;
+        rows.push(row);
+    }
+    let sent = rows.len();
+    if sent == 0 && total > 0 {
+        return Err(argument(
+            "Not even one row fits in what the sandbox accepts (the code is long or a row is very large). Choose fewer `columns`, or shorten the code.",
+        ));
+    }
     answer.insert("rows_total".into(), json!(total));
     answer.insert("rows_sent".into(), json!(sent));
     if sent < total {
@@ -1250,8 +1298,8 @@ fn code_job(
         );
     }
     let input = json!({"data": {
-        "columns": table.names,
-        "types": formats::dtype_names(&table),
+        "columns": names_json,
+        "types": types_json,
         "rows": rows,
         "total_rows": total,
         "truncated": sent < total,

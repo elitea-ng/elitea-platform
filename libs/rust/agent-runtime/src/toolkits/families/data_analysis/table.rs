@@ -33,6 +33,11 @@ pub(crate) struct Limits {
     pub(crate) max_answer_bytes: usize,
     /// Cells handed to the code sandbox as its input.
     pub(crate) max_sandbox_cells: usize,
+    /// Bytes of one sandbox request (its own bound is 1 MiB).
+    pub(crate) max_sandbox_bytes: usize,
+    /// JSON nodes of one sandbox input value (its own bound is 100,000);
+    /// arrays and objects count as well as scalars.
+    pub(crate) max_sandbox_nodes: usize,
     /// Wall clock of one call. Checked inside every loop that visits rows, so
     /// it stops the work, unlike a deadline wrapped around a thread.
     pub(crate) deadline: Duration,
@@ -54,6 +59,8 @@ impl Default for Limits {
             max_preview_rows: 500,
             max_answer_bytes: 60 * 1024,
             max_sandbox_cells: 50_000,
+            max_sandbox_bytes: 1024 * 1024,
+            max_sandbox_nodes: 100_000,
             deadline: Duration::from_secs(20),
             #[cfg(feature = "toolkit-data-analysis")]
             office: elitea_office_core::Limits::default(),

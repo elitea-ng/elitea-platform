@@ -26,14 +26,11 @@ struct AdapterResult {
     result: Value,
 }
 
-/// Message content is constructed here; user JSON cannot supply message roles,
-/// tool calls, checkpoint metadata, or runtime control fields.
-pub(super) fn project_code_receipt(
-    bytes: &[u8],
-    boundary: &CodeStateBoundary,
-    outputs: &[String],
-    structured: bool,
-) -> Result<BTreeMap<String, Value>, CodeStateError> {
+/// The program's result from a supervisor receipt: exactly a completed run
+/// that exited zero, whose stdout is exactly the adapter's revisioned
+/// envelope. Stderr is diagnostic data, never read into a result. Shared by
+/// the Code node projection and the `data_analysis` code tool.
+pub(super) fn parse_receipt(bytes: &[u8]) -> Result<Value, CodeStateError> {
     if bytes.len() > 512 * 1024 {
         return Err(CodeStateError::SizeLimit);
     }
@@ -42,7 +39,6 @@ pub(super) fn project_code_receipt(
     if receipt.revision != 1 || receipt.status != "completed" || receipt.exit_code != Some(0) {
         return Err(CodeStateError::MalformedResult);
     }
-    // Stderr is diagnostic data, never a state patch or an assistant message.
     drop(receipt.stderr);
     if receipt.stdout.len() > 256 * 1024 + 64 {
         return Err(CodeStateError::SizeLimit);
@@ -52,8 +48,19 @@ pub(super) fn project_code_receipt(
     if adapter.revision != 1 {
         return Err(CodeStateError::MalformedResult);
     }
-    let result_bytes =
-        serde_json::to_vec(&adapter.result).map_err(|_| CodeStateError::MalformedResult)?;
+    Ok(adapter.result)
+}
+
+/// Message content is constructed here; user JSON cannot supply message roles,
+/// tool calls, checkpoint metadata, or runtime control fields.
+pub(super) fn project_code_receipt(
+    bytes: &[u8],
+    boundary: &CodeStateBoundary,
+    outputs: &[String],
+    structured: bool,
+) -> Result<BTreeMap<String, Value>, CodeStateError> {
+    let result = parse_receipt(bytes)?;
+    let result_bytes = serde_json::to_vec(&result).map_err(|_| CodeStateError::MalformedResult)?;
     if outputs.len() > 256 || result_bytes.len().saturating_mul(outputs.len().max(1)) > 512 * 1024 {
         return Err(CodeStateError::SizeLimit);
     }
@@ -61,11 +68,11 @@ pub(super) fn project_code_receipt(
     // The legacy adapter returns {result: value}; ordinary output destinations
     // receive that value, rather than treating its object keys as authority.
     for key in outputs.iter().filter(|key| key.as_str() != "messages") {
-        updates.insert(key.clone(), adapter.result.clone());
+        updates.insert(key.clone(), result.clone());
     }
     let mut structured_list_result = None;
     if structured {
-        let value = match &adapter.result {
+        let value = match &result {
             Value::String(text) => {
                 serde_json::from_str(text).map_err(|_| CodeStateError::MalformedResult)?
             }
@@ -92,7 +99,7 @@ pub(super) fn project_code_receipt(
     }
     if outputs.is_empty() || outputs.iter().any(|key| key == "messages") {
         let content =
-            serde_json::to_string(&adapter.result).map_err(|_| CodeStateError::MalformedResult)?;
+            serde_json::to_string(&result).map_err(|_| CodeStateError::MalformedResult)?;
         updates.insert(
             "messages".to_owned(),
             json!([{"role":"assistant", "content":content}]),

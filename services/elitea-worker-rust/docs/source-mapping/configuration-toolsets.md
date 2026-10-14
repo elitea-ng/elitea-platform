@@ -2622,7 +2622,7 @@ What the Rust worker serves instead, behind the same toggle and the same
 | `correlate_data` | Pearson or Spearman matrix |
 | `chart_data` | `bar`, `line`, `scatter`, `pie`, `histogram` as a PNG artifact with a Markdown link |
 | `save_dataframe` | Converts between `.csv`, `.tsv`, `.json` and `.xlsx` (SDK wrapper name and arguments) |
-| `run_analysis_code` | Python or JavaScript on up to 50,000 cells, in the platform code sandbox; offered only when the run has a sandbox runtime |
+| `run_analysis_code` | Python or JavaScript on up to 50,000 cells (fewer when bytes or JSON nodes run out first), in the platform code sandbox; offered only when the run has a sandbox runtime |
 
 Files are read from the conversation attachments bucket (`chat-attachments`
 unless `bucket_name` says otherwise) through the Office object host that the
@@ -2633,8 +2633,10 @@ next to the source for a bare name, refused when the name is taken unless
 
 Bounds, enforced while a table is built and checked on a clock inside every
 loop: 50 MiB per file, 1,000,000 rows, 1,000 columns, 5,000,000 cells, 32 KiB
-per text cell, 500 pivot columns, 20 s per call, two analyses at a time per
-tool set. A CSV that opens a quote it never closes, a ragged row, UTF-16 or
+per text cell, 500 pivot columns, 20 s per call, two analyses at a time in the
+whole worker process (one shared gate), a result limit of 100 KiB for
+`run_analysis_code`, and a sandbox payload trimmed to 1 MiB and 100,000 JSON
+nodes. A CSV that opens a quote it never closes, a ragged row, UTF-16 or
 invalid UTF-8, JSON that is not records, and a workbook the Office gate refuses
 each get their own sentence.
 

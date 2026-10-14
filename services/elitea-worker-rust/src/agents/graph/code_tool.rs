@@ -11,18 +11,18 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
     AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner, AnalysisLanguage,
+    MAX_ANALYSIS_RESULT_BYTES,
 };
 use ring::digest;
-use serde::Deserialize;
 use serde_json::Value;
 
 use super::code::{CodeLanguage, CodeProvenance};
+use super::code_result::parse_receipt;
 use super::code_runtime::{CodeInvocation, CodeSandboxRuntime};
+use super::code_state::CodeStateError;
 
 /// The most bytes of input state one program is sent.
 const MAX_INPUT_BYTES: usize = 1024 * 1024;
-const MAX_RECEIPT_BYTES: usize = 512 * 1024;
-const MAX_RESULT_BYTES: usize = 256 * 1024 + 64;
 
 /// Runs analysis programs on the invocation's sandbox runtime.
 pub(crate) struct SandboxAnalysisRunner {
@@ -35,46 +35,19 @@ impl SandboxAnalysisRunner {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Receipt {
-    revision: u8,
-    status: String,
-    exit_code: Option<i32>,
-    stdout: String,
-    #[allow(dead_code)]
-    stderr: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AdapterResult {
-    revision: u8,
-    result: Value,
-}
-
-/// The program's result, from a completed receipt. A receipt that is not
-/// exactly the supervisor's, or a program that did not exit cleanly, is a
-/// failure; stderr is never read into a result.
+/// The program's result from a completed receipt, by the same reader the
+/// Code node uses; a result over the tool's cap is refused here, before the
+/// model-facing layer sees it.
 fn result_of(bytes: &[u8]) -> Result<Value, AnalysisCodeFailure> {
-    if bytes.len() > MAX_RECEIPT_BYTES {
-        return Err(AnalysisCodeFailure::Failed);
+    let result = parse_receipt(bytes).map_err(|error| match error {
+        CodeStateError::SizeLimit => AnalysisCodeFailure::ResultTooLarge,
+        _ => AnalysisCodeFailure::Failed,
+    })?;
+    let size = serde_json::to_vec(&result).map_or(usize::MAX, |encoded| encoded.len());
+    if size > MAX_ANALYSIS_RESULT_BYTES {
+        return Err(AnalysisCodeFailure::ResultTooLarge);
     }
-    let receipt: Receipt =
-        serde_json::from_slice(bytes).map_err(|_| AnalysisCodeFailure::Failed)?;
-    if receipt.revision != 1
-        || receipt.status != "completed"
-        || receipt.exit_code != Some(0)
-        || receipt.stdout.len() > MAX_RESULT_BYTES
-    {
-        return Err(AnalysisCodeFailure::Failed);
-    }
-    let adapter: AdapterResult =
-        serde_json::from_str(&receipt.stdout).map_err(|_| AnalysisCodeFailure::Failed)?;
-    if adapter.revision != 1 {
-        return Err(AnalysisCodeFailure::Failed);
-    }
-    Ok(adapter.result)
+    Ok(result)
 }
 
 /// The cause of a refused run, from the runtime's error text. The runtime
@@ -82,16 +55,31 @@ fn result_of(bytes: &[u8]) -> Result<Value, AnalysisCodeFailure> {
 /// so this is a match on its wording; an unrecognised message is `Failed`.
 fn classify(message: &str) -> AnalysisCodeFailure {
     let lower = message.to_ascii_lowercase();
-    if lower.contains("no sandbox runtime is configured")
-        || lower.contains("multiple sandbox runtimes")
-    {
+    let mentions = |words: &[&str]| words.iter().any(|word| lower.contains(word));
+    if mentions(&[
+        "no sandbox runtime is configured",
+        "multiple sandbox runtimes",
+    ]) {
         AnalysisCodeFailure::Unavailable
-    } else if lower.contains("could not be confirmed") || lower.contains("reconcile") {
+    } else if mentions(&["could not be confirmed", "reconcile"]) {
         AnalysisCodeFailure::Uncertain
-    } else if lower.contains("cancel") {
+    } else if mentions(&["cancel"]) {
         AnalysisCodeFailure::Cancelled
-    } else if lower.contains("authoriz") || lower.contains("exceeds") || lower.contains("too large")
-    {
+    } else if mentions(&[
+        "timed out",
+        "time limit",
+        "wall time",
+        "wall-clock",
+        "deadline",
+        "step limit",
+        "out of memory",
+        "memory limit",
+        "memory",
+    ]) {
+        // The program ran and ran out of a budget: a runtime failure with its
+        // own sentence, not a refusal of the job.
+        AnalysisCodeFailure::Overrun
+    } else if mentions(&["authoriz", "denied", "size bound", "too large", "exceeds"]) {
         AnalysisCodeFailure::Rejected
     } else {
         AnalysisCodeFailure::Failed
@@ -251,7 +239,6 @@ mod tests {
             receipt("not json", 0),
             receipt(r#"{"revision":2,"result":1}"#, 0),
             b"{}".to_vec(),
-            vec![b'x'; MAX_RECEIPT_BYTES + 1],
         ] {
             let (runner, _) = runner(Ok(bad));
             assert_eq!(
@@ -281,6 +268,18 @@ mod tests {
                 AnalysisCodeFailure::Rejected,
             ),
             (
+                "graph.code.execution_failed: the job exceeds the memory limit",
+                AnalysisCodeFailure::Overrun,
+            ),
+            (
+                "graph.code.execution_failed: wall time exceeded the 30 second limit",
+                AnalysisCodeFailure::Overrun,
+            ),
+            (
+                "graph.code.execution_failed: sandbox request exceeds its size bound",
+                AnalysisCodeFailure::Rejected,
+            ),
+            (
                 "graph.code.execution_failed: exit status 1",
                 AnalysisCodeFailure::Failed,
             ),
@@ -292,6 +291,26 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn an_oversized_receipt_is_a_size_refusal_not_a_failure() {
+        let (runner, _) = runner(Ok(vec![b'x'; 512 * 1024 + 1]));
+        assert_eq!(
+            runner.run(request("c")).await.unwrap_err(),
+            AnalysisCodeFailure::ResultTooLarge
+        );
+    }
+
+    #[tokio::test]
+    async fn a_result_over_the_tool_cap_is_refused_here() {
+        let big =
+            serde_json::json!({"revision": 1, "result": "z".repeat(MAX_ANALYSIS_RESULT_BYTES + 1)});
+        let (runner, _) = runner(Ok(receipt(&big.to_string(), 0)));
+        assert_eq!(
+            runner.run(request("c")).await.unwrap_err(),
+            AnalysisCodeFailure::ResultTooLarge
+        );
     }
 
     #[tokio::test]

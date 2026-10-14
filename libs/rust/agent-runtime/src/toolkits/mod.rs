@@ -178,6 +178,7 @@ pub use families::artifact::ArtifactToolAuthority;
 #[cfg(feature = "toolkit-data-analysis")]
 pub use families::data_analysis::code::{
     AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner, AnalysisLanguage,
+    MAX_ANALYSIS_RESULT_BYTES,
 };
 #[cfg(feature = "toolkit-data-analysis")]
 pub use families::data_analysis::tools::{
