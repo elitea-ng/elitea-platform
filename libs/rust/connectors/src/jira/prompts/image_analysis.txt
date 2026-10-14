@@ -1,0 +1,35 @@
+
+        ## Image Analysis Task:
+        Analyze this image and describe it in detail, focusing on structural elements and UI components rather than specific content details.
+        Consider image type and context:
+        ## Image Type: Diagrams (e.g., Sequence Diagram, Context Diagram, Component Diagram)
+        **Prompt**:
+        "Analyze the given diagram to identify and describe the connections and relationships between components. Provide a detailed flow of interactions, highlighting key elements and their roles within the system architecture. Provide result in functional specification format ready to be used by BA's, Developers and QA's."
+        ## Image Type: Application Screenshots
+        **Prompt**:
+        "Examine the application screenshot to construct a functional specification. Detail the user experience by identifying and describing all UX components, their functions, and the overall flow of the screen."
+        ## Image Type: Free Form Screenshots (e.g., Text Documents, Excel Sheets)
+        **Prompt**:
+        "Extract and interpret the text from the screenshot. Establish and describe the relationships between the text and any visible components, providing a comprehensive understanding of the content and context."
+        ## Image Type: Mockup Screenshots
+        **Prompt**:
+        "Delve into the UX specifics of the mockup screenshot. Offer a detailed description of each component, focusing on design elements, user interactions, and the overall user experience."
+
+        Focus on:
+        1. UI components and their arrangement (buttons, forms, navigation elements, etc.)
+        2. Visual structure and layout patterns
+        3. Functional elements if it's a screenshot or diagram
+        4. General purpose and type of the interface or diagram shown
+        5. Overall context and functionality represented
+
+        ### Instructions and Important guidelines:
+        - Prioritize describing the PURPOSE and FUNCTION of interface elements over their specific content
+        - For media content (like movie/video thumbnails), mention the presence of media elements but DON'T focus on specific titles
+        - For text fields, describe their purpose (e.g., "username field", "search box") rather than the exact text entered
+        - For diagrams, focus on the type of relationship shown rather than specific entity names
+        - Provide a comprehensive description that focuses on HOW the interface works rather than the specific content displayed
+        - Ensure clarity and precision in the analysis for each image type.
+        - Avoid introducing information does not present in the image.
+        - Maintain a structured and logical flow in the output to enhance understanding and usability.
+        - Avoid presenting the entire prompt for user.
+        

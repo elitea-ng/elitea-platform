@@ -103,10 +103,14 @@ impl JiraConnectorConfig {
 /// The `index_data` arguments the connector honours (the SDK's
 /// `_index_tool_params`). `max_total_issues` is accepted and ignored: the
 /// connector lists every issue the JQL matches (ADR-0030 decision 3) under
-/// the source's document cap. `process_images` is accepted and ignored
-/// (model-calling steps wait for I4: image references stay as markup), and
-/// `chunking_tool` is the worker's.
+/// the source's document cap. `process_images` asks the worker to describe
+/// the pictures an issue's description and comments link (ADR-0030 I4,
+/// PR-C2), and `chunking_tool` is the worker's.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the SDK's index_data form is these flags"
+)]
 pub struct JiraIndexArguments {
     /// The JQL; `None` is the SDK's default of every issue, newest update
     /// first.
@@ -125,6 +129,9 @@ pub struct JiraIndexArguments {
     /// role-restricted comment and an issue with a security level are left
     /// out either way: neither names principals this runtime can record.
     pub include_restricted_content: bool,
+    /// Describe the pictures the description and the comments link with the
+    /// chat model (the SDK's `process_images`, off by default).
+    pub process_images: bool,
 }
 
 impl JiraIndexArguments {
@@ -160,6 +167,7 @@ impl JiraIndexArguments {
             include_attachments: flag("include_attachments")?,
             include_comments: flag("include_comments")?,
             include_restricted_content: flag("include_restricted_content")?,
+            process_images: flag("process_images")?,
             skip_attachment_extensions: text_list(
                 arguments,
                 "skip_attachment_extensions",

@@ -51,6 +51,7 @@ use std::sync::Arc;
 use adk_rust::futures::StreamExt as _;
 use adk_rust::futures::stream::FuturesOrdered;
 use bytes::Bytes;
+use elitea_connectors::pictures::{PictureBatch, PictureStep};
 use elitea_content_source::{Acl, DocumentRef, SourceError};
 use elitea_doc_chunk::{
     Chunk, ChunkError, ChunkOptions, ChunkPlan, ChunkingConfig, Described, EmbeddedVisionPlan,
@@ -185,7 +186,7 @@ const MAX_VERSION_BYTES: usize = 1024;
 fn retryable_picture_skip(reason: &str) -> bool {
     matches!(
         reason,
-        SKIP_MODEL_FAILED | SKIP_MODEL_CAP_EXCEEDED | SKIP_EXTRACT_TIMEOUT
+        SKIP_MODEL_FAILED | SKIP_MODEL_CAP_EXCEEDED | SKIP_EXTRACT_TIMEOUT | SKIP_FETCH_FAILED
     )
 }
 
@@ -412,6 +413,9 @@ struct Tally {
     /// chat model, a model that refuses images): nothing was asked of the
     /// extractor for them.
     pictures_not_read: BTreeMap<&'static str, u64>,
+    /// The same two counts for the pictures a connector's documents LINK.
+    linked_skipped: BTreeMap<&'static str, u64>,
+    linked_not_read: BTreeMap<&'static str, u64>,
     unchanged_documents: u64,
     unchanged_chunks: u64,
     /// The documents written: key, version, chunk count.
@@ -436,16 +440,6 @@ impl Tally {
     fn skip_document(&mut self, reason: &'static str, lost: bool) {
         *self.skipped.entry(reason).or_default() += 1;
         self.lost_skips += u64::from(lost);
-    }
-
-    fn pictures_not_read(&mut self, reason: &'static str) {
-        *self.pictures_not_read.entry(reason).or_default() += 1;
-    }
-
-    fn picture_skip(&mut self, reason: &'static str, count: u64) {
-        if count > 0 {
-            *self.pictures_skipped.entry(reason).or_default() += count;
-        }
     }
 
     fn written_keys(&self) -> BTreeSet<&str> {
@@ -511,6 +505,9 @@ struct PictureTally {
     skipped: BTreeMap<&'static str, u64>,
     /// The reason the document's pictures were not even asked for.
     not_read: Option<&'static str>,
+    /// The pictures are the ones a connector's document LINKS, not ones
+    /// embedded in a file: reported under their own label.
+    linked: bool,
 }
 
 impl PictureTally {
@@ -522,11 +519,18 @@ impl PictureTally {
 
     /// Adds the document's counts to the run's, once, when it is indexed.
     fn settle(self, tally: &mut Tally) {
+        let (skipped, not_read) = if self.linked {
+            (&mut tally.linked_skipped, &mut tally.linked_not_read)
+        } else {
+            (&mut tally.pictures_skipped, &mut tally.pictures_not_read)
+        };
         for (reason, count) in self.skipped {
-            tally.picture_skip(reason, count);
+            if count > 0 {
+                *skipped.entry(reason).or_default() += count;
+            }
         }
         if let Some(reason) = self.not_read {
-            tally.pictures_not_read(reason);
+            *not_read.entry(reason).or_default() += 1;
         }
     }
 }
@@ -555,6 +559,20 @@ struct EmbeddedJob {
     dropped: PicturesDropped,
 }
 
+/// A connector's document with the pictures its text links read (ADR-0030
+/// I4, PR-C2): the loop describes them and renders the descriptions into
+/// the text, then the document is chunked like any other.
+struct ConnectorJob {
+    shell: Shell,
+    key: String,
+    mime: String,
+    chunking: Arc<ChunkingConfig>,
+    batch: PictureBatch,
+    /// The toolkit's prompt (`image_description_prompt`), else the SDK's
+    /// default.
+    prompt: Option<String>,
+}
+
 /// What preparing one document gives the run's loop: a document that is
 /// ready to go on, or one whose embedded pictures wait for their
 /// descriptions before its text is chunked (ADR-0030 I4 part C), which the
@@ -562,10 +580,12 @@ struct EmbeddedJob {
 enum Prepare {
     Done(Preparation),
     Embedded(Box<EmbeddedJob>),
+    Connector(Box<ConnectorJob>),
 }
 
 /// Whether a document's pictures are asked of the extractor, decided by the
 /// run's loop.
+#[derive(Clone)]
 enum PictureAsk {
     /// Not a document with the step on.
     No,
@@ -1198,6 +1218,10 @@ impl Runner<'_> {
                         Ok(finished) => finished,
                         Err(halted) => break Err(halted),
                     },
+                    Ok(Prepare::Connector(job)) => match self.finish_connector(*job).await {
+                        Ok(finished) => finished,
+                        Err(halted) => break Err(halted),
+                    },
                     Err(_) => {
                         break Err(halt(
                             "a document could not be prepared: the preparation task stopped unexpectedly",
@@ -1415,12 +1439,34 @@ impl Runner<'_> {
     /// the document a receiver for the result, which its preparation waits
     /// on only when it comes to ask the extractor, after it was fetched.
     fn picture_ask(&self, reference: &DocumentRef) -> Asked {
+        // A connector's own picture setting (ADR-0030 I4, PR-C2).
+        let step = self.source.picture_step(reference);
+        if matches!(step, Some(PictureStep::Inline { .. })) {
+            return self.gate_ask();
+        }
+        let overlaid;
+        let chunking: &ChunkingConfig = match step
+            .as_ref()
+            .and_then(|step| binary_overlay(&self.dependent_chunking, step, &reference.key))
+        {
+            Some(config) => {
+                overlaid = config;
+                &overlaid
+            }
+            None => &self.chunking,
+        };
         if !elitea_doc_extract::is_document_type(&reference.mime)
-            || elitea_doc_chunk::plan_embedded_for(&reference.key, &reference.mime, &self.chunking)
+            || elitea_doc_chunk::plan_embedded_for(&reference.key, &reference.mime, chunking)
                 .is_none()
         {
             return Asked::Decided(PictureAsk::No);
         }
+        self.gate_ask()
+    }
+
+    /// The answer for a document whose pictures are wanted, by what the
+    /// run's chat model is known to do.
+    fn gate_ask(&self) -> Asked {
         match self.steps.picture_gate_now() {
             PictureGateNow::Open => Asked::Decided(PictureAsk::Yes),
             PictureGateNow::Closed(reason) => {
@@ -1433,6 +1479,111 @@ impl Runner<'_> {
             }
             PictureGateNow::Unknown => Asked::NeedsModel,
         }
+    }
+
+    /// Describes the pictures a connector's document links, renders the
+    /// descriptions into its text and chunks it. A picture never fails the
+    /// document or stops the run for a reason of its own; the document's
+    /// text keeps the link's original form where nothing was written.
+    async fn finish_connector(&mut self, job: ConnectorJob) -> Result<Preparation, Halt> {
+        let ConnectorJob {
+            mut shell,
+            key,
+            mime,
+            chunking,
+            batch,
+            prompt,
+        } = job;
+        shell.pictures.linked = true;
+        for (reason, count) in &batch.skipped {
+            shell.pictures.skip(reason, u64::from(*count));
+        }
+        // Only what an image model takes goes to it: the bytes decide (the
+        // declared type only has to be an image one).
+        let mut pictures: Vec<Picture> = Vec::new();
+        let mut prompts: Vec<String> = Vec::new();
+        let mut owner: Vec<usize> = Vec::new();
+        for (index, source) in batch.pictures.iter().enumerate() {
+            let media_type = match elitea_doc_extract::image_for_vision("image/png", &source.bytes)
+            {
+                VisionImage::Supported(media_type) => media_type,
+                VisionImage::Bmp => "image/bmp",
+                // SVG, TIFF, ICO, bytes that are no picture.
+                VisionImage::Corrupt | VisionImage::Unsupported | VisionImage::NotAnImage => {
+                    shell.pictures.skip(SKIP_UNSUPPORTED, 1);
+                    continue;
+                }
+            };
+            pictures.push(Picture {
+                bytes: source.bytes.clone(),
+                media_type,
+                ordinal: u32::try_from(index).unwrap_or(u32::MAX),
+                text_offset: index,
+                name: Some(source.name.clone()),
+            });
+            prompts.push(
+                source
+                    .prompt
+                    .clone()
+                    .or_else(|| prompt.clone())
+                    .unwrap_or_else(|| elitea_doc_chunk::image_processing_prompt().to_owned()),
+            );
+            owner.push(index);
+        }
+        let prompt_refs: Vec<&str> = prompts.iter().map(String::as_str).collect();
+        let (outcomes, described_pending) = self
+            .describe_pictures(&prompt_refs, false, "", &pictures, &mut shell.pictures)
+            .await?;
+        // A picture the connector could not read for a transient reason
+        // marks the document as one that has not been described.
+        let pending = described_pending
+            || batch
+                .skipped
+                .keys()
+                .any(|reason| retryable_picture_skip(reason));
+        let mut described: Vec<Option<String>> = vec![None; batch.pictures.len()];
+        for (slot, outcome) in owner.iter().zip(outcomes) {
+            if let PictureOutcome::Text(text) = outcome {
+                described[*slot] = Some(if text.trim().is_empty() {
+                    elitea_doc_chunk::EMPTY_DESCRIPTION.to_owned()
+                } else {
+                    text
+                });
+            }
+        }
+        tracing::info!(
+            event = "index_connector_pictures",
+            pictures = batch.pictures.len(),
+            described = described.iter().flatten().count(),
+            pending,
+        );
+        if pending {
+            let prior = match shell.plan {
+                Plan::Changed { prior_pending, .. } => prior_pending,
+                Plan::New => 0,
+            };
+            shell.reference.version = pictures_pending(&shell.reference.version, prior + 1);
+        }
+        let refs: Vec<Option<&str>> = described.iter().map(Option::as_deref).collect();
+        let text = batch.render(&refs);
+        let chunked = tokio::task::spawn_blocking(move || {
+            let options = ExtractOptions {
+                html_to_markdown: true,
+            };
+            let plan = shell.plan;
+            match elitea_doc_extract::extract_with(&mime, text.as_bytes(), &options) {
+                Extracted::Text { text, .. } => {
+                    let is_html = matches!(mime.as_str(), "text/html" | "application/xhtml+xml");
+                    chunk_text(&text, &key, is_html, &chunking, shell)
+                }
+                Extracted::Unsupported => Preparation::Skipped(SKIP_UNSUPPORTED, plan),
+                Extracted::Unreadable(_) => Preparation::Skipped(SKIP_UNREADABLE, plan),
+            }
+        })
+        .await;
+        Ok(chunked.unwrap_or(Preparation::Configuration(
+            "the document preparation task stopped unexpectedly".to_owned(),
+        )))
     }
 
     /// Describes the pictures embedded in one document, writes the
@@ -1474,7 +1625,13 @@ impl Runner<'_> {
             .pictures
             .skip(SKIP_UNSUPPORTED, u64::from(dropped.unsupported));
         let (outcomes, pending) = self
-            .describe_pictures(&plan, &text, &pictures, &mut shell.pictures)
+            .describe_pictures(
+                &vec![plan.prompt(); pictures.len()],
+                plan.repeats_are_back_references(),
+                &text,
+                &pictures,
+                &mut shell.pictures,
+            )
             .await?;
         let inline: Vec<Inline<'_>> = pictures
             .iter()
@@ -1523,8 +1680,8 @@ impl Runner<'_> {
     /// that could not be described is counted in `tally` (the document's, not
     /// the run's) and is [`PictureOutcome::Nothing`].
     ///
-    /// Distinct pictures (by the sha256 of their bytes, all hashed in one
-    /// blocking task) are described [`PICTURES_IN_FLIGHT`] at a time and
+    /// Distinct pictures (by the sha256 of their bytes and their prompt, all
+    /// hashed in one blocking task) are described [`PICTURES_IN_FLIGHT`] at a time and
     /// their results applied in document order; the call cap and the image
     /// budget are charged atomically by the one description path. A picture
     /// whose bytes repeat an earlier one's takes that one's outcome, with
@@ -1534,7 +1691,8 @@ impl Runner<'_> {
     /// the pictures in, so a back-reference never points down the page.
     async fn describe_pictures(
         &mut self,
-        plan: &EmbeddedVisionPlan,
+        prompts: &[&str],
+        back_references: bool,
         text: &str,
         pictures: &[Picture],
         tally: &mut PictureTally,
@@ -1553,11 +1711,12 @@ impl Runner<'_> {
         let order = elitea_doc_chunk::written_order(text, &offsets);
         // The first picture of each distinct content, in written order, is
         // the one described.
-        let mut first_of: BTreeMap<[u8; 32], usize> = BTreeMap::new();
+        let mut first_of: BTreeMap<([u8; 32], &str), usize> = BTreeMap::new();
         let mut distinct: Vec<usize> = Vec::new();
         for index in order {
             if let Some(digest) = digests[index]
-                && let std::collections::btree_map::Entry::Vacant(slot) = first_of.entry(digest)
+                && let std::collections::btree_map::Entry::Vacant(slot) =
+                    first_of.entry((digest, prompts[index]))
             {
                 slot.insert(index);
                 distinct.push(index);
@@ -1578,7 +1737,7 @@ impl Runner<'_> {
                         steps,
                         &pictures[index],
                         digests[index],
-                        plan.prompt(),
+                        prompts[index],
                         &env,
                         &alive,
                     ));
@@ -1597,11 +1756,11 @@ impl Runner<'_> {
                 answers.insert(index, answer);
             }
         }
-        let back_references = plan.repeats_are_back_references();
         let mut pending = false;
         let mut outcomes = Vec::with_capacity(pictures.len());
         for (index, digest) in digests.iter().enumerate() {
-            let Some(first) = digest.and_then(|digest| first_of.get(&digest)) else {
+            let Some(first) = digest.and_then(|digest| first_of.get(&(digest, prompts[index])))
+            else {
                 tally.skip(SKIP_UNREADABLE, 1);
                 outcomes.push(PictureOutcome::Nothing);
                 continue;
@@ -1795,29 +1954,26 @@ impl Runner<'_> {
                 .collect();
             let _ = write!(message, " Skipped: {}.", reasons.join(", "));
         }
-        if !tally.pictures_skipped.is_empty() {
-            let reasons: Vec<String> = tally
-                .pictures_skipped
+        for (counts, label) in [
+            (&tally.pictures_skipped, "Embedded pictures not described"),
+            (
+                &tally.pictures_not_read,
+                "Embedded pictures not requested for documents",
+            ),
+            (&tally.linked_skipped, "Linked pictures not described"),
+            (
+                &tally.linked_not_read,
+                "Linked pictures not requested for documents",
+            ),
+        ] {
+            if counts.is_empty() {
+                continue;
+            }
+            let reasons: Vec<String> = counts
                 .iter()
                 .map(|(reason, count)| format!("{count} {reason}"))
                 .collect();
-            let _ = write!(
-                message,
-                " Embedded pictures not described: {}.",
-                reasons.join(", ")
-            );
-        }
-        if !tally.pictures_not_read.is_empty() {
-            let reasons: Vec<String> = tally
-                .pictures_not_read
-                .iter()
-                .map(|(reason, count)| format!("{count} {reason}"))
-                .collect();
-            let _ = write!(
-                message,
-                " Embedded pictures not requested for documents: {}.",
-                reasons.join(", ")
-            );
+            let _ = write!(message, " {label}: {}.", reasons.join(", "));
         }
         if tally.failed_chunks > 0 {
             let _ = write!(message, " {} chunks failed to embed.", tally.failed_chunks);
@@ -2117,6 +2273,30 @@ fn image_extension(class: VisionImage, declared: &str) -> String {
     .to_owned()
 }
 
+/// `chunking` with the vision step forced on, with the connector's prompt,
+/// for the extension of `key` when the connector's step names it (the SDK's
+/// `bins_with_llm`: the toolkit's own switch, over the extension's
+/// `use_llm`).
+pub(super) fn binary_overlay(
+    chunking: &ChunkingConfig,
+    step: &PictureStep,
+    key: &str,
+) -> Option<ChunkingConfig> {
+    let PictureStep::Binary { extensions, prompt } = step else {
+        return None;
+    };
+    let extension = elitea_doc_chunk::extension_of(key);
+    if !extensions.contains(&extension.as_str()) {
+        return None;
+    }
+    let mut config = chunking.clone();
+    let own = config.by_extension.entry(extension).or_default();
+    own.use_llm = Some(true);
+    own.use_default_prompt = Some(false);
+    own.prompt = Some(prompt.clone());
+    Some(config)
+}
+
 /// The chunking configs one document can be parsed with.
 struct Chunkings {
     base: Arc<ChunkingConfig>,
@@ -2166,6 +2346,9 @@ async fn prepare(
     let key = reference.key.clone();
     let mime = reference.mime.clone();
     let mut metadata = document.metadata;
+    // What a connector's picture pass needs from the fetch travels in the
+    // document and goes no further: off before anything is stored.
+    let picture_context = metadata.remove(elitea_connectors::pictures::CONTEXT_KEY);
     // The SDK applies `chunking_tool` to the base document only; a dependent
     // document (an attachment) is parsed by its own extension with the
     // per-extension settings.
@@ -2173,6 +2356,16 @@ async fn prepare(
         chunkings.dependent
     } else {
         chunkings.base
+    };
+    // A connector's own picture setting (ADR-0030 I4, PR-C2): `bins_with_llm`
+    // turns the vision step on for the attachment, with the toolkit's prompt.
+    let step = source.picture_step(&reference);
+    let chunking = match step
+        .as_ref()
+        .and_then(|step| binary_overlay(&chunking, step, &key))
+    {
+        Some(overlaid) => Arc::new(overlaid),
+        None => chunking,
     };
     metadata.insert("source".to_owned(), Value::String(key.clone()));
     if !document.title.is_empty() {
@@ -2262,6 +2455,43 @@ async fn prepare(
         )
         .into();
     }
+    let mut picture_tally = PictureTally::default();
+    // The pictures the text of a connector's document links: read through
+    // the connector, described by the run's loop.
+    if let Some(PictureStep::Inline { prompt }) = step
+        && source.may_have_pictures(&key, &bytes, picture_context.as_ref())
+    {
+        // These pictures are reported as the document's LINKED ones.
+        picture_tally.linked = true;
+        match pictures.clone().resolve().await {
+            Ok(true) => {
+                if let Some(batch) = source
+                    .pictures(&key, &bytes, picture_context.as_ref())
+                    .await
+                {
+                    let explicit_model =
+                        chunking.explicitly_needs_model_for(&elitea_doc_chunk::extension_of(&key));
+                    return Prepare::Connector(Box::new(ConnectorJob {
+                        shell: Shell {
+                            reference,
+                            plan,
+                            metadata,
+                            acl,
+                            explicit_model,
+                            pictures: picture_tally,
+                        },
+                        key,
+                        mime,
+                        chunking,
+                        batch,
+                        prompt,
+                    }));
+                }
+            }
+            Ok(false) => {}
+            Err(reason) => picture_tally.not_read = Some(reason),
+        }
+    }
     let plan_of_run = plan;
     // A document format (PDF, Office, e-mail) is the sidecar's to read; this
     // process extracts text and HTML itself, on the blocking thread below.
@@ -2280,7 +2510,6 @@ async fn prepare(
     // Only when the run can still describe a picture. The decision may
     // wait for the run's chat model to load; the document was fetched
     // meanwhile, so no slot sat idle for the load.
-    let mut picture_tally = PictureTally::default();
     let wanted = if embedded_plan.is_some() {
         match pictures.resolve().await {
             Ok(wanted) => wanted,

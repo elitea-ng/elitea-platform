@@ -480,8 +480,9 @@ connectors keep and where they deliberately differ:
   `include_extensions`/`skip_extensions`.
 - **Fetch:** `items/{id}/content`, following Graph's redirect to the site
   host without the bearer; PDF/Office bytes go to the extractor sidecar.
-- **Not ported:** OneNote (`include_onenote` is refused with the reason: it
-  needs a delegated user token and image descriptions, ADR-0030 I4).
+- **Not ported:** OneNote (`include_onenote` is refused with the reason: the
+  SDK reads OneNote with a delegated user token only and Microsoft retired
+  app-only access to the OneNote Graph API; see PR-C2 below).
 
 ### ado_wiki (`libs/rust/connectors/src/ado/wiki_source.rs`)
 
@@ -504,7 +505,7 @@ connectors keep and where they deliberately differ:
   indexed; `path_contains` does not filter attachments. The SDK's
   `::partial::` parent re-marking has no equivalent: a failed attachment is a
   `fetch_failed` skip retried next run.
-- **Not ported:** `process_images` / `image_description_prompt` (I4).
+- **Pictures:** `process_images` / `image_description_prompt` are ported (PR-C2, below).
 
 ### ado_boards (`libs/rust/connectors/src/ado/boards_source.rs`)
 
@@ -536,7 +537,7 @@ connectors keep and where they deliberately differ:
   listing time (one comments read per work item with comments; a fetch that
   finds the discussion moved on reports `Changed`). The SDK does not index
   comments.
-- **Not ported:** `process_images` (I4); the toolkit `limit` setting (the SDK
+- **Pictures:** `process_images` / `image_description_prompt` are ported (PR-C2, below). **Not ported:** the toolkit `limit` setting (the SDK
   does not apply it to indexing either).
 
 ### ado_plans (`libs/rust/connectors/src/ado/plans_source.rs`)
@@ -662,7 +663,40 @@ connectors in `libs/rust/connectors/src/{confluence,jira}` over what
 custom headers, ADF rendering, base64 image stripping), dispatched by
 `src/indexing/source.rs`, with the five index tools attached in
 `elitea-agent-runtime` (`INDEX_FAMILIES`) and the catalog frozen
-by elitea-main (`indexcatalog.Families`). Proving tests: the connector suites
+by elitea-main (`indexcatalog.Families`). Review round 1 changes: the picture pass reads each work item once (the body
+`fetch` read is kept for it); a boards `<img>` gets a picture of its own per
+occurrence (equal bytes still cost one model call through the cache); read
+failures are classified (`pictures::skip_reason`): only a 5xx, 408, 429, a
+timeout or a broken connection is `fetch_failed` and marks the document for
+another run, 401/403 is `forbidden`, a missing file, an invalid or tiny
+body `unreadable`, an egress or other-origin refusal `unsupported_type`, all
+final. A failed extra read (the Jira attachment list) keeps the text as
+fetched and is counted the same way. Jira reads the attachment list once per
+issue per run, downloads each attachment once per document, bounds every
+download by 5 MiB whatever the listing declared, and only treats
+`!name.<image ext>!`, `!id!` and `!attachment:id!` as picture markup (prose
+like "Done! Thanks!" costs no request). Wiki links accept Azure DevOps'
+` =WxH` suffix, `?query` and `#fragment`, every skipped link is counted, and
+the description is made one line with `\`, `]` and `)` escaped. The run
+asks for a document's pictures (and waits for the model) only when the
+document has picture markup, and reports them as "Linked pictures not
+described" / "not requested", apart from "Embedded pictures".
+
+Review round 2 moved the shared work into `elitea_connectors::pictures`:
+`Reads` owns the distinct reads of a document (keyed by the connector's own
+source identity: Jira attachment id, wiki path after normalisation, boards
+`src`), downloads each once, holds it once as `Bytes` (occurrences clone the
+handle; the worker passes it on without a copy) and charges the count and
+size budget once. The worker describes per distinct (bytes, prompt), so Jira
+references with different context get their own description and the same
+bytes with the same prompt cost one call. Boards no longer keeps any side
+state: the body the picture pass needs travels in the fetched document's
+metadata under `pictures::CONTEXT_KEY` and the run removes it before anything
+is stored. Jira replaces markup by the spans it found, never by searching the
+text. A boards picture that was read but not described ends as one that was
+never read.
+
+Proving tests: the connector suites
 (pagination, dependents, selection, restricted pages, 401/403, 429 with
 `Retry-After`, the version pin) and `src/indexing/atlassian_tests.rs`
 (Verification (2) against the `elitea-vector` fake: unchanged source writes
@@ -677,7 +711,7 @@ document's chunks are removed).
 | `limit`/`max_pages` (Confluence), `max_total_issues` (Jira, default 1000) cap the listing | Accepted and ignored; the listing follows every page; `SourceLimits::max_documents` bounds the run | ADR-0030 decision 3: list everything, no page caps |
 | `include_restricted_content=false` drops pages via `is_public_page` (also requires `status == current`) | Drops pages with any read restriction; an archived page is kept when `include_archived_content` asks for it; with `include_restricted_content` the restriction's users/groups/emails become the document's `Acl::Restricted` | The LangChain status check defeats `include_archived_content`; ACLs are recorded per ADR-0028 D3 |
 | `keep_markdown_format`/`keep_newlines` (markdownify vs BeautifulSoup text) | Page bodies are handed over as `text/html`; the worker converts to markdown (`elitea-doc-extract`) | One HTML path; the flags are accepted and ignored |
-| `ocr_languages`, `bins_with_llm`, `process_images` | Accepted and ignored; images stay as markup, PDFs/Office go to the extractor sidecar | Model-calling steps wait for I4 |
+| `ocr_languages`, `bins_with_llm`, `process_images` | `ocr_languages` is accepted and ignored (no OCR runs). `bins_with_llm` and Jira `process_images` are ported by PR-C2 (below); Confluence page bodies keep their images as markup, as in the SDK | — |
 | Jira `fields_to_index` are rendered only when also requested via `fields_to_extract` | Both lists are requested from the API | SDK defect: a field named only in `fields_to_index` was silently missing |
 | Jira attachment download tries `/rest/api/3/attachment/content/{id}` then falls back; Server uses `/secure/attachment/{id}/{name}`; Confluence downloads `_links.download` | One shared downloader (`atlassian::AttachmentDownloader`) for both. Jira: the attachment's `content` URL (on the configured origin only), else the Cloud or Server path. Confluence: `_links.download` under the API root. Cloud answers with a 302/303 to `api.media.atlassian.com`: followed (at most 5 hops) to an `https` target without the credential or custom headers, and only to that host or a host the egress allowlist names (the `*` opt-out does not widen it); a same-origin redirect must stay on a download path, a redirect to a login or SSO page or back to the origin after leaving it is refused; a 200 HTML page for a non-HTML attachment is refused | A deployment must allowlist `api.media.atlassian.com` for Jira Cloud and for Confluence Cloud attachments; otherwise the attachment is skipped `fetch_failed` and the rest of the run proceeds |
 | Confluence CQL results are all loaded as pages | Only content of type `page` is listed (a CQL can match comments, attachments, blog posts) | The SDK indexes pages; the other types are indexed as the page's dependents when asked |
@@ -847,7 +881,7 @@ log-safety child process), the prompt digests in `doc-chunk/src/vision.rs`.
 | `ImageDescriptionCache`: in-memory LRU of 500 per toolkit instance, key md5(bytes) + md5(prompt), blank descriptions not cached | A per-run LRU of 500 in the run's `ModelSteps` (`Runner` field), key sha256(bytes) + sha256(prompt) + model name; blank descriptions and descriptions over 32 KiB are not cached. A hit makes no call and is not charged against the run's model-call cap | Per run, not per toolkit instance: the worker has no instance that outlives a run; across runs the pipeline's version skip already avoids re-describing an unchanged file. The key adds the model so a model change inside a run (it cannot happen today) never serves another model's text |
 | A failed vision call raises and the document is lost or the whole load fails | The policy is the proposal chunker's for what is shared (three attempts, every attempt charged against `index_model_call_cap`, liveness before each attempt and retry wait, one shared call helper), but an image NEVER stops or fails a run for a reason of its own, and never feeds or resets the proposal failure streak. Stops the run: only the credential (`unauthorized`), the project (`forbidden`) and the budget (`budget_exhausted` family, `resource_exhausted`). Skips the image: a retryable failure after its attempts `model_failed`; the gateway's generic rejection (a text-only model, a provider 400 for one picture) `vision_refused`; `request_too_large` / `event_too_large` `too_large`; the model cannot be bound `no_model` (warned once, the rest of the run's images skip without asking); no chat model `no_model`; the call cap exhausted `model_cap_exceeded` (the next run resumes). Images have their own budget INSIDE the cap: at most half of `index_model_call_cap` (rounded down, at least one when the cap is at least one), every attempt counted; a spent image budget skips the remaining images `model_cap_exceeded`, so a proposal/statistical document always has at least half of the cap, and proposal calls keep the full cap minus what was actually spent. Three `vision_refused` in a row mark the run's model as text-only (warned once, naming it): the rest of the images are skipped `vision_refused` without a call; a success resets the streak. The cheap checks run before the expensive ones (chat model, sha256 of the original bytes and the cache, the image budget, and only then the decode and resize), so no picture is decoded for a run with no model, a cache hit or a spent budget. A fit that outlives its 30 s wait is skipped `extract_timeout`; the decode keeps its permit until it really ends, so at most two decodes run at once even after timeouts A reply cut by `max_tokens` is KEPT (SDK parity) with a warning. Image bytes and descriptions are never logged (only the facade's error code) | An unknown model reaches the worker as the gateway's generic rejection, so it reads as `vision_refused` per image (one call each) rather than a stop |
 | Images embedded in PDF / DOCX / PPTX (`extract_images`, off by default) | Ported by PR-C, below | — |
-| Connector `process_images` (ADO wiki/boards, Confluence `bins_with_llm`) | **Not ported**: those settings are accepted and ignored. OneNote (`include_onenote`) stays refused: it needs a delegated user token as well as descriptions | — |
+| Connector `process_images` (ADO wiki/boards, Jira), Confluence `bins_with_llm` | Ported by PR-C2, below. OneNote (`include_onenote`) stays refused | — |
 
 Follow-ups: SVG only if a font-free renderer that fetches nothing is
 accepted.
@@ -977,3 +1011,65 @@ An audit of the live Rust indexing against it found the gaps fixed below;
 | `39d2931` EL-6876 a rate-limited index fails with its cause | **Adopted** | Gateway refusals fail the run with the gateway's stable code; retryable ones retry, then skip with a breaker (I4 rows above) |
 | `fe33772` serialize tool results as JSON, not a Python repr | **Not applicable** | The Rust index tools answer JSON natively |
 | `3aa5c3f` chunked read of JSON with late non-ASCII bytes; `d280da0` `user_prompt` for image vision in `read_file`; `c47ff7e` artifact `list_files` public link; `870cad0` / `e1944e7` tool groups; `11ffbc4` / `5b2f592` whitelist tooltip | **Not applicable** | Agent-side tools and UI text, not the indexing worker |
+
+## ADR-0030 I4 (PR-C2): pictures the connectors' documents link, 2026-10-13
+
+`process_images` (ado_wiki, ado_boards, jira) and Confluence `bins_with_llm`
+were accepted and ignored; they are served now, through the one description
+path an image file and an embedded picture take (`ModelSteps::describe_one`:
+the run's cache, image budget, refused-model breaker, downscale, skip
+reasons, the `#pictures-pending` retry mark). SDK pinned `1b335d5`.
+
+How it is split. A connector reads the pictures through its OWN
+authenticated, egress-guarded `SourceHttp` (`elitea_connectors::pictures`:
+`PictureStep` says whether a document has the step, `PictureBatch` is the
+document's text as a TEMPLATE with a token where each read picture stands,
+plus the pictures and what could not be read). The worker's `prepare` asks
+only when the run can describe pictures (the same gate as embedded
+pictures), the run's loop describes them (`finish_connector`, four at a
+time, results applied in order) and `PictureBatch::render` writes the
+descriptions in before the document is chunked. A document the worker never
+asks (no chat model, a model that refuses images) is the connector's plain
+`fetch`, unchanged. A picture that cannot be read or described keeps the
+document's original markup there; failure notes are NOT indexed (the SDK
+wrote `[Image: ref - attachment not found]` into the text).
+
+Bounds (a deliberate difference, the SDK has none or 200): per document at
+most 20 pictures, 5 MiB each, 12 MiB together (as for embedded pictures);
+beyond them `too_many_pictures` / `too_large`, counted in the summary's
+message. Transient read failures are `fetch_failed` and mark the document
+for another run (up to three, as for a failed description); a missing file
+is `unreadable` and a link the connector will not follow `unsupported_type`,
+both final.
+
+| SDK behaviour | Rust | Deliberate difference |
+| --- | --- | --- |
+| **ado_wiki** `process_images` (index default False), `image_description_prompt`: every `![alt](url)` of a page; `/.attachments/...` with an image extension is downloaded from the wiki repository, any other `http(s)` URL with an unauthenticated `requests.get`; the link becomes `![alt](description)` (every occurrence of the same link) | Same replacement. Attachments are read from the wiki repository's blob by the path (`unquote`d; under the mapped folder of a code wiki) using the tree the listing already read; prompt = `image_description_prompt`, else the SDK's default image prompt | `http(s)` links are NOT fetched (`unsupported_type`): the SDK's request is unauthenticated and unguarded, this connector sends nothing to a host the toolkit is not configured for. The image is recognised by the URL's extension; the SDK passed the ALT text as the file name, so an alt without an extension was silently skipped |
+| **ado_boards** `process_images`, `image_description_prompt`: each `<img src>` of the work item's HTML fields (before `sanitize`) is described; the text is `[image: <description or alt>]` (or an `image-description` attribute with `sanitize: false`); at most 200 images | Same, over the fields the document keeps. An `<img>` whose `src` is an attachment URL of the organization with a `fileName` of an image type is read with the PAT; the others (external, `data:`, no `fileName`) keep the SDK's `[image: alt]` / dropped form. Whitespace of a description is normalised as `get_text` would | 20 pictures, not 200; an external image is not fetched. Comments are not described (the SDK describes them only in its `get_comments` tool) |
+| **jira** `process_images` (index default False): `!ref!` / `!ref\|opts!` in the description and in comments, resolved against the issue's attachments (id, `attachment:id`, name, case-insensitive, suffix); the image goes to the model with the SDK's analysis prompt, the image name and 500 characters of context either side; the markup becomes `[Image <name> Description: <d>]` | Same resolver, prompt (byte for byte), context and replacement, for the issue document and for each comment document. The attachment list is one extra `issue/{id}?fields=attachment` read; the download is the connector's own (`AttachmentDownloader`: the credential stays on the Jira origin) | A reference that names no attachment, a non-image attachment, a failed download and an `http(s)` reference (fetched unauthenticated by the SDK) stay as written instead of becoming failure text. A download under 100 bytes is a failed one, as in the SDK. The SDK's `image_description_prompt` does not exist for Jira, so none is read |
+| **confluence** `bins_with_llm` (index default False): while loading a page's attachments, PNG/JPG/JPEG are described with the loader's own multi-type prompt, a PDF is rendered page by page and each page described (`Page N:`), the result appended to the page. Page bodies' images are never described | Attachments are documents of their own here. With `bins_with_llm` the vision step is FORCED on, with the loader's prompt (byte for byte), for `.png .jpg .jpeg` attachments (over the extension's `use_llm`/`prompt`), and the pictures embedded in `.pdf` attachments are described with the same prompt | PDF pages are not rendered and described (the extractor has no rasteriser): a PDF keeps its text and gains descriptions of its embedded pictures. Without `bins_with_llm` the SDK ran OCR; this runtime has none and keeps describing image attachments by default (PR-B), unchanged. `gif`/`webp`/`bmp` attachments are not touched by the switch |
+| **sharepoint** `include_onenote` (+ `onenote_filter`) | **Still refused**, with the reason: needs a delegated user token (the app-only OneNote API was retired, MC1011142). Recommended to drop; awaiting the owner's decision | See below |
+
+### OneNote
+
+The SDK serves `include_onenote` only through its delegated Graph wrapper
+(`token` + `scopes`, refreshed with `refresh_token`: "Requires Graph API
+delegated access"). The Rust SharePoint connector authenticates app-only (the
+toolkit's client credential, or a pre-issued `access_token`), and Microsoft
+retired app-only (application-permission) access to the OneNote Graph API on
+2025-03-31 (Message Center MC1011142), so `Notes.Read.All` as an application
+permission cannot read notebooks any more. It therefore stays refused, with
+that reason in the message. What it would take: a delegated-token flow for
+index runs (a stored user refresh token and scopes in the toolkit, redeemed
+per run), then the notebook/section/page enumeration, `onenote_filter`
+and the page HTML (with its images, which this PR's picture step could
+describe) as a source.
+
+Proving tests: `libs/rust/connectors` (`pictures`, `ado::wiki_source`,
+`ado::boards_source`, `jira::source`, `confluence::source`: fixture pages and
+issues with pictures, limits, skip reasons, JSON and attribute escaping, the
+resolver, the context window, the prompt) and
+`src/indexing/connector_picture_tests.rs` (a whole run: descriptions land
+where the pictures were, the prompt reaches the model, the shared cache, no
+chat model, a failing model never fails the document, skip counts and the
+retry mark, the `bins_with_llm` overlay).

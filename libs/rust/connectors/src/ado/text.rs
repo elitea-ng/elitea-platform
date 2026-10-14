@@ -112,6 +112,101 @@ pub fn html_to_text(html: &str) -> String {
         .join("\n")
 }
 
+/// One `<img ...>` tag of an HTML field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImgTag {
+    /// The tag as written, `<img ...>` or `<img .../>`.
+    pub raw: String,
+    pub src: Option<String>,
+    pub alt: Option<String>,
+}
+
+/// `html` with each `<img>` tag replaced by what `decide` answers for it
+/// (called in document order).
+pub fn rewrite_images(html: &str, decide: &mut dyn FnMut(&ImgTag) -> String) -> String {
+    let lower = html.to_ascii_lowercase();
+    let mut out = String::with_capacity(html.len());
+    let mut at = 0;
+    while let Some(offset) = lower[at..].find("<img") {
+        let start = at + offset;
+        let after = start + 4;
+        let boundary = html[after..]
+            .chars()
+            .next()
+            .is_none_or(|c| c.is_whitespace() || c == '>' || c == '/');
+        if !boundary {
+            out.push_str(&html[at..after]);
+            at = after;
+            continue;
+        }
+        let Some(end) = tag_end(html, after) else {
+            break;
+        };
+        out.push_str(&html[at..start]);
+        let raw = &html[start..end];
+        let tag = ImgTag {
+            raw: raw.to_owned(),
+            src: attribute(raw, "src"),
+            alt: attribute(raw, "alt"),
+        };
+        out.push_str(&decide(&tag));
+        at = end;
+    }
+    out.push_str(&html[at..]);
+    out
+}
+
+/// The index after the `>` that closes the tag whose attributes start at
+/// `from` (a `>` inside a quoted value does not).
+fn tag_end(html: &str, from: usize) -> Option<usize> {
+    let mut quote: Option<char> = None;
+    for (index, character) in html[from..].char_indices() {
+        match (quote, character) {
+            (None, '"' | '\'') => quote = Some(character),
+            (Some(open), c) if c == open => quote = None,
+            (None, '>') => return Some(from + index + 1),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The value of attribute `name` of the tag `raw`, entities decoded.
+fn attribute(raw: &str, name: &str) -> Option<String> {
+    let lower = raw.to_ascii_lowercase();
+    let mut from = 4;
+    while let Some(offset) = lower[from..].find(name) {
+        let start = from + offset;
+        from = start + name.len();
+        let before_ok = raw[..start]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace);
+        if !before_ok {
+            continue;
+        }
+        let rest = raw[from..].trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let value = match rest.chars().next()? {
+            quote @ ('"' | '\'') => {
+                let inner = &rest[1..];
+                inner[..inner.find(quote)?].to_owned()
+            }
+            _ => rest
+                .split(|c: char| c.is_whitespace() || c == '>')
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches('/')
+                .to_owned(),
+        };
+        return Some(decode_entities(&value));
+    }
+    None
+}
+
 /// Whether a field value looks like HTML (the SDK sanitises every string
 /// field; a plain one passes through unchanged either way).
 fn looks_like_html(text: &str) -> bool {

@@ -1643,6 +1643,7 @@ dependencies = [
  "elitea-content-source",
  "futures-util",
  "http",
+ "percent-encoding",
  "reqwest 0.12.28",
  "reqwest 0.13.5",
  "ring",

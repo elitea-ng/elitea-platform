@@ -54,6 +54,8 @@ pub mod gitlab;
 #[cfg(feature = "providers")]
 pub mod jira;
 #[cfg(feature = "content-source")]
+pub mod pictures;
+#[cfg(feature = "content-source")]
 #[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
 pub mod qtest;
 mod reqwest_adapter;
