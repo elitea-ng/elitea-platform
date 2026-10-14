@@ -121,6 +121,33 @@ impl Transport for ObjectApi {
             url.query().map(str::to_owned),
             auth,
         ));
+        // `POST /api/v2/artifacts/buckets/{project}`: the name is in the body.
+        if path.starts_with("/api/v2/artifacts/buckets/") {
+            let body: Value = request
+                .body()
+                .and_then(|b| b.as_bytes())
+                .and_then(|b| serde_json::from_slice(b).ok())
+                .unwrap_or(Value::Null);
+            let name = body.get("name").and_then(Value::as_str).unwrap_or_default();
+            let status = match name {
+                "taken" => StatusCode::CONFLICT,
+                "locked" => StatusCode::FORBIDDEN,
+                "bad-name" => StatusCode::BAD_REQUEST,
+                "down" => StatusCode::INTERNAL_SERVER_ERROR,
+                _ => StatusCode::OK,
+            };
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            let reply = if status == StatusCode::OK {
+                json!({"name": name, "retention_days": body.get("retention_days")}).to_string()
+            } else {
+                String::new()
+            };
+            return Ok(Response::from_bytes(status, headers, reply));
+        }
         // Buckets that answer a fixed status, for the classification table.
         let fixed = match bucket.as_str() {
             "typed" => Some(StatusCode::UNSUPPORTED_MEDIA_TYPE),
@@ -655,6 +682,51 @@ async fn a_pptx_toolkit_round_trips_a_deck_through_the_worker_host() {
     assert!(prompts[0].0.contains("greet Ada"));
 }
 
+#[tokio::test]
+async fn a_bucket_is_created_through_the_platform_api_under_the_claims_credential() {
+    let api = ObjectApi::new();
+    let (host, _) = host(&api, vec![]);
+    let created = host
+        .create_bucket("reports", Some(14))
+        .await
+        .expect("created");
+    assert_eq!(created.name, "reports");
+    assert_eq!(created.retention_days, Some(14));
+    let log = api.log();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].0, "POST");
+    assert_eq!(log[0].1, "/api/v2/artifacts/buckets/42");
+    assert_eq!(
+        log[0].3.as_deref(),
+        Some("Bearer pat-token"),
+        "the turn's own credential, as for objects"
+    );
+
+    // Each real cause is its own kind, and a name that cannot exist is not sent.
+    let kind = |e: elitea_agent_runtime::toolkits::OfficeHostError| e.kind();
+    for (name, expected) in [
+        ("taken", OfficeFailure::AlreadyExists),
+        ("locked", OfficeFailure::AccessRefused),
+        ("bad-name", OfficeFailure::InvalidRequest),
+        ("down", OfficeFailure::Unreachable),
+    ] {
+        assert_eq!(
+            kind(host.create_bucket(name, None).await.expect_err(name)),
+            expected,
+            "{name}"
+        );
+    }
+    let before = api.log().len();
+    for name in ["", "a", "has/slash", &"x".repeat(64)] {
+        assert_eq!(
+            kind(host.create_bucket(name, None).await.expect_err(name)),
+            OfficeFailure::InvalidRequest,
+            "{name:?}"
+        );
+    }
+    assert_eq!(api.log().len(), before, "an invalid name sends nothing");
+}
+
 #[test]
 fn an_object_link_is_root_relative_and_never_the_in_cluster_origin() {
     let api = ObjectApi::new();
@@ -688,4 +760,13 @@ fn with_a_public_base_url_the_link_is_absolute_on_it_and_never_the_edge() {
         "https://elitea.example.com/api/v2/artifacts/artifact/default/42/chat-attachments/conv%201/chart_ab.png"
     );
     assert!(!link.contains("platform.internal"));
+}
+
+/// Object writes and bucket creation are effects: the host's HTTP client is
+/// built without protocol-level retries.
+#[test]
+fn the_host_client_is_built_without_protocol_retries() {
+    let retries_disabled = std::hint::black_box(super::office_host::OFFICE_POLICY.disable_retries);
+    assert!(retries_disabled);
+    assert!(super::office_host::OfficeRuntime::new(ORIGIN).is_ok());
 }

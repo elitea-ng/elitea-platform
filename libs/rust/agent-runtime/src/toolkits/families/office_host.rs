@@ -86,6 +86,8 @@ pub enum OfficeFailure {
     Conflict,
     /// The platform or model could not be reached.
     Unreachable,
+    /// This host does not offer the operation (a host without bucket access).
+    Unsupported,
 }
 
 /// A host failure: the cause and a data-free reason code for the log.
@@ -132,6 +134,15 @@ pub struct OfficeObjectWritten {
     pub media_type: String,
     /// The stored size.
     pub byte_length: u64,
+}
+
+/// One bucket created, as the host confirms it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OfficeBucketCreated {
+    /// The bucket name the platform stored.
+    pub name: String,
+    /// The retention the platform applied, in days, when it expires files.
+    pub retention_days: Option<u32>,
 }
 
 /// One chat-model call a tool makes inside its own run: a user prompt, with
@@ -209,6 +220,21 @@ pub trait OfficeToolHost: Send + Sync {
         bytes: Vec<u8>,
         overwrite: bool,
     ) -> Result<OfficeObjectWritten, OfficeHostError>;
+
+    /// Create one bucket in the turn's project. A name that is taken is
+    /// [`OfficeFailure::AlreadyExists`]; a refused credential or a retention
+    /// above the project's ceiling is [`OfficeFailure::AccessRefused`]. A host
+    /// that cannot create buckets keeps this default.
+    async fn create_bucket(
+        &self,
+        _name: &str,
+        _retention_days: Option<u32>,
+    ) -> Result<OfficeBucketCreated, OfficeHostError> {
+        Err(OfficeHostError::new(
+            OfficeFailure::Unsupported,
+            "office_host.create_bucket_unsupported",
+        ))
+    }
 
     /// One non-streaming chat completion on the run's model, accounted and
     /// budgeted by the model gateway like every other call the run makes.

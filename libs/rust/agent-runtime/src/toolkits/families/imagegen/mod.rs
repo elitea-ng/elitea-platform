@@ -436,6 +436,9 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> String {
         OfficeFailure::Conflict => format!(
             "Could not {action}: the model gateway reported a conflict. It may work if tried again."
         ),
+        OfficeFailure::Unsupported => {
+            format!("Could not {action}: this runtime does not offer that operation.")
+        }
         OfficeFailure::ReplyUnusable => format!(
             "Could not {action}: the image model answered but its reply was unusable (it may have been billed). Do not retry without telling the user."
         ),

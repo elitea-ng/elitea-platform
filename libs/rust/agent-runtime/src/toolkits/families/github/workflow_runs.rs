@@ -17,6 +17,7 @@ const MAX_OUTPUT_CHARS: usize = 200_000;
 const MAX_NAME_BYTES: usize = 16 * 1_024;
 const MAX_METADATA_BYTES: usize = 4 * 1_024;
 const MAX_URL_BYTES: usize = 4 * 1_024;
+const MAX_STEPS: usize = 1_000;
 
 pub(super) fn project_workflow_status(
     run: &Value,
@@ -60,6 +61,79 @@ pub(super) fn project_workflow_status(
         "jobs_total_count": total_jobs,
         "jobs_truncated": returned_jobs < total_jobs,
         "url": required_text(run, "html_url", MAX_URL_BYTES)?,
+    }))
+}
+
+/// `get_workflow_logs`' job-details answer (the SDK's fallback when the log
+/// archive cannot be read): the run, each job with its steps, and the job's
+/// log URL. The archive itself is never downloaded: GitHub answers a log
+/// request with a redirect to a storage host this runtime's egress does not
+/// admit, so the note says which part is missing.
+pub(super) fn project_workflow_logs(
+    run: &Value,
+    jobs: &Value,
+    expected_run_id: u64,
+) -> Result<Value, GitHubClientError> {
+    let run = run.as_object().ok_or_else(invalid_response)?;
+    if positive_number(run, "id")? != expected_run_id {
+        return Err(invalid_response());
+    }
+    let jobs = jobs.as_object().ok_or_else(invalid_response)?;
+    let total_jobs = nonnegative_number(jobs, "total_count")?;
+    let provider_jobs = jobs
+        .get("jobs")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid_response)?;
+    if provider_jobs.len() > MAX_WORKFLOW_JOBS {
+        return Err(resource_exhausted());
+    }
+    let mut details = Vec::with_capacity(provider_jobs.len());
+    for value in provider_jobs {
+        let job = value.as_object().ok_or_else(invalid_response)?;
+        if positive_number(job, "run_id")? != expected_run_id {
+            return Err(invalid_response());
+        }
+        let steps = match job.get("steps") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(steps)) if steps.len() <= MAX_STEPS => steps
+                .iter()
+                .map(|step| {
+                    let step = step.as_object().ok_or_else(invalid_response)?;
+                    Ok(json!({
+                        "name": required_text(step, "name", MAX_NAME_BYTES)?,
+                        "status": optional_text(step, "status", MAX_METADATA_BYTES)?,
+                        "conclusion": optional_text(step, "conclusion", MAX_METADATA_BYTES)?,
+                        "number": step.get("number").and_then(Value::as_u64),
+                        "started_at": optional_timestamp(step, "started_at")?,
+                        "completed_at": optional_timestamp(step, "completed_at")?,
+                    }))
+                })
+                .collect::<Result<Vec<_>, GitHubClientError>>()?,
+            Some(Value::Array(_)) => return Err(resource_exhausted()),
+            Some(_) => return Err(invalid_response()),
+        };
+        let logs_url = match optional_text(job, "url", MAX_URL_BYTES)? {
+            Value::String(url) => Value::String(format!("{}/logs", url.trim_end_matches('/'))),
+            _ => Value::String("No direct logs URL available".to_owned()),
+        };
+        details.push(json!({
+            "job_id": positive_number(job, "id")?,
+            "job_name": required_text(job, "name", MAX_NAME_BYTES)?,
+            "status": required_text(job, "status", MAX_METADATA_BYTES)?,
+            "conclusion": optional_text(job, "conclusion", MAX_METADATA_BYTES)?,
+            "steps": steps,
+            "logs_url": logs_url,
+        }));
+    }
+    let returned = u64::try_from(details.len()).map_err(|_| resource_exhausted())?;
+    bounded_output(json!({
+        "run_id": expected_run_id,
+        "status": optional_text(run, "status", MAX_METADATA_BYTES)?,
+        "conclusion": optional_text(run, "conclusion", MAX_METADATA_BYTES)?,
+        "job_details": details,
+        "jobs_total_count": total_jobs,
+        "jobs_truncated": returned < total_jobs,
+        "note": "Full logs couldn't be retrieved directly. Only job details are available. This runtime does not download the log archive; open a job's logs_url in GitHub for the log text.",
     }))
 }
 
@@ -166,6 +240,15 @@ fn bounded_output(value: Value) -> Result<Value, GitHubClientError> {
         return Err(resource_exhausted());
     }
     Ok(value)
+}
+
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_workflow_logs(
+    run: &Value,
+    jobs: &Value,
+    expected_run_id: u64,
+) -> Result<Value, GitHubClientError> {
+    project_workflow_logs(run, jobs, expected_run_id)
 }
 
 #[cfg(test)]
