@@ -42,10 +42,11 @@ import {
 } from '../../fixtures/pipelines';
 
 /**
- * The Add-node menu labels for the twelve node types the Rust pipeline
+ * The Add-node menu labels for the thirteen node types the Rust pipeline
  * compiler admits (`parse_pipeline_node` in
  * `services/elitea-worker-rust/src/agents/graph/compiler.rs`); Split Out and
- * Aggregate are admitted by default since #1262.
+ * Aggregate are admitted by default since #1262; Map is admitted with a State
+ * modifier worker (Parallel is still withheld).
  * Code requires an admitted sandbox runtime to execute; Custom remains unsupported.
  */
 const ADMITTED_NODE_LABELS = [
@@ -56,6 +57,7 @@ const ADMITTED_NODE_LABELS = [
   'Human-in-the-loop',
   'LLM',
   'MCP',
+  'Map',
   'Printer',
   'Router',
   'SplitOut',
@@ -91,6 +93,7 @@ const SAVEABLE_NODE_LABELS = ADMITTED_NODE_LABELS.filter(
     label !== 'MCP' &&
     label !== 'Code' &&
     label !== 'Aggregate' &&
+    label !== 'Map' &&
     label !== 'SplitOut',
 );
 
@@ -423,7 +426,7 @@ test('J16: every node type the menu offers mints a compiler-legal id', async ({ 
    * SDK worker hid this by silently rewriting ids through `clean_string`; the
    * Rust worker never rewrites.
    *
-   * This covers all twelve admitted types. The four that cannot be SAVED
+   * This covers all thirteen admitted types. The ones that cannot be SAVED
    * unconfigured (see SAVEABLE_NODE_LABELS) are only reachable here; the
    * stored-document gate is the test after this one.
    */

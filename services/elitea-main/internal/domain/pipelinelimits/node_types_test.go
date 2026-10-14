@@ -90,3 +90,49 @@ func TestNodeCountIsCheckedBeforeNodeTypes(t *testing.T) {
 		t.Fatalf("got %v, want ErrTooManyNodes before any node is inspected", err)
 	}
 }
+
+func mapPipeline(workerType, extraNode string) string {
+	return "entry_point: fan\nstate:\n  items: list\nnodes:\n" +
+		"  - id: fan\n    type: map\n    worker: w\n    transition: END\n" +
+		"  - id: w\n    type: " + workerType + "\n" + extraNode
+}
+
+func TestCheckAdmitsAMapNodeWithAStateModifierWorker(t *testing.T) {
+	if err := pipelinelimits.Check(mapPipeline("state_modifier", "")); err != nil {
+		t.Fatalf("a Map node with a State modifier worker must be admitted: %v", err)
+	}
+}
+
+func TestCheckRefusesMapFormsTheRuntimeCannotRecoverSafely(t *testing.T) {
+	cases := map[string]string{
+		"agent worker":     mapPipeline("agent", ""),
+		"llm worker":       mapPipeline("llm", ""),
+		"toolkit worker":   mapPipeline("toolkit", ""),
+		"agent elsewhere":  mapPipeline("state_modifier", "  - id: other\n    type: agent\n"),
+		"agent before map": "nodes:\n  - id: a\n    type: agent\n" + mapPipeline("state_modifier", "")[len("entry_point: fan\nstate:\n  items: list\nnodes:\n"):],
+	}
+	for name, doc := range cases {
+		api := refusal(t, doc)
+		if api.Code != pipelinelimits.CodeMapFormUnsupported {
+			t.Errorf("%s: code = %s, want %s", name, api.Code, pipelinelimits.CodeMapFormUnsupported)
+		}
+		if !strings.Contains(api.Message, `Node "fan"`) || !strings.Contains(api.Message, "Map node") {
+			t.Errorf("%s: message %q does not name the node and the form", name, api.Message)
+		}
+		if pipelinelimits.Refusal(api) == nil {
+			t.Errorf("%s: Refusal must recognise the Map form code", name)
+		}
+	}
+}
+
+func TestCheckLeavesUnreadableMapWorkersToTheCompiler(t *testing.T) {
+	for name, doc := range map[string]string{
+		"no worker":      "nodes:\n  - id: fan\n    type: map\n",
+		"unknown worker": "nodes:\n  - id: fan\n    type: map\n    worker: ghost\n",
+		"non-string":     "nodes:\n  - id: fan\n    type: map\n    worker: [w]\n  - id: w\n    type: llm\n",
+	} {
+		if err := pipelinelimits.Check(doc); err != nil {
+			t.Errorf("%s: must not be refused at save, got %v", name, err)
+		}
+	}
+}

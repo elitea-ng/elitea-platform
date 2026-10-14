@@ -527,6 +527,9 @@ pub(crate) struct AuthorizedNativeCommandBinding {
     client_stream_id: String,
     client_message_id: String,
     sio_event: String,
+    /// The original execution deadline, in Unix milliseconds. Fan-out nodes
+    /// are bounded by it; no other consumer reads it from the binding.
+    deadline_unix_millis: i64,
 }
 
 impl AuthorizedNativeCommandBinding {
@@ -559,6 +562,7 @@ impl AuthorizedNativeCommandBinding {
             client_stream_id: agent.client_stream_id.clone(),
             client_message_id: agent.client_message_id.clone(),
             sio_event: agent.sio_event.clone(),
+            deadline_unix_millis: command.deadline_unix_millis,
         }
     }
 
@@ -574,6 +578,15 @@ impl AuthorizedNativeCommandBinding {
             client_stream_id: "conversation-1".to_owned(),
             client_message_id: "message-1".to_owned(),
             sio_event: "chat_predict".to_owned(),
+            deadline_unix_millis: 4_102_444_800_000,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_deadline(self, deadline_unix_millis: i64) -> Self {
+        Self {
+            deadline_unix_millis,
+            ..self
         }
     }
 
@@ -606,6 +619,7 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     generation: u64,
     regenerate: bool,
     instruction_plan: super::instruction_authority::InstructionPlan,
+    deadline_unix_millis: i64,
 }
 
 impl OrdinaryNativeAgentPlan {
@@ -772,6 +786,7 @@ impl OrdinaryNativeAgentPlan {
             generation: binding.generation,
             regenerate: request.payload.is_regenerate,
             instruction_plan: profile.instruction_plan().clone(),
+            deadline_unix_millis: binding.deadline_unix_millis,
         })
     }
 
@@ -1113,6 +1128,7 @@ impl NativePipelineStateBackend {
                     sessions: Arc::clone(sessions),
                     checkpointer: Arc::clone(checkpointer),
                     parallel_authority: None,
+                    map_authority: None,
                     node_recovery_authority: None,
                     model_scopes: plan.model_scope_sessions(
                         super::model_scope::ModelScopeBackend::Local(sessions.clone()),
@@ -1217,12 +1233,14 @@ async fn activate_pipeline_postgres(
     let holder = Arc::new(checkpointer);
     let node_recovery_authority: Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory> =
         holder.clone();
+    let map_authority: Arc<dyn super::graph::MapCheckpointAuthority> = holder.clone();
     let authority: Arc<dyn super::graph::ParallelCheckpointAuthority> = holder;
     let checkpointer: Arc<dyn Checkpointer> = authority.clone();
     Ok(PipelineStateServices {
         sessions,
         checkpointer,
         parallel_authority: Some(authority),
+        map_authority: Some(map_authority),
         node_recovery_authority: Some(node_recovery_authority),
         model_scopes,
     })
@@ -1232,6 +1250,7 @@ pub(super) struct PipelineStateServices {
     sessions: Arc<dyn SessionService>,
     checkpointer: Arc<dyn Checkpointer>,
     parallel_authority: Option<Arc<dyn super::graph::ParallelCheckpointAuthority>>,
+    map_authority: Option<Arc<dyn super::graph::MapCheckpointAuthority>>,
     node_recovery_authority:
         Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>>,
     pub(super) model_scopes: super::model_scope::ModelScopeSessions,
@@ -1307,6 +1326,11 @@ impl PipelineStateServices {
     ) -> Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>> {
         self.node_recovery_authority.clone()
     }
+    /// The same single `PostgreSQL` capability holder, kept typed for Map.
+    pub(super) fn map_authority(&self) -> Option<Arc<dyn super::graph::MapCheckpointAuthority>> {
+        self.map_authority.clone()
+    }
+
     /// Preserve the single `PostgreSQL` capability holder before trait erasure.
     #[allow(dead_code)] // Fixed Parallel admission is still gated.
     pub(super) fn parallel_authority(
@@ -1593,6 +1617,31 @@ impl NativeAgentCompletionSelector for PipelineAgentCompletion {
     }
 }
 
+fn map_authority_unavailable() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::UnsupportedCapability,
+        "a Map node needs the fenced durable state writer, which this run does not have",
+    )
+}
+
+/// The original execution deadline as a monotonic instant for fan-out nodes.
+/// A deadline already passed is refused here: the lifecycle would end the run
+/// as `DeadlineExceeded` anyway, and a fan-out must never start past it.
+fn fanout_deadline(
+    deadline_unix_millis: i64,
+) -> Result<tokio::time::Instant, NativeAgentAssemblyError> {
+    let remaining = u64::try_from(deadline_unix_millis - chrono::Utc::now().timestamp_millis())
+        .ok()
+        .filter(|millis| *millis > 0)
+        .ok_or_else(|| {
+            NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::InvalidConfiguration,
+                "the execution deadline has already passed",
+            )
+        })?;
+    Ok(tokio::time::Instant::now() + std::time::Duration::from_millis(remaining))
+}
+
 const PIPELINE_RESUME_MARKER: &str = "[elitea:pipeline-resume:v1]";
 
 /// Build one admitted graph Runner with activated durable state contracts.
@@ -1647,12 +1696,43 @@ pub(super) async fn assemble_pipeline_native(
     )
     .await?;
     let is_resume = resume.is_some();
-    let turn_checkpointer = Arc::new(super::graph::turn_checkpointer::TurnCheckpointer::new(
-        Arc::clone(&state.checkpointer),
-        &plan.execution_id,
-        plan.generation,
-        is_resume,
-    ));
+    // A Map node owns its item threads through the same fenced holder as the
+    // parent, so the turn boundary and the Map capabilities travel together
+    // in one authority. Every other pipeline keeps the plain turn boundary.
+    let (turn_checkpointer, node_runtimes): (Arc<dyn Checkpointer>, _) =
+        if definition.has_map_nodes() {
+            let authority = state
+                .map_authority()
+                .ok_or_else(map_authority_unavailable)?;
+            let deadline = fanout_deadline(plan.deadline_unix_millis)?;
+            let turn = Arc::new(
+                super::graph::map_turn::MapTurnAuthority::new(
+                    authority,
+                    &state.checkpointer,
+                    plan.session_id(),
+                    &plan.execution_id,
+                    plan.generation,
+                    is_resume,
+                )
+                .map_err(|_| map_authority_unavailable())?,
+            );
+            let binding = super::graph::compiler::MapCompilerBinding::new(
+                Arc::clone(&turn) as Arc<dyn super::graph::MapCheckpointAuthority>,
+                deadline,
+            )
+            .map_err(|error| pipeline_configuration_error(&error))?;
+            (turn, node_runtimes.with_map(binding))
+        } else {
+            (
+                Arc::new(super::graph::turn_checkpointer::TurnCheckpointer::new(
+                    Arc::clone(&state.checkpointer),
+                    &plan.execution_id,
+                    plan.generation,
+                    is_resume,
+                )),
+                node_runtimes,
+            )
+        };
     let graph = definition
         .compile_with_runtime(ROOT_AGENT_NAME, turn_checkpointer, resume, &node_runtimes)
         .map_err(|error| pipeline_configuration_error(&error))?;
@@ -1675,6 +1755,7 @@ pub(super) async fn assemble_pipeline_native(
         generation: _,
         regenerate: _,
         instruction_plan,
+        deadline_unix_millis: _,
     } = plan;
     // Node models consume the admitted policy. The Runner never summarizes
     // deterministic graph state or introduces a pipeline-wide summary model.
@@ -2130,6 +2211,7 @@ where
         generation,
         regenerate,
         instruction_plan: _,
+        deadline_unix_millis: _,
     } = plan;
     let durable_context_plan = match (
         &context_management,
@@ -2632,6 +2714,7 @@ where
         generation: _,
         regenerate: _,
         instruction_plan: _,
+        deadline_unix_millis: _,
     } = plan;
     let context_compaction =
         context_management.prepare_runner_composition(model.summarization_model())?;

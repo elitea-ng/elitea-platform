@@ -1,6 +1,6 @@
 # Data-driven map and reduce pipeline design
 
-Status: describes the shipped V1 code on main (2026-10-08). Gate: off.
+Status: describes the shipped V1 code on main (2026-10-08). Gate: removed 2026-10-13 for the inline State modifier worker in the pipeline a conversation starts; every other form is refused at bind ([map-admitted-20261013.md](source-mapping/map-admitted-20261013.md)).
 
 All `path:line` citations are relative to `services/elitea-worker-rust/`
 unless they start with `apps/`. The earlier proposal in this file differed
@@ -21,18 +21,14 @@ The map node is a custom ADK node (`DurableMapNode`,
 V1 workers cannot pause. V1 has no per-item failure collection. Both are V2
 (see the last section).
 
-## Admission gate
+## Admission
 
 | Layer | State | Evidence |
 |-------|-------|----------|
-| Worker compiler | `MAP_INTEGRATION_READY = false`. `MapCompilerBinding::new` returns `Unsupported` before any other check. | `src/agents/graph/map_compiler.rs:31`, `:44-48` |
-| Test-only binding | `for_tests` skips the gate. | `map_compiler.rs:69-75` |
-| Web node-type allow-list | `CompilerAdmittedNodeTypes` does not list `Map`. It lists `Parallel`, `Code`, `Decision`, `Agent`, `Toolkit`, `Mcp`, `Hitl`, `LLM`, `Printer`, `Router`, `StateModifier`. The Add-node menu is driven by this list. | `apps/elitea-web/src/features/pipelines/lib/flow-editor/constants/runtimeContract.constants.ts:73-85` |
-| Web settings panel | `MapSettings.tsx` exists and is mounted by `MapNode.tsx`. | `apps/elitea-web/src/features/pipelines/ui/settings/graph-extensions/MapSettings.tsx`, `ui/nodes/MapNode.tsx:6-9` |
-
-The YAML parser still accepts `type: map` (`src/agents/graph/compiler.rs:1976`).
-Only the execution binding is gated. A document with a map node parses, but
-cannot be bound for execution in production.
+| Worker compiler | No gate. `MapCompilerBinding::new` refuses only an expired original deadline. `assemble_pipeline_native` builds the binding and `MapTurnAuthority` for a definition with a `map` node. | `src/agents/graph/map_compiler.rs`, `src/agents/session.rs` |
+| Admitted form | An inline `state_modifier` worker, in the pipeline a conversation starts, with no `agent` node in the same pipeline. An `agent` worker, a Map in a saved child pipeline and Map with Parallel are refused when the graph is bound. | `map_compiler.rs::{validate_map_ownership,bind_map_authority,bind_map_node}`, `pipeline.rs::bind_admitted_saved_pipeline` |
+| Main | Admits `map`; refuses a non-State-modifier worker or an Agent node beside a Map with `PIPELINE_MAP_FORM_UNSUPPORTED`. | `services/elitea-main/internal/domain/pipelinelimits/limits.go` |
+| Web | `CompilerAdmittedNodeTypes` lists `map`; the worker choice is State modifier only. | `runtimeContract.constants.ts`, `MapSettings.tsx`, `graphMapAdmission.helpers.ts` |
 
 ## YAML contract
 

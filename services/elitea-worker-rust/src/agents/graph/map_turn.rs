@@ -1,5 +1,4 @@
 //! Preserve sealed Map capabilities through the original pipeline turn.
-#![allow(dead_code)] // Production turn assembly remains behind the Map acceptance gate.
 
 use std::sync::Arc;
 
@@ -21,6 +20,9 @@ pub(crate) struct MapTurnAuthority {
     inner: Arc<dyn MapCheckpointAuthority>,
     root_thread: String,
     execution: Value,
+    /// A continuation reads the latest root checkpoint of any earlier turn, as
+    /// `TurnCheckpointer` does: its resume admission has already proved the frontier.
+    resume: bool,
 }
 
 impl MapTurnAuthority {
@@ -39,7 +41,6 @@ impl MapTurnAuthority {
             || execution_id.is_empty()
             || execution_id.len() > 256
             || generation == 0
-            || resume
         {
             return Err(map_error("invalid_turn_authority"));
         }
@@ -51,6 +52,7 @@ impl MapTurnAuthority {
             inner,
             root_thread: root_thread.to_owned(),
             execution: json!([execution_id, generation]),
+            resume,
         })
     }
 
@@ -88,6 +90,7 @@ impl Checkpointer for MapTurnAuthority {
         }
         Ok(saved.filter(|checkpoint| {
             thread != self.root_thread
+                || self.resume
                 || checkpoint.metadata.get(EXECUTION_KEY) == Some(&self.execution)
         }))
     }

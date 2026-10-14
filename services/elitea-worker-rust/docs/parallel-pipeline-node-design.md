@@ -1,6 +1,6 @@
 # Explicit pipeline parallel node design
 
-Status: proposed and capability-disabled.
+Status: proposed and capability-disabled. Still refused when the graph is bound (2026-10-13); the reasons are in [map-admitted-20261013.md](source-mapping/map-admitted-20261013.md) section 4.
 
 This document defines the first production-shaped pipeline `parallel` node.
 It replaces the disconnected prototype contract before compiler activation.

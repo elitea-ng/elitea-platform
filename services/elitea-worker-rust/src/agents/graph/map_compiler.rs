@@ -28,8 +28,6 @@ use crate::agents::graph::node_events::{
 };
 use crate::agents::graph::state_modifier::StateModifierNode;
 
-const MAP_INTEGRATION_READY: bool = false;
-
 pub(crate) struct MapCompilerBinding {
     authority: Arc<dyn MapCheckpointAuthority>,
     occurrence: Arc<MapOccurrenceCheckpointer>,
@@ -41,11 +39,6 @@ impl MapCompilerBinding {
         authority: Arc<dyn MapCheckpointAuthority>,
         deadline: tokio::time::Instant,
     ) -> Result<Arc<Self>, PipelineConfigurationError> {
-        if !MAP_INTEGRATION_READY {
-            return Err(PipelineConfigurationError::Unsupported(
-                "Map requires original-scope restart and pause acceptance",
-            ));
-        }
         if deadline <= tokio::time::Instant::now() {
             return Err(PipelineConfigurationError::Invalid(
                 "the original Map execution deadline has expired",
@@ -126,11 +119,21 @@ impl PipelineDefinition {
                 "Map and fixed Parallel require separately accepted overlay composition",
             ));
         }
+        if self.has_application_nodes() {
+            // Agent children keep per-turn checkpoint threads of their own. Map
+            // fences only the root thread by turn, so the two do not compose
+            // until a turn authority owns every thread (the scoped-continuation
+            // acceptance). Refusing here keeps a second turn from resuming an
+            // earlier turn's finished child.
+            return Err(PipelineConfigurationError::Unsupported(
+                "a Map node cannot share a pipeline with an Agent node",
+            ));
+        }
         let binding = runtimes
             .map
             .as_ref()
             .ok_or(PipelineConfigurationError::Unsupported(
-                "the Map atomic checkpoint authority is not bound",
+                "a Map node runs only in the pipeline a conversation starts, not in a saved pipeline an Agent node calls",
             ))?;
         if !Arc::ptr_eq(&checkpointer, &binding.parent_checkpointer()) {
             return Err(PipelineConfigurationError::Invalid(

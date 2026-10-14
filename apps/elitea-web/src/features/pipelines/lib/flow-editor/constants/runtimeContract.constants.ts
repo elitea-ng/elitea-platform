@@ -68,7 +68,7 @@ export const NODE_ID_WORD_SEPARATOR = '_';
  * somebody adds it here, having checked the runtime actually admits it. There
  * is no build flag: the set is asserted against the shared contract
  * `libs/proto/contracts/pipeline-node-admission-v1.json` (Worker and Main
- * assert the same file; `parallel` and `map` are its recorded Wave 2a drift).
+ * assert the same file; `parallel` is its recorded Wave 2a drift).
  *
  * Code nodes require a configured sandbox runtime at execution time.
  * `custom` remains unsupported by the compiler.
@@ -87,6 +87,7 @@ export const CompilerAdmittedNodeTypes: readonly PipelineNodeType[] = [
   PipelineNodeTypes.StateModifier, // compiler.rs:2394 "state_modifier"
   PipelineNodeTypes.SplitOut, // compiler.rs "split_out"
   PipelineNodeTypes.Aggregate, // compiler.rs "aggregate"
+  PipelineNodeTypes.Map, // compiler.rs "map"; State modifier worker, no Agent node in the pipeline
 ];
 
 const admittedNodeTypeSet: ReadonlySet<string> = new Set<string>(CompilerAdmittedNodeTypes);

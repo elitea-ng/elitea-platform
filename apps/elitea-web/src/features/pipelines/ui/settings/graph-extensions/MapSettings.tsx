@@ -14,7 +14,7 @@ import { StateChannelSelect } from './StateChannelSelect';
 export function MapSettings({ node, disabled, change }: ExtensionSettingsProps): ReactNode {
   const document = useContext(FlowEditorContext)?.yamlJsonObject;
   const worker = extensionText(node['worker']);
-  const workers = document?.nodes?.filter((entry) => entry.id !== node['id'] && (entry.type === 'state_modifier' || entry.type === 'agent')) ?? [];
+  const workers = document?.nodes?.filter((entry) => entry.id !== node['id'] && entry.type === 'state_modifier') ?? [];
   const workerNode = workers.find((entry) => entry.id === worker);
   const rawOutputs = extensionValues(node['outputs']);
   const rawBroadcast = extensionValues(node['broadcast']);
@@ -26,7 +26,7 @@ export function MapSettings({ node, disabled, change }: ExtensionSettingsProps):
     <Typography variant="bodySmall">{t('pipelines.graphExtensions.mapDescription', 'Run the same owned worker once per frozen list item. Preserve input order and original item identity.')}</Typography>
     <ExtensionChoice label={t('pipelines.graphExtensions.worker', 'Owned worker')} value={worker} disabled={disabled}
       choices={['', ...workers.map((entry) => entry.id)]} change={(value) => change('worker', value)}
-      help={t('pipelines.graphExtensions.workerHelp', 'The worker must have no transition, parent route, or static pause. Saved agents need verified effect and pause contracts.')} />
+      help={t('pipelines.graphExtensions.workerHelp', 'The worker must be a State modifier node with no transition, parent route, or static pause.')} />
     <StateChannelSelect label={t('pipelines.graphExtensions.source', 'Source state variable')} value={source} types={['list']}
       disabled={disabled} change={(value) => change('source', value)} />
     <ExtensionField label={t('pipelines.graphExtensions.itemChannel', 'Child item channel')} value={extensionText(node['item'])}

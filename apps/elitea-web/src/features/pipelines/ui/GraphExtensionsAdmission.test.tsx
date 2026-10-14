@@ -21,22 +21,23 @@ describe('SplitOut and Aggregate are admitted by default', () => {
     expect(collectGraphAdmissionIssues(document).filter((issue) => issue.rule === 'node.type')).toEqual([]);
   });
 
-  it('still refuses a type no runtime runs, and the unmerged map type', () => {
-    expect(isCompilerAdmittedNodeType('map')).toBe(false);
+  it('still refuses a type no runtime runs, while Map is admitted', () => {
+    expect(isCompilerAdmittedNodeType('map')).toBe(true);
     const issues = collectGraphAdmissionIssues({ ...document, nodes: [{ id: 'split', type: 'custom', transition: 'END' }] })
       .filter((issue) => issue.rule === 'node.type');
     expect(issues).toHaveLength(1);
     expect(issues[0]?.message).toBe('type: "custom" is not a node type this runtime can run — the whole pipeline is refused.');
   });
 
-  it('offers SplitOut and Aggregate in the Add node menu, and still withholds Parallel', async () => {
+  it('offers SplitOut, Aggregate and Map in the Add node menu, and still withholds Parallel', async () => {
     const user = userEvent.setup();
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Add node' }));
     const entries = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent);
-    expect(entries).toHaveLength(12);
+    expect(entries).toHaveLength(13);
     expect(entries).toContain('SplitOut');
     expect(entries).toContain('Aggregate');
+    expect(entries).toContain('Map');
     expect(entries).not.toContain('Parallel');
     expect(FIXED_PARALLEL_AUTHORING_ENABLED).toBe(false);
   });

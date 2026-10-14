@@ -334,8 +334,10 @@ Application fan-out remains a separate current ad-hoc runtime contract. UI,
 compiler, PostgreSQL crash, reclaim, tool-call, sensitive-tool, authorization,
 and live chat proofs remain activation gates.
 
-Data-driven map/reduce is a separate proposed node. It reads one state list,
-repeats one owned worker, and reduces typed outputs in input order.
+Data-driven map/reduce is a separate node, admitted 2026-10-13 for an inline State
+modifier worker (`docs/source-mapping/map-admitted-20261013.md`). It reads one state
+list, repeats one owned worker, and reduces typed outputs in input order. Fixed
+parallel remains refused when the graph is bound.
 
 The map contract mirrors LangGraph `Send`. An explicit upstream LLM can produce
 the list from one chat request before item admission starts.

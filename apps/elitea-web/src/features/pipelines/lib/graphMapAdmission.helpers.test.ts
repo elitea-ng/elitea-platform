@@ -22,9 +22,9 @@ describe('Map explicit ownership and channel contract', () => {
   it('permits a frozen source to be the destination and approved broadcasts to overlap business roots', () => {
     expect(fields(graph({ ...map, destination: 'items', broadcast: ['items', 'mapped', 'rendered'] }, { ...worker, input: ['entity', 'item_index', 'items', 'mapped', 'rendered'] }))).toEqual([]);
   });
-  it('keeps production type refusal and allows local reads only on the exact owned worker', () => {
+  it('admits the Map type and allows local reads only on the exact owned worker', () => {
     const issues = collectGraphAdmissionIssues(graph());
-    expect(issues.filter((issue) => issue.rule === 'node.type').map((issue) => issue.nodeId)).toEqual(['map_items']);
+    expect(issues.filter((issue) => issue.rule === 'node.type')).toEqual([]);
     expect(issues.filter((issue) => issue.rule === 'node.state-reference')).toEqual([]);
     const foreign = { id: 'foreign_reader', type: 'state_modifier', input: ['entity'], template: 'x' };
     expect(collectGraphAdmissionIssues({ ...graph(), nodes: [map, worker, foreign] })
@@ -42,7 +42,7 @@ describe('Map explicit ownership and channel contract', () => {
   ])('refuses exact Map field %s at %s', (patch, field) => {
     expect(fields(graph({ ...map, ...patch }))).toContain(field);
   });
-  it.each(['code', 'llm', 'toolkit', 'hitl', 'aggregate', 'parallel'])('refuses unreviewed %s worker effects', (type) => {
+  it.each(['code', 'llm', 'toolkit', 'hitl', 'aggregate', 'parallel', 'agent'])('refuses unreviewed %s worker effects', (type) => {
     expect(fields(graph(map, { ...worker, type }))).toContain('worker');
   });
   it('rejects duplicate Map ownership and local-channel exposure', () => {
@@ -66,10 +66,12 @@ describe('Map explicit ownership and channel contract', () => {
     expect(fields(graph(map, { ...worker, input: ['foreign'] }))).toContain('worker.input');
     expect(fields(graph(map, { ...worker, variables_to_clean: ['prefix'] }))).toContain('worker.variables_to_clean');
   });
-  it('checks Agent variable mappings while keeping saved participant effect proof runtime-owned', () => {
+  it('refuses a saved Agent worker and any Agent node beside a Map until the runtime composes them', () => {
     const child: YamlPipelineNode = { id: 'worker', type: 'agent', tool: 'saved_agent', input: [], output: ['rendered'],
       input_mapping: { task: { type: 'variable', value: 'entity' } } };
-    expect(fields(graph(map, child))).toEqual([]);
-    expect(fields(graph(map, { ...child, input_mapping: { task: { type: 'variable', value: 'foreign' } } }))).toContain('worker.input_mapping.task');
+    expect(fields(graph(map, child))).toContain('worker');
+    expect(mapOwnedWorkerChannels(graph(map, child), 'worker')).toEqual([]);
+    const beside = { ...graph(), nodes: [map, worker, { id: 'other', type: 'agent', tool: 'saved_agent' }] };
+    expect(graphMapIssues(beside).some((issue) => issue.message.includes('cannot share a pipeline with an Agent node'))).toBe(true);
   });
 });

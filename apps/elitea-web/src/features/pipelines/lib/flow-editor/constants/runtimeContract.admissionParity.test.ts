@@ -9,7 +9,7 @@ import { CompilerAdmittedNodeTypes, isCompilerAdmittedNodeType } from './runtime
  * Node-type admission parity. `libs/proto/contracts/pipeline-node-admission-v1.json`
  * is the one list of the node `type:` values each layer admits; the Worker compiler
  * test and Main's save-time test assert the same file. A node type added to one layer
- * only fails the others. The Wave 2a drift (`parallel`, `map`) is recorded in the file
+ * only fails the others. The Wave 2a drift (`parallel`) is recorded in the file
  * and compared exactly, so any new drift fails too.
  */
 interface AdmissionContract {

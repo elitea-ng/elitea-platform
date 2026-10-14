@@ -49,6 +49,8 @@ use crate::transport::runtime_context::{
 
 #[path = "pipeline_artifact_tests.rs"]
 mod artifact_tests;
+#[path = "pipeline_map_pg_tests.rs"]
+mod map_pg_tests;
 #[path = "pipeline_scope_tests.rs"]
 mod model_scope_tests;
 #[path = "pipeline_restart_pg_tests.rs"]

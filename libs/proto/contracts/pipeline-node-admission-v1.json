@@ -8,6 +8,7 @@
     "decision",
     "hitl",
     "llm",
+    "map",
     "mcp",
     "printer",
     "router",
@@ -16,9 +17,9 @@
     "toolkit"
   ],
   "pending_wave_2a": {
-    "comment": "KNOWN DRIFT, recorded so that any new drift fails. `parallel` and `map` are not composed yet: the Worker compiler parses them but refuses them when the graph is bound, Main's save check admits both, the Web editor lists `parallel` (the Add-node menu hides it behind FIXED_PARALLEL_AUTHORING_ENABLED) and omits `map`. This object MUST become empty (and move the two types into `admitted`) when Wave 2a composes Parallel and Map. Each layer's test asserts its admitted set equals `admitted` plus exactly its own entry below.",
-    "worker": ["map", "parallel"],
-    "main": ["map", "parallel"],
+    "comment": "KNOWN DRIFT, recorded so that any new drift fails. `map` is admitted (2026-10-13): the Worker composes it in the pipeline a conversation starts, with an inline `state_modifier` worker; every other Map form is refused when the graph is bound, with a named reason. `parallel` is not composed yet: the Worker compiler parses it but refuses it when the graph is bound (its branches are Agent nodes, which need the scoped Agent continuation and per-interrupt fan-out HITL, neither of which is accepted), Main's save check admits it, and the Web editor lists it (the Add-node menu hides it behind FIXED_PARALLEL_AUTHORING_ENABLED). This object MUST become empty (and move `parallel` into `admitted`) when Parallel is composed. Each layer's test asserts its admitted set equals `admitted` plus exactly its own entry below.",
+    "worker": ["parallel"],
+    "main": ["parallel"],
     "web": ["parallel"]
   },
   "refused": [

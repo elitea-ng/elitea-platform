@@ -1867,6 +1867,14 @@ fn bind_admitted_saved_pipeline<'a>(
     graph_path: String,
 ) -> PipelineBindingFuture<'a> {
     Box::pin(async move {
+        if admitted.profile.definition().has_map_nodes() {
+            // Refuse while the stored tree is bound, before any credential or
+            // child runtime exists, and say which capability is missing.
+            return Err(NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::UnsupportedCapability,
+                "the attached pipeline has a Map node, which runs only in the pipeline a conversation starts",
+            ));
+        }
         let mut runtime = runtime.clone();
         runtime.materialization = runtime.materialization.enter_pipeline((
             admitted.revision.application_id,

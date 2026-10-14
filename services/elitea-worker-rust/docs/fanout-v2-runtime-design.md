@@ -1,8 +1,9 @@
 # Fan-out V2 runtime design (Parallel and Map)
 
-Status: design for review, 2026-10-08. Wave 2 design (Track D1). Documentation only. All admission gates stay
-`false` (`FIXED_PARALLEL_INTEGRATION_READY`, `parallel_compiler.rs:33`; `MAP_INTEGRATION_READY`,
-`map_compiler.rs:31`; Web `CompilerAdmittedNodeTypes`). Nothing here is implemented.
+Status: design for review, 2026-10-08. Wave 2 design (Track D1). Documentation only; nothing here is implemented.
+Update 2026-10-13: `MAP_INTEGRATION_READY` is gone and Map is admitted for an inline State modifier worker, which needs none of
+this design ([source mapping](source-mapping/map-admitted-20261013.md)). `FIXED_PARALLEL_INTEGRATION_READY` stays `false`; the
+Agent, LLM and Pipeline workers (tasks 3 to 14) still need this design.
 
 Paths are relative to `services/elitea-worker-rust/src/` unless they start with `services/` or `libs/`. Anchors
 were checked against this branch (from `origin/main`). Code that only exists on PR #1084 is marked "lands with #1084".

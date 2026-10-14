@@ -54,6 +54,10 @@ const (
 	// CodeToolkitNotAttached is a direct tool node whose toolkit is not one of
 	// the version's attached tools; refused when a run starts.
 	CodeToolkitNotAttached = "PIPELINE_TOOLKIT_NOT_ATTACHED"
+	// CodeMapFormUnsupported is a `map` node in a form the runtime cannot make
+	// recovery-safe: a worker that is not a State modifier node, or a pipeline
+	// that also holds an Agent node.
+	CodeMapFormUnsupported = "PIPELINE_MAP_FORM_UNSUPPORTED"
 	// maxNamedBytes bounds a node id, type or toolkit name echoed in a refusal.
 	maxNamedBytes = 128
 )
@@ -66,7 +70,7 @@ func Refusal(err error) *apierr.APIError {
 		return nil
 	}
 	switch api.Code {
-	case CodeNodeTypeUnsupported, CodeToolkitNotAttached:
+	case CodeNodeTypeUnsupported, CodeToolkitNotAttached, CodeMapFormUnsupported:
 		return api
 	}
 	if errors.Is(err, ErrInstructionsTooLarge) || errors.Is(err, ErrTooManyNodes) || errors.Is(err, ErrExpansionTooLarge) {
@@ -132,17 +136,22 @@ func check(instructions string, attached *[]string) error {
 		if len(nodes.Content) > MaxNodes {
 			return ErrTooManyNodes
 		}
+		var all []map[string]*yaml.Node
 		for _, node := range nodes.Content {
 			fields := nodeFields(aliased(node))
 			if err := checkNodeType(fields); err != nil {
 				return err
 			}
+			all = append(all, fields)
 			if attached == nil {
 				continue
 			}
 			if err := checkDirectToolkit(fields, *attached); err != nil {
 				return err
 			}
+		}
+		if err := checkMapForms(all); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -156,7 +165,7 @@ func nodeFields(node *yaml.Node) map[string]*yaml.Node {
 	fields := make(map[string]*yaml.Node, 3)
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		switch key := aliased(node.Content[i]).Value; key {
-		case "id", "type", "toolkit_name":
+		case "id", "type", "toolkit_name", "worker":
 			fields[key] = aliased(node.Content[i+1])
 		}
 	}
@@ -185,6 +194,54 @@ func checkNodeType(fields map[string]*yaml.Node) error {
 		Message: fmt.Sprintf("%s uses the %s node type, which the pipeline runtime does not support. Remove or replace that node before saving.",
 			nodeLabel(fields["id"]), quoted(nodeType)),
 	}
+}
+
+// checkMapForms refuses a `map` node in a form the Worker cannot run safely.
+// The Worker composes Map only with an inline State modifier worker, and only
+// in a pipeline without Agent nodes (an Agent child keeps per-turn checkpoint
+// threads that the Map turn authority does not fence). Both are refused when
+// the graph is bound too; saying so here names the node and the remedy before
+// the pipeline is stored. A node whose worker or type cannot be read exactly is
+// left to the compiler, which refuses it.
+func checkMapForms(nodes []map[string]*yaml.Node) error {
+	types := make(map[string]string, len(nodes))
+	hasAgent := false
+	for _, fields := range nodes {
+		nodeType, ok := stringScalar(fields["type"])
+		if !ok {
+			continue
+		}
+		if nodeType == "agent" {
+			hasAgent = true
+		}
+		if id, ok := stringScalar(fields["id"]); ok {
+			types[id] = nodeType
+		}
+	}
+	for _, fields := range nodes {
+		if nodeType, _ := stringScalar(fields["type"]); nodeType != "map" {
+			continue
+		}
+		if worker, ok := stringScalar(fields["worker"]); ok {
+			if workerType, found := types[worker]; found && workerType != "state_modifier" {
+				return &apierr.APIError{
+					Status: http.StatusBadRequest,
+					Code:   CodeMapFormUnsupported,
+					Message: fmt.Sprintf("%s is a Map node whose owned worker is not a State modifier node. A Map node can run only a State modifier worker today. Change the worker before saving.",
+						nodeLabel(fields["id"])),
+				}
+			}
+		}
+		if hasAgent {
+			return &apierr.APIError{
+				Status: http.StatusBadRequest,
+				Code:   CodeMapFormUnsupported,
+				Message: fmt.Sprintf("%s is a Map node in a pipeline that also has an Agent node. A Map node cannot share a pipeline with an Agent node today. Remove one of them before saving.",
+					nodeLabel(fields["id"])),
+			}
+		}
+	}
+	return nil
 }
 
 // checkDirectToolkit refuses a direct tool node whose toolkit is not attached.
@@ -252,8 +309,8 @@ func ascii(value string) bool {
 // parse_pipeline_node (compiler.rs). There is no build tag or flag: every
 // deployment admits the same set, and the shared admission-parity contract
 // (libs/proto/contracts/pipeline-node-admission-v1.json) keeps it equal to the
-// Worker's and the Web editor's. `map` and `parallel` are listed there as
-// pending Wave 2a drift.
+// Worker's and the Web editor's. `parallel` is listed there as pending
+// Wave 2a drift.
 var admittedNodeTypes = map[string]struct{}{
 	"aggregate": {}, "agent": {}, "code": {}, "decision": {}, "hitl": {}, "llm": {},
 	"map": {}, "mcp": {}, "parallel": {}, "printer": {}, "router": {},

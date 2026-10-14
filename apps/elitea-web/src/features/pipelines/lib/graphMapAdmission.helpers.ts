@@ -14,7 +14,7 @@ export function mapOwnedWorkerChannels(document: YamlPipelineDocument, workerId:
   if (owners.length !== 1) return [];
   const owner = owners[0]!;
   const worker = document.nodes?.find((node) => node.id === workerId);
-  if (!worker || (worker.type !== 'state_modifier' && worker.type !== 'agent')) return [];
+  if (!worker || worker.type !== 'state_modifier') return [];
   const channels = [owner['item'], owner['index']];
   if (!channels.every((value) => validExtensionChannel(value) && !Object.hasOwn(document.state ?? {}, value))
     || channels[0] === channels[1] || owner.id === workerId
@@ -60,9 +60,12 @@ function mapWorkerBindings(document: YamlPipelineDocument, node: YamlPipelineNod
 }
 function mapWorkerIssues(document: YamlPipelineDocument, node: YamlPipelineNode, check: ExtensionValidator): void {
   const worker = (document.nodes ?? []).find((entry) => entry.id === node['worker']);
-  if (!worker || worker.id === node.id || (worker.type !== 'state_modifier' && worker.type !== 'agent')) {
-    check.issue('worker', 'Select one declared StateModifier or a verified saved Agent.');
+  if (!worker || worker.id === node.id || worker.type !== 'state_modifier') {
+    check.issue('worker', 'Select one declared StateModifier node. A Map node cannot own any other node type yet.');
     return;
+  }
+  if ((document.nodes ?? []).some((entry) => entry.type === 'agent')) {
+    check.issue('worker', 'A Map node cannot share a pipeline with an Agent node yet.');
   }
   mapWorkerTopology(document, worker, check);
   mapWorkerBindings(document, node, worker, check);

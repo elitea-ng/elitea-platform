@@ -30,6 +30,17 @@ use ring::digest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+/// Fixed Parallel stays refused when the graph is bound, deliberately.
+///
+/// Its branches are Agent nodes, and a branch cannot be proved recovery-safe
+/// today: the saved-participant identity it hashes exists only under the
+/// scoped Agent continuation (`SCOPED_APPLICATION_CONTINUATION_READY`, false),
+/// and a branch that pauses (sensitive tool, `ask_user`, MCP authorization, a
+/// `hitl` node) needs the per-interrupt fan-out decisions of
+/// `fanout-interrupt-decisions-v1`, which are not built. A branch that runs a
+/// tool can also repeat its effect after a crash until effect receipts cover
+/// Agent children. Map has none of these problems for its one admitted form (an
+/// inline State modifier worker), which is why Map is composed and this is not.
 const FIXED_PARALLEL_INTEGRATION_READY: bool = false;
 
 /// Prove descendant cards against their exact saved checkpoints and sessions.

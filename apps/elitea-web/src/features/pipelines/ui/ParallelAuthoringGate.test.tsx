@@ -23,16 +23,16 @@ describe('fixed Parallel parse support is separate from authoring readiness', ()
       expect(canCreateNodeType('parallel', getNodeTypeFlags(type, undefined, undefined))).toBe(false);
       expect(canCreateNodeType('agent', getNodeTypeFlags(type, undefined, undefined))).toBe(true);
     }
-    expect(isCompilerAdmittedNodeType('map')).toBe(false);
+    expect(isCompilerAdmittedNodeType('map')).toBe(true);
     expect(isCompilerAdmittedNodeType('split_out')).toBe(true);
     expect(isCompilerAdmittedNodeType('aggregate')).toBe(true);
   });
-  it('withholds Parallel from the real catalog while offering the ten other authoring choices and the two shaping nodes', async () => {
+  it('withholds Parallel from the real catalog while offering the eleven other authoring choices, the two shaping nodes and Map', async () => {
     const user = userEvent.setup();
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Add node' }));
     const entries = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent);
-    expect(entries).toHaveLength(12);
+    expect(entries).toHaveLength(13);
     expect(entries).not.toContain('Parallel');
     expect(entries).toContain('Code');
     expect(entries).toContain('Agent');

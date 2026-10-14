@@ -2,8 +2,8 @@
 //! of the shared contract `libs/proto/contracts/pipeline-node-admission-v1.json`.
 //!
 //! Main's save check and the Web editor assert the same file, so a node type
-//! added to one layer only fails there. The pending Wave 2a drift (`parallel`,
-//! `map`) is recorded in the file and compared exactly, so new drift fails too.
+//! added to one layer only fails there. The pending Wave 2a drift (`parallel`)
+//! is recorded in the file and compared exactly, so new drift fails too.
 
 use std::collections::BTreeSet;
 

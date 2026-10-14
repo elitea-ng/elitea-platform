@@ -266,10 +266,19 @@ fn map_yaml_rejects_ownership_routes_pauses_and_local_global_collisions() {
 async fn map_production_binding_and_missing_authority_fail_before_dispatch() {
     let store = Arc::new(TestAuthority::default());
     let definition = PipelineDefinition::from_yaml(&document()).unwrap();
+    // The production constructor admits an unexpired original deadline and
+    // refuses one that has already passed; no switch sits in front of it.
     assert!(
         MapCompilerBinding::new(
             Arc::new(BoundAuthority(Arc::clone(&store), "original")),
             tokio::time::Instant::now() + Duration::from_secs(1)
+        )
+        .is_ok()
+    );
+    assert!(
+        MapCompilerBinding::new(
+            Arc::new(BoundAuthority(Arc::clone(&store), "original")),
+            tokio::time::Instant::now()
         )
         .is_err()
     );
@@ -629,4 +638,89 @@ async fn map_fresh_turn_keeps_exact_physical_parent_cas_and_old_receipts() {
     );
     let stale_none = Checkpoint::new("root", State::new(), 1, vec!["map".to_owned()]);
     assert!(next.append_after(None, &stale_none).await.is_err());
+}
+
+#[tokio::test]
+async fn map_resume_turn_reads_the_earlier_root_and_still_fences_identity() {
+    use crate::agents::graph::map_turn::MapTurnAuthority;
+    let store = Arc::new(TestAuthority::default());
+    let first: Arc<dyn MapCheckpointAuthority> =
+        Arc::new(BoundAuthority(Arc::clone(&store), "original"));
+    let original: Arc<dyn Checkpointer> = first.clone();
+    let first = MapTurnAuthority::new(first, &original, "root", "original", 1, false).unwrap();
+    first
+        .save(&Checkpoint::new(
+            "root",
+            State::from([("paused".to_owned(), json!(true))]),
+            3,
+            vec!["after_map".to_owned()],
+        ))
+        .await
+        .unwrap();
+    // A continuation is a new execution. It must see the paused frontier a
+    // fresh turn is not allowed to see.
+    let next: Arc<dyn MapCheckpointAuthority> =
+        Arc::new(BoundAuthority(Arc::clone(&store), "continuation"));
+    let next_original: Arc<dyn Checkpointer> = next.clone();
+    let fresh = MapTurnAuthority::new(
+        next.clone(),
+        &next_original,
+        "root",
+        "continuation",
+        1,
+        false,
+    )
+    .unwrap();
+    assert!(fresh.load("root").await.unwrap().is_none());
+    let resumed =
+        MapTurnAuthority::new(next, &next_original, "root", "continuation", 1, true).unwrap();
+    let frontier = resumed.load("root").await.unwrap().unwrap();
+    assert_eq!(frontier.pending_nodes, vec!["after_map".to_owned()]);
+    // The next save carries the continuation's own execution stamp.
+    resumed
+        .append_after(
+            Some(&frontier),
+            &Checkpoint::new("root", frontier.state.clone(), 4, vec![]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.load("root").await.unwrap().unwrap().metadata["elitea.pipeline.execution.v1"],
+        json!(["continuation", 1])
+    );
+    let wrong: Arc<dyn MapCheckpointAuthority> =
+        Arc::new(BoundAuthority(Arc::clone(&store), "original"));
+    let wrong_original: Arc<dyn Checkpointer> = wrong.clone();
+    assert!(
+        MapTurnAuthority::new(wrong, &wrong_original, "root", "continuation", 1, true).is_err()
+    );
+}
+
+#[tokio::test]
+async fn map_refuses_to_share_a_pipeline_with_an_agent_node_and_names_why() {
+    let yaml = document()
+        .replace("state:\n", "state:\n  answer: {type: str, value: ''}\n")
+        .replace("transition: END}", "transition: side}")
+        + "  - {id: side, type: agent, tool: other, input_mapping: {task: {type: fixed, value: go}}, output: [answer], transition: END}\n";
+    let definition = PipelineDefinition::from_yaml(&yaml).unwrap();
+    let store = Arc::new(TestAuthority::default());
+    let binding = binding(
+        &store,
+        tokio::time::Instant::now() + Duration::from_secs(10),
+    );
+    let Err(error) = definition.compile_subgraph_with_runtime(
+        binding.parent_checkpointer(),
+        &PipelineNodeRuntimes::default().with_map(binding),
+    ) else {
+        panic!("Map and an Agent node do not compose");
+    };
+    assert!(
+        matches!(
+            error,
+            PipelineConfigurationError::Unsupported(reason)
+                if reason == "a Map node cannot share a pipeline with an Agent node"
+        ),
+        "{error:?}"
+    );
+    assert!(store.minted.lock().unwrap().is_empty());
 }
