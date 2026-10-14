@@ -20,7 +20,9 @@ use super::config::SharePointClientConfig;
 mod content;
 mod onenote_ops;
 
-pub(in crate::toolkits) use content::{MAX_READ_BYTES, SharePointFile, SharePointUpload};
+pub(in crate::toolkits) use content::{
+    MAX_READ_BYTES, SharePointFile, SharePointUpload, names_no_file, not_a_file,
+};
 
 const GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0/";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -29,6 +31,9 @@ const POOL_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
 const MAX_IDLE_PER_HOST: usize = 4;
 const MAX_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_OUTPUT_BYTES: usize = 512 * 1_024;
+/// The most raw markup of a `OneNote` page the readers take (they cut the text
+/// at their own limit; only a page over this is refused).
+const MAX_PAGE_MARKUP_BYTES: usize = 8 * 1_024 * 1_024;
 const MAX_PAGES: usize = 64;
 const MAX_DRIVES: usize = 64;
 const MAX_FOLDER_REQUESTS: usize = 512;
@@ -280,6 +285,11 @@ pub(in crate::toolkits) trait SharePointApi: Send + Sync {
     async fn onenote_get_page_content(&self, page_id: &str)
     -> Result<Value, SharePointClientError>;
 
+    /// The page's markup for the readers, up to a raw cap well above what
+    /// `onenote_get_page_content` hands the model; the reader cuts the TEXT
+    /// at its own limit. Over the raw cap is the only refusal.
+    async fn onenote_page_markup(&self, page_id: &str) -> Result<String, SharePointClientError>;
+
     /// A new item of one exact list: `{id, fields, webUrl}`.
     async fn create_list_item(
         &self,
@@ -356,6 +366,10 @@ pub(in crate::toolkits) struct SharePointHttpResponse {
     /// (`body` is empty). The status is still true: a caller that changed
     /// something reads it before it reads the size.
     pub(in crate::toolkits) oversize: bool,
+    /// The status arrived and the body did not (a stalled or dropped
+    /// connection): `Timeout` or `ConnectionLost`. The status is still true;
+    /// what the caller makes of it depends on whether it changed anything.
+    pub(in crate::toolkits) body_lost: Option<SharePointClientErrorCode>,
     pub(in crate::toolkits) body: Vec<u8>,
 }
 
@@ -431,39 +445,50 @@ impl SharePointTransport for ReqwestSharePointTransport {
                 content_type,
                 location,
                 oversize: true,
+                body_lost: None,
                 body: Vec::new(),
             });
         }
         let mut body = Vec::new();
         // The status is known: a failure from here on is an answer that did
-        // not arrive whole, not a request that never left.
-        while let Some(chunk) = response.chunk().await.map_err(|error| {
-            if error.is_timeout() {
-                timeout()
-            } else {
-                connection_lost()
+        // not arrive whole, not a request that never left. The status is kept
+        // and handed back with the loss, so a change that was confirmed (2xx)
+        // is not reported as lost and a refusal (4xx) stays a refusal.
+        let mut body_lost = None;
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    let next = body.len().saturating_add(chunk.len());
+                    if next > max_body {
+                        return Ok(SharePointHttpResponse {
+                            status,
+                            content_type,
+                            location,
+                            oversize: true,
+                            body_lost: None,
+                            body: Vec::new(),
+                        });
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    body_lost = Some(if error.is_timeout() {
+                        SharePointClientErrorCode::Timeout
+                    } else {
+                        SharePointClientErrorCode::ConnectionLost
+                    });
+                    body = Vec::new();
+                    break;
+                }
             }
-        })? {
-            let next = body
-                .len()
-                .checked_add(chunk.len())
-                .ok_or_else(resource_exhausted)?;
-            if next > max_body {
-                return Ok(SharePointHttpResponse {
-                    status,
-                    content_type,
-                    location,
-                    oversize: true,
-                    body: Vec::new(),
-                });
-            }
-            body.extend_from_slice(&chunk);
         }
         Ok(SharePointHttpResponse {
             status,
             content_type,
             location,
             oversize: false,
+            body_lost,
             body,
         })
     }
@@ -501,6 +526,7 @@ pub(crate) struct SharePointClient {
     transport: Arc<dyn SharePointTransport>,
     site_id: tokio::sync::OnceCell<String>,
     drives: tokio::sync::OnceCell<Vec<Value>>,
+    default_drive: tokio::sync::OnceCell<String>,
 }
 
 impl SharePointClient {
@@ -514,6 +540,7 @@ impl SharePointClient {
             transport: Arc::new(ReqwestSharePointTransport { http }),
             site_id: tokio::sync::OnceCell::new(),
             drives: tokio::sync::OnceCell::new(),
+            default_drive: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -527,6 +554,7 @@ impl SharePointClient {
             transport,
             site_id: tokio::sync::OnceCell::new(),
             drives: tokio::sync::OnceCell::new(),
+            default_drive: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -1090,6 +1118,18 @@ impl SharePointApi for SharePointClient {
             .map_err(|_| invalid_response())
     }
 
+    async fn onenote_page_markup(&self, page_id: &str) -> Result<String, SharePointClientError> {
+        let mut segments = self.onenote_prefix().await?;
+        segments.extend(["pages".to_owned(), page_id.to_owned(), "content".to_owned()]);
+        let refs = segments.iter().map(String::as_str).collect::<Vec<_>>();
+        let response = self
+            .send(GraphCall::get(graph_url(&refs)?, "text/html").max_body(MAX_PAGE_MARKUP_BYTES))
+            .await?;
+        require_success(response.status)?;
+        require_html(response.content_type.as_deref())?;
+        String::from_utf8(response.body).map_err(|_| invalid_response())
+    }
+
     async fn create_list_item(
         &self,
         list_title: &str,
@@ -1241,15 +1281,24 @@ impl GraphCall {
     }
 }
 
-/// A read's answer over the cap is an error; a change's is handed back.
+/// What a call makes of an answer that is over the cap or lost its body. A
+/// change keeps both (its status decides). A read cannot use either: an
+/// oversize answer is an error, and so is a lost body behind a success status;
+/// a lost body behind a refusal keeps the refusal's status for the caller.
 fn refuse_oversize(
     response: SharePointHttpResponse,
     keep: bool,
 ) -> Result<SharePointHttpResponse, SharePointClientError> {
-    if response.oversize && !keep {
-        Err(resource_exhausted())
-    } else {
-        Ok(response)
+    if keep {
+        return Ok(response);
+    }
+    if response.oversize {
+        return Err(resource_exhausted());
+    }
+    match response.body_lost {
+        Some(SharePointClientErrorCode::Timeout) if response.status.is_success() => Err(timeout()),
+        Some(_) if response.status.is_success() => Err(connection_lost()),
+        _ => Ok(response),
     }
 }
 
@@ -1474,7 +1523,6 @@ fn require_success(status: StatusCode) -> Result<(), SharePointClientError> {
 fn require_effect_success(status: StatusCode) -> Result<(), SharePointClientError> {
     match status.as_u16() {
         200..=299 => Ok(()),
-        400 | 415 | 422 => Err(invalid_input()),
         401 => Err(authentication()),
         403 => Err(authorization()),
         404 => Err(not_found()),
@@ -1482,6 +1530,9 @@ fn require_effect_success(status: StatusCode) -> Result<(), SharePointClientErro
         413 => Err(resource_exhausted()),
         429 => Err(rate_limited()),
         503 => Err(dependency_unavailable()),
+        // Any other refusal (400, 415, 422, 410 Gone, 416 Range Not Satisfiable, ...) is a
+        // definite one: Graph looked at the request and said no.
+        400..=499 => Err(invalid_input()),
         _ => Err(outcome_unknown()),
     }
 }

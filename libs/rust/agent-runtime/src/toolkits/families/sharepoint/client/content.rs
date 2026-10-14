@@ -23,8 +23,6 @@ use super::{
 
 /// The most bytes of a file the readers fetch (the SDK's sharing-link cap).
 pub(in crate::toolkits) const MAX_READ_BYTES: usize = 20 * 1_024 * 1_024;
-/// The most bytes of an image the sharing-link reader fetches.
-const MAX_IMAGE_READ_BYTES: usize = 3 * 1_024 * 1_024;
 /// The most bytes one upload sends.
 pub(in crate::toolkits) const MAX_UPLOAD_BYTES: usize = 50 * 1_024 * 1_024;
 /// Files up to this size are one `PUT` (the SDK's threshold, inclusive).
@@ -43,7 +41,10 @@ const APPLIED_TOO_LARGE: &str = "applied; the response was too large to show";
 const APPLIED_UNREADABLE: &str = "applied; the response could not be read";
 
 const NOT_A_FILE: &str = "the path does not point to a file: it names a document library or a folder; include the file name";
-const TOO_LARGE: &str = "the file is larger than the 20 MB this tool reads (3 MB for images)";
+const TOO_LARGE: &str = "the file is larger than the 20 MB this tool reads";
+const IMAGES_NOT_SUPPORTED: &str = "images are not supported by this tool: it reads the text of documents, and describes no picture";
+// The sentences above spell the limit; this ties them to it.
+const _: () = assert!(MAX_READ_BYTES == 20 * 1_024 * 1_024);
 const NO_EXTENSION: &str = "the file has no extension, so its type cannot be determined";
 const DOUBLE_EXTENSION: &str = "the file name has a suspicious double extension (an archive, media or executable type before the last one)";
 const UNSUPPORTED_TYPE: &str = "the file type is not supported: documents (PDF, DOCX, XLSX, PPTX), text files (TXT, MD, CSV, JSON, HTML, XML), images and common code files are; archives (ZIP, RAR), media (MP4, MP3) and executables are not";
@@ -51,6 +52,18 @@ const DANGEROUS_INTERMEDIATE: [&str; 18] = [
     "zip", "rar", "7z", "tar", "gz", "exe", "msi", "bat", "cmd", "sh", "mp4", "avi", "mov", "mp3",
     "wav", "dll", "so", "bin",
 ];
+
+/// The refusal for a path that names a library or a folder, not a file.
+pub(in crate::toolkits) fn not_a_file() -> SharePointClientError {
+    file_refused(NOT_A_FILE)
+}
+
+/// Whether a path, from its spelling alone, names no file: it ends in `/`,
+/// its last segment is empty, or it ends at a Graph `root:` (a library root).
+pub(in crate::toolkits) fn names_no_file(path: &str) -> bool {
+    let last = path.rsplit('/').next().unwrap_or_default();
+    last.is_empty() || last.ends_with(':')
+}
 
 /// A file read from `SharePoint`.
 pub(in crate::toolkits) struct SharePointFile {
@@ -285,11 +298,7 @@ impl SharePointClient {
                 Ok(response) => response,
                 Err(error) => {
                     self.cancel_upload_session(&upload_url).await;
-                    return Err(if last {
-                        error.for_effect()
-                    } else {
-                        demote_unknown(error)
-                    });
+                    return Err(settle_chunk_failure(error, last));
                 }
             };
             match response.status.as_u16() {
@@ -486,11 +495,16 @@ impl SharePointClient {
 
     /// The drive the site's default library lives on.
     async fn default_drive_id(&self) -> Result<String, SharePointClientError> {
-        let site_id = self.resolve_site_id().await?;
-        let object = self
-            .get_json(graph_url(&["sites", site_id, "drive"])?)
-            .await?;
-        required_json_text(&object, "id", 4 * 1_024).map(str::to_owned)
+        self.default_drive
+            .get_or_try_init(|| async {
+                let site_id = self.resolve_site_id().await?;
+                let object = self
+                    .get_json(graph_url(&["sites", site_id, "drive"])?)
+                    .await?;
+                required_json_text(&object, "id", 4 * 1_024).map(str::to_owned)
+            })
+            .await
+            .cloned()
     }
 
     /// A server-relative folder (or file) path as `(drive id, path relative
@@ -657,18 +671,7 @@ fn validate_shared_file(name: &str, size: Option<u64>) -> Result<usize, SharePoi
         .rsplit_once('.')
         .map(|(_, extension)| extension.to_ascii_lowercase())
         .filter(|extension| !extension.is_empty() && !name.starts_with('.'));
-    let is_image = extension.as_deref().is_some_and(|extension| {
-        matches!(
-            extension,
-            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff"
-        )
-    });
-    let limit = if is_image {
-        MAX_IMAGE_READ_BYTES
-    } else {
-        MAX_READ_BYTES
-    };
-    if size.is_some_and(|size| size > limit as u64) {
+    if size.is_some_and(|size| size > MAX_READ_BYTES as u64) {
         return Err(file_refused(TOO_LARGE));
     }
     let Some(extension) = extension else {
@@ -682,6 +685,14 @@ fn validate_shared_file(name: &str, size: Option<u64>) -> Result<usize, SharePoi
             .any(|part| DANGEROUS_INTERMEDIATE.contains(part))
     {
         return Err(file_refused(DOUBLE_EXTENSION));
+    }
+    // Pictures are not read by this tool (it describes none), so they are
+    // refused for what they are, not for their size.
+    if matches!(
+        extension.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "svg" | "ico" | "heic"
+    ) {
+        return Err(file_refused(IMAGES_NOT_SUPPORTED));
     }
     if matches!(
         extension.as_str(),
@@ -708,7 +719,7 @@ fn validate_shared_file(name: &str, size: Option<u64>) -> Result<usize, SharePoi
     ) {
         return Err(file_refused(UNSUPPORTED_TYPE));
     }
-    Ok(limit)
+    Ok(MAX_READ_BYTES)
 }
 
 /// The target of a redirect, or an invalid answer when it names none.
@@ -740,6 +751,24 @@ fn demote_unknown(error: SharePointClientError) -> SharePointClientError {
         dependency_unavailable()
     } else {
         error
+    }
+}
+
+/// What a failed chunk is told as. A refusal (a 4xx: 410 the session is gone,
+/// 416 the range is wrong, ...) is definite whichever chunk it was: the session
+/// is cancelled and nothing was saved. A lost answer or a 5xx is unknown only
+/// for the LAST chunk (the one that commits); before it nothing is committed,
+/// so it is a plain failure. A rejected token stays a rejected token.
+fn settle_chunk_failure(error: SharePointClientError, last: bool) -> SharePointClientError {
+    match error.code() {
+        SharePointClientErrorCode::Authentication => error,
+        SharePointClientErrorCode::InvalidInput
+        | SharePointClientErrorCode::Authorization
+        | SharePointClientErrorCode::NotFound
+        | SharePointClientErrorCode::Conflict
+        | SharePointClientErrorCode::ResourceExhausted => upload_incomplete(),
+        _ if last => error.for_effect(),
+        _ => demote_unknown(error),
     }
 }
 

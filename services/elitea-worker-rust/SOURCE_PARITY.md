@@ -1111,7 +1111,7 @@ no SharePoint tool is left only on the Python worker. Mapped against SDK
 | `onenote_create_notebook`, `_create_section`, `_create_page`, `_update_page`, `_replace_page_content`, `_delete_page` | `client/onenote_ops.rs`; one POST / PATCH / DELETE each; the SDK's success strings and projections | Bounded arguments (64 KiB of markup; at most 100 patch commands, each checked for `target`, `action` and `position`) |
 | `onenote_read_page`, `onenote_read_page_items` | `reader.rs::page_items` and `html.rs`: the SDK's `html.parser` chunker (block tags break lines, `head`/`script`/`style` are dropped, character references are decoded) and its `-----` rendering | Images render as `[image: <alt or 'no description'>]`, which is what the SDK renders without a vision model. `include_attachments=false` still lists attachments, as in the SDK (it only gates their content). Attachment content: at most 20 attachments and 40 MiB per page, 50,000 characters each, all within what the 200,000-character page limit leaves after the page's own text (attachments are fitted in order and the ones cut or left out are named; the page text is never cut for them); an attachment whose text was asked for and could not be had says `Content: not available: <reason>` (the SDK leaves it bare, which reads as an attachment with no text) |
 | `onenote_list_attachments`, `onenote_read_attachment` | `reader.rs`: the `<object data-attachment>` elements of the page markup; the bytes come from `sites/{site}/onenote/resources/{id}/content` | Only a Graph OneNote resource of THIS site (`https://graph.microsoft.com/v1.0/sites/<this site>/onenote/resources/<id>`) is fetched; any other address (a CDN picture, another site) is listed as written and never fetched (the SDK sends the bearer to whatever address the page names) |
-| the existing 8 | unchanged | integer arguments now go through `exact_number` (`2.0`, `"3"` and `1e2` are integers; `2.5` and `true` are not) |
+| the existing 8 | unchanged | integer arguments now go through the shared `integer_like` (`2.0`, `"3"`, `"10.0"` and `"1e2"` are integers, read exactly; `2.5` and `true` are not) |
 
 **Failures are sentences.** The runtime reduces every tool *error* to a generic
 line for the model ("tool dependency is unavailable"), which would hide the one
@@ -1126,17 +1126,20 @@ have been applied, so check the target before repeating it". Throttling (429,
 Graph's word that the change happened: whatever its body looks like (oversize,
 unreadable, a projection over the output cap) the answer is a success that says
 what could not be shown (`applied; the response was too large to show`), never a
-failure. A rejected
+failure. A status that arrives without its body keeps its status: a change
+confirmed (2xx) is `applied`, a 4xx stays a definite refusal, a read behind a lost
+body is a lost connection. A rejected
 token (401) stays a typed error so the run can ask for authorization and replay
 the call. Nothing is retried: the transport never retries and a change is never
 marked retryable. A resumable upload follows what the session asks for: a 202 that still
 names missing bytes after the last chunk is fed them again (three repairs at most),
-then it is a definite failure; every failure cancels the session; only a lost
-answer to the last chunk is unknown.
+then it is a definite failure; every failure cancels the session; a refusal (any 4xx: 410, 416, ...) of any chunk is a
+definite failure; only a lost answer or 5xx to the last chunk is unknown.
 
-**Bounds, all before buffering.** File reads 20 MiB (3 MiB for an image link),
-by `Content-Length` and by the streamed body; uploads 50 MiB; page markup
-512 KiB; page text 200,000 characters (over it the page text is cut at the limit and says so); a
+**Bounds, all before buffering.** File reads 20 MiB,
+by `Content-Length` and by the streamed body; uploads 50 MiB; the raw markup of a
+page 8 MiB for the readers (only a page over it is refused; its TEXT is cut at the
+limit) and 512 KiB for `onenote_get_page_content`, which hands the markup itself to the model; page text 200,000 characters (over it the page text is cut at the limit and says so); a
 text read over 200,000 characters answers the shared `content_too_large` guide
 (retry with `start_line`/`end_line`). Probing libraries for a bare path is concurrent (eight at a time, default library first) and stops at the first match. A Graph redirect to a download address is
 followed once, without the bearer, and only to an `https` `*.sharepoint.com`

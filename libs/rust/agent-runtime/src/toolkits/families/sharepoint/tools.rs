@@ -19,7 +19,7 @@ use crate::toolkits::policy::{ToolAdmissionDecision, ToolAdmissionPolicy};
 use super::client::{
     MAX_FILES, MAX_ONENOTE_PAGES, MAX_READ_BYTES, SharePointApi, SharePointClient,
     SharePointClientError, SharePointClientErrorCode, SharePointFileListOptions, SharePointUpload,
-    normalize_patterns,
+    names_no_file, normalize_patterns, not_a_file,
 };
 use super::config::{SharePointConfigError, SharePointConfigErrorCode, SharePointToolkitConfig};
 use super::reader::{self, Failure, PageOptions};
@@ -31,6 +31,8 @@ const MAX_ARGUMENT_BYTES: usize = 256 * 1_024;
 const MAX_FILEDATA_BYTES: usize = 64 * 1_024;
 const MAX_HTML_ARGUMENT_BYTES: usize = 64 * 1_024;
 const MAX_FIELDS_BYTES: usize = 64 * 1_024;
+// The artifact-size sentence says "50 MB"; the assert keeps it true.
+const _: () = assert!(MAX_OFFICE_OBJECT_BYTES == 50 * 1_024 * 1_024);
 const MAX_PATCH_COMMANDS: usize = 100;
 const MAX_TEXT_BYTES: usize = 8 * 1_024;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
@@ -328,6 +330,42 @@ impl SharePointToolKind {
             Self::OneNoteListAttachments => "onenote_list_attachments",
             Self::OneNoteReadAttachment => "onenote_read_attachment",
         }
+    }
+
+    /// The tools that turn a file or a page into text through the Office
+    /// host's document reader. Exhaustive on purpose: a new tool must say.
+    const fn reads_text(self) -> bool {
+        match self {
+            Self::ReadDocument
+            | Self::ReadFileFromSharingLink
+            | Self::OneNoteReadPage
+            | Self::OneNoteReadPageItems
+            | Self::OneNoteReadAttachment => true,
+            Self::ReadList
+            | Self::GetLists
+            | Self::GetListColumns
+            | Self::CreateListItem
+            | Self::GetFilesList
+            | Self::UploadFile
+            | Self::OneNoteGetNotebooks
+            | Self::OneNoteGetSections
+            | Self::OneNoteGetPages
+            | Self::OneNoteGetPageContent
+            | Self::OneNoteCreateNotebook
+            | Self::OneNoteCreateSection
+            | Self::OneNoteCreatePage
+            | Self::OneNoteUpdatePage
+            | Self::OneNoteReplacePageContent
+            | Self::OneNoteDeletePage
+            | Self::OneNoteListAttachments => false,
+        }
+    }
+
+    /// The tools that use the Office host at all: the text readers, and the
+    /// upload (which reads an artifact). The one list the worker builds the
+    /// host from.
+    const fn uses_office_host(self) -> bool {
+        self.reads_text() || matches!(self, Self::UploadFile)
     }
 
     /// The tools that change something: created once, never retried, never
@@ -756,6 +794,11 @@ impl SharePointTool {
                     "sharepoint.file.type_blocked",
                     reader::UNSUPPORTED_BLOCKED,
                 )));
+            }
+            // A path that names a library or a folder is refused as that,
+            // before the reader is asked about a "file" it is not.
+            if names_no_file(path) {
+                return Err(Failure::Client(not_a_file()));
             }
             // The reader is checked before a byte is downloaded.
             let host = reader::reader_host(self.host.as_ref())?;
@@ -1527,4 +1570,36 @@ const fn invalid_definition() -> SharePointToolsetError {
     SharePointToolsetError {
         code: SharePointToolsetErrorCode::InvalidDefinition,
     }
+}
+
+fn kind_named(name: &str) -> Option<SharePointToolKind> {
+    SharePointToolKind::ALL
+        .iter()
+        .copied()
+        .find(|kind| kind.name() == name)
+}
+
+/// Whether the `SharePoint` tool of this name turns a file or a page into text
+/// (it needs the host's document reader). `false` for a name the family does
+/// not serve.
+#[must_use]
+pub fn sharepoint_tool_reads_text(name: &str) -> bool {
+    kind_named(name).is_some_and(SharePointToolKind::reads_text)
+}
+
+/// Whether the `SharePoint` tool of this name uses the Office host (a text
+/// reader or the upload). The host is built for a run from this, and from
+/// nothing else.
+#[must_use]
+pub fn sharepoint_tool_uses_office_host(name: &str) -> bool {
+    kind_named(name).is_some_and(SharePointToolKind::uses_office_host)
+}
+
+/// Every tool name the family serves.
+#[must_use]
+pub fn sharepoint_tool_names() -> Vec<&'static str> {
+    SharePointToolKind::ALL
+        .iter()
+        .map(|kind| kind.name())
+        .collect()
 }

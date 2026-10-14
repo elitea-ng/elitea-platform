@@ -975,17 +975,6 @@ pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>
     })
 }
 
-/// The `SharePoint` tools that use the Office host: the readers (a document
-/// reader) and the upload (an artifact read).
-const SHAREPOINT_HOST_TOOLS: [&str; 6] = [
-    "read_document",
-    "read_file_from_sharing_link",
-    "upload_file",
-    "onenote_read_page",
-    "onenote_read_page_items",
-    "onenote_read_attachment",
-];
-
 /// Whether a configured toolkit needs the Office host built for the run. The
 /// Office families and `imagegen` always do; `sharepoint` only when its
 /// selected tools include one that reads a document or an artifact, so a
@@ -1003,7 +992,7 @@ fn toolkit_needs_office_host(
                 selected
                     .iter()
                     .filter_map(serde_json::Value::as_str)
-                    .any(|name| SHAREPOINT_HOST_TOOLS.contains(&name))
+                    .any(elitea_agent_runtime::toolkits::sharepoint_tool_uses_office_host)
             }),
         _ => false,
     }
@@ -1200,12 +1189,16 @@ mod office_host_need_tests {
             "onenote_create_page"
         ])])));
         // Each reader and the upload do.
-        for tool in super::SHAREPOINT_HOST_TOOLS {
-            assert!(
+        // Every tool the family says uses the host builds it, and no other.
+        for tool in elitea_agent_runtime::toolkits::sharepoint_tool_names() {
+            assert_eq!(
                 carries(&json!([sharepoint(&["get_lists", tool])])),
+                elitea_agent_runtime::toolkits::sharepoint_tool_uses_office_host(tool),
                 "{tool}"
             );
         }
+        assert!(elitea_agent_runtime::toolkits::sharepoint_tool_uses_office_host("upload_file"));
+        assert!(!elitea_agent_runtime::toolkits::sharepoint_tool_uses_office_host("get_lists"));
         // The Office families always do; an unrelated toolkit never.
         assert!(carries(
             &json!([{"id": 2, "type": "pptx", "toolkit_name": "P", "settings": {}}])

@@ -210,6 +210,9 @@ pub use families::office_host::{
     OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
     TextExtractionFailure, valid_upload_file_name,
 };
+pub use families::sharepoint::tools::{
+    sharepoint_tool_names, sharepoint_tool_reads_text, sharepoint_tool_uses_office_host,
+};
 pub use materialize::{
     ConfiguredToolsets, RefusedToolkit, ToolsetMaterializationError,
     ToolsetMaterializationErrorCode, materialize_configured_toolsets_reporting_refusals,

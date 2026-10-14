@@ -13,8 +13,8 @@ use html_escape::decode_html_entities;
 /// Tags whose content is not page text.
 const SKIPPED: [&str; 3] = ["script", "style", "head"];
 /// Tags that end a line.
-const BLOCKS: [&str; 11] = [
-    "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "br", "tr",
+const BLOCKS: [&str; 13] = [
+    "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "br", "tr", "td", "th",
 ];
 
 /// One `<img>` of a page.
@@ -56,8 +56,7 @@ enum Event {
     Text(String),
 }
 
-/// The page's text, images and attachments in document order. A `td` and a
-/// `th` are not line breaks (the SDK lists neither).
+/// The page's text, images and attachments in document order.
 pub(super) fn parse_page(html: &str) -> Page {
     let mut page = Page::default();
     let mut skip_depth = 0_usize;
@@ -156,7 +155,7 @@ fn collapse_line_breaks(text: &str) -> String {
 }
 
 fn is_block(name: &str) -> bool {
-    BLOCKS.contains(&name) || matches!(name, "td" | "th")
+    BLOCKS.contains(&name)
 }
 
 fn attribute(attributes: &[(String, String)], name: &str) -> String {
@@ -451,6 +450,18 @@ mod tests {
             drop(parse_page(html));
             drop(attachments_of(html));
         }
+    }
+
+    #[test]
+    fn table_cells_end_a_line_as_the_sdk_chunker_has_it() {
+        let page = parse_page("<table><tr><td>a</td><th>b</th></tr></table>");
+        let mut text = String::new();
+        for chunk in &page.chunks {
+            if let Chunk::Text(piece) = chunk {
+                text.push_str(piece);
+            }
+        }
+        assert_eq!(flush_text(&mut text).as_deref(), Some("a\n\nb"));
     }
 
     #[test]

@@ -69,20 +69,6 @@ enum DirectLending {
     None,
 }
 
-/// The `SharePoint` tools that turn a file or a page into text, which the
-/// document reader of the Office host serves. The others need no host, so a
-/// direct call of one redeems nothing.
-fn sharepoint_reads_text(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "read_document"
-            | "read_file_from_sharing_link"
-            | "onenote_read_page"
-            | "onenote_read_page_items"
-            | "onenote_read_attachment"
-    )
-}
-
 /// What to lend a direct call of `toolkit_type`. `imagegen`'s tools are all
 /// effectful and refused on this path, so it never needs the claim; `pptx`
 /// reads objects, so it does (when this worker has the Office runtime);
@@ -92,7 +78,10 @@ fn direct_lending(toolkit_type: &str, tool_name: &str, has_office_runtime: bool)
     match toolkit_type {
         "imagegen" => DirectLending::NoRoundTrip,
         "pptx" if has_office_runtime => DirectLending::Claim,
-        "sharepoint" if has_office_runtime && sharepoint_reads_text(tool_name) => {
+        "sharepoint"
+            if has_office_runtime
+                && elitea_agent_runtime::toolkits::sharepoint_tool_reads_text(tool_name) =>
+        {
             DirectLending::Claim
         }
         _ => DirectLending::None,

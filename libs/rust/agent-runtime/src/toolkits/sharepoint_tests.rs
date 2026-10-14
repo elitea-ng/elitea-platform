@@ -307,6 +307,7 @@ pub(super) fn response(
         content_type: Some(content_type.into()),
         location: None,
         oversize: false,
+        body_lost: None,
         body: serde_json::to_vec(&body).expect("fixture JSON"),
     }
 }
@@ -609,6 +610,10 @@ impl SharePointApi for AuthenticationApi {
     }
 
     async fn onenote_resource_url(&self, _: &str) -> Result<String, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn onenote_page_markup(&self, _: &str) -> Result<String, SharePointClientError> {
         Err(Self::error())
     }
 

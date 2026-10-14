@@ -29,6 +29,9 @@ const MAX_ATTACHMENTS_READ: usize = 20;
 const MAX_ATTACHMENT_TOTAL_BYTES: usize = 2 * MAX_READ_BYTES;
 /// The most characters of one attachment's text a page read inlines.
 const MAX_ATTACHMENT_CHARS: usize = 50_000;
+// The refusal sentences below spell these numbers; the asserts keep them true.
+const _: () = assert!(MAX_ATTACHMENTS_READ == 20);
+const _: () = assert!(MAX_OUTPUT_CHARS == 200_000);
 
 pub(super) const UNSUPPORTED_BLOCKED: &str = "Not supported type of files entered. Supported types are TXT, DOCX, PDF, PPTX, XLSX and XLS only.";
 
@@ -242,9 +245,8 @@ pub(super) async fn page_items(
     page_id: &str,
     options: PageOptions,
 ) -> Result<Vec<PageItem>, SharePointClientError> {
-    let markup = api.onenote_get_page_content(page_id).await?;
-    let markup = markup.as_str().unwrap_or_default();
-    let page = html::parse_page(markup);
+    let markup = api.onenote_page_markup(page_id).await?;
+    let page = html::parse_page(&markup);
 
     let mut items = Vec::new();
     // (position in `items`, position in `page.attachments`)
@@ -521,9 +523,9 @@ pub(super) async fn list_attachments(
     api: &dyn SharePointApi,
     page_id: &str,
 ) -> Result<Value, SharePointClientError> {
-    let markup = api.onenote_get_page_content(page_id).await?;
+    let markup = api.onenote_page_markup(page_id).await?;
     let mut listed = Vec::new();
-    for attachment in html::attachments_of(markup.as_str().unwrap_or_default()) {
+    for attachment in html::attachments_of(&markup) {
         listed.push(json!({
             "name": attachment.name,
             "resource_id": api.onenote_resource_id(&attachment.src).await?,
@@ -548,8 +550,8 @@ pub(super) async fn read_attachment(
     page_id: &str,
     attachment_name: &str,
 ) -> Result<String, Failure> {
-    let markup = api.onenote_get_page_content(page_id).await?;
-    let attachments = html::attachments_of(markup.as_str().unwrap_or_default());
+    let markup = api.onenote_page_markup(page_id).await?;
+    let attachments = html::attachments_of(&markup);
     let Some(found) = attachments.iter().find(|a| a.name == attachment_name) else {
         let available = attachments
             .iter()

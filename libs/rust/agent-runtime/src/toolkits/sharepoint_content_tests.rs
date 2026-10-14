@@ -45,6 +45,11 @@ enum Reply {
         body: Vec<u8>,
     },
     Fail(SharePointClientErrorCode),
+    /// The status arrives and the body does not.
+    BodyLost {
+        status: u16,
+        code: SharePointClientErrorCode,
+    },
 }
 
 impl Reply {
@@ -255,9 +260,18 @@ impl SharePointTransport for FakeGraph {
                 content_type: content_type.map(Into::into),
                 location: location.map(Into::into),
                 oversize: false,
+                body_lost: None,
                 body,
             }),
             Reply::Fail(code) => Err(SharePointClientError::fixture(code)),
+            Reply::BodyLost { status, code } => Ok(SharePointHttpResponse {
+                status: StatusCode::from_u16(status).expect("status"),
+                content_type: Some("application/json".into()),
+                location: None,
+                oversize: false,
+                body_lost: Some(code),
+                body: Vec::new(),
+            }),
         }
     }
 }
@@ -1791,7 +1805,8 @@ async fn a_sharing_link_that_graph_refuses_is_not_retried_off_graph() {
 async fn a_sharing_link_is_checked_before_a_byte_is_downloaded() {
     let cases: Vec<(&str, u64, &str)> = vec![
         ("Big.docx", 20 * 1_024 * 1_024 + 1, "larger than the 20 MB"),
-        ("photo.png", 3 * 1_024 * 1_024 + 1, "larger than the 20 MB"),
+        ("photo.png", 100, "images are not supported by this tool"),
+        ("huge.png", 25 * 1_024 * 1_024, "larger than the 20 MB"),
         ("README", 10, "no extension"),
         ("evil.zip.pdf", 10, "double extension"),
         ("bundle.zip", 10, "not supported"),
@@ -2629,12 +2644,40 @@ async fn onenote_reads_map_graph_failures_and_ask_for_authorization_on_401() {
 
 #[tokio::test]
 async fn a_page_over_the_size_limit_is_refused_and_over_the_text_limit_is_cut() {
-    // The raw page is over the 512 KiB the family returns: refused at the source.
+    // Raw markup well over 512 KiB (a real page carries a lot of markup for
+    // little text) is read; only the TEXT is bounded.
+    let markup = "<p style=\"margin-top:0pt;margin-bottom:0pt\">word </p>".repeat(12_000);
+    assert!(markup.len() > 600_000);
     let graph = FakeGraph::new();
     graph.with_site().on(
         Method::GET,
         &onenote_key("/pages/pg-1/content"),
-        vec![Reply::html(&format!("<p>{}</p>", "word ".repeat(110_000)))],
+        vec![Reply::html(&markup)],
+    );
+    let api = client(&graph);
+    let text = ok(&api, None, "onenote_read_page", json!({"page_id":"pg-1"})).await;
+    let text = text.as_str().expect("text");
+    assert_eq!(
+        text.matches("word").count(),
+        12_000,
+        "all 50k+ characters of text"
+    );
+    assert!(!text.contains("[page text cut"));
+    // The raw tool still hands the model at most 512 KiB.
+    let error = err(
+        &api,
+        None,
+        "onenote_get_page_content",
+        json!({"page_id":"pg-1"}),
+    )
+    .await;
+    assert_invalid_arguments(&error);
+    // Only markup over the raw cap (8 MiB) is refused by the readers.
+    let graph = FakeGraph::new();
+    graph.with_site().on(
+        Method::GET,
+        &onenote_key("/pages/pg-1/content"),
+        vec![Reply::html(&"x".repeat(8 * 1_024 * 1_024 + 1))],
     );
     let api = client(&graph);
     let sentence = refused(&api, None, "onenote_read_page", json!({"page_id":"pg-1"})).await;
@@ -2848,16 +2891,31 @@ async fn the_real_transport_tells_a_failed_connection_from_a_lost_answer_from_a_
         false,
     )
     .await;
-    let error = transport
+    // The status arrived; the body did not. The status is kept, with the loss.
+    let answer = transport
         .execute(request(port))
         .await
-        .err()
-        .expect("cut short");
-    assert_eq!(error.code(), SharePointClientErrorCode::ConnectionLost);
+        .expect("the status is read before the body");
+    assert_eq!(answer.status, StatusCode::OK);
     assert_eq!(
-        error.for_effect().code(),
-        SharePointClientErrorCode::OutcomeUnknown
+        answer.body_lost,
+        Some(SharePointClientErrorCode::ConnectionLost)
     );
+
+    // A stalled body: the same, as a timeout.
+    let port = serve(
+        vec![b"HTTP/1.1 403 Forbidden\r\ncontent-length: 10\r\n\r\nab".to_vec()],
+        true,
+    )
+    .await;
+    let mut stalled = request(port);
+    *stalled.timeout_mut() = Some(std::time::Duration::from_millis(400));
+    let answer = transport
+        .execute(stalled)
+        .await
+        .expect("the status is read before the body");
+    assert_eq!(answer.status, StatusCode::FORBIDDEN);
+    assert_eq!(answer.body_lost, Some(SharePointClientErrorCode::Timeout));
 
     // The server never answers: the request timed out.
     let port = serve(Vec::new(), true).await;
@@ -3189,10 +3247,7 @@ async fn the_reader_and_the_file_kind_are_checked_before_anything_is_downloaded(
         json!({"sharing_url":SHARE_URL}),
     )
     .await;
-    assert!(
-        sentence.contains("file type is not supported"),
-        "{sentence}"
-    );
+    assert!(sentence.contains("images are not supported"), "{sentence}");
     assert_eq!(graph.requests().len(), 1, "only the metadata was asked");
     let sentence = refused(
         &api,
@@ -3440,4 +3495,324 @@ async fn a_session_that_asks_for_missing_ranges_is_repaired_or_cancelled() {
         "{sentence}"
     );
     assert_eq!(graph.count(&Method::DELETE, UPLOAD_PATH), 1);
+}
+
+// ------------------------------------------------ review round 2: regressions
+
+/// A status that arrived is kept when the body does not: a confirmed change is
+/// applied, a refusal stays a refusal, and a read cannot use a lost body.
+#[tokio::test]
+async fn a_lost_body_keeps_its_status() {
+    let lost = SharePointClientErrorCode::ConnectionLost;
+    let stalled = SharePointClientErrorCode::Timeout;
+    // 2xx on a change: applied, id unknown.
+    for code in [lost, stalled] {
+        let graph = FakeGraph::new();
+        graph.with_site().with_list().on(
+            Method::POST,
+            &format!("{SITE}/lists/list-1/items"),
+            vec![Reply::BodyLost { status: 201, code }],
+        );
+        let api = client(&graph);
+        let answer = ok(
+            &api,
+            None,
+            "create_list_item",
+            json!({"list_title":"Tasks","fields":{"Title":"x"}}),
+        )
+        .await;
+        assert_eq!(
+            answer,
+            json!({"applied": true, "note": "applied; the response could not be read"})
+        );
+    }
+    let graph = FakeGraph::new();
+    graph.with_site().on(
+        Method::PUT,
+        UPLOAD_ITEM,
+        vec![Reply::BodyLost {
+            status: 201,
+            code: lost,
+        }],
+    );
+    let api = client(&graph);
+    let answer = ok(
+        &api,
+        None,
+        "upload_file",
+        json!({"folder_path":"/teams/project/Shared Documents/Reports","filedata":"hi","filename":"a b.txt"}),
+    )
+    .await;
+    assert_eq!(answer["applied"], true);
+
+    // 4xx with a stalled body: a definite failure with the status.
+    let graph = FakeGraph::new();
+    graph.with_site().with_list().on(
+        Method::POST,
+        &format!("{SITE}/lists/list-1/items"),
+        vec![Reply::BodyLost {
+            status: 403,
+            code: stalled,
+        }],
+    );
+    let api = client(&graph);
+    let sentence = refused(
+        &api,
+        None,
+        "create_list_item",
+        json!({"list_title":"Tasks","fields":{"Title":"x"}}),
+    )
+    .await;
+    assert!(sentence.contains(FORBIDDEN), "{sentence}");
+    assert!(!sentence.contains(UNKNOWN), "{sentence}");
+
+    // A read: a lost body behind a 200 is a lost connection, behind a 404 it is
+    // the 404.
+    let graph = FakeGraph::new();
+    graph.with_site().on(
+        Method::GET,
+        &onenote_key("/pages/pg-1/content"),
+        vec![Reply::BodyLost {
+            status: 200,
+            code: lost,
+        }],
+    );
+    let api = client(&graph);
+    let sentence = refused(&api, None, "onenote_read_page", json!({"page_id":"pg-1"})).await;
+    assert!(
+        sentence.contains("connection to Microsoft Graph was lost"),
+        "{sentence}"
+    );
+    let graph = FakeGraph::new();
+    graph.with_site().on(
+        Method::GET,
+        &onenote_key("/pages/pg-1/content"),
+        vec![Reply::BodyLost {
+            status: 404,
+            code: stalled,
+        }],
+    );
+    let api = client(&graph);
+    let sentence = refused(&api, None, "onenote_read_page", json!({"page_id":"pg-1"})).await;
+    assert!(sentence.contains(MISSING), "{sentence}");
+}
+
+/// The classes of the host-using tools are one list, in the family.
+#[test]
+fn the_family_says_which_tools_use_the_office_host() {
+    use super::{
+        sharepoint_tool_names, sharepoint_tool_reads_text, sharepoint_tool_uses_office_host,
+    };
+    let names = sharepoint_tool_names();
+    assert_eq!(names.len(), 22);
+    let readers = [
+        "read_document",
+        "read_file_from_sharing_link",
+        "onenote_read_page",
+        "onenote_read_page_items",
+        "onenote_read_attachment",
+    ];
+    for name in &names {
+        let reads = readers.contains(name);
+        assert_eq!(sharepoint_tool_reads_text(name), reads, "{name}");
+        assert_eq!(
+            sharepoint_tool_uses_office_host(name),
+            reads || *name == "upload_file",
+            "{name}"
+        );
+    }
+    assert!(!sharepoint_tool_uses_office_host("index_data"));
+    assert!(!sharepoint_tool_reads_text("nope"));
+}
+
+/// A definite refusal of any chunk is a definite failure; only the last chunk's
+/// lost answer or 5xx is unknown.
+#[tokio::test]
+async fn a_chunk_the_session_refuses_is_a_definite_failure() {
+    let session = |reply: Reply| {
+        let graph = FakeGraph::new();
+        graph
+            .with_site()
+            .on(Method::POST, SESSION, vec![session_reply()])
+            .on(Method::PUT, UPLOAD_PATH, vec![reply])
+            .on(Method::DELETE, UPLOAD_PATH, vec![Reply::status(204)]);
+        graph
+    };
+    let host = big_host();
+    let args = json!({"folder_path":"/teams/project/Shared Documents/Reports","filepath":"/bucket/big.bin"});
+    // The first (middle) chunk.
+    for status in [400, 404, 410, 416, 418] {
+        let graph = session(Reply::status(status));
+        let api = client(&graph);
+        let sentence = refused(&api, Some(&host), "upload_file", args.clone()).await;
+        assert!(
+            sentence.contains("did not accept the whole file"),
+            "{status}: {sentence}"
+        );
+        assert!(!sentence.contains(UNKNOWN), "{status}: {sentence}");
+        assert!(!sentence.contains(UNAVAILABLE), "{status}: {sentence}");
+        assert_eq!(
+            graph.count(&Method::DELETE, UPLOAD_PATH),
+            1,
+            "{status}: cancelled"
+        );
+        assert_eq!(
+            graph.count(&Method::PUT, UPLOAD_PATH),
+            1,
+            "{status}: no further chunk"
+        );
+    }
+    // A transport loss or a 5xx before the last chunk: nothing was committed,
+    // the session is cancelled, and it is not "unknown".
+    for reply in [
+        Reply::status(500),
+        Reply::Fail(SharePointClientErrorCode::Timeout),
+        Reply::Fail(SharePointClientErrorCode::ConnectionLost),
+    ] {
+        let graph = session(reply);
+        let api = client(&graph);
+        let sentence = refused(&api, Some(&host), "upload_file", args.clone()).await;
+        assert!(!sentence.contains(UNKNOWN), "{sentence}");
+        assert_eq!(graph.count(&Method::DELETE, UPLOAD_PATH), 1);
+    }
+    // The last chunk: a refusal is definite, a 5xx or a lost answer is unknown;
+    // both cancel the session.
+    for (status_reply, unknown) in [
+        (Reply::status(416), false),
+        (Reply::status(410), false),
+        (Reply::status(502), true),
+        (Reply::Fail(SharePointClientErrorCode::ConnectionLost), true),
+    ] {
+        let graph = FakeGraph::new();
+        graph
+            .with_site()
+            .on(Method::POST, SESSION, vec![session_reply()])
+            .on(
+                Method::PUT,
+                UPLOAD_PATH,
+                vec![Reply::json(202, &json!({})), status_reply],
+            )
+            .on(Method::DELETE, UPLOAD_PATH, vec![Reply::status(204)]);
+        let api = client(&graph);
+        let sentence = refused(&api, Some(&host), "upload_file", args.clone()).await;
+        assert_eq!(sentence.contains(UNKNOWN), unknown, "{sentence}");
+        assert_eq!(graph.count(&Method::DELETE, UPLOAD_PATH), 1);
+    }
+}
+
+/// The default library is looked up once per client.
+#[tokio::test]
+async fn the_default_library_is_looked_up_once() {
+    let graph = FakeGraph::new();
+    graph.with_site();
+    for drive in ["drive-docs", "drive-priv"] {
+        graph.on(
+            Method::GET,
+            &format!("graph.microsoft.com/v1.0/drives/{drive}/root:/Folder/Notes.txt"),
+            vec![Reply::json(200, &json!({"id":"item"}))],
+        );
+    }
+    with_download(&graph, DOCS_CONTENT, b"default");
+    let api = client(&graph);
+    let host = FakeHost::new().shared();
+    for _ in 0..3 {
+        ok(
+            &api,
+            Some(&host),
+            "read_document",
+            json!({"path":"Folder/Notes.txt"}),
+        )
+        .await;
+    }
+    assert_eq!(graph.count(&Method::GET, &format!("{SITE}/drive")), 1);
+    assert_eq!(graph.count(&Method::GET, &format!("{SITE}/drives")), 1);
+}
+
+/// A path that names a library or a folder is refused as that, before the
+/// reader is asked about a file it is not.
+#[tokio::test]
+async fn a_path_that_names_a_library_or_folder_is_refused_as_that_first() {
+    let graph = FakeGraph::new();
+    graph.with_site();
+    let api = client(&graph);
+    // Even a host that would refuse any file kind says "not a file" first.
+    let host = FakeHost::new();
+    *host.precheck_failure.lock().expect("failure") = Some(TextExtractionFailure::NoExtractor);
+    let host = host.shared();
+    for path in [
+        "/teams/project/Shared Documents/",
+        "/teams/project/Shared Documents/Folder/",
+        "/drives/drive-docs/root:",
+        "/drives/drive-docs/root:/",
+        "Folder/",
+    ] {
+        let sentence = refused(&api, Some(&host), "read_document", json!({"path":path})).await;
+        assert!(
+            sentence.contains("does not point to a file"),
+            "{path}: {sentence}"
+        );
+        assert!(!sentence.contains("document reader"), "{path}: {sentence}");
+    }
+    // A library root without a trailing slash is found out by resolving it.
+    let sentence = refused(
+        &api,
+        Some(&FakeHost::new().shared()),
+        "read_document",
+        json!({"path":"/teams/project/Shared Documents"}),
+    )
+    .await;
+    assert!(sentence.contains("does not point to a file"), "{sentence}");
+    assert!(
+        graph
+            .requests()
+            .iter()
+            .all(|(_, key)| !key.ends_with("/content"))
+    );
+}
+
+/// Integer arguments are read the way the shared reader reads them.
+#[tokio::test]
+async fn limits_accept_integer_valued_spellings_and_refuse_the_rest() {
+    let graph = FakeGraph::new();
+    graph.with_site().with_list().on(
+        Method::GET,
+        &format!("{SITE}/lists/list-1/items"),
+        vec![Reply::json(
+            200,
+            &json!({"value":[{"fields":{"a":1}},{"fields":{"a":2}},{"fields":{"a":3}}]}),
+        )],
+    );
+    let api = client(&graph);
+    for limit in [
+        json!("2.0"),
+        json!("2"),
+        json!(2.0),
+        json!("+2"),
+        json!(" 2 "),
+    ] {
+        let rows = ok(
+            &api,
+            None,
+            "read_list",
+            json!({"list_title":"Tasks","limit":limit}),
+        )
+        .await;
+        assert_eq!(rows.as_array().map(Vec::len), Some(2), "{limit}");
+    }
+    for limit in [
+        json!("2.5"),
+        json!("1e-1"),
+        json!("1e30"),
+        json!("many"),
+        json!(true),
+    ] {
+        let error = err(
+            &api,
+            None,
+            "read_list",
+            json!({"list_title":"Tasks","limit":limit}),
+        )
+        .await;
+        assert_invalid_arguments(&error);
+    }
 }
