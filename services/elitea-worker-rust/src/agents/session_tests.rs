@@ -1084,13 +1084,13 @@ async fn ask_user_pauses_and_resumes_as_the_original_correlated_tool_result() {
 #[tokio::test]
 async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_internal_tool() {
     let mut request = ordinary_request(AgentExecutionKind::Adhoc);
-    // `swarm` and `planner`: two platform-catalogue names this runtime does
-    // not implement, plus `ask_user`, which IS implemented and must produce
-    // no notice of its own.
+    // `swarm` and `image_generation`: two platform-catalogue names this
+    // runtime does not implement, plus `ask_user`, which IS implemented and
+    // must produce no notice of its own.
     request.payload.internal_tools = vec![
         "swarm".to_owned(),
         ASK_USER_TOOL_NAME.to_owned(),
-        "planner".to_owned(),
+        "image_generation".to_owned(),
     ];
     let profile = OrdinaryNoToolProfile::validate(&request).expect("skipped-tool profile");
     let plan = OrdinaryNativeAgentPlan::from_authorized(
@@ -1152,8 +1152,10 @@ async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_internal_tool
 
     assert_eq!(
         notice_texts,
-        ["internal tool 'planner' is not available on this worker\n\
-             internal tool 'swarm' is not available on this worker"],
+        [
+            "internal tool 'image_generation' is not available on this worker\n\
+             internal tool 'swarm' is not available on this worker"
+        ],
         "expected exactly one role=\"tool\" notice event naming both skipped tools, \
          in PLATFORM_INTERNAL_TOOLS order, and none for ask_user"
     );

@@ -38,6 +38,8 @@ pub(crate) mod tools;
 #[cfg(test)]
 mod atlassian_tests;
 #[cfg(test)]
+mod connector_picture_tests;
+#[cfg(test)]
 mod embedded_picture_tests;
 #[cfg(test)]
 mod figma_tests;

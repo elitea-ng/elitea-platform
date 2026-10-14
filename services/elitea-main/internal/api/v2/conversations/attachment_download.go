@@ -87,7 +87,7 @@ func (h *Handler) DownloadAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if bucketName == "" {
-		bucketName = defaultAttachmentBucketName
+		bucketName = storage.DefaultAttachmentBucket
 	}
 	key := conversationID + "/" + name
 	info, err := h.attachments.AttachmentObject(r.Context(), projectID, bucketName, key)
