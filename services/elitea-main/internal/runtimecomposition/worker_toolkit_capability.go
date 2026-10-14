@@ -122,13 +122,12 @@ type WorkerToolkitCapability struct {
 // render-capabilities.sh fails a default render that carries any such name).
 // The toolkit catalogue is served whether or not that plane is enabled.
 //
-// The default is python, because that is the worker
-// deploy/scripts/standalone-stack.sh starts when STANDALONE_WORKER is unset,
-// and — as of #865/#866 — deploy/helm/elitea/values.yaml's
-// worker.implementation default agrees. The chart still states the value
-// explicitly rather than relying on this default, so an operator who
-// overrides worker.implementation to run the lighter, narrower-coverage
-// Rust worker gets elitea-main agreeing with the image actually deployed.
+// The default is rust: the platform's end-state worker, and what
+// deploy/scripts/standalone-stack.sh starts when STANDALONE_WORKER is unset and
+// what deploy/helm/elitea/values.yaml's worker.implementation defaults to. The
+// Python worker is still selectable (set the variable to python) until it is
+// removed. The chart states the value explicitly rather than relying on this
+// default, so elitea-main always agrees with the image actually deployed.
 //
 // An unrecognised value is refused at startup. Falling back to a default would
 // mean a typo silently produces the wrong catalogue for the running worker,
@@ -140,7 +139,7 @@ func WorkerImplementationFromEnv(lookup LookupEnv) (string, error) {
 	value, _ := lookup("ELITEA_WORKER_IMPLEMENTATION")
 	switch value {
 	case "":
-		return PythonWorkerImplementation, nil
+		return RustWorkerImplementation, nil
 	case PythonWorkerImplementation, RustWorkerImplementation:
 		return value, nil
 	default:

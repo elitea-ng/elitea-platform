@@ -32,14 +32,15 @@ const MAX_TOOL_NAME_BYTES: usize = 64;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 /// How long a call waits for a free document slot: up to 8 retries at
 /// 250 ms, 500 ms, ... (9 s in all), under the engine's 20 s call deadline.
-const BUSY_RETRIES: u32 = 8;
-const BUSY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(250);
+use super::attachment_host::{
+    ENGINE_BUSY, ENGINE_BUSY_BACKOFF as BUSY_BACKOFF, ENGINE_BUSY_RETRIES as BUSY_RETRIES,
+};
 
 /// A failure as the model reads it.
 pub(crate) type Sentence = String;
 
 /// The sentence for a busy engine; the caller retries on exactly this.
-pub(crate) const BUSY: &str = "The document engine is busy with other work. Try again in a moment.";
+pub(crate) const BUSY: &str = ENGINE_BUSY;
 
 /// What one family is, in the words its sentences use.
 #[derive(Clone, Copy, Debug)]

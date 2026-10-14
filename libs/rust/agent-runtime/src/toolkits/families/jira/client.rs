@@ -13,6 +13,9 @@ use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
 use super::config::{JiraApiVersion, JiraCredential, JiraToolkitConfig, MAX_SEARCH_RESULTS};
+use crate::toolkits::families::attachment_host::AttachmentHost;
+
+mod attachments;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -52,6 +55,10 @@ pub(crate) enum JiraClientErrorCode {
 pub(crate) struct JiraClientError {
     code: JiraClientErrorCode,
     retryable: bool,
+    /// The tool error to report instead of the code's fixed sentence: the
+    /// attachment tools say exactly what did and did not happen (a file that
+    /// was uploaded while the description was not updated).
+    detail: Option<Box<AdkError>>,
 }
 
 impl JiraClientError {
@@ -67,7 +74,29 @@ impl JiraClientError {
         self.retryable
     }
 
+    /// A tool error with its own sentence.
+    pub(in crate::toolkits) fn described(
+        code: JiraClientErrorCode,
+        category: ErrorCategory,
+        reason: &'static str,
+        message: String,
+    ) -> Self {
+        Self {
+            code,
+            retryable: false,
+            detail: Some(Box::new(AdkError::new(
+                ErrorComponent::Tool,
+                category,
+                reason,
+                message,
+            ))),
+        }
+    }
+
     pub(crate) fn into_adk(self) -> AdkError {
+        if let Some(detail) = self.detail {
+            return *detail;
+        }
         let (category, code, message) = match self.code {
             JiraClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -124,7 +153,11 @@ impl JiraClientError {
 
     #[cfg(test)]
     pub(in crate::toolkits) const fn fixture(code: JiraClientErrorCode, retryable: bool) -> Self {
-        Self { code, retryable }
+        Self {
+            code,
+            retryable,
+            detail: None,
+        }
     }
 }
 
@@ -207,6 +240,36 @@ pub(in crate::toolkits) enum JiraOperation<'a> {
         relative_url: &'a str,
         params: Option<&'a str>,
     },
+    AddFileToIssueDescription {
+        issue_key: &'a str,
+        filepath: &'a str,
+        filename: Option<&'a str>,
+        prepend: bool,
+    },
+    UpdateCommentWithFile {
+        issue_key: &'a str,
+        comment_id: &'a str,
+        filepath: &'a str,
+        filename: Option<&'a str>,
+        prepend: bool,
+    },
+    GetAttachmentsContent {
+        issue_key: &'a str,
+        attachment_pattern: Option<&'a str>,
+    },
+    GetFieldWithImageDescriptions {
+        issue_key: &'a str,
+        field_name: &'a str,
+        prompt: Option<&'a str>,
+        context_radius: i64,
+        process_images: bool,
+    },
+    GetCommentsWithImageDescriptions {
+        issue_key: &'a str,
+        prompt: Option<&'a str>,
+        context_radius: i64,
+        process_images: bool,
+    },
 }
 
 #[async_trait]
@@ -218,6 +281,10 @@ pub(in crate::toolkits) struct JiraHttpResponse {
     status: StatusCode,
     body: Vec<u8>,
     json_content_type: bool,
+    /// The `Content-Type` media type, lower-cased, when the answer names one.
+    media_type: Option<String>,
+    /// The `Location` of a redirect (never followed by the transport).
+    location: Option<String>,
 }
 
 impl JiraHttpResponse {
@@ -229,6 +296,8 @@ impl JiraHttpResponse {
                 .map(|value| serde_json::to_vec(&value).unwrap_or_default())
                 .unwrap_or_default(),
             json_content_type: true,
+            media_type: Some("application/json".to_owned()),
+            location: None,
         }
     }
 
@@ -238,6 +307,25 @@ impl JiraHttpResponse {
             status,
             body: body.as_bytes().to_vec(),
             json_content_type: false,
+            media_type: Some("text/plain".to_owned()),
+            location: None,
+        }
+    }
+
+    /// A binary answer (an attachment download) or a redirect.
+    #[cfg(test)]
+    pub(in crate::toolkits) fn raw_fixture(
+        status: StatusCode,
+        body: &[u8],
+        media_type: Option<&str>,
+        location: Option<&str>,
+    ) -> Self {
+        Self {
+            status,
+            body: body.to_vec(),
+            json_content_type: false,
+            media_type: media_type.map(str::to_owned),
+            location: location.map(str::to_owned),
         }
     }
 
@@ -256,6 +344,20 @@ pub(in crate::toolkits) trait JiraTransport: Send + Sync {
         request: Request,
         effect: bool,
     ) -> Result<JiraHttpResponse, JiraClientError>;
+
+    /// [`Self::execute`] with the largest answer body the caller accepts
+    /// (an attachment download): the declared length is checked before the
+    /// body is read, and a body over the bound is never buffered. A transport
+    /// with a fixed bound answers as `execute` does.
+    async fn execute_bounded(
+        &self,
+        request: Request,
+        effect: bool,
+        max_body: usize,
+    ) -> Result<JiraHttpResponse, JiraClientError> {
+        let _ = max_body;
+        self.execute(request, effect).await
+    }
 }
 
 struct ReqwestJiraTransport {
@@ -269,6 +371,16 @@ impl JiraTransport for ReqwestJiraTransport {
         request: Request,
         effect: bool,
     ) -> Result<JiraHttpResponse, JiraClientError> {
+        self.execute_bounded(request, effect, MAX_RESPONSE_BYTES)
+            .await
+    }
+
+    async fn execute_bounded(
+        &self,
+        request: Request,
+        effect: bool,
+        max_body: usize,
+    ) -> Result<JiraHttpResponse, JiraClientError> {
         let mut response = self
             .http
             .execute(request)
@@ -279,26 +391,31 @@ impl JiraTransport for ReqwestJiraTransport {
             .get(CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES)
+            .is_some_and(|length| length > max_body)
         {
             return Err(response_bound_failure(effect));
         }
-        let json_content_type = response
+        let media_type = response
             .headers()
             .get(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.split(';').next())
-            .is_some_and(|value| {
-                let value = value.trim();
-                value.eq_ignore_ascii_case("application/json") || value.ends_with("+json")
-            });
+            .map(|value| value.trim().to_ascii_lowercase());
+        let json_content_type = media_type
+            .as_deref()
+            .is_some_and(|value| value == "application/json" || value.ends_with("+json"));
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
         let mut body = Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
             .map_err(|source| map_reqwest_error(&source, effect))?
         {
-            if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            if body.len().saturating_add(chunk.len()) > max_body {
                 return Err(response_bound_failure(effect));
             }
             body.extend_from_slice(&chunk);
@@ -307,6 +424,8 @@ impl JiraTransport for ReqwestJiraTransport {
             status: response.status(),
             body,
             json_content_type,
+            media_type,
+            location,
         })
     }
 }
@@ -328,6 +447,9 @@ pub(in crate::toolkits) struct JiraClient {
     /// client, because Jira answers an unauthenticated search with 200 and
     /// no issues. Rust does it once, before the first operation.
     authenticated: Mutex<bool>,
+    /// The artifact store and chat model of the run; `None` when the host
+    /// lends none (the attachment tools are then not served).
+    attachments: Option<AttachmentHost>,
 }
 
 impl JiraClient {
@@ -355,7 +477,18 @@ impl JiraClient {
             config,
             transport,
             authenticated: Mutex::new(false),
+            attachments: None,
         }
+    }
+
+    /// Lend the client the run's artifact store and chat model.
+    #[must_use]
+    pub(in crate::toolkits) fn with_attachments(
+        mut self,
+        attachments: Option<AttachmentHost>,
+    ) -> Self {
+        self.attachments = attachments;
+        self
     }
 
     #[cfg(test)]
@@ -1279,7 +1412,23 @@ impl JiraClient {
 
 #[async_trait]
 impl JiraApi for JiraClient {
+    /// The tool error layer replaces every `Err` message with a generic line,
+    /// so a failure that carries its own sentence (a refused artifact, an
+    /// upload whose follow-up step failed) is returned as the tool's text.
     async fn execute(&self, operation: JiraOperation<'_>) -> Result<Value, JiraClientError> {
+        match self.dispatch(operation).await {
+            Err(JiraClientError {
+                detail: Some(detail),
+                ..
+            }) => Ok(Value::String(detail.message)),
+            other => other,
+        }
+    }
+}
+
+impl JiraClient {
+    #[allow(clippy::too_many_lines)] // One arm per SDK tool.
+    async fn dispatch(&self, operation: JiraOperation<'_>) -> Result<Value, JiraClientError> {
         if let Some(refusal) = self.ensure_authenticated().await? {
             return text(refusal, false);
         }
@@ -1326,6 +1475,62 @@ impl JiraApi for JiraClient {
                 relative_url,
                 params,
             } => self.execute_generic_rq(method, relative_url, params).await,
+            JiraOperation::AddFileToIssueDescription {
+                issue_key,
+                filepath,
+                filename,
+                prepend,
+            } => {
+                self.add_file_to_issue_description(issue_key, filepath, filename, prepend)
+                    .await
+            }
+            JiraOperation::UpdateCommentWithFile {
+                issue_key,
+                comment_id,
+                filepath,
+                filename,
+                prepend,
+            } => {
+                self.update_comment_with_file(issue_key, comment_id, filepath, filename, prepend)
+                    .await
+            }
+            JiraOperation::GetAttachmentsContent {
+                issue_key,
+                attachment_pattern,
+            } => {
+                self.get_attachments_content(issue_key, attachment_pattern)
+                    .await
+            }
+            JiraOperation::GetFieldWithImageDescriptions {
+                issue_key,
+                field_name,
+                prompt,
+                context_radius,
+                process_images,
+            } => {
+                self.get_field_with_image_descriptions(
+                    issue_key,
+                    field_name,
+                    prompt,
+                    context_radius,
+                    process_images,
+                )
+                .await
+            }
+            JiraOperation::GetCommentsWithImageDescriptions {
+                issue_key,
+                prompt,
+                context_radius,
+                process_images,
+            } => {
+                self.get_comments_with_image_descriptions(
+                    issue_key,
+                    prompt,
+                    context_radius,
+                    process_images,
+                )
+                .await
+            }
         }
     }
 }
@@ -1664,7 +1869,11 @@ const fn response_bound_failure(effect: bool) -> JiraClientError {
 }
 
 const fn error(code: JiraClientErrorCode, retryable: bool) -> JiraClientError {
-    JiraClientError { code, retryable }
+    JiraClientError {
+        code,
+        retryable,
+        detail: None,
+    }
 }
 
 const fn invalid_configuration() -> JiraClientError {

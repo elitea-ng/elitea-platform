@@ -11,6 +11,11 @@ use ring::digest::{Context, SHA256};
 use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio_stream::{Stream, StreamExt as _};
 
+use crate::toolkits::families::attachment_host::{
+    AttachmentError, AttachmentHost, MAX_ATTACH_BYTES, Step,
+};
+use crate::toolkits::families::office_host::OfficeFailure;
+
 /// Aha documents files strictly below 300 MB and requires upload within 40s.
 pub(super) const MAX_ARTIFACT_BYTES: u64 = 300_000_000 - 1;
 const MAX_ARTIFACT_PATH_BYTES: usize = 2_048;
@@ -35,6 +40,10 @@ pub(crate) enum AhaArtifactErrorCode {
 /// Stable artifact-plane failure without path, grant, URL, or file data.
 pub(crate) struct AhaArtifactError {
     code: AhaArtifactErrorCode,
+    /// The sentence the model reads, set only by the host-backed source (a
+    /// platform read failure: path, empty, too large, refused...). It carries
+    /// no path, name or credential.
+    sentence: Option<Box<str>>,
 }
 
 impl AhaArtifactError {
@@ -44,7 +53,21 @@ impl AhaArtifactError {
     }
 
     pub(in crate::toolkits) const fn fixture(code: AhaArtifactErrorCode) -> Self {
-        Self { code }
+        Self {
+            code,
+            sentence: None,
+        }
+    }
+
+    /// The sentence the model reads for a failure of the host-backed source.
+    #[must_use]
+    pub(super) fn sentence(&self) -> Option<&str> {
+        self.sentence.as_deref()
+    }
+
+    fn with_sentence(mut self, sentence: String) -> Self {
+        self.sentence = Some(sentence.into());
+        self
     }
 }
 
@@ -203,6 +226,9 @@ trait ArtifactClaimSource: Send + Sync {
 pub(in crate::toolkits) struct AhaArtifactResolver {
     claims: Vec<AhaArtifactClaim>,
     source: Arc<dyn ArtifactClaimSource>,
+    /// The run's artifact store. When set, a path is read through it (at most
+    /// [`MAX_ATTACH_BYTES`]) instead of being matched against a claim.
+    host: Option<AttachmentHost>,
 }
 
 impl AhaArtifactResolver {
@@ -221,7 +247,11 @@ impl AhaArtifactResolver {
                 return Err(invalid_input());
             }
         }
-        Ok(Self { claims, source })
+        Ok(Self {
+            claims,
+            source,
+            host: None,
+        })
     }
 
     /// The resolver a runtime without an artifact-read grant plane holds: no
@@ -232,7 +262,46 @@ impl AhaArtifactResolver {
         Self {
             claims: Vec::new(),
             source: Arc::new(UnavailableSource),
+            host: None,
         }
+    }
+
+    /// The resolver of a run that lends its artifact store: `attach_file`
+    /// reads the file through [`AttachmentHost::read_artifact`], whose cap
+    /// ([`MAX_ATTACH_BYTES`], 50 MiB) is below Aha's own.
+    pub(in crate::toolkits) fn from_host(host: AttachmentHost) -> Self {
+        Self {
+            claims: Vec::new(),
+            source: Arc::new(UnavailableSource),
+            host: Some(host),
+        }
+    }
+
+    async fn multipart_from_host(
+        &self,
+        host: &AttachmentHost,
+        requested_path: &str,
+        filename_override: Option<&str>,
+    ) -> Result<Form, AhaArtifactError> {
+        // Aha's tool takes exactly /{bucket}/{filename}.
+        let requested = ArtifactPath::parse(requested_path)
+            .map_err(|error| error.with_sentence(AttachmentError::Path.sentence()))?;
+        let file = host
+            .read_artifact(&requested.canonical, MAX_ATTACH_BYTES)
+            .await
+            .map_err(|error| from_attachment(&error))?;
+        let filename = filename_override.unwrap_or(&file.name);
+        validate_filename(filename).map_err(|error| {
+            error.with_sentence(
+                "The file name cannot be sent to Aha (a plain name of at most 255 characters is needed); nothing was attached. Pass `filename` with a plain name.".to_owned(),
+            )
+        })?;
+        validate_media_type(file.media_type)?;
+        let part = Part::bytes(file.bytes)
+            .file_name(filename.to_owned())
+            .mime_str(file.media_type)
+            .map_err(|_| invalid_input())?;
+        Ok(Form::new().part("attachment[data]", part))
     }
 
     pub(super) async fn multipart(
@@ -240,6 +309,11 @@ impl AhaArtifactResolver {
         requested_path: &str,
         filename_override: Option<&str>,
     ) -> Result<Form, AhaArtifactError> {
+        if let Some(host) = &self.host {
+            return self
+                .multipart_from_host(host, requested_path, filename_override)
+                .await;
+        }
         let requested = ArtifactPath::parse(requested_path)?;
         let claim = self
             .claims
@@ -422,6 +496,33 @@ async fn spool_verified(
     Ok(file)
 }
 
+/// A host failure as an artifact-plane failure that keeps its sentence.
+fn from_attachment(error: &AttachmentError) -> AhaArtifactError {
+    let code = match error {
+        AttachmentError::Path | AttachmentError::Empty => AhaArtifactErrorCode::InvalidInput,
+        AttachmentError::TooLarge(_) => AhaArtifactErrorCode::ResourceExhausted,
+        AttachmentError::Host(step, failure) => match (step, failure) {
+            (_, OfficeFailure::NotFound) => AhaArtifactErrorCode::NotFound,
+            (_, OfficeFailure::AccessRefused) => AhaArtifactErrorCode::Authorization,
+            (_, OfficeFailure::TooLarge | OfficeFailure::ReplyTooLarge) => {
+                AhaArtifactErrorCode::ResourceExhausted
+            }
+            (_, OfficeFailure::InvalidRequest | OfficeFailure::UnsupportedType) => {
+                AhaArtifactErrorCode::InvalidInput
+            }
+            (_, OfficeFailure::Timeout) => AhaArtifactErrorCode::Timeout,
+            (Step::Read | Step::Write | Step::Model, _) => {
+                AhaArtifactErrorCode::DependencyUnavailable
+            }
+        },
+    };
+    AhaArtifactError {
+        code,
+        sentence: None,
+    }
+    .with_sentence(error.sentence())
+}
+
 fn validate_filename(value: &str) -> Result<(), AhaArtifactError> {
     if value.is_empty()
         || value.len() > MAX_FILENAME_BYTES
@@ -455,29 +556,34 @@ fn validate_media_type(value: &str) -> Result<(), AhaArtifactError> {
 const fn invalid_input() -> AhaArtifactError {
     AhaArtifactError {
         code: AhaArtifactErrorCode::InvalidInput,
+        sentence: None,
     }
 }
 
 const fn authorization() -> AhaArtifactError {
     AhaArtifactError {
         code: AhaArtifactErrorCode::Authorization,
+        sentence: None,
     }
 }
 
 const fn resource_exhausted() -> AhaArtifactError {
     AhaArtifactError {
         code: AhaArtifactErrorCode::ResourceExhausted,
+        sentence: None,
     }
 }
 
 const fn invalid_response() -> AhaArtifactError {
     AhaArtifactError {
         code: AhaArtifactErrorCode::InvalidResponse,
+        sentence: None,
     }
 }
 
 const fn dependency_unavailable() -> AhaArtifactError {
     AhaArtifactError {
         code: AhaArtifactErrorCode::DependencyUnavailable,
+        sentence: None,
     }
 }

@@ -70,6 +70,8 @@ mod aha_tests;
 #[cfg(test)]
 mod artifact_extra_tests;
 #[cfg(test)]
+mod attachment_test_support;
+#[cfg(test)]
 mod azure_search_tests;
 #[cfg(test)]
 mod azure_tests;
@@ -78,7 +80,11 @@ mod bigquery_tests;
 #[cfg(test)]
 mod bitbucket_tests;
 #[cfg(test)]
+mod carrier_reports_tests;
+#[cfg(test)]
 mod carrier_tests;
+#[cfg(test)]
+mod confluence_attachment_tests;
 #[cfg(test)]
 mod confluence_tests;
 #[cfg(all(test, feature = "toolkit-data-analysis"))]
@@ -109,6 +115,8 @@ mod imagegen_tests;
 mod index_tools_tests;
 #[cfg(test)]
 mod invocation_tests;
+#[cfg(test)]
+mod jira_attachment_tests;
 #[cfg(test)]
 mod jira_tests;
 #[cfg(test)]
@@ -220,11 +228,13 @@ pub use families::sharepoint::tools::{
     sharepoint_tool_names, sharepoint_tool_reads_text, sharepoint_tool_uses_office_host,
 };
 pub use materialize::{
-    ConfiguredToolsets, RefusedToolkit, ToolsetMaterializationError,
-    ToolsetMaterializationErrorCode, materialize_configured_toolsets_reporting_refusals,
+    ConfiguredToolsets, LeftOutReason, LeftOutToolkit, MAX_NOTICE_LABEL_BYTES,
+    ToolsetMaterializationError, ToolsetMaterializationErrorCode, bounded_label,
+    capped_notice_lines, left_out_toolkits_notice_text,
+    materialize_configured_toolsets_reporting_refusals,
     materialize_configured_toolsets_with_artifact_authority,
     materialize_configured_toolsets_with_authorities,
-    materialize_configured_toolsets_with_tokens_and_authorization, refused_toolkits_notice_text,
+    materialize_configured_toolsets_with_tokens_and_authorization,
 };
 pub use mcp::{
     AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,

@@ -58,7 +58,7 @@ bad() { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 # reserved by RFC 2606 and never resolves.
 RENDER=(
   -f "$CHART/values-standalone.yaml"
-  --set worker.enabled=true
+  --set worker.enabled=true --set worker.indexingRuntime=python
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )

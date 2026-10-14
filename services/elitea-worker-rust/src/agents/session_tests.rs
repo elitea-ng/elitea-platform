@@ -1019,13 +1019,19 @@ async fn ask_user_pauses_and_resumes_as_the_original_correlated_tool_result() {
         }),
         completed: "continued after clarification".to_owned(),
     };
+    // The resumed turn also skips `swarm`: its final message must still carry
+    // the notice list (the pause event persisted it once; the resume's final
+    // message replaces it, and a resume that forgot it would erase the notice).
+    let resume_tools =
+        InternalToolCatalog::from_values(Some(&serde_json::json!([ASK_USER_TOOL_NAME, "swarm"])))
+            .expect("resume internal tools");
     let resume_runtime = OrdinaryRuntimeBindings::new(
         internal_tools.toolsets(None),
         SensitiveToolCatalog::default(),
         DelegatedAuthorizationCatalog::default(),
         ApplicationRuntimeProjection::default(),
     )
-    .with_internal_tools(internal_tools);
+    .with_internal_tools(resume_tools);
     let resumed = assemble_direct_hitl_resume_with_sessions_and_applications(
         resumed_model,
         resume_plan,
@@ -1035,7 +1041,22 @@ async fn ask_user_pauses_and_resumes_as_the_original_correlated_tool_result() {
     )
     .await
     .expect("ask_user replay assembly");
-    let (mut resumed_run, _projector, completion) = resumed.start().expect("ask_user replay start");
+    let (mut resumed_run, mut resumed_projector, completion) =
+        resumed.start().expect("ask_user replay start");
+    let resumed_start = resumed_projector
+        .start(chrono::Utc::now())
+        .expect("resumed agent start");
+    let resumed_start: serde_json::Value = serde_json::from_slice(
+        &crate::protocol::node_event::encode_current_node_event_json(
+            resumed_start.into_iter().next().as_ref().expect("start"),
+        )
+        .expect("encode"),
+    )
+    .expect("start json");
+    assert_eq!(
+        resumed_start["response_metadata"]["skipped_capabilities"]["items"][0]["name"],
+        "swarm"
+    );
     let expected =
         Value::String("User answered:\n- Which environment should I use?: Staging".to_owned());
     let mut saw_answer = false;
@@ -2721,6 +2742,7 @@ async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_application_c
 /// The refusal comes from the real materializer, so the sentence asserted
 /// here is the one a user's agent receives.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One ordered fixture: materialize, assemble, then both notices.
 async fn a_fresh_session_names_a_toolkit_refused_for_its_settings() {
     let version = serde_json::json!({"tools": [{
         "id": 7,
@@ -2776,7 +2798,7 @@ async fn a_fresh_session_names_a_toolkit_refused_for_its_settings() {
         DelegatedAuthorizationCatalog::default(),
         ApplicationRuntimeProjection::default(),
     )
-    .with_refused_toolkits(materialized.refused);
+    .with_left_out_toolkits(materialized.left_out);
     let assembled = assemble_ordinary_native_with_sessions_and_runtime_catalogs(
         bound_model("unused — assembly alone is under test"),
         plan,
@@ -2786,7 +2808,24 @@ async fn a_fresh_session_names_a_toolkit_refused_for_its_settings() {
     )
     .await
     .expect("refused-toolkit assembly");
-    drop(assembled);
+    // The user-visible half: the turn's own `agent_start` names the toolkit.
+    let (_native, mut projector, _completion) = assembled.start().expect("native start");
+    let start = projector
+        .start(chrono::Utc::now())
+        .expect("agent start")
+        .into_iter()
+        .next()
+        .expect("one start event");
+    let start: serde_json::Value = serde_json::from_slice(
+        &crate::protocol::node_event::encode_current_node_event_json(&start).expect("encode"),
+    )
+    .expect("start json");
+    let skipped = &start["response_metadata"]["skipped_capabilities"]["items"];
+    assert_eq!(skipped[0]["kind"], "toolkit");
+    assert_eq!(skipped[0]["name"], "tracker");
+    assert_eq!(skipped[0]["type"], "jira");
+    assert_eq!(skipped[0]["reason_code"], "unsupported_setting");
+    assert!(!skipped.to_string().contains("refused-toolkit-secret"));
 
     let session = sessions
         .get(GetRequest {

@@ -95,15 +95,19 @@ SET is_streaming = FALSE,
             'is_error', FALSE,
             'error', '',
             'invoked_skills', $3::jsonb
-        ),
+        )
+        || CASE WHEN jsonb_typeof($4::jsonb) = 'object'
+            THEN jsonb_build_object('skipped_capabilities', $4::jsonb)
+            ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
-WHERE id = $4::bigint
+WHERE id = $5::bigint
 `
 
 type FinalizeCurrentAgentAuthorizationPauseParams struct {
 	ThreadID              string `db:"thread_id" json:"thread_id"`
 	AuthorizationRequests []byte `db:"authorization_requests" json:"authorization_requests"`
 	InvokedSkills         []byte `db:"invoked_skills" json:"invoked_skills"`
+	SkippedCapabilities   []byte `db:"skipped_capabilities" json:"skipped_capabilities"`
 	MessageGroupID        int64  `db:"message_group_id" json:"message_group_id"`
 }
 
@@ -112,6 +116,7 @@ func (q *Queries) FinalizeCurrentAgentAuthorizationPause(ctx context.Context, ar
 		arg.ThreadID,
 		arg.AuthorizationRequests,
 		arg.InvokedSkills,
+		arg.SkippedCapabilities,
 		arg.MessageGroupID,
 	)
 	if err != nil {
@@ -149,9 +154,12 @@ SET is_streaming = FALSE,
             ELSE '{}'::jsonb END
         || CASE WHEN jsonb_typeof($6::jsonb) = 'object'
             THEN jsonb_build_object('pipeline_static_tools_v1', $6::jsonb)
+            ELSE '{}'::jsonb END
+        || CASE WHEN jsonb_typeof($7::jsonb) = 'object'
+            THEN jsonb_build_object('skipped_capabilities', $7::jsonb)
             ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
-WHERE id = $7::bigint
+WHERE id = $8::bigint
 `
 
 type FinalizeCurrentAgentFullMessageParams struct {
@@ -161,6 +169,7 @@ type FinalizeCurrentAgentFullMessageParams struct {
 	OutputLimitReached  bool   `db:"output_limit_reached" json:"output_limit_reached"`
 	PipelineStaticProof []byte `db:"pipeline_static_proof" json:"pipeline_static_proof"`
 	PipelineStaticTools []byte `db:"pipeline_static_tools" json:"pipeline_static_tools"`
+	SkippedCapabilities []byte `db:"skipped_capabilities" json:"skipped_capabilities"`
 	MessageGroupID      int64  `db:"message_group_id" json:"message_group_id"`
 }
 
@@ -172,6 +181,7 @@ func (q *Queries) FinalizeCurrentAgentFullMessage(ctx context.Context, arg Final
 		arg.OutputLimitReached,
 		arg.PipelineStaticProof,
 		arg.PipelineStaticTools,
+		arg.SkippedCapabilities,
 		arg.MessageGroupID,
 	)
 	if err != nil {
@@ -191,17 +201,21 @@ SET is_streaming = FALSE,
             'is_error', FALSE,
             'error', '',
             'invoked_skills', $4::jsonb
-        ),
+        )
+        || CASE WHEN jsonb_typeof($5::jsonb) = 'object'
+            THEN jsonb_build_object('skipped_capabilities', $5::jsonb)
+            ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
-WHERE id = $5::bigint
+WHERE id = $6::bigint
 `
 
 type FinalizeCurrentAgentHITLPauseParams struct {
-	ThreadID       string `db:"thread_id" json:"thread_id"`
-	HitlInterrupt  []byte `db:"hitl_interrupt" json:"hitl_interrupt"`
-	HitlInterrupts []byte `db:"hitl_interrupts" json:"hitl_interrupts"`
-	InvokedSkills  []byte `db:"invoked_skills" json:"invoked_skills"`
-	MessageGroupID int64  `db:"message_group_id" json:"message_group_id"`
+	ThreadID            string `db:"thread_id" json:"thread_id"`
+	HitlInterrupt       []byte `db:"hitl_interrupt" json:"hitl_interrupt"`
+	HitlInterrupts      []byte `db:"hitl_interrupts" json:"hitl_interrupts"`
+	InvokedSkills       []byte `db:"invoked_skills" json:"invoked_skills"`
+	SkippedCapabilities []byte `db:"skipped_capabilities" json:"skipped_capabilities"`
+	MessageGroupID      int64  `db:"message_group_id" json:"message_group_id"`
 }
 
 func (q *Queries) FinalizeCurrentAgentHITLPause(ctx context.Context, arg FinalizeCurrentAgentHITLPauseParams) (int64, error) {
@@ -210,6 +224,7 @@ func (q *Queries) FinalizeCurrentAgentHITLPause(ctx context.Context, arg Finaliz
 		arg.HitlInterrupt,
 		arg.HitlInterrupts,
 		arg.InvokedSkills,
+		arg.SkippedCapabilities,
 		arg.MessageGroupID,
 	)
 	if err != nil {

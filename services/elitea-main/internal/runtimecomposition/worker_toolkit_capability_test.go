@@ -21,11 +21,11 @@ func TestWorkerImplementationFromEnv(t *testing.T) {
 		want  string
 		fails bool
 	}{
-		"unset defaults to python": {value: "", want: "python"},
-		"python":                   {value: "python", want: "python"},
-		"rust":                     {value: "rust", want: "rust"},
-		"a typo is refused":        {value: "Rust", fails: true},
-		"an unknown worker":        {value: "node", fails: true},
+		"unset defaults to rust": {value: "", want: "rust"},
+		"python":                 {value: "python", want: "python"},
+		"rust":                   {value: "rust", want: "rust"},
+		"a typo is refused":      {value: "Rust", fails: true},
+		"an unknown worker":      {value: "node", fails: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			lookup := func(string) (string, bool) { return testCase.value, testCase.value != "" }

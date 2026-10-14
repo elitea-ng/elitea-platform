@@ -8,10 +8,13 @@ use adk_core::{Tool, Toolset};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 
+use super::attachment_test_support::FakePlatform;
 use super::families::zephyr_essential::client::ZephyrEssentialClient;
 use super::families::zephyr_essential::config::{DEFAULT_BASE_URL, ZephyrEssentialToolkitConfig};
 use super::families::zephyr_essential::tools::{test_build_with_client, test_catalog};
-use super::families::zephyr_rest::client::ZephyrRestResponse;
+use super::families::zephyr_rest::client::{
+    ZephyrRestError, ZephyrRestErrorCode, ZephyrRestResponse,
+};
 use super::families::zephyr_rest::config::ZephyrRestConfigErrorCode;
 use super::families::zephyr_rest::tools::ZephyrRestToolsetErrorCode;
 use super::zephyr_rest_tests::{
@@ -22,6 +25,33 @@ const BASE: &str = "https://api.zephyrscale.example.test/v2";
 
 fn client(transport: &Arc<FixtureTransport>) -> Arc<ZephyrEssentialClient> {
     Arc::new(ZephyrEssentialClient::new(rest_client(BASE, transport)))
+}
+
+/// A client that lends the artifact store (the uploads and the BDD download).
+fn host_client(
+    transport: &Arc<FixtureTransport>,
+    platform: &Arc<FakePlatform>,
+) -> Arc<ZephyrEssentialClient> {
+    Arc::new(
+        ZephyrEssentialClient::new(rest_client(BASE, transport)).with_attachments(platform.host()),
+    )
+}
+
+async fn host_tools(
+    transport: &Arc<FixtureTransport>,
+    platform: &Arc<FakePlatform>,
+    selected: &[&str],
+) -> Vec<Arc<dyn Tool>> {
+    test_build_with_client(
+        "Essential QA",
+        selected,
+        &policy(&[]),
+        &host_client(transport, platform),
+    )
+    .expect("Zephyr Essential toolset")
+    .tools(readonly())
+    .await
+    .expect("Zephyr Essential tools")
 }
 
 async fn tools(transport: &Arc<FixtureTransport>, selected: &[&str]) -> Vec<Arc<dyn Tool>> {
@@ -78,22 +108,32 @@ fn configuration_defaults_the_cloud_base_and_requires_the_token() {
 }
 
 #[tokio::test]
-async fn catalog_serves_forty_one_operations_with_truthful_groups() {
+async fn catalog_serves_forty_five_operations_with_truthful_groups() {
     let catalog = test_catalog();
-    assert_eq!(catalog.len(), 41);
+    assert_eq!(catalog.len(), 45);
+    // `retrieve_bdd_test_cases` is a GET but stores an artifact: not a read.
     assert_eq!(catalog.iter().filter(|(_, read)| *read).count(), 24);
-    for unserved in [
+    assert!(
+        catalog
+            .iter()
+            .any(|(name, read)| *name == "retrieve_bdd_test_cases" && !*read)
+    );
+    assert!(catalog.iter().all(|(name, _)| *name != "index_data"));
+    // Without the artifact store the four file tools are omitted.
+    let transport = FixtureTransport::new([]);
+    let without = tools(&transport, &[]).await;
+    assert_eq!(without.len(), 41);
+    for omitted in [
         "create_custom_executions",
         "create_cucumber_executions",
         "create_junit_executions",
         "retrieve_bdd_test_cases",
-        "index_data",
     ] {
-        assert!(catalog.iter().all(|(name, _)| *name != unserved));
+        assert!(without.iter().all(|tool| tool.name() != omitted));
     }
-    let transport = FixtureTransport::new([]);
-    let all = tools(&transport, &[]).await;
-    assert_eq!(all.len(), 41);
+    let platform = FakePlatform::new();
+    let all = host_tools(&transport, &platform, &[]).await;
+    assert_eq!(all.len(), 45);
     for tool in &all {
         assert!(tool.description().starts_with("Toolkit: Essential QA\n"));
         assert!(tool.description().chars().count() <= 1_000);
@@ -101,7 +141,9 @@ async fn catalog_serves_forty_one_operations_with_truthful_groups() {
         if !tool.is_read_only() {
             assert!(
                 tool.description()
-                    .contains("read the current state before retrying")
+                    .contains("read the current state before retrying"),
+                "{}",
+                tool.name()
             );
         }
     }
@@ -111,7 +153,7 @@ async fn catalog_serves_forty_one_operations_with_truthful_groups() {
         &policy(&[]),
         &client(&transport),
     ) else {
-        panic!("a selection of only unserved tools must be unsupported");
+        panic!("a selection of only host-bound tools must be unsupported without a host");
     };
     assert_eq!(
         error.code(),
@@ -566,8 +608,431 @@ async fn text_and_empty_replies_and_bad_arguments() {
 #[tokio::test]
 async fn every_tool_keeps_the_sdk_contract() {
     let transport = FixtureTransport::new([]);
+    let platform = FakePlatform::new();
     let names = super::sdk_conformance::sdk_tool_names("zephyr_essential");
     let names = names.iter().map(String::as_str).collect::<Vec<_>>();
-    let tools = tools(&transport, &names).await;
+    let tools = host_tools(&transport, &platform, &names).await;
     super::sdk_conformance::assert_sdk_conformance("zephyr_essential", &tools);
+}
+
+#[allow(clippy::unnecessary_wraps, reason = "matches the transport queue type")]
+fn upload_reply() -> Result<ZephyrRestResponse, ZephyrRestError> {
+    Ok(ZephyrRestResponse::json(
+        StatusCode::OK,
+        &json!({"testCycle":{"id":"1","key":"PRJ-R1"}}),
+    ))
+}
+
+const JUNIT: &[u8] = b"<testsuites><testsuite name=\"s\"/></testsuites>";
+
+#[tokio::test]
+async fn result_uploads_send_one_multipart_file_read_from_the_artifact() {
+    for (name, segment, media) in [
+        ("create_custom_executions", "custom", "application/json"),
+        ("create_cucumber_executions", "cucumber", "application/json"),
+        ("create_junit_executions", "junit", "application/xml"),
+    ] {
+        let transport = FixtureTransport::new([upload_reply()]);
+        let platform = FakePlatform::new();
+        platform.put("results", "run 1.xml", JUNIT);
+        let tools = host_tools(&transport, &platform, &[name]).await;
+        let reply = tools[0]
+            .execute(
+                tool_context(),
+                json!({"project_key":"PRJ","files":"/results/run 1.xml","auto_create_test_cases":true}),
+            )
+            .await
+            .expect("uploaded");
+        assert_eq!(reply, json!({"testCycle":{"id":"1","key":"PRJ-R1"}}));
+        let sent = transport.requests();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].method, Method::POST);
+        assert_eq!(
+            sent[0].url,
+            format!(
+                "{BASE}/automations/executions/{segment}?projectKey=PRJ&autoCreateTestCases=true"
+            )
+        );
+        assert_eq!(
+            sent[0].authorization.as_deref(),
+            Some("Bearer zephyr-test-bearer-token")
+        );
+        let content_type = sent[0].content_type.clone().expect("content type");
+        assert!(content_type.starts_with("multipart/form-data; boundary="));
+        let body = String::from_utf8(sent[0].raw_body.clone().expect("body")).expect("text body");
+        assert!(body.contains("name=\"file\"; filename=\"run 1.xml\""));
+        assert!(body.contains(&format!("Content-Type: {media}\r\n\r\n")));
+        assert!(body.contains(std::str::from_utf8(JUNIT).expect("utf8")));
+        assert!(!tools[0].is_read_only());
+        assert!(!tools[0].is_concurrency_safe());
+    }
+    // The default for auto_create_test_cases is false.
+    let transport = FixtureTransport::new([upload_reply()]);
+    let platform = FakePlatform::new();
+    platform.put("results", "r.json", b"{}");
+    let tools = host_tools(&transport, &platform, &["create_custom_executions"]).await;
+    tools[0]
+        .execute(
+            tool_context(),
+            json!({"project_key":"PRJ","files":"/results/r.json"}),
+        )
+        .await
+        .expect("uploaded");
+    assert!(
+        transport.requests()[0]
+            .url
+            .ends_with("?projectKey=PRJ&autoCreateTestCases=false")
+    );
+}
+
+#[allow(clippy::too_many_lines, reason = "one corpus of failure causes")]
+#[tokio::test]
+async fn result_upload_failures_name_their_cause_and_never_retry() {
+    // Host failures answer with their sentence and send nothing.
+    let transport = FixtureTransport::new([]);
+    let platform = FakePlatform::new();
+    let tools = host_tools(&transport, &platform, &["create_junit_executions"]).await;
+    for (arguments, words) in [
+        (
+            json!({"project_key":"PRJ","files":"/results/missing.xml"}),
+            "was not found",
+        ),
+        (
+            json!({"project_key":"PRJ","files":"no-bucket"}),
+            "not valid",
+        ),
+    ] {
+        let answer = tools[0]
+            .execute(tool_context(), arguments.clone())
+            .await
+            .expect("a sentence, not an error");
+        let text = answer.as_str().expect("text");
+        assert!(text.contains(words), "{arguments}: {text}");
+        assert!(text.contains("nothing was sent") || text.contains("not valid"));
+    }
+    // Arguments the schema rejects are errors.
+    for arguments in [
+        json!({"project_key":"PRJ","files":"/results/x.xml","auto_create_test_cases":"yes"}),
+        json!({"project_key":"PRJ"}),
+        json!({"project_key":"PRJ","files":"/r/x.xml","extra":1}),
+    ] {
+        let error = tools[0]
+            .execute(tool_context(), arguments.clone())
+            .await
+            .expect_err("refused");
+        assert_eq!(
+            error.category,
+            adk_core::ErrorCategory::InvalidInput,
+            "{arguments}"
+        );
+    }
+    platform.put("results", "huge.xml", &[]);
+    let answer = tools[0]
+        .execute(
+            tool_context(),
+            json!({"project_key":"PRJ","files":"/results/huge.xml"}),
+        )
+        .await
+        .expect("sentence");
+    assert!(answer.as_str().expect("text").contains("empty"));
+    platform.fail_reads(super::families::office_host::OfficeFailure::AccessRefused);
+    platform.put("results", "r.xml", JUNIT);
+    let answer = tools[0]
+        .execute(
+            tool_context(),
+            json!({"project_key":"PRJ","files":"/results/r.xml"}),
+        )
+        .await
+        .expect("sentence");
+    assert!(answer.as_str().expect("text").contains("refused access"));
+    assert!(transport.requests().is_empty());
+
+    // Provider failures after a send: one request each, 5xx is unknown.
+    for (status, category) in [
+        (
+            StatusCode::UNAUTHORIZED,
+            adk_core::ErrorCategory::Unauthorized,
+        ),
+        (StatusCode::FORBIDDEN, adk_core::ErrorCategory::Forbidden),
+        (StatusCode::NOT_FOUND, adk_core::ErrorCategory::NotFound),
+        (StatusCode::CONFLICT, adk_core::ErrorCategory::InvalidInput),
+        (
+            StatusCode::BAD_REQUEST,
+            adk_core::ErrorCategory::InvalidInput,
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            adk_core::ErrorCategory::Internal,
+        ),
+        (StatusCode::BAD_GATEWAY, adk_core::ErrorCategory::Internal),
+    ] {
+        let transport =
+            FixtureTransport::new([Ok(ZephyrRestResponse::fixture(status, None, b"x"))]);
+        let platform = FakePlatform::new();
+        platform.put("results", "r.xml", JUNIT);
+        let tools = host_tools(&transport, &platform, &["create_junit_executions"]).await;
+        let outcome = tools[0]
+            .execute(
+                tool_context(),
+                json!({"project_key":"PRJ","files":"/results/r.xml"}),
+            )
+            .await;
+        if category == adk_core::ErrorCategory::Internal {
+            // An unknown outcome is an answer: an Err message would be replaced.
+            let text = outcome.expect("an unknown outcome is an answer");
+            assert!(
+                text.as_str().expect("text").contains("may have applied"),
+                "{status}"
+            );
+        } else {
+            let error = outcome.expect_err("provider failure");
+            assert_eq!(error.category, category, "{status}");
+            assert!(!error.is_retryable(), "{status}");
+        }
+        assert_eq!(transport.requests().len(), 1);
+    }
+    // A lost answer is an unknown outcome.
+    let transport = FixtureTransport::new([Err(ZephyrRestError::fixture(
+        ZephyrRestErrorCode::UnknownOutcome,
+        false,
+    ))]);
+    let platform = FakePlatform::new();
+    platform.put("results", "r.xml", JUNIT);
+    let tools = host_tools(&transport, &platform, &["create_junit_executions"]).await;
+    let client = host_client(&transport, &platform);
+    let error = client
+        .upload(
+            &["automations", "executions", "junit"],
+            &[],
+            &super::families::zephyr_rest::client::MultipartFile {
+                field: "file",
+                file_name: "r.xml",
+                media_type: "application/xml",
+                bytes: JUNIT,
+            },
+        )
+        .await
+        .expect_err("lost");
+    assert_eq!(error.code(), ZephyrRestErrorCode::UnknownOutcome);
+    assert!(
+        error
+            .into_adk(&super::families::zephyr_essential::client::FAMILY)
+            .message
+            .contains("may have applied")
+    );
+    drop(tools);
+}
+
+#[tokio::test]
+async fn upload_refuses_a_file_over_the_cap_before_sending() {
+    let transport = FixtureTransport::new([]);
+    let platform = FakePlatform::new();
+    // The fake enforces the cap it is given: one byte over 50 MiB.
+    platform.put("results", "big.xml", &vec![b'a'; 50 * 1024 * 1024 + 1]);
+    let tools = host_tools(&transport, &platform, &["create_junit_executions"]).await;
+    let answer = tools[0]
+        .execute(
+            tool_context(),
+            json!({"project_key":"PRJ","files":"/results/big.xml"}),
+        )
+        .await
+        .expect("a sentence");
+    assert!(
+        answer
+            .as_str()
+            .expect("text")
+            .contains("larger than the 50 MiB this tool accepts; nothing was sent")
+    );
+    assert!(transport.requests().is_empty());
+}
+
+#[tokio::test]
+async fn bdd_archive_is_stored_as_a_new_artifact() {
+    let zip = b"PK\x03\x04rest-of-archive".to_vec();
+    let transport = FixtureTransport::new([
+        Ok(ZephyrRestResponse::fixture(
+            StatusCode::OK,
+            Some("application/zip"),
+            &zip,
+        )),
+        Ok(ZephyrRestResponse::fixture(
+            StatusCode::OK,
+            Some("application/zip"),
+            &zip,
+        )),
+    ]);
+    let platform = FakePlatform::new();
+    // A fresh project: the default bucket does not exist yet.
+    platform.no_buckets();
+    let tools = host_tools(&transport, &platform, &["retrieve_bdd_test_cases"]).await;
+    assert!(!tools[0].is_read_only());
+    assert!(!tools[0].is_concurrency_safe());
+    let first = tools[0]
+        .execute(tool_context(), json!({"project_key":"PR/J"}))
+        .await
+        .expect("stored");
+    assert_eq!(
+        first,
+        json!(
+            "BDD test cases for project PR/J retrieved as a ZIP archive (19 bytes) and stored as artifact /zephyr-bdd/zephyr-bdd-PR_J.zip"
+        )
+    );
+    assert_eq!(
+        *platform.created.lock().expect("created"),
+        ["zephyr-bdd".to_owned()]
+    );
+    // A bucket the caller names must exist.
+    platform.add_bucket("mine");
+    let second = tools[0]
+        .execute(
+            tool_context(),
+            json!({"project_key":"PR/J","bucket":"mine"}),
+        )
+        .await
+        .expect("stored");
+    assert!(
+        second
+            .as_str()
+            .expect("text")
+            .ends_with("/mine/zephyr-bdd-PR_J.zip")
+    );
+    let sent = transport.requests();
+    assert_eq!(
+        sent[0].url,
+        format!("{BASE}/automations/testcases?projectKey=PR%2FJ")
+    );
+    assert_eq!(sent[0].accept.as_deref(), Some("application/zip"));
+    assert_eq!(
+        platform.get("zephyr-bdd", "zephyr-bdd-PR_J.zip"),
+        Some(zip.clone())
+    );
+    assert!(platform.writes.lock().expect("writes").iter().all(|w| !w.3));
+
+    // A taken name is never replaced: the next free suffix is used.
+    let transport = FixtureTransport::new([Ok(ZephyrRestResponse::fixture(
+        StatusCode::OK,
+        Some("application/zip"),
+        &zip,
+    ))]);
+    let platform = FakePlatform::new();
+    platform.put("zephyr-bdd", "zephyr-bdd-PRJ.zip", b"old");
+    let tools = host_tools(&transport, &platform, &["retrieve_bdd_test_cases"]).await;
+    let reply = tools[0]
+        .execute(tool_context(), json!({"project_key":"PRJ"}))
+        .await
+        .expect("stored under a free name");
+    assert!(
+        reply
+            .as_str()
+            .expect("text")
+            .ends_with("/zephyr-bdd/zephyr-bdd-PRJ-2.zip")
+    );
+    assert_eq!(
+        platform.get("zephyr-bdd", "zephyr-bdd-PRJ.zip"),
+        Some(b"old".to_vec())
+    );
+}
+
+#[tokio::test]
+async fn a_named_bucket_that_does_not_exist_is_not_created() {
+    let zip = b"PK\x03\x04 archive body".to_vec();
+    let transport = FixtureTransport::new([Ok(ZephyrRestResponse::fixture(
+        StatusCode::OK,
+        Some("application/zip"),
+        &zip,
+    ))]);
+    let platform = FakePlatform::new();
+    platform.no_buckets();
+    let tools = host_tools(&transport, &platform, &["retrieve_bdd_test_cases"]).await;
+    let reply = tools[0]
+        .execute(
+            tool_context(),
+            json!({"project_key":"PRJ","bucket":"typo-bucket"}),
+        )
+        .await
+        .expect("a sentence");
+    let text = reply.as_str().expect("text");
+    assert!(text.contains("bucket was not found"), "{text}");
+    assert!(text.contains("nothing was stored"), "{text}");
+    assert!(platform.created.lock().expect("created").is_empty());
+}
+
+#[tokio::test]
+async fn bdd_archive_failures_are_distinct() {
+    for (response, category) in [
+        (
+            ZephyrRestResponse::fixture(StatusCode::UNAUTHORIZED, None, b""),
+            adk_core::ErrorCategory::Unauthorized,
+        ),
+        (
+            ZephyrRestResponse::fixture(StatusCode::NOT_FOUND, None, b""),
+            adk_core::ErrorCategory::NotFound,
+        ),
+        (
+            ZephyrRestResponse::fixture(StatusCode::TOO_MANY_REQUESTS, None, b""),
+            adk_core::ErrorCategory::RateLimited,
+        ),
+        (
+            ZephyrRestResponse::fixture(StatusCode::OK, Some("application/zip"), b"not a zip"),
+            adk_core::ErrorCategory::Internal,
+        ),
+    ] {
+        let transport = FixtureTransport::new([Ok(response)]);
+        let platform = FakePlatform::new();
+        let tools = host_tools(&transport, &platform, &["retrieve_bdd_test_cases"]).await;
+        let error = tools[0]
+            .execute(tool_context(), json!({"project_key":"PRJ"}))
+            .await
+            .expect_err("failure");
+        assert_eq!(error.category, category);
+        assert!(platform.writes.lock().expect("writes").is_empty());
+    }
+    // An empty archive stores nothing.
+    let transport = FixtureTransport::new([Ok(ZephyrRestResponse::fixture(
+        StatusCode::OK,
+        Some("application/zip"),
+        b"",
+    ))]);
+    let platform = FakePlatform::new();
+    let tools = host_tools(&transport, &platform, &["retrieve_bdd_test_cases"]).await;
+    let reply = tools[0]
+        .execute(tool_context(), json!({"project_key":"PRJ"}))
+        .await
+        .expect("empty");
+    assert!(reply.as_str().expect("text").contains("nothing was stored"));
+    assert!(platform.writes.lock().expect("writes").is_empty());
+    // A response over the cap is refused (the fake transport ignores the
+    // transport-level cap, so the client re-check is what fires).
+    let transport = FixtureTransport::new([Ok(ZephyrRestResponse::fixture(
+        StatusCode::OK,
+        Some("application/zip"),
+        &vec![0_u8; 50 * 1024 * 1024 + 1],
+    ))]);
+    let platform = FakePlatform::new();
+    let tools = host_tools(&transport, &platform, &["retrieve_bdd_test_cases"]).await;
+    let error = tools[0]
+        .execute(tool_context(), json!({"project_key":"PRJ"}))
+        .await
+        .expect_err("too large");
+    assert_eq!(error.category, adk_core::ErrorCategory::InvalidInput);
+    // Write failure: the lost answer is reported as may-or-may-not.
+    let zip = b"PK\x03\x04x".to_vec();
+    let transport = FixtureTransport::new([Ok(ZephyrRestResponse::fixture(
+        StatusCode::OK,
+        Some("application/zip"),
+        &zip,
+    ))]);
+    let platform = FakePlatform::new();
+    platform.fail_writes(super::families::office_host::OfficeFailure::Unreachable);
+    let tools = host_tools(&transport, &platform, &["retrieve_bdd_test_cases"]).await;
+    let answer = tools[0]
+        .execute(tool_context(), json!({"project_key":"PRJ"}))
+        .await
+        .expect("sentence");
+    assert!(
+        answer
+            .as_str()
+            .expect("text")
+            .contains("may or may not have been stored")
+    );
 }

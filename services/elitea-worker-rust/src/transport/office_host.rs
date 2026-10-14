@@ -708,9 +708,13 @@ impl OfficeToolHost for ClaimOfficeHost {
         let mut parts = vec![Part::Text {
             text: request.prompt,
         }];
-        for image in request.images_png.iter() {
+        for (index, image) in request.images_png.iter().enumerate() {
             parts.push(Part::InlineData {
-                mime_type: "image/png".to_owned(),
+                mime_type: request
+                    .image_media_types
+                    .get(index)
+                    .map_or("image/png", String::as_str)
+                    .to_owned(),
                 data: image.clone(),
                 uri: None,
                 annotations: None,

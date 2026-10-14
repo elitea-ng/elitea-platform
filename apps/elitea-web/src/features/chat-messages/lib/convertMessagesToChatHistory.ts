@@ -324,6 +324,7 @@ export function convertMessagesToChatHistory(
       nodeRecoveryRequired: messageGroup.is_streaming === true && meta?.is_error !== true && !normalised.exception && !normalised.failureCode
         ? nodeRecoveryBinding(uuid, meta?.execution_generation, meta?.node_recovery_required_v1) : undefined,
       staticPause: staticPauseBinding(uuid, meta?.execution_generation, meta?.thread_id, meta?.pipeline_static_v1, meta?.pipeline_static_tools_v1),
+      ...(meta?.skipped_capabilities === undefined ? {} : { skippedCapabilities: meta.skipped_capabilities }),
     };
     if (messageGroup.persisted_trace) Object.assign(aiMessage, { persistedTrace: messageGroup.persisted_trace });
 
