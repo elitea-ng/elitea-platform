@@ -240,7 +240,7 @@ Maintained Rust runtime ownership registry:
   compatibility-named `mcp_auth` card for both node kinds; remote MCP can rebuild
   with an exact-server claim-fetched token, while Skip nulls declared data state
   and stops at `END`. The configured OpenAPI family applies the same flow to an
-  exact frozen API base URL. The delegated SharePoint read core applies it to
+  exact frozen API base URL. The delegated SharePoint family applies it to
   the exact frozen site URL and also turns a direct-node Graph 401 into the same
   typed interrupt.
   Printer uses a compiler-owned native `interrupt_after` checkpoint,
@@ -310,16 +310,19 @@ Maintained Rust runtime ownership registry:
   bodies and artifact/binary routing remain closed. Direct Toolkit nodes now
   preserve delegated 401 guards and exact-node resume; `delegated-auth-expiry.md`
   records the component proof and remaining deployed gates;
-- `src/toolkits/families/sharepoint/{config,client,tools}.rs`: delegated Azure
-  token resolution and eight explicitly selected Microsoft Graph reads for
-  lists, columns, metadata-only recursive file discovery and raw bounded
-  OneNote XHTML. The client keeps all requests and provider pagination on the
-  exact Graph v1.0 origin, preserves SharePoint site/library path resolution,
-  and exposes schema-complete guarded tools for native same-call authorization.
-  Empty selection, ACS/app-only auth, file parsing/download, indexing, OneNote
-  attachment interpretation, writes, rich discovery/DCR/refresh metadata and
+- `src/toolkits/families/sharepoint/{config,client,tools,reader,html}.rs` and
+  `client/{content,onenote_ops}.rs`: delegated Azure token resolution and 22
+  explicitly selected Microsoft Graph tools: lists, columns, list-item creation,
+  metadata-only recursive file discovery, document and sharing-link reads as
+  text, uploads, and the 14 OneNote tools. The client keeps all requests and
+  provider pagination on the exact Graph v1.0 origin (a download or upload
+  address Graph returns is followed only on an `https` `*.sharepoint.com` host),
+  preserves SharePoint site/library path resolution, sends every change once
+  without retry, and exposes schema-complete guarded tools for native same-call
+  authorization. Empty selection, ACS/app-only auth (refused by name), picture
+  description, page/sheet selection, rich discovery/DCR/refresh metadata and
   production egress remain closed. A mixed saved selection exposes only its
-  selected supported reads;
+  selected supported tools;
 - `src/transport/model_facade.rs`: provider-neutral model ownership over
   `openai_compatible_facade.rs` and `anthropic_facade.rs`, including frozen
   `model_project_id` authority;

@@ -90,6 +90,25 @@ pub enum OfficeFailure {
     Unsupported,
 }
 
+/// Why a document's text could not be read, in the terms the tool tells the
+/// model. One cause per sentence: an unsupported format is not an unreadable
+/// file, nor a busy engine a missing one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TextExtractionFailure {
+    /// This host lends no document reader.
+    NoExtractor,
+    /// The reader does not handle this kind of file.
+    Unsupported,
+    /// The file is encrypted, corrupt, or has no text.
+    Unreadable,
+    /// The file, its page count or its text is over a limit of the reader.
+    TooLarge,
+    /// The reader did not finish in time.
+    TimedOut,
+    /// The reader could not be reached or did not answer.
+    Unreachable,
+}
+
 /// A host failure: the cause and a data-free reason code for the log.
 #[derive(Clone, Copy, Debug)]
 pub struct OfficeHostError {
@@ -279,6 +298,27 @@ pub trait OfficeToolHost: Send + Sync {
             OfficeFailure::NoModel,
             "office_host.no_images_api",
         ))
+    }
+
+    /// The text of a document, read from its `bytes`. `name` is the file's
+    /// name (its extension tells the reader which kind of file it is). The
+    /// host reads a PDF or an Office document with the platform's document
+    /// extractor and plain text itself; it never reaches anything else.
+    /// Nothing is persisted. The default is a host with no reader.
+    async fn extract_text(
+        &self,
+        _name: &str,
+        _bytes: Vec<u8>,
+    ) -> Result<String, TextExtractionFailure> {
+        Err(TextExtractionFailure::NoExtractor)
+    }
+
+    /// Whether this host can read the text of a file with this name: it has a
+    /// document reader, and the kind of file (by its extension) is one the
+    /// reader handles. Answered from the name alone, so a tool refuses a file
+    /// BEFORE it downloads it. The default is a host with no reader.
+    fn can_read_text(&self, _name: &str) -> Result<(), TextExtractionFailure> {
+        Err(TextExtractionFailure::NoExtractor)
     }
 
     /// The size in bytes of one object, from its metadata, without reading

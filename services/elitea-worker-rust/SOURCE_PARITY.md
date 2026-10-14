@@ -108,10 +108,9 @@ parallel Authorize/Skip set through its graph checkpoint: the child hierarchy
 remains public, partial sets fail before materialization, Skip closes each
 original call with `mcp_auth_decision`, and mixed sensitive/auth leaves resume
 atomically. The bounded inline OpenAPI dynamic family, including static secret
-headers and schema-aware bounded response search, and the explicitly
-selected eight-read delegated SharePoint Graph core now use this exact-resource
-flow; their remaining OAuth/content capabilities are listed in the toolset
-ledger.
+headers and schema-aware bounded response search, and the delegated
+SharePoint family now use this exact-resource flow; their remaining OAuth and
+content capabilities are listed in the toolset ledger.
 
 Current OAuth/DCR proxy checkpoint: Main now implements the browser token and
 RFC 7591 registration proxies used by the replatform UI. The token proxy
@@ -318,7 +317,7 @@ parallel/nested authorization or pipeline-Agent authorization as a generic
 open gate. The remaining authorization gates are independent partial sibling
 resume, mixed-guardrail aggregation,
 live platform OAuth/DCR proof, runtime-discovered post-token model-loop challenges,
-remaining SharePoint content/app-only operations,
+app-only SharePoint access,
 remaining OpenAPI remote-specification, binary/artifact and production
 activation capabilities.
 
@@ -444,11 +443,11 @@ Toolkits such as SharePoint. Rust now represents that signal in
 and handles direct `toolkit`/`mcp` graph pause plus Skip using the common
 checkpoint path. Remote MCP additionally performs an exact-server token
 rebuild. Bounded inline OpenAPI adds the same exact-base-URL rebuild, and the
-delegated SharePoint subset rebuilds eight exact Graph reads against its frozen
+delegated SharePoint family rebuilds its exact Graph calls against its frozen
 site URL. Complete nested model-owned sets use the existing
 public authorization ID/action contract; any broader “MCP OAuth gated” wording
 above refers to independent partial resume, platform discovery/DCR,
-post-token model-loop challenges, remaining SharePoint content/app-only tools
+post-token model-loop challenges, app-only SharePoint access
 and the remaining OpenAPI capabilities rather than the implemented root,
 pipeline-LLM, nested and direct-node paths.
 
@@ -1092,3 +1091,94 @@ resolver, the context window, the prompt) and
 where the pictures were, the prompt reaches the model, the shared cache, no
 chat model, a failing model never fails the document, skip counts and the
 retry mark, the `bins_with_llm` overlay).
+
+## SharePoint tools on the Rust worker, 2026-10-14
+
+The delegated `sharepoint` family served 8 of the SDK's 28 tools. It now serves
+**22**; the other six are the index tools (`index_data`, `list_indexes`,
+`remove_index`, `search_index`, `stepback_search_index`, `stepback_summary_index`),
+which the index family adds to every toolkit that carries a catalog. With that,
+no SharePoint tool is left only on the Python worker. Mapped against SDK
+`1b335d5` (`tools/sharepoint/{api_wrapper,graph_wrapper,models,read_guidance}.py`,
+`tools/utils/{file_metadata,content_parser}.py`).
+
+| Tool | Rust | Difference from the SDK |
+| --- | --- | --- |
+| `create_list_item` | `client/content.rs::create_list_item_impl`; one POST of `{fields}` to `lists/{id}/items`; answers `{id, fields, webUrl}` | `fields` is bounded (64 KiB, non-empty keys); the list is resolved as the existing reads resolve it |
+| `read_document` | `client/content.rs::download_document_impl`, `reader.rs`; Graph bytes, then the Office host's document reader | A Graph drive path (`/drives/<id>/root:/...`, as `get_files_list` returns it) must name a library of the toolkit's own site; a probe that fails for any reason but 404 is an error, not a skipped library. `page_number`, `sheet_name` and `is_capture_image` are accepted and **not applied**: the answer says so before the text. Pictures are never described |
+| `upload_file` | `client/content.rs::upload_file_impl`; a PUT up to 4 MiB, a resumable session in 5 MiB chunks above it, `conflictBehavior` `replace` (the default) or `fail` | `filedata` is at most 64 KiB (the runtime refuses a longer argument string; a larger file goes up as an artifact). An artifact is read through the Office host (50 MiB cap, checked before it is buffered). The target name must be one SharePoint can store (no `/ \ : * ? " < > \|`, no `..`, no trailing dot). A `folder_path` that names no library and exists in none is **not found** (the SDK wrote it under the default library): nothing falls back, nothing is created outside a named library. Inside a named library a missing subfolder is created by the path upload, as in the SDK |
+| `read_file_from_sharing_link` | `download_shared_file_impl`: the link is encoded into `shares/u!<base64url>/driveItem` and resolved by Graph with `Prefer: redeemSharingLinkIfNecessary`; size, extension and double extension are checked before any byte is fetched | The SDK's fallback for a 403 (a FedAuth cookie request to the user-supplied host, then an unauthenticated download from an address that host's redirect names) is **not ported**: it fetches an arbitrary host from inside the cluster. A 403 is answered as "SharePoint did not authorize the request". The link itself is never fetched |
+| `onenote_create_notebook`, `_create_section`, `_create_page`, `_update_page`, `_replace_page_content`, `_delete_page` | `client/onenote_ops.rs`; one POST / PATCH / DELETE each; the SDK's success strings and projections | Bounded arguments (64 KiB of markup; at most 100 patch commands, each checked for `target`, `action` and `position`) |
+| `onenote_read_page`, `onenote_read_page_items` | `reader.rs::page_items` and `html.rs`: the SDK's `html.parser` chunker (block tags break lines, `head`/`script`/`style` are dropped, character references are decoded) and its `-----` rendering | Images render as `[image: <alt or 'no description'>]`, which is what the SDK renders without a vision model. `include_attachments=false` still lists attachments, as in the SDK (it only gates their content). Attachment content: at most 20 attachments and 40 MiB per page, 50,000 characters each, all within what the 200,000-character page limit leaves after the page's own text (attachments are fitted in order and the ones cut or left out are named; the page text is never cut for them); an attachment whose text was asked for and could not be had says `Content: not available: <reason>` (the SDK leaves it bare, which reads as an attachment with no text) |
+| `onenote_list_attachments`, `onenote_read_attachment` | `reader.rs`: the `<object data-attachment>` elements of the page markup; the bytes come from `sites/{site}/onenote/resources/{id}/content` | Only a Graph OneNote resource of THIS site (`https://graph.microsoft.com/v1.0/sites/<this site>/onenote/resources/<id>`) is fetched; any other address (a CDN picture, another site) is listed as written and never fetched (the SDK sends the bearer to whatever address the page names) |
+| the existing 8 | unchanged | integer arguments now go through the shared `integer_like` (`2.0`, `"3"`, `"10.0"` and `"1e2"` are integers, read exactly; `2.5` and `true` are not) |
+
+**Failures are sentences.** The runtime reduces every tool *error* to a generic
+line for the model ("tool dependency is unavailable"), which would hide the one
+thing a change must say. The new tools therefore answer a failure as text
+(`Could not <action>: <cause>.`), as the artifact and Office families do, with
+one sentence per cause: invalid request, not authorized, not found, a conflict
+with the current state, over a limit, rate limited, Graph unavailable, an
+invalid Graph answer, and, for a change whose answer was lost (a timeout, a
+connection that dropped after the request went out, a 500/502/504), "SharePoint did not confirm the change: it may or may not
+have been applied, so check the target before repeating it". Throttling (429,
+503) and a refused connection are *not* unknown: nothing was applied. A 2xx is
+Graph's word that the change happened: whatever its body looks like (oversize,
+unreadable, a projection over the output cap) the answer is a success that says
+what could not be shown (`applied; the response was too large to show`), never a
+failure. A status that arrives without its body keeps its status: a change
+confirmed (2xx) is `applied`, a 4xx stays a definite refusal, a read behind a lost
+body is a lost connection. A rejected
+token (401) stays a typed error so the run can ask for authorization and replay
+the call. Nothing is retried: the transport never retries and a change is never
+marked retryable. A resumable upload follows what the session asks for: a 202 that still
+names missing bytes after the last chunk is fed them again (three repairs at most),
+then it is a definite failure; every failure cancels the session; a refusal (any 4xx: 410, 416, ...) of any chunk is a
+definite failure; only a lost answer or 5xx to the last chunk is unknown.
+
+**Bounds, all before buffering.** File reads 20 MiB,
+by `Content-Length` and by the streamed body; uploads 50 MiB; the raw markup of a
+page 8 MiB for the readers (only a page over it is refused; its TEXT is cut at the
+limit) and 512 KiB for `onenote_get_page_content`, which hands the markup itself to the model; page text 200,000 characters (over it the page text is cut at the limit and says so); a
+text read over 200,000 characters answers the shared `content_too_large` guide
+(retry with `start_line`/`end_line`). Probing libraries for a bare path is concurrent (eight at a time, default library first) and stops at the first match. A Graph redirect to a download address is
+followed once, without the bearer, and only to an `https` `*.sharepoint.com`
+host with no port or credentials; an upload-session address is held to the same
+rule.
+
+**Document reader.** `OfficeToolHost::can_read_text` (new) answers from the file's name, before a byte is downloaded, whether a reader exists and the kind of file is one it reads; `OfficeToolHost::extract_text` (new) then reads it: the worker's host
+reads plain text, code and HTML itself (`elitea-doc-extract`) and sends a PDF or
+Office file to the `elitea-doc-extractor` sidecar through the one
+`ExtractorClient` the index runs use (now built once in `bootstrap.rs` and shared
+by both; a client that cannot be built is logged and the worker starts without document reading, unless an index run needs it). The Office host is built for a run only when the SharePoint toolkit selects a tool that uses it (a reader or `upload_file`). Without a sidecar a PDF or Office read says the runtime lends no
+document reader; an image, an archive and an unknown extension are "not
+supported". A direct (`toolkit.call_tool.v1`) call is lent the host for the five
+text readers only; its uploads are effects and are refused there.
+
+**OneNote and MC1011142.** Microsoft retired app-only access to the OneNote Graph
+API (MC1011142). This family never used it: it runs on the signed-in person's
+delegated token only, and a credential with no OAuth discovery endpoint
+(app-only) is refused for the **whole** toolkit by name
+(`UnsupportedSetting::SharePointAppOnly`), so on an app-only credential no
+OneNote tool exists and the user is told why. The ten OneNote tools beyond the
+existing four are therefore ported on the delegated path they can work on. The
+index-time `include_onenote` stays refused (above): an index run authenticates
+app-only. App-only (ACS, `rest_wrapper.py`) SharePoint is not ported at all;
+such credentials keep needing the Python worker, or a switch to a delegated
+credential.
+
+**Not ported / open.** Picture and scanned-image description (`capture_images`,
+`is_capture_image`); page and sheet selection of a document; Excel over-limit
+guidance (`read_guidance.py`); `add_attachment_to_list_item` (the SDK leaves it
+out of its tool list too); live-provider proof (WF-SP-01) and the sidecar round
+trip of a real PDF through a SharePoint tool (every sidecar skip is mapped and
+tested; the fake sidecar belongs to the index suite).
+
+Proving tests: `libs/rust/agent-runtime/src/toolkits/sharepoint_content_tests.rs`
+(a fake Graph recording every request: each tool's wire shape and projection,
+the cause table of every change, off-SharePoint redirects, upload URLs and
+download URLs never fetched, name round trip, the chunked upload and its cancel,
+the bounded readers, and a real socket for the declared and streamed size caps
+and the connect / lost answer / timeout split), `sharepoint_tests.rs` (SDK
+schema conformance for all 22, the app-only refusal), `families/sharepoint/html.rs`,
+and `src/transport/office_host_tests.rs` (the document reader).

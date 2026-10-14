@@ -165,7 +165,7 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `sql` | `configurations/sql.py::SqlConfiguration` | `tools/sql::SQLToolkit` | 2 | No | `toolkits/families/sql/` | Capability-disabled complete family: backend-specific PostgreSQL/MySQL execution plus bounded default-schema discovery; exact-interrupt HITL, effect reconciliation, TLS authority and driver preallocation controls remain gates |
 | `google_places` | `configurations/google_places.py::GooglePlacesConfiguration` | `tools/google_places::GooglePlacesToolkit` | 2 | No | `toolkits/families/google_places/{config,client,tools}.rs` | Capability-disabled complete read family: supported Places API (New) projection for `places` and `find_near`; attribution/persisted-result policy, authorized materialization and live provider proof remain gates |
 | `salesforce` | `configurations/salesforce.py::SalesforceConfiguration` | `tools/salesforce::SalesforceToolkit` | 6 | No | `toolkits/families/salesforce/{config,client,tools}.rs` | Capability-disabled complete family: six bounded CRM tools, including create/update and generic GET/POST/PATCH/DELETE; authorized materialization, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
-| `sharepoint` | `configurations/sharepoint.py::SharepointConfiguration` | `tools/sharepoint::SharepointToolkit` | 28 | Yes | `toolkits/families/sharepoint/{config,client,tools}.rs` | Partial capability-disabled delegated read family: 8 explicitly selected Graph operations cover lists, columns, metadata-only recursive file discovery and bounded raw OneNote XHTML with proactive missing-token guards and direct-node reactive 401 interrupts. Empty/all selection, ACS/app-only auth, remaining content/artifact/index/effect tools, rich OAuth discovery/DCR/refresh metadata, model-loop reactive 401 confirmation, approved egress and live-provider proof remain gates |
+| `sharepoint` | `configurations/sharepoint.py::SharepointConfiguration` | `tools/sharepoint::SharepointToolkit` | 28 | Yes | `toolkits/families/sharepoint/{config,client,tools,reader,html}.rs`, `client/{content,onenote_ops}.rs` | Delegated Graph family: 22 of the 28 SDK tools (lists, columns, list-item creation, recursive file metadata, `read_document`, `upload_file`, `read_file_from_sharing_link` and all 14 OneNote tools); the other six are the index tools, which the index family adds. Documents are read as text through the Office host's document reader (the extraction sidecar), uploads read artifacts through the same host, changes are sent once and never retried. An app-only credential (no OAuth discovery endpoint) is refused by name. Pictures are not described, page/sheet selection is not applied, ACS/app-only auth, rich OAuth discovery/DCR/refresh metadata, model-loop reactive 401 confirmation, approved egress and live-provider proof remain gates |
 | `carrier` | `configurations/carrier.py::CarrierConfiguration` | `tools/carrier::EliteACarrierToolkit` | 18 | No | `toolkits/families/carrier/{config,client,tools}.rs` | Partial capability-disabled family: 15 ticket, backend and UI test/report operations with the SDK's confirmation steps; the archive tools `get_report_by_id`, `create_excel_report` and `create_ui_excel_report` stay SDK-only (archive/xlsx writers), and exact-interrupt HITL, effect reconciliation, approved egress and live proof remain gates |
 | `report_portal` | `configurations/report_portal.py::ReportPortalConfiguration` | `tools/report_portal::ReportPortalToolkit` | 9 | Yes | `toolkits/families/report_portal/{config,client,tools}.rs` | Capability-disabled complete read family: nine bounded project/report reads, including explicit UTF-8 HTML and base64 PDF export projections; authorized materialization, egress policy and live provider proof remain gates |
 | `testio` | `configurations/testio.py::TestIOConfiguration` | `tools/testio::TestIOToolkit` | 15 | Yes | `toolkits/families/testio/{config,client,tools}.rs` | Partial read family (13 of 15): every read over `Authorization: Token`; the two SDK writes stay unserved because their payloads do not map to the current provider create/confirmation operations (below), and the capability snapshot lists the 13 served tools so the catalogue marks the writes unavailable |
@@ -238,35 +238,39 @@ Direct-node OpenAPI 401 recovery now uses the shared delegated authorization sig
 The [active-run ledger](delegated-auth-expiry.md) records exact-node resume, Skip, and bounded repeated-rejection tests.
 The worker does not exchange refresh tokens itself. Deployed active-run verification remains open.
 
-The SharePoint slice is intentionally smaller than the current 28-tool SDK
-catalog. `elitea_sdk/configurations/sharepoint.py` and the token/site-path logic
-in `elitea_sdk/tools/sharepoint/__init__.py` map to
+The SharePoint family serves 22 of the current 28-tool SDK catalog; the other
+six are the index tools. `elitea_sdk/configurations/sharepoint.py` and the
+token/site-path logic in `elitea_sdk/tools/sharepoint/__init__.py` map to
 `toolkits/families/sharepoint/config.rs`; `api_wrapper.py` maps the selected
-names, descriptions and input schemas to `tools.rs`; and delegated reads in
-`graph_wrapper.py` plus `file_filters.py` map to the fixed Graph v1.0 client in
-`client.rs`. The admitted operations are `read_list`, `get_lists`,
-`get_list_columns`, `get_files_list`, `onenote_get_notebooks`,
-`onenote_get_sections`, `onenote_get_pages` and
-`onenote_get_page_content`. File discovery returns metadata only and preserves
-site-prefix, document-library, recursive traversal, extension-filter and
-provider-next-link behavior without downloading content.
+names, descriptions and input schemas to `tools.rs`; the delegated Graph calls
+of `graph_wrapper.py` plus `file_filters.py` map to the fixed Graph v1.0 client
+in `client.rs` (reads), `client/content.rs` (document bytes, uploads, list items,
+sharing links) and `client/onenote_ops.rs` (OneNote changes); the OneNote page
+readers of `graph_wrapper.py` map to `html.rs` and `reader.rs`. The admitted
+tools are `read_list`, `get_lists`, `get_list_columns`, `create_list_item`,
+`get_files_list`, `read_document`, `upload_file`,
+`read_file_from_sharing_link` and the 14 `onenote_*` tools. File discovery
+returns metadata only; the readers fetch bytes under a size cap checked before
+they are buffered and turn them into text through the Office host. The per-tool
+differences, the failure sentences, the bounds and the OneNote / MC1011142 note
+are in `SOURCE_PARITY.md` ("SharePoint tools on the Rust worker").
 
-This subset rejects an empty selection because the SDK interprets empty as the
-complete catalog. A mixed saved selection exposes only supported reads that the
-user selected. It reports the count of omitted operations without exposing
-their arguments or configuration. A selection with no supported read still
-fails closed. `rest_wrapper.py` and `authorization_helper.py` remain the
-separate ACS/app-only authority gap. `read_document`, sharing-link parsing,
-OneNote image or attachment interpretation, artifact upload, indexing, and all
-effects remain closed until the artifact boundary and effect receipts exist. A
-real Graph 401 is converted to the common delegated-auth signal and direct
-Toolkit nodes can checkpoint it. A model-owned loop still requires a
+An empty selection is rejected because the SDK interprets empty as the complete
+catalog. A mixed saved selection exposes only the SDK tools that the user
+selected and this family serves, and reports the count of omitted operations
+without exposing their arguments or configuration. A selection with no served
+tool still fails closed. `rest_wrapper.py` and `authorization_helper.py` remain
+the separate ACS/app-only authority gap: an app-only credential is refused by
+name. A real Graph 401 is converted to the common delegated-auth signal and
+direct Toolkit nodes can checkpoint it. A model-owned loop still requires a
 runtime-discovered confirmation adapter when a previously accepted token
 expires. Proactive missing-token model calls already use the native
 original-call confirmation.
 `src/toolkits/sharepoint_tests.rs` owns configuration/token precedence,
 guarded schema, fixed-origin/sensitive-header, pagination, library-path,
-metadata-only traversal, reactive-401 and materializer-catalog proof. This
+metadata-only traversal, reactive-401, SDK schema conformance and
+materializer-catalog proof; `sharepoint_content_tests.rs` owns the content
+readers, uploads, list items, sharing links and OneNote tools against a fake Graph. This
 mapping was rechecked against SDK commit
 `c181fc0fb56e9db017cb301841644680684b4b54` on 2026-08-24.
 

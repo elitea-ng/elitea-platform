@@ -1578,6 +1578,7 @@ dependencies = [
  "fancy-regex 0.18.0",
  "futures",
  "hmac 0.13.0",
+ "html-escape",
  "html-to-markdown-rs",
  "http",
  "http-body-util",

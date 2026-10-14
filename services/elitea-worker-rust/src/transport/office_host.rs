@@ -23,7 +23,7 @@ use adk_rust::Part;
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
     ImageEditRequest, ImageGenerateRequest, OfficeBucketCreated, OfficeFailure, OfficeHostError,
-    OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
+    OfficeModelRequest, OfficeObjectWritten, OfficeToolHost, TextExtractionFailure,
 };
 use elitea_connectors::artifact::client::{ArtifactPlatform, valid_object_key, valid_segment};
 use elitea_connectors::egress::HostAllowlist;
@@ -32,6 +32,7 @@ use elitea_connectors::transport::{Body, Method, Url, header};
 use elitea_llm_wire::refusal::Refusal;
 use serde_json::Value;
 
+use super::extractor_client::{Extraction, ExtractorClient, SkipReason};
 use super::images_facade::{ImageCall, ImagesClient, ImagesError};
 use super::multipart::Multipart;
 use super::runtime_context::ClaimScopedEliteaContext;
@@ -52,6 +53,10 @@ pub(crate) struct OfficeRuntime {
     /// The deployment's public base URL, when it has stated one.
     public_base_url: Option<String>,
     http: SourceHttp,
+    /// The document extraction sidecar, when the deployment names it: the
+    /// toolkit tools that read a PDF or Office file as text (`SharePoint`
+    /// `read_document`) ask it. Absent, those tools say so.
+    extractor: Option<Arc<ExtractorClient>>,
 }
 
 /// The platform origin is not a usable `https://host[:port]`, or the client
@@ -77,7 +82,15 @@ impl OfficeRuntime {
             public_base_url: None,
             http: SourceHttp::new(HostAllowlist::parse(Some(&host)), Arc::new(transport))
                 .with_limits(limits),
+            extractor: None,
         })
+    }
+
+    /// The document extraction sidecar the text readers ask.
+    #[must_use]
+    pub(crate) fn with_extractor(mut self, extractor: Option<Arc<ExtractorClient>>) -> Self {
+        self.extractor = extractor;
+        self
     }
 
     /// The public base URL links in answers are built against. Absent, links
@@ -112,6 +125,7 @@ impl OfficeRuntime {
                     ..SourceLimits::default()
                 },
             ),
+            extractor: None,
         }
     }
 }
@@ -232,6 +246,88 @@ pub(crate) fn model_failure(message: &str) -> OfficeHostError {
         OfficeHostError::new(OfficeFailure::BudgetRefused, "office_host.budget_refused")
     } else {
         OfficeHostError::new(OfficeFailure::Unreachable, "office_host.model_call_failed")
+    }
+}
+
+/// How long the sidecar may take to read one document for a tool call.
+const EXTRACT_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
+
+/// A sidecar skip as the tool tells it.
+pub(crate) fn text_failure(reason: SkipReason) -> TextExtractionFailure {
+    match reason {
+        SkipReason::TooLarge | SkipReason::TooManyPages | SkipReason::OutputTooLarge => {
+            TextExtractionFailure::TooLarge
+        }
+        SkipReason::Encrypted | SkipReason::Corrupt | SkipReason::Empty => {
+            TextExtractionFailure::Unreadable
+        }
+        SkipReason::Unsupported => TextExtractionFailure::Unsupported,
+        SkipReason::Timeout => TextExtractionFailure::TimedOut,
+    }
+}
+
+/// Whether a file of this name can be read as text here: a kind the readers
+/// handle (by its extension), and, for a PDF or Office file, a sidecar. Answered
+/// from the name alone, so a tool refuses before it downloads.
+pub(crate) fn readable_kind(has_extractor: bool, name: &str) -> Result<(), TextExtractionFailure> {
+    let mime = elitea_content_source::mime_of(name);
+    if mime == "application/octet-stream" || mime.starts_with("image/") {
+        return Err(TextExtractionFailure::Unsupported);
+    }
+    if elitea_doc_extract::is_document_type(mime) && !has_extractor {
+        return Err(TextExtractionFailure::NoExtractor);
+    }
+    Ok(())
+}
+
+/// The text of a document, by its name's extension: a PDF or Office file by
+/// the sidecar, plain text and HTML here. A kind with no extension in the
+/// table, or an image, is not text.
+async fn document_text(
+    extractor: Option<&Arc<ExtractorClient>>,
+    name: &str,
+    bytes: Vec<u8>,
+) -> Result<String, TextExtractionFailure> {
+    readable_kind(extractor.is_some(), name)?;
+    let mime = elitea_content_source::mime_of(name);
+    if elitea_doc_extract::is_document_type(mime) {
+        let extractor = extractor.ok_or(TextExtractionFailure::NoExtractor)?;
+        return match extractor
+            .extract(
+                name,
+                mime,
+                bytes,
+                elitea_agent_runtime::toolkits::MAX_OFFICE_OBJECT_BYTES,
+                EXTRACT_TIMEOUT,
+                None,
+            )
+            .await
+        {
+            Ok(Extraction::Text(document)) => Ok(document.text),
+            Ok(Extraction::Skipped(reason)) => Err(text_failure(reason)),
+            Err(error) => {
+                tracing::warn!(
+                    event = "toolkit_document_extract_failed",
+                    error = %error,
+                    "the document extraction sidecar did not answer"
+                );
+                Err(TextExtractionFailure::Unreachable)
+            }
+        };
+    }
+    let options = elitea_doc_extract::ExtractOptions {
+        html_to_markdown: true,
+    };
+    let mime = mime.to_owned();
+    let decoded = tokio::task::spawn_blocking(move || {
+        elitea_doc_extract::extract_with(&mime, &bytes, &options)
+    })
+    .await
+    .map_err(|_| TextExtractionFailure::Unreachable)?;
+    match decoded {
+        elitea_doc_extract::Extracted::Text { text, .. } => Ok(text),
+        elitea_doc_extract::Extracted::Unsupported => Err(TextExtractionFailure::Unsupported),
+        elitea_doc_extract::Extracted::Unreadable(_) => Err(TextExtractionFailure::Unreadable),
     }
 }
 
@@ -377,6 +473,18 @@ impl OfficeToolHost for ClaimOfficeHost {
                 tracing::warn!(event = "imagegen_call_failed", error = %error, "an image edit call failed");
                 images_failure(&error)
             })
+    }
+
+    fn can_read_text(&self, name: &str) -> Result<(), TextExtractionFailure> {
+        readable_kind(self.runtime.extractor.is_some(), name)
+    }
+
+    async fn extract_text(
+        &self,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<String, TextExtractionFailure> {
+        document_text(self.runtime.extractor.as_ref(), name, bytes).await
     }
 
     async fn object_size(&self, bucket: &str, name: &str) -> Result<Option<u64>, OfficeHostError> {
