@@ -152,7 +152,14 @@ impl Llm for ScriptedLlm {
         request: LlmRequest,
         streaming: bool,
     ) -> adk_rust::Result<LlmResponseStream> {
-        assert!(!streaming, "the step reads one complete reply");
+        // The gateway facade admits only a streaming request that carries
+        // the generation config (anything else is `model_gateway.invalid_request`
+        // before it reaches the gateway): the step must send exactly that.
+        assert!(streaming, "the facade admits streaming requests only");
+        assert!(
+            request.config.is_some(),
+            "the facade admits requests with a generation config only"
+        );
         let index = self.state.calls.fetch_add(1, Ordering::SeqCst);
         let images: Vec<SeenImage> = request
             .contents

@@ -462,3 +462,15 @@ func TestListPayloadWithDeepHistoriesStaysSmall(t *testing.T) {
 		}
 	}
 }
+
+// A source that stayed rate limited is its own group: reporting it as
+// read_error ("Could not be read") told the operator the files were broken.
+func TestRateLimitedIsNotAReadError(t *testing.T) {
+	spec, ok := skipReasonGroups["rate_limited"]
+	if !ok {
+		t.Fatal("rate_limited has no group")
+	}
+	if spec.kind != kindFailed || spec.reason == skipReasonGroups["fetch_failed"].reason {
+		t.Errorf("rate_limited must be a failed group of its own, got %+v", spec)
+	}
+}

@@ -142,6 +142,32 @@ echo "== the Rust worker is given its vector store only under rust indexing =="
 [ "$(vectorkeys "$TMP/rust.yaml")" = "elitea-vector:9470|github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com api.zephyrscale.smartbear.com eu.api.zephyrscale.smartbear.com prod-api.zephyr4jiracloud.com xray.cloud.getxray.app us.xray.cloud.getxray.app eu.xray.cloud.getxray.app au.xray.cloud.getxray.app api.figma.com" ] \
   && ok "rust indexing points the worker at this chart's elitea-vector with the default egress allowlist" \
   || bad "rust indexing vector keys: $(vectorkeys "$TMP/rust.yaml")"
+# Artifact-toolkit indexing reads the platform's own object API at
+# runtime.json's `platform_origin`. The shipped defaults must support it: the
+# origin is a bare https origin (the shape the artifact source accepts), and
+# the external-source allowlist neither names it nor opens everything, because
+# the artifact source is pinned to that exact origin and never consults the
+# allowlist (live defect: the allowlist, public SaaS hosts only, refused it).
+platformorigin() {
+  python3 - "$1" <<'PY'
+import json, sys, yaml
+from urllib.parse import urlsplit
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+cm = next(d for d in docs
+          if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "elitea-worker-runtime")
+runtime = json.loads(cm["data"]["runtime.json"])
+origin = urlsplit(runtime["platform_origin"])
+bare = (origin.scheme == "https" and origin.hostname and not origin.username
+        and origin.path in ("", "/") and not origin.query and not origin.fragment)
+entries = runtime.get("index_egress_allowlist", "").replace(",", " ").split()
+pinned_only = origin.hostname not in entries and "*" not in entries
+print("pinned" if bare and pinned_only else f"unexpected:{runtime['platform_origin']}|{entries}")
+PY
+}
+[ "$(platformorigin "$TMP/rust.yaml")" = "pinned" ] \
+  && ok "the default platform_origin is a bare https origin the artifact source reaches without the egress allowlist" \
+  || bad "artifact indexing is not supported by the shipped defaults: $(platformorigin "$TMP/rust.yaml")"
 # An elitea-vector deployed elsewhere, named explicitly; an emptied allowlist
 # is NOT written, which the worker reads as fail-closed (every host refused).
 [ "$(vectorkeys "$TMP/external.yaml")" = "vector.platform.example:9470|-" ] \

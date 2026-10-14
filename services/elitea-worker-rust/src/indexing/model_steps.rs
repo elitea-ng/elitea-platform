@@ -71,7 +71,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use adk_rust::futures::StreamExt as _;
 use adk_rust::futures::stream::FuturesOrdered;
-use adk_rust::{AdkError, Content, FinishReason, Llm, LlmRequest, Part};
+use adk_rust::{AdkError, Content, FinishReason, GenerateContentConfig, Llm, LlmRequest, Part};
 use async_trait::async_trait;
 use bytes::Bytes;
 use elitea_doc_chunk::{
@@ -863,13 +863,14 @@ async fn call<T>(
                     CallFailure::Fatal(format!("model_facade.{error:?}"))
                 }
             })?;
-        let failure = match complete(&*model, model_name, (spec.content)(), spec.image).await {
-            Ok(reply) => match read(reply) {
-                Ok(value) => return Ok(value),
+        let failure =
+            match complete(&*model, model_name, (spec.content)(), spec.image, settings).await {
+                Ok(reply) => match read(reply) {
+                    Ok(value) => return Ok(value),
+                    Err(failure) => failure,
+                },
                 Err(failure) => failure,
-            },
-            Err(failure) => failure,
-        };
+            };
         match failure {
             CallFailure::Retryable(_) if attempt < CHAT_ATTEMPTS => {
                 gate.check(false)?;
@@ -928,10 +929,50 @@ async fn vision_call(
                     "the model's description was cut off by max_tokens; kept as it is"
                 );
             }
-            Ok(reply.text)
+            // A reasoning model that writes its thinking into the reply
+            // (`<think>…</think>`) is described by what follows it.
+            let description = strip_inline_reasoning(&reply.text);
+            // A reply cut off by `max_tokens` with nothing but thinking in it:
+            // the model spent its whole budget before it began to describe.
+            // Another attempt does the same; the picture is final for this
+            // run and the log says what to raise. (A blank reply that was
+            // not cut off keeps the SDK's placeholder.)
+            if description.is_empty() && reply.truncated {
+                tracing::warn!(
+                    event = "index_image_description_empty",
+                    max_tokens = settings.max_tokens,
+                    "the model spent its max_tokens thinking and described nothing; raise `max_tokens` in the toolkit's llm settings"
+                );
+                return Err(CallFailure::Unusable(
+                    "the model's reply was cut off before any description".to_owned(),
+                ));
+            }
+            Ok(description)
         },
     )
     .await
+}
+
+/// `text` without its `<think>…</think>` blocks, trimmed. A block that is
+/// never closed (the reply was cut inside it) runs to the end and is dropped
+/// with it.
+pub(super) fn strip_inline_reasoning(text: &str) -> String {
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+    let mut kept = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(OPEN) {
+        kept.push_str(&rest[..start]);
+        let after_open = &rest[start + OPEN.len()..];
+        if let Some(end) = after_open.find(CLOSE) {
+            rest = &after_open[end + CLOSE.len()..];
+        } else {
+            rest = "";
+            break;
+        }
+    }
+    kept.push_str(rest);
+    kept.trim().to_owned()
 }
 
 /// Descriptions kept for a run.
@@ -1059,36 +1100,61 @@ async fn chat_window(
     .await
 }
 
-/// One non-streaming call, as the step-back model makes it: a streaming call
-/// would hand back partial deltas and a final response carrying the whole
-/// text.
+/// One chat call, the way the gateway facade admits it: a streaming request
+/// that carries the generation config the model was bound with. The
+/// facade refuses anything else (`model_gateway.invalid_request`) before a
+/// byte reaches the gateway, so a call without the config, or a non-streaming
+/// one, never gets an answer. The reply's text is every text delta of the
+/// stream, in order; a provider's reasoning deltas are not part of it.
 async fn complete(
     model: &dyn Llm,
     model_name: &str,
     user: Content,
     image: bool,
+    settings: LlmSettings,
 ) -> Result<Reply, CallFailure> {
     let request = LlmRequest {
         model: model_name.to_owned(),
         contents: vec![user],
-        config: None,
+        config: Some(GenerateContentConfig {
+            temperature: settings.temperature,
+            max_output_tokens: settings.max_tokens.and_then(|n| i32::try_from(n).ok()),
+            ..GenerateContentConfig::default()
+        }),
         tools: std::collections::HashMap::new(),
         previous_response_id: None,
     };
     let mut responses = model
-        .generate_content(request, false)
+        .generate_content(request, true)
         .await
         .map_err(|error| classify_model_error(&error, image))?;
-    let mut text: Option<Reply> = None;
+    let mut reply = String::new();
+    let mut terminal: Option<bool> = None;
     while let Some(response) = responses.next().await {
         let response = response.map_err(|error| classify_model_error(&error, image))?;
-        if response.partial {
-            continue;
-        }
         if response.error_code.is_some() {
             return Err(CallFailure::Retryable(
                 "the model ended the reply with an error".to_owned(),
             ));
+        }
+        if let Some(content) = &response.content {
+            for part in &content.parts {
+                if let Part::Text { text: piece } = part {
+                    if reply.len().saturating_add(piece.len()) > MAX_REPLY_BYTES {
+                        return Err(if image {
+                            CallFailure::ImageSkip(SKIP_VISION_REFUSED)
+                        } else {
+                            CallFailure::Unusable(
+                                "the model's reply exceeds the size bound".to_owned(),
+                            )
+                        });
+                    }
+                    reply.push_str(piece);
+                }
+            }
+        }
+        if response.partial {
+            continue;
         }
         let truncated = response.finish_reason == Some(FinishReason::MaxTokens);
         if let Some(reason) = response.finish_reason
@@ -1107,29 +1173,14 @@ async fn complete(
                 },
             );
         }
-        let mut reply = String::new();
-        if let Some(content) = &response.content {
-            for part in &content.parts {
-                if let Part::Text { text: piece } = part {
-                    if reply.len().saturating_add(piece.len()) > MAX_REPLY_BYTES {
-                        return Err(if image {
-                            CallFailure::ImageSkip(SKIP_VISION_REFUSED)
-                        } else {
-                            CallFailure::Unusable(
-                                "the model's reply exceeds the size bound".to_owned(),
-                            )
-                        });
-                    }
-                    reply.push_str(piece);
-                }
-            }
-        }
-        text = Some(Reply {
+        terminal = Some(truncated);
+    }
+    terminal
+        .map(|truncated| Reply {
             text: reply,
             truncated,
-        });
-    }
-    text.ok_or_else(|| CallFailure::Retryable("the model returned no reply".to_owned()))
+        })
+        .ok_or_else(|| CallFailure::Retryable("the model returned no reply".to_owned()))
 }
 
 /// The gateway's refusal, sorted: retryable (429, 5xx, a timeout, the

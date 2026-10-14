@@ -24,7 +24,7 @@ use elitea_content_source::{Acl, DocumentRef, SourceError, mime_of};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use crate::egress::{EgressGuard, HostAllowlist};
+use crate::egress::{EgressGuard, HostAllowlist, OriginGuard};
 use crate::transport::header::RETRY_AFTER;
 use crate::transport::{HeaderMap, Request, Response, StatusCode, Transport, TransportError, Url};
 
@@ -249,7 +249,8 @@ impl Failure {
             (Self::Changed, Some(key)) => SourceError::Changed(key.to_owned()),
             (failure, key) => {
                 let what = key.map_or_else(String::new, |key| format!(" for '{key}'"));
-                SourceError::Unavailable(match failure {
+                let rate_limited = matches!(failure, Self::RateLimited);
+                let message = match failure {
                     Self::Refused => format!(
                         "{provider}: the host is not on the egress allowlist, so the request{what} was refused before it was sent"
                     ),
@@ -270,7 +271,12 @@ impl Failure {
                         format!("{provider} returned an invalid response{what}: {why}")
                     }
                     Self::Client(message) => format!("{provider}: {message}{what}"),
-                })
+                };
+                if rate_limited {
+                    SourceError::RateLimited(message)
+                } else {
+                    SourceError::Unavailable(message)
+                }
             }
         }
     }
@@ -284,10 +290,27 @@ fn transport_failure(error: TransportError) -> Failure {
     }
 }
 
+/// What a source's requests are held to: the external-source host
+/// allowlist, or the single origin of the platform itself.
+enum Guard {
+    Allowlist(EgressGuard),
+    Origin(OriginGuard),
+}
+
+#[async_trait::async_trait]
+impl Transport for Guard {
+    async fn execute(&self, request: Request) -> Result<Response, TransportError> {
+        match self {
+            Self::Allowlist(guard) => guard.execute(request).await,
+            Self::Origin(guard) => guard.execute(request).await,
+        }
+    }
+}
+
 /// The guarded transport, the caps and the backoff one source sends with.
 #[derive(Clone)]
 pub struct SourceHttp {
-    guard: Arc<EgressGuard>,
+    guard: Arc<Guard>,
     limits: SourceLimits,
     backoff: Backoff,
     timeouts: Timeouts,
@@ -299,7 +322,20 @@ impl SourceHttp {
     #[must_use]
     pub fn new(allowlist: HostAllowlist, transport: Arc<dyn Transport>) -> Self {
         Self {
-            guard: Arc::new(EgressGuard::new(allowlist, transport)),
+            guard: Arc::new(Guard::Allowlist(EgressGuard::new(allowlist, transport))),
+            limits: SourceLimits::default(),
+            backoff: Backoff::default(),
+            timeouts: Timeouts::default(),
+        }
+    }
+
+    /// Every request goes to `origin` (scheme, host and port) and nowhere
+    /// else, with no host allowlist: for a source that reads the platform's
+    /// own API, which the external-source allowlist must never govern.
+    #[must_use]
+    pub fn pinned_to_origin(origin: &url::Url, transport: Arc<dyn Transport>) -> Self {
+        Self {
+            guard: Arc::new(Guard::Origin(OriginGuard::new(origin, transport))),
             limits: SourceLimits::default(),
             backoff: Backoff::default(),
             timeouts: Timeouts::default(),
@@ -338,7 +374,10 @@ impl SourceHttp {
     /// Whether the allowlist admits `url`'s host.
     #[must_use]
     pub fn permits(&self, url: &url::Url) -> bool {
-        self.guard.allowlist().permits_url(url)
+        match &*self.guard {
+            Guard::Allowlist(guard) => guard.allowlist().permits_url(url),
+            Guard::Origin(guard) => guard.permits_url(url),
+        }
     }
 
     /// Send `request`, backing off on a rate limit within the bound.

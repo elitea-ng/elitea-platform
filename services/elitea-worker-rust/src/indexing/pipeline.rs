@@ -118,6 +118,9 @@ const SKIP_EMPTY: &str = "empty";
 /// never marks the document for another run.
 pub(super) const SKIP_REPLY_UNUSABLE: &str = "reply_unusable";
 const SKIP_FETCH_FAILED: &str = "fetch_failed";
+/// The source stayed rate limited past its backoff bound: nothing is wrong
+/// with the document, a later run reads it. The stored version is untouched.
+pub(super) const SKIP_RATE_LIMITED: &str = "rate_limited";
 const SKIP_EMBEDDING_FAILED: &str = "embedding_failed";
 pub(super) const SKIP_TOO_LARGE: &str = "too_large";
 /// The model refused this picture alone (a text-only model, a provider's 400
@@ -186,7 +189,11 @@ const MAX_VERSION_BYTES: usize = 1024;
 fn retryable_picture_skip(reason: &str) -> bool {
     matches!(
         reason,
-        SKIP_MODEL_FAILED | SKIP_MODEL_CAP_EXCEEDED | SKIP_EXTRACT_TIMEOUT | SKIP_FETCH_FAILED
+        SKIP_MODEL_FAILED
+            | SKIP_MODEL_CAP_EXCEEDED
+            | SKIP_EXTRACT_TIMEOUT
+            | SKIP_FETCH_FAILED
+            | SKIP_RATE_LIMITED
     )
 }
 
@@ -2334,6 +2341,10 @@ async fn prepare(
         Err(SourceError::NotFound(_)) => {
             // Listed, then gone: the next run deletes it.
             return Preparation::Skipped(SKIP_FETCH_FAILED, plan).into();
+        }
+        Err(error @ SourceError::RateLimited(_)) => {
+            tracing::warn!(event = "index_document_rate_limited", error = %error);
+            return Preparation::Skipped(SKIP_RATE_LIMITED, plan).into();
         }
         Err(error) => {
             tracing::warn!(event = "index_document_fetch_failed", error = %error);

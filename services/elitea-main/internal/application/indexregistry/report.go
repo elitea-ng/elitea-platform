@@ -41,6 +41,7 @@ var skipReasonGroups = map[string]reportGroupSpec{
 	"empty":              {kindSkipped, "empty", "Contained no indexable content"},
 	"unreadable":         {kindFailed, "read_error", "Could not be read"},
 	"fetch_failed":       {kindFailed, "read_error", "Could not be read"},
+	"rate_limited":       {kindFailed, "rate_limited", "Rate limited by the source; a later run retries"},
 	"extract_failed":     {kindFailed, "processing_error", "Could not be processed"},
 	"extract_timeout":    {kindFailed, "extract_timeout", "Timed out while extracting content"},
 	"embedding_failed":   {kindFailed, "embedding_failed", "Embedding failed"},

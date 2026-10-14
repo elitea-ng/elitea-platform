@@ -4326,7 +4326,9 @@ worker:
     # or Azure DevOps hosts, your TestRail, qTest and Zephyr Enterprise
     # hosts, a Zephyr Essential custom `base_url` host (only the default
     # SaaS origin is named above), and your Atlassian, SharePoint and other
-    # tenant hosts.
+    # tenant hosts. The platform itself (platformOrigin above) is NOT governed
+    # by this list: the artifact toolkit's source is pinned to exactly that
+    # origin (scheme, host and port) and is never subject to it.
     indexEgressAllowlist: "github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com api.zephyrscale.smartbear.com eu.api.zephyrscale.smartbear.com prod-api.zephyr4jiracloud.com xray.cloud.getxray.app us.xray.cloud.getxray.app eu.xray.cloud.getxray.app au.xray.cloud.getxray.app api.figma.com"
     # Rust worker, indexingRuntime=rust only (ADR-0030 I4): the model calls one
     # index run may make in its model steps, namely every chat call per window

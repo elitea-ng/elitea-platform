@@ -8,6 +8,7 @@
 //! per-image bound, the closed skip reasons, the failure policy shared with
 //! the proposal chunker, and that neither bytes nor descriptions are logged.
 
+use std::fmt::Write as _;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
@@ -1153,4 +1154,166 @@ mod lazy_entries {
         assert_eq!(entries.loads(), 1);
         assert_eq!(chat.calls(), 0);
     }
+}
+
+// --- the real gateway facade (live defect: a tiny PNG ended `vision_refused`)
+//
+// The scripted `Llm` above accepts any request. The facade the worker really
+// binds refuses everything but a STREAMING request that carries its generation
+// config (`model_gateway.invalid_request`, before a byte reaches the gateway),
+// and the step sent neither, so every image ended `vision_refused` whatever
+// the model could do. These runs bind the real `ModelFacade` over a fake
+// gateway that answers the way vLLM does.
+
+use crate::transport::model_facade::ModelFacade;
+use crate::transport::openai_compatible_facade::{
+    CapturedModelRequests, TestModelGatewayOutcome, test_model_gateway_client,
+    test_model_gateway_config, test_model_gateway_response,
+};
+
+fn sse(chunks: &[serde_json::Value]) -> Vec<u8> {
+    let mut out = String::new();
+    for chunk in chunks {
+        let _ = write!(out, "data: {chunk}\n\n");
+    }
+    out.push_str("data: [DONE]\n\n");
+    out.into_bytes()
+}
+
+fn delta(field: &str, text: &str) -> serde_json::Value {
+    json!({"choices": [{"delta": {field: text}, "finish_reason": null}]})
+}
+
+fn finish(reason: &str) -> serde_json::Value {
+    json!({"choices": [{"delta": {}, "finish_reason": reason}]})
+}
+
+fn gateway_answer(chunks: &[serde_json::Value]) -> TestModelGatewayOutcome {
+    let body = tonic::body::Body::new(http_body_util::Full::new(bytes::Bytes::from(sse(chunks))));
+    TestModelGatewayOutcome::Response(test_model_gateway_response(body))
+}
+
+fn with_real_facade(
+    harness: &mut Harness,
+    answers: Vec<TestModelGatewayOutcome>,
+) -> CapturedModelRequests {
+    let (client, captured) =
+        test_model_gateway_client(answers, test_model_gateway_config()).expect("gateway");
+    harness.runtime.chat_models = Some(Arc::new(ModelFacade::from_gateway(client)));
+    captured
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tiny_png_is_described_through_the_real_facade() {
+    let mut harness = harness(4, None).await;
+    let captured = with_real_facade(
+        &mut harness,
+        vec![gateway_answer(&[
+            delta("content", "A small "),
+            delta("content", "red square."),
+            finish("stop"),
+        ])],
+    );
+    let tiny = real_image("shots/tiny.png", ImageFormat::Png, 32, 32, "tiny");
+    let summary = run_model(&harness, vec![tiny], None, &defaults(), Some("Qwen3.8"))
+        .await
+        .expect("summary");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{summary:?}"
+    );
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert!(summary.skipped.is_empty(), "{summary:?}");
+    let requests = captured.lock().expect("captured");
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("json");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["max_completion_tokens"], 2048);
+    let content = body["messages"][0]["content"].as_array().expect("parts");
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image_url");
+    assert!(
+        content[1]["image_url"]["url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("data:image/png;base64,")),
+        "{content:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reasoning_models_thinking_is_not_the_description() {
+    let mut harness = harness(4, None).await;
+    // vLLM with a reasoning parser (reasoning_content) and without one (the
+    // thinking inline in the content).
+    with_real_facade(
+        &mut harness,
+        vec![
+            gateway_answer(&[
+                delta("reasoning_content", "Let me look. It is red."),
+                delta("content", "A red square."),
+                finish("stop"),
+            ]),
+            gateway_answer(&[
+                delta("content", "<think>Let me look."),
+                delta("content", " It is blue.</think>\n\nA blue square."),
+                finish("stop"),
+            ]),
+        ],
+    );
+    let documents = vec![
+        real_image("shots/a.png", ImageFormat::Png, 32, 32, "a"),
+        real_image("shots/b.png", ImageFormat::Png, 32, 32, "b"),
+    ];
+    let summary = run_model(&harness, documents, None, &defaults(), Some("Qwen3.8"))
+        .await
+        .expect("summary");
+    assert_eq!(summary.indexed_documents, 2, "{summary:?}");
+    let Harness { runtime, token, .. } = harness;
+    let runtime = Arc::new(runtime);
+    let host = search_host(&runtime, &token);
+    let found = search(
+        &host,
+        json!({"query": "square", "index_name": "docs", "cut_off": 0,
+               "output_fields": ["page_content"]}),
+    )
+    .await;
+    let text = found.to_string();
+    assert!(text.contains("A red square."), "{text}");
+    assert!(text.contains("A blue square."), "{text}");
+    assert!(!text.contains("think"), "{text}");
+    assert!(!text.contains("Let me look"), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_model_that_spends_max_tokens_thinking_is_not_a_refusal() {
+    let mut harness = harness(4, None).await;
+    with_real_facade(
+        &mut harness,
+        vec![gateway_answer(&[
+            delta("reasoning_content", "Thinking, thinking"),
+            finish("length"),
+        ])],
+    );
+    let tiny = real_image("shots/tiny.png", ImageFormat::Png, 32, 32, "tiny");
+    let summary = run_model(&harness, vec![tiny], None, &defaults(), Some("Qwen3.8"))
+        .await
+        .expect("summary");
+    assert_eq!(summary.indexed_documents, 0, "{summary:?}");
+    assert_eq!(
+        summary.skipped.get("reply_unusable"),
+        Some(&1),
+        "{summary:?}"
+    );
+    assert_eq!(summary.skipped.get("vision_refused"), None, "{summary:?}");
+}
+
+#[test]
+fn inline_reasoning_is_stripped() {
+    use super::model_steps::strip_inline_reasoning as strip;
+    assert_eq!(strip("<think>a</think>\nB"), "B");
+    assert_eq!(strip("x <think>a</think> y <think>b</think> z"), "x  y  z");
+    assert_eq!(strip("kept<think>cut off"), "kept");
+    assert_eq!(strip("<think>only"), "");
+    assert_eq!(strip("plain"), "plain");
 }
