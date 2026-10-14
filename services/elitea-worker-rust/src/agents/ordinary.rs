@@ -78,7 +78,7 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     /// (ADR-0030 I1); `None` on a deployment without a `vector_target`,
     /// where the indexing families carry no index tools.
     index_runtime: Option<Arc<IndexIngestRuntime>>,
-    /// The platform object client the Office families (`pptx`) read and write
+    /// The platform object client the Office families (`pptx`, `docx`, `xlsx`) read and write
     /// documents with (ADR-0032); `None` leaves them out as unsupported.
     office_runtime: Option<Arc<OfficeRuntime>>,
 }
@@ -120,7 +120,7 @@ impl OrdinaryNativeAgentAssembler {
         }
     }
 
-    /// Lend the Office runtime, so a `pptx` toolkit reads and writes its
+    /// Lend the Office runtime, so an Office toolkit reads and writes its
     /// documents under the claim's credential (ADR-0032 P3).
     #[must_use]
     pub(crate) fn with_office_runtime(
@@ -341,7 +341,7 @@ impl OrdinaryNativeAgentAssembler {
         ));
         let mut artifact_authority = ArtifactToolAuthority::new(Arc::clone(&platform_writer));
         // The Office host (ADR-0032) rides on the artifact authority, built
-        // only when the snapshot has a `pptx` toolkit: it mints a credential
+        // only when the snapshot has an Office toolkit: it mints a credential
         // and binds nothing until a tool calls the model.
         if snapshot_carries_office_family(tool_snapshot)
             && let Some(office) = self.office_host(&context, profile)
@@ -829,11 +829,12 @@ struct DirectToolsets {
 /// and building the sensitive-tool and delegated-authorization catalogs from
 /// THOSE names keeps the three in agreement; building either catalog from the
 /// published name would leave a renamed tool silently unguarded.
-/// Whether the snapshot has a toolkit of the Office families (ADR-0032).
+/// Whether the snapshot has a toolkit of the Office families (ADR-0032 P3, P4:
+/// `pptx`, `docx`, `xlsx`).
 pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
         reference.kind() == FrozenToolKind::Configured
-            && matches!(reference.tool_type(), "pptx" | "imagegen")
+            && matches!(reference.tool_type(), "pptx" | "docx" | "xlsx" | "imagegen")
     })
 }
 

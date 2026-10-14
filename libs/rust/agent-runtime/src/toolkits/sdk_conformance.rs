@@ -163,6 +163,14 @@ fn required(schema: &Value) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
+/// Whether the SDK snapshot declares a toolkit type at all. The families with
+/// no SDK counterpart (`docx`, `xlsx`; ADR-0032 P4) assert it is still absent:
+/// the day the SDK grows one, its names and schemas are the contract and the
+/// family must be reconciled with them.
+pub fn has_type(sdk_type: &str) -> bool {
+    snapshot().contains_key(sdk_type)
+}
+
 /// Every tool name the SDK type declares, for a family test that selects
 /// tools by name: select them all and let the family keep what it serves.
 pub fn sdk_tool_names(sdk_type: &str) -> Vec<String> {

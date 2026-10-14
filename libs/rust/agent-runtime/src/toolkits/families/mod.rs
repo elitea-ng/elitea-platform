@@ -16,6 +16,8 @@ pub(crate) mod bitbucket;
 pub(crate) mod carrier;
 pub(crate) mod confluence;
 pub(crate) mod connector_client;
+#[cfg(feature = "toolkit-office")]
+pub(crate) mod docx;
 pub(crate) mod elastic;
 pub(crate) mod figma;
 pub(crate) mod gcp;
@@ -25,6 +27,8 @@ pub(crate) mod gitlab_org;
 pub(crate) mod google_places;
 pub(crate) mod https_base_url;
 pub(crate) mod imagegen;
+#[cfg(feature = "toolkit-office")]
+pub(crate) mod office_common;
 pub mod office_host;
 // Public only to the worker's composition suites (`test-support`).
 #[cfg(any(test, feature = "test-support"))]
@@ -40,7 +44,7 @@ pub mod openapi;
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) mod openapi;
 pub(crate) mod postman;
-#[cfg(feature = "toolkit-pptx")]
+#[cfg(feature = "toolkit-office")]
 pub(crate) mod pptx;
 pub(crate) mod python_repr;
 pub(crate) mod qtest;
@@ -56,6 +60,8 @@ pub(crate) mod sql;
 pub(crate) mod testio;
 pub(crate) mod testrail;
 pub(crate) mod vcs_text;
+#[cfg(feature = "toolkit-office")]
+pub(crate) mod xlsx;
 pub(crate) mod xray_cloud;
 pub(crate) mod yagmail;
 pub(crate) mod zephyr;
@@ -99,4 +105,19 @@ impl UnsupportedSetting {
             }
         }
     }
+}
+
+/// The Office families' tools as elitea-main's `rust_only_toolkit_tools.json`
+/// carries them (ADR-0032 P3, P4): the `pptx` tools the SDK does not declare
+/// under `types`, and the whole `docx` and `xlsx` types (they have no SDK
+/// counterpart) under `new_types`. The Go catalogue merges both into its pinned
+/// SDK snapshot; the test that compares this document with the file there
+/// (`ELITEA_WRITE_RUST_ONLY_TOOLS=1` rewrites it) is what keeps the two equal.
+#[cfg(all(test, feature = "toolkit-office"))]
+pub(crate) fn rust_only_catalogue_document() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": "elitea.rust-only-toolkit-tools.v1",
+        "types": {"pptx": serde_json::Value::Object(pptx::schema::rust_only_catalogue_tools())},
+        "new_types": {"docx": docx::schema::type_entry(), "xlsx": xlsx::schema::type_entry()},
+    })
 }

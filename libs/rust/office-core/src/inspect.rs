@@ -208,11 +208,11 @@ struct PendingChart {
     facts: ChartFacts,
 }
 
-fn parent(path: &str) -> &str {
+pub(crate) fn parent(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
 
-fn rels_path(part: &str) -> String {
+pub(crate) fn rels_path(part: &str) -> String {
     match part.rsplit_once('/') {
         Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
         None => format!("_rels/{part}.rels"),
@@ -221,7 +221,7 @@ fn rels_path(part: &str) -> String {
 
 /// `target` relative to `base_dir`, with `..` folded; an absolute target
 /// (leading `/`) is taken from the package root.
-fn resolve(base_dir: &str, target: &str) -> String {
+pub(crate) fn resolve(base_dir: &str, target: &str) -> String {
     let mut parts: Vec<&str> = if target.starts_with('/') {
         Vec::new()
     } else {
@@ -239,7 +239,7 @@ fn resolve(base_dir: &str, target: &str) -> String {
     parts.join("/")
 }
 
-fn attr(e: &BytesStart<'_>, local: &[u8]) -> Option<String> {
+pub(crate) fn attr(e: &BytesStart<'_>, local: &[u8]) -> Option<String> {
     e.attributes()
         .flatten()
         .find(|a| a.key.local_name().as_ref() == local)
@@ -247,7 +247,7 @@ fn attr(e: &BytesStart<'_>, local: &[u8]) -> Option<String> {
 }
 
 /// The value of the namespaced `r:id`-style attribute (not the numeric `id`).
-fn rel_attr(e: &BytesStart<'_>, local: &[u8]) -> Option<String> {
+pub(crate) fn rel_attr(e: &BytesStart<'_>, local: &[u8]) -> Option<String> {
     e.attributes()
         .flatten()
         .find(|a| {
@@ -297,7 +297,7 @@ fn part_text(xml: &[u8]) -> String {
     out.trim().to_owned()
 }
 
-fn read_rels(xml: &[u8]) -> HashMap<String, String> {
+pub(crate) fn read_rels(xml: &[u8]) -> HashMap<String, String> {
     let mut out = HashMap::new();
     let mut r = Reader::from_reader(xml);
     loop {

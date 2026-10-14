@@ -83,12 +83,17 @@ type CurrentToolkitCatalogueSnapshot struct {
 // LoadPinnedCurrentToolkitCatalogueSnapshot loads the catalogue of the SDK
 // revision the Python worker image is admitted to run.
 func LoadPinnedCurrentToolkitCatalogueSnapshot() (*CurrentToolkitCatalogueSnapshot, error) {
-	return LoadCurrentToolkitCatalogueSnapshot(pinnedCurrentToolkitCatalogueSnapshotJSON)
+	return loadCurrentToolkitCatalogueSnapshot(
+		pinnedCurrentToolkitCatalogueSnapshotJSON, pinnedRustOnlyToolkitToolsJSON)
 }
 
 // LoadCurrentToolkitCatalogueSnapshot parses one bounded, deterministic
 // catalogue projection.
 func LoadCurrentToolkitCatalogueSnapshot(data []byte) (*CurrentToolkitCatalogueSnapshot, error) {
+	return loadCurrentToolkitCatalogueSnapshot(data, nil)
+}
+
+func loadCurrentToolkitCatalogueSnapshot(data, rustOnly []byte) (*CurrentToolkitCatalogueSnapshot, error) {
 	if len(data) == 0 || len(data) > maxCurrentToolkitCatalogueSnapshotBytes {
 		return nil, ErrCurrentToolkitCatalogueSnapshotInvalid
 	}
@@ -108,6 +113,14 @@ func LoadCurrentToolkitCatalogueSnapshot(data []byte) (*CurrentToolkitCatalogueS
 		len(document.Entries) == 0 ||
 		len(document.Entries) > maxCurrentToolkitSchemaEntries {
 		return nil, ErrCurrentToolkitCatalogueSnapshotInvalid
+	}
+
+	if len(rustOnly) != 0 {
+		merged, err := applyRustOnlyToolkitCatalogue(document.Entries, rustOnly)
+		if err != nil {
+			return nil, ErrCurrentToolkitCatalogueSnapshotInvalid
+		}
+		document.Entries = merged
 	}
 
 	entries := make(map[string]currentToolkitCatalogueEntry, len(document.Entries))
