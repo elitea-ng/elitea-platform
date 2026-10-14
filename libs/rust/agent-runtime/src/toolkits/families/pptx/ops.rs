@@ -16,15 +16,16 @@ use std::collections::{BTreeMap, HashSet};
 use aho_corasick::{AhoCorasick, MatchKind};
 
 use elitea_office_core::{
-    Bullet, ChartKind, ChartSpec, Deck, OfficeError, ParagraphInfo, Rect, Series, ShapeInfo,
-    ShapeKind, SlideFacts, SlideLayout, Theme,
+    Bullet, ChartSpec, Deck, OfficeError, ParagraphInfo, Rect, ShapeInfo, ShapeKind, SlideFacts,
+    SlideLayout, Theme,
 };
 use serde_json::{Map, Value};
 
 use super::schema::PptxTool;
 
-/// A failure as the model reads it.
-pub(super) type Sentence = String;
+pub(super) use super::super::office_common::{
+    Sentence, opt_bool, opt_f64, opt_str, opt_uint, req_str,
+};
 
 /// The text that marks a placeholder, as the SDK tests it
 /// (`"{{" in text or "[PLACEHOLDER]" in text`).
@@ -32,38 +33,19 @@ pub(super) fn is_placeholder_text(text: &str) -> bool {
     text.contains("{{") || text.contains("[PLACEHOLDER]")
 }
 
-/// The sentence for a busy engine; the caller retries on exactly this.
-pub(super) const BUSY: &str = "The document engine is busy with other work. Try again in a moment.";
+/// What this family's sentences call the file.
+pub(super) const KIND: super::super::office_common::OfficeKind =
+    super::super::office_common::OfficeKind {
+        family: "pptx",
+        label: "PowerPoint (.pptx)",
+        noun: "deck",
+        accepts: "a .pptx or an image",
+    };
 
 /// An [`OfficeError`] as a sentence the model can act on. Internal detail
 /// stays in the log, not in the sentence.
 pub(super) fn office_sentence(error: &OfficeError) -> Sentence {
-    match error {
-        OfficeError::LimitExceeded { limit, value } => format!(
-            "The document is over a safety limit ({limit}, measured {value}). Use a smaller file or fewer elements."
-        ),
-        OfficeError::Malformed(_) => {
-            "The file is not a valid PowerPoint (.pptx) package, or it is damaged.".to_owned()
-        }
-        OfficeError::Unsupported(message)
-        | OfficeError::NotFound(message)
-        | OfficeError::InvalidInput(message) => message.clone(),
-        OfficeError::DeadlineExceeded => {
-            "Processing the document took too long and was abandoned. Try a smaller deck."
-                .to_owned()
-        }
-        OfficeError::Indeterminate => {
-            "An edit timed out and may have half-applied; nothing was saved. Try again.".to_owned()
-        }
-        OfficeError::Busy => BUSY.to_owned(),
-        OfficeError::Internal(_) | _ => {
-            tracing::warn!(
-                event = "pptx_tool_internal_error",
-                "the document engine failed internally"
-            );
-            "The document engine failed on this file.".to_owned()
-        }
-    }
+    super::super::office_common::office_sentence(error, &KIND)
 }
 
 #[allow(clippy::needless_pass_by_value, reason = "used as a map_err function")]
@@ -82,27 +64,6 @@ pub(super) fn save(deck: &Deck) -> Result<Vec<u8>, Sentence> {
 // ---------------------------------------------------------------------------
 // Arguments
 // ---------------------------------------------------------------------------
-
-pub(super) fn req_str(args: &Value, key: &str) -> Result<String, Sentence> {
-    opt_str(args, key).ok_or_else(|| format!("`{key}` is required and must be a non-empty string."))
-}
-
-pub(super) fn opt_str(args: &Value, key: &str) -> Option<String> {
-    let v = args.get(key)?.as_str()?;
-    (!v.trim().is_empty()).then(|| v.to_owned())
-}
-
-pub(super) fn opt_bool(args: &Value, key: &str) -> Option<bool> {
-    args.get(key)?.as_bool()
-}
-
-fn opt_f64(args: &Value, key: &str) -> Option<f64> {
-    args.get(key)?.as_f64().filter(|v| v.is_finite())
-}
-
-fn opt_uint(args: &Value, key: &str) -> Option<u64> {
-    args.get(key)?.as_u64()
-}
 
 /// A 1-based slide number as a 0-based index into a deck of `count` slides.
 pub(super) fn slide_arg(args: &Value, key: &str, count: usize) -> Result<usize, Sentence> {
@@ -562,74 +523,21 @@ fn bullets_of(value: &Value) -> Result<Vec<Bullet>, Sentence> {
         .collect()
 }
 
-fn chart_kind(name: Option<&str>) -> Result<ChartKind, Sentence> {
-    Ok(match name.unwrap_or("column") {
-        "bar" => ChartKind::ClusteredBar,
-        "stacked_bar" => ChartKind::StackedBar,
-        "column" => ChartKind::ClusteredColumn,
-        "stacked_column" => ChartKind::StackedColumn,
-        "line" => ChartKind::Line,
-        "pie" => ChartKind::Pie,
-        "doughnut" => ChartKind::Doughnut,
-        "area" => ChartKind::Area,
-        "scatter" => ChartKind::Scatter,
-        other => return Err(format!("Unknown chart_type `{other}`.")),
-    })
-}
+/// The chart types a slide can take (all of them).
+const CHART_TYPES: &[&str] = &[
+    "bar",
+    "stacked_bar",
+    "column",
+    "stacked_column",
+    "line",
+    "pie",
+    "doughnut",
+    "area",
+    "scatter",
+];
 
 fn chart_spec(args: &Value) -> Result<ChartSpec, Sentence> {
-    let categories: Vec<String> = args
-        .get("categories")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "`categories` is required: a list of labels.".to_owned())?
-        .iter()
-        .map(|c| match c {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        })
-        .collect();
-    let series = args
-        .get("series")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "`series` is required: a list of {name, values}.".to_owned())?
-        .iter()
-        .map(|s| {
-            let name = s
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "Every series needs a `name`.".to_owned())?;
-            let values = s
-                .get("values")
-                .and_then(Value::as_array)
-                .ok_or_else(|| format!("Series `{name}` needs `values`."))?
-                .iter()
-                .map(|v| {
-                    v.as_f64()
-                        .filter(|f| f.is_finite())
-                        .ok_or_else(|| format!("Series `{name}` has a value that is not a number."))
-                })
-                .collect::<Result<Vec<f64>, _>>()?;
-            if values.len() != categories.len() {
-                return Err(format!(
-                    "Series `{name}` has {} values for {} categories: give exactly one per category.",
-                    values.len(),
-                    categories.len()
-                ));
-            }
-            Ok(Series {
-                name: name.to_owned(),
-                values,
-            })
-        })
-        .collect::<Result<Vec<_>, Sentence>>()?;
-    Ok(ChartSpec {
-        kind: chart_kind(args.get("chart_type").and_then(Value::as_str))?,
-        categories,
-        series,
-        title: opt_str(args, "title"),
-        legend_position: opt_str(args, "legend_position"),
-        data_labels: opt_bool(args, "data_labels").unwrap_or(false),
-    })
+    super::super::office_common::chart_spec(args, CHART_TYPES)
 }
 
 /// The shape of a slide a text edit addresses: a number (1-based, among the

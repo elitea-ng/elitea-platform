@@ -25,11 +25,12 @@ test-preserve-order = ["serde_json/preserve_order", "serde_json/float_roundtrip"
 # ADR-0029 decision 3), and without it a `sql` toolkit is skipped as
 # unsupported.
 toolkit-sql = ["dep:sqlx"]
-# The `pptx` toolkit family (ADR-0032 P3): Office authoring on
-# `elitea-office-core`. The cloud worker enables it; the desktop host does not
-# until P6 (the zavora libraries and their bundled fonts are about 18 MiB of
-# binary), and without it a `pptx` toolkit is skipped as unsupported.
-toolkit-pptx = ["dep:elitea-office-core"]
+# The `pptx`, `docx` and `xlsx` toolkit families (ADR-0032 P3, P4): Office
+# authoring on `elitea-office-core`. The cloud worker enables them; the
+# desktop host does not until P6 (the zavora libraries and their bundled fonts
+# are about 18 MiB of binary), and without it these toolkits are skipped as
+# unsupported.
+toolkit-office = ["dep:elitea-office-core"]
 # The `data_analysis` internal tool (ADR-0033): tables, charts and Excel I/O
 # over `elitea-office-core`. The cloud worker enables it; the desktop host does
 # not, and without it the internal tool is recognized and skipped.
@@ -64,7 +65,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 # ring): the connectors crate names no TLS stack of its own.
 elitea-connectors = { path = "../connectors", default-features = false, features = ["providers", "reqwest-012"] }
 # The one crate that names a zavora type (ADR-0032 decision 2). Optional:
-# only the `toolkit-pptx` build links the authoring libraries.
+# only the `toolkit-office` build links the authoring libraries.
 elitea-office-core = { path = "../office-core", optional = true }
 # The Figma family applies a caller-supplied output `regexp` the way the SDK's
 # Python `re` does, lookaround included (its documented example uses one).

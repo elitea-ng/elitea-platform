@@ -3860,14 +3860,16 @@ worker:
   #       Analysis), is served by the Rust worker (ADR-0033) as structured
   #       table tools over CSV, JSON and Excel attachments plus the code
   #       sandbox, not as the SDK's model-written pandas.
-  #   The Rust worker's other toolkit families (43 dispatched types: the
+  #   The Rust worker's other toolkit families (45 dispatched types: the
   #   original azure, azure_search, elastic, gcp, github, gitlab_org,
   #   google_places, k8s, keycloak, openapi, postman, rally, report_portal,
   #   salesforce, service_now, sharepoint, slack, sonar, sql, yagmail, zephyr,
   #   zephyr_squad, artifact, plus ado_*, aha, bigquery, bitbucket, carrier,
   #   confluence, figma, gitlab, jira, qtest, testio, testrail, xray_cloud and
   #   zephyr_enterprise/essential/scale, and pptx for direct agents and pipeline nodes: the SDK's
-  #   fill_template and translate_presentation plus 19 Rust-only tools, ADR-0032)
+  #   fill_template and translate_presentation plus 19 Rust-only tools, ADR-0032;
+  #   docx and xlsx, which the SDK does not have and the Python worker cannot
+  #   serve, ADR-0032 P4)
   #   and its one internal tool
   #   (ask_user) work as on Python, apart from the per-tool gaps above.
   #

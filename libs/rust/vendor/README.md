@@ -168,7 +168,7 @@ through `[patch.crates-io]` in `libs/rust/Cargo.toml` and
 `services/elitea-worker-rust/Cargo.toml`. Only `elitea-office-core` names them
 (through `zavora-slide`); the exact `=0.1.1` pins and the isolation test that
 reads the lock are unchanged, because the patched crates keep their version.
-The desktop host does not link them (no `toolkit-pptx`).
+The desktop host does not link them (no `toolkit-office`).
 
 | Crate | Archive SHA-256 (crates.io) | Upstream commit |
 | --- | --- | --- |
