@@ -92,6 +92,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -1164,6 +1165,7 @@ func mountMCPServerRoutes(
 func newToolkitHandler(
 	cfg RouterConfig,
 	prebuiltMCPStore *mcpregistry.PrebuiltStore,
+	journal *toolkitcleanup.Journal,
 ) *v2toolkits.Handler {
 	options := []v2toolkits.Option{
 		v2toolkits.WithArgumentSchemas(cfg.ToolkitArgumentSchemas),
@@ -1200,12 +1202,8 @@ func newToolkitHandler(
 	// the engine-side deletion an Inventory toolkit owes is recorded in the
 	// row's own transaction and performed by the reconciler the process starts
 	// over the same journal (OnToolkitCleanupJournal). See application_data.go.
-	if cfg.Pool != nil {
-		journal := newToolkitCleanupJournal(cfg)
+	if journal != nil {
 		options = append(options, v2toolkits.WithToolkitCleanupJournal(journal))
-		if cfg.OnToolkitCleanupJournal != nil {
-			cfg.OnToolkitCleanupJournal(journal)
-		}
 	}
 	return v2toolkits.NewHandler(cfg.Pool, options...)
 }
@@ -1722,7 +1720,21 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// The REST toolkit surface, the internal MCP toolkit builder and the MCP
 	// admin/runtime paths must all read the same durable catalogue.
 	prebuiltMCPStore := mcpregistry.NewPrebuiltStore(cfg.Pool)
-	toolkitHandler := newToolkitHandler(cfg, prebuiltMCPStore)
+	// One cleanup journal serves the toolkit handler (a toolkit delete), the
+	// user-deleting handlers (a user's personal memories) and SCIM (a group
+	// withdrawal), and the process's reconciler drains it.
+	var cleanupJournal *toolkitcleanup.Journal
+	var memoryUserJournal interface {
+		EnqueueMemoryUsers(ctx context.Context, tx pgx.Tx, projectID int64, userIDs ...int64) (string, error)
+	}
+	if cfg.Pool != nil {
+		cleanupJournal = newToolkitCleanupJournal(cfg)
+		memoryUserJournal = cleanupJournal
+		if cfg.OnToolkitCleanupJournal != nil {
+			cfg.OnToolkitCleanupJournal(cleanupJournal)
+		}
+	}
+	toolkitHandler := newToolkitHandler(cfg, prebuiltMCPStore, cleanupJournal)
 	// The platform MCP vault and eliteacore handler are constructed here rather
 	// than inside /api/v2 because both REST and the root-mounted internal MCP
 	// server consume them. One instance keeps project-context validation and
@@ -1734,7 +1746,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	)
 	coreHandler := v2core.NewHandler(
 		cfg.Pool,
-		v2core.WithMemoryUserRemover(cfg.MemoryData),
+		v2core.WithMemoryUserJournal(memoryUserJournal),
 		v2core.WithPermissionResolver(permissionResolver),
 		v2core.WithObjectStore(cfg.ObjectStore),
 		v2core.WithInviteMailer(inviteMailer),
@@ -1842,7 +1854,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			scimapi.Authenticate(scimCredentials),
 			apimw.Audit(auditRecorder),
 			scimapi.AnnotateAuditActor,
-		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool)).Routes())
+		).Mount(scimapi.BasePath, scimapi.NewHandler(scimdirectory.NewStore(cfg.Pool).WithMemoryUserJournal(memoryUserJournal)).Routes())
 	})
 
 	// This group holds the whole JSON API — the `/api/v2` route below is its
@@ -2040,7 +2052,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			adminHandler := admin.NewHandler(
 				cfg.Pool,
 				append([]admin.Option{
-					admin.WithMemoryUserRemover(cfg.MemoryData),
+					admin.WithMemoryUserJournal(memoryUserJournal),
 					admin.WithPermissionResolver(permissionResolver),
 					admin.WithToolkitRegistry(cfg.ToolkitRegistry),
 					admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
@@ -2057,7 +2069,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// The same store the SCIM tree writes through. One store, so
 					// the screen and a group push can never disagree about which
 					// project a binding names.
-					admin.WithSCIMGroupBindings(scimdirectory.NewStore(cfg.Pool)),
+					admin.WithSCIMGroupBindings(scimdirectory.NewStore(cfg.Pool).WithMemoryUserJournal(memoryUserJournal)),
 					// The SCIM client credentials, the same store the SCIM tree
 					// authenticates against.
 					admin.WithSCIMClients(scimClientStore),

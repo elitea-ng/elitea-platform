@@ -1,13 +1,19 @@
 package toolkitcleanup_test
 
-// A memory toolkit's delete against a real PostgreSQL (shared/0166): the
-// namespace its setting named is journaled in the delete's transaction, because
-// the setting leaves with the row, and the reconciler's replica asks the vector
-// store to delete that namespace (every owner's points of it).
+// Memory cleanup against a real PostgreSQL (worker unit M9). Two kinds of
+// journal row, one table, one reconciler:
+//
+//   - a memory TOOLKIT's delete journals the toolkit id in the delete's
+//     transaction, and the reconciler's replica asks the vector store to delete
+//     every point stamped with it (every namespace, every owner);
+//   - a USER's removal (deleted outright: project 0, or removed from one
+//     project) journals the user id, and the vector store deletes the user's
+//     personal points, retried until it can.
 
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -17,29 +23,34 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/platformops"
 )
 
-type fakeMemory struct {
-	calls []struct {
-		project   int64
-		namespace string
-	}
-	err error
+type memoryCall struct {
+	kind      string // "toolkit" or "user"
+	project   int64
+	toolkitOr int64 // the toolkit id, or the user id
 }
 
-func (f *fakeMemory) DeleteMemoryNamespace(_ context.Context, projectID int64, namespace string) error {
-	f.calls = append(f.calls, struct {
-		project   int64
-		namespace string
-	}{projectID, namespace})
+type fakeMemory struct {
+	calls []memoryCall
+	err   error
+}
+
+func (f *fakeMemory) DeleteMemoryToolkit(_ context.Context, projectID, toolkitID int64) error {
+	f.calls = append(f.calls, memoryCall{"toolkit", projectID, toolkitID})
 	return f.err
 }
 
-func enqueueMemory(ctx context.Context, t *testing.T, pool *pgxpool.Pool, journal *toolkitcleanup.Journal, namespace string) string {
+func (f *fakeMemory) DeleteMemoryUser(_ context.Context, projectID, userID int64) error {
+	f.calls = append(f.calls, memoryCall{"user", projectID, userID})
+	return f.err
+}
+
+func enqueueMemory(ctx context.Context, t *testing.T, pool *pgxpool.Pool, journal *toolkitcleanup.Journal) string {
 	t.Helper()
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := journal.EnqueueMemory(ctx, tx, 7, 70, namespace)
+	app, err := journal.EnqueueMemory(ctx, tx, 7, 70)
 	if err != nil {
 		t.Fatalf("enqueue memory: %v", err)
 	}
@@ -49,29 +60,140 @@ func enqueueMemory(ctx context.Context, t *testing.T, pool *pgxpool.Pool, journa
 	return app
 }
 
-func TestAMemoryToolkitDeleteJournalsItsNamespaceAndTheReconcilerDeletesIt(t *testing.T) {
+func enqueueUsers(ctx context.Context, t *testing.T, pool *pgxpool.Pool, journal *toolkitcleanup.Journal, projectID int64, userIDs ...int64) string {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := journal.EnqueueMemoryUsers(ctx, tx, projectID, userIDs...)
+	if err != nil {
+		t.Fatalf("enqueue memory users: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return app
+}
+
+func countRows(ctx context.Context, t *testing.T, pool *pgxpool.Pool) int {
+	t.Helper()
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM centry.toolkit_deletions`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+func TestAMemoryToolkitDeleteJournalsItsIdAndTheReconcilerDeletesEverythingOfIt(t *testing.T) {
 	pool := newJournalPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	memory := &fakeMemory{}
 	journal := toolkitcleanup.New(pool, quiet(), toolkitcleanup.WithMemory(memory, true))
 
-	if app := enqueueMemory(ctx, t, pool, journal, "team-notes"); app != toolkitcleanup.AppMemory {
+	if app := enqueueMemory(ctx, t, pool, journal); app != toolkitcleanup.AppMemory {
 		t.Fatalf("enqueued app = %q", app)
-	}
-	var namespace string
-	if err := pool.QueryRow(ctx, `SELECT namespace FROM centry.toolkit_deletions WHERE project_id = 7 AND toolkit_id = 70`).Scan(&namespace); err != nil || namespace != "team-notes" {
-		t.Fatalf("the journal row's namespace = %q (%v)", namespace, err)
 	}
 	if completed, err := claimAndResume(ctx, t, journal); err != nil || !completed {
 		t.Fatalf("resume: completed=%v err=%v", completed, err)
 	}
-	if len(memory.calls) != 1 || memory.calls[0].project != 7 || memory.calls[0].namespace != "team-notes" {
-		t.Fatalf("the vector store was asked %v", memory.calls)
+	if want := []memoryCall{{"toolkit", 7, 70}}; !slices.Equal(memory.calls, want) {
+		t.Fatalf("the vector store was asked %v, want %v", memory.calls, want)
 	}
 	row := readRow(ctx, t, pool, 7, 70)
 	if deref(row.outcome) != toolkitcleanup.OutcomeDeleted || row.completed == nil {
 		t.Fatalf("closed row = %+v outcome=%q", row, deref(row.outcome))
+	}
+}
+
+func TestUsersMemoryCleanupIsOneStatementForManyUsersAndDrainsToEveryProject(t *testing.T) {
+	pool := newJournalPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	memory := &fakeMemory{}
+	journal := toolkitcleanup.New(pool, quiet(), toolkitcleanup.WithMemory(memory, true))
+
+	// Deleted users: project 0 (every project). Non-positive ids are ignored.
+	if app := enqueueUsers(ctx, t, pool, journal, 0, 10, 11, 12, 0, -3); app != toolkitcleanup.AppMemoryUser {
+		t.Fatalf("enqueued app = %q", app)
+	}
+	if rows := countRows(ctx, t, pool); rows != 3 {
+		t.Fatalf("%d journal rows, want 3", rows)
+	}
+	// A user removed from one project: that project only.
+	enqueueUsers(ctx, t, pool, journal, 7, 10)
+	if rows := countRows(ctx, t, pool); rows != 4 {
+		t.Fatalf("%d journal rows, want 4", rows)
+	}
+	for range 4 {
+		if completed, err := claimAndResume(ctx, t, journal); err != nil || !completed {
+			t.Fatalf("resume: completed=%v err=%v", completed, err)
+		}
+	}
+	var got []memoryCall
+	got = append(got, memory.calls...)
+	slices.SortFunc(got, func(a, b memoryCall) int {
+		if a.project != b.project {
+			return int(a.project - b.project)
+		}
+		return int(a.toolkitOr - b.toolkitOr)
+	})
+	want := []memoryCall{{"user", 0, 10}, {"user", 0, 11}, {"user", 0, 12}, {"user", 7, 10}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the vector store was asked %v, want %v", got, want)
+	}
+	if row := readRow(ctx, t, pool, 0, 11); deref(row.outcome) != toolkitcleanup.OutcomeDeleted || row.completed == nil {
+		t.Fatalf("closed row = %+v", row)
+	}
+	// The same user again reopens the row (generation bumped), it does not add one.
+	enqueueUsers(ctx, t, pool, journal, 0, 11)
+	if rows := countRows(ctx, t, pool); rows != 4 {
+		t.Fatalf("%d journal rows after a repeat, want 4", rows)
+	}
+	if row := readRow(ctx, t, pool, 0, 11); row.generation != 2 || row.completed != nil {
+		t.Fatalf("reopened row = %+v", row)
+	}
+	// Nobody to clean: no row, no app.
+	if app := enqueueUsers(ctx, t, pool, journal, 0); app != "" {
+		t.Fatalf("an empty list enqueued %q", app)
+	}
+	if app := enqueueUsers(ctx, t, pool, journal, 0, 0, -1); app != "" {
+		t.Fatalf("non-positive ids enqueued %q", app)
+	}
+}
+
+func TestAUsersCleanupSurvivesTheVectorServiceBeingDownAndRunsLater(t *testing.T) {
+	pool := newJournalPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	// The vector service is unavailable.
+	memory := &fakeMemory{err: errors.Join(platformops.ErrRetryLater)}
+	journal := toolkitcleanup.New(pool, quiet(), toolkitcleanup.WithMemory(memory, true))
+	enqueueUsers(ctx, t, pool, journal, 0, 10)
+	if completed, err := claimAndResume(ctx, t, journal); completed || !errors.Is(err, platformops.ErrRetryLater) {
+		t.Fatalf("down: completed=%v err=%v", completed, err)
+	}
+	row := readRow(ctx, t, pool, 0, 10)
+	if row.completed != nil || row.attempts != 1 || row.lastError == nil {
+		t.Fatalf("the row must stay open and back off: %+v", row)
+	}
+	// Still down on the next pass.
+	reopenForRetry(ctx, t, pool)
+	if completed, err := claimAndResume(ctx, t, journal); completed || err == nil {
+		t.Fatalf("still down: completed=%v err=%v", completed, err)
+	}
+	// Back up: the retry closes the row, and the call was made each time.
+	reopenForRetry(ctx, t, pool)
+	memory.err = nil
+	if completed, err := claimAndResume(ctx, t, journal); err != nil || !completed {
+		t.Fatalf("recovered: completed=%v err=%v", completed, err)
+	}
+	if row := readRow(ctx, t, pool, 0, 10); deref(row.outcome) != toolkitcleanup.OutcomeDeleted || row.completed == nil {
+		t.Fatalf("closed row = %+v", row)
+	}
+	if len(memory.calls) != 3 {
+		t.Fatalf("calls = %v", memory.calls)
 	}
 }
 
@@ -84,21 +206,38 @@ func TestAMemoryRowRollsBackWithTheDeleteAndANonRecordingReplicaWritesNone(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := journal.EnqueueMemory(ctx, tx, 7, 70, "n"); err != nil {
+	if _, err := journal.EnqueueMemory(ctx, tx, 7, 70); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.EnqueueMemoryUsers(ctx, tx, 0, 10); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if rows := countRows(ctx, t, pool); rows != 0 {
+		t.Fatalf("%d journal rows after a rollback", rows)
+	}
 	// A deployment that keeps memories in the Python worker's database has
 	// nothing in the vector store to delete.
 	python := toolkitcleanup.New(pool, quiet(), toolkitcleanup.WithMemory(&fakeMemory{}, false))
-	if app := enqueueMemory(ctx, t, pool, python, "n"); app != "" {
+	if app := enqueueMemory(ctx, t, pool, python); app != "" {
 		t.Fatalf("a non-recording replica enqueued %q", app)
 	}
-	var rows int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM centry.toolkit_deletions`).Scan(&rows); err != nil || rows != 0 {
-		t.Fatalf("%d journal rows (%v)", rows, err)
+	if app := enqueueUsers(ctx, t, pool, python, 0, 10); app != "" {
+		t.Fatalf("a non-recording replica enqueued %q", app)
+	}
+	if rows := countRows(ctx, t, pool); rows != 0 {
+		t.Fatalf("%d journal rows", rows)
+	}
+	// A project id that is not valid for the row is refused, not journaled.
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := journal.EnqueueMemory(ctx, tx, 0, 70); err == nil {
+		t.Fatal("a memory toolkit row for project 0 was accepted")
 	}
 }
 
@@ -108,7 +247,7 @@ func TestAMemoryRowWaitsForAReplicaWithTheClientAndRetriesATransientFailure(t *t
 	defer cancel()
 	// The deciding replica records it without a client.
 	unwired := toolkitcleanup.New(pool, quiet(), toolkitcleanup.WithMemory(nil, true))
-	enqueueMemory(ctx, t, pool, unwired, "n")
+	enqueueMemory(ctx, t, pool, unwired)
 	completed, err := claimAndResume(ctx, t, unwired)
 	if completed || err == nil {
 		t.Fatalf("an unwired replica closed the memory row: %v %v", completed, err)
@@ -130,7 +269,7 @@ func TestAMemoryRowWaitsForAReplicaWithTheClientAndRetriesATransientFailure(t *t
 	}
 	// A refused certificate is closed as a permanent failure, the way an
 	// engine's is; the vector store logs what to fix.
-	enqueueMemory(ctx, t, pool, wired, "n")
+	enqueueMemory(ctx, t, pool, wired)
 	memory.err = platformops.ErrNotAllowed
 	if completed, err := claimAndResume(ctx, t, wired); err != nil || !completed {
 		t.Fatalf("refused: completed=%v err=%v", completed, err)

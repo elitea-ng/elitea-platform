@@ -54,13 +54,10 @@ func toolkitCleanupOptions(clients []ApplicationDataClient) []toolkitcleanup.Opt
 }
 
 // MemoryData is what elitea-main asks of the vector store for the memory
-// toolkit: delete a toolkit's namespace, delete a user's personal memories.
+// toolkit: delete a toolkit's points, delete a user's personal memories.
 // *vectorclient.Client satisfies it. cfg.MemoryData is a nil INTERFACE when the
 // deployment has no client (never a typed nil).
-type MemoryData interface {
-	toolkitcleanup.MemoryRemover
-	DeleteMemoryUser(ctx context.Context, projectID, userID int64) error
-}
+type MemoryData = toolkitcleanup.MemoryRemover
 
 // newToolkitCleanupJournal builds the toolkit cleanup journal over the shared
 // pool and the wired engines. The toolkit handler enqueues into it; the

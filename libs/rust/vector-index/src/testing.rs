@@ -239,18 +239,33 @@ impl FakeVector {
     }
 
     /// The memory owner the service would stamp, from the TOKEN only.
-    fn owner_for(&self, token: &str, source: i32, scope: i32) -> Result<Option<String>, Status> {
+    ///
+    /// The fake folds the toolkit id into the owner string (`user:7@41`),
+    /// where the service keeps it in its own payload key; the effect, a store
+    /// per (owner, toolkit), is the same.
+    fn owner_for(
+        &self,
+        token: &str,
+        source: i32,
+        scope: i32,
+        toolkit_id: i64,
+    ) -> Result<Option<String>, Status> {
         if source != pb::Source::Memory as i32 {
-            return if scope == 0 {
+            return if scope == 0 && toolkit_id == 0 {
                 Ok(None)
             } else {
                 Err(Status::invalid_argument(
-                    "memory_scope applies to the memory source only",
+                    "memory_scope and toolkit_id apply to the memory source only",
                 ))
             };
         }
+        if toolkit_id <= 0 {
+            return Err(Status::invalid_argument(
+                "toolkit_id is required for the memory source",
+            ));
+        }
         match pb::MemoryScope::try_from(scope) {
-            Ok(pb::MemoryScope::Project) => Ok(Some("project".to_owned())),
+            Ok(pb::MemoryScope::Project) => Ok(Some(format!("project@{toolkit_id}"))),
             Ok(pb::MemoryScope::Personal) => {
                 let Some((user, allowed)) = self.users.get(token).copied() else {
                     return Err(Status::permission_denied(
@@ -262,7 +277,7 @@ impl FakeVector {
                         "memory.personal_shared_conversation: personal memory is not available in a conversation with more than one person",
                     ));
                 }
-                Ok(Some(format!("user:{user}")))
+                Ok(Some(format!("user:{user}@{toolkit_id}")))
             }
             _ => Err(Status::invalid_argument(
                 "memory_scope is required for the memory source",
@@ -276,7 +291,7 @@ impl FakeVector {
         scope: Option<&pb::Scope>,
     ) -> Result<Option<String>, Status> {
         let scope = scope.ok_or_else(|| Status::invalid_argument("scope is required"))?;
-        self.owner_for(token, scope.source, scope.memory_scope)
+        self.owner_for(token, scope.source, scope.memory_scope, scope.toolkit_id)
     }
 }
 
@@ -463,7 +478,12 @@ impl VectorService for FakeVector {
             .namespace
             .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
         let owner = self
-            .owner_for(&token, namespace.source, namespace.memory_scope)?
+            .owner_for(
+                &token,
+                namespace.source,
+                namespace.memory_scope,
+                namespace.toolkit_id,
+            )?
             .unwrap_or_default();
         let mut upserted = 0_u64;
         while let Some(message) = stream.message().await? {
@@ -522,7 +542,12 @@ impl VectorService for FakeVector {
         let namespace = request
             .namespace
             .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
-        let owner = self.owner_for(&token, namespace.source, namespace.memory_scope)?;
+        let owner = self.owner_for(
+            &token,
+            namespace.source,
+            namespace.memory_scope,
+            namespace.toolkit_id,
+        )?;
         let space = request.space.map(|s| (s.model_slug, s.dimension));
         let selector = request
             .selector
@@ -778,7 +803,12 @@ impl VectorService for FakeVector {
         let namespace = request
             .namespace
             .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
-        let owner = self.owner_for(&token, namespace.source, namespace.memory_scope)?;
+        let owner = self.owner_for(
+            &token,
+            namespace.source,
+            namespace.memory_scope,
+            namespace.toolkit_id,
+        )?;
         let space = request.space.map(|s| (s.model_slug, s.dimension));
         let mut state = self.state.lock().expect("lock");
         state.listings.push(space.clone());
@@ -850,7 +880,7 @@ impl VectorService for FakeVector {
                 "a memory read names the memory source and exactly one namespace",
             ));
         }
-        let owner = self.owner_for(&token, scope.source, scope.memory_scope)?;
+        let owner = self.owner_for(&token, scope.source, scope.memory_scope, scope.toolkit_id)?;
         if request.limit == 0 || request.limit > 1000 {
             return Err(Status::invalid_argument("limit is 1 to 1000"));
         }
@@ -866,6 +896,15 @@ impl VectorService for FakeVector {
             .into_iter()
             .map(|stored| scored(stored, 0.0))
             .collect();
+        // Newest version first (valid_from, then the larger id), like the
+        // service.
+        points.sort_by_cached_key(|point| {
+            let valid_from = serde_json::from_str::<Value>(&point.metadata_json)
+                .ok()
+                .and_then(|value| value.pointer("/t/valid_from").and_then(Value::as_i64))
+                .unwrap_or(0);
+            std::cmp::Reverse((valid_from, point.id.clone()))
+        });
         points.truncate(request.limit as usize);
         Ok(Response::new(pb::ReadMemoryResponse { points }))
     }
@@ -886,7 +925,12 @@ impl VectorService for FakeVector {
             ));
         }
         let owner = self
-            .owner_for(&token, namespace.source, namespace.memory_scope)?
+            .owner_for(
+                &token,
+                namespace.source,
+                namespace.memory_scope,
+                namespace.toolkit_id,
+            )?
             .unwrap_or_default();
         if request.document_key.is_empty()
             || request.chunk_id.is_empty()
@@ -929,13 +973,13 @@ impl VectorService for FakeVector {
         ))
     }
 
-    async fn delete_memory_namespace(
+    async fn delete_memory_toolkit(
         &self,
-        request: Request<pb::DeleteMemoryNamespaceRequest>,
-    ) -> Result<Response<pb::DeleteMemoryNamespaceResponse>, Status> {
-        self.authenticate("delete_memory_namespace", &request)?;
+        request: Request<pb::DeleteMemoryToolkitRequest>,
+    ) -> Result<Response<pb::DeleteMemoryToolkitResponse>, Status> {
+        self.authenticate("delete_memory_toolkit", &request)?;
         Err(Status::permission_denied(
-            "only an administrator can delete a memory namespace",
+            "only an administrator can delete a memory toolkit",
         ))
     }
 }

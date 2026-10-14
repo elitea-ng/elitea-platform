@@ -170,10 +170,14 @@ impl pb::vector_service_server::VectorService for VectorService {
         caller.require_source(namespace.source)?;
         // The owner of a memory point comes from the token, here and nowhere
         // else; a request cannot name one.
-        let owner = caller.memory_owner(namespace.source, namespace.memory_scope)?;
+        let binding = caller.memory_binding(
+            namespace.source,
+            namespace.memory_scope,
+            namespace.toolkit_id,
+        )?;
         let target = UpsertTarget {
             project_id,
-            owner: owner.clone(),
+            binding: binding.clone(),
             source: layout::source_keyword(namespace.source)?,
             namespace_id: namespace.namespace_id.clone(),
             namespace: layout::namespace_uuid(&namespace.namespace_id)?,
@@ -203,7 +207,12 @@ impl pb::vector_service_server::VectorService for VectorService {
                 ));
             }
             current.require_source(namespace.source)?;
-            if current.memory_owner(namespace.source, namespace.memory_scope)? != owner {
+            if current.memory_binding(
+                namespace.source,
+                namespace.memory_scope,
+                namespace.toolkit_id,
+            )? != binding
+            {
                 return Err(Status::permission_denied(
                     "the token's memory owner changed during the stream",
                 ));
@@ -252,12 +261,16 @@ impl pb::vector_service_server::VectorService for VectorService {
         caller.require_source(namespace.source)?;
         let source = layout::source_keyword(namespace.source)?;
         layout::namespace_uuid(&namespace.namespace_id)?;
-        let owner = caller.memory_owner(namespace.source, namespace.memory_scope)?;
+        let binding = caller.memory_binding(
+            namespace.source,
+            namespace.memory_scope,
+            namespace.toolkit_id,
+        )?;
         let scope = Scope::project(project_id)
             .source(source)
             .namespaces(vec![namespace.namespace_id.clone()]);
-        let scope = match owner.as_deref() {
-            Some(owner) => scope.owned_by(owner),
+        let scope = match &binding {
+            Some(binding) => scope.bound_to(binding),
             None => scope,
         };
         let scope = match request.selector {
@@ -594,7 +607,11 @@ impl pb::vector_service_server::VectorService for VectorService {
         caller.require_source(namespace.source)?;
         let source = layout::source_keyword(namespace.source)?;
         layout::namespace_uuid(&namespace.namespace_id)?;
-        let owner = caller.memory_owner(namespace.source, namespace.memory_scope)?;
+        let binding = caller.memory_binding(
+            namespace.source,
+            namespace.memory_scope,
+            namespace.toolkit_id,
+        )?;
         let generation = layout::generation(&namespace.generation)?;
         let space = request
             .space
@@ -605,8 +622,8 @@ impl pb::vector_service_server::VectorService for VectorService {
             .source(source)
             .namespaces(vec![namespace.namespace_id.clone()])
             .generation(generation);
-        let scope = match owner.as_deref() {
-            Some(owner) => scope.owned_by(owner),
+        let scope = match &binding {
+            Some(binding) => scope.bound_to(binding),
             None => scope,
         };
         let filter = scope.filter(None);
@@ -692,22 +709,41 @@ impl pb::vector_service_server::VectorService for VectorService {
             .map(|space| Space::from_proto(Some(space)))
             .transpose()?;
         let filter = scope.filter(narrowing);
+        let matched = AtomicU64::new(0);
         let read_points = fan_out(self.store.targets(space.as_ref()).await?, |collection| {
             let filter = filter.clone();
+            let matched = &matched;
             async move {
-                let response = self
-                    .store
-                    .client()
-                    .scroll(
-                        ScrollPointsBuilder::new(collection)
-                            .filter(filter)
-                            .limit(limit)
-                            .with_payload(true)
-                            .with_vectors(false),
-                    )
-                    .await
-                    .map_err(|error| unavailable("scroll", &error))?;
-                Ok(response.result)
+                let mut points = Vec::new();
+                let mut offset: Option<PointId> = None;
+                loop {
+                    let mut scroll = ScrollPointsBuilder::new(&collection)
+                        .filter(filter.clone())
+                        .limit(MEMORY_SCROLL_PAGE)
+                        .with_payload(true)
+                        .with_vectors(false);
+                    if let Some(offset) = offset.take() {
+                        scroll = scroll.offset(offset);
+                    }
+                    let response = self
+                        .store
+                        .client()
+                        .scroll(scroll)
+                        .await
+                        .map_err(|error| unavailable("scroll", &error))?;
+                    let read = response.result.len() as u64;
+                    if matched.fetch_add(read, Ordering::Relaxed) + read > MAX_MEMORY_MATCHED {
+                        return Err(Status::resource_exhausted(
+                            "the read matches too many memory versions; narrow it",
+                        ));
+                    }
+                    points.extend(response.result);
+                    match response.next_page_offset {
+                        Some(next) => offset = Some(next),
+                        None => break,
+                    }
+                }
+                Ok(points)
             }
         })
         .await?;
@@ -716,7 +752,11 @@ impl pb::vector_service_server::VectorService for VectorService {
             .flatten()
             .map(|point| scored_from_payload(point.id, 0.0, &point.payload))
             .collect();
-        points.sort_by(|left, right| left.id.cmp(&right.id));
+        // Newest version first, whatever collection holds it: the version's
+        // valid_from, then the larger point id.
+        points.sort_by_cached_key(|point| {
+            std::cmp::Reverse((valid_from_of(&point.metadata_json), point.id.clone()))
+        });
         points.truncate(limit as usize);
         Ok(Response::new(pb::ReadMemoryResponse { points }))
     }
@@ -740,8 +780,12 @@ impl pb::vector_service_server::VectorService for VectorService {
         }
         caller.require_source(namespace.source)?;
         layout::namespace_uuid(&namespace.namespace_id)?;
-        let owner = caller
-            .memory_owner(namespace.source, namespace.memory_scope)?
+        let binding = caller
+            .memory_binding(
+                namespace.source,
+                namespace.memory_scope,
+                namespace.toolkit_id,
+            )?
             .ok_or_else(|| Status::invalid_argument("memory_scope is required"))?;
         let generation = layout::generation(&namespace.generation)?;
         for (name, value) in [
@@ -764,7 +808,7 @@ impl pb::vector_service_server::VectorService for VectorService {
             .source("memory")
             .namespaces(vec![namespace.namespace_id.clone()])
             .generation(generation)
-            .owned_by(&owner)
+            .bound_to(&binding)
             .with(Condition::matches(key::DOCUMENT_KEY, request.document_key))
             .with(Condition::matches(key::CHUNK_ID, request.chunk_id));
         let filter = scope.filter(None);
@@ -791,19 +835,25 @@ impl pb::vector_service_server::VectorService for VectorService {
         let caller = self.auth.authenticate(&request).await?;
         let identity = caller.require_admin()?.to_owned();
         let request = request.into_inner();
-        let project_id = caller.project(request.project_id)?;
         if request.user_id <= 0 {
             return Err(Status::invalid_argument("user_id must be positive"));
         }
+        if request.project_id < 0 {
+            return Err(Status::invalid_argument("project_id must not be negative"));
+        }
         let owner = crate::auth::user_owner(request.user_id);
+        // Project 0 is every project: a deleted user's personal memories go
+        // wherever they were written, with no membership lookup.
+        let scope = if request.project_id == 0 {
+            Scope::every_project()
+        } else {
+            Scope::project(caller.project(request.project_id)?)
+        };
         let collections = self.store.targets(None).await?;
-        self.delete_where(
-            &collections,
-            &Scope::project(project_id).source("memory").owned_by(&owner),
-        )
-        .await?;
+        self.delete_where(&collections, &scope.source("memory").owned_by(&owner))
+            .await?;
         tracing::info!(
-            project_id,
+            project_id = request.project_id,
             user_id = request.user_id,
             identity,
             "a user's personal memories deleted"
@@ -813,28 +863,49 @@ impl pb::vector_service_server::VectorService for VectorService {
         }))
     }
 
-    async fn delete_memory_namespace(
+    async fn delete_memory_toolkit(
         &self,
-        request: Request<pb::DeleteMemoryNamespaceRequest>,
-    ) -> Result<Response<pb::DeleteMemoryNamespaceResponse>, Status> {
+        request: Request<pb::DeleteMemoryToolkitRequest>,
+    ) -> Result<Response<pb::DeleteMemoryToolkitResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
         let identity = caller.require_admin()?.to_owned();
         let request = request.into_inner();
         let project_id = caller.project(request.project_id)?;
-        layout::namespace_uuid(&request.namespace_id)?;
+        if request.toolkit_id <= 0 {
+            return Err(Status::invalid_argument("toolkit_id must be positive"));
+        }
         let collections = self.store.targets(None).await?;
         self.delete_where(
             &collections,
             &Scope::project(project_id)
                 .source("memory")
-                .namespaces(vec![request.namespace_id]),
+                .toolkit(request.toolkit_id),
         )
         .await?;
-        tracing::info!(project_id, identity, "a memory namespace deleted");
-        Ok(Response::new(pb::DeleteMemoryNamespaceResponse {
+        tracing::info!(project_id, identity, "a memory toolkit's points deleted");
+        Ok(Response::new(pb::DeleteMemoryToolkitResponse {
             collections: count_u32(collections.len()),
         }))
     }
+}
+
+/// Points read per Qdrant scroll call by `ReadMemory`.
+const MEMORY_SCROLL_PAGE: u32 = 512;
+/// The most points one `ReadMemory` reads in all: a read matching more is
+/// refused rather than answered from a part of what it matched.
+const MAX_MEMORY_MATCHED: u64 = 5000;
+
+/// The `valid_from` of a memory point's metadata (`t.valid_from`), 0 when it
+/// has none.
+fn valid_from_of(metadata_json: &str) -> i64 {
+    serde_json::from_str::<serde_json::Value>(metadata_json)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/t/valid_from")
+                .and_then(serde_json::Value::as_i64)
+        })
+        .unwrap_or(0)
 }
 
 /// A memory read names the memory source, one namespace and no generation.
@@ -1012,8 +1083,9 @@ impl VectorService {
 /// Where one Upsert stream writes.
 struct UpsertTarget {
     project_id: i64,
-    /// The memory owner stamped on every point (`None` for other sources).
-    owner: Option<String>,
+    /// The memory owner and toolkit stamped on every point (`None` for other
+    /// sources).
+    binding: Option<crate::auth::MemoryBinding>,
     source: &'static str,
     namespace_id: String,
     namespace: uuid::Uuid,
@@ -1072,8 +1144,9 @@ impl UpsertTarget {
         payload.insert(key::PROJECT_ID, self.project_id.to_string());
         payload.insert(key::SOURCE, self.source.to_owned());
         payload.insert(key::NAMESPACE_ID, self.namespace_id.clone());
-        if let Some(owner) = &self.owner {
-            payload.insert(key::OWNER, owner.clone());
+        if let Some(binding) = &self.binding {
+            payload.insert(key::OWNER, binding.owner.clone());
+            payload.insert(key::TOOLKIT_ID, binding.toolkit_id.to_string());
         }
         if let Some(generation) = &self.generation {
             payload.insert(key::GENERATION, generation.clone());
@@ -1096,6 +1169,13 @@ impl UpsertTarget {
             vectors =
                 vectors.add_vector(BM25_VECTOR, Document::new(point.text.clone(), BM25_MODEL));
         }
+        // A memory point's identity includes its owner and its toolkit, so
+        // two toolkits (or owners) writing one key never share a point.
+        let identity = self
+            .binding
+            .as_ref()
+            .map(|binding| format!("{}@{}", binding.owner, binding.toolkit_id))
+            .unwrap_or_default();
         let id = layout::point_id(
             self.project_id,
             self.source,
@@ -1104,7 +1184,7 @@ impl UpsertTarget {
             &point.document_key,
             &point.chunk_id,
             &point.chunk_type,
-            self.owner.as_deref().unwrap_or(""),
+            &identity,
         );
         Ok(PointStruct::new(id.to_string(), vectors, payload))
     }
@@ -1160,10 +1240,10 @@ fn owned_read_scope(
     read: &pb::Scope,
     require_namespace: bool,
 ) -> Result<Scope, Status> {
-    let owner = caller.memory_owner(read.source, read.memory_scope)?;
+    let binding = caller.memory_binding(read.source, read.memory_scope, read.toolkit_id)?;
     let scope = scope::read_scope(project_id, read, require_namespace)?;
-    Ok(match owner.as_deref() {
-        Some(owner) => scope.owned_by(owner),
+    Ok(match &binding {
+        Some(binding) => scope.bound_to(binding),
         None => scope,
     })
 }
@@ -1335,7 +1415,7 @@ mod tests {
     fn upsert_payload_takes_scope_from_the_header() {
         let target = UpsertTarget {
             project_id: 7,
-            owner: None,
+            binding: None,
             source: "toolkit_index",
             namespace_id: "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b".to_owned(),
             namespace: uuid::Uuid::from_u128(1),
@@ -1369,7 +1449,7 @@ mod tests {
     fn a_chunk_id_or_type_with_a_control_character_is_refused() {
         let target = UpsertTarget {
             project_id: 7,
-            owner: None,
+            binding: None,
             source: "toolkit_index",
             namespace_id: "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b".to_owned(),
             namespace: uuid::Uuid::from_u128(1),

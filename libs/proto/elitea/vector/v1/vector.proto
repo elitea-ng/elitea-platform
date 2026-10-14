@@ -72,13 +72,15 @@ service VectorService {
   // SetMemoryMetadata replaces the metadata of one memory version in place,
   // keeping its vector, so closing a version costs no embedding. Token only.
   rpc SetMemoryMetadata(SetMemoryMetadataRequest) returns (SetMemoryMetadataResponse);
-  // DeleteMemoryUser removes every personal memory point of one user in one
-  // project, in every collection. Only an administrator caller can use it.
+  // DeleteMemoryUser removes every personal memory point of one user, in one
+  // project or (project_id 0) in every project, in every collection. Only an
+  // administrator caller can use it.
   rpc DeleteMemoryUser(DeleteMemoryUserRequest) returns (DeleteMemoryUserResponse);
-  // DeleteMemoryNamespace removes every memory point of one namespace of one
-  // project, whoever owns it (project-shared and personal alike), in every
-  // collection. Only an administrator caller can use it: a toolkit delete.
-  rpc DeleteMemoryNamespace(DeleteMemoryNamespaceRequest) returns (DeleteMemoryNamespaceResponse);
+  // DeleteMemoryToolkit removes every memory point of one memory toolkit of one
+  // project: every namespace, project-shared and personal alike, whoever owns
+  // it, in every collection. Only an administrator caller can use it: a toolkit
+  // delete.
+  rpc DeleteMemoryToolkit(DeleteMemoryToolkitRequest) returns (DeleteMemoryToolkitResponse);
 }
 
 // Source names the consumer that owns a namespace (payload key `source`).
@@ -108,7 +110,7 @@ enum Source {
 //
 // The owner is never taken from the request: a token cannot name another
 // user, and an administrator caller cannot use these scopes at all (it has
-// DeleteMemoryUser and DeleteMemoryNamespace).
+// DeleteMemoryUser and DeleteMemoryToolkit).
 enum MemoryScope {
   MEMORY_SCOPE_UNSPECIFIED = 0;
   MEMORY_SCOPE_PERSONAL = 1;
@@ -134,6 +136,14 @@ message Namespace {
   string generation = 3;
   // memory_scope is required for SOURCE_MEMORY and refused otherwise.
   MemoryScope memory_scope = 4;
+  // toolkit_id is the memory toolkit the points belong to: required (positive)
+  // for SOURCE_MEMORY and refused otherwise. The claim token binds a run, not a
+  // toolkit, so the worker names it from the toolkit reference Main froze into
+  // the claim; the service stamps it on every point and narrows every
+  // operation by it, so two toolkits never share a store whatever their
+  // namespace_id, and a toolkit delete removes exactly its own points. It is
+  // not a filter key a caller can use.
+  int64 toolkit_id = 5;
 }
 
 // Point is one chunk to write. project_id, source, namespace_id and
@@ -310,6 +320,8 @@ message Scope {
   repeated ActiveGeneration active_generations = 5;
   // memory_scope is required for SOURCE_MEMORY and refused otherwise.
   MemoryScope memory_scope = 6;
+  // toolkit_id: as in Namespace.
+  int64 toolkit_id = 7;
 }
 
 message ScoredPoint {
@@ -438,8 +450,8 @@ message ListDocumentsResponse {
 }
 
 message ReadMemoryRequest {
-  // scope names source SOURCE_MEMORY, a memory_scope and exactly one
-  // namespace; generation and active_generations are refused.
+  // scope names source SOURCE_MEMORY, a memory_scope, a toolkit_id and exactly
+  // one namespace; generation and active_generations are refused.
   Scope scope = 1;
   // space is optional. Without it every collection is read.
   EmbeddingSpace space = 2;
@@ -449,7 +461,12 @@ message ReadMemoryRequest {
 }
 
 message ReadMemoryResponse {
-  // points are in no particular order; score is 0.
+  // points are the newest first: by the version's valid_from
+  // (metadata.t.valid_from) descending, then by the larger point id, across every
+  // collection read; score is 0. Every matching point of each collection is
+  // read (a read that matches more than 5000 points is refused with
+  // RESOURCE_EXHAUSTED) before the first `limit` are kept, so the answer does not
+  // depend on how the points are spread over collections.
   repeated ScoredPoint points = 1;
 }
 
@@ -468,14 +485,16 @@ message SetMemoryMetadataRequest {
 message SetMemoryMetadataResponse {}
 
 message DeleteMemoryUserRequest {
+  // project_id is the project to clean; 0 cleans every project (a deleted
+  // user), a positive id only that project (a user removed from it).
   int64 project_id = 1;
   // user_id is the platform user whose personal memories go.
   int64 user_id = 2;
 }
 
-message DeleteMemoryNamespaceRequest {
+message DeleteMemoryToolkitRequest {
   int64 project_id = 1;
-  string namespace_id = 2;
+  int64 toolkit_id = 2;
 }
 
 message DeleteMemoryUserResponse {
@@ -483,7 +502,7 @@ message DeleteMemoryUserResponse {
   uint32 collections = 1;
 }
 
-message DeleteMemoryNamespaceResponse {
+message DeleteMemoryToolkitResponse {
   // collections is the number of collections the delete was applied to.
   uint32 collections = 1;
 }

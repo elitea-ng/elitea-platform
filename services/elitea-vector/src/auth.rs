@@ -6,7 +6,9 @@
 //!   verifies the token ([`Introspector`]); the answer is cached until the
 //!   token expires, and never longer than the configured maximum (shorter
 //!   still for a worker claim token, whose revocation its expiry does not
-//!   show). The token's project is the request's project, and the token's
+//!   show, and not at all for a token that may use PERSONAL memory: its
+//!   permission depends on the conversation's participants, which elitea-main
+//!   re-checks on every call). The token's project is the request's project, and the token's
 //!   sources are the only sources the request may name
 //!   ([`Caller::require_source`]).
 //!
@@ -67,6 +69,16 @@ pub const PROJECT_OWNER: &str = "project";
 #[must_use]
 pub fn user_owner(user_id: i64) -> String {
     format!("user:{user_id}")
+}
+
+/// Who and what a memory request works on, decided from the token and the
+/// worker's toolkit reference; see [`Caller::memory_binding`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemoryBinding {
+    /// `user:<id>` or `project`.
+    pub owner: String,
+    /// The memory toolkit.
+    pub toolkit_id: i64,
 }
 
 /// A verified token.
@@ -201,37 +213,50 @@ impl Caller {
             .collect()
     }
 
-    /// The owner a MEMORY request works under, from the TOKEN.
+    /// What a MEMORY request works under: the owner from the TOKEN and the
+    /// toolkit the worker named.
     ///
-    /// * `source` is not memory: `memory_scope` must be unspecified, and the
-    ///   answer is `None`.
-    /// * `source` is memory: `memory_scope` is required. PROJECT is the
-    ///   literal `project` owner. PERSONAL is `user:<id>` of the token's
-    ///   user, refused when the token names no user or elitea-main did not
-    ///   allow personal memory for the claim. An administrator caller has no
-    ///   memory owner: it uses `DeleteMemoryUser` and `DeleteMemoryNamespace`.
+    /// * `source` is not memory: `memory_scope` and `toolkit_id` must be unset,
+    ///   and the answer is `None`.
+    /// * `source` is memory: `memory_scope` and a positive `toolkit_id` are
+    ///   required. PROJECT is the literal `project` owner. PERSONAL is
+    ///   `user:<id>` of the token's user, refused when the token names no user
+    ///   or elitea-main did not allow personal memory for the claim (it
+    ///   re-checks on every introspection). An administrator caller has no
+    ///   memory binding: it uses `DeleteMemoryUser` and `DeleteMemoryToolkit`.
     ///
     /// # Errors
-    /// `INVALID_ARGUMENT` for a missing or misplaced scope; `PERMISSION_DENIED`
-    /// as above, with a stable `memory.` reason the client can word.
-    pub fn memory_owner(&self, source: i32, memory_scope: i32) -> Result<Option<String>, Status> {
+    /// `INVALID_ARGUMENT` for a missing or misplaced scope or toolkit;
+    /// `PERMISSION_DENIED` as above, with a stable `memory.` reason the client
+    /// can word.
+    pub fn memory_binding(
+        &self,
+        source: i32,
+        memory_scope: i32,
+        toolkit_id: i64,
+    ) -> Result<Option<MemoryBinding>, Status> {
         let is_memory = source == pb::Source::Memory as i32;
         if !is_memory {
-            return if memory_scope == pb::MemoryScope::Unspecified as i32 {
+            return if memory_scope == pb::MemoryScope::Unspecified as i32 && toolkit_id == 0 {
                 Ok(None)
             } else {
                 Err(Status::invalid_argument(
-                    "memory_scope applies to the memory source only",
+                    "memory_scope and toolkit_id apply to the memory source only",
                 ))
             };
         }
         let Self::Token(grant) = self else {
             return Err(Status::permission_denied(
-                "memory.administrator: an administrator has no memory scope; use DeleteMemoryUser or DeleteMemoryNamespace",
+                "memory.administrator: an administrator has no memory scope; use `DeleteMemoryUser` or `DeleteMemoryToolkit`",
             ));
         };
-        match pb::MemoryScope::try_from(memory_scope) {
-            Ok(pb::MemoryScope::Project) => Ok(Some(PROJECT_OWNER.to_owned())),
+        if toolkit_id <= 0 {
+            return Err(Status::invalid_argument(
+                "toolkit_id is required for the memory source",
+            ));
+        }
+        let owner = match pb::MemoryScope::try_from(memory_scope) {
+            Ok(pb::MemoryScope::Project) => PROJECT_OWNER.to_owned(),
             Ok(pb::MemoryScope::Personal) => {
                 let user = grant.memory_user().ok_or_else(|| {
                     Status::permission_denied(
@@ -240,15 +265,18 @@ impl Caller {
                 })?;
                 if !grant.personal_memory_allowed {
                     return Err(Status::permission_denied(
-                        "memory.personal_shared_conversation: personal memory is not available in a conversation with more than one person",
+                        "memory.personal_shared_conversation: personal memory is only available in a private conversation that only this person is in",
                     ));
                 }
-                Ok(Some(user_owner(user)))
+                user_owner(user)
             }
-            Ok(pb::MemoryScope::Unspecified) | Err(_) => Err(Status::invalid_argument(
-                "memory_scope is required for the memory source",
-            )),
-        }
+            Ok(pb::MemoryScope::Unspecified) | Err(_) => {
+                return Err(Status::invalid_argument(
+                    "memory_scope is required for the memory source",
+                ));
+            }
+        };
+        Ok(Some(MemoryBinding { owner, toolkit_id }))
     }
 
     /// Refuses a token caller: the operation is for administrators.
@@ -582,6 +610,12 @@ impl CachingIntrospector {
 
     fn valid_until(&self, grant: Option<&TokenGrant>, now: i64) -> i64 {
         match grant {
+            // A token that may use PERSONAL memory is asked about on every
+            // call: elitea-main re-checks the conversation (private, only this
+            // person in it) at each introspection, so a participant added
+            // mid-run withdraws the permission on the very next call, not
+            // after a cache lifetime.
+            Some(grant) if grant.personal_memory_allowed => now,
             Some(grant) => {
                 let ttl = if grant.kind == pb::TokenKind::WorkerClaim {
                     self.policy
@@ -596,13 +630,18 @@ impl CachingIntrospector {
         }
     }
 
+    /// The entry for `digest`, and whether this call loaded it (as opposed to
+    /// finding or sharing one).
     async fn load(
         &self,
         digest: [u8; 32],
         token: &str,
-    ) -> Result<Arc<CacheEntry>, IntrospectError> {
-        self.entries
+    ) -> Result<(Arc<CacheEntry>, bool), IntrospectError> {
+        let loaded = std::sync::atomic::AtomicBool::new(false);
+        let entry = self
+            .entries
             .try_get_with(digest, async {
+                loaded.store(true, std::sync::atomic::Ordering::Relaxed);
                 let grant = self.inner.introspect(token).await?;
                 let valid_until = self.valid_until(grant.as_ref(), (self.clock)());
                 Ok::<_, IntrospectError>(Arc::new(CacheEntry { grant, valid_until }))
@@ -613,7 +652,8 @@ impl CachingIntrospector {
                 IntrospectError::Unavailable(ref reason) => {
                     IntrospectError::Unavailable(reason.clone())
                 }
-            })
+            })?;
+        Ok((entry, loaded.load(std::sync::atomic::Ordering::Relaxed)))
     }
 }
 
@@ -622,12 +662,12 @@ impl Introspector for CachingIntrospector {
     async fn introspect(&self, token: &str) -> Result<Option<TokenGrant>, IntrospectError> {
         let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
         let now = (self.clock)();
-        let mut entry = self.load(digest, token).await?;
-        if now >= entry.valid_until {
+        let (mut entry, fresh) = self.load(digest, token).await?;
+        if !fresh && now >= entry.valid_until {
             // Past its deadline: drop it and ask once more (still shared by
             // every concurrent request for this token).
             self.entries.invalidate(&digest).await;
-            entry = self.load(digest, token).await?;
+            entry = self.load(digest, token).await?.0;
         }
         // Expiry is checked on every use, cached or not.
         Ok(entry
@@ -792,6 +832,39 @@ mod tests {
         now.store(1_005, Ordering::SeqCst);
         cache.introspect("t").await.expect("ok");
         assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_token_that_may_use_personal_memory_is_introspected_on_every_call() {
+        let personal = TokenGrant {
+            sources: vec![pb::Source::Memory],
+            personal_memory_allowed: true,
+            ..claim_grant(7, 100_000)
+        };
+        let inner = Arc::new(Counting {
+            calls: AtomicUsize::new(0),
+            answer: Some(personal),
+        });
+        let now = Arc::new(AtomicI64::new(1_000));
+        let cache = CachingIntrospector::new(inner.clone(), CachePolicy::default(), clock(&now));
+        for expected in 1..=3 {
+            cache.introspect("t").await.expect("ok");
+            assert_eq!(inner.calls.load(Ordering::SeqCst), expected);
+        }
+        // A token that may not (the shared-conversation answer) is cached as
+        // any worker claim token is.
+        let shared = Arc::new(Counting {
+            calls: AtomicUsize::new(0),
+            answer: Some(TokenGrant {
+                sources: vec![pb::Source::Memory],
+                personal_memory_allowed: false,
+                ..claim_grant(7, 100_000)
+            }),
+        });
+        let cache = CachingIntrospector::new(shared.clone(), CachePolicy::default(), clock(&now));
+        cache.introspect("t").await.expect("ok");
+        cache.introspect("t").await.expect("ok");
+        assert_eq!(shared.calls.load(Ordering::SeqCst), 1);
     }
 
     /// Slow enough that every concurrent request arrives while the first
@@ -1272,6 +1345,23 @@ mod tests {
         }
     }
 
+    /// The owner a binding names, with a fixed toolkit.
+    trait OwnerOf {
+        fn owner_of(&self, source: i32, scope: i32) -> Result<Option<String>, Status>;
+    }
+
+    impl OwnerOf for Caller {
+        fn owner_of(&self, source: i32, scope: i32) -> Result<Option<String>, Status> {
+            let toolkit = if source == pb::Source::Memory as i32 {
+                5
+            } else {
+                0
+            };
+            self.memory_binding(source, scope, toolkit)
+                .map(|binding| binding.map(|binding| binding.owner))
+        }
+    }
+
     const MEMORY: i32 = pb::Source::Memory as i32;
     const PERSONAL: i32 = pb::MemoryScope::Personal as i32;
     const PROJECT: i32 = pb::MemoryScope::Project as i32;
@@ -1288,13 +1378,13 @@ mod tests {
         // A user's personal scope is their id; the project scope is the literal.
         assert_eq!(
             claim("user:42", true)
-                .memory_owner(MEMORY, PERSONAL)
+                .owner_of(MEMORY, PERSONAL)
                 .expect("owner"),
             Some("user:42".to_owned())
         );
         assert_eq!(
             claim("user:42", true)
-                .memory_owner(MEMORY, PROJECT)
+                .owner_of(MEMORY, PROJECT)
                 .expect("owner"),
             Some("project".to_owned())
         );
@@ -1310,7 +1400,7 @@ mod tests {
             "",
         ] {
             let status = claim(principal, true)
-                .memory_owner(MEMORY, PERSONAL)
+                .owner_of(MEMORY, PERSONAL)
                 .expect_err(principal);
             assert_eq!(status.code(), tonic::Code::PermissionDenied, "{principal}");
             assert!(
@@ -1320,14 +1410,14 @@ mod tests {
             // Its project scope is unaffected.
             assert_eq!(
                 claim(principal, true)
-                    .memory_owner(MEMORY, PROJECT)
+                    .owner_of(MEMORY, PROJECT)
                     .expect("project"),
                 Some("project".to_owned())
             );
         }
         // A claim in a conversation with several people has no personal scope.
         let status = claim("user:42", false)
-            .memory_owner(MEMORY, PERSONAL)
+            .owner_of(MEMORY, PERSONAL)
             .expect_err("shared");
         assert!(
             status
@@ -1336,45 +1426,71 @@ mod tests {
         );
         // An engine callback token has no user identity for memory.
         let callback = Caller::Token(memory_grant("user:42", pb::TokenKind::EngineCallback, true));
-        assert!(callback.memory_owner(MEMORY, PERSONAL).is_err());
+        assert!(callback.owner_of(MEMORY, PERSONAL).is_err());
         // An administrator has no memory owner at all.
         let admin = Caller::Admin("dns:elitea-main".to_owned());
         for scope in [PERSONAL, PROJECT, 0] {
             assert_eq!(
-                admin.memory_owner(MEMORY, scope).expect_err("admin").code(),
+                admin.owner_of(MEMORY, scope).expect_err("admin").code(),
                 tonic::Code::PermissionDenied
             );
         }
         // The scope is required for memory and refused for every other source.
         assert_eq!(
             claim("user:42", true)
-                .memory_owner(MEMORY, 0)
+                .owner_of(MEMORY, 0)
                 .expect_err("required")
                 .code(),
             tonic::Code::InvalidArgument
         );
         assert_eq!(
             claim("user:42", true)
-                .memory_owner(MEMORY, 9)
+                .owner_of(MEMORY, 9)
                 .expect_err("unknown")
                 .code(),
             tonic::Code::InvalidArgument
         );
         for source in [pb::Source::ToolkitIndex as i32, pb::Source::Deepwiki as i32] {
             assert_eq!(
-                claim("user:42", true)
-                    .memory_owner(source, 0)
-                    .expect("none"),
+                claim("user:42", true).owner_of(source, 0).expect("none"),
                 None
             );
             assert_eq!(
                 claim("user:42", true)
-                    .memory_owner(source, PROJECT)
+                    .owner_of(source, PROJECT)
                     .expect_err("scope")
                     .code(),
                 tonic::Code::InvalidArgument
             );
         }
+    }
+
+    #[test]
+    fn a_memory_binding_names_the_toolkit_and_requires_it() {
+        let claim = Caller::Token(memory_grant("user:42", pb::TokenKind::WorkerClaim, true));
+        let binding = claim
+            .memory_binding(MEMORY, PROJECT, 9)
+            .expect("binding")
+            .expect("some");
+        assert_eq!(binding.toolkit_id, 9);
+        assert_eq!(binding.owner, "project");
+        for toolkit in [0, -1] {
+            assert_eq!(
+                claim
+                    .memory_binding(MEMORY, PROJECT, toolkit)
+                    .expect_err("toolkit")
+                    .code(),
+                tonic::Code::InvalidArgument
+            );
+        }
+        // Another source takes no toolkit.
+        assert_eq!(
+            claim
+                .memory_binding(pb::Source::ToolkitIndex as i32, 0, 9)
+                .expect_err("toolkit")
+                .code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]

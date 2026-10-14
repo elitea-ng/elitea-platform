@@ -60,8 +60,8 @@ mod proto {
 pub use proto::elitea::vector::v1 as pb;
 
 pub use client::{
-    ClaimToken, ClientConfig, DeleteSelector, HybridSearchParams, SearchParams, UpsertSummary,
-    VectorClient,
+    ClaimToken, ClientConfig, DeleteSelector, HybridSearchParams, MemoryTarget, SearchParams,
+    UpsertSummary, VectorClient,
 };
 pub use error::{Error, ErrorClass, Result};
 pub use filter::FilterError;

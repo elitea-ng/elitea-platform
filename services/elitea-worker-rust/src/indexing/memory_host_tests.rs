@@ -193,9 +193,24 @@ async fn call_in(
     namespace: &str,
     arguments: Value,
 ) -> String {
+    call_toolkit(host, TOOLKIT, scope, tool, namespace, arguments).await
+}
+
+/// The toolkit the helpers call as.
+const TOOLKIT: u64 = 41;
+
+async fn call_toolkit(
+    host: &ClaimIndexToolHost,
+    toolkit_id: u64,
+    scope: MemoryScope,
+    tool: MemoryToolName,
+    namespace: &str,
+    arguments: Value,
+) -> String {
     match host
         .memory(MemoryToolCall {
             tool,
+            toolkit_id,
             namespace,
             scope,
             arguments: &arguments,
@@ -598,4 +613,51 @@ async fn personal_memory_explains_why_it_is_unavailable_and_the_projects_still_w
         2,
         "only the project writes landed"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_toolkits_with_one_namespace_label_do_not_share_memories() {
+    let harness = harness(Some(MEMORY_MODEL), None).await;
+    let token = token(TOKEN_A, &["memory"]);
+    let host = host(&harness, &token);
+    let stored = call_toolkit(
+        &host,
+        TOOLKIT,
+        MemoryScope::Project,
+        MemoryToolName::ManageMemory,
+        "team",
+        json!({"content": "pasta needs salt", "key": "pasta"}),
+    )
+    .await;
+    assert_eq!(stored, "Successfully stored memory with key: pasta");
+    let other = call_toolkit(
+        &host,
+        TOOLKIT + 1,
+        MemoryScope::Project,
+        MemoryToolName::GetMemory,
+        "team",
+        json!({"key": "pasta"}),
+    )
+    .await;
+    assert_eq!(other, "No memory found with key: pasta");
+    let deleted = call_toolkit(
+        &host,
+        TOOLKIT + 1,
+        MemoryScope::Project,
+        MemoryToolName::DeleteMemory,
+        "team",
+        json!({"key": "pasta"}),
+    )
+    .await;
+    assert_eq!(deleted, "Successfully deleted memory with key: pasta");
+    let still = call_toolkit(
+        &host,
+        TOOLKIT,
+        MemoryScope::Project,
+        MemoryToolName::GetMemory,
+        "team",
+        json!({"key": "pasta"}),
+    )
+    .await;
+    assert!(still.contains("pasta needs salt"), "{still}");
 }

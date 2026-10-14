@@ -44,7 +44,6 @@ package eliteacore
 // project id below, so neither can write project 0's membership.
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,7 +54,6 @@ import (
 	"net/mail"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -669,36 +667,25 @@ func (h *Handler) UsersDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
 		return
 	}
+	// A user who leaves a project leaves their personal memories there behind:
+	// the vector store keeps them under the user's id, and they would come back
+	// if the person were ever re-added. The cleanup is journaled in THIS
+	// transaction (committed or rolled back with the removal) and the
+	// reconciler retries it until the vector store has done it.
+	if h.memoryUsers != nil {
+		ids := make([]int64, len(userIDs))
+		for i, id := range userIDs {
+			ids[i] = int64(id)
+		}
+		if _, err := h.memoryUsers.EnqueueMemoryUsers(ctx, tx, int64(projectID), ids...); err != nil {
+			slog.ErrorContext(ctx, "could not journal the removed users' personal-memory cleanup", "project_id", projectID, "err", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
+			return
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
 		return
 	}
-	// A user who leaves a project leaves their personal memories there behind:
-	// the vector store keeps them under the user's id, and they would come back
-	// if the person were ever re-added. Removing them is best effort after the
-	// removal (a failure is logged, never undoes the removal); see
-	// removeMemoriesOf.
-	h.removeMemoriesOf(ctx, int64(projectID), userIDs)
 	writeJSON(w, http.StatusOK, map[string]any{"msg": "users successfully removed"})
-}
-
-// removeMemoriesOf asks the vector store to delete the personal memories each
-// of userIDs holds in the project they were just removed from. It is best
-// effort: the removal has committed and stays, a failure is logged at Error
-// with the project and user so an operator can repeat it (the call is
-// idempotent), and a deployment with no elitea-vector client does nothing.
-func (h *Handler) removeMemoriesOf(ctx context.Context, projectID int64, userIDs []int) {
-	if h.memoryUsers == nil {
-		return
-	}
-	// The request may end the moment the answer is written; the cleanup must
-	// not be cut with it.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	for _, userID := range userIDs {
-		if err := h.memoryUsers.DeleteMemoryUser(ctx, projectID, int64(userID)); err != nil {
-			slog.ErrorContext(ctx, "the user left the project but their personal memories could not be deleted from the vector store; repeat the deletion",
-				"project_id", projectID, "user_id", userID, "err", err)
-		}
-	}
 }

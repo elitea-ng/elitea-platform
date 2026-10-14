@@ -556,7 +556,7 @@ fn memory_toolset_for(
     reference: &FrozenToolReference<'_>,
     policy: &Arc<ToolAdmissionPolicy>,
     index_tools: IndexToolSupport<'_>,
-    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, UnsupportedSetting) + Send),
+    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip) + Send),
 ) -> Result<Option<adk_tool::BasicToolset>, ToolsetMaterializationError> {
     let authority = match index_tools {
         IndexToolSupport::Lent(authority) if authority.host().serves_memory() => authority,
@@ -618,7 +618,7 @@ fn memory_toolset_for(
             reason = setting.reason(),
             "the memory toolkit's settings are malformed; the toolkit was left out"
         );
-        on_refused(reference, setting);
+        on_refused(reference, ToolkitSkip::Setting(setting));
         Ok(None)
     })
 }

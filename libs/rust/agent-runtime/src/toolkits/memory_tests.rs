@@ -23,7 +23,7 @@ use super::policy::ToolAdmissionPolicy;
 use super::sdk_conformance;
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolSnapshot};
 
-type Recorded = (MemoryToolName, String, Value, MemoryScope);
+type Recorded = (MemoryToolName, String, Value, MemoryScope, u64);
 
 struct MemoryHost {
     serves: bool,
@@ -47,6 +47,7 @@ impl IndexToolHost for MemoryHost {
             call.namespace.to_owned(),
             call.arguments.clone(),
             call.scope,
+            call.toolkit_id,
         ));
         if self.fail {
             return Err(IndexToolFailure::new(
@@ -139,15 +140,15 @@ fn the_memory_tools_keep_the_sdk_schema_contract() {
 }
 
 #[test]
-fn the_namespace_is_the_setting_or_the_toolkit_id() {
+fn the_namespace_label_is_the_setting_or_default() {
     assert_eq!(
-        memory_namespace(&settings(json!({"namespace": "team"})), Some(7)),
+        memory_namespace(&settings(json!({"namespace": "team"}))),
         Ok("team".to_owned())
     );
-    assert_eq!(memory_namespace(&Map::new(), Some(7)), Ok("7".to_owned()));
+    assert_eq!(memory_namespace(&Map::new()), Ok("default".to_owned()));
     assert_eq!(
-        memory_namespace(&settings(json!({"namespace": null})), Some(7)),
-        Ok("7".to_owned())
+        memory_namespace(&settings(json!({"namespace": null}))),
+        Ok("default".to_owned())
     );
     for bad in [
         json!({"namespace": ""}),
@@ -157,15 +158,20 @@ fn the_namespace_is_the_setting_or_the_toolkit_id() {
         json!({"namespace": "x".repeat(257)}),
     ] {
         assert_eq!(
-            memory_namespace(&settings(bad.clone()), Some(7)),
+            memory_namespace(&settings(bad.clone())),
             Err(MemoryToolsetError::InvalidNamespace),
             "{bad}"
         );
     }
-    assert_eq!(
-        memory_namespace(&Map::new(), None),
-        Err(MemoryToolsetError::InvalidNamespace)
-    );
+}
+
+#[test]
+fn a_memory_toolkit_without_an_id_has_no_store() {
+    let (authority, _) = lend(true, false);
+    assert!(matches!(
+        build_memory_toolset("notes", None, &Map::new(), &policy(), &authority),
+        Err(MemoryToolsetError::Invalid)
+    ));
 }
 
 #[tokio::test]
@@ -245,6 +251,7 @@ async fn a_call_reaches_the_host_with_its_namespace_and_a_failure_is_the_result_
     assert_eq!(recorded[0].0, MemoryToolName::ManageMemory);
     assert_eq!(recorded[0].1, "team-a");
     assert_eq!(recorded[0].2["content"], "likes tea");
+    assert_eq!(recorded[0].4, 7, "the host is told which toolkit");
 
     let (failing, _) = lend(true, true);
     let toolset =
@@ -327,7 +334,7 @@ async fn materialization_serves_memory_only_under_an_authority_that_serves_it() 
         assert!(toolsets.is_empty(), "{reason:?}");
     }
 
-    // The namespace falls back to the toolkit id.
+    // The namespace label falls back to `default`; the toolkit id travels.
     let (authority, host) = lend(true, false);
     let (toolsets, _) = materialize_configured_toolsets_with_authorities(
         &admitted(&version(&memory_tool(&json!({"selected_tools": []})))),
@@ -350,7 +357,9 @@ async fn materialization_serves_memory_only_under_an_authority_that_serves_it() 
         )
         .await
         .expect("get");
-    assert_eq!(host.calls.lock().expect("calls")[0].1, "7");
+    let recorded = host.calls.lock().expect("calls").clone();
+    assert_eq!(recorded[0].1, "default");
+    assert_eq!(recorded[0].4, 7);
 }
 
 #[tokio::test]
@@ -579,8 +588,8 @@ async fn malformed_settings_skip_the_toolkit_with_a_visible_reason_and_do_not_fa
         .await
         .expect("the run is not failed");
         assert!(configured.toolsets.is_empty(), "{bad}");
-        assert_eq!(configured.refused.len(), 1, "{bad}");
-        let notice = super::materialize::refused_toolkits_notice_text(&configured.refused)
+        assert_eq!(configured.left_out.len(), 1, "{bad}");
+        let notice = super::materialize::left_out_toolkits_notice_text(&configured.left_out)
             .expect("a notice");
         assert!(
             notice.contains("notes") && notice.contains(needle),

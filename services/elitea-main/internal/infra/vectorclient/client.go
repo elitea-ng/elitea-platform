@@ -58,9 +58,6 @@ package vectorclient
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -334,64 +331,44 @@ func (c *Client) classifyProjectDrop(projectID int64, err error) error {
 	return fmt.Errorf("elitea-vector drop_project %d failed: %s (%s)", projectID, message, code)
 }
 
-// MemoryNamespaceID is the vector namespace of a memory toolkit's `namespace`
-// string: the same hash the Rust worker computes
-// (libs/rust/vector-index/src/memory.rs namespace_id; the test pins both to
-// one fixture). It holds no secret: the service, not this id, keeps one user's
-// memories from another's.
-func MemoryNamespaceID(namespace string) string {
-	hasher := sha256.New()
-	hasher.Write([]byte("elitea.memory.namespace.v3\x00"))
-	var length [8]byte
-	binary.BigEndian.PutUint64(length[:], uint64(len(namespace)))
-	hasher.Write(length[:])
-	hasher.Write([]byte(namespace))
-	sum := hasher.Sum(nil)
-	bytes := make([]byte, 16)
-	copy(bytes, sum[:16])
-	bytes[6] = (bytes[6] & 0x0f) | 0x80
-	bytes[8] = (bytes[8] & 0x3f) | 0x80
-	encoded := hex.EncodeToString(bytes)
-	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32]
-}
-
-// DeleteMemoryNamespace removes every memory point of one memory toolkit's
-// namespace in one project, whoever owns it (the project's shared memories and
-// every user's personal ones), in every collection. It is the toolkit
-// cleanup journal's call when a memory toolkit is deleted. Idempotent. The
-// errors are platformops's classes, like DeleteProjectData.
-func (c *Client) DeleteMemoryNamespace(ctx context.Context, projectID int64, namespace string) error {
+// DeleteMemoryToolkit removes every memory point of one memory toolkit of a
+// project, whoever owns it (the project's shared memories and every user's
+// personal ones) and whatever namespace label it used, in every collection. It
+// is the toolkit cleanup journal's call when a memory toolkit is deleted.
+// Idempotent. The errors are platformops's classes, like DeleteProjectData.
+func (c *Client) DeleteMemoryToolkit(ctx context.Context, projectID, toolkitID int64) error {
 	if c == nil {
 		return fmt.Errorf("%w: no elitea-vector client", platformops.ErrConfig)
 	}
-	if projectID <= 0 || projectID > 1<<31-1 {
-		return fmt.Errorf("%w: project id %d is not a positive int32", platformops.ErrConfig, projectID)
+	if projectID <= 0 || projectID > 1<<31-1 || toolkitID <= 0 {
+		return fmt.Errorf("%w: project %d and toolkit %d must be positive", platformops.ErrConfig, projectID, toolkitID)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.indexTimeout)
 	defer cancel()
-	response, err := c.vectors.DeleteMemoryNamespace(callCtx, &vectorv1.DeleteMemoryNamespaceRequest{
-		ProjectId:   projectID,
-		NamespaceId: MemoryNamespaceID(namespace),
+	response, err := c.vectors.DeleteMemoryToolkit(callCtx, &vectorv1.DeleteMemoryToolkitRequest{
+		ProjectId: projectID,
+		ToolkitId: toolkitID,
 	})
 	if err != nil {
 		if ctxErr := callerEnded(ctx); ctxErr != nil {
 			return ctxErr
 		}
-		return c.classifyMemoryDelete("delete_memory_namespace", projectID, err)
+		return c.classifyMemoryDelete("delete_memory_toolkit", projectID, err)
 	}
-	c.logger.Info("memory namespace deleted", "project_id", projectID, "collections", response.GetCollections())
+	c.logger.Info("memory toolkit deleted", "project_id", projectID, "toolkit_id", toolkitID, "collections", response.GetCollections())
 	return nil
 }
 
 // DeleteMemoryUser removes every PERSONAL memory point of one user in one
-// project, in every collection: what a user's removal from a project (or the
-// user's deletion) owes. Idempotent. The errors are platformops's classes.
+// project, or (projectID 0) in every project, in every collection: what a
+// user's removal from a project (or the user's deletion) owes. Idempotent. The
+// errors are platformops's classes.
 func (c *Client) DeleteMemoryUser(ctx context.Context, projectID, userID int64) error {
 	if c == nil {
 		return fmt.Errorf("%w: no elitea-vector client", platformops.ErrConfig)
 	}
-	if projectID <= 0 || projectID > 1<<31-1 || userID <= 0 {
-		return fmt.Errorf("%w: project %d and user %d must be positive", platformops.ErrConfig, projectID, userID)
+	if projectID < 0 || projectID > 1<<31-1 || userID <= 0 {
+		return fmt.Errorf("%w: project %d must not be negative and user %d must be positive", platformops.ErrConfig, projectID, userID)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.indexTimeout)
 	defer cancel()

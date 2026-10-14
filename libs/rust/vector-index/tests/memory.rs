@@ -12,6 +12,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use elitea_vector_index::MemoryTarget;
 use elitea_vector_index::client::memory_namespace;
 use elitea_vector_index::memory::{
     GetMemoryArgs, MAX_CONTENT_BYTES, MAX_KEY_BYTES, MAX_MEMORIES_PER_NAMESPACE,
@@ -29,6 +30,8 @@ const TOKEN_A_SHARED: &str = "elvc_project-a-user-10-shared-chat";
 const TOKEN_A_ANON: &str = "elvc_project-a-no-user";
 const TOKEN_B: &str = "elvc_project-b-user-10";
 const SLUG: &str = "memory-model";
+/// The memory toolkit every tool here belongs to.
+const TOOLKIT: i64 = 41;
 
 const DAY_MS: i64 = 86_400_000;
 /// 2026-01-01T00:00:00Z
@@ -128,7 +131,7 @@ fn clocked<'a>(
     now: &Arc<AtomicI64>,
 ) -> MemoryTools<'a, VectorSession<'a>, TopicEmbedder> {
     let clock = Arc::clone(now);
-    MemoryTools::new(session, &TopicEmbedder, SLUG, scope, ns)
+    MemoryTools::new(session, &TopicEmbedder, SLUG, scope, TOOLKIT, ns)
         .with_clock(Arc::new(move || clock.load(Ordering::SeqCst)))
 }
 
@@ -142,6 +145,7 @@ async fn put_search_get_delete_in_one_namespace() {
         &TopicEmbedder,
         SLUG,
         MemoryScope::Project,
+        TOOLKIT,
         "team-notes",
     );
 
@@ -221,6 +225,7 @@ async fn an_empty_namespace_answers_with_the_sdk_sentences() {
         &TopicEmbedder,
         SLUG,
         MemoryScope::Personal,
+        TOOLKIT,
         "fresh",
     );
     assert_eq!(
@@ -241,7 +246,14 @@ async fn a_key_is_generated_and_an_empty_one_too() {
     let (client, fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
+    let tools = MemoryTools::new(
+        &session,
+        &TopicEmbedder,
+        SLUG,
+        MemoryScope::Project,
+        TOOLKIT,
+        "n",
+    );
     let stored = tools
         .manage_memory(&manage("pasta", None, None))
         .await
@@ -268,10 +280,10 @@ async fn a_key_is_generated_and_an_empty_one_too() {
 
 #[tokio::test]
 async fn the_namespace_id_is_stable_canonical_and_distinct() {
-    let one = namespace_id("a");
-    assert_eq!(one, namespace_id("a"));
-    assert_ne!(one, namespace_id("b"));
-    assert_ne!(namespace_id(""), namespace_id(" "));
+    let one = namespace_id(TOOLKIT, "a");
+    assert_eq!(one, namespace_id(TOOLKIT, "a"));
+    assert_ne!(one, namespace_id(TOOLKIT, "b"));
+    assert_ne!(namespace_id(TOOLKIT, ""), namespace_id(TOOLKIT, " "));
     assert_eq!(one.len(), 36);
     assert_eq!(one.chars().nth(14), Some('8'), "version 8: {one}");
     assert!(
@@ -280,21 +292,59 @@ async fn the_namespace_id_is_stable_canonical_and_distinct() {
         "canonical lower-case: {one}"
     );
     // The service accepts it as a namespace.
-    let _ = memory_namespace(&one, pb::MemoryScope::Project, "");
+    let target = MemoryTarget {
+        toolkit_id: TOOLKIT,
+        namespace_id: one,
+    };
+    let _ = memory_namespace(&target, pb::MemoryScope::Project, "");
 }
 
-/// elitea-main computes the same id to delete a memory toolkit's namespace
-/// (`infra/vectorclient.MemoryNamespaceID`; its test pins the same values).
 #[test]
-fn the_namespace_id_matches_elitea_mains() {
-    for (namespace, want) in [
-        ("team-notes", "86c50dff-2e9f-8a90-906f-a6d7cabb89be"),
-        ("7", "84ad73a1-03d1-8683-a972-c6ec7142f34c"),
-        ("a", "6b514a3e-18d1-81dc-aeef-bc3b735f8fce"),
-        ("é namespace", "2e1104ce-ae0c-8b3d-97b3-c0319493e2e5"),
-    ] {
-        assert_eq!(namespace_id(namespace), want, "{namespace}");
-    }
+fn the_namespace_id_includes_the_toolkit() {
+    assert_ne!(namespace_id(1, "notes"), namespace_id(2, "notes"));
+    assert_ne!(namespace_id(1, "notes"), namespace_id(1, "other"));
+    // A toolkit id and a label cannot be confused with one another.
+    assert_ne!(namespace_id(1, "2"), namespace_id(12, ""));
+}
+
+#[tokio::test]
+async fn two_toolkits_with_the_same_namespace_label_never_share_memories() {
+    let (client, _fake) = connect().await;
+    let token = TOKEN_A.to_owned();
+    let session = VectorSession::new(&client, &token);
+    let one = MemoryTools::new(
+        &session,
+        &TopicEmbedder,
+        SLUG,
+        MemoryScope::Project,
+        TOOLKIT,
+        "notes",
+    );
+    let two = MemoryTools::new(
+        &session,
+        &TopicEmbedder,
+        SLUG,
+        MemoryScope::Project,
+        TOOLKIT + 1,
+        "notes",
+    );
+    one.manage_memory(&manage("pasta", Some("k"), None))
+        .await
+        .expect("put");
+    assert_eq!(
+        two.get_memory(&gm("k")).await.expect("get"),
+        "No memory found with key: k"
+    );
+    assert_eq!(
+        two.delete_memory("k").await.expect("delete"),
+        "Successfully deleted memory with key: k"
+    );
+    assert!(
+        one.get_memory(&gm("k"))
+            .await
+            .expect("get")
+            .contains("pasta")
+    );
 }
 
 #[tokio::test]
@@ -310,11 +360,20 @@ async fn personal_memory_belongs_to_one_user_and_project_memory_to_everyone() {
             &TopicEmbedder,
             SLUG,
             MemoryScope::Personal,
+            TOOLKIT,
             "notes",
         )
     };
-    let shared =
-        |session| MemoryTools::new(session, &TopicEmbedder, SLUG, MemoryScope::Project, "notes");
+    let shared = |session| {
+        MemoryTools::new(
+            session,
+            &TopicEmbedder,
+            SLUG,
+            MemoryScope::Project,
+            TOOLKIT,
+            "notes",
+        )
+    };
     let (alice, bob) = (personal(&alice_session), personal(&bob_session));
     let (alice_project, bob_project) = (shared(&alice_session), shared(&bob_session));
     // The same user id in another project is another store.
@@ -394,8 +453,22 @@ async fn personal_memory_says_why_it_is_unavailable_and_project_memory_still_wor
     ] {
         let owned = token.to_owned();
         let session = VectorSession::new(&client, &owned);
-        let personal = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Personal, "n");
-        let project = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
+        let personal = MemoryTools::new(
+            &session,
+            &TopicEmbedder,
+            SLUG,
+            MemoryScope::Personal,
+            TOOLKIT,
+            "n",
+        );
+        let project = MemoryTools::new(
+            &session,
+            &TopicEmbedder,
+            SLUG,
+            MemoryScope::Project,
+            TOOLKIT,
+            "n",
+        );
         for error in [
             personal
                 .manage_memory(&manage("pasta", Some("k"), None))
@@ -424,7 +497,14 @@ async fn the_limits_refuse_with_a_sentence() {
     let (client, _fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
+    let tools = MemoryTools::new(
+        &session,
+        &TopicEmbedder,
+        SLUG,
+        MemoryScope::Project,
+        TOOLKIT,
+        "n",
+    );
 
     let long = "x".repeat(MAX_CONTENT_BYTES + 1);
     let error = tools
@@ -476,7 +556,14 @@ async fn a_search_limit_is_capped() {
     let (client, _fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
+    let tools = MemoryTools::new(
+        &session,
+        &TopicEmbedder,
+        SLUG,
+        MemoryScope::Project,
+        TOOLKIT,
+        "n",
+    );
     for index in 0..(elitea_vector_index::memory::MAX_SEARCH_LIMIT + 5) {
         tools
             .manage_memory(&manage(
@@ -502,9 +589,16 @@ async fn a_full_namespace_refuses_a_new_key_but_not_a_rewrite_that_frees_room() 
     let (client, fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "full");
+    let tools = MemoryTools::new(
+        &session,
+        &TopicEmbedder,
+        SLUG,
+        MemoryScope::Project,
+        TOOLKIT,
+        "full",
+    );
     // Fill the namespace straight through the client, in batches.
-    let ns = namespace_id("full");
+    let ns = namespace_id(TOOLKIT, "full");
     let points: Vec<pb::Point> = (0..MAX_MEMORIES_PER_NAMESPACE)
         .map(|index| pb::Point {
             document_key: format!("seed{index}"),
@@ -524,7 +618,14 @@ async fn a_full_namespace_refuses_a_new_key_but_not_a_rewrite_that_frees_room() 
                 model_slug: SLUG.to_owned(),
                 dimension: 3,
             },
-            memory_namespace(&ns, pb::MemoryScope::Project, ""),
+            memory_namespace(
+                &MemoryTarget {
+                    toolkit_id: TOOLKIT,
+                    namespace_id: ns,
+                },
+                pb::MemoryScope::Project,
+                "",
+            ),
             points,
         )
         .await
@@ -560,7 +661,14 @@ async fn each_failure_cause_has_its_own_sentence() {
     let (client, fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
+    let tools = MemoryTools::new(
+        &session,
+        &TopicEmbedder,
+        SLUG,
+        MemoryScope::Project,
+        TOOLKIT,
+        "n",
+    );
 
     let error = tools
         .manage_memory(&manage("fail-embedding pasta", None, None))
@@ -596,7 +704,14 @@ async fn each_failure_cause_has_its_own_sentence() {
     }
     let unknown_token = "elvc_unknown".to_owned();
     let stranger = VectorSession::new(&client, &unknown_token);
-    let tools = MemoryTools::new(&stranger, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
+    let tools = MemoryTools::new(
+        &stranger,
+        &TopicEmbedder,
+        SLUG,
+        MemoryScope::Project,
+        TOOLKIT,
+        "n",
+    );
     let error = tools
         .manage_memory(&manage("pasta", None, None))
         .await
@@ -609,7 +724,14 @@ async fn every_call_carries_the_claim_token_only() {
     let (client, fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Personal, "n");
+    let tools = MemoryTools::new(
+        &session,
+        &TopicEmbedder,
+        SLUG,
+        MemoryScope::Personal,
+        TOOLKIT,
+        "n",
+    );
     tools
         .manage_memory(&manage("pasta", Some("k"), None))
         .await
@@ -634,7 +756,14 @@ async fn no_call_lists_indexes_or_counts_the_project() {
     let (client, fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Personal, "n");
+    let tools = MemoryTools::new(
+        &session,
+        &TopicEmbedder,
+        SLUG,
+        MemoryScope::Personal,
+        TOOLKIT,
+        "n",
+    );
     tools
         .manage_memory(&manage("pasta", Some("k"), None))
         .await
@@ -1066,8 +1195,15 @@ async fn a_run_reads_one_collection_once_it_has_embedded() {
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
     let cache = Arc::new(AtomicU32::new(0));
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n")
-        .with_space_cache(Arc::clone(&cache));
+    let tools = MemoryTools::new(
+        &session,
+        &TopicEmbedder,
+        SLUG,
+        MemoryScope::Project,
+        TOOLKIT,
+        "n",
+    )
+    .with_space_cache(Arc::clone(&cache));
     // Nothing embedded yet: a get reads every collection (dimension unknown).
     assert_eq!(
         tools.get_memory(&gm("k")).await.expect("g"),

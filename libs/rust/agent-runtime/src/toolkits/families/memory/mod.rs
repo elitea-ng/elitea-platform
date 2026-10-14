@@ -4,7 +4,7 @@
 //!
 //! Names, argument schemas, descriptions, the `selected_tools` rule (empty
 //! selects all four) and the result sentences keep the SDK's. The settings
-//! are the SDK's: `namespace` (the toolkit's id when absent) and
+//! are the SDK's: `namespace` (`default` when absent) and
 //! `selected_tools`; `pgvector_configuration` is read by nothing here, because
 //! memories live in `elitea-vector`, not in a database the toolkit names.
 //!
@@ -26,6 +26,10 @@
 //!   `get_memory` and `search_memory` return current versions by default and
 //!   take optional `as_of` and `include_history`; `delete_memory` removes every
 //!   version. The SDK keeps one value per key.
+//! * A toolkit's memories are the TOOLKIT's. The SDK shared by the `namespace`
+//!   string (two toolkits with the same string saw one another's memories); here
+//!   the store is keyed by the toolkit id and `namespace` is only a label inside
+//!   it, so toolkits never share and deleting a toolkit deletes its memories.
 //! * Memories written under the Python worker are not carried over: they sit
 //!   in the toolkit's pgvector database, which nothing here reads.
 //! * Memory has an owner, set by the toolkit's `memory_scope` setting (an
@@ -272,7 +276,10 @@ impl MemoryToolName {
 pub struct MemoryToolCall<'a> {
     /// Which tool.
     pub tool: MemoryToolName,
-    /// The toolkit's `namespace`.
+    /// The toolkit's id. The memory store is scoped to it: two toolkits never
+    /// share memories, whatever their `namespace` label.
+    pub toolkit_id: u64,
+    /// The toolkit's `namespace` label (a name inside the toolkit's store).
     pub namespace: &'a str,
     /// Whose memories: fixed by the toolkit's `memory_scope`, or the call's
     /// `scope` argument for a `both` toolkit.
@@ -281,22 +288,17 @@ pub struct MemoryToolCall<'a> {
     pub arguments: &'a Value,
 }
 
-/// The namespace a memory toolkit works in: its `namespace` setting, or the
-/// toolkit's id when the setting is absent (the SDK's
-/// `settings.get('namespace', str(id))`).
+/// The namespace label a memory toolkit works under inside its own store: its
+/// `namespace` setting, or `default` when the setting is absent. The label does
+/// not make the store: the toolkit id does, so the SDK's habit of defaulting
+/// the namespace to the toolkit id is no longer needed to keep toolkits apart.
 ///
 /// # Errors
 ///
-/// A `namespace` that is not a non-blank, bounded string, or absent with no
-/// toolkit id.
-pub fn memory_namespace(
-    settings: &Map<String, Value>,
-    toolkit_id: Option<u64>,
-) -> Result<String, MemoryToolsetError> {
+/// A `namespace` that is not a non-blank, bounded string.
+pub fn memory_namespace(settings: &Map<String, Value>) -> Result<String, MemoryToolsetError> {
     match settings.get("namespace") {
-        None | Some(Value::Null) => toolkit_id
-            .map(|id| id.to_string())
-            .ok_or(MemoryToolsetError::InvalidNamespace),
+        None | Some(Value::Null) => Ok(DEFAULT_NAMESPACE.to_owned()),
         Some(Value::String(namespace))
             if !namespace.trim().is_empty()
                 && namespace.len() <= MAX_NAMESPACE_BYTES
@@ -307,6 +309,9 @@ pub fn memory_namespace(
         Some(_) => Err(MemoryToolsetError::InvalidNamespace),
     }
 }
+
+/// The label of a toolkit with no `namespace` setting.
+pub const DEFAULT_NAMESPACE: &str = "default";
 
 /// Why the memory toolset could not be built. Carries no setting value. The
 /// first three are the user's settings (the toolkit is skipped and the run
@@ -354,7 +359,9 @@ pub fn build_memory_toolset(
     policy: &Arc<ToolAdmissionPolicy>,
     authority: &IndexToolAuthority,
 ) -> Result<BasicToolset, MemoryToolsetError> {
-    let namespace: Arc<str> = Arc::from(memory_namespace(settings, toolkit_id)?);
+    // The store is the toolkit's: a memory toolkit with no id has none.
+    let toolkit_id = toolkit_id.ok_or(MemoryToolsetError::Invalid)?;
+    let namespace: Arc<str> = Arc::from(memory_namespace(settings)?);
     let scope = MemoryScopeSetting::from_settings(settings)?;
     let selected = selected_tool_names(settings)?;
     let include = |name: &str| selected.is_empty() || selected.iter().any(|value| value == name);
@@ -364,6 +371,7 @@ pub fn build_memory_toolset(
         .map(|tool| {
             Arc::new(MemoryTool {
                 tool,
+                toolkit_id,
                 namespace: Arc::clone(&namespace),
                 scope,
                 description: tool.description_for(scope).into_boxed_str(),
@@ -383,6 +391,7 @@ pub fn all_memory_tools(authority: &IndexToolAuthority) -> Vec<Arc<dyn Tool>> {
         .map(|tool| {
             Arc::new(MemoryTool {
                 tool,
+                toolkit_id: 1,
                 namespace: Arc::from("conformance"),
                 scope: MemoryScopeSetting::Personal,
                 description: tool
@@ -396,6 +405,7 @@ pub fn all_memory_tools(authority: &IndexToolAuthority) -> Vec<Arc<dyn Tool>> {
 
 struct MemoryTool {
     tool: MemoryToolName,
+    toolkit_id: u64,
     namespace: Arc<str>,
     scope: MemoryScopeSetting,
     description: Box<str>,
@@ -444,6 +454,7 @@ impl Tool for MemoryTool {
         };
         let call = MemoryToolCall {
             tool: self.tool,
+            toolkit_id: self.toolkit_id,
             namespace: &self.namespace,
             scope,
             arguments: &arguments,

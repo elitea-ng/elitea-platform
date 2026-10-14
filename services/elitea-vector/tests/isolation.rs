@@ -51,6 +51,7 @@ const TOKEN_ALICE_IN_B: &str = "token-alice-in-b";
 const ALICE: i64 = 11;
 const NAMESPACE_M: &str = "3a1f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5c";
 const NAMESPACE_M2: &str = "4b2f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5d";
+const NAMESPACE_M3: &str = "5c308c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5e";
 const NAMESPACE_A: &str = "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b";
 const NAMESPACE_B: &str = "6f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f";
 const DIMENSION: u32 = 4;
@@ -354,6 +355,7 @@ impl Harness {
             namespace_id: namespace_id.to_owned(),
             generation: String::new(),
             memory_scope: 0,
+            toolkit_id: 0,
         }
     }
 
@@ -2650,20 +2652,35 @@ async fn fan_out_over_collections_is_complete_and_sorted() {
 const PERSONAL: i32 = pb::MemoryScope::Personal as i32;
 const PROJECT: i32 = pb::MemoryScope::Project as i32;
 
+/// The memory toolkit every default helper names.
+const TOOLKIT_M: i64 = 41;
+/// Another memory toolkit of the same project.
+const TOOLKIT_OTHER: i64 = 42;
+
 fn memory_namespace(namespace_id: &str, scope: i32) -> pb::Namespace {
+    memory_namespace_in(TOOLKIT_M, namespace_id, scope)
+}
+
+fn memory_namespace_in(toolkit_id: i64, namespace_id: &str, scope: i32) -> pb::Namespace {
     pb::Namespace {
         source: pb::Source::Memory as i32,
         namespace_id: namespace_id.to_owned(),
         generation: String::new(),
         memory_scope: scope,
+        toolkit_id,
     }
 }
 
 fn memory_scope_of(namespace_id: &str, scope: i32) -> pb::Scope {
+    memory_scope_in(TOOLKIT_M, namespace_id, scope)
+}
+
+fn memory_scope_in(toolkit_id: i64, namespace_id: &str, scope: i32) -> pb::Scope {
     pb::Scope {
         source: pb::Source::Memory as i32,
         namespace_ids: vec![namespace_id.to_owned()],
         memory_scope: scope,
+        toolkit_id,
         ..pb::Scope::default()
     }
 }
@@ -2694,6 +2711,38 @@ impl Harness {
             .await
     }
 
+    async fn memory_upsert_in(
+        &mut self,
+        token: &str,
+        toolkit_id: i64,
+        scope: i32,
+        namespace_id: &str,
+        points: Vec<pb::Point>,
+    ) -> Result<pb::UpsertResponse, tonic::Status> {
+        self.upsert(
+            token,
+            0,
+            memory_namespace_in(toolkit_id, namespace_id, scope),
+            points,
+        )
+        .await
+    }
+
+    async fn memory_search_in(
+        &mut self,
+        token: &str,
+        toolkit_id: i64,
+        scope: i32,
+        namespace_id: &str,
+    ) -> Result<Vec<pb::ScoredPoint>, tonic::Status> {
+        self.search(
+            token,
+            memory_scope_in(toolkit_id, namespace_id, scope),
+            None,
+        )
+        .await
+    }
+
     async fn memory_search(
         &mut self,
         token: &str,
@@ -2702,6 +2751,51 @@ impl Harness {
     ) -> Result<Vec<pb::ScoredPoint>, tonic::Status> {
         self.search(token, memory_scope_of(namespace_id, scope), None)
             .await
+    }
+
+    async fn memory_delete_in(
+        &mut self,
+        token: &str,
+        toolkit_id: i64,
+        scope: i32,
+        namespace_id: &str,
+        selector: pb::delete_request::Selector,
+    ) -> Result<(), tonic::Status> {
+        let space = self.space();
+        self.worker
+            .delete(with_token(
+                token,
+                pb::DeleteRequest {
+                    project_id: 0,
+                    space: Some(space),
+                    namespace: Some(memory_namespace_in(toolkit_id, namespace_id, scope)),
+                    selector: Some(selector),
+                },
+            ))
+            .await
+            .map(|_| ())
+    }
+
+    /// Memory points of `project` stamped with `toolkit_id`, read from Qdrant
+    /// directly.
+    async fn truth_toolkit(&self, project: i64, toolkit_id: i64) -> u64 {
+        self.qdrant
+            .count(
+                qdrant_client::qdrant::CountPointsBuilder::new(format!(
+                    "emb_{}_{DIMENSION}",
+                    self.slug
+                ))
+                .filter(qdrant_client::qdrant::Filter::must([
+                    qdrant_client::qdrant::Condition::matches("project_id", project.to_string()),
+                    qdrant_client::qdrant::Condition::matches("source", "memory".to_owned()),
+                    qdrant_client::qdrant::Condition::matches("toolkit_id", toolkit_id.to_string()),
+                ]))
+                .exact(true),
+            )
+            .await
+            .expect("count")
+            .result
+            .map_or(0, |result| result.count)
     }
 
     async fn memory_read(
@@ -3380,11 +3474,11 @@ async fn only_an_administrator_deletes_a_users_personal_memories_or_a_namespace(
         assert_eq!(status.code(), Code::PermissionDenied);
         let status = h
             .worker
-            .delete_memory_namespace(with_token(
+            .delete_memory_toolkit(with_token(
                 token,
-                pb::DeleteMemoryNamespaceRequest {
+                pb::DeleteMemoryToolkitRequest {
                     project_id: 0,
-                    namespace_id: NAMESPACE_M.to_owned(),
+                    toolkit_id: TOOLKIT_M,
                 },
             ))
             .await
@@ -3430,19 +3524,205 @@ async fn only_an_administrator_deletes_a_users_personal_memories_or_a_namespace(
         Code::InvalidArgument
     );
 
-    // The namespace delete removes every owner's points of that namespace.
+    // The toolkit delete removes every owner's points of that toolkit, every
+    // namespace of it.
     h.admin
-        .delete_memory_namespace(tonic::Request::new(pb::DeleteMemoryNamespaceRequest {
+        .delete_memory_toolkit(tonic::Request::new(pb::DeleteMemoryToolkitRequest {
             project_id: PROJECT_A,
-            namespace_id: NAMESPACE_M.to_owned(),
+            toolkit_id: TOOLKIT_M,
         }))
         .await
-        .expect("delete namespace");
+        .expect("delete toolkit");
     assert_eq!(h.truth_memory(PROJECT_A, None).await, 0);
     assert_eq!(
         h.truth_memory(PROJECT_B, None).await,
         1,
         "another project's stay"
+    );
+
+    // Project 0 removes the user's personal points in every project.
+    h.admin
+        .delete_memory_user(tonic::Request::new(pb::DeleteMemoryUserRequest {
+            project_id: 0,
+            user_id: ALICE,
+        }))
+        .await
+        .expect("delete user everywhere");
+    assert_eq!(h.truth_memory(PROJECT_B, None).await, 0);
+}
+
+#[tokio::test]
+async fn memory_is_scoped_to_its_toolkit_even_with_the_same_namespace_id() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    // Alice's toolkit holds a personal and a project memory.
+    h.seed_memory().await;
+    let point = || vec![memory_point("k", 1, "other toolkit", [1.0, 0.0, 0.0, 0.0])];
+    // Another toolkit writes under the very same namespace id and key, as the
+    // same user and as another user.
+    for (token, scope) in [(TOKEN_ALICE, PERSONAL), (TOKEN_BOB, PROJECT)] {
+        h.memory_upsert_in(token, TOOLKIT_OTHER, scope, NAMESPACE_M, point())
+            .await
+            .expect("other toolkit write");
+    }
+    // Nothing of toolkit M was overwritten: 3 + 2 points.
+    assert_eq!(h.truth_memory(PROJECT_A, None).await, 5);
+    // Each toolkit reads only its own.
+    let own = h
+        .memory_search_in(TOKEN_ALICE, TOOLKIT_M, PERSONAL, NAMESPACE_M)
+        .await
+        .expect("own");
+    assert_eq!(own.len(), 1);
+    assert_eq!(own[0].text, "alice private pasta");
+    let other = h
+        .memory_search_in(TOKEN_ALICE, TOOLKIT_OTHER, PERSONAL, NAMESPACE_M)
+        .await
+        .expect("other");
+    assert_eq!(other.len(), 1);
+    assert_eq!(other[0].text, "other toolkit");
+    // A toolkit with no write of its own reads nothing of the others'.
+    for scope in [PERSONAL, PROJECT] {
+        assert!(
+            h.memory_search_in(TOKEN_ALICE, 43, scope, NAMESPACE_M)
+                .await
+                .expect("empty")
+                .is_empty()
+        );
+    }
+    // Deleting through the other toolkit does not touch toolkit M.
+    h.memory_delete_in(
+        TOKEN_ALICE,
+        TOOLKIT_OTHER,
+        PROJECT,
+        NAMESPACE_M,
+        pb::delete_request::Selector::WholeNamespace(pb::WholeNamespace {}),
+    )
+    .await
+    .expect("delete");
+    assert_eq!(h.truth_memory(PROJECT_A, None).await, 4);
+    assert_eq!(
+        h.memory_search_in(TOKEN_ALICE, TOOLKIT_M, PROJECT, NAMESPACE_M)
+            .await
+            .expect("still")
+            .len(),
+        1
+    );
+    // The toolkit id is stamped on every point and a client cannot filter on it.
+    let truth = h.truth_toolkit(PROJECT_A, TOOLKIT_M).await;
+    assert_eq!(truth, 3);
+    let crafted = pb::Filter {
+        should: vec![pb::Condition {
+            key: "toolkit_id".to_owned(),
+            r#match: Some(pb::condition::Match::Keyword(TOOLKIT_OTHER.to_string())),
+        }],
+        ..pb::Filter::default()
+    };
+    let status = h
+        .memory_read(TOKEN_ALICE, PERSONAL, NAMESPACE_M, Some(crafted))
+        .await
+        .expect_err("toolkit_id is not a filter key");
+    assert_eq!(status.code(), Code::InvalidArgument);
+    // Deleting a toolkit removes every namespace and owner of it, nothing else.
+    h.memory_upsert_in(
+        TOKEN_ALICE,
+        TOOLKIT_M,
+        PERSONAL,
+        NAMESPACE_M2,
+        vec![memory_point(
+            "k2",
+            1,
+            "second namespace",
+            [1.0, 0.0, 0.0, 0.0],
+        )],
+    )
+    .await
+    .expect("second namespace");
+    assert_eq!(h.truth_toolkit(PROJECT_A, TOOLKIT_M).await, 4);
+    h.admin
+        .delete_memory_toolkit(tonic::Request::new(pb::DeleteMemoryToolkitRequest {
+            project_id: PROJECT_A,
+            toolkit_id: TOOLKIT_M,
+        }))
+        .await
+        .expect("delete toolkit");
+    assert_eq!(h.truth_toolkit(PROJECT_A, TOOLKIT_M).await, 0);
+    assert_eq!(h.truth_toolkit(PROJECT_A, TOOLKIT_OTHER).await, 1);
+}
+
+#[tokio::test]
+async fn read_memory_is_newest_first_across_collections_and_beyond_one_page() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    let second = pb::EmbeddingSpace {
+        model_slug: format!("{}-b", h.slug),
+        dimension: DIMENSION,
+    };
+    // 30 versions of one key, valid_from 1000..1029, written in a shuffled
+    // order into two embedding spaces (two collections).
+    let mut order: Vec<i64> = (0..30).collect();
+    order.reverse();
+    order.rotate_left(7);
+    for i in order {
+        let mut point = memory_point("k", 1, "version", [1.0, 0.0, 0.0, 0.0]);
+        point.chunk_id = format!("v{i}");
+        point.metadata_json =
+            serde_json::json!({"m": {}, "t": {"valid_from": 1000 + i, "id": i}}).to_string();
+        let space = if i % 2 == 0 {
+            h.space()
+        } else {
+            second.clone()
+        };
+        h.upsert_in(
+            TOKEN_ALICE,
+            0,
+            space,
+            memory_namespace(NAMESPACE_M3, PROJECT),
+            vec![point],
+        )
+        .await
+        .expect("write");
+    }
+    let read = |limit: u32| {
+        let mut worker = h.worker.clone();
+        async move {
+            worker
+                .read_memory(with_token(
+                    TOKEN_ALICE,
+                    pb::ReadMemoryRequest {
+                        scope: Some(memory_scope_of(NAMESPACE_M3, PROJECT)),
+                        space: None,
+                        filter: None,
+                        limit,
+                    },
+                ))
+                .await
+                .expect("read")
+                .into_inner()
+                .points
+        }
+    };
+    let all = read(100).await;
+    let ids: Vec<String> = all.iter().map(|point| point.chunk_id.clone()).collect();
+    let expected: Vec<String> = (0..30).rev().map(|i| format!("v{i}")).collect();
+    assert_eq!(ids, expected, "newest first across both collections");
+    // A smaller limit keeps the newest, not an arbitrary subset.
+    let limited = read(5).await;
+    let ids: Vec<&str> = limited
+        .iter()
+        .map(|point| point.chunk_id.as_str())
+        .collect();
+    assert_eq!(ids, ["v29", "v28", "v27", "v26", "v25"]);
+    // The same answer twice.
+    assert_eq!(
+        read(5)
+            .await
+            .iter()
+            .map(|point| point.id.clone())
+            .collect::<Vec<_>>(),
+        limited
+            .iter()
+            .map(|point| point.id.clone())
+            .collect::<Vec<_>>()
     );
 }
 

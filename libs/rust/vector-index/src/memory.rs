@@ -11,8 +11,12 @@
 //!   narrows every read, count, update and delete by it. This crate only says
 //!   *which scope* a call works in ([`MemoryScope`]); it cannot name an owner,
 //!   and a caller that computes another user's namespace id reads nothing of
-//!   theirs. The namespace is the hash of the toolkit's `namespace` string
-//!   ([`namespace_id`]); the project is the token's.
+//!   theirs. The store is scoped to the TOOLKIT: the namespace id is the hash
+//!   of the toolkit id and its `namespace` label ([`namespace_id`]), and the
+//!   service stamps the toolkit id on every point and narrows by it, so two
+//!   toolkits never share memories even with the same label (the SDK shared
+//!   by the string; this is a deliberate difference). The project is the
+//!   token's.
 //! * **Points and time.** One point per VERSION of a memory: `document_key` is
 //!   the memory key, `text` is the content, `chunk_id` is `v<id>` and
 //!   `metadata_json` is `{"m": <the user's metadata>, "t": {"created_at",
@@ -68,8 +72,8 @@ use sha2::{Digest, Sha256};
 use tonic::Code;
 
 use crate::client::{
-    ClaimToken, DeleteSelector, MAX_LIMIT, SearchParams, VectorClient, memory_namespace,
-    memory_scope_of,
+    ClaimToken, DeleteSelector, MAX_LIMIT, MemoryTarget, SearchParams, VectorClient,
+    memory_namespace, memory_scope_of,
 };
 use crate::error::{Error, Result};
 use crate::filter::{keyword, nest, with_must};
@@ -99,7 +103,7 @@ const CHUNK_TYPE: &str = "memory";
 const DOCUMENT_VERSION: &str = "1";
 /// Mixed into the namespace hash, so a memory namespace is a different id
 /// space from every other use of a vector namespace UUID.
-const NAMESPACE_DOMAIN: &[u8] = b"elitea.memory.namespace.v3\0";
+const NAMESPACE_DOMAIN: &[u8] = b"elitea.memory.namespace.v4\0";
 
 /// Whose memory a call works in. The service turns it into an owner from the
 /// token; nothing here names a user.
@@ -120,15 +124,18 @@ impl MemoryScope {
     }
 }
 
-/// The vector namespace UUID of a toolkit `namespace` string: the first 16
-/// bytes of `SHA-256(domain || len(namespace) || namespace)` with the UUID
-/// version (8, custom) and variant bits set. Deterministic, so every run and
-/// worker agrees, and it holds no secret: the service, not this hash, keeps
-/// one user's memories from another.
+/// The vector namespace UUID of a toolkit's `namespace` label: the first 16
+/// bytes of `SHA-256(domain || toolkit id || len(namespace) || namespace)`
+/// with the UUID version (8, custom) and variant bits set. The toolkit is part
+/// of it, so two toolkits never share a store whatever label they use.
+/// Deterministic, so every run and worker agrees, and it holds no secret: the
+/// service (which also stamps and filters by the toolkit id), not this hash,
+/// keeps one user's memories from another.
 #[must_use]
-pub fn namespace_id(namespace: &str) -> String {
+pub fn namespace_id(toolkit_id: i64, namespace: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(NAMESPACE_DOMAIN);
+    hasher.update(toolkit_id.to_be_bytes());
     hasher.update(
         u64::try_from(namespace.len())
             .unwrap_or(u64::MAX)
@@ -170,7 +177,7 @@ pub trait MemoryBackend: Send + Sync {
         &self,
         scope: MemoryScope,
         space: pb::EmbeddingSpace,
-        namespace_id: &str,
+        target: &MemoryTarget,
         generation: &str,
         point: pb::Point,
     ) -> impl Future<Output = Result<()>> + Send;
@@ -184,7 +191,7 @@ pub trait MemoryBackend: Send + Sync {
     fn read(
         &self,
         scope: MemoryScope,
-        namespace_id: &str,
+        target: &MemoryTarget,
         space: Option<pb::EmbeddingSpace>,
         filter: Option<pb::Filter>,
         limit: u32,
@@ -193,7 +200,7 @@ pub trait MemoryBackend: Send + Sync {
     fn count(
         &self,
         scope: MemoryScope,
-        namespace_id: &str,
+        target: &MemoryTarget,
         space: Option<pb::EmbeddingSpace>,
         filter: Option<pb::Filter>,
     ) -> impl Future<Output = Result<u64>> + Send;
@@ -201,7 +208,7 @@ pub trait MemoryBackend: Send + Sync {
     fn set_metadata(
         &self,
         scope: MemoryScope,
-        namespace_id: &str,
+        target: &MemoryTarget,
         version: &VersionRef<'_>,
         metadata_json: &str,
     ) -> impl Future<Output = Result<()>> + Send;
@@ -209,14 +216,14 @@ pub trait MemoryBackend: Send + Sync {
     fn delete_key(
         &self,
         scope: MemoryScope,
-        namespace_id: &str,
+        target: &MemoryTarget,
         key: &str,
     ) -> impl Future<Output = Result<()>> + Send;
     /// Removes the named versions' generations, in every embedding space.
     fn delete_generations(
         &self,
         scope: MemoryScope,
-        namespace_id: &str,
+        target: &MemoryTarget,
         generations: Vec<String>,
     ) -> impl Future<Output = Result<()>> + Send;
 }
@@ -237,7 +244,7 @@ impl MemoryBackend for VectorSession<'_> {
         &self,
         scope: MemoryScope,
         space: pb::EmbeddingSpace,
-        namespace_id: &str,
+        target: &MemoryTarget,
         generation: &str,
         point: pb::Point,
     ) -> Result<()> {
@@ -245,7 +252,7 @@ impl MemoryBackend for VectorSession<'_> {
             .upsert(
                 self.token(),
                 space,
-                memory_namespace(namespace_id, scope.wire(), generation),
+                memory_namespace(target, scope.wire(), generation),
                 vec![point],
             )
             .await
@@ -266,34 +273,27 @@ impl MemoryBackend for VectorSession<'_> {
     async fn read(
         &self,
         scope: MemoryScope,
-        namespace_id: &str,
+        target: &MemoryTarget,
         space: Option<pb::EmbeddingSpace>,
         filter: Option<pb::Filter>,
         limit: u32,
     ) -> Result<Vec<pb::ScoredPoint>> {
         self.client()
-            .read_memory(
-                self.token(),
-                namespace_id,
-                scope.wire(),
-                space,
-                filter,
-                limit,
-            )
+            .read_memory(self.token(), target, scope.wire(), space, filter, limit)
             .await
     }
 
     async fn count(
         &self,
         scope: MemoryScope,
-        namespace_id: &str,
+        target: &MemoryTarget,
         space: Option<pb::EmbeddingSpace>,
         filter: Option<pb::Filter>,
     ) -> Result<u64> {
         self.client()
             .count(
                 self.token(),
-                memory_scope_of(namespace_id, scope.wire()),
+                memory_scope_of(target, scope.wire()),
                 space,
                 filter,
             )
@@ -303,14 +303,14 @@ impl MemoryBackend for VectorSession<'_> {
     async fn set_metadata(
         &self,
         scope: MemoryScope,
-        namespace_id: &str,
+        target: &MemoryTarget,
         version: &VersionRef<'_>,
         metadata_json: &str,
     ) -> Result<()> {
         self.client()
             .set_memory_metadata(
                 self.token(),
-                namespace_id,
+                target,
                 scope.wire(),
                 version.generation,
                 None,
@@ -321,12 +321,12 @@ impl MemoryBackend for VectorSession<'_> {
             .await
     }
 
-    async fn delete_key(&self, scope: MemoryScope, namespace_id: &str, key: &str) -> Result<()> {
+    async fn delete_key(&self, scope: MemoryScope, target: &MemoryTarget, key: &str) -> Result<()> {
         self.client()
             .delete(
                 self.token(),
                 None,
-                memory_namespace(namespace_id, scope.wire(), ""),
+                memory_namespace(target, scope.wire(), ""),
                 DeleteSelector::Documents(vec![key.to_owned()]),
             )
             .await
@@ -336,14 +336,14 @@ impl MemoryBackend for VectorSession<'_> {
     async fn delete_generations(
         &self,
         scope: MemoryScope,
-        namespace_id: &str,
+        target: &MemoryTarget,
         generations: Vec<String>,
     ) -> Result<()> {
         self.client()
             .delete(
                 self.token(),
                 None,
-                memory_namespace(namespace_id, scope.wire(), ""),
+                memory_namespace(target, scope.wire(), ""),
                 DeleteSelector::Generations(generations),
             )
             .await
@@ -412,7 +412,7 @@ pub struct MemoryTools<'a, B, E> {
     embedder: &'a E,
     model_slug: &'a str,
     scope: MemoryScope,
-    namespace_id: String,
+    target: MemoryTarget,
     clock: Clock,
     dimension: SpaceCache,
 }
@@ -634,6 +634,7 @@ impl<'a, B: MemoryBackend, E: MemoryEmbedder> MemoryTools<'a, B, E> {
         embedder: &'a E,
         model_slug: &'a str,
         scope: MemoryScope,
+        toolkit_id: i64,
         namespace: &str,
     ) -> Self {
         Self {
@@ -641,7 +642,10 @@ impl<'a, B: MemoryBackend, E: MemoryEmbedder> MemoryTools<'a, B, E> {
             embedder,
             model_slug,
             scope,
-            namespace_id: namespace_id(namespace),
+            target: MemoryTarget {
+                toolkit_id,
+                namespace_id: namespace_id(toolkit_id, namespace),
+            },
             clock: system_clock(),
             dimension: Arc::new(AtomicU32::new(0)),
         }
@@ -704,7 +708,7 @@ impl<'a, B: MemoryBackend, E: MemoryEmbedder> MemoryTools<'a, B, E> {
             .backend
             .read(
                 self.scope,
-                &self.namespace_id,
+                &self.target,
                 self.known_space(),
                 view_filter(Some(key), as_of, history),
                 u32::try_from(MAX_VERSIONS_PER_KEY + 5).unwrap_or(25),
@@ -748,7 +752,7 @@ impl<'a, B: MemoryBackend, E: MemoryEmbedder> MemoryTools<'a, B, E> {
         let overflow = (all.len() + 1).saturating_sub(MAX_VERSIONS_PER_KEY);
         let held = self
             .backend
-            .count(self.scope, &self.namespace_id, Some(space.clone()), None)
+            .count(self.scope, &self.target, Some(space.clone()), None)
             .await?;
         if held >= MAX_MEMORIES_PER_NAMESPACE && (all.is_empty() || overflow == 0) {
             return Err(Error::Refused(format!(
@@ -778,7 +782,7 @@ impl<'a, B: MemoryBackend, E: MemoryEmbedder> MemoryTools<'a, B, E> {
             .put(
                 self.scope,
                 space,
-                &self.namespace_id,
+                &self.target,
                 &fresh.generation(),
                 fresh.point(vector),
             )
@@ -791,7 +795,7 @@ impl<'a, B: MemoryBackend, E: MemoryEmbedder> MemoryTools<'a, B, E> {
             self.backend
                 .set_metadata(
                     self.scope,
-                    &self.namespace_id,
+                    &self.target,
                     &VersionRef {
                         key: &closed.key,
                         chunk_id: &closed.chunk_id(),
@@ -810,7 +814,7 @@ impl<'a, B: MemoryBackend, E: MemoryEmbedder> MemoryTools<'a, B, E> {
                 .map(Version::generation)
                 .collect();
             self.backend
-                .delete_generations(self.scope, &self.namespace_id, dropped)
+                .delete_generations(self.scope, &self.target, dropped)
                 .await?;
         }
         Ok(format!("Successfully stored memory with key: {key}"))
@@ -848,7 +852,7 @@ impl<'a, B: MemoryBackend, E: MemoryEmbedder> MemoryTools<'a, B, E> {
             .search(
                 self.scope,
                 SearchParams {
-                    scope: memory_scope_of(&self.namespace_id, self.scope.wire()),
+                    scope: memory_scope_of(&self.target, self.scope.wire()),
                     space,
                     vector,
                     filter: view_filter(None, as_of, history),
@@ -927,7 +931,7 @@ impl<'a, B: MemoryBackend, E: MemoryEmbedder> MemoryTools<'a, B, E> {
     pub async fn delete_memory(&self, key: &str) -> Result<String> {
         check_key(key)?;
         self.backend
-            .delete_key(self.scope, &self.namespace_id, key)
+            .delete_key(self.scope, &self.target, key)
             .await?;
         Ok(format!("Successfully deleted memory with key: {key}"))
     }

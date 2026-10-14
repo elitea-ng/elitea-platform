@@ -34,10 +34,14 @@ pub mod key {
     /// Who owns a memory point: `user:<id>` or `project`. Stamped by the
     /// service from the token; no request can set, filter on or read it.
     pub const OWNER: &str = "owner";
+    /// The memory toolkit a memory point belongs to. Named by the worker
+    /// (the token binds a run, not a toolkit); stamped on every point and
+    /// narrowed by on every memory operation; never a caller's filter key.
+    pub const TOOLKIT_ID: &str = "toolkit_id";
 }
 
 /// The keyword-indexed payload keys, `project_id` (the tenant) excluded.
-pub const KEYWORD_INDEXES: [&str; 9] = [
+pub const KEYWORD_INDEXES: [&str; 10] = [
     key::SOURCE,
     key::NAMESPACE_ID,
     key::GENERATION,
@@ -47,6 +51,7 @@ pub const KEYWORD_INDEXES: [&str; 9] = [
     key::CHUNK_TYPE,
     key::ACL,
     key::OWNER,
+    key::TOOLKIT_ID,
 ];
 
 /// One embedding space: a model slug and a dimension.

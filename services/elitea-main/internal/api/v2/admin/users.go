@@ -33,7 +33,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -301,20 +300,40 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		ids = append(ids, user.ID)
 	}
 
-	// The projects each user belongs to are read before the delete cascades
-	// them away: the user's personal memories are owed a deletion in each.
-	memberships := h.membershipsOf(r.Context(), ids)
-	// One statement, one transaction boundary: a partial delete would leave the
-	// operator unable to tell which half of a bulk selection went through.
+	// One transaction: a partial delete would leave the operator unable to tell
+	// which half of a bulk selection went through, and the journal row for the
+	// users' personal memories (every project: no membership lookup, it would
+	// be gone with the cascade) commits or rolls back with the delete itself.
 	// auth_core__user's dependents all cascade (user_role, token, user_group,
 	// project_user_role, …), so the row delete is sufficient.
-	tag, err := h.pool.Exec(r.Context(),
+	ctx := r.Context()
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx,
 		`DELETE FROM public.auth_core__user WHERE id = ANY($1::int[])`, ids)
 	if err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
 		return
 	}
-	h.removeMemoriesOf(r.Context(), memberships)
+	if h.memoryUsers != nil {
+		memoryIDs := make([]int64, len(ids))
+		for i, id := range ids {
+			memoryIDs[i] = int64(id)
+		}
+		if _, err := h.memoryUsers.EnqueueMemoryUsers(ctx, tx, 0, memoryIDs...); err != nil {
+			slog.ErrorContext(ctx, "could not journal the deleted users' personal-memory cleanup", "err", err)
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": tag.RowsAffected()})
 }
 
@@ -558,50 +577,4 @@ func (h *Handler) callerHasPermission(ctx context.Context, r *http.Request, perm
 		}
 	}
 	return false, nil
-}
-
-// membership is one user's membership of one project.
-type membership struct{ projectID, userID int64 }
-
-// membershipsOf reads the projects `userIDs` are members of. Only a deployment
-// with an elitea-vector client needs the answer; a failed read is logged and
-// leaves the memories to the operator.
-func (h *Handler) membershipsOf(ctx context.Context, userIDs []int) []membership {
-	if h.memoryUsers == nil {
-		return nil
-	}
-	rows, err := h.pool.Query(ctx,
-		`SELECT DISTINCT project_id, user_id FROM public.auth_core__project_user_role WHERE user_id = ANY($1::int[])`, userIDs)
-	if err != nil {
-		slog.ErrorContext(ctx, "could not read the deleted users' projects; their personal memories stay in the vector store", "err", err)
-		return nil
-	}
-	defer rows.Close()
-	var found []membership
-	for rows.Next() {
-		var m membership
-		if err := rows.Scan(&m.projectID, &m.userID); err != nil {
-			slog.ErrorContext(ctx, "could not read a deleted user's project", "err", err)
-			return found
-		}
-		found = append(found, m)
-	}
-	return found
-}
-
-// removeMemoriesOf deletes each membership's personal memories, best effort:
-// the users are already deleted, a failure is logged for the operator to
-// repeat (the call is idempotent).
-func (h *Handler) removeMemoriesOf(ctx context.Context, memberships []membership) {
-	if h.memoryUsers == nil || len(memberships) == 0 {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-	defer cancel()
-	for _, m := range memberships {
-		if err := h.memoryUsers.DeleteMemoryUser(ctx, m.projectID, m.userID); err != nil {
-			slog.ErrorContext(ctx, "the user was deleted but their personal memories could not be deleted from the vector store; repeat the deletion",
-				"project_id", m.projectID, "user_id", m.userID, "err", err)
-		}
-	}
 }

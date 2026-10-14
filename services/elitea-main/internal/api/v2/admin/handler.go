@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
@@ -18,9 +19,9 @@ import (
 )
 
 type Handler struct {
-	// memoryUsers removes a deleted user's personal memories; nil without an
-	// elitea-vector client.
-	memoryUsers MemoryUserRemover
+	// memoryUsers journals the removal of a deleted user's personal memories;
+	// nil when the deployment keeps none in the vector store.
+	memoryUsers MemoryUserJournal
 	pool        *pgxpool.Pool
 	resolver    auth.PermissionResolver
 	suggestions ToolkitRegistrySource
@@ -90,19 +91,19 @@ type Handler struct {
 // Option configures a Handler at construction time.
 type Option func(*Handler)
 
-// MemoryUserRemover deletes every PERSONAL memory a user holds in a project.
-// *vectorclient.Client satisfies it.
-type MemoryUserRemover interface {
-	DeleteMemoryUser(ctx context.Context, projectID, userID int64) error
+// MemoryUserJournal records, in the transaction that deletes users, that their
+// personal memories (in every project) owe the vector store a deletion (worker
+// unit M9). *toolkitcleanup.Journal satisfies it.
+type MemoryUserJournal interface {
+	EnqueueMemoryUsers(ctx context.Context, tx pgx.Tx, projectID int64, userIDs ...int64) (string, error)
 }
 
-// WithMemoryUserRemover wires the removal of a deleted user's personal
-// memories from every project they were a member of. Unwired (no
-// elitea-vector client), nothing is asked.
-func WithMemoryUserRemover(remover MemoryUserRemover) Option {
+// WithMemoryUserJournal wires the journal a user deletion writes to (project 0:
+// every project). Unwired, nothing is journaled.
+func WithMemoryUserJournal(journal MemoryUserJournal) Option {
 	return func(h *Handler) {
-		if remover != nil && !cleanupjournal.IsNilPointer(remover) {
-			h.memoryUsers = remover
+		if journal != nil && !cleanupjournal.IsNilPointer(journal) {
+			h.memoryUsers = journal
 		}
 	}
 }

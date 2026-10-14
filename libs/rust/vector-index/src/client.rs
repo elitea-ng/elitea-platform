@@ -481,7 +481,7 @@ impl VectorClient {
     pub async fn read_memory(
         &self,
         token: &dyn ClaimToken,
-        namespace_id: &str,
+        target: &MemoryTarget,
         scope: pb::MemoryScope,
         space: Option<pb::EmbeddingSpace>,
         filter: Option<pb::Filter>,
@@ -490,7 +490,7 @@ impl VectorClient {
         let request = authorize(
             token,
             pb::ReadMemoryRequest {
-                scope: Some(memory_scope_of(namespace_id, scope)),
+                scope: Some(memory_scope_of(target, scope)),
                 space,
                 filter,
                 limit,
@@ -518,7 +518,7 @@ impl VectorClient {
     pub async fn set_memory_metadata(
         &self,
         token: &dyn ClaimToken,
-        namespace_id: &str,
+        target: &MemoryTarget,
         scope: pb::MemoryScope,
         generation: &str,
         space: Option<pb::EmbeddingSpace>,
@@ -529,7 +529,7 @@ impl VectorClient {
         let request = authorize(
             token,
             pb::SetMemoryMetadataRequest {
-                namespace: Some(memory_namespace(namespace_id, scope, generation)),
+                namespace: Some(memory_namespace(target, scope, generation)),
                 space,
                 document_key: document_key.to_owned(),
                 chunk_id: chunk_id.to_owned(),
@@ -660,6 +660,7 @@ pub fn toolkit_scope(namespace_ids: Vec<String>, active_generation: Option<&str>
         generation: String::new(),
         active_generations,
         memory_scope: 0,
+        toolkit_id: 0,
     }
 }
 
@@ -682,6 +683,7 @@ pub fn toolkit_scope_with_generations(namespaces: &[(String, Option<String>)]) -
             })
             .collect(),
         memory_scope: 0,
+        toolkit_id: 0,
     }
 }
 
@@ -693,6 +695,7 @@ pub fn toolkit_namespace(namespace_id: &str) -> pb::Namespace {
         namespace_id: namespace_id.to_owned(),
         generation: String::new(),
         memory_scope: 0,
+        toolkit_id: 0,
     }
 }
 
@@ -700,29 +703,42 @@ pub fn toolkit_namespace(namespace_id: &str) -> pb::Namespace {
 /// none). The OWNER is never named here: the service takes it from the token.
 #[must_use]
 pub fn memory_namespace(
-    namespace_id: &str,
+    target: &MemoryTarget,
     scope: pb::MemoryScope,
     generation: &str,
 ) -> pb::Namespace {
     pb::Namespace {
         source: pb::Source::Memory as i32,
-        namespace_id: namespace_id.to_owned(),
+        namespace_id: target.namespace_id.clone(),
         generation: generation.to_owned(),
         memory_scope: scope as i32,
+        toolkit_id: target.toolkit_id,
     }
 }
 
-/// A read scope over the one memory namespace `namespace_id` of `scope`.
+/// A read scope over the one memory namespace of `target` in `scope`.
 #[must_use]
-pub fn memory_scope_of(namespace_id: &str, scope: pb::MemoryScope) -> pb::Scope {
+pub fn memory_scope_of(target: &MemoryTarget, scope: pb::MemoryScope) -> pb::Scope {
     pb::Scope {
         project_id: 0,
         source: pb::Source::Memory as i32,
-        namespace_ids: vec![namespace_id.to_owned()],
+        namespace_ids: vec![target.namespace_id.clone()],
         generation: String::new(),
         active_generations: Vec::new(),
         memory_scope: scope as i32,
+        toolkit_id: target.toolkit_id,
     }
+}
+
+/// The memory store one toolkit's tools address: the toolkit (which the
+/// service stamps on every point and narrows every operation by) and the
+/// namespace id hashed from the toolkit and its `namespace` label.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryTarget {
+    /// The memory toolkit's id.
+    pub toolkit_id: i64,
+    /// The vector namespace UUID.
+    pub namespace_id: String,
 }
 
 #[cfg(test)]

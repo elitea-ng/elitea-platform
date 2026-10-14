@@ -274,8 +274,8 @@ impl IndexToolHost for ClaimIndexToolHost {
     /// The `memory` toolkit's tools (worker unit M9) over the claim's vector
     /// token and the gateway embeddings route, with the deployment's memory
     /// embedding model. The project and the owner are the token's, decided by
-    /// `elitea-vector`; the namespace is the toolkit's, hashed by
-    /// `elitea-vector-index`.
+    /// `elitea-vector`; the store is the toolkit's (its id and its
+    /// `namespace` label, hashed by `elitea-vector-index`).
     async fn memory(&self, call: MemoryToolCall<'_>) -> Result<Value, IndexToolFailure> {
         let (prefix, memory_model) = (
             match call.tool {
@@ -307,6 +307,13 @@ impl IndexToolHost for ClaimIndexToolHost {
         let invalid = |error: serde_json::Error| {
             IndexToolFailure::new(format!("{prefix}: the tool arguments are invalid: {error}"))
         };
+        // The store is the TOOLKIT's: the id is part of the namespace hash and
+        // the service stamps and filters by it.
+        let Ok(toolkit_id) = i64::try_from(call.toolkit_id) else {
+            return Err(IndexToolFailure::new(format!(
+                "{prefix}: the memory toolkit's id is out of range"
+            )));
+        };
         let session = VectorSession::new(&self.runtime.vector, &self.token);
         let embedder = GatewayMemoryEmbedder {
             embeddings: &self.runtime.embeddings,
@@ -318,6 +325,7 @@ impl IndexToolHost for ClaimIndexToolHost {
             &embedder,
             &memory_model.slug,
             scope,
+            toolkit_id,
             call.namespace,
         )
         .with_space_cache(Arc::clone(&self.memory_space));

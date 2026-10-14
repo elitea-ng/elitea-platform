@@ -56,9 +56,10 @@ func mustJSON(v any) []byte {
 }
 
 type Handler struct {
-	// memoryUsers removes a user's personal memories from a project the user
-	// leaves; nil without an elitea-vector client.
-	memoryUsers        MemoryUserRemover
+	// memoryUsers journals the removal of a user's personal memories from a
+	// project the user leaves; nil when the deployment keeps none in the
+	// vector store.
+	memoryUsers        MemoryUserJournal
 	pool               *pgxpool.Pool
 	permissionResolver auth.PermissionResolver
 	httpClient         *http.Client
@@ -192,20 +193,19 @@ func WithInviteMailer(m InviteMailer) Option {
 
 type Option func(*Handler)
 
-// MemoryUserRemover deletes every PERSONAL memory a user holds in a project
-// (the memory toolkit's vector points, owned by the user). *vectorclient.Client
-// satisfies it.
-type MemoryUserRemover interface {
-	DeleteMemoryUser(ctx context.Context, projectID, userID int64) error
+// MemoryUserJournal records, in the transaction that removes users from a
+// project, that their personal memories there owe the vector store a deletion
+// (worker unit M9). *toolkitcleanup.Journal satisfies it.
+type MemoryUserJournal interface {
+	EnqueueMemoryUsers(ctx context.Context, tx pgx.Tx, projectID int64, userIDs ...int64) (string, error)
 }
 
-// WithMemoryUserRemover wires the removal of a user's personal memories when
-// the user leaves a project. Unwired (no elitea-vector client), nothing is
-// asked.
-func WithMemoryUserRemover(remover MemoryUserRemover) Option {
+// WithMemoryUserJournal wires the journal a project-membership removal writes
+// to. Unwired, nothing is journaled.
+func WithMemoryUserJournal(journal MemoryUserJournal) Option {
 	return func(handler *Handler) {
-		if remover != nil && !cleanupjournal.IsNilPointer(remover) {
-			handler.memoryUsers = remover
+		if journal != nil && !cleanupjournal.IsNilPointer(journal) {
+			handler.memoryUsers = journal
 		}
 	}
 }

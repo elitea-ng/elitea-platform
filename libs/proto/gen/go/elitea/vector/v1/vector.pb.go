@@ -244,7 +244,15 @@ type Namespace struct {
 	// atomically (ADR-0031 decision 3). Empty means "no generation".
 	Generation string `protobuf:"bytes,3,opt,name=generation,proto3" json:"generation,omitempty"`
 	// memory_scope is required for SOURCE_MEMORY and refused otherwise.
-	MemoryScope   MemoryScope `protobuf:"varint,4,opt,name=memory_scope,json=memoryScope,proto3,enum=elitea.vector.v1.MemoryScope" json:"memory_scope,omitempty"`
+	MemoryScope MemoryScope `protobuf:"varint,4,opt,name=memory_scope,json=memoryScope,proto3,enum=elitea.vector.v1.MemoryScope" json:"memory_scope,omitempty"`
+	// toolkit_id is the memory toolkit the points belong to: required (positive)
+	// for SOURCE_MEMORY and refused otherwise. The claim token binds a run, not a
+	// toolkit, so the worker names it from the toolkit reference Main froze into
+	// the claim; the service stamps it on every point and narrows every
+	// operation by it, so two toolkits never share a store whatever their
+	// namespace_id, and a toolkit delete removes exactly its own points. It is
+	// not a filter key a caller can use.
+	ToolkitId     int64 `protobuf:"varint,5,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -305,6 +313,13 @@ func (x *Namespace) GetMemoryScope() MemoryScope {
 		return x.MemoryScope
 	}
 	return MemoryScope_MEMORY_SCOPE_UNSPECIFIED
+}
+
+func (x *Namespace) GetToolkitId() int64 {
+	if x != nil {
+		return x.ToolkitId
+	}
+	return 0
 }
 
 // Point is one chunk to write. project_id, source, namespace_id and
@@ -1635,7 +1650,9 @@ type Scope struct {
 	// one entry per namespace; it cannot be combined with `generation`.
 	ActiveGenerations []*ActiveGeneration `protobuf:"bytes,5,rep,name=active_generations,json=activeGenerations,proto3" json:"active_generations,omitempty"`
 	// memory_scope is required for SOURCE_MEMORY and refused otherwise.
-	MemoryScope   MemoryScope `protobuf:"varint,6,opt,name=memory_scope,json=memoryScope,proto3,enum=elitea.vector.v1.MemoryScope" json:"memory_scope,omitempty"`
+	MemoryScope MemoryScope `protobuf:"varint,6,opt,name=memory_scope,json=memoryScope,proto3,enum=elitea.vector.v1.MemoryScope" json:"memory_scope,omitempty"`
+	// toolkit_id: as in Namespace.
+	ToolkitId     int64 `protobuf:"varint,7,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1710,6 +1727,13 @@ func (x *Scope) GetMemoryScope() MemoryScope {
 		return x.MemoryScope
 	}
 	return MemoryScope_MEMORY_SCOPE_UNSPECIFIED
+}
+
+func (x *Scope) GetToolkitId() int64 {
+	if x != nil {
+		return x.ToolkitId
+	}
+	return 0
 }
 
 type ScoredPoint struct {
@@ -2639,8 +2663,8 @@ func (x *ListDocumentsResponse) GetDocuments() []*IndexedDocument {
 
 type ReadMemoryRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// scope names source SOURCE_MEMORY, a memory_scope and exactly one
-	// namespace; generation and active_generations are refused.
+	// scope names source SOURCE_MEMORY, a memory_scope, a toolkit_id and exactly
+	// one namespace; generation and active_generations are refused.
 	Scope *Scope `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
 	// space is optional. Without it every collection is read.
 	Space  *EmbeddingSpace `protobuf:"bytes,2,opt,name=space,proto3" json:"space,omitempty"`
@@ -2711,7 +2735,12 @@ func (x *ReadMemoryRequest) GetLimit() uint32 {
 
 type ReadMemoryResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// points are in no particular order; score is 0.
+	// points are the newest first: by the version's valid_from
+	// (metadata.t.valid_from) descending, then by point id, across every
+	// collection read; score is 0. Every matching point of each collection is
+	// read (a read that matches more than 5000 points is refused with
+	// RESOURCE_EXHAUSTED) before the first `limit` are kept, so the answer does not
+	// depend on how the points are spread over collections.
 	Points        []*ScoredPoint `protobuf:"bytes,1,rep,name=points,proto3" json:"points,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2871,8 +2900,10 @@ func (*SetMemoryMetadataResponse) Descriptor() ([]byte, []int) {
 }
 
 type DeleteMemoryUserRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	ProjectId int64                  `protobuf:"varint,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project_id is the project to clean; 0 cleans every project (a deleted
+	// user), a positive id only that project (a user removed from it).
+	ProjectId int64 `protobuf:"varint,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
 	// user_id is the platform user whose personal memories go.
 	UserId        int64 `protobuf:"varint,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2923,28 +2954,28 @@ func (x *DeleteMemoryUserRequest) GetUserId() int64 {
 	return 0
 }
 
-type DeleteMemoryNamespaceRequest struct {
+type DeleteMemoryToolkitRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ProjectId     int64                  `protobuf:"varint,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
-	NamespaceId   string                 `protobuf:"bytes,2,opt,name=namespace_id,json=namespaceId,proto3" json:"namespace_id,omitempty"`
+	ToolkitId     int64                  `protobuf:"varint,2,opt,name=toolkit_id,json=toolkitId,proto3" json:"toolkit_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DeleteMemoryNamespaceRequest) Reset() {
-	*x = DeleteMemoryNamespaceRequest{}
+func (x *DeleteMemoryToolkitRequest) Reset() {
+	*x = DeleteMemoryToolkitRequest{}
 	mi := &file_elitea_vector_v1_vector_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DeleteMemoryNamespaceRequest) String() string {
+func (x *DeleteMemoryToolkitRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DeleteMemoryNamespaceRequest) ProtoMessage() {}
+func (*DeleteMemoryToolkitRequest) ProtoMessage() {}
 
-func (x *DeleteMemoryNamespaceRequest) ProtoReflect() protoreflect.Message {
+func (x *DeleteMemoryToolkitRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_elitea_vector_v1_vector_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2956,23 +2987,23 @@ func (x *DeleteMemoryNamespaceRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DeleteMemoryNamespaceRequest.ProtoReflect.Descriptor instead.
-func (*DeleteMemoryNamespaceRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use DeleteMemoryToolkitRequest.ProtoReflect.Descriptor instead.
+func (*DeleteMemoryToolkitRequest) Descriptor() ([]byte, []int) {
 	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{41}
 }
 
-func (x *DeleteMemoryNamespaceRequest) GetProjectId() int64 {
+func (x *DeleteMemoryToolkitRequest) GetProjectId() int64 {
 	if x != nil {
 		return x.ProjectId
 	}
 	return 0
 }
 
-func (x *DeleteMemoryNamespaceRequest) GetNamespaceId() string {
+func (x *DeleteMemoryToolkitRequest) GetToolkitId() int64 {
 	if x != nil {
-		return x.NamespaceId
+		return x.ToolkitId
 	}
-	return ""
+	return 0
 }
 
 type DeleteMemoryUserResponse struct {
@@ -3020,7 +3051,7 @@ func (x *DeleteMemoryUserResponse) GetCollections() uint32 {
 	return 0
 }
 
-type DeleteMemoryNamespaceResponse struct {
+type DeleteMemoryToolkitResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// collections is the number of collections the delete was applied to.
 	Collections   uint32 `protobuf:"varint,1,opt,name=collections,proto3" json:"collections,omitempty"`
@@ -3028,20 +3059,20 @@ type DeleteMemoryNamespaceResponse struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DeleteMemoryNamespaceResponse) Reset() {
-	*x = DeleteMemoryNamespaceResponse{}
+func (x *DeleteMemoryToolkitResponse) Reset() {
+	*x = DeleteMemoryToolkitResponse{}
 	mi := &file_elitea_vector_v1_vector_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DeleteMemoryNamespaceResponse) String() string {
+func (x *DeleteMemoryToolkitResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DeleteMemoryNamespaceResponse) ProtoMessage() {}
+func (*DeleteMemoryToolkitResponse) ProtoMessage() {}
 
-func (x *DeleteMemoryNamespaceResponse) ProtoReflect() protoreflect.Message {
+func (x *DeleteMemoryToolkitResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_elitea_vector_v1_vector_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3053,12 +3084,12 @@ func (x *DeleteMemoryNamespaceResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DeleteMemoryNamespaceResponse.ProtoReflect.Descriptor instead.
-func (*DeleteMemoryNamespaceResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use DeleteMemoryToolkitResponse.ProtoReflect.Descriptor instead.
+func (*DeleteMemoryToolkitResponse) Descriptor() ([]byte, []int) {
 	return file_elitea_vector_v1_vector_proto_rawDescGZIP(), []int{43}
 }
 
-func (x *DeleteMemoryNamespaceResponse) GetCollections() uint32 {
+func (x *DeleteMemoryToolkitResponse) GetCollections() uint32 {
 	if x != nil {
 		return x.Collections
 	}
@@ -3073,14 +3104,16 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\x0eEmbeddingSpace\x12\x1d\n" +
 	"\n" +
 	"model_slug\x18\x01 \x01(\tR\tmodelSlug\x12\x1c\n" +
-	"\tdimension\x18\x02 \x01(\rR\tdimension\"\xc2\x01\n" +
+	"\tdimension\x18\x02 \x01(\rR\tdimension\"\xe1\x01\n" +
 	"\tNamespace\x120\n" +
 	"\x06source\x18\x01 \x01(\x0e2\x18.elitea.vector.v1.SourceR\x06source\x12!\n" +
 	"\fnamespace_id\x18\x02 \x01(\tR\vnamespaceId\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x03 \x01(\tR\n" +
 	"generation\x12@\n" +
-	"\fmemory_scope\x18\x04 \x01(\x0e2\x1d.elitea.vector.v1.MemoryScopeR\vmemoryScope\"\x8f\x02\n" +
+	"\fmemory_scope\x18\x04 \x01(\x0e2\x1d.elitea.vector.v1.MemoryScopeR\vmemoryScope\x12\x1d\n" +
+	"\n" +
+	"toolkit_id\x18\x05 \x01(\x03R\ttoolkitId\"\x8f\x02\n" +
 	"\x05Point\x12!\n" +
 	"\fdocument_key\x18\x01 \x01(\tR\vdocumentKey\x12)\n" +
 	"\x10document_version\x18\x02 \x01(\tR\x0fdocumentVersion\x12\x1b\n" +
@@ -3166,7 +3199,7 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\fnamespace_id\x18\x01 \x01(\tR\vnamespaceId\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x02 \x01(\tR\n" +
-	"generation\"\xb2\x02\n" +
+	"generation\"\xd1\x02\n" +
 	"\x05Scope\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\x03R\tprojectId\x120\n" +
@@ -3176,7 +3209,9 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"generation\x18\x04 \x01(\tR\n" +
 	"generation\x12Q\n" +
 	"\x12active_generations\x18\x05 \x03(\v2\".elitea.vector.v1.ActiveGenerationR\x11activeGenerations\x12@\n" +
-	"\fmemory_scope\x18\x06 \x01(\x0e2\x1d.elitea.vector.v1.MemoryScopeR\vmemoryScope\"\xed\x03\n" +
+	"\fmemory_scope\x18\x06 \x01(\x0e2\x1d.elitea.vector.v1.MemoryScopeR\vmemoryScope\x12\x1d\n" +
+	"\n" +
+	"toolkit_id\x18\a \x01(\x03R\ttoolkitId\"\xed\x03\n" +
 	"\vScoredPoint\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05score\x18\x02 \x01(\x02R\x05score\x12\x1d\n" +
@@ -3277,14 +3312,15 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\x17DeleteMemoryUserRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\x03R\tprojectId\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\x03R\x06userId\"`\n" +
-	"\x1cDeleteMemoryNamespaceRequest\x12\x1d\n" +
+	"\auser_id\x18\x02 \x01(\x03R\x06userId\"Z\n" +
+	"\x1aDeleteMemoryToolkitRequest\x12\x1d\n" +
 	"\n" +
-	"project_id\x18\x01 \x01(\x03R\tprojectId\x12!\n" +
-	"\fnamespace_id\x18\x02 \x01(\tR\vnamespaceId\"<\n" +
+	"project_id\x18\x01 \x01(\x03R\tprojectId\x12\x1d\n" +
+	"\n" +
+	"toolkit_id\x18\x02 \x01(\x03R\ttoolkitId\"<\n" +
 	"\x18DeleteMemoryUserResponse\x12 \n" +
-	"\vcollections\x18\x01 \x01(\rR\vcollections\"A\n" +
-	"\x1dDeleteMemoryNamespaceResponse\x12 \n" +
+	"\vcollections\x18\x01 \x01(\rR\vcollections\"?\n" +
+	"\x1bDeleteMemoryToolkitResponse\x12 \n" +
 	"\vcollections\x18\x01 \x01(\rR\vcollections*x\n" +
 	"\x06Source\x12\x16\n" +
 	"\x12SOURCE_UNSPECIFIED\x10\x00\x12\x18\n" +
@@ -3295,7 +3331,7 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\vMemoryScope\x12\x1c\n" +
 	"\x18MEMORY_SCOPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15MEMORY_SCOPE_PERSONAL\x10\x01\x12\x18\n" +
-	"\x14MEMORY_SCOPE_PROJECT\x10\x022\xe9\b\n" +
+	"\x14MEMORY_SCOPE_PROJECT\x10\x022\xe3\b\n" +
 	"\rVectorService\x12M\n" +
 	"\x06Upsert\x12\x1f.elitea.vector.v1.UpsertRequest\x1a .elitea.vector.v1.UpsertResponse(\x01\x12K\n" +
 	"\x06Delete\x12\x1f.elitea.vector.v1.DeleteRequest\x1a .elitea.vector.v1.DeleteResponse\x12Z\n" +
@@ -3308,8 +3344,8 @@ const file_elitea_vector_v1_vector_proto_rawDesc = "" +
 	"\n" +
 	"ReadMemory\x12#.elitea.vector.v1.ReadMemoryRequest\x1a$.elitea.vector.v1.ReadMemoryResponse\x12l\n" +
 	"\x11SetMemoryMetadata\x12*.elitea.vector.v1.SetMemoryMetadataRequest\x1a+.elitea.vector.v1.SetMemoryMetadataResponse\x12i\n" +
-	"\x10DeleteMemoryUser\x12).elitea.vector.v1.DeleteMemoryUserRequest\x1a*.elitea.vector.v1.DeleteMemoryUserResponse\x12x\n" +
-	"\x15DeleteMemoryNamespace\x12..elitea.vector.v1.DeleteMemoryNamespaceRequest\x1a/.elitea.vector.v1.DeleteMemoryNamespaceResponseBQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
+	"\x10DeleteMemoryUser\x12).elitea.vector.v1.DeleteMemoryUserRequest\x1a*.elitea.vector.v1.DeleteMemoryUserResponse\x12r\n" +
+	"\x13DeleteMemoryToolkit\x12,.elitea.vector.v1.DeleteMemoryToolkitRequest\x1a-.elitea.vector.v1.DeleteMemoryToolkitResponseBQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
 
 var (
 	file_elitea_vector_v1_vector_proto_rawDescOnce sync.Once
@@ -3326,52 +3362,52 @@ func file_elitea_vector_v1_vector_proto_rawDescGZIP() []byte {
 var file_elitea_vector_v1_vector_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_elitea_vector_v1_vector_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
 var file_elitea_vector_v1_vector_proto_goTypes = []any{
-	(Source)(0),                           // 0: elitea.vector.v1.Source
-	(MemoryScope)(0),                      // 1: elitea.vector.v1.MemoryScope
-	(*EmbeddingSpace)(nil),                // 2: elitea.vector.v1.EmbeddingSpace
-	(*Namespace)(nil),                     // 3: elitea.vector.v1.Namespace
-	(*Point)(nil),                         // 4: elitea.vector.v1.Point
-	(*UpsertHeader)(nil),                  // 5: elitea.vector.v1.UpsertHeader
-	(*UpsertBatch)(nil),                   // 6: elitea.vector.v1.UpsertBatch
-	(*UpsertRequest)(nil),                 // 7: elitea.vector.v1.UpsertRequest
-	(*UpsertResponse)(nil),                // 8: elitea.vector.v1.UpsertResponse
-	(*DocumentKeys)(nil),                  // 9: elitea.vector.v1.DocumentKeys
-	(*Generations)(nil),                   // 10: elitea.vector.v1.Generations
-	(*GenerationsExcept)(nil),             // 11: elitea.vector.v1.GenerationsExcept
-	(*WholeNamespace)(nil),                // 12: elitea.vector.v1.WholeNamespace
-	(*DeleteRequest)(nil),                 // 13: elitea.vector.v1.DeleteRequest
-	(*DeleteResponse)(nil),                // 14: elitea.vector.v1.DeleteResponse
-	(*DropProjectRequest)(nil),            // 15: elitea.vector.v1.DropProjectRequest
-	(*DropProjectResponse)(nil),           // 16: elitea.vector.v1.DropProjectResponse
-	(*StringList)(nil),                    // 17: elitea.vector.v1.StringList
-	(*Condition)(nil),                     // 18: elitea.vector.v1.Condition
-	(*Range)(nil),                         // 19: elitea.vector.v1.Range
-	(*IsEmpty)(nil),                       // 20: elitea.vector.v1.IsEmpty
-	(*IsNull)(nil),                        // 21: elitea.vector.v1.IsNull
-	(*Filter)(nil),                        // 22: elitea.vector.v1.Filter
-	(*ActiveGeneration)(nil),              // 23: elitea.vector.v1.ActiveGeneration
-	(*Scope)(nil),                         // 24: elitea.vector.v1.Scope
-	(*ScoredPoint)(nil),                   // 25: elitea.vector.v1.ScoredPoint
-	(*SearchRequest)(nil),                 // 26: elitea.vector.v1.SearchRequest
-	(*SearchResponse)(nil),                // 27: elitea.vector.v1.SearchResponse
-	(*HybridSearchRequest)(nil),           // 28: elitea.vector.v1.HybridSearchRequest
-	(*HybridSearchResponse)(nil),          // 29: elitea.vector.v1.HybridSearchResponse
-	(*CountRequest)(nil),                  // 30: elitea.vector.v1.CountRequest
-	(*CountResponse)(nil),                 // 31: elitea.vector.v1.CountResponse
-	(*ListIndexesRequest)(nil),            // 32: elitea.vector.v1.ListIndexesRequest
-	(*IndexInfo)(nil),                     // 33: elitea.vector.v1.IndexInfo
-	(*ListIndexesResponse)(nil),           // 34: elitea.vector.v1.ListIndexesResponse
-	(*ListDocumentsRequest)(nil),          // 35: elitea.vector.v1.ListDocumentsRequest
-	(*IndexedDocument)(nil),               // 36: elitea.vector.v1.IndexedDocument
-	(*ListDocumentsResponse)(nil),         // 37: elitea.vector.v1.ListDocumentsResponse
-	(*ReadMemoryRequest)(nil),             // 38: elitea.vector.v1.ReadMemoryRequest
-	(*ReadMemoryResponse)(nil),            // 39: elitea.vector.v1.ReadMemoryResponse
-	(*SetMemoryMetadataRequest)(nil),      // 40: elitea.vector.v1.SetMemoryMetadataRequest
-	(*SetMemoryMetadataResponse)(nil),     // 41: elitea.vector.v1.SetMemoryMetadataResponse
-	(*DeleteMemoryUserRequest)(nil),       // 42: elitea.vector.v1.DeleteMemoryUserRequest
-	(*DeleteMemoryNamespaceRequest)(nil),  // 43: elitea.vector.v1.DeleteMemoryNamespaceRequest
-	(*DeleteMemoryUserResponse)(nil),      // 44: elitea.vector.v1.DeleteMemoryUserResponse
-	(*DeleteMemoryNamespaceResponse)(nil), // 45: elitea.vector.v1.DeleteMemoryNamespaceResponse
+	(Source)(0),                         // 0: elitea.vector.v1.Source
+	(MemoryScope)(0),                    // 1: elitea.vector.v1.MemoryScope
+	(*EmbeddingSpace)(nil),              // 2: elitea.vector.v1.EmbeddingSpace
+	(*Namespace)(nil),                   // 3: elitea.vector.v1.Namespace
+	(*Point)(nil),                       // 4: elitea.vector.v1.Point
+	(*UpsertHeader)(nil),                // 5: elitea.vector.v1.UpsertHeader
+	(*UpsertBatch)(nil),                 // 6: elitea.vector.v1.UpsertBatch
+	(*UpsertRequest)(nil),               // 7: elitea.vector.v1.UpsertRequest
+	(*UpsertResponse)(nil),              // 8: elitea.vector.v1.UpsertResponse
+	(*DocumentKeys)(nil),                // 9: elitea.vector.v1.DocumentKeys
+	(*Generations)(nil),                 // 10: elitea.vector.v1.Generations
+	(*GenerationsExcept)(nil),           // 11: elitea.vector.v1.GenerationsExcept
+	(*WholeNamespace)(nil),              // 12: elitea.vector.v1.WholeNamespace
+	(*DeleteRequest)(nil),               // 13: elitea.vector.v1.DeleteRequest
+	(*DeleteResponse)(nil),              // 14: elitea.vector.v1.DeleteResponse
+	(*DropProjectRequest)(nil),          // 15: elitea.vector.v1.DropProjectRequest
+	(*DropProjectResponse)(nil),         // 16: elitea.vector.v1.DropProjectResponse
+	(*StringList)(nil),                  // 17: elitea.vector.v1.StringList
+	(*Condition)(nil),                   // 18: elitea.vector.v1.Condition
+	(*Range)(nil),                       // 19: elitea.vector.v1.Range
+	(*IsEmpty)(nil),                     // 20: elitea.vector.v1.IsEmpty
+	(*IsNull)(nil),                      // 21: elitea.vector.v1.IsNull
+	(*Filter)(nil),                      // 22: elitea.vector.v1.Filter
+	(*ActiveGeneration)(nil),            // 23: elitea.vector.v1.ActiveGeneration
+	(*Scope)(nil),                       // 24: elitea.vector.v1.Scope
+	(*ScoredPoint)(nil),                 // 25: elitea.vector.v1.ScoredPoint
+	(*SearchRequest)(nil),               // 26: elitea.vector.v1.SearchRequest
+	(*SearchResponse)(nil),              // 27: elitea.vector.v1.SearchResponse
+	(*HybridSearchRequest)(nil),         // 28: elitea.vector.v1.HybridSearchRequest
+	(*HybridSearchResponse)(nil),        // 29: elitea.vector.v1.HybridSearchResponse
+	(*CountRequest)(nil),                // 30: elitea.vector.v1.CountRequest
+	(*CountResponse)(nil),               // 31: elitea.vector.v1.CountResponse
+	(*ListIndexesRequest)(nil),          // 32: elitea.vector.v1.ListIndexesRequest
+	(*IndexInfo)(nil),                   // 33: elitea.vector.v1.IndexInfo
+	(*ListIndexesResponse)(nil),         // 34: elitea.vector.v1.ListIndexesResponse
+	(*ListDocumentsRequest)(nil),        // 35: elitea.vector.v1.ListDocumentsRequest
+	(*IndexedDocument)(nil),             // 36: elitea.vector.v1.IndexedDocument
+	(*ListDocumentsResponse)(nil),       // 37: elitea.vector.v1.ListDocumentsResponse
+	(*ReadMemoryRequest)(nil),           // 38: elitea.vector.v1.ReadMemoryRequest
+	(*ReadMemoryResponse)(nil),          // 39: elitea.vector.v1.ReadMemoryResponse
+	(*SetMemoryMetadataRequest)(nil),    // 40: elitea.vector.v1.SetMemoryMetadataRequest
+	(*SetMemoryMetadataResponse)(nil),   // 41: elitea.vector.v1.SetMemoryMetadataResponse
+	(*DeleteMemoryUserRequest)(nil),     // 42: elitea.vector.v1.DeleteMemoryUserRequest
+	(*DeleteMemoryToolkitRequest)(nil),  // 43: elitea.vector.v1.DeleteMemoryToolkitRequest
+	(*DeleteMemoryUserResponse)(nil),    // 44: elitea.vector.v1.DeleteMemoryUserResponse
+	(*DeleteMemoryToolkitResponse)(nil), // 45: elitea.vector.v1.DeleteMemoryToolkitResponse
 }
 var file_elitea_vector_v1_vector_proto_depIdxs = []int32{
 	0,  // 0: elitea.vector.v1.Namespace.source:type_name -> elitea.vector.v1.Source
@@ -3434,7 +3470,7 @@ var file_elitea_vector_v1_vector_proto_depIdxs = []int32{
 	38, // 57: elitea.vector.v1.VectorService.ReadMemory:input_type -> elitea.vector.v1.ReadMemoryRequest
 	40, // 58: elitea.vector.v1.VectorService.SetMemoryMetadata:input_type -> elitea.vector.v1.SetMemoryMetadataRequest
 	42, // 59: elitea.vector.v1.VectorService.DeleteMemoryUser:input_type -> elitea.vector.v1.DeleteMemoryUserRequest
-	43, // 60: elitea.vector.v1.VectorService.DeleteMemoryNamespace:input_type -> elitea.vector.v1.DeleteMemoryNamespaceRequest
+	43, // 60: elitea.vector.v1.VectorService.DeleteMemoryToolkit:input_type -> elitea.vector.v1.DeleteMemoryToolkitRequest
 	8,  // 61: elitea.vector.v1.VectorService.Upsert:output_type -> elitea.vector.v1.UpsertResponse
 	14, // 62: elitea.vector.v1.VectorService.Delete:output_type -> elitea.vector.v1.DeleteResponse
 	16, // 63: elitea.vector.v1.VectorService.DropProject:output_type -> elitea.vector.v1.DropProjectResponse
@@ -3446,7 +3482,7 @@ var file_elitea_vector_v1_vector_proto_depIdxs = []int32{
 	39, // 69: elitea.vector.v1.VectorService.ReadMemory:output_type -> elitea.vector.v1.ReadMemoryResponse
 	41, // 70: elitea.vector.v1.VectorService.SetMemoryMetadata:output_type -> elitea.vector.v1.SetMemoryMetadataResponse
 	44, // 71: elitea.vector.v1.VectorService.DeleteMemoryUser:output_type -> elitea.vector.v1.DeleteMemoryUserResponse
-	45, // 72: elitea.vector.v1.VectorService.DeleteMemoryNamespace:output_type -> elitea.vector.v1.DeleteMemoryNamespaceResponse
+	45, // 72: elitea.vector.v1.VectorService.DeleteMemoryToolkit:output_type -> elitea.vector.v1.DeleteMemoryToolkitResponse
 	61, // [61:73] is the sub-list for method output_type
 	49, // [49:61] is the sub-list for method input_type
 	49, // [49:49] is the sub-list for extension type_name
