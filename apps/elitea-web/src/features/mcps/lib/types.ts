@@ -41,6 +41,8 @@ export interface StoredMcpToken {
   client_secret?: string | undefined;
   project_id?: string | undefined;
   toolkit_id?: string | undefined;
+  /** The challenge's protected-resource metadata URL, replayed on refresh. */
+  resource_metadata_url?: string | undefined;
   toolkit_type?: string | undefined;
   authorization_endpoint?: string | undefined;
   revocation_endpoint?: string | undefined;
@@ -85,6 +87,7 @@ export interface SetAccessTokenOAuthMeta {
   client_secret?: string | undefined;
   project_id?: string | undefined;
   toolkit_id?: string | undefined;
+  resource_metadata_url?: string | undefined;
   authorization_endpoint?: string | undefined;
   revocation_endpoint?: string | undefined;
   registration_endpoint?: string | undefined;
@@ -156,4 +159,5 @@ export interface McpAuthMetadata {
   resourceScopes?: readonly string[] | undefined;
   configurationUuid?: string | undefined;
   toolkitId?: string | undefined;
+  resourceMetadataUrl?: string | undefined;
 }

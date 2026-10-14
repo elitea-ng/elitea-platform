@@ -71,7 +71,7 @@ func TestMCPAuthorizationServerMetadataTriesTheNextCandidateOnIssuerMismatch(t *
 	defer server.Close()
 	base = server.URL
 
-	metadata, err := NewHandler(nil, WithHTTPClient(server.Client())).mcpAuthorizationServerMetadata(t.Context(), base+"/tenant/")
+	metadata, err := NewHandler(nil, WithHTTPClient(server.Client())).authorizationMetadataSource().authorizationServer(t.Context(), base+"/tenant/")
 	require.NoError(t, err)
 	require.Equal(t, base+"/token", metadata["token_endpoint"])
 }

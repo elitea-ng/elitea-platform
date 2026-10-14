@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -54,7 +55,10 @@ func mcpDiscoveryHeaders(headers map[string]string, tokens map[string]mcpDiscove
 	return result
 }
 
-var errMCPDiscoveryMetadata = errors.New("MCP authorization metadata is unavailable")
+var (
+	errMCPDiscoveryMetadata = errors.New("MCP authorization metadata is unavailable")
+	errMCPDiscoveryTimeout  = errors.New("MCP authorization metadata timed out")
+)
 
 // mcpMetadataSource fetches PUBLIC authorization metadata. The tool sync reads
 // through the handler's default client; the OAuth proxy reads through the
@@ -87,6 +91,10 @@ type mcpDiscovered struct {
 	// issuers holds the validated metadata of the servers that answered, in
 	// order. With all=false it holds only the first server's.
 	issuers []map[string]any
+	// timedOut reports that at least one fetch ran out of time. A server that
+	// did not answer is skipped, but a refusal that followed a timeout is not
+	// the same thing as one that followed a mismatch.
+	timedOut bool
 }
 
 // discover is the one implementation of the walk, shared by the tool sync and
@@ -96,10 +104,11 @@ type mcpDiscovered struct {
 // all=true an issuer that does not answer is skipped, and at least one must.
 func (s mcpMetadataSource) discover(
 	ctx context.Context, endpoint *url.URL, advertised string, maxServers int, all bool,
+	stop func(issuer map[string]any) bool,
 ) (mcpDiscovered, error) {
 	resource, metadataURL, err := s.protected(ctx, endpoint, advertised)
 	if err != nil {
-		return mcpDiscovered{}, err
+		return mcpDiscovered{timedOut: errors.Is(err, errMCPDiscoveryTimeout)}, err
 	}
 	servers, ok := boundedMCPMetadataList(resource["authorization_servers"])
 	if !ok || len(servers) == 0 || len(servers) > maxServers {
@@ -116,15 +125,29 @@ func (s mcpMetadataSource) discover(
 		metadata, err := s.authorizationServer(ctx, server)
 		if err == nil {
 			found.issuers = append(found.issuers, metadata)
+			// The caller has what it came for: later servers, which may be
+			// slow or dead, must not spend the budget the exchange needs.
+			if stop != nil && stop(metadata) {
+				break
+			}
 		} else if !all {
-			return mcpDiscovered{}, err
+			return mcpDiscovered{timedOut: errors.Is(err, errMCPDiscoveryTimeout)}, err
+		} else if errors.Is(err, errMCPDiscoveryTimeout) {
+			found.timedOut = true
+			if ctx.Err() != nil {
+				break
+			}
 		}
 		if !all {
 			break
 		}
 	}
 	if len(found.issuers) == 0 {
-		return mcpDiscovered{}, errMCPDiscoveryMetadata
+		err := errMCPDiscoveryMetadata
+		if found.timedOut {
+			err = errMCPDiscoveryTimeout
+		}
+		return found, err
 	}
 	return found, nil
 }
@@ -136,7 +159,7 @@ func (h *Handler) mcpDiscoveryAuthorization(ctx context.Context, endpoint *url.U
 	if !errors.As(cause, &required) {
 		return nil, cause
 	}
-	found, err := h.syncMetadataSource().discover(ctx, endpoint, required.ResourceMetadataURL(), mcpSyncMaxServers, false)
+	found, err := h.syncMetadataSource().discover(ctx, endpoint, required.ResourceMetadataURL(), mcpSyncMaxServers, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +178,9 @@ func (s mcpMetadataSource) protected(ctx context.Context, endpoint *url.URL, adv
 	}
 	for _, candidate := range candidates {
 		metadata, err := s.read(ctx, candidate)
+		if errors.Is(err, errMCPDiscoveryTimeout) {
+			return nil, "", err
+		}
 		if err != nil {
 			continue
 		}
@@ -165,10 +191,6 @@ func (s mcpMetadataSource) protected(ctx context.Context, endpoint *url.URL, adv
 		return metadata, candidate, nil
 	}
 	return nil, "", errMCPDiscoveryMetadata
-}
-
-func (h *Handler) mcpAuthorizationServerMetadata(ctx context.Context, rawIssuer string) (map[string]any, error) {
-	return h.syncMetadataSource().authorizationServer(ctx, rawIssuer)
 }
 
 func (s mcpMetadataSource) authorizationServer(ctx context.Context, rawIssuer string) (map[string]any, error) {
@@ -183,6 +205,9 @@ func (s mcpMetadataSource) authorizationServer(ctx context.Context, rawIssuer st
 	candidates := []string{base + "/.well-known/oauth-authorization-server" + path, base + path + "/.well-known/openid-configuration"}
 	for _, candidate := range candidates {
 		metadata, err := s.read(ctx, candidate)
+		if errors.Is(err, errMCPDiscoveryTimeout) {
+			return nil, err
+		}
 		if err != nil {
 			continue
 		}
@@ -246,6 +271,10 @@ func (s mcpMetadataSource) read(ctx context.Context, address string) (map[string
 		response, err = s.h.doMCPProxyRequest(request)
 	}
 	if err != nil {
+		var netErr net.Error
+		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+			return nil, errMCPDiscoveryTimeout
+		}
 		return nil, errMCPDiscoveryMetadata
 	}
 	defer func() { _ = response.Body.Close() }()

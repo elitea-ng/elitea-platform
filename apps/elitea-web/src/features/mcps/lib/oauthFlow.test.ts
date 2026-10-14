@@ -371,6 +371,40 @@ describe('startMcpAuthFlow', () => {
     await assertion;
   });
 
+  it('forwards the challenge\'s resource_metadata_url on the exchange and on a later refresh', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const { popup } = stubPopup();
+    const resource = 'https://mcp-hint.example.com/mcp';
+    const hint = 'https://mcp-hint.example.com/.well-known/oauth-protected-resource/mcp';
+    const grants: Record<string, unknown>[] = [];
+    server.use(
+      http.post('*/api/v2/elitea_core/mcp_oauth_proxy/5', async ({ request }) => {
+        grants.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({ access_token: `access-${grants.length}`, expires_in: 3600, refresh_token: 'refresh' });
+      }),
+    );
+
+    const flow = startMcpAuthFlow({
+      serverUrl: resource,
+      resourceUrl: resource,
+      resourceMetadataUrl: hint,
+      projectId: 5,
+      toolkitId: '19',
+      clientId: 'registered-app',
+      resourceMetadata: { oauth_authorization_server: {
+        authorization_endpoint: 'https://as.example.com/authorize',
+        token_endpoint: 'https://as.example.com/token',
+      } },
+    });
+    await vi.waitFor(() => expect(popup.location.href).toContain('/authorize?'));
+    deliverAuthResult({ code: 'code' }, stateFromPopupUrl(popup));
+    await flow;
+    expect(grants[0]).toMatchObject({ grant_type: 'authorization_code', resource_metadata_url: hint });
+
+    await refreshAccessToken({ serverUrl: resource, projectId: 5, clientId: 'registered-app', tokenEndpoint: 'https://as.example.com/token', toolkitId: '19' });
+    expect(grants[1]).toMatchObject({ grant_type: 'refresh_token', resource_metadata_url: hint });
+  });
+
   it('sends used_dcr to the backend on token exchange when DCR issued the client_id', async () => {
     configureGeneratedClient({ baseUrl: '/api/v2' });
     const { popup } = stubPopup();

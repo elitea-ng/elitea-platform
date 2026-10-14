@@ -33,6 +33,7 @@ export interface McpAuthMetadataSource {
         provided_settings?: McpProvidedSettings | undefined;
         authorization_servers?: readonly string[] | undefined;
         toolkit_id?: string | undefined;
+        resource_metadata_url?: string | undefined;
       }
     | undefined;
   toolMeta?:
@@ -40,6 +41,7 @@ export interface McpAuthMetadataSource {
         resource_metadata?: RawResourceMetadata | undefined;
         provided_settings?: McpProvidedSettings | undefined;
         toolkit_id?: string | undefined;
+        resource_metadata_url?: string | undefined;
       }
     | undefined;
   toolOutputs?:
@@ -119,6 +121,7 @@ export function extractMcpAuthMetadata(source: McpAuthMetadataSource | null | un
     resourceScopes: resourceMetadata.scopes_supported,
     configurationUuid: resourceMetadata.configuration_uuid,
     toolkitId: pickMcpToolkitId(responseMetadata, toolMeta, resourceMetadata),
+    resourceMetadataUrl: responseMetadata.resource_metadata_url ?? toolMeta.resource_metadata_url,
   };
 }
 

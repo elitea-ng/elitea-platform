@@ -2,6 +2,7 @@ package eliteacore
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
@@ -424,11 +425,7 @@ func (h *Handler) resolveMCPOAuthCredentials(
 	if err != nil {
 		return mcpOAuthCredentials{}, &mcpOAuthResolutionError{http.StatusBadRequest, "toolkit_type_mismatch"}
 	}
-	// Whose secret is it? Resolve fills a blank client_secret from the
-	// catalogue's vault, and that secret belongs to the operator, not to the
-	// toolkit's editor.
-	ownSecret := firstOAuthText(oauthSettingsLayers(resolved.Settings), "client_secret") != ""
-	settings, err := h.resolvePrebuiltSettings(ctx, resolved.Settings, effectiveType)
+	settings, prebuilt, err := h.resolvePrebuiltSettingsReport(ctx, resolved.Settings, effectiveType)
 	if err != nil {
 		return mcpOAuthCredentials{}, &mcpOAuthResolutionError{http.StatusServiceUnavailable, "prebuilt_catalogue_unavailable"}
 	}
@@ -439,34 +436,54 @@ func (h *Handler) resolveMCPOAuthCredentials(
 			credentials.clientID = firstOAuthText(layers, "client_id")
 		}
 		if credentials.clientSecret == "" {
-			storedSecret = firstOAuthText(layers, "client_secret")
+			if prebuilt.filled.ClientSecret {
+				// The catalogue's own value, exactly: not whichever layer of
+				// the toolkit's settings happens to hold a secret first.
+				storedSecret, _ = settings["client_secret"].(string)
+			} else {
+				storedSecret = firstOAuthText(layers, "client_secret")
+			}
 			credentials.clientSecret = storedSecret
 		}
 	}
 	if needsStoredScope {
 		credentials.scope = firstOAuthScope(layers)
 	}
-	if storedSecret != "" {
-		catalogueSecret := !ownSecret && mcpregistry.IsPrebuiltToolkitType(effectiveType)
-		// A catalogue secret is released only to the endpoint the catalogue's
-		// own server advertises: the toolkit's editable settings never bind it.
-		bound := !catalogueSecret && oauthTokenEndpointIsBound(tokenEndpoint, layers)
-		if !bound {
-			bound = h.mcpDiscoveryBindsTokenEndpoint(ctx, mcpBindingRequest{
-				projectID:     projectID,
-				toolkitID:     toolkitID,
-				toolkitType:   effectiveType,
-				settings:      settings,
-				catalogue:     catalogueSecret,
-				tokenEndpoint: tokenEndpoint,
-				advertised:    body.ResourceMetadataURL,
-			})
-		}
-		if !bound {
-			return mcpOAuthCredentials{}, &mcpOAuthResolutionError{http.StatusBadRequest, "untrusted_token_endpoint"}
-		}
+	if storedSecret == "" {
+		return credentials, nil
 	}
-	return credentials, nil
+	// THE RELEASE RULE. A client secret is released only to a token endpoint
+	// its OWNER controls. Ownership is what mcpregistry.ResolveReport says: a
+	// secret the catalogue filled belongs to the operator, and nothing else
+	// decides it. The operator's secret goes only to (1) the token_url pinned
+	// on the catalogue entry, or (2) the token endpoint discovered from the
+	// entry's EXACT url when that url has no placeholder. A url template, or an
+	// entry with neither, refuses the release and tells the operator to pin a
+	// token_url. Nothing a toolkit editor can write (its url, token_endpoint,
+	// token_url, oauth_discovery_endpoint, a metadata hint) is consulted for it.
+	// A secret the toolkit's own settings supplied may follow those settings:
+	// its saved token settings, or discovery from its saved url.
+	if prebuilt.filled.ClientSecret {
+		if failure := h.releaseCatalogueSecret(ctx, prebuilt.entry, projectID, toolkitID, tokenEndpoint); failure != nil {
+			return mcpOAuthCredentials{}, failure
+		}
+		return credentials, nil
+	}
+	if oauthTokenEndpointIsBound(tokenEndpoint, layers) {
+		return credentials, nil
+	}
+	saved, _ := settings["url"].(string)
+	if effectiveType == "mcp" || mcpregistry.IsPrebuiltToolkitType(effectiveType) {
+		failure := h.bindingFailure(h.mcpDiscoveryBindsTokenEndpoint(ctx, mcpBindingRequest{
+			projectID: projectID, toolkitID: toolkitID, startURL: saved,
+			tokenEndpoint: tokenEndpoint, advertised: body.ResourceMetadataURL,
+		}))
+		if failure != nil {
+			return mcpOAuthCredentials{}, failure
+		}
+		return credentials, nil
+	}
+	return mcpOAuthCredentials{}, &mcpOAuthResolutionError{http.StatusBadRequest, "untrusted_token_endpoint"}
 }
 
 func delegatedAuthIdentity(ctx context.Context, projectIDText string) (int32, int32, error) {
@@ -754,14 +771,53 @@ const (
 	mcpBindingCacheSize = 1024
 )
 
-// mcpBindingRequest is everything the binding decision depends on. The only
-// caller-supplied fields are the endpoint being judged and an advertised
-// metadata URL that is honoured solely when same-origin with the start URL.
+type bindingOutcome int
+
+const (
+	bindingUntrusted bindingOutcome = iota
+	bindingBound
+	bindingTimedOut
+)
+
+func (h *Handler) bindingFailure(outcome bindingOutcome) *mcpOAuthResolutionError {
+	switch outcome {
+	case bindingBound:
+		return nil
+	case bindingTimedOut:
+		return &mcpOAuthResolutionError{http.StatusGatewayTimeout, "oauth_discovery_timeout"}
+	default:
+		return &mcpOAuthResolutionError{http.StatusBadRequest, "untrusted_token_endpoint"}
+	}
+}
+
+// releaseCatalogueSecret applies the release rule to an operator-owned secret.
+func (h *Handler) releaseCatalogueSecret(
+	ctx context.Context, entry mcpregistry.PrebuiltServer, projectID, toolkitID int32, tokenEndpoint *url.URL,
+) *mcpOAuthResolutionError {
+	if pin := strings.TrimSpace(entry.TokenURL); pin != "" {
+		trusted, err := validateMCPProxyURL(pin)
+		if err == nil && sameMCPProxyEndpoint(tokenEndpoint, trusted) {
+			return nil
+		}
+		return &mcpOAuthResolutionError{http.StatusBadRequest, "untrusted_token_endpoint"}
+	}
+	server := strings.TrimSpace(entry.ServerURL)
+	if server == "" || strings.ContainsAny(server, "{}") {
+		return &mcpOAuthResolutionError{http.StatusBadRequest, "catalogue_token_endpoint_not_pinned"}
+	}
+	return h.bindingFailure(h.mcpDiscoveryBindsTokenEndpoint(ctx, mcpBindingRequest{
+		projectID: projectID, toolkitID: toolkitID, startURL: server, catalogue: true,
+		tokenEndpoint: tokenEndpoint,
+	}))
+}
+
+// mcpBindingRequest is everything the binding decision depends on. For a
+// catalogue secret startURL is the catalogue entry's own URL and advertised is
+// always empty; only an own secret may carry a hint, and only a same-origin one.
 type mcpBindingRequest struct {
 	projectID     int32
 	toolkitID     int32
-	toolkitType   string
-	settings      map[string]any
+	startURL      string
 	catalogue     bool
 	tokenEndpoint *url.URL
 	advertised    string
@@ -774,26 +830,58 @@ type mcpBindingKey struct {
 }
 
 type mcpBindingEntry struct {
+	key       mcpBindingKey
 	endpoints []string
 	expires   time.Time
 }
 
-// mcpBindingCache remembers the token endpoints a toolkit's server advertised,
-// so a refresh does not re-run discovery and a brief metadata outage does not
-// strand a signed-in user. The key holds the start URL: editing the toolkit's
-// URL is a different key, and the old entries of that toolkit are dropped.
+// mcpBindingCache remembers the token endpoints a server advertised so a
+// refresh does not re-run discovery and a brief metadata outage does not strand
+// a signed-in user. It is a bounded LRU: a full cache evicts its least recently
+// used entry, never everything, and each toolkit holds at most one entry, so
+// editing its URL replaces the old one.
 type mcpBindingCache struct {
-	mu      sync.Mutex
-	entries map[mcpBindingKey]mcpBindingEntry
+	mu        sync.Mutex
+	capacity  int
+	order     *list.List
+	entries   map[mcpBindingKey]*list.Element
+	byToolkit map[[2]int32]mcpBindingKey
+}
+
+func (c *mcpBindingCache) init() {
+	if c.order == nil {
+		c.order = list.New()
+		c.entries = make(map[mcpBindingKey]*list.Element)
+		c.byToolkit = make(map[[2]int32]mcpBindingKey)
+	}
+	if c.capacity <= 0 {
+		c.capacity = mcpBindingCacheSize
+	}
+}
+
+func (c *mcpBindingCache) remove(element *list.Element) {
+	entry := element.Value.(*mcpBindingEntry)
+	c.order.Remove(element)
+	delete(c.entries, entry.key)
+	if c.byToolkit[[2]int32{entry.key.projectID, entry.key.toolkitID}] == entry.key {
+		delete(c.byToolkit, [2]int32{entry.key.projectID, entry.key.toolkitID})
+	}
 }
 
 func (c *mcpBindingCache) lookup(key mcpBindingKey, endpoint *url.URL, now time.Time) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.entries[key]
-	if !ok || !now.Before(entry.expires) {
+	c.init()
+	element, ok := c.entries[key]
+	if !ok {
 		return false
 	}
+	entry := element.Value.(*mcpBindingEntry)
+	if !now.Before(entry.expires) {
+		c.remove(element)
+		return false
+	}
+	c.order.MoveToFront(element)
 	for _, candidate := range entry.endpoints {
 		if trusted, err := validateMCPProxyURL(candidate); err == nil && sameMCPProxyEndpoint(endpoint, trusted) {
 			return true
@@ -805,55 +893,32 @@ func (c *mcpBindingCache) lookup(key mcpBindingKey, endpoint *url.URL, now time.
 func (c *mcpBindingCache) store(key mcpBindingKey, endpoints []string, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.entries == nil || len(c.entries) >= mcpBindingCacheSize {
-		c.entries = make(map[mcpBindingKey]mcpBindingEntry)
+	c.init()
+	if element, ok := c.entries[key]; ok {
+		c.remove(element)
 	}
-	for existing := range c.entries {
-		if existing.projectID == key.projectID && existing.toolkitID == key.toolkitID && existing != key {
-			delete(c.entries, existing)
+	owner := [2]int32{key.projectID, key.toolkitID}
+	if previous, ok := c.byToolkit[owner]; ok {
+		if element, ok := c.entries[previous]; ok {
+			c.remove(element)
 		}
 	}
-	c.entries[key] = mcpBindingEntry{endpoints: endpoints, expires: now.Add(mcpBindingCacheTTL)}
+	c.entries[key] = c.order.PushFront(&mcpBindingEntry{key: key, endpoints: endpoints, expires: now.Add(mcpBindingCacheTTL)})
+	c.byToolkit[owner] = key
+	for c.order.Len() > c.capacity {
+		c.remove(c.order.Back())
+	}
 }
 
-// mcpDiscoveryStartURL picks where discovery begins and whether the secret may
-// be released at all.
-//
-// The toolkit's own secret may follow its own saved URL: its editor chose both.
-// The catalogue's secret belongs to the operator, so it is bound only through
-// the catalogue's server, and refused when the toolkit points elsewhere.
-func (h *Handler) mcpDiscoveryStartURL(ctx context.Context, req mcpBindingRequest) (string, bool) {
-	saved, _ := req.settings["url"].(string)
-	if !req.catalogue {
-		return saved, saved != ""
-	}
-	catalogueURL, err := h.prebuiltURLFor(ctx, req.toolkitType)
-	if err != nil || catalogueURL == "" || !mcpCatalogueOriginMatches(catalogueURL, saved) {
-		return "", false
-	}
-	// A catalogue template with placeholders names only an origin; the saved
-	// URL, now known to share it, supplies the path.
-	if strings.ContainsAny(catalogueURL, "{}") {
-		return saved, true
-	}
-	return catalogueURL, true
-}
-
-// mcpDiscoveryBindsTokenEndpoint binds a Remote MCP toolkit's stored client
-// secret to the token endpoint its own server advertises. A direct `mcp`
-// toolkit stores no token URL, so Main repeats the public discovery the worker
-// ran. Nothing the caller or model supplies can nominate the destination.
-func (h *Handler) mcpDiscoveryBindsTokenEndpoint(ctx context.Context, req mcpBindingRequest) bool {
-	if req.toolkitType != "mcp" && !mcpregistry.IsPrebuiltToolkitType(req.toolkitType) {
-		return false
-	}
-	start, ok := h.mcpDiscoveryStartURL(ctx, req)
-	if !ok {
-		return false
-	}
-	resourceURL, err := validateMCPMetadataURL(start)
+// mcpDiscoveryBindsTokenEndpoint repeats the public discovery the worker ran,
+// starting from req.startURL, and reports whether the server itself advertises
+// the endpoint. Nothing the caller or model supplies can nominate the
+// destination; a hint is honoured only when same-origin, and a failed hint
+// falls back to the well-known locations.
+func (h *Handler) mcpDiscoveryBindsTokenEndpoint(ctx context.Context, req mcpBindingRequest) bindingOutcome {
+	resourceURL, err := validateMCPMetadataURL(req.startURL)
 	if err != nil {
-		return false
+		return bindingUntrusted
 	}
 	key := mcpBindingKey{projectID: req.projectID, toolkitID: req.toolkitID, startURL: resourceURL.String(), catalogue: req.catalogue}
 	now := time.Now
@@ -861,35 +926,47 @@ func (h *Handler) mcpDiscoveryBindsTokenEndpoint(ctx context.Context, req mcpBin
 		now = h.mcpBindingClock
 	}
 	if h.mcpBindings.lookup(key, req.tokenEndpoint, now()) {
-		return true
-	}
-	advertised := ""
-	if hint, err := validateMCPMetadataURL(req.advertised); err == nil && req.advertised != "" && sameMCPProxyOrigin(hint, resourceURL) {
-		advertised = req.advertised
+		return bindingBound
 	}
 	source := h.authorizationMetadataSource()
 	if h.mcpDiscoveryFetchTimeout > 0 {
 		source.perFetch = h.mcpDiscoveryFetchTimeout
 	}
-	found, err := source.discover(ctx, resourceURL, advertised, mcpBindingMaxServers, true)
-	if err != nil {
-		return false
+	matches := func(issuer map[string]any) bool {
+		advertised, _ := issuer["token_endpoint"].(string)
+		trusted, err := validateMCPProxyURL(advertised)
+		return err == nil && sameMCPProxyEndpoint(req.tokenEndpoint, trusted)
+	}
+	attempt := func(advertised string) (mcpDiscovered, error) {
+		return source.discover(ctx, resourceURL, advertised, mcpBindingMaxServers, true, matches)
+	}
+	var found mcpDiscovered
+	if hint, err := validateMCPMetadataURL(req.advertised); !req.catalogue && req.advertised != "" &&
+		err == nil && sameMCPProxyOrigin(hint, resourceURL) {
+		found, err = attempt(req.advertised)
+		if err != nil {
+			found, err = attempt("")
+		}
+	} else {
+		found, _ = attempt("")
 	}
 	var endpoints []string
 	bound := false
 	for _, issuer := range found.issuers {
-		advertisedEndpoint, _ := issuer["token_endpoint"].(string)
-		trusted, err := validateMCPProxyURL(advertisedEndpoint)
-		if err != nil {
-			continue
+		if advertised, _ := issuer["token_endpoint"].(string); advertised != "" {
+			endpoints = append(endpoints, advertised)
 		}
-		endpoints = append(endpoints, advertisedEndpoint)
-		if sameMCPProxyEndpoint(req.tokenEndpoint, trusted) {
+		if matches(issuer) {
 			bound = true
 		}
 	}
-	if bound {
+	switch {
+	case bound:
 		h.mcpBindings.store(key, endpoints, now())
+		return bindingBound
+	case found.timedOut:
+		return bindingTimedOut
+	default:
+		return bindingUntrusted
 	}
-	return bound
 }

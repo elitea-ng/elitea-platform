@@ -80,6 +80,21 @@ func ValidatePrebuiltServer(entry PrebuiltServer) error {
 			return err
 		}
 	}
+	return ValidatePrebuiltTokenURL(entry.TokenURL)
+}
+
+// ValidatePrebuiltTokenURL accepts an empty pin or one absolute https URL with
+// no credentials, fragment or placeholder: the pin is an exact address.
+func ValidatePrebuiltTokenURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil ||
+		parsed.Fragment != "" || len(raw) > 4096 || strings.ContainsAny(raw, "{}\\\x00\r\n \t") {
+		return invalidPrebuiltParameter("token_url must be an exact https URL")
+	}
 	return nil
 }
 

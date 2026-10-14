@@ -80,6 +80,7 @@ type idp struct {
 	metadata func(host, path string) (int, string)
 	token    url.Values
 	delay    time.Duration
+	slowHost string
 }
 
 func (p *idp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +90,9 @@ func (p *idp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.mu.Unlock()
 	if p.delay > 0 {
 		time.Sleep(p.delay)
+	}
+	if p.slowHost != "" && r.Host == p.slowHost {
+		time.Sleep(600 * time.Millisecond)
 	}
 	if r.Method == http.MethodPost {
 		_ = r.ParseForm()
@@ -176,36 +180,89 @@ func catalogueEntry(serverURL string) *mcpregistry.PrebuiltServer {
 	}
 }
 
-// The attack: an editor saves an attacker URL on a prebuilt toolkit and the
-// attacker's metadata names an attacker token endpoint. The catalogue's secret
-// must not move, and nothing at the attacker's host may even be contacted.
+func (f *bindingFixture) attackerContacted(t *testing.T) {
+	t.Helper()
+	require.False(t, f.provider.sawHost("evil.example"), "the attacker's host was contacted")
+	require.Empty(t, f.provider.token, "a token request reached the provider")
+}
+
+// The attack: an editor saves an attacker URL on a prebuilt toolkit whose
+// catalogue URL is an exact one. The operator's secret is judged only by the
+// catalogue's server, never by anything the editor wrote.
 func TestCatalogueSecretIsNeverReleasedToAnAttackerChosenEndpoint(t *testing.T) {
 	f := newBindingFixture(t, "mcp_github",
 		map[string]any{"url": "https://evil.example/mcp"}, catalogueEntry("https://good.example/mcp"))
 	recorder := f.exchange(t, exchangeBody("https://evil.example/token", ""))
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	require.Contains(t, recorder.Body.String(), "untrusted_token_endpoint")
-	require.Zero(t, f.guard.dials.Load(), "no transport call was made")
-	require.Empty(t, f.provider.token)
+	f.attackerContacted(t)
 }
 
-// An editor-set token_endpoint on the toolkit also cannot bind the operator's secret.
-func TestCatalogueSecretIgnoresAnEditorSetTokenEndpointSetting(t *testing.T) {
+// A url TEMPLATE lets the user pick the host, so discovery from it would let
+// them pick where the secret goes. Without a pinned token_url it is refused with
+// the reason, and nothing is dialled at all.
+func TestCatalogueTemplateWithoutAPinnedTokenURLRefusesRelease(t *testing.T) {
 	f := newBindingFixture(t, "mcp_github",
-		map[string]any{"url": "https://evil.example/mcp", "token_endpoint": "https://evil.example/token"},
-		catalogueEntry("https://good.example/mcp"))
+		map[string]any{"url": "https://evil.example/mcp", "workspace": "evil"},
+		catalogueEntry("https://{workspace}.example/mcp"))
 	recorder := f.exchange(t, exchangeBody("https://evil.example/token", ""))
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
-	require.Zero(t, f.guard.dials.Load())
+	require.Contains(t, recorder.Body.String(), "catalogue_token_endpoint_not_pinned")
+	require.Zero(t, f.guard.dials.Load(), "no transport call was made")
+	f.attackerContacted(t)
 }
 
-func TestLegitimatePrebuiltToolkitBindsThroughTheCatalogueServer(t *testing.T) {
+func TestCatalogueSecretIgnoresEditorSetTokenSettingsAndHints(t *testing.T) {
+	for name, settings := range map[string]map[string]any{
+		"token_endpoint":           {"url": "https://evil.example/mcp", "token_endpoint": "https://evil.example/token"},
+		"token_url":                {"token_url": "https://evil.example/token"},
+		"oauth_discovery_endpoint": {"oauth_discovery_endpoint": "https://evil.example"},
+		"nested decoy": {"openapi_configuration": map[string]any{
+			"client_secret": "decoy", "token_endpoint": "https://evil.example/token",
+			"oauth_discovery_endpoint": "https://evil.example",
+		}},
+		"whitespace secret": {"client_secret": "   ", "token_url": "https://evil.example/token"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newBindingFixture(t, "mcp_github", settings, catalogueEntry("https://{workspace}.example/mcp"))
+			recorder := f.exchange(t, exchangeBody("https://evil.example/token", ""))
+			require.Equal(t, http.StatusBadRequest, recorder.Code)
+			require.Zero(t, f.guard.dials.Load())
+			f.attackerContacted(t)
+		})
+	}
+	t.Run("hint", func(t *testing.T) {
+		f := newBindingFixture(t, "mcp_github", map[string]any{"url": ""}, catalogueEntry("https://good.example/mcp"))
+		recorder := f.exchange(t, exchangeBody("https://good.example/token",
+			`,"resource_metadata_url":"https://good.example/hinted"`))
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		f.provider.mu.Lock()
+		defer f.provider.mu.Unlock()
+		require.NotContains(t, f.provider.paths, "/hinted", "a hint is never consulted for a catalogue secret")
+	})
+}
+
+func TestLegitimateCatalogueBindsThroughItsExactURLOrItsPinnedTokenURL(t *testing.T) {
 	f := newBindingFixture(t, "mcp_github", map[string]any{"url": ""}, catalogueEntry("https://good.example/mcp"))
 	recorder := f.exchange(t, exchangeBody("https://good.example/token", ""))
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	require.Equal(t, "catalogue-secret", f.provider.token.Get("client_secret"))
-	require.True(t, f.provider.sawHost("good.example"))
 	require.Positive(t, f.guard.dials.Load(), "discovery and exchange use the authorization guard")
+
+	entry := catalogueEntry("https://{workspace}.example/mcp")
+	entry.TokenURL = "https://good.example/token"
+	f = newBindingFixture(t, "mcp_github", map[string]any{"url": "https://acme.example/mcp"}, entry)
+	recorder = f.exchange(t, exchangeBody("https://good.example/token", ""))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "catalogue-secret", f.provider.token.Get("client_secret"))
+	f.provider.mu.Lock()
+	require.Equal(t, []string{"/token"}, f.provider.paths, "a pinned token_url needs no discovery")
+	f.provider.mu.Unlock()
+
+	f = newBindingFixture(t, "mcp_github", map[string]any{"url": ""}, entry)
+	recorder = f.exchange(t, exchangeBody("https://evil.example/token", ""))
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	f.attackerContacted(t)
 }
 
 func TestOwnSecretDirectToolkitBindsThroughItsSavedURL(t *testing.T) {
@@ -238,7 +295,7 @@ func TestDiscoveryFetchesTimeOutIndividually(t *testing.T) {
 	f.provider.delay = 400 * time.Millisecond
 	started := time.Now()
 	recorder := f.exchange(t, exchangeBody("https://own.example/token", ""))
-	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, http.StatusGatewayTimeout, recorder.Code)
 	require.Less(t, time.Since(started), 3*time.Second)
 }
 
@@ -302,15 +359,15 @@ func TestSyncAndBindingRejectTheSameBadDiscoveryDocuments(t *testing.T) {
 			f.provider.metadata = metadata
 			endpoint, err := url.Parse("https://own.example/mcp")
 			require.NoError(t, err)
-			_, syncErr := f.handler.syncMetadataSource().discover(context.Background(), endpoint, "", mcpSyncMaxServers, false)
-			_, guardedErr := f.handler.authorizationMetadataSource().discover(context.Background(), endpoint, "", mcpBindingMaxServers, true)
+			_, syncErr := f.handler.syncMetadataSource().discover(context.Background(), endpoint, "", mcpSyncMaxServers, false, nil)
+			_, guardedErr := f.handler.authorizationMetadataSource().discover(context.Background(), endpoint, "", mcpBindingMaxServers, true, nil)
 			require.Error(t, syncErr)
 			require.Error(t, guardedErr)
 		})
 	}
 }
 
-func TestAdvertisedMetadataURLIsHonouredOnlyWhenSameOrigin(t *testing.T) {
+func TestAdvertisedMetadataURLIsHonouredOnlyWhenSameOriginAndFallsBackWhenItFails(t *testing.T) {
 	f := newBindingFixture(t, "mcp",
 		map[string]any{"url": "https://own.example/mcp", "client_secret": "own-secret"}, nil)
 	recorder := f.exchange(t, exchangeBody("https://own.example/token",
@@ -318,14 +375,68 @@ func TestAdvertisedMetadataURLIsHonouredOnlyWhenSameOrigin(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	require.False(t, f.provider.sawHost("evil.example"), "a cross-origin hint is ignored")
 
+	// A same-origin hint that does not work falls back to the well-known paths.
 	f = newBindingFixture(t, "mcp",
 		map[string]any{"url": "https://own.example/mcp", "client_secret": "own-secret"}, nil)
 	recorder = f.exchange(t, exchangeBody("https://own.example/token",
 		`,"resource_metadata_url":"https://own.example/custom-md"`))
-	require.Equal(t, http.StatusBadRequest, recorder.Code, "the hint was used: that path is not served")
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	f.provider.mu.Lock()
 	defer f.provider.mu.Unlock()
-	require.Contains(t, f.provider.paths, "/custom-md")
+	require.Contains(t, f.provider.paths, "/custom-md", "the hint was tried first")
+}
+
+func twoServerMetadata(first, second string) func(host, path string) (int, string) {
+	return func(host, path string) (int, string) {
+		switch {
+		case strings.HasPrefix(path, "/.well-known/oauth-protected-resource"):
+			return 200, `{"resource":"https://` + host + `/mcp","authorization_servers":["https://` + first + `","https://` + second + `"]}`
+		case path == "/.well-known/oauth-authorization-server":
+			return 200, `{"issuer":"https://` + host + `","authorization_endpoint":"https://` + host +
+				`/authorize","token_endpoint":"https://` + host + `/token"}`
+		}
+		return 404, `{}`
+	}
+}
+
+func TestDiscoveryStopsAtTheMatchingServerAndNeverWaitsOnLaterOnes(t *testing.T) {
+	f := newBindingFixture(t, "mcp",
+		map[string]any{"url": "https://own.example/mcp", "client_secret": "own-secret"}, nil)
+	f.provider.metadata = twoServerMetadata("first.example", "slow.example")
+	f.provider.slowHost = "slow.example"
+	f.handler.mcpDiscoveryFetchTimeout = 100 * time.Millisecond
+	recorder := f.exchange(t, exchangeBody("https://first.example/token", ""))
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.False(t, f.provider.sawHost("slow.example"), "the later server was never asked")
+}
+
+func TestATimeoutIsReportedAsATimeoutNotAsUntrusted(t *testing.T) {
+	f := newBindingFixture(t, "mcp",
+		map[string]any{"url": "https://own.example/mcp", "client_secret": "own-secret"}, nil)
+	f.provider.metadata = twoServerMetadata("slow.example", "slow.example")
+	f.provider.slowHost = "slow.example"
+	f.handler.mcpDiscoveryFetchTimeout = 100 * time.Millisecond
+	recorder := f.exchange(t, exchangeBody("https://elsewhere.example/token", ""))
+	require.Equal(t, http.StatusGatewayTimeout, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), "oauth_discovery_timeout")
+}
+
+func TestBindingCacheIsAnLRUNotAWipeAll(t *testing.T) {
+	cache := &mcpBindingCache{capacity: 2}
+	now := time.Now()
+	endpoint, err := url.Parse("https://idp.example/token")
+	require.NoError(t, err)
+	key := func(toolkit int32) mcpBindingKey {
+		return mcpBindingKey{projectID: 1, toolkitID: toolkit, startURL: "https://t.example/mcp"}
+	}
+	cache.store(key(1), []string{endpoint.String()}, now)
+	cache.store(key(2), []string{endpoint.String()}, now)
+	require.True(t, cache.lookup(key(1), endpoint, now), "touching 1 makes 2 the oldest")
+	cache.store(key(3), []string{endpoint.String()}, now)
+	require.True(t, cache.lookup(key(1), endpoint, now), "a fresh entry survives another tenant's churn")
+	require.True(t, cache.lookup(key(3), endpoint, now))
+	require.False(t, cache.lookup(key(2), endpoint, now), "only the least recently used entry was evicted")
+	require.False(t, cache.lookup(key(1), endpoint, now.Add(mcpBindingCacheTTL+time.Second)), "expired entries go")
 }
 
 func TestBoundEndpointIsCachedAndInvalidatedWhenTheToolkitURLChanges(t *testing.T) {

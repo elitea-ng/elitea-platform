@@ -87,11 +87,14 @@ const prebuiltSecretMask = "******"
 // value (re-seal it). Collapsing absent and empty is how a save from a form
 // that does not echo secrets silently erases the credential.
 type prebuiltServerBody struct {
-	Key          string            `json:"key"`
-	DisplayName  string            `json:"display_name"`
-	URL          string            `json:"url"`
-	BaseURL      string            `json:"base_url"`
-	ClientID     string            `json:"client_id"`
+	Key         string `json:"key"`
+	DisplayName string `json:"display_name"`
+	URL         string `json:"url"`
+	BaseURL     string `json:"base_url"`
+	ClientID    string `json:"client_id"`
+	// TokenURL pins the OAuth token endpoint the entry's client secret may be
+	// sent to; see migration 0165. Operators must set it for a URL template.
+	TokenURL     string            `json:"token_url"`
 	ClientSecret *string           `json:"client_secret"`
 	Timeout      int               `json:"timeout"`
 	Headers      map[string]string `json:"headers"`
@@ -108,6 +111,7 @@ type prebuiltServerView struct {
 	URL          string            `json:"url"`
 	BaseURL      string            `json:"base_url"`
 	ClientID     string            `json:"client_id"`
+	TokenURL     string            `json:"token_url"`
 	ClientSecret string            `json:"client_secret,omitempty"`
 	Timeout      int               `json:"timeout"`
 	Headers      map[string]string `json:"headers"`
@@ -126,6 +130,7 @@ func prebuiltView(entry mcpregistry.PrebuiltServer) prebuiltServerView {
 		URL:          entry.ServerURL,
 		BaseURL:      entry.BaseURL,
 		ClientID:     entry.ClientID,
+		TokenURL:     entry.TokenURL,
 		Timeout:      entry.TimeoutSeconds,
 		Headers:      headers,
 		ConfigSchema: entry.ConfigSchema,
@@ -244,10 +249,17 @@ func (h *Handler) PrebuiltMCPSave(w http.ResponseWriter, r *http.Request) {
 		ServerURL:      body.URL,
 		BaseURL:        body.BaseURL,
 		ClientID:       body.ClientID,
+		TokenURL:       body.TokenURL,
 		TimeoutSeconds: body.Timeout,
 		Headers:        body.Headers,
 		ConfigSchema:   configSchema,
 		Enabled:        true,
+	}
+	if err := mcpregistry.ValidatePrebuiltTokenURL(body.TokenURL); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "token_url must be an exact https URL with no placeholders",
+		})
+		return
 	}
 	if err := mcpregistry.ValidatePrebuiltServer(candidate); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
@@ -292,6 +304,7 @@ func (h *Handler) PrebuiltMCPSave(w http.ResponseWriter, r *http.Request) {
 		ServerURL:       body.URL,
 		BaseURL:         body.BaseURL,
 		ClientID:        body.ClientID,
+		TokenURL:        body.TokenURL,
 		ClientSecretRef: secretRef,
 		TimeoutSeconds:  body.Timeout,
 		Headers:         body.Headers,

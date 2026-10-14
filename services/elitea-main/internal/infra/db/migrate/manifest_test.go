@@ -692,7 +692,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// is a bounded subset and cannot be summed for the list; the worker
 	// reports the whole index's totals and Main stores them. Two columns with
 	// DEFAULT 0, nothing migrated, no permission.
-	require.EqualValues(t, 164, Head(shared))
+	//
+	// 165: shared/0165_mcp_prebuilt_token_url.sql, the operator-pinned OAuth
+	// token endpoint of a pre-built MCP catalogue entry (one text column,
+	// DEFAULT ''), the only endpoint a catalogue entry's client secret may be
+	// released to when the entry's URL is a template. No permission, no data.
+	require.EqualValues(t, 165, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

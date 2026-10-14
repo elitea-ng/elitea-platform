@@ -47,10 +47,13 @@ type PrebuiltServer struct {
 	BaseURL         string
 	ClientID        string
 	ClientSecretRef string
-	TimeoutSeconds  int
-	Headers         map[string]string
-	ConfigSchema    map[string]any
-	Enabled         bool
+	// TokenURL pins the OAuth token endpoint the entry's client secret may be
+	// sent to. Operator-set; empty means not pinned.
+	TokenURL       string
+	TimeoutSeconds int
+	Headers        map[string]string
+	ConfigSchema   map[string]any
+	Enabled        bool
 }
 
 // PrebuiltToolkitTypePrefix is the marker that makes a toolkit type a pre-built
@@ -129,8 +132,28 @@ func Resolve(
 	entry *PrebuiltServer,
 	secret ResolvedSecretLookup,
 ) map[string]any {
+	resolved, _ := ResolveReport(settings, toolkitType, entry, secret)
+	return resolved
+}
+
+// Filled names the fields ResolveReport took from the catalogue. It is the
+// only source of truth for whose credential a resolved value is: a value the
+// catalogue filled belongs to the operator, whatever else the settings hold.
+type Filled struct {
+	ClientID     bool
+	ClientSecret bool
+}
+
+// ResolveReport is Resolve plus a report of what the catalogue supplied.
+func ResolveReport(
+	settings map[string]any,
+	toolkitType string,
+	entry *PrebuiltServer,
+	secret ResolvedSecretLookup,
+) (map[string]any, Filled) {
+	var filled Filled
 	if !IsPrebuiltToolkitType(toolkitType) || entry == nil || !entry.Enabled {
-		return settings
+		return settings, filled
 	}
 
 	resolved := make(map[string]any, len(settings)+6)
@@ -146,6 +169,7 @@ func Resolve(
 	}
 	if isBlank(resolved["client_id"]) && entry.ClientID != "" {
 		resolved["client_id"] = entry.ClientID
+		filled.ClientID = true
 	}
 	if isBlank(resolved["timeout"]) && entry.TimeoutSeconds > 0 {
 		resolved["timeout"] = entry.TimeoutSeconds
@@ -164,10 +188,11 @@ func Resolve(
 		// error path say the credential is missing.
 		if value, err := secret(entry.ClientSecretRef); err == nil && value != "" {
 			resolved["client_secret"] = value
+			filled.ClientSecret = true
 		}
 	}
 
-	return resolved
+	return resolved, filled
 }
 
 // isBlank reports whether a settings value counts as "not supplied".

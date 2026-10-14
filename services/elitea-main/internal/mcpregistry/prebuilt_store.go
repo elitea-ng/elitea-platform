@@ -32,7 +32,7 @@ type PrebuiltStore struct {
 func NewPrebuiltStore(pool *pgxpool.Pool) *PrebuiltStore { return &PrebuiltStore{pool: pool} }
 
 const prebuiltColumns = `catalogue_key, display_name, server_url, base_url, client_id,
-	client_secret_ref, timeout_seconds, headers, config_schema, enabled`
+	client_secret_ref, timeout_seconds, headers, config_schema, enabled, token_url`
 
 // List returns every catalogue entry, ordered by display name.
 //
@@ -221,8 +221,8 @@ func (s *PrebuiltStore) Upsert(ctx context.Context, entry PrebuiltServer) (Prebu
 	row := s.pool.QueryRow(ctx,
 		`INSERT INTO elitea_mcp.prebuilt_servers
 		     (catalogue_key, display_name, server_url, base_url, client_id,
-		      client_secret_ref, timeout_seconds, headers, config_schema, enabled)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		      client_secret_ref, timeout_seconds, headers, config_schema, enabled, token_url)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		 ON CONFLICT (catalogue_key) DO UPDATE SET
 		     display_name      = EXCLUDED.display_name,
 		     server_url        = EXCLUDED.server_url,
@@ -233,11 +233,13 @@ func (s *PrebuiltStore) Upsert(ctx context.Context, entry PrebuiltServer) (Prebu
 		     headers           = EXCLUDED.headers,
 		     config_schema     = EXCLUDED.config_schema,
 		     enabled           = EXCLUDED.enabled,
+		     token_url         = EXCLUDED.token_url,
 		     updated_at        = now()
 		 RETURNING `+prebuiltColumns,
 		key, display, strings.TrimSpace(entry.ServerURL), strings.TrimSpace(entry.BaseURL),
 		strings.TrimSpace(entry.ClientID), strings.TrimSpace(entry.ClientSecretRef),
-		entry.TimeoutSeconds, encodedHeaders, encodedConfigSchema, entry.Enabled)
+		entry.TimeoutSeconds, encodedHeaders, encodedConfigSchema, entry.Enabled,
+		strings.TrimSpace(entry.TokenURL))
 
 	return scanPrebuilt(row)
 }
@@ -284,6 +286,7 @@ func scanPrebuilt(row scanRow) (PrebuiltServer, error) {
 	if err := row.Scan(
 		&entry.Key, &entry.DisplayName, &entry.ServerURL, &entry.BaseURL, &entry.ClientID,
 		&entry.ClientSecretRef, &entry.TimeoutSeconds, &encodedHeaders, &encodedSchema, &entry.Enabled,
+		&entry.TokenURL,
 	); err != nil {
 		return PrebuiltServer{}, err
 	}

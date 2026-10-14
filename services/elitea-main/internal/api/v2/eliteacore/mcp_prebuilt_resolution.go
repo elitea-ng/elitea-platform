@@ -93,8 +93,20 @@ func (h *Handler) resolvePrebuiltSettings(
 	settings map[string]any,
 	toolkitType string,
 ) (map[string]any, error) {
+	resolved, _, err := h.resolvePrebuiltSettingsReport(ctx, settings, toolkitType)
+	return resolved, err
+}
+
+// resolvePrebuiltSettingsReport is resolvePrebuiltSettings plus the entry used
+// and what the catalogue filled. Callers that decide where a credential may go
+// need both: a filled client secret is the operator's, not the toolkit's.
+func (h *Handler) resolvePrebuiltSettingsReport(
+	ctx context.Context,
+	settings map[string]any,
+	toolkitType string,
+) (map[string]any, prebuiltResolution, error) {
 	if h.prebuiltMCP == nil || !mcpregistry.IsPrebuiltToolkitType(toolkitType) {
-		return settings, nil
+		return settings, prebuiltResolution{}, nil
 	}
 
 	entry, err := h.prebuiltMCP.Lookup(ctx, toolkitType)
@@ -103,13 +115,13 @@ func (h *Handler) resolvePrebuiltSettings(
 		// merely starts with `mcp_` need not be catalogued, and refusing it
 		// would break every hand-configured remote MCP toolkit whose type
 		// happens to carry the prefix.
-		return settings, nil
+		return settings, prebuiltResolution{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, prebuiltResolution{}, err
 	}
 
-	return mcpregistry.Resolve(settings, toolkitType, &entry, func(reference string) (string, error) {
+	resolved, filled := mcpregistry.ResolveReport(settings, toolkitType, &entry, func(reference string) (string, error) {
 		if h.prebuiltMCPVault == nil {
 			return "", errors.New("eliteacore: no platform vault is configured")
 		}
@@ -124,7 +136,14 @@ func (h *Handler) resolvePrebuiltSettings(
 			return "", err
 		}
 		return value, nil
-	}), nil
+	})
+	return resolved, prebuiltResolution{entry: entry, filled: filled}, nil
+}
+
+// prebuiltResolution is what a catalogue resolution used and supplied.
+type prebuiltResolution struct {
+	entry  mcpregistry.PrebuiltServer
+	filled mcpregistry.Filled
 }
 
 // prebuiltURLFor returns the catalogue URL for a toolkit type, or "".
