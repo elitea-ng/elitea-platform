@@ -372,7 +372,7 @@ pub(crate) struct PipelineNativeAgentAssembler {
     /// The index tools' vector client and embeddings route (ADR-0030 I1);
     /// `None` on a deployment without a `vector_target`.
     index_runtime: Option<Arc<IndexIngestRuntime>>,
-    /// The platform object client the Office families (`pptx`) use (ADR-0032).
+    /// The platform object client the Office families (`pptx`, `docx`, `xlsx`) use (ADR-0032).
     /// A pipeline binds no chat model to a tool, so the Office tools that call
     /// a model refuse here with a sentence; the rest work.
     office_runtime: Option<Arc<crate::transport::office_host::OfficeRuntime>>,
@@ -507,7 +507,7 @@ impl PipelineNativeAgentAssembler {
         // that calls an index tool on a toolkit carrying a catalog (the query
         // embedding, ADR-0030 I1 — review round 1).
         let calls_index_tool = pipeline_calls_index_tool(profile.definition(), &toolsets);
-        // A `pptx` toolkit reads and writes documents under the claim's
+        // An Office toolkit reads and writes documents under the claim's
         // credential, so its nodes need the redeemed context too (ADR-0032).
         let has_office = self.office_runtime.is_some()
             && super::ordinary::snapshot_carries_office_family(&toolsets);
@@ -549,7 +549,7 @@ impl PipelineNativeAgentAssembler {
             // The Office host (ADR-0032): objects under the claim's credential.
             // No chat model is bound in a pipeline, so `complete` refuses with
             // a fixed reason and `fill_template` / `translate_presentation`
-            // answer with a sentence saying so; every other pptx tool works.
+            // answer with a sentence saying so; every other Office tool works.
             match (has_office, self.office_runtime.as_ref(), context.as_ref()) {
                 (true, Some(runtime), Some(context)) => {
                     let host = crate::transport::office_host::ClaimOfficeHost::new(

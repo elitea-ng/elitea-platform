@@ -2827,7 +2827,7 @@ the tool (`fill_template`, `translate_presentation`). The Rust family keeps
 them under the same names and arguments, exposes their deterministic halves
 and adds the authoring surface. It is a claim-scoped family like `artifact`:
 it materializes where the Office host is lent (`ArtifactToolAuthority::with_office`),
-which is the direct-agent path and the nodes of a pipeline in a worker built with `toolkit-pptx` (no model is bound in a pipeline, so the two model tools refuse there with a sentence; direct `toolkit.call_tool.v1` calls do not serve it).
+which is the direct-agent path and the nodes of a pipeline in a worker built with `toolkit-office` (no model is bound in a pipeline, so the two model tools refuse there with a sentence; direct `toolkit.call_tool.v1` calls do not serve it).
 
 | Python source | Observable responsibility | Rust target |
 | --- | --- | --- |
@@ -2922,3 +2922,40 @@ work. Sensitive-tool confirmation,
 MCP smart authorization, nested applications, code execution and indexing
 overlays remain separate capabilities because their durable authority and
 isolation rules differ from an ordinary function call.
+
+## `docx` and `xlsx` (ADR-0032 P4)
+
+The SDK has neither a `docx` nor an `xlsx` toolkit, so these two families have no
+Python source to port and no SDK schema to stay callable by; the day the SDK
+grows one, `sdk_conformance::has_type` fails and the family is reconciled with
+it. Their tool names follow the `pptx` family's conventions (a `file_name` in the
+toolkit's bucket, `output_file_name` defaulting to the input, 1-based numbers,
+a returned key that works as the next call's `file_name`). Both are claim-scoped
+families like `pptx` (the Office host rides on the artifact authority), serve
+direct agents and pipeline nodes, and take the same two settings
+(`bucket_name`, `selected_tools`). Neither calls a model.
+
+They share, with `pptx`, `families/office_common.rs`: the settings parser, the
+argument helpers, the object-key and name round-trip rules, one sentence per host
+failure cause, the platform I/O of a toolkit (read, save, create without
+overwrite, the blocking pool with its busy retry), the catalogue schema shape and
+the toolset assembly.
+
+An edit is planned against the file's fact sheet (read from the package, without
+the document library) before anything is touched, applied once, serialised once,
+and the saved bytes' fact sheet is compared with the plan at the place the edit
+was aimed (the new paragraph, the named cell, every paragraph and cell a
+replacement matched, the new chart's sheet and ranges) and with the file as it
+was for everything an edit must not lose (paragraphs, tables, pictures, charts,
+cells per sheet, package part kinds). A save that does not satisfy the plan is
+refused and nothing is written.
+
+| Responsibility | Rust target |
+| --- | --- |
+| `docx` tools and schemas | `families/docx/{schema,ops,tools,config}.rs` |
+| `docx` fact sheet (paragraphs, tables, pictures, charts, part kinds) | `office-core/src/docx_facts.rs` |
+| One-pass replacement, line breaks as break runs | `office-core/src/document.rs::{replace_all,lines_to_breaks}` |
+| `xlsx` tools and schemas | `families/xlsx/{schema,ops,tools,config}.rs` |
+| `xlsx` fact sheet (named cells and ranges, used range, charts per sheet, sheet-name mentions, inline strings) | `office-core/src/xlsx_facts.rs` |
+| Batch writes counted by distinct cell, clear, chart from cell ranges | `office-core/src/workbook.rs::{write_cells,clear_range,add_chart}` |
+| Catalogue: the types are not in the SDK snapshot | `rustonly/rust_only_toolkit_tools.json` `new_types` (checked by `xlsx_tests::the_ui_catalogue_lists_every_tool_the_families_serve`) |

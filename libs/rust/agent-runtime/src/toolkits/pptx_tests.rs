@@ -3,180 +3,26 @@
 //! in-memory host, the two model-calling tools against a scripted model, and
 //! the prompt and reply parsing.
 
-use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
-use adk_tool::SimpleToolContext;
-use async_trait::async_trait;
-use elitea_office_core::{Bullet, Deck, Limits, Rect, SlideLayout};
+use elitea_office_core::{Bullet, Deck, Rect, SlideLayout};
 use serde_json::{Map, Value, json};
 
 use super::families::artifact::ArtifactToolAuthority;
-use super::families::office_host::{
-    OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
-    SharedOfficeToolHost,
-};
+use super::families::office_host::{OfficeFailure, OfficeHostError, SharedOfficeToolHost};
 use super::families::pptx::config::{PptxConfigErrorCode, PptxToolkitConfig};
 use super::families::pptx::model;
 use super::families::pptx::ops;
 use super::families::pptx::schema::{ALL_TOOLS, PptxTool};
 use super::families::pptx::tools::{build_pptx_toolset, build_with_host, host_sentence};
 use super::materialize::materialize_configured_toolsets_with_artifact_authority;
-use super::policy::ToolAdmissionPolicy;
+use super::office_test_support::{
+    FakeHost, NoPlatform, TINY_PNG, context, policy, settings, test_limits,
+};
 use super::sdk_conformance;
 use super::snapshot::FrozenToolSnapshot;
-use crate::host::{HostError, HostErrorCode, PlatformWriter};
-use crate::platform::{
-    ArtifactDeleteOutcome, ArtifactDeleteRequest, ArtifactListOutcome, ArtifactListRequest,
-    ArtifactReadOutcome, ArtifactReadRequest, ArtifactWriteOutcome, ArtifactWriteRequest,
-    ProjectContextWriteOutcome, ProjectContextWriteRequest, SkillWriteOutcome, SkillWriteRequest,
-};
-
-const TINY_PNG: &[u8] = &[
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-    0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xFF, 0xFF, 0x3F,
-    0x00, 0x05, 0xFE, 0x02, 0xFE, 0xA7, 0x35, 0x81, 0x84, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
-    0x44, 0xAE, 0x42, 0x60, 0x82,
-];
-
-/// An in-memory bucket and a scripted model.
-#[derive(Default)]
-struct FakeHost {
-    objects: Mutex<BTreeMap<(String, String), Vec<u8>>>,
-    replies: Mutex<VecDeque<Result<String, OfficeHostError>>>,
-    requests: Mutex<Vec<OfficeModelRequest>>,
-    /// Every write: the name and whether it asked to overwrite.
-    writes: Mutex<Vec<(String, bool)>>,
-    unreachable: bool,
-}
-
-impl FakeHost {
-    fn put(&self, name: &str, bytes: Vec<u8>) {
-        self.objects
-            .lock()
-            .expect("objects")
-            .insert(("bucket".to_owned(), name.to_owned()), bytes);
-    }
-
-    fn get(&self, name: &str) -> Vec<u8> {
-        self.objects
-            .lock()
-            .expect("objects")
-            .get(&("bucket".to_owned(), name.to_owned()))
-            .cloned()
-            .unwrap_or_else(|| panic!("no object {name}"))
-    }
-
-    fn has(&self, name: &str) -> bool {
-        self.objects
-            .lock()
-            .expect("objects")
-            .contains_key(&("bucket".to_owned(), name.to_owned()))
-    }
-
-    fn reply(&self, text: &str) {
-        self.replies
-            .lock()
-            .expect("replies")
-            .push_back(Ok(text.to_owned()));
-    }
-
-    fn fail_model(&self, kind: OfficeFailure) {
-        self.replies
-            .lock()
-            .expect("replies")
-            .push_back(Err(OfficeHostError::new(kind, "scripted")));
-    }
-
-    fn model_calls(&self) -> Vec<OfficeModelRequest> {
-        self.requests.lock().expect("requests").clone()
-    }
-}
-
-#[async_trait]
-impl OfficeToolHost for FakeHost {
-    async fn read_object(
-        &self,
-        bucket: &str,
-        name: &str,
-        max_bytes: u64,
-    ) -> Result<Vec<u8>, OfficeHostError> {
-        if self.unreachable {
-            return Err(OfficeHostError::new(OfficeFailure::Unreachable, "down"));
-        }
-        let objects = self.objects.lock().expect("objects");
-        let bytes = objects
-            .get(&(bucket.to_owned(), name.to_owned()))
-            .ok_or_else(|| OfficeHostError::new(OfficeFailure::NotFound, "missing"))?;
-        if bytes.len() as u64 > max_bytes {
-            return Err(OfficeHostError::new(OfficeFailure::TooLarge, "big"));
-        }
-        Ok(bytes.clone())
-    }
-
-    async fn write_object(
-        &self,
-        bucket: &str,
-        name: &str,
-        media_type: &str,
-        bytes: Vec<u8>,
-        overwrite: bool,
-    ) -> Result<OfficeObjectWritten, OfficeHostError> {
-        let byte_length = bytes.len() as u64;
-        let mut objects = self.objects.lock().expect("objects");
-        let slot = (bucket.to_owned(), name.to_owned());
-        self.writes
-            .lock()
-            .expect("writes")
-            .push((name.to_owned(), overwrite));
-        if !overwrite && objects.contains_key(&slot) {
-            return Err(OfficeHostError::new(OfficeFailure::AlreadyExists, "taken"));
-        }
-        objects.insert(slot, bytes);
-        Ok(OfficeObjectWritten {
-            bucket: bucket.to_owned(),
-            name: name.to_owned(),
-            media_type: media_type.to_owned(),
-            byte_length,
-        })
-    }
-
-    async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError> {
-        self.requests.lock().expect("requests").push(request);
-        self.replies
-            .lock()
-            .expect("replies")
-            .pop_front()
-            .unwrap_or_else(|| Err(OfficeHostError::new(OfficeFailure::Unreachable, "no reply")))
-    }
-}
-
-/// The production limits with room for the test threads: the engine's
-/// permit gate is process-wide and the tests run in parallel.
-fn test_limits() -> Limits {
-    Limits {
-        max_concurrent: 64,
-        ..Limits::default()
-    }
-}
-
-fn policy() -> Arc<ToolAdmissionPolicy> {
-    Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("policy"))
-}
-
-fn settings(selected: Option<Value>) -> Map<String, Value> {
-    let mut s = json!({"bucket_name": "bucket"});
-    if let Some(selected) = selected {
-        s["selected_tools"] = selected;
-    }
-    s.as_object().expect("settings").clone()
-}
-
-fn context() -> Arc<SimpleToolContext> {
-    Arc::new(SimpleToolContext::new("pptx-test"))
-}
+use crate::host::PlatformWriter;
 
 async fn tools_for(host: &Arc<FakeHost>, selected: Option<Value>) -> Vec<Arc<dyn Tool>> {
     let config = PptxToolkitConfig::parse(&settings(selected)).expect("config");
@@ -400,45 +246,6 @@ fn the_configuration_is_strict() {
             .bucket(),
         "bucket"
     );
-}
-
-struct NoPlatform;
-
-#[async_trait]
-impl PlatformWriter for NoPlatform {
-    async fn list_artifacts(
-        &self,
-        _: &ArtifactListRequest,
-    ) -> Result<ArtifactListOutcome, HostError> {
-        Err(HostError::new(HostErrorCode::NotFound, "none"))
-    }
-    async fn read_artifact(
-        &self,
-        _: &ArtifactReadRequest,
-    ) -> Result<ArtifactReadOutcome, HostError> {
-        Err(HostError::new(HostErrorCode::NotFound, "none"))
-    }
-    async fn write_artifact(
-        &self,
-        _: &ArtifactWriteRequest,
-    ) -> Result<ArtifactWriteOutcome, HostError> {
-        Err(HostError::new(HostErrorCode::NotFound, "none"))
-    }
-    async fn delete_artifact(
-        &self,
-        _: &ArtifactDeleteRequest,
-    ) -> Result<ArtifactDeleteOutcome, HostError> {
-        Err(HostError::new(HostErrorCode::NotFound, "none"))
-    }
-    async fn write_skill(&self, _: &SkillWriteRequest) -> Result<SkillWriteOutcome, HostError> {
-        Err(HostError::new(HostErrorCode::NotFound, "none"))
-    }
-    async fn write_project_context(
-        &self,
-        _: &ProjectContextWriteRequest,
-    ) -> Result<ProjectContextWriteOutcome, HostError> {
-        Err(HostError::new(HostErrorCode::NotFound, "none"))
-    }
 }
 
 fn pptx_version() -> Value {
@@ -2156,9 +1963,9 @@ async fn model_tools_say_plainly_when_no_model_is_bound() {
 fn the_ui_catalogue_lists_every_tool_the_family_serves() {
     const PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../services/elitea-main/internal/runtimecomposition/rust_only_toolkit_tools.json"
+        "/../../../services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
     );
-    let want = super::families::pptx::schema::rust_only_catalogue_document();
+    let want = super::families::rust_only_catalogue_document();
     if std::env::var("ELITEA_WRITE_RUST_ONLY_TOOLS").as_deref() == Ok("1") {
         std::fs::write(PATH, serde_json::to_string(&want).unwrap() + "\n").unwrap();
     }
@@ -2436,4 +2243,22 @@ async fn slide_images_are_sent_with_the_first_batch_only() {
             .iter()
             .all(|c| c.images_png.is_empty() && !c.prompt.contains("given with the first batch"))
     );
+}
+
+#[tokio::test]
+async fn a_null_table_cell_is_an_empty_cell_not_the_word_null() {
+    let rig = Rig::new().await;
+    rig.text(
+        "create_presentation",
+        json!({"file_name": "t.pptx", "title": "T"}),
+    )
+    .await;
+    rig.text(
+        "add_table",
+        json!({"file_name": "t.pptx", "slide": 1, "rows": [["h", null], [3, false]]}),
+    )
+    .await;
+    let md = rig.markdown("t.pptx");
+    assert!(!md.contains("null"), "{md}");
+    assert!(md.contains('3') && md.contains("false"), "{md}");
 }

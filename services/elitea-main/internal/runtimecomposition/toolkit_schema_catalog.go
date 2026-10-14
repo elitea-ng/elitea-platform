@@ -126,9 +126,11 @@ func loadCurrentToolkitSchemaSnapshot(data, rustOnly []byte) (*CurrentToolkitSch
 	}
 
 	if len(rustOnly) != 0 {
-		if err := applyRustOnlyToolkitTools(document.Entries, rustOnly); err != nil {
+		merged, err := applyRustOnlyToolkitTools(document.Entries, rustOnly)
+		if err != nil {
 			return nil, ErrCurrentToolkitSchemaSnapshotInvalid
 		}
+		document.Entries = merged
 	}
 
 	entries := make(map[string]currentToolkitSchemaSnapshotEntry, len(document.Entries))

@@ -336,3 +336,123 @@ async fn a_pptx_node_without_an_office_runtime_is_refused_as_unsupported() {
         "{error}"
     );
 }
+
+// -- The docx and xlsx families in pipeline nodes (ADR-0032 P4) ------------------
+
+/// The engine's permit gate is process-wide and these tests run in parallel.
+fn roomy_limits() -> elitea_office_core::Limits {
+    elitea_office_core::Limits {
+        max_concurrent: 64,
+        ..elitea_office_core::Limits::default()
+    }
+}
+
+fn office_pipeline_request(
+    toolkit_type: &str,
+    tool: &str,
+    file: &str,
+) -> super::super::request::AgentExecutionRequest {
+    let yaml = PPTX_PIPELINE
+        .replace("toolkit_name: deck", "toolkit_name: office")
+        .replace("tool: to_markdown", &format!("tool: {tool}"))
+        .replace("value: hello.pptx", &format!("value: {file}"));
+    let mut request = artifact_pipeline_request(&yaml);
+    let version = request
+        .payload
+        .application
+        .get_mut("version_details")
+        .and_then(Value::as_object_mut)
+        .expect("application version fixture");
+    version.insert(
+        "tools".to_owned(),
+        json!([{
+            "id": 6, "type": toolkit_type, "name": "office", "toolkit_name": "office",
+            "settings": {"bucket_name": "decks", "selected_tools": [tool]}
+        }]),
+    );
+    request
+}
+
+async fn run_office_pipeline(
+    request: &super::super::request::AgentExecutionRequest,
+    api: &Arc<crate::transport::office_host_tests::ObjectApi>,
+) -> String {
+    use crate::transport::office_host::OfficeRuntime;
+    let (assembler, _) = artifact_assembler(&[redeem_response()]);
+    let assembler = assembler.with_office_runtime(Some(Arc::new(OfficeRuntime::with_transport(
+        "https://platform.internal:9446",
+        Arc::clone(api) as Arc<dyn elitea_connectors::transport::Transport>,
+    ))));
+    let invocation = assembler
+        .assemble(authorized(request))
+        .await
+        .unwrap_or_else(|error| panic!("an Office pipeline was refused: {error}"));
+    let browser = collect_pipeline_completion(invocation).await;
+    serde_json::to_string(&browser).expect("browser events")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_docx_direct_node_reads_a_document_through_the_office_host() {
+    use crate::transport::office_host_tests::ObjectApi;
+    let api = ObjectApi::new();
+    let mut doc = elitea_office_core::Document::new(&roomy_limits());
+    doc.add_paragraph("Quarterly pipeline document")
+        .expect("paragraph");
+    api.put("hello.docx", doc.save().expect("document bytes"));
+    let rendered = run_office_pipeline(
+        &office_pipeline_request("docx", "read_document", "hello.docx"),
+        &api,
+    )
+    .await;
+    assert!(
+        rendered.contains("Quarterly pipeline document"),
+        "the document's text must reach the pipeline output: {rendered}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_xlsx_direct_node_reads_a_workbook_through_the_office_host() {
+    use crate::transport::office_host_tests::ObjectApi;
+    let api = ObjectApi::new();
+    let mut book = elitea_office_core::Workbook::new(&roomy_limits());
+    book.write_cell(
+        0,
+        0,
+        0,
+        &elitea_office_core::CellValue::Text("Quarterly pipeline cell".into()),
+    )
+    .expect("cell");
+    api.put("hello.xlsx", book.save().expect("workbook bytes"));
+    let rendered = run_office_pipeline(
+        &office_pipeline_request("xlsx", "sheet_to_markdown", "hello.xlsx"),
+        &api,
+    )
+    .await;
+    assert!(
+        rendered.contains("Quarterly pipeline cell"),
+        "the cell's text must reach the pipeline output: {rendered}"
+    );
+}
+
+/// With no Office runtime a docx or xlsx node is refused as unsupported, like
+/// any unserved family.
+#[tokio::test]
+async fn a_docx_or_xlsx_node_without_an_office_runtime_is_refused_as_unsupported() {
+    for (ty, tool, file) in [
+        ("docx", "read_document", "a.docx"),
+        ("xlsx", "list_sheets", "a.xlsx"),
+    ] {
+        let (assembler, _) = artifact_assembler(&[redeem_response()]);
+        let Err(error) = assembler
+            .assemble(authorized(&office_pipeline_request(ty, tool, file)))
+            .await
+        else {
+            panic!("a {ty} toolkit was bound with no Office runtime");
+        };
+        assert_eq!(
+            error.code(),
+            super::super::runtime::NativeAgentAssemblyErrorCode::UnsupportedCapability,
+            "{ty}: {error}"
+        );
+    }
+}
