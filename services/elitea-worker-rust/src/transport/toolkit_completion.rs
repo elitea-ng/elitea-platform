@@ -128,6 +128,12 @@ impl Llm for ToolkitCompletionModel {
             // A reply cut short (length, safety) is not a reply; the caller
             // names the reason it reads from the finish.
             let reason = response.finish_reason;
+            if reason == Some(FinishReason::MaxTokens) && strip_think(&text).is_empty() {
+                return Err(refused(
+                    "toolkit_completion.reasoning_cut",
+                    "the model ran out of tokens while reasoning; raise max_tokens",
+                ));
+            }
             return Err(refused(
                 "toolkit_completion.finish",
                 match reason {
@@ -139,10 +145,43 @@ impl Llm for ToolkitCompletionModel {
                 },
             ));
         }
+        // Models that think inline (Qwen3) put <think>...</think> in the text
+        // channel; it is not the reply. (The indexing completion strips the
+        // same way: dedupe with it into one helper when both have landed.)
+        let text = strip_think(&text);
+        if text.trim().is_empty() {
+            return Err(refused(
+                "toolkit_completion.empty",
+                "the model's reply held no usable text",
+            ));
+        }
         response.content = Some(Content::new("model").with_text(text));
         response.partial = false;
         Ok(Box::pin(stream::once(async move { Ok(response) })))
     }
+}
+
+/// `text` without its `<think>...</think>` spans; an unclosed span drops the
+/// rest (a reply cut inside its thinking has no answer).
+fn strip_think(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    // A reply that only has the closing tag: the opening one was in the
+    // prompt template, so everything before it is reasoning.
+    if let Some(close) = rest.find("</think>")
+        && rest.find("<think>").is_none_or(|open| open > close)
+    {
+        rest = &rest[close + "</think>".len()..];
+    }
+    while let Some(start) = rest.find("<think>") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("</think>") {
+            Some(end) => rest = &rest[start + end + "</think>".len()..],
+            None => return out.trim().to_owned(),
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_owned()
 }
 
 fn refused(code: &'static str, message: &'static str) -> AdkError {
@@ -277,6 +316,14 @@ mod tests {
         assert!(provider.seen.lock().expect("seen").is_empty());
     }
 
+    #[test]
+    fn inline_thinking_is_not_the_reply() {
+        assert_eq!(strip_think("<think>hm</think>\nAnswer"), "Answer");
+        assert_eq!(strip_think("a<think>x</think>b<think>y"), "ab");
+        assert_eq!(strip_think("<think>only"), "");
+        assert_eq!(strip_think("reasoning</think>\nAnswer"), "Answer");
+    }
+
     #[tokio::test]
     async fn a_reply_cut_short_is_not_a_reply() {
         let invocation = test_model_facade_invocation();
@@ -286,6 +333,7 @@ mod tests {
         });
         let model = toolkit_completion_model(provider as Arc<dyn Llm>, &invocation);
         let error = run(&model, request()).await.expect_err("cut off");
+        // Only deltas "Hello, world" came back: visible text cut at length.
         assert!(error.to_string().contains("length limit"), "{error}");
     }
 }
