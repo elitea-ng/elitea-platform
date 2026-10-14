@@ -28,6 +28,12 @@ pub(crate) const ASK_USER_TOOL_NAME: &str = "ask_user";
 /// bind real tools instead of a warning.
 pub(crate) const SKILLS_BUILDER_TOOL_NAME: &str = "skills_builder";
 pub(crate) const PROJECT_CONTEXT_BUILDER_TOOL_NAME: &str = "project_context_builder";
+/// The platform's Data Analysis toggle (ADR-0033). Unlike the two builders it
+/// starts out SKIPPED, with the usual notice, on every path: only the ordinary
+/// agent assembly, which has the Office host (objects) to read the attachments
+/// with, marks it served ([`InternalToolCatalog::serving_data_analysis`]).
+/// Pipelines and nested child agents bind no data tools, and keep saying so.
+pub(crate) const DATA_ANALYSIS_TOOL_NAME: &str = "data_analysis";
 const SKILLS_BUILDER_TOOLSET_NAME: &str = "skills_builder";
 const PROJECT_CONTEXT_BUILDER_TOOLSET_NAME: &str = "project_context_builder";
 const CREATE_SKILL_TOOL_NAME: &str = "create_or_update_skill";
@@ -90,6 +96,9 @@ const ASK_USER_DESCRIPTION: &str = "Ask the user a clarifying question when info
 /// `session.rs` reads a copy out of a struct it is about to move — see
 /// `assemble_ordinary_native_with_sessions_and_runtime_catalogs`). A `Vec`
 /// field would force every one of those call sites to clone or restructure.
+// Flags beside the `skipped` bitmask by design (see the type's doc): an
+// implemented capability must not be a bit in the "not served" mask.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct InternalToolCatalog {
     ask_user: bool,
@@ -99,6 +108,8 @@ pub(crate) struct InternalToolCatalog {
     /// tell the user the tool is unavailable in the same turn it runs.
     skills_builder: bool,
     project_context_builder: bool,
+    /// ADR-0033: the data tools, bound when the run can read the bucket.
+    data_analysis: bool,
     skipped: u8,
 }
 
@@ -109,6 +120,7 @@ impl InternalToolCatalog {
             ask_user: false,
             skills_builder: false,
             project_context_builder: false,
+            data_analysis: false,
             skipped: 0,
         }
     }
@@ -125,6 +137,9 @@ impl InternalToolCatalog {
                 Some(SKILLS_BUILDER_TOOL_NAME) => catalog.skills_builder = true,
                 Some(PROJECT_CONTEXT_BUILDER_TOOL_NAME) => catalog.project_context_builder = true,
                 Some(name) if PLATFORM_INTERNAL_TOOLS.contains(&name) => {
+                    if name == DATA_ANALYSIS_TOOL_NAME {
+                        catalog.data_analysis = true;
+                    }
                     // Same contract as the toolkit-family skip
                     // (`agent_toolkit_skipped` in materialize.rs): the agent
                     // runs WITHOUT a capability its author asked for, and a
@@ -167,6 +182,7 @@ impl InternalToolCatalog {
             ask_user: self.ask_user || other.ask_user,
             skills_builder: self.skills_builder || other.skills_builder,
             project_context_builder: self.project_context_builder || other.project_context_builder,
+            data_analysis: self.data_analysis || other.data_analysis,
             skipped: self.skipped | other.skipped,
         }
     }
@@ -187,8 +203,64 @@ impl InternalToolCatalog {
     }
 
     #[must_use]
+    pub(crate) const fn data_analysis_enabled(self) -> bool {
+        self.data_analysis
+    }
+
+    /// This catalog with the data tools marked as served: the run can read the
+    /// bucket, so the notice that says they are unavailable is withdrawn. Only
+    /// the assembly that binds [`Self::data_analysis_toolset`] calls it.
+    #[must_use]
+    pub(crate) fn serving_data_analysis(mut self) -> Self {
+        if self.data_analysis
+            && let Some(index) = PLATFORM_INTERNAL_TOOLS
+                .iter()
+                .position(|name| *name == DATA_ANALYSIS_TOOL_NAME)
+        {
+            self.skipped &= !(1 << index);
+        }
+        self
+    }
+
+    /// The data tools for this run, when the toggle is on, the run has the
+    /// host to read and write objects with, and the tool policy admits them.
+    pub(crate) fn data_analysis_toolset(
+        self,
+        authority: Option<&elitea_agent_runtime::toolkits::DataAnalysisAuthority>,
+        policy: &Arc<elitea_agent_runtime::toolkits::ToolAdmissionPolicy>,
+    ) -> Option<Arc<dyn Toolset>> {
+        if !self.data_analysis {
+            return None;
+        }
+        let authority = authority?;
+        match elitea_agent_runtime::toolkits::build_data_analysis_toolset(authority, policy) {
+            Ok(Some(toolset)) => Some(Arc::new(toolset)),
+            Ok(None) => {
+                tracing::warn!(
+                    event = "agent_internal_tool_blocked",
+                    internal_tool = DATA_ANALYSIS_TOOL_NAME,
+                    "the deployment's tool policy blocks the data_analysis toolkit"
+                );
+                None
+            }
+            Err(_) => {
+                tracing::error!(
+                    event = "agent_internal_tool_invalid",
+                    internal_tool = DATA_ANALYSIS_TOOL_NAME,
+                    "the data analysis tool definitions were refused"
+                );
+                None
+            }
+        }
+    }
+
+    #[must_use]
     pub(crate) const fn is_empty(self) -> bool {
-        !self.ask_user && !self.skills_builder && !self.project_context_builder && self.skipped == 0
+        !self.ask_user
+            && !self.skills_builder
+            && !self.project_context_builder
+            && !self.data_analysis
+            && self.skipped == 0
     }
 
     /// The platform-catalogue names this runtime skipped, in
@@ -962,6 +1034,13 @@ mod tests {
         let catalog = InternalToolCatalog::from_names(&all_platform).expect("catalog");
         assert!(catalog.ask_user_enabled());
         assert_eq!(catalog.toolsets(None).len(), 1);
+        // data_analysis is skipped unless the ordinary assembly serves it.
+        assert!(catalog.data_analysis_enabled());
+        assert!(
+            catalog
+                .skipped_platform_tools()
+                .any(|name| name == "data_analysis")
+        );
 
         // Outside the platform catalogue is still a refusal: it names nothing
         // the product can do, so skipping it would hide malformed config.
@@ -1394,5 +1473,104 @@ mod tests {
         for (error, expected) in cases {
             assert_eq!(builder_failure_text("skill", &host_error(&error)), expected);
         }
+    }
+    // ADR-0033: the Data Analysis toggle starts skipped with the #866 notice
+    // on every path, and only the assembly that binds the tools withdraws it.
+    #[test]
+    fn data_analysis_is_skipped_until_the_assembly_serves_it() {
+        let catalog =
+            InternalToolCatalog::from_names(&["data_analysis".to_owned()]).expect("catalog");
+        assert!(catalog.data_analysis_enabled());
+        assert_eq!(
+            catalog.skipped_tools_notice_text().as_deref(),
+            Some("internal tool 'data_analysis' is not available on this worker")
+        );
+        assert!(!catalog.is_empty());
+
+        let served = catalog.serving_data_analysis();
+        assert!(served.data_analysis_enabled());
+        assert_eq!(served.skipped_tools_notice_text(), None);
+        // Serving it leaves every other skipped tool in the notice.
+        let both =
+            InternalToolCatalog::from_names(&["data_analysis".to_owned(), "planner".to_owned()])
+                .unwrap()
+                .serving_data_analysis();
+        assert_eq!(
+            both.skipped_tools_notice_text().as_deref(),
+            Some("internal tool 'planner' is not available on this worker")
+        );
+        // A catalog that never named it is untouched; serving twice is a no-op.
+        assert_eq!(
+            InternalToolCatalog::empty().serving_data_analysis(),
+            InternalToolCatalog::empty()
+        );
+        assert_eq!(served.serving_data_analysis(), served);
+        // A nested application's toggle and its parent's combine.
+        let parent = InternalToolCatalog::from_names(&[ASK_USER_TOOL_NAME.to_owned()]).unwrap();
+        assert!(parent.merge(catalog).data_analysis_enabled());
+    }
+
+    #[tokio::test]
+    async fn the_data_toolset_needs_the_toggle_a_host_and_policy_consent() {
+        use std::collections::BTreeMap;
+
+        use async_trait::async_trait;
+        use elitea_agent_runtime::toolkits::{
+            DataAnalysisAuthority, OfficeFailure, OfficeHostError, OfficeModelRequest,
+            OfficeObjectWritten, OfficeToolHost, ToolAdmissionPolicy,
+        };
+
+        struct Host;
+        #[async_trait]
+        impl OfficeToolHost for Host {
+            async fn read_object(
+                &self,
+                _: &str,
+                _: &str,
+                _: u64,
+            ) -> Result<Vec<u8>, OfficeHostError> {
+                Err(OfficeHostError::new(OfficeFailure::NotFound, "none"))
+            }
+            async fn write_object(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: Vec<u8>,
+                _: bool,
+            ) -> Result<OfficeObjectWritten, OfficeHostError> {
+                Err(OfficeHostError::new(OfficeFailure::AccessRefused, "none"))
+            }
+            async fn complete(&self, _: OfficeModelRequest) -> Result<String, OfficeHostError> {
+                Err(OfficeHostError::new(OfficeFailure::NoModel, "none"))
+            }
+        }
+
+        let allow = Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("policy"));
+        let block = Arc::new(
+            ToolAdmissionPolicy::new(&["data_analysis".to_owned()], &BTreeMap::new())
+                .expect("policy"),
+        );
+        let authority = DataAnalysisAuthority::new(Arc::new(Host));
+        let on = InternalToolCatalog::from_names(&["data_analysis".to_owned()]).unwrap();
+        let off = InternalToolCatalog::from_names(&[ASK_USER_TOOL_NAME.to_owned()]).unwrap();
+
+        assert!(
+            off.data_analysis_toolset(Some(&authority), &allow)
+                .is_none()
+        );
+        assert!(on.data_analysis_toolset(None, &allow).is_none());
+        assert!(on.data_analysis_toolset(Some(&authority), &block).is_none());
+        let toolset = on
+            .data_analysis_toolset(Some(&authority), &allow)
+            .expect("toolset");
+        let tools = toolset
+            .tools(Arc::new(SimpleToolContext::new("internal-tools-test")))
+            .await
+            .expect("tools");
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"describe_data") && names.contains(&"chart_data"));
+        // No sandbox lent: free-form code is not offered.
+        assert!(!names.contains(&"run_analysis_code"));
     }
 }

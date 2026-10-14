@@ -98,6 +98,7 @@ pub(crate) struct ClaimOfficeHost {
     runtime: Arc<OfficeRuntime>,
     platform: ArtifactPlatform,
     model: LazyStepbackModel,
+    project_id: String,
 }
 
 impl ClaimOfficeHost {
@@ -119,6 +120,7 @@ impl ClaimOfficeHost {
             runtime,
             platform,
             model,
+            project_id: project_id.to_owned(),
         })
     }
 
@@ -294,6 +296,30 @@ impl OfficeToolHost for ClaimOfficeHost {
                 .and_then(Value::as_u64)
                 .unwrap_or(bytes.len() as u64),
         })
+    }
+
+    /// The link the SDK's chart answer used: the platform origin and the
+    /// artifact route of the turn's project (`pandas_analyze_data` printed
+    /// `{base_url}/api/v2/artifacts/artifact/default/{project}/{bucket}/{file}`).
+    fn object_link(&self, bucket: &str, name: &str) -> Option<String> {
+        if !valid_segment(bucket) || !valid_object_key(name) {
+            return None;
+        }
+        let mut url = Url::parse(&self.runtime.origin).ok()?;
+        {
+            let mut segments = url.path_segments_mut().ok()?;
+            segments.pop_if_empty().extend([
+                "api",
+                "v2",
+                "artifacts",
+                "artifact",
+                "default",
+                self.project_id.as_str(),
+                bucket,
+            ]);
+            segments.extend(name.split('/'));
+        }
+        Some(url.to_string())
     }
 
     async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError> {

@@ -79,6 +79,8 @@ mod bitbucket_tests;
 mod carrier_tests;
 #[cfg(test)]
 mod confluence_tests;
+#[cfg(all(test, feature = "toolkit-data-analysis"))]
+mod data_analysis_tests;
 #[cfg(test)]
 mod direct_execution_tests;
 #[cfg(test)]
@@ -173,6 +175,14 @@ pub use delegated_auth::{
     encode_delegated_authorization_requirement, hide_model_tools,
 };
 pub use families::artifact::ArtifactToolAuthority;
+#[cfg(feature = "toolkit-data-analysis")]
+pub use families::data_analysis::code::{
+    AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner, AnalysisLanguage,
+};
+#[cfg(feature = "toolkit-data-analysis")]
+pub use families::data_analysis::tools::{
+    DataAnalysisAuthority, DataAnalysisToolsetError, build_data_analysis_toolset,
+};
 pub use families::index_tools::{
     INDEXES_KEY, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
     IndexToolFailure, IndexToolHost, IndexToolName, IndexToolSupport, IndexToolsWithheld,

@@ -35,9 +35,13 @@ type internalToolCapability struct {
 // keys them by, and the Rust availability is
 // services/elitea-worker-rust/src/agents/internal_tools.rs's
 // PLATFORM_INTERNAL_TOOLS — as of #866, that list recognizes the first six below
-// and SKIPS every one of them (agent_internal_tool_skipped), so every entry
-// here is rustAvailable: false. ask_user, the Rust worker's one real internal
-// tool, is not a user-facing Modules toggle and is intentionally not listed.
+// and SKIPS them (agent_internal_tool_skipped), so those entries were
+// rustAvailable: false. data_analysis is the first of the six a Rust port
+// moved (ADR-0033): the worker serves structured table tools over CSV, JSON
+// and Excel attachments (and, with a sandbox, free-form code) instead of the
+// SDK's model-written pandas, so it reports true. ask_user, the Rust worker's
+// one real internal tool, is not a user-facing Modules toggle and is
+// intentionally not listed.
 // attachments and pyodide are PLATFORM_INTERNAL_TOOLS entries too, but #866
 // tracks them separately (pyodide runs a real Deno sandbox on the Python
 // worker only — see the toolkit-catalogue doc's Python Sandbox note; both are
@@ -49,7 +53,7 @@ type internalToolCapability struct {
 // the other.
 var platformInternalTools = []internalToolCapability{
 	{name: "image_generation", pythonAvailable: true, rustAvailable: false},
-	{name: "data_analysis", pythonAvailable: true, rustAvailable: false},
+	{name: "data_analysis", pythonAvailable: true, rustAvailable: true},
 	{name: "internal_mcp", pythonAvailable: true, rustAvailable: false},
 	{name: "planner", pythonAvailable: true, rustAvailable: false},
 	{name: "swarm", pythonAvailable: true, rustAvailable: false},

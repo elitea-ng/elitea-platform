@@ -8,7 +8,7 @@ const RUST: RuntimeCapabilities = {
   worker: 'rust',
   internal_tools: {
     image_generation: false,
-    data_analysis: false,
+    data_analysis: true,
     internal_mcp: false,
     planner: false,
     swarm: false,

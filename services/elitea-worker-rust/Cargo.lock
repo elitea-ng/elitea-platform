@@ -1430,6 +1430,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "quick-xml",
+ "resvg",
  "thiserror 2.0.21",
  "zavora-docx",
  "zavora-slide",

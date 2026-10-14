@@ -30,6 +30,10 @@ toolkit-sql = ["dep:sqlx"]
 # until P6 (the zavora libraries and their bundled fonts are about 18 MiB of
 # binary), and without it a `pptx` toolkit is skipped as unsupported.
 toolkit-pptx = ["dep:elitea-office-core"]
+# The `data_analysis` internal tool (ADR-0033): tables, charts and Excel I/O
+# over `elitea-office-core`. The cloud worker enables it; the desktop host does
+# not, and without it the internal tool is recognized and skipped.
+toolkit-data-analysis = ["dep:elitea-office-core"]
 
 [dependencies]
 # Tilde, not caret: adk breaks its API between minors. adk-agent and

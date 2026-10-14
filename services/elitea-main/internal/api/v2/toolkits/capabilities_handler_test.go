@@ -60,8 +60,9 @@ func TestRuntimeCapabilitiesReportsTheConfiguredWorker(t *testing.T) {
 	}
 }
 
-// #866's core claim: on Rust, every one of the six toggles the agent form
-// offers is a no-op, and this endpoint is the one place that says so.
+// #866's core claim: on Rust, a toggle the agent form offers is a no-op unless
+// the worker serves it, and this endpoint is the one place that says so.
+// data_analysis is the one of the six Rust serves (ADR-0033).
 func TestRuntimeCapabilitiesInternalToolsOnRust(t *testing.T) {
 	t.Parallel()
 
@@ -76,8 +77,9 @@ func TestRuntimeCapabilitiesInternalToolsOnRust(t *testing.T) {
 			t.Errorf("internal_tools has no entry for %q", name)
 			continue
 		}
-		if available {
-			t.Errorf("internal_tools[%q]=true on rust, want false (#866)", name)
+		want := name == "data_analysis"
+		if available != want {
+			t.Errorf("internal_tools[%q]=%v on rust, want %v (#866, ADR-0033)", name, available, want)
 		}
 	}
 }

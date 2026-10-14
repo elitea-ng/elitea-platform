@@ -3834,7 +3834,7 @@ worker:
   #     - whole toolkit types the Rust worker has no family for (checked
   #       against `current_toolkit_catalogue_snapshot.json` and
   #       `current_rust_worker_toolkit_capability_snapshot.json`): pptx,
-  #       imagegen and data_analysis (need a model lent to a toolkit),
+  #       imagegen (needs a model lent to a toolkit),
   #       memory, vectorstore, sandbox, delta_lake, aws and localgit (each
   #       blocked on a platform decision recorded in the worker's
   #       SOURCE_PARITY.md). #865's other 17 types are now Rust families.
@@ -3850,13 +3850,16 @@ worker:
   #       aha attach_file, testrail add_file_to_case). The capability
   #       snapshot's `supported_tools` lists exactly what is served; the
   #       remaining tools are shown greyed with a reason (#865).
-  #     - six internal chat-agent tools that
+  #     - five internal chat-agent tools that
   #       `services/elitea-worker-rust/src/agents/internal_tools.rs` recognizes
   #       and then skips rather than runs (#866): image_generation (Image
-  #       creation), data_analysis (Data Analysis), internal_mcp (Elitea MCP
-  #       Tools), planner (Planner), swarm (Swarm Mode), lazy_tools_mode (Smart
-  #       Tools Selection). A run that hits one of these now gets a visible
-  #       assistant-facing notice instead of the tool silently doing nothing.
+  #       creation), internal_mcp (Elitea MCP Tools), planner (Planner), swarm
+  #       (Swarm Mode), lazy_tools_mode (Smart Tools Selection). A run that
+  #       hits one of these now gets a visible assistant-facing notice instead
+  #       of the tool silently doing nothing. A sixth, data_analysis (Data
+  #       Analysis), is served by the Rust worker (ADR-0033) as structured
+  #       table tools over CSV, JSON and Excel attachments plus the code
+  #       sandbox, not as the SDK's model-written pandas.
   #   The Rust worker's other toolkit families (43 dispatched types: the
   #   original azure, azure_search, elastic, gcp, github, gitlab_org,
   #   google_places, k8s, keycloak, openapi, postman, rally, report_portal,

@@ -86,9 +86,10 @@ test('API-RC2: the answer is internally consistent with the configured worker', 
   const body = (await resp.json()) as RuntimeCapabilities;
 
   if (body.worker === 'rust') {
-    // #866's core claim, machine-checked: none of the six run on Rust.
+    // #866's core claim, machine-checked: of the six, only data_analysis runs
+    // on Rust (ADR-0033); the rest are skipped.
     for (const name of SIX_INTERNAL_TOOLS) {
-      expect(body.internal_tools[name], `internal_tools.${name} on rust`).toBe(false);
+      expect(body.internal_tools[name], `internal_tools.${name} on rust`).toBe(name === 'data_analysis');
     }
     // #865's core claim: at least one catalogued type is withheld — the
     // Rust worker materializes 22 of the 52 catalogued families.

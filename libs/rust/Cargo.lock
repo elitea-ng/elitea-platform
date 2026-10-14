@@ -1837,6 +1837,7 @@ dependencies = [
  "image",
  "peak_alloc",
  "quick-xml 0.41.0",
+ "resvg",
  "thiserror 2.0.21",
  "zavora-docx",
  "zavora-slide",

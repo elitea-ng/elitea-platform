@@ -2597,27 +2597,59 @@ elitea-main already models the gap: `nativeWorkerGatedToolkitTypes` hides
 `imagegen` on a Rust-worker deployment, and the `image_generation` internal
 tool reports `rustAvailable: false`.
 
-#### `data_analysis` (blocked)
+#### `data_analysis` (served, ADR-0033)
 
 `data_analysis` is an internal tool (the chat "Data Analysis" toggle), not a
-configured family: its `bucket_name` is the conversation attachment bucket
-injected at run time, and the Rust worker already recognizes and skips it
-with `agent_internal_tool_skipped` (`agents/internal_tools.rs`). Its one
-tool, `pandas_analyze_data(query, filename)`, loads the file into a pandas
-DataFrame (CSV, Excel via calamine, Parquet, JSON, XML, HDF5, Feather,
-pickle), asks the agent's LLM to write pandas code for the query (retrying up
-to five times with the traceback), runs that code in the SDK's restricted
-in-process executor, and saves any matplotlib chart as `chart_<uuid>.png` in
-the bucket, answering the text result or the chart links.
+configured family. The SDK's one tool, `pandas_analyze_data(query, filename)`,
+loaded the file into a pandas DataFrame, asked the agent's LLM to write pandas
+code for the query (retrying up to five times with the traceback), ran it in
+the SDK's restricted in-process executor, and saved any matplotlib chart as
+`chart_<uuid>.png`. The Rust worker does none of that. The owner's direction
+(ADR-0032 P5) was structured tools plus the existing code sandbox, never
+model-written pandas in the worker, and ADR-0033 records the design.
 
-Blocked on three authorities at once: (1) a model for code generation, which
-no tool is lent; (2) an isolated Python runtime with pandas and matplotlib:
-the Rust worker's only one is the Pyodide code-runner behind
-`host::CodeSandbox`, reached today only by pipeline code nodes, so lending it
-to a tool (with the file bytes as job input and the chart as job output) is
-new host plumbing; (3) the attachment bucket as an artifact authority, which
-exists (`ArtifactToolAuthority`) but is lent only to configured families.
-The row in "Special runtime toolsets" above keeps the long-term direction.
+What the Rust worker serves instead, behind the same toggle and the same
+`internal_tools` name:
+
+| Tool | Does |
+| --- | --- |
+| `describe_data` | Column types, counts, nulls, distinct counts, numeric summaries and quartiles, top text values, date ranges, first rows; lists an `.xlsx` workbook's sheets |
+| `filter_data` | Conditions (`eq`, `ne`, `gt`, `ge`, `lt`, `le`, `contains`, `not_contains`, `starts_with`, `ends_with`, `in`, `not_in`, `is_null`, `not_null`, `matches`), column choice, sort, limit |
+| `sort_data` | Multi-key stable sort, nulls last |
+| `aggregate_data` | Group by and `count`, `sum`, `mean`, `median`, `min`, `max`, `std`, `var`, `nunique`, `first`, `last`; no `group_by` summarises the table |
+| `pivot_data` | Index by columns by values with one of those functions |
+| `join_data` | `inner`, `left`, `right`, `outer` join of two files on key columns |
+| `correlate_data` | Pearson or Spearman matrix |
+| `chart_data` | `bar`, `line`, `scatter`, `pie`, `histogram` as a PNG artifact with a Markdown link |
+| `save_dataframe` | Converts between `.csv`, `.tsv`, `.json` and `.xlsx` (SDK wrapper name and arguments) |
+| `run_analysis_code` | Python or JavaScript on up to 50,000 cells, in the platform code sandbox; offered only when the run has a sandbox runtime |
+
+Files are read from the conversation attachments bucket (`chat-attachments`
+unless `bucket_name` says otherwise) through the Office object host that the
+`pptx` family already uses: the turn's own credential, the platform's object
+API, no new route. A result file is written only when `output_file` is given,
+next to the source for a bare name, refused when the name is taken unless
+`overwrite` is true, and encoded in full before the single write.
+
+Bounds, enforced while a table is built and checked on a clock inside every
+loop: 50 MiB per file, 1,000,000 rows, 1,000 columns, 5,000,000 cells, 32 KiB
+per text cell, 500 pivot columns, 20 s per call, two analyses at a time per
+tool set. A CSV that opens a quote it never closes, a ragged row, UTF-16 or
+invalid UTF-8, JSON that is not records, and a workbook the Office gate refuses
+each get their own sentence.
+
+The tool set is withheld, with the usual `internal tool 'data_analysis' is not
+available on this worker` notice, on a run with no Office object host (a
+pipeline node that binds none, the desktop), and `run_analysis_code` is left
+out where no sandbox runtime is configured. `elitea-main` reports
+`internal_tools.data_analysis` true for the Rust worker.
+
+Deliberate differences from the SDK: no natural-language entry point; no
+parquet, feather, HDF5, XML, pickle or `.xls`; Excel dates are read from the
+1900 system only; an `.xlsx` result holds dates as ISO text (the writer cannot
+write a date cell) and at most 1,000,000 cells; numbers are not formatted the
+pandas way; null keys never join; sums of integers are exact and error rather
+than wrap.
 
 ### Azure DevOps Boards work item family
 
@@ -2861,7 +2893,7 @@ reaching only `platform_origin`. No new internal route exists.
 | SDK `runtime/toolkits/artifact.py` | 16 artifact tools and indexing coupling | `src/toolkits/artifact.rs` | Planned; artifact service boundary required |
 | SDK `tools/memory` and `runtime/toolkits/vectorstore.py` | Four memory and four vectorstore tools | `src/toolkits/{memory,vectorstore}.rs` | Memory blocked pending the gate 7b ownership decision; vectorstore blocked on the native indexing gate (both in `toolkit-port-b7-20261010.md`) |
 | SDK `runtime/tools/sandbox.py` | Two Pyodide variants | External sandbox client | Intentional deviation: library abstraction is not a sandbox. Blocked as a toolkit (`toolkit-port-b7-20261010.md`): the SDK binds no tool for a configured `sandbox` type, and the Rust code runner has no Main grant path or lent authority for model-initiated jobs |
-| SDK `runtime/tools/data_analysis.py` | Generated data analysis over artifacts and pandas-shaped tabular operations | External sandbox/artifact boundary with Polars as the likely native data-frame engine | Blocked (surveyed 2026-10-10, see "Toolkit types that cannot be ported as configured families yet"): needs a tool-lent model, the `CodeSandbox` lent to a tool and the attachment-bucket artifact authority together; neither pandas byte-for-byte behavior nor in-process arbitrary Python execution is implied |
+| SDK `runtime/tools/data_analysis.py` | Generated data analysis over artifacts and pandas-shaped tabular operations | `libs/rust/agent-runtime/src/toolkits/families/data_analysis/` (in-house typed table engine), the platform code sandbox for free-form code | Served as an intentional deviation (ADR-0033, see "`data_analysis`" under "Toolkit types that cannot be ported as configured families yet"): deterministic tools instead of model-written pandas; no polars, no arrow, no code or model call in the worker |
 | SDK `community/inventory` | Dynamic retrieval/ingestion registry | `src/toolkits/inventory.rs` | Planned; current 14-schema versus 9-default drift must be resolved |
 
 ## Safe implementation ownership

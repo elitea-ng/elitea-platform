@@ -16,6 +16,8 @@ pub(crate) mod bitbucket;
 pub(crate) mod carrier;
 pub(crate) mod confluence;
 pub(crate) mod connector_client;
+#[cfg(feature = "toolkit-data-analysis")]
+pub mod data_analysis;
 pub(crate) mod elastic;
 pub(crate) mod figma;
 pub(crate) mod gcp;

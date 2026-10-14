@@ -143,6 +143,14 @@ pub trait OfficeToolHost: Send + Sync {
     /// budgeted by the model gateway like every other call the run makes.
     /// Returns the reply text.
     async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError>;
+
+    /// A link a person can open to see one stored object (the platform's
+    /// artifact route under the turn's project), when the host knows one.
+    /// `data_analysis` puts it in the Markdown image a chart answer offers;
+    /// the default is no link, and the answer then names the file only.
+    fn object_link(&self, _bucket: &str, _name: &str) -> Option<String> {
+        None
+    }
 }
 
 /// The Office host shared for one run.
