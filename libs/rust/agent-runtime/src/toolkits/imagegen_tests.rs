@@ -15,8 +15,8 @@ use super::families::imagegen::{
     ImageGenConfigErrorCode, ImageGenToolkitConfig, build_imagegen_toolset, build_with_host,
 };
 use super::families::office_host::{
-    ImageEditRequest, ImageGenerateRequest, OfficeFailure, OfficeHostError, OfficeModelRequest,
-    OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
+    ImageEditRequest, ImageGenerateRequest, MAX_IMAGE_EDIT_INPUT_BYTES, OfficeFailure,
+    OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
 };
 use super::materialize::materialize_configured_toolsets_with_artifact_authority;
 use super::policy::ToolAdmissionPolicy;
@@ -44,6 +44,10 @@ struct FakeHost {
     /// The 1-based write that fails, when set.
     fail_write: Mutex<Option<usize>>,
     no_images: bool,
+    /// Every `read_object` bound asked for: name and max bytes.
+    reads: Mutex<Vec<(String, u64)>>,
+    /// The host cannot tell an object's size without reading it.
+    size_unknown: bool,
 }
 
 impl FakeHost {
@@ -69,18 +73,41 @@ impl FakeHost {
 
 #[async_trait]
 impl OfficeToolHost for FakeHost {
+    async fn object_size(&self, bucket: &str, name: &str) -> Result<Option<u64>, OfficeHostError> {
+        if self.size_unknown {
+            return Ok(None);
+        }
+        self.objects
+            .lock()
+            .expect("objects")
+            .get(&(bucket.to_owned(), name.to_owned()))
+            .map(|bytes| Some(bytes.len() as u64))
+            .ok_or_else(|| OfficeHostError::new(OfficeFailure::NotFound, "missing"))
+    }
+
     async fn read_object(
         &self,
         bucket: &str,
         name: &str,
-        _max_bytes: u64,
+        max_bytes: u64,
     ) -> Result<Vec<u8>, OfficeHostError> {
+        self.reads
+            .lock()
+            .expect("reads")
+            .push((name.to_owned(), max_bytes));
         self.objects
             .lock()
             .expect("objects")
             .get(&(bucket.to_owned(), name.to_owned()))
             .cloned()
             .ok_or_else(|| OfficeHostError::new(OfficeFailure::NotFound, "missing"))
+            .and_then(|bytes| {
+                if bytes.len() as u64 > max_bytes {
+                    Err(OfficeHostError::new(OfficeFailure::TooLarge, "over"))
+                } else {
+                    Ok(bytes)
+                }
+            })
     }
 
     async fn write_object(
@@ -105,6 +132,15 @@ impl OfficeToolHost for FakeHost {
             return Err(OfficeHostError::new(OfficeFailure::Unreachable, "scripted"));
         }
         let byte_length = bytes.len() as u64;
+        if !overwrite
+            && self
+                .objects
+                .lock()
+                .expect("objects")
+                .contains_key(&(bucket.to_owned(), name.to_owned()))
+        {
+            return Err(OfficeHostError::new(OfficeFailure::AlreadyExists, "taken"));
+        }
         self.put(bucket, name, &bytes);
         Ok(OfficeObjectWritten {
             bucket: bucket.to_owned(),
@@ -266,13 +302,13 @@ async fn generate_image_saves_every_image_and_answers_the_sdk_shape() {
                 "pics".into(),
                 "generated-generate-0.png".into(),
                 "image/png".into(),
-                true
+                false
             ),
             (
                 "pics".into(),
                 "generated-generate-1.png".into(),
                 "image/png".into(),
-                true
+                false
             ),
         ]
     );
@@ -298,10 +334,11 @@ async fn size_auto_and_a_missing_n_follow_the_sdk() {
         assert_eq!(request.size, None);
         assert_eq!(request.count, 1);
     }
+    // Three earlier calls kept their images; this one steps over them.
     let out = rig.call("generate_image", json!({"prompt": "x"})).await;
     assert_eq!(
         out["artifacts"][0]["filepath"],
-        "/pics/e2e-proof-generate-0.png"
+        "/pics/e2e-proof-generate-6.png"
     );
 }
 
@@ -405,6 +442,14 @@ async fn every_failure_is_its_own_sentence() {
         ),
         (OfficeFailure::Timeout, "timed out"),
         (OfficeFailure::Conflict, "reported a conflict"),
+        (
+            OfficeFailure::ReplyUnusable,
+            "answered but its reply was unusable (it may have been billed). Do not retry without telling the user",
+        ),
+        (
+            OfficeFailure::ReplyTooLarge,
+            "answer was larger than the platform accepts",
+        ),
     ];
     for (kind, expected) in cases {
         rig.host
@@ -462,7 +507,6 @@ async fn selected_tools_follow_the_sdk_rule() {
         (json!(["edit_image"]), vec!["edit_image"]),
         (json!([]), vec!["generate_image", "edit_image"]),
         (json!(null), vec!["generate_image", "edit_image"]),
-        (json!(["no_such_tool"]), vec![]),
         (
             json!(["generate_image", "generate_image"]),
             vec!["generate_image"],
@@ -614,7 +658,11 @@ async fn a_failed_write_mid_batch_answers_what_was_saved_and_the_failure() {
     );
     let error = out["error"].as_str().expect("the failure sentence");
     assert!(
-        error.starts_with("saved 2 of 4; image 3 could not be saved: "),
+        error.starts_with("saved 2 of 4. Could not save the image `generated-generate-2.png`: "),
+        "{error}"
+    );
+    assert!(
+        error.ends_with("The 1 image after it was not saved."),
         "{error}"
     );
     assert!(error.contains("generated-generate-2.png"), "{error}");
@@ -661,4 +709,180 @@ async fn a_file_name_the_upload_cannot_carry_is_named_before_any_call() {
         .await;
     assert!(out.contains("cannot be sent to the image model"), "{out}");
     assert!(rig.host.edited.lock().expect("edited").is_empty());
+}
+
+#[tokio::test]
+async fn an_unusable_or_oversized_reply_never_says_it_did_not_happen() {
+    let rig = Rig::new().await;
+    for kind in [OfficeFailure::ReplyUnusable, OfficeFailure::ReplyTooLarge] {
+        rig.host
+            .answer_with(Err(OfficeHostError::new(kind, "scripted")));
+        let out = rig.text("generate_image", json!({"prompt": "x"})).await;
+        assert!(out.contains("may have been billed"), "{out}");
+        assert!(!out.contains("did not happen"), "{out}");
+        assert!(!out.contains("your file"), "{out}");
+    }
+}
+
+#[tokio::test]
+async fn a_bucket_or_prefix_the_object_api_would_refuse_is_refused_before_any_call() {
+    for bad in [
+        json!({"bucket": "a/b"}),
+        json!({"bucket": "a\\b"}),
+        json!({"name_prefix": "../x"}),
+        json!({"name_prefix": "a\"b"}),
+        json!({"name_prefix": "a\\b"}),
+        json!({"name_prefix": "line\nbreak"}),
+    ] {
+        let err = ImageGenToolkitConfig::parse(&settings(bad.clone()))
+            .err()
+            .unwrap_or_else(|| panic!("{bad} must be refused"));
+        assert_eq!(err.code(), ImageGenConfigErrorCode::InvalidConfiguration);
+    }
+    // And through materialization the toolkit is refused, so no tool exists to
+    // make a billed call.
+    for good in [json!({"bucket": "pics-2"}), json!({"name_prefix": "a/b-"})] {
+        ImageGenToolkitConfig::parse(&settings(good)).expect("accepted");
+    }
+}
+
+#[tokio::test]
+async fn the_name_prefix_is_not_trimmed_and_only_absent_or_empty_is_the_default() {
+    for (prefix, expected) in [
+        (json!("img "), "/pics/img generate-0.png"),
+        (json!(" "), "/pics/ generate-0.png"),
+        (json!(""), "/pics/generated-generate-0.png"),
+        (json!(null), "/pics/generated-generate-0.png"),
+    ] {
+        let rig = Rig::with(
+            FakeHost::default(),
+            &settings(json!({"name_prefix": prefix})),
+        )
+        .await;
+        let out = rig.call("generate_image", json!({"prompt": "x"})).await;
+        assert_eq!(out["artifacts"][0]["filepath"], expected, "{prefix}");
+    }
+}
+
+#[tokio::test]
+async fn consecutive_calls_never_overwrite_earlier_images() {
+    let rig = Rig::new().await;
+    let first = rig.call("generate_image", json!({"prompt": "a"})).await;
+    let second = rig.call("generate_image", json!({"prompt": "b"})).await;
+    assert_eq!(
+        first["artifacts"][0]["filepath"],
+        "/pics/generated-generate-0.png"
+    );
+    assert_eq!(
+        first["artifacts"][1]["filepath"],
+        "/pics/generated-generate-1.png"
+    );
+    // The second call's images step over the taken names.
+    assert_eq!(
+        second["artifacts"][0]["filepath"],
+        "/pics/generated-generate-2.png"
+    );
+    assert_eq!(
+        second["artifacts"][1]["filepath"],
+        "/pics/generated-generate-3.png"
+    );
+    let objects = rig.host.objects.lock().expect("objects");
+    assert_eq!(objects.len(), 4, "all four images are kept");
+    assert!(
+        rig.host
+            .writes
+            .lock()
+            .expect("writes")
+            .iter()
+            .all(|write| !write.3),
+        "no write asks to replace"
+    );
+}
+
+#[tokio::test]
+async fn the_partial_message_names_the_file_and_counts_only_what_follows() {
+    let rig = Rig::new().await;
+    rig.host
+        .answer_with(Ok((1..=4).map(|i| Some(vec![i])).collect()));
+    *rig.host.fail_write.lock().expect("fail") = Some(2);
+    let out = rig
+        .call("generate_image", json!({"prompt": "x", "n": 4}))
+        .await;
+    let error = out["error"].as_str().expect("error");
+    assert!(
+        error.starts_with("saved 1 of 4. Could not save the image `generated-generate-1.png`"),
+        "{error}"
+    );
+    assert!(
+        error.ends_with("The 2 images after it were not saved."),
+        "{error}"
+    );
+    // The last image failing has nothing after it to mention.
+    let rig = Rig::new().await;
+    *rig.host.fail_write.lock().expect("fail") = Some(2);
+    let out = rig
+        .call("generate_image", json!({"prompt": "x", "n": 2}))
+        .await;
+    let error = out["error"].as_str().expect("error");
+    assert!(!error.contains("after it"), "{error}");
+}
+
+#[tokio::test]
+async fn an_edit_over_the_combined_limit_is_refused_before_anything_is_read() {
+    let rig = Rig::new().await;
+    let big = vec![0_u8; usize::try_from(MAX_IMAGE_EDIT_INPUT_BYTES / 2 + 1).expect("fits")];
+    rig.host.put("pics", "a.png", &big);
+    rig.host.put("pics", "m.png", &big);
+    let out = rig
+        .text(
+            "edit_image",
+            json!({"image": "/pics/a.png", "mask": "/pics/m.png", "prompt": "x"}),
+        )
+        .await;
+    assert!(out.contains("together are"), "{out}");
+    assert!(out.contains(&(big.len() * 2).to_string()), "{out}");
+    assert!(
+        rig.host.reads.lock().expect("reads").is_empty(),
+        "nothing buffered"
+    );
+    assert!(rig.host.edited.lock().expect("edited").is_empty());
+}
+
+#[tokio::test]
+async fn without_sizes_the_reads_are_bounded_by_what_the_first_left() {
+    let host = FakeHost {
+        size_unknown: true,
+        ..FakeHost::default()
+    };
+    let rig = Rig::with(host, &settings(json!({}))).await;
+    let half = vec![0_u8; usize::try_from(MAX_IMAGE_EDIT_INPUT_BYTES / 2 + 1).expect("fits")];
+    rig.host.put("pics", "a.png", &half);
+    rig.host.put("pics", "m.png", &half);
+    let out = rig
+        .text(
+            "edit_image",
+            json!({"image": "/pics/a.png", "mask": "/pics/m.png", "prompt": "x"}),
+        )
+        .await;
+    assert!(out.contains("together are over the"), "{out}");
+    let reads = rig.host.reads.lock().expect("reads").clone();
+    assert_eq!(reads[1].1, MAX_IMAGE_EDIT_INPUT_BYTES - half.len() as u64);
+    assert!(rig.host.edited.lock().expect("edited").is_empty());
+}
+
+#[tokio::test]
+async fn a_selection_of_only_unknown_tools_is_refused_naming_them() {
+    let err = ImageGenToolkitConfig::parse(&settings(
+        json!({"selected_tools": ["draw_image", "paint", "draw_image"]}),
+    ))
+    .err()
+    .expect("refused");
+    assert_eq!(err.code(), ImageGenConfigErrorCode::InvalidConfiguration);
+    let text = err.to_string();
+    assert!(text.contains("draw_image, paint"), "{text}");
+    // One known name among unknown ones still serves the known one.
+    ImageGenToolkitConfig::parse(&settings(
+        json!({"selected_tools": ["paint", "edit_image"]}),
+    ))
+    .expect("accepted");
 }

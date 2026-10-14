@@ -49,6 +49,8 @@ struct Seen {
 struct Gateway {
     seen: Mutex<Vec<Seen>>,
     status: Mutex<StatusCode>,
+    /// A raw 2xx body to answer with instead of one PNG.
+    reply: Mutex<Option<Vec<u8>>>,
 }
 
 impl Gateway {
@@ -56,6 +58,7 @@ impl Gateway {
         Arc::new(Self {
             seen: Mutex::new(Vec::new()),
             status: Mutex::new(StatusCode::OK),
+            reply: Mutex::new(None),
         })
     }
 
@@ -93,16 +96,19 @@ impl ModelGatewayTransport for Gateway {
             body: body.to_vec(),
         });
         let status = *self.status.lock().expect("status");
-        let reply = if status.is_success() {
-            json!({"created": 1, "data": [{"b64_json": base64::engine::general_purpose::STANDARD.encode(PNG)}]})
+        let custom = self.reply.lock().expect("reply").clone();
+        let reply = if let Some(custom) = custom {
+            String::from_utf8_lossy(&custom).into_owned()
+        } else if status.is_success() {
+            json!({"created": 1, "data": [{"b64_json": base64::engine::general_purpose::STANDARD.encode(PNG)}]}).to_string()
         } else {
-            json!({"error": {"message": "no"}})
+            json!({"error": {"message": "no"}}).to_string()
         };
         Ok(Response::builder()
             .status(status)
             .version(Version::HTTP_2)
             .header("content-type", "application/json")
-            .body(Body::new(Full::new(Bytes::from(reply.to_string()))))
+            .body(Body::new(Full::new(Bytes::from(reply))))
             .expect("response"))
     }
 }
@@ -343,13 +349,66 @@ fn the_images_failure_table_names_each_cause() {
             F::Unreachable,
         ),
         (ImagesError::Transport, F::Unreachable),
-        (ImagesError::InvalidResponse("x"), F::Unreachable),
-        (ImagesError::TooLarge, F::TooLarge),
+        (ImagesError::UnusableReply("x"), F::ReplyUnusable),
+        (ImagesError::ReplyTooLarge, F::ReplyTooLarge),
+        (ImagesError::RequestTooLarge, F::TooLarge),
+        (ImagesError::Malformed, F::InvalidRequest),
         (ImagesError::InvalidFileName, F::InvalidRequest),
     ];
     for (error, expected) in table {
         assert_eq!(images_failure(&error).kind(), expected, "{error:?}");
     }
+}
+
+#[tokio::test]
+async fn a_2xx_with_an_unusable_or_oversized_reply_may_have_been_billed() {
+    let rig = Rig::new().await;
+    // Not the images object.
+    *rig.gateway.reply.lock().expect("reply") = Some(b"<html>nope</html>".to_vec());
+    let out = rig.call("generate_image", json!({"prompt": "x"})).await;
+    let text = out.as_str().expect("sentence");
+    assert!(
+        text.contains("answered but its reply was unusable"),
+        "{text}"
+    );
+    assert!(text.contains("may have been billed"), "{text}");
+    assert!(!text.contains("did not happen"), "{text}");
+    // More images than the API's maximum in one answer.
+    let eleven = vec![json!({"b64_json": "AQID"}); 11];
+    *rig.gateway.reply.lock().expect("reply") =
+        Some(json!({"data": eleven}).to_string().into_bytes());
+    let out = rig.call("generate_image", json!({"prompt": "x"})).await;
+    assert!(
+        out.as_str()
+            .expect("sentence")
+            .contains("may have been billed"),
+        "{out}"
+    );
+    assert!(rig.api.get("e2e-proof-generate-0.png").is_none());
+}
+
+#[tokio::test]
+async fn object_size_is_the_declared_length_of_a_head() {
+    let api = ObjectApi::new();
+    api.put("cat.png", vec![7_u8; 1234]);
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        Arc::clone(&api) as Arc<dyn Transport>,
+    ));
+    let host =
+        ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
+    assert_eq!(
+        host.object_size("pics", "cat.png").await.expect("size"),
+        Some(1234)
+    );
+    let missing = host
+        .object_size("pics", "none.png")
+        .await
+        .expect_err("a missing object");
+    assert_eq!(
+        missing.kind(),
+        elitea_agent_runtime::toolkits::OfficeFailure::NotFound
+    );
 }
 
 #[tokio::test]
@@ -390,35 +449,20 @@ async fn an_unusable_upload_file_name_is_an_invalid_request_and_nothing_is_sent(
     assert!(gateway.seen.lock().expect("seen").is_empty());
 }
 
-/// A direct toolkit call serves `imagegen` when the claim's Office host is
-/// lent (and says why a write tool still does not run), and reports the
-/// toolkit unsupported when it is not.
+/// A direct toolkit call of `imagegen` lists its tools and refuses to run
+/// them, with the read-only rule's reason, on a host that redeems nothing and
+/// calls nothing; without any host it is unsupported.
 #[tokio::test]
-async fn a_direct_call_serves_imagegen_when_the_host_is_lent() {
+async fn a_direct_call_lists_imagegen_and_refuses_its_write_tools_without_a_round_trip() {
     use crate::toolkits::{
         DirectToolkitRequest, DirectToolkitRuntime, DirectToolkitRuntimeErrorCode,
         IndexToolSupport, IndexToolsWithheld,
     };
-    let rig_api = ObjectApi::new();
-    let gateway = Gateway::new();
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        Arc::clone(&rig_api) as Arc<dyn Transport>,
-    ));
-    let images = ImagesClient::with_transport(
-        Arc::clone(&gateway) as Arc<dyn ModelGatewayTransport>,
-        Duration::from_secs(5),
-    );
-    let host = ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound())
-        .expect("host")
-        .with_images(
-            images,
-            Arc::new(ClaimScopedEliteaContext::fixture(42, "pat")),
-        );
+    use crate::transport::office_host::NoRoundTripImagesHost;
     let authority = ArtifactToolAuthority::new(Arc::new(
         crate::transport::platform_writer::HostOnlyPlatformWriter,
     ) as Arc<dyn PlatformWriter>)
-    .with_office(Arc::new(host));
+    .with_office(Arc::new(NoRoundTripImagesHost));
     let config = serde_json::to_vec(&json!({
         "id": 9, "type": "imagegen", "toolkit_name": "pics",
         "settings": {"image_generation_model": "m", "bucket": "pics"}
@@ -442,10 +486,6 @@ async fn a_direct_call_serves_imagegen_when_the_host_is_lent() {
         refused.code(),
         DirectToolkitRuntimeErrorCode::UnsupportedToolkit
     );
-
-    // Lent the host, the toolkit is served; its tools write artifacts, and
-    // `toolkit.call_tool.v1` runs read-only tools only, so the refusal now
-    // names THAT cause instead of an unsupported toolkit.
     let effectful = DirectToolkitRuntime::default()
         .execute_test(&request, "e", "c", withheld(), Some(&authority))
         .await
@@ -453,10 +493,6 @@ async fn a_direct_call_serves_imagegen_when_the_host_is_lent() {
     assert_eq!(
         effectful.code(),
         DirectToolkitRuntimeErrorCode::EffectfulToolUnavailable
-    );
-    assert!(
-        gateway.seen.lock().expect("seen").is_empty(),
-        "no billed call"
     );
     let listed = DirectToolkitRuntime::default()
         .discover(&request, Some(&authority))

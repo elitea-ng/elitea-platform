@@ -32,7 +32,7 @@ use elitea_connectors::transport::{Body, Method, Url, header};
 use elitea_llm_wire::refusal::Refusal;
 use serde_json::Value;
 
-use super::images_facade::{EditFile, ImageCall, ImagesClient, ImagesError};
+use super::images_facade::{ImageCall, ImagesClient, ImagesError};
 use super::multipart::Multipart;
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::indexing::tools::{LazyStepbackModel, generate_text};
@@ -215,6 +215,46 @@ pub(crate) fn model_failure(message: &str) -> OfficeHostError {
     }
 }
 
+/// The Office host of a direct toolkit call of `imagegen`: it claims to serve
+/// the images API so the toolkit materializes and its tools are listed, and it
+/// does nothing else. The tools write artifacts, `toolkit.call_tool.v1` runs
+/// read-only tools only, and the runtime refuses them before one runs; so no
+/// claim is redeemed and no platform call is made for it.
+pub(crate) struct NoRoundTripImagesHost;
+
+fn direct_path_refusal() -> OfficeHostError {
+    OfficeHostError::new(
+        OfficeFailure::NoModel,
+        "office_host.direct_path_no_round_trip",
+    )
+}
+
+#[async_trait]
+impl OfficeToolHost for NoRoundTripImagesHost {
+    fn serves_images(&self) -> bool {
+        true
+    }
+
+    async fn read_object(&self, _: &str, _: &str, _: u64) -> Result<Vec<u8>, OfficeHostError> {
+        Err(direct_path_refusal())
+    }
+
+    async fn write_object(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Vec<u8>,
+        _: bool,
+    ) -> Result<OfficeObjectWritten, OfficeHostError> {
+        Err(direct_path_refusal())
+    }
+
+    async fn complete(&self, _: OfficeModelRequest) -> Result<String, OfficeHostError> {
+        Err(direct_path_refusal())
+    }
+}
+
 /// An images-API failure as the host classifies it: each real cause its own
 /// kind, so the tool names it (a rate limit is not a lost connection).
 pub(crate) fn images_failure(error: &ImagesError) -> OfficeHostError {
@@ -235,14 +275,27 @@ pub(crate) fn images_failure(error: &ImagesError) -> OfficeHostError {
             Refusal::Conflict => (OfficeFailure::Conflict, "office_host.images_conflict"),
             Refusal::Unavailable => (OfficeFailure::Unreachable, "office_host.images_unavailable"),
         },
-        ImagesError::TooLarge => (OfficeFailure::TooLarge, "office_host.images_too_large"),
+        ImagesError::RequestTooLarge => (
+            OfficeFailure::TooLarge,
+            "office_host.images_request_too_large",
+        ),
+        ImagesError::ReplyTooLarge => (
+            OfficeFailure::ReplyTooLarge,
+            "office_host.images_reply_too_large",
+        ),
+        ImagesError::UnusableReply(_) => (
+            OfficeFailure::ReplyUnusable,
+            "office_host.images_reply_unusable",
+        ),
+        ImagesError::Malformed => (
+            OfficeFailure::InvalidRequest,
+            "office_host.images_malformed",
+        ),
         ImagesError::InvalidFileName => (
             OfficeFailure::InvalidRequest,
             "office_host.images_file_name",
         ),
-        ImagesError::Transport | ImagesError::InvalidResponse(_) => {
-            (OfficeFailure::Unreachable, "office_host.images_unavailable")
-        }
+        ImagesError::Transport => (OfficeFailure::Unreachable, "office_host.images_unavailable"),
     };
     OfficeHostError::new(kind, reason)
 }
@@ -297,16 +350,6 @@ impl OfficeToolHost for ClaimOfficeHost {
             size: None,
             count: 1,
         };
-        // The image and mask bytes are moved down to the encoder, which copies
-        // them once, into the body.
-        let image = EditFile {
-            name: image.name,
-            bytes: image.bytes,
-        };
-        let mask = mask.map(|mask| EditFile {
-            name: mask.name,
-            bytes: mask.bytes,
-        });
         client
             .edit(context, &call, image, mask)
             .await
@@ -314,6 +357,26 @@ impl OfficeToolHost for ClaimOfficeHost {
                 tracing::warn!(event = "imagegen_call_failed", error = %error, "an image edit call failed");
                 images_failure(&error)
             })
+    }
+
+    async fn object_size(&self, bucket: &str, name: &str) -> Result<Option<u64>, OfficeHostError> {
+        // A HEAD: the size is the declared Content-Length, and nothing is
+        // buffered.
+        let head = self.object_request(Method::HEAD, bucket, Some(name), false)?;
+        let response = self
+            .runtime
+            .http
+            .send(head)
+            .await
+            .map_err(|e| failure(&e))?;
+        if !response.status().is_success() {
+            return Err(failure(&Failure::Status(response.status())));
+        }
+        Ok(response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok()))
     }
 
     async fn read_object(

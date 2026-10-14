@@ -16,7 +16,11 @@
 //! image is written through the same platform object API the Office families
 //! use. No new internal route.
 //!
-//! Differences from the SDK, stated: an answer item that is only a `url` is
+//! Differences from the SDK, stated: a name that is taken is never
+//! overwritten (the image takes the next free index); `bucket` and
+//! `name_prefix` are validated with the object API's own rules when the
+//! toolkit is materialized; a selection of only unknown tools is refused;
+//! an edit's inputs are size-checked together before they are read; an answer item that is only a `url` is
 //! not fetched (the SDK downloads it; this runtime opens no connection beyond
 //! the platform, and every request asks for `b64_json`, which is what the
 //! gateway answers); `n` is capped at 10, the images API's own maximum;
@@ -28,12 +32,14 @@ use std::sync::Arc;
 use adk_core::{Tool, ToolContext};
 use adk_tool::BasicToolset;
 use async_trait::async_trait;
+use elitea_connectors::artifact::client::{valid_object_key, valid_segment};
 use serde_json::{Map, Value, json};
 
 use crate::toolkits::families::artifact::ArtifactToolAuthority;
 use crate::toolkits::families::office_host::{
-    ImageEditInput, ImageEditRequest, ImageGenerateRequest, MAX_OFFICE_OBJECT_BYTES, OfficeFailure,
-    OfficeHostError, SharedOfficeToolHost,
+    ImageEditInput, ImageEditRequest, ImageGenerateRequest, MAX_IMAGE_EDIT_INPUT_BYTES,
+    MAX_IMAGES_PER_REQUEST, MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError,
+    SharedOfficeToolHost, valid_upload_file_name,
 };
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
@@ -45,8 +51,10 @@ const MAX_TOOL_NAME_BYTES: usize = 64;
 const MAX_SETTING_BYTES: usize = 256;
 const MAX_PROMPT_BYTES: usize = 32 * 1_024;
 const MAX_KEY_BYTES: usize = 1_024;
-/// The images API's own maximum images per request.
-const MAX_IMAGES: i64 = 10;
+/// The most colliding file names one saved image steps over before it gives up.
+const MAX_NAME_PROBES: usize = 1_000;
+/// The most unknown tool names a refusal lists.
+const MAX_LISTED_UNKNOWN: usize = 8;
 
 const GENERATE_IMAGE: &str = "generate_image";
 const EDIT_IMAGE: &str = "edit_image";
@@ -111,16 +119,19 @@ impl ImageGenTool {
     }
 }
 
-/// Why the settings were refused. Carries no value.
+/// Why the settings were refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImageGenConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
-/// Stable, data-free failure for claim-materialized imagegen settings.
+/// Stable failure for claim-materialized imagegen settings. It carries no
+/// setting value; the one thing it can name is the unknown tool names of a
+/// selection that leaves nothing to serve (bounded tool names, not secrets).
 pub(crate) struct ImageGenConfigError {
     code: ImageGenConfigErrorCode,
+    unknown_tools: Vec<String>,
 }
 
 impl ImageGenConfigError {
@@ -139,25 +150,35 @@ impl fmt::Debug for ImageGenConfigError {
 
 impl fmt::Display for ImageGenConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self.code {
+        match self.code {
+            ImageGenConfigErrorCode::InvalidConfiguration if !self.unknown_tools.is_empty() => {
+                write!(
+                    f,
+                    "the imagegen toolkit selects only tools it does not serve ({}); it serves generate_image and edit_image",
+                    self.unknown_tools.join(", ")
+                )
+            }
             ImageGenConfigErrorCode::InvalidConfiguration => {
-                "the imagegen toolkit configuration is invalid"
+                f.write_str("the imagegen toolkit configuration is invalid")
             }
             ImageGenConfigErrorCode::ResourceExhausted => {
-                "the imagegen toolkit configuration exceeds its approved limit"
+                f.write_str("the imagegen toolkit configuration exceeds its approved limit")
             }
-        })
+        }
     }
 }
 
 impl std::error::Error for ImageGenConfigError {}
 
-const INVALID: ImageGenConfigError = ImageGenConfigError {
-    code: ImageGenConfigErrorCode::InvalidConfiguration,
-};
-const EXHAUSTED: ImageGenConfigError = ImageGenConfigError {
-    code: ImageGenConfigErrorCode::ResourceExhausted,
-};
+const fn refusal(code: ImageGenConfigErrorCode) -> ImageGenConfigError {
+    ImageGenConfigError {
+        code,
+        unknown_tools: Vec::new(),
+    }
+}
+
+const INVALID: ImageGenConfigError = refusal(ImageGenConfigErrorCode::InvalidConfiguration);
+const EXHAUSTED: ImageGenConfigError = refusal(ImageGenConfigErrorCode::ResourceExhausted);
 
 /// The toolkit's settings. A model or bucket that is absent builds the tools
 /// anyway and is reported by the tool, in the SDK's words, when it is called.
@@ -171,18 +192,47 @@ pub(crate) struct ImageGenToolkitConfig {
 
 impl ImageGenToolkitConfig {
     pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, ImageGenConfigError> {
+        let bucket = text_setting(settings, "bucket")?;
+        // The bucket the platform's object API will accept, checked here with
+        // the SAME rule its write applies, so a bad one is refused before any
+        // billed call, not after the image is generated.
+        if bucket
+            .as_deref()
+            .is_some_and(|bucket| !valid_segment(bucket))
+        {
+            return Err(INVALID);
+        }
+        let name_prefix = name_prefix_setting(settings)?;
+        // Every file name the family writes is `{prefix}{generate|edit}-{n}.png`;
+        // it must be an object key the platform accepts and a name the upload
+        // (and every later `edit_image` of it) can carry.
+        let probe = format!("{name_prefix}generate-0.png");
+        if !valid_object_key(&probe) || !valid_upload_file_name(file_name(&probe)) {
+            return Err(INVALID);
+        }
         Ok(Self {
             model: text_setting(settings, "image_generation_model")?,
-            bucket: text_setting(settings, "bucket")?,
-            // The SDK: `settings.get("name_prefix") or "generated-"`.
-            name_prefix: text_setting(settings, "name_prefix")?
-                .unwrap_or_else(|| DEFAULT_NAME_PREFIX.into()),
+            bucket,
+            name_prefix,
             selected: selected_tools(settings)?,
         })
     }
 
     fn tools(&self) -> Vec<ImageGenTool> {
         self.selected.clone().unwrap_or_else(|| ALL_TOOLS.to_vec())
+    }
+}
+
+/// The SDK's `settings.get("name_prefix") or "generated-"`: an absent, null or
+/// EMPTY prefix is the default; anything else is used exactly as given, with
+/// no trimming (`"img "` and `" "` are prefixes).
+fn name_prefix_setting(settings: &Map<String, Value>) -> Result<Box<str>, ImageGenConfigError> {
+    match settings.get("name_prefix") {
+        None | Some(Value::Null) => Ok(DEFAULT_NAME_PREFIX.into()),
+        Some(Value::String(text)) if text.is_empty() => Ok(DEFAULT_NAME_PREFIX.into()),
+        Some(Value::String(text)) if text.len() > MAX_SETTING_BYTES => Err(EXHAUSTED),
+        Some(Value::String(text)) => Ok(text.as_str().into()),
+        Some(_) => Err(INVALID),
     }
 }
 
@@ -223,6 +273,7 @@ fn selected_tools(
         return Ok(None);
     }
     let mut selected: Vec<ImageGenTool> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
     for value in values {
         let name = value.as_str().ok_or(INVALID)?.trim();
         if name.is_empty() || name.chars().any(char::is_control) {
@@ -231,11 +282,26 @@ fn selected_tools(
         if name.len() > MAX_TOOL_NAME_BYTES {
             return Err(EXHAUSTED);
         }
-        if let Some(tool) = ImageGenTool::parse(name)
-            && !selected.contains(&tool)
-        {
-            selected.push(tool);
+        match ImageGenTool::parse(name) {
+            Some(tool) => {
+                if !selected.contains(&tool) {
+                    selected.push(tool);
+                }
+            }
+            None => {
+                if unknown.len() < MAX_LISTED_UNKNOWN && !unknown.iter().any(|n| n == name) {
+                    unknown.push(name.to_owned());
+                }
+            }
         }
+    }
+    // A selection that names tools and none the family serves would bind
+    // nothing and look like a working toolkit: refuse it, naming them.
+    if selected.is_empty() {
+        return Err(ImageGenConfigError {
+            code: ImageGenConfigErrorCode::InvalidConfiguration,
+            unknown_tools: unknown,
+        });
     }
     Ok(Some(selected))
 }
@@ -370,6 +436,12 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> String {
         OfficeFailure::Conflict => format!(
             "Could not {action}: the model gateway reported a conflict. It may work if tried again."
         ),
+        OfficeFailure::ReplyUnusable => format!(
+            "Could not {action}: the image model answered but its reply was unusable (it may have been billed). Do not retry without telling the user."
+        ),
+        OfficeFailure::ReplyTooLarge => format!(
+            "Could not {action}: the image model's answer was larger than the platform accepts (it may have been billed). Do not retry without telling the user."
+        ),
         OfficeFailure::Unreachable => format!(
             "Could not {action}: the platform or the image model could not be reached. Tell the user it did not happen."
         ),
@@ -405,14 +477,9 @@ fn file_name(key: &str) -> &str {
     key.rsplit('/').next().unwrap_or(key)
 }
 
-/// A file name the image model's upload can carry: no quote, backslash or
-/// control character (they would end the multipart header line).
+/// A file name the image model's upload can carry (the one shared guard).
 fn upload_name_ok(name: &str) -> Result<(), String> {
-    if name.is_empty()
-        || name
-            .chars()
-            .any(|c| c == '"' || c == '\\' || c.is_control())
-    {
+    if !valid_upload_file_name(name) {
         return Err(format!(
             "The file name `{name}` cannot be sent to the image model: it is empty or contains a quote, a backslash or a control character. Rename the file and try again."
         ));
@@ -445,10 +512,12 @@ impl ImageGenToolImpl {
 
     /// Write every inline image and answer the SDK's `{"artifacts": [...]}`.
     ///
-    /// The file index is the image's position in the answer's `data` array
-    /// (the SDK enumerates it), not among the decoded images. A write that
-    /// fails after others succeeded answers what was saved AND the failure,
-    /// so the model never generates again what was already billed.
+    /// The first candidate name is `{prefix}{op}-{i}.png` with `i` the image's
+    /// position in the answer's `data` array (the SDK enumerates it). Unlike
+    /// the SDK, which overwrote, a name that is taken is never replaced: the
+    /// image takes the next free index, so an earlier call's images are kept.
+    /// A write that fails after others succeeded answers what was saved AND
+    /// the failure, so the model never generates again what was billed.
     async fn save(&self, images: Vec<Option<Vec<u8>>>, operation: &str) -> Result<Value, String> {
         let bucket = self.bucket()?;
         let total = images.iter().flatten().count();
@@ -456,30 +525,52 @@ impl ImageGenToolImpl {
             return Err("The image generation model returned no image data".to_owned());
         }
         let mut saved = Vec::new();
-        for (index, bytes) in images.into_iter().enumerate() {
+        let mut remaining = total;
+        let mut next_free = 0_usize;
+        for (position, bytes) in images.into_iter().enumerate() {
             let Some(bytes) = bytes else { continue };
-            let name = format!("{}{operation}-{index}.png", self.settings.name_prefix);
-            match self
-                .host
-                .write_object(bucket, &name, "image/png", bytes, true)
-                .await
-            {
-                Ok(written) => saved.push(json!({
-                    "filepath": format!("/{}/{}", written.bucket, written.name),
-                    "filename": file_name(&written.name),
-                })),
-                Err(error) => {
+            remaining -= 1;
+            let mut index = position.max(next_free);
+            let mut probes = 0;
+            let outcome = loop {
+                let name = format!("{}{operation}-{index}.png", self.settings.name_prefix);
+                match self
+                    .host
+                    .write_object(bucket, &name, "image/png", bytes.clone(), false)
+                    .await
+                {
+                    Ok(written) => break Ok(written),
+                    Err(error)
+                        if error.kind() == OfficeFailure::AlreadyExists
+                            && probes < MAX_NAME_PROBES =>
+                    {
+                        probes += 1;
+                        index += 1;
+                    }
+                    Err(error) => break Err((name, error)),
+                }
+            };
+            match outcome {
+                Ok(written) => {
+                    next_free = index + 1;
+                    saved.push(json!({
+                        "filepath": format!("/{}/{}", written.bucket, written.name),
+                        "filename": file_name(&written.name),
+                    }));
+                }
+                Err((name, error)) => {
                     let sentence = host_sentence(&format!("save the image `{name}`"), &error);
                     if saved.is_empty() {
                         return Err(sentence);
                     }
+                    let tail = match remaining {
+                        0 => String::new(),
+                        1 => " The 1 image after it was not saved.".to_owned(),
+                        n => format!(" The {n} images after it were not saved."),
+                    };
                     return Ok(json!({
                         "artifacts": saved,
-                        "error": format!(
-                            "saved {} of {total}; image {} could not be saved: {sentence} The images after it were not saved.",
-                            saved.len(),
-                            saved.len() + 1,
-                        ),
+                        "error": format!("saved {} of {total}. {sentence}{tail}", saved.len()),
                     }));
                 }
             }
@@ -499,8 +590,9 @@ impl ImageGenToolImpl {
                 .ok_or_else(|| "`n` must be a whole number.".to_owned())?,
         };
         let count = if count == 0 { 1 } else { count };
-        if !(1..=MAX_IMAGES).contains(&count) {
-            return Err(format!("`n` must be between 1 and {MAX_IMAGES}."));
+        let most = i64::try_from(MAX_IMAGES_PER_REQUEST).unwrap_or(10);
+        if !(1..=most).contains(&count) {
+            return Err(format!("`n` must be between 1 and {most}."));
         }
         let size = string_arg(arguments, "size")
             .map(|size| size.trim().to_owned())
@@ -529,26 +621,59 @@ impl ImageGenToolImpl {
             .ok_or_else(|| "`image` (an artifact filepath) is required.".to_owned())?;
         let (image_bucket, image_key) = split_filepath(&bucket, &image)?;
         upload_name_ok(file_name(image_key))?;
+        let mask_path = string_arg(arguments, "mask");
+        let mask_target = match mask_path.as_deref() {
+            Some(mask) => {
+                let (mask_bucket, mask_key) = split_filepath(&bucket, mask)?;
+                upload_name_ok(file_name(mask_key))?;
+                Some((mask_bucket, mask_key))
+            }
+            None => None,
+        };
+        // Refuse a request that would be too large BEFORE buffering either
+        // file: the sizes come from the objects' metadata when the host can
+        // tell.
+        let image_size = self.size_of(image_bucket, image_key, &image).await?;
+        let mask_size = match (mask_target, mask_path.as_deref()) {
+            (Some((b, k)), Some(path)) => Some(self.size_of(b, k, path).await?),
+            _ => None,
+        };
+        if let (Some(i), Some(Some(m))) = (image_size, mask_size) {
+            if i.saturating_add(m) > MAX_IMAGE_EDIT_INPUT_BYTES {
+                return Err(combined_too_large(&image, i, mask_path.as_deref(), Some(m)));
+            }
+        } else if let Some(i) = image_size
+            && i > MAX_IMAGE_EDIT_INPUT_BYTES
+        {
+            return Err(combined_too_large(&image, i, None, None));
+        }
+        // Sizes unknown (or only one known) stay bounded: the second read may
+        // take no more than what the first left of the combined limit.
         let source = self
             .host
-            .read_object(image_bucket, image_key, MAX_OFFICE_OBJECT_BYTES)
+            .read_object(
+                image_bucket,
+                image_key,
+                MAX_IMAGE_EDIT_INPUT_BYTES.min(MAX_OFFICE_OBJECT_BYTES),
+            )
             .await
-            .map_err(|e| host_sentence(&format!("read `{image}`"), &e))?;
-        let mask = match string_arg(arguments, "mask") {
-            Some(mask) => {
-                let (mask_bucket, mask_key) = split_filepath(&bucket, &mask)?;
-                upload_name_ok(file_name(mask_key))?;
+            .map_err(|e| Self::read_sentence(&e, &image, None))?;
+        let mask = match (mask_target, mask_path.as_deref()) {
+            (Some((mask_bucket, mask_key)), Some(path)) => {
+                let left = MAX_IMAGE_EDIT_INPUT_BYTES.saturating_sub(source.len() as u64);
                 let bytes = self
                     .host
-                    .read_object(mask_bucket, mask_key, MAX_OFFICE_OBJECT_BYTES)
+                    .read_object(mask_bucket, mask_key, left)
                     .await
-                    .map_err(|e| host_sentence(&format!("read `{mask}`"), &e))?;
+                    .map_err(|e| {
+                        Self::read_sentence(&e, path, Some((&image, source.len() as u64)))
+                    })?;
                 Some(ImageEditInput {
                     name: file_name(mask_key).to_owned(),
                     bytes,
                 })
             }
-            None => None,
+            _ => None,
         };
         let images = self
             .host
@@ -564,6 +689,46 @@ impl ImageGenToolImpl {
             .await
             .map_err(|e| host_sentence("edit the image", &e))?;
         self.save(images, "edit").await
+    }
+
+    /// The size of one input, from the host's metadata (`None`: it cannot
+    /// tell). A missing file is reported as one.
+    async fn size_of(&self, bucket: &str, key: &str, path: &str) -> Result<Option<u64>, String> {
+        self.host
+            .object_size(bucket, key)
+            .await
+            .map_err(|e| host_sentence(&format!("read `{path}`"), &e))
+    }
+
+    /// A failed read as the model reads it. A read that stopped at the bound
+    /// left for the mask is the combined size, and says so.
+    fn read_sentence(error: &OfficeHostError, path: &str, image: Option<(&str, u64)>) -> String {
+        if error.kind() == OfficeFailure::TooLarge
+            && let Some((image_path, image_bytes)) = image
+        {
+            return format!(
+                "The image `{image_path}` ({image_bytes} bytes) and the mask `{path}` together are over the {MAX_IMAGE_EDIT_INPUT_BYTES} bytes one edit accepts. Use smaller files."
+            );
+        }
+        host_sentence(&format!("read `{path}`"), error)
+    }
+}
+
+/// The sentence for an edit whose inputs are over the combined limit.
+fn combined_too_large(
+    image: &str,
+    image_bytes: u64,
+    mask: Option<&str>,
+    mask_bytes: Option<u64>,
+) -> String {
+    match (mask, mask_bytes) {
+        (Some(mask), Some(mask_bytes)) => format!(
+            "The image `{image}` ({image_bytes} bytes) and the mask `{mask}` ({mask_bytes} bytes) together are {} bytes, over the {MAX_IMAGE_EDIT_INPUT_BYTES} bytes one edit accepts. Use smaller files.",
+            image_bytes.saturating_add(mask_bytes)
+        ),
+        _ => format!(
+            "The image `{image}` is {image_bytes} bytes, over the {MAX_IMAGE_EDIT_INPUT_BYTES} bytes one edit accepts. Use a smaller file."
+        ),
     }
 }
 

@@ -17,7 +17,7 @@ use bytes::Bytes;
 use elitea_llm_wire::refusal::Refusal;
 use serde::Deserialize;
 
-use super::gateway_call::{CallError, build_request, send};
+use super::gateway_call::{CallError, Timing, build_request, send};
 use super::openai_compatible_facade::{ModelGatewayClient, ModelGatewayTransport};
 use super::runtime_context::ClaimScopedEliteaContext;
 
@@ -174,7 +174,12 @@ impl EmbeddingsClient {
         let collected = send(
             &self.transport,
             request,
-            self.response_timeout,
+            // Exactly the embeddings behaviour from before the flow was
+            // shared: a window for the headers and another for the body.
+            Timing::Split {
+                headers: self.response_timeout,
+                body: self.response_timeout,
+            },
             MAX_RESPONSE_BYTES,
         )
         .await
@@ -280,5 +285,68 @@ mod tests {
             br#"{"data":[{"index":0,"embedding":[1.0]},{"index":0,"embedding":[2.0]}]}"#;
         assert!(parse_response(duplicate, 2).is_err());
         assert!(parse_response(b"not json", 1).is_err());
+    }
+
+    /// Answers the headers after one delay and the body after another.
+    struct SlowEmbeddings {
+        header_delay: Duration,
+        body_delay: Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelGatewayTransport for SlowEmbeddings {
+        async fn post(
+            &self,
+            _: http::Request<tonic::body::Body>,
+        ) -> Result<
+            http::Response<tonic::body::Body>,
+            super::super::openai_compatible_facade::ModelGatewayTransportError,
+        > {
+            tokio::time::sleep(self.header_delay).await;
+            let delay = self.body_delay;
+            let frames = adk_rust::futures::stream::once(async move {
+                tokio::time::sleep(delay).await;
+                Ok::<_, std::io::Error>(http_body::Frame::data(Bytes::from_static(
+                    br#"{"model":"m","data":[{"index":0,"embedding":[1.0,0.0]}]}"#,
+                )))
+            });
+            Ok(http::Response::builder()
+                .status(200)
+                .body(tonic::body::Body::new(http_body_util::StreamBody::new(
+                    frames,
+                )))
+                .expect("response"))
+        }
+    }
+
+    /// The case that passed before the flow was shared: each of the header
+    /// and body phases is inside its own window while their sum is not.
+    /// Embeddings keeps that behaviour exactly.
+    #[tokio::test]
+    async fn the_header_and_body_windows_stay_separate() {
+        let context = ClaimScopedEliteaContext::fixture(1, "pat");
+        let client = EmbeddingsClient::with_transport(
+            Arc::new(SlowEmbeddings {
+                header_delay: Duration::from_millis(100),
+                body_delay: Duration::from_millis(100),
+            }),
+            Duration::from_millis(150),
+        );
+        let embedded = client
+            .embed(&context, "m", &["a".to_owned()])
+            .await
+            .expect("served within each window");
+        assert_eq!(embedded.vectors, vec![vec![1.0, 0.0]]);
+        let stalled = EmbeddingsClient::with_transport(
+            Arc::new(SlowEmbeddings {
+                header_delay: Duration::from_millis(10),
+                body_delay: Duration::from_millis(400),
+            }),
+            Duration::from_millis(150),
+        );
+        assert_eq!(
+            stalled.embed(&context, "m", &["a".to_owned()]).await,
+            Err(EmbeddingsError::Transport)
+        );
     }
 }

@@ -20,11 +20,12 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
+use elitea_agent_runtime::toolkits::{ImageEditInput, MAX_IMAGES_PER_REQUEST};
 use elitea_llm_wire::refusal::Refusal;
 use elitea_llm_wire::route::{IMAGES_EDITS_ROUTE, IMAGES_GENERATIONS_ROUTE};
 use serde::Deserialize;
 
-use super::gateway_call::{CallError, build_request, send};
+use super::gateway_call::{CallError, Timing, build_request, send};
 use super::multipart::{Multipart, PartError};
 use super::openai_compatible_facade::{ModelGatewayClient, ModelGatewayTransport};
 use super::runtime_context::ClaimScopedEliteaContext;
@@ -33,8 +34,6 @@ use super::runtime_context::ClaimScopedEliteaContext;
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 /// A response body cap: ten base64 images.
 const MAX_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
-/// The most images one answer may carry.
-const MAX_IMAGES: usize = 10;
 /// Image generation is slow; the chat timeouts do not fit. The SDK waits
 /// `model_timeout`; this is the same order.
 const MIN_IMAGE_TIMEOUT: Duration = Duration::from_mins(5);
@@ -46,13 +45,20 @@ pub(crate) enum ImagesError {
     Refused { refusal: Refusal },
     /// The channel could not carry the request or the response.
     Transport,
-    /// The response is not the images object.
-    InvalidResponse(&'static str),
-    /// A file name of the upload cannot be sent (a quote, a backslash or a
-    /// control character, or empty): the request was never made.
+    /// The gateway answered 2xx but the body is not the images object. The
+    /// call may have been billed.
+    UnusableReply(&'static str),
+    /// The answer is larger than its bound. The call may have been billed.
+    ReplyTooLarge,
+    /// The request is larger than its bound; nothing was sent.
+    RequestTooLarge,
+    /// A file name of the upload cannot be sent (see
+    /// [`elitea_agent_runtime::toolkits::valid_upload_file_name`]): the
+    /// request was never made.
     InvalidFileName,
-    /// A request or response would exceed its bound.
-    TooLarge,
+    /// The request could not be built (a header value is unusable); nothing
+    /// was sent.
+    Malformed,
 }
 
 impl fmt::Display for ImagesError {
@@ -62,11 +68,13 @@ impl fmt::Display for ImagesError {
                 write!(formatter, "the model gateway refused: {}", refusal.code())
             }
             Self::Transport => formatter.write_str("the model gateway transport failed"),
-            Self::InvalidResponse(reason) => {
-                write!(formatter, "the images response is malformed: {reason}")
+            Self::UnusableReply(reason) => {
+                write!(formatter, "the images response is unusable: {reason}")
             }
+            Self::ReplyTooLarge => formatter.write_str("the images response exceeds its bound"),
+            Self::RequestTooLarge => formatter.write_str("the images request exceeds its bound"),
             Self::InvalidFileName => formatter.write_str("a file name of the upload is unusable"),
-            Self::TooLarge => formatter.write_str("the images request exceeds its bound"),
+            Self::Malformed => formatter.write_str("the images request is malformed"),
         }
     }
 }
@@ -79,13 +87,6 @@ pub(crate) struct ImageCall<'a> {
     pub(crate) prompt: &'a str,
     pub(crate) size: Option<&'a str>,
     pub(crate) count: u32,
-}
-
-/// One file of an edit. Owned: the bytes are moved into the request body,
-/// never cloned.
-pub(crate) struct EditFile {
-    pub(crate) name: String,
-    pub(crate) bytes: Vec<u8>,
 }
 
 /// The gateway's images routes, bound to the shared channel.
@@ -157,7 +158,7 @@ impl ImagesClient {
         if let Some(size) = call.size {
             body["size"] = serde_json::Value::String(size.to_owned());
         }
-        let body = serde_json::to_vec(&body).map_err(|_| ImagesError::TooLarge)?;
+        let body = serde_json::to_vec(&body).map_err(|_| ImagesError::RequestTooLarge)?;
         self.post(
             context,
             IMAGES_GENERATIONS_ROUTE,
@@ -177,8 +178,8 @@ impl ImagesClient {
         &self,
         context: &ClaimScopedEliteaContext,
         call: &ImageCall<'_>,
-        image: EditFile,
-        mask: Option<EditFile>,
+        image: ImageEditInput,
+        mask: Option<ImageEditInput>,
     ) -> Result<Vec<Option<Vec<u8>>>, ImagesError> {
         let mut form = Multipart::new();
         form.text("prompt", call.prompt);
@@ -208,7 +209,7 @@ impl ImagesClient {
         body: Bytes,
     ) -> Result<Vec<Option<Vec<u8>>>, ImagesError> {
         if body.len() > MAX_REQUEST_BYTES {
-            return Err(ImagesError::TooLarge);
+            return Err(ImagesError::RequestTooLarge);
         }
         let token = context.model_facade_token();
         let request = build_request(
@@ -223,7 +224,7 @@ impl ImagesClient {
         let collected = send(
             &self.transport,
             request,
-            self.response_timeout,
+            Timing::Total(self.response_timeout),
             MAX_RESPONSE_BYTES,
         )
         .await
@@ -236,8 +237,8 @@ fn images_error(error: CallError) -> ImagesError {
     match error {
         CallError::Refused(refusal) => ImagesError::Refused { refusal },
         CallError::Transport => ImagesError::Transport,
-        CallError::TooLarge => ImagesError::TooLarge,
-        CallError::Malformed => ImagesError::InvalidResponse("the request is malformed"),
+        CallError::TooLarge => ImagesError::ReplyTooLarge,
+        CallError::Malformed => ImagesError::Malformed,
     }
 }
 
@@ -260,9 +261,9 @@ fn media_type(name: &str) -> &'static str {
 /// inline data (a bare `url`) is `None`, so the position stays the SDK's.
 fn parse_response(raw: &[u8]) -> Result<Vec<Option<Vec<u8>>>, ImagesError> {
     let parsed: ImagesResponse = serde_json::from_slice(raw)
-        .map_err(|_| ImagesError::InvalidResponse("not the images object"))?;
-    if parsed.data.len() > MAX_IMAGES {
-        return Err(ImagesError::InvalidResponse("too many images"));
+        .map_err(|_| ImagesError::UnusableReply("not the images object"))?;
+    if parsed.data.len() > MAX_IMAGES_PER_REQUEST {
+        return Err(ImagesError::UnusableReply("too many images"));
     }
     parsed
         .data
@@ -273,7 +274,7 @@ fn parse_response(raw: &[u8]) -> Result<Vec<Option<Vec<u8>>>, ImagesError> {
                 .map(|encoded| {
                     STANDARD
                         .decode(encoded.as_bytes())
-                        .map_err(|_| ImagesError::InvalidResponse("an image is not valid base64"))
+                        .map_err(|_| ImagesError::UnusableReply("an image is not valid base64"))
                 })
                 .transpose()
         })

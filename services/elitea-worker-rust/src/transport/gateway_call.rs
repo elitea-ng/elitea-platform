@@ -101,47 +101,78 @@ pub(crate) fn build_request(
     Ok(request)
 }
 
-/// Send `request` and read the whole success body, all within `deadline`
-/// (headers and body together: a gateway that answers its headers and then
-/// stalls is cut off at the same moment as one that never answers).
+/// How long a call may take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Timing {
+    /// One deadline from the first byte sent to the last byte read. A
+    /// refusal's body is read (bounded) to learn a 402's budget scope. For a
+    /// call whose whole answer is one slow generation (images).
+    Total(Duration),
+    /// A window for the response headers and another for the body, each
+    /// starting when the previous phase ends, and a refusal classified from
+    /// the status alone with its body never read (embeddings: exactly the
+    /// behaviour it had before this flow was shared).
+    Split { headers: Duration, body: Duration },
+}
+
+/// Send `request` and read the whole success body within `timing`.
 ///
 /// # Errors
 ///
-/// A refusal (classified from the status, with a 402's scope read from a
-/// bounded body), a transport failure or deadline, or a body over
-/// `max_response`.
+/// A refusal (classified from the status), a transport failure or deadline,
+/// or a body over `max_response`.
 pub(crate) async fn send(
     transport: &Arc<dyn ModelGatewayTransport>,
     request: Request<Body>,
-    deadline: Duration,
+    timing: Timing,
     max_response: usize,
 ) -> Result<Bytes, CallError> {
-    timeout(deadline, async {
-        let response = transport
-            .post(request)
-            .await
-            .map_err(|_| CallError::Transport)?;
-        let status = response.status().as_u16();
-        if (200..300).contains(&status) {
-            let limited = http_body_util::Limited::new(response.into_body(), max_response);
-            return match limited.collect().await {
-                Ok(collected) => Ok(collected.to_bytes()),
-                Err(error) => Err(classify_body_error(&error)),
-            };
+    match timing {
+        Timing::Total(deadline) => timeout(deadline, async {
+            let response = transport
+                .post(request)
+                .await
+                .map_err(|_| CallError::Transport)?;
+            let status = response.status().as_u16();
+            if (200..300).contains(&status) {
+                return read_body(response.into_body(), max_response).await;
+            }
+            // Best effort: the scope of a 402 is in the body, nothing else is.
+            let limited = http_body_util::Limited::new(response.into_body(), MAX_REFUSAL_BYTES);
+            let body = limited
+                .collect()
+                .await
+                .map(http_body_util::Collected::to_bytes)
+                .unwrap_or_default();
+            Err(CallError::Refused(
+                Refusal::classify(status, &body).unwrap_or(Refusal::Rejected),
+            ))
+        })
+        .await
+        .map_err(|_| CallError::Transport)?,
+        Timing::Split { headers, body } => {
+            let response = timeout(headers, transport.post(request))
+                .await
+                .map_err(|_| CallError::Transport)?
+                .map_err(|_| CallError::Transport)?;
+            if let Some(refusal) = Refusal::from_status(response.status().as_u16()) {
+                return Err(CallError::Refused(refusal));
+            }
+            timeout(body, read_body(response.into_body(), max_response))
+                .await
+                .map_err(|_| CallError::Transport)?
         }
-        // Best effort: the scope of a 402 is in the body, nothing else is.
-        let limited = http_body_util::Limited::new(response.into_body(), MAX_REFUSAL_BYTES);
-        let body = limited
-            .collect()
-            .await
-            .map(http_body_util::Collected::to_bytes)
-            .unwrap_or_default();
-        Err(CallError::Refused(
-            Refusal::classify(status, &body).unwrap_or(Refusal::Rejected),
-        ))
-    })
-    .await
-    .map_err(|_| CallError::Transport)?
+    }
+}
+
+async fn read_body(body: Body, max_response: usize) -> Result<Bytes, CallError> {
+    match http_body_util::Limited::new(body, max_response)
+        .collect()
+        .await
+    {
+        Ok(collected) => Ok(collected.to_bytes()),
+        Err(error) => Err(classify_body_error(&error)),
+    }
 }
 
 /// Only the bound's own refusal (`Limited` stopped at the maximum) is
@@ -246,10 +277,25 @@ mod tests {
         };
         let deadline = Duration::from_millis(150);
         // Each phase alone is inside the deadline; together they are not.
-        let outcome = send(&slow(100, 100), request(), deadline, 1024).await;
+        let outcome = send(&slow(100, 100), request(), Timing::Total(deadline), 1024).await;
         assert_eq!(outcome, Err(CallError::Transport));
+        // The embeddings policy: each phase has its own window, so the same
+        // 100 ms + 100 ms answer that the total deadline cuts off is served.
+        let split = Timing::Split {
+            headers: deadline,
+            body: deadline,
+        };
+        let served = send(&slow(100, 100), request(), split, 1024)
+            .await
+            .expect("each phase is inside its own window");
+        assert_eq!(&served[..], b"{}");
+        // A phase that overruns its own window is still cut off.
+        assert_eq!(
+            send(&slow(100, 200), request(), split, 1024).await,
+            Err(CallError::Transport)
+        );
         // Within the deadline overall it succeeds.
-        let body = send(&slow(20, 20), request(), deadline, 1024)
+        let body = send(&slow(20, 20), request(), Timing::Total(deadline), 1024)
             .await
             .expect("in time");
         assert_eq!(&body[..], b"{}");
@@ -263,7 +309,21 @@ mod tests {
             status: 429,
         });
         assert_eq!(
-            send(&refused, request(), Duration::from_secs(1), 1024).await,
+            send(
+                &refused,
+                request(),
+                Timing::Total(Duration::from_secs(1)),
+                1024
+            )
+            .await,
+            Err(CallError::Refused(Refusal::RateLimited))
+        );
+        let split = Timing::Split {
+            headers: Duration::from_secs(1),
+            body: Duration::from_secs(1),
+        };
+        assert_eq!(
+            send(&refused, request(), split, 1024).await,
             Err(CallError::Refused(Refusal::RateLimited))
         );
     }

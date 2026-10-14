@@ -28,6 +28,29 @@ use async_trait::async_trait;
 /// refuse before it buffers.
 pub const MAX_OFFICE_OBJECT_BYTES: u64 = 50 * 1024 * 1024;
 
+/// The most images one images-API request asks for or one answer carries: the
+/// API's own maximum. The family, the worker's facade and the tool schema all
+/// read this one number.
+pub const MAX_IMAGES_PER_REQUEST: usize = 10;
+
+/// The most bytes of the source image and the mask of one edit together: what
+/// the platform will put in one images request (the multipart body adds the
+/// prompt and framing).
+pub const MAX_IMAGE_EDIT_INPUT_BYTES: u64 = 48 * 1024 * 1024;
+
+/// Whether `name` can be carried as an upload file name in a
+/// `multipart/form-data` part header (`filename="..."`): not empty, and no
+/// quote, backslash or control character, any of which could end the header
+/// line. The ONE guard: the family checks it before any billed call, and the
+/// worker's multipart encoder enforces it on every part it writes.
+#[must_use]
+pub fn valid_upload_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name
+            .chars()
+            .any(|c| c == '"' || c == '\\' || c.is_control())
+}
+
 /// Why an Office host call failed, in the terms the tool tells the model:
 /// each cause has its own sentence, so a refused credential is not reported as
 /// an unreachable platform, nor a taken name as a bad one.
@@ -54,6 +77,11 @@ pub enum OfficeFailure {
     RateLimited,
     /// The model call timed out; trying again may work.
     Timeout,
+    /// The model answered, but its reply could not be used. The call may have
+    /// been billed.
+    ReplyUnusable,
+    /// The model's answer was larger than the platform accepts.
+    ReplyTooLarge,
     /// The model gateway reported a conflict; trying again may work.
     Conflict,
     /// The platform or model could not be reached.
@@ -217,6 +245,17 @@ pub trait OfficeToolHost: Send + Sync {
             OfficeFailure::NoModel,
             "office_host.no_images_api",
         ))
+    }
+
+    /// The size in bytes of one object, from its metadata, without reading
+    /// it; `None` when the host cannot tell. Lets a tool refuse a request
+    /// that would be too large BEFORE it buffers anything.
+    async fn object_size(
+        &self,
+        _bucket: &str,
+        _name: &str,
+    ) -> Result<Option<u64>, OfficeHostError> {
+        Ok(None)
     }
 
     /// Whether this host reaches the images API. The `imagegen` toolkit is

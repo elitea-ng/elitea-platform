@@ -8,6 +8,7 @@
 //! caller smuggled into.
 
 use bytes::Bytes;
+use elitea_agent_runtime::toolkits::valid_upload_file_name;
 
 /// A part header value that could not be sent. Carries no value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -16,15 +17,6 @@ pub(crate) enum PartError {
     FileName,
     /// The media type holds a quote or a control character.
     MediaType,
-}
-
-/// Whether `name` can sit inside `filename="..."`.
-#[must_use]
-pub(crate) fn valid_file_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name
-            .chars()
-            .any(|c| c == '"' || c == '\\' || c.is_control())
 }
 
 /// A `multipart/form-data` body under construction.
@@ -68,7 +60,7 @@ impl Multipart {
         media_type: &str,
         bytes: &[u8],
     ) -> Result<(), PartError> {
-        if !valid_file_name(file_name) {
+        if !valid_upload_file_name(file_name) {
             return Err(PartError::FileName);
         }
         if media_type.is_empty() || media_type.chars().any(|c| c == '"' || c.is_control()) {
@@ -141,6 +133,6 @@ mod tests {
             );
         }
         assert!(form.body.is_empty());
-        assert!(valid_file_name("dir name/ok-1.png"));
+        assert!(valid_upload_file_name("dir name/ok-1.png"));
     }
 }
