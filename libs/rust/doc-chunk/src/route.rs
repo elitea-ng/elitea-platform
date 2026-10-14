@@ -240,10 +240,18 @@ fn chunker_named(
 ) -> Result<Chunker, ChunkError> {
     match crate::config::normalize_chunker_name(name).as_str() {
         "markdown" => Ok(Chunker::Markdown),
-        "text" => Ok(Chunker::Text),
+        "text" | "txt" => Ok(Chunker::Text),
         "json" => Ok(Chunker::Json),
+        // The SDK's `file_extension_by_chunker` resolves these names to a
+        // file type and parses by that extension (the ado_plans form sends
+        // `xml`, whose loader yields plain text). `html`/`csv` likewise.
+        "xml" | "html" | "csv" => Ok(chunker_for_with(
+            &format!(".{}", crate::config::normalize_chunker_name(name)),
+            options,
+        )),
         "code" | "code_parser" => Ok(Chunker::Code),
-        "universal" => Ok(chunker_for_with(extension, options)),
+        // The empty name is the SDK's "no chunking tool": by extension.
+        "" | "universal" => Ok(chunker_for_with(extension, options)),
         "statistical" => Ok(Chunker::Statistical),
         "proposal" => Ok(Chunker::Proposal),
         other => Err(ChunkError::UnknownChunker(other.to_owned())),
@@ -620,6 +628,32 @@ mod tests {
             chunk("text", "a.txt", &nonsense),
             Err(ChunkError::UnknownChunker(_))
         ));
+    }
+
+    #[test]
+    fn the_ado_plans_form_chunking_tools_do_not_fail() {
+        // The ado_plans toolkit form offers `xml` (its default) and `''`.
+        // The SDK parses `xml` by its extension and treats `''` as no tool.
+        let text = "<steps><step>one</step></steps>";
+        let mut configs: Vec<(String, ChunkingConfig)> = ["xml", "XML", "html", "csv", "txt"]
+            .iter()
+            .map(|tool| {
+                let config = ChunkingConfig::from_value(&json!({ "chunking_tool": tool }))
+                    .expect("a valid config");
+                ((*tool).to_owned(), config)
+            })
+            .collect();
+        // The config reader drops an empty `chunking_tool`; the worker's
+        // `IndexParameters` path (`chunking_tool = Some("")`) sets it
+        // straight on the base chunker, which is the only way to reach the
+        // router's `""` arm.
+        let mut empty = ChunkingConfig::default();
+        empty.base.chunker = Some(String::new());
+        configs.push((String::new(), empty));
+        for (tool, config) in &configs {
+            let chunks = chunk(text, "case.md", config).expect(tool);
+            assert!(!chunks.is_empty(), "{tool:?}");
+        }
     }
 
     #[test]

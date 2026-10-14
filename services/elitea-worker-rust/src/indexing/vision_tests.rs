@@ -822,6 +822,12 @@ async fn a_request_over_the_gateways_size_bound_is_too_large_and_no_streak() {
     .expect("summary");
     assert_eq!(summary.skipped.get("too_large"), Some(&5), "{summary:?}");
     assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    // The model refused those pictures: lost work, not a limit of the worker.
+    assert_eq!(
+        summary.status,
+        crate::protocol::elitea::runtime::v1::IndexIngestStatusV1::PartlyIndexed as i32,
+        "{summary:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

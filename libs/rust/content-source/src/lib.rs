@@ -17,6 +17,7 @@
 
 pub mod acl;
 pub mod git;
+pub mod supported;
 
 pub use acl::{Acl, Caller, Principal, PrincipalKind};
 

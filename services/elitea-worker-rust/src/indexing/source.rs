@@ -61,6 +61,7 @@ use elitea_connectors::zephyr::essential::{ZephyrEssentialConfig, ZephyrEssentia
 use elitea_connectors::zephyr::scale::{
     ZephyrScaleConfig, ZephyrScaleIndexArguments, ZephyrScaleSource,
 };
+use elitea_content_source::supported::has_supported_extension;
 use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
 use serde_json::Value;
 
@@ -110,7 +111,11 @@ pub(crate) enum IndexSource {
     GitLab(GitLabSource),
     Bitbucket(BitbucketSource),
     AdoRepos(AdoReposSource),
-    Artifact(ArtifactSource),
+    /// The artifact connector and the folder it lists under (`""` for the
+    /// bucket). The connector keys objects relative to the folder; this
+    /// worker keys them by the FULL object key, as the SDK does, so a run
+    /// over `a/` and one over `b/` cannot collide.
+    Artifact(ArtifactSource, String),
     Confluence(ConfluenceSource),
     Jira(JiraSource),
     SharePoint(SharePointSource),
@@ -125,7 +130,7 @@ pub(crate) enum IndexSource {
     ZephyrEssential(ZephyrEssentialSource),
     ZephyrEnterprise(ZephyrEnterpriseSource),
     #[cfg(test)]
-    Fixture(Vec<Document>),
+    Fixture(Vec<Document>, PathFilter),
 }
 
 /// What the artifact connector needs of the platform: the object API's
@@ -149,6 +154,7 @@ impl IndexSource {
     pub(crate) fn build(
         configuration: &ToolkitConfiguration,
         parameters: &IndexParameters,
+        filter: &PathFilter,
         platform: &PlatformAccess<'_>,
         allowlist: &HostAllowlist,
         transport: Arc<dyn Transport>,
@@ -209,9 +215,12 @@ impl IndexSource {
                 let api =
                     ArtifactPlatform::new(platform.origin, platform.bearer, platform.project_id)
                         .map_err(|e| refused(&e))?;
-                let source = ArtifactSource::new(api, bucket, "", allowlist.clone(), transport)
+                // The SDK's `folder`: list under that prefix only. Parsed
+                // once, with the filter.
+                let folder = filter.artifact_folder();
+                let source = ArtifactSource::new(api, bucket, folder, allowlist.clone(), transport)
                     .map_err(|e| refused(&e))?;
-                Self::Artifact(source.with_limits(source_limits))
+                Self::Artifact(source.with_limits(source_limits), folder.to_owned())
             }
             "confluence" => {
                 let config = ConfluenceConnectorConfig::parse(settings).map_err(|e| refused(&e))?;
@@ -319,7 +328,7 @@ impl IndexSource {
             }
             // The tests' in-memory toolkit: the documents the test staged.
             #[cfg(test)]
-            "fixture" => match super::tests::take_fixture_source() {
+            "fixture" => match super::tests::take_fixture_source(parameters) {
                 Some(source) => source,
                 None => return Err(SourceBuildError("no fixture documents staged".to_owned())),
             },
@@ -331,6 +340,30 @@ impl IndexSource {
             }
         };
         Ok(source)
+    }
+
+    /// What this run keeps of the listing: the `filter` of the toolkit
+    /// type, except for the tests' in-memory toolkit, which brings its own.
+    pub(crate) fn scoped(&self, filter: PathFilter) -> PathFilter {
+        match self {
+            #[cfg(test)]
+            Self::Fixture(_, own) => own.clone(),
+            _ => filter,
+        }
+    }
+
+    /// Whether this source's documents are repository files, which carry the
+    /// SDK's `commit_hash` (see [`commit_hash`]).
+    pub(crate) fn hashes_commit(&self) -> bool {
+        match self {
+            Self::GitHub(_) | Self::GitLab(_) | Self::Bitbucket(_) | Self::AdoRepos(_) => true,
+            // The tests' toolkit is a repository when a document says so.
+            #[cfg(test)]
+            Self::Fixture(documents, _) => documents
+                .iter()
+                .any(|document| document.metadata.contains_key("fixture_hash_commit")),
+            _ => false,
+        }
     }
 
     /// Tell the connector which document versions the index holds, before
@@ -353,7 +386,12 @@ impl IndexSource {
             Self::GitLab(source) => source.list().await,
             Self::Bitbucket(source) => source.list().await,
             Self::AdoRepos(source) => source.list().await,
-            Self::Artifact(source) => source.list().await,
+            Self::Artifact(source, folder) => source.list().await.map(|mut refs| {
+                for reference in &mut refs {
+                    reference.key = full_artifact_key(folder, &reference.key);
+                }
+                refs
+            }),
             Self::Confluence(source) => source.list().await,
             Self::Jira(source) => source.list().await,
             Self::SharePoint(source) => source.list().await,
@@ -368,7 +406,7 @@ impl IndexSource {
             Self::ZephyrEssential(source) => source.list().await,
             Self::ZephyrEnterprise(source) => source.list().await,
             #[cfg(test)]
-            Self::Fixture(documents) => Ok(documents
+            Self::Fixture(documents, _) => Ok(documents
                 .iter()
                 .map(|document| document.reference.clone())
                 .collect()),
@@ -382,11 +420,22 @@ impl IndexSource {
     /// The connector's fetch failure.
     pub(crate) async fn fetch(&self, key: &str) -> Result<Document, SourceError> {
         match self {
-            Self::GitHub(source) => source.fetch(key).await,
-            Self::GitLab(source) => source.fetch(key).await,
-            Self::Bitbucket(source) => source.fetch(key).await,
-            Self::AdoRepos(source) => source.fetch(key).await,
-            Self::Artifact(source) => source.fetch(key).await,
+            Self::GitHub(source) => source.fetch(key).await.map(with_code_paths),
+            Self::GitLab(source) => source.fetch(key).await.map(with_code_paths),
+            Self::Bitbucket(source) => source.fetch(key).await.map(with_code_paths),
+            Self::AdoRepos(source) => source.fetch(key).await.map(with_code_paths),
+            Self::Artifact(source, folder) => {
+                let relative = if folder.is_empty() {
+                    key
+                } else {
+                    key.strip_prefix(folder.as_str())
+                        .and_then(|rest| rest.strip_prefix('/'))
+                        .ok_or_else(|| SourceError::NotFound(key.to_owned()))?
+                };
+                let mut document = source.fetch(relative).await?;
+                key.clone_into(&mut document.reference.key);
+                Ok(document)
+            }
             Self::Confluence(source) => source.fetch(key).await,
             Self::Jira(source) => source.fetch(key).await,
             Self::SharePoint(source) => source.fetch(key).await,
@@ -401,7 +450,7 @@ impl IndexSource {
             Self::ZephyrEssential(source) => source.fetch(key).await,
             Self::ZephyrEnterprise(source) => source.fetch(key).await,
             #[cfg(test)]
-            Self::Fixture(documents) => documents
+            Self::Fixture(documents, _) => documents
                 .iter()
                 .find(|document| document.reference.key == key)
                 .cloned()
@@ -421,11 +470,105 @@ impl IndexSource {
     }
 }
 
-/// The `index_data` whitelist and blacklist.
+/// The toolkit types whose documents are repository files: the SDK's
+/// `CodeIndexerToolkit` family.
+const GIT_FAMILIES: [&str; 4] = ["github", "gitlab", "bitbucket", "ado_repos"];
+
+/// The SDK's code metadata on a repository file: `file_path` and `filename`
+/// (the document's identity in the SDK, and what the code search output
+/// prints), both the object key. A key the connector already set stays. The
+/// third key, `commit_hash`, hashes the whole text and is added where the
+/// text is already being read off the async executor ([`commit_hash`]).
+pub(super) fn with_code_paths(mut document: Document) -> Document {
+    let path = Value::String(document.reference.key.clone());
+    document
+        .metadata
+        .entry("filename".to_owned())
+        .or_insert_with(|| path.clone());
+    document
+        .metadata
+        .entry("file_path".to_owned())
+        .or_insert(path);
+    document
+}
+
+/// The SDK's `commit_hash` of a repository file: the SHA-256 of the file's
+/// text, not a git commit (`CodeIndexerToolkit.loader`). The SDK decodes with
+/// `errors="ignore"` and hashes the text: valid UTF-8 hashes as it is (a real
+/// U+FFFD stays), invalid sequences drop. Nothing is copied. CPU work: call
+/// it from a blocking thread.
+pub(super) fn commit_hash(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    let mut hasher = Sha256::new();
+    for chunk in bytes.utf8_chunks() {
+        hasher.update(chunk.valid().as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// An artifact object's full key from the key relative to the folder.
+fn full_artifact_key(folder: &str, relative: &str) -> String {
+    if folder.is_empty() {
+        relative.to_owned()
+    } else {
+        format!("{folder}/{relative}")
+    }
+}
+
+/// The artifact toolkit's `folder` argument: the prefix to list under.
+fn artifact_folder(arguments: &serde_json::Map<String, Value>) -> Result<String, String> {
+    match arguments.get("folder") {
+        None | Some(Value::Null) => Ok(String::new()),
+        Some(Value::String(folder)) => Ok(folder.trim().trim_matches('/').to_owned()),
+        Some(_) => Err("`folder` must be a string".to_owned()),
+    }
+}
+
+fn pattern_list(
+    arguments: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Vec<String>, String> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| match item {
+                Value::String(pattern) => Ok(pattern.clone()),
+                _ => Err(format!("`{key}` must hold strings")),
+            })
+            .collect(),
+        Some(_) => Err(format!("`{key}` must be a list of strings")),
+    }
+}
+
+/// The SDK's `ArtifactToolkit._fnmatch_nocase`: `fnmatch` of the lower-cased
+/// key against the lower-cased pattern. The pattern is used as given (a bare
+/// `pdf` is not `*.pdf`) and meets the whole key, folder included.
+fn matches_nocase(key: &str, pattern: &str) -> bool {
+    fnmatch(&pattern.to_lowercase(), &key.to_lowercase())
+}
+
+/// What a run keeps of the connector's listing: the `index_data` whitelist
+/// and blacklist, and per toolkit family the SDK's own filters.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PathFilter {
     whitelist: Vec<String>,
     blacklist: Vec<String>,
+    /// The code families' `skip_unsupported_extensions` (default true): only
+    /// the SDK's [`SUPPORTED_EXTENSIONS`] are indexed.
+    supported_only: bool,
+    /// The artifact toolkit's folder, normalized once (`""` for the whole
+    /// bucket). It scopes the listing only: documents are keyed by the full
+    /// object key, and every filter meets that same key.
+    folder: String,
+    /// The artifact toolkit's `include_extensions` and `skip_extensions`.
+    include: Vec<String>,
+    skip: Vec<String>,
+    /// Whether an EMPTY listing from the connector is a complete answer. The
+    /// SDK's only attesting toolkit is the artifact one over the whole
+    /// bucket; every other empty listing over a populated index is a failed
+    /// run, not an instruction to delete (EL-6232).
+    attests_empty: bool,
 }
 
 impl PathFilter {
@@ -434,11 +577,81 @@ impl PathFilter {
         Self {
             whitelist: whitelist.to_vec(),
             blacklist: blacklist.to_vec(),
+            ..Self::default()
         }
     }
 
+    /// A filter with the family-specific rules set directly, for the tests'
+    /// in-memory toolkit (the production way in is [`Self::for_run`]).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn for_test(
+        whitelist: &[String],
+        blacklist: &[String],
+        supported_only: bool,
+        attests_empty: bool,
+    ) -> Self {
+        Self {
+            supported_only,
+            attests_empty,
+            ..Self::new(whitelist, blacklist)
+        }
+    }
+
+    /// The filter of one run of toolkit `toolkit_type` with `parameters`.
+    ///
+    /// # Errors
+    ///
+    /// An argument of the wrong type (`skip_unsupported_extensions`,
+    /// `include_extensions`, `skip_extensions`, `folder`), with the reason.
+    pub(crate) fn for_run(
+        toolkit_type: &str,
+        parameters: &IndexParameters,
+    ) -> Result<Self, String> {
+        let mut filter = Self::new(&parameters.whitelist, &parameters.blacklist);
+        let arguments = &parameters.arguments;
+        if GIT_FAMILIES.contains(&toolkit_type) {
+            filter.supported_only = match arguments.get("skip_unsupported_extensions") {
+                None | Some(Value::Null) => true,
+                Some(Value::Bool(flag)) => *flag,
+                Some(_) => {
+                    return Err("`skip_unsupported_extensions` must be a boolean".to_owned());
+                }
+            };
+        }
+        if toolkit_type == "artifact" {
+            let folder = artifact_folder(arguments)?;
+            filter.include = pattern_list(arguments, "include_extensions")?;
+            filter.skip = pattern_list(arguments, "skip_extensions")?;
+            filter.attests_empty = folder.is_empty();
+            filter.folder = folder;
+        }
+        Ok(filter)
+    }
+
+    /// The artifact folder the run lists under (`""` for the bucket).
+    #[must_use]
+    pub(crate) fn artifact_folder(&self) -> &str {
+        &self.folder
+    }
+
+    /// Whether the connector's empty listing may delete a populated index.
+    #[must_use]
+    pub(crate) fn attests_empty(&self) -> bool {
+        self.attests_empty
+    }
+
+    /// Whether the family's file-type allowlist (the default
+    /// `skip_unsupported_extensions`) excludes a document key. Such a stored
+    /// document is out of scope for a run, never "vanished".
+    #[must_use]
+    pub(crate) fn excluded_by_file_type(&self, path: &str) -> bool {
+        self.supported_only && !has_supported_extension(path)
+    }
+
     /// Whether a document path is indexed: on the whitelist (or no
-    /// whitelist) and not on the blacklist, by the SDK's rule.
+    /// whitelist) and not on the blacklist, by the SDK's rule, and per
+    /// family the SDK's extension allowlist or artifact patterns.
     #[must_use]
     pub(crate) fn keeps(&self, path: &str) -> bool {
         let listed = |patterns: &[String]| {
@@ -446,7 +659,31 @@ impl PathFilter {
                 .iter()
                 .any(|pattern| fnmatch(pattern, path) || path.ends_with(&format!(".{pattern}")))
         };
-        (self.whitelist.is_empty() || listed(&self.whitelist)) && !listed(&self.blacklist)
+        if !((self.whitelist.is_empty() || listed(&self.whitelist)) && !listed(&self.blacklist)) {
+            return false;
+        }
+        if self.excluded_by_file_type(path) {
+            return false;
+        }
+        if !self.include.is_empty() || !self.skip.is_empty() {
+            // Skip patterns first, then the include list when there is one.
+            if self
+                .skip
+                .iter()
+                .any(|pattern| matches_nocase(path, pattern))
+            {
+                return false;
+            }
+            if !self.include.is_empty()
+                && !self
+                    .include
+                    .iter()
+                    .any(|pattern| matches_nocase(path, pattern))
+            {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -515,6 +752,7 @@ mod tests {
         let error = IndexSource::build(
             &configuration,
             &parameters,
+            &PathFilter::for_run(&configuration.toolkit_type, &parameters).expect("a valid filter"),
             &platform,
             &HostAllowlist::parse(Some("*")),
             Arc::new(
@@ -568,6 +806,8 @@ mod tests {
             IndexSource::build(
                 &configuration,
                 &parameters,
+                &PathFilter::for_run(&configuration.toolkit_type, &parameters)
+                    .expect("a valid filter"),
                 &platform,
                 &HostAllowlist::parse(Some("*")),
                 Arc::clone(&transport),
@@ -632,6 +872,70 @@ mod tests {
         assert!(error.0.contains("plain HTTP"), "{error}");
     }
 
+    /// The artifact connector lists under the SDK's `folder`; a folder that
+    /// is not a string, or not a valid key, is refused.
+    #[test]
+    fn the_artifact_connector_is_scoped_to_the_folder_argument() {
+        let platform = PlatformAccess {
+            origin: "https://platform.internal",
+            bearer: "pat",
+            project_id: "1",
+        };
+        let transport: Arc<dyn Transport> = Arc::new(
+            elitea_connectors::reqwest012::ReqwestTransport::hardened(
+                &elitea_connectors::github::client::CLIENT_POLICY,
+            )
+            .expect("client"),
+        );
+        let build = |arguments: Value| {
+            let configuration = ToolkitConfiguration {
+                toolkit_type: "artifact".to_owned(),
+                toolkit_name: "files".to_owned(),
+                settings: serde_json::json!({"bucket": "docs"})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            };
+            let parameters = IndexParameters {
+                index_name: "x".to_owned(),
+                clean_index: false,
+                chunking_tool: None,
+                chunking_config: Value::Null,
+                branch: None,
+                whitelist: Vec::new(),
+                blacklist: Vec::new(),
+                arguments: arguments.as_object().cloned().unwrap_or_default(),
+            };
+            let filter = PathFilter::for_run(&configuration.toolkit_type, &parameters)
+                .map_err(SourceBuildError)?;
+            IndexSource::build(
+                &configuration,
+                &parameters,
+                &filter,
+                &platform,
+                &HostAllowlist::parse(Some("*")),
+                Arc::clone(&transport),
+                IndexRunLimits::default(),
+            )
+        };
+        assert!(matches!(
+            build(serde_json::json!({})),
+            Ok(IndexSource::Artifact(..))
+        ));
+        assert!(matches!(
+            build(serde_json::json!({"folder": "/reports/2026/"})),
+            Ok(IndexSource::Artifact(..))
+        ));
+        let error = build(serde_json::json!({"folder": 7}))
+            .err()
+            .expect("refused");
+        assert!(error.0.contains("`folder` must be a string"), "{error}");
+        let error = build(serde_json::json!({"folder": "a/../b"}))
+            .err()
+            .expect("refused");
+        assert!(error.0.contains("folder"), "{error}");
+    }
+
     /// Figma is built from the token and the `index_data` arguments; a missing
     /// token or file, or an egress list without `api.figma.com`, is refused
     /// with the connector's data-free reason.
@@ -667,6 +971,8 @@ mod tests {
             IndexSource::build(
                 &configuration,
                 &parameters,
+                &PathFilter::for_run(&configuration.toolkit_type, &parameters)
+                    .expect("a valid filter"),
                 &platform,
                 &HostAllowlist::parse(Some(allowlist)),
                 Arc::clone(&transport),

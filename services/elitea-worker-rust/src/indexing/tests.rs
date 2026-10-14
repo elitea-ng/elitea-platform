@@ -18,8 +18,9 @@ use http_body_util::{BodyExt as _, Full};
 use serde_json::{Map, Value, json};
 use tonic::body::Body;
 
+use super::inputs::IndexParameters;
 use super::pipeline::{RunLiveness, failure_for_test, record_for_test};
-use super::source::IndexSource;
+use super::source::{IndexSource, PathFilter};
 use super::{
     IndexIngestRuntime, IndexRun, IndexRunFailure, IndexRunLimits, Interruption, interrupt_summary,
     run_index,
@@ -264,7 +265,7 @@ pub(super) fn document(key: &str, version: &str, text: &str) -> Document {
 }
 
 /// A PNG-signature file (a picture the vision step would describe).
-fn png_document(key: &str) -> Document {
+pub(super) fn png_document(key: &str) -> Document {
     let mut document = document(key, "v1", "");
     document.bytes = b"\x89PNG\r\n\x1a\npixels".to_vec();
     document.reference.size = document.bytes.len() as u64;
@@ -308,7 +309,7 @@ pub(super) fn binding() -> Vec<u8> {
 
 /// Runs the pipeline against `documents` with the fixture source swapped in
 /// for the toolkit's connector.
-async fn run(
+pub(super) async fn run(
     harness: &Harness,
     documents: Vec<Document>,
     command: &IndexIngestCommandV1,
@@ -367,8 +368,25 @@ thread_local! {
     pub(super) static FIXTURE_SOURCE: Mutex<Option<Vec<Document>>> = const { Mutex::new(None) };
 }
 
-pub(super) fn take_fixture_source() -> Option<IndexSource> {
-    FIXTURE_SOURCE.with(|slot| slot.lock().expect("lock").take().map(IndexSource::Fixture))
+/// The staged documents as the `fixture` toolkit, with the scope its
+/// arguments ask for: `fixture_skip_unsupported` (the code families'
+/// file-type allowlist) and `fixture_attests_empty` (the artifact bucket's
+/// attested empty listing).
+pub(super) fn take_fixture_source(parameters: &IndexParameters) -> Option<IndexSource> {
+    let flag = |name: &str| parameters.arguments.get(name) == Some(&Value::Bool(true));
+    FIXTURE_SOURCE.with(|slot| {
+        slot.lock().expect("lock").take().map(|documents| {
+            IndexSource::Fixture(
+                documents,
+                PathFilter::for_test(
+                    &parameters.whitelist,
+                    &parameters.blacklist,
+                    flag("fixture_skip_unsupported"),
+                    flag("fixture_attests_empty"),
+                ),
+            )
+        })
+    })
 }
 
 pub(super) async fn stored(harness: &Harness) -> Vec<pb::IndexedDocument> {
@@ -400,14 +418,16 @@ async fn a_first_run_writes_every_document_and_stamps_the_space() {
     )
     .await
     .expect("summary");
+    // An image is described by the chat model, and this harness has none:
+    // the picture step is on by default and optional, so the skip is
+    // reported but does not degrade the run.
     assert_eq!(
         summary.status,
-        IndexIngestStatusV1::PartlyIndexed as i32,
+        IndexIngestStatusV1::Ok as i32,
         "{summary:?}"
     );
     assert_eq!(summary.indexed_documents, 2);
     assert_eq!(summary.updated, 0);
-    // An image is described by the chat model, and this harness has none.
     assert_eq!(summary.skipped.get("no_model"), Some(&1));
     assert_eq!(summary.embedding_model, MODEL);
     assert_eq!(summary.embedding_dimension, 4);
@@ -988,7 +1008,8 @@ async fn a_run_that_only_removes_documents_reports_zero_totals_present() {
         &harness,
         Vec::new(),
         &command(NS, Some((MODEL, 4))),
-        &parameters(false, json!({})),
+        // A source that attests it is empty (the artifact bucket).
+        &parameters(false, json!({"fixture_attests_empty": true})),
         &Always,
     )
     .await
