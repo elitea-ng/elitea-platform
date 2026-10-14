@@ -288,6 +288,7 @@ impl ProductionAgentRuntime {
             agentstate,
             sandbox,
             index_runtime,
+            extractor,
         } = bundle;
         let limits = deployment.limits;
         let output_config = OutputGrpcConfig {
@@ -349,7 +350,11 @@ impl ProductionAgentRuntime {
         let office_runtime =
             crate::transport::office_host::OfficeRuntime::new(&deployment.platform_origin)
                 .map(|runtime| {
-                    Arc::new(runtime.with_public_base_url(deployment.public_base_url.clone()))
+                    Arc::new(
+                        runtime
+                            .with_public_base_url(deployment.public_base_url.clone())
+                            .with_extractor(extractor.clone()),
+                    )
                 })
                 .ok();
         if office_runtime.is_none() {

@@ -965,12 +965,37 @@ struct DirectToolsets {
 /// THOSE names keeps the three in agreement; building either catalog from the
 /// published name would leave a renamed tool silently unguarded.
 /// Whether the snapshot has a toolkit of the Office families (ADR-0032 P3, P4:
-/// `pptx`, `docx`, `xlsx`).
+/// `pptx`, `docx`, `xlsx`) or one that reads and writes files through the same
+/// host (`imagegen`; `sharepoint`, whose `upload_file` reads artifacts and
+/// whose readers turn documents into text).
 pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
         reference.kind() == FrozenToolKind::Configured
-            && matches!(reference.tool_type(), "pptx" | "docx" | "xlsx" | "imagegen")
+            && toolkit_needs_office_host(reference.tool_type(), reference.settings())
     })
+}
+
+/// Whether a configured toolkit needs the Office host built for the run. The
+/// Office families and `imagegen` always do; `sharepoint` only when its
+/// selected tools include one that reads a document or an artifact, so a
+/// `get_lists`-only toolkit redeems nothing.
+fn toolkit_needs_office_host(
+    tool_type: &str,
+    settings: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> bool {
+    match tool_type {
+        "pptx" | "docx" | "xlsx" | "imagegen" => true,
+        "sharepoint" => settings
+            .and_then(|settings| settings.get("selected_tools"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|selected| {
+                selected
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .any(elitea_agent_runtime::toolkits::sharepoint_tool_uses_office_host)
+            }),
+        _ => false,
+    }
 }
 
 /// Whether any configured I1 indexing toolkit in the snapshot carries Main's
@@ -1122,4 +1147,64 @@ pub(super) fn mcp_materialization_error(
     // #982: the requirement travels with the error so the lifecycle can name
     // the toolkit that challenged instead of failing the turn anonymously.
     NativeAgentAssemblyError::new(code, message).with_authorization(error.authorization().cloned())
+}
+
+#[cfg(test)]
+mod office_host_need_tests {
+    use super::*;
+    use crate::toolkits::{FrozenToolSnapshot, ToolAdmissionPolicy};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    fn carries(tools: &serde_json::Value) -> bool {
+        let version = json!({ "tools": tools });
+        let policy = Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("policy"));
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+                .expect("snapshot")
+                .apply_policy(policy.as_ref());
+        snapshot_carries_office_family(&snapshot)
+    }
+
+    fn sharepoint(selected: &[&str]) -> serde_json::Value {
+        json!({"id": 1, "type": "sharepoint", "toolkit_name": "SP", "settings": {
+            "sharepoint_configuration": {
+                "client_id": "c", "client_secret": "s",
+                "site_url": "https://t.sharepoint.com/sites/x",
+                "oauth_discovery_endpoint": "https://login.microsoftonline.com/t"
+            },
+            "selected_tools": selected
+        }})
+    }
+
+    #[test]
+    fn a_sharepoint_toolkit_redeems_the_host_only_for_tools_that_use_it() {
+        // Lists, columns, file metadata, OneNote lists and writes use no host.
+        assert!(!carries(&json!([sharepoint(&[
+            "get_lists",
+            "read_list",
+            "get_files_list",
+            "create_list_item",
+            "onenote_get_pages",
+            "onenote_create_page"
+        ])])));
+        // Each reader and the upload do.
+        // Every tool the family says uses the host builds it, and no other.
+        for tool in elitea_agent_runtime::toolkits::sharepoint_tool_names() {
+            assert_eq!(
+                carries(&json!([sharepoint(&["get_lists", tool])])),
+                elitea_agent_runtime::toolkits::sharepoint_tool_uses_office_host(tool),
+                "{tool}"
+            );
+        }
+        assert!(elitea_agent_runtime::toolkits::sharepoint_tool_uses_office_host("upload_file"));
+        assert!(!elitea_agent_runtime::toolkits::sharepoint_tool_uses_office_host("get_lists"));
+        // The Office families always do; an unrelated toolkit never.
+        assert!(carries(
+            &json!([{"id": 2, "type": "pptx", "toolkit_name": "P", "settings": {}}])
+        ));
+        assert!(!carries(
+            &json!([{"id": 3, "type": "github", "toolkit_name": "G", "settings": {}}])
+        ));
+    }
 }

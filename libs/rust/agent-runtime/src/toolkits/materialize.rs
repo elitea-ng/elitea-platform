@@ -627,8 +627,12 @@ async fn materialize(
             sharepoint::config::SharePointToolkitConfig::parse(name, settings, delegated_tokens)
                 .map_err(|error| sharepoint_materialization_error(error.code()))?
                 .with_toolkit_id(reference.tool_id());
-        let materialized = sharepoint::tools::build_sharepoint_toolset(name, config, policy)
-            .map_err(|error| sharepoint_toolset_materialization_error(error.code()))?;
+        // The Office host of the live claim, when this path lends one: it
+        // reads artifacts for `upload_file` and turns documents into text.
+        let office = artifacts.and_then(ArtifactToolAuthority::office);
+        let materialized =
+            sharepoint::tools::build_sharepoint_toolset(name, config, policy, office)
+                .map_err(|error| sharepoint_toolset_materialization_error(error.code()))?;
         return Ok((
             Arc::new(materialized.toolset),
             materialized.delegated_authorization,
@@ -1233,8 +1237,10 @@ const fn sharepoint_materialization_error(
             invalid_configuration()
         }
         sharepoint::config::SharePointConfigErrorCode::ResourceExhausted => resource_exhausted(),
+        // The only unsupported capability of this family is an app-only
+        // credential: named, so the user is told why the toolkit is off.
         sharepoint::config::SharePointConfigErrorCode::UnsupportedCapability => {
-            unsupported_toolkit()
+            ToolsetMaterializationError::refused(UnsupportedSetting::SharePointAppOnly)
         }
     }
 }

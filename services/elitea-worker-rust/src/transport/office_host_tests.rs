@@ -17,7 +17,7 @@ use elitea_agent_runtime::platform::{
 };
 use elitea_agent_runtime::toolkits::{
     ArtifactToolAuthority, OfficeFailure, OfficeModelRequest, OfficeToolHost,
-    materialize_configured_toolsets_with_artifact_authority,
+    TextExtractionFailure, materialize_configured_toolsets_with_artifact_authority,
 };
 use elitea_connectors::source::Failure;
 use elitea_connectors::transport::{
@@ -773,4 +773,119 @@ fn the_host_client_is_built_without_protocol_retries() {
     let retries_disabled = std::hint::black_box(super::office_host::OFFICE_POLICY.disable_retries);
     assert!(retries_disabled);
     assert!(super::office_host::OfficeRuntime::new(ORIGIN).is_ok());
+}
+
+/// The document reader the `SharePoint` text tools ask: plain text and code are
+/// read here, a PDF or Office file needs the extraction sidecar, and what is
+/// neither is named, never guessed at.
+#[tokio::test]
+async fn the_host_reads_text_itself_and_names_what_it_cannot_read() {
+    let runtime = Arc::new(OfficeRuntime::with_transport(ORIGIN, ObjectApi::new()));
+    let host =
+        ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
+    for (name, bytes, expected) in [
+        ("notes.txt", "hello\nthere\n".as_bytes(), "hello\nthere\n"),
+        ("data.json", br#"{"a":1}"#, r#"{"a":1}"#),
+        ("src/main.rs", b"fn main() {}\n", "fn main() {}\n"),
+        // Not UTF-8, and not binary: read with the legacy encoding it implies.
+        ("legacy.txt", b"caf\xe9 cr\xe8me", "caf\u{e9} cr\u{e8}me"),
+    ] {
+        assert_eq!(
+            host.extract_text(name, bytes.to_vec()).await.as_deref(),
+            Ok(expected),
+            "{name}"
+        );
+    }
+    let page = host
+        .extract_text("page.html", b"<h1>Title</h1><p>Body</p>".to_vec())
+        .await
+        .expect("html");
+    assert!(
+        page.contains("Title") && page.contains("Body") && !page.contains("<h1>"),
+        "{page}"
+    );
+
+    for name in [
+        "archive.zzz",
+        "Makefile",
+        "photo.png",
+        "scan.JPG",
+        "clip.mp4",
+    ] {
+        assert_eq!(
+            host.extract_text(name, b"x".to_vec()).await,
+            Err(TextExtractionFailure::Unsupported),
+            "{name}"
+        );
+    }
+    // A text name over bytes that are not text.
+    assert_eq!(
+        host.extract_text("binary.txt", vec![0, 159, 146, 150, 0, 0, 1, 2])
+            .await,
+        Err(TextExtractionFailure::Unreadable)
+    );
+    // A PDF or Office document with no sidecar configured.
+    for name in ["a.pdf", "b.docx", "c.xlsx", "d.pptx"] {
+        assert_eq!(
+            host.extract_text(name, b"%PDF-1.4".to_vec()).await,
+            Err(TextExtractionFailure::NoExtractor),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn every_sidecar_skip_is_one_extraction_failure() {
+    use super::extractor_client::SkipReason as Skip;
+    use super::office_host::text_failure;
+    for (reason, expected) in [
+        (Skip::TooLarge, TextExtractionFailure::TooLarge),
+        (Skip::TooManyPages, TextExtractionFailure::TooLarge),
+        (Skip::OutputTooLarge, TextExtractionFailure::TooLarge),
+        (Skip::Encrypted, TextExtractionFailure::Unreadable),
+        (Skip::Corrupt, TextExtractionFailure::Unreadable),
+        (Skip::Empty, TextExtractionFailure::Unreadable),
+        (Skip::Unsupported, TextExtractionFailure::Unsupported),
+        (Skip::Timeout, TextExtractionFailure::TimedOut),
+    ] {
+        assert_eq!(text_failure(reason), expected, "{reason:?}");
+    }
+}
+
+/// A file is refused from its name alone, before anything is downloaded.
+#[test]
+fn a_file_is_refused_by_its_name_before_it_is_downloaded() {
+    use super::office_host::readable_kind;
+    for name in ["notes.txt", "a.md", "data.json", "src/main.rs", "page.html"] {
+        assert_eq!(readable_kind(false, name), Ok(()), "{name}");
+    }
+    for name in ["a.pdf", "b.docx", "c.xlsx", "d.pptx"] {
+        assert_eq!(readable_kind(true, name), Ok(()), "{name}");
+        assert_eq!(
+            readable_kind(false, name),
+            Err(TextExtractionFailure::NoExtractor),
+            "{name}"
+        );
+    }
+    for name in [
+        "photo.png",
+        "scan.JPG",
+        "archive.zzz",
+        "Makefile",
+        "clip.mp4",
+    ] {
+        assert_eq!(
+            readable_kind(true, name),
+            Err(TextExtractionFailure::Unsupported),
+            "{name}"
+        );
+    }
+    let runtime = Arc::new(OfficeRuntime::with_transport(ORIGIN, ObjectApi::new()));
+    let host =
+        ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
+    assert_eq!(host.can_read_text("a.txt"), Ok(()));
+    assert_eq!(
+        host.can_read_text("a.pdf"),
+        Err(TextExtractionFailure::NoExtractor)
+    );
 }

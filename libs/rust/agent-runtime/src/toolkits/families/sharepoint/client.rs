@@ -7,7 +7,8 @@ use adk_core::{AdkError, ErrorCategory, ErrorComponent, RetryHint};
 use async_trait::async_trait;
 use percent_encoding::percent_decode_str;
 use reqwest::header::{
-    ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue, USER_AGENT,
+    ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HeaderName, HeaderValue, LOCATION,
+    USER_AGENT,
 };
 use reqwest::{Method, Request, StatusCode, Url};
 use serde_json::{Map, Value, json};
@@ -16,6 +17,13 @@ use crate::toolkits::DelegatedAuthorizationRequirement;
 
 use super::config::SharePointClientConfig;
 
+mod content;
+mod onenote_ops;
+
+pub(in crate::toolkits) use content::{
+    MAX_READ_BYTES, SharePointFile, SharePointUpload, names_no_file, not_a_file,
+};
+
 const GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0/";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -23,6 +31,9 @@ const POOL_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
 const MAX_IDLE_PER_HOST: usize = 4;
 const MAX_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_OUTPUT_BYTES: usize = 512 * 1_024;
+/// The most raw markup of a `OneNote` page the readers take (they cut the text
+/// at their own limit; only a page over this is refused).
+const MAX_PAGE_MARKUP_BYTES: usize = 8 * 1_024 * 1_024;
 const MAX_PAGES: usize = 64;
 const MAX_DRIVES: usize = 64;
 const MAX_FOLDER_REQUESTS: usize = 512;
@@ -43,10 +54,24 @@ pub(crate) enum SharePointClientErrorCode {
     DependencyUnavailable,
     InvalidResponse,
     ResourceExhausted,
+    /// The request may have reached Graph, and the answer was lost.
+    ConnectionLost,
+    /// Graph refused a change because the target is in a conflicting state
+    /// (a taken name, a locked file, a stale version).
+    Conflict,
+    /// A change was sent and Graph did not confirm it: it may or may not have
+    /// been applied.
+    OutcomeUnknown,
+    /// A file this tool will not read; [`SharePointClientError::detail`] says
+    /// which of its fixed reasons.
+    FileRefused,
 }
 
 pub(crate) struct SharePointClientError {
     code: SharePointClientErrorCode,
+    /// A fixed sentence for the one cause behind `code` (never data from the
+    /// provider or the arguments).
+    detail: Option<&'static str>,
 }
 
 impl SharePointClientError {
@@ -62,11 +87,41 @@ impl SharePointClientError {
             SharePointClientErrorCode::RateLimited
                 | SharePointClientErrorCode::Timeout
                 | SharePointClientErrorCode::DependencyUnavailable
+                | SharePointClientErrorCode::ConnectionLost
         )
     }
 
+    /// This failure of a CHANGE: a request that may have reached Graph and
+    /// got no answer (a timeout, a lost connection) leaves the outcome
+    /// unknown, which is not a failure to retry.
+    #[must_use]
+    pub(crate) const fn for_effect(self) -> Self {
+        match self.code {
+            SharePointClientErrorCode::Timeout | SharePointClientErrorCode::ConnectionLost => {
+                outcome_unknown()
+            }
+            _ => self,
+        }
+    }
+
+    /// The one sentence for this cause, for a tool that tells the model
+    /// itself (never data from the provider or the arguments).
+    pub(crate) fn sentence(&self) -> &'static str {
+        self.detail.unwrap_or_else(|| self.parts().2)
+    }
+
     pub(crate) fn into_adk(self) -> AdkError {
-        let (category, code, message) = match self.code {
+        let (category, code, message) = self.parts();
+        let message = self.detail.unwrap_or(message);
+        AdkError::new(ErrorComponent::Tool, category, code, message).with_retry(RetryHint {
+            should_retry: self.retryable(),
+            retry_after_ms: None,
+            max_attempts: None,
+        })
+    }
+
+    const fn parts(&self) -> (ErrorCategory, &'static str, &'static str) {
+        match self.code {
             SharePointClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
                 "sharepoint.configuration.invalid",
@@ -75,7 +130,7 @@ impl SharePointClientError {
             SharePointClientErrorCode::InvalidInput => (
                 ErrorCategory::InvalidInput,
                 "sharepoint.request.invalid",
-                "the SharePoint tool arguments are invalid",
+                "SharePoint rejected the request as invalid, for example a name or a value it does not accept",
             ),
             SharePointClientErrorCode::Authentication => (
                 ErrorCategory::Unauthorized,
@@ -117,17 +172,32 @@ impl SharePointClientError {
                 "sharepoint.resource_exhausted",
                 "the SharePoint request or response exceeds its approved limit",
             ),
-        };
-        AdkError::new(ErrorComponent::Tool, category, code, message).with_retry(RetryHint {
-            should_retry: self.retryable(),
-            retry_after_ms: None,
-            max_attempts: None,
-        })
+            SharePointClientErrorCode::ConnectionLost => (
+                ErrorCategory::Unavailable,
+                "sharepoint.connection_lost",
+                "the connection to Microsoft Graph was lost before it answered",
+            ),
+            SharePointClientErrorCode::Conflict => (
+                ErrorCategory::InvalidInput,
+                "sharepoint.conflict",
+                "SharePoint refused the change because it conflicts with the current state of the target, for example a name that is already taken",
+            ),
+            SharePointClientErrorCode::OutcomeUnknown => (
+                ErrorCategory::Unavailable,
+                "sharepoint.outcome_unknown",
+                "SharePoint did not confirm the change: it may or may not have been applied, so check the target before repeating it",
+            ),
+            SharePointClientErrorCode::FileRefused => (
+                ErrorCategory::InvalidInput,
+                "sharepoint.file.refused",
+                "this tool does not read that file",
+            ),
+        }
     }
 
     #[cfg(test)]
     pub(in crate::toolkits) const fn fixture(code: SharePointClientErrorCode) -> Self {
-        Self { code }
+        Self { code, detail: None }
     }
 }
 
@@ -161,6 +231,12 @@ impl fmt::Display for SharePointClientError {
             SharePointClientErrorCode::ResourceExhausted => {
                 "the SharePoint request or response exceeds its approved limit"
             }
+            SharePointClientErrorCode::ConnectionLost => {
+                "the connection to Microsoft Graph was lost"
+            }
+            SharePointClientErrorCode::Conflict => "SharePoint reported a conflicting state",
+            SharePointClientErrorCode::OutcomeUnknown => "SharePoint did not confirm the change",
+            SharePointClientErrorCode::FileRefused => "the file is not read by this tool",
         })
     }
 }
@@ -208,20 +284,118 @@ pub(in crate::toolkits) trait SharePointApi: Send + Sync {
     ) -> Result<Value, SharePointClientError>;
     async fn onenote_get_page_content(&self, page_id: &str)
     -> Result<Value, SharePointClientError>;
+
+    /// The page's markup for the readers, up to a raw cap well above what
+    /// `onenote_get_page_content` hands the model; the reader cuts the TEXT
+    /// at its own limit. Over the raw cap is the only refusal.
+    async fn onenote_page_markup(&self, page_id: &str) -> Result<String, SharePointClientError>;
+
+    /// A new item of one exact list: `{id, fields, webUrl}`.
+    async fn create_list_item(
+        &self,
+        list_title: &str,
+        fields: &Map<String, Value>,
+    ) -> Result<Value, SharePointClientError>;
+    /// One file into a document library folder: `{id, webUrl, path, size,
+    /// mime_type}`.
+    async fn upload_file(&self, upload: SharePointUpload) -> Result<Value, SharePointClientError>;
+    /// The bytes of one file by server-relative or Graph drive path, bounded
+    /// by `max_bytes` before they are buffered.
+    async fn download_document(
+        &self,
+        path: &str,
+        max_bytes: usize,
+    ) -> Result<SharePointFile, SharePointClientError>;
+    /// The bytes of the file a sharing link names, resolved by Graph (the
+    /// link itself is never fetched).
+    async fn download_shared_file(
+        &self,
+        sharing_url: &str,
+        readable: &ReadableCheck,
+    ) -> Result<SharePointFile, SharePointClientError>;
+    /// One `OneNote` embedded resource (an image or an attachment) of this
+    /// site, by its resource id.
+    async fn onenote_download_resource(
+        &self,
+        resource_id: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, SharePointClientError>;
+    /// The canonical content address of an embedded `OneNote` resource named by
+    /// the address a page carries (shown to the model; never fetched from
+    /// here). An address that is no `OneNote` resource comes back unchanged.
+    async fn onenote_resource_url(&self, src: &str) -> Result<String, SharePointClientError>;
+    /// The resource id inside an address a page carries, only when that
+    /// address is a Graph `OneNote` resource of THIS site; `None` for anything
+    /// else (a CDN picture, another site's resource), which is never fetched.
+    async fn onenote_resource_id(&self, src: &str)
+    -> Result<Option<String>, SharePointClientError>;
+    async fn onenote_create_notebook(
+        &self,
+        display_name: &str,
+    ) -> Result<Value, SharePointClientError>;
+    async fn onenote_create_section(
+        &self,
+        notebook_id: &str,
+        display_name: &str,
+    ) -> Result<Value, SharePointClientError>;
+    async fn onenote_create_page(
+        &self,
+        section_id: &str,
+        html_content: &str,
+    ) -> Result<Value, SharePointClientError>;
+    async fn onenote_update_page(
+        &self,
+        page_id: &str,
+        patch_commands: &[Value],
+    ) -> Result<(), SharePointClientError>;
+    async fn onenote_delete_page(&self, page_id: &str) -> Result<(), SharePointClientError>;
 }
+
+/// Whether the host can read a file of this name: `None`, or the sentence of
+/// the refusal. Explicitly higher-ranked (an elided lifetime would be bound
+/// to the method by `async_trait`).
+pub(in crate::toolkits) type ReadableCheck =
+    dyn for<'name> Fn(&'name str) -> Option<&'static str> + Send + Sync;
 
 pub(in crate::toolkits) struct SharePointHttpResponse {
     pub(in crate::toolkits) status: StatusCode,
     pub(in crate::toolkits) content_type: Option<Box<str>>,
+    /// The `Location` of a redirect (a drive item's content is one).
+    pub(in crate::toolkits) location: Option<Box<str>>,
+    /// The answer was larger than the cap and its body was not buffered
+    /// (`body` is empty). The status is still true: a caller that changed
+    /// something reads it before it reads the size.
+    pub(in crate::toolkits) oversize: bool,
+    /// The status arrived and the body did not (a stalled or dropped
+    /// connection): `Timeout` or `ConnectionLost`. The status is still true;
+    /// what the caller makes of it depends on whether it changed anything.
+    pub(in crate::toolkits) body_lost: Option<SharePointClientErrorCode>,
     pub(in crate::toolkits) body: Vec<u8>,
 }
 
 #[async_trait]
 pub(in crate::toolkits) trait SharePointTransport: Send + Sync {
+    /// One request, its answer bounded at [`MAX_RESPONSE_BYTES`].
     async fn execute(
         &self,
         request: Request,
     ) -> Result<SharePointHttpResponse, SharePointClientError>;
+
+    /// One request whose answer may be as large as `max_body` bytes (a file's
+    /// content). The real transport refuses a larger answer before it
+    /// buffers it; a transport that cannot bound a stream checks afterwards.
+    async fn execute_bounded(
+        &self,
+        request: Request,
+        max_body: usize,
+    ) -> Result<SharePointHttpResponse, SharePointClientError> {
+        let mut response = self.execute(request).await?;
+        if response.body.len() > max_body {
+            response.body = Vec::new();
+            response.oversize = true;
+        }
+        Ok(response)
+    }
 }
 
 struct ReqwestSharePointTransport {
@@ -234,47 +408,117 @@ impl SharePointTransport for ReqwestSharePointTransport {
         &self,
         request: Request,
     ) -> Result<SharePointHttpResponse, SharePointClientError> {
+        self.execute_bounded(request, MAX_RESPONSE_BYTES).await
+    }
+
+    async fn execute_bounded(
+        &self,
+        request: Request,
+        max_body: usize,
+    ) -> Result<SharePointHttpResponse, SharePointClientError> {
         let mut response = self
             .http
             .execute(request)
             .await
             .map_err(|error| map_reqwest_error(&error))?;
-        if response
+        let declared_oversize = response
             .headers()
             .get(CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES)
-        {
-            return Err(resource_exhausted());
-        }
+            .is_some_and(|length| length > max_body);
         let status = response.status();
         let content_type = response
             .headers()
             .get(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(Into::into);
+        let location = response
+            .headers()
+            .get(LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| value.len() <= 16 * 1_024)
+            .map(Into::into);
+        if declared_oversize {
+            return Ok(SharePointHttpResponse {
+                status,
+                content_type,
+                location,
+                oversize: true,
+                body_lost: None,
+                body: Vec::new(),
+            });
+        }
         let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|error| map_reqwest_error(&error))?
-        {
-            let next = body
-                .len()
-                .checked_add(chunk.len())
-                .ok_or_else(resource_exhausted)?;
-            if next > MAX_RESPONSE_BYTES {
-                return Err(resource_exhausted());
+        // The status is known: a failure from here on is an answer that did
+        // not arrive whole, not a request that never left. The status is kept
+        // and handed back with the loss, so a change that was confirmed (2xx)
+        // is not reported as lost and a refusal (4xx) stays a refusal.
+        let mut body_lost = None;
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    let next = body.len().saturating_add(chunk.len());
+                    if next > max_body {
+                        return Ok(SharePointHttpResponse {
+                            status,
+                            content_type,
+                            location,
+                            oversize: true,
+                            body_lost: None,
+                            body: Vec::new(),
+                        });
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    body_lost = Some(if error.is_timeout() {
+                        SharePointClientErrorCode::Timeout
+                    } else {
+                        SharePointClientErrorCode::ConnectionLost
+                    });
+                    body = Vec::new();
+                    break;
+                }
             }
-            body.extend_from_slice(&chunk);
         }
         Ok(SharePointHttpResponse {
             status,
             content_type,
+            location,
+            oversize: false,
+            body_lost,
             body,
         })
     }
+}
+
+/// The one way this family builds its HTTP client. No redirect is followed
+/// (a Graph content redirect is read and validated by hand), and reqwest's own
+/// protocol-level retries are off: a change is sent exactly once, and a
+/// request that may have reached Graph is never silently sent again.
+fn base_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+        .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
+        .user_agent(USER_AGENT_VALUE)
+}
+
+/// A transport to a plain-HTTP server on this machine, for the tests that
+/// need a real socket (size caps and failure causes at the boundary). It is
+/// the production client but for TLS.
+#[cfg(test)]
+pub(in crate::toolkits) fn plain_http_transport() -> Arc<dyn SharePointTransport> {
+    let http = base_client_builder()
+        .no_proxy()
+        .build()
+        .expect("plain HTTP test client");
+    Arc::new(ReqwestSharePointTransport { http })
 }
 
 pub(crate) struct SharePointClient {
@@ -282,18 +526,13 @@ pub(crate) struct SharePointClient {
     transport: Arc<dyn SharePointTransport>,
     site_id: tokio::sync::OnceCell<String>,
     drives: tokio::sync::OnceCell<Vec<Value>>,
+    default_drive: tokio::sync::OnceCell<String>,
 }
 
 impl SharePointClient {
     pub(crate) fn new(config: SharePointClientConfig) -> Result<Self, SharePointClientError> {
-        let http = reqwest::Client::builder()
+        let http = base_client_builder()
             .https_only(true)
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-            .pool_max_idle_per_host(MAX_IDLE_PER_HOST)
-            .user_agent(USER_AGENT_VALUE)
             .build()
             .map_err(|_| invalid_configuration())?;
         Ok(Self {
@@ -301,6 +540,7 @@ impl SharePointClient {
             transport: Arc::new(ReqwestSharePointTransport { http }),
             site_id: tokio::sync::OnceCell::new(),
             drives: tokio::sync::OnceCell::new(),
+            default_drive: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -314,6 +554,7 @@ impl SharePointClient {
             transport,
             site_id: tokio::sync::OnceCell::new(),
             drives: tokio::sync::OnceCell::new(),
+            default_drive: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -392,21 +633,51 @@ impl SharePointClient {
         url: Url,
         accept: &'static str,
     ) -> Result<SharePointHttpResponse, SharePointClientError> {
-        validate_graph_url(&url)?;
-        let mut request = Request::new(Method::GET, url);
-        request
-            .headers_mut()
-            .insert(ACCEPT, HeaderValue::from_static(accept));
-        request
-            .headers_mut()
-            .insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
+        self.send(GraphCall::get(url, accept)).await
+    }
+
+    /// One call to Graph under the delegated bearer (and only there: the
+    /// URL must be a Graph v1.0 address).
+    async fn send(&self, call: GraphCall) -> Result<SharePointHttpResponse, SharePointClientError> {
+        validate_graph_url(&call.url)?;
+        let mut request = base_request(call.method, call.url, call.accept);
         let bearer =
             zeroize::Zeroizing::new(format!("Bearer {}", self.config.access_token.as_str()));
         let mut authorization =
             HeaderValue::from_str(&bearer).map_err(|_| invalid_configuration())?;
         authorization.set_sensitive(true);
         request.headers_mut().insert(AUTHORIZATION, authorization);
-        self.transport.execute(request).await
+        if let Some(prefer) = call.prefer {
+            request.headers_mut().insert(
+                HeaderName::from_static("prefer"),
+                HeaderValue::from_static(prefer),
+            );
+        }
+        attach_body(&mut request, call.body, call.timeout);
+        let response = self
+            .transport
+            .execute_bounded(request, call.max_body)
+            .await?;
+        refuse_oversize(response, call.keep_oversize)
+    }
+
+    /// One call to an address Graph handed back (a pre-authenticated download
+    /// or upload session URL): no bearer, and only a `SharePoint` host.
+    async fn send_transfer(
+        &self,
+        call: GraphCall,
+    ) -> Result<SharePointHttpResponse, SharePointClientError> {
+        validate_transfer_url(&call.url)?;
+        let mut request = base_request(call.method, call.url, call.accept);
+        for (name, value) in call.headers {
+            request.headers_mut().insert(name, value);
+        }
+        attach_body(&mut request, call.body, call.timeout);
+        let response = self
+            .transport
+            .execute_bounded(request, call.max_body)
+            .await?;
+        refuse_oversize(response, call.keep_oversize)
     }
 
     async fn page_values(
@@ -846,6 +1117,238 @@ impl SharePointApi for SharePointClient {
             .map(Value::String)
             .map_err(|_| invalid_response())
     }
+
+    async fn onenote_page_markup(&self, page_id: &str) -> Result<String, SharePointClientError> {
+        let mut segments = self.onenote_prefix().await?;
+        segments.extend(["pages".to_owned(), page_id.to_owned(), "content".to_owned()]);
+        let refs = segments.iter().map(String::as_str).collect::<Vec<_>>();
+        let response = self
+            .send(GraphCall::get(graph_url(&refs)?, "text/html").max_body(MAX_PAGE_MARKUP_BYTES))
+            .await?;
+        require_success(response.status)?;
+        require_html(response.content_type.as_deref())?;
+        String::from_utf8(response.body).map_err(|_| invalid_response())
+    }
+
+    async fn create_list_item(
+        &self,
+        list_title: &str,
+        fields: &Map<String, Value>,
+    ) -> Result<Value, SharePointClientError> {
+        self.create_list_item_impl(list_title, fields).await
+    }
+
+    async fn upload_file(&self, upload: SharePointUpload) -> Result<Value, SharePointClientError> {
+        self.upload_file_impl(upload).await
+    }
+
+    async fn download_document(
+        &self,
+        path: &str,
+        max_bytes: usize,
+    ) -> Result<SharePointFile, SharePointClientError> {
+        self.download_document_impl(path, max_bytes).await
+    }
+
+    async fn download_shared_file(
+        &self,
+        sharing_url: &str,
+        readable: &ReadableCheck,
+    ) -> Result<SharePointFile, SharePointClientError> {
+        self.download_shared_file_impl(sharing_url, readable).await
+    }
+
+    async fn onenote_download_resource(
+        &self,
+        resource_id: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, SharePointClientError> {
+        self.onenote_download_resource_impl(resource_id, max_bytes)
+            .await
+    }
+
+    async fn onenote_resource_id(
+        &self,
+        src: &str,
+    ) -> Result<Option<String>, SharePointClientError> {
+        let site_id = self.resolve_site_id().await?;
+        Ok(super::html::resource_id(src, site_id))
+    }
+
+    async fn onenote_resource_url(&self, src: &str) -> Result<String, SharePointClientError> {
+        match self.onenote_resource_id(src).await? {
+            Some(resource) => Ok(format!(
+                "{GRAPH_BASE}sites/{}/onenote/resources/{resource}/content",
+                self.resolve_site_id().await?
+            )),
+            None => Ok(src.to_owned()),
+        }
+    }
+
+    async fn onenote_create_notebook(
+        &self,
+        display_name: &str,
+    ) -> Result<Value, SharePointClientError> {
+        self.onenote_create_notebook_impl(display_name).await
+    }
+
+    async fn onenote_create_section(
+        &self,
+        notebook_id: &str,
+        display_name: &str,
+    ) -> Result<Value, SharePointClientError> {
+        self.onenote_create_section_impl(notebook_id, display_name)
+            .await
+    }
+
+    async fn onenote_create_page(
+        &self,
+        section_id: &str,
+        html_content: &str,
+    ) -> Result<Value, SharePointClientError> {
+        self.onenote_create_page_impl(section_id, html_content)
+            .await
+    }
+
+    async fn onenote_update_page(
+        &self,
+        page_id: &str,
+        patch_commands: &[Value],
+    ) -> Result<(), SharePointClientError> {
+        self.onenote_update_page_impl(page_id, patch_commands).await
+    }
+
+    async fn onenote_delete_page(&self, page_id: &str) -> Result<(), SharePointClientError> {
+        self.onenote_delete_page_impl(page_id).await
+    }
+}
+
+/// One call to Graph or to an address it returned.
+struct GraphCall {
+    method: Method,
+    url: Url,
+    accept: &'static str,
+    /// The body and its media type.
+    body: Option<(&'static str, Vec<u8>)>,
+    prefer: Option<&'static str>,
+    /// Extra headers of a transfer call (`Content-Range`).
+    headers: Vec<(HeaderName, HeaderValue)>,
+    timeout: Option<Duration>,
+    max_body: usize,
+    /// A change keeps an oversize answer so it can read the status first.
+    keep_oversize: bool,
+}
+
+impl GraphCall {
+    fn get(url: Url, accept: &'static str) -> Self {
+        Self::new(Method::GET, url, accept)
+    }
+
+    fn new(method: Method, url: Url, accept: &'static str) -> Self {
+        Self {
+            method,
+            url,
+            accept,
+            body: None,
+            prefer: None,
+            headers: Vec::new(),
+            timeout: None,
+            max_body: MAX_RESPONSE_BYTES,
+            keep_oversize: false,
+        }
+    }
+
+    /// An answer over the cap comes back flagged instead of as an error: for
+    /// a call that changes something, whose status is true whatever the size.
+    fn tolerate_oversize(mut self) -> Self {
+        self.keep_oversize = true;
+        self
+    }
+
+    fn body(mut self, content_type: &'static str, bytes: Vec<u8>) -> Self {
+        self.body = Some((content_type, bytes));
+        self
+    }
+
+    fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    fn max_body(mut self, max_body: usize) -> Self {
+        self.max_body = max_body;
+        self
+    }
+}
+
+/// What a call makes of an answer that is over the cap or lost its body. A
+/// change keeps both (its status decides). A read cannot use either: an
+/// oversize answer is an error, and so is a lost body behind a success status;
+/// a lost body behind a refusal keeps the refusal's status for the caller.
+fn refuse_oversize(
+    response: SharePointHttpResponse,
+    keep: bool,
+) -> Result<SharePointHttpResponse, SharePointClientError> {
+    if keep {
+        return Ok(response);
+    }
+    if response.oversize {
+        return Err(resource_exhausted());
+    }
+    match response.body_lost {
+        Some(SharePointClientErrorCode::Timeout) if response.status.is_success() => Err(timeout()),
+        Some(_) if response.status.is_success() => Err(connection_lost()),
+        _ => Ok(response),
+    }
+}
+
+fn base_request(method: Method, url: Url, accept: &'static str) -> Request {
+    let mut request = Request::new(method, url);
+    request
+        .headers_mut()
+        .insert(ACCEPT, HeaderValue::from_static(accept));
+    request
+        .headers_mut()
+        .insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
+    request
+}
+
+fn attach_body(
+    request: &mut Request,
+    body: Option<(&'static str, Vec<u8>)>,
+    timeout: Option<Duration>,
+) {
+    if let Some((content_type, bytes)) = body {
+        request
+            .headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+        *request.body_mut() = Some(reqwest::Body::from(bytes));
+    }
+    if let Some(timeout) = timeout {
+        *request.timeout_mut() = Some(timeout);
+    }
+}
+
+/// The address of a file transfer Graph handed back: `https`, on a
+/// `*.sharepoint.com` host, with no credentials, port or fragment. Anything
+/// else is refused, so a crafted answer cannot make this process fetch
+/// elsewhere.
+fn validate_transfer_url(url: &Url) -> Result<(), SharePointClientError> {
+    let on_sharepoint = url.host_str().is_some_and(|host| {
+        let host = host.to_ascii_lowercase();
+        host.len() > ".sharepoint.com".len() && host.ends_with(".sharepoint.com")
+    });
+    if url.scheme() != "https"
+        || !on_sharepoint
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.as_str().len() > 16 * 1_024
+    {
+        return Err(invalid_response());
+    }
+    Ok(())
 }
 
 fn graph_url(segments: &[&str]) -> Result<Url, SharePointClientError> {
@@ -1011,6 +1514,26 @@ fn require_success(status: StatusCode) -> Result<(), SharePointClientError> {
         429 => Err(rate_limited()),
         500..=599 => Err(dependency_unavailable()),
         _ => Err(invalid_response()),
+    }
+}
+
+/// The status of a CHANGE, one cause each. Throttling (429, 503) was not
+/// applied; a gateway or server failure after the request went out (408,
+/// 500, 502, 504, anything unlisted) may have been.
+fn require_effect_success(status: StatusCode) -> Result<(), SharePointClientError> {
+    match status.as_u16() {
+        200..=299 => Ok(()),
+        401 => Err(authentication()),
+        403 => Err(authorization()),
+        404 => Err(not_found()),
+        409 | 412 | 423 => Err(conflict()),
+        413 => Err(resource_exhausted()),
+        429 => Err(rate_limited()),
+        503 => Err(dependency_unavailable()),
+        // Any other refusal (400, 415, 422, 410 Gone, 416 Range Not Satisfiable, ...) is a
+        // definite one: Graph looked at the request and said no.
+        400..=499 => Err(invalid_input()),
+        _ => Err(outcome_unknown()),
     }
 }
 
@@ -1194,11 +1717,17 @@ fn wildcard_match(pattern: &[u8], value: &[u8]) -> bool {
     pattern[pattern_index..].iter().all(|byte| *byte == b'*')
 }
 
+/// A transport failure by what is known of how far the request got: a
+/// refused or failed connection never carried it (Graph is unavailable); a
+/// timeout, or any failure after the connection was up, may have (the answer
+/// was lost), which a change reports as an unknown outcome.
 fn map_reqwest_error(error: &reqwest::Error) -> SharePointClientError {
-    if error.is_timeout() {
-        timeout()
-    } else if error.is_connect() || error.is_request() {
+    if error.is_connect() {
         dependency_unavailable()
+    } else if error.is_timeout() {
+        timeout()
+    } else if error.is_request() || error.is_body() {
+        connection_lost()
     } else {
         invalid_response()
     }
@@ -1207,59 +1736,108 @@ fn map_reqwest_error(error: &reqwest::Error) -> SharePointClientError {
 const fn invalid_configuration() -> SharePointClientError {
     SharePointClientError {
         code: SharePointClientErrorCode::InvalidConfiguration,
+        detail: None,
     }
 }
 
 const fn invalid_input() -> SharePointClientError {
     SharePointClientError {
         code: SharePointClientErrorCode::InvalidInput,
+        detail: None,
     }
 }
 
 const fn authentication() -> SharePointClientError {
     SharePointClientError {
         code: SharePointClientErrorCode::Authentication,
+        detail: None,
     }
 }
 
 const fn authorization() -> SharePointClientError {
     SharePointClientError {
         code: SharePointClientErrorCode::Authorization,
+        detail: None,
     }
 }
 
 const fn not_found() -> SharePointClientError {
     SharePointClientError {
         code: SharePointClientErrorCode::NotFound,
+        detail: None,
     }
 }
 
 const fn rate_limited() -> SharePointClientError {
     SharePointClientError {
         code: SharePointClientErrorCode::RateLimited,
+        detail: None,
     }
 }
 
 const fn timeout() -> SharePointClientError {
     SharePointClientError {
         code: SharePointClientErrorCode::Timeout,
+        detail: None,
     }
 }
 
 const fn dependency_unavailable() -> SharePointClientError {
     SharePointClientError {
         code: SharePointClientErrorCode::DependencyUnavailable,
+        detail: None,
     }
 }
 
 const fn invalid_response() -> SharePointClientError {
     SharePointClientError {
         code: SharePointClientErrorCode::InvalidResponse,
+        detail: None,
+    }
+}
+
+const fn conflict() -> SharePointClientError {
+    SharePointClientError {
+        code: SharePointClientErrorCode::Conflict,
+        detail: None,
+    }
+}
+
+const fn outcome_unknown() -> SharePointClientError {
+    SharePointClientError {
+        code: SharePointClientErrorCode::OutcomeUnknown,
+        detail: None,
+    }
+}
+
+const fn connection_lost() -> SharePointClientError {
+    SharePointClientError {
+        code: SharePointClientErrorCode::ConnectionLost,
+        detail: None,
+    }
+}
+
+/// A resumable upload the session would not complete: a definite failure
+/// (nothing is saved; the session was cancelled).
+const fn upload_incomplete() -> SharePointClientError {
+    SharePointClientError {
+        code: SharePointClientErrorCode::DependencyUnavailable,
+        detail: Some(
+            "SharePoint did not accept the whole file, so the upload was cancelled and nothing was saved",
+        ),
+    }
+}
+
+const fn file_refused(detail: &'static str) -> SharePointClientError {
+    SharePointClientError {
+        code: SharePointClientErrorCode::FileRefused,
+        detail: Some(detail),
     }
 }
 
 const fn resource_exhausted() -> SharePointClientError {
     SharePointClientError {
         code: SharePointClientErrorCode::ResourceExhausted,
+        detail: None,
     }
 }
