@@ -121,5 +121,9 @@ func (i *ClaimTokenIssuer) IssueVectorClaimToken(ctx context.Context, fence runt
 		Bearer:              token,
 		ExpiresAtUnixMillis: minted.ExpiresAt.UnixMilli(),
 		AllowedSources:      append([]string(nil), minted.Sources...),
+		// The job's actor, read from the claim's execution by the mint (never
+		// from the caller). The mint refuses any actor that is not a user id,
+		// so this is always a positive user id.
+		ActorUserId: minted.ActorID,
 	}, nil
 }

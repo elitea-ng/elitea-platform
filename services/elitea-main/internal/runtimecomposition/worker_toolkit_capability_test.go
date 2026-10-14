@@ -397,8 +397,13 @@ func TestPinnedCapabilityRealPythonOnlyAndBothWorkerTypes(t *testing.T) {
 		Enabled: true, IndexingRuntime: runtimecomposition.IndexingRuntimeRust,
 		IndexIngestDispatchEnabled: true,
 	}
+	if ok, reason := rust.ForIndexingRuntime(rustIndexing).SupportsToolkitType("memory", "memory"); ok ||
+		!strings.Contains(reason, "Memory needs an embedding model configured by the operator") {
+		t.Errorf("memory needs the operator's embedding model: ok=%v reason=%q", ok, reason)
+	}
+	rustIndexing.MemoryEmbeddingModel = "text-embedding-3-small"
 	if ok, reason := rust.ForIndexingRuntime(rustIndexing).SupportsToolkitType("memory", "memory"); !ok {
-		t.Errorf("memory is served under the Rust indexing runtime: %q", reason)
+		t.Errorf("memory is served under the Rust indexing runtime with a model: %q", reason)
 	}
 	if ok, _ := python.ForIndexingRuntime(runtimecomposition.Config{}).SupportsToolkitType("memory", "memory"); !ok {
 		t.Error("the Python worker serves memory whatever the indexing runtime")

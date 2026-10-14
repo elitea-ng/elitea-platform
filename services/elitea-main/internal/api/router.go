@@ -266,6 +266,10 @@ type RouterConfig struct {
 	// run. Unassigned, every catalogued type is offered — the honest answer
 	// when nothing has said which worker image is deployed.
 	ToolkitWorkerCapability v2toolkits.ToolkitCapabilitySource
+	// MemoryOnVectorStore: memory toolkits keep their data in elitea-vector
+	// (the Rust indexing runtime), so their type schema drops the SDK's
+	// pgvector_configuration field.
+	MemoryOnVectorStore bool
 	// WorkerImplementation is the plain "python"/"rust" worker name (#865,
 	// #866) — the same value runtimecomposition.WorkerImplementationFromEnv
 	// derived to build ToolkitWorkerCapability above, restated here because
@@ -1169,6 +1173,7 @@ func newToolkitHandler(
 	if cfg.ToolkitWorkerCapability != nil {
 		options = append(options, v2toolkits.WithWorkerCapability(cfg.ToolkitWorkerCapability))
 	}
+	options = append(options, v2toolkits.WithMemoryOnVectorStore(cfg.MemoryOnVectorStore))
 	if cfg.WorkerImplementation != "" {
 		options = append(options, v2toolkits.WithWorkerImplementation(cfg.WorkerImplementation))
 	}

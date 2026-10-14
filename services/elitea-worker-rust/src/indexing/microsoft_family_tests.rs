@@ -214,6 +214,7 @@ async fn harness(transport: Arc<Recorded>) -> Harness {
         bearer: TOKEN.to_owned(),
         expires_at_unix_millis: i64::MAX,
         allowed_sources: vec!["toolkit_index".to_owned()],
+        actor_user_id: 42,
     }))
     .expect("token");
     Harness {

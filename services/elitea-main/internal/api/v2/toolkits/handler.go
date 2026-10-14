@@ -116,6 +116,9 @@ type Handler struct {
 	// workerCapability decides whether a catalogued type is offered as
 	// creatable. Nil offers every catalogued type.
 	workerCapability ToolkitCapabilitySource
+	// memoryOnVectorStore serves the memory type without pgvector_configuration
+	// (WithMemoryOnVectorStore).
+	memoryOnVectorStore bool
 	// workerImplementation is the plain "python"/"rust" name of the worker
 	// image this deployment runs, served as-is by RuntimeCapabilities. See
 	// WithWorkerImplementation (capabilities_handler.go).

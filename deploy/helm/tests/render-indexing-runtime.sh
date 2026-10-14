@@ -182,6 +182,28 @@ PY
   --set-string worker.runtime.memoryEmbeddingModel=text-embedding-3-small \
   >"$TMP/memory.yaml" 2>"$TMP/memory.err" \
   || bad "a memoryEmbeddingModel does not render: $(tail -1 "$TMP/memory.err")"
+# elitea-main is told the same model, so it can withhold memory from the
+# catalogue when none is configured.
+mainmemory() {
+  python3 - "$1" <<'PY'
+import sys, yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+values = [d["data"].get("ELITEA_MEMORY_EMBEDDING_MODEL", "-") for d in docs
+          if d["kind"] == "ConfigMap" and "ELITEA_INDEXING_RUNTIME" in (d.get("data") or {})]
+assert len(values) == 1, values
+print(values[0])
+PY
+}
+[ "$(mainmemory "$TMP/memory.yaml")" = "text-embedding-3-small" ] \
+  && ok "elitea-main receives the memory embedding model as ELITEA_MEMORY_EMBEDDING_MODEL" \
+  || bad "main memory model: $(mainmemory "$TMP/memory.yaml")"
+[ "$(mainmemory "$TMP/rust.yaml")" = "-" ] \
+  && ok "elitea-main gets no ELITEA_MEMORY_EMBEDDING_MODEL while none is configured" \
+  || bad "main memory model leaked: $(mainmemory "$TMP/rust.yaml")"
+[ "$(mainmemory "$TMP/default.yaml")" = "-" ] \
+  && ok "python indexing gives elitea-main no memory model" \
+  || bad "python indexing main memory model: $(mainmemory "$TMP/default.yaml")"
 [ "$(memorymodel "$TMP/rust.yaml")" = "-" ] \
   && ok "rust indexing writes no memory_embedding_model by default (the memory toolkit stays unserved)" \
   || bad "rust indexing leaked a memory model: $(memorymodel "$TMP/rust.yaml")"

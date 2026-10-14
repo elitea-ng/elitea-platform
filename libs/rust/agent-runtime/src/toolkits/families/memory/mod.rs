@@ -21,10 +21,20 @@
 //!   index, so its search ignores the query and lists the most recently
 //!   updated memories.
 //! * Memories have limits (count, content, metadata, key); the SDK has none.
+//! * Memories are versioned in time: writing an existing key supersedes the
+//!   current version (kept, closed at that instant) instead of overwriting;
+//!   `get_memory` and `search_memory` return current versions by default and
+//!   take optional `as_of` and `include_history`; `delete_memory` removes every
+//!   version. The SDK keeps one value per key.
 //! * Memories written under the Python worker are not carried over: they sit
 //!   in the toolkit's pgvector database, which nothing here reads.
-//! * Memory is shared by everyone who runs a toolkit with the same
-//!   `namespace` in the same project, as in the SDK; it is not per user.
+//! * Memory has an owner, set by the toolkit's `memory_scope` setting (an
+//!   extension; the SDK's memory belongs to the namespace, shared by everyone
+//!   who runs it). `personal` (the default) belongs to the one authenticated
+//!   user who runs the toolkit; `project` is shared by the whole project (the
+//!   SDK's behaviour); `both` gives every tool an optional `scope` argument
+//!   (`personal` by default). The user is the claim's, stated by Main; it is
+//!   never read from an argument or a setting.
 
 use std::sync::Arc;
 
@@ -44,6 +54,77 @@ use crate::toolkits::policy::ToolAdmissionPolicy;
 pub const MEMORY_TOOLKIT_TYPE: &str = "memory";
 /// The most bytes of `namespace` setting.
 pub const MAX_NAMESPACE_BYTES: usize = 256;
+
+/// Whose memories a call reads or writes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryScope {
+    /// The authenticated user's own memories.
+    Personal,
+    /// The project's shared memories.
+    Project,
+}
+
+impl MemoryScope {
+    /// The argument and setting spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Personal => "personal",
+            Self::Project => "project",
+        }
+    }
+}
+
+/// The toolkit's `memory_scope` setting: which scopes its tools serve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryScopeSetting {
+    /// Personal only (the default: privacy-safe).
+    Personal,
+    /// Project only.
+    Project,
+    /// Both, chosen per call by the `scope` argument.
+    Both,
+}
+
+impl MemoryScopeSetting {
+    /// Reads `memory_scope`: absent or null is `personal`.
+    ///
+    /// # Errors
+    ///
+    /// A value that is not `personal`, `project` or `both`.
+    pub fn from_settings(settings: &Map<String, Value>) -> Result<Self, MemoryToolsetError> {
+        match settings.get("memory_scope") {
+            None | Some(Value::Null) => Ok(Self::Personal),
+            Some(Value::String(value)) => match value.as_str() {
+                "personal" => Ok(Self::Personal),
+                "project" => Ok(Self::Project),
+                "both" => Ok(Self::Both),
+                _ => Err(MemoryToolsetError::Invalid),
+            },
+            Some(_) => Err(MemoryToolsetError::Invalid),
+        }
+    }
+
+    /// The scope a call uses: fixed for a single-scope toolkit, the
+    /// argument's (default `personal`) for `both`.
+    ///
+    /// # Errors
+    ///
+    /// A sentence for the model when a `both` toolkit's argument is not a
+    /// known scope.
+    pub fn resolve(self, arguments: &Value) -> Result<MemoryScope, String> {
+        match self {
+            Self::Personal => Ok(MemoryScope::Personal),
+            Self::Project => Ok(MemoryScope::Project),
+            Self::Both => match arguments.get("scope") {
+                None | Some(Value::Null) => Ok(MemoryScope::Personal),
+                Some(Value::String(value)) if value == "personal" => Ok(MemoryScope::Personal),
+                Some(Value::String(value)) if value == "project" => Ok(MemoryScope::Project),
+                Some(_) => Err("scope must be \"personal\" or \"project\"".to_owned()),
+            },
+        }
+    }
+}
 
 /// One of the four tools, by its SDK name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,6 +186,31 @@ impl MemoryToolName {
     /// `GetMemoryInput`, `DeleteMemoryInput`) as JSON Schema.
     #[must_use]
     pub fn parameters_schema(self) -> Value {
+        self.parameters_schema_for(MemoryScopeSetting::Personal)
+    }
+
+    /// [`Self::parameters_schema`] for a toolkit's scope setting: a `both`
+    /// toolkit adds the optional `scope` argument, any other has none.
+    #[must_use]
+    pub fn parameters_schema_for(self, setting: MemoryScopeSetting) -> Value {
+        let mut schema = self.sdk_parameters_schema();
+        if setting == MemoryScopeSetting::Both
+            && let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut)
+        {
+            properties.insert(
+                "scope".to_owned(),
+                json!({
+                    "type": "string",
+                    "enum": ["personal", "project"],
+                    "default": "personal",
+                    "description": "Whose memory to use: \"personal\" is private to the person talking to you, \"project\" is shared by everyone in the project."
+                }),
+            );
+        }
+        schema
+    }
+
+    fn sdk_parameters_schema(self) -> Value {
         match self {
             Self::ManageMemory => json!({
                 "type": "object",
@@ -120,7 +226,9 @@ impl MemoryToolName {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Natural language query to search memories"},
-                    "limit": {"type": "integer", "default": 5, "description": "Maximum number of results to return"}
+                    "limit": {"type": "integer", "default": 5, "description": "Maximum number of results to return"},
+                    "as_of": {"type": ["string", "null"], "default": null, "description": "Optional RFC 3339 timestamp (for example 2026-01-31T12:00:00Z): return the memories as they were valid at that moment instead of now."},
+                    "include_history": {"type": ["boolean", "null"], "default": false, "description": "When true, also return superseded versions of a memory, each with its version number and the period it was valid (valid_from, valid_to)."}
                 },
                 "required": ["query"],
                 "additionalProperties": false
@@ -128,7 +236,9 @@ impl MemoryToolName {
             Self::GetMemory => json!({
                 "type": "object",
                 "properties": {
-                    "key": {"type": "string", "description": "The key of the memory to retrieve"}
+                    "key": {"type": "string", "description": "The key of the memory to retrieve"},
+                    "as_of": {"type": ["string", "null"], "default": null, "description": "Optional RFC 3339 timestamp (for example 2026-01-31T12:00:00Z): return the memory as it was valid at that moment instead of now."},
+                    "include_history": {"type": ["boolean", "null"], "default": false, "description": "When true, return every version of the memory, newest first, each with its version number and the period it was valid (valid_from, valid_to)."}
                 },
                 "required": ["key"],
                 "additionalProperties": false
@@ -151,6 +261,9 @@ pub struct MemoryToolCall<'a> {
     pub tool: MemoryToolName,
     /// The toolkit's `namespace`.
     pub namespace: &'a str,
+    /// Whose memories: fixed by the toolkit's `memory_scope`, or the call's
+    /// `scope` argument for a `both` toolkit.
+    pub scope: MemoryScope,
     /// The call's arguments, as the model sent them (an object).
     pub arguments: &'a Value,
 }
@@ -221,6 +334,7 @@ pub fn build_memory_toolset(
     authority: &IndexToolAuthority,
 ) -> Result<BasicToolset, MemoryToolsetError> {
     let namespace: Arc<str> = Arc::from(memory_namespace(settings, toolkit_id)?);
+    let scope = MemoryScopeSetting::from_settings(settings)?;
     let selected = selected_tool_names(settings)?;
     let include = |name: &str| selected.is_empty() || selected.iter().any(|value| value == name);
     let tools: Vec<Arc<dyn Tool>> = MemoryToolName::ALL
@@ -230,6 +344,7 @@ pub fn build_memory_toolset(
             Arc::new(MemoryTool {
                 tool,
                 namespace: Arc::clone(&namespace),
+                scope,
                 authority: authority.clone(),
             }) as Arc<dyn Tool>
         })
@@ -247,6 +362,7 @@ pub fn all_memory_tools(authority: &IndexToolAuthority) -> Vec<Arc<dyn Tool>> {
             Arc::new(MemoryTool {
                 tool,
                 namespace: Arc::from("conformance"),
+                scope: MemoryScopeSetting::Personal,
                 authority: authority.clone(),
             }) as Arc<dyn Tool>
         })
@@ -256,6 +372,7 @@ pub fn all_memory_tools(authority: &IndexToolAuthority) -> Vec<Arc<dyn Tool>> {
 struct MemoryTool {
     tool: MemoryToolName,
     namespace: Arc<str>,
+    scope: MemoryScopeSetting,
     authority: IndexToolAuthority,
 }
 
@@ -278,7 +395,7 @@ impl Tool for MemoryTool {
     }
 
     fn parameters_schema(&self) -> Option<Value> {
-        Some(self.tool.parameters_schema())
+        Some(self.tool.parameters_schema_for(self.scope))
     }
 
     async fn execute(
@@ -295,9 +412,14 @@ impl Tool for MemoryTool {
                 "the tool arguments must be an object".to_owned(),
             ));
         };
+        let scope = match self.scope.resolve(&arguments) {
+            Ok(scope) => scope,
+            Err(sentence) => return Ok(Value::String(sentence)),
+        };
         let call = MemoryToolCall {
             tool: self.tool,
             namespace: &self.namespace,
+            scope,
             arguments: &arguments,
         };
         match self.authority.host().memory(call).await {

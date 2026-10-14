@@ -93,6 +93,9 @@ pub(crate) struct VectorClaimToken {
     bearer: Zeroizing<String>,
     expires_at_unix_millis: i64,
     sources: Vec<VectorSource>,
+    /// The authenticated user the execution runs as, stated by Main in the
+    /// receipt (read from the execution's actor, never from a caller).
+    actor_user_id: Option<i64>,
 }
 
 impl VectorClaimToken {
@@ -113,6 +116,7 @@ impl VectorClaimToken {
             bearer,
             expires_at_unix_millis,
             allowed_sources,
+            actor_user_id,
         } = token;
         let bearer = Zeroizing::new(bearer);
         let well_formed = bearer.len() == BEARER_LENGTH
@@ -149,6 +153,8 @@ impl VectorClaimToken {
             bearer,
             expires_at_unix_millis,
             sources,
+            // Zero is "not stated"; a negative value is not a user id.
+            actor_user_id: (actor_user_id > 0).then_some(actor_user_id),
         })
     }
 
@@ -175,6 +181,13 @@ impl VectorClaimToken {
         self.sources.contains(&source)
     }
 
+    /// The user the run is authenticated as, from Main's receipt. `None` when
+    /// Main stated none; per-user data (personal memory) is then unavailable.
+    #[must_use]
+    pub(crate) const fn actor_user_id(&self) -> Option<i64> {
+        self.actor_user_id
+    }
+
     /// A second owned copy for another authority derived from the same claim
     /// (the runtime-context authority an agent run receives). Crate-private,
     /// and deliberately not `Clone`, so copies are made only at those seams.
@@ -184,6 +197,7 @@ impl VectorClaimToken {
             bearer: Zeroizing::new(self.bearer.as_str().to_owned()),
             expires_at_unix_millis: self.expires_at_unix_millis,
             sources: self.sources.clone(),
+            actor_user_id: self.actor_user_id,
         }
     }
 }
@@ -202,6 +216,7 @@ impl fmt::Debug for VectorClaimToken {
             .field("bearer", &"<redacted>")
             .field("expires_at_unix_millis", &self.expires_at_unix_millis)
             .field("sources", &self.sources)
+            .field("actor_user_id", &self.actor_user_id)
             .finish()
     }
 }
@@ -212,6 +227,7 @@ pub(crate) fn test_vector_claim_token() -> VectorClaimTokenV1 {
         bearer: format!("{BEARER_PREFIX}{}", "A".repeat(43)),
         expires_at_unix_millis: 4_102_444_800_000,
         allowed_sources: vec!["toolkit_index".to_owned()],
+        actor_user_id: 42,
     }
 }
 
@@ -235,7 +251,9 @@ mod tests {
         assert!(!token.allows(VectorSource::Deepwiki));
         assert!(!token.allows(VectorSource::Inventory));
         assert_eq!(VectorSource::ToolkitIndex.keyword(), "toolkit_index");
+        assert_eq!(token.actor_user_id(), Some(42));
         let copy = token.duplicate();
+        assert_eq!(copy.actor_user_id(), Some(42));
         assert_eq!(copy.bearer(), bearer);
         assert!(copy.allows(VectorSource::ToolkitIndex));
     }

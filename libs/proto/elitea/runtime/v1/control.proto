@@ -109,7 +109,13 @@ message VectorClaimTokenV1 {
   // The vector sources it is admitted for, by payload keyword
   // ("toolkit_index").
   repeated string allowed_sources = 3;
-  reserved 4 to 15;
+  // The authenticated user the execution runs as (the job's actor), set by
+  // Main from the claim's execution, never by a caller. Main mints a token
+  // only for an actor that is a positive user id, so a token always carries
+  // one; 0 means "not stated" (an older Main) and gives the worker no user
+  // identity, which leaves per-user data (personal memory) unavailable.
+  int64 actor_user_id = 4;
+  reserved 5 to 15;
 }
 
 message ClaimCommandResponseV1 {

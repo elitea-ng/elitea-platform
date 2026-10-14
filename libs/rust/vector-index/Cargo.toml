@@ -25,6 +25,7 @@ sdk-key-order = ["serde_json/preserve_order", "serde_json/float_roundtrip"]
 # SDK's printed outputs stay byte for byte.
 elitea-engine-core = { path = "../engine-core" }
 # `try_join_all` for the concurrent sub-searches of `extended_search`.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 # Request and response messages of elitea.vector.v1.
 prost = "0.14.4"

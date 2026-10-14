@@ -36,11 +36,11 @@ use adk_rust::{Content, FinishReason, Llm, LlmRequest, Part};
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
     IndexCatalog as FrozenCatalog, IndexToolCall, IndexToolFailure, IndexToolHost, IndexToolName,
-    MemoryToolCall, MemoryToolName, SharedIndexCatalog,
+    MemoryScope, MemoryToolCall, MemoryToolName, SharedIndexCatalog,
 };
 use elitea_vector_index::format::{Doctype, index_not_found_message};
 use elitea_vector_index::memory::{
-    self, ManageArgs, MemoryEmbedder, MemoryTools, SearchMemoryArgs,
+    self, GetMemoryArgs, ManageArgs, MemoryEmbedder, MemoryOwner, MemoryTools, SearchMemoryArgs,
 };
 use elitea_vector_index::{
     Error as VectorError, IndexCatalog, IndexEntry, IndexTools, QueryEmbedder, SearchArgs,
@@ -291,6 +291,21 @@ impl IndexToolHost for ClaimIndexToolHost {
                 "{prefix}: the vector store is not available to this run: the claim carries no project token"
             )));
         }
+        // Whose memory: the project's, or the authenticated user's. The user
+        // is the one Main stated in the claim's token receipt, read from the
+        // execution's actor; nothing the model or the toolkit's settings say
+        // can name another.
+        let owner = match call.scope {
+            MemoryScope::Project => MemoryOwner::Project,
+            MemoryScope::Personal => match self.token.actor_user_id() {
+                Some(user) => MemoryOwner::User(user),
+                None => {
+                    return Err(IndexToolFailure::new(format!(
+                        "{prefix}: personal memory needs a signed-in user and this run has none; use scope \"project\" for shared memory"
+                    )));
+                }
+            },
+        };
         let invalid = |error: serde_json::Error| {
             IndexToolFailure::new(format!("{prefix}: the tool arguments are invalid: {error}"))
         };
@@ -300,7 +315,13 @@ impl IndexToolHost for ClaimIndexToolHost {
             context: self.context.as_ref(),
             model: &memory_model.name,
         };
-        let tools = MemoryTools::new(&session, &embedder, &memory_model.slug, call.namespace);
+        let tools = MemoryTools::new(
+            &session,
+            &embedder,
+            &memory_model.slug,
+            owner,
+            call.namespace,
+        );
         let outcome = match call.tool {
             MemoryToolName::ManageMemory => {
                 let args = serde_json::from_value::<ManageArgs>(call.arguments.clone())
@@ -312,18 +333,19 @@ impl IndexToolHost for ClaimIndexToolHost {
                     .map_err(invalid)?;
                 tools.search_memory(&args).await
             }
-            MemoryToolName::GetMemory | MemoryToolName::DeleteMemory => {
+            MemoryToolName::GetMemory => {
+                let args = serde_json::from_value::<GetMemoryArgs>(call.arguments.clone())
+                    .map_err(invalid)?;
+                tools.get_memory(&args).await
+            }
+            MemoryToolName::DeleteMemory => {
                 #[derive(serde::Deserialize)]
                 struct KeyArgs {
                     key: String,
                 }
                 let KeyArgs { key } =
                     serde_json::from_value(call.arguments.clone()).map_err(invalid)?;
-                if call.tool == MemoryToolName::GetMemory {
-                    tools.get_memory(&key).await
-                } else {
-                    tools.delete_memory(&key).await
-                }
+                tools.delete_memory(&key).await
             }
         };
         outcome.map(Value::String).map_err(|error| {

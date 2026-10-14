@@ -75,6 +75,11 @@ func TestClaimTokenIssuerStoresOnlyTheHashOfTheBearerItReturns(t *testing.T) {
 			t.Fatalf("capabilities = %v", request.Capabilities)
 		}
 	}
+	// The token carries the job's authenticated actor (read by the mint from the
+	// execution), which the worker derives per-user data scopes from.
+	if first.GetActorUserId() != 42 || second.GetActorUserId() != 42 {
+		t.Fatalf("actor_user_id = %d, %d; want the mint's actor 42", first.GetActorUserId(), second.GetActorUserId())
+	}
 	if first.GetExpiresAtUnixMillis() != expires.UnixMilli() || !slices.Equal(first.GetAllowedSources(), []string{"toolkit_index"}) {
 		t.Fatalf("unexpected token %v", first)
 	}

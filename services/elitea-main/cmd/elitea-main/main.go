@@ -2487,6 +2487,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ToolkitArgumentSchemas:        toolkitArgumentSchemas,
 		ToolkitCatalogue:              toolkitCatalogue,
 		ToolkitWorkerCapability:       workerToolkitCapability,
+		MemoryOnVectorStore:           runtimeConfig.RustIndexing(),
 		ToolkitSettingsDefinitions:    toolkitSettingsDefinitions,
 		ToolkitSettingsValidator:      toolkitSettingsValidator,
 		ToolkitRegistry:               toolkitArgumentSchemas,

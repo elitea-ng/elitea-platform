@@ -1881,6 +1881,7 @@ dependencies = [
 name = "elitea-vector-index"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "elitea-engine-core",
  "elitea-vector-index",
  "futures-util",

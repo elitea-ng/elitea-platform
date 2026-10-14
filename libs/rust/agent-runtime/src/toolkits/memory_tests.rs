@@ -15,15 +15,15 @@ use super::families::index_tools::{
     IndexToolsWithheld,
 };
 use super::families::memory::{
-    MemoryToolCall, MemoryToolName, MemoryToolsetError, all_memory_tools, build_memory_toolset,
-    memory_namespace,
+    MemoryScope, MemoryScopeSetting, MemoryToolCall, MemoryToolName, MemoryToolsetError,
+    all_memory_tools, build_memory_toolset, memory_namespace,
 };
 use super::materialize::materialize_configured_toolsets_with_authorities;
 use super::policy::ToolAdmissionPolicy;
 use super::sdk_conformance;
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolSnapshot};
 
-type Recorded = (MemoryToolName, String, Value);
+type Recorded = (MemoryToolName, String, Value, MemoryScope);
 
 struct MemoryHost {
     serves: bool,
@@ -46,6 +46,7 @@ impl IndexToolHost for MemoryHost {
             call.tool,
             call.namespace.to_owned(),
             call.arguments.clone(),
+            call.scope,
         ));
         if self.fail {
             return Err(IndexToolFailure::new(
@@ -350,4 +351,137 @@ async fn materialization_serves_memory_only_under_an_authority_that_serves_it() 
         .await
         .expect("get");
     assert_eq!(host.calls.lock().expect("calls")[0].1, "7");
+}
+
+#[tokio::test]
+async fn the_memory_scope_setting_decides_the_scope_and_the_schema() {
+    // Absent, personal and project: no `scope` argument in any schema, and the
+    // scope is the setting's whatever the model sends.
+    for (setting, expected) in [
+        (json!({}), MemoryScope::Personal),
+        (json!({"memory_scope": null}), MemoryScope::Personal),
+        (json!({"memory_scope": "personal"}), MemoryScope::Personal),
+        (json!({"memory_scope": "project"}), MemoryScope::Project),
+    ] {
+        let (authority, host) = lend(true, false);
+        let toolset = build_memory_toolset(
+            "notes",
+            Some(7),
+            &settings(setting.clone()),
+            &policy(),
+            &authority,
+        )
+        .expect("toolset");
+        let context = Arc::new(SimpleToolContext::new("memory-test"));
+        let tools = toolset
+            .tools(Arc::clone(&context) as Arc<dyn ReadonlyContext>)
+            .await
+            .expect("tools");
+        for tool in &tools {
+            let schema = tool.parameters_schema().expect("schema");
+            assert!(schema["properties"].get("scope").is_none(), "{setting}");
+        }
+        tools[2]
+            .execute(
+                Arc::clone(&context) as Arc<dyn adk_core::ToolContext>,
+                json!({"key": "k"}),
+            )
+            .await
+            .expect("get");
+        assert_eq!(
+            host.calls.lock().expect("calls")[0].3,
+            expected,
+            "{setting}"
+        );
+    }
+    for bad in [json!({"memory_scope": "team"}), json!({"memory_scope": 1})] {
+        let (authority, _) = lend(true, false);
+        assert!(
+            build_memory_toolset(
+                "notes",
+                Some(7),
+                &settings(bad.clone()),
+                &policy(),
+                &authority
+            )
+            .is_err(),
+            "{bad}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_both_toolkit_takes_an_optional_scope_argument_defaulting_to_personal() {
+    let (authority, host) = lend(true, false);
+    let toolset = build_memory_toolset(
+        "notes",
+        Some(7),
+        &settings(json!({"memory_scope": "both"})),
+        &policy(),
+        &authority,
+    )
+    .expect("toolset");
+    let context = Arc::new(SimpleToolContext::new("memory-test"));
+    let tools = toolset
+        .tools(Arc::clone(&context) as Arc<dyn ReadonlyContext>)
+        .await
+        .expect("tools");
+    for tool in &tools {
+        let schema = tool.parameters_schema().expect("schema");
+        assert_eq!(
+            schema["properties"]["scope"]["enum"],
+            json!(["personal", "project"])
+        );
+        assert!(
+            !schema["required"]
+                .as_array()
+                .expect("required")
+                .contains(&json!("scope")),
+            "{}",
+            tool.name()
+        );
+    }
+    // The SDK contract still holds with the extension.
+    sdk_conformance::assert_sdk_conformance(
+        "memory",
+        &tools.iter().map(Arc::clone).collect::<Vec<_>>(),
+    );
+    let run = |arguments: Value| {
+        let (tool, context) = (Arc::clone(&tools[2]), Arc::clone(&context));
+        async move {
+            tool.execute(context as Arc<dyn adk_core::ToolContext>, arguments)
+                .await
+                .expect("result")
+        }
+    };
+    run(json!({"key": "a"})).await;
+    run(json!({"key": "b", "scope": null})).await;
+    run(json!({"key": "c", "scope": "project"})).await;
+    run(json!({"key": "d", "scope": "personal"})).await;
+    let scopes: Vec<MemoryScope> = host
+        .calls
+        .lock()
+        .expect("calls")
+        .iter()
+        .map(|c| c.3)
+        .collect();
+    assert_eq!(
+        scopes,
+        [
+            MemoryScope::Personal,
+            MemoryScope::Personal,
+            MemoryScope::Project,
+            MemoryScope::Personal
+        ]
+    );
+    // An unknown scope never reaches the host and never falls back to a wider one.
+    for bad in [json!("team"), json!("PROJECT"), json!(1)] {
+        let answer = run(json!({"key": "e", "scope": bad})).await;
+        assert_eq!(answer, json!("scope must be \"personal\" or \"project\""));
+    }
+    assert_eq!(host.calls.lock().expect("calls").len(), 4);
+    assert_eq!(
+        MemoryScopeSetting::Both.resolve(&json!({})),
+        Ok(MemoryScope::Personal)
+    );
 }

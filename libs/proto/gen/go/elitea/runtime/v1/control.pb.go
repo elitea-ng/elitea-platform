@@ -592,8 +592,14 @@ type VectorClaimTokenV1 struct {
 	// The vector sources it is admitted for, by payload keyword
 	// ("toolkit_index").
 	AllowedSources []string `protobuf:"bytes,3,rep,name=allowed_sources,json=allowedSources,proto3" json:"allowed_sources,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The authenticated user the execution runs as (the job's actor), set by
+	// Main from the claim's execution, never by a caller. Main mints a token
+	// only for an actor that is a positive user id, so a token always carries
+	// one; 0 means "not stated" (an older Main) and gives the worker no user
+	// identity, which leaves per-user data (personal memory) unavailable.
+	ActorUserId   int64 `protobuf:"varint,4,opt,name=actor_user_id,json=actorUserId,proto3" json:"actor_user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *VectorClaimTokenV1) Reset() {
@@ -645,6 +651,13 @@ func (x *VectorClaimTokenV1) GetAllowedSources() []string {
 		return x.AllowedSources
 	}
 	return nil
+}
+
+func (x *VectorClaimTokenV1) GetActorUserId() int64 {
+	if x != nil {
+		return x.ActorUserId
+	}
+	return 0
 }
 
 type ClaimCommandResponseV1 struct {
@@ -1575,11 +1588,12 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"retirement\x12>\n" +
 	"\x1cclaim_started_at_unix_micros\x18\f \x01(\x03R\x18claimStartedAtUnixMicros\x12;\n" +
 	"\x1anode_recovery_receipt_json\x18\x10 \x01(\fR\x17nodeRecoveryReceiptJson\x12H\n" +
-	"\fvector_token\x18\x11 \x01(\v2%.elitea.runtime.v1.VectorClaimTokenV1R\vvectorTokenJ\x04\b\r\x10\x10\"\x90\x01\n" +
+	"\fvector_token\x18\x11 \x01(\v2%.elitea.runtime.v1.VectorClaimTokenV1R\vvectorTokenJ\x04\b\r\x10\x10\"\xb4\x01\n" +
 	"\x12VectorClaimTokenV1\x12\x16\n" +
 	"\x06bearer\x18\x01 \x01(\tR\x06bearer\x123\n" +
 	"\x16expires_at_unix_millis\x18\x02 \x01(\x03R\x13expiresAtUnixMillis\x12'\n" +
-	"\x0fallowed_sources\x18\x03 \x03(\tR\x0eallowedSourcesJ\x04\b\x04\x10\x10\"\x9c\x01\n" +
+	"\x0fallowed_sources\x18\x03 \x03(\tR\x0eallowedSources\x12\"\n" +
+	"\ractor_user_id\x18\x04 \x01(\x03R\vactorUserIdJ\x04\b\x05\x10\x10\"\x9c\x01\n" +
 	"\x16ClaimCommandResponseV1\x12;\n" +
 	"\areceipt\x18\x01 \x01(\v2!.elitea.runtime.v1.ClaimReceiptV1R\areceipt\x12?\n" +
 	"\trejection\x18\x02 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x03\x10\x10\"\x9e\x01\n" +

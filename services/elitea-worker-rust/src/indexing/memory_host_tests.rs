@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use elitea_agent_runtime::toolkits::{IndexToolHost, MemoryToolCall, MemoryToolName};
+use elitea_agent_runtime::toolkits::{IndexToolHost, MemoryScope, MemoryToolCall, MemoryToolName};
 use elitea_vector_index::testing::{FakeVector, status};
 use elitea_vector_index::{ClientConfig, VectorClient};
 use http::{Request, Response, StatusCode, Version};
@@ -140,10 +140,15 @@ async fn harness(memory_model: Option<&str>, refuse: Option<StatusCode>) -> Harn
 }
 
 fn token(bearer: &str, sources: &[&str]) -> VectorClaimToken {
+    token_for(bearer, sources, 42)
+}
+
+fn token_for(bearer: &str, sources: &[&str], actor_user_id: i64) -> VectorClaimToken {
     VectorClaimToken::from_receipt(Some(VectorClaimTokenV1 {
         bearer: bearer.to_owned(),
         expires_at_unix_millis: i64::MAX,
         allowed_sources: sources.iter().map(ToString::to_string).collect(),
+        actor_user_id,
     }))
     .expect("token")
 }
@@ -164,10 +169,21 @@ async fn call(
     namespace: &str,
     arguments: Value,
 ) -> String {
+    call_in(host, MemoryScope::Project, tool, namespace, arguments).await
+}
+
+async fn call_in(
+    host: &ClaimIndexToolHost,
+    scope: MemoryScope,
+    tool: MemoryToolName,
+    namespace: &str,
+    arguments: Value,
+) -> String {
     match host
         .memory(MemoryToolCall {
             tool,
             namespace,
+            scope,
             arguments: &arguments,
         })
         .await
@@ -422,4 +438,143 @@ async fn each_failure_cause_names_itself() {
         "{sentence}"
     );
     assert_eq!(working.fake.point_count(), 0);
+}
+
+/// Personal memory is derived from the claim's authenticated user, in the same
+/// project, through every tool; project memory is shared by both users.
+#[tokio::test(flavor = "multi_thread")]
+async fn personal_memory_follows_the_claims_user_and_project_memory_is_shared() {
+    use MemoryScope::{Personal, Project};
+    let harness = harness(Some(MEMORY_MODEL), None).await;
+    // Two users of ONE project (the same bearer's project), as two claims.
+    let alice_token = token_for(TOKEN_A, &["toolkit_index"], 10);
+    let bob_token = token_for(TOKEN_A, &["toolkit_index"], 11);
+    let alice = host(&harness, &alice_token);
+    let bob = host(&harness, &bob_token);
+
+    call_in(
+        &alice,
+        Personal,
+        MemoryToolName::ManageMemory,
+        "n",
+        json!({"content": "alice likes pasta", "key": "k"}),
+    )
+    .await;
+    call_in(
+        &alice,
+        Project,
+        MemoryToolName::ManageMemory,
+        "n",
+        json!({"content": "team likes paris", "key": "t"}),
+    )
+    .await;
+
+    // Bob cannot see Alice's through search, get or delete.
+    let search = call_in(
+        &bob,
+        Personal,
+        MemoryToolName::SearchMemory,
+        "n",
+        json!({"query": "pasta"}),
+    )
+    .await;
+    assert_eq!(search, "No memories found matching your query.");
+    assert_eq!(
+        call_in(
+            &bob,
+            Personal,
+            MemoryToolName::GetMemory,
+            "n",
+            json!({"key": "k"})
+        )
+        .await,
+        "No memory found with key: k"
+    );
+    call_in(
+        &bob,
+        Personal,
+        MemoryToolName::DeleteMemory,
+        "n",
+        json!({"key": "k"}),
+    )
+    .await;
+    assert!(
+        call_in(
+            &alice,
+            Personal,
+            MemoryToolName::GetMemory,
+            "n",
+            json!({"key": "k"})
+        )
+        .await
+        .contains("alice likes pasta")
+    );
+    // The project's memory is visible to both, and neither's personal key leaks into it.
+    for host in [&alice, &bob] {
+        assert!(
+            call_in(
+                host,
+                Project,
+                MemoryToolName::GetMemory,
+                "n",
+                json!({"key": "t"})
+            )
+            .await
+            .contains("team likes paris")
+        );
+        assert_eq!(
+            call_in(
+                host,
+                Project,
+                MemoryToolName::GetMemory,
+                "n",
+                json!({"key": "k"})
+            )
+            .await,
+            "No memory found with key: k"
+        );
+    }
+    // A model-supplied "user" or "user_id" argument changes nothing.
+    assert_eq!(
+        call_in(
+            &bob,
+            Personal,
+            MemoryToolName::GetMemory,
+            "n",
+            json!({"key": "k", "user_id": 10, "user": "10"})
+        )
+        .await,
+        "No memory found with key: k"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_without_a_user_has_no_personal_memory_but_keeps_the_projects() {
+    let harness = harness(Some(MEMORY_MODEL), None).await;
+    let anonymous = token_for(TOKEN_A, &["toolkit_index"], 0);
+    assert_eq!(anonymous.actor_user_id(), None);
+    let host = host(&harness, &anonymous);
+    let sentence = call_in(
+        &host,
+        MemoryScope::Personal,
+        MemoryToolName::ManageMemory,
+        "n",
+        json!({"content": "x"}),
+    )
+    .await;
+    assert!(
+        sentence.contains("Failed to store memory: personal memory needs a signed-in user"),
+        "{sentence}"
+    );
+    assert_eq!(harness.gateway.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.fake.point_count(), 0);
+    let stored = call_in(
+        &host,
+        MemoryScope::Project,
+        MemoryToolName::ManageMemory,
+        "n",
+        json!({"content": "shared", "key": "p"}),
+    )
+    .await;
+    assert_eq!(stored, "Successfully stored memory with key: p");
 }

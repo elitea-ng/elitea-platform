@@ -64,6 +64,84 @@ func WithWorkerCapability(source ToolkitCapabilitySource) Option {
 	return func(h *Handler) { h.workerCapability = source }
 }
 
+// WithMemoryOnVectorStore states that the deployment keeps memory toolkit data
+// in elitea-vector (the Rust indexing runtime, worker unit M9). The memory
+// type is then served without its SDK `pgvector_configuration` field: the Rust
+// worker reads nothing from it and such a deployment provisions no pgvector
+// configuration, so a form that required one could not be saved. The SDK schema
+// stays as pinned everywhere else (the Python worker uses the field).
+func WithMemoryOnVectorStore(enabled bool) Option {
+	return func(h *Handler) { h.memoryOnVectorStore = enabled }
+}
+
+// withoutPgvectorConfiguration copies a settings schema without the
+// `pgvector_configuration` property and its `required` entry. Only the nodes on
+// those paths are rebuilt, so the shared pinned schema is never written to.
+func withoutPgvectorConfiguration(settingsSchema map[string]any) map[string]any {
+	typeSchema := make(map[string]any, len(settingsSchema))
+	for key, value := range settingsSchema {
+		typeSchema[key] = value
+	}
+	if properties, ok := settingsSchema[toolkitSettingsPropertyKey].(map[string]any); ok {
+		kept := make(map[string]any, len(properties))
+		for name, property := range properties {
+			if name != "pgvector_configuration" {
+				kept[name] = property
+			}
+		}
+		typeSchema[toolkitSettingsPropertyKey] = kept
+	}
+	switch required := settingsSchema["required"].(type) {
+	case []any:
+		kept := make([]any, 0, len(required))
+		for _, name := range required {
+			if name != "pgvector_configuration" {
+				kept = append(kept, name)
+			}
+		}
+		typeSchema["required"] = kept
+	case []string:
+		kept := make([]string, 0, len(required))
+		for _, name := range required {
+			if name != "pgvector_configuration" {
+				kept = append(kept, name)
+			}
+		}
+		typeSchema["required"] = kept
+	}
+	return typeSchema
+}
+
+// memoryScopeDescription is what the create form shows under "Memory scope".
+const memoryScopeDescription = "Who can see what this toolkit remembers. " +
+	"Personal: each person has their own private memory, and nobody else can read, search or delete it (the safe default). " +
+	"Project: one memory shared by everyone in the project. " +
+	"Both: the agent chooses per memory, personal unless it says project. " +
+	"A run with no signed-in person (a scheduled run) has no personal memory."
+
+// withMemoryScope adds the `memory_scope` setting the Rust worker's memory
+// toolkit reads (worker unit M9). A copy: the shared schema is never written to.
+func withMemoryScope(settingsSchema map[string]any) map[string]any {
+	typeSchema := make(map[string]any, len(settingsSchema))
+	for key, value := range settingsSchema {
+		typeSchema[key] = value
+	}
+	properties, _ := settingsSchema[toolkitSettingsPropertyKey].(map[string]any)
+	withScope := make(map[string]any, len(properties)+1)
+	for name, property := range properties {
+		withScope[name] = property
+	}
+	withScope["memory_scope"] = map[string]any{
+		"type":        "string",
+		"title":       "Memory scope",
+		"description": memoryScopeDescription,
+		"enum":        []any{"personal", "project", "both"},
+		"default":     "personal",
+	}
+	typeSchema[toolkitSettingsPropertyKey] = withScope
+	return typeSchema
+}
+
 // Metadata keys this package writes. They are the reference deployment's own
 // names: the web client reads metadata.hidden to drop a tile and
 // metadata.categories[0] to group it.
@@ -215,6 +293,9 @@ func (h *Handler) toolkitTypeSchema(toolkitType string) (map[string]any, error) 
 	// list here and gets no groups — which is how the client knows to keep
 	// rendering its flat list. See tool_groups.go.
 	typeSchema = withToolGroups(typeSchema)
+	if toolkitType == "memory" && h != nil && h.memoryOnVectorStore {
+		typeSchema = withMemoryScope(withoutPgvectorConfiguration(typeSchema))
+	}
 
 	typeMetadata := h.toolkitTypeMetadata(toolkitType, metadata, catalogued)
 	if unavailable := h.unavailableTools(toolkitType, typeSchema); len(unavailable) > 0 {
