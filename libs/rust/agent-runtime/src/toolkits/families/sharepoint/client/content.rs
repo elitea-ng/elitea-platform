@@ -9,14 +9,16 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
+use futures::StreamExt as _;
+
 use super::{
-    Duration, GRAPH_BASE, GraphCall, HeaderName, HeaderValue, Map, Method, SharePointClient,
-    SharePointClientError, SharePointClientErrorCode, SharePointHttpResponse, Url, Value,
-    dependency_unavailable, drive_library_path, file_refused, graph_url, invalid_configuration,
-    invalid_input, invalid_response, json, normalize_folder_path, not_found, outcome_unknown,
+    Duration, GRAPH_BASE, GraphCall, HeaderName, HeaderValue, Map, Method, ReadableCheck,
+    SharePointClient, SharePointClientError, SharePointClientErrorCode, SharePointHttpResponse,
+    Url, Value, dependency_unavailable, drive_library_path, file_refused, graph_url,
+    invalid_configuration, invalid_input, invalid_response, json, normalize_folder_path, not_found,
     require_content_type, require_effect_success, require_success, required_json_text,
-    resource_exhausted, set_query, strip_path_prefix, strip_site_prefix, validate_output,
-    validate_segment, validate_transfer_url,
+    resource_exhausted, set_query, strip_path_prefix, strip_site_prefix, upload_incomplete,
+    validate_output, validate_segment, validate_transfer_url,
 };
 
 /// The most bytes of a file the readers fetch (the SDK's sharing-link cap).
@@ -33,6 +35,12 @@ const TRANSFER_TIMEOUT: Duration = Duration::from_mins(2);
 const MAX_PATH_BYTES: usize = 8 * 1_024;
 const MAX_SHARING_URL_BYTES: usize = 8 * 1_024;
 const MAX_FILE_NAME_BYTES: usize = 255;
+/// How many times a session that still asks for bytes is fed them again.
+const MAX_RANGE_REPAIRS: usize = 3;
+/// How many libraries are probed at once for a path that names none.
+const PROBE_CONCURRENCY: usize = 8;
+const APPLIED_TOO_LARGE: &str = "applied; the response was too large to show";
+const APPLIED_UNREADABLE: &str = "applied; the response could not be read";
 
 const NOT_A_FILE: &str = "the path does not point to a file: it names a document library or a folder; include the file name";
 const TOO_LARGE: &str = "the file is larger than the 20 MB this tool reads (3 MB for images)";
@@ -117,21 +125,21 @@ impl SharePointClient {
         let response = self
             .send(
                 GraphCall::new(Method::POST, url, "application/json")
-                    .body("application/json", body),
+                    .body("application/json", body)
+                    .tolerate_oversize(),
             )
             .await
             .map_err(SharePointClientError::for_effect)?;
         require_effect_success(response.status)?;
-        // The item exists once Graph answered 2xx. An answer that cannot be
-        // read is not a failure to repeat: repeating creates a second item.
-        let created = json_object(&response).map_err(|_| outcome_unknown())?;
-        let result = json!({
-            "id": created.get("id").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "fields": created.get("fields").cloned().unwrap_or_else(|| json!({})),
-            "webUrl": created.get("webUrl").cloned().unwrap_or_else(|| Value::String(String::new())),
-        });
-        validate_output(&result)?;
-        Ok(result)
+        // The item exists once Graph answered 2xx, whatever its answer looks
+        // like: never report a failure for it.
+        Ok(confirmed_echo(&response, |created| {
+            json!({
+                "id": created.get("id").cloned().unwrap_or_else(|| Value::String(String::new())),
+                "fields": created.get("fields").cloned().unwrap_or_else(|| json!({})),
+                "webUrl": created.get("webUrl").cloned().unwrap_or_else(|| Value::String(String::new())),
+            })
+        }))
     }
 
     pub(super) async fn upload_file_impl(
@@ -162,37 +170,37 @@ impl SharePointClient {
         let conflict = if replace { "replace" } else { "fail" };
         let media_type = detect_media_type(&bytes, &file_name);
         let size = bytes.len();
-        let item = if size <= SMALL_UPLOAD_BYTES {
+        let response = if size <= SMALL_UPLOAD_BYTES {
             self.upload_small(&drive_id, &item_path, conflict, media_type, bytes)
                 .await?
         } else {
             self.upload_in_chunks(&drive_id, &item_path, conflict, bytes)
                 .await?
         };
-        let parent = item
-            .get("parentReference")
-            .and_then(Value::as_object)
-            .and_then(|parent| parent.get("path"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let name = item
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or(&file_name);
-        let result = json!({
-            "id": item.get("id").and_then(Value::as_str).unwrap_or_default(),
-            "webUrl": item.get("webUrl").and_then(Value::as_str).unwrap_or_default(),
-            "path": format!("{parent}/{name}"),
-            "size": item.get("size").and_then(Value::as_u64).unwrap_or(size as u64),
-            "mime_type": item
-                .get("file")
+        Ok(confirmed_echo(&response, |item| {
+            let parent = item
+                .get("parentReference")
                 .and_then(Value::as_object)
-                .and_then(|file| file.get("mimeType"))
+                .and_then(|parent| parent.get("path"))
                 .and_then(Value::as_str)
-                .unwrap_or(media_type),
-        });
-        validate_output(&result)?;
-        Ok(result)
+                .unwrap_or_default();
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(&file_name);
+            json!({
+                "id": item.get("id").and_then(Value::as_str).unwrap_or_default(),
+                "webUrl": item.get("webUrl").and_then(Value::as_str).unwrap_or_default(),
+                "path": format!("{parent}/{name}"),
+                "size": item.get("size").and_then(Value::as_u64).unwrap_or(size as u64),
+                "mime_type": item
+                    .get("file")
+                    .and_then(Value::as_object)
+                    .and_then(|file| file.get("mimeType"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(media_type),
+            })
+        }))
     }
 
     async fn upload_small(
@@ -202,7 +210,7 @@ impl SharePointClient {
         conflict: &str,
         media_type: &'static str,
         bytes: Vec<u8>,
-    ) -> Result<Map<String, Value>, SharePointClientError> {
+    ) -> Result<SharePointHttpResponse, SharePointClientError> {
         let mut url = drive_item_url(drive_id, item_path, Some("content"))?;
         url.set_query(Some(&format!(
             "@microsoft.graph.conflictBehavior={conflict}"
@@ -211,21 +219,27 @@ impl SharePointClient {
             .send(
                 GraphCall::new(Method::PUT, url, "application/json")
                     .body(media_type, bytes)
-                    .timeout(TRANSFER_TIMEOUT),
+                    .timeout(TRANSFER_TIMEOUT)
+                    .tolerate_oversize(),
             )
             .await
             .map_err(SharePointClientError::for_effect)?;
         require_effect_success(response.status)?;
-        json_object(&response).map_err(|_| outcome_unknown())
+        Ok(response)
     }
 
+    /// A resumable upload, driven by what the session says it still needs.
+    /// Nothing is committed before the last byte lands, so every failure but a
+    /// lost answer to the last chunk is a plain one; any failure cancels the
+    /// session. A session that still asks for bytes after the last chunk is
+    /// repaired a few times, then reported as a definite failure.
     async fn upload_in_chunks(
         &self,
         drive_id: &str,
         item_path: &str,
         conflict: &str,
         bytes: Vec<u8>,
-    ) -> Result<Map<String, Value>, SharePointClientError> {
+    ) -> Result<SharePointHttpResponse, SharePointClientError> {
         // Opening a session changes nothing a person can see: a failure here
         // is a plain failure.
         let url = drive_item_url(drive_id, item_path, Some("createUploadSession"))?;
@@ -251,50 +265,62 @@ impl SharePointClient {
 
         let total = bytes.len();
         let mut offset = 0_usize;
-        while offset < total {
+        let mut repairs = 0_usize;
+        loop {
             let end = offset.saturating_add(UPLOAD_CHUNK_BYTES).min(total);
             let last = end == total;
             let range = HeaderValue::from_str(&format!("bytes {offset}-{}/{total}", end - 1))
                 .map_err(|_| invalid_input())?;
             let mut call = GraphCall::new(Method::PUT, upload_url.clone(), "application/json")
                 .body("application/octet-stream", bytes[offset..end].to_vec())
-                .timeout(TRANSFER_TIMEOUT);
+                .timeout(TRANSFER_TIMEOUT)
+                .tolerate_oversize();
             call.headers
                 .push((HeaderName::from_static("content-range"), range));
-            let sent = self.send_transfer(call).await;
-            let outcome = sent.and_then(|response| {
+            let sent = self.send_transfer(call).await.and_then(|response| {
                 require_effect_success(response.status)?;
-                if last {
-                    if matches!(response.status.as_u16(), 200 | 201) {
-                        json_object(&response).map_err(|_| outcome_unknown())
-                    } else {
-                        // The last bytes went out and the item was not
-                        // confirmed.
-                        Err(outcome_unknown())
-                    }
-                } else if response.status.as_u16() == 202 {
-                    Ok(Map::new())
-                } else {
-                    Err(invalid_response())
-                }
+                Ok(response)
             });
-            match outcome {
-                Ok(item) if last => return Ok(item),
-                Ok(_) => offset = end,
+            let response = match sent {
+                Ok(response) => response,
                 Err(error) => {
-                    // Nothing is committed before the last chunk lands, so an
-                    // earlier failure is a plain one (and the session is
-                    // cancelled); only the last chunk's lost answer leaves the
-                    // item possibly created.
-                    if last {
-                        return Err(error.for_effect());
-                    }
                     self.cancel_upload_session(&upload_url).await;
-                    return Err(demote_unknown(error));
+                    return Err(if last {
+                        error.for_effect()
+                    } else {
+                        demote_unknown(error)
+                    });
+                }
+            };
+            match response.status.as_u16() {
+                200 | 201 if last => return Ok(response),
+                202 => {
+                    let wanted = next_expected_start(&response).filter(|start| *start < total);
+                    let next = match wanted {
+                        Some(start) => start,
+                        None if !last => end,
+                        None => {
+                            self.cancel_upload_session(&upload_url).await;
+                            return Err(upload_incomplete());
+                        }
+                    };
+                    if next != end {
+                        repairs += 1;
+                    }
+                    if (last && next >= total) || repairs > MAX_RANGE_REPAIRS {
+                        self.cancel_upload_session(&upload_url).await;
+                        return Err(upload_incomplete());
+                    }
+                    offset = next;
+                }
+                // Done before the last byte was sent (not what was asked), or a
+                // status the protocol does not use here.
+                _ => {
+                    self.cancel_upload_session(&upload_url).await;
+                    return Err(invalid_response());
                 }
             }
         }
-        Err(invalid_input())
     }
 
     /// Ends an abandoned upload session so it holds no space. Best effort.
@@ -395,6 +421,7 @@ impl SharePointClient {
     pub(super) async fn download_shared_file_impl(
         &self,
         sharing_url: &str,
+        readable: &ReadableCheck,
     ) -> Result<SharePointFile, SharePointClientError> {
         let share_url = sharing_url.trim();
         if share_url.len() > MAX_SHARING_URL_BYTES
@@ -426,6 +453,11 @@ impl SharePointClient {
             .to_owned();
         let size = item.get("size").and_then(Value::as_u64);
         let limit = validate_shared_file(&name, size)?;
+        // The reader is asked before the file is: a file nothing here can
+        // read is not downloaded.
+        if let Some(reason) = readable(&name) {
+            return Err(file_refused(reason));
+        }
 
         let bytes = if let Some(download) = item
             .get("@microsoft.graph.downloadUrl")
@@ -493,26 +525,47 @@ impl SharePointClient {
         if !matched.is_empty() {
             return Ok(matched);
         }
-        if !cleaned.is_empty() {
-            let mut probed = Vec::new();
-            for drive in drives {
-                let id = drive
+        // No library is named: the path must exist as a folder (or file)
+        // somewhere. Nothing is created, and nothing falls back to the
+        // default library.
+        if cleaned.is_empty() {
+            return Err(not_found());
+        }
+        let mut ids = Vec::new();
+        for drive in drives {
+            ids.push(
+                drive
                     .as_object()
                     .ok_or_else(invalid_response)
-                    .and_then(|drive| required_json_text(drive, "id", 4 * 1_024))?;
-                let mut url = drive_item_url(id, &cleaned, None)?;
+                    .and_then(|drive| required_json_text(drive, "id", 4 * 1_024))?
+                    .to_owned(),
+            );
+        }
+        // The default library is asked first, so it wins a tie.
+        let default = self.default_drive_id().await?;
+        if let Some(at) = ids.iter().position(|id| *id == default) {
+            ids.swap(0, at);
+        }
+        let cleaned_ref = cleaned.as_str();
+        let mut probes = Box::pin(
+            futures::stream::iter(ids.into_iter().map(|id| async move {
+                let mut url = drive_item_url(&id, cleaned_ref, None)?;
                 set_query(&mut url, &[("$select", "id,folder")]);
                 match self.get_json(url).await {
-                    Ok(_) => probed.push((id.to_owned(), cleaned.clone())),
-                    Err(error) if error.code() == SharePointClientErrorCode::NotFound => {}
-                    Err(error) => return Err(error),
+                    Ok(_) => Ok(Some(id)),
+                    Err(error) if error.code() == SharePointClientErrorCode::NotFound => Ok(None),
+                    Err(error) => Err(error),
                 }
-            }
-            if !probed.is_empty() {
-                return Ok(probed);
+            }))
+            .buffered(PROBE_CONCURRENCY),
+        );
+        // In drive order; the rest are dropped at the first match.
+        while let Some(probed) = probes.next().await {
+            if let Some(id) = probed? {
+                return Ok(vec![(id, cleaned.clone())]);
             }
         }
-        Ok(vec![(self.default_drive_id().await?, cleaned)])
+        Err(not_found())
     }
 }
 
@@ -688,4 +741,49 @@ fn demote_unknown(error: SharePointClientError) -> SharePointClientError {
     } else {
         error
     }
+}
+
+/// The first byte a session still needs (`nextExpectedRanges`: `"5242880-"`).
+fn next_expected_start(response: &SharePointHttpResponse) -> Option<usize> {
+    json_object(response)
+        .ok()?
+        .get("nextExpectedRanges")?
+        .as_array()?
+        .first()?
+        .as_str()?
+        .split('-')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// What a change that `SharePoint` confirmed with a 2xx answers, whatever its
+/// body looks like: the projection of the item, or, when the answer is
+/// oversize, unreadable or its projection is over the output cap, a
+/// statement that the change was applied. A confirmed change is never
+/// reported as a failure.
+pub(super) fn confirmed_echo(
+    response: &SharePointHttpResponse,
+    project: impl FnOnce(&Map<String, Value>) -> Value,
+) -> Value {
+    if response.oversize {
+        return applied_without_echo(APPLIED_TOO_LARGE, None);
+    }
+    let Ok(object) = json_object(response) else {
+        return applied_without_echo(APPLIED_UNREADABLE, None);
+    };
+    let echo = project(&object);
+    if validate_output(&echo).is_ok() {
+        echo
+    } else {
+        applied_without_echo(APPLIED_TOO_LARGE, object.get("id").cloned())
+    }
+}
+
+fn applied_without_echo(note: &'static str, id: Option<Value>) -> Value {
+    let mut value = json!({"applied": true, "note": note});
+    if let Some(id) = id {
+        value["id"] = id;
+    }
+    value
 }

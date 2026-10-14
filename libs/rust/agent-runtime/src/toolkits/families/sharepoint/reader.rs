@@ -79,34 +79,36 @@ fn refusal(code: &'static str, message: &'static str) -> AdkError {
 }
 
 /// Why a document could not be turned into text, one sentence per cause.
-pub(super) fn text_failure(failure: TextExtractionFailure) -> AdkError {
+const fn failure_parts(
+    failure: TextExtractionFailure,
+) -> (ErrorCategory, &'static str, &'static str) {
     match failure {
-        TextExtractionFailure::NoExtractor => AdkError::new(
-            ErrorComponent::Tool,
+        TextExtractionFailure::NoExtractor => (
             ErrorCategory::Unsupported,
             "sharepoint.file.no_reader",
-            "this runtime lends no document reader, so the file's text cannot be read",
+            "this runtime lends no document reader for this kind of file, so its text cannot be read",
         ),
-        TextExtractionFailure::Unsupported => refusal(
+        TextExtractionFailure::Unsupported => (
+            ErrorCategory::InvalidInput,
             "sharepoint.file.unsupported",
             "the file type is not supported: documents (PDF, DOCX, XLSX, PPTX, DOC, XLS, PPT), text files (TXT, MD, CSV, JSON, HTML, XML) and common code files are read; images, archives (ZIP, RAR), media (MP4, MP3) and executables are not",
         ),
-        TextExtractionFailure::Unreadable => refusal(
+        TextExtractionFailure::Unreadable => (
+            ErrorCategory::InvalidInput,
             "sharepoint.file.unreadable",
             "the file could not be read: it is encrypted, damaged, or holds no text",
         ),
-        TextExtractionFailure::TooLarge => refusal(
+        TextExtractionFailure::TooLarge => (
+            ErrorCategory::InvalidInput,
             "sharepoint.file.reader_limit",
             "the file is over a limit of the document reader (its size, page count or text)",
         ),
-        TextExtractionFailure::TimedOut => AdkError::new(
-            ErrorComponent::Tool,
+        TextExtractionFailure::TimedOut => (
             ErrorCategory::Timeout,
             "sharepoint.file.reader_timeout",
             "reading the file took longer than the document reader allows",
         ),
-        TextExtractionFailure::Unreachable => AdkError::new(
-            ErrorComponent::Tool,
+        TextExtractionFailure::Unreachable => (
             ErrorCategory::Unavailable,
             "sharepoint.file.reader_unreachable",
             "the document reader could not be reached",
@@ -114,7 +116,37 @@ pub(super) fn text_failure(failure: TextExtractionFailure) -> AdkError {
     }
 }
 
-/// The host a text read needs, before any byte is downloaded.
+pub(super) fn text_failure(failure: TextExtractionFailure) -> AdkError {
+    let (category, code, message) = failure_parts(failure);
+    AdkError::new(ErrorComponent::Tool, category, code, message)
+}
+
+/// The host a text read needs, and a file it can read, BEFORE any byte is
+/// downloaded: the reader exists, and the file's kind (by its name) is one it
+/// reads.
+pub(super) fn check_readable(host: &SharedOfficeToolHost, name: &str) -> Result<(), AdkError> {
+    OfficeToolHost::can_read_text(host.as_ref(), name).map_err(text_failure)
+}
+
+/// [`check_readable`] as the sentence of a refusal, for a caller that checks
+/// from inside the client; `None` when the file can be read.
+pub(super) fn unreadable_reason(
+    host: Option<&SharedOfficeToolHost>,
+    name: &str,
+) -> Option<&'static str> {
+    let failure = match host {
+        None => TextExtractionFailure::NoExtractor,
+        Some(host) => OfficeToolHost::can_read_text(host.as_ref(), name).err()?,
+    };
+    Some(failure_parts(failure).2)
+}
+
+/// The file name at the end of a path (an address of a file, whatever its
+/// form).
+pub(super) fn file_name_of(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
 pub(super) fn reader_host(
     host: Option<&SharedOfficeToolHost>,
 ) -> Result<&SharedOfficeToolHost, AdkError> {
@@ -195,7 +227,15 @@ pub(super) struct PageOptions {
     pub(super) read_attachment_content: bool,
 }
 
-/// The page as typed items in document order.
+/// A cost, in characters, kept back for each attachment's notes and markers.
+const ATTACHMENT_RESERVE_CHARS: usize = 300;
+/// Under this much room an attachment's text is not worth starting.
+const MIN_ATTACHMENT_CHARS: usize = 1_000;
+
+/// The page as typed items in document order. The page's own text is never
+/// lost to attachment text: attachments are read into what the page's read
+/// limit leaves, in order, each as much as fits, and one that does not (or
+/// cannot) be read says why.
 pub(super) async fn page_items(
     api: &dyn SharePointApi,
     host: Option<&SharedOfficeToolHost>,
@@ -206,47 +246,9 @@ pub(super) async fn page_items(
     let markup = markup.as_str().unwrap_or_default();
     let page = html::parse_page(markup);
 
-    // Attachment text, read for at most MAX_ATTACHMENTS_READ attachments and
-    // MAX_ATTACHMENT_TOTAL_BYTES together. An attachment that is not read says
-    // why.
-    let attachments = page.attachments.len();
-    let mut contents: Vec<Option<String>> = vec![None; attachments];
-    let mut missing: Vec<Option<&'static str>> = vec![None; attachments];
-    if options.read_attachment_content
-        && options.include_attachments
-        && let Some(host) = host
-    {
-        let mut downloaded = 0_usize;
-        for (index, attachment) in page.attachments.iter().enumerate() {
-            if index >= MAX_ATTACHMENTS_READ {
-                missing[index] = Some("a page read opens at most 20 attachments");
-                continue;
-            }
-            let budget = MAX_ATTACHMENT_TOTAL_BYTES.saturating_sub(downloaded);
-            if budget == 0 {
-                missing[index] =
-                    Some("the attachments of this page together are over the read budget");
-                continue;
-            }
-            let bytes = match attachment_bytes(api, attachment, budget).await? {
-                Ok(bytes) => bytes,
-                Err(reason) => {
-                    missing[index] = Some(reason);
-                    continue;
-                }
-            };
-            downloaded = downloaded.saturating_add(bytes.len());
-            match extract(host, &attachment.name, bytes).await {
-                Ok(text) => match bounded_attachment_text(text) {
-                    Some(text) => contents[index] = Some(text),
-                    None => missing[index] = Some("the attachment holds no text"),
-                },
-                Err(_) => missing[index] = Some("the attachment could not be read as text"),
-            }
-        }
-    }
-
     let mut items = Vec::new();
+    // (position in `items`, position in `page.attachments`)
+    let mut slots = Vec::new();
     let mut buffer = String::new();
     for chunk in &page.chunks {
         match chunk {
@@ -266,36 +268,124 @@ pub(super) async fn page_items(
             Chunk::Attachment(index) => {
                 items.extend(html::flush_text(&mut buffer).map(PageItem::Text));
                 let attachment = &page.attachments[*index];
+                slots.push((items.len(), *index));
                 items.push(PageItem::Attachment {
                     name: attachment.name.clone(),
                     download_url: resolved(api, &attachment.src).await?,
-                    content: contents[*index].take(),
-                    missing: missing[*index],
+                    content: None,
+                    missing: None,
                 });
             }
         }
     }
     items.extend(html::flush_text(&mut buffer).map(PageItem::Text));
+    // Positions shift by none: text pushed after the last slot only appends.
+
+    if options.read_attachment_content && options.include_attachments && !slots.is_empty() {
+        fill_attachment_text(api, host, &page.attachments, &mut items, &slots).await?;
+    }
     Ok(items)
 }
 
-/// An attachment's text, unless it starts like the SDK's own placeholder, cut
-/// to the budget one attachment may take of a page read.
-fn bounded_attachment_text(text: String) -> Option<String> {
-    if text.is_empty() || text.starts_with("[attachment") {
-        return None;
+/// Reads attachment text into `items` within what the page's read limit
+/// leaves after the page's own text.
+async fn fill_attachment_text(
+    api: &dyn SharePointApi,
+    host: Option<&SharedOfficeToolHost>,
+    attachments: &[AttachmentRef],
+    items: &mut [PageItem],
+    slots: &[(usize, usize)],
+) -> Result<(), SharePointClientError> {
+    let Some(host) = host else {
+        // The caller says "no document reader" once for the page.
+        return Ok(());
+    };
+    let base = render_page(items).chars().count();
+    let mut allowance =
+        MAX_OUTPUT_CHARS.saturating_sub(base + ATTACHMENT_RESERVE_CHARS * slots.len());
+    let mut downloaded = 0_usize;
+    for (opened, (item_at, attachment_at)) in slots.iter().enumerate() {
+        let attachment = &attachments[*attachment_at];
+        let outcome: Result<String, &'static str> = async {
+            if opened >= MAX_ATTACHMENTS_READ {
+                return Ok(Err("a page read opens at most 20 attachments"));
+            }
+            if allowance < MIN_ATTACHMENT_CHARS {
+                return Ok(Err(
+                    "cut: the page read limit of 200000 characters was reached by the text before it",
+                ));
+            }
+            let budget = MAX_ATTACHMENT_TOTAL_BYTES.saturating_sub(downloaded);
+            if budget == 0 {
+                return Ok(Err(
+                    "the attachments of this page together are over the read budget",
+                ));
+            }
+            if let Some(reason) = unreadable_reason(Some(host), &attachment.name) {
+                return Ok(Err(reason));
+            }
+            let bytes = match attachment_bytes(api, attachment, budget).await? {
+                Ok(bytes) => bytes,
+                Err(reason) => return Ok(Err(reason)),
+            };
+            downloaded = downloaded.saturating_add(bytes.len());
+            Ok(match extract(host, &attachment.name, bytes).await {
+                Ok(text) if text.is_empty() || text.starts_with("[attachment") => {
+                    Err("the attachment holds no text")
+                }
+                Ok(text) => Ok(text),
+                Err(_) => Err("the attachment could not be read as text"),
+            })
+        }
+        .await?;
+        let PageItem::Attachment {
+            content, missing, ..
+        } = &mut items[*item_at]
+        else {
+            continue;
+        };
+        match outcome {
+            Ok(text) => {
+                let (fitted, cut) = fit_text(&text, allowance.min(MAX_ATTACHMENT_CHARS));
+                allowance = allowance.saturating_sub(indent(&fitted).chars().count());
+                *content = Some(if cut {
+                    format!(
+                        "{fitted}\n[attachment text cut: the page read limit leaves no more room]"
+                    )
+                } else {
+                    fitted
+                });
+            }
+            Err(reason) => *missing = Some(reason),
+        }
     }
-    if text.chars().count() <= MAX_ATTACHMENT_CHARS {
-        return Some(text);
+    Ok(())
+}
+
+/// The lines of `text` that fit `room` characters once indented (two spaces
+/// and a line break each), and whether any were left out. A first line longer
+/// than the room is cut inside the line.
+fn fit_text(text: &str, room: usize) -> (String, bool) {
+    let mut used = 0_usize;
+    let mut end = 0_usize;
+    for (start, stop) in python_line_ranges(text) {
+        let line = text[start..stop].trim_end_matches(['\n', '\r']);
+        let cost = line.chars().count() + 3;
+        if used + cost > room {
+            if end == 0 {
+                let keep = room.saturating_sub(3);
+                let cut = line
+                    .char_indices()
+                    .nth(keep)
+                    .map_or(line.len(), |(index, _)| index);
+                return (line[..cut].to_owned(), true);
+            }
+            return (text[..end].trim_end_matches(['\n', '\r']).to_owned(), true);
+        }
+        used += cost;
+        end = stop;
     }
-    let cut = text
-        .char_indices()
-        .nth(MAX_ATTACHMENT_CHARS)
-        .map_or(text.len(), |(index, _)| index);
-    Some(format!(
-        "{}\n[attachment text cut at {MAX_ATTACHMENT_CHARS} characters]",
-        &text[..cut]
-    ))
+    (text.to_owned(), false)
 }
 
 async fn resolved(api: &dyn SharePointApi, src: &str) -> Result<String, SharePointClientError> {
@@ -307,19 +397,19 @@ async fn resolved(api: &dyn SharePointApi, src: &str) -> Result<String, SharePoi
 }
 
 /// The bytes of one attachment, or why they are not read: it names no
-/// resource of this site (an address that is not a `OneNote` resource is
-/// never fetched) or Graph would not give them. A refused credential is an
-/// error of the whole read.
+/// `OneNote` resource of this site (any other address is never fetched) or
+/// Graph would not give them. A refused credential is an error of the whole
+/// read.
 async fn attachment_bytes(
     api: &dyn SharePointApi,
     attachment: &AttachmentRef,
     budget: usize,
 ) -> Result<Result<Vec<u8>, &'static str>, SharePointClientError> {
-    let Some(resource) = html::resource_id(&attachment.src) else {
+    let Some(resource) = api.onenote_resource_id(&attachment.src).await? else {
         return Ok(Err("the attachment is not a OneNote resource of this site"));
     };
     match api
-        .onenote_download_resource(resource, budget.min(MAX_READ_BYTES))
+        .onenote_download_resource(&resource, budget.min(MAX_READ_BYTES))
         .await
     {
         Ok(bytes) => Ok(Ok(bytes)),
@@ -409,14 +499,19 @@ fn indent(text: &str) -> String {
 }
 
 /// The most characters a page read returns: the read limit of every other
-/// text read.
-pub(super) fn limit_page_text(text: String) -> Result<Value, AdkError> {
+/// text read. Text over it is cut at the limit and says so; it is never a
+/// refusal, so a page is never lost to its size.
+pub(super) fn limit_page_text(text: String) -> Value {
     if text.chars().count() <= MAX_OUTPUT_CHARS {
-        return Ok(Value::String(text));
+        return Value::String(text);
     }
-    Err(refusal(
-        "sharepoint.onenote.page_too_large",
-        "the page's text is over the 200000-character read limit: read its sections with onenote_get_page_content, or without attachment content",
+    let cut = text
+        .char_indices()
+        .nth(MAX_OUTPUT_CHARS)
+        .map_or(text.len(), |(index, _)| index);
+    Value::String(format!(
+        "{}\n[page text cut at {MAX_OUTPUT_CHARS} characters]",
+        &text[..cut]
     ))
 }
 
@@ -431,7 +526,7 @@ pub(super) async fn list_attachments(
     for attachment in html::attachments_of(markup.as_str().unwrap_or_default()) {
         listed.push(json!({
             "name": attachment.name,
-            "resource_id": html::resource_id(&attachment.src),
+            "resource_id": api.onenote_resource_id(&attachment.src).await?,
             "download_url": resolved(api, &attachment.src).await?,
         }));
     }
@@ -466,7 +561,7 @@ pub(super) async fn read_attachment(
         )
         .into());
     };
-    let Some(resource) = html::resource_id(&found.src) else {
+    let Some(resource) = api.onenote_resource_id(&found.src).await? else {
         return Err(refusal(
             "sharepoint.onenote.attachment_unresolvable",
             "the attachment has no resolvable download address on this site",
@@ -474,8 +569,9 @@ pub(super) async fn read_attachment(
         .into());
     };
     let host = reader_host(host)?;
+    check_readable(host, &found.name)?;
     let bytes = api
-        .onenote_download_resource(resource, MAX_READ_BYTES)
+        .onenote_download_resource(&resource, MAX_READ_BYTES)
         .await?;
     let text = extract(host, &found.name, bytes).await?;
     if text.chars().count() <= MAX_OUTPUT_CHARS {

@@ -1106,11 +1106,11 @@ no SharePoint tool is left only on the Python worker. Mapped against SDK
 | --- | --- | --- |
 | `create_list_item` | `client/content.rs::create_list_item_impl`; one POST of `{fields}` to `lists/{id}/items`; answers `{id, fields, webUrl}` | `fields` is bounded (64 KiB, non-empty keys); the list is resolved as the existing reads resolve it |
 | `read_document` | `client/content.rs::download_document_impl`, `reader.rs`; Graph bytes, then the Office host's document reader | A Graph drive path (`/drives/<id>/root:/...`, as `get_files_list` returns it) must name a library of the toolkit's own site; a probe that fails for any reason but 404 is an error, not a skipped library. `page_number`, `sheet_name` and `is_capture_image` are accepted and **not applied**: the answer says so before the text. Pictures are never described |
-| `upload_file` | `client/content.rs::upload_file_impl`; a PUT up to 4 MiB, a resumable session in 5 MiB chunks above it, `conflictBehavior` `replace` (the default) or `fail` | `filedata` is at most 64 KiB (the runtime refuses a longer argument string; a larger file goes up as an artifact). An artifact is read through the Office host (50 MiB cap, checked before it is buffered). The target name must be one SharePoint can store (no `/ \ : * ? " < > \|`, no `..`, no trailing dot). As in the SDK, a `folder_path` that names no library and exists in none is written under the default library |
+| `upload_file` | `client/content.rs::upload_file_impl`; a PUT up to 4 MiB, a resumable session in 5 MiB chunks above it, `conflictBehavior` `replace` (the default) or `fail` | `filedata` is at most 64 KiB (the runtime refuses a longer argument string; a larger file goes up as an artifact). An artifact is read through the Office host (50 MiB cap, checked before it is buffered). The target name must be one SharePoint can store (no `/ \ : * ? " < > \|`, no `..`, no trailing dot). A `folder_path` that names no library and exists in none is **not found** (the SDK wrote it under the default library): nothing falls back, nothing is created outside a named library. Inside a named library a missing subfolder is created by the path upload, as in the SDK |
 | `read_file_from_sharing_link` | `download_shared_file_impl`: the link is encoded into `shares/u!<base64url>/driveItem` and resolved by Graph with `Prefer: redeemSharingLinkIfNecessary`; size, extension and double extension are checked before any byte is fetched | The SDK's fallback for a 403 (a FedAuth cookie request to the user-supplied host, then an unauthenticated download from an address that host's redirect names) is **not ported**: it fetches an arbitrary host from inside the cluster. A 403 is answered as "SharePoint did not authorize the request". The link itself is never fetched |
 | `onenote_create_notebook`, `_create_section`, `_create_page`, `_update_page`, `_replace_page_content`, `_delete_page` | `client/onenote_ops.rs`; one POST / PATCH / DELETE each; the SDK's success strings and projections | Bounded arguments (64 KiB of markup; at most 100 patch commands, each checked for `target`, `action` and `position`) |
-| `onenote_read_page`, `onenote_read_page_items` | `reader.rs::page_items` and `html.rs`: the SDK's `html.parser` chunker (block tags break lines, `head`/`script`/`style` are dropped, character references are decoded) and its `-----` rendering | Images render as `[image: <alt or 'no description'>]`, which is what the SDK renders without a vision model. `include_attachments=false` still lists attachments, as in the SDK (it only gates their content). Attachment content: at most 20 attachments and 40 MiB per page, 50,000 characters each; an attachment whose text was asked for and could not be had says `Content: not available: <reason>` (the SDK leaves it bare, which reads as an attachment with no text) |
-| `onenote_list_attachments`, `onenote_read_attachment` | `reader.rs`: the `<object data-attachment>` elements of the page markup; the bytes come from `sites/{site}/onenote/resources/{id}/content` | An attachment whose address is not a OneNote resource of this site is listed and never fetched (the SDK sends the bearer to whatever address the page names) |
+| `onenote_read_page`, `onenote_read_page_items` | `reader.rs::page_items` and `html.rs`: the SDK's `html.parser` chunker (block tags break lines, `head`/`script`/`style` are dropped, character references are decoded) and its `-----` rendering | Images render as `[image: <alt or 'no description'>]`, which is what the SDK renders without a vision model. `include_attachments=false` still lists attachments, as in the SDK (it only gates their content). Attachment content: at most 20 attachments and 40 MiB per page, 50,000 characters each, all within what the 200,000-character page limit leaves after the page's own text (attachments are fitted in order and the ones cut or left out are named; the page text is never cut for them); an attachment whose text was asked for and could not be had says `Content: not available: <reason>` (the SDK leaves it bare, which reads as an attachment with no text) |
+| `onenote_list_attachments`, `onenote_read_attachment` | `reader.rs`: the `<object data-attachment>` elements of the page markup; the bytes come from `sites/{site}/onenote/resources/{id}/content` | Only a Graph OneNote resource of THIS site (`https://graph.microsoft.com/v1.0/sites/<this site>/onenote/resources/<id>`) is fetched; any other address (a CDN picture, another site) is listed as written and never fetched (the SDK sends the bearer to whatever address the page names) |
 | the existing 8 | unchanged | integer arguments now go through `exact_number` (`2.0`, `"3"` and `1e2` are integers; `2.5` and `true` are not) |
 
 **Failures are sentences.** The runtime reduces every tool *error* to a generic
@@ -1120,30 +1120,34 @@ thing a change must say. The new tools therefore answer a failure as text
 one sentence per cause: invalid request, not authorized, not found, a conflict
 with the current state, over a limit, rate limited, Graph unavailable, an
 invalid Graph answer, and, for a change whose answer was lost (a timeout, a
-connection that dropped after the request went out, a 500/502/504, a 2xx whose
-body cannot be read), "SharePoint did not confirm the change: it may or may not
+connection that dropped after the request went out, a 500/502/504), "SharePoint did not confirm the change: it may or may not
 have been applied, so check the target before repeating it". Throttling (429,
-503) and a refused connection are *not* unknown: nothing was applied. A rejected
+503) and a refused connection are *not* unknown: nothing was applied. A 2xx is
+Graph's word that the change happened: whatever its body looks like (oversize,
+unreadable, a projection over the output cap) the answer is a success that says
+what could not be shown (`applied; the response was too large to show`), never a
+failure. A rejected
 token (401) stays a typed error so the run can ask for authorization and replay
 the call. Nothing is retried: the transport never retries and a change is never
-marked retryable. A resumable upload that fails before its last chunk is a plain
-failure (nothing is committed) and its session is cancelled; only the last
-chunk's lost answer is unknown.
+marked retryable. A resumable upload follows what the session asks for: a 202 that still
+names missing bytes after the last chunk is fed them again (three repairs at most),
+then it is a definite failure; every failure cancels the session; only a lost
+answer to the last chunk is unknown.
 
 **Bounds, all before buffering.** File reads 20 MiB (3 MiB for an image link),
 by `Content-Length` and by the streamed body; uploads 50 MiB; page markup
-512 KiB; page text 200,000 characters (over it the call is refused, not cut); a
+512 KiB; page text 200,000 characters (over it the page text is cut at the limit and says so); a
 text read over 200,000 characters answers the shared `content_too_large` guide
-(retry with `start_line`/`end_line`). A Graph redirect to a download address is
+(retry with `start_line`/`end_line`). Probing libraries for a bare path is concurrent (eight at a time, default library first) and stops at the first match. A Graph redirect to a download address is
 followed once, without the bearer, and only to an `https` `*.sharepoint.com`
 host with no port or credentials; an upload-session address is held to the same
 rule.
 
-**Document reader.** `OfficeToolHost::extract_text` (new): the worker's host
+**Document reader.** `OfficeToolHost::can_read_text` (new) answers from the file's name, before a byte is downloaded, whether a reader exists and the kind of file is one it reads; `OfficeToolHost::extract_text` (new) then reads it: the worker's host
 reads plain text, code and HTML itself (`elitea-doc-extract`) and sends a PDF or
 Office file to the `elitea-doc-extractor` sidecar through the one
 `ExtractorClient` the index runs use (now built once in `bootstrap.rs` and shared
-by both). Without a sidecar a PDF or Office read says the runtime lends no
+by both; a client that cannot be built is logged and the worker starts without document reading, unless an index run needs it). The Office host is built for a run only when the SharePoint toolkit selects a tool that uses it (a reader or `upload_file`). Without a sidecar a PDF or Office read says the runtime lends no
 document reader; an image, an archive and an unknown extension are "not
 supported". A direct (`toolkit.call_tool.v1`) call is lent the host for the five
 text readers only; its uploads are effects and are refused there.

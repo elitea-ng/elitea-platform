@@ -311,22 +311,20 @@ impl ProductionTransportBundle {
         let model_facade = Arc::new(model_facade);
         // PDF and Office documents go to the extraction sidecar when the
         // deployment names its socket; the dial is lazy, so a sidecar that is
-        // still starting costs nothing here.
-        let extractor = match deployment.extractor_socket.as_deref() {
-            Some(socket) => {
-                let extractor =
-                    crate::transport::extractor_client::ExtractorClient::connect_lazy(socket)
-                        .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
-                tracing::info!(
-                    event = "index_extractor_configured",
-                    socket = %extractor.socket().display()
-                );
-                Some(Arc::new(extractor))
-            }
-            None => None,
-        };
+        // still starting costs nothing here. A client that cannot be built does
+        // not stop the worker: it runs without document reading.
+        let extractor = connect_extractor(
+            deployment.extractor_socket.as_deref(),
+            crate::transport::extractor_client::ExtractorClient::connect_lazy,
+        );
         let index_runtime = match deployment.vector_target.as_deref() {
             Some(target) => {
+                // Index runs read PDF and Office files through the sidecar a
+                // deployment names; a named sidecar that cannot be used is a
+                // configuration error for them (and only them).
+                if deployment.extractor_socket.is_some() && extractor.is_none() {
+                    return Err(ProductionBootstrapError::InvalidConfiguration);
+                }
                 let mut runtime = crate::indexing::IndexIngestRuntime::new(
                     target,
                     trust.ca_pem(),
@@ -374,6 +372,33 @@ impl ProductionTransportBundle {
             index_runtime,
             extractor,
         })
+    }
+}
+
+/// The extraction sidecar's client for the socket a deployment names, if any.
+/// A socket that yields no client (the connector failed) is logged and
+/// answered `None`: the worker still starts, and the tools that read a
+/// document say they have no document reader. The connector is a parameter so
+/// that failure is testable.
+pub(crate) fn connect_extractor<E>(
+    socket: Option<&std::path::Path>,
+    connect: impl FnOnce(
+        &std::path::Path,
+    ) -> Result<crate::transport::extractor_client::ExtractorClient, E>,
+) -> Option<Arc<crate::transport::extractor_client::ExtractorClient>> {
+    let socket = socket?;
+    if let Ok(extractor) = connect(socket) {
+        tracing::info!(
+            event = "index_extractor_configured",
+            socket = %extractor.socket().display()
+        );
+        Some(Arc::new(extractor))
+    } else {
+        tracing::warn!(
+            event = "extractor_client_unavailable",
+            "the document extraction client could not be built; documents are not read"
+        );
+        None
     }
 }
 
@@ -776,5 +801,26 @@ mod tests {
             map_nats_error(&NatsJetStreamError::unavailable("provider text")),
             ProductionBootstrapError::DependencyUnavailable
         );
+    }
+
+    #[tokio::test]
+    async fn a_sidecar_client_that_cannot_be_built_does_not_stop_the_worker() {
+        use super::connect_extractor;
+        use crate::transport::extractor_client::ExtractorClient;
+        let socket = PathBuf::from("/run/doc-extractor.sock");
+        // No socket named: no client, nothing logged as a failure.
+        assert!(
+            connect_extractor(None, |_| Err::<ExtractorClient, ()>(())).is_none(),
+            "no sidecar named"
+        );
+        // A socket whose client cannot be built: the worker runs without one.
+        assert!(
+            connect_extractor(Some(&socket), |_| Err::<ExtractorClient, ()>(())).is_none(),
+            "a failed client is not fatal"
+        );
+        // A client that builds is used.
+        let extractor = connect_extractor(Some(&socket), ExtractorClient::connect_lazy)
+            .expect("a lazy client builds without the sidecar running");
+        assert_eq!(extractor.socket(), socket.as_path());
     }
 }

@@ -266,6 +266,20 @@ pub(crate) fn text_failure(reason: SkipReason) -> TextExtractionFailure {
     }
 }
 
+/// Whether a file of this name can be read as text here: a kind the readers
+/// handle (by its extension), and, for a PDF or Office file, a sidecar. Answered
+/// from the name alone, so a tool refuses before it downloads.
+pub(crate) fn readable_kind(has_extractor: bool, name: &str) -> Result<(), TextExtractionFailure> {
+    let mime = elitea_content_source::mime_of(name);
+    if mime == "application/octet-stream" || mime.starts_with("image/") {
+        return Err(TextExtractionFailure::Unsupported);
+    }
+    if elitea_doc_extract::is_document_type(mime) && !has_extractor {
+        return Err(TextExtractionFailure::NoExtractor);
+    }
+    Ok(())
+}
+
 /// The text of a document, by its name's extension: a PDF or Office file by
 /// the sidecar, plain text and HTML here. A kind with no extension in the
 /// table, or an image, is not text.
@@ -274,10 +288,8 @@ async fn document_text(
     name: &str,
     bytes: Vec<u8>,
 ) -> Result<String, TextExtractionFailure> {
+    readable_kind(extractor.is_some(), name)?;
     let mime = elitea_content_source::mime_of(name);
-    if mime == "application/octet-stream" || mime.starts_with("image/") {
-        return Err(TextExtractionFailure::Unsupported);
-    }
     if elitea_doc_extract::is_document_type(mime) {
         let extractor = extractor.ok_or(TextExtractionFailure::NoExtractor)?;
         return match extractor
@@ -461,6 +473,10 @@ impl OfficeToolHost for ClaimOfficeHost {
                 tracing::warn!(event = "imagegen_call_failed", error = %error, "an image edit call failed");
                 images_failure(&error)
             })
+    }
+
+    fn can_read_text(&self, name: &str) -> Result<(), TextExtractionFailure> {
+        readable_kind(self.runtime.extractor.is_some(), name)
     }
 
     async fn extract_text(

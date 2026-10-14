@@ -6,10 +6,10 @@ use adk_tool::BasicToolset;
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
-use crate::exact_number::exact_i64;
 use crate::toolkits::delegated_auth::{
     DelegatedAuthorizationCatalog, DelegatedAuthorizationRequirement, delegated_authorization_error,
 };
+use crate::toolkits::families::integer_like::integer_like;
 use crate::toolkits::families::office_host::{
     MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError, SharedOfficeToolHost,
 };
@@ -759,6 +759,7 @@ impl SharePointTool {
             }
             // The reader is checked before a byte is downloaded.
             let host = reader::reader_host(self.host.as_ref())?;
+            reader::check_readable(host, reader::file_name_of(path))?;
             let file = self.client.download_document(path, MAX_READ_BYTES).await?;
             let text = reader::extract(host, &file.name, file.bytes).await?;
             Ok(with_notice(
@@ -787,7 +788,10 @@ impl SharePointTool {
         let end = optional_line(arguments, "end_line")?;
         let outcome: Result<Value, Failure> = async {
             let host = reader::reader_host(self.host.as_ref())?;
-            let file = self.client.download_shared_file(url).await?;
+            let host_for_check = self.host.clone();
+            let readable =
+                move |name: &str| reader::unreadable_reason(host_for_check.as_ref(), name);
+            let file = self.client.download_shared_file(url, &readable).await?;
             let name = file.name.clone();
             let text = reader::extract(host, &file.name, file.bytes).await?;
             Ok(with_notice(
@@ -908,7 +912,7 @@ impl SharePointTool {
                     "[read_attachment_content not applied: this runtime lends no document reader]\n",
                 );
             }
-            Ok(reader::limit_page_text(format!("{notice}{rendered}"))?)
+            Ok(reader::limit_page_text(format!("{notice}{rendered}")))
         }
         .await;
         self.finish("read the page", outcome)
@@ -1317,21 +1321,10 @@ fn patch_commands(arguments: &Map<String, Value>) -> adk_core::Result<&[Value]> 
     Ok(commands)
 }
 
-/// A whole number, as pydantic's lax integer reads one: a JSON integer, a
-/// float or exponent with no fractional part (`2.0`, `1e2`), or a string of
-/// either. Nothing goes through `f64`.
-fn integer_of(value: &Value) -> Option<i64> {
-    match value {
-        Value::Number(number) => exact_i64(&number.to_string()).ok(),
-        Value::String(text) => exact_i64(text.trim()).ok(),
-        _ => None,
-    }
-}
-
 fn optional_integer(arguments: &Map<String, Value>, name: &str) -> adk_core::Result<Option<i64>> {
     match arguments.get(name) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => integer_of(value).map(Some).ok_or_else(invalid_arguments),
+        Some(value) => integer_like(value).map(Some).ok_or_else(invalid_arguments),
     }
 }
 
@@ -1368,9 +1361,9 @@ fn lax_bool(arguments: &Map<String, Value>, name: &str, default: bool) -> adk_co
     match arguments.get(name) {
         None | Some(Value::Null) => Ok(default),
         Some(Value::Bool(value)) => Ok(*value),
-        Some(Value::Number(number)) => match exact_i64(&number.to_string()) {
-            Ok(1) => Ok(true),
-            Ok(0) => Ok(false),
+        Some(number @ Value::Number(_)) => match integer_like(number) {
+            Some(1) => Ok(true),
+            Some(0) => Ok(false),
             _ => Err(invalid_arguments()),
         },
         Some(Value::String(text)) => match text.trim().to_ascii_lowercase().as_str() {

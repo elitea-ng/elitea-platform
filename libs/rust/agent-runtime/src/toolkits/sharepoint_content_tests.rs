@@ -254,6 +254,7 @@ impl SharePointTransport for FakeGraph {
                 status: StatusCode::from_u16(status).expect("status"),
                 content_type: content_type.map(Into::into),
                 location: location.map(Into::into),
+                oversize: false,
                 body,
             }),
             Reply::Fail(code) => Err(SharePointClientError::fixture(code)),
@@ -282,6 +283,8 @@ struct FakeHost {
     objects: Mutex<BTreeMap<(String, String), Vec<u8>>>,
     read_failure: Mutex<Option<OfficeFailure>>,
     extraction_failure: Mutex<Option<TextExtractionFailure>>,
+    /// A refusal `can_read_text` gives before any download.
+    precheck_failure: Mutex<Option<TextExtractionFailure>>,
     extracted: Mutex<Vec<(String, usize)>>,
 }
 
@@ -291,6 +294,7 @@ impl FakeHost {
             objects: Mutex::new(BTreeMap::new()),
             read_failure: Mutex::new(None),
             extraction_failure: Mutex::new(None),
+            precheck_failure: Mutex::new(None),
             extracted: Mutex::new(Vec::new()),
         })
     }
@@ -342,6 +346,21 @@ impl OfficeToolHost for FakeHost {
 
     async fn complete(&self, _: OfficeModelRequest) -> Result<String, OfficeHostError> {
         Err(OfficeHostError::new(OfficeFailure::NoModel, "unused"))
+    }
+
+    fn can_read_text(&self, name: &str) -> Result<(), TextExtractionFailure> {
+        if let Some(failure) = *self.precheck_failure.lock().expect("failure") {
+            return Err(failure);
+        }
+        // Images and archives are not text, as the worker's host says.
+        let lower = name.to_ascii_lowercase();
+        if [".png", ".jpg", ".zip", ".mp4"]
+            .iter()
+            .any(|e| lower.ends_with(e))
+        {
+            return Err(TextExtractionFailure::Unsupported);
+        }
+        Ok(())
     }
 
     async fn extract_text(
@@ -523,25 +542,6 @@ async fn create_list_item_names_each_cause_and_never_retries() {
         (
             Reply::Fail(SharePointClientErrorCode::DependencyUnavailable),
             UNAVAILABLE,
-        ),
-        // Created, and the answer cannot be read: the item exists.
-        (
-            Reply::Http {
-                status: 201,
-                content_type: Some("application/json"),
-                location: None,
-                body: b"{not json".to_vec(),
-            },
-            UNKNOWN,
-        ),
-        (
-            Reply::Http {
-                status: 201,
-                content_type: Some("text/plain"),
-                location: None,
-                body: b"created".to_vec(),
-            },
-            UNKNOWN,
         ),
     ];
     for (reply, code) in cases {
@@ -951,15 +951,6 @@ async fn upload_file_failures_name_each_cause_and_a_lost_answer_is_unknown() {
             Reply::Fail(SharePointClientErrorCode::DependencyUnavailable),
             UNAVAILABLE,
         ),
-        (
-            Reply::Http {
-                status: 201,
-                content_type: Some("application/json"),
-                location: None,
-                body: b"nope".to_vec(),
-            },
-            UNKNOWN,
-        ),
     ];
     for (reply, code) in cases {
         let graph = FakeGraph::new();
@@ -1096,7 +1087,7 @@ async fn an_early_chunk_failure_cancels_the_session_and_is_a_plain_failure() {
 }
 
 #[tokio::test]
-async fn a_lost_answer_to_the_last_chunk_is_an_unknown_outcome_and_the_session_is_kept() {
+async fn a_lost_answer_to_the_last_chunk_is_an_unknown_outcome_and_the_session_is_cancelled() {
     let graph = FakeGraph::new();
     graph
         .with_site()
@@ -1108,7 +1099,8 @@ async fn a_lost_answer_to_the_last_chunk_is_an_unknown_outcome_and_the_session_i
                 Reply::json(202, &json!({})),
                 Reply::Fail(SharePointClientErrorCode::Timeout),
             ],
-        );
+        )
+        .on(Method::DELETE, UPLOAD_PATH, vec![Reply::status(204)]);
     let api = client(&graph);
     let host = big_host();
     let sentence = refused(
@@ -1119,7 +1111,7 @@ async fn a_lost_answer_to_the_last_chunk_is_an_unknown_outcome_and_the_session_i
     )
     .await;
     assert!(sentence.contains(UNKNOWN), "{sentence}");
-    assert_eq!(graph.count(&Method::DELETE, UPLOAD_PATH), 0);
+    assert_eq!(graph.count(&Method::DELETE, UPLOAD_PATH), 1);
 }
 
 #[tokio::test]
@@ -2183,7 +2175,9 @@ async fn every_onenote_change_names_its_causes_and_is_never_retried() {
 }
 
 #[tokio::test]
-async fn a_create_whose_answer_cannot_be_read_is_an_unknown_outcome() {
+async fn a_create_whose_answer_cannot_be_read_is_still_applied() {
+    // A 2xx is Graph's word that it happened: whatever the body looks like,
+    // the answer is a success that says what could not be shown.
     for (tool, arguments, key) in [
         (
             "onenote_create_notebook",
@@ -2213,15 +2207,164 @@ async fn a_create_whose_answer_cannot_be_read_is_an_unknown_outcome() {
             }],
         );
         let api = client(&graph);
-        let sentence = refused(&api, None, tool, arguments).await;
-        assert!(sentence.contains(UNKNOWN), "{tool}: {sentence}");
+        let answer = ok(&api, None, tool, arguments).await;
+        assert_eq!(
+            answer,
+            json!({"applied": true, "note": "applied; the response could not be read"}),
+            "{tool}"
+        );
+        assert_eq!(graph.count(&Method::POST, &key), 1, "{tool}");
+    }
+}
+
+/// A confirmed change is never a failure, whatever its answer: oversize,
+/// unreadable, or a projection over the output cap.
+#[tokio::test]
+#[allow(clippy::too_many_lines, reason = "one scenario per kind of change")]
+async fn a_change_that_graph_confirmed_is_never_reported_as_a_failure() {
+    // Oversize body: the status is read before the size.
+    let huge = Reply::Http {
+        status: 201,
+        content_type: Some("application/json"),
+        location: None,
+        body: serde_json::to_vec(
+            &json!({"id":"9","fields":{"Notes":"x".repeat(2 * 1_024 * 1_024 + 10)}}),
+        )
+        .expect("json"),
+    };
+    let graph = FakeGraph::new();
+    graph.with_site().with_list().on(
+        Method::POST,
+        &format!("{SITE}/lists/list-1/items"),
+        vec![huge],
+    );
+    let api = client(&graph);
+    let answer = ok(
+        &api,
+        None,
+        "create_list_item",
+        json!({"list_title":"Tasks","fields":{"Title":"x"}}),
+    )
+    .await;
+    assert_eq!(
+        answer,
+        json!({"applied": true, "note": "applied; the response was too large to show"})
+    );
+
+    // Within the transport cap, over the output cap: the id still comes back.
+    let big = Reply::json(
+        201,
+        &json!({"id":"9","fields":{"Notes":"x".repeat(600 * 1_024)},"webUrl":"https://w"}),
+    );
+    let graph = FakeGraph::new();
+    graph.with_site().with_list().on(
+        Method::POST,
+        &format!("{SITE}/lists/list-1/items"),
+        vec![big],
+    );
+    let api = client(&graph);
+    let answer = ok(
+        &api,
+        None,
+        "create_list_item",
+        json!({"list_title":"Tasks","fields":{"Title":"x"}}),
+    )
+    .await;
+    assert_eq!(
+        answer,
+        json!({"applied": true, "note": "applied; the response was too large to show", "id": "9"})
+    );
+
+    // An upload, small and chunked, and the OneNote edits.
+    let graph = FakeGraph::new();
+    graph.with_site().on(
+        Method::PUT,
+        UPLOAD_ITEM,
+        vec![Reply::Http {
+            status: 201,
+            content_type: Some("application/json"),
+            location: None,
+            body: vec![b' '; 2 * 1_024 * 1_024 + 10],
+        }],
+    );
+    let api = client(&graph);
+    let answer = ok(
+        &api,
+        None,
+        "upload_file",
+        json!({"folder_path":"/teams/project/Shared Documents/Reports","filedata":"hello","filename":"a b.txt"}),
+    )
+    .await;
+    assert_eq!(answer["applied"], true);
+
+    let graph = FakeGraph::new();
+    graph
+        .with_site()
+        .on(Method::POST, SESSION, vec![session_reply()])
+        .on(
+            Method::PUT,
+            UPLOAD_PATH,
+            vec![
+                Reply::json(202, &json!({"nextExpectedRanges":["5242880-"]})),
+                Reply::Http {
+                    status: 201,
+                    content_type: Some("application/json"),
+                    location: None,
+                    body: vec![b' '; 2 * 1_024 * 1_024 + 10],
+                },
+            ],
+        );
+    let api = client(&graph);
+    let host = big_host();
+    let answer = ok(
+        &api,
+        Some(&host),
+        "upload_file",
+        json!({"folder_path":"/teams/project/Shared Documents/Reports","filepath":"/bucket/big.bin"}),
+    )
+    .await;
+    assert_eq!(answer["applied"], true);
+
+    for (tool, arguments, method, key) in [
+        (
+            "onenote_update_page",
+            json!({"page_id":"pg","patch_commands":[{"target":"body","action":"append","content":"x"}]}),
+            Method::PATCH,
+            onenote_key("/pages/pg/content"),
+        ),
+        (
+            "onenote_delete_page",
+            json!({"page_id":"pg"}),
+            Method::DELETE,
+            onenote_key("/pages/pg"),
+        ),
+    ] {
+        let graph = FakeGraph::new();
+        graph.with_site().on(
+            method.clone(),
+            &key,
+            vec![Reply::Http {
+                status: 200,
+                content_type: Some("application/json"),
+                location: None,
+                body: vec![b' '; 2 * 1_024 * 1_024 + 10],
+            }],
+        );
+        let api = client(&graph);
+        let answer = ok(&api, None, tool, arguments).await;
+        assert!(
+            answer
+                .as_str()
+                .is_some_and(|text| text.contains("successfully")),
+            "{tool}: {answer}"
+        );
     }
 }
 
 const PAGE_HTML: &str = r#"<!DOCTYPE html><html lang="en-US"><head><title>Plan</title></head>
 <body><div><p>Hello &amp; welcome</p>
-<img src="https://graph.microsoft.com/v1.0/sites/s/onenote/resources/img-1/$value" alt="a chart" />
-<p><object data-attachment="plan.pdf" data="https://graph.microsoft.com/v1.0/sites/s/onenote/resources/res-1/$value" type="application/pdf"></object></p>
+<img src="https://graph.microsoft.com/v1.0/sites/tenant.sharepoint.com,site-id,web-id/onenote/resources/img-1/$value" alt="a chart" />
+<p><object data-attachment="plan.pdf" data="https://graph.microsoft.com/v1.0/sites/tenant.sharepoint.com,site-id,web-id/onenote/resources/res-1/$value" type="application/pdf"></object></p>
 <p>Bye</p></div></body></html>"#;
 
 const CANONICAL_RES1: &str = "https://graph.microsoft.com/v1.0/sites/tenant.sharepoint.com,site-id,web-id/onenote/resources/res-1/content";
@@ -2485,7 +2628,7 @@ async fn onenote_reads_map_graph_failures_and_ask_for_authorization_on_401() {
 }
 
 #[tokio::test]
-async fn a_page_over_the_size_or_text_limit_is_refused_not_cut() {
+async fn a_page_over_the_size_limit_is_refused_and_over_the_text_limit_is_cut() {
     // The raw page is over the 512 KiB the family returns: refused at the source.
     let graph = FakeGraph::new();
     graph.with_site().on(
@@ -2505,10 +2648,14 @@ async fn a_page_over_the_size_or_text_limit_is_refused_not_cut() {
         vec![Reply::html(&format!("<p>{}</p>", "word ".repeat(50_000)))],
     );
     let api = client(&graph);
-    let sentence = refused(&api, None, "onenote_read_page", json!({"page_id":"pg-1"})).await;
+    // The page's own text is returned, cut at the limit and saying so.
+    let text = ok(&api, None, "onenote_read_page", json!({"page_id":"pg-1"})).await;
+    let text = text.as_str().expect("text");
+    assert!(text.starts_with("word word"));
     assert!(
-        sentence.contains("over the 200000-character read limit"),
-        "{sentence}"
+        text.ends_with("[page text cut at 200000 characters]"),
+        "{}",
+        &text[text.len() - 60..]
     );
 }
 
@@ -2643,12 +2790,12 @@ async fn the_real_transport_refuses_a_declared_oversize_body_before_reading_it()
     .await;
     let transport = plain_http_transport();
     let started = std::time::Instant::now();
-    let error = transport
+    let answer = transport
         .execute_bounded(request(port), 1_024)
         .await
-        .err()
-        .expect("over the cap");
-    assert_eq!(error.code(), SharePointClientErrorCode::ResourceExhausted);
+        .expect("the status is read before the size");
+    assert!(answer.oversize && answer.body.is_empty());
+    assert_eq!(answer.status, StatusCode::OK);
     assert!(
         started.elapsed() < std::time::Duration::from_secs(5),
         "no body was awaited"
@@ -2664,12 +2811,11 @@ async fn the_real_transport_stops_a_body_that_outgrows_its_cap_without_a_length(
     script.push(b"0\r\n\r\n".to_vec());
     let port = serve(script, false).await;
     let transport = plain_http_transport();
-    let error = transport
+    let answer = transport
         .execute_bounded(request(port), 2_048)
         .await
-        .err()
-        .expect("over the cap");
-    assert_eq!(error.code(), SharePointClientErrorCode::ResourceExhausted);
+        .expect("the status is read before the size");
+    assert!(answer.oversize && answer.body.is_empty());
 }
 
 #[tokio::test]
@@ -2764,4 +2910,534 @@ async fn integer_arguments_use_the_exact_reading_for_every_limit() {
         .await;
         assert_invalid_arguments(&error);
     }
+}
+
+// ------------------------------------------------ review round 1: regressions
+
+/// Only a Graph `OneNote` resource of THIS site is fetched with the person's
+/// token; a picture on a CDN that happens to have `/resources/<id>` in its
+/// path, and another site's resource, are listed as written and never fetched.
+#[tokio::test]
+async fn a_cdn_or_foreign_address_with_a_resources_path_is_not_a_onenote_resource() {
+    let html = r#"<p>
+<object data-attachment="cdn.pdf" data="https://cdn.example.com/files/resources/res-1/$value"></object>
+<object data-attachment="other.pdf" data="https://graph.microsoft.com/v1.0/sites/other,site/onenote/resources/res-2/$value"></object>
+<object data-attachment="mine.pdf" data="https://graph.microsoft.com/v1.0/sites/tenant.sharepoint.com,site-id,web-id/onenote/resources/res-3/$value"></object></p>"#;
+    let graph = FakeGraph::new();
+    graph
+        .with_site()
+        .on(
+            Method::GET,
+            &onenote_key("/pages/pg-1/content"),
+            vec![Reply::html(html)],
+        )
+        .on(
+            Method::GET,
+            &onenote_key("/resources/res-3/content"),
+            vec![Reply::bytes(b"mine")],
+        );
+    let api = client(&graph);
+    let host = FakeHost::new().shared();
+    let listed = ok(
+        &api,
+        Some(&host),
+        "onenote_list_attachments",
+        json!({"page_id":"pg-1"}),
+    )
+    .await;
+    assert_eq!(listed[0]["resource_id"], Value::Null);
+    assert_eq!(
+        listed[0]["download_url"], "https://cdn.example.com/files/resources/res-1/$value",
+        "an address that is not a resource of this site is shown as written"
+    );
+    assert_eq!(listed[1]["resource_id"], Value::Null);
+    assert_eq!(listed[2]["resource_id"], "res-3");
+
+    let text = ok(
+        &api,
+        Some(&host),
+        "onenote_read_page",
+        json!({"page_id":"pg-1","read_attachment_content":true}),
+    )
+    .await;
+    let text = text.as_str().expect("text");
+    assert!(text.contains("[attachment: cdn.pdf]\n  https://cdn.example.com/files/resources/res-1/$value\n  Content: not available: the attachment is not a OneNote resource of this site"), "{text}");
+    assert!(text.contains("Content:\n  mine"), "{text}");
+    assert!(!graph.touched("cdn.example.com"));
+    assert_eq!(
+        graph.count(&Method::GET, &onenote_key("/resources/res-1/content")),
+        0
+    );
+    assert_eq!(
+        graph.count(&Method::GET, &onenote_key("/resources/res-2/content")),
+        0
+    );
+
+    let sentence = refused(
+        &api,
+        Some(&host),
+        "onenote_read_attachment",
+        json!({"page_id":"pg-1","attachment_name":"cdn.pdf"}),
+    )
+    .await;
+    assert!(
+        sentence.contains("no resolvable download address"),
+        "{sentence}"
+    );
+}
+
+/// A folder that is in no library and exists nowhere is not found: nothing is
+/// created and nothing falls back to the default library.
+#[tokio::test]
+async fn upload_into_a_folder_that_exists_nowhere_is_not_found_and_creates_nothing() {
+    for folder in [
+        "Nowhere/Reports",
+        "/teams/project",
+        "/teams/project/Unknown Library/x",
+    ] {
+        let graph = FakeGraph::new();
+        graph.with_site();
+        for drive in ["drive-docs", "drive-priv"] {
+            let cleaned = folder
+                .trim_start_matches("/teams/project")
+                .trim_matches('/');
+            if cleaned.is_empty() {
+                continue;
+            }
+            let encoded = cleaned.replace(' ', "%20");
+            graph.on(
+                Method::GET,
+                &format!("graph.microsoft.com/v1.0/drives/{drive}/root:/{encoded}"),
+                vec![Reply::status(404)],
+            );
+        }
+        let api = client(&graph);
+        let sentence = refused(
+            &api,
+            None,
+            "upload_file",
+            json!({"folder_path":folder,"filedata":"x","filename":"a.txt"}),
+        )
+        .await;
+        assert!(sentence.contains(MISSING), "{folder}: {sentence}");
+        assert!(
+            graph
+                .requests()
+                .iter()
+                .all(|(method, _)| *method == Method::GET),
+            "{folder}: nothing was written"
+        );
+    }
+    // Inside a named library the SDK's path upload may create the subfolders.
+    let graph = FakeGraph::new();
+    graph.with_site().on(
+        Method::PUT,
+        "graph.microsoft.com/v1.0/drives/drive-docs/root:/New/Sub/a.txt:/content",
+        vec![Reply::json(
+            201,
+            &json!({"id":"1","name":"a.txt","parentReference":{"path":"/drives/drive-docs/root:/New/Sub"}}),
+        )],
+    );
+    let api = client(&graph);
+    let done = ok(
+        &api,
+        None,
+        "upload_file",
+        json!({"folder_path":"/teams/project/Shared Documents/New/Sub","filedata":"x","filename":"a.txt"}),
+    )
+    .await;
+    assert_eq!(done["id"], "1");
+}
+
+/// Probing is bounded, ordered with the default library first, and stops at
+/// the first library that has the folder.
+#[tokio::test]
+async fn library_probes_stop_at_the_first_match_and_are_bounded() {
+    let graph = FakeGraph::new();
+    let drives = (0..30)
+        .map(|n| {
+            json!({"id":format!("d{n:02}"),"name":format!("L{n}"),"webUrl":format!("https://tenant.sharepoint.com/teams/project/L{n}")})
+        })
+        .collect::<Vec<_>>();
+    graph
+        .on(
+            Method::GET,
+            SITE_LOOKUP,
+            vec![Reply::json(
+                200,
+                &json!({"id":"tenant.sharepoint.com,site-id,web-id"}),
+            )],
+        )
+        .on(
+            Method::GET,
+            &format!("{SITE}/drives"),
+            vec![Reply::json(200, &json!({"value":drives}))],
+        )
+        .on(
+            Method::GET,
+            &format!("{SITE}/drive"),
+            vec![Reply::json(200, &json!({"id":"d07"}))],
+        );
+    for n in 0..30 {
+        let reply = if n == 3 {
+            Reply::json(200, &json!({"id":"x"}))
+        } else {
+            Reply::status(404)
+        };
+        graph.on(
+            Method::GET,
+            &format!("graph.microsoft.com/v1.0/drives/d{n:02}/root:/Shared/Folder"),
+            vec![reply],
+        );
+    }
+    graph.on(
+        Method::PUT,
+        "graph.microsoft.com/v1.0/drives/d03/root:/Shared/Folder/a.txt:/content",
+        vec![Reply::json(
+            201,
+            &json!({"id":"1","name":"a.txt","parentReference":{"path":"p"}}),
+        )],
+    );
+    let api = client(&graph);
+    ok(
+        &api,
+        None,
+        "upload_file",
+        json!({"folder_path":"Shared/Folder","filedata":"x","filename":"a.txt"}),
+    )
+    .await;
+    let probed = graph
+        .requests()
+        .iter()
+        .filter(|(_, key)| key.ends_with("/root:/Shared/Folder"))
+        .count();
+    assert!(probed < 30, "stopped at the first match, probed {probed}");
+    assert!(probed <= 10, "bounded concurrency, probed {probed}");
+    assert!(
+        graph.count(
+            &Method::GET,
+            "graph.microsoft.com/v1.0/drives/d07/root:/Shared/Folder"
+        ) >= 1,
+        "the default library is asked first"
+    );
+}
+
+/// The reader is checked before a byte is downloaded: no reader, an unreadable
+/// kind of file.
+#[tokio::test]
+#[allow(clippy::too_many_lines, reason = "one scenario per kind of file")]
+async fn the_reader_and_the_file_kind_are_checked_before_anything_is_downloaded() {
+    let graph = FakeGraph::new();
+    graph.with_site();
+    let api = client(&graph);
+    for (failure, fragment) in [
+        (
+            TextExtractionFailure::NoExtractor,
+            "lends no document reader",
+        ),
+        (
+            TextExtractionFailure::Unsupported,
+            "file type is not supported",
+        ),
+    ] {
+        let host = FakeHost::new();
+        *host.precheck_failure.lock().expect("failure") = Some(failure);
+        let shared = host.shared();
+        let sentence = refused(
+            &api,
+            Some(&shared),
+            "read_document",
+            json!({"path":"/drives/drive-docs/root:/Folder/Plan.pdf"}),
+        )
+        .await;
+        assert!(sentence.contains(fragment), "{sentence}");
+    }
+    // By its extension: an image is not read, and is not downloaded.
+    let host = FakeHost::new().shared();
+    let sentence = refused(
+        &api,
+        Some(&host),
+        "read_document",
+        json!({"path":"/teams/project/Shared Documents/photo.png"}),
+    )
+    .await;
+    assert!(
+        sentence.contains("file type is not supported"),
+        "{sentence}"
+    );
+    assert!(
+        graph
+            .requests()
+            .iter()
+            .all(|(_, key)| !key.ends_with("/content")),
+        "no content was requested: {:?}",
+        graph.requests()
+    );
+
+    // A sharing link: the name is known from the metadata, before the bytes.
+    let graph = FakeGraph::new();
+    graph.on(
+        Method::GET,
+        &share_key("driveItem"),
+        vec![share_item("pic.png", 10, Some(DOWNLOAD_URL))],
+    );
+    let api = client(&graph);
+    let sentence = refused(
+        &api,
+        Some(&host),
+        "read_file_from_sharing_link",
+        json!({"sharing_url":SHARE_URL}),
+    )
+    .await;
+    assert!(
+        sentence.contains("file type is not supported"),
+        "{sentence}"
+    );
+    assert_eq!(graph.requests().len(), 1, "only the metadata was asked");
+    let sentence = refused(
+        &api,
+        None,
+        "read_file_from_sharing_link",
+        json!({"sharing_url":SHARE_URL}),
+    )
+    .await;
+    assert!(sentence.contains("lends no document reader"), "{sentence}");
+    assert_eq!(graph.requests().len(), 1);
+
+    // An attachment of a kind that cannot be read is not downloaded either.
+    let html = r#"<p><object data-attachment="scan.png" data="https://graph.microsoft.com/v1.0/sites/tenant.sharepoint.com,site-id,web-id/onenote/resources/res-9/$value"></object></p>"#;
+    let graph = FakeGraph::new();
+    graph.with_site().on(
+        Method::GET,
+        &onenote_key("/pages/pg-1/content"),
+        vec![Reply::html(html)],
+    );
+    let api = client(&graph);
+    let text = ok(
+        &api,
+        Some(&host),
+        "onenote_read_page",
+        json!({"page_id":"pg-1","read_attachment_content":true}),
+    )
+    .await;
+    assert!(
+        text.as_str()
+            .expect("text")
+            .contains("Content: not available: the file type is not supported"),
+        "{text}"
+    );
+    let sentence = refused(
+        &api,
+        Some(&host),
+        "onenote_read_attachment",
+        json!({"page_id":"pg-1","attachment_name":"scan.png"}),
+    )
+    .await;
+    assert!(
+        sentence.contains("file type is not supported"),
+        "{sentence}"
+    );
+    assert_eq!(
+        graph.count(&Method::GET, &onenote_key("/resources/res-9/content")),
+        0
+    );
+}
+
+/// The page keeps all its own text; attachments are read into what is left,
+/// in order, each as much as fits, and those that do not fit are named.
+#[tokio::test]
+async fn attachments_are_fitted_into_the_page_limit_and_the_cut_ones_are_named() {
+    let attachment = |n: u32| {
+        format!(
+            r#"<object data-attachment="a{n}.txt" data="https://graph.microsoft.com/v1.0/sites/tenant.sharepoint.com,site-id,web-id/onenote/resources/res-{n}/$value"></object>"#
+        )
+    };
+    let paragraphs = "<p>line of page text</p>".repeat(6_000);
+    let html = format!(
+        "{paragraphs}{}{}{}",
+        attachment(1),
+        attachment(2),
+        attachment(3)
+    );
+    let graph = FakeGraph::new();
+    graph.with_site().on(
+        Method::GET,
+        &onenote_key("/pages/pg-1/content"),
+        vec![Reply::html(&html)],
+    );
+    for n in 1..=3 {
+        // 80 thousand characters each, in lines.
+        let body = format!("attachment {n} line\n").repeat(4_000);
+        graph.on(
+            Method::GET,
+            &onenote_key(&format!("/resources/res-{n}/content")),
+            vec![Reply::bytes(body.as_bytes())],
+        );
+    }
+    let api = client(&graph);
+    let host = FakeHost::new().shared();
+    let text = ok(
+        &api,
+        Some(&host),
+        "onenote_read_page",
+        json!({"page_id":"pg-1","read_attachment_content":true}),
+    )
+    .await;
+    let text = text.as_str().expect("text");
+    assert!(text.chars().count() <= 200_000, "{}", text.chars().count());
+    // The page text is whole.
+    assert_eq!(text.matches("line of page text").count(), 6_000);
+    // The first attachment fits whole; the later ones are cut or left out,
+    // by name, never silently.
+    assert!(text.contains("[attachment: a1.txt]"));
+    assert!(text.contains("Content:\n  attachment 1 line"));
+    assert!(
+        !text.contains("[page text cut"),
+        "the page itself was not cut"
+    );
+    let named = |n: u32| {
+        let at = text
+            .find(&format!("[attachment: a{n}.txt]"))
+            .expect("named");
+        text[at..]
+            .split("\n-----\n")
+            .next()
+            .expect("block")
+            .to_owned()
+    };
+    let second = named(2);
+    let third = named(3);
+    assert!(
+        second.contains("attachment text cut") || second.contains("Content: not available: cut"),
+        "{}",
+        &second[second.len().saturating_sub(200)..]
+    );
+    assert!(
+        third.contains("attachment text cut") || third.contains("Content: not available: cut"),
+        "{}",
+        &third[third.len().saturating_sub(200)..]
+    );
+}
+
+/// A resumable upload whose session still asks for bytes after the last chunk
+/// is fed the missing range; one that never settles is a definite failure and
+/// the session is cancelled.
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one scenario per way a session can end"
+)]
+async fn a_session_that_asks_for_missing_ranges_is_repaired_or_cancelled() {
+    let item = Reply::json(
+        201,
+        &json!({"id":"BIG","name":"big.bin","size":6_291_456,"parentReference":{"path":"/drives/drive-docs/root:/Reports"}}),
+    );
+    // 202 for chunk 1; 202 asking for byte 5 MiB again after the last chunk;
+    // then the item.
+    let graph = FakeGraph::new();
+    graph
+        .with_site()
+        .on(Method::POST, SESSION, vec![session_reply()])
+        .on(
+            Method::PUT,
+            UPLOAD_PATH,
+            vec![
+                Reply::json(202, &json!({"nextExpectedRanges":["5242880-"]})),
+                Reply::json(202, &json!({"nextExpectedRanges":["5242880-"]})),
+                item,
+            ],
+        );
+    let api = client(&graph);
+    let host = big_host();
+    let done = ok(
+        &api,
+        Some(&host),
+        "upload_file",
+        json!({"folder_path":"/teams/project/Shared Documents/Reports","filepath":"/bucket/big.bin"}),
+    )
+    .await;
+    assert_eq!(done["id"], "BIG");
+    let ranges = graph
+        .seen
+        .lock()
+        .expect("seen")
+        .iter()
+        .filter(|seen| seen.method == Method::PUT)
+        .map(|seen| {
+            seen.headers["content-range"]
+                .to_str()
+                .expect("range")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ranges,
+        [
+            "bytes 0-5242879/6291456",
+            "bytes 5242880-6291455/6291456",
+            "bytes 5242880-6291455/6291456"
+        ],
+        "the missing range was sent again"
+    );
+
+    // Never settles: bounded repairs, then a definite failure and a cancel.
+    let graph = FakeGraph::new();
+    graph
+        .with_site()
+        .on(Method::POST, SESSION, vec![session_reply()])
+        .on(
+            Method::PUT,
+            UPLOAD_PATH,
+            vec![Reply::json(
+                202,
+                &json!({"nextExpectedRanges":["5242880-"]}),
+            )],
+        )
+        .on(Method::DELETE, UPLOAD_PATH, vec![Reply::status(204)]);
+    let api = client(&graph);
+    let sentence = refused(
+        &api,
+        Some(&host),
+        "upload_file",
+        json!({"folder_path":"/teams/project/Shared Documents/Reports","filepath":"/bucket/big.bin"}),
+    )
+    .await;
+    assert!(
+        sentence.contains("did not accept the whole file"),
+        "{sentence}"
+    );
+    assert!(
+        !sentence.contains(UNKNOWN),
+        "a definite failure: {sentence}"
+    );
+    assert_eq!(graph.count(&Method::DELETE, UPLOAD_PATH), 1);
+    assert!(graph.count(&Method::PUT, UPLOAD_PATH) <= 6, "bounded");
+
+    // A 202 on the last chunk that names no range at all: definite failure.
+    let graph = FakeGraph::new();
+    graph
+        .with_site()
+        .on(Method::POST, SESSION, vec![session_reply()])
+        .on(
+            Method::PUT,
+            UPLOAD_PATH,
+            vec![
+                Reply::json(202, &json!({"nextExpectedRanges":["5242880-"]})),
+                Reply::json(202, &json!({})),
+            ],
+        )
+        .on(Method::DELETE, UPLOAD_PATH, vec![Reply::status(204)]);
+    let api = client(&graph);
+    let sentence = refused(
+        &api,
+        Some(&host),
+        "upload_file",
+        json!({"folder_path":"/teams/project/Shared Documents/Reports","filepath":"/bucket/big.bin"}),
+    )
+    .await;
+    assert!(
+        sentence.contains("did not accept the whole file"),
+        "{sentence}"
+    );
+    assert_eq!(graph.count(&Method::DELETE, UPLOAD_PATH), 1);
 }

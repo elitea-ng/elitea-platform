@@ -319,31 +319,71 @@ fn find_ignore_case(haystack: &str, needle: &str) -> Option<usize> {
         .find(|&start| haystack[start..start + needle.len()].eq_ignore_ascii_case(needle))
 }
 
-/// The resource id inside an embedded resource's address
-/// (`…/resources/<id>/$value`, `…/content`, or bare), or `None`.
-pub(super) fn resource_id(src: &str) -> Option<&str> {
-    let after = src.split_once("resources/")?.1;
-    let id = after.split(['/', '?']).next()?;
-    (!id.is_empty()).then_some(id)
+/// The resource id of an address a page carries, only when it is a Graph
+/// `OneNote` resource of the site `site_id`:
+/// `https://graph.microsoft.com/v1.0/sites/<site>/onenote/resources/<id>[/$value|/content]`.
+/// A picture on a CDN, another site's resource, a look-alike host or any
+/// other address is not one, and is never fetched with the person's token.
+pub(super) fn resource_id(src: &str, site_id: &str) -> Option<String> {
+    let url = reqwest::Url::parse(src).ok()?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("graph.microsoft.com")
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    let segments = url.path_segments()?.collect::<Vec<_>>();
+    if segments.len() < 6
+        || !matches!(segments[0], "v1.0" | "beta")
+        || segments[1] != "sites"
+        || segments[3] != "onenote"
+        || segments[4] != "resources"
+    {
+        return None;
+    }
+    let decode = |segment: &str| {
+        percent_encoding::percent_decode_str(segment)
+            .decode_utf8()
+            .ok()
+            .map(std::borrow::Cow::into_owned)
+    };
+    let site = decode(segments[2])?;
+    // `host,collection,web` or the `collection,web` pair a page may carry.
+    let same_site = site == site_id
+        || site_id
+            .split_once(',')
+            .is_some_and(|(_, rest)| rest == site);
+    let id = decode(segments[5])?;
+    (same_site && !id.is_empty()).then_some(id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const SITE: &str = "tenant.sharepoint.com,site-id,web-id";
+
     #[test]
     fn page_text_follows_the_sdk_chunker() {
         let html = r#"<!DOCTYPE html><html lang="en"><head><title>Hidden</title><meta name="created" content="x"/></head>
 <body><div><p id="p1">Hello &amp; <b>world</b></p><p>Second<br/>line</p>
-<img src="https://graph.microsoft.com/v1.0/sites/s/onenote/resources/0-abc!1-X/$value" alt="a chart" />
-<p><object data-attachment="plan.pdf" data="https://graph.microsoft.com/v1.0/sites/s/onenote/resources/res-1/$value" type="application/pdf"></object></p>
+<img src="https://graph.microsoft.com/v1.0/sites/tenant.sharepoint.com,site-id,web-id/onenote/resources/0-abc!1-X/$value" alt="a chart" />
+<p><object data-attachment="plan.pdf" data="https://graph.microsoft.com/v1.0/sites/tenant.sharepoint.com,site-id,web-id/onenote/resources/res-1/$value" type="application/pdf"></object></p>
 <script>var a = "<p>no</p>";</script><p>Last &lt;one&gt;</p></div></body></html>"#;
         let page = parse_page(html);
         assert_eq!(page.images.len(), 1);
         assert_eq!(page.images[0].alt, "a chart");
-        assert_eq!(resource_id(&page.images[0].src), Some("0-abc!1-X"));
+        assert_eq!(
+            resource_id(&page.images[0].src, SITE).as_deref(),
+            Some("0-abc!1-X")
+        );
         assert_eq!(page.attachments[0].name, "plan.pdf");
-        assert_eq!(resource_id(&page.attachments[0].src), Some("res-1"));
+        assert_eq!(
+            resource_id(&page.attachments[0].src, SITE).as_deref(),
+            Some("res-1")
+        );
 
         let mut text = String::new();
         let mut blocks = Vec::new();
@@ -441,11 +481,72 @@ mod tests {
     }
 
     #[test]
-    fn resource_ids_come_out_of_every_embedded_address_form() {
-        assert_eq!(resource_id("x/resources/a-1/$value"), Some("a-1"));
-        assert_eq!(resource_id("x/resources/a-1/content"), Some("a-1"));
-        assert_eq!(resource_id("x/resources/a-1?x=1"), Some("a-1"));
-        assert_eq!(resource_id("x/resources/"), None);
-        assert_eq!(resource_id("https://example.org/pic.png"), None);
+    fn only_a_graph_onenote_resource_of_this_site_is_a_resource() {
+        let base = "https://graph.microsoft.com/v1.0/sites";
+        for (src, expected) in [
+            (
+                format!("{base}/{SITE}/onenote/resources/a-1/$value"),
+                Some("a-1"),
+            ),
+            (
+                format!("{base}/{SITE}/onenote/resources/a-1/content"),
+                Some("a-1"),
+            ),
+            (format!("{base}/{SITE}/onenote/resources/a-1"), Some("a-1")),
+            // The site as a page may spell it: encoded commas, or the
+            // collection/web pair without the host.
+            (
+                format!(
+                    "{base}/tenant.sharepoint.com%2Csite-id%2Cweb-id/onenote/resources/a-1/$value"
+                ),
+                Some("a-1"),
+            ),
+            (
+                format!("{base}/site-id,web-id/onenote/resources/a-1/$value"),
+                Some("a-1"),
+            ),
+            (
+                format!("{base}/{SITE}/onenote/resources/0-abc%211-X/$value"),
+                Some("0-abc!1-X"),
+            ),
+            // Another site, a picture on a CDN, a look-alike host, plain
+            // http, a port, credentials, a different API surface.
+            (
+                format!("{base}/other-site,web/onenote/resources/a-1/$value"),
+                None,
+            ),
+            (
+                "https://cdn.example.com/files/resources/a-1/$value".to_owned(),
+                None,
+            ),
+            (
+                format!(
+                    "https://graph.microsoft.com.evil.example/v1.0/sites/{SITE}/onenote/resources/a-1"
+                ),
+                None,
+            ),
+            (
+                format!("http://graph.microsoft.com/v1.0/sites/{SITE}/onenote/resources/a-1"),
+                None,
+            ),
+            (
+                format!("https://graph.microsoft.com:8443/v1.0/sites/{SITE}/onenote/resources/a-1"),
+                None,
+            ),
+            (
+                format!("https://u:p@graph.microsoft.com/v1.0/sites/{SITE}/onenote/resources/a-1"),
+                None,
+            ),
+            (
+                "https://graph.microsoft.com/v1.0/users/me/onenote/resources/a-1".to_string(),
+                None,
+            ),
+            (format!("{base}/{SITE}/drive/resources/a-1"), None),
+            (format!("{base}/{SITE}/onenote/resources/"), None),
+            ("x/resources/a-1/$value".to_owned(), None),
+            ("https://example.org/pic.png".to_owned(), None),
+        ] {
+            assert_eq!(resource_id(&src, SITE).as_deref(), expected, "{src}");
+        }
     }
 }

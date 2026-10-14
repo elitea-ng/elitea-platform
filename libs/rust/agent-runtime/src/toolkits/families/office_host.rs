@@ -313,6 +313,14 @@ pub trait OfficeToolHost: Send + Sync {
         Err(TextExtractionFailure::NoExtractor)
     }
 
+    /// Whether this host can read the text of a file with this name: it has a
+    /// document reader, and the kind of file (by its extension) is one the
+    /// reader handles. Answered from the name alone, so a tool refuses a file
+    /// BEFORE it downloads it. The default is a host with no reader.
+    fn can_read_text(&self, _name: &str) -> Result<(), TextExtractionFailure> {
+        Err(TextExtractionFailure::NoExtractor)
+    }
+
     /// The size in bytes of one object, from its metadata, without reading
     /// it; `None` when the host cannot tell. Lets a tool refuse a request
     /// that would be too large BEFORE it buffers anything.

@@ -9,8 +9,7 @@
 
 use super::{
     GraphCall, Map, Method, SharePointClient, SharePointClientError, Url, Value, content,
-    graph_url, invalid_input, json, outcome_unknown, require_effect_success, resource_exhausted,
-    validate_output,
+    graph_url, invalid_input, json, require_effect_success, resource_exhausted,
 };
 
 /// The most HTML a new or replaced page may carry.
@@ -26,22 +25,26 @@ impl SharePointClient {
         graph_url(&refs)
     }
 
-    /// One change that answers a JSON object.
-    async fn onenote_change_json(
+    /// One change that creates something. Its 2xx status is read before its
+    /// size or its body, so a confirmed change is never reported as a failure.
+    async fn onenote_create(
         &self,
         tail: &[&str],
         content_type: &'static str,
         body: Vec<u8>,
-    ) -> Result<Map<String, Value>, SharePointClientError> {
+        project: impl FnOnce(&Map<String, Value>) -> Value,
+    ) -> Result<Value, SharePointClientError> {
         let url = self.onenote_url(tail).await?;
         let response = self
-            .send(GraphCall::new(Method::POST, url, "application/json").body(content_type, body))
+            .send(
+                GraphCall::new(Method::POST, url, "application/json")
+                    .body(content_type, body)
+                    .tolerate_oversize(),
+            )
             .await
             .map_err(SharePointClientError::for_effect)?;
         require_effect_success(response.status)?;
-        // Graph created it; an answer that cannot be read must not read as
-        // "nothing happened".
-        content::json_object(&response).map_err(|_| outcome_unknown())
+        Ok(content::confirmed_echo(&response, project))
     }
 
     pub(super) async fn onenote_create_notebook_impl(
@@ -50,22 +53,20 @@ impl SharePointClient {
     ) -> Result<Value, SharePointClientError> {
         let body = serde_json::to_vec(&json!({"displayName": display_name}))
             .map_err(|_| invalid_input())?;
-        let created = self
-            .onenote_change_json(&["notebooks"], "application/json", body)
-            .await?;
-        let result = json!({
-            "id": created.get("id").cloned().unwrap_or(Value::Null),
-            "displayName": created.get("displayName").cloned().unwrap_or(Value::Null),
-            "createdDateTime": created.get("createdDateTime").cloned().unwrap_or(Value::Null),
-            "webUrl": created
-                .get("links")
-                .and_then(|links| links.get("oneNoteWebUrl"))
-                .and_then(|link| link.get("href"))
-                .cloned()
-                .unwrap_or(Value::Null),
-        });
-        validate_output(&result)?;
-        Ok(result)
+        self.onenote_create(&["notebooks"], "application/json", body, |created| {
+            json!({
+                "id": created.get("id").cloned().unwrap_or(Value::Null),
+                "displayName": created.get("displayName").cloned().unwrap_or(Value::Null),
+                "createdDateTime": created.get("createdDateTime").cloned().unwrap_or(Value::Null),
+                "webUrl": created
+                    .get("links")
+                    .and_then(|links| links.get("oneNoteWebUrl"))
+                    .and_then(|link| link.get("href"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            })
+        })
+        .await
     }
 
     pub(super) async fn onenote_create_section_impl(
@@ -75,21 +76,20 @@ impl SharePointClient {
     ) -> Result<Value, SharePointClientError> {
         let body = serde_json::to_vec(&json!({"displayName": display_name}))
             .map_err(|_| invalid_input())?;
-        let created = self
-            .onenote_change_json(
-                &["notebooks", notebook_id, "sections"],
-                "application/json",
-                body,
-            )
-            .await?;
-        let result = json!({
-            "id": created.get("id").cloned().unwrap_or(Value::Null),
-            "displayName": created.get("displayName").cloned().unwrap_or(Value::Null),
-            "createdDateTime": created.get("createdDateTime").cloned().unwrap_or(Value::Null),
-            "pagesUrl": created.get("pagesUrl").cloned().unwrap_or(Value::Null),
-        });
-        validate_output(&result)?;
-        Ok(result)
+        self.onenote_create(
+            &["notebooks", notebook_id, "sections"],
+            "application/json",
+            body,
+            |created| {
+                json!({
+                    "id": created.get("id").cloned().unwrap_or(Value::Null),
+                    "displayName": created.get("displayName").cloned().unwrap_or(Value::Null),
+                    "createdDateTime": created.get("createdDateTime").cloned().unwrap_or(Value::Null),
+                    "pagesUrl": created.get("pagesUrl").cloned().unwrap_or(Value::Null),
+                })
+            },
+        )
+        .await
     }
 
     pub(super) async fn onenote_create_page_impl(
@@ -100,22 +100,21 @@ impl SharePointClient {
         if html_content.len() > MAX_PAGE_HTML_BYTES {
             return Err(resource_exhausted());
         }
-        let created = self
-            .onenote_change_json(
-                &["sections", section_id, "pages"],
-                "text/html",
-                html_content.as_bytes().to_vec(),
-            )
-            .await?;
-        let result = json!({
-            "id": created.get("id").cloned().unwrap_or(Value::Null),
-            "title": created.get("title").cloned().unwrap_or(Value::Null),
-            "createdDateTime": created.get("createdDateTime").cloned().unwrap_or(Value::Null),
-            "webUrl": created.get("webUrl").cloned().unwrap_or(Value::Null),
-            "contentUrl": created.get("contentUrl").cloned().unwrap_or(Value::Null),
-        });
-        validate_output(&result)?;
-        Ok(result)
+        self.onenote_create(
+            &["sections", section_id, "pages"],
+            "text/html",
+            html_content.as_bytes().to_vec(),
+            |created| {
+                json!({
+                    "id": created.get("id").cloned().unwrap_or(Value::Null),
+                    "title": created.get("title").cloned().unwrap_or(Value::Null),
+                    "createdDateTime": created.get("createdDateTime").cloned().unwrap_or(Value::Null),
+                    "webUrl": created.get("webUrl").cloned().unwrap_or(Value::Null),
+                    "contentUrl": created.get("contentUrl").cloned().unwrap_or(Value::Null),
+                })
+            },
+        )
+        .await
     }
 
     pub(super) async fn onenote_update_page_impl(
@@ -131,7 +130,8 @@ impl SharePointClient {
         let response = self
             .send(
                 GraphCall::new(Method::PATCH, url, "application/json")
-                    .body("application/json", body),
+                    .body("application/json", body)
+                    .tolerate_oversize(),
             )
             .await
             .map_err(SharePointClientError::for_effect)?;
@@ -144,7 +144,7 @@ impl SharePointClient {
     ) -> Result<(), SharePointClientError> {
         let url = self.onenote_url(&["pages", page_id]).await?;
         let response = self
-            .send(GraphCall::new(Method::DELETE, url, "application/json"))
+            .send(GraphCall::new(Method::DELETE, url, "application/json").tolerate_oversize())
             .await
             .map_err(SharePointClientError::for_effect)?;
         require_effect_success(response.status)

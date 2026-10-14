@@ -301,6 +301,7 @@ pub(in crate::toolkits) trait SharePointApi: Send + Sync {
     async fn download_shared_file(
         &self,
         sharing_url: &str,
+        readable: &ReadableCheck,
     ) -> Result<SharePointFile, SharePointClientError>;
     /// One `OneNote` embedded resource (an image or an attachment) of this
     /// site, by its resource id.
@@ -313,6 +314,11 @@ pub(in crate::toolkits) trait SharePointApi: Send + Sync {
     /// the address a page carries (shown to the model; never fetched from
     /// here). An address that is no `OneNote` resource comes back unchanged.
     async fn onenote_resource_url(&self, src: &str) -> Result<String, SharePointClientError>;
+    /// The resource id inside an address a page carries, only when that
+    /// address is a Graph `OneNote` resource of THIS site; `None` for anything
+    /// else (a CDN picture, another site's resource), which is never fetched.
+    async fn onenote_resource_id(&self, src: &str)
+    -> Result<Option<String>, SharePointClientError>;
     async fn onenote_create_notebook(
         &self,
         display_name: &str,
@@ -335,11 +341,21 @@ pub(in crate::toolkits) trait SharePointApi: Send + Sync {
     async fn onenote_delete_page(&self, page_id: &str) -> Result<(), SharePointClientError>;
 }
 
+/// Whether the host can read a file of this name: `None`, or the sentence of
+/// the refusal. Explicitly higher-ranked (an elided lifetime would be bound
+/// to the method by `async_trait`).
+pub(in crate::toolkits) type ReadableCheck =
+    dyn for<'name> Fn(&'name str) -> Option<&'static str> + Send + Sync;
+
 pub(in crate::toolkits) struct SharePointHttpResponse {
     pub(in crate::toolkits) status: StatusCode,
     pub(in crate::toolkits) content_type: Option<Box<str>>,
     /// The `Location` of a redirect (a drive item's content is one).
     pub(in crate::toolkits) location: Option<Box<str>>,
+    /// The answer was larger than the cap and its body was not buffered
+    /// (`body` is empty). The status is still true: a caller that changed
+    /// something reads it before it reads the size.
+    pub(in crate::toolkits) oversize: bool,
     pub(in crate::toolkits) body: Vec<u8>,
 }
 
@@ -359,9 +375,10 @@ pub(in crate::toolkits) trait SharePointTransport: Send + Sync {
         request: Request,
         max_body: usize,
     ) -> Result<SharePointHttpResponse, SharePointClientError> {
-        let response = self.execute(request).await?;
+        let mut response = self.execute(request).await?;
         if response.body.len() > max_body {
-            return Err(resource_exhausted());
+            response.body = Vec::new();
+            response.oversize = true;
         }
         Ok(response)
     }
@@ -390,15 +407,12 @@ impl SharePointTransport for ReqwestSharePointTransport {
             .execute(request)
             .await
             .map_err(|error| map_reqwest_error(&error))?;
-        if response
+        let declared_oversize = response
             .headers()
             .get(CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > max_body)
-        {
-            return Err(resource_exhausted());
-        }
+            .is_some_and(|length| length > max_body);
         let status = response.status();
         let content_type = response
             .headers()
@@ -411,6 +425,15 @@ impl SharePointTransport for ReqwestSharePointTransport {
             .and_then(|value| value.to_str().ok())
             .filter(|value| value.len() <= 16 * 1_024)
             .map(Into::into);
+        if declared_oversize {
+            return Ok(SharePointHttpResponse {
+                status,
+                content_type,
+                location,
+                oversize: true,
+                body: Vec::new(),
+            });
+        }
         let mut body = Vec::new();
         // The status is known: a failure from here on is an answer that did
         // not arrive whole, not a request that never left.
@@ -426,7 +449,13 @@ impl SharePointTransport for ReqwestSharePointTransport {
                 .checked_add(chunk.len())
                 .ok_or_else(resource_exhausted)?;
             if next > max_body {
-                return Err(resource_exhausted());
+                return Ok(SharePointHttpResponse {
+                    status,
+                    content_type,
+                    location,
+                    oversize: true,
+                    body: Vec::new(),
+                });
             }
             body.extend_from_slice(&chunk);
         }
@@ -434,6 +463,7 @@ impl SharePointTransport for ReqwestSharePointTransport {
             status,
             content_type,
             location,
+            oversize: false,
             body,
         })
     }
@@ -596,7 +626,11 @@ impl SharePointClient {
             );
         }
         attach_body(&mut request, call.body, call.timeout);
-        self.transport.execute_bounded(request, call.max_body).await
+        let response = self
+            .transport
+            .execute_bounded(request, call.max_body)
+            .await?;
+        refuse_oversize(response, call.keep_oversize)
     }
 
     /// One call to an address Graph handed back (a pre-authenticated download
@@ -611,7 +645,11 @@ impl SharePointClient {
             request.headers_mut().insert(name, value);
         }
         attach_body(&mut request, call.body, call.timeout);
-        self.transport.execute_bounded(request, call.max_body).await
+        let response = self
+            .transport
+            .execute_bounded(request, call.max_body)
+            .await?;
+        refuse_oversize(response, call.keep_oversize)
     }
 
     async fn page_values(
@@ -1075,8 +1113,9 @@ impl SharePointApi for SharePointClient {
     async fn download_shared_file(
         &self,
         sharing_url: &str,
+        readable: &ReadableCheck,
     ) -> Result<SharePointFile, SharePointClientError> {
-        self.download_shared_file_impl(sharing_url).await
+        self.download_shared_file_impl(sharing_url, readable).await
     }
 
     async fn onenote_download_resource(
@@ -1088,8 +1127,16 @@ impl SharePointApi for SharePointClient {
             .await
     }
 
+    async fn onenote_resource_id(
+        &self,
+        src: &str,
+    ) -> Result<Option<String>, SharePointClientError> {
+        let site_id = self.resolve_site_id().await?;
+        Ok(super::html::resource_id(src, site_id))
+    }
+
     async fn onenote_resource_url(&self, src: &str) -> Result<String, SharePointClientError> {
-        match super::html::resource_id(src) {
+        match self.onenote_resource_id(src).await? {
             Some(resource) => Ok(format!(
                 "{GRAPH_BASE}sites/{}/onenote/resources/{resource}/content",
                 self.resolve_site_id().await?
@@ -1148,6 +1195,8 @@ struct GraphCall {
     headers: Vec<(HeaderName, HeaderValue)>,
     timeout: Option<Duration>,
     max_body: usize,
+    /// A change keeps an oversize answer so it can read the status first.
+    keep_oversize: bool,
 }
 
 impl GraphCall {
@@ -1165,7 +1214,15 @@ impl GraphCall {
             headers: Vec::new(),
             timeout: None,
             max_body: MAX_RESPONSE_BYTES,
+            keep_oversize: false,
         }
+    }
+
+    /// An answer over the cap comes back flagged instead of as an error: for
+    /// a call that changes something, whose status is true whatever the size.
+    fn tolerate_oversize(mut self) -> Self {
+        self.keep_oversize = true;
+        self
     }
 
     fn body(mut self, content_type: &'static str, bytes: Vec<u8>) -> Self {
@@ -1181,6 +1238,18 @@ impl GraphCall {
     fn max_body(mut self, max_body: usize) -> Self {
         self.max_body = max_body;
         self
+    }
+}
+
+/// A read's answer over the cap is an error; a change's is handed back.
+fn refuse_oversize(
+    response: SharePointHttpResponse,
+    keep: bool,
+) -> Result<SharePointHttpResponse, SharePointClientError> {
+    if response.oversize && !keep {
+        Err(resource_exhausted())
+    } else {
+        Ok(response)
     }
 }
 
@@ -1694,6 +1763,17 @@ const fn connection_lost() -> SharePointClientError {
     SharePointClientError {
         code: SharePointClientErrorCode::ConnectionLost,
         detail: None,
+    }
+}
+
+/// A resumable upload the session would not complete: a definite failure
+/// (nothing is saved; the session was cancelled).
+const fn upload_incomplete() -> SharePointClientError {
+    SharePointClientError {
+        code: SharePointClientErrorCode::DependencyUnavailable,
+        detail: Some(
+            "SharePoint did not accept the whole file, so the upload was cancelled and nothing was saved",
+        ),
     }
 }
 

@@ -847,3 +847,41 @@ fn every_sidecar_skip_is_one_extraction_failure() {
         assert_eq!(text_failure(reason), expected, "{reason:?}");
     }
 }
+
+/// A file is refused from its name alone, before anything is downloaded.
+#[test]
+fn a_file_is_refused_by_its_name_before_it_is_downloaded() {
+    use super::office_host::readable_kind;
+    for name in ["notes.txt", "a.md", "data.json", "src/main.rs", "page.html"] {
+        assert_eq!(readable_kind(false, name), Ok(()), "{name}");
+    }
+    for name in ["a.pdf", "b.docx", "c.xlsx", "d.pptx"] {
+        assert_eq!(readable_kind(true, name), Ok(()), "{name}");
+        assert_eq!(
+            readable_kind(false, name),
+            Err(TextExtractionFailure::NoExtractor),
+            "{name}"
+        );
+    }
+    for name in [
+        "photo.png",
+        "scan.JPG",
+        "archive.zzz",
+        "Makefile",
+        "clip.mp4",
+    ] {
+        assert_eq!(
+            readable_kind(true, name),
+            Err(TextExtractionFailure::Unsupported),
+            "{name}"
+        );
+    }
+    let runtime = Arc::new(OfficeRuntime::with_transport(ORIGIN, ObjectApi::new()));
+    let host =
+        ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
+    assert_eq!(host.can_read_text("a.txt"), Ok(()));
+    assert_eq!(
+        host.can_read_text("a.pdf"),
+        Err(TextExtractionFailure::NoExtractor)
+    );
+}

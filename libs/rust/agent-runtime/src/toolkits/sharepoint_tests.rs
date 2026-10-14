@@ -306,6 +306,7 @@ pub(super) fn response(
         status,
         content_type: Some(content_type.into()),
         location: None,
+        oversize: false,
         body: serde_json::to_vec(&body).expect("fixture JSON"),
     }
 }
@@ -591,7 +592,11 @@ impl SharePointApi for AuthenticationApi {
         Err(Self::error())
     }
 
-    async fn download_shared_file(&self, _: &str) -> Result<SharePointFile, SharePointClientError> {
+    async fn download_shared_file(
+        &self,
+        _: &str,
+        _: &super::families::sharepoint::client::ReadableCheck,
+    ) -> Result<SharePointFile, SharePointClientError> {
         Err(Self::error())
     }
 
@@ -604,6 +609,10 @@ impl SharePointApi for AuthenticationApi {
     }
 
     async fn onenote_resource_url(&self, _: &str) -> Result<String, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn onenote_resource_id(&self, _: &str) -> Result<Option<String>, SharePointClientError> {
         Err(Self::error())
     }
 
