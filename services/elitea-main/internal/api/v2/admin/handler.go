@@ -11,12 +11,16 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 type Handler struct {
+	// memoryUsers removes a deleted user's personal memories; nil without an
+	// elitea-vector client.
+	memoryUsers MemoryUserRemover
 	pool        *pgxpool.Pool
 	resolver    auth.PermissionResolver
 	suggestions ToolkitRegistrySource
@@ -85,6 +89,23 @@ type Handler struct {
 
 // Option configures a Handler at construction time.
 type Option func(*Handler)
+
+// MemoryUserRemover deletes every PERSONAL memory a user holds in a project.
+// *vectorclient.Client satisfies it.
+type MemoryUserRemover interface {
+	DeleteMemoryUser(ctx context.Context, projectID, userID int64) error
+}
+
+// WithMemoryUserRemover wires the removal of a deleted user's personal
+// memories from every project they were a member of. Unwired (no
+// elitea-vector client), nothing is asked.
+func WithMemoryUserRemover(remover MemoryUserRemover) Option {
+	return func(h *Handler) {
+		if remover != nil && !cleanupjournal.IsNilPointer(remover) {
+			h.memoryUsers = remover
+		}
+	}
+}
 
 // WithPermissionResolver supplies the resolver the WRITE handlers in users.go
 // use for their own, finer-grained checks — specifically the `super_admin`

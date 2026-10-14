@@ -52,4 +52,12 @@ message IntrospectTokenResponse {
   // SOURCE_TOOLKIT_INDEX. A callback token names the source of the provider
   // that minted it. elitea-vector refuses every other source.
   repeated Source allowed_sources = 6;
+  // personal_memory_allowed says whether this token may use the PERSONAL
+  // memory scope: a worker claim token of a run by a user whose conversation
+  // has one human participant (or no conversation). False for every callback
+  // token, and for a claim that runs in a conversation with more than one
+  // person, where a personal memory would be read into, or written from, a
+  // transcript other people see. Decided by elitea-main when the claim token
+  // is minted.
+  bool personal_memory_allowed = 7;
 }

@@ -55,11 +55,11 @@ On the Rust worker a memory holds up to 16 KiB of content and 8 KiB of metadata,
 </Note>
 
 <Note>
-**Memory scope** (Rust worker). *Personal* (the default): each person has a private memory, and nobody else can read, search or delete it. *Project*: one memory shared by everyone in the project. *Both*: the agent chooses per memory, personal unless it says project. A run with no signed-in person, such as a scheduled run, has no personal memory. Memories are kept per project.
+**Memory scope** (Rust worker). *Personal* (the default): each person has a private memory, and nobody else can read, search or delete it. *Project*: one memory shared by everyone in the project. *Both*: the agent chooses per memory, personal unless it says project. Anything saved to *project* memory is read back by every later conversation in the project as a fact, so in *Both* mode the agent is told to save there only when the person asked and never to copy personal memories or text that came from a web page, a document or a tool. If an agent reads untrusted content, prefer *Personal* only. A scheduled run acts as the person who owns the schedule and uses that person's personal memory. A conversation with more than one person has no personal memory (the agent says so); project memory still works there. Memories are kept per project, and the platform, not the agent, keeps one person's personal memory from another: it is enforced where the memories are stored.
 </Note>
 
 <Note>
-On the Rust worker, saving to an existing key keeps the old value as history instead of overwriting it. `get_memory` and `search_memory` return the current value; they also accept `as_of` (an RFC 3339 timestamp, to see what was true then) and `include_history`. `delete_memory` removes every version. A key keeps at most 20 versions.
+On the Rust worker, saving to an existing key keeps the old value as history instead of overwriting it. `get_memory` and `search_memory` return the current value; they also accept `as_of` (an RFC 3339 timestamp, to see what was true then) and `include_history`. `delete_memory` removes every version. A key keeps at most 20 versions. Deleting the toolkit deletes its memories, including every person's personal ones in its namespace; a person who leaves the project has their personal memories there deleted.
 </Note>
 
 <Note>

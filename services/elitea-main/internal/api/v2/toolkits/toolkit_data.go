@@ -41,9 +41,11 @@ package toolkits
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -56,6 +58,25 @@ type ToolkitCleanupJournal interface {
 	// Enqueue writes the journal row for the toolkit when its type owes one,
 	// and returns the application queued ("" when none).
 	Enqueue(ctx context.Context, tx pgx.Tx, projectID, toolkitID int64, toolkitType string) (app string, err error)
+}
+
+// MemoryCleanupJournal is the part of the journal a MEMORY toolkit's delete
+// uses: the vector store holds its memories under the namespace its setting
+// names, and the setting leaves with the row, so the delete records it.
+// *toolkitcleanup.Journal satisfies it; a journal that does not is simply not
+// asked.
+type MemoryCleanupJournal interface {
+	EnqueueMemory(ctx context.Context, tx pgx.Tx, projectID, toolkitID int64, namespace string) (app string, err error)
+}
+
+// MemoryNamespaceOf is the namespace a memory toolkit's tools work in: its
+// `namespace` setting, or the toolkit's id when the setting is absent or not a
+// non-blank text (the worker's own default).
+func MemoryNamespaceOf(settings map[string]any, toolkitID int64) string {
+	if namespace, ok := settings["namespace"].(string); ok && strings.TrimSpace(namespace) != "" {
+		return namespace
+	}
+	return strconv.FormatInt(toolkitID, 10)
 }
 
 // WithToolkitCleanupJournal makes Delete row-first with a journal
@@ -86,10 +107,13 @@ func (r *pgRepo) DeleteToolkitRowFirst(ctx context.Context, projectID, toolkitID
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
-	var toolkitType string
+	var (
+		toolkitType string
+		settingsRaw []byte
+	)
 	switch err := tx.QueryRow(ctx,
-		fmt.Sprintf(`DELETE FROM %s.elitea_tools WHERE id = $1 RETURNING type`, schema), toolkitID,
-	).Scan(&toolkitType); {
+		fmt.Sprintf(`DELETE FROM %s.elitea_tools WHERE id = $1 RETURNING type, COALESCE(settings, '{}'::jsonb)`, schema), toolkitID,
+	).Scan(&toolkitType, &settingsRaw); {
 	case errors.Is(err, pgx.ErrNoRows):
 		// Nothing to delete and nothing to journal; the empty transaction ends
 		// with the rollback above.
@@ -111,6 +135,16 @@ func (r *pgRepo) DeleteToolkitRowFirst(ctx context.Context, projectID, toolkitID
 	if journal != nil {
 		if _, err := journal.Enqueue(ctx, tx, project, toolkit, toolkitType); err != nil {
 			return err
+		}
+		// A memory toolkit's memories are in the vector store, under the
+		// namespace its settings named; record it before the row's settings
+		// are gone for good.
+		if memory, ok := journal.(MemoryCleanupJournal); ok && toolkitType == "memory" {
+			var settings map[string]any
+			_ = json.Unmarshal(settingsRaw, &settings)
+			if _, err := memory.EnqueueMemory(ctx, tx, project, toolkit, MemoryNamespaceOf(settings, toolkit)); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit(ctx)

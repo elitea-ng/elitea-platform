@@ -60,6 +60,15 @@ pub const NOT_AUTHORIZED_WINDOW_SECONDS: i64 = 60;
 /// it, so an authorized caller is answered "inactive".
 const SELF_CHECK_TOKEN: &str = "elitea-vector-introspection-self-check";
 
+/// The `owner` payload value of project-shared memory.
+pub const PROJECT_OWNER: &str = "project";
+
+/// The `owner` payload value of one user's personal memory.
+#[must_use]
+pub fn user_owner(user_id: i64) -> String {
+    format!("user:{user_id}")
+}
+
 /// A verified token.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TokenGrant {
@@ -75,9 +84,28 @@ pub struct TokenGrant {
     /// token names `ToolkitIndex`; a callback token names the source of the
     /// provider that minted it.
     pub sources: Vec<pb::Source>,
+    /// Whether the token may use the PERSONAL memory scope: elitea-main says
+    /// so for a worker claim of a run whose conversation has one human
+    /// participant. Never true for a callback token.
+    pub personal_memory_allowed: bool,
 }
 
 impl TokenGrant {
+    /// The user the token was minted for: the id of a `user:<id>` principal
+    /// of a WORKER CLAIM token. An engine callback token has no user identity
+    /// for memory, whatever its principal says.
+    #[must_use]
+    pub fn memory_user(&self) -> Option<i64> {
+        if self.kind != pb::TokenKind::WorkerClaim {
+            return None;
+        }
+        self.principal
+            .strip_prefix("user:")
+            .filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|id| id.parse::<i64>().ok())
+            .filter(|id| *id > 0)
+    }
+
     /// Whether the token may use `source`.
     #[must_use]
     pub fn allows(&self, source: pb::Source) -> bool {
@@ -171,6 +199,56 @@ impl Caller {
                 Self::Token(grant) => grant.allows(*source),
             })
             .collect()
+    }
+
+    /// The owner a MEMORY request works under, from the TOKEN.
+    ///
+    /// * `source` is not memory: `memory_scope` must be unspecified, and the
+    ///   answer is `None`.
+    /// * `source` is memory: `memory_scope` is required. PROJECT is the
+    ///   literal `project` owner. PERSONAL is `user:<id>` of the token's
+    ///   user, refused when the token names no user or elitea-main did not
+    ///   allow personal memory for the claim. An administrator caller has no
+    ///   memory owner: it uses `DeleteMemoryUser` and `DeleteMemoryNamespace`.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` for a missing or misplaced scope; `PERMISSION_DENIED`
+    /// as above, with a stable `memory.` reason the client can word.
+    pub fn memory_owner(&self, source: i32, memory_scope: i32) -> Result<Option<String>, Status> {
+        let is_memory = source == pb::Source::Memory as i32;
+        if !is_memory {
+            return if memory_scope == pb::MemoryScope::Unspecified as i32 {
+                Ok(None)
+            } else {
+                Err(Status::invalid_argument(
+                    "memory_scope applies to the memory source only",
+                ))
+            };
+        }
+        let Self::Token(grant) = self else {
+            return Err(Status::permission_denied(
+                "memory.administrator: an administrator has no memory scope; use DeleteMemoryUser or DeleteMemoryNamespace",
+            ));
+        };
+        match pb::MemoryScope::try_from(memory_scope) {
+            Ok(pb::MemoryScope::Project) => Ok(Some(PROJECT_OWNER.to_owned())),
+            Ok(pb::MemoryScope::Personal) => {
+                let user = grant.memory_user().ok_or_else(|| {
+                    Status::permission_denied(
+                        "memory.personal_unavailable: this token names no user, so there is no personal memory",
+                    )
+                })?;
+                if !grant.personal_memory_allowed {
+                    return Err(Status::permission_denied(
+                        "memory.personal_shared_conversation: personal memory is not available in a conversation with more than one person",
+                    ));
+                }
+                Ok(Some(user_owner(user)))
+            }
+            Ok(pb::MemoryScope::Unspecified) | Err(_) => Err(Status::invalid_argument(
+                "memory_scope is required for the memory source",
+            )),
+        }
     }
 
     /// Refuses a token caller: the operation is for administrators.
@@ -392,6 +470,8 @@ pub fn grant_from_response(response: &pb::IntrospectTokenResponse, now: i64) -> 
         kind,
         expires_at_unix: response.expires_at_unix,
         sources,
+        personal_memory_allowed: response.personal_memory_allowed
+            && kind == pb::TokenKind::WorkerClaim,
     })
 }
 
@@ -684,6 +764,7 @@ mod tests {
             kind: pb::TokenKind::EngineCallback,
             expires_at_unix,
             sources: vec![pb::Source::Deepwiki],
+            personal_memory_allowed: false,
         }
     }
 
@@ -1134,6 +1215,7 @@ mod tests {
             kind: pb::TokenKind::EngineCallback as i32,
             expires_at_unix: 2_000,
             allowed_sources: vec![pb::Source::Deepwiki as i32],
+            personal_memory_allowed: false,
         };
         assert_eq!(
             grant_from_response(&good, 1_000).expect("good").sources,
@@ -1177,5 +1259,151 @@ mod tests {
         ] {
             assert!(grant_from_response(&bad, 1_000).is_none(), "{bad:?}");
         }
+    }
+
+    fn memory_grant(principal: &str, kind: pb::TokenKind, personal: bool) -> TokenGrant {
+        TokenGrant {
+            project_id: 7,
+            principal: principal.to_owned(),
+            kind,
+            expires_at_unix: i64::MAX,
+            sources: vec![pb::Source::Memory],
+            personal_memory_allowed: personal,
+        }
+    }
+
+    const MEMORY: i32 = pb::Source::Memory as i32;
+    const PERSONAL: i32 = pb::MemoryScope::Personal as i32;
+    const PROJECT: i32 = pb::MemoryScope::Project as i32;
+
+    #[test]
+    fn the_memory_owner_comes_from_the_token_and_nowhere_else() {
+        let claim = |principal: &str, personal| {
+            Caller::Token(memory_grant(
+                principal,
+                pb::TokenKind::WorkerClaim,
+                personal,
+            ))
+        };
+        // A user's personal scope is their id; the project scope is the literal.
+        assert_eq!(
+            claim("user:42", true)
+                .memory_owner(MEMORY, PERSONAL)
+                .expect("owner"),
+            Some("user:42".to_owned())
+        );
+        assert_eq!(
+            claim("user:42", true)
+                .memory_owner(MEMORY, PROJECT)
+                .expect("owner"),
+            Some("project".to_owned())
+        );
+        // Not a user id: no personal scope, whatever the principal says.
+        for principal in [
+            "service:scheduler",
+            "user:",
+            "user:0",
+            "user:-3",
+            "user:4x",
+            "user:042 ",
+            "42",
+            "",
+        ] {
+            let status = claim(principal, true)
+                .memory_owner(MEMORY, PERSONAL)
+                .expect_err(principal);
+            assert_eq!(status.code(), tonic::Code::PermissionDenied, "{principal}");
+            assert!(
+                status.message().starts_with("memory.personal_unavailable"),
+                "{principal}"
+            );
+            // Its project scope is unaffected.
+            assert_eq!(
+                claim(principal, true)
+                    .memory_owner(MEMORY, PROJECT)
+                    .expect("project"),
+                Some("project".to_owned())
+            );
+        }
+        // A claim in a conversation with several people has no personal scope.
+        let status = claim("user:42", false)
+            .memory_owner(MEMORY, PERSONAL)
+            .expect_err("shared");
+        assert!(
+            status
+                .message()
+                .starts_with("memory.personal_shared_conversation")
+        );
+        // An engine callback token has no user identity for memory.
+        let callback = Caller::Token(memory_grant("user:42", pb::TokenKind::EngineCallback, true));
+        assert!(callback.memory_owner(MEMORY, PERSONAL).is_err());
+        // An administrator has no memory owner at all.
+        let admin = Caller::Admin("dns:elitea-main".to_owned());
+        for scope in [PERSONAL, PROJECT, 0] {
+            assert_eq!(
+                admin.memory_owner(MEMORY, scope).expect_err("admin").code(),
+                tonic::Code::PermissionDenied
+            );
+        }
+        // The scope is required for memory and refused for every other source.
+        assert_eq!(
+            claim("user:42", true)
+                .memory_owner(MEMORY, 0)
+                .expect_err("required")
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        assert_eq!(
+            claim("user:42", true)
+                .memory_owner(MEMORY, 9)
+                .expect_err("unknown")
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        for source in [pb::Source::ToolkitIndex as i32, pb::Source::Deepwiki as i32] {
+            assert_eq!(
+                claim("user:42", true)
+                    .memory_owner(source, 0)
+                    .expect("none"),
+                None
+            );
+            assert_eq!(
+                claim("user:42", true)
+                    .memory_owner(source, PROJECT)
+                    .expect_err("scope")
+                    .code(),
+                tonic::Code::InvalidArgument
+            );
+        }
+    }
+
+    #[test]
+    fn personal_memory_survives_introspection_only_for_a_worker_claim() {
+        let answer = |kind: pb::TokenKind, personal| pb::IntrospectTokenResponse {
+            active: true,
+            project_id: 7,
+            principal: "user:42".to_owned(),
+            kind: kind as i32,
+            expires_at_unix: 2_000,
+            allowed_sources: vec![pb::Source::Memory as i32],
+            personal_memory_allowed: personal,
+        };
+        assert!(
+            grant_from_response(&answer(pb::TokenKind::WorkerClaim, true), 1_000)
+                .expect("claim")
+                .personal_memory_allowed
+        );
+        assert!(
+            !grant_from_response(&answer(pb::TokenKind::WorkerClaim, false), 1_000)
+                .expect("claim")
+                .personal_memory_allowed
+        );
+        // A callback token is never given the personal scope, even if the
+        // answer says so.
+        assert!(
+            !grant_from_response(&answer(pb::TokenKind::EngineCallback, true), 1_000)
+                .expect("callback")
+                .personal_memory_allowed
+        );
     }
 }

@@ -353,7 +353,7 @@ async fn materialize_all(
         // the lent vector token, like the index tools.
         // (Spelled as a literal: the Go drift check reads this dispatch.)
         if reference.tool_type() == "memory" {
-            if let Some(toolset) = memory_toolset_for(reference, policy, index_tools)? {
+            if let Some(toolset) = memory_toolset_for(reference, policy, index_tools, on_refused)? {
                 toolsets.push(Arc::new(toolset) as Arc<dyn Toolset>);
             }
             continue;
@@ -441,6 +441,7 @@ fn memory_toolset_for(
     reference: &FrozenToolReference<'_>,
     policy: &Arc<ToolAdmissionPolicy>,
     index_tools: IndexToolSupport<'_>,
+    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, UnsupportedSetting) + Send),
 ) -> Result<Option<adk_tool::BasicToolset>, ToolsetMaterializationError> {
     let authority = match index_tools {
         IndexToolSupport::Lent(authority) if authority.host().serves_memory() => authority,
@@ -484,9 +485,26 @@ fn memory_toolset_for(
         authority,
     )
     .map(Some)
-    .map_err(|error| match error {
-        MemoryToolsetError::Invalid => invalid_configuration(),
-        MemoryToolsetError::ResourceExhausted => resource_exhausted(),
+    .or_else(|error| {
+        // A setting the user can fix skips THIS toolkit with a visible
+        // reason (the run's notice names it); it never fails the run.
+        let setting = match error {
+            MemoryToolsetError::InvalidNamespace => UnsupportedSetting::MemoryNamespace,
+            MemoryToolsetError::InvalidScope => UnsupportedSetting::MemoryScope,
+            MemoryToolsetError::InvalidSelection => UnsupportedSetting::MemorySelection,
+            MemoryToolsetError::Invalid => return Err(invalid_configuration()),
+            MemoryToolsetError::ResourceExhausted => return Err(resource_exhausted()),
+        };
+        tracing::warn!(
+            event = "agent_toolkit_refused",
+            reason_code = "invalid_memory_setting",
+            toolkit_type = reference.tool_type(),
+            toolkit_id = reference.tool_id(),
+            reason = setting.reason(),
+            "the memory toolkit's settings are malformed; the toolkit was left out"
+        );
+        on_refused(reference, setting);
+        Ok(None)
     })
 }
 

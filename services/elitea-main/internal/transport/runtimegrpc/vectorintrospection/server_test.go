@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -121,6 +122,10 @@ func newTestServer(t *testing.T) *Server {
 			mustHash(t, claimToken(0x01)): {ProjectID: 7, ActorID: 42, Sources: []string{"toolkit_index"}, ExpiresAt: expires},
 			mustHash(t, claimToken(0x02)): {ProjectID: 7, ActorID: 42, Sources: []string{"not-a-source"}, ExpiresAt: expires},
 			mustHash(t, claimToken(0x03)): {ProjectID: 7, ActorID: 42, ExpiresAt: expires},
+			// The memory source, for a run in a one-person conversation and for
+			// one in a conversation with several people.
+			mustHash(t, claimToken(0x14)): {ProjectID: 7, ActorID: 42, Sources: []string{"toolkit_index", "memory"}, ExpiresAt: expires, PersonalMemoryAllowed: true},
+			mustHash(t, claimToken(0x15)): {ProjectID: 7, ActorID: 42, Sources: []string{"toolkit_index", "memory"}, ExpiresAt: expires},
 		},
 		[]string{"dns:elitea-vector"},
 		nil,
@@ -258,5 +263,26 @@ func TestIntrospectRefusesEveryOtherClaimToken(t *testing.T) {
 	}
 	if _, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: claimToken(0x99)}); status.Code(err) != codes.Unavailable {
 		t.Fatalf("store down: got %v, want Unavailable", err)
+	}
+}
+
+func TestIntrospectNamesTheMemorySourceAndWhetherPersonalMemoryIsAllowed(t *testing.T) {
+	server := newTestServer(t)
+	for token, allowed := range map[byte]bool{0x14: true, 0x15: false} {
+		response, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: claimToken(token)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !response.GetActive() || response.GetPrincipal() != "user:42" ||
+			response.GetKind() != vectorv1.TokenKind_TOKEN_KIND_WORKER_CLAIM ||
+			!slices.Equal(response.GetAllowedSources(), []vectorv1.Source{vectorv1.Source_SOURCE_TOOLKIT_INDEX, vectorv1.Source_SOURCE_MEMORY}) ||
+			response.GetPersonalMemoryAllowed() != allowed {
+			t.Fatalf("token %#x: %v", token, response)
+		}
+	}
+	// A callback token never carries the personal scope.
+	callback, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: "callback"})
+	if err != nil || callback.GetPersonalMemoryAllowed() {
+		t.Fatalf("callback token: %v %v", callback, err)
 	}
 }

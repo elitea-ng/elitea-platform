@@ -222,7 +222,6 @@ fn token(sources: &[&str]) -> VectorClaimToken {
         bearer: TOKEN.to_owned(),
         expires_at_unix_millis: i64::MAX,
         allowed_sources: sources.iter().map(ToString::to_string).collect(),
-        actor_user_id: 42,
     }))
     .expect("token")
 }

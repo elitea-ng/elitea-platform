@@ -117,7 +117,8 @@ const memoryScopeDescription = "Who can see what this toolkit remembers. " +
 	"Personal: each person has their own private memory, and nobody else can read, search or delete it (the safe default). " +
 	"Project: one memory shared by everyone in the project. " +
 	"Both: the agent chooses per memory, personal unless it says project. " +
-	"A run with no signed-in person (a scheduled run) has no personal memory."
+	"A scheduled run acts as the person who owns the schedule and uses that person's personal memory. " +
+	"A conversation with more than one person has no personal memory; project memory still works there."
 
 // withMemoryScope adds the `memory_scope` setting the Rust worker's memory
 // toolkit reads (worker unit M9). A copy: the shared schema is never written to.

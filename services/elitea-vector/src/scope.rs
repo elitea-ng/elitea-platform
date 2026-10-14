@@ -121,6 +121,16 @@ impl Scope {
         self
     }
 
+    /// Narrows to the points one memory owner holds (`user:<id>` or
+    /// `project`), as the token decides it. The only way an `owner` condition
+    /// is ever built: no request carries one.
+    #[must_use]
+    pub fn owned_by(mut self, owner: &str) -> Self {
+        self.conditions
+            .push(Condition::matches(key::OWNER, owner.to_owned()));
+        self
+    }
+
     /// Adds one condition the service built (a delete selector).
     #[must_use]
     pub fn with(mut self, condition: Condition) -> Self {
@@ -386,6 +396,7 @@ mod tests {
             "source",
             "namespace_id",
             "generation",
+            "owner",
             "text",
             "metadata",
             "metadata.",

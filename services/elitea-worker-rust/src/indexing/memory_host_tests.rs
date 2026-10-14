@@ -31,6 +31,12 @@ use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
 const TOKEN_A: &str = "elvc_0123456789abcdef0123456789abcdef0123456789a";
 const TOKEN_B: &str = "elvc_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+/// Another user of project 1.
+const TOKEN_A2: &str = "elvc_ccccccccccccccccccccccccccccccccccccccccccc";
+/// A claim of project 1 that names no user.
+const TOKEN_NOUSER: &str = "elvc_ddddddddddddddddddddddddddddddddddddddddddd";
+/// The first user in a conversation with more than one person.
+const TOKEN_SHARED: &str = "elvc_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 const MEMORY_MODEL: &str = "memory-embedder";
 
 /// Embeds by topic, records the model each request names, and can refuse.
@@ -98,7 +104,20 @@ struct Harness {
 }
 
 async fn harness(memory_model: Option<&str>, refuse: Option<StatusCode>) -> Harness {
-    let fake = FakeVector::new(&[(TOKEN_A, 1), (TOKEN_B, 2)]);
+    let fake = FakeVector::new(&[
+        (TOKEN_A, 1),
+        (TOKEN_A2, 1),
+        (TOKEN_B, 2),
+        (TOKEN_NOUSER, 1),
+        (TOKEN_SHARED, 1),
+    ])
+    .with_users(&[
+        (TOKEN_A, 10),
+        (TOKEN_A2, 11),
+        (TOKEN_B, 10),
+        (TOKEN_SHARED, 10),
+    ])
+    .with_shared_conversation(TOKEN_SHARED);
     let (address, server) = fake.clone().serve().await.expect("serve");
     let mut config = ClientConfig::new(format!("http://{address}"));
     config.allow_insecure = true;
@@ -140,15 +159,10 @@ async fn harness(memory_model: Option<&str>, refuse: Option<StatusCode>) -> Harn
 }
 
 fn token(bearer: &str, sources: &[&str]) -> VectorClaimToken {
-    token_for(bearer, sources, 42)
-}
-
-fn token_for(bearer: &str, sources: &[&str], actor_user_id: i64) -> VectorClaimToken {
     VectorClaimToken::from_receipt(Some(VectorClaimTokenV1 {
         bearer: bearer.to_owned(),
         expires_at_unix_millis: i64::MAX,
         allowed_sources: sources.iter().map(ToString::to_string).collect(),
-        actor_user_id,
     }))
     .expect("token")
 }
@@ -197,7 +211,7 @@ async fn call_in(
 #[tokio::test(flavor = "multi_thread")]
 async fn the_four_tools_work_end_to_end_with_the_deployments_model() {
     let harness = harness(Some(MEMORY_MODEL), None).await;
-    let token = token(TOKEN_A, &["toolkit_index"]);
+    let token = token(TOKEN_A, &["memory"]);
     let host = host(&harness, &token);
     assert!(host.serves_memory());
 
@@ -270,10 +284,7 @@ async fn the_four_tools_work_end_to_end_with_the_deployments_model() {
 #[tokio::test(flavor = "multi_thread")]
 async fn projects_and_namespaces_never_share_memory() {
     let harness = harness(Some(MEMORY_MODEL), None).await;
-    let (a, b) = (
-        token(TOKEN_A, &["toolkit_index"]),
-        token(TOKEN_B, &["toolkit_index"]),
-    );
+    let (a, b) = (token(TOKEN_A, &["memory"]), token(TOKEN_B, &["memory"]));
     let (host_a, host_b) = (host(&harness, &a), host(&harness, &b));
     call(
         &host_a,
@@ -338,7 +349,7 @@ async fn projects_and_namespaces_never_share_memory() {
 #[tokio::test(flavor = "multi_thread")]
 async fn memory_is_not_served_without_a_model_or_a_source() {
     let without_model = harness(None, None).await;
-    let token_a = token(TOKEN_A, &["toolkit_index"]);
+    let token_a = token(TOKEN_A, &["memory"]);
     let host_a = host(&without_model, &token_a);
     assert!(!host_a.serves_memory());
     assert!(
@@ -364,7 +375,7 @@ async fn memory_is_not_served_without_a_model_or_a_source() {
     )
     .await;
     assert!(
-        sentence.contains("Failed to search memory") && sentence.contains("no project token"),
+        sentence.contains("Failed to search memory") && sentence.contains("has no memory at all"),
         "{sentence}"
     );
     assert_eq!(with_model.gateway.requests.load(Ordering::SeqCst), 0);
@@ -375,7 +386,7 @@ async fn memory_is_not_served_without_a_model_or_a_source() {
 async fn each_failure_cause_names_itself() {
     // The gateway refuses (budget): nothing is written.
     let refusing = harness(Some(MEMORY_MODEL), Some(StatusCode::PAYMENT_REQUIRED)).await;
-    let token_a = token(TOKEN_A, &["toolkit_index"]);
+    let token_a = token(TOKEN_A, &["memory"]);
     let host_a = host(&refusing, &token_a);
     let sentence = call(
         &host_a,
@@ -440,15 +451,15 @@ async fn each_failure_cause_names_itself() {
     assert_eq!(working.fake.point_count(), 0);
 }
 
-/// Personal memory is derived from the claim's authenticated user, in the same
-/// project, through every tool; project memory is shared by both users.
+/// Personal memory is the service's per-user decision: two users of ONE
+/// project, in the same namespace, each see only their own; the project's is
+/// shared by both.
 #[tokio::test(flavor = "multi_thread")]
-async fn personal_memory_follows_the_claims_user_and_project_memory_is_shared() {
+async fn personal_memory_is_per_user_and_project_memory_is_shared() {
     use MemoryScope::{Personal, Project};
     let harness = harness(Some(MEMORY_MODEL), None).await;
-    // Two users of ONE project (the same bearer's project), as two claims.
-    let alice_token = token_for(TOKEN_A, &["toolkit_index"], 10);
-    let bob_token = token_for(TOKEN_A, &["toolkit_index"], 11);
+    let alice_token = token(TOKEN_A, &["memory"]);
+    let bob_token = token(TOKEN_A2, &["memory"]);
     let alice = host(&harness, &alice_token);
     let bob = host(&harness, &bob_token);
 
@@ -534,7 +545,8 @@ async fn personal_memory_follows_the_claims_user_and_project_memory_is_shared() 
             "No memory found with key: k"
         );
     }
-    // A model-supplied "user" or "user_id" argument changes nothing.
+    // A model-supplied "user" or "user_id" argument changes nothing: the
+    // owner is the token's.
     assert_eq!(
         call_in(
             &bob,
@@ -549,32 +561,41 @@ async fn personal_memory_follows_the_claims_user_and_project_memory_is_shared() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_run_without_a_user_has_no_personal_memory_but_keeps_the_projects() {
+async fn personal_memory_explains_why_it_is_unavailable_and_the_projects_still_works() {
     let harness = harness(Some(MEMORY_MODEL), None).await;
-    let anonymous = token_for(TOKEN_A, &["toolkit_index"], 0);
-    assert_eq!(anonymous.actor_user_id(), None);
-    let host = host(&harness, &anonymous);
-    let sentence = call_in(
-        &host,
-        MemoryScope::Personal,
-        MemoryToolName::ManageMemory,
-        "n",
-        json!({"content": "x"}),
-    )
-    .await;
-    assert!(
-        sentence.contains("Failed to store memory: personal memory needs a signed-in user"),
-        "{sentence}"
+    for (bearer, needle) in [
+        (TOKEN_NOUSER, "its token names no user"),
+        (TOKEN_SHARED, "more than one person"),
+    ] {
+        let claim = token(bearer, &["memory"]);
+        let host = host(&harness, &claim);
+        let sentence = call_in(
+            &host,
+            MemoryScope::Personal,
+            MemoryToolName::ManageMemory,
+            "n",
+            json!({"content": "x"}),
+        )
+        .await;
+        assert!(
+            sentence
+                .starts_with("FAILED: Failed to store memory: personal memory is not available")
+                && sentence.contains(needle),
+            "{sentence}"
+        );
+        let stored = call_in(
+            &host,
+            MemoryScope::Project,
+            MemoryToolName::ManageMemory,
+            "n",
+            json!({"content": "shared", "key": bearer}),
+        )
+        .await;
+        assert!(stored.starts_with("Successfully stored memory"), "{stored}");
+    }
+    assert_eq!(
+        harness.fake.point_count(),
+        2,
+        "only the project writes landed"
     );
-    assert_eq!(harness.gateway.requests.load(Ordering::SeqCst), 0);
-    assert_eq!(harness.fake.point_count(), 0);
-    let stored = call_in(
-        &host,
-        MemoryScope::Project,
-        MemoryToolName::ManageMemory,
-        "n",
-        json!({"content": "shared", "key": "p"}),
-    )
-    .await;
-    assert_eq!(stored, "Successfully stored memory with key: p");
 }

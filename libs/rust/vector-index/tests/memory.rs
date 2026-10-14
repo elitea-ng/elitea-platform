@@ -1,24 +1,38 @@
 //! The memory tools against the in-process fake of `elitea-vector`, over a
-//! real gRPC connection: put, search, get and delete per namespace, the
-//! isolation between projects, namespaces and the index tools, the limits and
-//! the failure sentences by cause.
+//! real gRPC connection: put, search, get and delete per namespace and scope,
+//! versions in time, the limits and the failure sentences by cause.
+//!
+//! WHO MAY SEE A MEMORY is the service's rule, not this crate's (the owner is
+//! stamped from the token and every call is narrowed by it), and its real
+//! proof is `services/elitea-vector/tests/isolation.rs` against a live Qdrant.
+//! The fake applies the same rule so the tools are exercised end to end here.
 
 #![allow(clippy::too_many_lines, reason = "scenario tests read top to bottom")]
 
-use elitea_vector_index::client::toolkit_namespace;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+
+use elitea_vector_index::client::memory_namespace;
 use elitea_vector_index::memory::{
-    self, GetMemoryArgs, MAX_CONTENT_BYTES, MAX_KEY_BYTES, MAX_MEMORIES_PER_NAMESPACE,
-    MAX_METADATA_BYTES, ManageArgs, MemoryEmbedder, MemoryOwner, MemoryTools, SearchMemoryArgs,
-    describe, namespace_id,
+    GetMemoryArgs, MAX_CONTENT_BYTES, MAX_KEY_BYTES, MAX_MEMORIES_PER_NAMESPACE,
+    MAX_METADATA_BYTES, MAX_VERSIONS_PER_KEY, ManageArgs, MemoryEmbedder, MemoryScope, MemoryTools,
+    SearchMemoryArgs, describe, namespace_id,
 };
 use elitea_vector_index::testing::{FakeVector, status};
 use elitea_vector_index::{ClientConfig, Error, Result, VectorClient, VectorSession, pb};
 use serde_json::{Value, json};
 use tonic::Code;
 
-const TOKEN_A: &str = "elvc_project-a";
-const TOKEN_B: &str = "elvc_project-b";
+const TOKEN_A: &str = "elvc_project-a-user-10";
+const TOKEN_A2: &str = "elvc_project-a-user-11";
+const TOKEN_A_SHARED: &str = "elvc_project-a-user-10-shared-chat";
+const TOKEN_A_ANON: &str = "elvc_project-a-no-user";
+const TOKEN_B: &str = "elvc_project-b-user-10";
 const SLUG: &str = "memory-model";
+
+const DAY_MS: i64 = 86_400_000;
+/// 2026-01-01T00:00:00Z
+const T0: i64 = 1_767_225_600_000;
 
 /// A bag of three topics: cooking, travel, code. Deterministic and offline.
 struct TopicEmbedder;
@@ -50,7 +64,20 @@ impl MemoryEmbedder for TopicEmbedder {
 }
 
 async fn connect() -> (VectorClient, FakeVector) {
-    let fake = FakeVector::new(&[(TOKEN_A, 1), (TOKEN_B, 2)]);
+    let fake = FakeVector::new(&[
+        (TOKEN_A, 1),
+        (TOKEN_A2, 1),
+        (TOKEN_A_SHARED, 1),
+        (TOKEN_A_ANON, 1),
+        (TOKEN_B, 2),
+    ])
+    .with_users(&[
+        (TOKEN_A, 10),
+        (TOKEN_A2, 11),
+        (TOKEN_A_SHARED, 10),
+        (TOKEN_B, 10),
+    ])
+    .with_shared_conversation(TOKEN_A_SHARED);
     let (address, _server) = fake.clone().serve().await.expect("serve");
     let mut config = ClientConfig::new(format!("http://{address}"));
     config.allow_insecure = true;
@@ -75,11 +102,34 @@ fn search(query: &str, limit: Option<i64>) -> SearchMemoryArgs {
 }
 
 fn gm(key: &str) -> GetMemoryArgs {
+    gm_at(key, None, false)
+}
+
+fn gm_at(key: &str, as_of: Option<&str>, history: bool) -> GetMemoryArgs {
     GetMemoryArgs {
         key: key.to_owned(),
-        as_of: None,
-        include_history: None,
+        as_of: as_of.map(str::to_owned),
+        include_history: Some(history),
     }
+}
+
+fn list(text: &str) -> Vec<Value> {
+    serde_json::from_str::<Value>(text)
+        .expect("json")
+        .as_array()
+        .expect("list")
+        .clone()
+}
+
+fn clocked<'a>(
+    session: &'a VectorSession<'a>,
+    scope: MemoryScope,
+    ns: &str,
+    now: &Arc<AtomicI64>,
+) -> MemoryTools<'a, VectorSession<'a>, TopicEmbedder> {
+    let clock = Arc::clone(now);
+    MemoryTools::new(session, &TopicEmbedder, SLUG, scope, ns)
+        .with_clock(Arc::new(move || clock.load(Ordering::SeqCst)))
 }
 
 #[tokio::test]
@@ -91,7 +141,7 @@ async fn put_search_get_delete_in_one_namespace() {
         &session,
         &TopicEmbedder,
         SLUG,
-        MemoryOwner::Project,
+        MemoryScope::Project,
         "team-notes",
     );
 
@@ -123,13 +173,12 @@ async fn put_search_get_delete_in_one_namespace() {
         .search_memory(&search("how do I cook pasta", Some(2)))
         .await
         .expect("search");
-    let parsed: Value = serde_json::from_str(&found).expect("json");
-    let list = parsed.as_array().expect("a list");
-    assert_eq!(list.len(), 2);
-    assert_eq!(list[0]["key"], "pasta");
-    assert_eq!(list[0]["metadata"]["topic"], "food");
+    let parsed = list(&found);
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0]["key"], "pasta");
+    assert_eq!(parsed[0]["metadata"]["topic"], "food");
     assert!(
-        list[1].get("metadata").is_none(),
+        parsed[1].get("metadata").is_none(),
         "no metadata, no key: {found}"
     );
     // The SDK's text: indent 2, key then content then metadata, ASCII only.
@@ -139,16 +188,14 @@ async fn put_search_get_delete_in_one_namespace() {
     );
     assert!(found.contains("\\u00e9"), "ensure_ascii: {found}");
 
-    let one = tools.get_memory(&gm("trip")).await.expect("get");
     assert_eq!(
-        one,
+        tools.get_memory(&gm("trip")).await.expect("get"),
         "{\n  \"key\": \"trip\",\n  \"content\": \"Book a flight to Paris\"\n}"
     );
     assert_eq!(
         tools.get_memory(&gm("absent")).await.expect("get"),
         "No memory found with key: absent"
     );
-
     assert_eq!(
         tools.delete_memory("trip").await.expect("delete"),
         "Successfully deleted memory with key: trip"
@@ -173,7 +220,7 @@ async fn an_empty_namespace_answers_with_the_sdk_sentences() {
         &session,
         &TopicEmbedder,
         SLUG,
-        MemoryOwner::Project,
+        MemoryScope::Personal,
         "fresh",
     );
     assert_eq!(
@@ -190,11 +237,11 @@ async fn an_empty_namespace_answers_with_the_sdk_sentences() {
 }
 
 #[tokio::test]
-async fn a_key_is_generated_and_a_rewrite_replaces() {
+async fn a_key_is_generated_and_an_empty_one_too() {
     let (client, fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryOwner::Project, "n");
+    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
     let stored = tools
         .manage_memory(&manage("pasta", None, None))
         .await
@@ -209,18 +256,9 @@ async fn a_key_is_generated_and_a_rewrite_replaces() {
         .await
         .expect("put");
     assert_eq!(fake.point_count(), 2);
-    tools
-        .manage_memory(&manage("pasta again", Some(key), Some(json!({"v": 2}))))
-        .await
-        .expect("rewrite");
-    assert_eq!(fake.point_count(), 3, "the old version is kept, closed");
-    let got: Value =
-        serde_json::from_str(&tools.get_memory(&gm(key)).await.expect("get")).expect("json");
-    assert_eq!(got["content"], "pasta again");
-    assert_eq!(got["metadata"], json!({"v": 2}));
     // An empty metadata object is dropped, as `if metadata:` does.
     tools
-        .manage_memory(&manage("pasta once more", Some(key), Some(json!({}))))
+        .manage_memory(&manage("pasta again", Some(key), Some(json!({}))))
         .await
         .expect("rewrite");
     let got: Value =
@@ -229,82 +267,11 @@ async fn a_key_is_generated_and_a_rewrite_replaces() {
 }
 
 #[tokio::test]
-async fn namespaces_and_projects_are_separate() {
-    let (client, _fake) = connect().await;
-    let (a, b) = (TOKEN_A.to_owned(), TOKEN_B.to_owned());
-    let session_a = VectorSession::new(&client, &a);
-    let session_b = VectorSession::new(&client, &b);
-    let a_one = MemoryTools::new(
-        &session_a,
-        &TopicEmbedder,
-        SLUG,
-        MemoryOwner::Project,
-        "shared-name",
-    );
-    let a_two = MemoryTools::new(
-        &session_a,
-        &TopicEmbedder,
-        SLUG,
-        MemoryOwner::Project,
-        "other-name",
-    );
-    let b_one = MemoryTools::new(
-        &session_b,
-        &TopicEmbedder,
-        SLUG,
-        MemoryOwner::Project,
-        "shared-name",
-    );
-
-    a_one
-        .manage_memory(&manage("secret pasta of project A", Some("k"), None))
-        .await
-        .expect("put");
-
-    // Another namespace of the same project sees nothing.
-    assert_eq!(
-        a_two
-            .search_memory(&search("pasta", None))
-            .await
-            .expect("s"),
-        "No memories found matching your query."
-    );
-    assert_eq!(
-        a_two.get_memory(&gm("k")).await.expect("g"),
-        "No memory found with key: k"
-    );
-    // The same namespace string in another project sees nothing, for every tool.
-    assert_eq!(
-        b_one
-            .search_memory(&search("pasta", None))
-            .await
-            .expect("s"),
-        "No memories found matching your query."
-    );
-    assert_eq!(
-        b_one.get_memory(&gm("k")).await.expect("g"),
-        "No memory found with key: k"
-    );
-    // And its writes and deletes never touch project A's memory.
-    b_one
-        .manage_memory(&manage("pasta of project B", Some("k"), None))
-        .await
-        .expect("put");
-    b_one.delete_memory("k").await.expect("delete");
-    a_two.delete_memory("k").await.expect("delete");
-    let kept: Value =
-        serde_json::from_str(&a_one.get_memory(&gm("k")).await.expect("g")).expect("j");
-    assert_eq!(kept["content"], "secret pasta of project A");
-}
-
-#[tokio::test]
-async fn the_namespace_id_is_stable_canonical_and_domain_separated() {
-    let project = |ns: &str| namespace_id(MemoryOwner::Project, ns);
-    let user = |id: i64, ns: &str| namespace_id(MemoryOwner::User(id), ns);
-    let one = project("a");
-    assert_eq!(one, project("a"));
-    assert_ne!(one, project("b"));
-    assert_ne!(project(""), project(" "));
+async fn the_namespace_id_is_stable_canonical_and_distinct() {
+    let one = namespace_id("a");
+    assert_eq!(one, namespace_id("a"));
+    assert_ne!(one, namespace_id("b"));
+    assert_ne!(namespace_id(""), namespace_id(" "));
     assert_eq!(one.len(), 36);
     assert_eq!(one.chars().nth(14), Some('8'), "version 8: {one}");
     assert!(
@@ -312,77 +279,52 @@ async fn the_namespace_id_is_stable_canonical_and_domain_separated() {
             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase() || c == '-'),
         "canonical lower-case: {one}"
     );
-    // Project, each user and each namespace are separate id spaces.
-    let ids = [
-        project("a"),
-        user(1, "a"),
-        user(2, "a"),
-        user(1, "b"),
-        project("b"),
-        user(-1, "a"),
-        user(0, "a"),
-    ];
-    for (index, id) in ids.iter().enumerate() {
-        for other in &ids[index + 1..] {
-            assert_ne!(id, other);
-        }
+    // The service accepts it as a namespace.
+    let _ = memory_namespace(&one, pb::MemoryScope::Project, "");
+}
+
+/// elitea-main computes the same id to delete a memory toolkit's namespace
+/// (`infra/vectorclient.MemoryNamespaceID`; its test pins the same values).
+#[test]
+fn the_namespace_id_matches_elitea_mains() {
+    for (namespace, want) in [
+        ("team-notes", "86c50dff-2e9f-8a90-906f-a6d7cabb89be"),
+        ("7", "84ad73a1-03d1-8683-a972-c6ec7142f34c"),
+        ("a", "6b514a3e-18d1-81dc-aeef-bc3b735f8fce"),
+        ("é namespace", "2e1104ce-ae0c-8b3d-97b3-c0319493e2e5"),
+    ] {
+        assert_eq!(namespace_id(namespace), want, "{namespace}");
     }
-    // A namespace crafted to look like the owner bytes of another owner does
-    // not collide: the string is length-prefixed after the owner.
-    assert_ne!(project("\u{1}"), user(0, ""));
-    assert_ne!(
-        user(1, "x"),
-        user(
-            i64::from_be_bytes(*b"\x00\x00\x00\x00\x00\x00\x00\x01"),
-            "y"
-        )
-    );
-    // The service accepts it as a namespace (the fake validates the shape).
-    let _ = toolkit_namespace(&one);
 }
 
 #[tokio::test]
 async fn personal_memory_belongs_to_one_user_and_project_memory_to_everyone() {
     let (client, _fake) = connect().await;
-    let (a, b) = (TOKEN_A.to_owned(), TOKEN_B.to_owned());
-    let session = VectorSession::new(&client, &a);
+    let (a, a2, b) = (TOKEN_A.to_owned(), TOKEN_A2.to_owned(), TOKEN_B.to_owned());
+    let alice_session = VectorSession::new(&client, &a);
+    let bob_session = VectorSession::new(&client, &a2);
     let other_project = VectorSession::new(&client, &b);
-    // Same project, same namespace string, two users and the project scope.
-    let alice = MemoryTools::new(
-        &session,
-        &TopicEmbedder,
-        SLUG,
-        MemoryOwner::User(10),
-        "notes",
-    );
-    let bob = MemoryTools::new(
-        &session,
-        &TopicEmbedder,
-        SLUG,
-        MemoryOwner::User(11),
-        "notes",
-    );
-    let shared = MemoryTools::new(
-        &session,
-        &TopicEmbedder,
-        SLUG,
-        MemoryOwner::Project,
-        "notes",
-    );
+    let personal = |session| {
+        MemoryTools::new(
+            session,
+            &TopicEmbedder,
+            SLUG,
+            MemoryScope::Personal,
+            "notes",
+        )
+    };
+    let shared =
+        |session| MemoryTools::new(session, &TopicEmbedder, SLUG, MemoryScope::Project, "notes");
+    let (alice, bob) = (personal(&alice_session), personal(&bob_session));
+    let (alice_project, bob_project) = (shared(&alice_session), shared(&bob_session));
     // The same user id in another project is another store.
-    let alice_elsewhere = MemoryTools::new(
-        &other_project,
-        &TopicEmbedder,
-        SLUG,
-        MemoryOwner::User(10),
-        "notes",
-    );
+    let alice_elsewhere = personal(&other_project);
 
     alice
         .manage_memory(&manage("alice likes pasta", Some("pref"), None))
         .await
         .expect("put");
-    shared
+    alice_project
         .manage_memory(&manage("the team likes paris", Some("team"), None))
         .await
         .expect("put");
@@ -407,32 +349,25 @@ async fn personal_memory_belongs_to_one_user_and_project_memory_to_everyone() {
         "bob's put under the same key is bob's"
     );
 
-    // Alice does not see the project's, nor the project Alice's.
+    // Alice does not see the project's through her personal tools, nor the
+    // project Alice's.
     assert_eq!(
         alice.get_memory(&gm("team")).await.expect("g"),
         "No memory found with key: team"
     );
     assert_eq!(
-        shared.get_memory(&gm("pref")).await.expect("g"),
+        alice_project.get_memory(&gm("pref")).await.expect("g"),
         "No memory found with key: pref"
-    );
-    let in_project = shared
-        .search_memory(&search("pasta", None))
-        .await
-        .expect("s");
-    assert!(
-        !in_project.contains("alice") && !in_project.contains("bob"),
-        "{in_project}"
     );
     // Project memory: every user of the project reads and writes it.
     assert!(
-        shared
+        bob_project
             .get_memory(&gm("team"))
             .await
             .expect("g")
             .contains("the team likes paris")
     );
-    shared
+    bob_project
         .manage_memory(&manage("paris again", Some("team"), None))
         .await
         .expect("write");
@@ -451,11 +386,45 @@ async fn personal_memory_belongs_to_one_user_and_project_memory_to_everyone() {
 }
 
 #[tokio::test]
+async fn personal_memory_says_why_it_is_unavailable_and_project_memory_still_works() {
+    let (client, _fake) = connect().await;
+    for (token, expect) in [
+        (TOKEN_A_ANON, "names no user"),
+        (TOKEN_A_SHARED, "more than one person"),
+    ] {
+        let owned = token.to_owned();
+        let session = VectorSession::new(&client, &owned);
+        let personal = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Personal, "n");
+        let project = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
+        for error in [
+            personal
+                .manage_memory(&manage("pasta", Some("k"), None))
+                .await
+                .unwrap_err(),
+            personal
+                .search_memory(&search("pasta", None))
+                .await
+                .unwrap_err(),
+            personal.get_memory(&gm("k")).await.unwrap_err(),
+            personal.delete_memory("k").await.unwrap_err(),
+        ] {
+            let sentence = describe(&error);
+            assert!(sentence.contains(expect), "{token}: {sentence}");
+            assert!(sentence.contains("ersonal memory"), "{sentence}");
+        }
+        project
+            .manage_memory(&manage("shared fact", Some(token), None))
+            .await
+            .expect("project works");
+    }
+}
+
+#[tokio::test]
 async fn the_limits_refuse_with_a_sentence() {
     let (client, _fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryOwner::Project, "n");
+    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
 
     let long = "x".repeat(MAX_CONTENT_BYTES + 1);
     let error = tools
@@ -507,8 +476,8 @@ async fn a_search_limit_is_capped() {
     let (client, _fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryOwner::Project, "n");
-    for index in 0..(memory::MAX_SEARCH_LIMIT + 5) {
+    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
+    for index in 0..(elitea_vector_index::memory::MAX_SEARCH_LIMIT + 5) {
         tools
             .manage_memory(&manage(
                 &format!("pasta {index}"),
@@ -522,26 +491,25 @@ async fn a_search_limit_is_capped() {
         .search_memory(&search("pasta", Some(10_000)))
         .await
         .expect("search");
-    let parsed: Value = serde_json::from_str(&found).expect("json");
     assert_eq!(
-        parsed.as_array().expect("list").len(),
-        memory::MAX_SEARCH_LIMIT as usize
+        list(&found).len(),
+        elitea_vector_index::memory::MAX_SEARCH_LIMIT as usize
     );
 }
 
 #[tokio::test]
-async fn a_full_namespace_refuses_a_new_key_but_not_a_rewrite() {
+async fn a_full_namespace_refuses_a_new_key_but_not_a_rewrite_that_frees_room() {
     let (client, fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryOwner::Project, "full");
+    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "full");
     // Fill the namespace straight through the client, in batches.
-    let ns = namespace_id(MemoryOwner::Project, "full");
+    let ns = namespace_id("full");
     let points: Vec<pb::Point> = (0..MAX_MEMORIES_PER_NAMESPACE)
         .map(|index| pb::Point {
             document_key: format!("seed{index}"),
             document_version: "1".to_owned(),
-            chunk_id: "0".to_owned(),
+            chunk_id: "vseed".to_owned(),
             chunk_type: "memory".to_owned(),
             text: "seed".to_owned(),
             metadata_json: "{}".to_owned(),
@@ -556,7 +524,7 @@ async fn a_full_namespace_refuses_a_new_key_but_not_a_rewrite() {
                 model_slug: SLUG.to_owned(),
                 dimension: 3,
             },
-            toolkit_namespace(&ns),
+            memory_namespace(&ns, pb::MemoryScope::Project, ""),
             points,
         )
         .await
@@ -572,7 +540,6 @@ async fn a_full_namespace_refuses_a_new_key_but_not_a_rewrite() {
         "{}",
         describe(&error)
     );
-    assert_eq!(fake.point_count() as u64, MAX_MEMORIES_PER_NAMESPACE);
     // A correction adds a version, so a full namespace refuses it too.
     let error = tools
         .manage_memory(&manage("pasta, corrected", Some("seed7"), None))
@@ -593,7 +560,7 @@ async fn each_failure_cause_has_its_own_sentence() {
     let (client, fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryOwner::Project, "n");
+    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
 
     let error = tools
         .manage_memory(&manage("fail-embedding pasta", None, None))
@@ -629,7 +596,7 @@ async fn each_failure_cause_has_its_own_sentence() {
     }
     let unknown_token = "elvc_unknown".to_owned();
     let stranger = VectorSession::new(&client, &unknown_token);
-    let tools = MemoryTools::new(&stranger, &TopicEmbedder, SLUG, MemoryOwner::Project, "n");
+    let tools = MemoryTools::new(&stranger, &TopicEmbedder, SLUG, MemoryScope::Project, "n");
     let error = tools
         .manage_memory(&manage("pasta", None, None))
         .await
@@ -642,7 +609,7 @@ async fn every_call_carries_the_claim_token_only() {
     let (client, fake) = connect().await;
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
-    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryOwner::Project, "n");
+    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Personal, "n");
     tools
         .manage_memory(&manage("pasta", Some("k"), None))
         .await
@@ -662,45 +629,36 @@ async fn every_call_carries_the_claim_token_only() {
     );
 }
 
+#[tokio::test]
+async fn no_call_lists_indexes_or_counts_the_project() {
+    let (client, fake) = connect().await;
+    let token = TOKEN_A.to_owned();
+    let session = VectorSession::new(&client, &token);
+    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Personal, "n");
+    tools
+        .manage_memory(&manage("pasta", Some("k"), None))
+        .await
+        .expect("put");
+    tools.get_memory(&gm("k")).await.expect("get");
+    tools
+        .search_memory(&search("pasta", None))
+        .await
+        .expect("search");
+    tools.delete_memory("k").await.expect("delete");
+    let calls = fake.calls();
+    assert!(!calls.contains(&"list_indexes"), "{calls:?}");
+    // A write is: one read of the key's versions, one count of the namespace,
+    // one upsert.
+    assert_eq!(
+        calls.iter().filter(|call| **call == "count").count(),
+        1,
+        "{calls:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
-// Time: supersede, history, as_of, recency, deletion
+// Time: supersede, history, as_of, recency, concurrency, deletion
 // ---------------------------------------------------------------------------
-
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
-
-use elitea_vector_index::memory::MAX_VERSIONS_PER_KEY;
-
-const DAY_MS: i64 = 86_400_000;
-/// 2026-01-01T00:00:00Z
-const T0: i64 = 1_767_225_600_000;
-
-fn clocked<'a>(
-    session: &'a VectorSession<'a>,
-    owner: MemoryOwner,
-    ns: &str,
-    now: &Arc<AtomicI64>,
-) -> MemoryTools<'a, VectorSession<'a>, TopicEmbedder> {
-    let clock = Arc::clone(now);
-    MemoryTools::new(session, &TopicEmbedder, SLUG, owner, ns)
-        .with_clock(Arc::new(move || clock.load(Ordering::SeqCst)))
-}
-
-fn temporal(text: &str) -> Vec<Value> {
-    serde_json::from_str::<Value>(text)
-        .expect("json")
-        .as_array()
-        .expect("list")
-        .clone()
-}
-
-fn gm_at(key: &str, as_of: Option<&str>, history: bool) -> GetMemoryArgs {
-    GetMemoryArgs {
-        key: key.to_owned(),
-        as_of: as_of.map(str::to_owned),
-        include_history: Some(history),
-    }
-}
 
 #[tokio::test]
 async fn a_rewrite_supersedes_and_history_as_of_and_deletion_follow() {
@@ -708,7 +666,7 @@ async fn a_rewrite_supersedes_and_history_as_of_and_deletion_follow() {
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
     let now = Arc::new(AtomicI64::new(T0));
-    let tools = clocked(&session, MemoryOwner::Project, "n", &now);
+    let tools = clocked(&session, MemoryScope::Project, "n", &now);
 
     tools
         .manage_memory(&manage(
@@ -731,20 +689,18 @@ async fn a_rewrite_supersedes_and_history_as_of_and_deletion_follow() {
     assert_eq!(fake.point_count(), 3, "three versions, none overwritten");
 
     // Current by default, in the SDK's shape (no temporal fields).
-    let current = tools.get_memory(&gm("office")).await.expect("get");
     assert_eq!(
-        current,
+        tools.get_memory(&gm("office")).await.expect("get"),
         "{\n  \"key\": \"office\",\n  \"content\": \"the office is in pasta town\"\n}"
     );
     // History: newest first, with the validity interval of each.
-    let history = temporal(
+    let history = list(
         &tools
             .get_memory(&gm_at("office", None, true))
             .await
             .expect("history"),
     );
     assert_eq!(history.len(), 3);
-    assert_eq!(history[0]["version"], 3);
     assert_eq!(history[0]["valid_to"], Value::Null);
     assert_eq!(history[0]["valid_from"], "2026-01-21T00:00:00.000Z");
     assert_eq!(history[1]["valid_from"], "2026-01-11T00:00:00.000Z");
@@ -778,8 +734,27 @@ async fn a_rewrite_supersedes_and_history_as_of_and_deletion_follow() {
             .expect("before"),
         "No memory found with key: office as of 2025-12-31T00:00:00Z"
     );
-    // Search sees the current version only by default, one per key; history shows all.
-    let found = temporal(
+    // include_history with as_of: every version that existed by then (the
+    // schema says "also return superseded versions").
+    let by_then = list(
+        &tools
+            .get_memory(&gm_at("office", Some("2026-01-15T00:00:00Z"), true))
+            .await
+            .expect("history as of"),
+    );
+    assert_eq!(
+        by_then.len(),
+        2,
+        "the version written on the 21st did not exist yet"
+    );
+    assert!(
+        by_then[0]["content"]
+            .as_str()
+            .expect("c")
+            .contains("rust city")
+    );
+    // Search sees the open version only by default, one per key; history shows all.
+    let found = list(
         &tools
             .search_memory(&search("pasta paris rust", Some(10)))
             .await
@@ -792,16 +767,16 @@ async fn a_rewrite_supersedes_and_history_as_of_and_deletion_follow() {
             .expect("c")
             .contains("pasta town")
     );
-    assert!(found[0].get("version").is_none());
+    assert!(found[0].get("valid_from").is_none());
     let mut with_history = search("office", Some(10));
     with_history.include_history = Some(true);
     assert_eq!(
-        temporal(&tools.search_memory(&with_history).await.expect("s")).len(),
+        list(&tools.search_memory(&with_history).await.expect("s")).len(),
         3
     );
     let mut then = search("paris", Some(10));
     then.as_of = Some("2026-01-05T00:00:00Z".to_owned());
-    let at_then = temporal(&tools.search_memory(&then).await.expect("s"));
+    let at_then = list(&tools.search_memory(&then).await.expect("s"));
     assert_eq!(at_then.len(), 1);
     assert!(at_then[0]["content"].as_str().expect("c").contains("paris"));
     // A bad as_of is a sentence.
@@ -825,12 +800,91 @@ async fn a_rewrite_supersedes_and_history_as_of_and_deletion_follow() {
         tools.get_memory(&gm("office")).await.expect("g"),
         "No memory found with key: office"
     );
+}
+
+#[tokio::test]
+async fn concurrent_writers_lose_no_version_and_the_later_one_is_current() {
+    let (client, fake) = connect().await;
+    let token = TOKEN_A.to_owned();
+    let session = VectorSession::new(&client, &token);
+    let early = Arc::new(AtomicI64::new(T0 + DAY_MS));
+    let late = Arc::new(AtomicI64::new(T0 + 2 * DAY_MS));
+    let first = clocked(
+        &session,
+        MemoryScope::Project,
+        "n",
+        &Arc::new(AtomicI64::new(T0)),
+    );
+    first
+        .manage_memory(&manage("pasta v0", Some("k"), None))
+        .await
+        .expect("v0");
+
+    // Two writers read the same open version and both write.
+    let (a, b) = (
+        clocked(&session, MemoryScope::Project, "n", &early),
+        clocked(&session, MemoryScope::Project, "n", &late),
+    );
+    let (early_args, late_args) = (
+        manage("pasta from the early writer", Some("k"), None),
+        manage("pasta from the late writer", Some("k"), None),
+    );
+    let (ra, rb) = tokio::join!(a.manage_memory(&early_args), b.manage_memory(&late_args));
+    ra.expect("early");
+    rb.expect("late");
     assert_eq!(
-        tools
-            .get_memory(&gm_at("office", Some("2026-01-05T00:00:00Z"), true))
+        fake.point_count(),
+        3,
+        "v0 and both racing versions are kept"
+    );
+
+    let history = list(
+        &first
+            .get_memory(&gm_at("k", None, true))
             .await
-            .expect("g"),
-        "No memory found with key: office as of 2026-01-05T00:00:00Z"
+            .expect("history"),
+    );
+    assert_eq!(history.len(), 3);
+    assert!(
+        history[0]["content"]
+            .as_str()
+            .expect("c")
+            .contains("late writer")
+    );
+    assert_eq!(history[0]["valid_to"], Value::Null);
+    // The early writer's version reads as ended where the late one began, even
+    // if its own close raced.
+    assert!(
+        history[1]["content"]
+            .as_str()
+            .expect("c")
+            .contains("early writer")
+    );
+    assert_eq!(history[1]["valid_to"], history[0]["valid_from"]);
+    let current: Value =
+        serde_json::from_str(&first.get_memory(&gm("k")).await.expect("get")).expect("json");
+    assert!(
+        current["content"]
+            .as_str()
+            .expect("c")
+            .contains("late writer")
+    );
+    // The next write closes whatever was left open.
+    first
+        .manage_memory(&manage("pasta v3", Some("k"), None))
+        .await
+        .expect("v3");
+    let history = list(
+        &first
+            .get_memory(&gm_at("k", None, true))
+            .await
+            .expect("history"),
+    );
+    assert_eq!(history.len(), 4);
+    assert!(
+        history[1..]
+            .iter()
+            .all(|version| version["valid_to"] != Value::Null)
     );
 }
 
@@ -840,8 +894,8 @@ async fn history_is_capped_per_key_and_the_oldest_goes_first() {
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
     let now = Arc::new(AtomicI64::new(T0));
-    let tools = clocked(&session, MemoryOwner::Project, "n", &now);
-    let cap = usize::try_from(MAX_VERSIONS_PER_KEY).expect("small");
+    let tools = clocked(&session, MemoryScope::Project, "n", &now);
+    let cap = MAX_VERSIONS_PER_KEY;
     for round in 0..(cap + 5) {
         now.store(
             T0 + i64::try_from(round).expect("small") * DAY_MS,
@@ -861,24 +915,26 @@ async fn history_is_capped_per_key_and_the_oldest_goes_first() {
         cap,
         "never more than the cap of versions"
     );
-    let history = temporal(
+    let history = list(
         &tools
             .get_memory(&gm_at("k", None, true))
             .await
             .expect("history"),
     );
     assert_eq!(history.len(), cap);
-    assert_eq!(history[0]["version"], cap + 5, "versions keep counting");
-    assert_eq!(
-        history[cap - 1]["version"],
-        6,
-        "the five oldest were dropped"
-    );
     assert!(
         history[0]["content"]
             .as_str()
             .expect("c")
             .ends_with(&format!("{}", cap + 4))
+    );
+    assert!(
+        history[cap - 1]["content"]
+            .as_str()
+            .expect("c")
+            .ends_with("number 5"),
+        "the five oldest were dropped: {}",
+        history[cap - 1]["content"]
     );
     // Other keys are untouched by this key's cap.
     tools
@@ -894,7 +950,7 @@ async fn recency_nudges_the_ranking_but_cosine_still_decides() {
     let token = TOKEN_A.to_owned();
     let session = VectorSession::new(&client, &token);
     let now = Arc::new(AtomicI64::new(T0));
-    let tools = clocked(&session, MemoryOwner::Project, "n", &now);
+    let tools = clocked(&session, MemoryScope::Project, "n", &now);
     // Two equally relevant memories, written a year apart.
     tools
         .manage_memory(&manage("old pasta recipe", Some("old"), None))
@@ -905,7 +961,7 @@ async fn recency_nudges_the_ranking_but_cosine_still_decides() {
         .manage_memory(&manage("new pasta recipe", Some("new"), None))
         .await
         .expect("new");
-    let found = temporal(
+    let found = list(
         &tools
             .search_memory(&search("pasta", Some(5)))
             .await
@@ -919,7 +975,7 @@ async fn recency_nudges_the_ranking_but_cosine_still_decides() {
         .manage_memory(&manage("paris flight", Some("fresh-but-off"), None))
         .await
         .expect("fresh");
-    let found = temporal(
+    let found = list(
         &tools
             .search_memory(&search("pasta", Some(5)))
             .await
@@ -931,14 +987,17 @@ async fn recency_nudges_the_ranking_but_cosine_still_decides() {
 #[tokio::test]
 async fn time_travel_never_crosses_users_or_projects() {
     let (client, _fake) = connect().await;
-    let (a, b) = (TOKEN_A.to_owned(), TOKEN_B.to_owned());
-    let session = VectorSession::new(&client, &a);
-    let elsewhere = VectorSession::new(&client, &b);
+    let (a, a2, b) = (TOKEN_A.to_owned(), TOKEN_A2.to_owned(), TOKEN_B.to_owned());
+    let (alice_session, bob_session, elsewhere_session) = (
+        VectorSession::new(&client, &a),
+        VectorSession::new(&client, &a2),
+        VectorSession::new(&client, &b),
+    );
     let now = Arc::new(AtomicI64::new(T0));
-    let alice = clocked(&session, MemoryOwner::User(1), "n", &now);
-    let bob = clocked(&session, MemoryOwner::User(2), "n", &now);
-    let shared = clocked(&session, MemoryOwner::Project, "n", &now);
-    let other_project = clocked(&elsewhere, MemoryOwner::User(1), "n", &now);
+    let alice = clocked(&alice_session, MemoryScope::Personal, "n", &now);
+    let bob = clocked(&bob_session, MemoryScope::Personal, "n", &now);
+    let shared = clocked(&alice_session, MemoryScope::Project, "n", &now);
+    let other_project = clocked(&elsewhere_session, MemoryScope::Personal, "n", &now);
 
     alice
         .manage_memory(&manage("alice pasta v1", Some("k"), None))
@@ -976,14 +1035,13 @@ async fn time_travel_never_crosses_users_or_projects() {
                 .contains("alice")
         );
     }
-    // The project's history holds the team's key only; Alice's versions are hers.
-    let team = temporal(&shared.get_memory(&gm_at("k", None, true)).await.expect("g"));
+    let team = list(&shared.get_memory(&gm_at("k", None, true)).await.expect("g"));
     assert_eq!(team.len(), 1);
     assert_eq!(team[0]["content"], "team pasta");
     // Bob deleting "k" in his namespace leaves every version of Alice's.
     bob.delete_memory("k").await.expect("delete");
     assert_eq!(
-        temporal(&alice.get_memory(&gm_at("k", None, true)).await.expect("g")).len(),
+        list(&alice.get_memory(&gm_at("k", None, true)).await.expect("g")).len(),
         2
     );
     // Alice's delete removes all of hers and none of the project's.
@@ -999,4 +1057,38 @@ async fn time_travel_never_crosses_users_or_projects() {
             .expect("g")
             .contains("team pasta")
     );
+}
+
+#[tokio::test]
+async fn a_run_reads_one_collection_once_it_has_embedded() {
+    use std::sync::atomic::AtomicU32;
+    let (client, fake) = connect().await;
+    let token = TOKEN_A.to_owned();
+    let session = VectorSession::new(&client, &token);
+    let cache = Arc::new(AtomicU32::new(0));
+    let tools = MemoryTools::new(&session, &TopicEmbedder, SLUG, MemoryScope::Project, "n")
+        .with_space_cache(Arc::clone(&cache));
+    // Nothing embedded yet: a get reads every collection (dimension unknown).
+    assert_eq!(
+        tools.get_memory(&gm("k")).await.expect("g"),
+        "No memory found with key: k"
+    );
+    assert_eq!(cache.load(Ordering::SeqCst), 0);
+    tools
+        .manage_memory(&manage("pasta", Some("k"), None))
+        .await
+        .expect("put");
+    assert_eq!(
+        cache.load(Ordering::SeqCst),
+        3,
+        "the run now knows its space"
+    );
+    assert!(
+        tools
+            .get_memory(&gm("k"))
+            .await
+            .expect("g")
+            .contains("pasta")
+    );
+    assert_eq!(fake.point_count(), 1);
 }

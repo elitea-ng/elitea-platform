@@ -97,6 +97,14 @@ pub(crate) enum UnsupportedSetting {
     /// A `SharePoint` credential with no OAuth discovery endpoint: the
     /// app-only (client secret) mode.
     SharePointAppOnly,
+    /// A `memory` toolkit whose `namespace` is blank, too long or holds a
+    /// control character.
+    MemoryNamespace,
+    /// A `memory` toolkit whose `memory_scope` is not `personal`, `project`
+    /// or `both`.
+    MemoryScope,
+    /// A `memory` toolkit whose `selected_tools` is not a list of names.
+    MemorySelection,
 }
 
 impl UnsupportedSetting {
@@ -113,6 +121,15 @@ impl UnsupportedSetting {
             }
             Self::ReservedHeader => {
                 "a custom header that overrides the credential or request framing (Authorization, Cookie, Host, Content-Type, Accept or a platform header) is not supported by the Rust worker"
+            }
+            Self::MemoryNamespace => {
+                "the memory toolkit's namespace must be a non-blank text of at most 256 bytes without control characters; edit the toolkit and save it again"
+            }
+            Self::MemoryScope => {
+                "the memory toolkit's memory scope must be personal, project or both; edit the toolkit and save it again"
+            }
+            Self::MemorySelection => {
+                "the memory toolkit's selected tools must be a list of tool names; edit the toolkit and save it again"
             }
             Self::SharePointAppOnly => {
                 "a SharePoint credential without an OAuth discovery endpoint (app-only access with a client secret) is not supported by the Rust worker: its SharePoint tools act as the signed-in person with a delegated token, so set the credential's OAuth discovery endpoint. Microsoft retired app-only access to the OneNote Graph API (MC1011142), so the OneNote tools cannot run on an app-only credential at all"

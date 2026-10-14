@@ -53,9 +53,23 @@ func toolkitCleanupOptions(clients []ApplicationDataClient) []toolkitcleanup.Opt
 	return options
 }
 
+// MemoryData is what elitea-main asks of the vector store for the memory
+// toolkit: delete a toolkit's namespace, delete a user's personal memories.
+// *vectorclient.Client satisfies it. cfg.MemoryData is a nil INTERFACE when the
+// deployment has no client (never a typed nil).
+type MemoryData interface {
+	toolkitcleanup.MemoryRemover
+	DeleteMemoryUser(ctx context.Context, projectID, userID int64) error
+}
+
 // newToolkitCleanupJournal builds the toolkit cleanup journal over the shared
 // pool and the wired engines. The toolkit handler enqueues into it; the
 // process's reconciler (RouterConfig.OnToolkitCleanupJournal) drains it.
 func newToolkitCleanupJournal(cfg RouterConfig) *toolkitcleanup.Journal {
-	return toolkitcleanup.New(cfg.Pool, slog.Default(), toolkitCleanupOptions(cfg.ApplicationData)...)
+	options := toolkitCleanupOptions(cfg.ApplicationData)
+	// A memory toolkit's memories are vectors (worker unit M9): the journal
+	// pays them with the elitea-vector client, and records the obligation only
+	// where memories live there (the Rust indexing runtime).
+	options = append(options, toolkitcleanup.WithMemory(cfg.MemoryData, cfg.MemoryDataRecorded))
+	return toolkitcleanup.New(cfg.Pool, slog.Default(), options...)
 }

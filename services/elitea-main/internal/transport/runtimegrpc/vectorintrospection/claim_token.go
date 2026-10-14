@@ -32,6 +32,9 @@ const (
 	MaxClaimTokenLifetime = 6 * time.Hour
 	// sourceToolkitIndex is the payload keyword of SOURCE_TOOLKIT_INDEX.
 	sourceToolkitIndex = "toolkit_index"
+	// sourceMemory is the payload keyword of SOURCE_MEMORY (the memory
+	// toolkit, worker unit M9).
+	sourceMemory = "memory"
 )
 
 // claimTokenCapabilities are the execution capabilities whose worker may use
@@ -54,7 +57,7 @@ func (i *ClaimTokenIssuer) QualifiesForVectorClaimToken(capabilityID string) boo
 }
 
 // claimTokenSources is what a worker claim token may read and write.
-var claimTokenSources = []string{sourceToolkitIndex}
+var claimTokenSources = []string{sourceToolkitIndex, sourceMemory}
 
 // HashClaimToken is the stored form of a well-formed claim token. A token of
 // the wrong length, prefix or alphabet is not well formed.
@@ -121,9 +124,5 @@ func (i *ClaimTokenIssuer) IssueVectorClaimToken(ctx context.Context, fence runt
 		Bearer:              token,
 		ExpiresAtUnixMillis: minted.ExpiresAt.UnixMilli(),
 		AllowedSources:      append([]string(nil), minted.Sources...),
-		// The job's actor, read from the claim's execution by the mint (never
-		// from the caller). The mint refuses any actor that is not a user id,
-		// so this is always a positive user id.
-		ActorUserId: minted.ActorID,
 	}, nil
 }

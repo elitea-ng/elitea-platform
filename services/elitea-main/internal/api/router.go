@@ -437,6 +437,13 @@ type RouterConfig struct {
 	// namespace (v2/toolkits/toolkit_data.go), so elitea-vector needs no
 	// per-toolkit remover here.
 	ProjectVectorData projectprovisioning.ApplicationDataRemover
+	// MemoryData pays a memory toolkit's cleanup (the toolkit's namespace in
+	// elitea-vector) and a user's personal-memory cleanup; MemoryDataRecorded
+	// says whether a toolkit delete decided here owes the vector store a
+	// call (the deployment keeps memories there: the Rust indexing runtime).
+	// Both zero leave memories alone.
+	MemoryData         MemoryData
+	MemoryDataRecorded bool
 	// ProjectVectorDataRecorded says whether a delete decided on this replica
 	// RECORDS the vector step on the journal row: true under the Rust indexing
 	// runtime, whose toolkit indexes live in elitea-vector, WITH OR WITHOUT a
@@ -1727,6 +1734,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	)
 	coreHandler := v2core.NewHandler(
 		cfg.Pool,
+		v2core.WithMemoryUserRemover(cfg.MemoryData),
 		v2core.WithPermissionResolver(permissionResolver),
 		v2core.WithObjectStore(cfg.ObjectStore),
 		v2core.WithInviteMailer(inviteMailer),
@@ -2032,6 +2040,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			adminHandler := admin.NewHandler(
 				cfg.Pool,
 				append([]admin.Option{
+					admin.WithMemoryUserRemover(cfg.MemoryData),
 					admin.WithPermissionResolver(permissionResolver),
 					admin.WithToolkitRegistry(cfg.ToolkitRegistry),
 					admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),

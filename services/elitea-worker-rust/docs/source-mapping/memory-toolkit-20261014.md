@@ -21,18 +21,8 @@ the design decisions, the evaluations and the follow-ups.
   no such argument). A *personal* memory belongs to one authenticated user and
   is invisible to every other user, through search, get and delete. A *project*
   memory is shared by everyone in the project (the SDK's behaviour).
-* **Identity.** The personal owner is `VectorClaimTokenV1.actor_user_id`, new in
-  this change: Main fills it from the execution's actor when it mints the
-  claim's vector token. Main mints a token only for an actor that is a positive
-  user id, so scheduled and system runs get no token and nothing in a tool
-  argument or a toolkit setting can name a user. A token that states no user
-  (an older Main) leaves personal memory unavailable with a sentence, project
-  memory working.
-* **Namespacing.** The vector namespace is a SHA-256 of a domain tag, the owner
-  (project, or user id) and the length-prefixed toolkit `namespace`. The project
-  comes from the token on the server side. So project, each user, each namespace
-  string and each project are separate id spaces, and none can equal an
-  `index_registry` id.
+* **Who may see a memory is decided by `elitea-vector`, not by the worker.** See
+  "Security model" below. The worker only says which scope a call works in.
 * **Personal memory stays per project.** The vector facade injects the token's
   project into every call and refuses another, and the claim holds a token for
   the run's project only; a personal memory that followed a user across projects
@@ -41,20 +31,110 @@ the design decisions, the evaluations and the follow-ups.
   rule simple. (A user's personal project is therefore *not* their cross-project
   memory.)
 * **Time.** Every memory is versioned. `manage_memory` on an existing key
-  *supersedes*: the new version is written, then the previous one is closed
-  (`valid_to` stamped), nothing is overwritten; saying the same content again is
-  a no-op. `get_memory` and `search_memory` return current versions by default
-  in the SDK's output shape; `as_of` (RFC 3339) returns what was valid then
-  (a boundary instant belongs to the newer version); `include_history` returns
-  every version with `version`, `valid_from`, `valid_to`. Search re-ranks by
-  `0.9 * cosine + 0.1 * recency` (recency halves every 30 days of age from
-  `valid_from` to now, or to `as_of`), so recency nudges and cosine decides.
-  `delete_memory` removes **every** version: privacy beats history. At most 20
-  versions are kept per key (the oldest is deleted by its own generation); the
-  10,000-point namespace limit counts versions. Closing a version re-writes its
-  point, and the store does not return vectors, so the old text is embedded
-  again in the same batch as the new one.
+  *supersedes*: the new version is written, then every older open version is
+  closed in place (`valid_to` set; the vector is kept, nothing is embedded
+  again); saying the same content again is a no-op. A version's id is a random
+  UUID, so concurrent writers never share a point and none is lost: "current" is
+  the open version with the latest `valid_from`, and the other racer stays in the
+  history with its end derived from the next version. `get_memory` and
+  `search_memory` return current versions by default in the SDK's output shape;
+  `as_of` (RFC 3339) returns what was valid then (a boundary instant belongs to
+  the newer version); `include_history` returns every version with
+  `valid_from` and `valid_to` (together with `as_of`: every version that existed
+  by then). Search re-ranks by `0.9 * cosine + 0.1 * recency` (recency halves
+  every 30 days of age from `valid_from` to now, or to `as_of`), so recency
+  nudges and cosine decides. `delete_memory` removes **every** version: privacy
+  beats history. At most 20 versions are kept per key (the oldest is deleted by
+  its own generation); the 10,000-point namespace limit counts versions.
+* **Hot path.** A write is one read of the key's versions (`ReadMemory`, no
+  vector), one embedding, one count scoped to the namespace and owner, one
+  upsert and one in-place metadata update per version it closes. Nothing lists
+  indexes or counts the project. A run remembers its embedding dimension, so a
+  read that embeds nothing (`get_memory`) names its one collection.
 * Limits: 16 KiB content, 8 KiB metadata, 256-byte key, search limit 50.
+
+## Security model (review round 1)
+
+The first version kept users apart only by hashing the user id into the
+namespace the worker chose; `elitea-vector` checked the project and nothing
+more, so a compromised or buggy worker, or anything that computed another
+user's namespace id, could read or delete that user's memories. The service now
+enforces it:
+
+* **A distinct source.** Memory points have source `memory` (`SOURCE_MEMORY`),
+  not `toolkit_index`. Main mints the claim token with the `memory` source
+  beside `toolkit_index`; a callback token never has it.
+* **The owner is stamped from the token.** On upsert the facade writes an
+  `owner` payload key: `user:<id>` for the `personal` scope, from the token's
+  principal (a worker-claim token only, and only a positive integer id), or the
+  literal `project` for the `project` scope. No request field carries an owner,
+  `owner` is not a filterable key (a filter naming it is refused), and the point
+  id includes the owner, so two users writing the same key into one namespace
+  never overwrite each other.
+* **Every operation is narrowed by it.** Search, hybrid search, count, read,
+  list-documents, delete and the in-place metadata update all add
+  `owner == <the token's owner for the requested scope>` to the project scope.
+  User B's token, even holding user A's namespace id, reads, counts, lists,
+  updates and deletes nothing of A's (service tests against a live Qdrant).
+* **No user, no personal memory.** A token whose principal is not `user:<positive
+  id>` gets `PERMISSION_DENIED memory.personal_unavailable` for the personal
+  scope; the project scope still works. In practice Main mints a worker claim
+  token only for a run a person started or a schedule a person owns (the
+  actor must be a positive user id), and scheduled runs act as their owner and
+  use the owner's personal memory; a run that has no token has no vector access,
+  so no memory at all.
+* **Shared conversations.** Main decides when it mints the token whether the
+  claim's conversation has more than one human participant
+  (`vector_claim_tokens.personal_memory_allowed`, shared/0166; a conversation
+  it cannot find counts as shared: a doubt about privacy answers no).
+  Introspection hands the flag to `elitea-vector`, which refuses the personal
+  scope with `memory.personal_shared_conversation` (the tool says so plainly)
+  while the project scope works. It is decided once at the start of a run: a
+  person added to the conversation mid-run is seen from the next run.
+* **Memory is not an index.** `ListIndexes` never lists memory namespaces and
+  refuses `source = memory`.
+* **Administrators.** The administrator identity has no memory scope; it has
+  `DeleteMemoryNamespace` (every owner's points of one namespace of a project:
+  a toolkit delete) and `DeleteMemoryUser` (every personal point of one user in
+  one project). `DropProject` still removes everything of a project.
+* **The namespace id holds no secret.** It is a hash of the toolkit's
+  `namespace` string; it is the same for every owner, and elitea-main computes
+  the same value (pinned by a fixture in both test suites) to delete it.
+
+### Prompt injection and the `both` scope
+
+Anything the model writes into a memory is later read back as a fact. In `both`
+mode, a model that moves content from `personal` to `project` scope shares one
+person's words with everyone in the project, and a model that saves text taken
+from a web page, a document or a tool result into `project` memory lets that
+text steer every later conversation of the project. So: project writes are
+explicit calls (nothing copies implicitly between scopes), `personal` stays the
+default of the `scope` argument, and the `manage_memory` description and the
+`scope` argument tell the model to write to `project` only when the person asked
+and never to copy personal memories or content that came from a tool. This is a
+mitigation, not a guarantee; a toolkit that must never share should be
+`personal` only, and `project` only toolkits should be attached to agents whose
+inputs are trusted.
+
+### Lifecycle
+
+* **Deleting a memory toolkit** deletes its PROJECT memories and every user's
+  PERSONAL ones in that namespace through the existing toolkit cleanup journal
+  (`centry.toolkit_deletions`, row-first: the delete's transaction records the
+  namespace the setting named, because the setting leaves with the row; a
+  reconciler calls `DeleteMemoryNamespace`, with the journal's backoff and
+  permanent-failure notes). Recorded only where memories live in the vector
+  store (the Rust indexing runtime). Renaming a toolkit's namespace strands the
+  memories of the old namespace until the toolkit is deleted.
+* **A user leaving a project, or being deleted,** has their personal memories
+  there deleted (`DeleteMemoryUser`) from the two paths that remove a project
+  member (the project members route and the administrators' user delete).
+  This is best effort after the removal commits: a failure is logged at Error
+  with the project and user so it can be repeated (the call is idempotent). Two
+  paths are not hooked: SCIM deactivation (it suspends, nothing is removed) and
+  a group-sync that withdraws the last role (`scimdirectory`); a user removed
+  that way keeps personal memories that return if the person is re-added. A
+  durable journal for user cleanup is the remaining follow-up.
 
 ## Evaluation: `adk-memory = "=2.2.0"` as the seam (decision: NO-GO)
 
@@ -157,18 +237,9 @@ setting, and a rule for untrusted input, none of which is small. Design:
 
 ## Deleting a user
 
-There is no user-deletion cleanup journal in elitea-main: the admin
-`deleteUsers` handler and SCIM `DeleteUser` act directly, and the project
-delete's `vector_data` step drops a whole project, which removes every memory of
-that project (personal and shared) through `DropProject`. Removing one user's
-personal memories needs their namespaces, and a namespace id is a hash:
-`elitea-vector` cannot delete by owner, and `ListIndexes` does not say whose a
-namespace is. A follow-up needs either a Main-side list of memory toolkits'
-`namespace` strings per project (so Main can recompute `namespace_id(User(id),
-ns)` for each project the user belonged to and delete it with its admin
-credential) or an `owner` payload key the facade can delete by. Until then a
-user's personal memories are removed by their own `delete_memory`, or with their
-project.
+See "Lifecycle" above: the facade has `DeleteMemoryUser`, and the two member
+removal paths call it after their transaction. What is not done is a durable
+journal for it (the toolkit delete has one), and the SCIM group-sync path.
 
 ## Open items
 

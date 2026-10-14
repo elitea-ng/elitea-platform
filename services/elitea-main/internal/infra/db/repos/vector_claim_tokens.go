@@ -13,10 +13,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -48,6 +50,9 @@ type VectorClaimTokenMinted struct {
 	ActorID   int64
 	Sources   []string
 	ExpiresAt time.Time
+	// PersonalMemoryAllowed is false when the claim runs in a conversation
+	// with more than one person (see personalMemoryAllowed).
+	PersonalMemoryAllowed bool
 }
 
 // VectorClaimTokenFacts is what introspection answers for a live token.
@@ -56,6 +61,9 @@ type VectorClaimTokenFacts struct {
 	ActorID   int64
 	Sources   []string
 	ExpiresAt time.Time
+	// PersonalMemoryAllowed is what the mint decided for the claim's
+	// conversation; elitea-vector refuses the personal memory scope without it.
+	PersonalMemoryAllowed bool
 }
 
 // VectorClaimTokens reads and writes the token hashes.
@@ -169,13 +177,74 @@ LEFT JOIN minted ON true`,
 	if err != nil || actorID <= 0 {
 		return VectorClaimTokenMinted{}, fmt.Errorf("mint vector claim token: actor %q is not a user id", *actor)
 	}
+	// Personal memory is allowed unless the claim's conversation has more than
+	// one person in it. The mint decides it once, here, and stores it with the
+	// token; introspection hands it to elitea-vector, which enforces it.
+	allowed := s.personalMemoryAllowed(ctx, fence.ExecutionID, int64(fence.Generation))
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE elitea_runtime.vector_claim_tokens
+		    SET personal_memory_allowed = $2
+		  WHERE token_sha256 = $1`, request.TokenSHA256[:], allowed); err != nil {
+		return VectorClaimTokenMinted{}, fmt.Errorf("mint vector claim token: record the personal memory decision: %w", err)
+	}
 	return VectorClaimTokenMinted{
-		Minted:    true,
-		ProjectID: int64(*project),
-		ActorID:   actorID,
-		Sources:   sources,
-		ExpiresAt: expiresAt.UTC(),
+		Minted:                true,
+		ProjectID:             int64(*project),
+		ActorID:               actorID,
+		Sources:               sources,
+		ExpiresAt:             expiresAt.UTC(),
+		PersonalMemoryAllowed: allowed,
 	}, nil
+}
+
+// personalMemoryAllowed says whether the claim's execution may use PERSONAL
+// memory: not when it runs in a conversation that more than one person is a
+// participant of, because what a personal memory recalls or saves there would
+// be shown to, or written from the words of, the others.
+//
+// An execution with no conversation (a toolkit call, an index run) is allowed.
+// The conversation of a turn is the execution's client_stream_id (admission
+// checks it equals the turn's conversation uuid) in the projection project's
+// tenant schema. Anything that cannot be decided — no such schema, no such
+// conversation, a failed read — is NOT allowed: the question is about
+// privacy, so a doubt answers no (and logs), and project memory still works.
+func (s *VectorClaimTokens) personalMemoryAllowed(ctx context.Context, executionID string, generation int64) bool {
+	var (
+		projection int64
+		stream     string
+	)
+	err := s.pool.QueryRow(ctx, `
+SELECT j.projection_project_id, a.client_stream_id
+FROM elitea_runtime.execution_jobs AS j
+JOIN elitea_runtime.agent_execution_jobs AS a
+  ON a.execution_id = j.execution_id AND a.generation = j.generation
+WHERE j.execution_id = $1 AND j.generation = $2`, executionID, generation).Scan(&projection, &stream)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "vector claim token: could not read the execution's conversation; personal memory is withheld", "err", err)
+		return false
+	}
+	schema, err := tenantschema.QuoteInt(projection)
+	if err != nil {
+		return false
+	}
+	var people int
+	err = s.pool.QueryRow(ctx, fmt.Sprintf(`
+SELECT count(DISTINCT participant.entity_meta ->> 'id')
+FROM %[1]s.chat_conversations AS conversation
+JOIN %[1]s.chat_participant_mapping AS mapping ON mapping.conversation_id = conversation.id
+JOIN %[1]s.chat_participants AS participant
+  ON participant.id = mapping.participant_id AND participant.entity_name = 'user'
+WHERE conversation.uuid::text = $1`, schema), stream).Scan(&people)
+	if err != nil {
+		slog.WarnContext(ctx, "vector claim token: could not count the conversation's participants; personal memory is withheld", "err", err)
+		return false
+	}
+	// Exactly one: a turn's conversation always holds the person who sent it,
+	// so none means the conversation was not found, which is a doubt.
+	return people == 1
 }
 
 // Facts reads the token whose SHA-256 is tokenSHA256. Only a live token
@@ -192,9 +261,10 @@ func (s *VectorClaimTokens) Facts(ctx context.Context, tokenSHA256 [32]byte) (Ve
 		actor     string
 		sources   []string
 		expiresAt time.Time
+		personal  bool
 	)
 	err := s.pool.QueryRow(ctx, `
-SELECT t.resource_project_id, t.actor_id, t.allowed_sources, t.expires_at
+SELECT t.resource_project_id, t.actor_id, t.allowed_sources, t.expires_at, t.personal_memory_allowed
 FROM elitea_runtime.vector_claim_tokens AS t
 JOIN elitea_runtime.execution_claims AS c
   ON c.claim_id = t.claim_id
@@ -221,7 +291,7 @@ WHERE t.token_sha256 = $1
   AND j.actor_id = t.actor_id
   AND p.suspended IS FALSE
   AND p.create_success IS TRUE`, tokenSHA256[:]).
-		Scan(&project, &actor, &sources, &expiresAt)
+		Scan(&project, &actor, &sources, &expiresAt, &personal)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VectorClaimTokenFacts{}, ErrVectorClaimTokenFactsNotFound
 	}
@@ -233,9 +303,10 @@ WHERE t.token_sha256 = $1
 		return VectorClaimTokenFacts{}, ErrVectorClaimTokenFactsNotFound
 	}
 	return VectorClaimTokenFacts{
-		ProjectID: int64(project),
-		ActorID:   actorID,
-		Sources:   sources,
-		ExpiresAt: expiresAt.UTC(),
+		ProjectID:             int64(project),
+		ActorID:               actorID,
+		Sources:               sources,
+		ExpiresAt:             expiresAt.UTC(),
+		PersonalMemoryAllowed: personal,
 	}, nil
 }

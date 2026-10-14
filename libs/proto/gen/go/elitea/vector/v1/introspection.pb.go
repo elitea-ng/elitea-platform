@@ -143,8 +143,16 @@ type IntrospectTokenResponse struct {
 	// SOURCE_TOOLKIT_INDEX. A callback token names the source of the provider
 	// that minted it. elitea-vector refuses every other source.
 	AllowedSources []Source `protobuf:"varint,6,rep,packed,name=allowed_sources,json=allowedSources,proto3,enum=elitea.vector.v1.Source" json:"allowed_sources,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// personal_memory_allowed says whether this token may use the PERSONAL
+	// memory scope: a worker claim token of a run by a user whose conversation
+	// has one human participant (or no conversation). False for every callback
+	// token, and for a claim that runs in a conversation with more than one
+	// person, where a personal memory would be read into, or written from, a
+	// transcript other people see. Decided by elitea-main when the claim token
+	// is minted.
+	PersonalMemoryAllowed bool `protobuf:"varint,7,opt,name=personal_memory_allowed,json=personalMemoryAllowed,proto3" json:"personal_memory_allowed,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *IntrospectTokenResponse) Reset() {
@@ -219,13 +227,20 @@ func (x *IntrospectTokenResponse) GetAllowedSources() []Source {
 	return nil
 }
 
+func (x *IntrospectTokenResponse) GetPersonalMemoryAllowed() bool {
+	if x != nil {
+		return x.PersonalMemoryAllowed
+	}
+	return false
+}
+
 var File_elitea_vector_v1_introspection_proto protoreflect.FileDescriptor
 
 const file_elitea_vector_v1_introspection_proto_rawDesc = "" +
 	"\n" +
 	"$elitea/vector/v1/introspection.proto\x12\x10elitea.vector.v1\x1a\x1delitea/vector/v1/vector.proto\".\n" +
 	"\x16IntrospectTokenRequest\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"\x8a\x02\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\xc2\x02\n" +
 	"\x17IntrospectTokenResponse\x12\x16\n" +
 	"\x06active\x18\x01 \x01(\bR\x06active\x12\x1d\n" +
 	"\n" +
@@ -233,7 +248,8 @@ const file_elitea_vector_v1_introspection_proto_rawDesc = "" +
 	"\tprincipal\x18\x03 \x01(\tR\tprincipal\x12/\n" +
 	"\x04kind\x18\x04 \x01(\x0e2\x1b.elitea.vector.v1.TokenKindR\x04kind\x12&\n" +
 	"\x0fexpires_at_unix\x18\x05 \x01(\x03R\rexpiresAtUnix\x12A\n" +
-	"\x0fallowed_sources\x18\x06 \x03(\x0e2\x18.elitea.vector.v1.SourceR\x0eallowedSources*d\n" +
+	"\x0fallowed_sources\x18\x06 \x03(\x0e2\x18.elitea.vector.v1.SourceR\x0eallowedSources\x126\n" +
+	"\x17personal_memory_allowed\x18\a \x01(\bR\x15personalMemoryAllowed*d\n" +
 	"\tTokenKind\x12\x1a\n" +
 	"\x16TOKEN_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17TOKEN_KIND_WORKER_CLAIM\x10\x01\x12\x1e\n" +

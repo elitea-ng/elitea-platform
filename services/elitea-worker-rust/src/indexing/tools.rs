@@ -40,7 +40,7 @@ use elitea_agent_runtime::toolkits::{
 };
 use elitea_vector_index::format::{Doctype, index_not_found_message};
 use elitea_vector_index::memory::{
-    self, GetMemoryArgs, ManageArgs, MemoryEmbedder, MemoryOwner, MemoryTools, SearchMemoryArgs,
+    self, GetMemoryArgs, ManageArgs, MemoryEmbedder, MemoryTools, SearchMemoryArgs, SpaceCache,
 };
 use elitea_vector_index::{
     Error as VectorError, IndexCatalog, IndexEntry, IndexTools, QueryEmbedder, SearchArgs,
@@ -141,6 +141,9 @@ pub(crate) struct ClaimIndexToolHost {
     model: Option<LazyStepbackModel>,
     /// The claim material `remove_index` addresses Main with.
     removal: IndexRemovalBinding,
+    /// The embedding dimension this run has seen, so a memory read that
+    /// embeds nothing names its one collection.
+    memory_space: SpaceCache,
 }
 
 impl ClaimIndexToolHost {
@@ -162,6 +165,7 @@ impl ClaimIndexToolHost {
             context,
             model,
             removal,
+            memory_space: SpaceCache::default(),
         }
     }
 
@@ -264,13 +268,14 @@ impl ClaimIndexToolHost {
 #[async_trait]
 impl IndexToolHost for ClaimIndexToolHost {
     fn serves_memory(&self) -> bool {
-        self.runtime.memory_model.is_some() && self.token.allows(VectorSource::ToolkitIndex)
+        self.runtime.memory_model.is_some() && self.token.allows(VectorSource::Memory)
     }
 
     /// The `memory` toolkit's tools (worker unit M9) over the claim's vector
     /// token and the gateway embeddings route, with the deployment's memory
-    /// embedding model. The project is the token's; the namespace is the
-    /// toolkit's, hashed by `elitea-vector-index`.
+    /// embedding model. The project and the owner are the token's, decided by
+    /// `elitea-vector`; the namespace is the toolkit's, hashed by
+    /// `elitea-vector-index`.
     async fn memory(&self, call: MemoryToolCall<'_>) -> Result<Value, IndexToolFailure> {
         let (prefix, memory_model) = (
             match call.tool {
@@ -286,25 +291,18 @@ impl IndexToolHost for ClaimIndexToolHost {
                 "{prefix}: this deployment has no memory embedding model configured"
             )));
         };
-        if !self.token.allows(VectorSource::ToolkitIndex) {
+        if !self.token.allows(VectorSource::Memory) {
             return Err(IndexToolFailure::new(format!(
-                "{prefix}: the vector store is not available to this run: the claim carries no project token"
+                "{prefix}: memory is not available to this run: it carries no vector token, which Main mints only for a run a person started or a schedule owned by one, so a run without one has no memory at all"
             )));
         }
-        // Whose memory: the project's, or the authenticated user's. The user
-        // is the one Main stated in the claim's token receipt, read from the
-        // execution's actor; nothing the model or the toolkit's settings say
-        // can name another.
-        let owner = match call.scope {
-            MemoryScope::Project => MemoryOwner::Project,
-            MemoryScope::Personal => match self.token.actor_user_id() {
-                Some(user) => MemoryOwner::User(user),
-                None => {
-                    return Err(IndexToolFailure::new(format!(
-                        "{prefix}: personal memory needs a signed-in user and this run has none; use scope \"project\" for shared memory"
-                    )));
-                }
-            },
+        // Whose memory is the SERVICE's decision: it stamps the owner from
+        // the token (the user this run acts as; a scheduled run acts as its
+        // owner) and narrows every call by it. All the worker says is which
+        // scope the call works in.
+        let scope = match call.scope {
+            MemoryScope::Project => memory::MemoryScope::Project,
+            MemoryScope::Personal => memory::MemoryScope::Personal,
         };
         let invalid = |error: serde_json::Error| {
             IndexToolFailure::new(format!("{prefix}: the tool arguments are invalid: {error}"))
@@ -319,9 +317,10 @@ impl IndexToolHost for ClaimIndexToolHost {
             &session,
             &embedder,
             &memory_model.slug,
-            owner,
+            scope,
             call.namespace,
-        );
+        )
+        .with_space_cache(Arc::clone(&self.memory_space));
         let outcome = match call.tool {
             MemoryToolName::ManageMemory => {
                 let args = serde_json::from_value::<ManageArgs>(call.arguments.clone())

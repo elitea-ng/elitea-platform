@@ -470,6 +470,76 @@ impl VectorClient {
 }
 
 impl VectorClient {
+    /// Reads the points of one memory namespace by filter, with no query
+    /// vector. `space` narrows the read to one collection; without it every
+    /// collection is read. The service narrows the read to the token's own
+    /// memories for `scope`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidToken`] or the facade's refusal.
+    pub async fn read_memory(
+        &self,
+        token: &dyn ClaimToken,
+        namespace_id: &str,
+        scope: pb::MemoryScope,
+        space: Option<pb::EmbeddingSpace>,
+        filter: Option<pb::Filter>,
+        limit: u32,
+    ) -> Result<Vec<pb::ScoredPoint>> {
+        let request = authorize(
+            token,
+            pb::ReadMemoryRequest {
+                scope: Some(memory_scope_of(namespace_id, scope)),
+                space,
+                filter,
+                limit,
+            },
+        )?;
+        Ok(self
+            .inner
+            .clone()
+            .read_memory(request)
+            .await?
+            .into_inner()
+            .points)
+    }
+
+    /// Replaces the metadata of one memory version in place, keeping its
+    /// vector. `generation` names the version's generation.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidToken`] or the facade's refusal.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument names one part of the point"
+    )]
+    pub async fn set_memory_metadata(
+        &self,
+        token: &dyn ClaimToken,
+        namespace_id: &str,
+        scope: pb::MemoryScope,
+        generation: &str,
+        space: Option<pb::EmbeddingSpace>,
+        document_key: &str,
+        chunk_id: &str,
+        metadata_json: &str,
+    ) -> Result<()> {
+        let request = authorize(
+            token,
+            pb::SetMemoryMetadataRequest {
+                namespace: Some(memory_namespace(namespace_id, scope, generation)),
+                space,
+                document_key: document_key.to_owned(),
+                chunk_id: chunk_id.to_owned(),
+                metadata_json: metadata_json.to_owned(),
+            },
+        )?;
+        self.inner.clone().set_memory_metadata(request).await?;
+        Ok(())
+    }
+
     /// Lists the documents of one toolkit-index namespace as the store holds
     /// them: each (`document_key`, `document_version`) with its chunk count,
     /// in `document_key` order. `space` narrows the read to one collection;
@@ -589,6 +659,7 @@ pub fn toolkit_scope(namespace_ids: Vec<String>, active_generation: Option<&str>
         namespace_ids,
         generation: String::new(),
         active_generations,
+        memory_scope: 0,
     }
 }
 
@@ -610,6 +681,7 @@ pub fn toolkit_scope_with_generations(namespaces: &[(String, Option<String>)]) -
                 })
             })
             .collect(),
+        memory_scope: 0,
     }
 }
 
@@ -620,6 +692,36 @@ pub fn toolkit_namespace(namespace_id: &str) -> pb::Namespace {
         source: pb::Source::ToolkitIndex as i32,
         namespace_id: namespace_id.to_owned(),
         generation: String::new(),
+        memory_scope: 0,
+    }
+}
+
+/// The memory namespace `namespace_id` of `scope`, under `generation` (empty:
+/// none). The OWNER is never named here: the service takes it from the token.
+#[must_use]
+pub fn memory_namespace(
+    namespace_id: &str,
+    scope: pb::MemoryScope,
+    generation: &str,
+) -> pb::Namespace {
+    pb::Namespace {
+        source: pb::Source::Memory as i32,
+        namespace_id: namespace_id.to_owned(),
+        generation: generation.to_owned(),
+        memory_scope: scope as i32,
+    }
+}
+
+/// A read scope over the one memory namespace `namespace_id` of `scope`.
+#[must_use]
+pub fn memory_scope_of(namespace_id: &str, scope: pb::MemoryScope) -> pb::Scope {
+    pb::Scope {
+        project_id: 0,
+        source: pb::Source::Memory as i32,
+        namespace_ids: vec![namespace_id.to_owned()],
+        generation: String::new(),
+        active_generations: Vec::new(),
+        memory_scope: scope as i32,
     }
 }
 

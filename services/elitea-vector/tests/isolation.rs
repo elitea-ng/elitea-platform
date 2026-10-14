@@ -40,6 +40,17 @@ const TOKEN_EXPIRED: &str = "token-expired";
 const TOKEN_SHORT: &str = "token-short";
 /// Project A's `DeepWiki` callback token (source `deepwiki` only).
 const TOKEN_A_WIKI: &str = "token-a-wiki";
+/// Memory callers (worker claim tokens with the `memory` source): two users of
+/// project A, the first again in a shared conversation, a claim naming no
+/// user, and the first user's id in project B.
+const TOKEN_ALICE: &str = "token-alice";
+const TOKEN_BOB: &str = "token-bob";
+const TOKEN_ALICE_SHARED: &str = "token-alice-shared";
+const TOKEN_NO_USER: &str = "token-no-user";
+const TOKEN_ALICE_IN_B: &str = "token-alice-in-b";
+const ALICE: i64 = 11;
+const NAMESPACE_M: &str = "3a1f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5c";
+const NAMESPACE_M2: &str = "4b2f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5d";
 const NAMESPACE_A: &str = "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b";
 const NAMESPACE_B: &str = "6f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f";
 const DIMENSION: u32 = 4;
@@ -120,6 +131,17 @@ fn grant(project_id: i64, expires_at_unix: i64) -> TokenGrant {
         kind: pb::TokenKind::WorkerClaim,
         expires_at_unix,
         sources: vec![pb::Source::ToolkitIndex],
+        personal_memory_allowed: true,
+    }
+}
+
+/// A worker claim token that may use memory, for `user`.
+fn memory_grant(project_id: i64, user: &str, personal: bool, expires_at_unix: i64) -> TokenGrant {
+    TokenGrant {
+        principal: user.to_owned(),
+        sources: vec![pb::Source::ToolkitIndex, pb::Source::Memory],
+        personal_memory_allowed: personal,
+        ..grant(project_id, expires_at_unix)
     }
 }
 
@@ -140,6 +162,26 @@ fn oracle() -> Arc<dyn Introspector> {
         (TOKEN_EXPIRED.to_owned(), grant(PROJECT_A, now - 1)),
         (TOKEN_SHORT.to_owned(), grant(PROJECT_A, now + 3)),
         (TOKEN_A_WIKI.to_owned(), wiki_grant(PROJECT_A, now + 3600)),
+        (
+            TOKEN_ALICE.to_owned(),
+            memory_grant(PROJECT_A, "user:11", true, now + 3600),
+        ),
+        (
+            TOKEN_BOB.to_owned(),
+            memory_grant(PROJECT_A, "user:12", true, now + 3600),
+        ),
+        (
+            TOKEN_ALICE_SHARED.to_owned(),
+            memory_grant(PROJECT_A, "user:11", false, now + 3600),
+        ),
+        (
+            TOKEN_NO_USER.to_owned(),
+            memory_grant(PROJECT_A, "service:scheduler", true, now + 3600),
+        ),
+        (
+            TOKEN_ALICE_IN_B.to_owned(),
+            memory_grant(PROJECT_B, "user:11", true, now + 3600),
+        ),
     ]));
     Arc::new(CachingIntrospector::new(
         Arc::new(tokens),
@@ -311,6 +353,7 @@ impl Harness {
             source: pb::Source::ToolkitIndex as i32,
             namespace_id: namespace_id.to_owned(),
             generation: String::new(),
+            memory_scope: 0,
         }
     }
 
@@ -2487,7 +2530,9 @@ async fn a_token_revoked_mid_stream_is_refused_at_the_next_batch() {
     });
     // The first batch lands.
     let mut written = 0;
-    for _ in 0..100 {
+    // Creating the collection and its (now nine) payload indexes takes a few
+    // seconds on a cold Qdrant; 20 s leaves room.
+    for _ in 0..400 {
         // The collection appears with the first batch.
         if qdrant
             .collection_exists(format!("emb_{}_{DIMENSION}", h.slug))
@@ -2598,4 +2643,1005 @@ async fn fan_out_over_collections_is_complete_and_sorted() {
         .into_inner()
         .count;
     assert!(counted >= 6, "{counted}");
+}
+
+// ── memory: owner enforcement ───────────────────────────────────────────────
+
+const PERSONAL: i32 = pb::MemoryScope::Personal as i32;
+const PROJECT: i32 = pb::MemoryScope::Project as i32;
+
+fn memory_namespace(namespace_id: &str, scope: i32) -> pb::Namespace {
+    pb::Namespace {
+        source: pb::Source::Memory as i32,
+        namespace_id: namespace_id.to_owned(),
+        generation: String::new(),
+        memory_scope: scope,
+    }
+}
+
+fn memory_scope_of(namespace_id: &str, scope: i32) -> pb::Scope {
+    pb::Scope {
+        source: pb::Source::Memory as i32,
+        namespace_ids: vec![namespace_id.to_owned()],
+        memory_scope: scope,
+        ..pb::Scope::default()
+    }
+}
+
+fn memory_point(key: &str, version: u32, text: &str, vector: [f32; 4]) -> pb::Point {
+    pb::Point {
+        document_key: key.to_owned(),
+        document_version: "1".to_owned(),
+        chunk_id: format!("v{version}"),
+        chunk_type: "memory".to_owned(),
+        text: text.to_owned(),
+        // A client that tries to claim an owner through the metadata.
+        metadata_json: "{\"m\":{\"owner\":\"user:999\"},\"t\":{\"version\":1}}".to_owned(),
+        vector: vector.to_vec(),
+        ..pb::Point::default()
+    }
+}
+
+impl Harness {
+    async fn memory_upsert(
+        &mut self,
+        token: &str,
+        scope: i32,
+        namespace_id: &str,
+        points: Vec<pb::Point>,
+    ) -> Result<pb::UpsertResponse, tonic::Status> {
+        self.upsert(token, 0, memory_namespace(namespace_id, scope), points)
+            .await
+    }
+
+    async fn memory_search(
+        &mut self,
+        token: &str,
+        scope: i32,
+        namespace_id: &str,
+    ) -> Result<Vec<pb::ScoredPoint>, tonic::Status> {
+        self.search(token, memory_scope_of(namespace_id, scope), None)
+            .await
+    }
+
+    async fn memory_read(
+        &mut self,
+        token: &str,
+        scope: i32,
+        namespace_id: &str,
+        filter: Option<pb::Filter>,
+    ) -> Result<Vec<pb::ScoredPoint>, tonic::Status> {
+        let space = self.space();
+        self.worker
+            .read_memory(with_token(
+                token,
+                pb::ReadMemoryRequest {
+                    scope: Some(memory_scope_of(namespace_id, scope)),
+                    space: Some(space),
+                    filter,
+                    limit: 100,
+                },
+            ))
+            .await
+            .map(|response| response.into_inner().points)
+    }
+
+    async fn memory_count(
+        &mut self,
+        token: &str,
+        scope: i32,
+        namespace_id: &str,
+    ) -> Result<u64, tonic::Status> {
+        self.worker
+            .count(with_token(
+                token,
+                pb::CountRequest {
+                    scope: Some(memory_scope_of(namespace_id, scope)),
+                    space: Some(self.space()),
+                    filter: None,
+                },
+            ))
+            .await
+            .map(|response| response.into_inner().count)
+    }
+
+    async fn memory_delete(
+        &mut self,
+        token: &str,
+        scope: i32,
+        namespace_id: &str,
+        selector: pb::delete_request::Selector,
+    ) -> Result<(), tonic::Status> {
+        let space = self.space();
+        self.worker
+            .delete(with_token(
+                token,
+                pb::DeleteRequest {
+                    project_id: 0,
+                    space: Some(space),
+                    namespace: Some(memory_namespace(namespace_id, scope)),
+                    selector: Some(selector),
+                },
+            ))
+            .await
+            .map(|_| ())
+    }
+
+    async fn memory_documents(
+        &mut self,
+        token: &str,
+        scope: i32,
+        namespace_id: &str,
+    ) -> Result<usize, tonic::Status> {
+        let space = self.space();
+        let mut stream = self
+            .worker
+            .list_documents(with_token(
+                token,
+                pb::ListDocumentsRequest {
+                    project_id: 0,
+                    namespace: Some(memory_namespace(namespace_id, scope)),
+                    space: Some(space),
+                    max_documents: 0,
+                },
+            ))
+            .await?
+            .into_inner();
+        let mut documents = 0;
+        while let Some(page) = stream.message().await? {
+            documents += page.documents.len();
+        }
+        Ok(documents)
+    }
+
+    /// Memory points of `project` owned by `owner` (`None`: any owner), read
+    /// from Qdrant directly.
+    async fn truth_memory(&self, project: i64, owner: Option<&str>) -> u64 {
+        let mut must = vec![
+            qdrant_client::qdrant::Condition::matches("project_id", project.to_string()),
+            qdrant_client::qdrant::Condition::matches("source", "memory".to_owned()),
+        ];
+        if let Some(owner) = owner {
+            must.push(qdrant_client::qdrant::Condition::matches(
+                "owner",
+                owner.to_owned(),
+            ));
+        }
+        self.qdrant
+            .count(
+                qdrant_client::qdrant::CountPointsBuilder::new(format!(
+                    "emb_{}_{DIMENSION}",
+                    self.slug
+                ))
+                .filter(qdrant_client::qdrant::Filter::must(must))
+                .exact(true),
+            )
+            .await
+            .expect("count")
+            .result
+            .map_or(0, |result| result.count)
+    }
+
+    /// Alice and Bob each write a personal memory under the SAME key, and
+    /// Alice writes a project one. Every point is one document of one chunk.
+    async fn seed_memory(&mut self) {
+        for (token, scope, text) in [
+            (TOKEN_ALICE, PERSONAL, "alice private pasta"),
+            (TOKEN_BOB, PERSONAL, "bob private pasta"),
+            (TOKEN_ALICE, PROJECT, "team shared pasta"),
+        ] {
+            let written = self
+                .memory_upsert(
+                    token,
+                    scope,
+                    NAMESPACE_M,
+                    vec![memory_point("k", 1, text, [1.0, 0.0, 0.0, 0.0])],
+                )
+                .await
+                .expect("seed memory");
+            assert_eq!(written.upserted, 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_service_stamps_the_owner_from_the_token_and_gives_each_owner_its_own_point() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_memory().await;
+    // Three points for one (project, namespace, key, chunk): the owner is part
+    // of the point id, so Bob's write did not overwrite Alice's.
+    assert_eq!(h.truth_memory(PROJECT_A, None).await, 3);
+    assert_eq!(h.truth_memory(PROJECT_A, Some("user:11")).await, 1);
+    assert_eq!(h.truth_memory(PROJECT_A, Some("user:12")).await, 1);
+    assert_eq!(h.truth_memory(PROJECT_A, Some("project")).await, 1);
+    // The owner the client tried to smuggle through metadata is only metadata.
+    assert_eq!(h.truth_memory(PROJECT_A, Some("user:999")).await, 0);
+    // Each reads its own back.
+    for (token, scope, text) in [
+        (TOKEN_ALICE, PERSONAL, "alice private pasta"),
+        (TOKEN_BOB, PERSONAL, "bob private pasta"),
+        (TOKEN_BOB, PROJECT, "team shared pasta"),
+    ] {
+        let points = h
+            .memory_search(token, scope, NAMESPACE_M)
+            .await
+            .expect("search");
+        assert_eq!(points.len(), 1, "{token}");
+        assert_eq!(points[0].text, text);
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One scenario, every RPC in turn.
+async fn user_b_cannot_read_count_list_or_delete_user_as_personal_memories_even_with_the_namespace_id()
+ {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    // Only Alice writes a personal memory; Bob knows the namespace id.
+    h.memory_upsert(
+        TOKEN_ALICE,
+        PERSONAL,
+        NAMESPACE_M,
+        vec![memory_point(
+            "secret",
+            1,
+            "alice diagnosis",
+            [1.0, 0.0, 0.0, 0.0],
+        )],
+    )
+    .await
+    .expect("alice writes");
+    assert_eq!(h.truth_memory(PROJECT_A, Some("user:11")).await, 1);
+
+    // Search, hybrid search, read, count and list: nothing, in either scope.
+    for scope in [PERSONAL, PROJECT] {
+        assert!(
+            h.memory_search(TOKEN_BOB, scope, NAMESPACE_M)
+                .await
+                .expect("search")
+                .is_empty(),
+            "search {scope}"
+        );
+        assert!(
+            h.memory_read(TOKEN_BOB, scope, NAMESPACE_M, None)
+                .await
+                .expect("read")
+                .is_empty(),
+            "read {scope}"
+        );
+        assert_eq!(
+            h.memory_count(TOKEN_BOB, scope, NAMESPACE_M)
+                .await
+                .expect("count"),
+            0,
+            "count {scope}"
+        );
+        assert_eq!(
+            h.memory_documents(TOKEN_BOB, scope, NAMESPACE_M)
+                .await
+                .expect("list"),
+            0,
+            "list {scope}"
+        );
+    }
+    let hybrid = h
+        .worker
+        .hybrid_search(with_token(
+            TOKEN_BOB,
+            pb::HybridSearchRequest {
+                scope: Some(memory_scope_of(NAMESPACE_M, PERSONAL)),
+                space: Some(h.space()),
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                text: "alice diagnosis".to_owned(),
+                limit: 10,
+                ..pb::HybridSearchRequest::default()
+            },
+        ))
+        .await
+        .expect("hybrid")
+        .into_inner();
+    assert!(hybrid.points.is_empty());
+    // A crafted filter on the document key or a catch-all `should` only
+    // narrows within Bob's own (empty) scope.
+    let crafted = pb::Filter {
+        should: vec![pb::Condition {
+            key: "document_key".to_owned(),
+            r#match: Some(pb::condition::Match::Keyword("secret".to_owned())),
+        }],
+        ..pb::Filter::default()
+    };
+    assert!(
+        h.memory_read(TOKEN_BOB, PERSONAL, NAMESPACE_M, Some(crafted))
+            .await
+            .expect("read")
+            .is_empty()
+    );
+
+    // Every delete selector of Bob's removes nothing of Alice's.
+    for selector in [
+        pb::delete_request::Selector::WholeNamespace(pb::WholeNamespace {}),
+        pb::delete_request::Selector::Documents(pb::DocumentKeys {
+            document_keys: vec!["secret".to_owned()],
+        }),
+        pb::delete_request::Selector::Generations(pb::Generations {
+            generations: vec!["g".to_owned()],
+        }),
+    ] {
+        h.memory_delete(TOKEN_BOB, PERSONAL, NAMESPACE_M, selector.clone())
+            .await
+            .expect("delete");
+        h.memory_delete(TOKEN_BOB, PROJECT, NAMESPACE_M, selector)
+            .await
+            .expect("delete");
+    }
+    assert_eq!(h.truth_memory(PROJECT_A, Some("user:11")).await, 1);
+
+    // Bob cannot rewrite Alice's metadata either.
+    h.worker
+        .set_memory_metadata(with_token(
+            TOKEN_BOB,
+            pb::SetMemoryMetadataRequest {
+                namespace: Some(memory_namespace(NAMESPACE_M, PERSONAL)),
+                space: None,
+                document_key: "secret".to_owned(),
+                chunk_id: "v1".to_owned(),
+                metadata_json: "{\"m\":{\"tampered\":true}}".to_owned(),
+            },
+        ))
+        .await
+        .expect("a no-op for Bob");
+    let alice = h
+        .memory_read(TOKEN_ALICE, PERSONAL, NAMESPACE_M, None)
+        .await
+        .expect("alice reads");
+    assert_eq!(alice.len(), 1);
+    assert!(!alice[0].metadata_json.contains("tampered"));
+    // The `owner` key is not a filter key at all.
+    let by_owner = pb::Filter {
+        must: vec![pb::Condition {
+            key: "owner".to_owned(),
+            r#match: Some(pb::condition::Match::Keyword("user:11".to_owned())),
+        }],
+        ..pb::Filter::default()
+    };
+    let refused = h
+        .memory_read(TOKEN_BOB, PERSONAL, NAMESPACE_M, Some(by_owner))
+        .await
+        .expect_err("owner is not filterable");
+    assert_eq!(refused.code(), Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn project_memory_is_shared_inside_a_project_and_never_across_projects() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.memory_upsert(
+        TOKEN_ALICE,
+        PROJECT,
+        NAMESPACE_M,
+        vec![memory_point(
+            "team",
+            1,
+            "team standup at nine",
+            [1.0, 0.0, 0.0, 0.0],
+        )],
+    )
+    .await
+    .expect("alice writes");
+    // Bob reads, and rewrites it (shared: one point, last writer wins per id
+    // is not the question here, he can write his own key).
+    let seen = h
+        .memory_search(TOKEN_BOB, PROJECT, NAMESPACE_M)
+        .await
+        .expect("bob reads");
+    assert_eq!(seen.len(), 1);
+    h.memory_upsert(
+        TOKEN_BOB,
+        PROJECT,
+        NAMESPACE_M,
+        vec![memory_point(
+            "retro",
+            1,
+            "retro on friday",
+            [1.0, 0.0, 0.0, 0.0],
+        )],
+    )
+    .await
+    .expect("bob writes");
+    assert_eq!(
+        h.memory_search(TOKEN_ALICE, PROJECT, NAMESPACE_M)
+            .await
+            .expect("alice reads")
+            .len(),
+        2
+    );
+    // Another project, even for the same user id: nothing, in either scope.
+    for scope in [PERSONAL, PROJECT] {
+        assert!(
+            h.memory_search(TOKEN_ALICE_IN_B, scope, NAMESPACE_M)
+                .await
+                .expect("search")
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        h.memory_count(TOKEN_ALICE_IN_B, PROJECT, NAMESPACE_M)
+            .await
+            .expect("count"),
+        0
+    );
+    // And its own write there stays there.
+    h.memory_upsert(
+        TOKEN_ALICE_IN_B,
+        PERSONAL,
+        NAMESPACE_M,
+        vec![memory_point("k", 1, "alice in b", [1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("write in B");
+    assert_eq!(h.truth_memory(PROJECT_B, Some("user:11")).await, 1);
+    assert_eq!(h.truth_memory(PROJECT_A, Some("user:11")).await, 0);
+}
+
+#[tokio::test]
+async fn personal_memory_is_refused_for_a_token_without_a_user_or_in_a_shared_conversation() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    for (token, reason) in [
+        (TOKEN_NO_USER, "memory.personal_unavailable"),
+        (TOKEN_ALICE_SHARED, "memory.personal_shared_conversation"),
+    ] {
+        let status = h
+            .memory_upsert(
+                token,
+                PERSONAL,
+                NAMESPACE_M,
+                vec![memory_point("k", 1, "nope", [1.0, 0.0, 0.0, 0.0])],
+            )
+            .await
+            .expect_err("personal upsert");
+        assert_eq!(status.code(), Code::PermissionDenied, "{token}");
+        assert!(
+            status.message().starts_with(reason),
+            "{token}: {}",
+            status.message()
+        );
+        for status in [
+            h.memory_search(token, PERSONAL, NAMESPACE_M)
+                .await
+                .expect_err("search"),
+            h.memory_read(token, PERSONAL, NAMESPACE_M, None)
+                .await
+                .expect_err("read"),
+            h.memory_count(token, PERSONAL, NAMESPACE_M)
+                .await
+                .expect_err("count"),
+            h.memory_documents(token, PERSONAL, NAMESPACE_M)
+                .await
+                .expect_err("list"),
+            h.memory_delete(
+                token,
+                PERSONAL,
+                NAMESPACE_M,
+                pb::delete_request::Selector::WholeNamespace(pb::WholeNamespace {}),
+            )
+            .await
+            .expect_err("delete"),
+        ] {
+            assert_eq!(status.code(), Code::PermissionDenied, "{token}");
+            assert!(status.message().starts_with(reason));
+        }
+        // The project's memory works for both.
+        h.memory_upsert(
+            token,
+            PROJECT,
+            NAMESPACE_M,
+            vec![memory_point(token, 1, "shared fact", [1.0, 0.0, 0.0, 0.0])],
+        )
+        .await
+        .expect("project write");
+    }
+    assert_eq!(h.truth_memory(PROJECT_A, Some("project")).await, 2);
+    assert_eq!(h.truth_memory(PROJECT_A, Some("user:11")).await, 0);
+}
+
+#[tokio::test]
+async fn memory_scope_is_required_for_memory_and_refused_elsewhere_and_other_tokens_cannot_use_memory()
+ {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    // Memory without a scope.
+    let status = h
+        .memory_upsert(
+            TOKEN_ALICE,
+            0,
+            NAMESPACE_M,
+            vec![memory_point("k", 1, "x", [1.0, 0.0, 0.0, 0.0])],
+        )
+        .await
+        .expect_err("no scope");
+    assert_eq!(status.code(), Code::InvalidArgument);
+    assert_eq!(
+        h.memory_search(TOKEN_ALICE, 0, NAMESPACE_M)
+            .await
+            .expect_err("no scope")
+            .code(),
+        Code::InvalidArgument
+    );
+    // A scope on a source that has none.
+    let mut namespace = Harness::namespace(NAMESPACE_A);
+    namespace.memory_scope = PERSONAL;
+    let status = h
+        .upsert(
+            TOKEN_ALICE,
+            0,
+            namespace,
+            vec![Harness::point("d", "t", [1.0, 0.0, 0.0, 0.0])],
+        )
+        .await
+        .expect_err("scope on an index");
+    assert_eq!(status.code(), Code::InvalidArgument);
+    // A worker token without the memory source, and a callback token.
+    for token in [TOKEN_A, TOKEN_A_WIKI] {
+        let status = h
+            .memory_upsert(
+                token,
+                PROJECT,
+                NAMESPACE_M,
+                vec![memory_point("k", 1, "x", [1.0, 0.0, 0.0, 0.0])],
+            )
+            .await
+            .expect_err("no memory source");
+        assert_eq!(status.code(), Code::PermissionDenied, "{token}");
+    }
+    // An administrator has no memory scope at all.
+    for scope in [PERSONAL, PROJECT] {
+        let status = h
+            .admin
+            .count(tonic::Request::new(pb::CountRequest {
+                scope: Some(pb::Scope {
+                    project_id: PROJECT_A,
+                    ..memory_scope_of(NAMESPACE_M, scope)
+                }),
+                space: None,
+                filter: None,
+            }))
+            .await
+            .expect_err("admin count of memory");
+        assert_eq!(status.code(), Code::PermissionDenied);
+    }
+}
+
+#[tokio::test]
+async fn memory_is_never_listed_as_an_index() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_memory().await;
+    h.upsert(
+        TOKEN_A,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![Harness::point("d", "alpha", [1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("an index too");
+    let suffix = format!("{}_{DIMENSION}", h.slug);
+    for token in [TOKEN_ALICE, TOKEN_BOB, TOKEN_A] {
+        let listed = h
+            .worker
+            .list_indexes(with_token(token, pb::ListIndexesRequest::default()))
+            .await
+            .expect("list")
+            .into_inner()
+            .indexes;
+        assert!(
+            listed
+                .iter()
+                .filter(|index| index.collection.ends_with(&suffix))
+                .all(|index| index.source != pb::Source::Memory as i32
+                    && index.namespace_id != NAMESPACE_M),
+            "{token}: {listed:?}"
+        );
+        let status = h
+            .worker
+            .list_indexes(with_token(
+                token,
+                pb::ListIndexesRequest {
+                    project_id: 0,
+                    source: pb::Source::Memory as i32,
+                },
+            ))
+            .await
+            .expect_err("memory is not an index");
+        assert_eq!(status.code(), Code::InvalidArgument, "{token}");
+    }
+    let admin = h
+        .admin
+        .list_indexes(tonic::Request::new(pb::ListIndexesRequest {
+            project_id: PROJECT_A,
+            source: 0,
+        }))
+        .await
+        .expect("admin list")
+        .into_inner()
+        .indexes;
+    assert!(
+        admin
+            .iter()
+            .all(|index| index.source != pb::Source::Memory as i32)
+    );
+}
+
+#[tokio::test]
+async fn set_memory_metadata_changes_the_owners_point_and_keeps_its_vector() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_memory().await;
+    h.worker
+        .set_memory_metadata(with_token(
+            TOKEN_ALICE,
+            pb::SetMemoryMetadataRequest {
+                namespace: Some(memory_namespace(NAMESPACE_M, PERSONAL)),
+                space: Some(h.space()),
+                document_key: "k".to_owned(),
+                chunk_id: "v1".to_owned(),
+                metadata_json: "{\"t\":{\"valid_to\":123}}".to_owned(),
+            },
+        ))
+        .await
+        .expect("alice sets");
+    let alice = h
+        .memory_read(TOKEN_ALICE, PERSONAL, NAMESPACE_M, None)
+        .await
+        .expect("read");
+    assert_eq!(alice.len(), 1);
+    assert!(
+        alice[0].metadata_json.contains("123"),
+        "{}",
+        alice[0].metadata_json
+    );
+    // Bob's point of the same key, and the project's, are unchanged.
+    for (token, scope) in [(TOKEN_BOB, PERSONAL), (TOKEN_BOB, PROJECT)] {
+        let points = h
+            .memory_read(token, scope, NAMESPACE_M, None)
+            .await
+            .expect("read");
+        assert_eq!(points.len(), 1);
+        assert!(!points[0].metadata_json.contains("123"), "{scope}");
+    }
+    // The vector is still there: a dense search still finds it.
+    assert_eq!(
+        h.memory_search(TOKEN_ALICE, PERSONAL, NAMESPACE_M)
+            .await
+            .expect("search")
+            .len(),
+        1
+    );
+    // A non-memory source, a non-object and a missing key are refused.
+    let bad = |namespace: pb::Namespace, key: &str, metadata: &str| pb::SetMemoryMetadataRequest {
+        namespace: Some(namespace),
+        space: None,
+        document_key: key.to_owned(),
+        chunk_id: "v1".to_owned(),
+        metadata_json: metadata.to_owned(),
+    };
+    for request in [
+        bad(Harness::namespace(NAMESPACE_A), "k", "{}"),
+        bad(memory_namespace(NAMESPACE_M, PERSONAL), "k", "[1]"),
+        bad(memory_namespace(NAMESPACE_M, PERSONAL), "", "{}"),
+    ] {
+        assert_eq!(
+            h.worker
+                .set_memory_metadata(with_token(TOKEN_ALICE, request))
+                .await
+                .expect_err("refused")
+                .code(),
+            Code::InvalidArgument
+        );
+    }
+}
+
+#[tokio::test]
+async fn only_an_administrator_deletes_a_users_personal_memories_or_a_namespace() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_memory().await;
+    h.memory_upsert(
+        TOKEN_ALICE,
+        PERSONAL,
+        NAMESPACE_M2,
+        vec![memory_point("k2", 1, "alice second", [1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("second namespace");
+    h.memory_upsert(
+        TOKEN_ALICE_IN_B,
+        PERSONAL,
+        NAMESPACE_M,
+        vec![memory_point("k", 1, "alice in b", [1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("project b");
+
+    // A token (even Alice's own) cannot use the user-wide delete.
+    for token in [TOKEN_ALICE, TOKEN_BOB] {
+        let status = h
+            .worker
+            .delete_memory_user(with_token(
+                token,
+                pb::DeleteMemoryUserRequest {
+                    project_id: 0,
+                    user_id: ALICE,
+                },
+            ))
+            .await
+            .expect_err("a token cannot");
+        assert_eq!(status.code(), Code::PermissionDenied);
+        let status = h
+            .worker
+            .delete_memory_namespace(with_token(
+                token,
+                pb::DeleteMemoryNamespaceRequest {
+                    project_id: 0,
+                    namespace_id: NAMESPACE_M.to_owned(),
+                },
+            ))
+            .await
+            .expect_err("a token cannot");
+        assert_eq!(status.code(), Code::PermissionDenied);
+    }
+    assert_eq!(h.truth_memory(PROJECT_A, None).await, 4);
+
+    // The administrator removes Alice's personal points in project A only.
+    h.admin
+        .delete_memory_user(tonic::Request::new(pb::DeleteMemoryUserRequest {
+            project_id: PROJECT_A,
+            user_id: ALICE,
+        }))
+        .await
+        .expect("delete user");
+    assert_eq!(h.truth_memory(PROJECT_A, Some("user:11")).await, 0);
+    assert_eq!(
+        h.truth_memory(PROJECT_A, Some("user:12")).await,
+        1,
+        "Bob's stay"
+    );
+    assert_eq!(
+        h.truth_memory(PROJECT_A, Some("project")).await,
+        1,
+        "the project's stay"
+    );
+    assert_eq!(
+        h.truth_memory(PROJECT_B, Some("user:11")).await,
+        1,
+        "another project's stay"
+    );
+    // Not a positive user id.
+    assert_eq!(
+        h.admin
+            .delete_memory_user(tonic::Request::new(pb::DeleteMemoryUserRequest {
+                project_id: PROJECT_A,
+                user_id: 0,
+            }))
+            .await
+            .expect_err("invalid")
+            .code(),
+        Code::InvalidArgument
+    );
+
+    // The namespace delete removes every owner's points of that namespace.
+    h.admin
+        .delete_memory_namespace(tonic::Request::new(pb::DeleteMemoryNamespaceRequest {
+            project_id: PROJECT_A,
+            namespace_id: NAMESPACE_M.to_owned(),
+        }))
+        .await
+        .expect("delete namespace");
+    assert_eq!(h.truth_memory(PROJECT_A, None).await, 0);
+    assert_eq!(
+        h.truth_memory(PROJECT_B, None).await,
+        1,
+        "another project's stay"
+    );
+}
+
+#[tokio::test]
+async fn an_administrator_cannot_name_memory_through_the_ordinary_operations() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_memory().await;
+    for scope in [PERSONAL, PROJECT, 0] {
+        let status = h
+            .admin
+            .delete(tonic::Request::new(pb::DeleteRequest {
+                project_id: PROJECT_A,
+                space: None,
+                namespace: Some(memory_namespace(NAMESPACE_M, scope)),
+                selector: Some(pb::delete_request::Selector::WholeNamespace(
+                    pb::WholeNamespace {},
+                )),
+            }))
+            .await
+            .expect_err("admin delete of memory");
+        assert!(
+            matches!(
+                status.code(),
+                Code::PermissionDenied | Code::InvalidArgument
+            ),
+            "{scope}: {status:?}"
+        );
+    }
+    assert_eq!(h.truth_memory(PROJECT_A, None).await, 3);
+    // DropProject still removes everything of the project, memory included.
+    h.admin
+        .drop_project(tonic::Request::new(pb::DropProjectRequest {
+            project_id: PROJECT_A,
+        }))
+        .await
+        .expect("drop");
+    assert_eq!(h.truth_memory(PROJECT_A, None).await, 0);
+}
+
+/// The temporal filters the memory tools send (`is_null` and ranges on
+/// `metadata.t.*`, a nested `should`) mean what the tools assume on the real
+/// store, and closing a version in place changes what they select.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One scenario, each filter in turn.
+async fn the_memory_tools_temporal_filters_work_on_the_real_store() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    let version = |id: &str, from: i64, to: Option<i64>| {
+        let mut point = memory_point("k", 1, &format!("version {id}"), [1.0, 0.0, 0.0, 0.0]);
+        point.chunk_id = format!("v{id}");
+        point.metadata_json =
+            serde_json::json!({"m": {}, "t": {"valid_from": from, "valid_to": to, "id": id}})
+                .to_string();
+        point
+    };
+    for (id, from, to, generation) in [("a", 500, Some(1000), "g-a"), ("b", 1000, None, "g-b")] {
+        let mut namespace = memory_namespace(NAMESPACE_M, PROJECT);
+        namespace.generation = generation.to_owned();
+        h.upsert(TOKEN_ALICE, 0, namespace, vec![version(id, from, to)])
+            .await
+            .expect("version");
+    }
+    let key = |value: &str| pb::Condition {
+        key: "document_key".to_owned(),
+        r#match: Some(pb::condition::Match::Keyword(value.to_owned())),
+    };
+    let is_null = pb::Condition {
+        key: "metadata.t.valid_to".to_owned(),
+        r#match: Some(pb::condition::Match::IsNull(pb::IsNull {})),
+    };
+    let range = |name: &str, gt: Option<f64>, lte: Option<f64>| pb::Condition {
+        key: name.to_owned(),
+        r#match: Some(pb::condition::Match::Range(pb::Range {
+            gt,
+            gte: None,
+            lt: None,
+            lte,
+        })),
+    };
+    let ids = |points: &[pb::ScoredPoint]| {
+        let mut ids: Vec<String> = points.iter().map(|p| p.chunk_id.clone()).collect();
+        ids.sort();
+        ids
+    };
+    let filter = |must: Vec<pb::Condition>| {
+        Some(pb::Filter {
+            must,
+            ..pb::Filter::default()
+        })
+    };
+
+    // Open versions: only "b".
+    let open = h
+        .memory_read(
+            TOKEN_ALICE,
+            PROJECT,
+            NAMESPACE_M,
+            filter(vec![key("k"), is_null.clone()]),
+        )
+        .await
+        .expect("open");
+    assert_eq!(ids(&open), ["vb"]);
+    // As of 700: valid_from <= 700 AND (valid_to is null OR valid_to > 700): "a".
+    let as_of = |at: f64| {
+        filter(vec![
+            key("k"),
+            range("metadata.t.valid_from", None, Some(at)),
+            pb::Condition {
+                key: String::new(),
+                r#match: Some(pb::condition::Match::Filter(pb::Filter {
+                    should: vec![
+                        is_null.clone(),
+                        range("metadata.t.valid_to", Some(at), None),
+                    ],
+                    ..pb::Filter::default()
+                })),
+            },
+        ])
+    };
+    assert_eq!(
+        ids(&h
+            .memory_read(TOKEN_ALICE, PROJECT, NAMESPACE_M, as_of(700.0))
+            .await
+            .expect("as of")),
+        ["va"]
+    );
+    // At the boundary instant the newer version is the one valid.
+    assert_eq!(
+        ids(&h
+            .memory_read(TOKEN_ALICE, PROJECT, NAMESPACE_M, as_of(1000.0))
+            .await
+            .expect("boundary")),
+        ["vb"]
+    );
+    assert!(
+        h.memory_read(TOKEN_ALICE, PROJECT, NAMESPACE_M, as_of(100.0))
+            .await
+            .expect("before")
+            .is_empty()
+    );
+    // The same filters on a search.
+    let hits = h
+        .search(
+            TOKEN_ALICE,
+            memory_scope_of(NAMESPACE_M, PROJECT),
+            as_of(700.0),
+        )
+        .await
+        .expect("search");
+    assert_eq!(ids(&hits), ["va"]);
+
+    // Close "b" in place: it is no longer open, its vector is still searchable.
+    h.worker
+        .set_memory_metadata(with_token(
+            TOKEN_ALICE,
+            pb::SetMemoryMetadataRequest {
+                namespace: Some(pb::Namespace {
+                    generation: "g-b".to_owned(),
+                    ..memory_namespace(NAMESPACE_M, PROJECT)
+                }),
+                space: Some(h.space()),
+                document_key: "k".to_owned(),
+                chunk_id: "vb".to_owned(),
+                metadata_json: serde_json::json!({"m": {}, "t": {"valid_from": 1000, "valid_to": 2000, "id": "b"}}).to_string(),
+            },
+        ))
+        .await
+        .expect("close");
+    assert!(
+        h.memory_read(
+            TOKEN_ALICE,
+            PROJECT,
+            NAMESPACE_M,
+            filter(vec![key("k"), is_null])
+        )
+        .await
+        .expect("none open")
+        .is_empty()
+    );
+    let hits = h
+        .memory_search(TOKEN_ALICE, PROJECT, NAMESPACE_M)
+        .await
+        .expect("search");
+    assert_eq!(hits.len(), 2, "both versions are still points with vectors");
+    // A version is deleted alone by its generation; the other stays.
+    h.memory_delete(
+        TOKEN_ALICE,
+        PROJECT,
+        NAMESPACE_M,
+        pb::delete_request::Selector::Generations(pb::Generations {
+            generations: vec!["g-a".to_owned()],
+        }),
+    )
+    .await
+    .expect("delete one version");
+    let left = h
+        .memory_read(TOKEN_ALICE, PROJECT, NAMESPACE_M, None)
+        .await
+        .expect("left");
+    assert_eq!(ids(&left), ["vb"]);
 }

@@ -283,3 +283,56 @@ func TestDeleteToolkitRowFirstOnADatabaseWithoutTheIndexRegistryTable(t *testing
 		t.Fatalf("DeleteToolkit on a baseline-only database: err=%v left=%d", err, countToolkits(ctx, t, repo))
 	}
 }
+
+// memoryJournal is a journal that also takes the memory toolkit's namespace.
+type memoryJournal struct {
+	txJournal
+	namespaces []string
+}
+
+func (j *memoryJournal) EnqueueMemory(_ context.Context, tx pgx.Tx, projectID, toolkitID int64, namespace string) (string, error) {
+	if tx == nil || projectID != 1 || toolkitID <= 0 {
+		return "", errors.New("unexpected memory enqueue")
+	}
+	j.namespaces = append(j.namespaces, namespace)
+	return "memory", nil
+}
+
+// A memory toolkit's namespace is read from the row being deleted, so it
+// reaches the journal before the setting is gone; an absent namespace is the
+// toolkit's id, the worker's own default.
+func TestAMemoryToolkitDeleteRecordsItsNamespaceInTheSameTransaction(t *testing.T) {
+	pool, ctx := migratedToolkitsPool(t)
+	repo := &pgRepo{pool: pool}
+	for _, tc := range []struct {
+		settings string
+		want     func(id string) string
+	}{
+		{`{"namespace": "team-notes", "memory_scope": "both"}`, func(string) string { return "team-notes" }},
+		{`{"memory_scope": "personal"}`, func(id string) string { return id }},
+		{`{"namespace": "   "}`, func(id string) string { return id }},
+	} {
+		var id string
+		if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.elitea_tools (name, type, description, settings, owner_id, author_id)
+VALUES ('notes', 'memory', '', $1::jsonb, 1, 1) RETURNING id::text`, tc.settings).Scan(&id); err != nil {
+			t.Fatalf("seed memory toolkit: %v", err)
+		}
+		journal := &memoryJournal{}
+		if err := repo.DeleteToolkitRowFirst(ctx, "1", id, journal); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		if len(journal.namespaces) != 1 || journal.namespaces[0] != tc.want(id) {
+			t.Fatalf("settings %s: the journal got %v, want %q", tc.settings, journal.namespaces, tc.want(id))
+		}
+	}
+	// Another type is never offered the memory enqueue.
+	other := seedOneToolkit(ctx, t, repo)
+	journal := &memoryJournal{}
+	if err := repo.DeleteToolkitRowFirst(ctx, "1", other, journal); err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.namespaces) != 0 {
+		t.Fatalf("a non-memory toolkit was offered the memory enqueue: %v", journal.namespaces)
+	}
+}

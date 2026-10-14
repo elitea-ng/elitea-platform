@@ -86,6 +86,7 @@ var sourceKeywords = map[string]vectorv1.Source{
 	"toolkit_index": vectorv1.Source_SOURCE_TOOLKIT_INDEX,
 	"deepwiki":      vectorv1.Source_SOURCE_DEEPWIKI,
 	"inventory":     vectorv1.Source_SOURCE_INVENTORY,
+	"memory":        vectorv1.Source_SOURCE_MEMORY,
 }
 
 // Server is the introspection service.
@@ -177,6 +178,9 @@ func (s *Server) introspectClaimToken(ctx context.Context, token string) (*vecto
 		Kind:           vectorv1.TokenKind_TOKEN_KIND_WORKER_CLAIM,
 		ExpiresAtUnix:  facts.ExpiresAt.Unix(),
 		AllowedSources: sources,
+		// Decided when the token was minted, from the execution's
+		// conversation; elitea-vector enforces it.
+		PersonalMemoryAllowed: facts.PersonalMemoryAllowed,
 	}, nil
 }
 

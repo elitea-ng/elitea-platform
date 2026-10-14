@@ -81,6 +81,20 @@ type Remover interface {
 	DeleteToolkitData(ctx context.Context, projectID, toolkitID int64) (platformops.ToolkitDeletion, error)
 }
 
+// AppMemory is the application a memory toolkit's rows are filed under: the
+// vector store, which holds the toolkit's memories as the namespace its
+// `namespace` setting names (worker unit M9). It is not an engine in
+// platformops's sense and a memory row records the namespace, so it has its own
+// enqueue (EnqueueMemory) and its own remover (MemoryRemover).
+const AppMemory = "memory"
+
+// MemoryRemover deletes every memory point of one memory namespace of a
+// project, whoever owns it. *vectorclient.Client satisfies it; the errors are
+// platformops's classes, like Remover's.
+type MemoryRemover interface {
+	DeleteMemoryNamespace(ctx context.Context, projectID int64, namespace string) error
+}
+
 // The outcomes a closed row records (migration shared/0163).
 const (
 	OutcomeDeleted         = "deleted"
@@ -135,7 +149,13 @@ var (
 type Journal struct {
 	pool     *pgxpool.Pool
 	removers map[string]Remover
-	logger   *slog.Logger
+	// memory deletes a memory toolkit's namespace; nil on a replica without
+	// an elitea-vector client. memoryRecorded says whether a toolkit delete
+	// decided here owes the vector store a call at all (the deployment keeps
+	// memories there: the Rust indexing runtime).
+	memory         MemoryRemover
+	memoryRecorded bool
+	logger         *slog.Logger
 }
 
 // Option configures a Journal.
@@ -152,6 +172,20 @@ func WithRemover(app string, remover Remover) Option {
 			return
 		}
 		j.removers[app] = remover
+	}
+}
+
+// WithMemory wires the vector store for memory toolkits. recorded says that a
+// delete decided on this replica owes the store a call (the deployment keeps
+// memories in elitea-vector); a replica that only drains passes false. A nil
+// remover (or a typed nil) leaves the rows this replica cannot pay pending.
+func WithMemory(remover MemoryRemover, recorded bool) Option {
+	return func(j *Journal) {
+		j.memoryRecorded = recorded
+		if remover == nil || cleanupjournal.IsNilPointer(remover) {
+			return
+		}
+		j.memory = remover
 	}
 }
 
@@ -174,9 +208,12 @@ func New(pool *pgxpool.Pool, logger *slog.Logger, options ...Option) *Journal {
 // AppsWired names the applications this journal can call, sorted. For the
 // composition root's startup log and for tests.
 func (j *Journal) AppsWired() []string {
-	apps := make([]string, 0, len(j.removers))
+	apps := make([]string, 0, len(j.removers)+1)
 	for app := range j.removers {
 		apps = append(apps, app)
+	}
+	if j.memory != nil {
+		apps = append(apps, AppMemory)
 	}
 	sort.Strings(apps)
 	return apps
@@ -238,6 +275,50 @@ RETURNING id, generation`, projectID, toolkitID, app, toolkitType).Scan(&id, &ge
 	return app, nil
 }
 
+// EnqueueMemory records, in tx (the transaction that deletes a memory
+// toolkit's row), that the toolkit's memories owe the vector store a deletion:
+// the namespace the toolkit's setting named, which is gone with the row. It
+// returns AppMemory, or "" when this deployment keeps no memories in the vector
+// store (the journal was built with recorded false). Like Enqueue, a row for the
+// same toolkit is REOPENED, its generation bumped.
+func (j *Journal) EnqueueMemory(ctx context.Context, tx pgx.Tx, projectID, toolkitID int64, namespace string) (string, error) {
+	if !j.memoryRecorded {
+		return "", nil
+	}
+	if tx == nil {
+		return "", errors.New("toolkitcleanup: enqueue needs the delete's transaction")
+	}
+	if strings.TrimSpace(namespace) == "" {
+		return "", errors.New("toolkitcleanup: a memory toolkit's namespace is required")
+	}
+	var id, generation int64
+	if err := tx.QueryRow(ctx, `
+INSERT INTO centry.toolkit_deletions (project_id, toolkit_id, app, toolkit_type, namespace, created_at, next_attempt_at)
+VALUES ($1, $2, $3, 'memory', $4, clock_timestamp(), clock_timestamp())
+ON CONFLICT (project_id, toolkit_id, app) DO UPDATE
+SET toolkit_type = EXCLUDED.toolkit_type,
+    namespace = EXCLUDED.namespace,
+    outcome = NULL,
+    note = NULL,
+    created_at = EXCLUDED.created_at,
+    attempts = 0,
+    last_error = NULL,
+    next_attempt_at = EXCLUDED.next_attempt_at,
+    claimed_until = NULL,
+    completed_at = NULL,
+    generation = centry.toolkit_deletions.generation + 1
+RETURNING id, generation`, projectID, toolkitID, AppMemory, namespace).Scan(&id, &generation); err != nil {
+		return "", fmt.Errorf("toolkitcleanup: write cleanup journal: %w", err)
+	}
+	attrs := []any{"app", AppMemory, "project_id", projectID, "toolkit_id", toolkitID, "journal_id", id, "generation", generation}
+	if j.memory == nil {
+		j.logger.WarnContext(ctx, "memory toolkit delete: the vector-store deletion is journaled, but this process has no elitea-vector client; a replica that has one drains the row", attrs...)
+	} else {
+		j.logger.InfoContext(ctx, "memory toolkit delete: the vector-store deletion is journaled", attrs...)
+	}
+	return AppMemory, nil
+}
+
 // Claim is one run's ownership of a journal row: the row's id and the
 // generation it had when claimed. Every write the run makes requires the
 // generation, so a row reopened under the run is left alone.
@@ -292,6 +373,8 @@ type row struct {
 	toolkitID   int64
 	app         string
 	toolkitType string
+	// namespace is a memory toolkit's namespace string; empty otherwise.
+	namespace string
 }
 
 // Resume runs the journal row the caller has claimed (ClaimNext). completed is
@@ -310,9 +393,9 @@ func (j *Journal) Resume(ctx context.Context, claim Claim) (bool, error) {
 		completed *time.Time
 	)
 	switch err := j.pool.QueryRow(ctx, `
-SELECT id, generation, project_id, toolkit_id, app, toolkit_type, completed_at
+SELECT id, generation, project_id, toolkit_id, app, toolkit_type, COALESCE(namespace, ''), completed_at
 FROM centry.toolkit_deletions WHERE id = $1`, claim.ID,
-	).Scan(&r.id, &r.generation, &r.projectID, &r.toolkitID, &r.app, &r.toolkitType, &completed); {
+	).Scan(&r.id, &r.generation, &r.projectID, &r.toolkitID, &r.app, &r.toolkitType, &r.namespace, &completed); {
 	case errors.Is(err, pgx.ErrNoRows):
 		return false, ErrRowNotFound
 	case err != nil:
@@ -403,12 +486,26 @@ type outcome struct {
 // is the part of a run that needs no database.
 func (j *Journal) deleteInEngine(ctx context.Context, r row) outcome {
 	attrs := []any{"journal_id", r.id, "app", r.app, "project_id", r.projectID, "toolkit_id", r.toolkitID}
-	remover, wired := j.removers[r.app]
-	if !wired {
-		j.logger.WarnContext(ctx, "toolkit delete cleanup: this replica has no client for the application; the row is left for one that has", attrs...)
-		return outcome{kind: outcomeNotWired, cause: fmt.Errorf("toolkitcleanup: no %s client on this replica", r.app)}
+	var (
+		deletion platformops.ToolkitDeletion
+		err      error
+	)
+	if r.app == AppMemory {
+		if j.memory == nil {
+			j.logger.WarnContext(ctx, "toolkit delete cleanup: this replica has no elitea-vector client; the memory row is left for one that has", attrs...)
+			return outcome{kind: outcomeNotWired, cause: fmt.Errorf("toolkitcleanup: no %s client on this replica", r.app)}
+		}
+		if err = j.memory.DeleteMemoryNamespace(ctx, r.projectID, r.namespace); err == nil {
+			deletion.Deleted = true
+		}
+	} else {
+		remover, wired := j.removers[r.app]
+		if !wired {
+			j.logger.WarnContext(ctx, "toolkit delete cleanup: this replica has no client for the application; the row is left for one that has", attrs...)
+			return outcome{kind: outcomeNotWired, cause: fmt.Errorf("toolkitcleanup: no %s client on this replica", r.app)}
+		}
+		deletion, err = remover.DeleteToolkitData(ctx, r.projectID, r.toolkitID)
 	}
-	deletion, err := remover.DeleteToolkitData(ctx, r.projectID, r.toolkitID)
 	switch {
 	case err == nil:
 		result, note := OutcomeDeleted, "deleted the toolkit's data"

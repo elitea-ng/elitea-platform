@@ -52,14 +52,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	VectorService_Upsert_FullMethodName        = "/elitea.vector.v1.VectorService/Upsert"
-	VectorService_Delete_FullMethodName        = "/elitea.vector.v1.VectorService/Delete"
-	VectorService_DropProject_FullMethodName   = "/elitea.vector.v1.VectorService/DropProject"
-	VectorService_Search_FullMethodName        = "/elitea.vector.v1.VectorService/Search"
-	VectorService_HybridSearch_FullMethodName  = "/elitea.vector.v1.VectorService/HybridSearch"
-	VectorService_Count_FullMethodName         = "/elitea.vector.v1.VectorService/Count"
-	VectorService_ListIndexes_FullMethodName   = "/elitea.vector.v1.VectorService/ListIndexes"
-	VectorService_ListDocuments_FullMethodName = "/elitea.vector.v1.VectorService/ListDocuments"
+	VectorService_Upsert_FullMethodName                = "/elitea.vector.v1.VectorService/Upsert"
+	VectorService_Delete_FullMethodName                = "/elitea.vector.v1.VectorService/Delete"
+	VectorService_DropProject_FullMethodName           = "/elitea.vector.v1.VectorService/DropProject"
+	VectorService_Search_FullMethodName                = "/elitea.vector.v1.VectorService/Search"
+	VectorService_HybridSearch_FullMethodName          = "/elitea.vector.v1.VectorService/HybridSearch"
+	VectorService_Count_FullMethodName                 = "/elitea.vector.v1.VectorService/Count"
+	VectorService_ListIndexes_FullMethodName           = "/elitea.vector.v1.VectorService/ListIndexes"
+	VectorService_ListDocuments_FullMethodName         = "/elitea.vector.v1.VectorService/ListDocuments"
+	VectorService_ReadMemory_FullMethodName            = "/elitea.vector.v1.VectorService/ReadMemory"
+	VectorService_SetMemoryMetadata_FullMethodName     = "/elitea.vector.v1.VectorService/SetMemoryMetadata"
+	VectorService_DeleteMemoryUser_FullMethodName      = "/elitea.vector.v1.VectorService/DeleteMemoryUser"
+	VectorService_DeleteMemoryNamespace_FullMethodName = "/elitea.vector.v1.VectorService/DeleteMemoryNamespace"
 )
 
 // VectorServiceClient is the client API for VectorService service.
@@ -95,6 +99,19 @@ type VectorServiceClient interface {
 	// unchanged documents and delete vanished ones; the store, not a mirror,
 	// is what was written.
 	ListDocuments(ctx context.Context, in *ListDocumentsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListDocumentsResponse], error)
+	// ReadMemory reads the points of one memory namespace by filter, with no
+	// query vector (a read of a memory by key, or of its versions). Token only.
+	ReadMemory(ctx context.Context, in *ReadMemoryRequest, opts ...grpc.CallOption) (*ReadMemoryResponse, error)
+	// SetMemoryMetadata replaces the metadata of one memory version in place,
+	// keeping its vector, so closing a version costs no embedding. Token only.
+	SetMemoryMetadata(ctx context.Context, in *SetMemoryMetadataRequest, opts ...grpc.CallOption) (*SetMemoryMetadataResponse, error)
+	// DeleteMemoryUser removes every personal memory point of one user in one
+	// project, in every collection. Only an administrator caller can use it.
+	DeleteMemoryUser(ctx context.Context, in *DeleteMemoryUserRequest, opts ...grpc.CallOption) (*DeleteMemoryUserResponse, error)
+	// DeleteMemoryNamespace removes every memory point of one namespace of one
+	// project, whoever owns it (project-shared and personal alike), in every
+	// collection. Only an administrator caller can use it: a toolkit delete.
+	DeleteMemoryNamespace(ctx context.Context, in *DeleteMemoryNamespaceRequest, opts ...grpc.CallOption) (*DeleteMemoryNamespaceResponse, error)
 }
 
 type vectorServiceClient struct {
@@ -197,6 +214,46 @@ func (c *vectorServiceClient) ListDocuments(ctx context.Context, in *ListDocumen
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type VectorService_ListDocumentsClient = grpc.ServerStreamingClient[ListDocumentsResponse]
 
+func (c *vectorServiceClient) ReadMemory(ctx context.Context, in *ReadMemoryRequest, opts ...grpc.CallOption) (*ReadMemoryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadMemoryResponse)
+	err := c.cc.Invoke(ctx, VectorService_ReadMemory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vectorServiceClient) SetMemoryMetadata(ctx context.Context, in *SetMemoryMetadataRequest, opts ...grpc.CallOption) (*SetMemoryMetadataResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetMemoryMetadataResponse)
+	err := c.cc.Invoke(ctx, VectorService_SetMemoryMetadata_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vectorServiceClient) DeleteMemoryUser(ctx context.Context, in *DeleteMemoryUserRequest, opts ...grpc.CallOption) (*DeleteMemoryUserResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteMemoryUserResponse)
+	err := c.cc.Invoke(ctx, VectorService_DeleteMemoryUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vectorServiceClient) DeleteMemoryNamespace(ctx context.Context, in *DeleteMemoryNamespaceRequest, opts ...grpc.CallOption) (*DeleteMemoryNamespaceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteMemoryNamespaceResponse)
+	err := c.cc.Invoke(ctx, VectorService_DeleteMemoryNamespace_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VectorServiceServer is the server API for VectorService service.
 // All implementations must embed UnimplementedVectorServiceServer
 // for forward compatibility.
@@ -230,6 +287,19 @@ type VectorServiceServer interface {
 	// unchanged documents and delete vanished ones; the store, not a mirror,
 	// is what was written.
 	ListDocuments(*ListDocumentsRequest, grpc.ServerStreamingServer[ListDocumentsResponse]) error
+	// ReadMemory reads the points of one memory namespace by filter, with no
+	// query vector (a read of a memory by key, or of its versions). Token only.
+	ReadMemory(context.Context, *ReadMemoryRequest) (*ReadMemoryResponse, error)
+	// SetMemoryMetadata replaces the metadata of one memory version in place,
+	// keeping its vector, so closing a version costs no embedding. Token only.
+	SetMemoryMetadata(context.Context, *SetMemoryMetadataRequest) (*SetMemoryMetadataResponse, error)
+	// DeleteMemoryUser removes every personal memory point of one user in one
+	// project, in every collection. Only an administrator caller can use it.
+	DeleteMemoryUser(context.Context, *DeleteMemoryUserRequest) (*DeleteMemoryUserResponse, error)
+	// DeleteMemoryNamespace removes every memory point of one namespace of one
+	// project, whoever owns it (project-shared and personal alike), in every
+	// collection. Only an administrator caller can use it: a toolkit delete.
+	DeleteMemoryNamespace(context.Context, *DeleteMemoryNamespaceRequest) (*DeleteMemoryNamespaceResponse, error)
 	mustEmbedUnimplementedVectorServiceServer()
 }
 
@@ -263,6 +333,18 @@ func (UnimplementedVectorServiceServer) ListIndexes(context.Context, *ListIndexe
 }
 func (UnimplementedVectorServiceServer) ListDocuments(*ListDocumentsRequest, grpc.ServerStreamingServer[ListDocumentsResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method ListDocuments not implemented")
+}
+func (UnimplementedVectorServiceServer) ReadMemory(context.Context, *ReadMemoryRequest) (*ReadMemoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReadMemory not implemented")
+}
+func (UnimplementedVectorServiceServer) SetMemoryMetadata(context.Context, *SetMemoryMetadataRequest) (*SetMemoryMetadataResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetMemoryMetadata not implemented")
+}
+func (UnimplementedVectorServiceServer) DeleteMemoryUser(context.Context, *DeleteMemoryUserRequest) (*DeleteMemoryUserResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteMemoryUser not implemented")
+}
+func (UnimplementedVectorServiceServer) DeleteMemoryNamespace(context.Context, *DeleteMemoryNamespaceRequest) (*DeleteMemoryNamespaceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteMemoryNamespace not implemented")
 }
 func (UnimplementedVectorServiceServer) mustEmbedUnimplementedVectorServiceServer() {}
 func (UnimplementedVectorServiceServer) testEmbeddedByValue()                       {}
@@ -411,6 +493,78 @@ func _VectorService_ListDocuments_Handler(srv interface{}, stream grpc.ServerStr
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type VectorService_ListDocumentsServer = grpc.ServerStreamingServer[ListDocumentsResponse]
 
+func _VectorService_ReadMemory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadMemoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VectorServiceServer).ReadMemory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VectorService_ReadMemory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VectorServiceServer).ReadMemory(ctx, req.(*ReadMemoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VectorService_SetMemoryMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetMemoryMetadataRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VectorServiceServer).SetMemoryMetadata(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VectorService_SetMemoryMetadata_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VectorServiceServer).SetMemoryMetadata(ctx, req.(*SetMemoryMetadataRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VectorService_DeleteMemoryUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteMemoryUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VectorServiceServer).DeleteMemoryUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VectorService_DeleteMemoryUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VectorServiceServer).DeleteMemoryUser(ctx, req.(*DeleteMemoryUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VectorService_DeleteMemoryNamespace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteMemoryNamespaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VectorServiceServer).DeleteMemoryNamespace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VectorService_DeleteMemoryNamespace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VectorServiceServer).DeleteMemoryNamespace(ctx, req.(*DeleteMemoryNamespaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // VectorService_ServiceDesc is the grpc.ServiceDesc for VectorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -441,6 +595,22 @@ var VectorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListIndexes",
 			Handler:    _VectorService_ListIndexes_Handler,
+		},
+		{
+			MethodName: "ReadMemory",
+			Handler:    _VectorService_ReadMemory_Handler,
+		},
+		{
+			MethodName: "SetMemoryMetadata",
+			Handler:    _VectorService_SetMemoryMetadata_Handler,
+		},
+		{
+			MethodName: "DeleteMemoryUser",
+			Handler:    _VectorService_DeleteMemoryUser_Handler,
+		},
+		{
+			MethodName: "DeleteMemoryNamespace",
+			Handler:    _VectorService_DeleteMemoryNamespace_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

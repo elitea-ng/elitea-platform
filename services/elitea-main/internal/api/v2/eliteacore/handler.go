@@ -29,6 +29,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
@@ -55,6 +56,9 @@ func mustJSON(v any) []byte {
 }
 
 type Handler struct {
+	// memoryUsers removes a user's personal memories from a project the user
+	// leaves; nil without an elitea-vector client.
+	memoryUsers        MemoryUserRemover
 	pool               *pgxpool.Pool
 	permissionResolver auth.PermissionResolver
 	httpClient         *http.Client
@@ -187,6 +191,24 @@ func WithInviteMailer(m InviteMailer) Option {
 }
 
 type Option func(*Handler)
+
+// MemoryUserRemover deletes every PERSONAL memory a user holds in a project
+// (the memory toolkit's vector points, owned by the user). *vectorclient.Client
+// satisfies it.
+type MemoryUserRemover interface {
+	DeleteMemoryUser(ctx context.Context, projectID, userID int64) error
+}
+
+// WithMemoryUserRemover wires the removal of a user's personal memories when
+// the user leaves a project. Unwired (no elitea-vector client), nothing is
+// asked.
+func WithMemoryUserRemover(remover MemoryUserRemover) Option {
+	return func(handler *Handler) {
+		if remover != nil && !cleanupjournal.IsNilPointer(remover) {
+			handler.memoryUsers = remover
+		}
+	}
+}
 
 func WithPermissionResolver(resolver auth.PermissionResolver) Option {
 	return func(handler *Handler) {
