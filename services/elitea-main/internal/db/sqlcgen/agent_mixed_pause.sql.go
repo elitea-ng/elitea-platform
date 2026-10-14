@@ -12,7 +12,7 @@ import (
 const finalizeCurrentAgentMixedPause = `-- name: FinalizeCurrentAgentMixedPause :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'skipped_capabilities') || jsonb_build_object(
+    meta = meta || jsonb_build_object(
         'thread_id', $1::text,
         'hitl_interrupt', $2::jsonb,
         'hitl_interrupts', $3::jsonb,

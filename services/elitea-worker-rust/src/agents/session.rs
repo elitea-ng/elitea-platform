@@ -2194,13 +2194,6 @@ where
         return Err(invalid_configuration());
     }
     let notices = FreshSessionNotices::from_runtime(&runtime);
-    // The user-visible half: the same facts, on the turn's own node events.
-    let projection =
-        projection.with_skipped_capabilities(super::skipped_capabilities::skipped_capabilities(
-            &runtime.left_out_toolkits,
-            internal_tools,
-            &runtime.skipped_application_children,
-        ));
     if regenerate {
         reset_session_for_regeneration(sessions.as_ref(), &user_id, &session_id).await?;
     }
@@ -2341,6 +2334,16 @@ fn build_runtime_agent(
     parallel: bool,
     checkpoint: Option<super::model_checkpoint::ModelCheckpointWriter>,
 ) -> Result<(Arc<dyn Agent>, AgentEventProjector), NativeAgentAssemblyError> {
+    // The user-visible half of what the turn could not serve, on the turn's own
+    // node events. Done HERE, where every path (a fresh turn, a checkpoint
+    // recovery and a human-in-the-loop or authorization RESUME) builds its
+    // agent, so a resumed turn's final message carries the list too.
+    let projection =
+        projection.with_skipped_capabilities(super::skipped_capabilities::skipped_capabilities(
+            &runtime.left_out_toolkits,
+            runtime.internal_tools,
+            &runtime.skipped_application_children,
+        ));
     let OrdinaryRuntimeBindings {
         toolsets,
         sensitive_tools,

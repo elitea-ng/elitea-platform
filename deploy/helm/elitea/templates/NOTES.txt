@@ -1,18 +1,30 @@
+{{- $mainWorker := default .Values.worker.implementation (get (.Values.main.env | default dict) "ELITEA_WORKER_IMPLEMENTATION") }}
 {{- if not .Values.worker.enabled }}
 NOTE: this release deploys no agent worker (worker.enabled=false). elitea-main
-assumes the Rust worker (ELITEA_WORKER_IMPLEMENTATION={{ .Values.worker.implementation }}) when it
-decides which toolkit types and built-in tools a user can turn on. If you run a
-Python worker separately, set worker.implementation: python so the catalogue
-matches the worker you actually run.
+assumes the {{ $mainWorker | title }} worker (ELITEA_WORKER_IMPLEMENTATION={{ $mainWorker }}) when it decides
+which toolkit types and built-in tools a user can turn on.
+{{- if eq $mainWorker "rust" }} If you run a Python worker separately, set
+worker.implementation: python so the catalogue matches the worker you run.
+{{- else }} If you run the Rust worker separately, set worker.implementation: rust
+so the catalogue matches the worker you run.
 {{- end }}
-{{- if and .Values.worker.enabled (eq .Values.worker.implementation "rust") (not (default "" .Values.worker.indexingRuntime)) (eq (include "elitea.indexingRuntime" .) "python") }}
+{{- end }}
+{{- if and .Values.worker.enabled (eq .Values.worker.implementation "rust") (eq (include "elitea.indexingRuntime" .) "python") }}
 
-NOTE: the Rust worker is running with PYTHON indexing, because Rust indexing
-needs a vector store, the runtime plane with index ingest dispatch and
-elitea-main's vector client, and not all of them are on. To switch to Rust
-indexing, set vector.enabled=true (with vector.qdrant.apiKeySecret.name),
+================================================================================
+UPGRADE WARNING: the Rust worker is now the default, and it runs here with
+PYTHON indexing (worker.indexingRuntime is not "rust").
+  * Agents running on the Rust worker CANNOT search the existing (Python-era)
+    indexes: their search_index and stepback tools read the Rust vector store,
+    which starts empty. Until indexing is switched to Rust and the indexes are
+    re-created, agents lose index search over everything indexed so far. Nothing
+    is migrated between the two.
+  * These toolkit types have no Rust implementation yet and are unavailable on
+    the Rust worker: memory, vectorstore, sandbox, delta_lake, aws, localgit.
+To keep today's behaviour, set worker.implementation: python.
+To use Rust indexing, set worker.indexingRuntime: rust together with
+vector.enabled=true (and vector.qdrant.apiKeySecret.name),
 main.runtime.enabled=true and main.runtime.indexIngestDispatch.enabled=true; the
-chart then selects it by itself, or force it with worker.indexingRuntime: rust
-(which fails the render, naming what is missing). Indexes are NOT migrated
-between the two: users create their indexes again.
+render names anything missing, then re-create your indexes.
+================================================================================
 {{- end }}

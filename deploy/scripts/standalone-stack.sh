@@ -147,8 +147,8 @@ detect_compose_bin
 
 # Which worker this stack runs. New stacks run the native Rust worker. An
 # EXISTING stack is not switched silently: its choice is recorded on `up`, and
-# an unset STANDALONE_WORKER keeps it (a stack with no record whose worker
-# container is the Python one counts as python, which is what every stack was
+# an unset STANDALONE_WORKER keeps it (on `up` and `build`, a stack with no
+# record whose worker container is the Python one counts as python, which is what every stack was
 # before the default changed). Switching changes the indexing runtime too, and
 # indexes created under the other runtime are NOT migrated.
 WORKER_STATE_DIR="${REPO_ROOT}/deploy/certs"
@@ -156,7 +156,9 @@ WORKER_STATE="${WORKER_STATE_DIR}/.worker-${PROJECT}"
 recorded_worker=""
 if [ -f "$WORKER_STATE" ]; then
   recorded_worker="$(tr -d '[:space:]' <"$WORKER_STATE")"
-else
+elif [ "${1:-}" = up ] || [ "${1:-}" = build ]; then
+  # Lazily, and only where a worker is chosen: `ps` costs a compose round trip
+  # that `logs`, `check`, `down` and the seeders do not need.
   existing_ps="$($COMPOSE_BIN $COMPOSE_F ps -a 2>/dev/null || true)"
   if printf '%s' "$existing_ps" | grep -q 'worker-rust'; then
     recorded_worker=rust

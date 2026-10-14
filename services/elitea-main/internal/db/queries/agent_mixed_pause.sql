@@ -1,7 +1,7 @@
 -- name: FinalizeCurrentAgentMixedPause :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'skipped_capabilities') || jsonb_build_object(
+    meta = meta || jsonb_build_object(
         'thread_id', sqlc.arg(thread_id)::text,
         'hitl_interrupt', sqlc.arg(hitl_interrupt)::jsonb,
         'hitl_interrupts', sqlc.arg(hitl_interrupts)::jsonb,

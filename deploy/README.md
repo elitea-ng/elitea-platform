@@ -321,17 +321,28 @@ starts and then fails.
 Two images share one chart component. The `worker` component runs either
 `elitea-worker-rust` (the default, matching `deploy/scripts/
 standalone-stack.sh`'s own default) or `elitea-worker-python` while it still
-exists, selected by `worker.implementation`. `worker.indexingRuntime` is
-automatic (empty): Rust indexing when the Rust worker, the runtime plane with
-`main.runtime.indexIngestDispatch.enabled=true` and a vector store
-(`vector.enabled=true`) are all on, Python indexing otherwise, so an install
-that merely enables the worker, or pins `worker.implementation=python`, renders
-as before and `helm install` prints a note on how to switch. Setting
-`worker.indexingRuntime=rust` explicitly is never rewritten: a missing
-prerequisite fails the render and names the value. A release with
-`worker.enabled=false` still tells elitea-main `ELITEA_WORKER_IMPLEMENTATION=rust`
-(the toolkit catalogue follows it): a Python worker you deploy separately needs
-`worker.implementation: python`. `deploy/scripts/standalone-stack.sh` does not
+exists, selected by `worker.implementation`. `worker.indexingRuntime` defaults to
+`python`: the chart never switches to Rust indexing by itself, because Rust
+indexing starts with EMPTY indexes (nothing is migrated). To use it, set
+`worker.indexingRuntime: rust` together with `vector.enabled=true`,
+`main.runtime.enabled=true` and `main.runtime.indexIngestDispatch.enabled=true`;
+anything missing fails the render and is named. The Python-removal change will
+flip this default.
+
+**Upgrade notes.** (1) An install that enables the worker and never set
+`worker.implementation` moves from the Python worker to the Rust worker. With
+the default Python indexing, agents on the Rust worker cannot search the
+indexes created before the upgrade (the Rust tools read a vector store that
+starts empty): until you set `worker.indexingRuntime: rust` and re-create your
+indexes, index search is lost. `helm install` prints this as an UPGRADE
+WARNING. To keep today's behaviour set `worker.implementation: python`. (2) The
+toolkit types memory, vectorstore, sandbox, delta_lake, aws and localgit have
+no Rust implementation yet and are unavailable on the Rust worker. (3) A
+release with `worker.enabled=false` still tells elitea-main
+`ELITEA_WORKER_IMPLEMENTATION=rust` (the toolkit catalogue follows it): a Python
+worker deployed separately needs `worker.implementation: python`. (4) A
+`main.env.ELITEA_INDEXING_RUNTIME` that disagrees with `worker.indexingRuntime`
+fails the render. `deploy/scripts/standalone-stack.sh` does not
 switch an existing stack: it records the worker on `up` and keeps it until you
 set `STANDALONE_WORKER`. `worker.runtime.agentModelCheckpointRecovery` and
 `agentNodeRecovery` stay `false` by default until the pod-replacement proofs in

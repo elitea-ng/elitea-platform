@@ -214,27 +214,36 @@ value for a deployment that did not ask for one.
 {{- end }}
 
 {{/*
-  The indexing runtime this release actually uses (ADR-0030 decision 6).
-
-  worker.indexingRuntime is "" by default, which means AUTO: rust only when
-  everything Rust indexing needs is on (the Rust worker, the runtime plane and
-  index ingest dispatch, a vector store and elitea-main's vector client),
-  python otherwise. That keeps an install that merely enables the worker, or
-  that pins worker.implementation=python, rendering as it did, with the Python
-  indexing it had. An EXPLICIT "rust" is never rewritten: guards.yaml refuses it
-  loudly when a prerequisite is missing. An explicit "python" stays python.
+  The indexing runtime this release uses (ADR-0030 decision 6): the explicit
+  worker.indexingRuntime, python otherwise. There is NO automatic switch to
+  rust: Rust indexing starts with empty indexes, so it is something an operator
+  chooses, with every prerequisite (see "elitea.rustIndexingMissing"). The final
+  Python-removal change will flip this default. This is the single resolver:
+  elitea-main's ELITEA_INDEXING_RUNTIME, the worker's vector_target, the
+  extractor guard and NOTES.txt all read it.
 */}}
 {{- define "elitea.indexingRuntime" -}}
-{{- $worker := .Values.worker -}}
-{{- $explicit := default "" $worker.indexingRuntime -}}
-{{- $dispatch := (.Values.main.runtime.indexIngestDispatch | default dict).enabled -}}
-{{- $vectorStore := or .Values.vector.enabled ((.Values.worker.runtime | default dict).vectorTarget) -}}
-{{- $mainClient := or (include "elitea-vector.mainClientEnabled" .) (get (.Values.main.env | default dict) "ELITEA_VECTOR_GRPC_TARGET") -}}
-{{- if or (eq $explicit "rust") (eq $explicit "python") -}}
-{{- $explicit -}}
-{{- else if and $worker.enabled (eq $worker.implementation "rust") .Values.main.runtime.enabled $dispatch $vectorStore $mainClient -}}
-rust
-{{- else -}}
-python
+{{- if eq (default "" .Values.worker.indexingRuntime) "rust" -}}rust{{- else -}}python{{- end -}}
+{{- end }}
+
+{{/*
+  What Rust indexing is missing, one requirement per line; empty when it has
+  everything. The one place these conditions are written: every guard that
+  refuses worker.indexingRuntime=rust prints this list.
+*/}}
+{{- define "elitea.rustIndexingMissing" -}}
+{{- $missing := list -}}
+{{- if not (and .Values.worker.enabled (eq .Values.worker.implementation "rust")) -}}
+{{- $missing = append $missing "worker.enabled=true with worker.implementation=rust (only the Rust worker searches the vector store that Rust indexing writes, ADR-0031)" -}}
 {{- end -}}
+{{- if not (and .Values.main.runtime.enabled ((.Values.main.runtime.indexIngestDispatch | default dict).enabled)) -}}
+{{- $missing = append $missing "main.runtime.enabled=true and main.runtime.indexIngestDispatch.enabled=true (elitea-main selects the registry only when index ingest dispatch is composed, and refuses ELITEA_INDEXING_RUNTIME=rust with its runtime plane off)" -}}
+{{- end -}}
+{{- if not (or .Values.vector.enabled ((.Values.worker.runtime | default dict).vectorTarget)) -}}
+{{- $missing = append $missing "a vector store: vector.enabled=true (this chart's elitea-vector, <vector.service.name>:<vector.service.port>) or worker.runtime.vectorTarget=<host:port> of one deployed elsewhere (without it the worker refuses every index.ingest.v1 run)" -}}
+{{- end -}}
+{{- if not (or (include "elitea-vector.mainClientEnabled" .) (get (.Values.main.env | default dict) "ELITEA_VECTOR_GRPC_TARGET")) -}}
+{{- $missing = append $missing "elitea-main's elitea-vector client: vector.mainClient.enabled=true with this chart's elitea-vector, or main.env.ELITEA_VECTOR_GRPC_TARGET (plus the three ELITEA_VECTOR_GRPC_*_FILE paths and main.fileConfig.vectorClientMaterial) for one deployed elsewhere (without it a deleted index keeps its vectors)" -}}
+{{- end -}}
+{{- join "\n" $missing -}}
 {{- end }}

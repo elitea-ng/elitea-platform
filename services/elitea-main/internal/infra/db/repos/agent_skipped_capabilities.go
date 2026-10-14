@@ -17,8 +17,15 @@ import (
 // anything malformed is dropped rather than failing the answer it rides on.
 
 const (
-	maxSkippedCapabilities         = 32
-	maxSkippedCapabilityLabelRunes = 256
+	maxSkippedCapabilities = 32
+	// The worker's limits, exactly (elitea-worker-rust
+	// agents/skipped_capabilities.rs and the agent-runtime notice bounds):
+	// names and types are bounded to 128 BYTES, the machine code to 64, and a
+	// reason, which is fixed worker text, to 512 characters. An entry the
+	// worker can send must never be dropped here.
+	maxSkippedCapabilityLabelBytes  = 128
+	maxSkippedCapabilityCodeBytes   = 64
+	maxSkippedCapabilityReasonRunes = 512
 )
 
 type skippedCapability struct {
@@ -29,12 +36,22 @@ type skippedCapability struct {
 	Reason     string `json:"reason"`
 }
 
-func validSkippedCapabilityText(value string, required bool) bool {
-	if required && value == "" {
+func cleanSkippedCapabilityText(value string) bool {
+	return utf8.ValidString(value) && !strings.ContainsAny(value, "\x00\r\n")
+}
+
+func (entry skippedCapability) valid() bool {
+	switch entry.Kind {
+	case "toolkit", "internal_tool", "application":
+	default:
 		return false
 	}
-	return utf8.RuneCountInString(value) <= maxSkippedCapabilityLabelRunes &&
-		!strings.ContainsAny(value, "\x00\r\n")
+	return entry.Name != "" && len(entry.Name) <= maxSkippedCapabilityLabelBytes &&
+		len(entry.Type) <= maxSkippedCapabilityLabelBytes &&
+		entry.ReasonCode != "" && len(entry.ReasonCode) <= maxSkippedCapabilityCodeBytes &&
+		entry.Reason != "" && utf8.RuneCountInString(entry.Reason) <= maxSkippedCapabilityReasonRunes &&
+		cleanSkippedCapabilityText(entry.Name) && cleanSkippedCapabilityText(entry.Type) &&
+		cleanSkippedCapabilityText(entry.ReasonCode) && cleanSkippedCapabilityText(entry.Reason)
 }
 
 // skippedCapabilitiesFromMetadata reads and sanitizes the list from a node
@@ -63,30 +80,24 @@ func sanitizeSkippedCapabilities(raw json.RawMessage) json.RawMessage {
 		return nil
 	}
 	kept := make([]skippedCapability, 0, len(list.Items))
+	dropped := 0
 	for _, entry := range list.Items {
-		switch entry.Kind {
-		case "toolkit", "internal_tool", "application":
-		default:
-			continue
-		}
-		if !validSkippedCapabilityText(entry.Name, true) ||
-			!validSkippedCapabilityText(entry.Type, false) ||
-			!validSkippedCapabilityText(entry.ReasonCode, true) ||
-			!validSkippedCapabilityText(entry.Reason, true) {
+		if !entry.valid() || len(kept) == maxSkippedCapabilities {
+			dropped++
 			continue
 		}
 		kept = append(kept, entry)
-		if len(kept) == maxSkippedCapabilities {
-			break
-		}
 	}
 	if len(kept) == 0 {
 		return nil
 	}
+	// An entry dropped here was still not shown: it counts into `more`, so the
+	// notice never reads as the whole list.
 	more := list.More
 	if more < 0 || more > 1_000_000 {
 		more = 0
 	}
+	more += dropped
 	encoded, err := json.Marshal(struct {
 		Items []skippedCapability `json:"items"`
 		More  int                 `json:"more,omitempty"`

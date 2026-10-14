@@ -88,7 +88,7 @@ func (q *Queries) DeleteCurrentAgentProvisionalText(ctx context.Context, arg Del
 const finalizeCurrentAgentAuthorizationPause = `-- name: FinalizeCurrentAgentAuthorizationPause :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'skipped_capabilities')
+    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts')
         || jsonb_build_object(
             'thread_id', $1::text,
             'authorization_requests', $2::jsonb,
@@ -128,7 +128,7 @@ func (q *Queries) FinalizeCurrentAgentAuthorizationPause(ctx context.Context, ar
 const finalizeCurrentAgentFullMessage = `-- name: FinalizeCurrentAgentFullMessage :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests' - 'output_limit_reached' - 'pipeline_static_v1' - 'pipeline_static_tools_v1' - 'skipped_capabilities')
+    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests' - 'output_limit_reached' - 'pipeline_static_v1' - 'pipeline_static_tools_v1')
         || jsonb_build_object(
             'thread_id', $1::text,
             'references', $2::jsonb,
@@ -193,7 +193,7 @@ func (q *Queries) FinalizeCurrentAgentFullMessage(ctx context.Context, arg Final
 const finalizeCurrentAgentHITLPause = `-- name: FinalizeCurrentAgentHITLPause :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupts' - 'authorization_requests' - 'skipped_capabilities')
+    meta = (meta - 'hitl_interrupts' - 'authorization_requests')
         || jsonb_build_object(
             'thread_id', $1::text,
             'hitl_interrupt', $2::jsonb,

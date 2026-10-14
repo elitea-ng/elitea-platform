@@ -1019,13 +1019,19 @@ async fn ask_user_pauses_and_resumes_as_the_original_correlated_tool_result() {
         }),
         completed: "continued after clarification".to_owned(),
     };
+    // The resumed turn also skips `swarm`: its final message must still carry
+    // the notice list (the pause event persisted it once; the resume's final
+    // message replaces it, and a resume that forgot it would erase the notice).
+    let resume_tools =
+        InternalToolCatalog::from_values(Some(&serde_json::json!([ASK_USER_TOOL_NAME, "swarm"])))
+            .expect("resume internal tools");
     let resume_runtime = OrdinaryRuntimeBindings::new(
         internal_tools.toolsets(None),
         SensitiveToolCatalog::default(),
         DelegatedAuthorizationCatalog::default(),
         ApplicationRuntimeProjection::default(),
     )
-    .with_internal_tools(internal_tools);
+    .with_internal_tools(resume_tools);
     let resumed = assemble_direct_hitl_resume_with_sessions_and_applications(
         resumed_model,
         resume_plan,
@@ -1035,7 +1041,22 @@ async fn ask_user_pauses_and_resumes_as_the_original_correlated_tool_result() {
     )
     .await
     .expect("ask_user replay assembly");
-    let (mut resumed_run, _projector, completion) = resumed.start().expect("ask_user replay start");
+    let (mut resumed_run, mut resumed_projector, completion) =
+        resumed.start().expect("ask_user replay start");
+    let resumed_start = resumed_projector
+        .start(chrono::Utc::now())
+        .expect("resumed agent start");
+    let resumed_start: serde_json::Value = serde_json::from_slice(
+        &crate::protocol::node_event::encode_current_node_event_json(
+            resumed_start.into_iter().next().as_ref().expect("start"),
+        )
+        .expect("encode"),
+    )
+    .expect("start json");
+    assert_eq!(
+        resumed_start["response_metadata"]["skipped_capabilities"]["items"][0]["name"],
+        "swarm"
+    );
     let expected =
         Value::String("User answered:\n- Which environment should I use?: Staging".to_owned());
     let mut saw_answer = false;

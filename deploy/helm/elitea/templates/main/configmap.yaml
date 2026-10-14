@@ -67,12 +67,12 @@
   elitea_runtime.index_registry table (rust). An explicit env entry still wins.
 */ -}}
 {{- /*
-  The effective runtime is chosen by the "elitea.indexingRuntime" helper:
-  worker.indexingRuntime is auto by default (rust only when the Rust worker, the
-  runtime plane with index ingest dispatch and a vector store are all on), and
-  an explicit rust is never rewritten (guards.yaml refuses it when a
-  prerequisite is missing, because elitea-main refuses ELITEA_INDEXING_RUNTIME=rust
-  with its runtime plane off).
+  The runtime comes from the "elitea.indexingRuntime" helper (the explicit
+  worker.indexingRuntime, python otherwise: the chart never switches to rust by
+  itself). guards.yaml refuses a main.env.ELITEA_INDEXING_RUNTIME override that
+  disagrees with it, and refuses an explicit rust whose prerequisites are
+  missing, because elitea-main refuses ELITEA_INDEXING_RUNTIME=rust with its
+  runtime plane off.
 */ -}}
 {{- if not (get $env "ELITEA_INDEXING_RUNTIME") }}
 {{- $indexingRuntime := include "elitea.indexingRuntime" $ }}

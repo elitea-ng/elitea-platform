@@ -2898,7 +2898,7 @@ WHERE id = sqlc.arg(message_group_id)::bigint;
 -- name: FinalizeCurrentAgentFullMessage :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests' - 'output_limit_reached' - 'pipeline_static_v1' - 'pipeline_static_tools_v1' - 'skipped_capabilities')
+    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests' - 'output_limit_reached' - 'pipeline_static_v1' - 'pipeline_static_tools_v1')
         || jsonb_build_object(
             'thread_id', sqlc.arg(thread_id)::text,
             'references', sqlc.arg(references_json)::jsonb,
@@ -2934,7 +2934,7 @@ WHERE id = sqlc.arg(message_group_id)::bigint;
 -- name: FinalizeCurrentAgentHITLPause :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupts' - 'authorization_requests' - 'skipped_capabilities')
+    meta = (meta - 'hitl_interrupts' - 'authorization_requests')
         || jsonb_build_object(
             'thread_id', sqlc.arg(thread_id)::text,
             'hitl_interrupt', sqlc.arg(hitl_interrupt)::jsonb,
@@ -2952,7 +2952,7 @@ WHERE id = sqlc.arg(message_group_id)::bigint;
 -- name: FinalizeCurrentAgentAuthorizationPause :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'skipped_capabilities')
+    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts')
         || jsonb_build_object(
             'thread_id', sqlc.arg(thread_id)::text,
             'authorization_requests', sqlc.arg(authorization_requests)::jsonb,
