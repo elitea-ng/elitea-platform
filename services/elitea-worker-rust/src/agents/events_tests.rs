@@ -531,6 +531,75 @@ fn ordinary_stream_matches_current_text_lifecycle_without_a_heap_event_queue() {
     );
 }
 
+/// The user-visible half of the skipped-capability record: the turn's
+/// `agent_start` and final `full_message` both carry it, and a turn that
+/// skipped nothing carries no such key at all.
+#[test]
+fn skipped_capabilities_ride_agent_start_and_the_final_message() {
+    let skipped = vec![json!({
+        "kind": "toolkit", "name": "wiki", "type": "confluence",
+        "reason_code": "unsupported_toolkit_family",
+        "reason": "this toolkit type is not available on this worker yet, so its tools were left out",
+    })];
+    let mut projector = AgentEventProjector::new(
+        AgentEventProjectionContext::fixture(json!({})).with_skipped_capabilities(skipped.clone()),
+    )
+    .expect("projector");
+    let start = current(
+        &projector
+            .start(timestamp(0))
+            .expect("start")
+            .into_iter()
+            .next()
+            .unwrap(),
+    );
+    assert_eq!(
+        start["response_metadata"]["skipped_capabilities"],
+        json!(skipped)
+    );
+    projector
+        .project(&event(
+            "llm-1",
+            1,
+            false,
+            true,
+            vec![Part::Text {
+                text: "hi".to_owned(),
+            }],
+        ))
+        .expect("turn");
+    let terminal: Vec<_> = projector
+        .finish_after_eos(CompletedAgentBrowserOutput::fixture("hi"), timestamp(2))
+        .expect("terminal")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    let full = terminal
+        .iter()
+        .find(|event| event["type"] == "full_message")
+        .expect("full_message");
+    assert_eq!(
+        full["response_metadata"]["skipped_capabilities"],
+        json!(skipped)
+    );
+
+    let mut quiet =
+        AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).expect("quiet");
+    let start = current(
+        &quiet
+            .start(timestamp(0))
+            .expect("start")
+            .into_iter()
+            .next()
+            .unwrap(),
+    );
+    assert!(
+        start["response_metadata"]
+            .get("skipped_capabilities")
+            .is_none()
+    );
+}
+
 #[test]
 fn completed_text_projection_is_independent_of_provider_chunk_count() {
     for fragments in [1, 255, 256, 257, 285, 2048] {

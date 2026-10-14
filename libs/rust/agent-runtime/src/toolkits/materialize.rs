@@ -159,16 +159,45 @@ impl std::error::Error for ToolsetMaterializationError {}
 pub struct RefusedToolkit {
     toolkit_name: String,
     toolkit_type: String,
+    reason_code: &'static str,
     reason: &'static str,
 }
 
+/// Why a configured toolkit was left out of the run.
+#[derive(Clone, Copy)]
+enum ToolkitSkip {
+    /// The configuration asks for a setting this runtime refuses.
+    Setting(UnsupportedSetting),
+    /// The toolkit's family is not served by this runtime at all.
+    UnsupportedFamily,
+}
+
+/// Machine code for a toolkit whose family this runtime does not serve.
+pub const REASON_UNSUPPORTED_TOOLKIT_FAMILY: &str = "unsupported_toolkit_family";
+/// Machine code for a toolkit whose configuration asks for a refused setting.
+pub const REASON_UNSUPPORTED_SETTING: &str = "unsupported_setting";
+
 impl RefusedToolkit {
-    fn new(reference: &FrozenToolReference<'_>, setting: UnsupportedSetting) -> Self {
+    fn new(reference: &FrozenToolReference<'_>, skip: ToolkitSkip) -> Self {
+        let (reason_code, reason) = match skip {
+            ToolkitSkip::Setting(setting) => (REASON_UNSUPPORTED_SETTING, setting.reason()),
+            ToolkitSkip::UnsupportedFamily => (
+                REASON_UNSUPPORTED_TOOLKIT_FAMILY,
+                "this toolkit type is not available on this worker yet, so its tools were left out",
+            ),
+        };
         Self {
             toolkit_name: bounded_label(reference.toolkit_name()),
             toolkit_type: bounded_label(reference.tool_type()),
-            reason: setting.reason(),
+            reason_code,
+            reason,
         }
+    }
+
+    /// Machine-readable cause, for the structured run notice.
+    #[must_use]
+    pub const fn reason_code(&self) -> &'static str {
+        self.reason_code
     }
 
     #[must_use]
@@ -295,8 +324,12 @@ pub async fn materialize_configured_toolsets_with_authorities(
         delegated_tokens,
         artifacts,
         index_tools,
-        &mut |_, setting| {
-            refusal.get_or_insert(ToolsetMaterializationError::refused(setting));
+        &mut |_, skip| {
+            // An unported family stays a quiet skip here: these callers have
+            // no run notice, and refusing the profile would stop the agent.
+            if let ToolkitSkip::Setting(setting) = skip {
+                refusal.get_or_insert(ToolsetMaterializationError::refused(setting));
+            }
         },
     )
     .await?;
@@ -324,7 +357,7 @@ pub async fn materialize_configured_toolsets_reporting_refusals(
         delegated_tokens,
         artifacts,
         index_tools,
-        &mut |reference, setting| refused.push(RefusedToolkit::new(reference, setting)),
+        &mut |reference, skip| refused.push(RefusedToolkit::new(reference, skip)),
     )
     .await?;
     materialized.refused = refused;
@@ -337,7 +370,7 @@ async fn materialize_all(
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
     index_tools: IndexToolSupport<'_>,
-    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, UnsupportedSetting) + Send),
+    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip) + Send),
 ) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     if snapshot.len() > MAX_AGENT_TOOLSETS {
         return Err(resource_exhausted());
@@ -384,7 +417,7 @@ async fn materialize_all(
                         index_tools_kept = index_toolset.is_some(),
                         "agent toolkit configuration asks for a setting this runtime refuses; the toolkit's own tools were left out"
                     );
-                    on_refused(reference, setting);
+                    on_refused(reference, ToolkitSkip::Setting(setting));
                     None
                 }
                 Err(error)
@@ -398,6 +431,7 @@ async fn materialize_all(
                         index_tools_kept = index_toolset.is_some(),
                         "agent toolkit is unavailable in this runtime and its own tools were omitted from the native toolsets"
                     );
+                    on_refused(reference, ToolkitSkip::UnsupportedFamily);
                     None
                 }
                 Err(error) => return Err(error),

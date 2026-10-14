@@ -2721,6 +2721,7 @@ async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_application_c
 /// The refusal comes from the real materializer, so the sentence asserted
 /// here is the one a user's agent receives.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One ordered fixture: materialize, assemble, then both notices.
 async fn a_fresh_session_names_a_toolkit_refused_for_its_settings() {
     let version = serde_json::json!({"tools": [{
         "id": 7,
@@ -2786,7 +2787,24 @@ async fn a_fresh_session_names_a_toolkit_refused_for_its_settings() {
     )
     .await
     .expect("refused-toolkit assembly");
-    drop(assembled);
+    // The user-visible half: the turn's own `agent_start` names the toolkit.
+    let (_native, mut projector, _completion) = assembled.start().expect("native start");
+    let start = projector
+        .start(chrono::Utc::now())
+        .expect("agent start")
+        .into_iter()
+        .next()
+        .expect("one start event");
+    let start: serde_json::Value = serde_json::from_slice(
+        &crate::protocol::node_event::encode_current_node_event_json(&start).expect("encode"),
+    )
+    .expect("start json");
+    let skipped = &start["response_metadata"]["skipped_capabilities"];
+    assert_eq!(skipped[0]["kind"], "toolkit");
+    assert_eq!(skipped[0]["name"], "tracker");
+    assert_eq!(skipped[0]["type"], "jira");
+    assert_eq!(skipped[0]["reason_code"], "unsupported_setting");
+    assert!(!skipped.to_string().contains("refused-toolkit-secret"));
 
     let session = sessions
         .get(GetRequest {

@@ -45,6 +45,8 @@ RENDER=(
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )
+# The legacy pairing, stated explicitly now that rust/rust is the default.
+PYTHON=(--set worker.implementation=python --set worker.indexingRuntime=python)
 # A Rust-indexing deployment: the Rust worker, the registry, and this chart's
 # elitea-vector (whose introspection pool costs the fourth main replica, as
 # render-vector.sh explains).
@@ -55,8 +57,8 @@ RUST=(
 )
 
 # Unrolled, like render-worker.sh: the floor counts accepting sites.
-"$HELM" template t "$CHART" "${RENDER[@]}" >"$TMP/default.yaml" 2>"$TMP/default.err" \
-  && ok "the default values render" \
+"$HELM" template t "$CHART" "${RENDER[@]}" "${PYTHON[@]}" >"$TMP/default.yaml" 2>"$TMP/default.err" \
+  && ok "the explicit python/python pairing renders" \
   || bad "default does not render: $(tail -1 "$TMP/default.err")"
 "$HELM" template t "$CHART" "${RENDER[@]}" "${RUST[@]}" \
   >"$TMP/rust.yaml" 2>"$TMP/rust.err" \
@@ -106,8 +108,23 @@ PY
 }
 
 [ "$(mainenv "$TMP/default.yaml")" = "python" ] \
-  && ok "the default is written explicitly as python" \
-  || bad "the default render does not carry ELITEA_INDEXING_RUNTIME=python"
+  && ok "python indexing is written explicitly as python" \
+  || bad "the python render does not carry ELITEA_INDEXING_RUNTIME=python"
+# The shipped defaults are rust/rust (the Rust-only future), and a chart default
+# install has no worker and no runtime plane, where elitea-main would refuse
+# ELITEA_INDEXING_RUNTIME=rust: the dark plane is written as python.
+python3 - "$CHART/values.yaml" <<'PY' && ok "the shipped defaults are worker.implementation=rust and worker.indexingRuntime=rust" || bad "the shipped worker defaults are not rust/rust"
+import sys, yaml
+worker = yaml.safe_load(open(sys.argv[1]))["worker"]
+assert worker["implementation"] == "rust" and worker["indexingRuntime"] == "rust", worker
+PY
+"$HELM" template t "$CHART" \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1 \
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
+  >"$TMP/dark.yaml" 2>"$TMP/dark.err" \
+  && [ "$(mainenv "$TMP/dark.yaml")" = "python" ] \
+  && ok "with no worker the rust default is written to elitea-main as python" \
+  || bad "the worker-less default does not render with ELITEA_INDEXING_RUNTIME=python: $(tail -1 "$TMP/dark.err")"
 [ "$(mainenv "$TMP/rust.yaml")" = "rust" ] \
   && ok "indexingRuntime=rust is written as rust" \
   || bad "the rust render does not carry ELITEA_INDEXING_RUNTIME=rust"
@@ -182,9 +199,16 @@ refuses 'worker.indexingRuntime must be' --set worker.indexingRuntime=golang \
   && ok "an unknown worker.indexingRuntime is refused" \
   || bad "an unknown worker.indexingRuntime is not refused"
 
-refuses 'worker.indexingRuntime=rust needs' --set worker.implementation=python --set worker.indexingRuntime=rust \
+refuses 'needs worker.implementation=rust' --set worker.implementation=python --set worker.indexingRuntime=rust \
   && ok "indexingRuntime=rust with the Python worker is refused" \
   || bad "indexingRuntime=rust with the Python worker is not refused"
+
+# The defaults themselves (rust/rust) with only the worker enabled: the install
+# must choose its indexing prerequisites (or python) rather than get a worker
+# that silently refuses every index run.
+refuses 'worker.indexingRuntime=rust needs a vector store' \
+  && ok "enabling the worker on the rust/rust defaults without a vector store is refused" \
+  || bad "the rust/rust defaults with a worker and no vector store are not refused"
 
 # No vector store anywhere: neither this chart's elitea-vector nor an external
 # target. The worker would start without a vector_target and refuse every

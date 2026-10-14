@@ -123,7 +123,7 @@ func (q *Queries) FinalizeCurrentAgentAuthorizationPause(ctx context.Context, ar
 const finalizeCurrentAgentFullMessage = `-- name: FinalizeCurrentAgentFullMessage :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests' - 'output_limit_reached' - 'pipeline_static_v1' - 'pipeline_static_tools_v1')
+    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests' - 'output_limit_reached' - 'pipeline_static_v1' - 'pipeline_static_tools_v1' - 'skipped_capabilities')
         || jsonb_build_object(
             'thread_id', $1::text,
             'references', $2::jsonb,
@@ -149,9 +149,12 @@ SET is_streaming = FALSE,
             ELSE '{}'::jsonb END
         || CASE WHEN jsonb_typeof($6::jsonb) = 'object'
             THEN jsonb_build_object('pipeline_static_tools_v1', $6::jsonb)
+            ELSE '{}'::jsonb END
+        || CASE WHEN jsonb_typeof($7::jsonb) = 'array'
+            THEN jsonb_build_object('skipped_capabilities', $7::jsonb)
             ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
-WHERE id = $7::bigint
+WHERE id = $8::bigint
 `
 
 type FinalizeCurrentAgentFullMessageParams struct {
@@ -161,6 +164,7 @@ type FinalizeCurrentAgentFullMessageParams struct {
 	OutputLimitReached  bool   `db:"output_limit_reached" json:"output_limit_reached"`
 	PipelineStaticProof []byte `db:"pipeline_static_proof" json:"pipeline_static_proof"`
 	PipelineStaticTools []byte `db:"pipeline_static_tools" json:"pipeline_static_tools"`
+	SkippedCapabilities []byte `db:"skipped_capabilities" json:"skipped_capabilities"`
 	MessageGroupID      int64  `db:"message_group_id" json:"message_group_id"`
 }
 
@@ -172,6 +176,7 @@ func (q *Queries) FinalizeCurrentAgentFullMessage(ctx context.Context, arg Final
 		arg.OutputLimitReached,
 		arg.PipelineStaticProof,
 		arg.PipelineStaticTools,
+		arg.SkippedCapabilities,
 		arg.MessageGroupID,
 	)
 	if err != nil {

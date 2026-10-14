@@ -9,6 +9,7 @@ use reqwest::{Request, StatusCode};
 use serde_json::{Map, Value, json};
 
 use super::delegated_auth::delegated_authorization_requirement;
+use super::families::index_tools::{IndexToolSupport, IndexToolsWithheld};
 use super::families::openapi::client::{
     OpenApiAccessToken, OpenApiApi, OpenApiClient, OpenApiClientError, OpenApiRequest,
     OpenApiResponse, OpenApiTransport, oauth_token_lifetime,
@@ -16,7 +17,10 @@ use super::families::openapi::client::{
 use super::families::openapi::config::{OpenApiConfigErrorCode, OpenApiToolkitConfig};
 use super::families::openapi::spec::{OpenApiSpecErrorCode, parse_operations};
 use super::families::openapi::tools::build_openapi_toolset;
-use super::materialize::materialize_configured_toolsets_with_tokens_and_authorization;
+use super::materialize::{
+    materialize_configured_toolsets_reporting_refusals,
+    materialize_configured_toolsets_with_tokens_and_authorization,
+};
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::FrozenToolSnapshot;
 
@@ -393,6 +397,36 @@ async fn unsupported_configured_family_does_not_hide_runnable_openapi_toolkit() 
     let tools = toolsets[0].tools(readonly).await.expect("OpenAPI tools");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name(), "get_users_by_id");
+}
+
+/// An unported family is REPORTED to the ordinary agent path, with a machine
+/// code and a plain sentence, so the run can tell the user (the log line
+/// alone told nobody). The callers that have no notice keep the quiet skip.
+#[tokio::test]
+async fn an_unported_family_is_reported_to_the_ordinary_agent_path() {
+    let version = json!({"tools":[
+        {"id":1,"type":"not_a_toolkit_family","toolkit_name":"roadmap",
+         "settings":{"selected_tools":["get_ideas"]}}
+    ]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy(&[]),
+        &Map::new(),
+        None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NoVectorStore),
+    )
+    .await
+    .expect("an unported family does not fail the agent");
+    assert!(materialized.toolsets.is_empty());
+    assert_eq!(materialized.refused.len(), 1);
+    let skipped = &materialized.refused[0];
+    assert_eq!(skipped.toolkit_name(), "roadmap");
+    assert_eq!(skipped.toolkit_type(), "not_a_toolkit_family");
+    assert_eq!(skipped.reason_code(), "unsupported_toolkit_family");
+    assert!(skipped.reason().contains("not available on this worker"));
 }
 
 struct FixtureTransport {

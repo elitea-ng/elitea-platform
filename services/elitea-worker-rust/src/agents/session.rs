@@ -2194,6 +2194,13 @@ where
         return Err(invalid_configuration());
     }
     let notices = FreshSessionNotices::from_runtime(&runtime);
+    // The user-visible half: the same facts, on the turn's own node events.
+    let projection =
+        projection.with_skipped_capabilities(super::skipped_capabilities::skipped_capabilities(
+            &runtime.refused_toolkits,
+            internal_tools,
+            &runtime.skipped_application_children,
+        ));
     if regenerate {
         reset_session_for_regeneration(sessions.as_ref(), &user_id, &session_id).await?;
     }

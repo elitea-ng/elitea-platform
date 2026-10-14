@@ -126,7 +126,7 @@ check_dynamic() {
 # ---------------------------------------------------------------------------
 # 1 + 2. The worker platform edge.
 # ---------------------------------------------------------------------------
-helm template "${GATEWAY_RENDER_POSTURE[@]}" "${STANDALONE[@]}" --set worker.enabled=true t "$CHART" >"$WORK/worker.yaml"
+helm template "${GATEWAY_RENDER_POSTURE[@]}" "${STANDALONE[@]}" --set worker.enabled=true --set worker.implementation=python --set worker.indexingRuntime=python t "$CHART" >"$WORK/worker.yaml"
 pass "the chart renders with the worker and its platform edge"
 
 yq eval-all 'select(.kind == "ConfigMap" and .metadata.component != "x" and .metadata.name == "elitea-platform-edge") | .data["dynamic.yml"]' "$WORK/worker.yaml" >"$WORK/rendered-dynamic.yml"

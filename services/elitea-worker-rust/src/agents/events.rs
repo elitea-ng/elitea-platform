@@ -318,6 +318,9 @@ pub(crate) struct AgentEventProjectionContext {
     parallel_reconcile: bool,
     invoked_skills: Vec<Value>,
     applied_skills: Vec<Value>,
+    /// What this turn could not serve (`skipped_capabilities`), reported on
+    /// `agent_start` and the final `full_message` so the chat can say so.
+    skipped_capabilities: Vec<Value>,
     output_limit_behavior: OutputLimitBehavior,
     continuation_prefix: Option<String>,
 }
@@ -656,6 +659,10 @@ impl AgentEventProjectionContext {
         self.applied_skills = skills;
         self
     }
+    pub(crate) fn with_skipped_capabilities(mut self, skipped: Vec<Value>) -> Self {
+        self.skipped_capabilities = skipped;
+        self
+    }
     pub(crate) fn ordinary(
         input: OrdinaryProjectionInput,
     ) -> Result<Self, AgentEventProjectionError> {
@@ -676,6 +683,7 @@ impl AgentEventProjectionContext {
             parallel_reconcile: false,
             invoked_skills: Vec::new(),
             applied_skills: Vec::new(),
+            skipped_capabilities: Vec::new(),
             output_limit_behavior: OutputLimitBehavior::UserControlled,
             continuation_prefix: input.continuation_prefix,
         };
@@ -718,6 +726,7 @@ impl AgentEventProjectionContext {
             parallel_reconcile: self.parallel_reconcile,
             invoked_skills: Vec::new(),
             applied_skills: Vec::new(),
+            skipped_capabilities: Vec::new(),
             output_limit_behavior: OutputLimitBehavior::Suppressed,
             continuation_prefix: None,
         };
@@ -746,6 +755,7 @@ impl AgentEventProjectionContext {
             parallel_reconcile: false,
             invoked_skills: Vec::new(),
             applied_skills: Vec::new(),
+            skipped_capabilities: Vec::new(),
             output_limit_behavior: OutputLimitBehavior::UserControlled,
             continuation_prefix: None,
         }
@@ -1092,10 +1102,10 @@ impl AgentEventProjector {
             "agent_start",
             &Value::Null,
             None,
-            &json!({
+            &self.with_skipped_capabilities(json!({
                 "invoked_skills": self.context.invoked_skills,
                 "should_continue": self.context.should_continue && !self.checkpoint_recovery,
-            }),
+            })),
             occurred_at,
         )?;
         let mut batch = ProjectedAgentEventBatch::new();
@@ -3415,7 +3425,7 @@ impl AgentEventProjector {
             "full_message",
             &response,
             None,
-            &json!({
+            &self.with_skipped_capabilities(json!({
                 "project_id": self.context.project_id,
                 "chat_project_id": self.context.chat_project_id,
                 "application_details": self.context.application_details,
@@ -3435,11 +3445,25 @@ impl AgentEventProjector {
                 "invoked_skills": self.context.applied_skills,
                 "result_ref_v1": result_ref,
                 "pipeline_static_v1": self.static_pause_proof,
-            }),
+            })),
             occurred_at,
         )?)?;
         self.state = ProjectionState::Finished;
         Ok(batch)
+    }
+
+    /// Add the turn's `skipped_capabilities` to a metadata object, and only
+    /// when there is something to say (an absent key means "served it all").
+    fn with_skipped_capabilities(&self, mut metadata: Value) -> Value {
+        if !self.context.skipped_capabilities.is_empty()
+            && let Some(object) = metadata.as_object_mut()
+        {
+            object.insert(
+                "skipped_capabilities".to_owned(),
+                Value::Array(self.context.skipped_capabilities.clone()),
+            );
+        }
+        metadata
     }
 
     fn bind_invocation_id(&mut self, event: &Event) {

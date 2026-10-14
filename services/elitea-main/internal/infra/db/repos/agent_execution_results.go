@@ -41,6 +41,7 @@ func newAgentExecutionResultsRepository(projects projectStore) (*AgentExecutionR
 type currentAgentFullMessage struct {
 	PipelineStaticProof        json.RawMessage
 	PipelineStaticTools        json.RawMessage
+	SkippedCapabilities        json.RawMessage
 	ReplacePipelineProvisional bool
 	Content                    string
 	ResultReference            bool
@@ -344,6 +345,7 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 		Authorization       json.RawMessage `json:"authorization_requests"`
 		ThreadID            string          `json:"thread_id"`
 		InvokedSkills       json.RawMessage `json:"invoked_skills"`
+		SkippedCapabilities json.RawMessage `json:"skipped_capabilities"`
 		OutputLimitReached  bool            `json:"output_limit_reached"`
 		ApplicationDetails  struct {
 			AgentType      string `json:"agent_type"`
@@ -395,6 +397,7 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 		ThreadID:                   metadata.ThreadID,
 		References:                 cloneJSONOrDefault(references, []byte("[]")),
 		InvokedSkills:              invokedSkills,
+		SkippedCapabilities:        sanitizeSkippedCapabilities(metadata.SkippedCapabilities),
 		ResponseMetadata:           append(json.RawMessage(nil), responseMetadata...),
 		OutputLimitReached:         metadata.OutputLimitReached,
 		PipelineStaticProof:        bytes.Clone(metadata.PipelineStaticProof),
@@ -660,6 +663,7 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 				OutputLimitReached:  message.OutputLimitReached,
 				PipelineStaticProof: cloneJSONOrDefault(message.PipelineStaticProof, []byte("null")),
 				PipelineStaticTools: cloneJSONOrDefault(message.PipelineStaticTools, []byte("null")),
+				SkippedCapabilities: cloneJSONOrDefault(message.SkippedCapabilities, []byte("null")),
 				MessageGroupID:      int64(messageGroupID),
 			},
 		)

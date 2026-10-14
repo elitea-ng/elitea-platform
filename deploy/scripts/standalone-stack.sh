@@ -127,12 +127,14 @@ COMPOSE_F="-p ${PROJECT} -f ${REPO_ROOT}/deploy/docker-compose.standalone-full.y
 # absent for `build`, so `build` would rebuild the service the overlay replaced
 # and `up` would run whatever stale tag the overlay names.
 #
-#   STANDALONE_WORKER=rust  deploy/scripts/standalone-stack.sh build
+#   deploy/scripts/standalone-stack.sh build                      # native Rust worker (default)
+#   STANDALONE_WORKER=python  deploy/scripts/standalone-stack.sh build
 #
-# is the supported way to select the native Rust worker; STANDALONE_OVERLAY
-# takes an explicit space-separated list of paths for anything else.
+# The native Rust worker is the default; STANDALONE_WORKER=python selects the
+# legacy Python worker until it is removed. STANDALONE_OVERLAY takes an
+# explicit space-separated list of paths for anything else.
 OVERLAY="${STANDALONE_OVERLAY:-}"
-case "${STANDALONE_WORKER:-python}" in
+case "${STANDALONE_WORKER:-rust}" in
   python) ;;
   rust) OVERLAY="${REPO_ROOT}/deploy/docker-compose.standalone-rust-agent.yml ${OVERLAY}" ;;
   *) echo "ERROR: STANDALONE_WORKER must be python or rust (got '${STANDALONE_WORKER}')." >&2; exit 1 ;;

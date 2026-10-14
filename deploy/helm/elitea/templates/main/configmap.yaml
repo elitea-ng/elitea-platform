@@ -66,8 +66,17 @@
   index routes read: the per-project pgvector index_meta rows (python) or the
   elitea_runtime.index_registry table (rust). An explicit env entry still wins.
 */ -}}
+{{- /*
+  The default is rust (worker.indexingRuntime), but elitea-main refuses
+  ELITEA_INDEXING_RUNTIME=rust when its runtime plane is off
+  (runtimecomposition.ConfigFromEnv), and the chart's default install has no
+  worker and no runtime plane. With no worker there is nothing to index with,
+  so the dark plane is written as python (inert); guards.yaml makes an install
+  that DOES enable a worker choose its indexing prerequisites explicitly.
+*/ -}}
 {{- if not (get $env "ELITEA_INDEXING_RUNTIME") }}
-{{- $env = merge (deepCopy $env) (dict "ELITEA_INDEXING_RUNTIME" $.Values.worker.indexingRuntime) }}
+{{- $indexingRuntime := ternary (default "python" $.Values.worker.indexingRuntime) "python" (default false $.Values.worker.enabled) }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_INDEXING_RUNTIME" $indexingRuntime) }}
 {{- end }}
 {{- /*
   The application engines' platform gRPC targets (#1243, #1244): where

@@ -35,6 +35,8 @@ import Typography from '@mui/material/Typography';
 
 import { messageNodeRecoveryBinding } from '../../lib/nodeRecoveryBinding';
 import { NodeRecoveryNotice } from './NodeRecoveryNotice';
+import { SkippedCapabilitiesNotice } from './SkippedCapabilitiesNotice';
+import { skippedCapabilitiesOf } from '../../lib/skippedCapabilities';
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
 import { ApplicationAnswerLoading } from './ApplicationAnswerLoading';
 import { ApplicationAnswerAuthorization } from './ApplicationAnswerAuthorization';
@@ -117,6 +119,11 @@ export function ApplicationAnswer({
   const currentSpokenRange = speakingMessageId === messageId ? spokenRange : undefined;
   const requiresConfirmationSignal = answer.requiresConfirmation;
 
+  const { responseMetadata, skippedCapabilities: persistedSkipped } = answer;
+  const skippedCapabilities = useMemo(
+    () => skippedCapabilitiesOf({ responseMetadata, skippedCapabilities: persistedSkipped }),
+    [responseMetadata, persistedSkipped],
+  );
   const items = useMemo(() => readAnswerItems(answer.messageItems), [answer.messageItems]);
   // A canvas counts as content: an answer that is nothing but a canvas would
   // otherwise render as an empty bubble. Which of `content` and the text items
@@ -283,6 +290,8 @@ export function ApplicationAnswer({
           ))}
         </Box>
       )}
+
+      {!isProcessing && <SkippedCapabilitiesNotice items={skippedCapabilities} />}
 
       {shouldRenderAnswerBlock && (
         <Box

@@ -354,6 +354,12 @@ services:
       ELITEA_DEEPWIKI_CA_FILE: /certs/ca.crt
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "e2e-deepwiki-identity"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+      # Which worker this stack runs, stated explicitly: elitea-main's own default
+      # is rust, so a Python-worker base must say so or its toolkit catalogue
+      # would describe a worker that is not there. The Rust overlay
+      # (docker-compose.standalone-rust-agent.yml) overrides this with "rust".
+      ELITEA_WORKER_IMPLEMENTATION: "python"
+
       ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
       # ── The Inventory facade, on the same OIDC-only stack ────────────────
       # Same credential set, same reasoning: the API group's LocalValidator
