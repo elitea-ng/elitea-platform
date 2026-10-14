@@ -2,6 +2,8 @@ package artifacts_test
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 func newObjectTestRouter(h *artifacts.Handler) chi.Router {
@@ -644,5 +647,36 @@ func TestObjectKeyWithSlash_RoundTripsThroughRealRouter(t *testing.T) {
 	r.ServeHTTP(confirmRR, confirmReq)
 	if confirmRR.Code != http.StatusNotFound {
 		t.Fatalf("expected the deleted key to 404, got %d", confirmRR.Code)
+	}
+}
+
+// timelessObjectStore mimics the real S3 backend, whose Put reports no
+// LastModified; the upload response used to carry created_at year 1.
+type timelessObjectStore struct{ *fakeStore }
+
+func (s timelessObjectStore) Put(ctx context.Context, ref storage.ObjectRef, body io.Reader, opts storage.PutOptions) (storage.ObjectInfo, error) {
+	info, err := s.fakeStore.Put(ctx, ref, body, opts)
+	info.LastModified = time.Time{}
+	return info, err
+}
+
+func TestUploadObject_CreatedAtIsNeverZeroTime(t *testing.T) {
+	_, repo, _ := newObjectTestHandler(t)
+	h := artifacts.NewHandler(repo, timelessObjectStore{newFakeStore()})
+	before := time.Now().Add(-time.Second)
+
+	rr := httptest.NewRecorder()
+	newObjectTestRouter(h).ServeHTTP(rr, newUploadRequest(t, "/objects/1/reports", "a.txt", []byte("x")))
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		CreatedAt time.Time `json:"created_at"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.CreatedAt.Before(before) || body.CreatedAt.After(time.Now().Add(time.Second)) {
+		t.Fatalf("created_at = %v, want about now; body=%s", body.CreatedAt, rr.Body.String())
 	}
 }

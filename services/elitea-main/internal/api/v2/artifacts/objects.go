@@ -562,7 +562,7 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 		"size_bytes": info.Size,
 		"media_type": contentType,
 		"etag":       info.ETag,
-		"created_at": info.LastModified,
+		"created_at": createdAtOf(info),
 	})
 }
 
@@ -853,4 +853,15 @@ func parseRangeHeader(h string) (storage.ByteRange, bool) {
 		}
 	}
 	return storage.ByteRange{Start: start, End: end}, true
+}
+
+// createdAtOf is the creation time reported in an upload response. The real S3
+// backend's Put returns only key, size and ETag, so info.LastModified is the
+// zero time and used to be serialised as "0001-01-01T00:00:00Z". The write has
+// just completed, so the server clock is the object's creation time.
+func createdAtOf(info storage.ObjectInfo) time.Time {
+	if info.LastModified.IsZero() {
+		return time.Now().UTC()
+	}
+	return info.LastModified
 }

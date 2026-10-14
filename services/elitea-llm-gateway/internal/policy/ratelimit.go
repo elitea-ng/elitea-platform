@@ -66,7 +66,10 @@ const rateLimitOpTimeout = 2 * time.Second
 // decision. Every fail-open is counted in Degraded() and logged, so the gap is
 // measurable rather than assumed.
 type Limiter struct {
-	counter RateCounter
+	// counter is bound late: a gateway that boots while NATS is down starts
+	// with none, and the background recovery loop calls Bind when NATS comes
+	// up. Read atomically because Admit runs on every /llm request goroutine.
+	counter atomic.Pointer[counterBox]
 	subject SubjectBuilder
 	log     *slog.Logger
 	now     func() time.Time
@@ -76,6 +79,56 @@ type Limiter struct {
 	degraded atomic.Int64
 	// refused counts admissions the limiter blocked.
 	refused atomic.Int64
+	// failing is true while the most recent counter round-trip failed. It is
+	// cleared by the next success, so it tracks a NATS drop AND its recovery
+	// without any background probing.
+	failing atomic.Bool
+}
+
+// counterBox lets an interface value live in an atomic.Pointer.
+type counterBox struct{ c RateCounter }
+
+// RateStatus is the limiter's operator-facing state.
+type RateStatus string
+
+const (
+	// RateStatusOK: bound to a counter and the last round-trip succeeded.
+	RateStatusOK RateStatus = "ok"
+	// RateStatusDisabled: no counter has been bound; limits are NOT enforced.
+	RateStatusDisabled RateStatus = "disabled"
+	// RateStatusDegraded: bound, but the counter is failing; requests are being
+	// admitted without their ceiling (fail open).
+	RateStatusDegraded RateStatus = "degraded"
+)
+
+// Bind installs the counter after construction. It is how a gateway that
+// started without NATS begins enforcing when NATS appears, without a restart.
+// A nil counter is ignored.
+func (l *Limiter) Bind(c RateCounter) {
+	if l == nil || c == nil {
+		return
+	}
+	l.counter.Store(&counterBox{c: c})
+	l.failing.Store(false)
+}
+
+// Status reports whether per-minute limits are actually being kept.
+func (l *Limiter) Status() RateStatus {
+	switch {
+	case !l.Enabled():
+		return RateStatusDisabled
+	case l.failing.Load():
+		return RateStatusDegraded
+	default:
+		return RateStatusOK
+	}
+}
+
+func (l *Limiter) rateCounter() RateCounter {
+	if b := l.counter.Load(); b != nil {
+		return b.c
+	}
+	return nil
 }
 
 // LimiterConfig configures a Limiter.
@@ -98,12 +151,14 @@ func NewLimiter(cfg LimiterConfig) *Limiter {
 	if nowFn == nil {
 		nowFn = time.Now
 	}
-	return &Limiter{counter: cfg.Counter, subject: cfg.Subject, log: log, now: nowFn}
+	l := &Limiter{subject: cfg.Subject, log: log, now: nowFn}
+	l.Bind(cfg.Counter)
+	return l
 }
 
 // Enabled reports whether the limiter can enforce anything at all.
 func (l *Limiter) Enabled() bool {
-	return l != nil && l.counter != nil && l.subject != nil
+	return l != nil && l.rateCounter() != nil && l.subject != nil
 }
 
 // Degraded returns how many admissions skipped enforcement because the counter
@@ -241,13 +296,17 @@ func (l *Limiter) RecordTokens(ctx context.Context, def RateLimitDef, sub Subjec
 func (l *Limiter) read(ctx context.Context, kind, key string, window int64) (int64, error) {
 	opCtx, cancel := context.WithTimeout(ctx, rateLimitOpTimeout)
 	defer cancel()
-	return l.counter.ReadRateLimit(opCtx, l.subject(kind, key, window))
+	n, err := l.rateCounter().ReadRateLimit(opCtx, l.subject(kind, key, window))
+	l.failing.Store(err != nil)
+	return n, err
 }
 
 func (l *Limiter) incr(ctx context.Context, kind, key string, window, delta int64) (int64, error) {
 	opCtx, cancel := context.WithTimeout(ctx, rateLimitOpTimeout)
 	defer cancel()
-	return l.counter.IncrRateLimit(opCtx, l.subject(kind, key, window), delta)
+	n, err := l.rateCounter().IncrRateLimit(opCtx, l.subject(kind, key, window), delta)
+	l.failing.Store(err != nil)
+	return n, err
 }
 
 func (l *Limiter) failOpen(bucket string, def RateLimitDef, sub Subject, err error) {

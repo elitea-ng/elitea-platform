@@ -32,6 +32,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -317,7 +318,7 @@ func main() {
 	// boot: a background re-dial can install enforcement while the process runs,
 	// and a pod that recovers must return to the rotation without a restart
 	// (issue #315).
-	mux.HandleFunc("/readyz", makeReadyzHandler(plane, plane.unwired))
+	mux.HandleFunc("/readyz", makeReadyzHandler(plane, plane.unwired, rateLimitsCheck))
 
 	// The authored-governance plane (issue #218). It is a SEPARATE wiring from
 	// the budget engine above and has different preconditions:
@@ -358,19 +359,24 @@ func main() {
 			logger:  logger,
 		})
 
+		// The limiter always exists when there is a database. Its counter is
+		// bound now if NATS is up, otherwise by the budget-recovery loop when
+		// NATS comes up (limits recover without a restart).
+		policyLimiter = policy.NewLimiter(policy.LimiterConfig{
+			Subject: nats.RateLimitSubject,
+			Logger:  logger,
+		})
+		trackRateLimiter(policyLimiter)
 		if rc, ok := nc.(policy.RateCounter); ok && nc != nil {
-			policyLimiter = policy.NewLimiter(policy.LimiterConfig{
-				Counter: rc,
-				Subject: nats.RateLimitSubject,
-				Logger:  logger,
-			})
+			policyLimiter.Bind(rc)
 			logger.Info("GOVERNANCE ENFORCEMENT ENABLED: authored definitions are read from "+
 				"gateway.governance_config, and per-minute rate limits run on the shared NATS counter",
 				"refresh", cfg.GovernanceRefresh)
 		} else {
 			logger.Warn("GOVERNANCE RATE LIMITS DISABLED: no NATS counter is available, so an authored " +
-				"tokens_per_min or requests_per_min ceiling is loaded and NOT enforced. Every other authored " +
-				"control — model allowlists, MCP allowlists, routing rules, rate policy — is in force. " +
+				"tokens_per_min or requests_per_min ceiling is loaded and NOT enforced (fail-open). Every other " +
+				"authored control — model allowlists, MCP allowlists, routing rules, rate policy — is in force. " +
+				"If GATEWAY_NATS_URL is set they are enabled automatically when NATS becomes reachable. " +
 				"GET /governance/status reports this as rate_limits_enforceable=false")
 		}
 		var usage llmproxy.BudgetUsageReader
@@ -506,6 +512,7 @@ func main() {
 		plane:   plane,
 		handler: handler,
 		policy:  policyStore,
+		limiter: policyLimiter,
 		logger:  logger,
 	})
 
@@ -879,6 +886,38 @@ func recordBudgetEnforcementEnabled(enabled bool) {
 	}
 }
 
+// trackedLimiter is the running rate limiter the metrics and /readyz read.
+var trackedLimiter atomic.Pointer[policy.Limiter]
+
+func trackRateLimiter(l *policy.Limiter) { trackedLimiter.Store(l) }
+
+// metricRateLimitsEnforced is 1 only when per-minute limits are actually kept:
+// a counter is bound AND the last round-trip succeeded. 0 means disabled or
+// degraded (fail open).
+const metricRateLimitsEnforced = "gateway_rate_limits_enforced"
+
+var rateLimitsEnforced = expvar.Func(func() any {
+	if l := trackedLimiter.Load(); l != nil && l.Status() == policy.RateStatusOK {
+		return 1
+	}
+	return 0
+})
+
+func init() { expvar.Publish(metricRateLimitsEnforced, rateLimitsEnforced) }
+
+// rateLimitsCheck is the /readyz detail: present only when limits are not
+// being enforced. It never affects the status code.
+func rateLimitsCheck() (string, string) {
+	l := trackedLimiter.Load()
+	if l == nil {
+		return "", ""
+	}
+	if st := l.Status(); st != policy.RateStatusOK {
+		return "rate_limits", string(st)
+	}
+	return "", ""
+}
+
 // gatewayMetric is one variable that GET /metrics serves.
 type gatewayMetric struct {
 	name string
@@ -911,6 +950,12 @@ func gatewayMetrics() []gatewayMetric {
 		help: "1 when this gateway enforces budgets. 0 when enforcement is off.",
 		v:    budgetEnforcementEnabled,
 	}}
+	metrics = append(metrics, gatewayMetric{
+		name: metricRateLimitsEnforced,
+		kind: "gauge",
+		help: "1 when per-minute rate limits are enforced. 0 when disabled or degraded (NATS counter unavailable; requests admitted fail-open).",
+		v:    rateLimitsEnforced,
+	})
 	// The SSE gauge the HPA has always named and nothing ever published.
 	// `kind: "gauge"` is load-bearing: every other entry here is a counter, and
 	// a Prometheus Adapter rule that rate()s a gauge produces a number that
@@ -1162,29 +1207,42 @@ func livenessHandler(w http.ResponseWriter, _ *http.Request) {
 // It is checked BEFORE the p == nil guard because the disabled path passes a
 // typed-nil *GovernanceStore, which is non-nil as an interface and whose Ping
 // is nil-receiver safe and returns success.
-func makeReadyzHandler(p pinger, enforcementUnwired func() bool) http.HandlerFunc {
+func makeReadyzHandler(p pinger, enforcementUnwired func() bool, details ...func() (string, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Informational checks never change the status code: degraded rate
+		// limits fail open by policy, so they must not pull a pod from rotation.
+		addDetails := func(h healthStatus) healthStatus {
+			for _, d := range details {
+				if k, v := d(); k != "" {
+					if h.Checks == nil {
+						h.Checks = map[string]string{}
+					}
+					h.Checks[k] = v
+				}
+			}
+			return h
+		}
 		if enforcementUnwired != nil && enforcementUnwired() {
-			writeHealthJSON(w, http.StatusServiceUnavailable, healthStatus{
+			writeHealthJSON(w, http.StatusServiceUnavailable, addDetails(healthStatus{
 				Status: "not_ready",
 				Checks: map[string]string{"budget_enforcement": "unwired"},
-			})
+			}))
 			return
 		}
 		if p == nil {
-			writeHealthJSON(w, http.StatusOK, healthStatus{Status: "ready"})
+			writeHealthJSON(w, http.StatusOK, addDetails(healthStatus{Status: "ready"}))
 			return
 		}
 		if err := p.Ping(r.Context()); err != nil {
-			writeHealthJSON(w, http.StatusServiceUnavailable, healthStatus{
+			writeHealthJSON(w, http.StatusServiceUnavailable, addDetails(healthStatus{
 				Status: "not_ready",
 				Checks: map[string]string{"nats": "unavailable"},
-			})
+			}))
 			return
 		}
-		writeHealthJSON(w, http.StatusOK, healthStatus{
+		writeHealthJSON(w, http.StatusOK, addDetails(healthStatus{
 			Status: "ready",
 			Checks: map[string]string{"nats": "ok"},
-		})
+		}))
 	}
 }
