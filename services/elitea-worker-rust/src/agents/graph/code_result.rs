@@ -31,22 +31,50 @@ struct AdapterResult {
 /// envelope. Stderr is diagnostic data, never read into a result. Shared by
 /// the Code node projection and the `data_analysis` code tool.
 pub(super) fn parse_receipt(bytes: &[u8]) -> Result<Value, CodeStateError> {
-    if bytes.len() > 512 * 1024 {
-        return Err(CodeStateError::SizeLimit);
+    parse_receipt_detailed(bytes).map_err(|error| match error {
+        ReceiptError::TooLarge => CodeStateError::SizeLimit,
+        ReceiptError::Malformed | ReceiptError::ProgramFailed { .. } => {
+            CodeStateError::MalformedResult
+        }
+    })
+}
+
+/// Why a receipt holds no result.
+pub(super) enum ReceiptError {
+    /// The receipt, or a completed run's result, is over its size bound.
+    TooLarge,
+    /// Not the supervisor's receipt.
+    Malformed,
+    /// The run did not complete with exit code zero: the program failed. Its
+    /// stderr rides along as diagnostic text for the caller to bound.
+    ProgramFailed { stderr: String },
+}
+
+/// [`parse_receipt`] with the cause kept. The run's status is read BEFORE any
+/// size judgement, so a failed run that wrote a great deal to stderr is "the
+/// program failed", never "the result is too large".
+pub(super) fn parse_receipt_detailed(bytes: &[u8]) -> Result<Value, ReceiptError> {
+    let receipt: Receipt = match serde_json::from_slice(bytes) {
+        Ok(receipt) => receipt,
+        Err(_) if bytes.len() > 512 * 1024 => return Err(ReceiptError::TooLarge),
+        Err(_) => return Err(ReceiptError::Malformed),
+    };
+    if receipt.revision != 1 {
+        return Err(ReceiptError::Malformed);
     }
-    let receipt: Receipt =
-        serde_json::from_slice(bytes).map_err(|_| CodeStateError::MalformedResult)?;
-    if receipt.revision != 1 || receipt.status != "completed" || receipt.exit_code != Some(0) {
-        return Err(CodeStateError::MalformedResult);
+    if receipt.status != "completed" || receipt.exit_code != Some(0) {
+        return Err(ReceiptError::ProgramFailed {
+            stderr: receipt.stderr,
+        });
+    }
+    if bytes.len() > 512 * 1024 || receipt.stdout.len() > 256 * 1024 + 64 {
+        return Err(ReceiptError::TooLarge);
     }
     drop(receipt.stderr);
-    if receipt.stdout.len() > 256 * 1024 + 64 {
-        return Err(CodeStateError::SizeLimit);
-    }
     let adapter: AdapterResult =
-        serde_json::from_str(&receipt.stdout).map_err(|_| CodeStateError::MalformedResult)?;
+        serde_json::from_str(&receipt.stdout).map_err(|_| ReceiptError::Malformed)?;
     if adapter.revision != 1 {
-        return Err(CodeStateError::MalformedResult);
+        return Err(ReceiptError::Malformed);
     }
     Ok(adapter.result)
 }

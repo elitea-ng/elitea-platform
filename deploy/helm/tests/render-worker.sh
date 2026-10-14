@@ -245,6 +245,20 @@ refuses 'worker.traceLevel must be one of' --set worker.implementation=rust --se
   && ok "an invalid worker.traceLevel is refused" \
   || bad "an invalid worker.traceLevel is not refused"
 
+refuses 'worker.runtime.publicBaseUrl requires the Rust worker' --set worker.implementation=python --set-string worker.runtime.publicBaseUrl=https://elitea.example.com \
+  && ok "worker.runtime.publicBaseUrl is refused for the Python worker" \
+  || bad "worker.runtime.publicBaseUrl is not refused for the Python worker"
+
+"$HELM" template t "$CHART" "${RENDER[@]}" --set worker.implementation=rust --set-string worker.runtime.publicBaseUrl=https://elitea.example.com >"$TMP/public.yaml" 2>/dev/null
+python3 - "$TMP/public.yaml" <<'PY' && ok "rust: worker.runtime.publicBaseUrl reaches runtime.json as public_base_url, beside the untouched platform_origin" || bad "publicBaseUrl rendering"
+import json, sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+cm = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "elitea-worker-runtime")
+runtime = json.loads(cm["data"]["runtime.json"])
+assert runtime["public_base_url"] == "https://elitea.example.com", runtime
+assert runtime["platform_origin"] == "https://elitea-platform-edge", runtime
+PY
+
 echo
 RAN=$((PASS+FAIL))
 echo "worker render assertions: ${RAN} ran, ${PASS} passed, ${FAIL} failed"

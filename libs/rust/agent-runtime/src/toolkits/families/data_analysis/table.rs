@@ -41,6 +41,9 @@ pub(crate) struct Limits {
     /// Wall clock of one call. Checked inside every loop that visits rows, so
     /// it stops the work, unlike a deadline wrapped around a thread.
     pub(crate) deadline: Duration,
+    /// The longest a call waits for a free analysis slot (never past its own
+    /// deadline) before it says the engine is busy.
+    pub(crate) queue_timeout: Duration,
     /// The Office engine's own bounds (archive, XML, cells, permits), for
     /// the `.xlsx` reader and writer and the chart rasteriser.
     #[cfg(feature = "toolkit-data-analysis")]
@@ -62,6 +65,7 @@ impl Default for Limits {
             max_sandbox_bytes: 1024 * 1024,
             max_sandbox_nodes: 100_000,
             deadline: Duration::from_secs(20),
+            queue_timeout: Duration::from_secs(30),
             #[cfg(feature = "toolkit-data-analysis")]
             office: elitea_office_core::Limits::default(),
         }
@@ -79,6 +83,11 @@ impl Deadline {
         Self {
             at: Instant::now() + limit,
         }
+    }
+
+    /// Time left, zero when it has run out.
+    pub(crate) fn remaining(&self) -> Duration {
+        self.at.saturating_duration_since(Instant::now())
     }
 
     /// Fail when the call has run out of time. Cheap enough to call every few

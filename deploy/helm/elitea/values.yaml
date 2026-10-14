@@ -4238,6 +4238,13 @@ worker:
     # elitea-main serves its product API over cleartext HTTP inside the cluster.
     # platformEdge below bridges that.
     platformOrigin: "https://elitea-platform-edge"
+    # The deployment's public base URL (an http(s) origin a browser opens), for
+    # links the Rust worker puts in answers such as a chart's Markdown image.
+    # Set it to the same value as main.env.DEPLOYMENT_URL. Empty, links are
+    # root-relative and the chat UI resolves them against its own origin.
+    # Rust worker only (the Python worker's config refuses unknown keys).
+    # Never platformOrigin: that is the in-cluster edge.
+    publicBaseUrl: ""
     spoolRoot: /var/lib/elitea-worker/output-spool
     spoolSizeLimit: 2Gi
     # Rust-only. Enable checkpoint recovery after verifying the deployment contract.

@@ -252,39 +252,22 @@ impl RemoteCodeRuntime {
     }
 }
 
-#[async_trait]
-impl CodeSandboxRuntime for RemoteCodeRuntime {
-    fn bind_saved_child_scope(
-        &self,
-        provider: Arc<
-            dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider,
-        >,
-    ) -> Result<Arc<dyn CodeSandboxRuntime>, GraphError> {
-        Ok(Arc::new(Self {
-            saved_child_scope: Some(provider),
-            intent_content: self.intent_content.clone(),
-            control: self.control.clone(),
-            authority: self.authority.clone(),
-            profiles: self.profiles.clone(),
-            journal: self.journal.clone(),
-            compiled_profile: self.compiled_profile.clone(),
-            debug_sink: self.debug_sink.clone(),
-        }))
-    }
-    #[allow(
-        clippy::large_futures,
-        reason = "Keep the bounded owner future lexical without adding allocations."
-    )]
-    async fn execute_attempt(
+impl RemoteCodeRuntime {
+    /// The raw invocation. `report`, when given, receives the typed cause of
+    /// a failure the caller (a tool) wants as a value.
+    #[allow(clippy::too_many_lines)] // Keep ordered authority checks and durable phase fences visible together.
+    async fn execute_reporting(
         &self,
         invocation: CodeInvocation<'_>,
-        authority: &super::node_recovery_runtime::NodeAttemptAuthority,
-    ) -> Result<Vec<u8>, super::code_runtime::CodeAttemptFailure> {
-        self.execute_recovery_attempt(invocation, authority).await
-    }
-
-    #[allow(clippy::too_many_lines)] // Keep ordered authority checks and durable phase fences visible together.
-    async fn execute(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+        report: Option<&std::sync::Mutex<Option<super::code_runtime::ToolCodeError>>>,
+    ) -> Result<Vec<u8>, GraphError> {
+        let note = |cause: super::code_runtime::ToolCodeError| {
+            if let Some(slot) = report
+                && let Ok(mut slot) = slot.lock()
+            {
+                *slot = Some(cause);
+            }
+        };
         validate_invocation(&invocation)?;
         if invocation.original.is_some()
             || self.saved_child_scope.is_some()
@@ -299,9 +282,10 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
         let mut matching = self.profiles.iter().filter(|profile| {
             profile.language == invocation.language && profile.platform_client.is_none()
         });
-        let profile = matching
-            .next()
-            .ok_or_else(|| failed("No sandbox runtime is configured for this Code language."))?;
+        let profile = matching.next().ok_or_else(|| {
+            note(super::code_runtime::ToolCodeError::Unavailable);
+            failed("No sandbox runtime is configured for this Code language.")
+        })?;
         if matching.next().is_some() {
             return Err(failed(
                 "Multiple sandbox runtimes are configured for this Code language.",
@@ -390,7 +374,10 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
             };
             let outcome = tokio::time::timeout_at(deadline, attempt)
                 .await
-                .map_err(|_| uncertain())?;
+                .map_err(|_| {
+                    note(super::code_runtime::ToolCodeError::Uncertain);
+                    uncertain()
+                })?;
             if matches!(
                 &outcome,
                 Ok(SandboxOutcome::Completed(_)
@@ -410,16 +397,21 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
             match outcome {
                 Ok(SandboxOutcome::Completed(receipt)) => return Ok(receipt),
                 Ok(SandboxOutcome::Failed { code }) => {
+                    note(super::code_runtime::ToolCodeError::Sandbox { code: code.clone() });
                     return Err(failed(&format!(
                         "Sandbox execution failed ({code}); dependent pipeline nodes were not run."
                     )));
                 }
                 Ok(SandboxOutcome::Cancelled) => {
+                    note(super::code_runtime::ToolCodeError::Cancelled);
                     return Err(failed(
                         "Sandbox execution was cancelled; dependent pipeline nodes were not run.",
                     ));
                 }
-                Ok(SandboxOutcome::Uncertain { .. }) => return Err(uncertain()),
+                Ok(SandboxOutcome::Uncertain { .. }) => {
+                    note(super::code_runtime::ToolCodeError::Uncertain);
+                    return Err(uncertain());
+                }
                 Ok(SandboxOutcome::Pending)
                 | Err(
                     SandboxCallError::Authorization(
@@ -433,9 +425,25 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
                             | tonic::Code::ResourceExhausted,
                     },
                 ) => {}
-                Err(error) => return Err(failed(&error.to_string())),
+                Err(error) => {
+                    note(match &error {
+                        SandboxCallError::Invalid
+                        | SandboxCallError::Rejected
+                        | SandboxCallError::Authorization(_) => {
+                            super::code_runtime::ToolCodeError::Refused
+                        }
+                        SandboxCallError::InvalidReceipt => {
+                            super::code_runtime::ToolCodeError::Uncertain
+                        }
+                        SandboxCallError::Submission { .. } => {
+                            super::code_runtime::ToolCodeError::Submission
+                        }
+                    });
+                    return Err(failed(&error.to_string()));
+                }
             }
             if tokio::time::Instant::now() >= deadline {
+                note(super::code_runtime::ToolCodeError::Uncertain);
                 return Err(uncertain());
             }
             // Every retry uses a fresh Main grant and the identical prepared
@@ -446,6 +454,57 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
             .await;
         }
         }).await
+    }
+}
+
+#[async_trait]
+impl CodeSandboxRuntime for RemoteCodeRuntime {
+    fn bind_saved_child_scope(
+        &self,
+        provider: Arc<
+            dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider,
+        >,
+    ) -> Result<Arc<dyn CodeSandboxRuntime>, GraphError> {
+        Ok(Arc::new(Self {
+            saved_child_scope: Some(provider),
+            intent_content: self.intent_content.clone(),
+            control: self.control.clone(),
+            authority: self.authority.clone(),
+            profiles: self.profiles.clone(),
+            journal: self.journal.clone(),
+            compiled_profile: self.compiled_profile.clone(),
+            debug_sink: self.debug_sink.clone(),
+        }))
+    }
+    #[allow(
+        clippy::large_futures,
+        reason = "Keep the bounded owner future lexical without adding allocations."
+    )]
+    async fn execute_attempt(
+        &self,
+        invocation: CodeInvocation<'_>,
+        authority: &super::node_recovery_runtime::NodeAttemptAuthority,
+    ) -> Result<Vec<u8>, super::code_runtime::CodeAttemptFailure> {
+        self.execute_recovery_attempt(invocation, authority).await
+    }
+
+    async fn execute_tool(
+        &self,
+        invocation: CodeInvocation<'_>,
+    ) -> Result<Vec<u8>, super::code_runtime::ToolCodeError> {
+        let report = std::sync::Mutex::new(None);
+        match Box::pin(self.execute_reporting(invocation, Some(&report))).await {
+            Ok(receipt) => Ok(receipt),
+            Err(error) => Err(report
+                .lock()
+                .ok()
+                .and_then(|mut slot| slot.take())
+                .unwrap_or_else(|| super::code_runtime::ToolCodeError::Untyped(error.to_string()))),
+        }
+    }
+
+    async fn execute(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+        Box::pin(self.execute_reporting(invocation, None)).await
     }
 }
 

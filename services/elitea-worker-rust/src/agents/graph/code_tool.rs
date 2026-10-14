@@ -10,16 +10,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
-    AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner, AnalysisLanguage,
-    MAX_ANALYSIS_RESULT_BYTES,
+    AnalysisCodeError, AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner,
+    AnalysisLanguage, MAX_ANALYSIS_RESULT_BYTES,
 };
 use ring::digest;
 use serde_json::Value;
 
 use super::code::{CodeLanguage, CodeProvenance};
-use super::code_result::parse_receipt;
-use super::code_runtime::{CodeInvocation, CodeSandboxRuntime};
-use super::code_state::CodeStateError;
+use super::code_result::{ReceiptError, parse_receipt_detailed};
+use super::code_runtime::{CodeInvocation, CodeSandboxRuntime, ToolCodeError};
 
 /// The most bytes of input state one program is sent.
 const MAX_INPUT_BYTES: usize = 1024 * 1024;
@@ -35,54 +34,57 @@ impl SandboxAnalysisRunner {
     }
 }
 
-/// The program's result from a completed receipt, by the same reader the
-/// Code node uses; a result over the tool's cap is refused here, before the
-/// model-facing layer sees it.
-fn result_of(bytes: &[u8]) -> Result<Value, AnalysisCodeFailure> {
-    let result = parse_receipt(bytes).map_err(|error| match error {
-        CodeStateError::SizeLimit => AnalysisCodeFailure::ResultTooLarge,
-        _ => AnalysisCodeFailure::Failed,
-    })?;
-    let size = serde_json::to_vec(&result).map_or(usize::MAX, |encoded| encoded.len());
-    if size > MAX_ANALYSIS_RESULT_BYTES {
-        return Err(AnalysisCodeFailure::ResultTooLarge);
+/// The most characters of the program's stderr that ride in an answer.
+const MAX_DETAIL_CHARS: usize = 1_500;
+
+/// The program's result from a receipt, by the same reader the Code node
+/// uses. The run's status is judged before any size: a program that failed
+/// and wrote a great deal to stderr failed; it did not return too large a
+/// result. This is the one place the result limit is checked.
+fn result_of(bytes: &[u8]) -> Result<Value, AnalysisCodeError> {
+    match parse_receipt_detailed(bytes) {
+        Ok(result) => {
+            let size = serde_json::to_vec(&result).map_or(usize::MAX, |encoded| encoded.len());
+            if size > MAX_ANALYSIS_RESULT_BYTES {
+                return Err(AnalysisCodeFailure::ResultTooLarge.into());
+            }
+            Ok(result)
+        }
+        Err(ReceiptError::TooLarge) => Err(AnalysisCodeFailure::ResultTooLarge.into()),
+        Err(ReceiptError::Malformed) => Err(AnalysisCodeFailure::Failed.into()),
+        Err(ReceiptError::ProgramFailed { stderr }) => {
+            let mut detail: String = stderr.chars().take(MAX_DETAIL_CHARS).collect();
+            if stderr.chars().count() > MAX_DETAIL_CHARS {
+                detail.push_str(" [stderr truncated]");
+            }
+            Err(AnalysisCodeError {
+                failure: AnalysisCodeFailure::Failed,
+                detail: (!detail.trim().is_empty()).then_some(detail),
+            })
+        }
     }
-    Ok(result)
 }
 
-/// The cause of a refused run, from the runtime's error text. The runtime
-/// reports through `GraphError` strings (`graph.code.execution_failed: ...`),
-/// so this is a match on its wording; an unrecognised message is `Failed`.
-fn classify(message: &str) -> AnalysisCodeFailure {
-    let lower = message.to_ascii_lowercase();
-    let mentions = |words: &[&str]| words.iter().any(|word| lower.contains(word));
-    if mentions(&[
-        "no sandbox runtime is configured",
-        "multiple sandbox runtimes",
-    ]) {
-        AnalysisCodeFailure::Unavailable
-    } else if mentions(&["could not be confirmed", "reconcile"]) {
-        AnalysisCodeFailure::Uncertain
-    } else if mentions(&["cancel"]) {
-        AnalysisCodeFailure::Cancelled
-    } else if mentions(&[
-        "timed out",
-        "time limit",
-        "wall time",
-        "wall-clock",
-        "deadline",
-        "step limit",
-        "out of memory",
-        "memory limit",
-        "memory",
-    ]) {
-        // The program ran and ran out of a budget: a runtime failure with its
-        // own sentence, not a refusal of the job.
-        AnalysisCodeFailure::Overrun
-    } else if mentions(&["authoriz", "denied", "size bound", "too large", "exceeds"]) {
-        AnalysisCodeFailure::Rejected
-    } else {
-        AnalysisCodeFailure::Failed
+/// The cause of a run that produced no receipt, from what the runtime and the
+/// supervisor said as values: the supervisor's failure code, or which call
+/// refused. No message text is read.
+fn classify(error: &ToolCodeError) -> AnalysisCodeFailure {
+    match error {
+        ToolCodeError::Unavailable => AnalysisCodeFailure::Unavailable,
+        ToolCodeError::Cancelled => AnalysisCodeFailure::Cancelled,
+        ToolCodeError::Uncertain => AnalysisCodeFailure::Uncertain,
+        ToolCodeError::Refused => AnalysisCodeFailure::Rejected,
+        ToolCodeError::Sandbox { code } => match code.as_str() {
+            "sandbox.output_limit" | "sandbox.receipt_limit" => AnalysisCodeFailure::ResultTooLarge,
+            "sandbox.invalid_request" => AnalysisCodeFailure::Rejected,
+            "sandbox.deadline_exceeded"
+            | "sandbox.hydration_deadline_exceeded"
+            | "sandbox.memory_limit"
+            | "sandbox.step_limit" => AnalysisCodeFailure::Overrun,
+            "sandbox.cancelled" => AnalysisCodeFailure::Cancelled,
+            _ => AnalysisCodeFailure::Failed,
+        },
+        ToolCodeError::Submission | ToolCodeError::Untyped(_) => AnalysisCodeFailure::Failed,
     }
 }
 
@@ -103,11 +105,11 @@ fn activation(call_id: &str, source: &str, input: &[u8]) -> [u8; 32] {
 
 #[async_trait]
 impl AnalysisCodeRunner for SandboxAnalysisRunner {
-    async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeFailure> {
-        let input_json =
-            serde_json::to_vec(&request.input).map_err(|_| AnalysisCodeFailure::Rejected)?;
+    async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeError> {
+        let input_json = serde_json::to_vec(&request.input)
+            .map_err(|_| AnalysisCodeError::from(AnalysisCodeFailure::Rejected))?;
         if input_json.len() > MAX_INPUT_BYTES || request.source.contains('\0') {
-            return Err(AnalysisCodeFailure::Rejected);
+            return Err(AnalysisCodeFailure::Rejected.into());
         }
         let language = match request.language {
             AnalysisLanguage::Python => CodeLanguage::Python,
@@ -128,17 +130,16 @@ impl AnalysisCodeRunner for SandboxAnalysisRunner {
             debug: None,
             workspace: None,
         };
-        match self.runtime.execute(invocation).await {
+        match self.runtime.execute_tool(invocation).await {
             Ok(receipt) => result_of(&receipt),
             Err(error) => {
-                let message = error.to_string();
-                let failure = classify(&message);
+                let failure = classify(&error);
                 tracing::warn!(
                     event = "data_analysis_code_failed",
                     failure = ?failure,
                     "the sandbox did not return a result for run_analysis_code"
                 );
-                Err(failure)
+                Err(failure.into())
             }
         }
     }
@@ -157,12 +158,19 @@ mod tests {
 
     struct Fake {
         seen: Mutex<Vec<Seen>>,
-        reply: Mutex<Option<Result<Vec<u8>, GraphError>>>,
+        reply: Mutex<Option<Result<Vec<u8>, ToolCodeError>>>,
     }
 
     #[async_trait]
     impl CodeSandboxRuntime for Fake {
-        async fn execute(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+        async fn execute(&self, _: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+            unreachable!("the tool path asks for typed failures")
+        }
+
+        async fn execute_tool(
+            &self,
+            invocation: CodeInvocation<'_>,
+        ) -> Result<Vec<u8>, ToolCodeError> {
             self.seen.lock().unwrap().push((
                 invocation.activation,
                 match invocation.language {
@@ -177,7 +185,7 @@ mod tests {
         }
     }
 
-    fn runner(reply: Result<Vec<u8>, GraphError>) -> (SandboxAnalysisRunner, Arc<Fake>) {
+    fn runner(reply: Result<Vec<u8>, ToolCodeError>) -> (SandboxAnalysisRunner, Arc<Fake>) {
         let fake = Arc::new(Fake {
             seen: Mutex::new(Vec::new()),
             reply: Mutex::new(Some(reply)),
@@ -198,11 +206,20 @@ mod tests {
     }
 
     fn receipt(stdout: &str, exit: i32) -> Vec<u8> {
+        receipt_with(stdout, exit, "diagnostic", "completed")
+    }
+
+    fn receipt_with(stdout: &str, exit: i32, stderr: &str, status: &str) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
-            "revision": 1, "status": "completed", "exit_code": exit,
-            "stdout": stdout, "stderr": "diagnostic"
+            "revision": 1, "status": status, "exit_code": exit,
+            "stdout": stdout, "stderr": stderr
         }))
         .unwrap()
+    }
+
+    async fn failure_of(reply: Result<Vec<u8>, ToolCodeError>) -> AnalysisCodeError {
+        let (runner, _) = runner(reply);
+        runner.run(request("c")).await.unwrap_err()
     }
 
     #[tokio::test]
@@ -221,9 +238,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_activation_is_stable_per_call_and_differs_across_calls() {
-        let (a, fa) = runner(Ok(receipt(r#"{"revision":1,"result":1}"#, 0)));
-        let (b, fb) = runner(Ok(receipt(r#"{"revision":1,"result":1}"#, 0)));
-        let (c, fc) = runner(Ok(receipt(r#"{"revision":1,"result":1}"#, 0)));
+        let ok = || Ok(receipt(r#"{"revision":1,"result":1}"#, 0));
+        let (a, fa) = runner(ok());
+        let (b, fb) = runner(ok());
+        let (c, fc) = runner(ok());
         a.run(request("same")).await.unwrap();
         b.run(request("same")).await.unwrap();
         c.run(request("other")).await.unwrap();
@@ -240,64 +258,42 @@ mod tests {
             receipt(r#"{"revision":2,"result":1}"#, 0),
             b"{}".to_vec(),
         ] {
-            let (runner, _) = runner(Ok(bad));
             assert_eq!(
-                runner.run(request("c")).await.unwrap_err(),
+                failure_of(Ok(bad)).await.failure,
                 AnalysisCodeFailure::Failed
             );
         }
     }
 
     #[tokio::test]
-    async fn runtime_errors_are_classified_by_cause() {
-        for (message, expected) in [
-            (
-                "graph.code.execution_failed: No sandbox runtime is configured for this Code language.",
-                AnalysisCodeFailure::Unavailable,
-            ),
-            (
-                "graph.code.execution_failed: Sandbox completion could not be confirmed. The job was not restarted; reconcile its durable status before retrying the pipeline.",
-                AnalysisCodeFailure::Uncertain,
-            ),
-            (
-                "graph.code.execution_failed: The job was cancelled.",
-                AnalysisCodeFailure::Cancelled,
-            ),
-            (
-                "graph.code.execution_failed: not authorized",
-                AnalysisCodeFailure::Rejected,
-            ),
-            (
-                "graph.code.execution_failed: the job exceeds the memory limit",
-                AnalysisCodeFailure::Overrun,
-            ),
-            (
-                "graph.code.execution_failed: wall time exceeded the 30 second limit",
-                AnalysisCodeFailure::Overrun,
-            ),
-            (
-                "graph.code.execution_failed: sandbox request exceeds its size bound",
-                AnalysisCodeFailure::Rejected,
-            ),
-            (
-                "graph.code.execution_failed: exit status 1",
-                AnalysisCodeFailure::Failed,
-            ),
-        ] {
-            let (runner, _) = runner(Err(GraphError::Other(message.into())));
-            assert_eq!(
-                runner.run(request("c")).await.unwrap_err(),
-                expected,
-                "{message}"
-            );
-        }
+    async fn a_failed_run_with_huge_stderr_is_a_failure_with_bounded_stderr() {
+        // Status is read before size: 600 KB of stderr from a failed run is
+        // "the program failed", never "result too large".
+        let big = receipt_with("", 1, &"E".repeat(600 * 1024), "completed");
+        let error = failure_of(Ok(big)).await;
+        assert_eq!(error.failure, AnalysisCodeFailure::Failed);
+        let detail = error.detail.expect("stderr rides along");
+        assert!(detail.ends_with("[stderr truncated]"));
+        assert!(detail.len() < 2_000);
+        let killed = receipt_with("", 137, "boom", "failed");
+        let error = failure_of(Ok(killed)).await;
+        assert_eq!(error.failure, AnalysisCodeFailure::Failed);
+        assert_eq!(error.detail.as_deref(), Some("boom"));
     }
 
     #[tokio::test]
     async fn an_oversized_receipt_is_a_size_refusal_not_a_failure() {
-        let (runner, _) = runner(Ok(vec![b'x'; 512 * 1024 + 1]));
+        let huge = format!(
+            "{{\"revision\":1,\"result\":\"{}\"}}",
+            "x".repeat(300 * 1024)
+        );
+        let big = receipt_with(&huge, 0, "", "completed");
         assert_eq!(
-            runner.run(request("c")).await.unwrap_err(),
+            failure_of(Ok(big)).await.failure,
+            AnalysisCodeFailure::ResultTooLarge
+        );
+        assert_eq!(
+            failure_of(Ok(vec![b'x'; 512 * 1024 + 1])).await.failure,
             AnalysisCodeFailure::ResultTooLarge
         );
     }
@@ -306,10 +302,80 @@ mod tests {
     async fn a_result_over_the_tool_cap_is_refused_here() {
         let big =
             serde_json::json!({"revision": 1, "result": "z".repeat(MAX_ANALYSIS_RESULT_BYTES + 1)});
-        let (runner, _) = runner(Ok(receipt(&big.to_string(), 0)));
         assert_eq!(
-            runner.run(request("c")).await.unwrap_err(),
+            failure_of(Ok(receipt(&big.to_string(), 0))).await.failure,
             AnalysisCodeFailure::ResultTooLarge
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_runtime_failures_map_by_code_without_reading_text() {
+        let sandbox = |code: &str| ToolCodeError::Sandbox { code: code.into() };
+        for (error, expected) in [
+            (ToolCodeError::Unavailable, AnalysisCodeFailure::Unavailable),
+            (ToolCodeError::Cancelled, AnalysisCodeFailure::Cancelled),
+            (ToolCodeError::Uncertain, AnalysisCodeFailure::Uncertain),
+            (ToolCodeError::Refused, AnalysisCodeFailure::Rejected),
+            (ToolCodeError::Submission, AnalysisCodeFailure::Failed),
+            (
+                ToolCodeError::Untyped("memory time exceeds cancel authorized".into()),
+                AnalysisCodeFailure::Failed,
+            ),
+            (
+                sandbox("sandbox.output_limit"),
+                AnalysisCodeFailure::ResultTooLarge,
+            ),
+            (
+                sandbox("sandbox.receipt_limit"),
+                AnalysisCodeFailure::ResultTooLarge,
+            ),
+            (
+                sandbox("sandbox.invalid_request"),
+                AnalysisCodeFailure::Rejected,
+            ),
+            (
+                sandbox("sandbox.deadline_exceeded"),
+                AnalysisCodeFailure::Overrun,
+            ),
+            (
+                sandbox("sandbox.hydration_deadline_exceeded"),
+                AnalysisCodeFailure::Overrun,
+            ),
+            (
+                sandbox("sandbox.memory_limit"),
+                AnalysisCodeFailure::Overrun,
+            ),
+            (sandbox("sandbox.cancelled"), AnalysisCodeFailure::Cancelled),
+            (sandbox("sandbox.code_failed"), AnalysisCodeFailure::Failed),
+            (
+                sandbox("sandbox.launch_failed"),
+                AnalysisCodeFailure::Failed,
+            ),
+        ] {
+            assert_eq!(
+                failure_of(Err(error.clone())).await.failure,
+                expected,
+                "{error:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_default_tool_path_reports_untyped_text_as_a_plain_failure() {
+        struct Plain;
+        #[async_trait]
+        impl CodeSandboxRuntime for Plain {
+            async fn execute(&self, _: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
+                Err(GraphError::Other(
+                    "graph.code.execution_failed: not authorized, memory, cancel".into(),
+                ))
+            }
+        }
+        let runner = SandboxAnalysisRunner::new(Arc::new(Plain));
+        // The words in the message decide nothing.
+        assert_eq!(
+            runner.run(request("c")).await.unwrap_err().failure,
+            AnalysisCodeFailure::Failed
         );
     }
 
@@ -319,7 +385,7 @@ mod tests {
         let mut big = request("c");
         big.input = serde_json::json!({"data": "x".repeat(MAX_INPUT_BYTES)});
         assert_eq!(
-            runner.run(big).await.unwrap_err(),
+            runner.run(big).await.unwrap_err().failure,
             AnalysisCodeFailure::Rejected
         );
         assert!(fake.seen.lock().unwrap().is_empty());

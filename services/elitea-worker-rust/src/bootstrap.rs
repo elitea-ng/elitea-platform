@@ -657,6 +657,7 @@ mod tests {
             spool_root: PathBuf::from("/runtime/spool"),
             spool_key_path: PathBuf::from("/runtime/spool.key"),
             sandbox_runtimes: Vec::new(),
+            public_base_url: None,
             vector_target: None,
             index_egress_allowlist: None,
             extractor_socket: None,

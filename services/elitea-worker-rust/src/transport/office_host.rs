@@ -36,6 +36,8 @@ use crate::indexing::tools::{LazyStepbackModel, generate_text};
 /// guarded HTTP client to it.
 pub(crate) struct OfficeRuntime {
     origin: String,
+    /// The deployment's public base URL, when it has stated one.
+    public_base_url: Option<String>,
     http: SourceHttp,
 }
 
@@ -61,9 +63,18 @@ impl OfficeRuntime {
         };
         Ok(Self {
             origin: platform_origin.to_owned(),
+            public_base_url: None,
             http: SourceHttp::new(HostAllowlist::parse(Some(&host)), Arc::new(transport))
                 .with_limits(limits),
         })
+    }
+
+    /// The public base URL links in answers are built against. Absent, links
+    /// are root-relative.
+    #[must_use]
+    pub(crate) fn with_public_base_url(mut self, public_base_url: Option<String>) -> Self {
+        self.public_base_url = public_base_url;
+        self
     }
 
     /// Whether the guard admits `url`'s host.
@@ -83,6 +94,7 @@ impl OfficeRuntime {
             .unwrap_or_default();
         Self {
             origin: platform_origin.to_owned(),
+            public_base_url: None,
             http: SourceHttp::new(HostAllowlist::parse(Some(&host)), transport).with_limits(
                 SourceLimits {
                     max_document_bytes: elitea_agent_runtime::toolkits::MAX_OFFICE_OBJECT_BYTES,
@@ -298,17 +310,20 @@ impl OfficeToolHost for ClaimOfficeHost {
         })
     }
 
-    /// The path the SDK's chart answer used
-    /// (`/api/v2/artifacts/artifact/default/{project}/{bucket}/{file}`),
-    /// root-relative on purpose: the platform origin this host reaches is the
-    /// in-cluster edge, which a person's browser cannot open. The chat UI
-    /// resolves the path against the origin it was served from.
+    /// The link the SDK's chart answer used
+    /// (`{base}/api/v2/artifacts/artifact/default/{project}/{bucket}/{file}`).
+    /// `base` is the deployment's PUBLIC base URL when it has one; the
+    /// platform origin this host reaches is the in-cluster edge, which a
+    /// browser cannot open, so it is never used. With no public base URL the
+    /// link is root-relative and the chat UI resolves it against its own
+    /// origin.
     fn object_link(&self, bucket: &str, name: &str) -> Option<String> {
         if !valid_segment(bucket) || !valid_object_key(name) {
             return None;
         }
+        let base = self.runtime.public_base_url.as_deref();
         // Percent-encoding comes from the URL type's path-segment rules.
-        let mut url = Url::parse("https://relative.invalid/").ok()?;
+        let mut url = Url::parse(base.unwrap_or("https://relative.invalid/")).ok()?;
         {
             let mut segments = url.path_segments_mut().ok()?;
             segments.pop_if_empty().extend([
@@ -322,7 +337,11 @@ impl OfficeToolHost for ClaimOfficeHost {
             ]);
             segments.extend(name.split('/'));
         }
-        Some(url.path().to_owned())
+        Some(if base.is_some() {
+            url.to_string()
+        } else {
+            url.path().to_owned()
+        })
     }
 
     async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError> {

@@ -52,11 +52,28 @@ pub enum AnalysisCodeFailure {
     Uncertain,
 }
 
+/// A failed run: the cause, and the program's own diagnostic text when it has
+/// one (stderr, already bounded by the runner).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnalysisCodeError {
+    pub failure: AnalysisCodeFailure,
+    pub detail: Option<String>,
+}
+
+impl From<AnalysisCodeFailure> for AnalysisCodeError {
+    fn from(failure: AnalysisCodeFailure) -> Self {
+        Self {
+            failure,
+            detail: None,
+        }
+    }
+}
+
 /// The host side of `run_analysis_code`.
 #[async_trait]
 pub trait AnalysisCodeRunner: Send + Sync {
     /// Run `request` and return the program's JSON result.
-    async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeFailure>;
+    async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeError>;
 }
 
 /// The sentence the model reads for a failure.

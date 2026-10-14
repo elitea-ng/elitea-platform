@@ -17,11 +17,12 @@ use elitea_office_core::{CellValue, Workbook};
 use serde_json::{Value, json};
 
 use super::families::data_analysis::code::{
-    AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner, AnalysisLanguage,
+    AnalysisCodeError, AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner,
+    AnalysisLanguage,
 };
 use super::families::data_analysis::schema::ALL_TOOLS;
 use super::families::data_analysis::table::Limits;
-use super::families::data_analysis::tools::{DataAnalysisAuthority, build_with};
+use super::families::data_analysis::tools::{AnalysisGate, DataAnalysisAuthority, build_with};
 use super::families::office_host::{
     OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
     SharedOfficeToolHost,
@@ -34,6 +35,7 @@ const BUCKET: &str = "chat-attachments";
 struct FakeHost {
     objects: Mutex<BTreeMap<(String, String), Vec<u8>>>,
     writes: Mutex<Vec<(String, bool)>>,
+    reads: Mutex<Vec<String>>,
     link: bool,
 }
 
@@ -79,6 +81,7 @@ impl OfficeToolHost for FakeHost {
         name: &str,
         max_bytes: u64,
     ) -> Result<Vec<u8>, OfficeHostError> {
+        self.reads.lock().expect("reads").push(name.to_owned());
         let objects = self.objects.lock().expect("objects");
         let bytes = objects
             .get(&(bucket.to_owned(), name.to_owned()))
@@ -129,12 +132,12 @@ impl OfficeToolHost for FakeHost {
 #[derive(Default)]
 struct FakeRunner {
     seen: Mutex<Vec<AnalysisCodeRequest>>,
-    reply: Mutex<Option<Result<Value, AnalysisCodeFailure>>>,
+    reply: Mutex<Option<Result<Value, AnalysisCodeError>>>,
 }
 
 #[async_trait]
 impl AnalysisCodeRunner for FakeRunner {
-    async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeFailure> {
+    async fn run(&self, request: AnalysisCodeRequest) -> Result<Value, AnalysisCodeError> {
         self.seen.lock().expect("seen").push(request);
         self.reply
             .lock()
@@ -172,9 +175,19 @@ impl Rig {
     }
 
     async fn with(host: FakeHost, limits: Limits, runner: Option<Arc<FakeRunner>>) -> Self {
+        // Each rig has a gate of its own: no test contends with another.
+        Self::with_gate(host, limits, runner, AnalysisGate::new(16)).await
+    }
+
+    async fn with_gate(
+        host: FakeHost,
+        limits: Limits,
+        runner: Option<Arc<FakeRunner>>,
+        gate: AnalysisGate,
+    ) -> Self {
         let host = Arc::new(host);
         let shared: SharedOfficeToolHost = Arc::clone(&host) as SharedOfficeToolHost;
-        let mut authority = DataAnalysisAuthority::new(shared);
+        let mut authority = DataAnalysisAuthority::new(shared).with_gate(gate);
         if let Some(runner) = runner {
             authority = authority.with_code_runner(runner);
         }
@@ -510,7 +523,7 @@ async fn a_result_file_goes_next_to_the_source_and_never_overwrites_unasked() {
 async fn an_output_path_is_taken_as_given_and_formats_come_from_the_extension() {
     let rig = Rig::new().await;
     rig.host.put("c1/sales.csv", SALES);
-    for name in ["out/all.json", "out/all.tsv", "out/all.xlsx"] {
+    for name in ["c1/out/all.json", "c1/out/all.tsv", "c1/out/all.xlsx"] {
         let out = rig
             .ok(
                 "filter_data",
@@ -519,12 +532,12 @@ async fn an_output_path_is_taken_as_given_and_formats_come_from_the_extension() 
             .await;
         assert_eq!(out["saved"]["file"], name);
     }
-    let json_out: Value = serde_json::from_slice(&rig.host.get("out/all.json")).unwrap();
+    let json_out: Value = serde_json::from_slice(&rig.host.get("c1/out/all.json")).unwrap();
     assert_eq!(json_out[0]["region"], "north");
     assert_eq!(json_out[0]["day"], "2024-01-01");
     // The xlsx reads back as the same table.
     let back = rig
-        .ok("describe_data", json!({"filename": "out/all.xlsx"}))
+        .ok("describe_data", json!({"filename": "c1/out/all.xlsx"}))
         .await;
     assert_eq!(back["rows"], 6);
     let message = rig
@@ -1240,10 +1253,12 @@ async fn every_sandbox_failure_has_its_own_sentence() {
         AnalysisCodeFailure::Unavailable,
         AnalysisCodeFailure::Rejected,
         AnalysisCodeFailure::Failed,
+        AnalysisCodeFailure::Overrun,
+        AnalysisCodeFailure::ResultTooLarge,
         AnalysisCodeFailure::Cancelled,
         AnalysisCodeFailure::Uncertain,
     ] {
-        *runner.reply.lock().unwrap() = Some(Err(failure));
+        *runner.reply.lock().unwrap() = Some(Err(failure.into()));
         sentences.push(
             rig.err(
                 "run_analysis_code",
@@ -1255,17 +1270,21 @@ async fn every_sandbox_failure_has_its_own_sentence() {
     let mut unique = sentences.clone();
     unique.sort();
     unique.dedup();
-    assert_eq!(unique.len(), 5, "{sentences:?}");
-    assert!(sentences[4].contains("may have run"));
-    // An oversized result is refused, not cut.
-    *runner.reply.lock().unwrap() = Some(Ok(json!({"blob": "z".repeat(200_000)})));
+    assert_eq!(unique.len(), 7, "{sentences:?}");
+    assert!(sentences[6].contains("may have run"));
+    // The program's own stderr rides along on a failure, and is the only text.
+    *runner.reply.lock().unwrap() = Some(Err(AnalysisCodeError {
+        failure: AnalysisCodeFailure::Failed,
+        detail: Some("NameError: name 'x' is not defined".into()),
+    }));
     let m = rig
         .err(
             "run_analysis_code",
             json!({"filename": "s.csv", "code": "x"}),
         )
         .await;
-    assert!(m.contains("return at most 102400"), "{m}");
+    assert!(m.contains("The program failed in the sandbox"), "{m}");
+    assert!(m.contains("Program error output:\nNameError"), "{m}");
     let m = rig
         .err(
             "run_analysis_code",
@@ -1417,24 +1436,279 @@ async fn formula_like_header_names_are_neutralized_too() {
 }
 
 #[tokio::test]
-async fn the_analysis_limit_is_worker_wide_not_per_tool_set() {
-    use super::families::data_analysis::tools::analysis_gate;
-    let first = Rig::new().await;
-    let second = Rig::new().await;
-    second.host.put("s.csv", SALES);
-    first.host.put("s.csv", SALES);
-    let held = analysis_gate().acquire_many(2).await.expect("gate");
+async fn tool_sets_sharing_a_gate_share_its_slots() {
+    let gate = AnalysisGate::new(2);
+    let first = Rig::with_gate(FakeHost::default(), test_limits(), None, gate.clone()).await;
+    let second = Rig::with_gate(FakeHost::default(), test_limits(), None, gate.clone()).await;
+    for rig in [&first, &second] {
+        rig.host.put("s.csv", SALES);
+    }
+    let held = gate
+        .semaphore_for_test()
+        .acquire_many(2)
+        .await
+        .expect("gate");
     let args =
         json!({"filename": "s.csv", "aggregations": [{"column": "units", "function": "sum"}]});
     let mut a = Box::pin(first.call("aggregate_data", args.clone()));
     let mut b = Box::pin(second.call("aggregate_data", args));
     let wait = std::time::Duration::from_millis(250);
-    // Both tool sets wait on the one gate while it is held.
+    // Both tool sets wait on the one gate while it is held, and neither has
+    // read its file: the slot comes before the bytes.
     assert!(tokio::time::timeout(wait, &mut a).await.is_err());
     assert!(tokio::time::timeout(wait, &mut b).await.is_err());
+    assert!(first.host.reads.lock().unwrap().is_empty());
+    assert!(second.host.reads.lock().unwrap().is_empty());
     drop(held);
     assert_eq!(a.await["status"], "success");
     assert_eq!(b.await["status"], "success");
+    assert_eq!(gate.available(), 2);
+}
+
+#[tokio::test]
+async fn authorities_default_to_the_one_process_wide_gate() {
+    let host: SharedOfficeToolHost = Arc::new(FakeHost::default());
+    let a = DataAnalysisAuthority::new(Arc::clone(&host));
+    let b = DataAnalysisAuthority::new(host);
+    assert!(a.gate_is(&b));
+    assert!(a.gate_is_process());
+    assert!(!a.clone().with_gate(AnalysisGate::new(1)).gate_is(&b));
+}
+
+#[tokio::test]
+async fn a_call_that_cannot_get_a_slot_says_busy_and_reads_nothing() {
+    let gate = AnalysisGate::new(1);
+    let rig = Rig::with_gate(
+        FakeHost::default(),
+        tight(|l| l.queue_timeout = std::time::Duration::from_millis(100)),
+        None,
+        gate.clone(),
+    )
+    .await;
+    rig.host.put("s.csv", SALES);
+    let _held = gate.semaphore_for_test().acquire().await.expect("gate");
+    let m = rig.err("describe_data", json!({"filename": "s.csv"})).await;
+    assert!(
+        m.contains("busy with other analyses. Try again shortly"),
+        "{m}"
+    );
+    assert!(rig.host.reads.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_closed_gate_refuses_with_the_shutdown_sentence() {
+    let gate = AnalysisGate::new(2);
+    let rig = Rig::with_gate(FakeHost::default(), test_limits(), None, gate.clone()).await;
+    rig.host.put("s.csv", SALES);
+    rig.ok("describe_data", json!({"filename": "s.csv"})).await;
+    gate.close();
+    let m = rig.err("describe_data", json!({"filename": "s.csv"})).await;
+    assert!(m.contains("shutting down"), "{m}");
+}
+
+#[tokio::test]
+async fn the_call_clock_covers_the_wait_for_a_slot() {
+    // A 150 ms clock and a gate that never frees: the call ends with the
+    // busy sentence at about 150 ms, not at the 30 s queue timeout.
+    let gate = AnalysisGate::new(1);
+    let rig = Rig::with_gate(
+        FakeHost::default(),
+        tight(|l| l.deadline = std::time::Duration::from_millis(150)),
+        None,
+        gate.clone(),
+    )
+    .await;
+    rig.host.put("s.csv", SALES);
+    let _held = gate.semaphore_for_test().acquire().await.expect("gate");
+    let started = std::time::Instant::now();
+    let m = rig.err("describe_data", json!({"filename": "s.csv"})).await;
+    assert!(m.contains("busy"), "{m}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[tokio::test]
+async fn output_files_stay_in_the_source_files_folder() {
+    let rig = Rig::new().await;
+    rig.host.put("conv-a/s.csv", SALES);
+    rig.host.put("conv-b/secret.csv", "x\n1\n");
+    rig.host.put("root.csv", SALES);
+    for target in [
+        "conv-b/secret.csv",
+        "/chat-attachments/conv-b/new.csv",
+        "other/new.csv",
+        "../conv-b/new.csv",
+    ] {
+        let m = rig
+            .err(
+                "filter_data",
+                json!({"filename": "conv-a/s.csv", "output_file": target, "overwrite": true}),
+            )
+            .await;
+        assert!(
+            m.contains("only in the source file's folder (`conv-a/`)") || m.contains("`..`"),
+            "{target}: {m}"
+        );
+    }
+    // The other conversation's file is untouched, and nothing was written.
+    assert_eq!(rig.host.get("conv-b/secret.csv"), b"x\n1\n");
+    assert!(rig.host.writes.lock().unwrap().is_empty());
+    // Inside the folder, including a subfolder and an overwrite, is fine.
+    for target in [
+        "conv-a/sub/new.csv",
+        "/chat-attachments/conv-a/again.csv",
+        "plain.csv",
+    ] {
+        rig.ok(
+            "filter_data",
+            json!({"filename": "conv-a/s.csv", "output_file": target}),
+        )
+        .await;
+    }
+    rig.ok(
+        "filter_data",
+        json!({"filename": "conv-a/s.csv", "output_file": "plain.csv", "overwrite": true}),
+    )
+    .await;
+    // A source at the bucket root keeps its results at the root.
+    let m = rig
+        .err(
+            "filter_data",
+            json!({"filename": "root.csv", "output_file": "conv-b/x.csv"}),
+        )
+        .await;
+    assert!(m.contains("at the top of the bucket"), "{m}");
+    rig.ok(
+        "filter_data",
+        json!({"filename": "root.csv", "output_file": "r2.csv"}),
+    )
+    .await;
+    // Charts and conversions obey the same rule.
+    let m = rig
+        .err(
+            "chart_data",
+            json!({"filename": "conv-a/s.csv", "chart_type": "bar", "x": "region", "output_file": "conv-b/c.png"}),
+        )
+        .await;
+    assert!(m.contains("only in the source file's folder"), "{m}");
+    let m = rig
+        .err(
+            "save_dataframe",
+            json!({"source_df": "conv-a/s.csv", "target_file": "conv-b/t.xlsx"}),
+        )
+        .await;
+    assert!(m.contains("only in the source file's folder"), "{m}");
+}
+
+#[tokio::test]
+async fn a_sort_key_may_name_a_source_column_the_chart_does_not_plot() {
+    let rig = Rig::new().await;
+    rig.host.put(
+        "m.csv",
+        "month_name,month_number,v\nApril,4,1\nFebruary,2,2\nJanuary,1,3\nApril,4,4\n",
+    );
+    let plain = rig
+        .ok(
+            "chart_data",
+            json!({"filename": "m.csv", "chart_type": "bar", "x": "month_name", "y": ["v"]}),
+        )
+        .await;
+    let order = |out: &Value| -> Vec<String> {
+        out["plotted_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r[0].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(order(&plain), ["April", "February", "January"]);
+    let by_number = rig
+        .ok(
+            "chart_data",
+            json!({"filename": "m.csv", "chart_type": "line", "x": "month_name", "y": ["v"],
+                "sort_by": ["month_number"]}),
+        )
+        .await;
+    assert_eq!(order(&by_number), ["January", "February", "April"]);
+    // The helper column is carried for ordering only: it is not plotted.
+    assert_eq!(by_number["series"], json!(["v"]));
+    let desc = rig
+        .ok(
+            "chart_data",
+            json!({"filename": "m.csv", "chart_type": "pie", "x": "month_name", "y": ["v"],
+                "sort_by": [{"column": "month_number", "descending": true}]}),
+        )
+        .await;
+    assert_eq!(order(&desc), ["April", "February", "January"]);
+    let m = rig
+        .err(
+            "chart_data",
+            json!({"filename": "m.csv", "chart_type": "bar", "x": "month_name", "y": ["v"], "sort_by": ["nope"]}),
+        )
+        .await;
+    assert!(m.contains("There is no column named `nope`"), "{m}");
+}
+
+#[tokio::test]
+async fn a_quote_and_newline_heavy_program_is_budgeted_by_its_escaped_length() {
+    let runner = Arc::new(FakeRunner::default());
+    let rig = Rig::with(
+        FakeHost::default(),
+        tight(|l| l.max_sandbox_bytes = 70_000),
+        Some(Arc::clone(&runner)),
+    )
+    .await;
+    rig.host
+        .put("t.csv", "a\n".to_owned() + &"xxxxxxxx\n".repeat(5_000));
+    let code = "a\"\n".repeat(10_000);
+    assert_eq!(code.len(), 30_000);
+    let out = rig
+        .ok(
+            "run_analysis_code",
+            json!({"filename": "t.csv", "code": code}),
+        )
+        .await;
+    let sent = out["rows_sent"].as_u64().unwrap();
+    let seen = runner.seen.lock().unwrap();
+    let escaped = serde_json::to_string(&seen[0].source).unwrap().len();
+    assert!(escaped > 45_000, "{escaped}");
+    let request_bytes = seen[0].input.to_string().len() + escaped;
+    assert!(request_bytes <= 70_000, "{request_bytes} bytes");
+    // Counting the raw 90,000 bytes would have admitted about twice the rows.
+    assert!(sent > 500 && sent < 2_000, "{sent}");
+}
+
+#[tokio::test]
+async fn a_result_over_the_answer_budget_is_shown_cut_and_says_so() {
+    let runner = Arc::new(FakeRunner::default());
+    *runner.reply.lock().unwrap() = Some(Ok(json!({"blob": "é".repeat(30_000)})));
+    let rig = Rig::with(
+        FakeHost::default(),
+        tight(|l| l.max_answer_bytes = 1_001),
+        Some(Arc::clone(&runner)),
+    )
+    .await;
+    rig.host.put("s.csv", SALES);
+    let out = rig
+        .ok(
+            "run_analysis_code",
+            json!({"filename": "s.csv", "code": "x"}),
+        )
+        .await;
+    assert!(out.get("result").is_none());
+    assert_eq!(out["result_truncated"], true);
+    assert!(out["result_bytes"].as_u64().unwrap() > 60_000);
+    let preview = out["result_preview"].as_str().unwrap();
+    assert!(preview.len() <= 1_001 && preview.len() > 900);
+    assert!(out["note"].as_str().unwrap().contains("only the first"));
+    // Under the budget it is embedded whole.
+    *runner.reply.lock().unwrap() = Some(Ok(json!({"n": 3})));
+    let out = rig
+        .ok(
+            "run_analysis_code",
+            json!({"filename": "s.csv", "code": "x"}),
+        )
+        .await;
+    assert_eq!(out["result"], json!({"n": 3}));
 }
 
 #[tokio::test]

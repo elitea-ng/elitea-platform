@@ -25,7 +25,7 @@ use crate::toolkits::policy::{ToolAdmissionDecision, ToolAdmissionPolicy};
 use super::chart::{self, Chart, Kind, Series};
 use super::code::{
     AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner, AnalysisLanguage,
-    MAX_ANALYSIS_RESULT_BYTES, failure_sentence,
+    failure_sentence,
 };
 use super::formats::{self, Format, Loaded, SourceInfo, WriteNotes};
 use super::ops::{self, Func, How, JoinSpec, PivotSpec};
@@ -41,14 +41,63 @@ const DEFAULT_PREVIEW_ROWS: usize = 20;
 /// of runs and tool sets exist: each can hold millions of cells, so the bound
 /// on memory must not grow with the number of conversations.
 const CONCURRENT_ANALYSES: usize = 2;
-static ANALYSIS_GATE: tokio::sync::Semaphore =
-    tokio::sync::Semaphore::const_new(CONCURRENT_ANALYSES);
 
-/// The gate, for the tests that hold it.
-#[cfg(test)]
-pub(crate) fn analysis_gate() -> &'static tokio::sync::Semaphore {
-    &ANALYSIS_GATE
+/// The slots analyses run in. A tool set holds a handle to one; by default it
+/// is the process-wide gate, and a test (or a host that wants its own bound)
+/// lends another.
+#[derive(Clone)]
+pub struct AnalysisGate {
+    semaphore: Arc<tokio::sync::Semaphore>,
 }
+
+impl AnalysisGate {
+    /// A gate of its own with `permits` slots.
+    #[must_use]
+    pub fn new(permits: usize) -> Self {
+        Self {
+            semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
+        }
+    }
+
+    /// The worker-wide gate: two slots shared by every run.
+    #[must_use]
+    pub fn process() -> Self {
+        static PROCESS: std::sync::OnceLock<AnalysisGate> = std::sync::OnceLock::new();
+        PROCESS
+            .get_or_init(|| AnalysisGate::new(CONCURRENT_ANALYSES))
+            .clone()
+    }
+
+    /// The semaphore itself, for tests that hold the slots.
+    #[cfg(test)]
+    pub(crate) fn semaphore_for_test(&self) -> &tokio::sync::Semaphore {
+        &self.semaphore
+    }
+
+    /// Stop admitting analyses: waiting and future callers are told the engine
+    /// is shutting down. Running analyses finish and keep their slots.
+    pub fn close(&self) {
+        self.semaphore.close();
+    }
+
+    /// Whether the gate has been closed.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.semaphore.is_closed()
+    }
+
+    /// Slots free right now.
+    #[must_use]
+    pub fn available(&self) -> usize {
+        self.semaphore.available_permits()
+    }
+}
+
+/// Close the worker-wide gate: the worker is draining.
+pub fn close_analysis_gate() {
+    AnalysisGate::process().close();
+}
+
 const MAX_CHART_CATEGORIES: usize = 100;
 const MAX_SCATTER_POINTS: usize = 5_000;
 /// Bytes of the request around the data: the job envelope and key names.
@@ -67,12 +116,36 @@ type Sentence = String;
 pub struct DataAnalysisAuthority {
     host: SharedOfficeToolHost,
     runner: Option<Arc<dyn AnalysisCodeRunner>>,
+    gate: AnalysisGate,
 }
 
 impl DataAnalysisAuthority {
     #[must_use]
     pub fn new(host: SharedOfficeToolHost) -> Self {
-        Self { host, runner: None }
+        Self {
+            host,
+            runner: None,
+            gate: AnalysisGate::process(),
+        }
+    }
+
+    /// Whether two authorities share one gate.
+    #[cfg(test)]
+    pub(crate) fn gate_is(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.gate.semaphore, &other.gate.semaphore)
+    }
+
+    /// Whether this authority uses the worker-wide gate.
+    #[cfg(test)]
+    pub(crate) fn gate_is_process(&self) -> bool {
+        Arc::ptr_eq(&self.gate.semaphore, &AnalysisGate::process().semaphore)
+    }
+
+    /// Use a gate of its own instead of the worker-wide one.
+    #[must_use]
+    pub fn with_gate(mut self, gate: AnalysisGate) -> Self {
+        self.gate = gate;
+        self
     }
 
     /// Lend the code sandbox. Without it `run_analysis_code` is not offered.
@@ -133,6 +206,7 @@ pub(crate) fn build_with(
                 host: Arc::clone(&authority.host),
                 runner: authority.runner.clone(),
                 limits: Arc::clone(&limits),
+                gate: authority.gate.clone(),
             })
         })
         .collect();
@@ -146,6 +220,7 @@ struct DataToolImpl {
     host: SharedOfficeToolHost,
     runner: Option<Arc<dyn AnalysisCodeRunner>>,
     limits: Arc<Limits>,
+    gate: AnalysisGate,
 }
 
 #[async_trait]
@@ -291,13 +366,36 @@ fn directory_of(key: &str) -> &str {
     key.rfind('/').map_or("", |i| &key[..=i])
 }
 
-/// Where a result file goes: a bare name next to the source, a path as given.
+/// Where a result file goes: a bare name next to the source, a path as given
+/// but only inside the source file's folder. A conversation's attachments live
+/// in a folder of their own (`<conversation>/...`), so a model-chosen name can
+/// neither land in another conversation's folder nor replace a file there; a
+/// source at the bucket root keeps its results at the root.
 fn output_key(bucket: &str, source_key: &str, name: &str) -> Result<String, Sentence> {
     let trimmed = name.trim();
-    if trimmed.contains('/') {
-        return object_key(bucket, trimmed);
+    let key = if trimmed.contains('/') {
+        object_key(bucket, trimmed)?
+    } else {
+        object_key(bucket, &format!("{}{trimmed}", directory_of(source_key)))?
+    };
+    let folder = directory_of(source_key);
+    let inside = if folder.is_empty() {
+        !key.contains('/')
+    } else {
+        key.starts_with(folder)
+    };
+    if !inside {
+        return Err(if folder.is_empty() {
+            format!(
+                "Results are saved next to the source file, at the top of the bucket; `{key}` is in a folder. Give a bare file name."
+            )
+        } else {
+            format!(
+                "Results are saved only in the source file's folder (`{folder}`); `{key}` is outside it. Give a bare file name, or a path under `{folder}`."
+            )
+        });
     }
-    object_key(bucket, &format!("{}{trimmed}", directory_of(source_key)))
+    Ok(key)
 }
 
 struct Source {
@@ -378,6 +476,7 @@ impl DataToolImpl {
         if !args.is_object() {
             return Err("The arguments must be a JSON object.".to_owned());
         }
+        let deadline = Deadline::after(self.limits.deadline);
         let primary = match self.tool {
             DataTool::SaveDataframe => source(args, "source_df", "bucket_name", "sheet")?,
             _ => source(args, "filename", "bucket_name", "sheet")?,
@@ -401,9 +500,15 @@ impl DataToolImpl {
             DataTool::DescribeData | DataTool::CorrelateData | DataTool::RunCode => None,
             _ => output(args, "output_file", &primary)?,
         };
-        let first = self.read(primary).await?;
+        // One clock for the whole call: the wait for a slot, the reads, the
+        // work and the start of the write. The sandbox run has its own limit
+        // and is not on this clock; a write that has begun is not interrupted.
+        // The slot comes BEFORE the reads, so the bytes of a queued call are
+        // never buffered, and it is held until the blocking work ends.
+        let permit = self.admit(&deadline).await?;
+        let first = self.read(primary, &deadline).await?;
         let second = match second {
-            Some(s) => Some(self.read(s).await?),
+            Some(s) => Some(self.read(s, &deadline).await?),
             None => None,
         };
         let (bucket, source_key) = (first.source.bucket.clone(), first.source.key.clone());
@@ -412,7 +517,7 @@ impl DataToolImpl {
         let call_id = call_id.to_owned();
         let format = out.as_ref().map(|o| o.format);
         let outcome = self
-            .blocking(move |limits, deadline| {
+            .blocking(permit, deadline, move |limits, deadline| {
                 compute(tool, &call, first, second, format, limits, deadline)
             })
             .await?;
@@ -428,6 +533,7 @@ impl DataToolImpl {
                     source,
                     input,
                 } = request;
+                // The one result-size check is the runner's.
                 let result = runner
                     .run(AnalysisCodeRequest {
                         call_id,
@@ -436,14 +542,15 @@ impl DataToolImpl {
                         input,
                     })
                     .await
-                    .map_err(|f| failure_sentence(f).to_owned())?;
-                let size = serde_json::to_vec(&result).map_or(usize::MAX, |b| b.len());
-                if size > MAX_ANALYSIS_RESULT_BYTES {
-                    return Err(format!(
-                        "The program returned {size} bytes; return at most {MAX_ANALYSIS_RESULT_BYTES}. Summarise inside the program."
-                    ));
-                }
-                answer.insert("result".into(), result);
+                    .map_err(|error| {
+                        let mut sentence = failure_sentence(error.failure).to_owned();
+                        if let Some(detail) = error.detail {
+                            sentence.push_str("\nProgram error output:\n");
+                            sentence.push_str(&detail);
+                        }
+                        sentence
+                    })?;
+                put_result(&mut answer, result, self.limits.max_answer_bytes);
                 Outcome {
                     answer,
                     encoded: None,
@@ -454,6 +561,8 @@ impl DataToolImpl {
             }
         };
         if let (Some(encoded), Some(out)) = (encoded, out) {
+            // Nothing is written once the clock has run out.
+            deadline.check().map_err(|e| e.to_string())?;
             let stored = self
                 .host
                 .write_object(
@@ -524,34 +633,79 @@ impl DataToolImpl {
         Ok(Value::Object(answer))
     }
 
-    async fn read(&self, source: Source) -> Result<Input, Sentence> {
-        let bytes = self
+    async fn read(&self, source: Source, deadline: &Deadline) -> Result<Input, Sentence> {
+        let read = self
             .host
-            .read_object(&source.bucket, &source.key, MAX_OFFICE_OBJECT_BYTES)
+            .read_object(&source.bucket, &source.key, MAX_OFFICE_OBJECT_BYTES);
+        let bytes = tokio::time::timeout(deadline.remaining(), read)
             .await
+            .map_err(|_| DataError::TimedOut.to_string())?
             .map_err(|e| host_sentence(&format!("read `{}`", source.key), &e))?;
         Ok(Input { bytes, source })
     }
 
-    /// Run `work` on the blocking pool, a few at a time, under the engine's
-    /// own clock.
-    async fn blocking<F>(&self, work: F) -> Result<Pending, Sentence>
+    /// A slot in the gate, waiting at most the queue timeout and never past
+    /// the call's own clock.
+    async fn admit(
+        &self,
+        deadline: &Deadline,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, Sentence> {
+        let wait = self.limits.queue_timeout.min(deadline.remaining());
+        match tokio::time::timeout(wait, Arc::clone(&self.gate.semaphore).acquire_owned()).await {
+            Ok(Ok(permit)) => Ok(permit),
+            Ok(Err(_)) => Err("The analysis engine is shutting down. Try again later.".to_owned()),
+            Err(_) => Err(
+                "The analysis engine is busy with other analyses. Try again shortly.".to_owned(),
+            ),
+        }
+    }
+
+    /// Run `work` on the blocking pool under the call's clock. The slot moves
+    /// into the closure, so it is held until the work really ends, not until
+    /// a dropped future stops waiting for it.
+    async fn blocking<F>(
+        &self,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        deadline: Deadline,
+        work: F,
+    ) -> Result<Pending, Sentence>
     where
         F: FnOnce(&Limits, &Deadline) -> DataResult<Pending> + Send + 'static,
     {
-        let _permit = ANALYSIS_GATE
-            .acquire()
-            .await
-            .map_err(|_| "The analysis engine is shutting down.".to_owned())?;
         let limits = Arc::clone(&self.limits);
         tokio::task::spawn_blocking(move || {
-            let deadline = Deadline::after(limits.deadline);
+            let _permit = permit;
             work(&limits, &deadline)
         })
         .await
         .map_err(|_| "The analysis engine stopped unexpectedly on this file.".to_owned())?
         .map_err(|e| e.to_string())
     }
+}
+
+/// Put a program's result in the answer. The answer has one byte budget
+/// (`max_answer_bytes`); a result over it is shown cut at that point, said so,
+/// with its true size, never silently.
+fn put_result(answer: &mut Map<String, Value>, result: Value, budget: usize) {
+    let text = result.to_string();
+    if text.len() <= budget {
+        answer.insert("result".into(), result);
+        return;
+    }
+    let mut end = budget;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    answer.insert("result_preview".into(), json!(&text[..end]));
+    answer.insert("result_truncated".into(), json!(true));
+    answer.insert("result_bytes".into(), json!(text.len()));
+    answer.insert(
+        "note".into(),
+        json!(format!(
+            "The program's result is {} bytes; only the first {end} bytes are shown, cut mid-way. Return a smaller result (a summary, not the data).",
+            text.len()
+        )),
+    );
 }
 
 enum Pending {
@@ -564,6 +718,25 @@ struct CodeJob {
     language: AnalysisLanguage,
     source: String,
     input: Value,
+}
+
+/// The column names `sort_by` mentions, in either spelling.
+fn sort_names(args: &Value) -> Vec<String> {
+    args.get("sort_by")
+        .and_then(Value::as_array)
+        .map(|keys| {
+            keys.iter()
+                .filter_map(|key| match key {
+                    Value::String(name) => Some(name.clone()),
+                    Value::Object(object) => object
+                        .get("column")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn chart_output(args: &Value, src: &Source) -> Result<Output, Sentence> {
@@ -949,9 +1122,10 @@ fn chart_tool(
     if table.rows == 0 {
         return Err(argument("No rows are left to draw after the filters."));
     }
-    // Scatter and histogram draw rows, so `sort_by` orders the rows. Bar, line
-    // and pie draw groups: there it orders the aggregated groups, below.
-    if matches!(kind, Kind::Scatter | Kind::Histogram) {
+    // A scatter draws rows, so `sort_by` orders the rows. Bar, line and pie
+    // draw groups, so there it orders the aggregated groups, below. A
+    // histogram's bins do not depend on row order.
+    if kind == Kind::Scatter {
         let keys = ops::parse_sort(&table, args)?;
         if !keys.is_empty() {
             table = ops::sort_table(&table, &keys, deadline)?;
@@ -1057,6 +1231,25 @@ fn chart_tool(
                     })
                     .collect::<DataResult<_>>()?
             };
+            // A sort key may name a SOURCE column (month_number to order a
+            // month_name axis): carry it through the aggregation as its min
+            // per group, so the groups can be ordered by it. Only a name
+            // that is neither a result column nor a source column errors.
+            let mut specs = specs;
+            let plotted = specs.len();
+            for name in sort_names(args) {
+                let wanted = name.trim().to_lowercase();
+                let in_result = table.names[x].to_lowercase() == wanted
+                    || specs.iter().any(|s| s.name.to_lowercase() == wanted);
+                if !in_result {
+                    let c = table.find(&name)?;
+                    specs.push(ops::AggSpec {
+                        column: Some(c),
+                        func: Func::Min,
+                        name: table.names[c].clone(),
+                    });
+                }
+            }
             let mut grouped = ops::aggregate(&table, &[x], &specs, limits, deadline)?;
             let mut notes = Vec::new();
             if let Some(top) = args.get("top_n").and_then(Value::as_u64) {
@@ -1085,7 +1278,7 @@ fn chart_tool(
             let categories: Vec<String> = (0..grouped.rows)
                 .map(|r| ops::label(&grouped.columns[0], r))
                 .collect();
-            let series = (1..grouped.width())
+            let series = (1..=plotted)
                 .map(|c| Series {
                     name: grouped.names[c].clone(),
                     values: (0..grouped.rows)
@@ -1260,9 +1453,12 @@ fn code_job(
     let types_json = json!(formats::dtype_names(&table));
     let head_bytes =
         names_json.to_string().len() + types_json.to_string().len() + SANDBOX_HEAD_BYTES;
+    // The program travels as a JSON string in the request, so its budget is
+    // its escaped length: a program of quotes and newlines is up to twice its size.
+    let source_json_len = serde_json::to_string(&source).map_or(source.len() * 2, |s| s.len());
     let byte_budget = limits
         .max_sandbox_bytes
-        .saturating_sub(source.len() + SANDBOX_ENVELOPE_BYTES);
+        .saturating_sub(source_json_len + SANDBOX_ENVELOPE_BYTES);
     // data object, columns + types arrays and their names, rows array,
     // total_rows, truncated.
     let fixed_nodes = 6 + 2 * table.width();
@@ -1310,4 +1506,68 @@ fn code_job(
         source,
         input,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::toolkits::families::office_host::{
+        OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
+    };
+
+    struct NoHost;
+
+    #[async_trait]
+    impl OfficeToolHost for NoHost {
+        async fn read_object(&self, _: &str, _: &str, _: u64) -> Result<Vec<u8>, OfficeHostError> {
+            Err(OfficeHostError::new(OfficeFailure::NotFound, "none"))
+        }
+        async fn write_object(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Vec<u8>,
+            _: bool,
+        ) -> Result<OfficeObjectWritten, OfficeHostError> {
+            Err(OfficeHostError::new(OfficeFailure::AccessRefused, "none"))
+        }
+        async fn complete(&self, _: OfficeModelRequest) -> Result<String, OfficeHostError> {
+            Err(OfficeHostError::new(OfficeFailure::NoModel, "none"))
+        }
+    }
+
+    /// The slot belongs to the blocking work, not to the future that waits
+    /// for it: abandoning the call does not free it while the work runs.
+    #[tokio::test]
+    async fn the_slot_is_held_until_the_blocking_work_ends() {
+        let gate = AnalysisGate::new(1);
+        let tool = DataToolImpl {
+            tool: DataTool::DescribeData,
+            host: Arc::new(NoHost),
+            runner: None,
+            limits: Arc::new(Limits::default()),
+            gate: gate.clone(),
+        };
+        let deadline = Deadline::after(std::time::Duration::from_secs(20));
+        let permit = tool.admit(&deadline).await.expect("slot");
+        assert_eq!(gate.available(), 0);
+        let call = tool.blocking(permit, deadline, |_, _| {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            Err(DataError::TimedOut)
+        });
+        // The caller gives up after 50 ms and drops the future.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), call)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            gate.available(),
+            0,
+            "freed while the work was still running"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        assert_eq!(gate.available(), 1, "never freed after the work ended");
+    }
 }

@@ -177,12 +177,13 @@ pub use delegated_auth::{
 pub use families::artifact::ArtifactToolAuthority;
 #[cfg(feature = "toolkit-data-analysis")]
 pub use families::data_analysis::code::{
-    AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner, AnalysisLanguage,
-    MAX_ANALYSIS_RESULT_BYTES,
+    AnalysisCodeError, AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner,
+    AnalysisLanguage, MAX_ANALYSIS_RESULT_BYTES,
 };
 #[cfg(feature = "toolkit-data-analysis")]
 pub use families::data_analysis::tools::{
-    DataAnalysisAuthority, DataAnalysisToolsetError, build_data_analysis_toolset,
+    AnalysisGate, DataAnalysisAuthority, DataAnalysisToolsetError, build_data_analysis_toolset,
+    close_analysis_gate,
 };
 pub use families::index_tools::{
     INDEXES_KEY, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
