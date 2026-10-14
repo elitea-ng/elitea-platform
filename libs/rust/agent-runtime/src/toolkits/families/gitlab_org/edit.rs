@@ -50,7 +50,77 @@ pub(in crate::toolkits) fn apply_update(
     Ok(updated)
 }
 
-fn editable(file_path: &str) -> bool {
+/// What [`apply_pairs`] did: the content after every pair that applied, how
+/// many did, and the SDK's sentence for each one that did not.
+pub(in crate::toolkits) struct PairsOutcome {
+    pub(in crate::toolkits) updated: String,
+    pub(in crate::toolkits) applied: usize,
+    pub(in crate::toolkits) warnings: Vec<String>,
+}
+
+/// The artifact toolkit's `edit_file`: pair by pair, a pair that does not
+/// apply is reported and the rest still go in (`try_apply_edit` in the
+/// SDK), where [`apply_update`] fails the whole edit. The text-editable
+/// check is the caller's, since the SDK words its refusal differently.
+pub(in crate::toolkits) fn apply_pairs(
+    file_path: &str,
+    content: &str,
+    query: &str,
+) -> Result<PairsOutcome, EditErrorCode> {
+    if query.len() > MAX_EDIT_QUERY_BYTES || content.len() > MAX_FILE_BYTES {
+        return Err(EditErrorCode::ResourceExhausted);
+    }
+    let edits = parse_markers(query)?;
+    let mut updated = content.to_owned();
+    let mut applied = 0_usize;
+    let mut warnings = Vec::new();
+    for (old, new) in edits {
+        match apply_one(&updated, &old, &new) {
+            Ok(next) => {
+                if next != updated {
+                    applied += 1;
+                    updated = next;
+                }
+            }
+            Err(EditErrorCode::Ambiguous) => {
+                let exact = updated.matches(old.as_str()).count();
+                let old_repr = crate::toolkits::families::python_repr::repr_str(&old);
+                warnings.push(if exact > 1 {
+                    format!(
+                        "Exact OLD block appears {exact} times in {file_path}; no replacement applied to avoid ambiguity. OLD value: {old_repr}"
+                    )
+                } else {
+                    format!(
+                        "Multiple candidate regions for OLD block in {file_path}; no change applied to avoid ambiguity. OLD value: {old_repr}"
+                    )
+                });
+            }
+            Err(EditErrorCode::NotFound) => {
+                let old_repr = crate::toolkits::families::python_repr::repr_str(&old);
+                warnings.push(if old.trim().is_empty() {
+                    format!(
+                        "OLD block is empty or whitespace-only; no replacement applied. OLD value: {old_repr}"
+                    )
+                } else if updated.is_empty() {
+                    "Content is empty; no replacement applied.".to_owned()
+                } else {
+                    format!("Normalized OLD block not found in {file_path}. OLD value: {old_repr}")
+                });
+            }
+            Err(other) => return Err(other),
+        }
+        if updated.len() > MAX_FILE_BYTES {
+            return Err(EditErrorCode::ResourceExhausted);
+        }
+    }
+    Ok(PairsOutcome {
+        updated,
+        applied,
+        warnings,
+    })
+}
+
+pub(in crate::toolkits) fn editable(file_path: &str) -> bool {
     let lower = file_path.to_ascii_lowercase();
     EDITABLE_EXTENSIONS
         .iter()

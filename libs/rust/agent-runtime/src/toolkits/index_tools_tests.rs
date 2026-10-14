@@ -647,9 +647,9 @@ fn bitbucket_tool(indexes: Option<Value>, selected: &[&str]) -> Value {
 
 /// Review round 2, finding 1: a family half that is skipped (a selection
 /// this runtime does not serve) no longer takes the toolkit's index tools
-/// down with it. GitHub's read-only port refuses the SDK's "all tools"
-/// default (an empty `selected_tools`): the five index tools are still
-/// served under the toolkit's name. A GitLab or Bitbucket selection naming
+/// down with it. GitHub's port refuses a selection of only
+/// `generic_github_api_call` (a `PyGithub` dispatcher it does not serve) and
+/// an index tool: `search_index` is still served under the toolkit's name. A GitLab or Bitbucket selection naming
 /// a tool the port does not serve (Bitbucket has no `delete_file`; the
 /// GitLab name is outside its port) is skipped as a family, and
 /// `search_index` beside it is still served. Without an index toolset the
@@ -657,8 +657,9 @@ fn bitbucket_tool(indexes: Option<Value>, selected: &[&str]) -> Value {
 #[tokio::test]
 async fn a_skipped_family_half_keeps_the_toolkits_index_tools() {
     let (authority, _) = lend(false);
-    // github, SDK default selection: the family is skipped, the index tools stay.
-    let version = json!({"tools": [github_tool(Some(catalog_value()), &[])]});
+    // github, a selection it serves none of: the family is skipped, the index
+    // tools stay.
+    let version = json!({"tools": [github_tool(Some(catalog_value()), &["generic_github_api_call", "search_index"])]});
     let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
         .expect("snapshot")
         .apply_policy(policy().as_ref());
@@ -673,13 +674,10 @@ async fn a_skipped_family_half_keeps_the_toolkits_index_tools() {
     .expect("materialized");
     assert_eq!(toolsets.len(), 1);
     assert_eq!(toolsets[0].name(), "repo");
-    let mut names = tool_names(&toolsets).await;
-    names.sort_unstable();
-    let mut expected: Vec<&str> = INDEX_TOOL_NAMES.to_vec();
-    expected.sort_unstable();
-    assert_eq!(names, expected);
+    assert_eq!(tool_names(&toolsets).await, ["search_index"]);
     // The same toolkit without a catalog is omitted, as before this stage.
-    let version = json!({"tools": [github_tool(None, &[])]});
+    let version =
+        json!({"tools": [github_tool(None, &["generic_github_api_call", "search_index"])]});
     let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
         .expect("snapshot")
         .apply_policy(policy().as_ref());

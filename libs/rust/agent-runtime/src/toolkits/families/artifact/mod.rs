@@ -1,5 +1,6 @@
 //! The `artifact` toolkit family (#906): claim-scoped bucket list, read, write
-//! and delete.
+//! and delete, and (`extra_tools.rs`) read-many, grep, edit, append, metadata and
+//! bucket creation.
 //!
 //! IT IS NOT LIKE ITS NEIGHBOURS, and the difference is the whole reason it did
 //! not exist until now. Every other family in this directory talks to a third
@@ -27,6 +28,7 @@
 #![allow(dead_code)] // Production toolkit assembly remains capability-gated.
 
 pub mod config;
+mod extra_tools;
 pub mod tools;
 
 use std::sync::Arc;

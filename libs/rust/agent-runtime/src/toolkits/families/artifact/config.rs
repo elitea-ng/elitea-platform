@@ -112,12 +112,11 @@ fn valid_bucket_name(bucket: &str) -> bool {
 /// `sonar`'s `validate_selection` refuses a name it does not implement, which
 /// is right for a family whose whole tool list it owns. The artifact type's
 /// stored catalogue is the SDK's, and it names tools this runtime does not
-/// serve yet (`read_multiple_files`, `get_file_metadata`, `append_data`,
-/// `create_new_bucket`, and the indexing pair). Refusing the configuration
-/// because it mentions one of them would fail materialization for every
-/// toolkit created through the product's own form — turning a partial port
-/// into a dead agent, which is exactly the outcome #906 is about. The unknown
-/// names simply select nothing; `tools.rs` binds what it has.
+/// serve (the six index tools, which the index toolset serves). Refusing the
+/// configuration because it mentions one of them would fail materialization
+/// for every toolkit created through the product's own form — turning a
+/// partial port into a dead agent, which is exactly the outcome #906 is about.
+/// The unknown names simply select nothing; `tools.rs` binds what it has.
 fn selected_tools(settings: &Map<String, Value>) -> Result<Vec<Box<str>>, ArtifactConfigError> {
     let Some(value) = settings.get("selected_tools") else {
         return Ok(Vec::new());

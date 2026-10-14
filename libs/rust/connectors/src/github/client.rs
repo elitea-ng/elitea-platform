@@ -34,16 +34,18 @@ const GITHUB_ACCEPT: &str = "application/vnd.github+json";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const USER_AGENT: &str = "elitea-worker-rust/0.1";
 
-/// The client the family builds: HTTPS only, no redirect, these timeouts.
-/// reqwest's own protocol-level retries stay at their default, as the
-/// family always had them.
+/// The client the family builds: HTTPS only, no redirect, these timeouts, and
+/// reqwest's protocol-level retries OFF for everything it sends (as ado,
+/// bitbucket and gitlab do): a retried POST or PUT is a second effect, and a
+/// retry that finishes after the first answer was lost hides the unknown
+/// outcome.
 pub const CLIENT_POLICY: ClientPolicy = ClientPolicy {
     connect_timeout: CONNECT_TIMEOUT,
     request_timeout: REQUEST_TIMEOUT,
     pool_idle_timeout: POOL_IDLE_TIMEOUT,
     max_idle_per_host: MAX_IDLE_PER_HOST,
     user_agent: USER_AGENT,
-    disable_retries: false,
+    disable_retries: true,
 };
 
 /// Stable, data-free failure categories for GitHub transport and response use.
@@ -62,6 +64,12 @@ pub enum GitHubClientErrorCode {
     ResourceExhausted,
     /// The host is not on the egress allowlist; nothing was sent.
     EgressRefused,
+    /// GitHub refused a write because the target changed or is already
+    /// there (409).
+    Conflict,
+    /// A write was sent and its outcome cannot be told (the answer was lost,
+    /// timed out or was a server error): the change may have been made.
+    UnknownOutcome,
 }
 
 /// A safe GitHub client failure.
@@ -120,6 +128,10 @@ impl fmt::Display for GitHubClientError {
             }
             GitHubClientErrorCode::EgressRefused => {
                 "the GitHub host is not on the egress allowlist"
+            }
+            GitHubClientErrorCode::Conflict => "GitHub reported a conflict with the target",
+            GitHubClientErrorCode::UnknownOutcome => {
+                "the outcome of the GitHub write is unknown and must be reconciled"
             }
         })
     }
@@ -305,6 +317,78 @@ impl GitHubRest {
         self.execute_json_request(request, max_response_bytes).await
     }
 
+    /// Send one write (or any JSON request) and return GitHub's answer
+    /// whatever its status, so the caller can read the reason a 409 or 422
+    /// carries. Only a request that could not complete is an error:
+    ///
+    /// * the egress allowlist refused it, or no connection was made: nothing
+    ///   was sent, so the failure is definite;
+    /// * anything after the request left (a timeout, a lost body) is
+    ///   [`GitHubClientErrorCode::UnknownOutcome`], because GitHub may have
+    ///   applied the change.
+    pub async fn send_effect(
+        &self,
+        method: Method,
+        path: &[&str],
+        query: &[(&str, String)],
+        body: Option<&Value>,
+        max_response_bytes: usize,
+    ) -> Result<EffectReply, GitHubClientError> {
+        let mut request = self.build_request_at(
+            GitHubRequestKind::Repository,
+            path,
+            query,
+            REQUEST_TIMEOUT,
+            SystemTime::now(),
+        )?;
+        *request.method_mut() = method;
+        if let Some(body) = body {
+            let bytes = serde_json::to_vec(body).map_err(|_| invalid_input())?;
+            request
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            *request.body_mut() = Some(bytes.into());
+        }
+        self.execute_effect(request, max_response_bytes).await
+    }
+
+    /// [`Self::send_effect`] for a request already built (GraphQL mutations).
+    pub async fn execute_effect(
+        &self,
+        request: Request,
+        max_response_bytes: usize,
+    ) -> Result<EffectReply, GitHubClientError> {
+        let mut response = self.transport.execute(request).await.map_err(|source| {
+            if source.is_refused() {
+                error(GitHubClientErrorCode::EgressRefused)
+            } else if source.is_connect() {
+                error(GitHubClientErrorCode::DependencyUnavailable)
+            } else {
+                error(GitHubClientErrorCode::UnknownOutcome)
+            }
+        })?;
+        let status = response.status();
+        let rate_limited = status == StatusCode::TOO_MANY_REQUESTS
+            || (status == StatusCode::FORBIDDEN && github_rate_limited(response.headers()));
+        // A body that cannot be read or is over the bound does not undo the
+        // status: the caller still knows what GitHub answered.
+        let body = if response.declares_more_than(max_response_bytes) {
+            Vec::new()
+        } else {
+            response
+                .bytes_within(max_response_bytes)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        };
+        Ok(EffectReply {
+            status,
+            rate_limited,
+            body,
+        })
+    }
+
     pub async fn post_graphql_json(
         &self,
         payload: &Value,
@@ -369,6 +453,90 @@ impl GitHubRest {
         } else {
             project_commit_tree_sha(&response)
         }
+    }
+}
+
+/// GitHub's answer to a write: the status, whether it was a rate limit, and
+/// the (bounded) body.
+#[derive(Debug)]
+pub struct EffectReply {
+    status: StatusCode,
+    rate_limited: bool,
+    body: Vec<u8>,
+}
+
+impl EffectReply {
+    #[must_use]
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    /// The body as JSON, when it is.
+    #[must_use]
+    pub fn json(&self) -> Option<Value> {
+        serde_json::from_slice(&self.body).ok()
+    }
+
+    /// GitHub's own reason for a refusal (`message`, then each
+    /// `errors[].message`), control characters removed and bounded, for the
+    /// sentence a tool tells the model. GitHub's validation reasons carry no
+    /// credential.
+    #[must_use]
+    pub fn reason(&self) -> Option<String> {
+        const MAX_REASON_CHARS: usize = 400;
+        let value = self.json()?;
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(message) = value.get("message").and_then(Value::as_str) {
+            parts.push(message.to_owned());
+        }
+        if let Some(errors) = value.get("errors").and_then(Value::as_array) {
+            for error in errors {
+                match error {
+                    Value::String(text) => parts.push(text.clone()),
+                    Value::Object(object) => {
+                        if let Some(message) = object.get("message").and_then(Value::as_str) {
+                            parts.push(message.to_owned());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let text: String = parts
+            .join("; ")
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(MAX_REASON_CHARS)
+            .collect();
+        (!text.trim().is_empty()).then_some(text)
+    }
+
+    /// `None` for a 2xx; else the failure this status means for a WRITE.
+    /// A 5xx is [`GitHubClientErrorCode::UnknownOutcome`]: the server may
+    /// have applied the change before failing.
+    #[must_use]
+    pub fn failure(&self) -> Option<GitHubClientError> {
+        let status = self.status;
+        if status.is_success() {
+            return None;
+        }
+        Some(error(if self.rate_limited {
+            GitHubClientErrorCode::RateLimited
+        } else if status == StatusCode::UNAUTHORIZED {
+            GitHubClientErrorCode::Authentication
+        } else if status == StatusCode::FORBIDDEN {
+            GitHubClientErrorCode::Authorization
+        } else if status == StatusCode::NOT_FOUND {
+            GitHubClientErrorCode::NotFound
+        } else if status == StatusCode::CONFLICT {
+            GitHubClientErrorCode::Conflict
+        } else if status == StatusCode::UNPROCESSABLE_ENTITY || status == StatusCode::BAD_REQUEST {
+            GitHubClientErrorCode::InvalidInput
+        } else if status.is_server_error() || status == StatusCode::REQUEST_TIMEOUT {
+            GitHubClientErrorCode::UnknownOutcome
+        } else {
+            GitHubClientErrorCode::InvalidResponse
+        }))
     }
 }
 
