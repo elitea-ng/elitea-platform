@@ -2924,6 +2924,9 @@ SET is_streaming = FALSE,
             ELSE '{}'::jsonb END
         || CASE WHEN jsonb_typeof(sqlc.arg(pipeline_static_tools)::jsonb) = 'object'
             THEN jsonb_build_object('pipeline_static_tools_v1', sqlc.arg(pipeline_static_tools)::jsonb)
+            ELSE '{}'::jsonb END
+        || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'object'
+            THEN jsonb_build_object('skipped_capabilities', sqlc.arg(skipped_capabilities)::jsonb)
             ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
 WHERE id = sqlc.arg(message_group_id)::bigint;
@@ -2939,7 +2942,10 @@ SET is_streaming = FALSE,
             'is_error', FALSE,
             'error', '',
             'invoked_skills', sqlc.arg(invoked_skills)::jsonb
-        ),
+        )
+        || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'object'
+            THEN jsonb_build_object('skipped_capabilities', sqlc.arg(skipped_capabilities)::jsonb)
+            ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
 WHERE id = sqlc.arg(message_group_id)::bigint;
 
@@ -2953,7 +2959,10 @@ SET is_streaming = FALSE,
             'is_error', FALSE,
             'error', '',
             'invoked_skills', sqlc.arg(invoked_skills)::jsonb
-        ),
+        )
+        || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'object'
+            THEN jsonb_build_object('skipped_capabilities', sqlc.arg(skipped_capabilities)::jsonb)
+            ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
 WHERE id = sqlc.arg(message_group_id)::bigint;
 

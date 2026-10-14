@@ -69,6 +69,10 @@ type currentAgentTerminal struct {
 	FullMessage        *currentAgentFullMessage
 	HITLPause          *currentAgentHITLPause
 	AuthorizationPause *currentAgentAuthorizationPause
+	// SkippedCapabilities is what the turn was configured with but could not
+	// serve (display data, sanitized), read from whichever node event ended
+	// the turn: the final message or a pause.
+	SkippedCapabilities json.RawMessage
 	// AttachmentContents rides the terminal frame rather than being read back
 	// out of the durable node event the way FullMessage is (#607). It has to:
 	// the node event is the browser-facing `full_message`, and putting every
@@ -326,6 +330,7 @@ func loadCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, projectID int
 	default:
 		return currentAgentTerminal{}, outputapp.ErrAgentExecutionResultMismatch
 	}
+	terminal.SkippedCapabilities = skippedCapabilitiesFromMetadata(event.ResponseMetadata)
 	return terminal, nil
 }
 
@@ -660,6 +665,7 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 				OutputLimitReached:  message.OutputLimitReached,
 				PipelineStaticProof: cloneJSONOrDefault(message.PipelineStaticProof, []byte("null")),
 				PipelineStaticTools: cloneJSONOrDefault(message.PipelineStaticTools, []byte("null")),
+				SkippedCapabilities: cloneJSONOrDefault(terminal.SkippedCapabilities, []byte("null")),
 				MessageGroupID:      int64(messageGroupID),
 			},
 		)
@@ -684,6 +690,7 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		rows, err := writer.FinalizeCurrentAgentMixedPause(ctx, sqlcgen.FinalizeCurrentAgentMixedPauseParams{
 			ThreadID: pause.ThreadID, HitlInterrupt: []byte(pause.Interrupt), HitlInterrupts: []byte(pause.Interrupts),
 			AuthorizationRequests: []byte(authorization.Requests), InvokedSkills: []byte(skills), MessageGroupID: int64(messageGroupID),
+			SkippedCapabilities: cloneJSONOrDefault(terminal.SkippedCapabilities, []byte("null")),
 		})
 		if err != nil || rows != 1 {
 			return fmt.Errorf("persist current agent mixed pause: %w", terminalWriteError(err))
@@ -699,11 +706,12 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		rows, err := writer.FinalizeCurrentAgentHITLPause(
 			ctx,
 			sqlcgen.FinalizeCurrentAgentHITLPauseParams{
-				ThreadID:       pause.ThreadID,
-				HitlInterrupt:  []byte(pause.Interrupt),
-				HitlInterrupts: []byte(pause.Interrupts),
-				InvokedSkills:  []byte(invokedSkills),
-				MessageGroupID: int64(messageGroupID),
+				ThreadID:            pause.ThreadID,
+				HitlInterrupt:       []byte(pause.Interrupt),
+				HitlInterrupts:      []byte(pause.Interrupts),
+				InvokedSkills:       []byte(invokedSkills),
+				MessageGroupID:      int64(messageGroupID),
+				SkippedCapabilities: cloneJSONOrDefault(terminal.SkippedCapabilities, []byte("null")),
 			},
 		)
 		if err != nil || rows != 1 {
@@ -724,6 +732,7 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 				AuthorizationRequests: []byte(pause.Requests),
 				InvokedSkills:         []byte(invokedSkills),
 				MessageGroupID:        int64(messageGroupID),
+				SkippedCapabilities:   cloneJSONOrDefault(terminal.SkippedCapabilities, []byte("null")),
 			},
 		)
 		if err != nil || rows != 1 {

@@ -9,6 +9,8 @@ SET is_streaming = FALSE,
         'is_error', FALSE,
         'error', '',
         'invoked_skills', sqlc.arg(invoked_skills)::jsonb
-    ),
+    ) || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'object'
+        THEN jsonb_build_object('skipped_capabilities', sqlc.arg(skipped_capabilities)::jsonb)
+        ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
 WHERE id = sqlc.arg(message_group_id)::bigint;

@@ -9,6 +9,7 @@ use reqwest::{Request, StatusCode};
 use serde_json::{Map, Value, json};
 
 use super::delegated_auth::delegated_authorization_requirement;
+use super::families::index_tools::{IndexToolSupport, IndexToolsWithheld};
 use super::families::openapi::client::{
     OpenApiAccessToken, OpenApiApi, OpenApiClient, OpenApiClientError, OpenApiRequest,
     OpenApiResponse, OpenApiTransport, oauth_token_lifetime,
@@ -16,7 +17,10 @@ use super::families::openapi::client::{
 use super::families::openapi::config::{OpenApiConfigErrorCode, OpenApiToolkitConfig};
 use super::families::openapi::spec::{OpenApiSpecErrorCode, parse_operations};
 use super::families::openapi::tools::build_openapi_toolset;
-use super::materialize::materialize_configured_toolsets_with_tokens_and_authorization;
+use super::materialize::{
+    materialize_configured_toolsets_reporting_refusals,
+    materialize_configured_toolsets_with_tokens_and_authorization,
+};
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::FrozenToolSnapshot;
 
@@ -393,6 +397,73 @@ async fn unsupported_configured_family_does_not_hide_runnable_openapi_toolkit() 
     let tools = toolsets[0].tools(readonly).await.expect("OpenAPI tools");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name(), "get_users_by_id");
+}
+
+/// An unported family is REPORTED to the ordinary agent path, with a machine
+/// code and a plain sentence, so the run can tell the user (the log line
+/// alone told nobody). The callers that have no notice keep the quiet skip.
+#[tokio::test]
+async fn an_unported_family_is_reported_to_the_ordinary_agent_path() {
+    let version = json!({"tools":[
+        {"id":1,"type":"not_a_toolkit_family","toolkit_name":"roadmap",
+         "settings":{"selected_tools":["get_ideas"]}}
+    ]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy(&[]),
+        &Map::new(),
+        None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NoVectorStore),
+    )
+    .await
+    .expect("an unported family does not fail the agent");
+    assert!(materialized.toolsets.is_empty());
+    assert_eq!(materialized.left_out.len(), 1);
+    let skipped = &materialized.left_out[0];
+    assert_eq!(skipped.toolkit_name(), "roadmap");
+    assert_eq!(skipped.toolkit_type(), "not_a_toolkit_family");
+    assert_eq!(skipped.reason_code(), "unsupported_toolkit_family");
+    assert!(skipped.reason().contains("not available on this worker"));
+    // The sentence the MODEL reads (seeded into the session's history).
+    assert_eq!(
+        super::left_out_toolkits_notice_text(&materialized.left_out).as_deref(),
+        Some(
+            "toolkit 'roadmap' (not_a_toolkit_family) is not enabled on this worker: this toolkit type is not available on this worker yet, so its tools were left out"
+        )
+    );
+}
+
+/// A family that is not ported but whose index tools are served says so
+/// precisely, instead of claiming the whole toolkit was left out.
+#[test]
+fn an_unported_family_with_index_tools_is_only_partly_enabled() {
+    use super::materialize::{LeftOutReason, LeftOutToolkit};
+    let toolkit = LeftOutToolkit::fixture(
+        "code",
+        "github",
+        LeftOutReason::FamilyNotPortedIndexToolsKept,
+        "only its index tools are available (its other tools are not ported)",
+    );
+    assert_eq!(toolkit.reason_code(), "index_tools_only");
+    assert_eq!(
+        super::left_out_toolkits_notice_text(&[toolkit]).as_deref(),
+        Some(
+            "toolkit 'code' (github) is only partly enabled on this worker: only its index tools are available (its other tools are not ported)"
+        )
+    );
+}
+
+#[test]
+fn notice_labels_and_lists_are_bounded_in_bytes_and_count_what_was_cut() {
+    let label = super::bounded_label(&"ж".repeat(500));
+    assert!(label.len() <= super::MAX_NOTICE_LABEL_BYTES && label.chars().all(|c| c == 'ж'));
+    let lines: Vec<String> = (0..40).map(|i| format!("line {i:02}")).collect();
+    let text = super::capped_notice_lines(lines, 32);
+    assert!(text.ends_with("(8 more not shown)"));
+    assert_eq!(text.lines().count(), 33);
 }
 
 struct FixtureTransport {

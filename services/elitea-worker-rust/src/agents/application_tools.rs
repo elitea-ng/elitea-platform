@@ -91,7 +91,6 @@ pub(crate) const PIPELINE_APPLICATION_AGENT_TYPE: &str = "pipeline";
 /// Upper bound on the children one notice names, so a version with a hundred
 /// unsupported references cannot write a hundred lines into the transcript.
 const MAX_SKIPPED_APPLICATION_CHILDREN: usize = 8;
-const MAX_SKIPPED_APPLICATION_LABEL_CHARS: usize = 96;
 const MAX_AGENT_TIERS: usize = 3;
 pub(super) const MAX_APPLICATION_TASK_BYTES: usize = 240 * 1_024;
 const MAX_AGENT_DESCRIPTION_BYTES: usize = 4 * 1_024;
@@ -2776,7 +2775,7 @@ async fn materialize_pipeline_children(
                 if skipped.len() < MAX_SKIPPED_APPLICATION_CHILDREN {
                     skipped.push(SkippedApplicationChild {
                         agent_type: PIPELINE_APPLICATION_AGENT_TYPE.to_owned(),
-                        name: bounded_skipped_label(&reference.alias),
+                        name: crate::toolkits::bounded_label(&reference.alias),
                     });
                 }
                 continue;
@@ -3309,8 +3308,8 @@ pub(crate) fn skipped_application_children(
             break;
         }
         skipped.insert(SkippedApplicationChild {
-            agent_type: bounded_skipped_label(agent_type),
-            name: bounded_skipped_label(reference.toolkit_name()),
+            agent_type: crate::toolkits::bounded_label(agent_type),
+            name: crate::toolkits::bounded_label(reference.toolkit_name()),
         });
     }
     skipped.into_iter().collect()
@@ -3337,17 +3336,7 @@ pub(crate) fn skipped_application_children_notice_text(
         .collect::<Vec<_>>();
     lines.sort_unstable();
     lines.dedup();
-    Some(lines.join("\n"))
-}
-
-/// Truncate a name or type before it reaches a notice the model reads. Both
-/// come from stored rows, and neither has a length the runtime enforces.
-fn bounded_skipped_label(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| !character.is_control())
-        .take(MAX_SKIPPED_APPLICATION_LABEL_CHARS)
-        .collect()
+    Some(crate::toolkits::capped_notice_lines(lines, 32))
 }
 
 fn application_references(

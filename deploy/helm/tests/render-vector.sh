@@ -347,7 +347,7 @@ inside="$(render $COMPLETE \
 [ "$(select_one "$inside" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE')" = "/run/elitea-vector-client/tls.crt" ] \
   && note "explicit material paths inside the chart's mount render beside mainClient" \
   || fail "explicit in-mount material paths were not rendered"
-expect_refusal "rust indexing without elitea-main's vector client" "needs elitea-main's elitea-vector client" \
+expect_refusal "rust indexing without elitea-main's vector client" "elitea-main's elitea-vector client" \
   --set worker.enabled=true --set worker.implementation=rust --set worker.indexingRuntime=rust --set vector.mainClient.enabled=false
 
 if [ "$failures" -ne 0 ]; then

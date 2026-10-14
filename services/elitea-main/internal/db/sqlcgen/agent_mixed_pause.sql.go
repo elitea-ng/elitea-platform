@@ -20,9 +20,11 @@ SET is_streaming = FALSE,
         'is_error', FALSE,
         'error', '',
         'invoked_skills', $5::jsonb
-    ),
+    ) || CASE WHEN jsonb_typeof($6::jsonb) = 'object'
+        THEN jsonb_build_object('skipped_capabilities', $6::jsonb)
+        ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
-WHERE id = $6::bigint
+WHERE id = $7::bigint
 `
 
 type FinalizeCurrentAgentMixedPauseParams struct {
@@ -31,6 +33,7 @@ type FinalizeCurrentAgentMixedPauseParams struct {
 	HitlInterrupts        []byte `db:"hitl_interrupts" json:"hitl_interrupts"`
 	AuthorizationRequests []byte `db:"authorization_requests" json:"authorization_requests"`
 	InvokedSkills         []byte `db:"invoked_skills" json:"invoked_skills"`
+	SkippedCapabilities   []byte `db:"skipped_capabilities" json:"skipped_capabilities"`
 	MessageGroupID        int64  `db:"message_group_id" json:"message_group_id"`
 }
 
@@ -41,6 +44,7 @@ func (q *Queries) FinalizeCurrentAgentMixedPause(ctx context.Context, arg Finali
 		arg.HitlInterrupts,
 		arg.AuthorizationRequests,
 		arg.InvokedSkills,
+		arg.SkippedCapabilities,
 		arg.MessageGroupID,
 	)
 	if err != nil {

@@ -45,6 +45,8 @@ RENDER=(
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )
+# The legacy pairing, stated explicitly now that rust/rust is the default.
+PYTHON=(--set worker.implementation=python --set worker.indexingRuntime=python)
 # A Rust-indexing deployment: the Rust worker, the registry, and this chart's
 # elitea-vector (whose introspection pool costs the fourth main replica, as
 # render-vector.sh explains).
@@ -55,8 +57,8 @@ RUST=(
 )
 
 # Unrolled, like render-worker.sh: the floor counts accepting sites.
-"$HELM" template t "$CHART" "${RENDER[@]}" >"$TMP/default.yaml" 2>"$TMP/default.err" \
-  && ok "the default values render" \
+"$HELM" template t "$CHART" "${RENDER[@]}" "${PYTHON[@]}" >"$TMP/default.yaml" 2>"$TMP/default.err" \
+  && ok "the explicit python/python pairing renders" \
   || bad "default does not render: $(tail -1 "$TMP/default.err")"
 "$HELM" template t "$CHART" "${RENDER[@]}" "${RUST[@]}" \
   >"$TMP/rust.yaml" 2>"$TMP/rust.err" \
@@ -106,8 +108,24 @@ PY
 }
 
 [ "$(mainenv "$TMP/default.yaml")" = "python" ] \
-  && ok "the default is written explicitly as python" \
-  || bad "the default render does not carry ELITEA_INDEXING_RUNTIME=python"
+  && ok "python indexing is written explicitly as python" \
+  || bad "the python render does not carry ELITEA_INDEXING_RUNTIME=python"
+# The shipped defaults are the Rust worker with PYTHON indexing: the chart never
+# switches to rust indexing by itself (it starts with empty indexes). A chart default
+# install has no worker and no runtime plane, where elitea-main would refuse
+# ELITEA_INDEXING_RUNTIME=rust: the dark plane is written as python.
+python3 - "$CHART/values.yaml" <<'PY' && ok "the shipped defaults are worker.implementation=rust and worker.indexingRuntime=python" || bad "the shipped worker defaults are not rust/python"
+import sys, yaml
+worker = yaml.safe_load(open(sys.argv[1]))["worker"]
+assert worker["implementation"] == "rust" and worker["indexingRuntime"] == "python", worker
+PY
+"$HELM" template t "$CHART" \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1 \
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
+  >"$TMP/dark.yaml" 2>"$TMP/dark.err" \
+  && [ "$(mainenv "$TMP/dark.yaml")" = "python" ] \
+  && ok "with no worker the rust default is written to elitea-main as python" \
+  || bad "the worker-less default does not render with ELITEA_INDEXING_RUNTIME=python: $(tail -1 "$TMP/dark.err")"
 [ "$(mainenv "$TMP/rust.yaml")" = "rust" ] \
   && ok "indexingRuntime=rust is written as rust" \
   || bad "the rust render does not carry ELITEA_INDEXING_RUNTIME=rust"
@@ -182,14 +200,60 @@ refuses 'worker.indexingRuntime must be' --set worker.indexingRuntime=golang \
   && ok "an unknown worker.indexingRuntime is refused" \
   || bad "an unknown worker.indexingRuntime is not refused"
 
-refuses 'worker.indexingRuntime=rust needs' --set worker.implementation=python --set worker.indexingRuntime=rust \
+refuses 'worker.implementation=rust' --set worker.implementation=python --set worker.indexingRuntime=rust \
   && ok "indexingRuntime=rust with the Python worker is refused" \
   || bad "indexingRuntime=rust with the Python worker is not refused"
+
+# Upgrade compatibility. Old values that only pin the Python worker render, and
+# index with python.
+"$HELM" template t "$CHART" "${RENDER[@]}" --set worker.implementation=python >"$TMP/oldpy.yaml" 2>"$TMP/oldpy.err" \
+  && [ "$(mainenv "$TMP/oldpy.yaml")" = "python" ] \
+  && ok "old values with only implementation=python still render, with python indexing" \
+  || bad "implementation=python alone does not render as python indexing: $(tail -1 "$TMP/oldpy.err")"
+# Enabling the worker WITHOUT a vector store renders, on python indexing, and
+# the release notes say how to switch.
+"$HELM" template t "$CHART" "${RENDER[@]}" >"$TMP/auto-novec.yaml" 2>"$TMP/auto-novec.err" \
+  && [ "$(mainenv "$TMP/auto-novec.yaml")" = "python" ] \
+  && ok "the Rust worker without a vector store renders with python indexing" \
+  || bad "the Rust worker without a vector store does not render as python indexing: $(tail -1 "$TMP/auto-novec.err")"
+"$HELM" install t "$CHART" --dry-run=client "${RENDER[@]}" >"$TMP/notes.txt" 2>/dev/null
+grep -q 'UPGRADE WARNING' "$TMP/notes.txt" && grep -q 'CANNOT search the existing' "$TMP/notes.txt" \
+  && grep -q 'memory, vectorstore, sandbox, delta_lake, aws, localgit' "$TMP/notes.txt" \
+  && ok "the release notes warn that agents lose index search and list the types missing on Rust" \
+  || bad "the release notes lack the upgrade warning"
+# Every prerequisite on is still NOT enough: the chart never switches to rust
+# indexing by itself.
+"$HELM" template t "$CHART" "${RENDER[@]}" --set worker.implementation=rust \
+  --set vector.enabled=true --set main.autoscaling.maxReplicas=3 \
+  --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key >"$TMP/no-auto.yaml" 2>"$TMP/no-auto.err" \
+  && [ "$(mainenv "$TMP/no-auto.yaml")" = "python" ] \
+  && ok "with every prerequisite on but no explicit choice, indexing stays python" \
+  || bad "indexing switched to rust without being asked: $(tail -1 "$TMP/no-auto.err")"
+# One source of truth: an override that disagrees with the resolver is refused.
+refuses 'disagrees with worker.indexingRuntime' --set-string main.env.ELITEA_INDEXING_RUNTIME=rust \
+  && ok "a main.env.ELITEA_INDEXING_RUNTIME override that disagrees with the resolver is refused" \
+  || bad "a disagreeing ELITEA_INDEXING_RUNTIME override is not refused"
+# The worker-off note follows the implementation and the main.env override.
+"$HELM" install t "$CHART" --dry-run=client "${RENDER[@]}" --set worker.enabled=false --set worker.implementation=python 2>/dev/null \
+  | grep -q 'assumes the Python worker' \
+  && ok "the worker-off note names Python when implementation is python" \
+  || bad "the worker-off note does not follow worker.implementation"
+"$HELM" install t "$CHART" --dry-run=client "${RENDER[@]}" --set worker.enabled=false --set-string main.env.ELITEA_WORKER_IMPLEMENTATION=python 2>/dev/null \
+  | grep -q 'assumes the Python worker' \
+  && ok "the worker-off note follows a main.env.ELITEA_WORKER_IMPLEMENTATION override" \
+  || bad "the worker-off note ignores the ELITEA_WORKER_IMPLEMENTATION override"
+# An explicit rust is never rewritten, even with nothing to run it on.
+refuses 'worker.indexingRuntime=rust is missing' --set worker.enabled=false --set worker.indexingRuntime=rust \
+  && ok "an explicit indexingRuntime=rust without a worker is refused, not rewritten" \
+  || bad "an explicit indexingRuntime=rust without a worker is not refused"
+refuses 'runtime' --set main.runtime.enabled=false --set worker.enabled=false --set worker.indexingRuntime=rust \
+  && ok "an explicit indexingRuntime=rust with the runtime plane off is refused" \
+  || bad "an explicit indexingRuntime=rust with the runtime plane off is not refused"
 
 # No vector store anywhere: neither this chart's elitea-vector nor an external
 # target. The worker would start without a vector_target and refuse every
 # index run while elitea-main keeps admitting them.
-refuses 'worker.indexingRuntime=rust needs a vector store' \
+refuses 'a vector store' \
   --set worker.implementation=rust --set worker.indexingRuntime=rust \
   && ok "indexingRuntime=rust without a vector store is refused" \
   || bad "indexingRuntime=rust without a vector store is not refused"
@@ -198,11 +262,16 @@ refuses 'worker.indexingRuntime=rust needs a vector store' \
 # worker.enabled guard that indexingRuntime=rust implies, so only the dispatch
 # plane is a new refusal. The stream is cleared so that the settings guard of the
 # configmap does not refuse first.
-refuses 'worker.indexingRuntime=rust needs main.runtime.enabled' \
+refuses 'main.runtime.enabled=true and main.runtime.indexIngestDispatch' \
   "${RUST[@]}" \
   --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= \
   && ok "indexingRuntime=rust without index ingest dispatch is refused" \
   || bad "indexingRuntime=rust without index ingest dispatch is not refused"
+
+# The extractor guard follows the resolver and says what is actually wrong.
+refuses 'worker.extractor.enabled needs worker.indexingRuntime=rust' --set worker.extractor.enabled=true \
+  && ok "the extractor without rust indexing is refused with an accurate message" \
+  || bad "the extractor guard message is wrong or missing"
 
 # The cap is validated: 0 must not silently become the default, and a
 # negative, fractional or non-numeric value is refused with the key's name.

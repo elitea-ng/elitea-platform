@@ -648,6 +648,9 @@ jobs:
           COMPOSE_BIN: docker compose
           CI: "true"
           STANDALONE_SKIP_BUILD: "1"
+          # Explicit: standalone-stack.sh now defaults to the Rust worker, and this job
+          # builds and tests the Python one.
+          STANDALONE_WORKER: python
           CHAT_STREAM_PROJECT: elitea-chatstream-ci
           CHAT_STREAM_PORT: "8084"
           MOCK_LLM_CHUNK_DELAY_MS: "120"
@@ -1190,6 +1193,9 @@ jobs:
           COMPOSE_BIN: docker compose
           CI: "true"
           STANDALONE_SKIP_BUILD: "1"
+          # Explicit: standalone-stack.sh now defaults to the Rust worker, and this job
+          # builds and tests the Python one.
+          STANDALONE_WORKER: python
           DEEPWIKI_STREAM_PROJECT: elitea-deepwiki-ci
           DEEPWIKI_STREAM_PORT: "8087"
           PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
@@ -1247,6 +1253,9 @@ jobs:
           COMPOSE_BIN: docker compose
           CI: "true"
           STANDALONE_SKIP_BUILD: "1"
+          # Explicit: standalone-stack.sh now defaults to the Rust worker, and this job
+          # builds and tests the Python one.
+          STANDALONE_WORKER: python
           STANDALONE_PROJECT: elitea-native-conformance-ci
           STANDALONE_PORT: "8088"
         run: bash deploy/scripts/native-conformance.sh run
@@ -1315,6 +1324,9 @@ jobs:
           COMPOSE_BIN: docker compose
           CI: "true"
           STANDALONE_SKIP_BUILD: "1"
+          # Explicit: standalone-stack.sh now defaults to the Rust worker, and this job
+          # builds and tests the Python one.
+          STANDALONE_WORKER: python
           INDEX_STREAM_PROJECT: elitea-indexstream-ci
           INDEX_STREAM_PORT: "8087"
           INDEX_STREAM_MOCK_PORT: "8091"

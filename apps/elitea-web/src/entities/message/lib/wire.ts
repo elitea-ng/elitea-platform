@@ -151,6 +151,8 @@ export interface MessageGroupMetaWire {
   readonly execution_generation?: string;
   readonly pipeline_static_v1?: unknown;
   readonly pipeline_static_tools_v1?: unknown;
+  /** What the turn was configured with but could not serve (worker `skipped_capabilities`); see `features/chat-messages/lib/skippedCapabilities`. */
+  readonly skipped_capabilities?: unknown;
   readonly interaction_uuid?: string;
   readonly references?: unknown;
   readonly is_error?: boolean;

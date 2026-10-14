@@ -22,8 +22,9 @@ use super::families::jira::tools::{
     JiraToolsetErrorCode, build_jira_toolset, test_build_with_api, test_catalog,
 };
 use super::materialize::{
-    ToolsetMaterializationErrorCode, materialize_configured_toolsets_reporting_refusals,
-    materialize_configured_toolsets_with_tokens_and_authorization, refused_toolkits_notice_text,
+    ToolsetMaterializationErrorCode, left_out_toolkits_notice_text,
+    materialize_configured_toolsets_reporting_refusals,
+    materialize_configured_toolsets_with_tokens_and_authorization,
 };
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::FrozenToolSnapshot;
@@ -1286,8 +1287,8 @@ async fn a_refused_setting_is_named_to_the_user_not_silently_skipped() {
         1,
         "only the served toolkit binds"
     );
-    assert_eq!(materialized.refused.len(), 3);
-    let notice = refused_toolkits_notice_text(&materialized.refused).expect("a notice");
+    assert_eq!(materialized.left_out.len(), 3);
+    let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
     assert_eq!(
         notice,
         [
