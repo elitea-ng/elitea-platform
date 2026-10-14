@@ -311,10 +311,9 @@ impl DirectToolkitRuntime {
                         McpMaterializationErrorCode::DependencyUnavailable => {
                             failure(DirectToolkitRuntimeErrorCode::DependencyUnavailable, true)
                         }
-                        McpMaterializationErrorCode::UnsupportedAuthority
-                        | McpMaterializationErrorCode::RetiredSseEndpoint => {
-                            failure(DirectToolkitRuntimeErrorCode::UnsupportedToolkit, false)
-                        }
+                        // Unsupported authority, retired SSE and the OAuth-app refusals:
+                        // none can succeed on retry.
+                        _ => failure(DirectToolkitRuntimeErrorCode::UnsupportedToolkit, false),
                     })?;
                 if let Some(requirement) = authorization
                     .requirement_for_direct(request.toolkit_name(), request.tool_name())

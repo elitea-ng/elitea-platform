@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 )
@@ -55,6 +56,79 @@ func mcpDiscoveryHeaders(headers map[string]string, tokens map[string]mcpDiscove
 
 var errMCPDiscoveryMetadata = errors.New("MCP authorization metadata is unavailable")
 
+// mcpMetadataSource fetches PUBLIC authorization metadata. The tool sync reads
+// through the handler's default client; the OAuth proxy reads through the
+// authorization egress guard, with a per-fetch timeout, because its answer
+// decides where a stored client secret may be sent.
+type mcpMetadataSource struct {
+	h        *Handler
+	guarded  bool
+	perFetch time.Duration
+}
+
+const (
+	mcpDiscoveryFetchTimeout = 5 * time.Second
+	mcpSyncMaxServers        = 16
+	mcpBindingMaxServers     = 4
+)
+
+func (h *Handler) syncMetadataSource() mcpMetadataSource { return mcpMetadataSource{h: h} }
+
+func (h *Handler) authorizationMetadataSource() mcpMetadataSource {
+	return mcpMetadataSource{h: h, guarded: true, perFetch: mcpDiscoveryFetchTimeout}
+}
+
+// mcpDiscovered is a fail-closed walk of protected-resource then
+// authorization-server metadata.
+type mcpDiscovered struct {
+	resource    map[string]any
+	metadataURL string
+	servers     []string
+	// issuers holds the validated metadata of the servers that answered, in
+	// order. With all=false it holds only the first server's.
+	issuers []map[string]any
+}
+
+// discover is the one implementation of the walk, shared by the tool sync and
+// the OAuth proxy's token-endpoint binding. Every document must validate: a
+// server list that is empty, over maxServers or holds an issuer with a query is
+// refused outright, and so is a first issuer that does not answer. With
+// all=true an issuer that does not answer is skipped, and at least one must.
+func (s mcpMetadataSource) discover(
+	ctx context.Context, endpoint *url.URL, advertised string, maxServers int, all bool,
+) (mcpDiscovered, error) {
+	resource, metadataURL, err := s.protected(ctx, endpoint, advertised)
+	if err != nil {
+		return mcpDiscovered{}, err
+	}
+	servers, ok := boundedMCPMetadataList(resource["authorization_servers"])
+	if !ok || len(servers) == 0 || len(servers) > maxServers {
+		return mcpDiscovered{}, errMCPDiscoveryMetadata
+	}
+	for _, server := range servers {
+		issuer, err := validateMCPMetadataURL(server)
+		if err != nil || issuer.RawQuery != "" {
+			return mcpDiscovered{}, errMCPDiscoveryMetadata
+		}
+	}
+	found := mcpDiscovered{resource: resource, metadataURL: metadataURL, servers: servers}
+	for _, server := range servers {
+		metadata, err := s.authorizationServer(ctx, server)
+		if err == nil {
+			found.issuers = append(found.issuers, metadata)
+		} else if !all {
+			return mcpDiscovered{}, err
+		}
+		if !all {
+			break
+		}
+	}
+	if len(found.issuers) == 0 {
+		return mcpDiscovered{}, errMCPDiscoveryMetadata
+	}
+	return found, nil
+}
+
 // Resolve public metadata without any invocation headers or credentials.
 // Only fields used by the existing consent contract cross back to the browser.
 func (h *Handler) mcpDiscoveryAuthorization(ctx context.Context, endpoint *url.URL, cause error) (map[string]any, error) {
@@ -62,39 +136,25 @@ func (h *Handler) mcpDiscoveryAuthorization(ctx context.Context, endpoint *url.U
 	if !errors.As(cause, &required) {
 		return nil, cause
 	}
-	resource, metadataURL, err := h.mcpProtectedMetadata(ctx, endpoint, required.ResourceMetadataURL())
+	found, err := h.syncMetadataSource().discover(ctx, endpoint, required.ResourceMetadataURL(), mcpSyncMaxServers, false)
 	if err != nil {
 		return nil, err
 	}
-	servers, ok := boundedMCPMetadataList(resource["authorization_servers"])
-	if !ok || len(servers) == 0 || len(servers) > 16 {
-		return nil, errMCPDiscoveryMetadata
-	}
-	for _, server := range servers {
-		issuer, err := validateMCPMetadataURL(server)
-		if err != nil || issuer.RawQuery != "" {
-			return nil, errMCPDiscoveryMetadata
-		}
-	}
-	auth, err := h.mcpAuthorizationServerMetadata(ctx, servers[0])
-	if err != nil {
-		return nil, err
-	}
-	projected := map[string]any{"resource": endpoint.String(), "authorization_servers": servers, "oauth_authorization_server": auth}
-	if scopes, ok := boundedMCPMetadataList(resource["scopes_supported"]); ok {
+	projected := map[string]any{"resource": endpoint.String(), "authorization_servers": found.servers, "oauth_authorization_server": found.issuers[0]}
+	if scopes, ok := boundedMCPMetadataList(found.resource["scopes_supported"]); ok {
 		projected["scopes_supported"] = scopes
 	}
-	return map[string]any{"server_url": endpoint.String(), "resource_metadata_url": metadataURL, "resource_metadata": projected}, nil
+	return map[string]any{"server_url": endpoint.String(), "resource_metadata_url": found.metadataURL, "resource_metadata": projected}, nil
 }
 
-func (h *Handler) mcpProtectedMetadata(ctx context.Context, endpoint *url.URL, advertised string) (map[string]any, string, error) {
+func (s mcpMetadataSource) protected(ctx context.Context, endpoint *url.URL, advertised string) (map[string]any, string, error) {
 	candidates := []string{advertised}
 	if advertised == "" {
 		base := endpoint.Scheme + "://" + endpoint.Host
 		candidates = []string{base + "/.well-known/oauth-protected-resource" + endpoint.EscapedPath(), base + "/.well-known/oauth-protected-resource"}
 	}
 	for _, candidate := range candidates {
-		metadata, err := h.readMCPPublicMetadata(ctx, candidate)
+		metadata, err := s.read(ctx, candidate)
 		if err != nil {
 			continue
 		}
@@ -108,6 +168,10 @@ func (h *Handler) mcpProtectedMetadata(ctx context.Context, endpoint *url.URL, a
 }
 
 func (h *Handler) mcpAuthorizationServerMetadata(ctx context.Context, rawIssuer string) (map[string]any, error) {
+	return h.syncMetadataSource().authorizationServer(ctx, rawIssuer)
+}
+
+func (s mcpMetadataSource) authorizationServer(ctx context.Context, rawIssuer string) (map[string]any, error) {
 	issuer, err := validateMCPMetadataURL(rawIssuer)
 	if err != nil {
 		return nil, err
@@ -118,7 +182,7 @@ func (h *Handler) mcpAuthorizationServerMetadata(ctx context.Context, rawIssuer 
 	path := strings.TrimRight(issuer.EscapedPath(), "/")
 	candidates := []string{base + "/.well-known/oauth-authorization-server" + path, base + path + "/.well-known/openid-configuration"}
 	for _, candidate := range candidates {
-		metadata, err := h.readMCPPublicMetadata(ctx, candidate)
+		metadata, err := s.read(ctx, candidate)
 		if err != nil {
 			continue
 		}
@@ -155,17 +219,32 @@ func (h *Handler) mcpAuthorizationServerMetadata(ctx context.Context, rawIssuer 
 	return nil, errMCPDiscoveryMetadata
 }
 
-func (h *Handler) readMCPPublicMetadata(ctx context.Context, address string) (map[string]any, error) {
+func (s mcpMetadataSource) read(ctx context.Context, address string) (map[string]any, error) {
 	endpoint, err := validateMCPMetadataURL(address)
 	if err != nil {
 		return nil, err
+	}
+	if s.perFetch > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.perFetch)
+		defer cancel()
+	}
+	if s.guarded && s.h.mcpAuthorizationGuard != nil {
+		if err := s.h.mcpAuthorizationGuard.Validate(ctx, endpoint.String()); err != nil {
+			return nil, errMCPDiscoveryMetadata
+		}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return nil, errMCPDiscoveryMetadata
 	}
 	request.Header.Set("Accept", "application/json")
-	response, err := h.doMCPProxyRequest(request)
+	var response *http.Response
+	if s.guarded {
+		response, err = s.h.doMCPAuthorizationRequest(request)
+	} else {
+		response, err = s.h.doMCPProxyRequest(request)
+	}
 	if err != nil {
 		return nil, errMCPDiscoveryMetadata
 	}

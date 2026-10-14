@@ -65,20 +65,22 @@ impl DelegatedAuthorizationRequirement {
     /// the authorization browser flow runs against the registered app. Main
     /// holds the secret and performs the code exchange; the worker never mints
     /// a token from it. Without discovered metadata there is no authorization
-    /// server to name, so the requirement is returned as it was.
-    #[must_use]
+    /// server to name, so the requirement is returned unchanged and counts as
+    /// done. If the app would break the metadata limits the flag is false and
+    /// the requirement is as it was, so the caller can refuse rather than
+    /// silently drop the app.
     pub fn with_oauth_client(
         self,
         client_id: &str,
         secret_present: bool,
         scopes: &[String],
         configuration_uuid: Option<&str>,
-    ) -> Self {
+    ) -> (Self, bool) {
         let Some(mut metadata) = self.resource_metadata().cloned() else {
-            return self;
+            return (self, true);
         };
         let Some(object) = metadata.as_object_mut() else {
-            return self;
+            return (self, true);
         };
         let scopes = scopes.iter().map(|scope| json!(scope)).collect();
         object.insert(
@@ -88,7 +90,7 @@ impl DelegatedAuthorizationRequirement {
         if let Some(uuid) = configuration_uuid {
             object.insert("configuration_uuid".to_owned(), json!(uuid));
         }
-        self.with_valid_resource_metadata(metadata)
+        self.try_with_resource_metadata(metadata)
     }
 
     /// Fetch only public endpoints. Do not fetch a token or call the toolkit.

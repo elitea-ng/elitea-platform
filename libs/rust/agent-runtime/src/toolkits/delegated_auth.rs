@@ -344,14 +344,15 @@ impl DelegatedAuthorizationRequirement {
         valid_requirement(&self).then_some(self)
     }
 
-    /// Attach metadata only when it is valid, otherwise return `self` as it
-    /// was. The other fields are already valid, so nothing is cloned to check.
+    /// Attach metadata only when it is valid. The flag says whether it was
+    /// attached; when not, the requirement is returned as it was.
     #[must_use]
-    pub fn with_valid_resource_metadata(mut self, resource_metadata: Value) -> Self {
-        if valid_resource_metadata(&resource_metadata) {
+    pub fn try_with_resource_metadata(mut self, resource_metadata: Value) -> (Self, bool) {
+        let valid = valid_resource_metadata(&resource_metadata);
+        if valid {
             self.resource_metadata = Some(resource_metadata);
         }
-        self
+        (self, valid)
     }
 
     /// Compare the frozen authority, not the optional discovered display data.

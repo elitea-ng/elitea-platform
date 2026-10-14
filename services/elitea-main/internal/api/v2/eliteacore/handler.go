@@ -73,7 +73,13 @@ type Handler struct {
 	// The pre-built MCP server catalogue and the vault holding its client
 	// secrets (mcp_prebuilt_resolution.go). Both nil unless
 	// WithPrebuiltMCPCatalogue is applied, in which case resolution is a no-op.
-	prebuiltMCP      *mcpregistry.PrebuiltStore
+	prebuiltMCP     prebuiltLookup
+	mcpBindings     mcpBindingCache
+	mcpBindingClock func() time.Time
+	// mcpDiscoveryFetchTimeout overrides the per-fetch discovery timeout (tests).
+	mcpDiscoveryFetchTimeout time.Duration
+	// mcpProxyBudget overrides the overall OAuth proxy budget (tests).
+	mcpProxyBudget   time.Duration
 	prebuiltMCPVault PrebuiltSecretReader
 	delegatedAuth    DelegatedAuthToolkitSettingsResolver
 	dcrClients       MCPDCRClients

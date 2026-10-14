@@ -81,6 +81,12 @@ pub enum McpMaterializationErrorCode {
     /// server refuses it (405/410). Retrying cannot succeed; the toolkit must
     /// be pointed at the streamable HTTP endpoint (`…/mcp`) instead.
     RetiredSseEndpoint,
+    /// A confidential OAuth app (`client_id` with `client_secret`) needs a
+    /// saved toolkit: Main holds the secret and finds it by the toolkit's id.
+    SavedToolkitRequired,
+    /// The OAuth app could not be attached to the authorization request, so
+    /// signing in would silently use the wrong client. Refused, not dropped.
+    OAuthAppUnattachable,
 }
 
 /// A stable, data-free remote MCP assembly failure.
@@ -127,11 +133,39 @@ impl fmt::Display for McpMaterializationError {
             }
             McpMaterializationErrorCode::DependencyUnavailable => "the MCP server is unavailable",
             McpMaterializationErrorCode::RetiredSseEndpoint => RETIRED_SSE_MESSAGE,
+            McpMaterializationErrorCode::SavedToolkitRequired => SAVED_TOOLKIT_REQUIRED_MESSAGE,
+            McpMaterializationErrorCode::OAuthAppUnattachable => OAUTH_APP_UNATTACHABLE_MESSAGE,
         })
     }
 }
 
 impl std::error::Error for McpMaterializationError {}
+
+impl McpMaterializationError {
+    /// Data-free text that is safe and useful to show for the codes whose
+    /// cause the user can fix; `None` for every other code.
+    #[must_use]
+    pub const fn visible_message(&self) -> Option<&'static str> {
+        match self.code {
+            McpMaterializationErrorCode::RetiredSseEndpoint => Some(RETIRED_SSE_MESSAGE),
+            McpMaterializationErrorCode::SavedToolkitRequired => {
+                Some(SAVED_TOOLKIT_REQUIRED_MESSAGE)
+            }
+            McpMaterializationErrorCode::OAuthAppUnattachable => {
+                Some(OAUTH_APP_UNATTACHABLE_MESSAGE)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Text for [`McpMaterializationErrorCode::SavedToolkitRequired`].
+pub const SAVED_TOOLKIT_REQUIRED_MESSAGE: &str = "an MCP server with a client secret needs a \
+     saved toolkit: save the toolkit, then run it again so the secret can be used for sign-in";
+
+/// Text for [`McpMaterializationErrorCode::OAuthAppUnattachable`].
+pub const OAUTH_APP_UNATTACHABLE_MESSAGE: &str = "the MCP server's OAuth client settings are too \
+     large to send with the sign-in request; shorten the client id or scopes";
 
 /// Data-free text for [`McpMaterializationErrorCode::RetiredSseEndpoint`],
 /// shared with the assembly error mappers so every surface says the same.
@@ -143,7 +177,7 @@ pub const RETIRED_SSE_MESSAGE: &str = "the MCP server no longer serves the legac
 /// The SDK uses these only to identify the OAuth app in the authorization-code
 /// flow (it never runs a client-credentials grant), and the worker follows:
 /// the secret value is never read into this process.
-struct OAuthClient {
+pub(super) struct OAuthClient {
     client_id: String,
     secret_present: bool,
     configuration_uuid: Option<String>,
@@ -188,8 +222,13 @@ impl RemoteMcpConfig {
         }
         let settings = reference.settings().ok_or_else(invalid_configuration)?;
         let prebuilt = parse_mcp_authority(reference.tool_type())?;
-        let oauth_client = parse_oauth_client(settings)?;
         let toolkit_id = reference.tool_id();
+        // An internal builder's identity comes only from Main's materializer.
+        let oauth_client = if reference.is_internal_builder() {
+            None
+        } else {
+            parse_oauth_client(settings, toolkit_id.is_some())?
+        };
         let requested_scopes = parse_requested_scopes(settings)?;
         let endpoint = parse_endpoint(settings)?;
         let timeout = Duration::from_secs(parse_bounded_integer(
@@ -256,7 +295,7 @@ impl RemoteMcpConfig {
             access_token,
             // Identity comes only from Main's materializer for an internal
             // builder; it is never offered a registered OAuth app.
-            oauth_client: oauth_client.filter(|_| !reference.is_internal_builder()),
+            oauth_client,
             toolkit_id,
             // An internal builder's bearer is minted per execution, so its
             // listing could never be reused: caching it would only pin memory.
@@ -1011,8 +1050,9 @@ fn parse_mcp_authority(tool_type: &str) -> Result<bool, McpMaterializationError>
 /// Accepts the SDK's `client_id` / `client_secret` pair without reading the
 /// secret. Blank values are unset; a secret with no client id names no app and
 /// is refused rather than dropped; a non-string value is a configuration error.
-fn parse_oauth_client(
+pub(super) fn parse_oauth_client(
     settings: &Map<String, Value>,
+    has_toolkit_id: bool,
 ) -> Result<Option<OAuthClient>, McpMaterializationError> {
     let text = |key: &str| -> Result<Option<&str>, McpMaterializationError> {
         match settings.get(key) {
@@ -1031,7 +1071,8 @@ fn parse_oauth_client(
     let secret_present = match settings.get("client_secret") {
         None | Some(Value::Null) => false,
         Some(Value::String(value)) => !value.trim().is_empty(),
-        Some(Value::Object(_)) => true,
+        // Main resolves only text (`{{secret.NAME}}` or a literal); another
+        // shape would be dropped there and the sign-in would run without it.
         Some(_) => return Err(invalid_configuration()),
     };
     let Some(client_id) = client_id else {
@@ -1041,6 +1082,9 @@ fn parse_oauth_client(
             Ok(None)
         };
     };
+    if secret_present && !has_toolkit_id {
+        return Err(saved_toolkit_required());
+    }
     Ok(Some(OAuthClient {
         client_id: client_id.to_owned(),
         secret_present,
@@ -1345,12 +1389,23 @@ fn finish_authorization(config: &RemoteMcpConfig, error: &mut McpMaterialization
     };
     let mut requirement = *requirement;
     if let Some(client) = &config.oauth_client {
-        requirement = requirement.with_oauth_client(
+        let (attached, ok) = requirement.with_oauth_client(
             &client.client_id,
             client.secret_present,
             &config.requested_scopes,
             client.configuration_uuid.as_deref(),
         );
+        if !ok {
+            // Dropping the app would send the user to sign in with a
+            // different client than the one configured.
+            tracing::warn!(
+                event = "mcp_oauth_app_unattachable",
+                "the OAuth app exceeds the authorization metadata limits"
+            );
+            error.code = McpMaterializationErrorCode::OAuthAppUnattachable;
+            return;
+        }
+        requirement = attached;
     }
     error.authorization = Some(Box::new(requirement.with_toolkit_id(config.toolkit_id)));
 }
@@ -1643,6 +1698,13 @@ const fn unsupported_authority() -> McpMaterializationError {
 const fn resource_exhausted() -> McpMaterializationError {
     McpMaterializationError {
         code: McpMaterializationErrorCode::ResourceExhausted,
+        authorization: None,
+    }
+}
+
+const fn saved_toolkit_required() -> McpMaterializationError {
+    McpMaterializationError {
+        code: McpMaterializationErrorCode::SavedToolkitRequired,
         authorization: None,
     }
 }

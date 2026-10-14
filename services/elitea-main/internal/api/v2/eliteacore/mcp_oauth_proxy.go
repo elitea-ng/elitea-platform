@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -45,7 +46,11 @@ type mcpOAuthProxyRequest struct {
 	ToolkitID                  json.RawMessage `json:"toolkit_id,omitempty"`
 	ToolkitType                string          `json:"toolkit_type,omitempty"`
 	ConfigurationID            string          `json:"configuration_uuid,omitempty"`
-	UsedDCR                    bool            `json:"used_dcr,omitempty"`
+	// ResourceMetadataURL is the protected-resource metadata URL the challenge
+	// advertised. It is a hint: Main uses it only when it is same-origin as the
+	// toolkit's own URL, and otherwise falls back to the well-known locations.
+	ResourceMetadataURL string `json:"resource_metadata_url,omitempty"`
+	UsedDCR             bool   `json:"used_dcr,omitempty"`
 }
 
 type mcpDCRProxyRequest struct {
@@ -102,7 +107,15 @@ func (h *Handler) mcpOAuthProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	credentials, err := h.resolveMCPOAuthCredentials(r.Context(), chi.URLParam(r, "projectID"), tokenEndpoint, body)
+	// One budget covers discovery and the exchange: the exchange gets whatever
+	// the credential resolution left.
+	budget := mcpOAuthProxyTimeout
+	if h.mcpProxyBudget > 0 {
+		budget = h.mcpProxyBudget
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
+	defer cancel()
+	credentials, err := h.resolveMCPOAuthCredentials(ctx, chi.URLParam(r, "projectID"), tokenEndpoint, body)
 	if err != nil {
 		var resolutionError *mcpOAuthResolutionError
 		if errors.As(err, &resolutionError) {
@@ -136,8 +149,6 @@ func (h *Handler) mcpOAuthProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), mcpOAuthProxyTimeout)
-	defer cancel()
 	httpRequest, err := http.NewRequestWithContext(
 		ctx, http.MethodPost, tokenEndpoint.String(), strings.NewReader(form.Encode()),
 	)
@@ -413,6 +424,10 @@ func (h *Handler) resolveMCPOAuthCredentials(
 	if err != nil {
 		return mcpOAuthCredentials{}, &mcpOAuthResolutionError{http.StatusBadRequest, "toolkit_type_mismatch"}
 	}
+	// Whose secret is it? Resolve fills a blank client_secret from the
+	// catalogue's vault, and that secret belongs to the operator, not to the
+	// toolkit's editor.
+	ownSecret := firstOAuthText(oauthSettingsLayers(resolved.Settings), "client_secret") != ""
 	settings, err := h.resolvePrebuiltSettings(ctx, resolved.Settings, effectiveType)
 	if err != nil {
 		return mcpOAuthCredentials{}, &mcpOAuthResolutionError{http.StatusServiceUnavailable, "prebuilt_catalogue_unavailable"}
@@ -431,9 +446,25 @@ func (h *Handler) resolveMCPOAuthCredentials(
 	if needsStoredScope {
 		credentials.scope = firstOAuthScope(layers)
 	}
-	if storedSecret != "" && !oauthTokenEndpointIsBound(tokenEndpoint, layers) &&
-		!h.mcpDiscoveryBindsTokenEndpoint(ctx, effectiveType, settings, tokenEndpoint) {
-		return mcpOAuthCredentials{}, &mcpOAuthResolutionError{http.StatusBadRequest, "untrusted_token_endpoint"}
+	if storedSecret != "" {
+		catalogueSecret := !ownSecret && mcpregistry.IsPrebuiltToolkitType(effectiveType)
+		// A catalogue secret is released only to the endpoint the catalogue's
+		// own server advertises: the toolkit's editable settings never bind it.
+		bound := !catalogueSecret && oauthTokenEndpointIsBound(tokenEndpoint, layers)
+		if !bound {
+			bound = h.mcpDiscoveryBindsTokenEndpoint(ctx, mcpBindingRequest{
+				projectID:     projectID,
+				toolkitID:     toolkitID,
+				toolkitType:   effectiveType,
+				settings:      settings,
+				catalogue:     catalogueSecret,
+				tokenEndpoint: tokenEndpoint,
+				advertised:    body.ResourceMetadataURL,
+			})
+		}
+		if !bound {
+			return mcpOAuthCredentials{}, &mcpOAuthResolutionError{http.StatusBadRequest, "untrusted_token_endpoint"}
+		}
 	}
 	return credentials, nil
 }
@@ -718,47 +749,147 @@ func safeOAuthProviderError(code string, provider map[string]any, sensitive ...s
 	return response
 }
 
-// mcpDiscoveryBindsTokenEndpoint binds a Remote MCP toolkit's stored client
-// secret to the token endpoint its own server advertises. A direct `mcp`
-// toolkit stores no token URL, so Main repeats the public discovery the worker
-// ran: the toolkit's saved URL names the protected resource, whose metadata
-// names the authorization servers, whose metadata names the token endpoint.
-// Nothing here comes from the request except the endpoint being checked, so
-// the model or a caller cannot nominate a destination for the secret.
-func (h *Handler) mcpDiscoveryBindsTokenEndpoint(
-	ctx context.Context,
-	toolkitType string,
-	settings map[string]any,
-	tokenEndpoint *url.URL,
-) bool {
-	if toolkitType != "mcp" && !mcpregistry.IsPrebuiltToolkitType(toolkitType) {
+const (
+	mcpBindingCacheTTL  = time.Hour
+	mcpBindingCacheSize = 1024
+)
+
+// mcpBindingRequest is everything the binding decision depends on. The only
+// caller-supplied fields are the endpoint being judged and an advertised
+// metadata URL that is honoured solely when same-origin with the start URL.
+type mcpBindingRequest struct {
+	projectID     int32
+	toolkitID     int32
+	toolkitType   string
+	settings      map[string]any
+	catalogue     bool
+	tokenEndpoint *url.URL
+	advertised    string
+}
+
+type mcpBindingKey struct {
+	projectID, toolkitID int32
+	startURL             string
+	catalogue            bool
+}
+
+type mcpBindingEntry struct {
+	endpoints []string
+	expires   time.Time
+}
+
+// mcpBindingCache remembers the token endpoints a toolkit's server advertised,
+// so a refresh does not re-run discovery and a brief metadata outage does not
+// strand a signed-in user. The key holds the start URL: editing the toolkit's
+// URL is a different key, and the old entries of that toolkit are dropped.
+type mcpBindingCache struct {
+	mu      sync.Mutex
+	entries map[mcpBindingKey]mcpBindingEntry
+}
+
+func (c *mcpBindingCache) lookup(key mcpBindingKey, endpoint *url.URL, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || !now.Before(entry.expires) {
 		return false
 	}
-	address, _ := settings["url"].(string)
-	resourceURL, err := validateMCPMetadataURL(address)
-	if err != nil {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(ctx, mcpOAuthProxyTimeout)
-	defer cancel()
-	resource, _, err := h.mcpProtectedMetadata(ctx, resourceURL, "")
-	if err != nil {
-		return false
-	}
-	servers, ok := boundedMCPMetadataList(resource["authorization_servers"])
-	if !ok || len(servers) == 0 || len(servers) > 16 {
-		return false
-	}
-	for _, server := range servers {
-		metadata, err := h.mcpAuthorizationServerMetadata(ctx, server)
-		if err != nil {
-			continue
-		}
-		advertised, _ := metadata["token_endpoint"].(string)
-		trusted, err := validateMCPProxyURL(advertised)
-		if err == nil && sameMCPProxyEndpoint(tokenEndpoint, trusted) {
+	for _, candidate := range entry.endpoints {
+		if trusted, err := validateMCPProxyURL(candidate); err == nil && sameMCPProxyEndpoint(endpoint, trusted) {
 			return true
 		}
 	}
 	return false
+}
+
+func (c *mcpBindingCache) store(key mcpBindingKey, endpoints []string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil || len(c.entries) >= mcpBindingCacheSize {
+		c.entries = make(map[mcpBindingKey]mcpBindingEntry)
+	}
+	for existing := range c.entries {
+		if existing.projectID == key.projectID && existing.toolkitID == key.toolkitID && existing != key {
+			delete(c.entries, existing)
+		}
+	}
+	c.entries[key] = mcpBindingEntry{endpoints: endpoints, expires: now.Add(mcpBindingCacheTTL)}
+}
+
+// mcpDiscoveryStartURL picks where discovery begins and whether the secret may
+// be released at all.
+//
+// The toolkit's own secret may follow its own saved URL: its editor chose both.
+// The catalogue's secret belongs to the operator, so it is bound only through
+// the catalogue's server, and refused when the toolkit points elsewhere.
+func (h *Handler) mcpDiscoveryStartURL(ctx context.Context, req mcpBindingRequest) (string, bool) {
+	saved, _ := req.settings["url"].(string)
+	if !req.catalogue {
+		return saved, saved != ""
+	}
+	catalogueURL, err := h.prebuiltURLFor(ctx, req.toolkitType)
+	if err != nil || catalogueURL == "" || !mcpCatalogueOriginMatches(catalogueURL, saved) {
+		return "", false
+	}
+	// A catalogue template with placeholders names only an origin; the saved
+	// URL, now known to share it, supplies the path.
+	if strings.ContainsAny(catalogueURL, "{}") {
+		return saved, true
+	}
+	return catalogueURL, true
+}
+
+// mcpDiscoveryBindsTokenEndpoint binds a Remote MCP toolkit's stored client
+// secret to the token endpoint its own server advertises. A direct `mcp`
+// toolkit stores no token URL, so Main repeats the public discovery the worker
+// ran. Nothing the caller or model supplies can nominate the destination.
+func (h *Handler) mcpDiscoveryBindsTokenEndpoint(ctx context.Context, req mcpBindingRequest) bool {
+	if req.toolkitType != "mcp" && !mcpregistry.IsPrebuiltToolkitType(req.toolkitType) {
+		return false
+	}
+	start, ok := h.mcpDiscoveryStartURL(ctx, req)
+	if !ok {
+		return false
+	}
+	resourceURL, err := validateMCPMetadataURL(start)
+	if err != nil {
+		return false
+	}
+	key := mcpBindingKey{projectID: req.projectID, toolkitID: req.toolkitID, startURL: resourceURL.String(), catalogue: req.catalogue}
+	now := time.Now
+	if h.mcpBindingClock != nil {
+		now = h.mcpBindingClock
+	}
+	if h.mcpBindings.lookup(key, req.tokenEndpoint, now()) {
+		return true
+	}
+	advertised := ""
+	if hint, err := validateMCPMetadataURL(req.advertised); err == nil && req.advertised != "" && sameMCPProxyOrigin(hint, resourceURL) {
+		advertised = req.advertised
+	}
+	source := h.authorizationMetadataSource()
+	if h.mcpDiscoveryFetchTimeout > 0 {
+		source.perFetch = h.mcpDiscoveryFetchTimeout
+	}
+	found, err := source.discover(ctx, resourceURL, advertised, mcpBindingMaxServers, true)
+	if err != nil {
+		return false
+	}
+	var endpoints []string
+	bound := false
+	for _, issuer := range found.issuers {
+		advertisedEndpoint, _ := issuer["token_endpoint"].(string)
+		trusted, err := validateMCPProxyURL(advertisedEndpoint)
+		if err != nil {
+			continue
+		}
+		endpoints = append(endpoints, advertisedEndpoint)
+		if sameMCPProxyEndpoint(req.tokenEndpoint, trusted) {
+			bound = true
+		}
+	}
+	if bound {
+		h.mcpBindings.store(key, endpoints, now())
+	}
+	return bound
 }

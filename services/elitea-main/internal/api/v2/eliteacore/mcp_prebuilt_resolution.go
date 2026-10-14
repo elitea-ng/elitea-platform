@@ -68,9 +68,17 @@ type PrebuiltSecretReader interface {
 // option rather than a required dependency.
 func WithPrebuiltMCPCatalogue(store *mcpregistry.PrebuiltStore, vault PrebuiltSecretReader) Option {
 	return func(handler *Handler) {
-		handler.prebuiltMCP = store
+		if store != nil {
+			handler.prebuiltMCP = store
+		}
 		handler.prebuiltMCPVault = vault
 	}
+}
+
+// prebuiltLookup is the read half of the catalogue store; an interface so a
+// test can stand in for the database.
+type prebuiltLookup interface {
+	Lookup(ctx context.Context, nameOrType string) (mcpregistry.PrebuiltServer, error)
 }
 
 // resolvePrebuiltSettings fills a pre-built MCP toolkit's settings from the

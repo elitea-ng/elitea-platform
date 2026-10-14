@@ -669,6 +669,7 @@ async fn malformed_scope_hints_and_inline_clients_fail_before_connecting() {
         ("client_id", json!({"id": "x"})),
         ("client_secret", json!(7)),
         ("client_secret", json!(true)),
+        ("client_secret", json!({"$secret": "vault-reference"})),
     ] {
         let mut value = settings(&[]);
         value[field] = bad;
@@ -1806,4 +1807,55 @@ fn a_blank_oauth_client_is_treated_as_unset() {
         .apply_policy(policy(&[]).as_ref());
     let reference = snapshot.iter().next().expect("reference");
     RemoteMcpConfig::parse_for_test(reference, &Map::new()).expect("blank client is unset");
+}
+
+#[test]
+fn a_secret_needs_a_saved_toolkit_but_a_public_client_does_not() {
+    // A frozen MCP row always carries an id today; this guards the parser on
+    // its own so a future unsaved toolkit cannot slip a secret marker through.
+    let confidential = oauth_client_settings();
+    let confidential = confidential.as_object().expect("settings object");
+    let error = super::mcp::parse_oauth_client(confidential, false)
+        .err()
+        .expect("an unsaved toolkit cannot name a confidential app");
+    assert_eq!(
+        error.code(),
+        McpMaterializationErrorCode::SavedToolkitRequired
+    );
+    assert!(
+        error
+            .visible_message()
+            .is_some_and(|message| message.contains("saved toolkit"))
+    );
+    assert!(super::mcp::parse_oauth_client(confidential, true).is_ok());
+
+    let mut public = confidential.clone();
+    public.insert("client_secret".to_owned(), Value::Null);
+    assert!(super::mcp::parse_oauth_client(&public, false).is_ok());
+}
+
+#[tokio::test]
+async fn an_oauth_app_that_would_break_the_metadata_limits_is_refused_not_dropped() {
+    let mut configured = oauth_client_settings();
+    // 64 scopes are admitted; the shared builder adds offline_access as a 65th.
+    configured["scopes"] = json!((0..64).map(|n| format!("scope{n}")).collect::<Vec<_>>());
+    let version = frozen("mcp", &configured);
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let error = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &DiscoveringConnector,
+        &policy(&[]),
+        &Map::new(),
+    )
+    .await
+    .err()
+    .expect("the app cannot be attached");
+    assert_eq!(
+        error.code(),
+        McpMaterializationErrorCode::OAuthAppUnattachable
+    );
+    assert!(error.authorization().is_none());
+    assert!(error.visible_message().is_some());
 }
