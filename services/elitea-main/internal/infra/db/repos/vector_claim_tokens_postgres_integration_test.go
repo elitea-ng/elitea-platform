@@ -393,92 +393,158 @@ VALUES ($1, $2, $3, clock_timestamp() - interval '1 minute', clock_timestamp() +
 	})
 }
 
-// Personal memory is refused for a claim whose conversation has more than one
-// person in it (shared/0166). The mint decides once and introspection reads it
-// back: a call with no conversation is allowed; a turn in a conversation
-// with one person is allowed; two people, or a conversation the mint cannot
-// find, are not (a doubt about privacy answers no).
-func TestPostgresVectorClaimTokenSaysWhetherPersonalMemoryIsAllowed(t *testing.T) {
+// Personal memory is allowed only for a claim in a PRIVATE conversation whose
+// only user participant is the actor, and that is re-checked at EVERY
+// introspection (nothing is stored at mint). Everything else, and any doubt,
+// is refused: no conversation (a direct toolkit call), a missing row, a public
+// conversation, another single participant, a participant added mid-run, a
+// failed lookup.
+func TestPostgresVectorClaimTokenPersonalMemoryIsRecheckedAtEveryIntrospection(t *testing.T) {
 	f := newVectorClaimFixture(t, "vector-claim-personal-memory")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	facts := func(bearer string) VectorClaimTokenFacts {
+	mintMemory := func(bearer string) {
+		t.Helper()
+		minted, err := f.store.Mint(ctx, VectorClaimTokenMint{
+			Fence:        f.fence,
+			TokenSHA256:  sha256.Sum256([]byte(bearer)),
+			Capabilities: vectorClaimCapabilities,
+			Sources:      []string{"toolkit_index", "memory"},
+			MaxLifetime:  6 * time.Hour,
+		})
+		if err != nil || !minted.Minted {
+			t.Fatalf("mint: %+v %v", minted, err)
+		}
+	}
+	allowed := func(bearer string) bool {
 		t.Helper()
 		got, err := f.store.Facts(ctx, sha256.Sum256([]byte(bearer)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return got
-	}
-	// A toolkit call has no conversation.
-	minted, err := f.mint(t, f.fence, "bearer-call")
-	if err != nil || !minted.Minted || !minted.PersonalMemoryAllowed || !facts("bearer-call").PersonalMemoryAllowed {
-		t.Fatalf("a call without a conversation: %+v %v", minted, err)
+		return got.PersonalMemoryAllowed
 	}
 
-	// An agent turn in a conversation of the execution's projection project.
+	// A direct toolkit call has no agent_execution_jobs row: not allowed.
+	mintMemory("bearer-call")
+	if allowed("bearer-call") {
+		t.Fatal("a call without a conversation was allowed personal memory")
+	}
+
 	var projection int64
 	if err := f.pool.QueryRow(ctx, `SELECT projection_project_id FROM elitea_runtime.execution_jobs WHERE execution_id = $1`, f.fence.ExecutionID).Scan(&projection); err != nil {
 		t.Fatal(err)
 	}
+	schema := fmt.Sprintf("p_%d", projection)
 	// The fixture database is private: its tenant schema is replaced by the
-	// three tables the mint reads.
+	// three tables the check reads. Actor is user 42.
 	for _, statement := range []string{
-		fmt.Sprintf(`DROP SCHEMA IF EXISTS p_%d CASCADE`, projection),
-		fmt.Sprintf(`CREATE SCHEMA p_%d`, projection),
-		`CREATE TABLE p_%[1]d.chat_conversations (id serial PRIMARY KEY, uuid uuid NOT NULL)`,
-		`CREATE TABLE p_%[1]d.chat_participants (id serial PRIMARY KEY, entity_name text NOT NULL, entity_meta jsonb NOT NULL)`,
-		`CREATE TABLE p_%[1]d.chat_participant_mapping (conversation_id int NOT NULL, participant_id int NOT NULL)`,
-		`INSERT INTO p_%[1]d.chat_participants (id, entity_name, entity_meta) VALUES
+		`DROP SCHEMA IF EXISTS @S@ CASCADE`,
+		`CREATE SCHEMA @S@`,
+		`CREATE TABLE @S@.chat_conversations (id serial PRIMARY KEY, uuid uuid NOT NULL, is_private boolean NOT NULL DEFAULT false)`,
+		`CREATE TABLE @S@.chat_participants (id serial PRIMARY KEY, entity_name text NOT NULL, entity_meta jsonb NOT NULL)`,
+		`CREATE TABLE @S@.chat_participant_mapping (conversation_id int NOT NULL, participant_id int NOT NULL)`,
+		`INSERT INTO @S@.chat_participants (id, entity_name, entity_meta) VALUES
 		    (1, 'user', '{"id": 42}'), (2, 'user', '{"id": 43}'), (3, 'application', '{"id": 7}'), (4, 'dummy', '{}')`,
-		`INSERT INTO p_%[1]d.chat_conversations (id, uuid) VALUES
-		    (1, '11111111-1111-4111-8111-111111111111'), (2, '22222222-2222-4222-8222-222222222222')`,
-		// Conversation 1: one person and an agent. Conversation 2: two people.
-		`INSERT INTO p_%[1]d.chat_participant_mapping VALUES (1, 1), (1, 3), (1, 4), (2, 1), (2, 2), (2, 3)`,
+		`INSERT INTO @S@.chat_conversations (id, uuid, is_private) VALUES
+		    (1, '11111111-1111-4111-8111-111111111111', true),
+		    (2, '22222222-2222-4222-8222-222222222222', true),
+		    (3, '33333333-3333-4333-8333-333333333333', false),
+		    (4, '44444444-4444-4444-8444-444444444444', true)`,
+		// 1: the actor alone (and an agent). 2: the actor and someone else.
+		// 3: the actor alone, but PUBLIC. 4: another person alone.
+		`INSERT INTO @S@.chat_participant_mapping VALUES (1, 1), (1, 3), (1, 4), (2, 1), (2, 2), (2, 3), (3, 1), (4, 2)`,
 	} {
-		f.exec(t, strings.ReplaceAll(statement, "p_%[1]d", fmt.Sprintf("p_%d", projection)))
+		f.exec(t, strings.ReplaceAll(statement, "@S@", schema))
 	}
-	for name, tc := range map[string]struct {
-		stream  string
-		allowed bool
-	}{
-		"one person and an agent": {"11111111-1111-4111-8111-111111111111", true},
-		"two people":              {"22222222-2222-4222-8222-222222222222", false},
-		"no such conversation":    {"33333333-3333-4333-8333-333333333333", false},
-		"not a uuid":              {"not-a-uuid", false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			// A bare agent_execution_jobs row for the execution (its foreign
-			// keys need the whole admission kernel; the mint reads two columns).
-			conn, err := f.pool.Acquire(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer conn.Release()
-			if _, err := conn.Exec(ctx, `SET session_replication_role = replica`); err != nil {
-				t.Skipf("cannot relax foreign keys for the fixture: %v", err)
-			}
-			defer func() { _, _ = conn.Exec(ctx, `SET session_replication_role = DEFAULT`) }()
-			if _, err := conn.Exec(ctx, `DELETE FROM elitea_runtime.agent_execution_jobs WHERE execution_id = $1`, f.fence.ExecutionID); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := conn.Exec(ctx, `
+
+	// A bare agent_execution_jobs row for the execution (its foreign keys need
+	// the whole admission kernel; the check reads two columns).
+	withStream := func(stream string) {
+		t.Helper()
+		conn, err := f.pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Release()
+		if _, err := conn.Exec(ctx, `SET session_replication_role = replica`); err != nil {
+			t.Skipf("cannot relax foreign keys for the fixture: %v", err)
+		}
+		defer func() { _, _ = conn.Exec(ctx, `SET session_replication_role = DEFAULT`) }()
+		if _, err := conn.Exec(ctx, `DELETE FROM elitea_runtime.agent_execution_jobs WHERE execution_id = $1`, f.fence.ExecutionID); err != nil {
+			t.Fatal(err)
+		}
+		if stream == "" {
+			return
+		}
+		if _, err := conn.Exec(ctx, `
 INSERT INTO elitea_runtime.agent_execution_jobs
     (execution_id, generation, capability_id, input_bundle_id, request_entry_id,
      client_stream_id, client_message_id, client_execution_generation, sio_event)
 VALUES ($1, $2, 'agent.execute.application.v1', 'bundle', 'entry', $3, 'm', 'g', 'chat_predict')`,
-				f.fence.ExecutionID, int64(f.fence.Generation), tc.stream); err != nil {
-				t.Fatal(err)
-			}
-			bearer := "bearer-" + name
-			minted, err := f.mint(t, f.fence, bearer)
-			if err != nil || !minted.Minted {
-				t.Fatalf("mint: %+v %v", minted, err)
-			}
-			if minted.PersonalMemoryAllowed != tc.allowed || facts(bearer).PersonalMemoryAllowed != tc.allowed {
-				t.Fatalf("allowed: minted=%v facts=%v, want %v", minted.PersonalMemoryAllowed, facts(bearer).PersonalMemoryAllowed, tc.allowed)
+			f.fence.ExecutionID, int64(f.fence.Generation), stream); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mintMemory("bearer")
+	for name, tc := range map[string]struct {
+		stream  string
+		allowed bool
+	}{
+		"private, the actor alone and an agent": {"11111111-1111-4111-8111-111111111111", true},
+		"private, two people":                   {"22222222-2222-4222-8222-222222222222", false},
+		"public conversation":                   {"33333333-3333-4333-8333-333333333333", false},
+		"private, another single participant":   {"44444444-4444-4444-8444-444444444444", false},
+		"no such conversation":                  {"55555555-5555-4555-8555-555555555555", false},
+		"not a uuid":                            {"not-a-uuid", false},
+		"missing agent_execution_jobs row":      {"", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			withStream(tc.stream)
+			if got := allowed("bearer"); got != tc.allowed {
+				t.Fatalf("allowed = %v, want %v", got, tc.allowed)
 			}
 		})
 	}
+
+	t.Run("a participant added mid-run withdraws it at the next introspection", func(t *testing.T) {
+		withStream("11111111-1111-4111-8111-111111111111")
+		if !allowed("bearer") {
+			t.Fatal("precondition: allowed")
+		}
+		f.exec(t, strings.ReplaceAll(`INSERT INTO @S@.chat_participant_mapping VALUES (1, 2)`, "@S@", schema))
+		if allowed("bearer") {
+			t.Fatal("still allowed after a second person joined")
+		}
+	})
+
+	t.Run("a conversation made public mid-run withdraws it", func(t *testing.T) {
+		withStream("11111111-1111-4111-8111-111111111111")
+		f.exec(t, strings.ReplaceAll(`DELETE FROM @S@.chat_participant_mapping WHERE conversation_id = 1 AND participant_id = 2`, "@S@", schema))
+		if !allowed("bearer") {
+			t.Fatal("precondition: allowed again")
+		}
+		f.exec(t, strings.ReplaceAll(`UPDATE @S@.chat_conversations SET is_private = false WHERE id = 1`, "@S@", schema))
+		if allowed("bearer") {
+			t.Fatal("still allowed after the conversation became public")
+		}
+	})
+
+	t.Run("a failed lookup is a refusal", func(t *testing.T) {
+		withStream("11111111-1111-4111-8111-111111111111")
+		f.exec(t, strings.ReplaceAll(`DROP TABLE @S@.chat_participant_mapping`, "@S@", schema))
+		if allowed("bearer") {
+			t.Fatal("allowed although the lookup failed")
+		}
+	})
+
+	t.Run("a token without the memory source is never asked", func(t *testing.T) {
+		if _, err := f.mint(t, f.fence, "bearer-index-only"); err != nil {
+			t.Fatal(err)
+		}
+		if allowed("bearer-index-only") {
+			t.Fatal("an index-only token carries personal memory")
+		}
+	})
 }

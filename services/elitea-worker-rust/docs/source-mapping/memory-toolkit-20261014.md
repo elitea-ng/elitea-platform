@@ -83,23 +83,40 @@ enforces it:
   actor must be a positive user id), and scheduled runs act as their owner and
   use the owner's personal memory; a run that has no token has no vector access,
   so no memory at all.
-* **Shared conversations.** Main decides when it mints the token whether the
-  claim's conversation has more than one human participant
-  (`vector_claim_tokens.personal_memory_allowed`, shared/0166; a conversation
-  it cannot find counts as shared: a doubt about privacy answers no).
-  Introspection hands the flag to `elitea-vector`, which refuses the personal
-  scope with `memory.personal_shared_conversation` (the tool says so plainly)
-  while the project scope works. It is decided once at the start of a run: a
-  person added to the conversation mid-run is seen from the next run.
+* **Personal memory is re-checked on every call.** Main answers
+  `personal_memory_allowed` at EVERY introspection, from the conversation as it
+  is now, and stores nothing at mint. It is true only if the claim has a
+  conversation (an `agent_execution_jobs` row whose `client_stream_id` is the
+  conversation uuid), the conversation is private (`is_private`), its user
+  participants are exactly one, and that one is the actor. A public
+  conversation, another single participant, a participant added mid-run, a
+  missing row, a direct toolkit call and any lookup error all answer false (a
+  doubt about privacy answers no). `elitea-vector` does not cache the answer of
+  a token that may use personal memory, so every call asks Main; a refusal is
+  `memory.personal_shared_conversation` and the project scope keeps working.
+* **The store is the toolkit's.** The worker names the toolkit id (from the
+  run's frozen toolkit reference, not from the model); the facade stamps it as
+  the `toolkit_id` payload key, includes it in the point id, and narrows every
+  operation by it. It is not a client filter key. The namespace id the worker
+  sends is the hash of the toolkit id and the `namespace` label, so two
+  toolkits never share a store even with the same label. This is a deliberate
+  difference from the SDK, which shared memories by the namespace string: here
+  `namespace` is only a label inside the toolkit (default `default`). A
+  toolkit's memories are removed with the toolkit (`DeleteMemoryToolkit`), so a
+  rename or a changed label strands nothing.
 * **Memory is not an index.** `ListIndexes` never lists memory namespaces and
   refuses `source = memory`.
 * **Administrators.** The administrator identity has no memory scope; it has
-  `DeleteMemoryNamespace` (every owner's points of one namespace of a project:
-  a toolkit delete) and `DeleteMemoryUser` (every personal point of one user in
-  one project). `DropProject` still removes everything of a project.
-* **The namespace id holds no secret.** It is a hash of the toolkit's
-  `namespace` string; it is the same for every owner, and elitea-main computes
-  the same value (pinned by a fixture in both test suites) to delete it.
+  `DeleteMemoryToolkit` (every point of one toolkit of a project, every
+  namespace and owner: a toolkit delete) and `DeleteMemoryUser` (every personal
+  point of one user in one project, or with project 0 in every project). `DropProject` still removes everything of a project.
+* **The namespace id holds no secret.** It is a hash of the toolkit id and the
+  `namespace` label; elitea-main needs neither (it deletes by toolkit id).
+* **`ReadMemory` is deterministic.** The facade reads every matching point of
+  each collection in pages (refusing, `RESOURCE_EXHAUSTED`, past 5000 matched),
+  sorts them newest first by `valid_from` (then the larger id) across all
+  collections and only then keeps `limit`, so versions beyond a page, or spread
+  over two embedding spaces, still come back newest first.
 
 ### Prompt injection and the `both` scope
 
@@ -118,23 +135,28 @@ inputs are trusted.
 
 ### Lifecycle
 
-* **Deleting a memory toolkit** deletes its PROJECT memories and every user's
-  PERSONAL ones in that namespace through the existing toolkit cleanup journal
-  (`centry.toolkit_deletions`, row-first: the delete's transaction records the
-  namespace the setting named, because the setting leaves with the row; a
-  reconciler calls `DeleteMemoryNamespace`, with the journal's backoff and
-  permanent-failure notes). Recorded only where memories live in the vector
-  store (the Rust indexing runtime). Renaming a toolkit's namespace strands the
-  memories of the old namespace until the toolkit is deleted.
+* **Deleting a memory toolkit** deletes every memory point stamped with its id
+  (project memories and every user's personal ones, every namespace) through the
+  existing toolkit cleanup journal (`centry.toolkit_deletions`, row-first:
+  recorded in the delete's transaction, drained by the reconciler with the
+  journal's backoff and permanent-failure notes). Recorded only where memories
+  live in the vector store (the Rust indexing runtime).
 * **A user leaving a project, or being deleted,** has their personal memories
-  there deleted (`DeleteMemoryUser`) from the two paths that remove a project
-  member (the project members route and the administrators' user delete).
-  This is best effort after the removal commits: a failure is logged at Error
-  with the project and user so it can be repeated (the call is idempotent). Two
-  paths are not hooked: SCIM deactivation (it suspends, nothing is removed) and
-  a group-sync that withdraws the last role (`scimdirectory`); a user removed
-  that way keeps personal memories that return if the person is re-added. A
-  durable journal for user cleanup is the remaining follow-up.
+  deleted through the SAME journal (app `memory_user`; the `toolkit_id` column
+  holds the user id; project 0 means every project). The row is written in the
+  transaction that removes the user or the membership, by one helper
+  (`Journal.EnqueueMemoryUsers`), and the reconciler retries it until
+  `elitea-vector` has done it; a vector service that is down only delays it.
+  Hooked: the project members route (`DELETE users`), the administrators' user
+  delete (project 0: every project, no membership lookup), and SCIM group sync
+  (a withdrawal that leaves the person with no role in the project, including
+  rebinding and group delete). Not hooked: SCIM deactivation (it suspends,
+  nothing is removed). No migration is needed: the existing journal table
+  already carries the rows, so this PR adds none (the next free shared number
+  is still 0166).
+* **No data migration from the Python store.** Memories written under the
+  Python worker stay in the toolkit's pgvector database; nothing reads or
+  copies them.
 
 ## Evaluation: `adk-memory = "=2.2.0"` as the seam (decision: NO-GO)
 
@@ -237,9 +259,8 @@ setting, and a rule for untrusted input, none of which is small. Design:
 
 ## Deleting a user
 
-See "Lifecycle" above: the facade has `DeleteMemoryUser`, and the two member
-removal paths call it after their transaction. What is not done is a durable
-journal for it (the toolkit delete has one), and the SCIM group-sync path.
+See "Lifecycle" above: a durable journal row (`memory_user`) per user, written
+in the removal's transaction and retried by the reconciler.
 
 ## Open items
 
@@ -247,5 +268,5 @@ journal for it (the toolkit delete has one), and the SCIM group-sync path.
   Rust indexing runtime (Main serves the type without it); the native filter on
   `metadata.t.*` payload paths is tested against the in-process fake only, not a
   live Qdrant.
-* Automatic recall, consolidation, entity/relation graph and user-deletion
-  cleanup are follow-ups as above.
+* Automatic recall, consolidation and the entity/relation graph are follow-ups
+  as above.

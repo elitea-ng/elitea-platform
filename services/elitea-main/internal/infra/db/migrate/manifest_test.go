@@ -697,7 +697,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// token endpoint of a pre-built MCP catalogue entry (one text column,
 	// DEFAULT ''), the only endpoint a catalogue entry's client secret may be
 	// released to when the entry's URL is a template. No permission, no data.
-	require.EqualValues(t, 165, Head(shared))
+	//
+	// 166: shared/0166_vector_claim_tokens_memory_source.sql, the check on
+	// elitea_runtime.vector_claim_tokens.allowed_sources admits the `memory`
+	// source (worker unit M9). A constraint only: no column, no data, no
+	// permission.
+	require.EqualValues(t, 166, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

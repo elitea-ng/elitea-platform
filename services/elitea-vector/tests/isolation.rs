@@ -3437,7 +3437,8 @@ async fn set_memory_metadata_changes_the_owners_point_and_keeps_its_vector() {
 }
 
 #[tokio::test]
-async fn only_an_administrator_deletes_a_users_personal_memories_or_a_namespace() {
+#[allow(clippy::too_many_lines)] // One scenario, every admin RPC in turn.
+async fn only_an_administrator_deletes_a_users_personal_memories_or_a_toolkit() {
     let _ = require_qdrant!();
     let mut h = harness().await.expect("harness");
     h.seed_memory().await;

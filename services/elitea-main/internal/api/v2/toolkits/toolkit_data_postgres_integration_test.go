@@ -8,6 +8,7 @@ package toolkits
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -284,46 +285,43 @@ func TestDeleteToolkitRowFirstOnADatabaseWithoutTheIndexRegistryTable(t *testing
 	}
 }
 
-// memoryJournal is a journal that also takes the memory toolkit's namespace.
+// memoryJournal is a journal that also takes the memory toolkit's id.
 type memoryJournal struct {
 	txJournal
-	namespaces []string
+	toolkits []int64
 }
 
-func (j *memoryJournal) EnqueueMemory(_ context.Context, tx pgx.Tx, projectID, toolkitID int64, namespace string) (string, error) {
+func (j *memoryJournal) EnqueueMemory(_ context.Context, tx pgx.Tx, projectID, toolkitID int64) (string, error) {
 	if tx == nil || projectID != 1 || toolkitID <= 0 {
 		return "", errors.New("unexpected memory enqueue")
 	}
-	j.namespaces = append(j.namespaces, namespace)
+	j.toolkits = append(j.toolkits, toolkitID)
 	return "memory", nil
 }
 
-// A memory toolkit's namespace is read from the row being deleted, so it
-// reaches the journal before the setting is gone; an absent namespace is the
-// toolkit's id, the worker's own default.
-func TestAMemoryToolkitDeleteRecordsItsNamespaceInTheSameTransaction(t *testing.T) {
+// A memory toolkit's delete records the toolkit id in the delete's transaction,
+// whatever its settings say: the store is the toolkit's, not a namespace
+// string's, so a rename or a changed namespace setting orphans nothing.
+func TestAMemoryToolkitDeleteRecordsItsIdInTheSameTransaction(t *testing.T) {
 	pool, ctx := migratedToolkitsPool(t)
 	repo := &pgRepo{pool: pool}
-	for _, tc := range []struct {
-		settings string
-		want     func(id string) string
-	}{
-		{`{"namespace": "team-notes", "memory_scope": "both"}`, func(string) string { return "team-notes" }},
-		{`{"memory_scope": "personal"}`, func(id string) string { return id }},
-		{`{"namespace": "   "}`, func(id string) string { return id }},
+	for _, settings := range []string{
+		`{"namespace": "team-notes", "memory_scope": "both"}`,
+		`{"memory_scope": "personal"}`,
+		`{"namespace": "   "}`,
 	} {
 		var id string
 		if err := pool.QueryRow(ctx, `
 INSERT INTO p_1.elitea_tools (name, type, description, settings, owner_id, author_id)
-VALUES ('notes', 'memory', '', $1::jsonb, 1, 1) RETURNING id::text`, tc.settings).Scan(&id); err != nil {
+VALUES ('notes', 'memory', '', $1::jsonb, 1, 1) RETURNING id::text`, settings).Scan(&id); err != nil {
 			t.Fatalf("seed memory toolkit: %v", err)
 		}
 		journal := &memoryJournal{}
 		if err := repo.DeleteToolkitRowFirst(ctx, "1", id, journal); err != nil {
 			t.Fatalf("delete: %v", err)
 		}
-		if len(journal.namespaces) != 1 || journal.namespaces[0] != tc.want(id) {
-			t.Fatalf("settings %s: the journal got %v, want %q", tc.settings, journal.namespaces, tc.want(id))
+		if want := id; len(journal.toolkits) != 1 || fmt.Sprint(journal.toolkits[0]) != want {
+			t.Fatalf("settings %s: the journal got %v, want %s", settings, journal.toolkits, want)
 		}
 	}
 	// Another type is never offered the memory enqueue.
@@ -332,7 +330,7 @@ VALUES ('notes', 'memory', '', $1::jsonb, 1, 1) RETURNING id::text`, tc.settings
 	if err := repo.DeleteToolkitRowFirst(ctx, "1", other, journal); err != nil {
 		t.Fatal(err)
 	}
-	if len(journal.namespaces) != 0 {
-		t.Fatalf("a non-memory toolkit was offered the memory enqueue: %v", journal.namespaces)
+	if len(journal.toolkits) != 0 {
+		t.Fatalf("a non-memory toolkit was offered the memory enqueue: %v", journal.toolkits)
 	}
 }
