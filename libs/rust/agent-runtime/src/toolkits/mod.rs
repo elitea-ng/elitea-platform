@@ -83,6 +83,8 @@ mod carrier_tests;
 mod confluence_tests;
 #[cfg(test)]
 mod direct_execution_tests;
+#[cfg(all(test, feature = "toolkit-office"))]
+mod docx_tests;
 #[cfg(test)]
 mod elastic_tests;
 #[cfg(test)]
@@ -111,6 +113,8 @@ mod keycloak_tests;
 mod kubernetes_tests;
 #[cfg(test)]
 mod mcp_tests;
+#[cfg(all(test, feature = "toolkit-office"))]
+mod office_test_support;
 #[cfg(test)]
 mod openapi_bounds_tests;
 #[cfg(test)]
@@ -119,7 +123,7 @@ mod openapi_tests;
 mod policy_tests;
 #[cfg(test)]
 mod postman_tests;
-#[cfg(all(test, feature = "toolkit-pptx"))]
+#[cfg(all(test, feature = "toolkit-office"))]
 mod pptx_tests;
 #[cfg(test)]
 mod qtest_tests;
@@ -149,6 +153,8 @@ mod sql_tests;
 mod testio_tests;
 #[cfg(test)]
 mod testrail_tests;
+#[cfg(all(test, feature = "toolkit-office"))]
+mod xlsx_tests;
 #[cfg(test)]
 mod xray_cloud_tests;
 #[cfg(test)]

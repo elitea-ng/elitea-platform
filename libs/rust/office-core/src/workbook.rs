@@ -10,8 +10,10 @@ use crate::guard::{Shared, run_guarded};
 use crate::limits::Limits;
 use crate::validate::{Kind, Mode, finish_output, validate_and_repack};
 
-const MAX_ROW: u32 = 1_048_575;
-const MAX_COL: u16 = 16_383;
+use crate::a1::{MAX_COL, MAX_ROW};
+
+/// The most characters Excel keeps in one cell.
+const MAX_CELL_TEXT_CHARS: usize = 32_767;
 
 fn map_err(e: ZError) -> OfficeError {
     match e {
@@ -96,10 +98,46 @@ pub struct CellRange {
 }
 
 impl CellRange {
-    fn cells(&self) -> u64 {
+    /// How many cells the range covers.
+    #[must_use]
+    pub fn cells(&self) -> u64 {
         u64::from(self.last_row - self.first_row + 1)
             * u64::from(self.last_col - self.first_col + 1)
     }
+}
+
+/// One series of a spreadsheet chart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SheetSeries {
+    /// The series name (a literal), if any.
+    pub name: Option<String>,
+    /// The cell range that holds the values.
+    pub values: String,
+}
+
+/// A chart drawn on a sheet from cell ranges of the workbook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SheetChartSpec {
+    /// The chart type.
+    pub kind: crate::ChartKind,
+    /// The title, if any.
+    pub title: Option<String>,
+    /// The cell range of the category labels, if any.
+    pub categories: Option<String>,
+    /// The series, 1 to 20.
+    pub series: Vec<SheetSeries>,
+    /// Whether to show a legend (at the bottom).
+    pub legend: bool,
+    /// Whether to show the value on each point.
+    pub data_labels: bool,
+    /// Row of the chart's top-left corner (0-based).
+    pub anchor_row: u32,
+    /// Column of the chart's top-left corner (0-based).
+    pub anchor_col: u16,
+    /// Width in pixels (100 to 4000).
+    pub width_px: u32,
+    /// Height in pixels (100 to 4000).
+    pub height_px: u32,
 }
 
 /// An xlsx workbook.
@@ -114,6 +152,8 @@ pub struct Workbook {
     /// opened sheet and reads them back after `clear_cell`; this mask hides
     /// them. The saved file does not have them.
     cleared: std::collections::HashSet<(usize, u32, u16)>,
+    /// Renames and deletes since open, for the defined names to follow at save.
+    name_ops: Vec<crate::defined_names::NameOp>,
 }
 
 impl std::fmt::Debug for Workbook {
@@ -132,6 +172,7 @@ impl Workbook {
             cells: 0,
             inline_strings: false,
             cleared: std::collections::HashSet::new(),
+            name_ops: Vec::new(),
         }
     }
 
@@ -145,6 +186,7 @@ impl Workbook {
     /// [`OfficeError::Unsupported`], [`OfficeError::Busy`],
     /// [`OfficeError::DeadlineExceeded`].
     pub fn open(bytes: &[u8], limits: &Limits) -> Result<Self> {
+        crate::counters::bump(crate::counters::Op::Open);
         crate::validate::precheck_len(bytes.len(), limits)?;
         let (data, l) = (bytes.to_vec(), limits.clone());
         let (wb, cells, inline_strings) = run_guarded(limits, move || {
@@ -165,6 +207,7 @@ impl Workbook {
             cells,
             inline_strings,
             cleared: std::collections::HashSet::new(),
+            name_ops: Vec::new(),
         })
     }
 
@@ -183,8 +226,13 @@ impl Workbook {
     /// # Errors
     /// Any limit violation of the produced file.
     pub fn save(&self) -> Result<Vec<u8>> {
-        self.wb.guarded(|w, l| {
-            let raw = w.save_to_buffer().map_err(map_err)?;
+        crate::counters::bump(crate::counters::Op::Save);
+        let ops = self.name_ops.clone();
+        self.wb.guarded(move |w, l| {
+            let mut raw = w.save_to_buffer().map_err(map_err)?;
+            if !ops.is_empty() {
+                raw = crate::defined_names::apply(&raw, &ops, l)?;
+            }
             finish_output(&raw, Kind::Xlsx, l)
         })
     }
@@ -224,6 +272,8 @@ impl Workbook {
     /// [`OfficeError::NotFound`] for a bad index.
     pub fn remove_sheet(&mut self, index: usize) -> Result<()> {
         self.wb.lock()?.remove_worksheet(index).map_err(map_err)?;
+        self.name_ops
+            .push(crate::defined_names::NameOp::Delete(index));
         // Cleared-cell marks follow the sheets that moved down.
         self.cleared = self
             .cleared
@@ -239,10 +289,19 @@ impl Workbook {
     /// # Errors
     /// [`OfficeError::NotFound`] or [`OfficeError::InvalidInput`].
     pub fn rename_sheet(&mut self, index: usize, name: &str) -> Result<()> {
+        let old = self.sheet_names()?.get(index).cloned();
         self.wb
             .lock()?
             .rename_worksheet(index, name)
-            .map_err(map_err)
+            .map_err(map_err)?;
+        if let Some(old) = old {
+            self.name_ops.push(crate::defined_names::NameOp::Rename {
+                index,
+                old,
+                new: name.to_owned(),
+            });
+        }
+        Ok(())
     }
 
     /// Write one cell (0-based row and column). A cell counts against
@@ -303,6 +362,176 @@ impl Workbook {
         if grows {
             self.cells += 1;
         }
+        Ok(())
+    }
+
+    /// Write many cells in one call, all or none: every value is checked
+    /// (grid, kind, text length, finite numbers) and the cell cap is checked
+    /// against the DISTINCT cells that would go from empty to written, before
+    /// the first cell is touched. A cell named twice is written once, with its
+    /// last value. Returns how many cells went from empty to written.
+    ///
+    /// # Errors
+    /// [`Limit::Cells`], [`OfficeError::InvalidInput`],
+    /// [`OfficeError::Unsupported`], [`OfficeError::NotFound`] for a bad sheet.
+    pub fn write_cells(&mut self, sheet: usize, cells: &[(u32, u16, CellValue)]) -> Result<u64> {
+        let mut last: std::collections::HashMap<(u32, u16), &CellValue> =
+            std::collections::HashMap::with_capacity(cells.len().min(1 << 16));
+        for (row, col, value) in cells {
+            check_writable(*row, *col, value)?;
+            last.insert((*row, *col), value);
+        }
+        let grows = {
+            let mut w = self.wb.lock()?;
+            let ws = w.worksheet(sheet).map_err(map_err)?;
+            let mut n = 0u64;
+            for (&(row, col), value) in &last {
+                let was_empty = self.cleared.contains(&(sheet, row, col))
+                    || matches!(ws.read_cell(row, col), ZCell::Empty);
+                if was_empty && !matches!(value, CellValue::Empty) {
+                    n += 1;
+                }
+            }
+            n
+        };
+        let total = self.cells.saturating_add(grows);
+        if total > self.limits.max_cells {
+            return Err(limit(Limit::Cells, total));
+        }
+        // Row-major, so the result does not depend on hash order.
+        let mut ordered: Vec<(&(u32, u16), &&CellValue)> = last.iter().collect();
+        ordered.sort_by_key(|(k, _)| **k);
+        for (&(row, col), value) in ordered {
+            self.write_cell(sheet, row, col, value)?;
+        }
+        Ok(grows)
+    }
+
+    /// Clear every cell of `range` that holds a value; returns how many did.
+    ///
+    /// # Errors
+    /// [`Limit::Cells`] when the part of the range inside the sheet's used
+    /// range is larger than `max_cells`; [`OfficeError::NotFound`] for a bad
+    /// sheet.
+    pub fn clear_range(&mut self, sheet: usize, range: CellRange) -> Result<u64> {
+        let Some(used) = self.used_range(sheet)? else {
+            return Ok(0);
+        };
+        let first_row = range.first_row.max(used.first_row);
+        let first_col = range.first_col.max(used.first_col);
+        let last_row = range.last_row.min(used.last_row);
+        let last_col = range.last_col.min(used.last_col);
+        if first_row > last_row || first_col > last_col {
+            return Ok(0);
+        }
+        let inside = CellRange {
+            first_row,
+            first_col,
+            last_row,
+            last_col,
+        };
+        if inside.cells() > self.limits.max_cells {
+            return Err(limit(Limit::Cells, inside.cells()));
+        }
+        let mut cleared = 0u64;
+        for row in first_row..=last_row {
+            for col in first_col..=last_col {
+                let held = {
+                    let mut w = self.wb.lock()?;
+                    let ws = w.worksheet(sheet).map_err(map_err)?;
+                    !self.cleared.contains(&(sheet, row, col))
+                        && !matches!(ws.read_cell(row, col), ZCell::Empty)
+                };
+                if held {
+                    self.write_cell(sheet, row, col, &CellValue::Empty)?;
+                    cleared += 1;
+                }
+            }
+        }
+        Ok(cleared)
+    }
+
+    /// Add a chart to a sheet. Series and categories are cell ranges of the
+    /// workbook (`A2:A9`, or `Sheet2!B2:B9` for another sheet); they are
+    /// validated against the sheet grid and written in the absolute form the
+    /// file format wants. The chart counts its points against `max_cells`.
+    ///
+    /// # Errors
+    /// [`OfficeError::InvalidInput`] for a range that is not one,
+    /// [`OfficeError::Unsupported`] for stacked bars and columns,
+    /// [`Limit::Cells`], [`OfficeError::NotFound`] for a bad sheet.
+    pub fn add_chart(&mut self, sheet: usize, spec: &SheetChartSpec) -> Result<()> {
+        use zavora_xlsx::features::chart::{Chart, ChartType, LegendPosition};
+        if spec.series.is_empty() || spec.series.len() > 20 {
+            return Err(OfficeError::InvalidInput(
+                "a chart needs 1 to 20 series".into(),
+            ));
+        }
+        let kind = match spec.kind {
+            crate::ChartKind::ClusteredBar => ChartType::Bar,
+            crate::ChartKind::ClusteredColumn => ChartType::Column,
+            crate::ChartKind::Line => ChartType::Line,
+            crate::ChartKind::Pie => ChartType::Pie,
+            crate::ChartKind::Area => ChartType::Area,
+            crate::ChartKind::Scatter => ChartType::Scatter,
+            crate::ChartKind::Doughnut => ChartType::Doughnut,
+            crate::ChartKind::StackedBar | crate::ChartKind::StackedColumn => {
+                return Err(OfficeError::Unsupported(
+                    "xlsx charts support bar, column, line, pie, doughnut, area and scatter".into(),
+                ));
+            }
+        };
+        let names = self.sheet_names()?;
+        let own = names
+            .get(sheet)
+            .ok_or_else(|| OfficeError::NotFound(format!("sheet {sheet}")))?
+            .clone();
+        let mut points = 0u64;
+        let categories = match &spec.categories {
+            Some(r) => Some(absolute_ref(r, &own, &names, &mut points)?),
+            None => None,
+        };
+        let mut series = Vec::with_capacity(spec.series.len());
+        for s in &spec.series {
+            let mut counted = 0u64;
+            let values = absolute_ref(&s.values, &own, &names, &mut counted)?;
+            points = points.saturating_add(counted);
+            series.push((s.name.clone(), values));
+        }
+        let total = self.cells.saturating_add(points);
+        if total > self.limits.max_cells {
+            return Err(limit(Limit::Cells, total));
+        }
+        let mut chart = Chart::new(kind);
+        if let Some(t) = &spec.title {
+            chart.set_title(t);
+        }
+        chart.set_legend_position(if spec.legend {
+            LegendPosition::Bottom
+        } else {
+            LegendPosition::None
+        });
+        chart.set_width(spec.width_px.clamp(100, 4000));
+        chart.set_height(spec.height_px.clamp(100, 4000));
+        for (name, values) in &series {
+            let s = chart.add_series();
+            s.set_values(values);
+            if let Some(c) = &categories {
+                s.set_categories(c);
+            }
+            if let Some(n) = name {
+                s.set_name(n);
+            }
+            if spec.data_labels {
+                s.set_data_labels(true);
+            }
+        }
+        let mut w = self.wb.lock()?;
+        let ws = w.worksheet(sheet).map_err(map_err)?;
+        ws.insert_chart(spec.anchor_row, spec.anchor_col, &chart)
+            .map_err(map_err)?;
+        drop(w);
+        self.cells = total;
         Ok(())
     }
 
@@ -432,6 +661,70 @@ impl Workbook {
     /// Always [`OfficeError::Unsupported`]: zavora-xlsx has no PDF export.
     pub fn export_pdf(&self) -> Result<Vec<u8>> {
         Err(OfficeError::Unsupported("xlsx has no PDF export".into()))
+    }
+}
+
+/// What a chart series or category range is, in the file's absolute form
+/// (`'My Sheet'!$B$2:$B$9`), with the number of cells it covers added to
+/// `points`.
+fn absolute_ref(text: &str, own: &str, sheets: &[String], points: &mut u64) -> Result<String> {
+    let (sheet, range) = match text.rsplit_once('!') {
+        Some((s, r)) => (s.trim().trim_matches('\'').replace("''", "'"), r),
+        None => (own.to_owned(), text),
+    };
+    if !sheets.contains(&sheet) {
+        return Err(OfficeError::InvalidInput(format!(
+            "the chart range `{text}` names a sheet that does not exist"
+        )));
+    }
+    let r = crate::a1::parse_range(range).ok_or_else(|| {
+        OfficeError::InvalidInput(format!("`{text}` is not a cell range such as A2:A9"))
+    })?;
+    *points = points.saturating_add(r.cells());
+    let a = crate::a1::cell_ref(r.first_row, r.first_col);
+    let b = crate::a1::cell_ref(r.last_row, r.last_col);
+    let abs = |c: &str| {
+        let split = c.find(|ch: char| ch.is_ascii_digit()).unwrap_or(c.len());
+        format!("${}${}", &c[..split], &c[split..])
+    };
+    Ok(format!(
+        "'{}'!{}:{}",
+        sheet.replace('\'', "''"),
+        abs(&a),
+        abs(&b)
+    ))
+}
+
+fn check_writable(row: u32, col: u16, value: &CellValue) -> Result<()> {
+    if row > MAX_ROW || col > MAX_COL {
+        return Err(OfficeError::InvalidInput(format!(
+            "cell {} is outside the sheet grid",
+            crate::a1::cell_ref(row.min(MAX_ROW), col.min(MAX_COL))
+        )));
+    }
+    match value {
+        CellValue::Empty | CellValue::Bool(_) => Ok(()),
+        CellValue::Text(s) if s.chars().count() <= MAX_CELL_TEXT_CHARS => Ok(()),
+        CellValue::Text(_) => Err(OfficeError::InvalidInput(format!(
+            "the text of cell {} is over {MAX_CELL_TEXT_CHARS} characters",
+            crate::a1::cell_ref(row, col)
+        ))),
+        CellValue::Number(n) if n.is_finite() => Ok(()),
+        CellValue::Number(_) => Err(OfficeError::InvalidInput(format!(
+            "cell {} is not a finite number",
+            crate::a1::cell_ref(row, col)
+        ))),
+        CellValue::Formula { formula, .. } if !formula.trim().is_empty() => Ok(()),
+        CellValue::Formula { .. } => Err(OfficeError::InvalidInput(format!(
+            "the formula of cell {} is empty",
+            crate::a1::cell_ref(row, col)
+        ))),
+        CellValue::Error(_) => Err(OfficeError::Unsupported(
+            "zavora-xlsx 0.1.2 cannot write an error cell (t=\"e\")".into(),
+        )),
+        _ => Err(OfficeError::Unsupported(
+            "this cell value kind cannot be written".into(),
+        )),
     }
 }
 

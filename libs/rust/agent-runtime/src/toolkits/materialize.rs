@@ -42,8 +42,6 @@ use super::families::index_tools::{
     build_index_toolset, is_index_family, selection_is_index_only,
 };
 use super::families::jira;
-#[cfg(feature = "toolkit-pptx")]
-use super::families::pptx;
 use super::families::qtest;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
@@ -55,6 +53,8 @@ use super::families::{
     gitlab_org, google_places, keycloak, kubernetes, openapi, postman, rally, report_portal,
     salesforce, service_now, sharepoint, slack, sonar, yagmail, zephyr, zephyr_squad,
 };
+#[cfg(feature = "toolkit-office")]
+use super::families::{docx, pptx, xlsx};
 use super::family_error::family_error;
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::{AdmittedToolSnapshot, FrozenToolKind, FrozenToolReference};
@@ -544,9 +544,9 @@ async fn materialize(
         let toolset = materialize_artifact(name, settings, policy, artifacts)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
-    #[cfg(feature = "toolkit-pptx")]
-    if reference.tool_type() == "pptx" {
-        let toolset = materialize_pptx(name, settings, policy, artifacts)?;
+    #[cfg(feature = "toolkit-office")]
+    if matches!(reference.tool_type(), "pptx" | "docx" | "xlsx") {
+        let toolset = materialize_office(reference.tool_type(), name, settings, policy, artifacts)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
     if reference.tool_type() == "github" {
@@ -1040,43 +1040,66 @@ fn materialize_github(
     Ok(Arc::new(toolset))
 }
 
-/// The `pptx` family (ADR-0032 P3). Like `artifact`, its authority is the
-/// live claim: the Office host rides on the artifact authority. A path that
-/// lends none (the desktop until P6) skips the toolkit as unsupported.
-#[cfg(feature = "toolkit-pptx")]
-fn materialize_pptx(
+/// The Office families (ADR-0032 P3, P4): `pptx`, `docx` and `xlsx`. Like
+/// `artifact`, their authority is the live claim: the Office host rides on the
+/// artifact authority. A path that lends none (the desktop until P6) skips the
+/// toolkit as unsupported.
+#[cfg(feature = "toolkit-office")]
+fn materialize_office(
+    family: &str,
     name: &str,
     settings: &serde_json::Map<String, serde_json::Value>,
     policy: &Arc<ToolAdmissionPolicy>,
     artifacts: Option<&ArtifactToolAuthority>,
 ) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    use super::families::office_common::{OfficeConfigError, OfficeToolsetError};
     let authority = artifacts.ok_or_else(unsupported_toolkit)?;
-    let config = pptx::config::PptxToolkitConfig::parse(settings)
-        .map_err(|error| pptx_config_materialization_error(error.code()))?;
-    let toolset = pptx::tools::build_pptx_toolset(name, &config, policy, authority)
-        .map_err(|error| pptx_toolset_materialization_error(error.code()))?
-        .ok_or_else(unsupported_toolkit)?;
-    Ok(Arc::new(toolset))
+    let config_error = |error: OfficeConfigError| office_config_materialization_error(&error);
+    let toolset_error = |error: OfficeToolsetError| office_toolset_materialization_error(&error);
+    let built = match family {
+        "docx" => {
+            let config = docx::config::DocxToolkitConfig::parse(settings).map_err(config_error)?;
+            let toolset = docx::tools::build_docx_toolset(name, &config, policy, authority)
+                .map_err(toolset_error)?;
+            toolset.map(|t| Arc::new(t) as Arc<dyn Toolset>)
+        }
+        "xlsx" => {
+            let config = xlsx::config::XlsxToolkitConfig::parse(settings).map_err(config_error)?;
+            let toolset = xlsx::tools::build_xlsx_toolset(name, &config, policy, authority)
+                .map_err(toolset_error)?;
+            toolset.map(|t| Arc::new(t) as Arc<dyn Toolset>)
+        }
+        "pptx" => {
+            let config = pptx::config::PptxToolkitConfig::parse(settings).map_err(config_error)?;
+            let toolset = pptx::tools::build_pptx_toolset(name, &config, policy, authority)
+                .map_err(toolset_error)?;
+            toolset.map(|t| Arc::new(t) as Arc<dyn Toolset>)
+        }
+        _ => return Err(unsupported_toolkit()),
+    };
+    built.ok_or_else(unsupported_toolkit)
 }
 
-#[cfg(feature = "toolkit-pptx")]
-const fn pptx_config_materialization_error(
-    code: pptx::config::PptxConfigErrorCode,
+#[cfg(feature = "toolkit-office")]
+fn office_config_materialization_error(
+    error: &super::families::office_common::OfficeConfigError,
 ) -> ToolsetMaterializationError {
-    match code {
-        pptx::config::PptxConfigErrorCode::InvalidConfiguration => invalid_configuration(),
-        pptx::config::PptxConfigErrorCode::ResourceExhausted => resource_exhausted(),
+    use super::families::office_common::OfficeConfigErrorCode;
+    match error.code() {
+        OfficeConfigErrorCode::InvalidConfiguration => invalid_configuration(),
+        OfficeConfigErrorCode::ResourceExhausted => resource_exhausted(),
     }
 }
 
-#[cfg(feature = "toolkit-pptx")]
-const fn pptx_toolset_materialization_error(
-    code: pptx::tools::PptxToolsetErrorCode,
+#[cfg(feature = "toolkit-office")]
+fn office_toolset_materialization_error(
+    error: &super::families::office_common::OfficeToolsetError,
 ) -> ToolsetMaterializationError {
-    match code {
-        pptx::tools::PptxToolsetErrorCode::ResourceExhausted => resource_exhausted(),
-        pptx::tools::PptxToolsetErrorCode::InvalidConfiguration
-        | pptx::tools::PptxToolsetErrorCode::InvalidDefinition => invalid_configuration(),
+    use super::families::office_common::OfficeToolsetErrorCode;
+    match error.code() {
+        OfficeToolsetErrorCode::ResourceExhausted => resource_exhausted(),
+        OfficeToolsetErrorCode::InvalidConfiguration
+        | OfficeToolsetErrorCode::InvalidDefinition => invalid_configuration(),
     }
 }
 

@@ -44,27 +44,39 @@
 //! * `SmartArt` and other parts the libraries do not model are kept as opaque
 //!   bytes by the surgical pptx save, not edited.
 
+mod a1;
 mod counters;
 mod deck;
+mod defined_names;
 mod document;
+mod docx_facts;
 mod error;
 mod guard;
 mod image;
 mod inspect;
 mod limits;
+mod sheetrefs;
 mod validate;
 mod workbook;
+mod xlsx_facts;
 
+pub use a1::{cell_ref, column_name, parse_cell_ref, parse_range, range_ref};
 pub use deck::{
     Bullet, ChartKind, ChartSpec, Deck, ParagraphInfo, PlaceholderRef, Rect, RunInfo, Series,
     ShapeInfo, SlideLayout, Theme,
 };
 pub use document::{Document, TableData};
+pub use docx_facts::{DocBlock, DocFacts, DocParagraph, DocTable, facts_of_docx_package};
 pub use error::{Limit, OfficeError, Result};
 pub use guard::{Health, health};
 pub use inspect::{ChartFacts, ShapeFacts, ShapeKind, SlideFacts, TableFacts, facts_of_package};
 pub use limits::{Limits, PARSE_STACK_BYTES};
-pub use workbook::{CellRange, CellValue, Workbook};
+pub use sheetrefs::rename_in_formula;
+pub use workbook::{CellRange, CellValue, SheetChartSpec, SheetSeries, Workbook};
+pub use xlsx_facts::{
+    DefinedName, XlsxChart, XlsxFacts, XlsxQuery, XlsxSheet, facts_of_xlsx_package,
+    facts_of_xlsx_package_choosing,
+};
 
 /// The pixel size of a raster image (PNG, GIF, JPEG, BMP, WebP, TIFF) from its
 /// header alone, or `None` when the bytes are not one or the header is
@@ -138,6 +150,46 @@ pub mod testing {
             PackageKind::Xlsx => Kind::Xlsx,
         };
         validate_and_repack(bytes, k, Mode::Render { dpi: 72.0 }, limits).map(|r| r.bytes)
+    }
+
+    /// The text of one part of a package, for a test that looks at the file.
+    #[must_use]
+    pub fn part_text(package: &[u8], name: &str) -> Option<String> {
+        use std::io::Read;
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(package)).ok()?;
+        let mut out = String::new();
+        zip.by_name(name).ok()?.read_to_string(&mut out).ok()?;
+        Some(out)
+    }
+
+    /// A copy of `package` with the first `from` of the part `name` replaced
+    /// by `to`, for a test that needs a file shaped the way a producer shapes it.
+    ///
+    /// # Panics
+    /// When the part or the text is not there.
+    #[must_use]
+    pub fn replace_in_part(package: &[u8], name: &str, from: &str, to: &str) -> Vec<u8> {
+        use std::io::{Read, Write};
+        let mut input = zip::ZipArchive::new(std::io::Cursor::new(package)).expect("a zip");
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..input.len() {
+            let mut entry = input.by_index(i).expect("an entry");
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).expect("a readable entry");
+            if entry.name() == name {
+                let text = String::from_utf8(data).expect("a text part");
+                assert!(text.contains(from), "{name} has no {from}");
+                data = text.replacen(from, to, 1).into_bytes();
+            }
+            out.start_file(
+                entry.name(),
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated),
+            )
+            .expect("a new entry");
+            out.write_all(&data).expect("a written entry");
+        }
+        out.finish().expect("a finished zip").into_inner()
     }
 
     /// `(opens, saves, package_reads)` made on the calling thread since
@@ -275,6 +327,11 @@ pub mod testing {
         finding("save", d.save());
         finding("pdf", d.export_pdf());
         finding("png", d.render_page_png(0, 48.0));
+        finding(
+            "replace_all",
+            d.replace_all(&[("e".to_owned(), "a\nb".to_owned())]),
+        );
+        finding("facts", crate::facts_of_docx_package(data, &l));
     }
 
     /// Fuzz entry: open as a workbook and use it.
@@ -293,5 +350,18 @@ pub mod testing {
             w.write_cell(0, 0, 0, &crate::CellValue::Number(1.0)),
         );
         finding("save", w.save());
+        finding(
+            "facts",
+            crate::facts_of_xlsx_package(
+                data,
+                &l,
+                &crate::XlsxQuery {
+                    cells: &[(0, 0, 0), (0, 1, 1)],
+                    ranges: &[],
+                    sheet_mention: Some("Sheet1"),
+                    for_delete: false,
+                },
+            ),
+        );
     }
 }
