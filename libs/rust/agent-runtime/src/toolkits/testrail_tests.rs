@@ -200,7 +200,8 @@ fn provider(method: &Method, endpoint: &str) -> TestRailHttpResponse {
         })),
         ("POST", "add_case/5") => ok(json!({"id":42,"title":"New","created_on":1_700_000_000})),
         ("GET", "get_case/42") => ok(json!({"id":42,"custom_preconds":"<p>Existing</p>"})),
-        ("GET", "get_case/50" | "get_case/51") => ok(json!({"id":50,"custom_steps":null})),
+        ("GET", "get_case/50") => ok(json!({"id":50,"custom_steps":null})),
+        ("GET", "get_case/51") => ok(json!({"id":51,"custom_expected":null})),
         ("GET", "get_case/52") => TestRailHttpResponse::fixture(StatusCode::NOT_FOUND, None),
         ("POST", "add_attachment_to_case/52") => ok(json!({"attachment_id":890})),
         ("POST", "update_case/42") => ok(json!({"id":42,"updated_on":1_700_000_100})),
@@ -743,9 +744,10 @@ async fn add_file_to_case_embeds_inline_and_reports_a_failed_embed_exactly() {
     );
     let captured = transport.captured();
     assert_eq!(captured[1].endpoint, "get_case/50");
-    assert_eq!(captured[2].endpoint, "update_case/50");
+    assert_eq!(captured[2].endpoint, "get_case/50");
+    assert_eq!(captured[3].endpoint, "update_case/50");
     assert_eq!(
-        captured[2].body,
+        captured[3].body,
         Some(
             json!({"custom_steps":"Before:<br/><img src=\"index.php?/attachments/get/888\" id=\"attachment-888\" data-attachment-id=\"888\" />"})
         )
@@ -789,12 +791,17 @@ async fn add_file_to_case_embeds_on_success() {
     );
     assert_eq!(
         transport.endpoints(),
-        ["add_attachment_to_case/42", "get_case/42", "update_case/42"]
+        [
+            "add_attachment_to_case/42",
+            "get_case/42",
+            "get_case/42",
+            "update_case/42"
+        ]
     );
     // The existing value is kept and the reference follows it.
     let captured = transport.captured();
     assert_eq!(
-        captured[2].body,
+        captured[3].body,
         Some(
             json!({"custom_preconds":"<p>Existing</p><br/><img src=\"index.php?/attachments/get/777\" id=\"attachment-777\" data-attachment-id=\"777\" />"})
         )
@@ -904,7 +911,7 @@ async fn add_file_to_case_reports_host_failures_before_sending_anything() {
 }
 
 #[tokio::test]
-async fn add_file_to_case_sends_an_ascii_fallback_name_beside_the_real_one() {
+async fn add_file_to_case_sends_the_real_utf8_name() {
     let platform = FakePlatform::new();
     platform.put("bucket", "отчёт.png", b"png");
     let (transport, tools) = attach_tools(&platform).await;
@@ -916,7 +923,99 @@ async fn add_file_to_case_sends_an_ascii_fallback_name_beside_the_real_one() {
     .await;
     let body = String::from_utf8_lossy(&transport.captured()[0].upload.clone().expect("upload").1)
         .into_owned();
-    assert!(body.contains("filename=\"attachment-"), "{body}");
-    assert!(!body.contains("filename=\".png\""), "{body}");
-    assert!(body.contains("filename*=UTF-8''"), "{body}");
+    assert!(body.contains("filename=\"отчёт.png\"\r\n"), "{body}");
+    assert!(!body.contains("filename*"), "{body}");
+}
+
+#[tokio::test]
+async fn a_field_missing_from_the_case_is_not_on_its_template_and_is_not_written() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    let (transport, tools) = attach_tools(&platform).await;
+    // case 42's answer carries custom_preconds only: custom_steps is absent,
+    // which is not the same as an empty (null) field.
+    let text = call(
+        &tools,
+        "add_file_to_case",
+        json!({"case_id":"42","filepath":"/bucket/a.txt","embed_in_field":"custom_steps"}),
+    )
+    .await;
+    let text = text.as_str().expect("text");
+    assert!(text.contains("(attachment_id: 777)"), "{text}");
+    assert!(text.contains("not on this case's template"), "{text}");
+    assert!(text.contains("the field is unchanged"), "{text}");
+    assert_eq!(
+        transport.endpoints(),
+        ["add_attachment_to_case/42", "get_case/42"]
+    );
+}
+
+#[tokio::test]
+async fn a_field_edited_between_the_read_and_the_write_gets_the_reference_on_the_fresh_value() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    let changes = |changing: usize| {
+        let reads = std::sync::atomic::AtomicUsize::new(0);
+        move |method: &Method, endpoint: &str| -> TestRailHttpResponse {
+            match (method.as_str(), endpoint) {
+                ("POST", "add_attachment_to_case/60") => ok(json!({"attachment_id":900})),
+                ("GET", "get_case/60") => {
+                    let read = reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    // Reads 0 and 1 differ (someone edited in between); from
+                    // then on `changing` more reads keep differing.
+                    let value = if read < 2 + changing {
+                        format!("<p>v{read}</p>")
+                    } else {
+                        format!("<p>v{}</p>", 1 + changing)
+                    };
+                    ok(json!({"id":60,"custom_steps":value}))
+                }
+                ("POST", "update_case/60") => ok(json!({"id":60})),
+                other => panic!("unexpected TestRail request {other:?}"),
+            }
+        }
+    };
+    let host = platform.host();
+    let transport = FixtureTransport::new(changes(0));
+    let tools = tools_with_host(Arc::clone(&transport), Some(&host)).await;
+    let text = call(
+        &tools,
+        "add_file_to_case",
+        json!({"case_id":"60","filepath":"/bucket/a.txt","embed_in_field":"custom_steps"}),
+    )
+    .await;
+    assert!(
+        text.as_str()
+            .expect("text")
+            .contains("embedded inline in field 'custom_steps'"),
+        "{text}"
+    );
+    let update = transport
+        .captured()
+        .into_iter()
+        .find(|captured| captured.endpoint == "update_case/60")
+        .expect("update");
+    // v0 was read first, v1 just before the write: the reference follows v1.
+    assert!(
+        update.body.expect("body")["custom_steps"]
+            .as_str()
+            .expect("text")
+            .starts_with("<p>v1</p><br/>")
+    );
+
+    // A field that never settles is left unchanged.
+    let transport = FixtureTransport::new(changes(99));
+    let tools = tools_with_host(Arc::clone(&transport), Some(&host)).await;
+    let text = call(
+        &tools,
+        "add_file_to_case",
+        json!({"case_id":"60","filepath":"/bucket/a.txt","embed_in_field":"custom_steps"}),
+    )
+    .await;
+    let text = text.as_str().expect("text");
+    assert!(
+        text.contains("changed on every one of 3 attempts"),
+        "{text}"
+    );
+    assert!(transport.endpoints().iter().all(|e| e != "update_case/60"));
 }

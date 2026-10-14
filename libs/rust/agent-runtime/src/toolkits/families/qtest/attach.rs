@@ -51,7 +51,13 @@ impl Qtest {
             {
                 return Err(Failure::Adk(invalid_arguments()));
             }
-            trimmed.trim_start_matches('0').to_owned()
+            let id = trimmed.trim_start_matches('0');
+            // An all-zero id is no test case: `int('000')` is 0, which no
+            // qTest object has.
+            if id.is_empty() {
+                return Err(Failure::Adk(invalid_arguments()));
+            }
+            id.to_owned()
         };
         let file = self.read_file(filepath).await?;
         let (object_type, object_id, location) = match step {

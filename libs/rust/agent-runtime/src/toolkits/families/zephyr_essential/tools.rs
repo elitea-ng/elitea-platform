@@ -1068,7 +1068,7 @@ static OPERATIONS: [Operation; 45] = [
     Operation {
         name: "retrieve_bdd_test_cases",
         title: "RetrieveBDDTestCases",
-        description: "Retrieve BDD test cases. Zephyr answers with a ZIP archive, which cannot be shown as text, so it is stored as a new artifact (never replacing a file; a taken name gets a numeric suffix) and the answer names the bucket and file. Optional `bucket` picks the artifact bucket (default zephyr-bdd). Stores a file: read the current state before retrying after a timeout or unknown outcome.",
+        description: "Retrieve BDD test cases. Zephyr answers with a ZIP archive, which cannot be shown as text, so it is stored as a new artifact (never replacing a file; a taken name gets a numeric suffix) and the answer names the bucket and file. Optional `bucket` picks an EXISTING artifact bucket (default zephyr-bdd, created when missing). Stores a file: read the current state before retrying after a timeout or unknown outcome.",
         verb: Verb::Get,
         path: &[L("automations"), L("testcases")],
         arguments: &[
@@ -1080,7 +1080,7 @@ static OPERATIONS: [Operation; 45] = [
             arg(
                 "bucket",
                 OptionalIdentifier,
-                "Artifact bucket to store the ZIP archive in (default zephyr-bdd).",
+                "Existing artifact bucket to store the ZIP archive in (default zephyr-bdd, created when missing).",
             ),
         ],
         query: &[],
@@ -1400,9 +1400,10 @@ async fn retrieve_bdd(
     args: &Arguments<'_>,
 ) -> adk_core::Result<Value> {
     let project_key = args.identifier("project_key")?;
-    let bucket = args
-        .optional_identifier("bucket")?
-        .unwrap_or(DEFAULT_BDD_BUCKET);
+    // A bucket the caller names must already exist (a typo is "not found",
+    // not a new bucket); only the tool's own default is created on demand.
+    let supplied = args.optional_identifier("bucket")?;
+    let bucket = supplied.unwrap_or(DEFAULT_BDD_BUCKET);
     let host = api.attachments().ok_or_else(|| args.invalid())?;
     let into_adk = |error: ZephyrRestError| error.into_adk(&FAMILY);
     let bytes = api.download_bdd(project_key).await.map_err(into_adk)?;
@@ -1417,10 +1418,14 @@ async fn retrieve_bdd(
     }
     let stem = format!("zephyr-bdd-{}", file_safe(project_key));
     // A lost answer on this write says "may or may not have been stored".
-    let stored = match host
-        .write_unique_artifact(bucket, &stem, "zip", "application/zip", bytes)
-        .await
-    {
+    let written = if supplied.is_some() {
+        host.write_unique_artifact(bucket, &stem, "zip", "application/zip", bytes)
+            .await
+    } else {
+        host.write_unique_artifact_creating_bucket(bucket, &stem, "zip", "application/zip", bytes)
+            .await
+    };
+    let stored = match written {
         Ok(stored) => stored,
         Err(error) => return Ok(Value::String(error.sentence())),
     };

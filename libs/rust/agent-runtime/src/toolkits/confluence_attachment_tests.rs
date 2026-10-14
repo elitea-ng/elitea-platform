@@ -1382,3 +1382,57 @@ async fn once_the_run_has_no_model_no_further_picture_is_downloaded() {
     assert_eq!(script.seen().len(), 2);
     assert_eq!(platform.model_calls().len(), 1);
 }
+
+#[tokio::test]
+async fn a_blob_link_resolves_to_the_download_path_with_the_wiki_prefix_once() {
+    let html = "<ac:image><ri:url ri:value=\"https://tenant.atlassian.net/wiki/x?media-blob-url=true&amp;contentId-77&amp;name=x.png\"/></ac:image>";
+    let (client, script, platform) = setup(
+        &cloud_settings(),
+        vec![
+            storage_page(html),
+            attachment_listing(json!([
+                {"title": "x.png", "_links": {"download": "/wiki/download/attachments/77/x.png"}}
+            ])),
+            bytes(StatusCode::OK, &picture(), "image/png"),
+        ],
+    );
+    platform.reply("a blob picture");
+    let text = run(&client, page_images(None)).await;
+    assert!(text.contains("Description: a blob picture"), "{text}");
+    let urls: Vec<String> = script.seen().into_iter().map(|r| r.url).collect();
+    assert_eq!(
+        urls[2],
+        "https://tenant.atlassian.net/wiki/download/attachments/77/x.png"
+    );
+}
+
+#[tokio::test]
+async fn without_a_host_no_attachment_picture_is_downloaded() {
+    let script = Script::new(vec![
+        attachment_listing(json!([
+            entry("a4", "shot.png", "image/png", ""),
+            entry("a1", "notes.txt", "text/plain", "")
+        ])),
+        history("Ann"),
+        history("Ann"),
+        bytes(StatusCode::OK, b"plain text", "text/plain"),
+        bytes(StatusCode::OK, &picture(), "image/png"),
+    ]);
+    let client = ConfluenceClient::with_transport(
+        ConfluenceToolkitConfig::parse(&server_settings()).expect("config"),
+        script.clone(),
+    );
+    let result = run_value(&client, page_attachments()).await;
+    assert_eq!(
+        result[0]["llm_analysis"],
+        "[LLM not available for image processing]"
+    );
+    assert_eq!(result[1]["content"], "plain text");
+    assert!(
+        script
+            .seen()
+            .iter()
+            .all(|request| !request.url.contains("shot.png")),
+        "the picture was downloaded without a host to describe it"
+    );
+}

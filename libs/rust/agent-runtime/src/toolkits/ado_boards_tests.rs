@@ -764,8 +764,13 @@ async fn the_inline_field_keeps_its_content_and_the_comment_follows() {
         .find(|request| request.method == Method::PATCH)
         .expect("patch");
     assert_eq!(
-        patch.body.as_ref().expect("body")[1],
+        patch.body.as_ref().expect("body")[2],
         json!({"op":"add","path":"/fields/System.Description","value":format!("<p>old</p>{markup}")})
+    );
+    // The update is guarded by the revision of the read that built the value.
+    assert_eq!(
+        patch.body.as_ref().expect("body")[0],
+        json!({"op":"test","path":"/rev","value":3})
     );
     let comment = requests.last().expect("comment");
     assert_eq!(comment.body, Some(json!({"text":markup})));
@@ -784,7 +789,7 @@ async fn the_inline_field_keeps_its_content_and_the_comment_follows() {
         .rfind(|r| r.method == Method::PATCH)
         .expect("patch");
     assert!(
-        patch.body.expect("body")[1]["value"]
+        patch.body.expect("body")[2]["value"]
             .as_str()
             .expect("text")
             .contains("<img src=")
@@ -1173,4 +1178,105 @@ async fn model_failures_are_named_and_never_retried() {
     let text = describe(&served, url).await;
     assert!(text.contains("none is bound in this run"), "{text}");
     assert_eq!(platform.model_calls().len(), 2);
+}
+
+/// A provider whose work item is at revision 3 on the first read and 4 after,
+/// and which refuses the first `refusals` guarded patches as stale.
+fn racing_provider(
+    refusals: usize,
+) -> impl Fn(
+    &CapturedRequest,
+    usize,
+) -> Result<super::families::ado::client::AdoHttpResponse, AdoClientError> {
+    let patches = std::sync::atomic::AtomicUsize::new(0);
+    let reads = std::sync::atomic::AtomicUsize::new(0);
+    move |request, _| match (request.method.as_str(), request.path.as_str()) {
+        ("POST", "/contoso/Fabrikam Fiber/_apis/wit/attachments") => {
+            ok(json!({"id":"a-1","url":ATTACHMENT_URL}))
+        }
+        ("GET", WI) => {
+            let read = reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut item = work_item(42, &json!({"System.Description":format!("<p>v{read}</p>")}));
+            item["rev"] = json!(3 + read);
+            ok(item)
+        }
+        ("PATCH", WI) => {
+            if patches.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < refusals {
+                status(StatusCode::PRECONDITION_FAILED, Some("revision mismatch"))
+            } else {
+                ok(json!({"id":42,"rev":9}))
+            }
+        }
+        other => panic!("unexpected request {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_work_item_edited_during_the_attach_is_read_again_and_the_field_never_overwritten() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "n.txt", b"notes");
+    let transport = FixtureTransport::new(racing_provider(1));
+    let served = host_toolset(&transport, &platform).await;
+    let result = attach(
+        &served,
+        json!({"work_item_id":42,"filepath":"/bucket/n.txt","inline_field":"System.Description"}),
+    )
+    .await;
+    assert_eq!(result["inline_field"], "System.Description");
+    let patches: Vec<_> = transport
+        .requests()
+        .into_iter()
+        .filter(|request| request.method == Method::PATCH)
+        .collect();
+    assert_eq!(patches.len(), 2);
+    // The retry is built on the fresh read (revision 4, value v1).
+    let second = patches[1].body.as_ref().expect("body");
+    assert_eq!(second[0], json!({"op":"test","path":"/rev","value":4}));
+    assert!(
+        second[2]["value"]
+            .as_str()
+            .expect("value")
+            .starts_with("<p>v1</p>")
+    );
+    // The file was uploaded once.
+    assert_eq!(
+        transport
+            .requests()
+            .iter()
+            .filter(
+                |request| request.method == Method::POST && request.path.ends_with("/attachments")
+            )
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_work_item_that_keeps_changing_is_reported_as_uploaded_but_not_linked() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "n.txt", b"notes");
+    let transport = FixtureTransport::new(racing_provider(99));
+    let served = host_toolset(&transport, &platform).await;
+    let result = attach(
+        &served,
+        json!({"work_item_id":42,"filepath":"/bucket/n.txt","inline_field":"System.Description"}),
+    )
+    .await;
+    let text = result.as_str().expect("a sentence");
+    assert!(
+        text.contains("uploaded as attachment a-1 but NOT linked"),
+        "{text}"
+    );
+    assert!(
+        text.contains("changed on every one of 3 attempts"),
+        "{text}"
+    );
+    assert_eq!(
+        transport
+            .requests()
+            .iter()
+            .filter(|request| request.method == Method::PATCH)
+            .count(),
+        3
+    );
 }

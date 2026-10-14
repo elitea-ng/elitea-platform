@@ -122,6 +122,19 @@ fn attachment_failure(error: AttachmentError) -> ConfluenceClientError {
 }
 
 /// `str.lower().split('.')[-1] if '.' in title else ''`.
+/// `path` without the leading `prefix` (a path segment such as `/wiki`),
+/// only when the prefix is a whole segment: `/wiki/x` and `/wiki` lose it,
+/// `/wikifoo/x` does not.
+fn strip_path_prefix<'a>(path: &'a str, prefix: &str) -> &'a str {
+    if prefix.is_empty() {
+        return path;
+    }
+    match path.strip_prefix(prefix) {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => rest,
+        _ => path,
+    }
+}
+
 fn extension_of(title: &str) -> String {
     if title.contains('.') {
         title
@@ -566,6 +579,15 @@ impl ConfluenceClient {
         Err(FetchFailure::Refused)
     }
 
+    /// The URL of a `_links.download` path (see [`Self::download_link`]),
+    /// `None` when it leaves this origin.
+    fn link_url(&self, link: &str) -> Option<Url> {
+        let url = Url::parse(&self.download_link(link)).ok()?;
+        let root = self.config.api_root();
+        (url.origin() == root.origin() && url.username().is_empty() && url.fragment().is_none())
+            .then_some(url)
+    }
+
     /// The absolute address of a `_links.download` path: under the API root
     /// (Cloud: `.../wiki`), with that prefix exactly once.
     fn download_link(&self, link: &str) -> String {
@@ -621,7 +643,7 @@ impl ConfluenceClient {
                         .and_then(|attachment| attachment.pointer("/_links/download"))
                         .and_then(Value::as_str)
                 {
-                    return self.file_url(link);
+                    return self.link_url(link);
                 }
             }
         }
@@ -648,11 +670,7 @@ impl ConfluenceClient {
         {
             // Under the bare base: a path that already carries the API
             // root's own prefix (`/wiki/...`) is relative to the root.
-            if cloud_prefix.is_empty() {
-                rest
-            } else {
-                rest.strip_prefix(cloud_prefix).unwrap_or(rest)
-            }
+            strip_path_prefix(rest, cloud_prefix)
         } else if let Some(at) = ["/download/attachments/", "/download/thumbnails/"]
             .iter()
             .find_map(|pattern| parsed.find(pattern))
@@ -660,10 +678,8 @@ impl ConfluenceClient {
             &parsed[at..]
         } else if parsed.starts_with("http") {
             return None;
-        } else if !cloud_prefix.is_empty() {
-            parsed.strip_prefix(cloud_prefix).unwrap_or(parsed)
         } else {
-            parsed
+            strip_path_prefix(parsed, cloud_prefix)
         };
         self.file_url(relative)
     }
@@ -940,7 +956,7 @@ impl ConfluenceClient {
             }
         }
         let mut tally = PictureTally::default();
-        let mut no_model = false;
+        let mut no_model = self.attachments.is_none();
         let mut results: Vec<Value> = Vec::new();
         for attachment in &selection.selected {
             let title = attachment
@@ -1004,7 +1020,7 @@ impl ConfluenceClient {
             let mut analysis: Option<String> = None;
             let is_text = TEXT_MEDIA_TYPES.contains(&media_type)
                 || TEXT_EXTENSIONS.contains(&file_ext.as_str());
-            let url = link.and_then(|link| self.file_url(link));
+            let url = link.and_then(|link| self.link_url(link));
             if is_text {
                 body_text = Some(match url {
                     None => {
@@ -1464,7 +1480,8 @@ impl<'a> PageWork<'a> {
             listing: None,
             tally: PictureTally::default(),
             described: HashMap::new(),
-            no_model: false,
+            // Without a host there is no model: no picture is fetched.
+            no_model: client.attachments.is_none(),
             skipped_no_model: 0,
         }
     }
@@ -1670,5 +1687,25 @@ impl<'a> PageWork<'a> {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::strip_path_prefix;
+
+    #[test]
+    fn a_path_prefix_is_removed_only_as_a_whole_segment() {
+        assert_eq!(
+            strip_path_prefix("/wiki/download/x", "/wiki"),
+            "/download/x"
+        );
+        assert_eq!(strip_path_prefix("/wiki", "/wiki"), "");
+        assert_eq!(
+            strip_path_prefix("/wikifoo/download/x", "/wiki"),
+            "/wikifoo/download/x"
+        );
+        assert_eq!(strip_path_prefix("/download/x", "/wiki"), "/download/x");
+        assert_eq!(strip_path_prefix("/download/x", ""), "/download/x");
     }
 }

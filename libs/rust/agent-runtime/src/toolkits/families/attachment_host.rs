@@ -278,6 +278,35 @@ impl AttachmentHost {
         media_type: &str,
         bytes: Vec<u8>,
     ) -> Result<ArtifactStored, AttachmentError> {
+        self.write_unique(bucket, stem, ext, media_type, bytes, false)
+            .await
+    }
+
+    /// [`Self::write_unique_artifact`] for a bucket the TOOL derived (not one
+    /// the user or model named): a missing bucket is created once, an
+    /// existing one is success. Never used for a supplied bucket, which is
+    /// the caller's to create on purpose.
+    pub(crate) async fn write_unique_artifact_creating_bucket(
+        &self,
+        bucket: &str,
+        stem: &str,
+        ext: &str,
+        media_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<ArtifactStored, AttachmentError> {
+        self.write_unique(bucket, stem, ext, media_type, bytes, true)
+            .await
+    }
+
+    async fn write_unique(
+        &self,
+        bucket: &str,
+        stem: &str,
+        ext: &str,
+        media_type: &str,
+        bytes: Vec<u8>,
+        create_bucket: bool,
+    ) -> Result<ArtifactStored, AttachmentError> {
         let mut last = AttachmentError::Host(Step::Write, OfficeFailure::AlreadyExists);
         let mut bucket_ensured = false;
         let mut attempt = 1;
@@ -298,7 +327,7 @@ impl AttachmentHost {
                 // A bucket this tool derives may not exist in a fresh
                 // project: create it once, then write again (the same name).
                 Err(AttachmentError::Host(Step::Write, OfficeFailure::NotFound))
-                    if !bucket_ensured =>
+                    if create_bucket && !bucket_ensured =>
                 {
                     bucket_ensured = true;
                     self.ensure_bucket(bucket).await?;
@@ -374,28 +403,37 @@ fn clip(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
 
-/// A bucket name the platform accepts, derived from any text: lowercase
-/// letters, digits and hyphens, starting with a letter, at most 63 bytes;
-/// `fallback` when nothing usable is left.
-pub(crate) fn derived_bucket_name(raw: &str, fallback: &str) -> String {
-    let mut name = String::new();
+/// A bucket name the platform accepts for a bucket a tool derives from
+/// other text: `{prefix}-{text}` with the text lowercased and every other
+/// character a hyphen, at most 63 bytes. Deterministic, and two different
+/// texts do not share a bucket: when the text had to be changed (or cut), a
+/// short digest of the original is appended, so `a_b` and `a b` stay apart.
+pub(crate) fn derived_bucket_name(prefix: &str, raw: &str) -> String {
+    let mut text = String::new();
     for c in raw.chars() {
         let c = c.to_ascii_lowercase();
         if c.is_ascii_lowercase() || c.is_ascii_digit() {
-            name.push(c);
-        } else if !name.ends_with('-') {
-            name.push('-');
+            text.push(c);
+        } else if !text.ends_with('-') {
+            text.push('-');
         }
     }
-    let name = name.trim_matches('-');
-    let name = name.trim_start_matches(|c: char| c.is_ascii_digit());
-    let name: String = name.chars().take(63).collect();
-    let name = name.trim_matches('-');
-    if name.len() < 2 {
-        fallback.to_owned()
-    } else {
-        name.to_owned()
+    let text = text.trim_matches('-');
+    let mut name = format!("{prefix}-{text}");
+    if text != raw || name.len() > 63 {
+        let digest = ring::digest::digest(&ring::digest::SHA256, raw.as_bytes());
+        let mut suffix = String::from("-");
+        for byte in &digest.as_ref()[..4] {
+            let _ = write!(suffix, "{byte:02x}");
+        }
+        let room = 63 - suffix.len();
+        name.truncate(room);
+        while name.ends_with('-') {
+            name.pop();
+        }
+        name.push_str(&suffix);
     }
+    name
 }
 
 /// `/{bucket}/{key}` (the form the platform shows for a file) or
@@ -620,8 +658,11 @@ pub(crate) struct MultipartBody {
     pub(crate) bytes: Vec<u8>,
 }
 
-/// Build the body of an upload. The boundary is random per body; `file_name`
-/// must already be a plain name (see [`upload_name_is_valid`]).
+/// Build the body of an upload. The boundary is random per body and is
+/// checked against every part (a boundary that occurs in a payload is
+/// replaced); `file_name` is sent as it is, UTF-8 included, exactly as Python
+/// `requests` sends it (a quote, a backslash and control characters cannot
+/// end the header line: see [`header_quote`]).
 pub(crate) fn multipart_upload(
     fields: &[(&str, &str)],
     file_field: &str,
@@ -629,19 +670,66 @@ pub(crate) fn multipart_upload(
     file_media_type: &str,
     file: &[u8],
 ) -> MultipartBody {
+    multipart_with(
+        &mut random_boundary,
+        fields,
+        file_field,
+        file_name,
+        file_media_type,
+        file,
+    )
+}
+
+/// A boundary nobody can predict: 128 random bits. Where the system source
+/// fails, a process-wide counter mixed with the clock keeps boundaries
+/// distinct; the caller's occurrence check, not secrecy, is what makes the
+/// body well-formed either way.
+fn random_boundary() -> String {
     use ring::rand::SecureRandom as _;
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let mut random = [0_u8; 16];
     if ring::rand::SystemRandom::new().fill(&mut random).is_err() {
-        // No random source: the clock still makes the boundary unlikely to
-        // occur in the file.
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
-        random = nanos.to_be_bytes();
+        let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        random[..8].copy_from_slice(&count.to_be_bytes());
+        random[8..].copy_from_slice(&nanos.to_be_bytes()[8..]);
     }
     let mut boundary = String::from("----elitea");
     for byte in random {
         let _ = write!(boundary, "{byte:02x}");
+    }
+    boundary
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
+fn multipart_with(
+    next_boundary: &mut dyn FnMut() -> String,
+    fields: &[(&str, &str)],
+    file_field: &str,
+    file_name: &str,
+    file_media_type: &str,
+    file: &[u8],
+) -> MultipartBody {
+    // Regenerate until the delimiter occurs in no part payload.
+    let mut boundary = next_boundary();
+    for _ in 0..64 {
+        let delimiter = format!("--{boundary}");
+        if !contains_bytes(file, delimiter.as_bytes())
+            && !fields
+                .iter()
+                .any(|(_, value)| value.contains(delimiter.as_str()))
+        {
+            break;
+        }
+        boundary = next_boundary();
     }
     let delimiter = format!("--{boundary}");
     let mut bytes = Vec::with_capacity(file.len() + 1024);
@@ -654,19 +742,13 @@ pub(crate) fn multipart_upload(
             .as_bytes(),
         );
     }
-    let ascii = file_name.is_ascii();
-    let extended = if ascii {
-        String::new()
-    } else {
-        format!(
-            "; filename*=UTF-8''{}",
-            percent_encoding::utf8_percent_encode(file_name, percent_encoding::NON_ALPHANUMERIC)
-        )
+    let shown = match header_quote(file_name) {
+        shown if shown.is_empty() => "attachment".to_owned(),
+        shown => shown,
     };
-    let shown = header_quote(&ascii_file_name(file_name));
     bytes.extend_from_slice(
         format!(
-            "{delimiter}\r\nContent-Disposition: form-data; name=\"{}\"; filename=\"{shown}\"{extended}\r\nContent-Type: {file_media_type}\r\n\r\n",
+            "{delimiter}\r\nContent-Disposition: form-data; name=\"{}\"; filename=\"{shown}\"\r\nContent-Type: {file_media_type}\r\n\r\n",
             header_quote(file_field)
         )
         .as_bytes(),
@@ -679,55 +761,20 @@ pub(crate) fn multipart_upload(
     }
 }
 
-/// The plain-ASCII `filename=` that stands beside `filename*` for a name with
-/// other characters: the ASCII characters of the name when a stem is left,
-/// else `attachment-<hash>` (a stable digest of the real name) with the
-/// name's ASCII extension. Never an empty stem such as `.pdf`.
-pub(crate) fn ascii_file_name(name: &str) -> String {
-    if name.is_ascii() {
-        return name.to_owned();
-    }
-    let (stem, extension) = match name.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() => (stem, extension),
-        _ => (name, ""),
-    };
-    let stem: String = stem
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ' ' | '(' | ')'))
-        .collect();
-    let stem = stem.trim().to_owned();
-    let extension: String = extension
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .take(16)
-        .collect();
-    let stem = if stem.is_empty() {
-        let digest = ring::digest::digest(&ring::digest::SHA256, name.as_bytes());
-        let mut stem = String::from("attachment-");
-        for byte in &digest.as_ref()[..4] {
-            let _ = write!(stem, "{byte:02x}");
-        }
-        stem
-    } else {
-        stem
-    };
-    if extension.is_empty() {
-        stem
-    } else {
-        format!("{stem}.{extension}")
-    }
-}
-
+/// A header parameter value that cannot end its line or its quotes: control
+/// characters (CR and LF included) are dropped, `"` becomes `%22` and `\`
+/// becomes `%5C` (what `urllib3` does); everything else, UTF-8 included, is
+/// sent as it is.
 fn header_quote(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| !character.is_control())
-        .flat_map(|character| match character {
-            '"' => vec!['%', '2', '2'],
-            '\\' => vec!['/'],
-            other => vec![other],
-        })
-        .collect()
+    let mut quoted = String::with_capacity(value.len());
+    for character in value.chars().filter(|character| !character.is_control()) {
+        match character {
+            '"' => quoted.push_str("%22"),
+            '\\' => quoted.push_str("%5C"),
+            other => quoted.push(other),
+        }
+    }
+    quoted
 }
 
 /// A name a tool uploads a file under: not empty, at most 255 bytes, with no
@@ -796,21 +843,39 @@ mod tests {
     }
 
     #[test]
-    fn derived_bucket_names_follow_the_platform_rule() {
-        assert_eq!(derived_bucket_name("My_Test 1", "x-fallback"), "my-test-1");
+    fn derived_bucket_names_are_valid_deterministic_and_collision_resistant() {
+        assert_eq!(derived_bucket_name("carrier", "mytest1"), "carrier-mytest1");
+        let names = [
+            derived_bucket_name("carrier", "a_b"),
+            derived_bucket_name("carrier", "a b"),
+            derived_bucket_name("carrier", "A-B"),
+            derived_bucket_name("carrier", "a-b"),
+            derived_bucket_name("carrier", "123"),
+            derived_bucket_name("carrier", "--"),
+            derived_bucket_name("carrier", "日本"),
+            derived_bucket_name("carrier", "中文"),
+        ];
+        for (index, name) in names.iter().enumerate() {
+            assert!(name.starts_with("carrier-"), "{name}");
+            assert!(name.len() <= 63, "{name}");
+            assert!(
+                name.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+                "{name}"
+            );
+            for other in &names[index + 1..] {
+                assert_ne!(name, other, "two different texts must not share a bucket");
+            }
+        }
+        // Deterministic, and a long text is cut but still distinct.
         assert_eq!(
-            derived_bucket_name("reports_test_results_b7", "x-fallback"),
-            "reports-test-results-b7"
+            derived_bucket_name("carrier", "a_b"),
+            derived_bucket_name("carrier", "a_b")
         );
-        assert_eq!(
-            derived_bucket_name("123", "carrier-reports"),
-            "carrier-reports"
-        );
-        assert_eq!(
-            derived_bucket_name("--", "carrier-reports"),
-            "carrier-reports"
-        );
-        assert!(derived_bucket_name(&"a".repeat(200), "f").len() <= 63);
+        let long_a = derived_bucket_name("carrier", &format!("{}x", "a".repeat(200)));
+        let long_b = derived_bucket_name("carrier", &format!("{}y", "a".repeat(200)));
+        assert!(long_a.len() <= 63 && long_b.len() <= 63);
+        assert_ne!(long_a, long_b);
     }
 
     #[tokio::test]
@@ -820,7 +885,7 @@ mod tests {
         platform.no_buckets();
         let host = platform.host();
         let stored = host
-            .write_unique_artifact("fresh", "report", "xlsx", "x/y", b"1".to_vec())
+            .write_unique_artifact_creating_bucket("fresh", "report", "xlsx", "x/y", b"1".to_vec())
             .await
             .expect("stored");
         assert_eq!(
@@ -836,11 +901,30 @@ mod tests {
             .await
             .expect("already exists is success");
         let second = host
-            .write_unique_artifact("fresh", "report", "xlsx", "x/y", b"2".to_vec())
+            .write_unique_artifact_creating_bucket("fresh", "report", "xlsx", "x/y", b"2".to_vec())
             .await
             .expect("stored");
         assert_eq!(second.key, "report-2.xlsx");
         assert_eq!(platform.created.lock().expect("created").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_supplied_bucket_that_does_not_exist_is_never_created() {
+        use crate::toolkits::families::office_host::OfficeFailure;
+        let platform = crate::toolkits::attachment_test_support::FakePlatform::new();
+        platform.no_buckets();
+        let error = platform
+            .host()
+            .write_unique_artifact("typo-bucket", "r", "zip", "x/y", b"1".to_vec())
+            .await
+            .expect_err("not found");
+        assert_eq!(
+            error,
+            AttachmentError::Host(Step::Write, OfficeFailure::NotFound)
+        );
+        assert!(error.sentence().contains("nothing was stored"));
+        assert!(platform.created.lock().expect("created").is_empty());
+        assert!(platform.objects.lock().expect("objects").is_empty());
     }
 
     #[tokio::test]
@@ -851,7 +935,7 @@ mod tests {
         platform.fail_create(OfficeFailure::Unsupported);
         let error = platform
             .host()
-            .write_unique_artifact("fresh", "r", "zip", "x/y", b"1".to_vec())
+            .write_unique_artifact_creating_bucket("fresh", "r", "zip", "x/y", b"1".to_vec())
             .await
             .expect_err("no bucket");
         assert_eq!(
@@ -862,27 +946,43 @@ mod tests {
     }
 
     #[test]
-    fn non_ascii_upload_names_get_a_stable_ascii_fallback_with_the_extension() {
-        assert_eq!(ascii_file_name("report.pdf"), "report.pdf");
-        assert_eq!(ascii_file_name("отчёт.pdf"), ascii_file_name("отчёт.pdf"));
-        let fallback = ascii_file_name("отчёт.pdf");
-        assert!(
-            fallback.starts_with("attachment-")
-                && std::path::Path::new(&fallback)
-                    .extension()
-                    .is_some_and(|extension| extension == "pdf"),
-            "{fallback}"
-        );
-        assert_ne!(fallback, ascii_file_name("другой.pdf"));
-        assert_eq!(
-            ascii_file_name("Quarterly отчёт.xlsx"),
-            "Quarterly".to_owned() + ".xlsx"
-        );
-        let body = multipart_upload(&[], "file", "日本語.png", "image/png", b"x");
+    fn upload_names_are_sent_as_they_are_with_quotes_and_line_breaks_neutralised() {
+        let body = multipart_upload(&[], "file", "отчёт.pdf", "application/pdf", b"x");
         let text = String::from_utf8(body.bytes).expect("utf8");
-        assert!(!text.contains("filename=\".png\""), "{text}");
-        assert!(text.contains("filename=\"attachment-"), "{text}");
-        assert!(text.contains("filename*=UTF-8''"), "{text}");
+        assert!(text.contains("filename=\"отчёт.pdf\"\r\n"), "{text}");
+        assert!(!text.contains("filename*"), "{text}");
+        let body = multipart_upload(&[], "file", "a\"b\\c\r\nX: y.txt", "text/plain", b"x");
+        let text = String::from_utf8(body.bytes).expect("utf8");
+        assert!(
+            text.contains("filename=\"a%22b%5CcX: y.txt\"\r\n"),
+            "{text}"
+        );
+        assert_eq!(text.matches("\r\nX: y.txt").count(), 0);
+        // Nothing usable left: a plain stand-in, never an empty name.
+        let body = multipart_upload(&[], "file", "\r\n", "text/plain", b"x");
+        let text = String::from_utf8(body.bytes).expect("utf8");
+        assert!(text.contains("filename=\"attachment\"\r\n"), "{text}");
+    }
+
+    #[test]
+    fn a_boundary_found_in_a_payload_is_replaced_before_it_is_used() {
+        let mut offered = vec!["----clean".to_owned(), "----inside".to_owned()];
+        let mut next = || offered.pop().expect("a boundary");
+        let body = multipart_with(
+            &mut next,
+            &[("note", "has ------inside in it")],
+            "file",
+            "f.bin",
+            "application/octet-stream",
+            b"bytes ------inside bytes",
+        );
+        // "----inside" is offered first (popped from the end) and occurs in
+        // the payloads, so "----clean" is used.
+        assert_eq!(body.content_type, "multipart/form-data; boundary=----clean");
+        let text = String::from_utf8_lossy(&body.bytes);
+        assert_eq!(text.matches("------clean").count(), 3);
+        // Two random boundaries differ.
+        assert_ne!(random_boundary(), random_boundary());
     }
 
     #[test]

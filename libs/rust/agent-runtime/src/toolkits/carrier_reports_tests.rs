@@ -741,12 +741,12 @@ async fn excel_report_from_a_report_id_stores_the_sdk_sheet_in_the_artifact_stor
     assert_eq!(
         answer,
         json!(
-            "Excel report generated and stored in the project's artifact store, bucket mytest1, report name: reports_test_results_b7_excel_report.xlsx, artifact path: /mytest1/reports_test_results_b7_excel_report.xlsx"
+            "Excel report generated and stored in the project's artifact store, bucket carrier-mytest1, report name: reports_test_results_b7_excel_report.xlsx, artifact path: /carrier-mytest1/reports_test_results_b7_excel_report.xlsx"
         )
     );
     assert_eq!(
         *platform.created.lock().expect("created"),
-        ["mytest1".to_owned()]
+        ["carrier-mytest1".to_owned()]
     );
     // The first write found no bucket; the retry after creating it stored.
     let writes = platform.writes.lock().expect("writes").clone();
@@ -756,7 +756,10 @@ async fn excel_report_from_a_report_id_stores_the_sdk_sheet_in_the_artifact_stor
         "never asks to overwrite"
     );
     let stored = platform
-        .get("mytest1", "reports_test_results_b7_excel_report.xlsx")
+        .get(
+            "carrier-mytest1",
+            "reports_test_results_b7_excel_report.xlsx",
+        )
         .expect("stored");
     let workbook =
         elitea_office_core::Workbook::open(&stored, &elitea_office_core::Limits::default())
@@ -789,11 +792,14 @@ async fn excel_report_from_a_report_id_stores_the_sdk_sheet_in_the_artifact_stor
         again
             .as_str()
             .expect("text")
-            .contains("/mytest1/reports_test_results_b7_excel_report-2.xlsx")
+            .contains("/carrier-mytest1/reports_test_results_b7_excel_report-2.xlsx")
     );
     assert!(
         platform
-            .get("mytest1", "reports_test_results_b7_excel_report.xlsx")
+            .get(
+                "carrier-mytest1",
+                "reports_test_results_b7_excel_report.xlsx"
+            )
             .is_some()
     );
 }
@@ -813,7 +819,7 @@ async fn excel_report_from_a_bucket_file_reads_it_with_the_bare_header() {
         .expect("report");
     let text = answer.as_str().expect("text");
     assert!(
-        text.contains("bucket results, report name: run.jtl_"),
+        text.contains("bucket carrier-results, report name: run.jtl_"),
         "{text}"
     );
     let seen = transport.seen();
@@ -829,7 +835,9 @@ async fn excel_report_from_a_bucket_file_reads_it_with_the_bare_header() {
         Some("bearer carrier-super-secret")
     );
     let writes = platform.writes.lock().expect("writes").clone();
-    let stored = platform.get("results", &writes[0].1).expect("stored");
+    let stored = platform
+        .get("carrier-results", &writes[0].1)
+        .expect("stored");
     let workbook =
         elitea_office_core::Workbook::open(&stored, &elitea_office_core::Limits::default())
             .expect("xlsx");
@@ -1055,13 +1063,15 @@ async fn ui_excel_report_stores_one_sheet_per_lighthouse_json() {
         "{text}"
     );
     assert!(text.contains("- **JSON Files Processed:** `2`"));
-    assert!(text.contains("- **Bucket:** `checkoutflow`"));
+    assert!(text.contains("- **Bucket:** `carrier-checkoutflow`"));
     assert!(!text.contains("Skipped"));
     let writes = platform.writes.lock().expect("writes").clone();
     assert_eq!(writes.len(), 1);
     assert!(!writes[0].3);
     assert!(writes[0].1.starts_with("ui_report_5_"));
-    let stored = platform.get("checkoutflow", &writes[0].1).expect("stored");
+    let stored = platform
+        .get("carrier-checkoutflow", &writes[0].1)
+        .expect("stored");
     let workbook =
         elitea_office_core::Workbook::open(&stored, &elitea_office_core::Limits::default())
             .expect("xlsx");

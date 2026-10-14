@@ -897,3 +897,26 @@ async fn uploads_validate_and_report_host_failures_before_sending_anything() {
     assert!(denied.contains("refused access"), "{denied}");
     assert_eq!(uploads_of(&transport), 0);
 }
+
+#[tokio::test]
+async fn an_all_zero_test_case_id_is_invalid_arguments_and_nothing_is_read_or_sent() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    let (transport, tools) = attach_tools(&platform).await;
+    for id in ["0", "000", " 00 "] {
+        let error = find(&tools, "add_file_to_test_case")
+            .execute(
+                context(),
+                json!({"test_case_id": id, "filepath": "/bucket/a.txt"}),
+            )
+            .await
+            .expect_err("an id of zero is refused");
+        assert_eq!(
+            error.category,
+            adk_core::ErrorCategory::InvalidInput,
+            "{id}"
+        );
+    }
+    assert!(transport.targets().is_empty());
+    assert_eq!(platform.read_count(), 0);
+}

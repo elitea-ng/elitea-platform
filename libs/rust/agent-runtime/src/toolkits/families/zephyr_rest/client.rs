@@ -804,3 +804,28 @@ pub(in crate::toolkits) const fn unknown_outcome() -> ZephyrRestError {
         retryable: false,
     }
 }
+
+#[cfg(test)]
+mod multipart_tests {
+    use super::{MultipartFile, encode_multipart};
+
+    #[test]
+    fn a_non_ascii_name_is_sent_as_it_is_with_one_boundary() {
+        let (content_type, body) = encode_multipart(&MultipartFile {
+            field: "file",
+            file_name: "результаты.xml",
+            media_type: "application/xml",
+            bytes: b"<x/>",
+        })
+        .expect("part");
+        let text = String::from_utf8(body).expect("utf8");
+        assert!(
+            text.contains("name=\"file\"; filename=\"результаты.xml\"\r\n"),
+            "{text}"
+        );
+        assert!(text.contains("Content-Type: application/xml\r\n"), "{text}");
+        assert!(!text.contains("filename*"), "{text}");
+        let boundary = content_type.split("boundary=").nth(1).expect("boundary");
+        assert!(text.ends_with(&format!("\r\n--{boundary}--\r\n")));
+    }
+}

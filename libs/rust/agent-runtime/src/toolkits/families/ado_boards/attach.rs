@@ -28,6 +28,9 @@ pub(super) const MAX_NAME_BYTES: usize = 255;
 pub(super) const MAX_URL_BYTES: usize = 8_192;
 /// `_MAX_IMAGE_PIXELS_FOR_LLM`.
 const MAX_IMAGE_PIXELS: u64 = 36_000_000;
+/// How many times the inline field is read and written when the work item
+/// changes between the read and the write.
+const MAX_FIELD_ATTEMPTS: u32 = 3;
 const COMMENTS_API: &str = "7.1-preview.4";
 const ATTACHMENTS_API: &str = "7.1-preview.3";
 /// `image_processing_prompt`, the SDK's default image prompt, verbatim.
@@ -217,43 +220,83 @@ impl AdoBoardsClient {
         if let Some(comment) = request.comment.filter(|comment| !comment.is_empty()) {
             relation["attributes"]["comment"] = Value::String(comment.to_owned());
         }
-        let mut document = vec![json!({"op": "add", "path": "/relations/-", "value": relation})];
 
-        // Step 2 (optional): the new value of the inline field. A field that
-        // cannot be read is left alone: writing "the new markup only" would
-        // replace what it holds.
-        let mut inline_applied = None;
-        if let Some(field) = request.inline_field {
-            match get_work_item(&self.ado, id, Some(&[field.to_owned()]), None, None).await {
-                Ok(item) => {
-                    let current = item
-                        .get("fields")
-                        .and_then(|fields| fields.get(field))
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    let value = format!("{current}{}", inline_markup(&attachment_url, &name, is_image));
-                    document.push(json!({"op": "add", "path": format!("/fields/{field}"), "value": value}));
-                    inline_applied = Some(field);
+        // Steps 2 and 3. With an inline field the new value is the field's
+        // current value plus the markup, so the update is guarded by the
+        // revision of the SAME read (`test /rev`): a work item edited in
+        // between answers 409/412, and the field is read again (a bounded
+        // number of times). A field that cannot be read is left alone:
+        // writing "the new markup only" would replace what it holds.
+        let mut inline_applied: Option<&str>;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut document =
+                vec![json!({"op": "add", "path": "/relations/-", "value": relation})];
+            inline_applied = None;
+            let mut field_warning = None;
+            if let Some(field) = request.inline_field {
+                match get_work_item(&self.ado, id, Some(&[field.to_owned()]), None, None).await {
+                    Ok(item) => match item.get("rev").and_then(Value::as_u64) {
+                        Some(rev) => {
+                            let current = item
+                                .get("fields")
+                                .and_then(|fields| fields.get(field))
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            let value = format!(
+                                "{current}{}",
+                                inline_markup(&attachment_url, &name, is_image)
+                            );
+                            document.insert(0, json!({"op": "test", "path": "/rev", "value": rev}));
+                            document.push(json!({"op": "add", "path": format!("/fields/{field}"), "value": value}));
+                            inline_applied = Some(field);
+                        }
+                        None => {
+                            field_warning = Some(format!(
+                                "the field '{field}' was not updated because Azure DevOps returned no revision to guard the update with"
+                            ));
+                        }
+                    },
+                    Err(error) => {
+                        field_warning = Some(format!(
+                            "the field '{field}' was not updated because its current value could not be read ({})",
+                            cause(&error)
+                        ));
+                    }
                 }
-                Err(error) => warnings.push(format!(
-                    "the field '{field}' was not updated because its current value could not be read ({})",
-                    cause(&error)
-                )),
             }
-        }
-
-        // Step 3: link (and the field, in the same atomic update).
-        if let Err(error) = update_work_item(&self.ado, &id.to_string(), document).await {
-            let state = if unknown(&error) {
-                format!(
-                    "'{name}' was uploaded as attachment {uploaded_text} and may or may not be linked to work item {id}; check the work item's attachments before retrying"
-                )
-            } else {
-                format!(
-                    "'{name}' was uploaded as attachment {uploaded_text} but NOT linked to work item {id}, which is unchanged; retrying uploads the file again"
-                )
-            };
-            return Ok(Value::String(format!("{state}: {}.", cause(&error))));
+            match update_work_item(&self.ado, &id.to_string(), document).await {
+                Ok(_) => {
+                    warnings.extend(field_warning);
+                    break;
+                }
+                Err(error)
+                    if inline_applied.is_some()
+                        && error.code() == AdoClientErrorCode::Conflict
+                        && attempt < MAX_FIELD_ATTEMPTS => {}
+                Err(error) => {
+                    let conflict = if inline_applied.is_some()
+                        && error.code() == AdoClientErrorCode::Conflict
+                    {
+                        format!(
+                            "the work item changed on every one of {attempt} attempts (its revision no longer matched)"
+                        )
+                    } else {
+                        cause(&error)
+                    };
+                    let state = if unknown(&error) {
+                        format!(
+                            "'{name}' was uploaded as attachment {uploaded_text} and may or may not be linked to work item {id}; check the work item's attachments before retrying"
+                        )
+                    } else {
+                        format!(
+                            "'{name}' was uploaded as attachment {uploaded_text} but NOT linked to work item {id}, which is unchanged; retrying uploads the file again"
+                        )
+                    };
+                    return Ok(Value::String(format!("{state}: {conflict}.")));
+                }
+            }
         }
 
         // Step 4 (optional): the comment. The file is attached either way.

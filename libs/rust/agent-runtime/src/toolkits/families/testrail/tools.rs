@@ -23,6 +23,9 @@ pub(super) const MAX_OUTPUT_BYTES: usize = 512 * 1_024;
 const MAX_ARGUMENT_BYTES: usize = 256 * 1_024;
 const MAX_DESCRIPTION_CHARS: usize = 1_000;
 const MAX_BULK_PAGES: u64 = 40;
+/// How many times the embed field is re-read and re-applied when it changes
+/// between the read and the write.
+const MAX_EMBED_ATTEMPTS: u32 = 3;
 const MAX_CASES_PER_CALL: usize = 100;
 const MAX_KEYS: usize = 128;
 const MAX_FILTER_MEMBERS: usize = 64;
@@ -940,35 +943,46 @@ impl Operations<'_> {
             )));
         };
         // The field's current value is read and kept: the new reference is
-        // appended, never written over what is there. A field that cannot be
-        // read is not touched.
-        let current = match self
-            .client
-            .get(&format!("get_case/{case}"), &Vec::new())
+        // appended, never written over what is there. The value is read again
+        // immediately before the write and compared with the first read; if
+        // it changed, the reference is applied to the fresh value instead (a
+        // bounded number of times). TestRail has no conditional write, so an
+        // edit landing between that second read and the write itself can
+        // still be lost: that window is a few milliseconds, not the whole
+        // call.
+        let mut seen = match self
+            .embed_field_value(case, field, &filename, &attachment_id)
             .await
         {
-            Ok(current) => match current.get(field) {
-                None | Some(Value::Null) => String::new(),
-                Some(Value::String(text)) => text.clone(),
-                Some(_) => {
-                    return Ok(Value::String(format!(
-                        "File '{filename}' attached to test case {case} (attachment_id: {attachment_id}), but field '{field}' is not a text field, so it was left unchanged."
-                    )));
-                }
-            },
-            Err(error) => {
+            Ok(value) => value,
+            Err(sentence) => return Ok(Value::String(sentence)),
+        };
+        let mut body = Map::new();
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let separator = if seen.is_empty() { "" } else { "<br/>" };
+            body.insert(
+                field.to_owned(),
+                Value::String(format!("{seen}{separator}{before}{inline_ref}{after}")),
+            );
+            let fresh = match self
+                .embed_field_value(case, field, &filename, &attachment_id)
+                .await
+            {
+                Ok(value) => value,
+                Err(sentence) => return Ok(Value::String(sentence)),
+            };
+            if fresh == seen {
+                break;
+            }
+            if attempt >= MAX_EMBED_ATTEMPTS {
                 return Ok(Value::String(format!(
-                    "File '{filename}' attached to test case {case} (attachment_id: {attachment_id}), but the current value of field '{field}' could not be read ({}), so the field was left unchanged.",
-                    embed_failure(&error)
+                    "File '{filename}' attached to test case {case} (attachment_id: {attachment_id}), but field '{field}' changed on every one of {attempt} attempts, so it was left unchanged."
                 )));
             }
-        };
-        let separator = if current.is_empty() { "" } else { "<br/>" };
-        let mut body = Map::new();
-        body.insert(
-            field.to_owned(),
-            Value::String(format!("{current}{separator}{before}{inline_ref}{after}")),
-        );
+            seen = fresh;
+        }
         Ok(Value::String(
             match self
                 .client
@@ -988,6 +1002,42 @@ impl Operations<'_> {
                 ),
             },
         ))
+    }
+
+    /// The text of `field` on `case` right now. `Err` carries the sentence
+    /// for a field that must be left alone: unreadable, not a text field, or
+    /// not on this case's template (a key that is missing, as opposed to an
+    /// explicit null, which is an empty field).
+    async fn embed_field_value(
+        &self,
+        case: u64,
+        field: &str,
+        filename: &str,
+        attachment_id: &str,
+    ) -> Result<String, String> {
+        let current = match self
+            .client
+            .get(&format!("get_case/{case}"), &Vec::new())
+            .await
+        {
+            Ok(current) => current,
+            Err(error) => {
+                return Err(format!(
+                    "File '{filename}' attached to test case {case} (attachment_id: {attachment_id}), but the current value of field '{field}' could not be read ({}), so the field was left unchanged.",
+                    embed_failure(&error)
+                ));
+            }
+        };
+        match current.get(field) {
+            Some(Value::Null) => Ok(String::new()),
+            Some(Value::String(text)) => Ok(text.clone()),
+            Some(_) => Err(format!(
+                "File '{filename}' attached to test case {case} (attachment_id: {attachment_id}), but field '{field}' is not a text field, so it was left unchanged."
+            )),
+            None => Err(format!(
+                "File '{filename}' attached to test case {case} (attachment_id: {attachment_id}); the field '{field}' is not on this case's template, so the file is attached and the field is unchanged."
+            )),
+        }
     }
 
     async fn add_cases(&self, arguments: &Map<String, Value>) -> Result<Value, AdkError> {

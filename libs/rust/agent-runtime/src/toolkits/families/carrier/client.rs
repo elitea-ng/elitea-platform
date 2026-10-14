@@ -712,3 +712,19 @@ const fn unknown_outcome() -> CarrierClientError {
         retryable: false,
     }
 }
+
+#[cfg(test)]
+mod multipart_tests {
+    use super::encode_file_part;
+
+    #[test]
+    fn a_non_ascii_name_is_sent_as_it_is_with_one_boundary() {
+        let (content_type, body) = encode_file_part("отчёт_2026.zip", b"zip bytes").expect("part");
+        let text = String::from_utf8(body).expect("utf8");
+        assert!(text.contains("filename=\"отчёт_2026.zip\"\r\n"), "{text}");
+        assert!(!text.contains("filename*"), "{text}");
+        let boundary = content_type.split("boundary=").nth(1).expect("boundary");
+        assert!(text.ends_with(&format!("\r\n--{boundary}--\r\n")));
+        assert!(encode_file_part("", b"x").is_err());
+    }
+}

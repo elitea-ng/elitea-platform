@@ -881,6 +881,8 @@ async fn bdd_archive_is_stored_as_a_new_artifact() {
         *platform.created.lock().expect("created"),
         ["zephyr-bdd".to_owned()]
     );
+    // A bucket the caller names must exist.
+    platform.add_bucket("mine");
     let second = tools[0]
         .execute(
             tool_context(),
@@ -929,6 +931,30 @@ async fn bdd_archive_is_stored_as_a_new_artifact() {
         platform.get("zephyr-bdd", "zephyr-bdd-PRJ.zip"),
         Some(b"old".to_vec())
     );
+}
+
+#[tokio::test]
+async fn a_named_bucket_that_does_not_exist_is_not_created() {
+    let zip = b"PK\x03\x04 archive body".to_vec();
+    let transport = FixtureTransport::new([Ok(ZephyrRestResponse::fixture(
+        StatusCode::OK,
+        Some("application/zip"),
+        &zip,
+    ))]);
+    let platform = FakePlatform::new();
+    platform.no_buckets();
+    let tools = host_tools(&transport, &platform, &["retrieve_bdd_test_cases"]).await;
+    let reply = tools[0]
+        .execute(
+            tool_context(),
+            json!({"project_key":"PRJ","bucket":"typo-bucket"}),
+        )
+        .await
+        .expect("a sentence");
+    let text = reply.as_str().expect("text");
+    assert!(text.contains("bucket was not found"), "{text}");
+    assert!(text.contains("nothing was stored"), "{text}");
+    assert!(platform.created.lock().expect("created").is_empty());
 }
 
 #[tokio::test]

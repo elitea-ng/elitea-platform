@@ -72,6 +72,13 @@ impl FakePlatform {
         *self.buckets.lock().expect("buckets") = Some(std::collections::BTreeSet::new());
     }
 
+    /// A bucket that exists in a fresh project.
+    pub(super) fn add_bucket(&self, name: &str) {
+        if let Some(set) = self.buckets.lock().expect("buckets").as_mut() {
+            set.insert(name.to_owned());
+        }
+    }
+
     pub(super) fn reply(&self, text: &str) {
         self.replies
             .lock()

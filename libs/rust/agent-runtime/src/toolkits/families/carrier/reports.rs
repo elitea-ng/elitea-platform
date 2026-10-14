@@ -580,8 +580,8 @@ pub(super) async fn create_excel_report(
 
     // 3. Store it, never replacing a file.
     let stored = host
-        .write_unique_artifact(
-            &derived_bucket_name(&target_bucket, "carrier-reports"),
+        .write_unique_artifact_creating_bucket(
+            &derived_bucket_name("carrier", &target_bucket),
             &stem,
             "xlsx",
             XLSX_MEDIA_TYPE,
@@ -743,8 +743,8 @@ pub(super) async fn create_ui_excel_report(
         chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S")
     );
     let stored = host
-        .write_unique_artifact(
-            &derived_bucket_name(&bucket, "carrier-reports"),
+        .write_unique_artifact_creating_bucket(
+            &derived_bucket_name("carrier", &bucket),
             &stem,
             "xlsx",
             XLSX_MEDIA_TYPE,
