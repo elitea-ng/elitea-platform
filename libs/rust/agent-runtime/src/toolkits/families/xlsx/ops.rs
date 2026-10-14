@@ -151,7 +151,7 @@ fn range_arg(text: &str) -> Result<CellRange, Sentence> {
 // ---------------------------------------------------------------------------
 
 /// What a call will do and what the saved file must then hold.
-pub(super) enum Plan {
+pub(crate) enum Plan {
     Write {
         sheet: usize,
         /// Distinct cells, row-major, the last value of each.
@@ -554,7 +554,7 @@ fn saved_ref(text: &str) -> String {
     clippy::float_cmp,
     reason = "a number we wrote is read back bit for bit"
 )]
-fn verify(
+pub(crate) fn verify(
     before: &XlsxFacts,
     after: &XlsxFacts,
     plan: &Plan,
@@ -562,11 +562,17 @@ fn verify(
 ) -> Result<(), Sentence> {
     let before_names: Vec<&str> = before.sheets.iter().map(|s| s.name.as_str()).collect();
     let after_names: Vec<&str> = after.sheets.iter().map(|s| s.name.as_str()).collect();
-    // Nothing the file held may be gone: no part of a kind fewer (a deleted
-    // sheet takes its own parts with it).
-    if !matches!(plan, Plan::Delete { .. }) {
+    // Nothing the file held may be gone: no part of a kind fewer. Deleting a
+    // sheet takes the parts ONLY that sheet reaches with it (its drawings,
+    // charts, comments, tables and media); every other part must stay.
+    let exempt: BTreeMap<String, usize> = match plan {
+        Plan::Delete { sheet } => before.sheets[*sheet].owned_parts.clone(),
+        _ => BTreeMap::new(),
+    };
+    {
         for (kind, n) in &before.parts {
-            let now = after.parts.get(kind).copied().unwrap_or(0);
+            let now = after.parts.get(kind).copied().unwrap_or(0)
+                + exempt.get(kind).copied().unwrap_or(0);
             if now < *n {
                 tracing::warn!(
                     event = "xlsx_save_would_lose_content",
@@ -576,7 +582,7 @@ fn verify(
                     "a save would have dropped content; refused"
                 );
                 return Err(format!(
-                    "Nothing was saved: this edit would have removed {} `{kind}` part{} from the file.",
+                    "Nothing was saved: this edit would have removed {} `{kind}` part{} that it was not meant to touch.",
                     n - now,
                     if n - now == 1 { "" } else { "s" }
                 ));
@@ -587,7 +593,10 @@ fn verify(
     // same charts.
     let same_sheet = |b: usize, a: usize| -> Result<(), Sentence> {
         let (bs, as_) = (&before.sheets[b], &after.sheets[a]);
-        if bs.value_cells != as_.value_cells || bs.charts.len() != as_.charts.len() {
+        if bs.value_cells != as_.value_cells
+            || bs.charts.len() != as_.charts.len()
+            || bs.owned_parts != as_.owned_parts
+        {
             return Err(unplanned(&format!("sheet `{}` had changed", bs.name)));
         }
         Ok(())
@@ -810,9 +819,23 @@ pub(crate) fn run_edit(
         return Err("The workbook's sheets could not be read consistently.".to_owned());
     }
     match &mut plan {
-        Plan::Rename { sheet, .. } | Plan::Delete { sheet } if before.sheet_mentioned => {
+        Plan::Rename { sheet, .. } if before.sheet_mentioned => {
             return Err(format!(
-                "Sheet `{}` is referred to by name from a formula or a chart, and those references are not rewritten, so the edit would break them. Nothing was changed.",
+                "Sheet `{}` is referred to by name from a formula, a defined name, a validation, a conditional format, a hyperlink, a chart or a pivot table, and those references are not rewritten, so the edit would break them. Nothing was changed.",
+                names[*sheet]
+            ));
+        }
+        // A delete takes the sheet's own cells and charts with it, so what
+        // they say about the sheet does not block it.
+        Plan::Delete { sheet } if before.sheet_mentioned_elsewhere => {
+            return Err(format!(
+                "Sheet `{}` is referred to by name from a formula or chart of another sheet, a defined name, a validation, a conditional format, a hyperlink or a pivot table, and those references are not rewritten, so the edit would break them. Nothing was changed.",
+                names[*sheet]
+            ));
+        }
+        Plan::Delete { sheet } if before.local_name_sheet_ids.iter().any(|id| *id >= *sheet) => {
+            return Err(format!(
+                "A defined name or print area is scoped to sheet `{}` or to a sheet after it by position, and those scopes are not renumbered when a sheet is deleted, so the edit would move them to the wrong sheets. Nothing was changed.",
                 names[*sheet]
             ));
         }
@@ -889,6 +912,32 @@ fn json_of(value: &CellValue) -> Value {
     }
 }
 
+fn check_width(r: CellRange) -> Result<(), Sentence> {
+    let width = u64::from(r.last_col - r.first_col) + 1;
+    if width > MAX_READ_CELLS {
+        return Err(format!(
+            "The range is {width} columns wide; at most {MAX_READ_CELLS} cells can be read at once."
+        ));
+    }
+    Ok(())
+}
+
+/// `r` cut to the rows that fit the cell cap, and its row count before the cut.
+fn fit_rows(r: CellRange) -> (CellRange, u32) {
+    let width = u64::from(r.last_col - r.first_col) + 1;
+    let rows_fit = u32::try_from(MAX_READ_CELLS / width.max(1))
+        .unwrap_or(u32::MAX)
+        .max(1);
+    let total = r.last_row - r.first_row + 1;
+    (
+        CellRange {
+            last_row: r.first_row + total.min(rows_fit) - 1,
+            ..r
+        },
+        total,
+    )
+}
+
 /// `list_sheets`.
 pub(crate) fn list_sheets(bytes: &[u8], limits: &Limits) -> Result<Value, Sentence> {
     let f = facts(bytes, limits, &Query::default())?;
@@ -917,44 +966,41 @@ pub(crate) fn read_range(
     limits: &Limits,
     json_format: bool,
 ) -> Result<Value, Sentence> {
-    let base = facts(bytes, limits, &Query::default())?;
-    let names: Vec<String> = base.sheets.iter().map(|s| s.name.clone()).collect();
-    let sheet = sheet_arg(args, &names)?;
-    let used = base.sheets[sheet].used_range;
     let asked = match opt_str(args, "range") {
         Some(r) => Some(range_arg(&r)?),
         None => None,
     };
-    let Some(wanted) = asked.or(used) else {
-        return Ok(Value::String(format!("Sheet `{}` is empty.", names[sheet])));
-    };
-    // Cut to the rows that fit the cell cap.
-    let width = u64::from(wanted.last_col - wanted.first_col) + 1;
-    if width > MAX_READ_CELLS {
-        return Err(format!(
-            "The range is {width} columns wide; at most {MAX_READ_CELLS} cells can be read at once."
-        ));
+    if let Some(r) = asked {
+        check_width(r)?;
     }
-    let rows_fit = u32::try_from(MAX_READ_CELLS / width)
-        .unwrap_or(u32::MAX)
-        .max(1);
-    let total_rows = wanted.last_row - wanted.first_row + 1;
-    let truncated = total_rows > rows_fit;
-    let range = CellRange {
-        last_row: wanted.first_row + total_rows.min(rows_fit) - 1,
-        ..wanted
-    };
-    let f = facts(
+    // One validate-and-scan: the sheet is picked once the names are known, and
+    // the range's cells are collected in the same pass.
+    let picked = args.clone();
+    let (sheet, f) = elitea_office_core::facts_of_xlsx_package_choosing(
         bytes,
         limits,
-        &Query {
-            ranges: vec![(sheet, range)],
-            ..Query::default()
+        usize::try_from(MAX_READ_CELLS).unwrap_or(usize::MAX),
+        move |names| {
+            let sheet = sheet_arg(&picked, names).map_err(OfficeError::InvalidInput)?;
+            Ok((sheet, asked.map(|r| fit_rows(r).0)))
         },
-    )?;
+    )
+    .map_err(oe)?;
+    let names: Vec<String> = f.sheets.iter().map(|s| s.name.clone()).collect();
+    let Some(wanted) = asked.or(f.sheets[sheet].used_range) else {
+        return Ok(Value::String(format!("Sheet `{}` is empty.", names[sheet])));
+    };
+    check_width(wanted)?;
+    let (range, total_rows) = fit_rows(wanted);
+    let truncated = total_rows > range.last_row - range.first_row + 1;
     let at = |r: u32, c: u16| f.cells.get(&(sheet, r, c));
     let mut formulas: Map<String, Value> = Map::new();
     for ((_, r, c), v) in &f.cells {
+        let inside = (range.first_row..=range.last_row).contains(r)
+            && (range.first_col..=range.last_col).contains(c);
+        if !inside {
+            continue;
+        }
         if let CellValue::Formula { formula, .. } = v {
             formulas.insert(cell_ref(*r, *c), Value::String(format!("={formula}")));
         }

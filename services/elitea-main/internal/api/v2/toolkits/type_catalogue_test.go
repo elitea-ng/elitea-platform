@@ -717,3 +717,27 @@ func TestDocxAndXlsxAreRustOnlyTypes(t *testing.T) {
 		}
 	}
 }
+
+// A catalogue served with a nil capability projection (the deployment has not
+// stated its worker) offers the SDK's types and withholds docx and xlsx and
+// pptx's Rust-only tools.
+func TestANilCapabilityWithholdsTheRustOnlyTypesAndTools(t *testing.T) {
+	t.Parallel()
+
+	options := append(catalogueOptions(t, ""),
+		toolkits.WithWorkerCapability((*runtimecomposition.WorkerToolkitCapability)(nil)))
+	body := getToolkitTypeCatalogue(t, options...)
+	for _, toolkitType := range rustOnlyTypes {
+		metadata := metadataOf(t, body, toolkitType)
+		if unavailable, _ := metadata["unavailable"].(bool); !unavailable {
+			t.Errorf("%s is offered with no capability: %v", toolkitType, metadata)
+		}
+	}
+	if unavailable, _ := metadataOf(t, body, "github")["unavailable"].(bool); unavailable {
+		t.Error("github is withheld with no capability")
+	}
+	withheld, _ := metadataOf(t, body, "pptx")["unavailable_tools"].([]any)
+	if len(withheld) != 19 {
+		t.Errorf("pptx withholds %d tools with no capability, want the 19 Rust-only ones", len(withheld))
+	}
+}

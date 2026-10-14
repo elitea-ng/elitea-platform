@@ -281,15 +281,22 @@ func (c *WorkerToolkitCapability) Implementation() string {
 // importKey is the type's SDK registry key, from the toolkit catalogue. An
 // empty key means the SDK imports the toolkit unconditionally.
 //
-// A nil projection supports everything and gives no reason. That is the
-// deliberate reading of absence: a deployment that has not stated its worker
-// must keep serving the catalogue it served before this projection existed,
-// rather than losing every tile to a missing file.
+// A nil projection supports every type the SDK has and gives no reason: a
+// deployment that has not stated its worker keeps serving the catalogue it
+// served before this projection existed, rather than losing every tile to a
+// missing file. It does NOT support the types only the Rust worker serves
+// (docx, xlsx; ADR-0032 P4): absence of a statement is not a statement that
+// the Rust worker is there, and offering a tile no running worker can serve is
+// the failure this projection exists to prevent.
 func (c *WorkerToolkitCapability) SupportsToolkitType(
 	toolkitType string,
 	importKey string,
 ) (bool, string) {
 	if c == nil {
+		if _, rustOnly := rustOnlyToolkitTypeNames()[toolkitType]; rustOnly {
+			return false, "This deployment has not stated which agent worker it runs, so the " +
+				toolkitType + " toolkit, which only the Rust worker serves, is not offered."
+		}
 		return true, ""
 	}
 	switch c.implementation {
@@ -391,7 +398,17 @@ func (c *WorkerToolkitCapability) SupportsTool(toolkitType, toolName string) (bo
 		}
 		return true, ""
 	}
-	if c == nil || c.implementation != RustWorkerImplementation {
+	if c == nil {
+		// The same reading of absence as SupportsToolkitType: the tools only the
+		// Rust worker serves are not offered on a deployment that has not said
+		// it runs one.
+		if _, rustOnly := rustOnlyToolkitToolNames()[toolkitType][toolName]; rustOnly {
+			return false, "This deployment has not stated which agent worker it runs, so the " +
+				toolName + " tool of the " + toolkitType + " toolkit, which only the Rust worker serves, is not offered."
+		}
+		return true, ""
+	}
+	if c.implementation != RustWorkerImplementation {
 		return true, ""
 	}
 	tools, partial := c.supportedTools[toolkitType]

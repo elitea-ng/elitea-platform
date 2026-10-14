@@ -51,6 +51,8 @@ pub struct Document {
 /// break is carried as this private-use character and made a `w:br` in the
 /// saved parts (see `lines_to_breaks`).
 const LINE_BREAK: char = '\u{E002}';
+/// The same for a tab, made a `w:tab` run.
+const TAB: char = '\u{E003}';
 /// Private-use characters this module uses as markers; text that holds one is
 /// refused rather than misread.
 const RESERVED: std::ops::RangeInclusive<char> = '\u{E000}'..='\u{E4FF}';
@@ -65,7 +67,8 @@ fn encode(text: &str) -> Result<String> {
     Ok(text
         .replace("\r\n", "\n")
         .replace('\r', "\n")
-        .replace('\n', &LINE_BREAK.to_string()))
+        .replace('\n', &LINE_BREAK.to_string())
+        .replace('\t', &TAB.to_string()))
 }
 
 impl std::fmt::Debug for Document {
@@ -177,7 +180,7 @@ impl Document {
     /// [`OfficeError::NotFound`] for a bad index.
     pub fn set_paragraph_text(&mut self, index: usize, text: &str) -> Result<()> {
         let text = encode(text)?;
-        let has_breaks = text.contains(LINE_BREAK);
+        let has_breaks = text.contains([LINE_BREAK, TAB]);
         self.doc.guarded_mut(move |d, _| {
             const MARKER: &str = "\u{E000}office-core-marker-9c1d\u{E000}";
             if d.find_content_index(MARKER).is_some() {
@@ -346,7 +349,7 @@ impl Document {
             .map(|(_, v)| encode(v))
             .collect::<Result<_>>()?;
         let keys: Vec<String> = pairs.iter().map(|(k, _)| k.clone()).collect();
-        let has_breaks = values.iter().any(|v| v.contains(LINE_BREAK));
+        let has_breaks = values.iter().any(|v| v.contains([LINE_BREAK, TAB]));
         let counts = self.doc.guarded_mut(move |d, _| {
             // Longest first; ties in byte order, so the result is the same
             // however the pairs were listed.
@@ -567,16 +570,15 @@ fn partly_overlap(a: &str, b: &str) -> bool {
     tail_head(a, b) || tail_head(b, a)
 }
 
-/// Turn every [`LINE_BREAK`] inside a `w:t` of the package's `word/*.xml`
+/// Turn every [`LINE_BREAK`] and [`TAB`] inside a `w:t` of the package's `word/*.xml`
 /// parts into a break run: `<w:t>a<LB>b</w:t>` becomes
 /// `<w:t>a</w:t><w:br/><w:t>b</w:t>`, which is valid wherever the text was.
-fn lines_to_breaks(package: &[u8], l: &Limits) -> Result<Vec<u8>> {
+pub(crate) fn lines_to_breaks(package: &[u8], l: &Limits) -> Result<Vec<u8>> {
     use std::io::{Cursor, Read, Write};
     use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
     let mut input = ZipArchive::new(Cursor::new(package))
         .map_err(|e| OfficeError::Malformed(format!("package: {e}")))?;
     let mut out = ZipWriter::new(Cursor::new(Vec::new()));
-    let marker = LINE_BREAK.to_string();
     for i in 0..input.len() {
         let entry = input
             .by_index(i)
@@ -585,17 +587,28 @@ fn lines_to_breaks(package: &[u8], l: &Limits) -> Result<Vec<u8>> {
             continue;
         }
         let name = entry.name().to_owned();
+        let xml = std::path::Path::new(&name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("xml") || ext.eq_ignore_ascii_case("rels"));
+        // Never truncate: a part over the cap the gate would give it is a typed
+        // limit error, not a shortened part.
+        let (cap, which) = if xml {
+            (l.max_xml_part_bytes, Limit::XmlPartBytes)
+        } else {
+            (l.max_media_part_bytes, Limit::MediaPartBytes)
+        };
         let mut data = Vec::new();
         entry
-            .take(l.max_input_bytes.saturating_mul(4))
+            .take(cap.saturating_add(1))
             .read_to_end(&mut data)
             .map_err(|e| OfficeError::Malformed(format!("part {name}: {e}")))?;
+        if data.len() as u64 > cap {
+            return Err(limit(which, data.len() as u64));
+        }
         if name.starts_with("word/")
-            && std::path::Path::new(&name)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("xml"))
+            && xml
             && let Ok(text) = std::str::from_utf8(&data)
-            && text.contains(&marker)
+            && text.contains([LINE_BREAK, TAB])
         {
             data = split_text_nodes(text).into_bytes();
         }
@@ -641,21 +654,31 @@ fn split_text_nodes(xml: &str) -> String {
         };
         let text = &rest[body_from..body_from + close];
         out.push_str(&rest[..at]);
-        if text.contains(LINE_BREAK) {
+        if text.contains([LINE_BREAK, TAB]) {
             let open = if start_tag.contains("xml:space") {
                 start_tag.to_owned()
             } else {
                 "<w:t xml:space=\"preserve\">".to_owned()
             };
-            let parts: Vec<&str> = text.split(LINE_BREAK).collect();
-            for (n, part) in parts.iter().enumerate() {
-                if n > 0 {
-                    out.push_str("<w:br/>");
-                }
+            let mut piece = String::new();
+            for c in text.chars() {
+                let mark = match c {
+                    LINE_BREAK => "<w:br/>",
+                    TAB => "<w:tab/>",
+                    other => {
+                        piece.push(other);
+                        continue;
+                    }
+                };
                 out.push_str(&open);
-                out.push_str(part);
+                out.push_str(&piece);
                 out.push_str("</w:t>");
+                out.push_str(mark);
+                piece.clear();
             }
+            out.push_str(&open);
+            out.push_str(&piece);
+            out.push_str("</w:t>");
         } else {
             out.push_str(start_tag);
             out.push_str(text);
@@ -671,4 +694,66 @@ fn render_copy(d: &mut ZDocument, l: &Limits, dpi: f64) -> Result<ZDocument> {
     let raw = d.to_bytes().map_err(map_err)?;
     let r = validate_and_repack(&raw, Kind::Docx, Mode::Render { dpi }, l)?;
     ZDocument::from_bytes(&r.bytes).map_err(map_err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+    use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+    fn package(parts: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        let mut w = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in parts {
+            w.start_file(
+                *name,
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
+            )
+            .unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn a_part_over_the_cap_is_a_typed_error_never_a_shortened_part() {
+        let limits = Limits {
+            max_xml_part_bytes: 200,
+            max_media_part_bytes: 300,
+            ..Limits::default()
+        };
+        let long_xml = format!("<w:t>{}</w:t>", "a".repeat(500));
+        let pkg = package(&[("word/document.xml", long_xml.into_bytes())]);
+        assert!(matches!(
+            lines_to_breaks(&pkg, &limits),
+            Err(OfficeError::LimitExceeded {
+                limit: Limit::XmlPartBytes,
+                ..
+            })
+        ));
+        let pkg = package(&[("word/media/image1.png", vec![7u8; 400])]);
+        assert!(matches!(
+            lines_to_breaks(&pkg, &limits),
+            Err(OfficeError::LimitExceeded {
+                limit: Limit::MediaPartBytes,
+                ..
+            })
+        ));
+        // Within the cap every byte survives and the markers become runs.
+        let xml = format!("<w:r><w:t>a{LINE_BREAK}b{TAB}c</w:t></w:r>");
+        let pkg = package(&[
+            ("word/document.xml", xml.into_bytes()),
+            ("word/media/image1.png", vec![9u8; 250]),
+        ]);
+        let out = lines_to_breaks(&pkg, &limits).unwrap();
+        let mut z = zip::ZipArchive::new(Cursor::new(out)).unwrap();
+        let mut doc = String::new();
+        std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut doc)
+            .unwrap();
+        assert!(doc.contains("<w:br/>") && doc.contains("<w:tab/>"), "{doc}");
+        let mut img = Vec::new();
+        std::io::Read::read_to_end(&mut z.by_name("word/media/image1.png").unwrap(), &mut img)
+            .unwrap();
+        assert_eq!(img, vec![9u8; 250]);
+    }
 }

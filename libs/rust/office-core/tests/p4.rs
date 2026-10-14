@@ -664,3 +664,292 @@ fn xlsx_facts_read_shared_inline_phonetic_and_error_cells() {
     assert!(!facts.cells.contains_key(&(0, 1, 2)));
     assert_eq!(facts.sheets[0].value_cells, 6);
 }
+
+// -- review round 1 -----------------------------------------------------------------
+
+#[test]
+fn docx_tab_stop_definitions_are_not_text() {
+    let l = limits();
+    let bytes = docx_with_body(
+        "<w:p><w:pPr><w:tabs><w:tab w:val=\"left\" w:pos=\"720\"/><w:tab w:val=\"right\" w:pos=\"9000\"/></w:tabs></w:pPr><w:r><w:t>x</w:t></w:r><w:r><w:tab/><w:t>y</w:t></w:r></w:p>\
+         <w:p><w:pPr><w:tabs><w:tab w:val=\"left\" w:pos=\"720\"></w:tab></w:tabs></w:pPr><w:r><w:t>z</w:t></w:r></w:p>",
+    );
+    let facts = facts_of_docx_package(&bytes, &l).unwrap();
+    let texts: Vec<String> = facts.paragraphs().iter().map(|p| p.text.clone()).collect();
+    // Only the tab inside a run is a tab character.
+    assert_eq!(texts, ["x\ty", "z"]);
+    // The paragraph is editable, and reads back as written.
+    let mut d = Document::open(&bytes, &l).unwrap();
+    d.set_paragraph_text(1, "w").unwrap();
+    let after = facts_of_docx_package(&d.save().unwrap(), &l).unwrap();
+    assert_eq!(after.paragraphs()[1].text, "w");
+    assert_eq!(after.paragraphs()[0].text, "x\ty");
+}
+
+#[test]
+fn docx_tabs_are_tab_runs_not_raw_characters() {
+    let l = limits();
+    let mut d = Document::new(&l);
+    d.add_paragraph("a\tb").unwrap();
+    d.add_heading("h\t1", 1).unwrap();
+    let t = d.add_table(1, 1).unwrap();
+    d.set_table_cell(t, 0, 0, "c\td\ne").unwrap();
+    d.add_paragraph("Hello {{n}}").unwrap();
+    d.replace_text("{{n}}", "x\ty").unwrap();
+    d.set_paragraph_text(0, "p\tq").unwrap();
+    let saved = d.save().unwrap();
+    let xml = part(&saved, "word/document.xml");
+    assert!(xml.matches("<w:tab/>").count() >= 4, "{xml}");
+    for run in xml.split("<w:t>").skip(1).chain(xml.split("<w:t ").skip(1)) {
+        let text = run.split("</w:t>").next().unwrap();
+        assert!(
+            !text.contains('\t') && !text.contains('\u{E003}'),
+            "{text:?}"
+        );
+    }
+    let facts = facts_of_docx_package(&saved, &l).unwrap();
+    let p = facts.paragraphs();
+    assert_eq!(p[0].text, "p\tq");
+    assert_eq!(p[1].text, "h\t1");
+    assert_eq!(p[2].text, "Hello x\ty");
+    assert_eq!(facts.tables()[0].rows[0][0], "c\td\ne");
+}
+
+/// A two-sheet workbook (`Sheet1`, `Data`) with the given edit applied to the
+/// package, and whether a mention of `name` is found.
+fn mentioned_after(
+    edit: impl Fn(Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)>,
+    name: &str,
+) -> bool {
+    let l = limits();
+    let mut w = Workbook::new(&l);
+    w.add_sheet("Data").unwrap();
+    w.write_cells(0, &[(0, 0, CellValue::Number(1.0))]).unwrap();
+    let edited = zip_of(&edit(entries(&w.save().unwrap())));
+    facts_of_xlsx_package(
+        &edited,
+        &l,
+        &XlsxQuery {
+            cells: &[],
+            ranges: &[],
+            sheet_mention: Some(name),
+        },
+    )
+    .unwrap()
+    .sheet_mentioned
+}
+
+fn patched(
+    entries: Vec<(String, Vec<u8>)>,
+    part: &str,
+    from: &str,
+    to: &str,
+) -> Vec<(String, Vec<u8>)> {
+    entries
+        .into_iter()
+        .map(|(n, d)| {
+            if n == part {
+                let s = String::from_utf8(d).unwrap();
+                assert!(s.contains(from), "{part} has no {from}: {s}");
+                (n, s.replacen(from, to, 1).into_bytes())
+            } else {
+                (n, d)
+            }
+        })
+        .collect()
+}
+
+type Edit = Box<dyn Fn(Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)>>;
+
+#[test]
+fn xlsx_sheet_references_are_found_in_every_formula_bearing_place() {
+    let sheet1 = "xl/worksheets/sheet1.xml";
+    // Each place, with the reference in different spellings; a name nobody
+    // refers to is never found.
+    let places: Vec<(&str, Edit)> = vec![
+        (
+            "defined name",
+            Box::new(|e| {
+                patched(
+                    e,
+                    "xl/workbook.xml",
+                    "</sheets>",
+                    "</sheets><definedNames><definedName name=\"N\">'data'!$A$1</definedName></definedNames>",
+                )
+            }),
+        ),
+        (
+            "data validation",
+            Box::new(move |e| {
+                patched(
+                    e,
+                    sheet1,
+                    "</sheetData>",
+                    "</sheetData><dataValidations count=\"1\"><dataValidation type=\"list\" sqref=\"B1\"><formula1>DATA!$A$1:$A$3</formula1></dataValidation></dataValidations>",
+                )
+            }),
+        ),
+        (
+            "data validation, second formula",
+            Box::new(move |e| {
+                patched(
+                    e,
+                    sheet1,
+                    "</sheetData>",
+                    "</sheetData><dataValidations count=\"1\"><dataValidation type=\"whole\" operator=\"between\" sqref=\"B1\"><formula1>1</formula1><formula2>'Data'!A1</formula2></dataValidation></dataValidations>",
+                )
+            }),
+        ),
+        (
+            "conditional format",
+            Box::new(move |e| {
+                patched(
+                    e,
+                    sheet1,
+                    "</sheetData>",
+                    "</sheetData><conditionalFormatting sqref=\"A1\"><cfRule type=\"expression\" priority=\"1\"><formula>Data!$A$1&gt;0</formula></cfRule></conditionalFormatting>",
+                )
+            }),
+        ),
+        (
+            "hyperlink location",
+            Box::new(move |e| {
+                patched(
+                    e,
+                    sheet1,
+                    "</sheetData>",
+                    "</sheetData><hyperlinks><hyperlink ref=\"A1\" location=\"'Data'!B2\"/></hyperlinks>",
+                )
+            }),
+        ),
+        (
+            "pivot cache source",
+            Box::new(|mut e| {
+                e.push((
+                    "xl/pivotCache/pivotCacheDefinition1.xml".to_owned(),
+                    b"<pivotCacheDefinition xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><cacheSource type=\"worksheet\"><worksheetSource ref=\"A1:B2\" sheet=\"Data\"/></cacheSource></pivotCacheDefinition>".to_vec(),
+                ));
+                e
+            }),
+        ),
+        (
+            "3-D range",
+            Box::new(move |e| patched(e, sheet1, "<v>1</v>", "<v>1</v><f>SUM(Sheet1:Data!A1)</f>")),
+        ),
+    ];
+    for (place, edit) in &places {
+        assert!(mentioned_after(edit, "Data"), "{place}: not found");
+        assert!(
+            !mentioned_after(edit, "Sheet1") || *place == "3-D range",
+            "{place}: Sheet1 found"
+        );
+    }
+    assert!(!mentioned_after(|e| e, "Data"));
+}
+
+#[test]
+fn xlsx_local_sheet_ids_of_defined_names_are_reported() {
+    let l = limits();
+    let mut w = Workbook::new(&l);
+    w.add_sheet("B").unwrap();
+    let edited = zip_of(&patched(
+        entries(&w.save().unwrap()),
+        "xl/workbook.xml",
+        "</sheets>",
+        "</sheets><definedNames><definedName name=\"_xlnm.Print_Area\" localSheetId=\"1\">B!$A$1:$C$5</definedName><definedName name=\"G\">B!$A$1</definedName></definedNames>",
+    ));
+    let facts = facts_of_xlsx_package(&edited, &l, &XlsxQuery::default()).unwrap();
+    assert_eq!(facts.local_name_sheet_ids, [1]);
+}
+
+#[test]
+fn xlsx_a_sheet_owns_the_parts_only_it_reaches() {
+    let l = limits();
+    let mut w = Workbook::new(&l);
+    w.add_sheet("Two").unwrap();
+    w.write_cells(
+        1,
+        &[
+            (0, 0, CellValue::Number(1.0)),
+            (1, 0, CellValue::Number(2.0)),
+        ],
+    )
+    .unwrap();
+    w.add_chart(
+        1,
+        &SheetChartSpec {
+            kind: ChartKind::Line,
+            title: None,
+            categories: None,
+            series: vec![SheetSeries {
+                name: None,
+                values: "A1:A2".into(),
+            }],
+            legend: false,
+            data_labels: false,
+            anchor_row: 0,
+            anchor_col: 3,
+            width_px: 300,
+            height_px: 200,
+        },
+    )
+    .unwrap();
+    let facts = facts_of_xlsx_package(&w.save().unwrap(), &l, &XlsxQuery::default()).unwrap();
+    assert!(
+        facts.sheets[0]
+            .owned_parts
+            .keys()
+            .all(|k| !k.contains("chart") && !k.contains("drawing")),
+        "{:?}",
+        facts.sheets[0].owned_parts
+    );
+    let owned = &facts.sheets[1].owned_parts;
+    assert_eq!(owned.get("xl/charts/chart"), Some(&1), "{owned:?}");
+    assert!(
+        owned.keys().any(|k| k.starts_with("xl/drawings/drawing")),
+        "{owned:?}"
+    );
+    assert_eq!(owned.get("xl/worksheets/sheet"), Some(&1), "{owned:?}");
+}
+
+#[test]
+fn xlsx_choosing_reads_one_range_in_one_scan() {
+    let l = limits();
+    let mut w = Workbook::new(&l);
+    for r in 0..10u32 {
+        w.write_cells(
+            0,
+            &[
+                (r, 0, CellValue::Number(f64::from(r))),
+                (r, 1, CellValue::Number(1.0)),
+            ],
+        )
+        .unwrap();
+    }
+    let saved = w.save().unwrap();
+    reset_counters();
+    let (sheet, facts) =
+        elitea_office_core::facts_of_xlsx_package_choosing(&saved, &l, 6, |names| {
+            assert_eq!(names, ["Sheet1"]);
+            Ok((0, None))
+        })
+        .unwrap();
+    assert_eq!(counters(), (0, 0, 1), "one validate-and-scan");
+    assert_eq!(sheet, 0);
+    // The default takes the first value cells in file order, one past the cap.
+    assert_eq!(facts.cells.len(), 7);
+    assert_eq!(facts.sheets[0].used_range.unwrap().last_row, 9);
+    // An explicit range is exact.
+    let (_, facts) = elitea_office_core::facts_of_xlsx_package_choosing(&saved, &l, 100, |_| {
+        Ok((0, parse_range("A3:B4")))
+    })
+    .unwrap();
+    assert_eq!(facts.cells.len(), 4);
+    // A refusal from the chooser is the call's error.
+    assert!(matches!(
+        elitea_office_core::facts_of_xlsx_package_choosing(&saved, &l, 1, |_| Err(
+            OfficeError::InvalidInput("no".into())
+        )),
+        Err(OfficeError::InvalidInput(_))
+    ));
+}

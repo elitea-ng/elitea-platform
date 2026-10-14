@@ -878,11 +878,23 @@ fn an_edit_opens_once_and_serialises_once() {
         assert_eq!(saves, 1, "{tool:?}: serialisations");
         assert_eq!(reads, 2, "{tool:?}: package reads (before and after)");
     }
-    // A read parses nothing with the library.
+    // A read parses nothing with the library, and validates and scans the
+    // package ONCE (the sheet is picked and the range collected in one pass).
+    for args in [
+        json!({}),
+        json!({"range": "A1:B2"}),
+        json!({"sheet": "Sheet1", "range": "A2:A3"}),
+    ] {
+        reset_counters();
+        ops::read_range(&bytes, &args, &l, false).unwrap();
+        assert_eq!(counters(), (0, 0, 1), "{args}");
+    }
     reset_counters();
-    ops::read_range(&bytes, &json!({}), &l, false).unwrap();
+    ops::read_range(&bytes, &json!({}), &l, true).unwrap();
+    assert_eq!(counters(), (0, 0, 1));
+    reset_counters();
     ops::list_sheets(&bytes, &l).unwrap();
-    assert_eq!((counters().0, counters().1), (0, 0));
+    assert_eq!(counters(), (0, 0, 1));
 }
 
 // -- verification at the target ---------------------------------------------------
@@ -968,4 +980,198 @@ async fn materialization_needs_the_office_capability_on_the_artifact_authority()
         .expect("an unserved toolkit is skipped, not fatal");
         assert!(toolsets.is_empty(), "skipped, not bound");
     }
+}
+
+// -- review round 1 -----------------------------------------------------------------
+
+fn facts_with_sheets(sheets: &[(&str, &[(&str, usize)])], parts: &[(&str, usize)]) -> XlsxFacts {
+    use elitea_office_core::XlsxSheet;
+    XlsxFacts {
+        sheets: sheets
+            .iter()
+            .map(|(name, owned)| XlsxSheet {
+                name: (*name).to_owned(),
+                charts: Vec::new(),
+                value_cells: 1,
+                used_range: None,
+                owned_parts: owned.iter().map(|(k, n)| ((*k).to_owned(), *n)).collect(),
+            })
+            .collect(),
+        parts: parts.iter().map(|(k, n)| ((*k).to_owned(), *n)).collect(),
+        ..XlsxFacts::default()
+    }
+}
+
+#[test]
+fn deleting_a_sheet_exempts_only_the_parts_that_sheet_owns() {
+    let names = vec!["Sheet1".to_owned(), "Sheet2".to_owned()];
+    let plan = ops::Plan::Delete { sheet: 1 };
+    // Sheet1 has an image of its own; Sheet2 has a chart and a drawing.
+    let before = facts_with_sheets(
+        &[
+            (
+                "Sheet1",
+                &[("xl/media/image", 1), ("xl/worksheets/sheet", 1)],
+            ),
+            (
+                "Sheet2",
+                &[("xl/charts/chart", 1), ("xl/worksheets/sheet", 1)],
+            ),
+        ],
+        &[
+            ("xl/media/image", 1),
+            ("xl/charts/chart", 1),
+            ("xl/worksheets/sheet", 2),
+        ],
+    );
+    // Right: Sheet2's chart and sheet part are gone, Sheet1 is whole.
+    let right = facts_with_sheets(
+        &[(
+            "Sheet1",
+            &[("xl/media/image", 1), ("xl/worksheets/sheet", 1)],
+        )],
+        &[("xl/media/image", 1), ("xl/worksheets/sheet", 1)],
+    );
+    ops::verify(&before, &right, &plan, &names).expect("only Sheet2's parts went");
+    // Wrong: the library also dropped Sheet1's image. Sheet2's exemption does
+    // not cover it, whatever the totals say.
+    let lost = facts_with_sheets(
+        &[("Sheet1", &[("xl/worksheets/sheet", 1)])],
+        &[("xl/worksheets/sheet", 1)],
+    );
+    let said = ops::verify(&before, &lost, &plan, &names).expect_err("Sheet1 lost its image");
+    assert!(said.contains("Nothing was saved"), "{said}");
+    assert!(said.contains("xl/media/image"), "{said}");
+    // And a change to Sheet1's own parts with the totals still adding up is
+    // caught per sheet.
+    let swapped = facts_with_sheets(
+        &[(
+            "Sheet1",
+            &[
+                ("xl/media/image", 1),
+                ("xl/worksheets/sheet", 1),
+                ("xl/charts/chart", 1),
+            ],
+        )],
+        &[
+            ("xl/media/image", 1),
+            ("xl/worksheets/sheet", 1),
+            ("xl/charts/chart", 1),
+        ],
+    );
+    assert!(ops::verify(&before, &swapped, &plan, &names).is_err());
+}
+
+#[tokio::test]
+async fn a_sheet_with_a_chart_of_its_own_can_be_deleted_and_the_rest_is_untouched() {
+    let rig = Rig::new().await;
+    let l = test_limits();
+    let mut w = Workbook::new(&l);
+    w.add_sheet("Two").unwrap();
+    w.write_cells(0, &[(0, 0, CellValue::Text("keep".into()))])
+        .unwrap();
+    w.write_cells(
+        1,
+        &[
+            (0, 0, CellValue::Number(1.0)),
+            (1, 0, CellValue::Number(2.0)),
+        ],
+    )
+    .unwrap();
+    rig.host.put("b.xlsx", w.save().unwrap());
+    rig.text(
+        "add_chart",
+        json!({"file_name": "b.xlsx", "sheet": "Two", "series": [{"values": "A1:A2"}]}),
+    )
+    .await;
+    assert_eq!(rig.facts("b.xlsx", &[]).sheets[1].charts.len(), 1);
+    let said = rig
+        .text(
+            "delete_sheet",
+            json!({"file_name": "b.xlsx", "sheet": "Two"}),
+        )
+        .await;
+    assert!(said.contains("Deleted sheet `Two`"), "{said}");
+    let f = rig.facts("b.xlsx", &[(0, 0, 0)]);
+    assert_eq!(f.sheets.len(), 1);
+    assert_eq!(f.cells[&(0, 0, 0)], CellValue::Text("keep".into()));
+}
+
+#[tokio::test]
+async fn a_sheet_named_anywhere_is_not_renamed_or_deleted_and_scoped_names_block_a_delete() {
+    use elitea_office_core::testing::replace_in_part;
+    let rig = Rig::new().await;
+    let l = test_limits();
+    let mut base = Workbook::new(&l);
+    base.add_sheet("Data").unwrap();
+    base.add_sheet("Last").unwrap();
+    let base = base.save().unwrap();
+    let cases: [(&str, Vec<u8>); 3] = [
+        (
+            "a defined name",
+            replace_in_part(
+                &base,
+                "xl/workbook.xml",
+                "</sheets>",
+                "</sheets><definedNames><definedName name=\"N\">'data'!$A$1</definedName></definedNames>",
+            ),
+        ),
+        (
+            "a data validation",
+            replace_in_part(
+                &base,
+                "xl/worksheets/sheet1.xml",
+                "</sheetData>",
+                "</sheetData><dataValidations count=\"1\"><dataValidation type=\"list\" sqref=\"A1\"><formula1>Data!$A$1:$A$3</formula1></dataValidation></dataValidations>",
+            ),
+        ),
+        (
+            "a hyperlink",
+            replace_in_part(
+                &base,
+                "xl/worksheets/sheet1.xml",
+                "</sheetData>",
+                "</sheetData><hyperlinks><hyperlink ref=\"A1\" location=\"DATA!B2\"/></hyperlinks>",
+            ),
+        ),
+    ];
+    for (what, bytes) in cases {
+        rig.host.put("b.xlsx", bytes.clone());
+        for (tool, args) in [
+            (
+                "rename_sheet",
+                json!({"sheet": "Data", "new_name": "Renamed"}),
+            ),
+            ("delete_sheet", json!({"sheet": "Data"})),
+        ] {
+            let mut args = args;
+            args["file_name"] = json!("b.xlsx");
+            let said = rig.text(tool, args).await;
+            assert!(
+                said.contains("referred to by name"),
+                "{what} {tool}: {said}"
+            );
+        }
+        assert_eq!(rig.host.get("b.xlsx"), bytes);
+    }
+    // A name scoped to a sheet by position, at or after the deleted sheet.
+    let scoped = replace_in_part(
+        &base,
+        "xl/workbook.xml",
+        "</sheets>",
+        "</sheets><definedNames><definedName name=\"_xlnm.Print_Area\" localSheetId=\"2\">Last!$A$1:$C$3</definedName></definedNames>",
+    );
+    rig.host.put("s.xlsx", scoped.clone());
+    // Deleting sheet 2 (index 1) would shift the scope of sheet index 2.
+    let said = rig
+        .text("delete_sheet", json!({"file_name": "s.xlsx", "sheet": 2}))
+        .await;
+    assert!(said.contains("scoped to sheet"), "{said}");
+    assert_eq!(rig.host.get("s.xlsx"), scoped);
+    // Renaming does not move a scope.
+    rig.text(
+        "rename_sheet",
+        json!({"file_name": "s.xlsx", "sheet": 2, "new_name": "Fine"}),
+    )
+    .await;
 }

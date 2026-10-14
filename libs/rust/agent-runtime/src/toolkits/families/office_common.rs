@@ -805,7 +805,12 @@ pub(crate) fn table_rows(
                 .map(|cells| {
                     cells
                         .iter()
-                        .map(|c| c.as_str().map_or_else(|| c.to_string(), str::to_owned))
+                        .map(|c| match c {
+                            Value::String(s) => s.clone(),
+                            // A null cell is an empty cell, not the word "null".
+                            Value::Null => String::new(),
+                            other => other.to_string(),
+                        })
                         .collect()
                 })
         })

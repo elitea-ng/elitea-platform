@@ -366,3 +366,58 @@ func repositoryRoot(t *testing.T) string {
 	t.Fatal("repository root not found from the test working directory")
 	return ""
 }
+
+// Absence of a capability projection must not advertise what only the Rust
+// worker serves: docx and xlsx (and pptx's Rust-only tools) are offered only
+// where the deployment states a Rust worker. The SDK's own types stay.
+func TestWithoutACapabilityTheRustOnlyTypesAndToolsAreWithheld(t *testing.T) {
+	t.Parallel()
+
+	var absent *runtimecomposition.WorkerToolkitCapability
+	python, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rust, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("rust")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, toolkitType := range []string{"docx", "xlsx"} {
+		supported, reason := absent.SupportsToolkitType(toolkitType, "")
+		if supported || !strings.Contains(reason, "only the Rust worker serves") {
+			t.Errorf("nil: %s supported=%v reason=%q", toolkitType, supported, reason)
+		}
+		if supported, _ := python.SupportsToolkitType(toolkitType, ""); supported {
+			t.Errorf("python offers %s", toolkitType)
+		}
+		if supported, reason := rust.SupportsToolkitType(toolkitType, ""); !supported {
+			t.Errorf("rust withholds %s: %s", toolkitType, reason)
+		}
+	}
+	// pptx's Rust-only tools: withheld on nil and Python, offered on Rust;
+	// its SDK tools are offered everywhere.
+	for _, tool := range []string{"add_slide", "export_pdf"} {
+		if supported, reason := absent.SupportsTool("pptx", tool); supported || reason == "" {
+			t.Errorf("nil offers pptx/%s", tool)
+		}
+		if supported, _ := python.SupportsTool("pptx", tool); supported {
+			t.Errorf("python offers pptx/%s", tool)
+		}
+		if supported, reason := rust.SupportsTool("pptx", tool); !supported {
+			t.Errorf("rust withholds pptx/%s: %s", tool, reason)
+		}
+	}
+	for _, tool := range []string{"fill_template", "translate_presentation"} {
+		for name, capability := range map[string]*runtimecomposition.WorkerToolkitCapability{"nil": absent, "python": python, "rust": rust} {
+			if supported, reason := capability.SupportsTool("pptx", tool); !supported {
+				t.Errorf("%s withholds the SDK tool pptx/%s: %s", name, tool, reason)
+			}
+		}
+	}
+	// The SDK's types are unchanged on nil.
+	for _, toolkitType := range []string{"github", "pptx", "artifact"} {
+		if supported, _ := absent.SupportsToolkitType(toolkitType, toolkitType); !supported {
+			t.Errorf("nil withholds the SDK type %s", toolkitType)
+		}
+	}
+}

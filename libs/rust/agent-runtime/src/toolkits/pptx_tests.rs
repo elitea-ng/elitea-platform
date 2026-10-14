@@ -2244,3 +2244,21 @@ async fn slide_images_are_sent_with_the_first_batch_only() {
             .all(|c| c.images_png.is_empty() && !c.prompt.contains("given with the first batch"))
     );
 }
+
+#[tokio::test]
+async fn a_null_table_cell_is_an_empty_cell_not_the_word_null() {
+    let rig = Rig::new().await;
+    rig.text(
+        "create_presentation",
+        json!({"file_name": "t.pptx", "title": "T"}),
+    )
+    .await;
+    rig.text(
+        "add_table",
+        json!({"file_name": "t.pptx", "slide": 1, "rows": [["h", null], [3, false]]}),
+    )
+    .await;
+    let md = rig.markdown("t.pptx");
+    assert!(!md.contains("null"), "{md}");
+    assert!(md.contains('3') && md.contains("false"), "{md}");
+}

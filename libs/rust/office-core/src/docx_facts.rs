@@ -145,15 +145,24 @@ pub(crate) fn part_kinds(
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
-        let name = entry.name();
-        if name.ends_with('/') || name.contains("/_rels/") || name.starts_with("_rels/") {
-            continue;
+        if let Some(kind) = kind_of(entry.name()) {
+            *out.entry(kind).or_insert(0) += 1;
         }
-        let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
-        let kind = stem.trim_end_matches(|c: char| c.is_ascii_digit());
-        *out.entry(kind.to_owned()).or_insert(0) += 1;
     }
     out
+}
+
+/// The kind of a part: its name without extension and trailing digits
+/// (`None` for a directory or a relationships part).
+pub(crate) fn kind_of(name: &str) -> Option<String> {
+    if name.ends_with('/') || name.contains("/_rels/") || name.starts_with("_rels/") {
+        return None;
+    }
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    Some(
+        stem.trim_end_matches(|c: char| c.is_ascii_digit())
+            .to_owned(),
+    )
 }
 
 /// The main document part, from the package relationships (`word/document.xml`
@@ -237,6 +246,9 @@ fn read_body(xml: &[u8]) -> DocFacts {
     let mut tbl_at = 0usize;
     let mut tbl_level = 0usize;
     let mut in_t = false;
+    // Only a tab or break INSIDE a run is text; `w:tab` also defines a tab stop
+    // in `w:pPr/w:tabs`.
+    let mut in_run = false;
     // Text boxes and fallbacks hold paragraphs of their own, or copies.
     let mut skip_from: Option<usize> = None;
     // Whether the `w:p` being read is a direct child of the body.
@@ -289,13 +301,14 @@ fn read_body(xml: &[u8]) -> DocFacts {
                             t.cell = Vec::new();
                         }
                     }
+                    b"r" => in_run = true,
                     b"t" if para.is_some() => in_t = true,
                     b"drawing" | b"pict" | b"object" => {}
                     b"blip" => note_picture(&mut para, &mut out),
                     b"chart" => note_chart(e, &mut para, &mut out),
                     b"pStyle" if para_is_body => set_style(e, &mut para),
-                    b"tab" if para.is_some() && !in_t => push_char(&mut para, '\t'),
-                    b"br" | b"cr" if para.is_some() => push_char(&mut para, '\n'),
+                    b"tab" if para.is_some() && in_run && !in_t => push_char(&mut para, '\t'),
+                    b"br" | b"cr" if para.is_some() && in_run => push_char(&mut para, '\n'),
                     _ => {
                         if at_body && tbl.is_none() && para.is_none() {
                             other_from = Some(depth);
@@ -327,8 +340,8 @@ fn read_body(xml: &[u8]) -> DocFacts {
                     b"blip" => note_picture(&mut para, &mut out),
                     b"chart" => note_chart(e, &mut para, &mut out),
                     b"pStyle" if para_is_body => set_style(e, &mut para),
-                    b"tab" if para.is_some() && !in_t => push_char(&mut para, '\t'),
-                    b"br" | b"cr" if para.is_some() => push_char(&mut para, '\n'),
+                    b"tab" if para.is_some() && in_run && !in_t => push_char(&mut para, '\t'),
+                    b"br" | b"cr" if para.is_some() && in_run => push_char(&mut para, '\n'),
                     _ => {
                         // A body-level empty element that is not a paragraph or
                         // a table (a bookmark, a section break, ...).
@@ -361,6 +374,7 @@ fn read_body(xml: &[u8]) -> DocFacts {
                     continue;
                 }
                 match name {
+                    b"r" => in_run = false,
                     b"t" => in_t = false,
                     b"p" if para.is_some() && depth == para_at => {
                         let p = para.take().unwrap_or_default();

@@ -1022,3 +1022,21 @@ async fn materialization_needs_the_office_capability_on_the_artifact_authority()
 fn part(package: &[u8], name: &str) -> String {
     elitea_office_core::testing::part_text(package, name).expect("the part exists")
 }
+
+#[tokio::test]
+async fn a_null_table_cell_is_an_empty_cell_and_other_scalars_are_their_text() {
+    let rig = Rig::new().await;
+    rig.text("create_document", json!({"file_name": "d.docx"}))
+        .await;
+    let said = rig
+        .text(
+            "add_table",
+            json!({"file_name": "d.docx", "rows": [["a", null, 7], [true, 1.5, "z"]]}),
+        )
+        .await;
+    assert!(said.contains("table 1"), "{said}");
+    assert_eq!(
+        rig.facts("d.docx").tables()[0].rows,
+        vec![vec!["a", "", "7"], vec!["true", "1.5", "z"]]
+    );
+}

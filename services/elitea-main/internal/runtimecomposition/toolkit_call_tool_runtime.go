@@ -51,14 +51,11 @@ type toolkitTypeVerdictAdapter struct {
 }
 
 func (a toolkitTypeVerdictAdapter) SupportsToolkitType(toolkitType string) (bool, string) {
-	if a.catalogue == nil || a.capability == nil {
-		// The same reading of absence the catalogue applies: a deployment that
-		// has not stated its worker keeps behaving as it did before this
-		// projection existed.
-		return true, ""
-	}
+	// The same reading of absence the capability applies (nil receiver): a
+	// deployment that has not stated its worker keeps the SDK's types and is
+	// not offered the types only the Rust worker serves.
 	importKey, found := a.catalogue.ToolkitImportKey(toolkitType)
-	if !found {
+	if !found && a.capability != nil {
 		return true, ""
 	}
 	return a.capability.SupportsToolkitType(toolkitType, importKey)
@@ -67,9 +64,6 @@ func (a toolkitTypeVerdictAdapter) SupportsToolkitType(toolkitType string) (bool
 // SupportsTool is the per-tool half (ADR-0027): a partial Rust family serves
 // fewer tools than its SDK type declares. The same reading of absence.
 func (a toolkitTypeVerdictAdapter) SupportsTool(toolkitType, toolName string) (bool, string) {
-	if a.capability == nil {
-		return true, ""
-	}
 	return a.capability.SupportsTool(toolkitType, toolName)
 }
 

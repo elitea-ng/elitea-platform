@@ -70,7 +70,10 @@ pub use guard::{Health, health};
 pub use inspect::{ChartFacts, ShapeFacts, ShapeKind, SlideFacts, TableFacts, facts_of_package};
 pub use limits::{Limits, PARSE_STACK_BYTES};
 pub use workbook::{CellRange, CellValue, SheetChartSpec, SheetSeries, Workbook};
-pub use xlsx_facts::{XlsxChart, XlsxFacts, XlsxQuery, XlsxSheet, facts_of_xlsx_package};
+pub use xlsx_facts::{
+    XlsxChart, XlsxFacts, XlsxQuery, XlsxSheet, facts_of_xlsx_package,
+    facts_of_xlsx_package_choosing,
+};
 
 /// The pixel size of a raster image (PNG, GIF, JPEG, BMP, WebP, TIFF) from its
 /// header alone, or `None` when the bytes are not one or the header is
@@ -154,6 +157,36 @@ pub mod testing {
         let mut out = String::new();
         zip.by_name(name).ok()?.read_to_string(&mut out).ok()?;
         Some(out)
+    }
+
+    /// A copy of `package` with the first `from` of the part `name` replaced
+    /// by `to`, for a test that needs a file shaped the way a producer shapes it.
+    ///
+    /// # Panics
+    /// When the part or the text is not there.
+    #[must_use]
+    pub fn replace_in_part(package: &[u8], name: &str, from: &str, to: &str) -> Vec<u8> {
+        use std::io::{Read, Write};
+        let mut input = zip::ZipArchive::new(std::io::Cursor::new(package)).expect("a zip");
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..input.len() {
+            let mut entry = input.by_index(i).expect("an entry");
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).expect("a readable entry");
+            if entry.name() == name {
+                let text = String::from_utf8(data).expect("a text part");
+                assert!(text.contains(from), "{name} has no {from}");
+                data = text.replacen(from, to, 1).into_bytes();
+            }
+            out.start_file(
+                entry.name(),
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated),
+            )
+            .expect("a new entry");
+            out.write_all(&data).expect("a written entry");
+        }
+        out.finish().expect("a finished zip").into_inner()
     }
 
     /// `(opens, saves, package_reads)` made on the calling thread since
