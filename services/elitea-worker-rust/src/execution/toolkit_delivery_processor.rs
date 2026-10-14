@@ -69,13 +69,32 @@ enum DirectLending {
     None,
 }
 
+/// The `SharePoint` tools that turn a file or a page into text, which the
+/// document reader of the Office host serves. The others need no host, so a
+/// direct call of one redeems nothing.
+fn sharepoint_reads_text(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "read_document"
+            | "read_file_from_sharing_link"
+            | "onenote_read_page"
+            | "onenote_read_page_items"
+            | "onenote_read_attachment"
+    )
+}
+
 /// What to lend a direct call of `toolkit_type`. `imagegen`'s tools are all
 /// effectful and refused on this path, so it never needs the claim; `pptx`
-/// reads objects, so it does (when this worker has the Office runtime).
-fn direct_lending(toolkit_type: &str, has_office_runtime: bool) -> DirectLending {
+/// reads objects, so it does (when this worker has the Office runtime);
+/// `sharepoint` is lent the host only for the tools that read text, whose
+/// document reader it carries. Its uploads are effects and are refused here.
+fn direct_lending(toolkit_type: &str, tool_name: &str, has_office_runtime: bool) -> DirectLending {
     match toolkit_type {
         "imagegen" => DirectLending::NoRoundTrip,
         "pptx" if has_office_runtime => DirectLending::Claim,
+        "sharepoint" if has_office_runtime && sharepoint_reads_text(tool_name) => {
+            DirectLending::Claim
+        }
         _ => DirectLending::None,
     }
 }
@@ -89,13 +108,29 @@ mod direct_lending_tests {
         // Whether or not the worker has an Office runtime: no round trip.
         for runtime in [true, false] {
             assert_eq!(
-                direct_lending("imagegen", runtime),
+                direct_lending("imagegen", "", runtime),
                 DirectLending::NoRoundTrip
             );
         }
-        assert_eq!(direct_lending("pptx", true), DirectLending::Claim);
-        assert_eq!(direct_lending("pptx", false), DirectLending::None);
-        assert_eq!(direct_lending("github", true), DirectLending::None);
+        assert_eq!(direct_lending("pptx", "", true), DirectLending::Claim);
+        assert_eq!(direct_lending("pptx", "", false), DirectLending::None);
+        assert_eq!(direct_lending("github", "", true), DirectLending::None);
+        // SharePoint is lent the host for its text readers only.
+        assert_eq!(
+            direct_lending("sharepoint", "read_document", true),
+            DirectLending::Claim
+        );
+        assert_eq!(
+            direct_lending("sharepoint", "read_document", false),
+            DirectLending::None
+        );
+        for tool in ["get_lists", "upload_file", "onenote_get_page_content", ""] {
+            assert_eq!(
+                direct_lending("sharepoint", tool, true),
+                DirectLending::None,
+                "{tool}"
+            );
+        }
     }
 }
 
@@ -975,7 +1010,11 @@ where
         lease: &mut ClaimLeaseMonitor,
         request: &DirectToolkitRequest,
     ) -> Result<Option<crate::toolkits::ArtifactToolAuthority>, RuntimeFailureKind> {
-        match direct_lending(request.toolkit_type(), self.office.is_some()) {
+        match direct_lending(
+            request.toolkit_type(),
+            request.tool_name(),
+            self.office.is_some(),
+        ) {
             DirectLending::NoRoundTrip => Ok(Some(
                 crate::toolkits::ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter))
                     .with_office(Arc::new(NoRoundTripImagesHost)),

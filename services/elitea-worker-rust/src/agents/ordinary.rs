@@ -965,11 +965,16 @@ struct DirectToolsets {
 /// THOSE names keeps the three in agreement; building either catalog from the
 /// published name would leave a renamed tool silently unguarded.
 /// Whether the snapshot has a toolkit of the Office families (ADR-0032 P3, P4:
-/// `pptx`, `docx`, `xlsx`).
+/// `pptx`, `docx`, `xlsx`) or one that reads and writes files through the same
+/// host (`imagegen`; `sharepoint`, whose `upload_file` reads artifacts and
+/// whose readers turn documents into text).
 pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
         reference.kind() == FrozenToolKind::Configured
-            && matches!(reference.tool_type(), "pptx" | "docx" | "xlsx" | "imagegen")
+            && matches!(
+                reference.tool_type(),
+                "pptx" | "docx" | "xlsx" | "imagegen" | "sharepoint"
+            )
     })
 }
 

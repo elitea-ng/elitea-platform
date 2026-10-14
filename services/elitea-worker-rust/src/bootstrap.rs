@@ -120,6 +120,11 @@ pub(crate) struct ProductionTransportBundle {
     /// The index.ingest.v1 runtime, when the deployment names a
     /// `vector_target` (ADR-0030 I1).
     pub(crate) index_runtime: Option<Arc<crate::indexing::IndexIngestRuntime>>,
+    /// The document extraction sidecar's client, when the deployment names
+    /// its socket: shared by the index runs and by the toolkit tools that
+    /// read a document as text (`SharePoint` `read_document`), so both queue
+    /// behind one permit pool.
+    pub(crate) extractor: Option<Arc<crate::transport::extractor_client::ExtractorClient>>,
 }
 
 impl ProductionTransportBundle {
@@ -304,6 +309,22 @@ impl ProductionTransportBundle {
         };
         let platform = Arc::new(PlatformClient::new(runtime_context));
         let model_facade = Arc::new(model_facade);
+        // PDF and Office documents go to the extraction sidecar when the
+        // deployment names its socket; the dial is lazy, so a sidecar that is
+        // still starting costs nothing here.
+        let extractor = match deployment.extractor_socket.as_deref() {
+            Some(socket) => {
+                let extractor =
+                    crate::transport::extractor_client::ExtractorClient::connect_lazy(socket)
+                        .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
+                tracing::info!(
+                    event = "index_extractor_configured",
+                    socket = %extractor.socket().display()
+                );
+                Some(Arc::new(extractor))
+            }
+            None => None,
+        };
         let index_runtime = match deployment.vector_target.as_deref() {
             Some(target) => {
                 let mut runtime = crate::indexing::IndexIngestRuntime::new(
@@ -330,18 +351,8 @@ impl ProductionTransportBundle {
                 // call over the same gateway channel.
                 .with_chat_models(Arc::clone(&model_facade)
                     as Arc<dyn crate::indexing::model_steps::ChatModelBinder>);
-                // PDF and Office documents go to the extraction sidecar when
-                // the deployment names its socket; the dial is lazy, so a
-                // sidecar that is still starting costs nothing here.
-                if let Some(socket) = deployment.extractor_socket.as_deref() {
-                    let extractor =
-                        crate::transport::extractor_client::ExtractorClient::connect_lazy(socket)
-                            .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
-                    tracing::info!(
-                        event = "index_extractor_configured",
-                        socket = %extractor.socket().display()
-                    );
-                    runtime = runtime.with_extractor(Arc::new(extractor));
+                if let Some(extractor) = extractor.as_ref() {
+                    runtime = runtime.with_extractor(Arc::clone(extractor));
                 }
                 Some(Arc::new(runtime))
             }
@@ -361,6 +372,7 @@ impl ProductionTransportBundle {
             model_facade,
             agentstate,
             index_runtime,
+            extractor,
         })
     }
 }

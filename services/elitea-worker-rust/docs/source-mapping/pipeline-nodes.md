@@ -61,16 +61,20 @@ for the subsequent fixes to child-task preservation, fragmented node output, and
 | `printer` | Publish the declared state value as an ordinary chat result, durably pause after it, and resume from a compiler-owned reset node without duplicating browser output. Implemented capability-disabled with native ADK `interrupt_after`; it is not a HITL decision card. |
 | `router` | Render a bounded condition from selected state or the whole state and choose only a declared target. Implemented capability-disabled as a deterministic custom ADK node with bounded MiniJinja, `json_loads`, normalized route labels, an exact default and atomic `goto`. |
 | `state_modifier` | Render one bounded MiniJinja template with the four current SDK filters, update the first declared output using the existing state type, and clear declared variables by type. When its explicit route targets the `END` control-flow sink, that output is also a public-result candidate. Implemented capability-disabled |
-| `toolkit` | Execute the exact selected read-only tool from the selected configured toolkit with fixed/state/template argument mapping and declared typed output projection. It is one native ADK `Tool` call, not an `LlmAgent` turn. Implemented capability-disabled, including checkpoint-bound confirmation for sensitive reads and a family-neutral delegated-auth interrupt compatible with the SDK's `McpAuthorizationRequired`/`mcp_auth` contract. Approval can rebuild only when the concrete family consumes the returned token; Skip nulls declared data outputs and stops at `END`. Bounded inline OpenAPI consumes this token against its exact API base URL; the explicitly selected SharePoint read core consumes it against the frozen site URL and maps direct-call Graph 401 to the same interrupt. Remaining OpenAPI and SharePoint content/auth capabilities plus remote effects remain fail-closed behind their authority and reconciliation contracts. |
+| `toolkit` | Execute the exact selected read-only tool from the selected configured toolkit with fixed/state/template argument mapping and declared typed output projection. It is one native ADK `Tool` call, not an `LlmAgent` turn. Implemented capability-disabled, including checkpoint-bound confirmation for sensitive reads and a family-neutral delegated-auth interrupt compatible with the SDK's `McpAuthorizationRequired`/`mcp_auth` contract. Approval can rebuild only when the concrete family consumes the returned token; Skip nulls declared data outputs and stops at `END`. Bounded inline OpenAPI consumes this token against its exact API base URL; the delegated SharePoint family consumes it against the frozen site URL and maps direct-call Graph 401 to the same interrupt. Remaining OpenAPI capabilities, app-only SharePoint access plus remote effects (including the SharePoint uploads, list-item creation and OneNote edits, which a Toolkit node does not run) remain fail-closed behind their authority and reconciliation contracts. |
 
-SharePoint checkpoint update: Toolkit nodes may now select one of eight
-artifact-free delegated Graph reads. A missing token uses the same pre-dispatch
-interrupt as OpenAPI, and a Graph 401 raised during the direct call is converted
-to that native interrupt before state projection. Skip still leaves typed
-outputs null and routes to `END`. Empty/all selection, ACS/app-only access,
-document or attachment parsing, indexing, writes and model-loop post-token 401
-handling remain closed. A mixed saved selection exposes only its selected
-supported reads. This update supersedes older broad inventory rows below.
+SharePoint checkpoint update: Toolkit nodes may now select any read-only
+SharePoint tool (the 14 reads of the family's 22: lists and columns, file
+metadata, \`read_document\`, \`read_file_from_sharing_link\` and the OneNote
+readers). The text readers use the Office host of the claim (the document
+reader), which a pipeline lends to its nodes as it does for the Office
+toolkits. A missing token uses the same pre-dispatch interrupt as OpenAPI, and a
+Graph 401 raised during the direct call is converted to that native interrupt
+before state projection. Skip still leaves typed outputs null and routes to
+\`END\`. Empty/all selection, ACS/app-only access (refused by name), the SharePoint
+writes, picture description and model-loop post-token 401 handling remain
+closed. A mixed saved selection exposes only its selected supported tools. This
+update supersedes older broad inventory rows below.
 
 The UI marks `function`, `condition`, `pipeline`, `loop`, `loop_from_tool` and
 `tool` deprecated and removes them from the add menu. `END`, `ghost` and

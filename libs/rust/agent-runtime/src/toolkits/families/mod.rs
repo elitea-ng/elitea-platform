@@ -89,6 +89,9 @@ pub(crate) enum UnsupportedSetting {
     /// A custom header that would replace the credential, carry platform
     /// identity or change request framing.
     ReservedHeader,
+    /// A `SharePoint` credential with no OAuth discovery endpoint: the
+    /// app-only (client secret) mode.
+    SharePointAppOnly,
 }
 
 impl UnsupportedSetting {
@@ -105,6 +108,9 @@ impl UnsupportedSetting {
             }
             Self::ReservedHeader => {
                 "a custom header that overrides the credential or request framing (Authorization, Cookie, Host, Content-Type, Accept or a platform header) is not supported by the Rust worker"
+            }
+            Self::SharePointAppOnly => {
+                "a SharePoint credential without an OAuth discovery endpoint (app-only access with a client secret) is not supported by the Rust worker: its SharePoint tools act as the signed-in person with a delegated token, so set the credential's OAuth discovery endpoint. Microsoft retired app-only access to the OneNote Graph API (MC1011142), so the OneNote tools cannot run on an app-only credential at all"
             }
         }
     }

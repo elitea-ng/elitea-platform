@@ -598,7 +598,7 @@ an open generic-MCP gate.
 
 The remaining MCP/on-demand-auth gates are independent partial sibling resume,
 mixed-guardrail terminal aggregation,
-post-token model-loop challenges, remaining SharePoint content/app-only tools,
+post-token model-loop challenges, app-only SharePoint access,
 remaining OpenAPI capabilities, platform
 OAuth/DCR and production activation. Materializer-known root, pipeline-LLM and
 parallel nested calls, including a pipeline Agent owner, are covered.
@@ -619,7 +619,7 @@ materializer-known direct `LlmAgent`/saved-agent hierarchy and that hierarchy
 inside a pipeline Agent node, plus Main's bounded exact complete-set admission.
 Older `Main plural/partial activation` wording now means independent partial
 resume only. It does not claim mixed-guardrail terminal aggregation,
-post-token model-loop challenges, remaining SharePoint content/app-only tools
+post-token model-loop challenges, app-only SharePoint access
 or the remaining OpenAPI capabilities.
 
 SharePoint checkpoint update: the explicitly selected delegated Graph read core
