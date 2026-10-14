@@ -10,9 +10,9 @@ use super::direct_execution::{
     execute_test_toolsets,
 };
 use super::{
-    AdkHttpMcpConnector, DirectToolkitRequest, FrozenToolKind, IndexToolSupport,
-    IndexToolsWithheld, McpConnector, McpMaterializationErrorCode, ToolsetMaterializationErrorCode,
-    materialize_configured_toolsets_with_authorities,
+    AdkHttpMcpConnector, ArtifactToolAuthority, DirectToolkitRequest, FrozenToolKind,
+    IndexToolSupport, IndexToolsWithheld, McpConnector, McpMaterializationErrorCode,
+    ToolsetMaterializationErrorCode, materialize_configured_toolsets_with_authorities,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 
@@ -136,6 +136,7 @@ impl DirectToolkitRuntime {
             .materialize(
                 request,
                 IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath),
+                None,
             )
             .await?;
         let invocation = DirectToolkitInvocation::new(
@@ -152,6 +153,9 @@ impl DirectToolkitRuntime {
             .map_err(|error| map_execution_error(&error))
     }
     /// Run one tool of one configured toolkit (`toolkit.call_tool.v1`).
+    /// `artifacts` is the claim's Office-host authority, lent for the
+    /// families that act on platform objects and the images API (`pptx`,
+    /// `imagegen`); withheld, those toolkits are unsupported here.
     /// `index_tools` is the claim's index-tool authority, lent when the call
     /// names an index tool of a toolkit that carries an index catalog and
     /// this worker has a vector store (ADR-0030 I1); withheld, an index tool
@@ -162,8 +166,9 @@ impl DirectToolkitRuntime {
         execution_id: &str,
         call_id: &str,
         index_tools: IndexToolSupport<'_>,
+        artifacts: Option<&ArtifactToolAuthority>,
     ) -> Result<Value, DirectToolkitRuntimeError> {
-        let toolsets = self.materialize(request, index_tools).await?;
+        let toolsets = self.materialize(request, index_tools, artifacts).await?;
         let invocation = DirectToolkitInvocation::new(
             request.toolkit_type().to_owned(),
             request.toolkit_name().to_owned(),
@@ -183,11 +188,13 @@ impl DirectToolkitRuntime {
     pub(crate) async fn discover(
         &self,
         request: &DirectToolkitRequest,
+        artifacts: Option<&ArtifactToolAuthority>,
     ) -> Result<Value, DirectToolkitRuntimeError> {
         let toolsets = self
             .materialize(
                 request,
                 IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath),
+                artifacts,
             )
             .await?;
         let frozen = super::tool_binding::freeze_toolsets(toolsets, "elitea-toolkit-discovery")
@@ -230,6 +237,7 @@ impl DirectToolkitRuntime {
         &self,
         request: &DirectToolkitRequest,
         index_tools: IndexToolSupport<'_>,
+        artifacts: Option<&ArtifactToolAuthority>,
     ) -> Result<Vec<Arc<dyn adk_rust::Toolset>>, DirectToolkitRuntimeError> {
         let snapshot = request.snapshot().map_err(|error| match error.code() {
             super::DirectToolkitRequestErrorCode::InvalidInput
@@ -256,7 +264,7 @@ impl DirectToolkitRuntime {
                     &admitted,
                     request.policy(),
                     tokens,
-                    None,
+                    artifacts,
                     index_tools,
                 )
                 .await
@@ -419,7 +427,7 @@ mod shared_tests {
         )
         .expect("request");
         let result = DirectToolkitRuntime::default()
-            .discover(&request)
+            .discover(&request, None)
             .await
             .expect("descriptors");
         assert_eq!(result["tools"].as_array().expect("tools").len(), 1);
@@ -447,6 +455,7 @@ mod shared_tests {
                 "execution",
                 "call",
                 IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath),
+                None,
             )
             .await
             .expect_err("pre-invocation auth");
@@ -467,7 +476,8 @@ mod shared_tests {
             DirectToolkitRuntime::default()
                 .materialize(
                     &wrong_request,
-                    IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath)
+                    IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath),
+                    None
                 )
                 .await
                 .err()
@@ -483,7 +493,8 @@ mod shared_tests {
             DirectToolkitRuntime::default()
                 .materialize(
                     &authorized,
-                    IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath)
+                    IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath),
+                    None
                 )
                 .await
                 .expect("authorized toolset")

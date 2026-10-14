@@ -369,7 +369,7 @@ impl ProductionAgentRuntime {
             )
             .with_sandbox(sandbox)
             .with_index_runtime(index_runtime.clone())
-            .with_office_runtime(office_runtime),
+            .with_office_runtime(office_runtime.clone()),
         );
         let clock = Arc::new(SystemUnixMillisClock);
         let agent: ProductionAgentProcessor = native_agent_delivery_processor(
@@ -401,7 +401,8 @@ impl ProductionAgentRuntime {
             DirectToolkitRuntime::default(),
             platform,
             index_runtime,
-        );
+        )
+        .with_office(office_runtime);
         let processor = Arc::new(ExecutionDeliveryProcessor::new(
             command_authenticator,
             agent,

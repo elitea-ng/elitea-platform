@@ -314,10 +314,10 @@ func TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize(t *testing.
 
 // imagegen is hand-written (its credential is the project's own
 // image_generation model, not a pinned-snapshot settings shape) but it IS a
-// real, worker-implemented toolkit (elitea_sdk/tools/imagegen, #864) — unlike
-// the other four hand-written types, it must still carry a genuine worker
-// verdict: buildable under Python, hidden under Rust (no Rust family exists
-// for it), and offered with no verdict when no capability source is wired.
+// real, worker-implemented toolkit (elitea_sdk/tools/imagegen on Python, the
+// native imagegen family on Rust, #864) — unlike the other four hand-written
+// types, it must still carry a genuine worker verdict: buildable under both
+// workers, and offered with no verdict when no capability source is wired.
 func TestImageGenIsHandWrittenButStillWorkerGated(t *testing.T) {
 	t.Parallel()
 
@@ -329,17 +329,11 @@ func TestImageGenIsHandWrittenButStillWorkerGated(t *testing.T) {
 
 	rust := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
 	rustMetadata := metadataOf(t, rust, "imagegen")
-	hidden, _ := rustMetadata["hidden"].(bool)
-	unavailable, _ := rustMetadata["unavailable"].(bool)
-	reason, _ := rustMetadata["unavailable_reason"].(string)
-	if !hidden || !unavailable || reason == "" {
-		t.Errorf(
-			"imagegen has no Rust toolkit family and should be served hidden=true unavailable=true with a reason; got hidden=%v unavailable=%v reason=%q",
-			hidden, unavailable, reason,
-		)
+	if hidden, _ := rustMetadata["hidden"].(bool); hidden {
+		t.Errorf("imagegen has a Rust family and must not be served hidden: %#v", rustMetadata)
 	}
-	if !contains(reason, "imagegen") {
-		t.Errorf("imagegen reason=%q, want it to name the imagegen type", reason)
+	if unavailable, _ := rustMetadata["unavailable"].(bool); unavailable {
+		t.Errorf("imagegen has a Rust family and must not be served unavailable: %#v", rustMetadata)
 	}
 
 	unset := getToolkitTypeCatalogue(t, catalogueOptions(t, "")...)

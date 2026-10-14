@@ -22,14 +22,19 @@ use std::sync::Arc;
 use adk_rust::Part;
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
-    OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
+    ImageEditRequest, ImageGenerateRequest, OfficeFailure, OfficeHostError, OfficeModelRequest,
+    OfficeObjectWritten, OfficeToolHost,
 };
 use elitea_connectors::artifact::client::{ArtifactPlatform, valid_object_key, valid_segment};
 use elitea_connectors::egress::HostAllowlist;
 use elitea_connectors::source::{Failure, SourceHttp, SourceLimits};
 use elitea_connectors::transport::{Body, Method, Url, header};
+use elitea_llm_wire::refusal::Refusal;
 use serde_json::Value;
 
+use super::images_facade::{ImageCall, ImagesClient, ImagesError};
+use super::multipart::Multipart;
+use super::runtime_context::ClaimScopedEliteaContext;
 use crate::indexing::tools::{LazyStepbackModel, generate_text};
 
 /// What every Office host of the worker shares: the platform origin and the
@@ -111,6 +116,9 @@ pub(crate) struct ClaimOfficeHost {
     platform: ArtifactPlatform,
     model: LazyStepbackModel,
     project_id: String,
+    /// The gateway's images routes under the claim (the `imagegen` toolkit,
+    /// #864); `None` leaves that toolkit out as unsupported.
+    images: Option<(ImagesClient, Arc<ClaimScopedEliteaContext>)>,
 }
 
 impl ClaimOfficeHost {
@@ -133,7 +141,21 @@ impl ClaimOfficeHost {
             platform,
             model,
             project_id: project_id.to_owned(),
+            images: None,
         })
+    }
+
+    /// This host with the gateway's images API, called under `context`'s
+    /// credential, project and execution (the same attribution, budget and
+    /// request log as the turn's chat calls).
+    #[must_use]
+    pub(crate) fn with_images(
+        mut self,
+        client: ImagesClient,
+        context: Arc<ClaimScopedEliteaContext>,
+    ) -> Self {
+        self.images = Some((client, context));
+        self
     }
 
     fn object_request(
@@ -207,8 +229,170 @@ pub(crate) fn model_failure(message: &str) -> OfficeHostError {
     }
 }
 
+/// The Office host of a direct toolkit call of `imagegen`: it claims to serve
+/// the images API so the toolkit materializes and its tools are listed, and it
+/// does nothing else. The tools write artifacts, `toolkit.call_tool.v1` runs
+/// read-only tools only, and the runtime refuses them before one runs; so no
+/// claim is redeemed and no platform call is made for it.
+pub(crate) struct NoRoundTripImagesHost;
+
+fn direct_path_refusal() -> OfficeHostError {
+    OfficeHostError::new(
+        OfficeFailure::NoModel,
+        "office_host.direct_path_no_round_trip",
+    )
+}
+
+#[async_trait]
+impl OfficeToolHost for NoRoundTripImagesHost {
+    fn serves_images(&self) -> bool {
+        true
+    }
+
+    async fn read_object(&self, _: &str, _: &str, _: u64) -> Result<Vec<u8>, OfficeHostError> {
+        Err(direct_path_refusal())
+    }
+
+    async fn write_object(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Vec<u8>,
+        _: bool,
+    ) -> Result<OfficeObjectWritten, OfficeHostError> {
+        Err(direct_path_refusal())
+    }
+
+    async fn complete(&self, _: OfficeModelRequest) -> Result<String, OfficeHostError> {
+        Err(direct_path_refusal())
+    }
+}
+
+/// An images-API failure as the host classifies it: each real cause its own
+/// kind, so the tool names it (a rate limit is not a lost connection).
+pub(crate) fn images_failure(error: &ImagesError) -> OfficeHostError {
+    let (kind, reason) = match error {
+        ImagesError::Refused { refusal } => match refusal {
+            Refusal::BudgetExhausted(_) => {
+                (OfficeFailure::BudgetRefused, "office_host.budget_refused")
+            }
+            Refusal::Unauthorized | Refusal::Forbidden => {
+                (OfficeFailure::AccessRefused, "office_host.images_refused")
+            }
+            Refusal::Rejected => (OfficeFailure::InvalidRequest, "office_host.images_rejected"),
+            Refusal::RateLimited => (
+                OfficeFailure::RateLimited,
+                "office_host.images_rate_limited",
+            ),
+            Refusal::UpstreamTimeout => (OfficeFailure::Timeout, "office_host.images_timeout"),
+            Refusal::Conflict => (OfficeFailure::Conflict, "office_host.images_conflict"),
+            Refusal::Unavailable => (OfficeFailure::Unreachable, "office_host.images_unavailable"),
+        },
+        ImagesError::RequestTooLarge => (
+            OfficeFailure::TooLarge,
+            "office_host.images_request_too_large",
+        ),
+        ImagesError::ReplyTooLarge => (
+            OfficeFailure::ReplyTooLarge,
+            "office_host.images_reply_too_large",
+        ),
+        ImagesError::UnusableReply(_) => (
+            OfficeFailure::ReplyUnusable,
+            "office_host.images_reply_unusable",
+        ),
+        ImagesError::Malformed => (
+            OfficeFailure::InvalidRequest,
+            "office_host.images_malformed",
+        ),
+        ImagesError::InvalidFileName => (
+            OfficeFailure::InvalidRequest,
+            "office_host.images_file_name",
+        ),
+        ImagesError::Transport => (OfficeFailure::Unreachable, "office_host.images_unavailable"),
+    };
+    OfficeHostError::new(kind, reason)
+}
+
 #[async_trait]
 impl OfficeToolHost for ClaimOfficeHost {
+    fn serves_images(&self) -> bool {
+        self.images.is_some()
+    }
+
+    async fn generate_images(
+        &self,
+        request: ImageGenerateRequest,
+    ) -> Result<Vec<Option<Vec<u8>>>, OfficeHostError> {
+        let Some((client, context)) = &self.images else {
+            return Err(OfficeHostError::new(
+                OfficeFailure::NoModel,
+                "office_host.no_images_api",
+            ));
+        };
+        let call = ImageCall {
+            model: &request.model,
+            prompt: &request.prompt,
+            size: request.size.as_deref(),
+            count: request.count,
+        };
+        client.generate(context, &call).await.map_err(|error| {
+            tracing::warn!(event = "imagegen_call_failed", error = %error, "an image generation call failed");
+            images_failure(&error)
+        })
+    }
+
+    async fn edit_images(
+        &self,
+        request: ImageEditRequest,
+    ) -> Result<Vec<Option<Vec<u8>>>, OfficeHostError> {
+        let Some((client, context)) = &self.images else {
+            return Err(OfficeHostError::new(
+                OfficeFailure::NoModel,
+                "office_host.no_images_api",
+            ));
+        };
+        let ImageEditRequest {
+            model,
+            prompt,
+            image,
+            mask,
+        } = request;
+        let call = ImageCall {
+            model: &model,
+            prompt: &prompt,
+            size: None,
+            count: 1,
+        };
+        client
+            .edit(context, &call, image, mask)
+            .await
+            .map_err(|error| {
+                tracing::warn!(event = "imagegen_call_failed", error = %error, "an image edit call failed");
+                images_failure(&error)
+            })
+    }
+
+    async fn object_size(&self, bucket: &str, name: &str) -> Result<Option<u64>, OfficeHostError> {
+        // A HEAD: the size is the declared Content-Length, and nothing is
+        // buffered.
+        let head = self.object_request(Method::HEAD, bucket, Some(name), false)?;
+        let response = self
+            .runtime
+            .http
+            .send(head)
+            .await
+            .map_err(|e| failure(&e))?;
+        if !response.status().is_success() {
+            return Err(failure(&Failure::Status(response.status())));
+        }
+        Ok(response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok()))
+    }
+
     async fn read_object(
         &self,
         bucket: &str,
@@ -247,28 +431,21 @@ impl OfficeToolHost for ClaimOfficeHost {
         bytes: Vec<u8>,
         overwrite: bool,
     ) -> Result<OfficeObjectWritten, OfficeHostError> {
-        // A name that could end the multipart header line is never sent.
-        if !valid_object_key(name)
-            || name.contains(['"', '\\', '\r', '\n'])
-            || media_type.contains(['\r', '\n', '"'])
-        {
+        if !valid_object_key(name) {
             return Err(OfficeHostError::new(
                 OfficeFailure::InvalidRequest,
                 "office_host.invalid_name",
             ));
         }
         let mut request = self.object_request(Method::POST, bucket, None, overwrite)?;
-        let boundary = format!("elitea-office-{}", uuid::Uuid::new_v4().simple());
-        let mut body = Vec::with_capacity(bytes.len() + 256);
-        body.extend_from_slice(
-            format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: {media_type}\r\n\r\n"
-            )
-            .as_bytes(),
-        );
-        body.extend_from_slice(&bytes);
-        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-        let content_type = format!("multipart/form-data; boundary={boundary}");
+        let byte_length = bytes.len() as u64;
+        // The one multipart encoder refuses a name or media type that could
+        // end the header line.
+        let mut form = Multipart::new();
+        form.file("file", name, media_type, &bytes).map_err(|_| {
+            OfficeHostError::new(OfficeFailure::InvalidRequest, "office_host.invalid_name")
+        })?;
+        let (content_type, body) = form.finish();
         request.headers_mut().insert(
             header::CONTENT_TYPE,
             content_type.parse().map_err(|_| {
@@ -306,7 +483,7 @@ impl OfficeToolHost for ClaimOfficeHost {
             byte_length: reply
                 .get("size_bytes")
                 .and_then(Value::as_u64)
-                .unwrap_or(bytes.len() as u64),
+                .unwrap_or(byte_length),
         })
     }
 

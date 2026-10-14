@@ -3833,8 +3833,7 @@ worker:
   #   LOSES, as of this release:
   #     - whole toolkit types the Rust worker has no family for (checked
   #       against `current_toolkit_catalogue_snapshot.json` and
-  #       `current_rust_worker_toolkit_capability_snapshot.json`): pptx,
-  #       imagegen (needs a model lent to a toolkit),
+  #       `current_rust_worker_toolkit_capability_snapshot.json`):
   #       memory, vectorstore, sandbox, delta_lake, aws and localgit (each
   #       blocked on a platform decision recorded in the worker's
   #       SOURCE_PARITY.md). #865's other 17 types are now Rust families.

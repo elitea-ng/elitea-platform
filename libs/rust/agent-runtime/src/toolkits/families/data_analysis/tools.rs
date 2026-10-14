@@ -329,6 +329,12 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> Sentence {
         OfficeFailure::BudgetRefused | OfficeFailure::NoModel => {
             format!("Could not {action}: the platform refused the request.")
         }
+        OfficeFailure::RateLimited | OfficeFailure::Timeout | OfficeFailure::Conflict => {
+            format!("Could not {action}: the platform is busy or timed out. Try again shortly.")
+        }
+        OfficeFailure::ReplyUnusable | OfficeFailure::ReplyTooLarge => {
+            format!("Could not {action}: the platform's answer could not be used. Tell the user.")
+        }
         OfficeFailure::Unreachable => format!(
             "Could not {action}: the platform could not be reached. Tell the user it did not happen."
         ),

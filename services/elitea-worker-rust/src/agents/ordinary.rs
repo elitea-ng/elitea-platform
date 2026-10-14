@@ -681,6 +681,9 @@ impl OrdinaryNativeAgentAssembler {
             model,
         );
         if let Ok(host) = host {
+            // The `imagegen` toolkit's images API rides on the same host and
+            // the same credential (#864).
+            let host = host.with_images(self.model_facade.images(), Arc::clone(context));
             return Some(Arc::new(host));
         }
         tracing::warn!(
@@ -966,7 +969,7 @@ struct DirectToolsets {
 pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
         reference.kind() == FrozenToolKind::Configured
-            && matches!(reference.tool_type(), "pptx" | "docx" | "xlsx")
+            && matches!(reference.tool_type(), "pptx" | "docx" | "xlsx" | "imagegen")
     })
 }
 

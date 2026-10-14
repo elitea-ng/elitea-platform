@@ -28,6 +28,29 @@ use async_trait::async_trait;
 /// refuse before it buffers.
 pub const MAX_OFFICE_OBJECT_BYTES: u64 = 50 * 1024 * 1024;
 
+/// The most images one images-API request asks for or one answer carries: the
+/// API's own maximum. The family, the worker's facade and the tool schema all
+/// read this one number.
+pub const MAX_IMAGES_PER_REQUEST: usize = 10;
+
+/// The most bytes of the source image and the mask of one edit together: what
+/// the platform will put in one images request (the multipart body adds the
+/// prompt and framing).
+pub const MAX_IMAGE_EDIT_INPUT_BYTES: u64 = 48 * 1024 * 1024;
+
+/// Whether `name` can be carried as an upload file name in a
+/// `multipart/form-data` part header (`filename="..."`): not empty, and no
+/// quote, backslash or control character, any of which could end the header
+/// line. The ONE guard: the family checks it before any billed call, and the
+/// worker's multipart encoder enforces it on every part it writes.
+#[must_use]
+pub fn valid_upload_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name
+            .chars()
+            .any(|c| c == '"' || c == '\\' || c.is_control())
+}
+
 /// Why an Office host call failed, in the terms the tool tells the model:
 /// each cause has its own sentence, so a refused credential is not reported as
 /// an unreachable platform, nor a taken name as a bad one.
@@ -50,6 +73,17 @@ pub enum OfficeFailure {
     BudgetRefused,
     /// The run binds no chat model (a pipeline node).
     NoModel,
+    /// The model gateway is rate-limiting the call; trying again shortly may work.
+    RateLimited,
+    /// The model call timed out; trying again may work.
+    Timeout,
+    /// The model answered, but its reply could not be used. The call may have
+    /// been billed.
+    ReplyUnusable,
+    /// The model's answer was larger than the platform accepts.
+    ReplyTooLarge,
+    /// The model gateway reported a conflict; trying again may work.
+    Conflict,
     /// The platform or model could not be reached.
     Unreachable,
 }
@@ -113,6 +147,43 @@ pub struct OfficeModelRequest {
     pub images_png: std::sync::Arc<[Vec<u8>]>,
 }
 
+/// One image-generation call: the gateway's `POST /llm/v1/images/generations`
+/// body, as the `imagegen` toolkit builds it.
+#[derive(Clone, Debug)]
+pub struct ImageGenerateRequest {
+    /// The toolkit's configured image-generation model (a registry name).
+    pub model: String,
+    /// The text prompt.
+    pub prompt: String,
+    /// `WIDTHxHEIGHT`, or `None` for the model's default.
+    pub size: Option<String>,
+    /// How many images to ask for.
+    pub count: u32,
+}
+
+/// One input image of an edit: its file name and bytes.
+#[derive(Clone, Debug)]
+pub struct ImageEditInput {
+    /// The name the upload carries.
+    pub name: String,
+    /// The image bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// One image-edit call: the gateway's multipart
+/// `POST /llm/v1/images/edits`, as the `imagegen` toolkit builds it.
+#[derive(Clone, Debug)]
+pub struct ImageEditRequest {
+    /// The toolkit's configured image-generation model (a registry name).
+    pub model: String,
+    /// The edit prompt.
+    pub prompt: String,
+    /// The source image.
+    pub image: ImageEditInput,
+    /// The optional mask (transparent areas mark where the edit applies).
+    pub mask: Option<ImageEditInput>,
+}
+
 /// The host side of the Office families.
 #[async_trait]
 pub trait OfficeToolHost: Send + Sync {
@@ -150,6 +221,55 @@ pub trait OfficeToolHost: Send + Sync {
     /// the default is no link, and the answer then names the file only.
     fn object_link(&self, _bucket: &str, _name: &str) -> Option<String> {
         None
+    }
+
+    /// Generate images on the gateway's images API under the turn's own
+    /// credential (the same budget, request log and execution attribution as
+    /// a chat call). Returns one slot per item of the answer's `data` array,
+    /// in order: the decoded bytes of an image carried inline, or `None` for
+    /// an item with none (a bare URL is not fetched: the runtime opens no
+    /// connection of its own beyond the platform). The position matters: the
+    /// SDK names files by it.
+    ///
+    /// The default is a host with no images API: the `imagegen` toolkit is
+    /// then left out as unsupported before this is reached.
+    async fn generate_images(
+        &self,
+        _request: ImageGenerateRequest,
+    ) -> Result<Vec<Option<Vec<u8>>>, OfficeHostError> {
+        Err(OfficeHostError::new(
+            OfficeFailure::NoModel,
+            "office_host.no_images_api",
+        ))
+    }
+
+    /// Edit an image on the gateway's images API; see
+    /// [`OfficeToolHost::generate_images`].
+    async fn edit_images(
+        &self,
+        _request: ImageEditRequest,
+    ) -> Result<Vec<Option<Vec<u8>>>, OfficeHostError> {
+        Err(OfficeHostError::new(
+            OfficeFailure::NoModel,
+            "office_host.no_images_api",
+        ))
+    }
+
+    /// The size in bytes of one object, from its metadata, without reading
+    /// it; `None` when the host cannot tell. Lets a tool refuse a request
+    /// that would be too large BEFORE it buffers anything.
+    async fn object_size(
+        &self,
+        _bucket: &str,
+        _name: &str,
+    ) -> Result<Option<u64>, OfficeHostError> {
+        Ok(None)
+    }
+
+    /// Whether this host reaches the images API. The `imagegen` toolkit is
+    /// served only where it does.
+    fn serves_images(&self) -> bool {
+        false
     }
 }
 

@@ -698,7 +698,7 @@ async fn call_directly_with(
     )
     .expect("request");
     DirectToolkitRuntime::default()
-        .execute_test(&request, "execution", "call", index_tools)
+        .execute_test(&request, "execution", "call", index_tools, None)
         .await
         .map_err(|error| error.code())
 }

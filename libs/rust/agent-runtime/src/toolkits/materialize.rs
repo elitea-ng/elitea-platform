@@ -529,6 +529,10 @@ fn index_toolset_for(
     })
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one dispatch table over the toolkit families; each arm is a call"
+)]
 async fn materialize(
     reference: &FrozenToolReference<'_>,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -555,6 +559,10 @@ async fn materialize(
     if matches!(reference.tool_type(), "pptx" | "docx" | "xlsx") {
         let toolset = materialize_office(reference.tool_type(), name, settings, policy, artifacts)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
+    if reference.tool_type() == "imagegen" {
+        return materialize_imagegen(name, settings, policy, artifacts)
+            .map(|toolset| (toolset, DelegatedAuthorizationCatalog::default()));
     }
     if matches!(
         reference.tool_type(),
@@ -1074,6 +1082,29 @@ fn office_toolset_materialization_error(
         OfficeToolsetErrorCode::InvalidConfiguration
         | OfficeToolsetErrorCode::InvalidDefinition => invalid_configuration(),
     }
+}
+
+/// The `imagegen` family (#864). Like `pptx`, its authority is the live claim:
+/// the images API and the object API ride on the Office host of the artifact
+/// authority. A path that lends no host that reaches the images API (the
+/// desktop until P6) skips the toolkit as unsupported.
+fn materialize_imagegen(
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    artifacts: Option<&ArtifactToolAuthority>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    use super::families::imagegen::{self, ImageGenConfigErrorCode};
+    let authority = artifacts.ok_or_else(unsupported_toolkit)?;
+    let config =
+        imagegen::ImageGenToolkitConfig::parse(settings).map_err(|error| match error.code() {
+            ImageGenConfigErrorCode::InvalidConfiguration => invalid_configuration(),
+            ImageGenConfigErrorCode::ResourceExhausted => resource_exhausted(),
+        })?;
+    let toolset = imagegen::build_imagegen_toolset(name, &config, policy, authority)
+        .map_err(|_| invalid_configuration())?
+        .ok_or_else(unsupported_toolkit)?;
+    Ok(Arc::new(toolset))
 }
 
 const fn artifact_config_materialization_error(
