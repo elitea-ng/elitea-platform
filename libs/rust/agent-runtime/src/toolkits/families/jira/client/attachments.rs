@@ -319,13 +319,12 @@ fn scalar_text(value: Option<&Value>) -> Option<String> {
 #[allow(clippy::too_many_lines)] // Mirrors the SDK walker node by node.
 #[allow(clippy::cast_possible_truncation)] // The heading level is clamped to 1..=6.
 fn extract_image_data(value: &Value) -> String {
-    match value {
+    let object = match value {
         Value::String(text) => return text.clone(),
         Value::Array(nodes) => return nodes.iter().map(extract_image_data).collect(),
-        Value::Object(_) => {}
+        Value::Object(object) => object,
         _ => return String::new(),
-    }
-    let object = value.as_object().expect("an object");
+    };
     if let (Some(filename), Some(content)) = (object.get("filename"), object.get("content"))
         && !content.is_array()
     {
