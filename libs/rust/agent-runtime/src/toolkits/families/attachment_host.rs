@@ -145,6 +145,9 @@ impl AttachmentError {
                 OfficeFailure::Unreachable => {
                     (ErrorCategory::Unavailable, "attachment.unreachable")
                 }
+                OfficeFailure::Unsupported => {
+                    (ErrorCategory::Unavailable, "attachment.unsupported")
+                }
             },
         }
     }
