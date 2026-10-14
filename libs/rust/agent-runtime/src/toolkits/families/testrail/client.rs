@@ -15,6 +15,7 @@ use serde_json::Value;
 use zeroize::Zeroizing;
 
 use super::config::TestRailToolkitConfig;
+use crate::toolkits::families::attachment_host::multipart_upload;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// `testrail_api`'s default request timeout.
@@ -429,7 +430,14 @@ impl TestRailApi for TestRailClient {
         }
         let mut request = Request::new(Method::POST, self.url(endpoint, &Vec::new())?);
         self.authorize(&mut request)?;
-        let (content_type, body) = multipart_file("attachment", filename, &bytes);
+        let multipart = multipart_upload(
+            &[],
+            "attachment",
+            filename,
+            "application/octet-stream",
+            &bytes,
+        );
+        let (content_type, body) = (multipart.content_type, multipart.bytes);
         drop(bytes);
         request.headers_mut().insert(
             CONTENT_TYPE,
@@ -442,31 +450,6 @@ impl TestRailApi for TestRailClient {
         }
         Ok(response.body.unwrap_or(Value::Null))
     }
-}
-
-/// `requests`' `files={name: (filename, data)}`: one form-data part. The
-/// boundary is chosen so it occurs nowhere in the file.
-fn multipart_file(field: &str, filename: &str, bytes: &[u8]) -> (String, Vec<u8>) {
-    let mut boundary = String::from("elitea-testrail-attachment-boundary");
-    while contains(bytes, boundary.as_bytes()) {
-        boundary.push('x');
-    }
-    let mut body = Vec::with_capacity(bytes.len() + 256);
-    body.extend_from_slice(
-        format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n\r\n"
-        )
-        .as_bytes(),
-    );
-    body.extend_from_slice(bytes);
-    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-    (format!("multipart/form-data; boundary={boundary}"), body)
-}
-
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
 }
 
 fn status_error(status: StatusCode, effect: bool) -> TestRailClientError {

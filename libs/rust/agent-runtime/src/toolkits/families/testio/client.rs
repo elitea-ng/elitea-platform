@@ -4,9 +4,7 @@ use std::time::Duration;
 
 use adk_core::{AdkError, ErrorCategory, ErrorComponent, RetryHint};
 use async_trait::async_trait;
-use reqwest::header::{
-    ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue, USER_AGENT,
-};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_LENGTH, HeaderValue, USER_AGENT};
 use reqwest::{Method, Request, StatusCode, Url};
 use serde_json::Value;
 use zeroize::Zeroizing;
@@ -18,7 +16,6 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
 const MAX_IDLE_PER_HOST: usize = 4;
 const MAX_RESPONSE_BYTES: usize = 4 * 1_024 * 1_024;
-const MAX_REQUEST_BYTES: usize = 256 * 1_024;
 pub(super) const MAX_OUTPUT_BYTES: usize = 512 * 1_024;
 const USER_AGENT_VALUE: &str = "elitea-worker-rust/0.1";
 const JSON_CONTENT_TYPE: &str = "application/json";
@@ -35,8 +32,6 @@ pub(crate) enum TestIoClientErrorCode {
     DependencyUnavailable,
     InvalidResponse,
     ResourceExhausted,
-    Conflict,
-    UnknownOutcome,
 }
 
 /// Stable Test IO failure without provider bodies, URLs or the token.
@@ -109,16 +104,6 @@ impl TestIoClientError {
                 "testio.response.resource_exhausted",
                 "the TestIO response exceeds the approved limit",
             ),
-            TestIoClientErrorCode::Conflict => (
-                ErrorCategory::InvalidInput,
-                "testio.resource.conflict",
-                "TestIO reported a conflict with the current state of the resource",
-            ),
-            TestIoClientErrorCode::UnknownOutcome => (
-                ErrorCategory::Internal,
-                "testio.effect.unknown_outcome",
-                "TestIO may have applied the requested effect; reconcile it before retrying",
-            ),
         };
         AdkError::new(ErrorComponent::Tool, category, code, message).with_retry(RetryHint {
             should_retry: self.retryable,
@@ -160,10 +145,6 @@ impl fmt::Display for TestIoClientError {
             TestIoClientErrorCode::ResourceExhausted => {
                 "the TestIO response exceeds its approved limit"
             }
-            TestIoClientErrorCode::Conflict => "TestIO reported a conflict",
-            TestIoClientErrorCode::UnknownOutcome => {
-                "the TestIO effect outcome is unknown and must be reconciled"
-            }
         })
     }
 }
@@ -187,11 +168,7 @@ impl TestIoHttpResponse {
 /// client, tests a recording fixture.
 #[async_trait]
 pub(in crate::toolkits) trait TestIoTransport: Send + Sync {
-    async fn execute(
-        &self,
-        request: Request,
-        effect: bool,
-    ) -> Result<TestIoHttpResponse, TestIoClientError>;
+    async fn execute(&self, request: Request) -> Result<TestIoHttpResponse, TestIoClientError>;
 }
 
 struct ReqwestTestIoTransport {
@@ -200,16 +177,12 @@ struct ReqwestTestIoTransport {
 
 #[async_trait]
 impl TestIoTransport for ReqwestTestIoTransport {
-    async fn execute(
-        &self,
-        request: Request,
-        effect: bool,
-    ) -> Result<TestIoHttpResponse, TestIoClientError> {
+    async fn execute(&self, request: Request) -> Result<TestIoHttpResponse, TestIoClientError> {
         let mut response = self
             .http
             .execute(request)
             .await
-            .map_err(|source| map_reqwest_error(&source, effect))?;
+            .map_err(|source| map_reqwest_error(&source))?;
         if response
             .headers()
             .get(CONTENT_LENGTH)
@@ -217,16 +190,16 @@ impl TestIoTransport for ReqwestTestIoTransport {
             .and_then(|value| value.parse::<usize>().ok())
             .is_some_and(|length| length > MAX_RESPONSE_BYTES)
         {
-            return Err(bound_failure(effect));
+            return Err(resource_exhausted());
         }
         let mut bytes = Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|source| map_reqwest_error(&source, effect))?
+            .map_err(|source| map_reqwest_error(&source))?
         {
             if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-                return Err(bound_failure(effect));
+                return Err(resource_exhausted());
             }
             bytes.extend_from_slice(&chunk);
         }
@@ -253,11 +226,6 @@ pub(in crate::toolkits) trait TestIoApi: Send + Sync {
         segments: &[String],
         query: &[(&'static str, String)],
     ) -> Result<Value, TestIoClientError>;
-
-    /// `POST {endpoint}/customer/v2/{segments...}` with a JSON body, sent at
-    /// most once. A failure after the request may have been sent is an
-    /// `UnknownOutcome`, never retried.
-    async fn post(&self, segments: &[String], body: &Value) -> Result<Value, TestIoClientError>;
 }
 
 /// Invocation-scoped Test IO customer-API v2 client.
@@ -292,14 +260,13 @@ impl TestIoClient {
     }
 }
 
-impl TestIoClient {
-    fn request(
+#[async_trait]
+impl TestIoApi for TestIoClient {
+    async fn get(
         &self,
-        method: Method,
         segments: &[String],
         query: &[(&'static str, String)],
-        body: Option<&Value>,
-    ) -> Result<Request, TestIoClientError> {
+    ) -> Result<Value, TestIoClientError> {
         let mut url: Url = self.config.endpoint().clone();
         {
             let mut path = url
@@ -316,7 +283,7 @@ impl TestIoClient {
                 pairs.append_pair(name, value);
             }
         }
-        let mut request = Request::new(method, url);
+        let mut request = Request::new(Method::GET, url);
         // TestIO's customer API and the SDK's own connection check
         // authenticate with `Token`; the SDK runtime's `Bearer` spelling is
         // the drift recorded in SOURCE_PARITY.md and is not copied.
@@ -328,49 +295,15 @@ impl TestIoClient {
         headers.insert(AUTHORIZATION, authorization);
         headers.insert(ACCEPT, HeaderValue::from_static(JSON_CONTENT_TYPE));
         headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
-        if let Some(body) = body {
-            let encoded = serde_json::to_vec(body).map_err(|_| invalid_input())?;
-            if encoded.len() > MAX_REQUEST_BYTES {
-                return Err(resource_exhausted());
-            }
-            headers.insert(CONTENT_TYPE, HeaderValue::from_static(JSON_CONTENT_TYPE));
-            *request.body_mut() = Some(encoded.into());
-        }
-        Ok(request)
-    }
-}
-
-#[async_trait]
-impl TestIoApi for TestIoClient {
-    async fn get(
-        &self,
-        segments: &[String],
-        query: &[(&'static str, String)],
-    ) -> Result<Value, TestIoClientError> {
-        let request = self.request(Method::GET, segments, query, None)?;
-        let response = self.transport.execute(request, false).await?;
+        let response = self.transport.execute(request).await?;
         if !response.status.is_success() {
-            return Err(status_error(response.status, false));
+            return Err(status_error(response.status));
         }
         response.body.ok_or_else(invalid_response)
     }
-
-    async fn post(&self, segments: &[String], body: &Value) -> Result<Value, TestIoClientError> {
-        let request = self.request(Method::POST, segments, &[], Some(body))?;
-        let response = self.transport.execute(request, true).await?;
-        if !response.status.is_success() {
-            return Err(status_error(response.status, true));
-        }
-        // The SDK reads `response.json()` after the request succeeded: a
-        // body that is not JSON leaves the effect applied but unreadable.
-        response.body.ok_or_else(unknown_outcome)
-    }
 }
 
-fn status_error(status: StatusCode, effect: bool) -> TestIoClientError {
-    if effect && (status.is_server_error() || status == StatusCode::REQUEST_TIMEOUT) {
-        return unknown_outcome();
-    }
+fn status_error(status: StatusCode) -> TestIoClientError {
     let code = match status {
         StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
             TestIoClientErrorCode::InvalidInput
@@ -378,7 +311,6 @@ fn status_error(status: StatusCode, effect: bool) -> TestIoClientError {
         StatusCode::UNAUTHORIZED => TestIoClientErrorCode::Authentication,
         StatusCode::FORBIDDEN => TestIoClientErrorCode::Authorization,
         StatusCode::NOT_FOUND => TestIoClientErrorCode::NotFound,
-        StatusCode::CONFLICT => TestIoClientErrorCode::Conflict,
         StatusCode::REQUEST_TIMEOUT => TestIoClientErrorCode::Timeout,
         StatusCode::TOO_MANY_REQUESTS => TestIoClientErrorCode::RateLimited,
         status if status.is_server_error() => TestIoClientErrorCode::DependencyUnavailable,
@@ -386,20 +318,16 @@ fn status_error(status: StatusCode, effect: bool) -> TestIoClientError {
     };
     TestIoClientError {
         code,
-        retryable: !effect
-            && matches!(
-                code,
-                TestIoClientErrorCode::Timeout
-                    | TestIoClientErrorCode::RateLimited
-                    | TestIoClientErrorCode::DependencyUnavailable
-            ),
+        retryable: matches!(
+            code,
+            TestIoClientErrorCode::Timeout
+                | TestIoClientErrorCode::RateLimited
+                | TestIoClientErrorCode::DependencyUnavailable
+        ),
     }
 }
 
-fn map_reqwest_error(source: &reqwest::Error, effect: bool) -> TestIoClientError {
-    if effect {
-        return unknown_outcome();
-    }
+fn map_reqwest_error(source: &reqwest::Error) -> TestIoClientError {
     TestIoClientError {
         code: if source.is_timeout() {
             TestIoClientErrorCode::Timeout
@@ -407,28 +335,6 @@ fn map_reqwest_error(source: &reqwest::Error, effect: bool) -> TestIoClientError
             TestIoClientErrorCode::DependencyUnavailable
         },
         retryable: true,
-    }
-}
-
-const fn invalid_input() -> TestIoClientError {
-    TestIoClientError {
-        code: TestIoClientErrorCode::InvalidInput,
-        retryable: false,
-    }
-}
-
-const fn unknown_outcome() -> TestIoClientError {
-    TestIoClientError {
-        code: TestIoClientErrorCode::UnknownOutcome,
-        retryable: false,
-    }
-}
-
-const fn bound_failure(effect: bool) -> TestIoClientError {
-    if effect {
-        unknown_outcome()
-    } else {
-        resource_exhausted()
     }
 }
 

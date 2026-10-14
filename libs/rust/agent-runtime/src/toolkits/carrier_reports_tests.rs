@@ -728,6 +728,8 @@ fn cell(workbook: &elitea_office_core::Workbook, row: u32, column: u16) -> Value
 async fn excel_report_from_a_report_id_stores_the_sdk_sheet_in_the_artifact_store() {
     let transport = excel_transport();
     let platform = FakePlatform::new();
+    // A fresh project: the report's bucket is created, once.
+    platform.no_buckets();
     let tool = make_tool(&transport, Some(&platform), "create_excel_report").await;
     let answer = tool
         .execute(
@@ -742,9 +744,17 @@ async fn excel_report_from_a_report_id_stores_the_sdk_sheet_in_the_artifact_stor
             "Excel report generated and stored in the project's artifact store, bucket mytest1, report name: reports_test_results_b7_excel_report.xlsx, artifact path: /mytest1/reports_test_results_b7_excel_report.xlsx"
         )
     );
+    assert_eq!(
+        *platform.created.lock().expect("created"),
+        ["mytest1".to_owned()]
+    );
+    // The first write found no bucket; the retry after creating it stored.
     let writes = platform.writes.lock().expect("writes").clone();
-    assert_eq!(writes.len(), 1);
-    assert!(!writes[0].3, "never asks to overwrite");
+    assert_eq!(writes.len(), 2);
+    assert!(
+        writes.iter().all(|write| !write.3),
+        "never asks to overwrite"
+    );
     let stored = platform
         .get("mytest1", "reports_test_results_b7_excel_report.xlsx")
         .expect("stored");

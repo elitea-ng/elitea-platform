@@ -279,7 +279,9 @@ impl AttachmentHost {
         bytes: Vec<u8>,
     ) -> Result<ArtifactStored, AttachmentError> {
         let mut last = AttachmentError::Host(Step::Write, OfficeFailure::AlreadyExists);
-        for attempt in 1..=MAX_NAME_ATTEMPTS {
+        let mut bucket_ensured = false;
+        let mut attempt = 1;
+        while attempt <= MAX_NAME_ATTEMPTS {
             let key = if attempt == 1 {
                 format!("{stem}.{ext}")
             } else {
@@ -291,11 +293,31 @@ impl AttachmentHost {
             {
                 Err(error @ AttachmentError::Host(_, OfficeFailure::AlreadyExists)) => {
                     last = error;
+                    attempt += 1;
+                }
+                // A bucket this tool derives may not exist in a fresh
+                // project: create it once, then write again (the same name).
+                Err(AttachmentError::Host(Step::Write, OfficeFailure::NotFound))
+                    if !bucket_ensured =>
+                {
+                    bucket_ensured = true;
+                    self.ensure_bucket(bucket).await?;
                 }
                 other => return other,
             }
         }
         Err(last)
+    }
+
+    /// Create `bucket` unless it exists (a bucket that is already there is
+    /// success). A host that cannot create buckets, or a refusal, is reported
+    /// as the write's failure: nothing was stored.
+    pub(crate) async fn ensure_bucket(&self, bucket: &str) -> Result<(), AttachmentError> {
+        match self.host.create_bucket(bucket, None).await {
+            Ok(_) => Ok(()),
+            Err(error) if error.kind() == OfficeFailure::AlreadyExists => Ok(()),
+            Err(error) => Err(Self::failed(Step::Write, &error)),
+        }
     }
 
     /// Ask the run's chat model one question with pictures beside it, accounted
@@ -350,6 +372,30 @@ fn clip(text: &str, limit: usize) -> String {
         return text.to_owned();
     }
     text.chars().take(limit).collect()
+}
+
+/// A bucket name the platform accepts, derived from any text: lowercase
+/// letters, digits and hyphens, starting with a letter, at most 63 bytes;
+/// `fallback` when nothing usable is left.
+pub(crate) fn derived_bucket_name(raw: &str, fallback: &str) -> String {
+    let mut name = String::new();
+    for c in raw.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            name.push(c);
+        } else if !name.ends_with('-') {
+            name.push('-');
+        }
+    }
+    let name = name.trim_matches('-');
+    let name = name.trim_start_matches(|c: char| c.is_ascii_digit());
+    let name: String = name.chars().take(63).collect();
+    let name = name.trim_matches('-');
+    if name.len() < 2 {
+        fallback.to_owned()
+    } else {
+        name.to_owned()
+    }
 }
 
 /// `/{bucket}/{key}` (the form the platform shows for a file) or
@@ -609,7 +655,6 @@ pub(crate) fn multipart_upload(
         );
     }
     let ascii = file_name.is_ascii();
-    let quoted = header_quote(file_name);
     let extended = if ascii {
         String::new()
     } else {
@@ -618,11 +663,7 @@ pub(crate) fn multipart_upload(
             percent_encoding::utf8_percent_encode(file_name, percent_encoding::NON_ALPHANUMERIC)
         )
     };
-    let shown = if ascii {
-        quoted
-    } else {
-        header_quote(&file_name.chars().filter(char::is_ascii).collect::<String>())
-    };
+    let shown = header_quote(&ascii_file_name(file_name));
     bytes.extend_from_slice(
         format!(
             "{delimiter}\r\nContent-Disposition: form-data; name=\"{}\"; filename=\"{shown}\"{extended}\r\nContent-Type: {file_media_type}\r\n\r\n",
@@ -635,6 +676,45 @@ pub(crate) fn multipart_upload(
     MultipartBody {
         content_type: format!("multipart/form-data; boundary={boundary}"),
         bytes,
+    }
+}
+
+/// The plain-ASCII `filename=` that stands beside `filename*` for a name with
+/// other characters: the ASCII characters of the name when a stem is left,
+/// else `attachment-<hash>` (a stable digest of the real name) with the
+/// name's ASCII extension. Never an empty stem such as `.pdf`.
+pub(crate) fn ascii_file_name(name: &str) -> String {
+    if name.is_ascii() {
+        return name.to_owned();
+    }
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem, extension),
+        _ => (name, ""),
+    };
+    let stem: String = stem
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ' ' | '(' | ')'))
+        .collect();
+    let stem = stem.trim().to_owned();
+    let extension: String = extension
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(16)
+        .collect();
+    let stem = if stem.is_empty() {
+        let digest = ring::digest::digest(&ring::digest::SHA256, name.as_bytes());
+        let mut stem = String::from("attachment-");
+        for byte in &digest.as_ref()[..4] {
+            let _ = write!(stem, "{byte:02x}");
+        }
+        stem
+    } else {
+        stem
+    };
+    if extension.is_empty() {
+        stem
+    } else {
+        format!("{stem}.{extension}")
     }
 }
 
@@ -713,6 +793,96 @@ mod tests {
         );
         assert!(is_describable_image("image/webp"));
         assert!(!is_describable_image("image/svg+xml"));
+    }
+
+    #[test]
+    fn derived_bucket_names_follow_the_platform_rule() {
+        assert_eq!(derived_bucket_name("My_Test 1", "x-fallback"), "my-test-1");
+        assert_eq!(
+            derived_bucket_name("reports_test_results_b7", "x-fallback"),
+            "reports-test-results-b7"
+        );
+        assert_eq!(
+            derived_bucket_name("123", "carrier-reports"),
+            "carrier-reports"
+        );
+        assert_eq!(
+            derived_bucket_name("--", "carrier-reports"),
+            "carrier-reports"
+        );
+        assert!(derived_bucket_name(&"a".repeat(200), "f").len() <= 63);
+    }
+
+    #[tokio::test]
+    async fn a_derived_bucket_is_created_once_in_a_fresh_project_and_an_existing_one_is_success() {
+        use crate::toolkits::attachment_test_support::FakePlatform;
+        let platform = FakePlatform::new();
+        platform.no_buckets();
+        let host = platform.host();
+        let stored = host
+            .write_unique_artifact("fresh", "report", "xlsx", "x/y", b"1".to_vec())
+            .await
+            .expect("stored");
+        assert_eq!(
+            (stored.bucket.as_str(), stored.key.as_str()),
+            ("fresh", "report.xlsx")
+        );
+        assert_eq!(
+            *platform.created.lock().expect("created"),
+            ["fresh".to_owned()]
+        );
+        // A second write finds the bucket; a racing creator is not an error.
+        host.ensure_bucket("fresh")
+            .await
+            .expect("already exists is success");
+        let second = host
+            .write_unique_artifact("fresh", "report", "xlsx", "x/y", b"2".to_vec())
+            .await
+            .expect("stored");
+        assert_eq!(second.key, "report-2.xlsx");
+        assert_eq!(platform.created.lock().expect("created").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_host_that_cannot_create_buckets_reports_the_write_as_not_done() {
+        use crate::toolkits::families::office_host::OfficeFailure;
+        let platform = crate::toolkits::attachment_test_support::FakePlatform::new();
+        platform.no_buckets();
+        platform.fail_create(OfficeFailure::Unsupported);
+        let error = platform
+            .host()
+            .write_unique_artifact("fresh", "r", "zip", "x/y", b"1".to_vec())
+            .await
+            .expect_err("no bucket");
+        assert_eq!(
+            error,
+            AttachmentError::Host(Step::Write, OfficeFailure::Unsupported)
+        );
+        assert!(platform.objects.lock().expect("objects").is_empty());
+    }
+
+    #[test]
+    fn non_ascii_upload_names_get_a_stable_ascii_fallback_with_the_extension() {
+        assert_eq!(ascii_file_name("report.pdf"), "report.pdf");
+        assert_eq!(ascii_file_name("отчёт.pdf"), ascii_file_name("отчёт.pdf"));
+        let fallback = ascii_file_name("отчёт.pdf");
+        assert!(
+            fallback.starts_with("attachment-")
+                && std::path::Path::new(&fallback)
+                    .extension()
+                    .is_some_and(|extension| extension == "pdf"),
+            "{fallback}"
+        );
+        assert_ne!(fallback, ascii_file_name("другой.pdf"));
+        assert_eq!(
+            ascii_file_name("Quarterly отчёт.xlsx"),
+            "Quarterly".to_owned() + ".xlsx"
+        );
+        let body = multipart_upload(&[], "file", "日本語.png", "image/png", b"x");
+        let text = String::from_utf8(body.bytes).expect("utf8");
+        assert!(!text.contains("filename=\".png\""), "{text}");
+        assert!(text.contains("filename=\"attachment-"), "{text}");
+        assert!(text.contains("filename*=UTF-8''"), "{text}");
     }
 
     #[test]

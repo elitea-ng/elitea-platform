@@ -1,5 +1,4 @@
 use std::fmt;
-use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,6 +10,8 @@ use reqwest::header::{
 use reqwest::{Method, Request, StatusCode, Url};
 use serde_json::Value;
 use zeroize::Zeroizing;
+
+use crate::toolkits::families::attachment_host::multipart_upload;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -606,7 +607,6 @@ pub(in crate::toolkits) struct MultipartFile<'a> {
 /// `multipart/form-data` with one file part, under a random boundary the
 /// content cannot collide with.
 fn encode_multipart(file: &MultipartFile<'_>) -> Result<(String, Vec<u8>), ZephyrRestError> {
-    use ring::rand::{SecureRandom, SystemRandom};
     let unsafe_header = |text: &str| {
         text.is_empty()
             || text
@@ -617,36 +617,8 @@ fn encode_multipart(file: &MultipartFile<'_>) -> Result<(String, Vec<u8>), Zephy
     {
         return Err(invalid_input());
     }
-    let mut boundary = String::from("----eliteaFormBoundary");
-    for _ in 0..4 {
-        let mut random = [0_u8; 8];
-        SystemRandom::new()
-            .fill(&mut random)
-            .map_err(|_| invalid_input())?;
-        for byte in random {
-            let _ = write!(boundary, "{byte:02x}");
-        }
-        if !contains(file.bytes, boundary.as_bytes()) {
-            let mut body = Vec::with_capacity(file.bytes.len() + 512);
-            body.extend_from_slice(
-                format!(
-                    "--{boundary}\r\nContent-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
-                    file.field, file.file_name, file.media_type
-                )
-                .as_bytes(),
-            );
-            body.extend_from_slice(file.bytes);
-            body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-            return Ok((format!("multipart/form-data; boundary={boundary}"), body));
-        }
-    }
-    Err(invalid_input())
-}
-
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
+    let body = multipart_upload(&[], file.field, file.file_name, file.media_type, file.bytes);
+    Ok((body.content_type, body.bytes))
 }
 
 /// A dynamic path segment from a tool argument.

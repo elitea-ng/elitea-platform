@@ -199,6 +199,10 @@ fn provider(method: &Method, endpoint: &str) -> TestRailHttpResponse {
             "results":[{"id":101,"test_id":9,"status_id":1,"comment":null,"created_on":1_700_000_060}]
         })),
         ("POST", "add_case/5") => ok(json!({"id":42,"title":"New","created_on":1_700_000_000})),
+        ("GET", "get_case/42") => ok(json!({"id":42,"custom_preconds":"<p>Existing</p>"})),
+        ("GET", "get_case/50" | "get_case/51") => ok(json!({"id":50,"custom_steps":null})),
+        ("GET", "get_case/52") => TestRailHttpResponse::fixture(StatusCode::NOT_FOUND, None),
+        ("POST", "add_attachment_to_case/52") => ok(json!({"attachment_id":890})),
         ("POST", "update_case/42") => ok(json!({"id":42,"updated_on":1_700_000_100})),
         ("POST", "delete_case/42" | "delete_section/5") => {
             TestRailHttpResponse::fixture(StatusCode::OK, None)
@@ -645,7 +649,7 @@ async fn add_file_to_case_is_served_only_with_a_host_and_is_an_effect() {
     let attach = tool(&tools, "add_file_to_case");
     assert!(!attach.is_read_only());
     assert!(!attach.is_concurrency_safe());
-    assert!(attach.description().contains("REPLACES"));
+    assert!(attach.description().contains("append"));
     super::sdk_conformance::assert_sdk_conformance("testrail", &tools);
     // A selection of only the host tool builds with a host, not without.
     let client: Arc<dyn TestRailApi> = Arc::new(TestRailClient::with_transport(
@@ -702,7 +706,7 @@ async fn add_file_to_case_uploads_multipart_and_reports_the_attachment() {
     let (content_type, body) = captured[0].upload.clone().expect("upload");
     let boundary = content_type.split("boundary=").nth(1).expect("boundary");
     let head = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"attachment\"; filename=\"login.png\"\r\n\r\n"
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"attachment\"; filename=\"login.png\"\r\nContent-Type: application/octet-stream\r\n\r\n"
     );
     assert!(body.starts_with(head.as_bytes()));
     assert!(body.ends_with(format!("\r\n--{boundary}--\r\n").as_bytes()));
@@ -738,9 +742,10 @@ async fn add_file_to_case_embeds_inline_and_reports_a_failed_embed_exactly() {
         )
     );
     let captured = transport.captured();
-    assert_eq!(captured[1].endpoint, "update_case/50");
+    assert_eq!(captured[1].endpoint, "get_case/50");
+    assert_eq!(captured[2].endpoint, "update_case/50");
     assert_eq!(
-        captured[1].body,
+        captured[2].body,
         Some(
             json!({"custom_steps":"Before:<br/><img src=\"index.php?/attachments/get/888\" id=\"attachment-888\" data-attachment-id=\"888\" />"})
         )
@@ -784,7 +789,36 @@ async fn add_file_to_case_embeds_on_success() {
     );
     assert_eq!(
         transport.endpoints(),
-        ["add_attachment_to_case/42", "update_case/42"]
+        ["add_attachment_to_case/42", "get_case/42", "update_case/42"]
+    );
+    // The existing value is kept and the reference follows it.
+    let captured = transport.captured();
+    assert_eq!(
+        captured[2].body,
+        Some(
+            json!({"custom_preconds":"<p>Existing</p><br/><img src=\"index.php?/attachments/get/777\" id=\"attachment-777\" data-attachment-id=\"777\" />"})
+        )
+    );
+}
+
+#[tokio::test]
+async fn add_file_to_case_leaves_a_field_it_cannot_read_unchanged() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    let (transport, tools) = attach_tools(&platform).await;
+    let text = call(
+        &tools,
+        "add_file_to_case",
+        json!({"case_id":"52","filepath":"/bucket/a.txt","embed_in_field":"custom_steps"}),
+    )
+    .await;
+    let text = text.as_str().expect("text");
+    assert!(text.contains("(attachment_id: 890)"), "{text}");
+    assert!(text.contains("could not be read"), "{text}");
+    assert!(text.contains("left unchanged"), "{text}");
+    assert_eq!(
+        transport.endpoints(),
+        ["add_attachment_to_case/52", "get_case/52"]
     );
 }
 
@@ -867,4 +901,22 @@ async fn add_file_to_case_reports_host_failures_before_sending_anything() {
     assert!(denied.contains("refused access"), "{denied}");
     assert!(denied.contains("Nothing was sent"), "{denied}");
     assert!(transport.endpoints().is_empty());
+}
+
+#[tokio::test]
+async fn add_file_to_case_sends_an_ascii_fallback_name_beside_the_real_one() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "отчёт.png", b"png");
+    let (transport, tools) = attach_tools(&platform).await;
+    call(
+        &tools,
+        "add_file_to_case",
+        json!({"case_id":"42","filepath":"/bucket/отчёт.png"}),
+    )
+    .await;
+    let body = String::from_utf8_lossy(&transport.captured()[0].upload.clone().expect("upload").1)
+        .into_owned();
+    assert!(body.contains("filename=\"attachment-"), "{body}");
+    assert!(!body.contains("filename=\".png\""), "{body}");
+    assert!(body.contains("filename*=UTF-8''"), "{body}");
 }

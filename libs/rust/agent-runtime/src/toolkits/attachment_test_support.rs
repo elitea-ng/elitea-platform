@@ -10,7 +10,8 @@ use async_trait::async_trait;
 
 use super::families::attachment_host::AttachmentHost;
 use super::families::office_host::{
-    OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
+    OfficeBucketCreated, OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten,
+    OfficeToolHost,
 };
 
 /// A real, tiny, valid 1x1 PNG.
@@ -34,6 +35,12 @@ pub(super) struct FakePlatform {
     pub(super) write_failure: Mutex<Option<OfficeFailure>>,
     /// Reads attempted (the size probe is not a read).
     pub(super) reads: Mutex<u32>,
+    /// `Some`: only these buckets exist (a write elsewhere is `NotFound` until
+    /// `create_bucket`); `None`: every bucket exists.
+    pub(super) buckets: Mutex<Option<std::collections::BTreeSet<String>>>,
+    /// Buckets created through the host, in order.
+    pub(super) created: Mutex<Vec<String>>,
+    pub(super) create_failure: Mutex<Option<OfficeFailure>>,
 }
 
 impl FakePlatform {
@@ -60,6 +67,11 @@ impl FakePlatform {
             .cloned()
     }
 
+    /// A fresh project: no bucket exists until one is created.
+    pub(super) fn no_buckets(&self) {
+        *self.buckets.lock().expect("buckets") = Some(std::collections::BTreeSet::new());
+    }
+
     pub(super) fn reply(&self, text: &str) {
         self.replies
             .lock()
@@ -76,6 +88,10 @@ impl FakePlatform {
 
     pub(super) fn fail_reads(&self, kind: OfficeFailure) {
         *self.read_failure.lock().expect("read failure") = Some(kind);
+    }
+
+    pub(super) fn fail_create(&self, kind: OfficeFailure) {
+        *self.create_failure.lock().expect("create failure") = Some(kind);
     }
 
     pub(super) fn fail_writes(&self, kind: OfficeFailure) {
@@ -130,6 +146,11 @@ impl OfficeToolHost for FakePlatform {
         if let Some(kind) = *self.write_failure.lock().expect("write failure") {
             return Err(OfficeHostError::new(kind, "scripted"));
         }
+        if let Some(buckets) = self.buckets.lock().expect("buckets").as_ref()
+            && !buckets.contains(bucket)
+        {
+            return Err(OfficeHostError::new(OfficeFailure::NotFound, "no bucket"));
+        }
         let byte_length = bytes.len() as u64;
         let mut objects = self.objects.lock().expect("objects");
         let slot = (bucket.to_owned(), name.to_owned());
@@ -142,6 +163,27 @@ impl OfficeToolHost for FakePlatform {
             name: name.to_owned(),
             media_type: media_type.to_owned(),
             byte_length,
+        })
+    }
+
+    async fn create_bucket(
+        &self,
+        name: &str,
+        _retention_days: Option<u32>,
+    ) -> Result<OfficeBucketCreated, OfficeHostError> {
+        if let Some(kind) = *self.create_failure.lock().expect("create failure") {
+            return Err(OfficeHostError::new(kind, "scripted"));
+        }
+        let mut buckets = self.buckets.lock().expect("buckets");
+        if let Some(set) = buckets.as_mut()
+            && !set.insert(name.to_owned())
+        {
+            return Err(OfficeHostError::new(OfficeFailure::AlreadyExists, "taken"));
+        }
+        self.created.lock().expect("created").push(name.to_owned());
+        Ok(OfficeBucketCreated {
+            name: name.to_owned(),
+            retention_days: None,
         })
     }
 

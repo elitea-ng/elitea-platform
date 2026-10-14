@@ -1,5 +1,4 @@
 use std::fmt;
-use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,6 +12,7 @@ use serde_json::Value;
 use zeroize::Zeroizing;
 
 use super::config::CarrierToolkitConfig;
+use crate::toolkits::families::attachment_host::multipart_upload;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -584,7 +584,6 @@ fn encode_file_part(
     file_name: &str,
     bytes: &[u8],
 ) -> Result<(String, Vec<u8>), CarrierClientError> {
-    use ring::rand::{SecureRandom, SystemRandom};
     if file_name.is_empty()
         || file_name
             .chars()
@@ -592,32 +591,8 @@ fn encode_file_part(
     {
         return Err(invalid_input());
     }
-    let mut boundary = String::from("----eliteaFormBoundary");
-    for _ in 0..4 {
-        let mut random = [0_u8; 8];
-        SystemRandom::new()
-            .fill(&mut random)
-            .map_err(|_| invalid_input())?;
-        for byte in random {
-            let _ = write!(boundary, "{byte:02x}");
-        }
-        if !bytes
-            .windows(boundary.len())
-            .any(|window| window == boundary.as_bytes())
-        {
-            let mut body = Vec::with_capacity(bytes.len() + 512);
-            body.extend_from_slice(
-                format!(
-                    "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
-                )
-                .as_bytes(),
-            );
-            body.extend_from_slice(bytes);
-            body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-            return Ok((format!("multipart/form-data; boundary={boundary}"), body));
-        }
-    }
-    Err(invalid_input())
+    let body = multipart_upload(&[], "file", file_name, "application/octet-stream", bytes);
+    Ok((body.content_type, body.bytes))
 }
 
 /// A raised non-2xx status, then a body that must be JSON.

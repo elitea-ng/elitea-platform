@@ -862,6 +862,8 @@ async fn bdd_archive_is_stored_as_a_new_artifact() {
         )),
     ]);
     let platform = FakePlatform::new();
+    // A fresh project: the default bucket does not exist yet.
+    platform.no_buckets();
     let tools = host_tools(&transport, &platform, &["retrieve_bdd_test_cases"]).await;
     assert!(!tools[0].is_read_only());
     assert!(!tools[0].is_concurrency_safe());
@@ -874,6 +876,10 @@ async fn bdd_archive_is_stored_as_a_new_artifact() {
         json!(
             "BDD test cases for project PR/J retrieved as a ZIP archive (19 bytes) and stored as artifact /zephyr-bdd/zephyr-bdd-PR_J.zip"
         )
+    );
+    assert_eq!(
+        *platform.created.lock().expect("created"),
+        ["zephyr-bdd".to_owned()]
     );
     let second = tools[0]
         .execute(

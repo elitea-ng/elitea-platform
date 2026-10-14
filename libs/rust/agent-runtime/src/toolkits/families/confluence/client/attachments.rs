@@ -566,6 +566,19 @@ impl ConfluenceClient {
         Err(FetchFailure::Refused)
     }
 
+    /// The absolute address of a `_links.download` path: under the API root
+    /// (Cloud: `.../wiki`), with that prefix exactly once.
+    fn download_link(&self, link: &str) -> String {
+        let api_root = self.config.api_root().as_str().trim_end_matches('/');
+        let base = self.config.base_url().as_str().trim_end_matches('/');
+        let prefix = api_root.strip_prefix(base).unwrap_or_default();
+        if !prefix.is_empty() && link.starts_with(&format!("{prefix}/")) {
+            format!("{base}{link}")
+        } else {
+            format!("{api_root}{link}")
+        }
+    }
+
     /// A path under the API root, from a link Confluence gave or a page
     /// referenced; `None` when it leaves this origin.
     fn file_url(&self, relative: &str) -> Option<Url> {
@@ -618,9 +631,28 @@ impl ConfluenceClient {
         {
             parsed = image_url.split('?').next().unwrap_or(image_url);
         }
-        let base = self.config.base_url().as_str();
-        let relative = if let Some(rest) = parsed.strip_prefix(base) {
+        // A link under the API root (Cloud: `.../wiki/...`) or under the bare
+        // base is made relative to the API root exactly once, so the `/wiki`
+        // prefix of Cloud is neither doubled nor lost.
+        let api_root = self.config.api_root().as_str().trim_end_matches('/');
+        let base = self.config.base_url().as_str().trim_end_matches('/');
+        let cloud_prefix = api_root.strip_prefix(base).unwrap_or_default();
+        let relative = if let Some(rest) = parsed
+            .strip_prefix(api_root)
+            .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+        {
             rest
+        } else if let Some(rest) = parsed
+            .strip_prefix(base)
+            .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+        {
+            // Under the bare base: a path that already carries the API
+            // root's own prefix (`/wiki/...`) is relative to the root.
+            if cloud_prefix.is_empty() {
+                rest
+            } else {
+                rest.strip_prefix(cloud_prefix).unwrap_or(rest)
+            }
         } else if let Some(at) = ["/download/attachments/", "/download/thumbnails/"]
             .iter()
             .find_map(|pattern| parsed.find(pattern))
@@ -628,6 +660,8 @@ impl ConfluenceClient {
             &parsed[at..]
         } else if parsed.starts_with("http") {
             return None;
+        } else if !cloud_prefix.is_empty() {
+            parsed.strip_prefix(cloud_prefix).unwrap_or(parsed)
         } else {
             parsed
         };
@@ -964,10 +998,7 @@ impl ConfluenceClient {
                 "updated": last_updated,
                 "media_type": media_type,
                 "labels": labels,
-                "download_url": link.map_or(Value::Null, |link| Value::String(format!(
-                    "{}{link}",
-                    self.config.base_url().as_str().trim_end_matches('/')
-                ))),
+                "download_url": link.map_or(Value::Null, |link| Value::String(self.download_link(link))),
             });
             let mut body_text: Option<String> = None;
             let mut analysis: Option<String> = None;
@@ -1022,19 +1053,18 @@ impl ConfluenceClient {
                 let declared = attachment
                     .pointer("/extensions/fileSize")
                     .and_then(Value::as_u64);
-                analysis = if no_model {
-                    Some(NO_MODEL_TEXT.to_owned())
-                } else if let Some(reason) = tally.refusal(declared) {
+                // The call's bounds always apply; with no model the picture is
+                // then not fetched at all.
+                analysis = if let Some(reason) = tally.refusal(declared) {
                     Some(format!("[Image {title} - {reason}]"))
+                } else if no_model {
+                    Some(NO_MODEL_TEXT.to_owned())
                 } else {
                     tally.attempt();
                     let image = match link {
                         Some(link) => {
                             self.download_image(
-                                &format!(
-                                    "{}{link}",
-                                    self.config.base_url().as_str().trim_end_matches('/')
-                                ),
+                                &self.download_link(link),
                                 usize::try_from(MAX_PICTURE_BYTES).unwrap_or(usize::MAX),
                             )
                             .await
@@ -1285,7 +1315,8 @@ impl ConfluenceClient {
     }
 
     /// One attempt of the page edit (`update_page`): read the page, put the
-    /// markup first or last, write the new version. A 4xx answer comes back
+    /// markup first or last, write the next version (taken from that same
+    /// read, so a concurrent edit is a 409). A 4xx answer comes back
     /// as `Err((status, message))` for the caller to retry or report.
     async fn replace_page_body(
         &self,
@@ -1315,18 +1346,23 @@ impl ConfluenceClient {
         } else {
             format!("{current}<p></p>{markup}")
         };
-        let history = match self.get(self.v1(&["content", page_id, "history"])?).await? {
-            Reply::Accepted(history) => history,
-            Reply::Refused(status, message) => return Ok(Err((status, message))),
-        };
-        let version = history
-            .pointer("/lastUpdated/number")
+        // The version comes from the SAME read as the body: a page edited
+        // between this read and the write is then a 409 (the caller reads
+        // again), never a silent overwrite of the other edit.
+        let version = page
+            .pointer("/version/number")
             .and_then(Value::as_u64)
             .ok_or_else(invalid_response)?
             .saturating_add(1);
+        // A blog post is edited as a blog post: a `page` payload for it is
+        // refused or retypes it.
+        let content_type = match page.get("type").and_then(Value::as_str) {
+            Some("blogpost") => "blogpost",
+            _ => "page",
+        };
         let payload = json!({
             "id": page_id,
-            "type": "page",
+            "type": content_type,
             "title": title,
             "version": {"number": version, "minorEdit": false, "message": format!("Added file: {uploaded}")},
             "metadata": {"properties": fixed_width()},
@@ -1407,6 +1443,8 @@ struct PageWork<'a> {
     tally: PictureTally,
     described: HashMap<String, String>,
     no_model: bool,
+    /// Pictures left unfetched because the run has no model.
+    skipped_no_model: u32,
 }
 
 impl<'a> PageWork<'a> {
@@ -1427,6 +1465,7 @@ impl<'a> PageWork<'a> {
             tally: PictureTally::default(),
             described: HashMap::new(),
             no_model: false,
+            skipped_no_model: 0,
         }
     }
 
@@ -1513,10 +1552,7 @@ impl<'a> PageWork<'a> {
         let Some(link) = link else {
             return Ok(format!("[Image: {filename} - Error: 'download']"));
         };
-        let url = format!(
-            "{}{link}",
-            self.client.config.base_url().as_str().trim_end_matches('/')
-        );
+        let url = self.client.download_link(&link);
         Ok(self.describe(&url, filename, whole, filename).await)
     }
 
@@ -1555,6 +1591,16 @@ impl<'a> PageWork<'a> {
         if let Some(reason) = self.refusal(None) {
             return format!("[Image: {label} - {reason}]");
         }
+        // No model in this run: nothing would be done with the bytes, so the
+        // picture is not fetched (counted as skipped).
+        if self.no_model {
+            self.skipped_no_model += 1;
+            tracing::debug!(
+                skipped = self.skipped_no_model,
+                "a picture was not fetched: the run has no chat model"
+            );
+            return format!("[Image {name} Description: {NO_MODEL_TEXT}]");
+        }
         self.tally.attempt();
         let Some(bytes) = self
             .client
@@ -1575,9 +1621,6 @@ impl<'a> PageWork<'a> {
     }
 
     fn refusal(&self, declared: Option<u64>) -> Option<String> {
-        if self.no_model {
-            return None;
-        }
         self.tally.refusal(declared)
     }
 

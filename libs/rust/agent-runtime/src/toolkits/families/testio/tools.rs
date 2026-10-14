@@ -10,8 +10,8 @@ use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_t
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
 use super::client::{
-    MAX_OUTPUT_BYTES, TestIoApi, TestIoClient, TestIoClientError, TestIoClientErrorCode,
-    invalid_response, resource_exhausted,
+    MAX_OUTPUT_BYTES, TestIoApi, TestIoClient, TestIoClientError, invalid_response,
+    resource_exhausted,
 };
 use super::config::{TestIoConfigError, TestIoConfigErrorCode, TestIoToolkitConfig};
 
@@ -20,8 +20,6 @@ const MAX_ARGUMENT_BYTES: usize = 64 * 1_024;
 const MAX_LIST_ITEMS: usize = 256;
 const MAX_FIELD_BYTES: usize = 256;
 const MAX_FILTER_BYTES: usize = 4 * 1_024;
-const MAX_TEXT_BYTES: usize = 1_024;
-const MAX_LONG_TEXT_BYTES: usize = 16 * 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TestIoToolsetErrorCode {
@@ -186,18 +184,16 @@ enum TestIoToolKind {
     GetUserStory,
     ListExploratoryTests,
     GetExploratoryTest,
-    CreateExploratoryTest,
     ListTestCases,
     GetTestCase,
-    ConfirmBugFix,
     GetTestCasesForTest,
     GetTestCasesStatusesForTest,
     ListBugsForTestWithFilter,
 }
 
 impl TestIoToolKind {
-    /// The SDK's `get_available_tools` order.
-    const ALL: [Self; 15] = [
+    /// The SDK's `get_available_tools` order, writes removed.
+    const ALL: [Self; 13] = [
         Self::ListProducts,
         Self::GetProduct,
         Self::ListFeatures,
@@ -206,19 +202,12 @@ impl TestIoToolKind {
         Self::GetUserStory,
         Self::ListExploratoryTests,
         Self::GetExploratoryTest,
-        Self::CreateExploratoryTest,
         Self::ListTestCases,
         Self::GetTestCase,
-        Self::ConfirmBugFix,
         Self::GetTestCasesForTest,
         Self::GetTestCasesStatusesForTest,
         Self::ListBugsForTestWithFilter,
     ];
-
-    /// The two SDK `write` tools: one remote POST each.
-    const fn is_effect(self) -> bool {
-        matches!(self, Self::CreateExploratoryTest | Self::ConfirmBugFix)
-    }
 
     const fn name(self) -> &'static str {
         match self {
@@ -230,8 +219,6 @@ impl TestIoToolKind {
             Self::GetUserStory => "get_user_story",
             Self::ListExploratoryTests => "list_exploratory_tests",
             Self::GetExploratoryTest => "get_exploratory_test",
-            Self::CreateExploratoryTest => "create_exploratory_test",
-            Self::ConfirmBugFix => "confirm_bug_fix",
             Self::ListTestCases => "list_test_cases",
             Self::GetTestCase => "get_test_case",
             Self::GetTestCasesForTest => "get_test_cases_for_test",
@@ -262,12 +249,6 @@ impl TestIoToolKind {
             }
             Self::GetExploratoryTest => {
                 "Retrieve detailed information about a specific exploratory test by its ID. TestIO lists exploratory tests per product, so pass the product_id that owns the test."
-            }
-            Self::CreateExploratoryTest => {
-                "Create a new exploratory test with specified parameters including product, section, test type, devices, etc. Sends one POST to the TestIO customer API with the SDK's payload and never retries it: if the answer is lost, TestIO may have created the test, so list the product's exploratory tests before trying again."
-            }
-            Self::ConfirmBugFix => {
-                "Confirm the status of a bug fix with optional comments. Sends one POST to the TestIO customer API and never retries it: if the answer is lost, TestIO may have recorded the confirmation, so check the bug before trying again."
             }
             Self::ListTestCases => {
                 "Retrieve a list of test cases for a specific product with optional filtering by section."
@@ -324,10 +305,6 @@ impl TestIoTool {
             | TestIoToolKind::GetFeature
             | TestIoToolKind::ListUserStories
             | TestIoToolKind::GetUserStory => self.product_read(arguments).await?,
-            TestIoToolKind::CreateExploratoryTest => {
-                self.create_exploratory_test(arguments).await?
-            }
-            TestIoToolKind::ConfirmBugFix => self.confirm_bug_fix(arguments).await?,
             _ => self.test_read(arguments).await?,
         };
         let projected = match fields {
@@ -335,92 +312,6 @@ impl TestIoTool {
             None => data,
         };
         bounded(projected)
-    }
-
-    /// `create_exploratory_test`: the SDK's payload, truthy-only optionals,
-    /// the provider's JSON answer returned whole.
-    async fn create_exploratory_test(
-        &self,
-        arguments: &Map<String, Value>,
-    ) -> Result<Value, AdkError> {
-        let mut payload = Map::new();
-        payload.insert(
-            "product_id".into(),
-            json!(required_id(arguments, "product_id")?),
-        );
-        payload.insert(
-            "section_id".into(),
-            json!(required_id(arguments, "section_id")?),
-        );
-        payload.insert(
-            "test_type".into(),
-            Value::String(required_text(arguments, "test_type", MAX_TEXT_BYTES)?),
-        );
-        payload.insert(
-            "devices".into(),
-            json!(required_id_list(arguments, "devices")?),
-        );
-        payload.insert(
-            "features".into(),
-            json!(required_id_list(arguments, "features")?),
-        );
-        payload.insert(
-            "start_date".into(),
-            Value::String(required_text(arguments, "start_date", MAX_TEXT_BYTES)?),
-        );
-        payload.insert(
-            "end_date".into(),
-            Value::String(required_text(arguments, "end_date", MAX_TEXT_BYTES)?),
-        );
-        payload.insert(
-            "test_goal".into(),
-            Value::String(required_text(arguments, "test_goal", MAX_LONG_TEXT_BYTES)?),
-        );
-        if let Some(text) = optional_text(arguments, "out_of_scope", MAX_LONG_TEXT_BYTES)?
-            && !text.is_empty()
-        {
-            payload.insert("out_of_scope".into(), Value::String(text));
-        }
-        if let Some(requirements) = optional_text_list(arguments, "requirements")?
-            && !requirements.is_empty()
-        {
-            payload.insert("requirements".into(), json!(requirements));
-        }
-        self.post(&["exploratory_tests".to_owned()], &Value::Object(payload))
-            .await
-    }
-
-    /// `confirm_bug_fix`: the SDK's payload; `client_fields` projects the
-    /// provider's answer.
-    async fn confirm_bug_fix(&self, arguments: &Map<String, Value>) -> Result<Value, AdkError> {
-        let mut payload = Map::new();
-        payload.insert("bug_id".into(), json!(required_id(arguments, "bug_id")?));
-        payload.insert(
-            "status".into(),
-            Value::String(required_text(arguments, "status", MAX_TEXT_BYTES)?),
-        );
-        if let Some(comment) = optional_text(arguments, "comment", MAX_LONG_TEXT_BYTES)?
-            && !comment.is_empty()
-        {
-            payload.insert("comment".into(), Value::String(comment));
-        }
-        self.post(
-            &["bug_report_confirmations".to_owned()],
-            &Value::Object(payload),
-        )
-        .await
-    }
-
-    async fn post(&self, segments: &[String], body: &Value) -> Result<Value, AdkError> {
-        match self.client.post(segments, body).await {
-            Ok(value) => Ok(value),
-            // The sentence is the answer: the model must read that the
-            // effect may have happened (an Err message is replaced).
-            Err(error) if error.code() == TestIoClientErrorCode::UnknownOutcome => {
-                Ok(Value::String(error.into_adk().message))
-            }
-            Err(error) => Err(error.into_adk()),
-        }
     }
 
     async fn product_read(&self, arguments: &Map<String, Value>) -> Result<Value, AdkError> {
@@ -609,11 +500,11 @@ impl Tool for TestIoTool {
     }
 
     fn is_read_only(&self) -> bool {
-        !self.kind.is_effect()
+        true
     }
 
     fn is_concurrency_safe(&self) -> bool {
-        !self.kind.is_effect()
+        true
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -664,17 +555,6 @@ fn id_list_property(description: &str) -> Value {
     json!({
         "type":["array","null"], "items":{"type":"integer","minimum":0},
         "maxItems":MAX_LIST_ITEMS, "default":null, "description":description
-    })
-}
-
-fn text_property(description: &str, max: usize) -> Value {
-    json!({"type":"string","maxLength":max,"description":description})
-}
-
-fn required_id_list_property(description: &str) -> Value {
-    json!({
-        "type":"array", "items":{"type":"integer","minimum":0},
-        "maxItems":MAX_LIST_ITEMS, "description":description
     })
 }
 
@@ -736,10 +616,6 @@ fn product_properties(kind: TestIoToolKind) -> (Value, &'static [&'static str]) 
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "one schema per SDK tool, kept side by side"
-)]
 fn test_properties(kind: TestIoToolKind) -> (Value, &'static [&'static str]) {
     let product = id_property("The ID of the product");
     let fields = fields_property();
@@ -790,49 +666,6 @@ fn test_properties(kind: TestIoToolKind) -> (Value, &'static [&'static str]) {
                 "client_fields":fields
             }),
             &["product_id", "test_case_test_id"],
-        ),
-        TestIoToolKind::CreateExploratoryTest => (
-            json!({
-                "product_id":product,
-                "section_id":id_property("The ID of the section"),
-                "test_type":text_property("Type of the test", MAX_TEXT_BYTES),
-                "devices":required_id_list_property("List of device IDs"),
-                "features":required_id_list_property("List of feature IDs"),
-                "start_date":text_property("Start date in ISO format", MAX_TEXT_BYTES),
-                "end_date":text_property("End date in ISO format", MAX_TEXT_BYTES),
-                "test_goal":text_property("Description of the test goal", MAX_LONG_TEXT_BYTES),
-                "out_of_scope":{
-                    "type":["string","null"], "maxLength":MAX_LONG_TEXT_BYTES, "default":null,
-                    "description":"Description of what's out of scope"
-                },
-                "requirements":{
-                    "type":["array","null"], "items":{"type":"string","maxLength":MAX_TEXT_BYTES},
-                    "maxItems":MAX_LIST_ITEMS, "default":null,
-                    "description":"List of requirements"
-                }
-            }),
-            &[
-                "product_id",
-                "section_id",
-                "test_type",
-                "devices",
-                "features",
-                "start_date",
-                "end_date",
-                "test_goal",
-            ],
-        ),
-        TestIoToolKind::ConfirmBugFix => (
-            json!({
-                "bug_id":id_property("The ID of the bug"),
-                "status":text_property("Status of the bug fix confirmation", MAX_TEXT_BYTES),
-                "comment":{
-                    "type":["string","null"], "maxLength":MAX_LONG_TEXT_BYTES, "default":null,
-                    "description":"Optional comment on the bug fix"
-                },
-                "client_fields":fields
-            }),
-            &["bug_id", "status"],
         ),
         _ => (
             json!({
@@ -953,18 +786,7 @@ fn validate_argument_size(arguments: &Value) -> Result<(), AdkError> {
 /// pydantic models coerce one.
 fn id_value(value: &Value) -> Option<u64> {
     match value {
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "the float is integral, non-negative and under 9e15"
-        )]
-        Value::Number(number) => number.as_u64().or_else(|| {
-            // Pydantic accepts an integral float such as `5.0`.
-            number
-                .as_f64()
-                .filter(|float| float.fract() == 0.0 && *float >= 0.0 && *float < 9.0e15)
-                .map(|float| float as u64)
-        }),
+        Value::Number(number) => number.as_u64(),
         Value::String(text) if !text.is_empty() && text.len() <= 20 => {
             text.trim().parse::<u64>().ok()
         }
@@ -994,55 +816,6 @@ fn optional_id_list(
             .map(|value| id_value(value).ok_or_else(invalid_arguments))
             .collect::<Result<Vec<_>, _>>()
             .map(|ids| (!ids.is_empty()).then_some(ids)),
-        Some(_) => Err(invalid_arguments()),
-    }
-}
-
-fn required_id_list(arguments: &Map<String, Value>, name: &str) -> Result<Vec<u64>, AdkError> {
-    match arguments.get(name) {
-        Some(Value::Array(values)) if values.len() <= MAX_LIST_ITEMS => values
-            .iter()
-            .map(|value| id_value(value).ok_or_else(invalid_arguments))
-            .collect(),
-        _ => Err(invalid_arguments()),
-    }
-}
-
-/// A pydantic `str`: only a JSON string is accepted.
-fn required_text(
-    arguments: &Map<String, Value>,
-    name: &str,
-    max: usize,
-) -> Result<String, AdkError> {
-    optional_text(arguments, name, max)?.ok_or_else(invalid_arguments)
-}
-
-fn optional_text(
-    arguments: &Map<String, Value>,
-    name: &str,
-    max: usize,
-) -> Result<Option<String>, AdkError> {
-    match arguments.get(name) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(value)) if value.len() <= max => Ok(Some(value.clone())),
-        Some(_) => Err(invalid_arguments()),
-    }
-}
-
-fn optional_text_list(
-    arguments: &Map<String, Value>,
-    name: &str,
-) -> Result<Option<Vec<String>>, AdkError> {
-    match arguments.get(name) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Array(values)) if values.len() <= MAX_LIST_ITEMS => values
-            .iter()
-            .map(|value| match value {
-                Value::String(text) if text.len() <= MAX_TEXT_BYTES => Ok(text.clone()),
-                _ => Err(invalid_arguments()),
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(Some),
         Some(_) => Err(invalid_arguments()),
     }
 }

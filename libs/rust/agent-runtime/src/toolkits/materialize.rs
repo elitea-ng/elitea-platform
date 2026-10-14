@@ -834,8 +834,6 @@ fn materialize_ported_saas(
     attachments: Option<&AttachmentHost>,
 ) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
     let toolset = match tool_type {
-        // No runtime host has an artifact-read grant plane, so Aha is built
-        // without one and serves every tool but attach_file.
         "aha" => aha::tools::build_aha_toolset(
             name,
             aha::config::AhaToolkitConfig::parse(settings)
@@ -879,7 +877,6 @@ fn materialize_ported_saas(
             figma::config::FigmaToolkitConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
-            attachments.cloned(),
         )
         .map_err(|error| family_error(error.code()))?,
         "gitlab" => gitlab::tools::build_gitlab_toolset(

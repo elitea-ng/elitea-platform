@@ -874,8 +874,9 @@ impl Operations<'_> {
     }
 
     /// `add_file_to_case`: read the artifact, upload it to the case, then
-    /// optionally replace one rich-text field with the inline reference. Two
+    /// optionally append the inline reference to one rich-text field. Three
     /// requests, so the reply says which of them happened.
+    #[allow(clippy::too_many_lines)] // One source-ordered ledger: read, upload, read field, write.
     async fn add_file_to_case(&self, arguments: &Map<String, Value>) -> Result<Value, AdkError> {
         let host = self.attachments.ok_or_else(invalid_arguments)?;
         let case = required_id(arguments, "case_id")?;
@@ -938,10 +939,35 @@ impl Operations<'_> {
                 "File '{filename}' successfully attached to test case {case}. Attachment ID: {attachment_id}. To embed this file inline in a rich-text field (e.g. custom_steps, custom_preconds, custom_expected), use update_case with: {inline_ref}"
             )));
         };
+        // The field's current value is read and kept: the new reference is
+        // appended, never written over what is there. A field that cannot be
+        // read is not touched.
+        let current = match self
+            .client
+            .get(&format!("get_case/{case}"), &Vec::new())
+            .await
+        {
+            Ok(current) => match current.get(field) {
+                None | Some(Value::Null) => String::new(),
+                Some(Value::String(text)) => text.clone(),
+                Some(_) => {
+                    return Ok(Value::String(format!(
+                        "File '{filename}' attached to test case {case} (attachment_id: {attachment_id}), but field '{field}' is not a text field, so it was left unchanged."
+                    )));
+                }
+            },
+            Err(error) => {
+                return Ok(Value::String(format!(
+                    "File '{filename}' attached to test case {case} (attachment_id: {attachment_id}), but the current value of field '{field}' could not be read ({}), so the field was left unchanged.",
+                    embed_failure(&error)
+                )));
+            }
+        };
+        let separator = if current.is_empty() { "" } else { "<br/>" };
         let mut body = Map::new();
         body.insert(
             field.to_owned(),
-            Value::String(format!("{before}{inline_ref}{after}")),
+            Value::String(format!("{current}{separator}{before}{inline_ref}{after}")),
         );
         Ok(Value::String(
             match self

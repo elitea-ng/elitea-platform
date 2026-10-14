@@ -18,7 +18,9 @@ use std::sync::Arc;
 use reqwest::Method;
 use serde_json::{Map, Value, json};
 
-use crate::toolkits::families::attachment_host::{AttachmentError, AttachmentHost};
+use crate::toolkits::families::attachment_host::{
+    AttachmentError, AttachmentHost, derived_bucket_name,
+};
 
 use super::client::{
     CarrierAuth, CarrierClient, CarrierClientError, MAX_FILE_BYTES, MAX_LOG_DOWNLOAD_BYTES,
@@ -578,7 +580,13 @@ pub(super) async fn create_excel_report(
 
     // 3. Store it, never replacing a file.
     let stored = host
-        .write_unique_artifact(&target_bucket, &stem, "xlsx", XLSX_MEDIA_TYPE, bytes)
+        .write_unique_artifact(
+            &derived_bucket_name(&target_bucket, "carrier-reports"),
+            &stem,
+            "xlsx",
+            XLSX_MEDIA_TYPE,
+            bytes,
+        )
         .await?;
     Ok(Value::String(format!(
         "Excel report generated and stored in the project's artifact store, bucket {}, report name: {}, artifact path: /{}/{}",
@@ -735,7 +743,13 @@ pub(super) async fn create_ui_excel_report(
         chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S")
     );
     let stored = host
-        .write_unique_artifact(&bucket, &stem, "xlsx", XLSX_MEDIA_TYPE, bytes)
+        .write_unique_artifact(
+            &derived_bucket_name(&bucket, "carrier-reports"),
+            &stem,
+            "xlsx",
+            XLSX_MEDIA_TYPE,
+            bytes,
+        )
         .await?;
     let name_shown = report
         .get("name")

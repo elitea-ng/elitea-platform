@@ -717,10 +717,22 @@ impl JiraClient {
 
     /// The `attachment` field of an issue (empty when Jira refuses).
     async fn issue_attachments(&self, issue_key: &str) -> Result<Vec<Value>, JiraClientError> {
+        Ok(self
+            .read_issue_attachments(issue_key)
+            .await?
+            .unwrap_or_default())
+    }
+
+    /// The same read, with Jira's refusal kept for a caller that must stop on
+    /// it (`Err(message)` inside).
+    async fn read_issue_attachments(
+        &self,
+        issue_key: &str,
+    ) -> Result<Result<Vec<Value>, String>, JiraClientError> {
         let mut url = self.api_url(self.version(), &["issue", issue_key])?;
         url.query_pairs_mut().append_pair("fields", "attachment");
         Ok(match self.send(Method::GET, url, None, false).await? {
-            Reply::Accepted(issue) => issue
+            Reply::Accepted(issue) => Ok(issue
                 .pointer("/fields/attachment")
                 .and_then(Value::as_array)
                 .map(|list| {
@@ -730,8 +742,8 @@ impl JiraClient {
                         .cloned()
                         .collect()
                 })
-                .unwrap_or_default(),
-            Reply::Refused(_) => Vec::new(),
+                .unwrap_or_default()),
+            Reply::Refused(message) => Err(message),
         })
     }
 
@@ -763,17 +775,11 @@ impl JiraClient {
         }
         let media_type = detect_media_type(&file.bytes, &name);
         // Jira keeps a same-named upload beside the old file; say so.
-        let mut url = self.api_url(self.version(), &["issue", issue_key])?;
-        url.query_pairs_mut().append_pair("fields", "attachment");
-        let duplicate = match self.send(Method::GET, url, None, false).await? {
-            Reply::Accepted(issue) => issue
-                .pointer("/fields/attachment")
-                .and_then(Value::as_array)
-                .is_some_and(|list| {
-                    list.iter()
-                        .any(|a| a.get("filename").and_then(Value::as_str) == Some(name.as_str()))
-                }),
-            Reply::Refused(message) => {
+        let duplicate = match self.read_issue_attachments(issue_key).await? {
+            Ok(list) => list
+                .iter()
+                .any(|a| a.get("filename").and_then(Value::as_str) == Some(name.as_str())),
+            Err(message) => {
                 return Err(refuse(format!(
                     "Failed to upload attachment to {issue_key}: {message}. Nothing was uploaded."
                 )));

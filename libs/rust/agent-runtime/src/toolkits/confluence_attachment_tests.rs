@@ -749,7 +749,7 @@ async fn cloud_hides_files_removed_from_the_page_body_and_pages_through_the_list
     );
     assert_eq!(
         items[0]["metadata"]["download_url"],
-        "https://tenant.atlassian.net/download/attachments/42/keep.txt?version=1"
+        "https://tenant.atlassian.net/wiki/download/attachments/42/keep.txt?version=1"
     );
 }
 
@@ -875,7 +875,6 @@ fn upload_replies(page_body: &str) -> Vec<Reply> {
         ok(
             json!({"id": "42", "title": "Design", "body": {"storage": {"value": page_body}}, "version": {"number": 3}, "_links": {"webui": "/spaces/ENG/pages/42/Design"}}),
         ),
-        ok(json!({"lastUpdated": {"number": 3}})),
         ok(json!({"id": "42"})),
     ]
 }
@@ -894,7 +893,7 @@ async fn a_picture_is_uploaded_and_placed_in_the_page_with_its_caption() {
         "File 'shot.png' uploaded and added to page 42 as image. View at: https://wiki.example.test/confluence/spaces/ENG/pages/42/Design"
     );
     let seen = script.seen();
-    assert_eq!(seen.len(), 5);
+    assert_eq!(seen.len(), 4);
     assert_eq!(
         seen[0].url,
         "https://wiki.example.test/confluence/rest/api/content/42/child/attachment?filename=shot.png"
@@ -922,13 +921,13 @@ async fn a_picture_is_uploaded_and_placed_in_the_page_with_its_caption() {
     ] {
         assert!(contains(&seen[1].body, part), "{part}");
     }
-    assert_eq!(seen[4].method, Method::PUT);
-    assert!(seen[4].effect);
+    assert_eq!(seen[3].method, Method::PUT);
+    assert!(seen[3].effect);
     assert_eq!(
-        seen[4].url,
+        seen[3].url,
         "https://wiki.example.test/confluence/rest/api/content/42?status=current"
     );
-    let payload = seen[4].json();
+    let payload = seen[3].json();
     assert_eq!(payload["version"]["number"], 4);
     assert_eq!(payload["version"]["message"], "Added file: shot.png");
     assert_eq!(
@@ -955,7 +954,7 @@ async fn a_file_is_linked_and_prepended_and_a_same_named_one_gets_a_new_version(
         "https://wiki.example.test/confluence/rest/api/content/42/child/attachment/att9/data"
     );
     assert_eq!(
-        seen[4].json()["body"]["storage"]["value"],
+        seen[3].json()["body"]["storage"]["value"],
         "<ac:link><ri:attachment ri:filename=\"spec.pdf\"/></ac:link><p></p><p>Body</p>"
     );
 }
@@ -1075,7 +1074,7 @@ async fn each_upload_failure_has_its_sentence_and_the_upload_is_never_retried() 
 #[tokio::test]
 async fn a_page_that_cannot_be_updated_says_the_file_was_uploaded() {
     let mut replies = upload_replies("<p>x</p>");
-    replies[4] = refused(StatusCode::BAD_REQUEST, "Invalid body");
+    replies[3] = refused(StatusCode::BAD_REQUEST, "Invalid body");
     let (client, _, platform) = setup(&server_settings(), replies);
     platform.put("imgs", "shot.png", &picture());
     let error = fail(&client, add_file("/imgs/shot.png", None, false)).await;
@@ -1085,7 +1084,7 @@ async fn a_page_that_cannot_be_updated_says_the_file_was_uploaded() {
     );
 
     let mut replies = upload_replies("<p>x</p>");
-    replies[4] = status(StatusCode::INTERNAL_SERVER_ERROR);
+    replies[3] = status(StatusCode::INTERNAL_SERVER_ERROR);
     let (client, _, platform) = setup(&server_settings(), replies);
     platform.put("imgs", "shot.png", &picture());
     let error = fail(&client, add_file("/imgs/shot.png", None, false)).await;
@@ -1106,17 +1105,14 @@ async fn a_version_conflict_re_reads_the_page_and_tries_again_up_to_three_times(
             json!({"id": "42", "title": "Design", "body": {"storage": {"value": "<p>x</p>"}}, "version": {"number": 3}, "_links": {"webui": "/w"}}),
         )
     };
-    let hist = || ok(json!({"lastUpdated": {"number": 3}}));
     let (client, script, platform) = setup(
         &server_settings(),
         vec![
             ok(json!({"results": [], "size": 0})),
             ok(json!({"results": [{"title": "shot.png"}]})),
             page(),
-            hist(),
             conflict(),
             page(),
-            hist(),
             ok(json!({"id": "42"})),
         ],
     );
@@ -1141,13 +1137,10 @@ async fn a_version_conflict_re_reads_the_page_and_tries_again_up_to_three_times(
             ok(json!({"results": [], "size": 0})),
             ok(json!({"results": [{"title": "shot.png"}]})),
             page(),
-            hist(),
             conflict(),
             page(),
-            hist(),
             conflict(),
             page(),
-            hist(),
             conflict(),
         ],
     );
@@ -1278,4 +1271,114 @@ async fn without_attachment_authority_the_tools_are_omitted() {
         error.code(),
         ConfluenceToolsetErrorCode::UnsupportedSelection
     );
+}
+
+#[tokio::test]
+async fn the_next_version_comes_from_the_same_read_as_the_body() {
+    // The page read says version 7; only that read is used (no second read of
+    // the history that a concurrent edit could slip between).
+    let (client, script, platform) = setup(
+        &server_settings(),
+        vec![
+            ok(json!({"results": [], "size": 0})),
+            ok(json!({"results": [{"title": "shot.png"}]})),
+            ok(
+                json!({"id": "42", "title": "T", "body": {"storage": {"value": "<p>x</p>"}}, "version": {"number": 7}, "_links": {"webui": "/w"}}),
+            ),
+            ok(json!({"id": "42"})),
+        ],
+    );
+    platform.put("imgs", "shot.png", &picture());
+    run(&client, add_file("/imgs/shot.png", None, false)).await;
+    let seen = script.seen();
+    assert_eq!(seen.len(), 4);
+    assert!(seen.iter().all(|r| !r.url.contains("/history")));
+    assert_eq!(seen[3].json()["version"]["number"], 8);
+    assert_eq!(seen[3].json()["type"], "page");
+}
+
+#[tokio::test]
+async fn a_concurrent_edit_is_a_conflict_that_re_reads_and_a_blog_post_keeps_its_type() {
+    let blog = |version: u64| {
+        ok(
+            json!({"id": "42", "type": "blogpost", "title": "News", "body": {"storage": {"value": "<p>x</p>"}}, "version": {"number": version}, "_links": {"webui": "/w"}}),
+        )
+    };
+    let (client, script, platform) = setup(
+        &server_settings(),
+        vec![
+            ok(json!({"results": [], "size": 0})),
+            ok(json!({"results": [{"title": "shot.png"}]})),
+            blog(3),
+            refused(StatusCode::CONFLICT, "stale"),
+            blog(4),
+            ok(json!({"id": "42"})),
+        ],
+    );
+    platform.put("imgs", "shot.png", &picture());
+    let text = run(&client, add_file("/imgs/shot.png", None, false)).await;
+    assert!(
+        text.starts_with("File 'shot.png' uploaded and added to page 42"),
+        "{text}"
+    );
+    let puts: Vec<_> = script
+        .seen()
+        .into_iter()
+        .filter(|r| r.method == Method::PUT)
+        .collect();
+    assert_eq!(puts.len(), 2);
+    assert_eq!(puts[0].json()["version"]["number"], 4);
+    assert_eq!(puts[1].json()["version"]["number"], 5);
+    assert!(puts.iter().all(|r| r.json()["type"] == "blogpost"));
+}
+
+#[tokio::test]
+async fn an_absolute_cloud_link_keeps_the_wiki_prefix_once() {
+    let html = "<ac:image><ri:url ri:value=\"https://tenant.atlassian.net/wiki/download/attachments/42/a.png?version=1\"/></ac:image><ac:image><ri:url ri:value=\"https://tenant.atlassian.net/download/attachments/42/b.png\"/></ac:image><ac:image><ri:url ri:value=\"/wiki/download/attachments/42/c.png\"/></ac:image>";
+    let (client, script, platform) = setup(
+        &cloud_settings(),
+        vec![
+            storage_page(html),
+            bytes(StatusCode::OK, &picture(), "image/png"),
+            bytes(StatusCode::OK, &picture(), "image/png"),
+            bytes(StatusCode::OK, &picture(), "image/png"),
+        ],
+    );
+    for _ in 0..3 {
+        platform.reply("a picture");
+    }
+    let text = run(&client, page_images(None)).await;
+    assert_eq!(text.matches("Description: a picture").count(), 3, "{text}");
+    let urls: Vec<String> = script.seen().into_iter().skip(1).map(|r| r.url).collect();
+    assert_eq!(
+        urls,
+        [
+            "https://tenant.atlassian.net/wiki/download/attachments/42/a.png",
+            "https://tenant.atlassian.net/wiki/download/attachments/42/b.png",
+            "https://tenant.atlassian.net/wiki/download/attachments/42/c.png",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn once_the_run_has_no_model_no_further_picture_is_downloaded() {
+    let html = "<ac:image><ri:url ri:value=\"/download/attachments/42/a.png\"/></ac:image><ac:image><ri:url ri:value=\"/download/attachments/42/b.png\"/></ac:image><ac:image><ri:url ri:value=\"/download/attachments/42/c.png\"/></ac:image>";
+    let (client, script, platform) = setup(
+        &server_settings(),
+        vec![
+            storage_page(html),
+            bytes(StatusCode::OK, &picture(), "image/png"),
+        ],
+    );
+    platform.fail_model(OfficeFailure::NoModel);
+    let text = run(&client, page_images(None)).await;
+    assert_eq!(
+        text.matches("[LLM not available for image processing]")
+            .count(),
+        3,
+        "{text}"
+    );
+    // The page read and ONE picture download; the other two were not fetched.
+    assert_eq!(script.seen().len(), 2);
+    assert_eq!(platform.model_calls().len(), 1);
 }
