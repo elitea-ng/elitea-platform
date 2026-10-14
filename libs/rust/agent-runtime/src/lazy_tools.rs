@@ -146,6 +146,9 @@ struct Toolkit {
 /// The lazily-bindable tools, grouped by toolkit in the order they arrived.
 pub struct Registry {
     toolkits: Vec<Toolkit>,
+    /// Built once, when the registry is: the model's `(toolkit, tool)` is
+    /// resolved against this on every call and the worker attributes calls by it.
+    directory: Directory,
 }
 
 impl Registry {
@@ -160,27 +163,8 @@ impl Registry {
             .find(|candidate| candidate.name() == tool)
     }
 
-    fn directory(&self) -> Directory {
-        Directory {
-            toolkits: self
-                .toolkits
-                .iter()
-                .map(|toolkit| {
-                    (
-                        toolkit.name.clone(),
-                        toolkit
-                            .tools
-                            .iter()
-                            .map(|tool| tool.name().to_owned())
-                            .collect(),
-                    )
-                })
-                .collect(),
-        }
-    }
-
     fn resolve(&self, toolkit: &str, tool: &str) -> Result<(String, &Arc<dyn Tool>), Value> {
-        let (actual, name) = self.directory().resolve(toolkit, tool)?;
+        let (actual, name) = self.directory.resolve(toolkit, tool)?;
         let found = self.tool(&actual, &name).ok_or_else(
             || json!({"error": format!("Tool '{tool}' not found"), "hint": "Nothing was run."}),
         )?;
@@ -357,7 +341,25 @@ pub fn partition(
             direct.push(FrozenToolset::new(toolset.name(), kept));
         }
     }
-    let registry = Registry { toolkits };
+    let directory = Directory {
+        toolkits: toolkits
+            .iter()
+            .map(|toolkit| {
+                (
+                    toolkit.name.clone(),
+                    toolkit
+                        .tools
+                        .iter()
+                        .map(|tool| tool.name().to_owned())
+                        .collect(),
+                )
+            })
+            .collect(),
+    };
+    let registry = Registry {
+        toolkits,
+        directory,
+    };
     let reserved_name_taken = direct
         .iter()
         .flat_map(|toolset| toolset.tools().iter())
@@ -377,7 +379,7 @@ pub fn partition(
         };
     }
     let index = registry.index();
-    let directory = registry.directory();
+    let directory = registry.directory.clone();
     let registry = Arc::new(registry);
     let meta: Vec<Arc<dyn Tool>> = vec![
         Arc::new(GetToolSchema {

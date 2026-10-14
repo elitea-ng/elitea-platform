@@ -321,21 +321,11 @@ impl OrdinaryRuntimeBindings {
     /// after a blank line (the SDK appends it per call, to the system message).
     #[must_use]
     pub(crate) fn instruction_suffix(&self, instructions: &str) -> String {
-        let mut text = instructions.to_owned();
-        if let Some(addendum) = self.internal_tools.instruction_addendum() {
-            if text.is_empty() {
-                text.push_str(addendum.trim_start_matches('\n'));
-            } else {
-                text.push_str("\n\n---\n\n");
-                text.push_str(addendum);
-            }
-        }
-        if let Some(index) = &self.lazy_tools_index {
-            if !text.is_empty() {
-                text.push_str("\n\n");
-            }
-            text.push_str(index);
-        }
+        let text = compose_instructions(
+            instructions,
+            self.internal_tools.instruction_addendum(),
+            self.lazy_tools_index.as_deref(),
+        );
         if text.len() > elitea_agent_runtime::request::MAX_AGENT_INSTRUCTION_BYTES {
             // Instructions admitted at their own bound leave no room for the
             // guidance: serve the agent's own text rather than fail the turn.
@@ -3217,17 +3207,50 @@ fn pipeline_configuration_error(error: &PipelineConfigurationError) -> NativeAge
     )
 }
 
+/// The system instruction: the agent's own `instructions`, then the internal
+/// tools' guidance after the SDK's separator, then the Smart Tools Selection
+/// index after a blank line. The ONE function that builds it, and the one the
+/// fit check measures, so the check and the build cannot disagree.
+#[must_use]
+pub(crate) fn compose_instructions(
+    instructions: &str,
+    guidance: Option<&str>,
+    index: Option<&str>,
+) -> String {
+    let mut text = instructions.to_owned();
+    if let Some(guidance) = guidance {
+        if text.is_empty() {
+            text.push_str(guidance.trim_start_matches('\n'));
+        } else {
+            text.push_str("\n\n---\n\n");
+            text.push_str(guidance);
+        }
+    }
+    if let Some(index) = index {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(index);
+    }
+    text
+}
+
 /// Whether the Smart Tools Selection `index` fits in the system prompt beside
-/// the agent's `instructions` and the other internal tools' guidance.
+/// the agent's `instructions` and the other internal tools' guidance: the
+/// length of the string [`compose_instructions`] would build, against the cap
+/// [`OrdinaryRuntimeBindings::instruction_suffix`] enforces.
 #[must_use]
 pub(crate) fn lazy_index_fits(
     instructions: &str,
     internal_tools: InternalToolCatalog,
     index: &str,
 ) -> bool {
-    let guidance = internal_tools.instruction_addendum().map_or(0, str::len);
-    // The two separators `instruction_suffix` writes are at most 8 bytes.
-    instructions.len() + guidance + index.len() + 8
+    compose_instructions(
+        instructions,
+        internal_tools.instruction_addendum(),
+        Some(index),
+    )
+    .len()
         <= elitea_agent_runtime::request::MAX_AGENT_INSTRUCTION_BYTES
 }
 

@@ -5205,7 +5205,12 @@ mod internal_tools_graph {
                 Arc::new(InMemorySessionService::new()),
             );
             let mut request = with_toggles(kind, &["attachments"]);
-            request.payload.conversation_id = Some(UUID.to_owned());
+            // A conversation can be addressed by uuid or by numeric id; the
+            // worker needs neither, main resolves the claim's own.
+            request.payload.conversation_id = Some(match kind {
+                AgentExecutionKind::Application => UUID.to_owned(),
+                AgentExecutionKind::Adhoc => "42".to_owned(),
+            });
             run(&assembler, &request).await;
             let seen = requests(&captured);
             assert_eq!(seen.len(), 3);
@@ -5333,22 +5338,48 @@ mod internal_tools_graph {
         }
     }
 
+    /// The fit check and the string the model gets are built by one function, so
+    /// they agree exactly at the cap: the last byte that fits, and the first
+    /// that does not, with the planner's guidance and the index both in play.
     #[test]
-    fn the_index_fit_check_counts_instructions_guidance_and_index() {
+    fn the_index_fit_check_and_the_built_instruction_agree_at_the_cap() {
         use super::super::internal_tools::InternalToolCatalog;
-        use super::super::session::lazy_index_fits;
+        use super::super::session::{
+            ApplicationRuntimeProjection, OrdinaryRuntimeBindings, lazy_index_fits,
+        };
+        use crate::agents::sensitive_tools::SensitiveToolCatalog;
+        use crate::toolkits::DelegatedAuthorizationCatalog;
         let max = elitea_agent_runtime::request::MAX_AGENT_INSTRUCTION_BYTES;
-        let planner = InternalToolCatalog::from_names(&["planner".to_owned()]).expect("catalog");
-        let lazy =
-            InternalToolCatalog::from_names(&["lazy_tools_mode".to_owned()]).expect("catalog");
+        let catalog =
+            InternalToolCatalog::from_names(&["planner".to_owned(), "lazy_tools_mode".to_owned()])
+                .expect("catalog");
         let index = "i".repeat(1_000);
-        assert!(lazy_index_fits("short", lazy, &index));
-        assert!(lazy_index_fits(&"x".repeat(max - 1_100), lazy, &index));
-        assert!(!lazy_index_fits(&"x".repeat(max - 900), lazy, &index));
-        // The planner's guidance shares the same budget.
-        let room = max - 1_000 - 8 - elitea_agent_runtime::planner::PLAN_ADDON.len();
-        assert!(lazy_index_fits(&"x".repeat(room), planner, &index));
-        assert!(!lazy_index_fits(&"x".repeat(room + 1), planner, &index));
+        let guidance = elitea_agent_runtime::planner::PLAN_ADDON.len();
+        // "\n\n---\n\n" before the guidance (7), "\n\n" before the index (2).
+        let exact = max - (7 + guidance + 2 + index.len());
+        let bindings = || {
+            OrdinaryRuntimeBindings::new(
+                Vec::new(),
+                SensitiveToolCatalog::default(),
+                DelegatedAuthorizationCatalog::default(),
+                ApplicationRuntimeProjection::default(),
+            )
+            .with_internal_tools(catalog)
+            .with_lazy_tools_index(Some(index.clone()))
+        };
+        let fits = "x".repeat(exact);
+        assert!(lazy_index_fits(&fits, catalog, &index));
+        let built = bindings().instruction_suffix(&fits);
+        assert_eq!(built.len(), max, "built to exactly the cap");
+        assert!(built.ends_with(&index) && built.contains("## Planning"));
+
+        let over = "x".repeat(exact + 1);
+        assert!(!lazy_index_fits(&over, catalog, &index));
+        assert_eq!(
+            bindings().instruction_suffix(&over),
+            over,
+            "one byte over: the agent's own text, nothing appended"
+        );
     }
 
     /// A project that names its own attachment bucket: the listing asks for the

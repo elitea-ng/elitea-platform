@@ -265,15 +265,29 @@ type RuntimeArtifactSource interface {
 }
 
 // DefaultAttachmentBucket is the chat attachment bucket of a project whose
-// storage policy names none (main's conversations handler uses the same name).
+// storage policy names none. It is the one definition: the upload handler and
+// this listing both use it, and the worker never assumes a name (it asks for the
+// project's bucket with an empty one).
 const DefaultAttachmentBucket = "chat-attachments"
 
-// AttachmentBucketResolver is implemented by a RuntimeArtifactSource that can
-// name a project's chat attachment bucket from its storage policy ("" when the
-// policy names none). It is optional: a source without it refuses a listing
-// that does not name a bucket.
-type AttachmentBucketResolver interface {
+// AttachmentListingSource is implemented by a RuntimeArtifactSource that can
+// list a project's chat attachments. It is optional: a source without it
+// refuses a listing that names no bucket.
+type AttachmentListingSource interface {
+	// AttachmentBucket names the project's attachment bucket from its storage
+	// policy ("" when the policy names none).
 	AttachmentBucket(ctx context.Context, projectID int64) (string, error)
+	// ListAttachmentsNewestFirst lists one conversation's attachment objects,
+	// newest upload first, at most limit of them; truncated says files were left
+	// out. An absent bucket is an empty list, not an error.
+	ListAttachmentsNewestFirst(
+		ctx context.Context,
+		projectID int64,
+		actorID int64,
+		bucket string,
+		prefix string,
+		limit int32,
+	) ([]RuntimeArtifactRecord, bool, error)
 }
 
 // RuntimeArtifactObjectService serves all four artifact operations under one
@@ -314,26 +328,35 @@ func (service *RuntimeArtifactObjectService) authorize(
 	claim ContentClaim,
 	stage string,
 ) (runtimeArtifactPrincipal, error) {
+	_, principal, err := service.authorizeWithConversation(ctx, claim, stage)
+	return principal, err
+}
+
+func (service *RuntimeArtifactObjectService) authorizeWithConversation(
+	ctx context.Context,
+	claim ContentClaim,
+	stage string,
+) (RuntimeContextAuthorization, runtimeArtifactPrincipal, error) {
 	if service == nil || service.authorizer == nil || service.artifacts == nil {
-		return runtimeArtifactPrincipal{}, runtimeContextUnavailable(stage)
+		return RuntimeContextAuthorization{}, runtimeArtifactPrincipal{}, runtimeContextUnavailable(stage)
 	}
 	if err := ctx.Err(); err != nil {
-		return runtimeArtifactPrincipal{}, err
+		return RuntimeContextAuthorization{}, runtimeArtifactPrincipal{}, err
 	}
 	authorization, err := service.authorizer.AuthorizeAgentRuntimeContext(ctx, claim)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
-			return runtimeArtifactPrincipal{}, contextErr
+			return RuntimeContextAuthorization{}, runtimeArtifactPrincipal{}, contextErr
 		}
 		if errors.Is(err, ErrContentUnauthorized) {
-			return runtimeArtifactPrincipal{}, ErrContentUnauthorized
+			return RuntimeContextAuthorization{}, runtimeArtifactPrincipal{}, ErrContentUnauthorized
 		}
-		return runtimeArtifactPrincipal{}, runtimeContextUnavailable(
+		return RuntimeContextAuthorization{}, runtimeArtifactPrincipal{}, runtimeContextUnavailable(
 			runtimeContextStageClaimAuthorize,
 		)
 	}
 	if authorization.ResourceProjectID <= 0 || authorization.ResourceProjectID > math.MaxInt32 {
-		return runtimeArtifactPrincipal{}, runtimeContextUnavailable(
+		return RuntimeContextAuthorization{}, runtimeArtifactPrincipal{}, runtimeContextUnavailable(
 			runtimeContextStageProjectIdentity,
 		)
 	}
@@ -344,11 +367,11 @@ func (service *RuntimeArtifactObjectService) authorize(
 	actorID, err := strconv.ParseInt(authorization.ActorID, 10, 64)
 	if err != nil || actorID <= 0 || actorID > math.MaxInt32 ||
 		strconv.FormatInt(actorID, 10) != authorization.ActorID {
-		return runtimeArtifactPrincipal{}, runtimeContextUnavailable(
+		return RuntimeContextAuthorization{}, runtimeArtifactPrincipal{}, runtimeContextUnavailable(
 			runtimeContextStageExecutionActor,
 		)
 	}
-	return runtimeArtifactPrincipal{projectID: authorization.ResourceProjectID, actorID: actorID}, nil
+	return authorization, runtimeArtifactPrincipal{projectID: authorization.ResourceProjectID, actorID: actorID}, nil
 }
 
 // List serves one bucket listing for the claimed execution.
@@ -359,44 +382,82 @@ func (service *RuntimeArtifactObjectService) List(
 ) (RuntimeArtifactListContext, error) {
 	bucket := strings.TrimSpace(request.Bucket)
 	prefix := strings.TrimPrefix(strings.TrimSpace(request.Prefix), "/")
-	// An EMPTY bucket asks for the project's chat attachment bucket: the one
-	// its storage policy names, or the default when it names none. The worker
-	// cannot know that name (it is project policy, not claim data), and the
-	// answer says which bucket was used.
-	wantsAttachmentBucket := bucket == ""
-	if wantsAttachmentBucket {
-		if _, ok := service.artifacts.(AttachmentBucketResolver); !ok {
-			return RuntimeArtifactListContext{}, ErrContentRejected
-		}
-	} else if !addressableAttachmentBucket(bucket) {
-		return RuntimeArtifactListContext{}, ErrContentRejected
-	}
-	if !addressableArtifactPrefix(prefix) {
-		return RuntimeArtifactListContext{}, ErrContentRejected
-	}
 	limit := int32(maxRuntimeArtifactListFiles)
 	if request.Limit > 0 && request.Limit < limit {
 		limit = request.Limit
+	}
+	// An EMPTY bucket is the CONVERSATION ATTACHMENT listing: the claim's own
+	// conversation's files in the project's attachment bucket (its storage
+	// policy, or the default), newest upload first. The worker names neither
+	// the bucket nor the conversation: both are project policy and claim data
+	// it should not have to know (a conversation can be addressed by uuid or by
+	// numeric id), so the request's prefix is ignored and the answer says which
+	// bucket was used.
+	if bucket == "" {
+		return service.listConversationAttachments(ctx, claim, limit)
+	}
+	if !addressableAttachmentBucket(bucket) || !addressableArtifactPrefix(prefix) {
+		return RuntimeArtifactListContext{}, ErrContentRejected
 	}
 	principal, err := service.authorize(ctx, claim, runtimeContextStageArtifactList)
 	if err != nil {
 		return RuntimeArtifactListContext{}, err
 	}
-	if wantsAttachmentBucket {
-		resolver, _ := service.artifacts.(AttachmentBucketResolver)
-		bucket, err = resolver.AttachmentBucket(ctx, principal.projectID)
-		if err != nil {
-			return RuntimeArtifactListContext{}, service.sourceError(ctx, err, runtimeContextStageArtifactList)
-		}
-		if bucket == "" {
-			bucket = DefaultAttachmentBucket
-		}
-		if !addressableAttachmentBucket(bucket) {
-			return RuntimeArtifactListContext{}, ErrContentRejected
-		}
-	}
 	records, truncated, err := service.artifacts.ListRuntimeArtifacts(
 		ctx, principal.projectID, principal.actorID, bucket, prefix, request.Recursive, limit,
+	)
+	if err != nil {
+		return RuntimeArtifactListContext{}, service.sourceError(ctx, err, runtimeContextStageArtifactList)
+	}
+	files := make([]RuntimeArtifactFile, 0, len(records))
+	for _, record := range records {
+		files = append(files, RuntimeArtifactFile{
+			Name:       record.Name,
+			ByteLength: record.ByteLength,
+			MediaType:  record.MediaType,
+			ModifiedAt: record.ModifiedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	return RuntimeArtifactListContext{
+		SchemaVersion: RuntimeArtifactListSchemaVersion,
+		ProjectID:     principal.projectID,
+		Bucket:        bucket,
+		Files:         files,
+		Truncated:     truncated,
+	}, nil
+}
+
+// listConversationAttachments serves the bucketless listing (see List).
+func (service *RuntimeArtifactObjectService) listConversationAttachments(
+	ctx context.Context,
+	claim ContentClaim,
+	limit int32,
+) (RuntimeArtifactListContext, error) {
+	source, ok := service.artifacts.(AttachmentListingSource)
+	if !ok {
+		return RuntimeArtifactListContext{}, ErrContentRejected
+	}
+	authorization, principal, err := service.authorizeWithConversation(
+		ctx, claim, runtimeContextStageArtifactList,
+	)
+	if err != nil {
+		return RuntimeArtifactListContext{}, err
+	}
+	if !canonicalConversationIdentity(authorization.ConversationID) {
+		return RuntimeArtifactListContext{}, ErrContentUnauthorized
+	}
+	bucket, err := source.AttachmentBucket(ctx, principal.projectID)
+	if err != nil {
+		return RuntimeArtifactListContext{}, service.sourceError(ctx, err, runtimeContextStageArtifactList)
+	}
+	if bucket == "" {
+		bucket = DefaultAttachmentBucket
+	}
+	if !addressableAttachmentBucket(bucket) {
+		return RuntimeArtifactListContext{}, ErrContentRejected
+	}
+	records, truncated, err := source.ListAttachmentsNewestFirst(
+		ctx, principal.projectID, principal.actorID, bucket, authorization.ConversationID+"/", limit,
 	)
 	if err != nil {
 		return RuntimeArtifactListContext{}, service.sourceError(ctx, err, runtimeContextStageArtifactList)

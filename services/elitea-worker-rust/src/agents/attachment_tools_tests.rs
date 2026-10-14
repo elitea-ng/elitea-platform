@@ -253,8 +253,10 @@ use std::sync::Mutex;
 use super::{AttachmentSource, ListedAttachment, Listing, SourceError, attachment_id};
 use crate::agents::attachments::{AttachmentRead, AttachmentReference};
 
+const BUCKET: &str = "chat-attachments";
+
 fn stored(name: &str) -> AttachmentReference {
-    AttachmentReference::new("chat-attachments", name)
+    AttachmentReference::stored(BUCKET, name)
 }
 
 fn plain_document(text: &str) -> AttachmentDocument {
@@ -278,29 +280,49 @@ fn plain_document(text: &str) -> AttachmentDocument {
     }
 }
 
-/// A source over a fixed set of stored files that counts what it reads.
+/// A source over a fixed set of stored files, newest first, that counts what it
+/// reads. `page` limits how many the listing returns (the rest are reachable
+/// only by name), `unreadable` names files whose read fails.
 struct FakeSource {
-    files: Vec<(AttachmentReference, &'static str)>,
+    bucket: String,
+    files: Vec<(AttachmentReference, String)>,
     unreadable: Vec<AttachmentReference>,
     listing: Result<(), SourceError>,
-    truncated: bool,
+    page: Option<usize>,
     reads: Mutex<Vec<String>>,
     lists: Mutex<usize>,
 }
 
 impl FakeSource {
-    fn new(files: Vec<(&str, &'static str)>) -> Arc<Self> {
-        Arc::new(Self {
+    fn in_bucket(bucket: &str, files: Vec<(&str, String)>) -> Self {
+        Self {
+            bucket: bucket.to_owned(),
             files: files
                 .into_iter()
-                .map(|(name, text)| (stored(name), text))
+                .map(|(name, text)| (AttachmentReference::stored(bucket, name), text))
                 .collect(),
             unreadable: Vec::new(),
             listing: Ok(()),
-            truncated: false,
+            page: None,
             reads: Mutex::default(),
             lists: Mutex::default(),
-        })
+        }
+    }
+
+    fn new(files: Vec<(&str, &str)>) -> Arc<Self> {
+        Arc::new(Self::in_bucket(
+            BUCKET,
+            files
+                .into_iter()
+                .map(|(name, text)| (name, text.to_owned()))
+                .collect(),
+        ))
+    }
+
+    fn failing(error: SourceError) -> Arc<Self> {
+        let mut source = Self::in_bucket(BUCKET, Vec::new());
+        source.listing = Err(error);
+        Arc::new(source)
     }
 }
 
@@ -309,15 +331,17 @@ impl AttachmentSource for FakeSource {
     async fn list(&self) -> Result<Listing, SourceError> {
         *self.lists.lock().expect("lists") += 1;
         self.listing?;
+        let shown = self.page.unwrap_or(self.files.len());
         Ok(Listing {
             attachments: self
                 .files
                 .iter()
+                .take(shown)
                 .enumerate()
                 .map(|(index, (reference, text))| ListedAttachment {
                     reference: reference.clone(),
                     size_bytes: text.len() as u64,
-                    // Later files are older, to prove the order is by time.
+                    // The first file is the newest.
                     modified_at: {
                         let second = 86_399 - index.min(86_399);
                         format!(
@@ -329,23 +353,18 @@ impl AttachmentSource for FakeSource {
                     },
                 })
                 .collect(),
-            truncated: self.truncated,
+            truncated: shown < self.files.len(),
+            bucket: Some(self.bucket.clone()),
+            key_prefix: Some("conv/".to_owned()),
         })
     }
 
-    async fn reference_for(&self, name: &str) -> Option<AttachmentReference> {
-        self.files
-            .iter()
-            .map(|(reference, _)| reference)
-            .find(|reference| display_name(reference.name()) == name)
-            .cloned()
-    }
-
     async fn read(&self, reference: &AttachmentReference) -> AttachmentRead {
-        self.reads
-            .lock()
-            .expect("reads")
-            .push(reference.name().to_owned());
+        self.reads.lock().expect("reads").push(format!(
+            "{}:{}",
+            reference.bucket(),
+            reference.name()
+        ));
         if self.unreadable.contains(reference) {
             return AttachmentRead::Unreadable("encrypted");
         }
@@ -381,6 +400,10 @@ async fn tool_named(library: &Arc<AttachmentLibrary>, name: &str) -> Arc<dyn Too
         .expect("attachment tool")
 }
 
+fn read_count(source: &FakeSource) -> usize {
+    source.reads.lock().expect("reads").len()
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn a_library_without_a_source_binds_two_tools_and_with_one_binds_three() {
     let names = |library: &Arc<AttachmentLibrary>| {
@@ -410,39 +433,27 @@ async fn a_library_without_a_source_binds_two_tools_and_with_one_binds_three() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn list_attachments_names_every_stored_file_and_flags_the_current_message() {
+async fn list_attachments_is_newest_first_and_flags_the_current_message() {
     let source = FakeSource::new(vec![
-        ("conv/old.txt", "an earlier file"),
         ("conv/new.txt", "this message's file"),
+        ("conv/old.txt", "an earlier file"),
     ]);
     let library = sourced(Arc::clone(&source), &[stored("conv/new.txt")]);
     let list = tool_named(&library, "list_attachments").await;
     let answer = list.execute(ctx(), json!({})).await.expect("listing");
     assert_eq!(answer["count"], 2);
-    let by_name = |name: &str| {
-        answer["attachments"]
-            .as_array()
-            .expect("attachments")
-            .iter()
-            .find(|entry| entry["name"] == name)
-            .cloned()
-            .expect("listed")
-    };
-    assert_eq!(
-        by_name("old.txt")["attachment_id"],
-        attachment_id(&stored("conv/old.txt"))
-    );
-    assert_eq!(by_name("old.txt")["in_this_message"], false);
-    assert_eq!(by_name("new.txt")["in_this_message"], true);
-    assert_eq!(by_name("old.txt")["size_bytes"], 15);
-    assert_eq!(by_name("old.txt")["loaded"], false);
+    assert_eq!(answer["order"], "newest upload first");
+    assert_eq!(answer["attachments"][0]["name"], "new.txt");
+    assert_eq!(answer["attachments"][1]["name"], "old.txt");
+    assert_eq!(answer["attachments"][0]["in_this_message"], true);
+    assert_eq!(answer["attachments"][1]["in_this_message"], false);
+    assert_eq!(answer["attachments"][1]["size_bytes"], 15);
+    assert_eq!(answer["attachments"][1]["loaded"], false);
+    assert!(answer.get("truncated").is_none());
     // Listed once per run, however often it is asked.
     list.execute(ctx(), json!({})).await.expect("listing");
     assert_eq!(*source.lists.lock().expect("lists"), 1);
-    assert!(
-        source.reads.lock().expect("reads").is_empty(),
-        "listing reads nothing"
-    );
+    assert_eq!(read_count(&source), 0, "listing reads nothing");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -465,7 +476,7 @@ async fn a_file_is_read_the_first_time_a_tool_names_it_and_not_again() {
     }
     assert_eq!(
         source.reads.lock().expect("reads").as_slice(),
-        ["conv/old.txt"]
+        ["chat-attachments:conv/old.txt"]
     );
     // An id that is neither loaded nor listed is the library's own answer.
     let unknown = read
@@ -477,180 +488,196 @@ async fn a_file_is_read_the_first_time_a_tool_names_it_and_not_again() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn an_unreadable_stored_file_is_named_with_its_reason() {
-    let mut source = FakeSource::new(vec![("conv/locked.pdf", "x")]);
-    Arc::get_mut(&mut source)
-        .expect("sole owner")
-        .unreadable
-        .push(stored("conv/locked.pdf"));
-    let library = sourced(source, &[]);
+async fn an_unreadable_stored_file_is_named_with_its_reason_and_not_read_again() {
+    let mut source = FakeSource::in_bucket(BUCKET, vec![("conv/locked.pdf", "x".to_owned())]);
+    source.unreadable.push(stored("conv/locked.pdf"));
+    let source = Arc::new(source);
+    let library = sourced(Arc::clone(&source), &[]);
     let read = tool_named(&library, "read_attachment").await;
-    let answer = read
+    let id = attachment_id(&stored("conv/locked.pdf"));
+    for _ in 0..2 {
+        let answer = read
+            .execute(ctx(), json!({"attachment_id": id}))
+            .await
+            .expect("read");
+        assert_eq!(answer["error"], "attachment_unreadable");
+        assert_eq!(answer["reason"], "encrypted");
+        assert_eq!(answer["name"], "locked.pdf");
+    }
+    assert_eq!(
+        read_count(&source),
+        1,
+        "a failure is remembered for the run"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_missing_stored_file_is_attachment_not_found_not_a_refusal() {
+    // The listing names it but the read finds nothing: main said not found.
+    let mut source = FakeSource::in_bucket(BUCKET, vec![("conv/gone.txt", "x".to_owned())]);
+    source.files.clear();
+    source
+        .files
+        .push((stored("conv/other.txt"), "y".to_owned()));
+    let source = Arc::new(source);
+    let library = sourced(source, &[stored("conv/gone.txt")]);
+    let answer = tool_named(&library, "read_attachment")
+        .await
         .execute(
             ctx(),
-            json!({"attachment_id": attachment_id(&stored("conv/locked.pdf"))}),
+            json!({"attachment_id": attachment_id(&stored("conv/gone.txt"))}),
         )
         .await
         .expect("read");
-    assert_eq!(answer["error"], "attachment_unreadable");
-    assert_eq!(answer["reason"], "encrypted");
-    assert_eq!(answer["name"], "locked.pdf");
+    assert_eq!(answer["error"], "attachment_not_found");
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn a_search_without_an_id_loads_a_bounded_number_of_files_and_says_what_it_skipped() {
-    let texts: [&'static str; 10] = [
-        "alpha one",
-        "alpha two",
-        "alpha three",
-        "alpha four",
-        "alpha five",
-        "alpha six",
-        "alpha seven",
-        "alpha eight QUOKKAWORD",
-        "alpha nine",
-        "alpha ten",
-    ];
-    let files = texts
-        .iter()
-        .enumerate()
-        .map(|(index, text)| (format!("conv/file{index}.txt"), *text))
-        .collect::<Vec<_>>();
-    let source = FakeSource::new(
+fn lettered(files: &[(String, bool)]) -> (Arc<FakeSource>, Vec<String>) {
+    let mut source = FakeSource::in_bucket(
+        BUCKET,
         files
             .iter()
-            .map(|(name, text)| (name.as_str(), *text))
+            .map(|(name, _)| (name.as_str(), "alpha text".to_owned()))
             .collect(),
     );
+    for (name, readable) in files {
+        if !readable {
+            source.unreadable.push(stored(name));
+        }
+    }
+    let names = files.iter().map(|(name, _)| name.clone()).collect();
+    (Arc::new(source), names)
+}
+
+/// A search window that meets files it cannot read must not meet them again:
+/// the next search takes the next files. The unreadable are named once.
+#[tokio::test(flavor = "current_thread")]
+async fn unreadable_files_never_starve_a_later_searchs_window_and_are_named_once() {
+    // Newest first: 8 unreadable, then 10 readable.
+    let files: Vec<(String, bool)> = (0..18)
+        .map(|index| (format!("conv/f{index:02}.txt"), index >= 8))
+        .collect();
+    let (source, _) = lettered(&files);
     let library = sourced(Arc::clone(&source), &[]);
     let search = tool_named(&library, "search_attachment").await;
-    let answer = search
+
+    let first = search
         .execute(ctx(), json!({"query": "alpha"}))
         .await
         .expect("search");
-    assert_eq!(source.reads.lock().expect("reads").len(), MAX_SEARCH_LOADS);
-    assert!(
-        answer["not_searched"]
-            .as_str()
-            .is_some_and(|note| note.starts_with("2 more attachment(s) were not searched")),
-        "{answer}"
+    assert_eq!(
+        first["unreadable_attachments"]
+            .as_array()
+            .expect("named")
+            .len(),
+        8
     );
-    // Naming a file covers it: the skipped one is read on request.
-    let answer = search
-        .execute(
-            ctx(),
-            json!({"query": "alpha", "attachment_id": attachment_id(&stored("conv/file0.txt"))}),
-        )
+    assert!(first["results"].as_array().expect("results").is_empty());
+    assert_eq!(read_count(&source), 8);
+
+    let second = search
+        .execute(ctx(), json!({"query": "alpha"}))
         .await
         .expect("search");
-    assert_eq!(
-        source.reads.lock().expect("reads").len(),
-        MAX_SEARCH_LOADS + 1
-    );
-    assert_eq!(answer["results"].as_array().expect("results").len(), 1);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn a_listing_the_platform_refuses_is_an_answer_not_a_failure() {
-    let source = Arc::new(FakeSource {
-        files: Vec::new(),
-        unreadable: Vec::new(),
-        listing: Err(SourceError::NotAvailable),
-        truncated: false,
-        reads: Mutex::default(),
-        lists: Mutex::default(),
-    });
-    let library = sourced(source, &[]);
-    let list = tool_named(&library, "list_attachments").await;
-    let answer = list.execute(ctx(), json!({})).await.expect("answer");
-    assert_eq!(answer["error"], "attachments_not_available");
-}
-
-fn many(count: usize) -> Arc<FakeSource> {
-    let files: Vec<(String, &'static str)> = (0..count)
-        .map(|index| (format!("conv/file{index:04}.txt"), "body"))
-        .collect();
-    FakeSource::new(
-        files
-            .iter()
-            .map(|(name, text)| (name.as_str(), *text))
-            .collect(),
-    )
-}
-
-/// More than the old 200-file cut: every file is listed, oldest upload first.
-#[tokio::test(flavor = "current_thread")]
-async fn a_long_listing_names_every_file_oldest_upload_first() {
-    let library = sourced(many(450), &[]);
-    let list = tool_named(&library, "list_attachments").await;
-    let answer = list.execute(ctx(), json!({})).await.expect("listing");
-    assert_eq!(answer["count"], 450);
-    assert_eq!(answer["order"], "oldest upload first");
-    assert!(answer.get("truncated").is_none());
-    let first = &answer["attachments"][0];
-    // The fake gives later files earlier times, so the last file sorts first.
-    assert_eq!(first["name"], "file0449.txt");
     assert!(
-        first["uploaded_at"]
+        second.get("unreadable_attachments").is_none(),
+        "named once, not again"
+    );
+    assert_eq!(second["results"].as_array().expect("results").len(), 8);
+    assert_eq!(
+        read_count(&source),
+        16,
+        "the second window read the next 8, not the 8 that failed"
+    );
+    assert!(
+        second["not_searched"]
             .as_str()
-            .is_some_and(|time| time.starts_with("2026-10-"))
+            .is_some_and(|note| note.starts_with("2 more attachment(s)"))
     );
 }
 
-/// Past the hard cap, or when the platform says it returned a page, the answer
-/// says so and says how to reach a file that is not listed.
+/// Eight unreadable OLD files and readable newer ones: the newest-first window
+/// never even touches the old ones.
 #[tokio::test(flavor = "current_thread")]
-async fn a_listing_past_the_cap_or_truncated_by_the_platform_says_more_exist() {
-    let library = sourced(many(MAX_LISTED + 5), &[]);
+async fn readable_newer_files_are_searched_ahead_of_unreadable_old_ones() {
+    let files: Vec<(String, bool)> = (0..16)
+        .map(|index| (format!("conv/f{index:02}.txt"), index < 8))
+        .collect();
+    let (source, _) = lettered(&files);
+    let library = sourced(Arc::clone(&source), &[]);
+    let answer = tool_named(&library, "search_attachment")
+        .await
+        .execute(ctx(), json!({"query": "alpha"}))
+        .await
+        .expect("search");
+    assert_eq!(answer["results"].as_array().expect("results").len(), 8);
+    assert!(answer.get("unreadable_attachments").is_none());
+    assert_eq!(read_count(&source), 8);
+}
+
+/// A listing that fails during a search says so, beside the results from what
+/// was already loaded.
+#[tokio::test(flavor = "current_thread")]
+async fn a_listing_failure_during_search_is_reported_beside_the_loaded_results() {
+    let library = Arc::new(AttachmentLibrary::new(
+        vec![LibraryDocument::new(
+            "att-loaded".to_owned(),
+            "loaded.txt".to_owned(),
+            plain_document("alpha already here"),
+        )],
+        4_000,
+    ));
+    library.attach_source(FakeSource::failing(SourceError::Unavailable), &[]);
+    let answer = tool_named(&library, "search_attachment")
+        .await
+        .execute(ctx(), json!({"query": "alpha"}))
+        .await
+        .expect("search");
+    assert_eq!(answer["results"].as_array().expect("results").len(), 1);
+    assert_eq!(answer["listing"]["error"], "attachments_unavailable");
+    assert_eq!(answer["listing"]["retry"], true);
+}
+
+/// A page that left files out says so, and an older file past the page is still
+/// reachable by name, in the bucket the listing named.
+#[tokio::test(flavor = "current_thread")]
+async fn a_file_past_the_page_is_reachable_by_name_in_the_listed_bucket() {
+    let mut source = FakeSource::in_bucket(
+        "team-files",
+        (0..10)
+            .map(|index| {
+                (
+                    Box::leak(format!("conv/f{index}.txt").into_boxed_str()) as &str,
+                    "text".to_owned(),
+                )
+            })
+            .collect(),
+    );
+    source.page = Some(3);
+    let source = Arc::new(source);
+    let library = sourced(Arc::clone(&source), &[]);
     let list = tool_named(&library, "list_attachments").await;
     let answer = list.execute(ctx(), json!({})).await.expect("listing");
-    assert_eq!(answer["count"], MAX_LISTED);
+    assert_eq!(answer["count"], 3);
     assert_eq!(answer["truncated"], true);
     assert!(
         answer["more_not_listed"]
             .as_str()
             .expect("line")
-            .contains("not listed")
+            .contains("newest page")
     );
 
-    let mut source = many(3);
-    Arc::get_mut(&mut source).expect("sole owner").truncated = true;
-    let list = tool_named(&sourced(source, &[]), "list_attachments").await;
-    let answer = list.execute(ctx(), json!({})).await.expect("listing");
-    assert_eq!(answer["count"], 3);
-    assert_eq!(answer["truncated"], true);
-}
-
-/// A file the listing does not reach is still readable: this message's own
-/// files by id (no listing needed), and any file by its name.
-#[tokio::test(flavor = "current_thread")]
-async fn a_file_beyond_the_listing_is_still_found_by_id_or_by_name() {
-    let mut source = many(MAX_LISTED + 5);
-    // The newest file sorts last and is cut by the cap.
-    let beyond = format!("conv/file{:04}.txt", 0);
-    Arc::get_mut(&mut source).expect("sole owner").truncated = false;
-    let library = sourced(Arc::clone(&source), &[stored(&beyond)]);
     let read = tool_named(&library, "read_attachment").await;
-
-    let by_id = read
-        .execute(
-            ctx(),
-            json!({"attachment_id": attachment_id(&stored(&beyond))}),
-        )
-        .await
-        .expect("read");
-    assert!(by_id["content"].as_str().is_some(), "{by_id}");
-    assert_eq!(
-        *source.lists.lock().expect("lists"),
-        0,
-        "found without the listing"
-    );
-
     let by_name = read
-        .execute(ctx(), json!({"name": "file0003.txt"}))
+        .execute(ctx(), json!({"name": "f9.txt"}))
         .await
         .expect("read");
     assert!(by_name["content"].as_str().is_some(), "{by_name}");
+    assert_eq!(
+        source.reads.lock().expect("reads").as_slice(),
+        ["team-files:conv/f9.txt"],
+        "the listed bucket, not an assumed one"
+    );
     let unknown = read
         .execute(ctx(), json!({"name": "nope.txt"}))
         .await
@@ -660,19 +687,42 @@ async fn a_file_beyond_the_listing_is_still_found_by_id_or_by_name() {
     assert_eq!(neither["error"], "attachment_id or name is required");
 }
 
+/// This message's own files are readable by id with no listing at all.
+#[tokio::test(flavor = "current_thread")]
+async fn this_messages_files_are_found_by_id_without_the_listing() {
+    let source = FakeSource::new(vec![("conv/mine.txt", "mine")]);
+    let library = sourced(Arc::clone(&source), &[stored("conv/mine.txt")]);
+    let answer = tool_named(&library, "read_attachment")
+        .await
+        .execute(
+            ctx(),
+            json!({"attachment_id": attachment_id(&stored("conv/mine.txt"))}),
+        )
+        .await
+        .expect("read");
+    assert!(answer["content"].as_str().is_some());
+    assert_eq!(*source.lists.lock().expect("lists"), 0);
+}
+
+/// A name lookup needs the listing for the bucket; when it cannot be had the
+/// answer is "unavailable, retry", never a guess.
+#[tokio::test(flavor = "current_thread")]
+async fn a_name_lookup_with_no_listing_asks_for_a_retry() {
+    let library = sourced(FakeSource::failing(SourceError::Unavailable), &[]);
+    let answer = tool_named(&library, "read_attachment")
+        .await
+        .execute(ctx(), json!({"name": "report.txt"}))
+        .await
+        .expect("read");
+    assert_eq!(answer["error"], "attachments_unavailable");
+    assert_eq!(answer["retry"], true);
+}
+
 /// A listing that fails is "try again", never "no such attachment".
 #[tokio::test(flavor = "current_thread")]
 async fn a_failed_listing_during_a_read_or_search_asks_for_a_retry() {
     for error in [SourceError::Unavailable, SourceError::NotAvailable] {
-        let source = Arc::new(FakeSource {
-            files: Vec::new(),
-            unreadable: Vec::new(),
-            listing: Err(error),
-            truncated: false,
-            reads: Mutex::default(),
-            lists: Mutex::default(),
-        });
-        let library = sourced(source, &[]);
+        let library = sourced(FakeSource::failing(error), &[]);
         let id = attachment_id(&stored("conv/earlier.txt"));
         for (tool, args) in [
             ("read_attachment", json!({"attachment_id": id})),
@@ -697,4 +747,71 @@ async fn a_failed_listing_during_a_read_or_search_asks_for_a_retry() {
             }
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_listing_the_platform_refuses_is_an_answer_not_a_failure() {
+    let library = sourced(FakeSource::failing(SourceError::NotAvailable), &[]);
+    let list = tool_named(&library, "list_attachments").await;
+    let answer = list.execute(ctx(), json!({})).await.expect("answer");
+    assert_eq!(answer["error"], "attachments_not_available");
+}
+
+/// The byte cap is enforced on what was ACTUALLY loaded: a document that would
+/// pass it is refused with a sentence, kept out of the library and not retried.
+#[tokio::test(flavor = "current_thread")]
+async fn the_byte_cap_is_enforced_on_the_loaded_size() {
+    let nine_mib = "a".repeat(9 * 1_024 * 1_024);
+    let source = Arc::new(FakeSource::in_bucket(
+        BUCKET,
+        vec![
+            ("conv/a.txt", nine_mib.clone()),
+            ("conv/b.txt", nine_mib),
+            ("conv/c.txt", "small".to_owned()),
+        ],
+    ));
+    let library = sourced(Arc::clone(&source), &[]);
+    let read = tool_named(&library, "read_attachment").await;
+    let id = |name: &str| attachment_id(&stored(name));
+    let first = read
+        .execute(ctx(), json!({"attachment_id": id("conv/a.txt")}))
+        .await
+        .expect("read");
+    assert!(first["content"].as_str().is_some());
+    for _ in 0..2 {
+        let second = read
+            .execute(ctx(), json!({"attachment_id": id("conv/b.txt")}))
+            .await
+            .expect("read");
+        assert_eq!(second["error"], "attachment_not_loaded");
+        assert_eq!(second["reason"], "memory_limit");
+        assert!(second["hint"].as_str().expect("sentence").contains("limit"));
+    }
+    assert_eq!(read_count(&source), 2, "the refused document is read once");
+    // A document that still fits loads.
+    let third = read
+        .execute(ctx(), json!({"attachment_id": id("conv/c.txt")}))
+        .await
+        .expect("read");
+    assert!(third["content"].as_str().is_some());
+    assert_eq!(library.ids().len(), 2, "the refused one is not held");
+}
+
+/// Two calls for one file at once read it once and hold it once.
+#[tokio::test(flavor = "current_thread")]
+async fn concurrent_loads_of_one_file_read_and_hold_it_once() {
+    let source = FakeSource::new(vec![("conv/same.txt", "shared text")]);
+    let library = sourced(Arc::clone(&source), &[]);
+    let read = tool_named(&library, "read_attachment").await;
+    let id = attachment_id(&stored("conv/same.txt"));
+    let (a, b, c) = tokio::join!(
+        read.execute(ctx(), json!({"attachment_id": id})),
+        read.execute(ctx(), json!({"attachment_id": id})),
+        read.execute(ctx(), json!({"attachment_id": id})),
+    );
+    for answer in [a, b, c] {
+        assert!(answer.expect("read")["content"].as_str().is_some());
+    }
+    assert_eq!(read_count(&source), 1);
+    assert_eq!(library.ids().len(), 1);
 }

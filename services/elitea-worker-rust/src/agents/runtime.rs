@@ -582,7 +582,6 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
     ) -> Result<RedeemedOrdinaryNativeAssembly<'a>, RuntimeContextError> {
         // What the Attachments module needs to reach the conversation's stored
         // files later, taken before the request is dropped from the struct.
-        let conversation_id = self.request.payload.conversation_id.clone();
         let current_attachments =
             attachments::pending_attachment_reads(&self.request.payload.input_attachments);
         let attachment_read_tokens = AttachmentBudget::for_request(self.request).tool_read_tokens();
@@ -601,7 +600,6 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
         } = self;
         let context = client.redeem_elitea_context(&runtime_context).await?;
         Ok(RedeemedOrdinaryNativeAssembly {
-            conversation_id,
             current_attachments,
             attachment_read_tokens,
             attachment_library,
@@ -621,9 +619,8 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
 
 /// Admitted ordinary assembly after its sole claim-scoped PAT redemption.
 pub(crate) struct RedeemedOrdinaryNativeAssembly<'a> {
-    /// The request's conversation, and the references of this turn's own
+    /// The references of this turn's own
     /// attachments: the Attachments module's way to the conversation's files.
-    pub(super) conversation_id: Option<String>,
     pub(super) current_attachments: Vec<attachments::AttachmentReference>,
     /// How many tokens one `read_attachment` answer may carry this turn.
     pub(super) attachment_read_tokens: u64,

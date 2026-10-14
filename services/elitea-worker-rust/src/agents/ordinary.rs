@@ -236,7 +236,6 @@ impl OrdinaryNativeAgentAssembler {
         checkpoint_recovery: bool,
     ) -> Result<OrdinaryRunnerInputs, NativeAgentAssemblyError> {
         let RedeemedOrdinaryNativeAssembly {
-            conversation_id,
             current_attachments,
             attachment_read_tokens,
             attachment_library,
@@ -276,7 +275,6 @@ impl OrdinaryNativeAgentAssembler {
                 Arc::new(super::attachments::ClaimAttachmentSource::new(
                     Arc::clone(&self.platform),
                     Arc::clone(&runtime_context),
-                    conversation_id.as_deref(),
                     current_attachments.clone(),
                 )),
                 &current_attachments,
