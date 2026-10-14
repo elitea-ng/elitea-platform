@@ -1603,7 +1603,7 @@ mod tests {
     // Generous: these tests prove results, not speed; a 1M-row debug build on a
     // shared CI runner took over 5 s. Deadline behaviour has its own tests.
     fn clock() -> Deadline {
-        Deadline::after(std::time::Duration::from_secs(120))
+        Deadline::after(std::time::Duration::from_mins(2))
     }
 
     #[test]
