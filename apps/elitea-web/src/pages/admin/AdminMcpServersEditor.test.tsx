@@ -33,7 +33,7 @@ import { getListToolkitsQueryKey } from '@/shared/api/generated/toolkits/toolkit
 import { server } from '@/test/setup';
 
 import { AdminMcpServersEditor } from './AdminMcpServersEditor';
-import { normalizeCatalogueKey, resolveSecretForSave } from './adminMcpServerForm';
+import { normalizeCatalogueKey, resolveSecretForSave, validateTokenUrl } from './adminMcpServerForm';
 import { renderAdminRoute } from './__tests__/testRouter';
 
 const CATALOGUE = [
@@ -43,6 +43,7 @@ const CATALOGUE = [
     url: 'https://api.githubcopilot.com/mcp/',
     base_url: '',
     client_id: 'copilot-client',
+    token_url: 'https://github.com/login/oauth/access_token',
     client_secret: '******',
     timeout: 30,
     headers: { Authorization: 'Bearer {api_token}' },
@@ -215,6 +216,38 @@ describe('Admin › MCP Servers catalogue', () => {
     // Declared explicitly so the server's stdio refusal is a contract this
     // client is on the right side of, not a default it leans on.
     expect(body['transport']).toBe('http');
+  });
+
+  it('shows the current token_url and carries it on every save, so an unrelated edit keeps the pin', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminMcpServersEditor />);
+    await openEditFor('GitHub Copilot');
+
+    const pin = await screen.findByLabelText('OAuth token endpoint (optional)');
+    expect(pin).toHaveValue('https://github.com/login/oauth/access_token');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      expect(writes()).toHaveLength(1);
+    });
+    const body = writes()[0]?.body as Record<string, unknown>;
+    expect(body['token_url']).toBe('https://github.com/login/oauth/access_token');
+  });
+
+  it('refuses a placeholder token_url and a templated URL with a secret and no pin, before any write', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminMcpServersEditor />);
+    await openEditFor('GitHub Copilot');
+
+    const pin = await screen.findByLabelText('OAuth token endpoint (optional)');
+    fireEvent.change(pin, { target: { value: 'https://{tenant}.example/token' } });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByTestId('admin-mcp-server-dialog-error')).toHaveTextContent('exact https URL');
+
+    fireEvent.change(pin, { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Server URL'), { target: { value: 'https://{workspace}.example.com/mcp' } });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByTestId('admin-mcp-server-dialog-error')).toHaveTextContent('needs a token endpoint');
+    expect(writes()).toHaveLength(0);
   });
 
   it('invalidates every project toolkit catalogue after a save', async () => {
@@ -397,5 +430,18 @@ describe('resolveSecretForSave', () => {
     // Clearing WINS over a typed value: the checkbox disables the field, so a
     // stale keystroke must not resurrect a secret the operator chose to remove.
     expect(resolveSecretForSave('typed', true)).toBe('');
+  });
+});
+
+describe('validateTokenUrl', () => {
+  it('mirrors the server rule: exact https (loopback http), no placeholders, no dot segments', () => {
+    expect(validateTokenUrl('', 'https://a.example/mcp', true)).toBeUndefined();
+    expect(validateTokenUrl('https://idp.example/token', 'https://{w}.example/mcp', true)).toBeUndefined();
+    expect(validateTokenUrl('http://localhost:8080/token', '', true)).toBeUndefined();
+    for (const bad of ['http://idp.example/token', 'https://{t}.example/token', 'https://idp.example/a/../token', 'https://u:p@idp.example/t', 'not a url']) {
+      expect(validateTokenUrl(bad, '', true)).toBeDefined();
+    }
+    expect(validateTokenUrl('', 'https://{w}.example/mcp', true)).toContain('token endpoint');
+    expect(validateTokenUrl('', 'https://{w}.example/mcp', false)).toBeUndefined();
   });
 });

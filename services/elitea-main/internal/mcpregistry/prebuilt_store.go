@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -32,7 +33,7 @@ type PrebuiltStore struct {
 func NewPrebuiltStore(pool *pgxpool.Pool) *PrebuiltStore { return &PrebuiltStore{pool: pool} }
 
 const prebuiltColumns = `catalogue_key, display_name, server_url, base_url, client_id,
-	client_secret_ref, timeout_seconds, headers, config_schema, enabled`
+	client_secret_ref, timeout_seconds, headers, config_schema, enabled, token_url`
 
 // List returns every catalogue entry, ordered by display name.
 //
@@ -52,9 +53,32 @@ func (s *PrebuiltStore) List(ctx context.Context) ([]PrebuiltServer, error) {
 	}
 	defer rows.Close()
 
+	return readPrebuiltRows(rows)
+}
+
+// prebuiltRows is the part of a result set List reads.
+type prebuiltRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
+// errInvalidCatalogueRow marks a row that was read but cannot be used: its
+// stored JSON does not decode or it fails the entry's own validation.
+var errInvalidCatalogueRow = errors.New("mcpregistry: invalid catalogue row")
+
+// readPrebuiltRows collects every usable row. One bad row must not take the
+// whole catalogue (and every toolkit form that lists it) down: it is logged by
+// key and skipped, and the rest are returned. A failure to read the result set
+// itself is still an error.
+func readPrebuiltRows(rows prebuiltRows) ([]PrebuiltServer, error) {
 	entries := make([]PrebuiltServer, 0)
 	for rows.Next() {
 		entry, err := scanPrebuilt(rows)
+		if errors.Is(err, errInvalidCatalogueRow) {
+			slog.Error("mcp prebuilt catalogue: skipping an invalid row", "err", err)
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -221,8 +245,8 @@ func (s *PrebuiltStore) Upsert(ctx context.Context, entry PrebuiltServer) (Prebu
 	row := s.pool.QueryRow(ctx,
 		`INSERT INTO elitea_mcp.prebuilt_servers
 		     (catalogue_key, display_name, server_url, base_url, client_id,
-		      client_secret_ref, timeout_seconds, headers, config_schema, enabled)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		      client_secret_ref, timeout_seconds, headers, config_schema, enabled, token_url)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		 ON CONFLICT (catalogue_key) DO UPDATE SET
 		     display_name      = EXCLUDED.display_name,
 		     server_url        = EXCLUDED.server_url,
@@ -233,11 +257,13 @@ func (s *PrebuiltStore) Upsert(ctx context.Context, entry PrebuiltServer) (Prebu
 		     headers           = EXCLUDED.headers,
 		     config_schema     = EXCLUDED.config_schema,
 		     enabled           = EXCLUDED.enabled,
+		     token_url         = EXCLUDED.token_url,
 		     updated_at        = now()
 		 RETURNING `+prebuiltColumns,
 		key, display, strings.TrimSpace(entry.ServerURL), strings.TrimSpace(entry.BaseURL),
 		strings.TrimSpace(entry.ClientID), strings.TrimSpace(entry.ClientSecretRef),
-		entry.TimeoutSeconds, encodedHeaders, encodedConfigSchema, entry.Enabled)
+		entry.TimeoutSeconds, encodedHeaders, encodedConfigSchema, entry.Enabled,
+		strings.TrimSpace(entry.TokenURL))
 
 	return scanPrebuilt(row)
 }
@@ -284,6 +310,7 @@ func scanPrebuilt(row scanRow) (PrebuiltServer, error) {
 	if err := row.Scan(
 		&entry.Key, &entry.DisplayName, &entry.ServerURL, &entry.BaseURL, &entry.ClientID,
 		&entry.ClientSecretRef, &entry.TimeoutSeconds, &encodedHeaders, &encodedSchema, &entry.Enabled,
+		&entry.TokenURL,
 	); err != nil {
 		return PrebuiltServer{}, err
 	}
@@ -293,7 +320,7 @@ func scanPrebuilt(row scanRow) (PrebuiltServer, error) {
 	if len(encodedHeaders) > 0 {
 		if err := json.Unmarshal(encodedHeaders, &entry.Headers); err != nil {
 			return PrebuiltServer{}, fmt.Errorf(
-				"mcpregistry: catalogue entry %q has undecodable headers: %w", entry.Key, err)
+				"%w: catalogue entry %q has undecodable headers: %w", errInvalidCatalogueRow, entry.Key, err)
 		}
 	}
 	if len(encodedSchema) > 0 {
@@ -301,11 +328,11 @@ func scanPrebuilt(row scanRow) (PrebuiltServer, error) {
 		decoder.UseNumber()
 		if err := decoder.Decode(&entry.ConfigSchema); err != nil {
 			return PrebuiltServer{}, fmt.Errorf(
-				"mcpregistry: catalogue entry %q has undecodable config schema: %w", entry.Key, err)
+				"%w: catalogue entry %q has undecodable config schema: %w", errInvalidCatalogueRow, entry.Key, err)
 		}
 	}
 	if err := ValidatePrebuiltServer(entry); err != nil {
-		return PrebuiltServer{}, err
+		return PrebuiltServer{}, fmt.Errorf("%w: catalogue entry %q: %w", errInvalidCatalogueRow, entry.Key, err)
 	}
 	return entry, nil
 }

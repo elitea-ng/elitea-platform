@@ -33,7 +33,12 @@ package mcpregistry
 // file, which is exactly what `internal/api/v2/admin/config_values.go` refuses
 // for a platform-configuration row.
 
-import "strings"
+import (
+	"fmt"
+	"net"
+	"net/url"
+	"strings"
+)
 
 // PrebuiltServer is one catalogue entry.
 //
@@ -47,10 +52,13 @@ type PrebuiltServer struct {
 	BaseURL         string
 	ClientID        string
 	ClientSecretRef string
-	TimeoutSeconds  int
-	Headers         map[string]string
-	ConfigSchema    map[string]any
-	Enabled         bool
+	// TokenURL pins the OAuth token endpoint the entry's client secret may be
+	// sent to. Operator-set; empty means not pinned.
+	TokenURL       string
+	TimeoutSeconds int
+	Headers        map[string]string
+	ConfigSchema   map[string]any
+	Enabled        bool
 }
 
 // PrebuiltToolkitTypePrefix is the marker that makes a toolkit type a pre-built
@@ -129,8 +137,28 @@ func Resolve(
 	entry *PrebuiltServer,
 	secret ResolvedSecretLookup,
 ) map[string]any {
+	resolved, _ := ResolveReport(settings, toolkitType, entry, secret)
+	return resolved
+}
+
+// Filled names the fields ResolveReport took from the catalogue. It is the
+// only source of truth for whose credential a resolved value is: a value the
+// catalogue filled belongs to the operator, whatever else the settings hold.
+type Filled struct {
+	ClientID     bool
+	ClientSecret bool
+}
+
+// ResolveReport is Resolve plus a report of what the catalogue supplied.
+func ResolveReport(
+	settings map[string]any,
+	toolkitType string,
+	entry *PrebuiltServer,
+	secret ResolvedSecretLookup,
+) (map[string]any, Filled) {
+	var filled Filled
 	if !IsPrebuiltToolkitType(toolkitType) || entry == nil || !entry.Enabled {
-		return settings
+		return settings, filled
 	}
 
 	resolved := make(map[string]any, len(settings)+6)
@@ -146,6 +174,7 @@ func Resolve(
 	}
 	if isBlank(resolved["client_id"]) && entry.ClientID != "" {
 		resolved["client_id"] = entry.ClientID
+		filled.ClientID = true
 	}
 	if isBlank(resolved["timeout"]) && entry.TimeoutSeconds > 0 {
 		resolved["timeout"] = entry.TimeoutSeconds
@@ -164,10 +193,11 @@ func Resolve(
 		// error path say the credential is missing.
 		if value, err := secret(entry.ClientSecretRef); err == nil && value != "" {
 			resolved["client_secret"] = value
+			filled.ClientSecret = true
 		}
 	}
 
-	return resolved
+	return resolved, filled
 }
 
 // isBlank reports whether a settings value counts as "not supplied".
@@ -201,4 +231,59 @@ func isBlank(value any) bool {
 	default:
 		return false
 	}
+}
+
+// ValidateEndpointURL is the one rule for a URL the platform will send an
+// OAuth request to: absolute, no credentials, fragment or dot segment, https
+// (or http to a loopback host). The scheme and host come back normalized.
+func ValidateEndpointURL(rawURL string) (*url.URL, error) {
+	endpoint, err := url.ParseRequestURI(rawURL)
+	if err != nil ||
+		!endpoint.IsAbs() ||
+		endpoint.Host == "" ||
+		endpoint.User != nil ||
+		endpoint.Fragment != "" ||
+		endpoint.Opaque != "" {
+		return nil, fmt.Errorf("invalid MCP endpoint")
+	}
+
+	scheme := strings.ToLower(endpoint.Scheme)
+	host := strings.TrimSuffix(strings.ToLower(endpoint.Hostname()), ".")
+	if host == "" {
+		return nil, fmt.Errorf("invalid MCP endpoint host")
+	}
+	for _, segment := range strings.Split(endpoint.Path, "/") {
+		if segment == "." || segment == ".." {
+			return nil, fmt.Errorf("invalid MCP endpoint path")
+		}
+	}
+
+	switch scheme {
+	case "https":
+		// Custom HTTPS provider hosts are intentionally supported.
+	case "http":
+		if !isLoopbackHost(host) {
+			return nil, fmt.Errorf("plain HTTP MCP endpoints must use a loopback host")
+		}
+	default:
+		return nil, fmt.Errorf("unsupported MCP endpoint scheme")
+	}
+
+	endpoint.Scheme = scheme
+	return endpoint, nil
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// TokenURLRequired reports whether an entry holds a client secret behind a URL
+// template with no pinned token endpoint: the one shape whose secret can never
+// be released, because the user's own values select the host.
+func (p PrebuiltServer) TokenURLRequired() bool {
+	return p.ClientSecretRef != "" && strings.ContainsAny(p.ServerURL, "{}") && strings.TrimSpace(p.TokenURL) == ""
 }

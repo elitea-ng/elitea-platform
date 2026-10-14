@@ -29,14 +29,20 @@ package toolkits
 // would be a control that nothing honours, which is the exact fault
 // `mcpregistry.Resolve` records for `ssl_verify`.
 //
-// # Headers are a supported field with one honest limit
+// # Headers and the OAuth app
 //
-// `headers` is how a Remote MCP toolkit authenticates, and both the discovery
-// path here and the Python worker send them. The NATIVE Rust worker refuses a
-// toolkit that carries any header at all (`reject_unowned_auth`, mcp.rs:576) —
-// it accepts only a continuation token fetched with the claim. That is a
-// deliberate authority decision in that runtime, not an oversight here, so the
-// field is served with a description that says where it applies.
+// `headers` is how a Remote MCP toolkit authenticates with a static credential
+// (a PAT, an API key): the discovery path here, the Python worker and the
+// native Rust worker all send them, and a configured Authorization header wins
+// over a delegated token so discovery and execution act as one identity.
+// Transport-owned headers (Host, Content-Length, ...) are refused.
+//
+// `client_id` / `client_secret` / `scopes` name the OAuth app of the DELEGATED
+// authorization-code flow, exactly as in the SDK (which never runs a
+// client-credentials grant for MCP). The native worker accepts them, carries
+// the id and a masked secret marker on the authorization signal, and applies
+// the claim-fetched token; Main keeps the secret and does the exchange and
+// refresh. They are not a machine identity.
 
 import (
 	"context"
@@ -67,13 +73,11 @@ func remoteMCPSettingsProperties() map[string]any {
 			"example":     "https://your-mcp-server.com/mcp",
 		},
 		"headers": map[string]any{
-			"type":  "object",
-			"title": "Headers",
-			"description": "HTTP headers for authentication and configuration. " +
-				"The native agent runtime accepts no static header and refuses a " +
-				"toolkit that carries one.",
-			"tooltip": "HTTP headers to send with requests (e.g. Authorization)",
-			"default": map[string]any{},
+			"type":        "object",
+			"title":       "Headers",
+			"description": "HTTP headers for authentication and configuration",
+			"tooltip":     "HTTP headers to send with requests (e.g. Authorization)",
+			"default":     map[string]any{},
 		},
 		"client_id": map[string]any{
 			"type":        "string",

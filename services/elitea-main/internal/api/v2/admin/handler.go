@@ -13,7 +13,6 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -39,7 +38,7 @@ type Handler struct {
 	// The pre-built MCP server catalogue and the vault its client secrets are
 	// sealed into (mcp_prebuilt.go). Both nil unless WithPrebuiltMCPCatalogue
 	// is applied, and the catalogue routes answer 503 while either is.
-	prebuiltMCP      *mcpregistry.PrebuiltStore
+	prebuiltMCP      prebuiltCatalogue
 	prebuiltMCPVault PrebuiltSecretStore
 	// The typed identity provider definitions and the vault their secrets are
 	// sealed into (identity_providers.go). Both nil unless

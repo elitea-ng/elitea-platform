@@ -260,7 +260,7 @@ export function setAccessToken(
     client_id: getOrExisting('client_id'),
     client_reference: clientReference,
     project_id: getOrExisting('project_id'),
-    toolkit_id: getOrExisting('toolkit_id'),
+    toolkit_id: getOrExisting('toolkit_id'), resource_metadata_url: getOrExisting('resource_metadata_url'),
     // Not routed through getOrExisting: toolkitType is a positional
     // parameter of setAccessToken, not part of SetAccessTokenOAuthMeta.
     toolkit_type: toolkitType ?? existingToken.toolkit_type,

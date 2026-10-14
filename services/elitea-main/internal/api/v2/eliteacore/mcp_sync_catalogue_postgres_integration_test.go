@@ -133,7 +133,7 @@ func newMCPCataloguePool(t *testing.T) *pgxpool.Pool {
 		}
 		adminPool.Close()
 	})
-	for _, name := range []string{"0094_mcp_prebuilt_catalogue.sql", "0128_mcp_prebuilt_parameter_schema.sql"} {
+	for _, name := range []string{"0094_mcp_prebuilt_catalogue.sql", "0128_mcp_prebuilt_parameter_schema.sql", "0165_mcp_prebuilt_token_url.sql"} {
 		migration, err := os.ReadFile("../../../../migrations/shared/" + name)
 		require.NoError(t, err)
 		_, err = pool.Exec(ctx, string(migration))

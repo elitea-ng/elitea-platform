@@ -53,6 +53,34 @@ impl McpConnector for AuthorizationConnector {
     }
 }
 
+fn discovered_metadata() -> Value {
+    json!({
+        "authorization_servers": ["https://login.example.invalid/"],
+        "oauth_authorization_server": {
+            "authorization_endpoint": "https://login.example.invalid/authorize",
+            "token_endpoint": "https://login.example.invalid/token"
+        }
+    })
+}
+
+struct DiscoveringConnector;
+
+#[async_trait]
+impl McpConnector for DiscoveringConnector {
+    async fn connect(
+        &self,
+        config: &RemoteMcpConfig,
+    ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        Err(
+            super::mcp::mcp_authorization_required_with_metadata_fixture(
+                config,
+                "Bearer",
+                discovered_metadata(),
+            ),
+        )
+    }
+}
+
 struct TokenConnector;
 
 #[async_trait]
@@ -633,9 +661,18 @@ async fn malformed_scope_hints_and_inline_clients_fail_before_connecting() {
         value["scopes"] = scopes;
         cases.push(value);
     }
-    for field in ["client_id", "client_secret"] {
+    let mut secret_only = settings(&[]);
+    secret_only["client_secret"] = json!("orphan-secret");
+    cases.push(secret_only);
+    for (field, bad) in [
+        ("client_id", json!(7)),
+        ("client_id", json!({"id": "x"})),
+        ("client_secret", json!(7)),
+        ("client_secret", json!(true)),
+        ("client_secret", json!({"$secret": "vault-reference"})),
+    ] {
         let mut value = settings(&[]);
-        value[field] = json!("unowned-client-value");
+        value[field] = bad;
         cases.push(value);
     }
     for configured in cases {
@@ -1613,4 +1650,212 @@ fn platform_reserved_header_names_are_refused_in_direct_mcp_headers() {
             .expect("headers");
         assert_eq!(headers[name.to_ascii_lowercase()], "value");
     }
+}
+
+fn oauth_client_settings() -> Value {
+    let mut configured = settings(&["lookup_release"]);
+    configured["client_id"] = json!("registered-app");
+    configured["client_secret"] = json!("super-secret-client-value");
+    configured["scopes"] = json!(["mcp:read"]);
+    configured["configuration_uuid"] = json!("cfg-1");
+    configured
+}
+
+#[tokio::test]
+async fn an_oauth_app_toolkit_is_not_refused_and_applies_the_claim_token() {
+    let version = frozen("mcp", &oauth_client_settings());
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let tokens = Map::from_iter([(
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        json!({"access_token": "runtime-secret"}),
+    )]);
+    let toolsets =
+        materialize_mcp_toolsets_with_tokens(&snapshot, &TokenConnector, &policy(&[]), &tokens)
+            .await
+            .expect("client_id / client_secret no longer refuse the toolkit");
+    assert_eq!(toolsets.len(), 1);
+}
+
+async fn oauth_app_authorization(configured: Value, connector: &dyn McpConnector) -> Value {
+    let version = frozen("mcp", &configured);
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let (_, authorization) = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        connector,
+        &policy(&[]),
+        &Map::new(),
+    )
+    .await
+    .expect("authorization catalog");
+    authorization
+        .requirement_for("lookup_release")
+        .expect("guarded tool")
+        .resource_metadata()
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[tokio::test]
+async fn an_unauthorized_oauth_app_toolkit_names_its_app_its_id_and_never_the_secret() {
+    let metadata = oauth_app_authorization(oauth_client_settings(), &DiscoveringConnector).await;
+    assert_eq!(
+        metadata["provided_settings"],
+        json!({
+            "mcp_client_id": "registered-app",
+            "mcp_client_secret": "********",
+            "scopes": ["offline_access", "mcp:read"]
+        })
+    );
+    assert_eq!(metadata["configuration_uuid"], "cfg-1");
+    assert_eq!(metadata["toolkit_id"], "41", "Main loads the secret by id");
+    assert_eq!(
+        metadata["oauth_authorization_server"]["token_endpoint"],
+        "https://login.example.invalid/token"
+    );
+    assert!(!metadata.to_string().contains("super-secret-client-value"));
+}
+
+#[tokio::test]
+async fn without_discovered_metadata_no_authorization_server_is_invented() {
+    let metadata = oauth_app_authorization(oauth_client_settings(), &AuthorizationConnector).await;
+    assert!(
+        metadata.is_null(),
+        "no issuer is guessed from the MCP origin"
+    );
+}
+
+#[test]
+fn an_internal_builder_is_never_offered_an_oauth_app() {
+    let version = json!({
+        "tools": [{
+            "type": "mcp_elitea_internal_chat",
+            "toolkit_name": "Elitea Chat",
+            "name": "Elitea Chat",
+            "meta": {"mcp": true, "internal_builder": true},
+            "settings": {
+                "server_name": "mcp_elitea_internal_chat",
+                "url": "https://elitea.example.invalid/app/7/mcp/chat",
+                "headers": {"Authorization": "Bearer per-execution-actor-token"},
+                "client_id": "registered-app",
+                "client_secret": "super-secret-client-value",
+                "selected_tools": [],
+                "ssl_verify": true
+            }
+        }]
+    })
+    .as_object()
+    .cloned()
+    .expect("internal builder version");
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let reference = snapshot
+        .iter()
+        .find(|reference| reference.is_internal_builder())
+        .expect("internal builder reference");
+    let config = RemoteMcpConfig::parse_for_test(reference, &Map::new()).expect("config");
+    assert!(config.oauth_client_for_test().is_none());
+}
+
+#[tokio::test]
+async fn a_stored_token_is_used_on_the_next_turn_without_a_new_challenge() {
+    // Main materializes the saved grant under the canonical resource URL.
+    let version = frozen("mcp", &oauth_client_settings());
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let first = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &DiscoveringConnector,
+        &policy(&[]),
+        &Map::new(),
+    )
+    .await
+    .expect("first turn");
+    assert!(!first.1.is_empty(), "the first turn asks to authorize");
+    let tokens = Map::from_iter([(
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        json!({"access_token": "runtime-secret"}),
+    )]);
+    let second = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &TokenConnector,
+        &policy(&[]),
+        &tokens,
+    )
+    .await
+    .expect("next turn");
+    assert!(
+        second.1.is_empty(),
+        "no new challenge once the token is stored"
+    );
+    assert_eq!(second.0.len(), 1);
+}
+
+#[test]
+fn a_blank_oauth_client_is_treated_as_unset() {
+    let mut configured = settings(&["lookup_release"]);
+    configured["client_id"] = json!("  ");
+    configured["client_secret"] = json!("");
+    let version = frozen("mcp", &configured);
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let reference = snapshot.iter().next().expect("reference");
+    RemoteMcpConfig::parse_for_test(reference, &Map::new()).expect("blank client is unset");
+}
+
+#[test]
+fn a_secret_needs_a_saved_toolkit_but_a_public_client_does_not() {
+    // A frozen MCP row always carries an id today; this guards the parser on
+    // its own so a future unsaved toolkit cannot slip a secret marker through.
+    let confidential = oauth_client_settings();
+    let confidential = confidential.as_object().expect("settings object");
+    let error = super::mcp::parse_oauth_client(confidential, false)
+        .err()
+        .expect("an unsaved toolkit cannot name a confidential app");
+    assert_eq!(
+        error.code(),
+        McpMaterializationErrorCode::SavedToolkitRequired
+    );
+    assert!(
+        error
+            .visible_message()
+            .is_some_and(|message| message.contains("saved toolkit"))
+    );
+    assert!(super::mcp::parse_oauth_client(confidential, true).is_ok());
+
+    let mut public = confidential.clone();
+    public.insert("client_secret".to_owned(), Value::Null);
+    assert!(super::mcp::parse_oauth_client(&public, false).is_ok());
+}
+
+#[tokio::test]
+async fn an_oauth_app_that_would_break_the_metadata_limits_is_refused_not_dropped() {
+    let mut configured = oauth_client_settings();
+    // 64 scopes are admitted; the shared builder adds offline_access as a 65th.
+    configured["scopes"] = json!((0..64).map(|n| format!("scope{n}")).collect::<Vec<_>>());
+    let version = frozen("mcp", &configured);
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let error = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &DiscoveringConnector,
+        &policy(&[]),
+        &Map::new(),
+    )
+    .await
+    .err()
+    .expect("the app cannot be attached");
+    assert_eq!(
+        error.code(),
+        McpMaterializationErrorCode::OAuthAppUnattachable
+    );
+    assert!(error.authorization().is_none());
+    assert!(error.visible_message().is_some());
 }

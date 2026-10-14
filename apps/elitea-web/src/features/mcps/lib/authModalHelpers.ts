@@ -94,6 +94,7 @@ export interface ValidatedAuthServers {
   authServers: readonly string[];
   oauthAuthorizationServer: OAuthServerMetadata | undefined;
   oauthMetadata: Partial<OAuthServerMetadata> | null | undefined;
+  resourceMetadataUrl?: string | undefined;
 }
 
 /** Throws when the metadata this modal was opened with carries no usable authorization servers — an invariant violation, not a user-facing validation state. */
@@ -105,6 +106,7 @@ export function ensureAuthServersAvailable(mcpAuthMetadata: McpAuthMetadata | nu
     authServers: mcpAuthMetadata.authServers,
     oauthAuthorizationServer: mcpAuthMetadata.oauthAuthorizationServer,
     oauthMetadata: mcpAuthMetadata.oauthMetadata,
+    resourceMetadataUrl: mcpAuthMetadata.resourceMetadataUrl,
   };
 }
 
@@ -126,6 +128,7 @@ export function buildStartFlowOptions(params: BuildStartFlowOptionsParams): Star
     authorizationReferenceOnly: flowContext.authorizationReferenceOnly,
     resourceUrl: flowContext.toolkitType === 'mcp' || isPrebuildMcp ? flowContext.serverUrl : undefined,
     resourceMetadata: { authorization_servers: validated.authServers, oauth_authorization_server: asForFlow },
+    resourceMetadataUrl: validated.resourceMetadataUrl,
     oauthMetadata: validated.oauthMetadata ?? { token_endpoint: asForFlow?.token_endpoint, grant_types_supported: asForFlow?.grant_types_supported },
     clientId: params.credentials.clientId,
     clientSecret: params.credentials.clientSecret,

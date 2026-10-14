@@ -5181,7 +5181,9 @@ fn mcp_toolset_error(error: &crate::toolkits::McpMaterializationError) -> Native
             NativeAgentAssemblyErrorCode::InvalidConfiguration
         }
         McpMaterializationErrorCode::UnsupportedAuthority
-        | McpMaterializationErrorCode::RetiredSseEndpoint => {
+        | McpMaterializationErrorCode::RetiredSseEndpoint
+        | McpMaterializationErrorCode::SavedToolkitRequired
+        | McpMaterializationErrorCode::OAuthAppUnattachable => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
         McpMaterializationErrorCode::AuthorizationRequired => {
@@ -5194,11 +5196,9 @@ fn mcp_toolset_error(error: &crate::toolkits::McpMaterializationError) -> Native
             NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
     };
-    let message = if error.code() == McpMaterializationErrorCode::RetiredSseEndpoint {
-        crate::toolkits::RETIRED_SSE_MESSAGE
-    } else {
-        "the nested application MCP toolsets are unavailable"
-    };
+    let message = error
+        .visible_message()
+        .unwrap_or("the nested application MCP toolsets are unavailable");
     // #982: the requirement travels with the error so the lifecycle can name
     // the toolkit that challenged instead of failing the turn anonymously.
     NativeAgentAssemblyError::new(code, message).with_authorization(error.authorization().cloned())

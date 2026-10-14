@@ -11,7 +11,6 @@ import (
 	"io"
 	"log/slog"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -73,11 +72,22 @@ type Handler struct {
 	// The pre-built MCP server catalogue and the vault holding its client
 	// secrets (mcp_prebuilt_resolution.go). Both nil unless
 	// WithPrebuiltMCPCatalogue is applied, in which case resolution is a no-op.
-	prebuiltMCP      *mcpregistry.PrebuiltStore
-	prebuiltMCPVault PrebuiltSecretReader
-	delegatedAuth    DelegatedAuthToolkitSettingsResolver
-	dcrClients       MCPDCRClients
-	delegatedTokens  MCPDelegatedTokens
+	prebuiltMCP prebuiltLookup
+	mcpBindings mcpBindingCache // own-secret bindings, by (project, toolkit, URL)
+	// mcpCatalogueBindings holds operator-secret bindings by (entry, URL): a
+	// separate cache, so neither kind can evict the other.
+	mcpCatalogueBindings mcpBindingCache
+	mcpBindingClock      func() time.Time
+	// mcpDiscoveryFetchTimeout overrides the per-fetch discovery timeout (tests).
+	mcpDiscoveryFetchTimeout time.Duration
+	// mcpDiscoveryBudget and mcpExchangeBudget override the two OAuth proxy
+	// windows (tests).
+	mcpDiscoveryBudget time.Duration
+	mcpExchangeBudget  time.Duration
+	prebuiltMCPVault   PrebuiltSecretReader
+	delegatedAuth      DelegatedAuthToolkitSettingsResolver
+	dcrClients         MCPDCRClients
+	delegatedTokens    MCPDelegatedTokens
 	// Outbound e-mail for project invitations (users_write.go); nil means
 	// the invite result reports no delivery.
 	mailer InviteMailer
@@ -5118,55 +5128,7 @@ func (h *Handler) DeleteProjectIcon(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateMCPProxyURL(rawURL string) (*url.URL, error) {
-	endpoint, err := url.ParseRequestURI(rawURL)
-	if err != nil ||
-		!endpoint.IsAbs() ||
-		endpoint.Host == "" ||
-		endpoint.User != nil ||
-		endpoint.Fragment != "" ||
-		endpoint.Opaque != "" {
-		return nil, fmt.Errorf("invalid MCP endpoint")
-	}
-
-	scheme := strings.ToLower(endpoint.Scheme)
-	host := strings.TrimSuffix(strings.ToLower(endpoint.Hostname()), ".")
-	if host == "" {
-		return nil, fmt.Errorf("invalid MCP endpoint host")
-	}
-	if hasMCPProxyDotPathSegment(endpoint.Path) {
-		return nil, fmt.Errorf("invalid MCP endpoint path")
-	}
-
-	switch scheme {
-	case "https":
-		// Custom HTTPS provider hosts are intentionally supported.
-	case "http":
-		if !isLoopbackMCPHost(host) {
-			return nil, fmt.Errorf("plain HTTP MCP endpoints must use a loopback host")
-		}
-	default:
-		return nil, fmt.Errorf("unsupported MCP endpoint scheme")
-	}
-
-	endpoint.Scheme = scheme
-	return endpoint, nil
-}
-
-func hasMCPProxyDotPathSegment(path string) bool {
-	for _, segment := range strings.Split(path, "/") {
-		if segment == "." || segment == ".." {
-			return true
-		}
-	}
-	return false
-}
-
-func isLoopbackMCPHost(host string) bool {
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return mcpregistry.ValidateEndpointURL(rawURL)
 }
 
 func sameMCPProxyOrigin(first, second *url.URL) bool {

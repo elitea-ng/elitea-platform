@@ -232,7 +232,7 @@ func TestMCPAuthorizationServerMetadataStripsIssuerTrailingSlash(t *testing.T) {
 			}))
 			defer server.Close()
 			base = server.URL
-			metadata, err := NewHandler(nil, WithHTTPClient(server.Client())).mcpAuthorizationServerMetadata(t.Context(), base+suffix)
+			metadata, err := NewHandler(nil, WithHTTPClient(server.Client())).authorizationMetadataSource().authorizationServer(t.Context(), base+suffix)
 			require.NoError(t, err)
 			require.Equal(t, base+"/token", metadata["token_endpoint"])
 			for _, path := range paths {

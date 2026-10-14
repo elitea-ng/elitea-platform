@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -472,5 +473,82 @@ func TestMCPProxiesRejectMalformedAndOversizedRequests(t *testing.T) {
 			test.handler(eliteacore.NewHandler(nil), recorder, authenticatedOAuthRequest(t, test.body))
 			assertStatus(t, recorder, test.status)
 		})
+	}
+}
+
+func mcpDiscoveryTransport(t *testing.T, tokenForm *url.Values) roundTripFunc {
+	t.Helper()
+	return func(request *http.Request) (*http.Response, error) {
+		switch request.URL.String() {
+		case "https://mcp.example/.well-known/oauth-protected-resource/v1/mcp":
+			return oauthResponse(request, http.StatusOK,
+				`{"resource":"https://mcp.example/v1/mcp","authorization_servers":["https://login.example"]}`), nil
+		case "https://login.example/.well-known/oauth-authorization-server":
+			return oauthResponse(request, http.StatusOK, `{"issuer":"https://login.example",
+				"authorization_endpoint":"https://login.example/authorize",
+				"token_endpoint":"https://login.example/token"}`), nil
+		case "https://login.example/token":
+			if err := request.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			*tokenForm = request.Form
+			return oauthResponse(request, http.StatusOK, `{"access_token":"access","token_type":"Bearer"}`), nil
+		}
+		return oauthResponse(request, http.StatusNotFound, `{}`), nil
+	}
+}
+
+func mcpToolkitResolver() *delegatedAuthSettingsStub {
+	return &delegatedAuthSettingsStub{
+		found: true,
+		result: toolkitexecutionapp.DelegatedAuthToolkitSettings{
+			ToolkitType: "mcp",
+			Settings: map[string]any{
+				"url":           "https://mcp.example/v1/mcp",
+				"client_id":     "stored-client",
+				"client_secret": "stored-secret",
+			},
+		},
+	}
+}
+
+// The body is the exact shape the Rust worker's authorization signal makes the
+// browser send: a masked secret marker, the toolkit id and the discovered
+// token endpoint.
+func TestMCPOAuthProxyBindsDirectMCPSecretToTheDiscoveredTokenEndpoint(t *testing.T) {
+	var form url.Values
+	handler := eliteacore.NewHandler(nil,
+		eliteacore.WithHTTPClient(&http.Client{Transport: mcpDiscoveryTransport(t, &form)}),
+		eliteacore.WithDelegatedAuthToolkitSettingsResolver(mcpToolkitResolver()),
+	)
+	request := authenticatedOAuthRequest(t, `{
+		"token_endpoint":"https://login.example/token",
+		"code":"code","redirect_uri":"https://elitea.example/mcp-auth-callback",
+		"client_id":"stored-client","client_secret":"********","toolkit_id":"19"
+	}`)
+	recorder := httptest.NewRecorder()
+	handler.MCPOAuthProxy(recorder, request)
+	assertStatus(t, recorder, http.StatusOK)
+	if form.Get("client_secret") != "stored-secret" || form.Get("client_id") != "stored-client" {
+		t.Fatalf("stored credentials were not used: %#v", form)
+	}
+}
+
+func TestMCPOAuthProxyRefusesDirectMCPSecretAtAnUndiscoveredEndpoint(t *testing.T) {
+	var form url.Values
+	handler := eliteacore.NewHandler(nil,
+		eliteacore.WithHTTPClient(&http.Client{Transport: mcpDiscoveryTransport(t, &form)}),
+		eliteacore.WithDelegatedAuthToolkitSettingsResolver(mcpToolkitResolver()),
+	)
+	request := authenticatedOAuthRequest(t, `{
+		"token_endpoint":"https://collector.example/token",
+		"code":"code","redirect_uri":"https://elitea.example/mcp-auth-callback",
+		"client_secret":"********","toolkit_id":"19"
+	}`)
+	recorder := httptest.NewRecorder()
+	handler.MCPOAuthProxy(recorder, request)
+	assertStatus(t, recorder, http.StatusBadRequest)
+	if decodeObj(t, recorder)["error"] != "untrusted_token_endpoint" || form != nil {
+		t.Fatal("secret reached an endpoint the MCP server did not advertise")
 	}
 }
