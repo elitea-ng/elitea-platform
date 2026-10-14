@@ -129,8 +129,11 @@ var pythonVerifiedImportKeys = []string{
 //
 // `imagegen` (#864) is a claim-scoped family like `pptx`: it materialises only
 // where the Office host that reaches the gateway's images API is lent (the
-// ordinary agent path and a pipeline's nodes of the cloud worker), and it
-// serves the SDK's two tools, `generate_image` and `edit_image`, unchanged.
+// ordinary agent path, a pipeline's nodes and a direct toolkit call of the
+// cloud worker), and it serves the SDK's two tools, `generate_image` and
+// `edit_image`, unchanged. Both write artifacts, so a direct
+// `toolkit.call_tool.v1` (read-only tools only) lists them and refuses to run
+// them with that reason.
 //
 // `artifact` (#906) is the odd one: it materialises only where the live
 // execution claim is in scope (the ordinary agent path and a root pipeline's

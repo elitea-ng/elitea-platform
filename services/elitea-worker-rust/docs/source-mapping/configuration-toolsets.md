@@ -2591,8 +2591,8 @@ edge routes.
 Differences, stated: an answer item that is only a `url` is not downloaded;
 `n` is capped at 10; failures are sentences, one per cause. Main lists the type
 under the Rust worker (`rustNativeToolTypes`, the pinned Rust capability
-snapshot). The `image_generation` internal tool stays recognized-and-skipped:
-the SDK has no implementation of it (see SOURCE_PARITY).
+snapshot). The `image_generation` internal tool is **dropped: no SDK implementation**
+(owner programme decision): it stays recognized-and-skipped, see SOURCE_PARITY.
 
 #### `data_analysis` (blocked)
 

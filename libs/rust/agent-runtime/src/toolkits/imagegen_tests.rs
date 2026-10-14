@@ -29,6 +29,7 @@ use crate::platform::{
 };
 
 type Written = (String, String, String, bool);
+type Answer = Result<Vec<Option<Vec<u8>>>, OfficeHostError>;
 
 /// An in-memory bucket and a scripted images API.
 #[derive(Default)]
@@ -39,7 +40,9 @@ struct FakeHost {
     generated: Mutex<Vec<ImageGenerateRequest>>,
     edited: Mutex<Vec<ImageEditRequest>>,
     /// What the images API answers; `None` is two images.
-    answer: Mutex<Option<Result<Vec<Vec<u8>>, OfficeHostError>>>,
+    answer: Mutex<Option<Answer>>,
+    /// The 1-based write that fails, when set.
+    fail_write: Mutex<Option<usize>>,
     no_images: bool,
 }
 
@@ -51,16 +54,16 @@ impl FakeHost {
             .insert((bucket.to_owned(), name.to_owned()), bytes.to_vec());
     }
 
-    fn answer_with(&self, answer: Result<Vec<Vec<u8>>, OfficeHostError>) {
+    fn answer_with(&self, answer: Answer) {
         *self.answer.lock().expect("answer") = Some(answer);
     }
 
-    fn images(&self) -> Result<Vec<Vec<u8>>, OfficeHostError> {
+    fn images(&self) -> Answer {
         self.answer
             .lock()
             .expect("answer")
             .clone()
-            .unwrap_or_else(|| Ok(vec![vec![1, 1], vec![2, 2]]))
+            .unwrap_or_else(|| Ok(vec![Some(vec![1, 1]), Some(vec![2, 2])]))
     }
 }
 
@@ -88,12 +91,19 @@ impl OfficeToolHost for FakeHost {
         bytes: Vec<u8>,
         overwrite: bool,
     ) -> Result<OfficeObjectWritten, OfficeHostError> {
-        self.writes.lock().expect("writes").push((
-            bucket.to_owned(),
-            name.to_owned(),
-            media_type.to_owned(),
-            overwrite,
-        ));
+        let attempt = {
+            let mut writes = self.writes.lock().expect("writes");
+            writes.push((
+                bucket.to_owned(),
+                name.to_owned(),
+                media_type.to_owned(),
+                overwrite,
+            ));
+            writes.len()
+        };
+        if *self.fail_write.lock().expect("fail") == Some(attempt) {
+            return Err(OfficeHostError::new(OfficeFailure::Unreachable, "scripted"));
+        }
         let byte_length = bytes.len() as u64;
         self.put(bucket, name, &bytes);
         Ok(OfficeObjectWritten {
@@ -115,7 +125,7 @@ impl OfficeToolHost for FakeHost {
     async fn generate_images(
         &self,
         request: ImageGenerateRequest,
-    ) -> Result<Vec<Vec<u8>>, OfficeHostError> {
+    ) -> Result<Vec<Option<Vec<u8>>>, OfficeHostError> {
         self.generated.lock().expect("generated").push(request);
         self.images()
     }
@@ -123,7 +133,7 @@ impl OfficeToolHost for FakeHost {
     async fn edit_images(
         &self,
         request: ImageEditRequest,
-    ) -> Result<Vec<Vec<u8>>, OfficeHostError> {
+    ) -> Result<Vec<Option<Vec<u8>>>, OfficeHostError> {
         self.edited.lock().expect("edited").push(request);
         self.images()
     }
@@ -389,6 +399,12 @@ async fn every_failure_is_its_own_sentence() {
         (OfficeFailure::Unreachable, "could not be reached"),
         (OfficeFailure::TooLarge, "larger than the platform accepts"),
         (OfficeFailure::NoModel, "not available in this run"),
+        (
+            OfficeFailure::RateLimited,
+            "rate-limited right now. Try again shortly",
+        ),
+        (OfficeFailure::Timeout, "timed out"),
+        (OfficeFailure::Conflict, "reported a conflict"),
     ];
     for (kind, expected) in cases {
         rig.host
@@ -576,4 +592,73 @@ async fn materialization_needs_a_host_that_reaches_the_images_api() {
         .expect("an unserved toolkit is skipped, not fatal");
         assert!(toolsets.is_empty(), "skipped, not bound");
     }
+}
+
+#[tokio::test]
+async fn a_failed_write_mid_batch_answers_what_was_saved_and_the_failure() {
+    let rig = Rig::new().await;
+    rig.host
+        .answer_with(Ok((1..=4).map(|i| Some(vec![i])).collect()));
+    *rig.host.fail_write.lock().expect("fail") = Some(3);
+    let out = rig
+        .call("generate_image", json!({"prompt": "x", "n": 4}))
+        .await;
+    // The two saved images are still reported: the model must not re-generate
+    // what was billed.
+    assert_eq!(
+        out["artifacts"],
+        json!([
+            {"filepath": "/pics/generated-generate-0.png", "filename": "generated-generate-0.png"},
+            {"filepath": "/pics/generated-generate-1.png", "filename": "generated-generate-1.png"},
+        ])
+    );
+    let error = out["error"].as_str().expect("the failure sentence");
+    assert!(
+        error.starts_with("saved 2 of 4; image 3 could not be saved: "),
+        "{error}"
+    );
+    assert!(error.contains("generated-generate-2.png"), "{error}");
+    assert_eq!(rig.host.generated.lock().expect("generated").len(), 1);
+
+    // A failure on the first write has nothing to report: a plain sentence.
+    let rig = Rig::new().await;
+    *rig.host.fail_write.lock().expect("fail") = Some(1);
+    let out = rig.text("generate_image", json!({"prompt": "x"})).await;
+    assert!(out.starts_with("Could not save the image"), "{out}");
+}
+
+#[tokio::test]
+async fn the_file_index_is_the_position_in_the_answer_not_among_decoded_images() {
+    let rig = Rig::new().await;
+    // [url-only, inline]: the SDK enumerates `data`, so the inline image is -1.
+    rig.host.answer_with(Ok(vec![None, Some(vec![9])]));
+    let out = rig
+        .call("generate_image", json!({"prompt": "x", "n": 2}))
+        .await;
+    assert_eq!(
+        out,
+        json!({"artifacts": [
+            {"filepath": "/pics/generated-generate-1.png", "filename": "generated-generate-1.png"}
+        ]})
+    );
+    // Nothing inline at all is the SDK's error.
+    rig.host.answer_with(Ok(vec![None, None]));
+    assert_eq!(
+        rig.text("generate_image", json!({"prompt": "x"})).await,
+        "The image generation model returned no image data"
+    );
+}
+
+#[tokio::test]
+async fn a_file_name_the_upload_cannot_carry_is_named_before_any_call() {
+    let rig = Rig::new().await;
+    rig.host.put("pics", "a\"b.png", b"X");
+    let out = rig
+        .text(
+            "edit_image",
+            json!({"image": "/pics/a\"b.png", "prompt": "x"}),
+        )
+        .await;
+    assert!(out.contains("cannot be sent to the image model"), "{out}");
+    assert!(rig.host.edited.lock().expect("edited").is_empty());
 }

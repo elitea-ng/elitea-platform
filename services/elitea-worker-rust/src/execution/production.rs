@@ -352,6 +352,7 @@ impl ProductionAgentRuntime {
                 "the Office families are left out: the platform origin is unusable"
             );
         }
+        let images = model_facade.images();
         let assembler = Arc::new(
             NativeRuntimeAssembler::postgres(
                 Arc::clone(&platform),
@@ -363,7 +364,7 @@ impl ProductionAgentRuntime {
             )
             .with_sandbox(sandbox)
             .with_index_runtime(index_runtime.clone())
-            .with_office_runtime(office_runtime),
+            .with_office_runtime(office_runtime.clone()),
         );
         let clock = Arc::new(SystemUnixMillisClock);
         let agent: ProductionAgentProcessor = native_agent_delivery_processor(
@@ -395,7 +396,8 @@ impl ProductionAgentRuntime {
             DirectToolkitRuntime::default(),
             platform,
             index_runtime,
-        );
+        )
+        .with_office(office_runtime, images);
         let processor = Arc::new(ExecutionDeliveryProcessor::new(
             command_authenticator,
             agent,

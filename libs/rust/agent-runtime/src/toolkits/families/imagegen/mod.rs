@@ -361,6 +361,15 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> String {
         OfficeFailure::NoModel => {
             format!("Could not {action}: image generation is not available in this run.")
         }
+        OfficeFailure::RateLimited => format!(
+            "Could not {action}: the image model is rate-limited right now. Try again shortly."
+        ),
+        OfficeFailure::Timeout => {
+            format!("Could not {action}: the image model timed out. It may work if tried again.")
+        }
+        OfficeFailure::Conflict => format!(
+            "Could not {action}: the model gateway reported a conflict. It may work if tried again."
+        ),
         OfficeFailure::Unreachable => format!(
             "Could not {action}: the platform or the image model could not be reached. Tell the user it did not happen."
         ),
@@ -396,6 +405,21 @@ fn file_name(key: &str) -> &str {
     key.rsplit('/').next().unwrap_or(key)
 }
 
+/// A file name the image model's upload can carry: no quote, backslash or
+/// control character (they would end the multipart header line).
+fn upload_name_ok(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name
+            .chars()
+            .any(|c| c == '"' || c == '\\' || c.is_control())
+    {
+        return Err(format!(
+            "The file name `{name}` cannot be sent to the image model: it is empty or contains a quote, a backslash or a control character. Rename the file and try again."
+        ));
+    }
+    Ok(())
+}
+
 fn string_arg(arguments: &Value, key: &str) -> Option<String> {
     arguments
         .get(key)
@@ -419,24 +443,46 @@ impl ImageGenToolImpl {
             .ok_or_else(|| "An artifact bucket is not configured for this toolkit".to_owned())
     }
 
-    /// Write every image and answer the SDK's `{"artifacts": [...]}`.
-    async fn save(&self, images: Vec<Vec<u8>>, operation: &str) -> Result<Value, String> {
+    /// Write every inline image and answer the SDK's `{"artifacts": [...]}`.
+    ///
+    /// The file index is the image's position in the answer's `data` array
+    /// (the SDK enumerates it), not among the decoded images. A write that
+    /// fails after others succeeded answers what was saved AND the failure,
+    /// so the model never generates again what was already billed.
+    async fn save(&self, images: Vec<Option<Vec<u8>>>, operation: &str) -> Result<Value, String> {
         let bucket = self.bucket()?;
+        let total = images.iter().flatten().count();
+        if total == 0 {
+            return Err("The image generation model returned no image data".to_owned());
+        }
         let mut saved = Vec::new();
         for (index, bytes) in images.into_iter().enumerate() {
+            let Some(bytes) = bytes else { continue };
             let name = format!("{}{operation}-{index}.png", self.settings.name_prefix);
-            let written = self
+            match self
                 .host
                 .write_object(bucket, &name, "image/png", bytes, true)
                 .await
-                .map_err(|e| host_sentence(&format!("save the image `{name}`"), &e))?;
-            saved.push(json!({
-                "filepath": format!("/{}/{}", written.bucket, written.name),
-                "filename": file_name(&written.name),
-            }));
-        }
-        if saved.is_empty() {
-            return Err("The image generation model returned no image data".to_owned());
+            {
+                Ok(written) => saved.push(json!({
+                    "filepath": format!("/{}/{}", written.bucket, written.name),
+                    "filename": file_name(&written.name),
+                })),
+                Err(error) => {
+                    let sentence = host_sentence(&format!("save the image `{name}`"), &error);
+                    if saved.is_empty() {
+                        return Err(sentence);
+                    }
+                    return Ok(json!({
+                        "artifacts": saved,
+                        "error": format!(
+                            "saved {} of {total}; image {} could not be saved: {sentence} The images after it were not saved.",
+                            saved.len(),
+                            saved.len() + 1,
+                        ),
+                    }));
+                }
+            }
         }
         Ok(json!({"artifacts": saved}))
     }
@@ -482,6 +528,7 @@ impl ImageGenToolImpl {
         let image = string_arg(arguments, "image")
             .ok_or_else(|| "`image` (an artifact filepath) is required.".to_owned())?;
         let (image_bucket, image_key) = split_filepath(&bucket, &image)?;
+        upload_name_ok(file_name(image_key))?;
         let source = self
             .host
             .read_object(image_bucket, image_key, MAX_OFFICE_OBJECT_BYTES)
@@ -490,6 +537,7 @@ impl ImageGenToolImpl {
         let mask = match string_arg(arguments, "mask") {
             Some(mask) => {
                 let (mask_bucket, mask_key) = split_filepath(&bucket, &mask)?;
+                upload_name_ok(file_name(mask_key))?;
                 let bytes = self
                     .host
                     .read_object(mask_bucket, mask_key, MAX_OFFICE_OBJECT_BYTES)

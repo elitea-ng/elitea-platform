@@ -5,6 +5,7 @@ pub mod command_bus;
 pub mod control_grpc;
 pub(crate) mod embeddings_facade;
 pub(crate) mod extractor_client;
+pub(crate) mod gateway_call;
 pub(crate) mod images_facade;
 #[cfg(test)]
 mod images_host_tests;
@@ -13,6 +14,7 @@ pub mod input_content;
 mod input_content_tests;
 pub(crate) mod keepalive;
 pub(crate) mod model_facade;
+pub(crate) mod multipart;
 pub mod nats_jetstream;
 pub(crate) mod office_host;
 #[cfg(test)]

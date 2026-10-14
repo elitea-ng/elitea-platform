@@ -33,6 +33,7 @@ use elitea_llm_wire::refusal::Refusal;
 use serde_json::Value;
 
 use super::images_facade::{EditFile, ImageCall, ImagesClient, ImagesError};
+use super::multipart::Multipart;
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::indexing::tools::{LazyStepbackModel, generate_text};
 
@@ -214,29 +215,36 @@ pub(crate) fn model_failure(message: &str) -> OfficeHostError {
     }
 }
 
-/// An images-API failure as the host classifies it: the gateway's budget
-/// refusal is its own cause, as for a chat call.
+/// An images-API failure as the host classifies it: each real cause its own
+/// kind, so the tool names it (a rate limit is not a lost connection).
 pub(crate) fn images_failure(error: &ImagesError) -> OfficeHostError {
-    match error {
+    let (kind, reason) = match error {
         ImagesError::Refused { refusal } => match refusal {
             Refusal::BudgetExhausted(_) => {
-                OfficeHostError::new(OfficeFailure::BudgetRefused, "office_host.budget_refused")
+                (OfficeFailure::BudgetRefused, "office_host.budget_refused")
             }
             Refusal::Unauthorized | Refusal::Forbidden => {
-                OfficeHostError::new(OfficeFailure::AccessRefused, "office_host.images_refused")
+                (OfficeFailure::AccessRefused, "office_host.images_refused")
             }
-            Refusal::Rejected => {
-                OfficeHostError::new(OfficeFailure::InvalidRequest, "office_host.images_rejected")
-            }
-            _ => OfficeHostError::new(OfficeFailure::Unreachable, "office_host.images_unavailable"),
+            Refusal::Rejected => (OfficeFailure::InvalidRequest, "office_host.images_rejected"),
+            Refusal::RateLimited => (
+                OfficeFailure::RateLimited,
+                "office_host.images_rate_limited",
+            ),
+            Refusal::UpstreamTimeout => (OfficeFailure::Timeout, "office_host.images_timeout"),
+            Refusal::Conflict => (OfficeFailure::Conflict, "office_host.images_conflict"),
+            Refusal::Unavailable => (OfficeFailure::Unreachable, "office_host.images_unavailable"),
         },
-        ImagesError::TooLarge => {
-            OfficeHostError::new(OfficeFailure::TooLarge, "office_host.images_too_large")
-        }
+        ImagesError::TooLarge => (OfficeFailure::TooLarge, "office_host.images_too_large"),
+        ImagesError::InvalidFileName => (
+            OfficeFailure::InvalidRequest,
+            "office_host.images_file_name",
+        ),
         ImagesError::Transport | ImagesError::InvalidResponse(_) => {
-            OfficeHostError::new(OfficeFailure::Unreachable, "office_host.images_unavailable")
+            (OfficeFailure::Unreachable, "office_host.images_unavailable")
         }
-    }
+    };
+    OfficeHostError::new(kind, reason)
 }
 
 #[async_trait]
@@ -248,7 +256,7 @@ impl OfficeToolHost for ClaimOfficeHost {
     async fn generate_images(
         &self,
         request: ImageGenerateRequest,
-    ) -> Result<Vec<Vec<u8>>, OfficeHostError> {
+    ) -> Result<Vec<Option<Vec<u8>>>, OfficeHostError> {
         let Some((client, context)) = &self.images else {
             return Err(OfficeHostError::new(
                 OfficeFailure::NoModel,
@@ -270,29 +278,37 @@ impl OfficeToolHost for ClaimOfficeHost {
     async fn edit_images(
         &self,
         request: ImageEditRequest,
-    ) -> Result<Vec<Vec<u8>>, OfficeHostError> {
+    ) -> Result<Vec<Option<Vec<u8>>>, OfficeHostError> {
         let Some((client, context)) = &self.images else {
             return Err(OfficeHostError::new(
                 OfficeFailure::NoModel,
                 "office_host.no_images_api",
             ));
         };
+        let ImageEditRequest {
+            model,
+            prompt,
+            image,
+            mask,
+        } = request;
         let call = ImageCall {
-            model: &request.model,
-            prompt: &request.prompt,
+            model: &model,
+            prompt: &prompt,
             size: None,
             count: 1,
         };
+        // The image and mask bytes are moved down to the encoder, which copies
+        // them once, into the body.
         let image = EditFile {
-            name: &request.image.name,
-            bytes: &request.image.bytes,
+            name: image.name,
+            bytes: image.bytes,
         };
-        let mask = request.mask.as_ref().map(|mask| EditFile {
-            name: &mask.name,
-            bytes: &mask.bytes,
+        let mask = mask.map(|mask| EditFile {
+            name: mask.name,
+            bytes: mask.bytes,
         });
         client
-            .edit(context, &call, &image, mask.as_ref())
+            .edit(context, &call, image, mask)
             .await
             .map_err(|error| {
                 tracing::warn!(event = "imagegen_call_failed", error = %error, "an image edit call failed");
@@ -338,28 +354,21 @@ impl OfficeToolHost for ClaimOfficeHost {
         bytes: Vec<u8>,
         overwrite: bool,
     ) -> Result<OfficeObjectWritten, OfficeHostError> {
-        // A name that could end the multipart header line is never sent.
-        if !valid_object_key(name)
-            || name.contains(['"', '\\', '\r', '\n'])
-            || media_type.contains(['\r', '\n', '"'])
-        {
+        if !valid_object_key(name) {
             return Err(OfficeHostError::new(
                 OfficeFailure::InvalidRequest,
                 "office_host.invalid_name",
             ));
         }
         let mut request = self.object_request(Method::POST, bucket, None, overwrite)?;
-        let boundary = format!("elitea-office-{}", uuid::Uuid::new_v4().simple());
-        let mut body = Vec::with_capacity(bytes.len() + 256);
-        body.extend_from_slice(
-            format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: {media_type}\r\n\r\n"
-            )
-            .as_bytes(),
-        );
-        body.extend_from_slice(&bytes);
-        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-        let content_type = format!("multipart/form-data; boundary={boundary}");
+        let byte_length = bytes.len() as u64;
+        // The one multipart encoder refuses a name or media type that could
+        // end the header line.
+        let mut form = Multipart::new();
+        form.file("file", name, media_type, &bytes).map_err(|_| {
+            OfficeHostError::new(OfficeFailure::InvalidRequest, "office_host.invalid_name")
+        })?;
+        let (content_type, body) = form.finish();
         request.headers_mut().insert(
             header::CONTENT_TYPE,
             content_type.parse().map_err(|_| {
@@ -397,7 +406,7 @@ impl OfficeToolHost for ClaimOfficeHost {
             byte_length: reply
                 .get("size_bytes")
                 .and_then(Value::as_u64)
-                .unwrap_or(bytes.len() as u64),
+                .unwrap_or(byte_length),
         })
     }
 

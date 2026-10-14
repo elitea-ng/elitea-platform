@@ -50,6 +50,12 @@ pub enum OfficeFailure {
     BudgetRefused,
     /// The run binds no chat model (a pipeline node).
     NoModel,
+    /// The model gateway is rate-limiting the call; trying again shortly may work.
+    RateLimited,
+    /// The model call timed out; trying again may work.
+    Timeout,
+    /// The model gateway reported a conflict; trying again may work.
+    Conflict,
     /// The platform or model could not be reached.
     Unreachable,
 }
@@ -183,16 +189,18 @@ pub trait OfficeToolHost: Send + Sync {
 
     /// Generate images on the gateway's images API under the turn's own
     /// credential (the same budget, request log and execution attribution as
-    /// a chat call). Returns the decoded bytes of every image the answer
-    /// carried inline; an answer item that is only a URL is not fetched (the
-    /// runtime opens no connection of its own beyond the platform).
+    /// a chat call). Returns one slot per item of the answer's `data` array,
+    /// in order: the decoded bytes of an image carried inline, or `None` for
+    /// an item with none (a bare URL is not fetched: the runtime opens no
+    /// connection of its own beyond the platform). The position matters: the
+    /// SDK names files by it.
     ///
     /// The default is a host with no images API: the `imagegen` toolkit is
     /// then left out as unsupported before this is reached.
     async fn generate_images(
         &self,
         _request: ImageGenerateRequest,
-    ) -> Result<Vec<Vec<u8>>, OfficeHostError> {
+    ) -> Result<Vec<Option<Vec<u8>>>, OfficeHostError> {
         Err(OfficeHostError::new(
             OfficeFailure::NoModel,
             "office_host.no_images_api",
@@ -204,7 +212,7 @@ pub trait OfficeToolHost: Send + Sync {
     async fn edit_images(
         &self,
         _request: ImageEditRequest,
-    ) -> Result<Vec<Vec<u8>>, OfficeHostError> {
+    ) -> Result<Vec<Option<Vec<u8>>>, OfficeHostError> {
         Err(OfficeHostError::new(
             OfficeFailure::NoModel,
             "office_host.no_images_api",

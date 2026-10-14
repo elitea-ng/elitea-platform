@@ -562,11 +562,10 @@ impl PipelineNativeAgentAssembler {
                         Ok(host) => {
                             // The `imagegen` toolkit's images API (#864): lent
                             // wherever the worker holds a model facade.
-                            let host = match (self.model_facade.as_ref(), Arc::clone(context)) {
-                                (Some(facade), context) => {
-                                    host.with_images(facade.images(), context)
-                                }
-                                (None, _) => host,
+                            let host = if let Some(facade) = self.model_facade.as_ref() {
+                                host.with_images(facade.images(), Arc::clone(context))
+                            } else {
+                                host
                             };
                             authority.with_office(Arc::new(host))
                         }

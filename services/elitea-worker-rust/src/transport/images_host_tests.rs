@@ -267,7 +267,13 @@ async fn the_gateways_refusals_reach_the_model_as_their_own_sentences() {
         (StatusCode::BAD_REQUEST, "refused as invalid"),
         (StatusCode::NOT_FOUND, "refused as invalid"),
         (StatusCode::BAD_GATEWAY, "could not be reached"),
-        (StatusCode::TOO_MANY_REQUESTS, "could not be reached"),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate-limited right now. Try again shortly",
+        ),
+        (StatusCode::REQUEST_TIMEOUT, "timed out"),
+        (StatusCode::GATEWAY_TIMEOUT, "timed out"),
+        (StatusCode::CONFLICT, "reported a conflict"),
     ] {
         rig.gateway.refuse_with(status);
         let out = rig.call("generate_image", json!({"prompt": "x"})).await;
@@ -276,6 +282,201 @@ async fn the_gateways_refusals_reach_the_model_as_their_own_sentences() {
     }
     // Nothing was stored for a refused call.
     assert!(rig.api.get("e2e-proof-generate-0.png").is_none());
+}
+
+/// The failure table of the host, cause by cause: a rate limit, a timeout and
+/// a conflict are retryable causes of their own, and only a real connection
+/// or gateway failure is "unreachable".
+#[test]
+fn the_images_failure_table_names_each_cause() {
+    use super::images_facade::ImagesError;
+    use super::office_host::images_failure;
+    use elitea_agent_runtime::toolkits::OfficeFailure as F;
+    use elitea_llm_wire::refusal::{BudgetScope, Refusal as R};
+    let table = [
+        (
+            ImagesError::Refused {
+                refusal: R::BudgetExhausted(BudgetScope::Unscoped),
+            },
+            F::BudgetRefused,
+        ),
+        (
+            ImagesError::Refused {
+                refusal: R::Unauthorized,
+            },
+            F::AccessRefused,
+        ),
+        (
+            ImagesError::Refused {
+                refusal: R::Forbidden,
+            },
+            F::AccessRefused,
+        ),
+        (
+            ImagesError::Refused {
+                refusal: R::Rejected,
+            },
+            F::InvalidRequest,
+        ),
+        (
+            ImagesError::Refused {
+                refusal: R::RateLimited,
+            },
+            F::RateLimited,
+        ),
+        (
+            ImagesError::Refused {
+                refusal: R::UpstreamTimeout,
+            },
+            F::Timeout,
+        ),
+        (
+            ImagesError::Refused {
+                refusal: R::Conflict,
+            },
+            F::Conflict,
+        ),
+        (
+            ImagesError::Refused {
+                refusal: R::Unavailable,
+            },
+            F::Unreachable,
+        ),
+        (ImagesError::Transport, F::Unreachable),
+        (ImagesError::InvalidResponse("x"), F::Unreachable),
+        (ImagesError::TooLarge, F::TooLarge),
+        (ImagesError::InvalidFileName, F::InvalidRequest),
+    ];
+    for (error, expected) in table {
+        assert_eq!(images_failure(&error).kind(), expected, "{error:?}");
+    }
+}
+
+#[tokio::test]
+async fn an_unusable_upload_file_name_is_an_invalid_request_and_nothing_is_sent() {
+    let api = ObjectApi::new();
+    let gateway = Gateway::new();
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        Arc::clone(&api) as Arc<dyn Transport>,
+    ));
+    let images = ImagesClient::with_transport(
+        Arc::clone(&gateway) as Arc<dyn ModelGatewayTransport>,
+        Duration::from_secs(5),
+    );
+    let host = ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound())
+        .expect("host")
+        .with_images(
+            images,
+            Arc::new(ClaimScopedEliteaContext::fixture(42, "pat")),
+        );
+    let error = host
+        .edit_images(elitea_agent_runtime::toolkits::ImageEditRequest {
+            model: "m".into(),
+            prompt: "p".into(),
+            image: elitea_agent_runtime::toolkits::ImageEditInput {
+                name: "a\"b\r\n.png".into(),
+                bytes: vec![1],
+            },
+            mask: None,
+        })
+        .await
+        .expect_err("refused");
+    assert_eq!(
+        error.kind(),
+        elitea_agent_runtime::toolkits::OfficeFailure::InvalidRequest
+    );
+    assert_eq!(error.reason_code(), "office_host.images_file_name");
+    assert!(gateway.seen.lock().expect("seen").is_empty());
+}
+
+/// A direct toolkit call serves `imagegen` when the claim's Office host is
+/// lent (and says why a write tool still does not run), and reports the
+/// toolkit unsupported when it is not.
+#[tokio::test]
+async fn a_direct_call_serves_imagegen_when_the_host_is_lent() {
+    use crate::toolkits::{
+        DirectToolkitRequest, DirectToolkitRuntime, DirectToolkitRuntimeErrorCode,
+        IndexToolSupport, IndexToolsWithheld,
+    };
+    let rig_api = ObjectApi::new();
+    let gateway = Gateway::new();
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        Arc::clone(&rig_api) as Arc<dyn Transport>,
+    ));
+    let images = ImagesClient::with_transport(
+        Arc::clone(&gateway) as Arc<dyn ModelGatewayTransport>,
+        Duration::from_secs(5),
+    );
+    let host = ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound())
+        .expect("host")
+        .with_images(
+            images,
+            Arc::new(ClaimScopedEliteaContext::fixture(42, "pat")),
+        );
+    let authority = ArtifactToolAuthority::new(Arc::new(
+        crate::transport::platform_writer::HostOnlyPlatformWriter,
+    ) as Arc<dyn PlatformWriter>)
+    .with_office(Arc::new(host));
+    let config = serde_json::to_vec(&json!({
+        "id": 9, "type": "imagegen", "toolkit_name": "pics",
+        "settings": {"image_generation_model": "m", "bucket": "pics"}
+    }))
+    .expect("config");
+    let request = DirectToolkitRequest::parse_call(
+        "imagegen",
+        "9",
+        "generate_image",
+        &config,
+        br#"{"prompt":"a cat"}"#,
+        br#"{"toolkit_security":{}}"#,
+    )
+    .expect("request");
+    let withheld = || IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath);
+    let refused = DirectToolkitRuntime::default()
+        .execute_test(&request, "e", "c", withheld(), None)
+        .await
+        .expect_err("no host lent");
+    assert_eq!(
+        refused.code(),
+        DirectToolkitRuntimeErrorCode::UnsupportedToolkit
+    );
+
+    // Lent the host, the toolkit is served; its tools write artifacts, and
+    // `toolkit.call_tool.v1` runs read-only tools only, so the refusal now
+    // names THAT cause instead of an unsupported toolkit.
+    let effectful = DirectToolkitRuntime::default()
+        .execute_test(&request, "e", "c", withheld(), Some(&authority))
+        .await
+        .expect_err("an effectful tool on the read-only path");
+    assert_eq!(
+        effectful.code(),
+        DirectToolkitRuntimeErrorCode::EffectfulToolUnavailable
+    );
+    assert!(
+        gateway.seen.lock().expect("seen").is_empty(),
+        "no billed call"
+    );
+    let listed = DirectToolkitRuntime::default()
+        .discover(&request, Some(&authority))
+        .await
+        .expect("discovered");
+    let names: Vec<&str> = listed["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|t| t["name"].as_str().expect("name"))
+        .collect();
+    assert_eq!(names, ["generate_image", "edit_image"]);
+    assert_eq!(
+        DirectToolkitRuntime::default()
+            .discover(&request, None)
+            .await
+            .expect_err("no host lent")
+            .code(),
+        DirectToolkitRuntimeErrorCode::UnsupportedToolkit
+    );
 }
 
 #[tokio::test]
