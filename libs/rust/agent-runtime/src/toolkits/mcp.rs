@@ -59,6 +59,7 @@ const MAX_AUTH_CHALLENGE_BYTES: usize = 16 * 1_024;
 const AUTH_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_AUTH_METADATA_LIST_ITEMS: usize = 64;
 const MAX_AUTH_METADATA_STRING_BYTES: usize = 4 * 1_024;
+const MAX_OAUTH_CLIENT_BYTES: usize = 1_024;
 const MAX_STATIC_HEADERS: usize = 64;
 const MAX_HEADER_NAME_BYTES: usize = 256;
 const MAX_HEADER_VALUE_BYTES: usize = 16 * 1_024;
@@ -137,6 +138,17 @@ impl std::error::Error for McpMaterializationError {}
 pub const RETIRED_SSE_MESSAGE: &str = "the MCP server no longer serves the legacy HTTP+SSE \
      endpoint; HTTP+SSE is not supported, configure the server's streamable HTTP /mcp endpoint";
 
+/// The public half of a toolkit's `client_id` / `client_secret` pair.
+///
+/// The SDK uses these only to identify the OAuth app in the authorization-code
+/// flow (it never runs a client-credentials grant), and the worker follows:
+/// the secret value is never read into this process.
+struct OAuthClient {
+    client_id: String,
+    secret_present: bool,
+    configuration_uuid: Option<String>,
+}
+
 /// Validated, immutable connection settings for one direct remote MCP server.
 ///
 /// This value intentionally has no `Debug` implementation because endpoints
@@ -155,6 +167,10 @@ pub struct RemoteMcpConfig {
     requested_scopes: Vec<String>,
     static_headers: reqwest_mcp::header::HeaderMap,
     access_token: Option<Zeroizing<String>>,
+    /// The toolkit's registered OAuth app for the delegated browser flow.
+    /// Public identifiers only: the secret stays in Main, which performs the
+    /// code exchange and refresh, so only its presence is kept here.
+    oauth_client: Option<OAuthClient>,
     /// `None` when `enable_caching` is false: every materialization lists.
     tool_list_ttl: Option<Duration>,
 }
@@ -169,7 +185,7 @@ impl RemoteMcpConfig {
         }
         let settings = reference.settings().ok_or_else(invalid_configuration)?;
         let prebuilt = parse_mcp_authority(reference.tool_type())?;
-        reject_unowned_auth(settings)?;
+        let oauth_client = parse_oauth_client(settings)?;
         let requested_scopes = parse_requested_scopes(settings)?;
         let endpoint = parse_endpoint(settings)?;
         let timeout = Duration::from_secs(parse_bounded_integer(
@@ -234,6 +250,7 @@ impl RemoteMcpConfig {
             requested_scopes,
             static_headers,
             access_token,
+            oauth_client,
             // An internal builder's bearer is minted per execution, so its
             // listing could never be reused: caching it would only pin memory.
             tool_list_ttl: (enable_caching && !reference.is_internal_builder())
@@ -977,13 +994,38 @@ fn parse_mcp_authority(tool_type: &str) -> Result<bool, McpMaterializationError>
     }
 }
 
-fn reject_unowned_auth(settings: &Map<String, Value>) -> Result<(), McpMaterializationError> {
-    for key in ["client_id", "client_secret"] {
-        if settings.get(key).is_some_and(|value| !value.is_null()) {
-            return Err(unsupported_authority());
+/// Accepts the SDK's `client_id` / `client_secret` pair without reading the
+/// secret. A non-string value is a configuration error, not a way to smuggle
+/// a different authority.
+fn parse_oauth_client(
+    settings: &Map<String, Value>,
+) -> Result<Option<OAuthClient>, McpMaterializationError> {
+    let text = |key: &str| -> Result<Option<&str>, McpMaterializationError> {
+        match settings.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) if value.trim().is_empty() => Ok(None),
+            Some(Value::String(value))
+                if value.len() <= MAX_OAUTH_CLIENT_BYTES
+                    && !value.chars().any(char::is_control) =>
+            {
+                Ok(Some(value.as_str()))
+            }
+            Some(_) => Err(invalid_configuration()),
         }
-    }
-    Ok(())
+    };
+    let client_id = text("client_id")?;
+    let secret_present = match settings.get("client_secret") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(value)) => !value.is_empty(),
+        Some(Value::Object(_)) => true,
+        Some(_) => return Err(invalid_configuration()),
+    };
+    let configuration_uuid = text("configuration_uuid")?;
+    Ok(client_id.map(|client_id| OAuthClient {
+        client_id: client_id.to_owned(),
+        secret_present,
+        configuration_uuid: configuration_uuid.map(str::to_owned),
+    }))
 }
 
 fn parse_requested_scopes(
@@ -1253,7 +1295,7 @@ async fn authorization_required_with_metadata(
     .await
     .ok()
     .and_then(Result::ok);
-    let Some(resource_metadata) = resolution
+    if let Some(resource_metadata) = resolution
         .as_ref()
         .filter(|resolution| resolution.source.is_discovered())
         .and_then(|resolution| {
@@ -1263,15 +1305,39 @@ async fn authorization_required_with_metadata(
                 &config.requested_scopes,
             )
         })
-    else {
-        return error;
-    };
-    error.authorization = error.authorization.take().and_then(|requirement| {
-        requirement
-            .with_resource_metadata(resource_metadata)
-            .map(Box::new)
-    });
+    {
+        error.authorization = error.authorization.take().and_then(|requirement| {
+            requirement
+                .with_resource_metadata(resource_metadata)
+                .map(Box::new)
+        });
+    }
+    attach_oauth_client(config, &mut error);
     error
+}
+
+/// Carries the toolkit's registered OAuth app on the authorization signal. A
+/// requirement that cannot take it stays as it was: the user can still be
+/// asked to authorize, just without the pre-registered app.
+fn attach_oauth_client(config: &RemoteMcpConfig, error: &mut McpMaterializationError) {
+    let Some(client) = &config.oauth_client else {
+        return;
+    };
+    let Some(requirement) = error.authorization.take() else {
+        return;
+    };
+    let requirement = *requirement;
+    error.authorization = Some(Box::new(
+        requirement
+            .clone()
+            .with_oauth_client(
+                &client.client_id,
+                client.secret_present,
+                &config.requested_scopes,
+                client.configuration_uuid.as_deref(),
+            )
+            .unwrap_or(requirement),
+    ));
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -1279,7 +1345,9 @@ pub fn mcp_authorization_required_fixture(
     config: &RemoteMcpConfig,
     challenge: &str,
 ) -> McpMaterializationError {
-    authorization_required(config, Some(challenge))
+    let mut error = authorization_required(config, Some(challenge));
+    attach_oauth_client(config, &mut error);
+    error
 }
 
 fn resource_metadata_url(challenge: &str, endpoint: &str) -> Option<String> {

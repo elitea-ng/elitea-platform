@@ -48,6 +48,43 @@ impl DelegatedAuthorizationRequirement {
         self.with_resource_metadata(metadata)
     }
 
+    /// Attach the toolkit's OAuth app (client id, a masked secret marker and
+    /// scopes) to whatever metadata discovery produced, so the authorization
+    /// browser flow runs against the registered app. Main holds the secret and
+    /// performs the code exchange; the worker never mints a token from it.
+    pub fn with_oauth_client(
+        self,
+        client_id: &str,
+        secret_present: bool,
+        scopes: &[String],
+        configuration_uuid: Option<&str>,
+    ) -> Option<Self> {
+        let mut provided = json!({"mcp_client_id": client_id});
+        if secret_present {
+            provided["mcp_client_secret"] = json!(SECRET_PLACEHOLDER);
+        }
+        if !scopes.is_empty() {
+            provided["scopes"] = json!(scopes);
+        }
+        let mut metadata = if let Some(existing) = self.resource_metadata() {
+            existing.clone()
+        } else {
+            let mut origin = super::valid_https_url(self.server_url())?;
+            origin.set_path("");
+            origin.set_query(None);
+            json!({
+                "authorization_servers": [origin.to_string().trim_end_matches('/')],
+                "resource_name": self.toolkit_type(),
+            })
+        };
+        let object = metadata.as_object_mut()?;
+        object.insert("provided_settings".to_owned(), provided);
+        if let Some(uuid) = configuration_uuid {
+            object.insert("configuration_uuid".to_owned(), json!(uuid));
+        }
+        self.with_resource_metadata(metadata)
+    }
+
     /// Fetch only public endpoints. Do not fetch a token or call the toolkit.
     pub async fn resolve_public_metadata(&self) -> Self {
         let Some(metadata) = self.resource_metadata().and_then(Value::as_object) else {

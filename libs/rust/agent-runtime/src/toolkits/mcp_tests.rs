@@ -633,9 +633,14 @@ async fn malformed_scope_hints_and_inline_clients_fail_before_connecting() {
         value["scopes"] = scopes;
         cases.push(value);
     }
-    for field in ["client_id", "client_secret"] {
+    for (field, bad) in [
+        ("client_id", json!(7)),
+        ("client_id", json!({"id": "x"})),
+        ("client_secret", json!(7)),
+        ("client_secret", json!(true)),
+    ] {
         let mut value = settings(&[]);
-        value[field] = json!("unowned-client-value");
+        value[field] = bad;
         cases.push(value);
     }
     for configured in cases {
@@ -1613,4 +1618,69 @@ fn platform_reserved_header_names_are_refused_in_direct_mcp_headers() {
             .expect("headers");
         assert_eq!(headers[name.to_ascii_lowercase()], "value");
     }
+}
+
+fn oauth_client_settings() -> Value {
+    let mut configured = settings(&["lookup_release"]);
+    configured["client_id"] = json!("registered-app");
+    configured["client_secret"] = json!("super-secret-client-value");
+    configured["scopes"] = json!(["mcp:read"]);
+    configured["configuration_uuid"] = json!("cfg-1");
+    configured
+}
+
+#[tokio::test]
+async fn an_oauth_app_toolkit_is_not_refused_and_applies_the_claim_token() {
+    let version = frozen("mcp", &oauth_client_settings());
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let tokens = Map::from_iter([(
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        json!({"access_token": "runtime-secret"}),
+    )]);
+    let toolsets =
+        materialize_mcp_toolsets_with_tokens(&snapshot, &TokenConnector, &policy(&[]), &tokens)
+            .await
+            .expect("client_id / client_secret no longer refuse the toolkit");
+    assert_eq!(toolsets.len(), 1);
+}
+
+#[tokio::test]
+async fn an_unauthorized_oauth_app_toolkit_names_its_app_and_never_the_secret() {
+    let version = frozen("mcp", &oauth_client_settings());
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let (_, authorization) = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &AuthorizationConnector,
+        &policy(&[]),
+        &Map::new(),
+    )
+    .await
+    .expect("authorization catalog");
+    let requirement = authorization
+        .requirement_for("lookup_release")
+        .expect("guarded tool");
+    let metadata = requirement.resource_metadata().expect("metadata");
+    assert_eq!(
+        metadata["provided_settings"],
+        json!({"mcp_client_id": "registered-app", "mcp_client_secret": "********", "scopes": ["mcp:read"]})
+    );
+    assert_eq!(metadata["configuration_uuid"], "cfg-1");
+    assert!(!format!("{metadata}").contains("super-secret-client-value"));
+}
+
+#[test]
+fn a_blank_oauth_client_is_treated_as_unset() {
+    let mut configured = settings(&["lookup_release"]);
+    configured["client_id"] = json!("  ");
+    configured["client_secret"] = json!("");
+    let version = frozen("mcp", &configured);
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let reference = snapshot.iter().next().expect("reference");
+    RemoteMcpConfig::parse_for_test(reference, &Map::new()).expect("blank client is unset");
 }
