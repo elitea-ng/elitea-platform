@@ -488,13 +488,14 @@ func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter
 
 	// Same rule as storeObject: the retention window starts at the write,
 	// not at the bucket's frozen expires_at. See computeExpiresAt.
-	if _, err := h.repo.UpsertObject(ctx, repos.NewObjectInput{
+	row, err := h.repo.UpsertObject(ctx, repos.NewObjectInput{
 		BucketID:   grant.BucketID,
 		Key:        grant.Key,
 		ByteLength: n,
 		MediaType:  grant.ContentType,
 		ExpiresAt:  computeExpiresAt(bucketRow.RetentionDays),
-	}); err != nil {
+	})
+	if err != nil {
 		h.writeInternalCtx(ctx, w, "record object metadata", err)
 		return
 	}
@@ -540,6 +541,6 @@ func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter
 		"size_bytes": n,
 		"media_type": grant.ContentType,
 		"etag":       info.ETag,
-		"created_at": createdAtOf(info),
+		"created_at": row.CreatedAt,
 	})
 }

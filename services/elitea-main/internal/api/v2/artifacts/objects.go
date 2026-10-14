@@ -387,17 +387,17 @@ type storeObjectInput struct {
 //
 // The quota check runs after the write, not before, because the object's
 // exact byte length isn't known until the stream has been fully read.
-func (h *Handler) storeObject(ctx context.Context, in storeObjectInput) (storage.ObjectInfo, string, string) {
+func (h *Handler) storeObject(ctx context.Context, in storeObjectInput) (storage.ObjectInfo, repos.ObjectRow, string, string) {
 	info, err := h.store.Put(ctx, in.ref, in.body, storage.PutOptions{
 		ContentType:   in.contentType,
 		ContentLength: -1,
 	})
 	if err != nil {
 		if isMaxBytesError(err) {
-			return storage.ObjectInfo{}, "TooLarge", "object exceeds the project's max_object_bytes limit"
+			return storage.ObjectInfo{}, repos.ObjectRow{}, "TooLarge", "object exceeds the project's max_object_bytes limit"
 		}
 		code, message := h.classifyStorageError(ctx, "put object", err)
-		return storage.ObjectInfo{}, code, message
+		return storage.ObjectInfo{}, repos.ObjectRow{}, code, message
 	}
 
 	// The object's own retention window starts now. It does not inherit the
@@ -405,31 +405,32 @@ func (h *Handler) storeObject(ctx context.Context, in storeObjectInput) (storage
 	// restarts the window, because UpsertArtifactObject's ON CONFLICT branch
 	// refreshes expires_at; that matches an S3 lifecycle rule, which also
 	// measures age from the newest version.
-	if _, err := h.repo.UpsertObject(ctx, repos.NewObjectInput{
+	row, err := h.repo.UpsertObject(ctx, repos.NewObjectInput{
 		BucketID:   in.bucketRow.ID,
 		Key:        info.Key,
 		ByteLength: info.Size,
 		MediaType:  in.contentType,
 		ExpiresAt:  computeExpiresAt(in.bucketRow.RetentionDays),
-	}); err != nil {
+	})
+	if err != nil {
 		h.logInternal(ctx, "record object metadata", err)
-		return storage.ObjectInfo{}, "Internal", "record object metadata"
+		return storage.ObjectInfo{}, repos.ObjectRow{}, "Internal", "record object metadata"
 	}
 
 	if in.policy.MaxTotalBytes != nil {
 		total, err := h.repo.SumProjectBytes(ctx, in.projectID)
 		if err != nil {
 			h.logInternal(ctx, "sum project bytes", err)
-			return storage.ObjectInfo{}, "Internal", "sum project bytes"
+			return storage.ObjectInfo{}, repos.ObjectRow{}, "Internal", "sum project bytes"
 		}
 		if total > *in.policy.MaxTotalBytes {
 			_ = h.repo.DeleteObjects(ctx, in.bucketRow.ID, []string{info.Key})
 			_ = h.store.Delete(ctx, in.ref)
-			return storage.ObjectInfo{}, "TooLarge", "upload would exceed the project's storage quota"
+			return storage.ObjectInfo{}, repos.ObjectRow{}, "TooLarge", "upload would exceed the project's storage quota"
 		}
 	}
 
-	return info, "", ""
+	return info, row, "", ""
 }
 
 // UploadObject streams the multipart "file" part straight into
@@ -535,7 +536,7 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 		contentType = mimeFromExtension(filename)
 	}
 
-	info, code, message := h.storeObject(r.Context(), storeObjectInput{
+	info, row, code, message := h.storeObject(r.Context(), storeObjectInput{
 		projectID:   projectID,
 		bucketRow:   bucketRow,
 		ref:         ref,
@@ -562,7 +563,7 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 		"size_bytes": info.Size,
 		"media_type": contentType,
 		"etag":       info.ETag,
-		"created_at": createdAtOf(info),
+		"created_at": row.CreatedAt,
 	})
 }
 
@@ -853,15 +854,4 @@ func parseRangeHeader(h string) (storage.ByteRange, bool) {
 		}
 	}
 	return storage.ByteRange{Start: start, End: end}, true
-}
-
-// createdAtOf is the creation time reported in an upload response. The real S3
-// backend's Put returns only key, size and ETag, so info.LastModified is the
-// zero time and used to be serialised as "0001-01-01T00:00:00Z". The write has
-// just completed, so the server clock is the object's creation time.
-func createdAtOf(info storage.ObjectInfo) time.Time {
-	if info.LastModified.IsZero() {
-		return time.Now().UTC()
-	}
-	return info.LastModified
 }

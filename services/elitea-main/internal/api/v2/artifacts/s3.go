@@ -427,7 +427,7 @@ func (h *Handler) UploadObjectS3(w http.ResponseWriter, r *http.Request) {
 		contentType = mimeFromExtension(key)
 	}
 
-	info, code, message := h.storeObject(r.Context(), storeObjectInput{
+	info, _, code, message := h.storeObject(r.Context(), storeObjectInput{
 		projectID:   projectID,
 		bucketRow:   bucketRow,
 		ref:         ref,

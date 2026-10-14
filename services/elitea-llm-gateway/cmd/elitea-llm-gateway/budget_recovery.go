@@ -100,11 +100,7 @@ type budgetRecovery struct {
 	// when the gateway has no database, in which case recovery cannot run at
 	// all — governance needs the pool.
 	policy *policy.Store
-	// limiter is the RUNNING per-minute rate limiter. It is bound to the NATS
-	// counter as soon as the re-dial succeeds, independently of whether the
-	// budget engine assembles. nil when the gateway has no database.
-	limiter *policy.Limiter
-	logger  *slog.Logger
+	logger *slog.Logger
 	// build assembles the governance engine. It is nil in production, where
 	// attempt uses buildGovernance. It is a TEST SEAM: buildGovernance needs a
 	// live database pool, and without this seam the install half of the loop —
@@ -172,14 +168,6 @@ func (r budgetRecovery) attempt(ctx context.Context) bool {
 		r.logger.Warn("budget enforcement recovery: NATS is still unreachable; the gateway stays not-ready",
 			"err", err, "retry_in", budgetRecoveryInterval)
 		return false
-	}
-
-	// Per-minute rate limits need only the counter stream, not the governance
-	// engine, so they come back the moment NATS does.
-	if rc, ok := nc.(policy.RateCounter); ok && r.limiter != nil && !r.limiter.Enabled() {
-		r.limiter.Bind(rc)
-		r.logger.Info("GOVERNANCE RATE LIMITS RECOVERED: NATS is reachable and authored per-minute limits " +
-			"are enforced on the running gateway")
 	}
 
 	build := r.build

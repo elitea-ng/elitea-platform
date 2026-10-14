@@ -32,7 +32,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -90,7 +89,6 @@ func main() {
 	// /debug/vars on http.DefaultServeMux, which this process never serves, so
 	// every published variable was unreadable. /metrics serves an allowlist —
 	// see gatewayMetrics for why the full expvar surface stays unpublished.
-	mux.Handle("/metrics", makeMetricsHandler(gatewayMetrics()))
 
 	// Open the Postgres pool BEFORE the server: it backs the vault-backed
 	// Account (BFF.6), the governance/failmode store (FIX #0), and the
@@ -314,11 +312,6 @@ func main() {
 	// which is the one guard this needs: any future caller that boxes a typed
 	// nil *GovernanceStore into an interface is covered too, not just this
 	// call site. Measured against the standalone compose stack.
-	// Both arguments read the LIVE store, not the one this goroutine saw at
-	// boot: a background re-dial can install enforcement while the process runs,
-	// and a pod that recovers must return to the rotation without a restart
-	// (issue #315).
-	mux.HandleFunc("/readyz", makeReadyzHandler(plane, plane.unwired, rateLimitsCheck))
 
 	// The authored-governance plane (issue #218). It is a SEPARATE wiring from
 	// the budget engine above and has different preconditions:
@@ -366,7 +359,6 @@ func main() {
 			Subject: nats.RateLimitSubject,
 			Logger:  logger,
 		})
-		trackRateLimiter(policyLimiter)
 		if rc, ok := nc.(policy.RateCounter); ok && nc != nil {
 			policyLimiter.Bind(rc)
 			logger.Info("GOVERNANCE ENFORCEMENT ENABLED: authored definitions are read from "+
@@ -393,6 +385,15 @@ func main() {
 		logger.Warn("GOVERNANCE ENFORCEMENT DISABLED: no database pool, so no authored governance definition " +
 			"is read or enforced")
 	}
+
+	// Mounted here, after the limiter exists, so both can report its state.
+	natsConfigured := cfg.NATSURL != ""
+	mux.Handle("/metrics", makeMetricsHandler(gatewayMetrics(rateLimitsMetric(policyLimiter, natsConfigured)...)))
+	// Both arguments read the LIVE store, not the one this goroutine saw at
+	// boot: a background re-dial can install enforcement while the process runs,
+	// and a pod that recovers must return to the rotation without a restart
+	// (issue #315).
+	mux.HandleFunc("/readyz", makeReadyzHandler(plane, plane.unwired, rateLimitsCheck(policyLimiter, natsConfigured)))
 
 	// The operator's answer to "is the rule I saved actually in force?".
 	mux.HandleFunc("/governance/status",
@@ -505,6 +506,13 @@ func main() {
 	//
 	// The call is a no-op on every other posture: enforcement already wired,
 	// GATEWAY_NATS_URL unset, or no database pool.
+	// Rate limits recover on their OWN loop, independent of the budget engine:
+	// they need only the counter stream, and must come back even when budget
+	// enforcement was installed by another path or fails to assemble.
+	startRateLimitMonitor(ctx, rateLimitMonitor{
+		srv: srv, limiter: policyLimiter, logger: logger, interval: rateLimitProbeInterval,
+	}, natsConfigured)
+
 	startBudgetRecovery(ctx, budgetRecovery{
 		cfg:     cfg,
 		srv:     srv,
@@ -512,7 +520,6 @@ func main() {
 		plane:   plane,
 		handler: handler,
 		policy:  policyStore,
-		limiter: policyLimiter,
 		logger:  logger,
 	})
 
@@ -886,37 +893,47 @@ func recordBudgetEnforcementEnabled(enabled bool) {
 	}
 }
 
-// trackedLimiter is the running rate limiter the metrics and /readyz read.
-var trackedLimiter atomic.Pointer[policy.Limiter]
-
-func trackRateLimiter(l *policy.Limiter) { trackedLimiter.Store(l) }
-
-// metricRateLimitsEnforced is 1 only when per-minute limits are actually kept:
-// a counter is bound AND the last round-trip succeeded. 0 means disabled or
-// degraded (fail open).
-const metricRateLimitsEnforced = "gateway_rate_limits_enforced"
-
-var rateLimitsEnforced = expvar.Func(func() any {
-	if l := trackedLimiter.Load(); l != nil && l.Status() == policy.RateStatusOK {
-		return 1
-	}
-	return 0
-})
-
-func init() { expvar.Publish(metricRateLimitsEnforced, rateLimitsEnforced) }
-
-// rateLimitsCheck is the /readyz detail: present only when limits are not
-// being enforced. It never affects the status code.
-func rateLimitsCheck() (string, string) {
-	l := trackedLimiter.Load()
-	if l == nil {
+// rateLimitsCheck builds the /readyz detail for the limiter. It is
+// informational and never changes the status code. configured is whether NATS
+// is configured at all: a deployment that deliberately runs without NATS is
+// reported as off, not as an outage.
+func rateLimitsCheck(l *policy.Limiter, configured bool) func() (string, string) {
+	return func() (string, string) {
+		if l == nil {
+			return "", ""
+		}
+		if !configured {
+			return "rate_limits", "off (not configured)"
+		}
+		if st := l.Status(); st != policy.RateStatusEnforced {
+			return "rate_limits", string(st)
+		}
 		return "", ""
 	}
-	if st := l.Status(); st != policy.RateStatusOK {
-		return "rate_limits", string(st)
-	}
-	return "", ""
 }
+
+// rateLimitsMetric is the enforcement gauge: 1 when per-minute limits are
+// enforced, 0 when NATS is configured but the limiter is unbound or degraded.
+// It is only exported when NATS is configured; a deliberate NATS-less
+// deployment would otherwise look like a permanent outage.
+func rateLimitsMetric(l *policy.Limiter, configured bool) []gatewayMetric {
+	if l == nil || !configured {
+		return nil
+	}
+	return []gatewayMetric{{
+		name: metricRateLimitsEnforced,
+		kind: "gauge",
+		help: "1 when per-minute rate limits are enforced. 0 when the NATS counter is unbound or degraded (requests admitted fail-open).",
+		v: expvar.Func(func() any {
+			if l.Status() == policy.RateStatusEnforced {
+				return 1
+			}
+			return 0
+		}),
+	}}
+}
+
+const metricRateLimitsEnforced = "gateway_rate_limits_enforced"
 
 // gatewayMetric is one variable that GET /metrics serves.
 type gatewayMetric struct {
@@ -943,19 +960,14 @@ type gatewayMetric struct {
 // The model-map names come from llmproxy.ModelMapMetricNames, so the package
 // that publishes a counter also states its name. Nothing here copies a name
 // from another file.
-func gatewayMetrics() []gatewayMetric {
+func gatewayMetrics(extra ...gatewayMetric) []gatewayMetric {
 	metrics := []gatewayMetric{{
 		name: metricBudgetEnforcementEnabled,
 		kind: "gauge",
 		help: "1 when this gateway enforces budgets. 0 when enforcement is off.",
 		v:    budgetEnforcementEnabled,
 	}}
-	metrics = append(metrics, gatewayMetric{
-		name: metricRateLimitsEnforced,
-		kind: "gauge",
-		help: "1 when per-minute rate limits are enforced. 0 when disabled or degraded (NATS counter unavailable; requests admitted fail-open).",
-		v:    rateLimitsEnforced,
-	})
+	metrics = append(metrics, extra...)
 	// The SSE gauge the HPA has always named and nothing ever published.
 	// `kind: "gauge"` is load-bearing: every other entry here is a counter, and
 	// a Prometheus Adapter rule that rate()s a gauge produces a number that

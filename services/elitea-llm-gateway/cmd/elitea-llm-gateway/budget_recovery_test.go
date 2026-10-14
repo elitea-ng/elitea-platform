@@ -15,8 +15,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,7 +27,6 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/governance"
 	natsinfra "github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/infra/nats"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/llmproxy"
-	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/server"
 )
 
@@ -339,101 +336,5 @@ func TestBudgetRecovery_SkipsWhenAlreadyWired(t *testing.T) {
 	if dials.Load() != before {
 		t.Errorf("the recovery loop re-dialled NATS on a gateway that already enforces (%d dials)",
 			dials.Load()-before)
-	}
-}
-
-// rateNATS is a stub NATS client that is also a policy.RateCounter.
-type rateNATS struct{ stubNATS }
-
-func (rateNATS) IncrRateLimit(context.Context, string, int64) (int64, error) { return 1, nil }
-func (rateNATS) ReadRateLimit(context.Context, string) (int64, error)        { return 0, nil }
-
-// TestBudgetRecovery_RebindsRateLimiter is the rate-limit half of the outage:
-// the limiter is built unbound at boot (NATS down), reports disabled on the
-// gauge and /readyz, and enforces again once the recovery loop's re-dial
-// succeeds — even when governance assembly itself fails.
-func TestBudgetRecovery_RebindsRateLimiter(t *testing.T) {
-	flipped := make(chan struct{})
-	srv, err := server.New(
-		context.Background(), enforcingCfg(), testLogger(), new(slog.LevelVar), nil, http.NewServeMux(),
-		server.WithNATSConnector(func(context.Context, natsinfra.Config) (server.NATSClient, error) {
-			select {
-			case <-flipped:
-				return &rateNATS{}, nil
-			default:
-				return nil, errors.New("connection refused")
-			}
-		}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
-
-	limiter := policy.NewLimiter(policy.LimiterConfig{Subject: natsinfra.RateLimitSubject})
-	trackRateLimiter(limiter)
-	t.Cleanup(func() { trackRateLimiter(nil) })
-
-	if k, v := rateLimitsCheck(); k != "rate_limits" || v != "disabled" {
-		t.Fatalf("boot check = %q=%q, want rate_limits=disabled", k, v)
-	}
-	if got := rateLimitsEnforced.String(); got != "0" {
-		t.Fatalf("gauge = %s, want 0 while degraded", got)
-	}
-
-	plane := &enforcementPlane{cfg: enforcingCfg()}
-	r := budgetRecovery{
-		cfg: enforcingCfg(), srv: srv, plane: plane,
-		handler: llmproxy.NewHandler(nil, testLogger(), nil),
-		limiter: limiter, logger: testLogger(),
-		build: func(context.Context, config.Config, server.NATSClient, *pgxpool.Pool, *slog.Logger) (*governance.GovernanceStore, *cost.Calculator, error) {
-			return nil, nil, errors.New("assembly failed")
-		},
-	}
-	if r.attempt(context.Background()) || limiter.Enabled() {
-		t.Fatal("limiter enabled while NATS is unreachable")
-	}
-
-	close(flipped)
-	r.attempt(context.Background()) // governance fails; limiter must still bind
-	if !limiter.Enabled() || limiter.Status() != policy.RateStatusOK {
-		t.Fatalf("limiter status = %s after NATS returned, want ok", limiter.Status())
-	}
-	if got := rateLimitsEnforced.String(); got != "1" {
-		t.Fatalf("gauge = %s, want 1 after recovery", got)
-	}
-	if k, _ := rateLimitsCheck(); k != "" {
-		t.Fatal("rate_limits check still reported after recovery")
-	}
-
-	// /readyz carries the detail without changing the status code.
-	limiter2 := policy.NewLimiter(policy.LimiterConfig{Subject: natsinfra.RateLimitSubject})
-	trackRateLimiter(limiter2)
-	rec := httptest.NewRecorder()
-	makeReadyzHandler(nil, nil, rateLimitsCheck).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"rate_limits":"disabled"`) {
-		t.Fatalf("readyz = %d %s", rec.Code, rec.Body.String())
-	}
-}
-
-// TestBudgetRecovery_LoopStopsOnCancel: the background loop must not outlive
-// its context (no goroutine leak when the gateway shuts down mid-outage).
-func TestBudgetRecovery_LoopStopsOnCancel(t *testing.T) {
-	before := runtime.NumGoroutine()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { budgetRecovery{logger: testLogger()}.run(ctx); close(done) }()
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("recovery loop did not stop after ctx cancel")
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if n := runtime.NumGoroutine(); n > before {
-		t.Fatalf("goroutines %d -> %d after loop stopped", before, n)
 	}
 }

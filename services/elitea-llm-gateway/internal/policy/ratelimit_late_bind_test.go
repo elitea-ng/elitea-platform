@@ -51,8 +51,8 @@ func TestLimiter_BindLateStartsEnforcing(t *testing.T) {
 	l := lateLimiter()
 	def := RateLimitDef{Name: "r", RequestsPerMin: 1}
 	sub := Subject{ProjectID: 1}
-	if l.Status() != RateStatusDisabled || l.Enabled() {
-		t.Fatalf("status = %s, want disabled", l.Status())
+	if l.Status() != RateStatusUnbound || l.Enabled() {
+		t.Fatalf("status = %s, want unbound", l.Status())
 	}
 	for i := 0; i < 3; i++ {
 		if !l.Admit(context.Background(), def, sub, true).Allowed {
@@ -61,8 +61,8 @@ func TestLimiter_BindLateStartsEnforcing(t *testing.T) {
 	}
 	c := &togglingCounter{}
 	l.Bind(c)
-	if l.Status() != RateStatusOK {
-		t.Fatalf("status = %s, want ok", l.Status())
+	if l.Status() != RateStatusEnforced {
+		t.Fatalf("status = %s, want enforced", l.Status())
 	}
 	if !l.Admit(context.Background(), def, sub, true).Allowed {
 		t.Fatal("first request after bind refused")
@@ -72,33 +72,37 @@ func TestLimiter_BindLateStartsEnforcing(t *testing.T) {
 	}
 }
 
-// NATS dropping mid-run flips the status to degraded (fail open, counted) and
-// the next success flips it back.
-func TestLimiter_StatusFollowsCounterHealth(t *testing.T) {
+// Request-path failures fail open and are counted, but only Probe moves the
+// state.
+func TestLimiter_StatusFollowsProbeNotRequests(t *testing.T) {
 	c := &togglingCounter{}
 	l := lateLimiter()
 	l.Bind(c)
 	def := RateLimitDef{Name: "r", RequestsPerMin: 1}
 	sub := Subject{ProjectID: 1}
-	l.Admit(context.Background(), def, sub, true)
 	c.setDown(true)
 	if !l.Admit(context.Background(), def, sub, true).Allowed {
 		t.Fatal("must fail open while the counter is down")
 	}
-	if l.Status() != RateStatusDegraded || l.Degraded() != 1 {
-		t.Fatalf("status=%s degraded=%d, want degraded/1", l.Status(), l.Degraded())
+	if l.Status() != RateStatusEnforced || l.Degraded() != 1 {
+		t.Fatalf("status=%s degraded=%d: request must count but not flip state", l.Status(), l.Degraded())
+	}
+	l.Probe(context.Background())
+	if l.Status() != RateStatusDegraded {
+		t.Fatalf("status = %s after failed probe", l.Status())
 	}
 	c.setDown(false)
-	l.Admit(context.Background(), def, sub, true)
-	if l.Status() != RateStatusOK {
-		t.Fatalf("status = %s after recovery, want ok", l.Status())
+	l.Probe(context.Background())
+	if l.Status() != RateStatusEnforced {
+		t.Fatalf("status = %s after recovery", l.Status())
 	}
 }
 
 func TestLimiter_NilSafeStatus(t *testing.T) {
 	var l *Limiter
-	if l.Status() != RateStatusDisabled {
+	if l.Status() != RateStatusUnbound {
 		t.Fatal("nil limiter must report disabled")
 	}
 	l.Bind(&togglingCounter{}) // must not panic
+	l.Probe(context.Background())
 }

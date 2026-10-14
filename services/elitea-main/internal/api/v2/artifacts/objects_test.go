@@ -650,8 +650,8 @@ func TestObjectKeyWithSlash_RoundTripsThroughRealRouter(t *testing.T) {
 	}
 }
 
-// timelessObjectStore mimics the real S3 backend, whose Put reports no
-// LastModified; the upload response used to carry created_at year 1.
+// A store whose Put reports no LastModified (the real S3 backend) must not
+// leak the zero time: created_at comes from the persisted row.
 type timelessObjectStore struct{ *fakeStore }
 
 func (s timelessObjectStore) Put(ctx context.Context, ref storage.ObjectRef, body io.Reader, opts storage.PutOptions) (storage.ObjectInfo, error) {
@@ -660,13 +660,10 @@ func (s timelessObjectStore) Put(ctx context.Context, ref storage.ObjectRef, bod
 	return info, err
 }
 
-func TestUploadObject_CreatedAtIsNeverZeroTime(t *testing.T) {
-	_, repo, _ := newObjectTestHandler(t)
-	h := artifacts.NewHandler(repo, timelessObjectStore{newFakeStore()})
-	before := time.Now().Add(-time.Second)
-
+func uploadCreatedAt(t *testing.T, h *artifacts.Handler, query string) time.Time {
+	t.Helper()
 	rr := httptest.NewRecorder()
-	newObjectTestRouter(h).ServeHTTP(rr, newUploadRequest(t, "/objects/1/reports", "a.txt", []byte("x")))
+	newObjectTestRouter(h).ServeHTTP(rr, newUploadRequest(t, "/objects/1/reports"+query, "a.txt", []byte("x")))
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("status = %d; body=%s", rr.Code, rr.Body.String())
 	}
@@ -676,7 +673,31 @@ func TestUploadObject_CreatedAtIsNeverZeroTime(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.CreatedAt.Before(before) || body.CreatedAt.After(time.Now().Add(time.Second)) {
-		t.Fatalf("created_at = %v, want about now; body=%s", body.CreatedAt, rr.Body.String())
+	if body.CreatedAt.IsZero() || body.CreatedAt.Year() < 2000 {
+		t.Fatalf("created_at = %v; body=%s", body.CreatedAt, rr.Body.String())
+	}
+	return body.CreatedAt
+}
+
+func TestUploadObject_CreatedAtIsThePersistedRow(t *testing.T) {
+	_, repo, _ := newObjectTestHandler(t)
+	h := artifacts.NewHandler(repo, timelessObjectStore{newFakeStore()})
+	first := uploadCreatedAt(t, h, "")
+	row := repo.lastUpserted
+	if !first.Equal(row.CreatedAt) {
+		t.Fatalf("created_at = %v, row holds %v", first, row.CreatedAt)
+	}
+}
+
+// With overwrite the response reports what the row holds: the original
+// created_at, not a fresh clock reading.
+func TestUploadObject_OverwriteKeepsRowCreatedAt(t *testing.T) {
+	_, repo, _ := newObjectTestHandler(t)
+	h := artifacts.NewHandler(repo, timelessObjectStore{newFakeStore()})
+	first := uploadCreatedAt(t, h, "")
+	time.Sleep(5 * time.Millisecond)
+	second := uploadCreatedAt(t, h, "?overwrite=true")
+	if !second.Equal(first) {
+		t.Fatalf("overwrite created_at = %v, want the row's original %v", second, first)
 	}
 }
