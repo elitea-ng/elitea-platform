@@ -4645,3 +4645,597 @@ fn the_index_tool_host_is_built_only_for_a_snapshot_carrying_a_catalog() {
     assert!(!carries(serde_json::json!([])));
     assert!(!carries(serde_json::json!([github(Some(&catalog), "aha")])));
 }
+
+/// Graph-level proofs for the `planner`, `lazy_tools_mode` (Smart Tools
+/// Selection) and `attachments` toggles: each is driven through the real
+/// ordinary assembler, the ADK agent loop and the test model gateway, and read
+/// back from the requests the model actually received.
+mod internal_tools_graph {
+    use super::*;
+
+    const UUID: &str = "0d1f9a52-1c6e-4f7e-9f3a-5a3b2c1d0e9f";
+
+    fn call_response(call_id: &str, name: &str, arguments: &serde_json::Value) -> Response<Body> {
+        let first = serde_json::json!({"choices":[{"delta":{"tool_calls":[{
+            "index":0,"id":call_id,"type":"function",
+            "function":{"name":name,"arguments":arguments.to_string()}}]},"finish_reason":null}]});
+        let raw = format!(
+            "data: {first}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":3,\"completion_tokens\":2}}}}\n\ndata: [DONE]\n\n"
+        );
+        test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
+    }
+
+    fn with_toggles(
+        kind: AgentExecutionKind,
+        toggles: &[&str],
+    ) -> super::super::request::AgentExecutionRequest {
+        let mut request = ordinary_request(kind);
+        request.payload.internal_tools = toggles.iter().map(|name| (*name).to_owned()).collect();
+        request
+    }
+
+    /// Run one turn to its end, returning nothing: the proof is in what the
+    /// model was sent.
+    async fn run(
+        assembler: &OrdinaryNativeAgentAssembler,
+        request: &super::super::request::AgentExecutionRequest,
+    ) {
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                request,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .expect("assembly");
+        invocation.project_start(chrono::Utc::now()).expect("start");
+        let (mut native, mut projector, completion) = invocation.start().expect("native start");
+        while let Some(event) = native.next_event().await.expect("event") {
+            projector.project(&event).expect("projected event");
+        }
+        let completed = completion.select().await.expect("completion");
+        projector
+            .finish_after_eos(completed, chrono::Utc::now())
+            .expect("finish");
+    }
+
+    fn requests(captured: &Arc<Mutex<Vec<CapturedModelRequest>>>) -> Vec<serde_json::Value> {
+        captured
+            .lock()
+            .expect("captured model requests")
+            .iter()
+            .map(|request| serde_json::from_slice(&request.body).expect("model request json"))
+            .collect()
+    }
+
+    fn tool_names(request: &serde_json::Value) -> Vec<String> {
+        request["tools"]
+            .as_array()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn system_text(request: &serde_json::Value) -> String {
+        request["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .filter(|message| message["role"] == "system")
+            .filter_map(|message| message["content"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn tool_results(request: &serde_json::Value) -> Vec<String> {
+        request["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .filter_map(|message| message["content"].as_str())
+            // The shared model facade encodes a tool's JSON value once: a text
+            // answer arrives as a JSON string, an object as its JSON text.
+            .map(
+                |content| match serde_json::from_str::<serde_json::Value>(content) {
+                    Ok(serde_json::Value::String(text)) => text,
+                    _ => content.to_owned(),
+                },
+            )
+            .collect()
+    }
+
+    fn assembler_with(
+        outcomes: Vec<TestModelGatewayOutcome>,
+        runtime_context: RuntimeContextClient,
+        sessions: Arc<InMemorySessionService>,
+    ) -> (
+        OrdinaryNativeAgentAssembler,
+        Arc<Mutex<Vec<CapturedModelRequest>>>,
+    ) {
+        let (gateway, captured) =
+            test_model_gateway_client(outcomes, test_model_gateway_config()).expect("gateway");
+        let assembler = OrdinaryNativeAgentAssembler::new(
+            platform_client(runtime_context),
+            Arc::new(ModelFacade::from_gateway(gateway)),
+            empty_tool_policy(),
+        )
+        .with_sessions(sessions);
+        (assembler, captured)
+    }
+
+    const PLAN_TOOLS: [&str; 5] = [
+        "update_plan",
+        "start_step",
+        "complete_step",
+        "get_plan_status",
+        "delete_plan",
+    ];
+
+    /// The planner toggle binds the five plan tools and the planning guidance,
+    /// the plan written by one turn is read by the next (state in the session,
+    /// not the prompt), and with the toggle off none of it exists.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_planner_toggle_binds_the_tools_the_guidance_and_a_plan_that_outlives_the_turn() {
+        for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
+            let sessions = Arc::new(InMemorySessionService::new());
+
+            // Toggle ON, turn 1: create and start a plan.
+            let (runtime_context, _) = runtime_context_client();
+            let (assembler, captured) = assembler_with(
+                vec![
+                    TestModelGatewayOutcome::Response(call_response(
+                        "call_plan",
+                        "update_plan",
+                        &serde_json::json!({"title": "Ship it", "steps": ["Build", "Test"]}),
+                    )),
+                    TestModelGatewayOutcome::Response(call_response(
+                        "call_start",
+                        "start_step",
+                        &serde_json::json!({"step_number": 1}),
+                    )),
+                    TestModelGatewayOutcome::Response(text_response("Planned.")),
+                ],
+                runtime_context,
+                Arc::clone(&sessions),
+            );
+            run(&assembler, &with_toggles(kind, &["planner"])).await;
+            let seen = requests(&captured);
+            assert_eq!(seen.len(), 3);
+            let mut names = tool_names(&seen[0]);
+            names.sort();
+            let mut expected: Vec<String> = PLAN_TOOLS.iter().map(|n| (*n).to_owned()).collect();
+            expected.sort();
+            assert_eq!(names, expected);
+            let system = system_text(&seen[0]);
+            assert!(
+                system.contains("## Planning"),
+                "the guidance is in the system prompt"
+            );
+            assert!(system.starts_with(if kind == AgentExecutionKind::Adhoc {
+                "be concise\n\n---\n\n\n---\n\n## Planning"
+            } else {
+                "review carefully\n\n---\n\n\n---\n\n## Planning"
+            }));
+            assert_eq!(
+                tool_results(&seen[1]),
+                [
+                    "Plan created:\n\n📋 Ship it\n   Progress: 0/2 completed, 0 in progress\n\n   ☐ 1. Build\n   ☐ 2. Test"
+                ]
+            );
+            assert!(tool_results(&seen[2])[1].starts_with("Started step 1: Build"));
+
+            // Toggle ON, a LATER turn on the same session reads the plan back.
+            let (runtime_context, _) = runtime_context_client();
+            let (assembler, captured) = assembler_with(
+                vec![
+                    TestModelGatewayOutcome::Response(call_response(
+                        "call_status",
+                        "get_plan_status",
+                        &serde_json::json!({}),
+                    )),
+                    TestModelGatewayOutcome::Response(text_response("Resumed.")),
+                ],
+                runtime_context,
+                Arc::clone(&sessions),
+            );
+            run(&assembler, &with_toggles(kind, &["planner"])).await;
+            let seen = requests(&captured);
+            // The session replays the earlier turn's three tool answers; the
+            // last one is this turn's `get_plan_status`, rendered by the tool
+            // from the persisted plan.
+            let status = tool_results(&seen[1]);
+            assert_eq!(status.len(), 3, "{kind:?}");
+            let status = status.last().expect("status answer");
+            assert!(
+                status.contains("▶ 1. Build (in progress)") && status.contains("☐ 2. Test"),
+                "{status:?}"
+            );
+
+            // Toggle OFF: no plan tool, no guidance.
+            let (runtime_context, _) = runtime_context_client();
+            let (assembler, captured) = assembler_with(
+                vec![TestModelGatewayOutcome::Response(text_response("Plain."))],
+                runtime_context,
+                Arc::new(InMemorySessionService::new()),
+            );
+            run(&assembler, &with_toggles(kind, &[])).await;
+            let seen = requests(&captured);
+            assert!(
+                tool_names(&seen[0]).is_empty(),
+                "{:?}",
+                tool_names(&seen[0])
+            );
+            assert!(!system_text(&seen[0]).contains("## Planning"));
+        }
+    }
+
+    struct RecordedTool {
+        name: String,
+        calls: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    }
+
+    #[async_trait]
+    impl Tool for RecordedTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self) -> &'static str {
+            "Read release evidence."
+        }
+
+        fn parameters_schema(&self) -> Option<serde_json::Value> {
+            Some(serde_json::json!({
+                "type": "object",
+                "properties": {"release": {"type": "string"}},
+                "required": ["release"]
+            }))
+        }
+
+        fn is_read_only(&self) -> bool {
+            true
+        }
+
+        fn is_concurrency_safe(&self) -> bool {
+            true
+        }
+
+        async fn execute(
+            &self,
+            _context: Arc<dyn ToolContext>,
+            arguments: serde_json::Value,
+        ) -> adk_rust::Result<serde_json::Value> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push((self.name.clone(), arguments.clone()));
+            Ok(serde_json::json!({"tool": self.name, "release": arguments["release"]}))
+        }
+    }
+
+    struct ManyToolsConnector {
+        names: Vec<String>,
+        calls: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    }
+
+    #[async_trait]
+    impl McpConnector for ManyToolsConnector {
+        async fn connect(
+            &self,
+            _config: &RemoteMcpConfig,
+        ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+            Ok(Arc::new(BasicToolset::new(
+                "many_fixture_mcp",
+                self.names
+                    .iter()
+                    .map(|name| {
+                        Arc::new(RecordedTool {
+                            name: name.clone(),
+                            calls: Arc::clone(&self.calls),
+                        }) as Arc<dyn Tool>
+                    })
+                    .collect(),
+            )))
+        }
+    }
+
+    fn many_tool_request(
+        kind: AgentExecutionKind,
+        toggles: &[&str],
+        names: &[String],
+    ) -> super::super::request::AgentExecutionRequest {
+        let mut request = with_toggles(kind, toggles);
+        let mut tool = remote_mcp_tool();
+        tool["settings"]["selected_tools"] = serde_json::json!(names);
+        match kind {
+            AgentExecutionKind::Application => {
+                request
+                    .payload
+                    .application
+                    .get_mut("version_details")
+                    .and_then(serde_json::Value::as_object_mut)
+                    .expect("application version")
+                    .insert("tools".to_owned(), serde_json::json!([tool]));
+            }
+            AgentExecutionKind::Adhoc => request.payload.tools.push(tool),
+        }
+        request
+    }
+
+    fn release_names(count: usize) -> Vec<String> {
+        (0..count).map(|n| format!("read_release_{n:02}")).collect()
+    }
+
+    /// Smart Tools Selection swaps a many-tool toolkit for the two meta-tools
+    /// and the index, the model's `invoke_tool` reaches the real tool with the
+    /// null stripped, and with the toggle off every tool is bound as before.
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::too_many_lines)] // Three toggle states of one scenario read best together.
+    async fn the_lazy_tools_toggle_swaps_the_toolkit_for_two_meta_tools_and_an_index() {
+        for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
+            let names = release_names(24);
+
+            // Toggle ON.
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let (runtime_context, _) = runtime_context_client();
+            let (assembler, captured) = assembler_with(
+                vec![
+                    TestModelGatewayOutcome::Response(call_response(
+                        "call_schema",
+                        "get_tool_schema",
+                        &serde_json::json!({"toolkit": "release intelligence", "tool": "read_release_07"}),
+                    )),
+                    TestModelGatewayOutcome::Response(call_response(
+                        "call_invoke",
+                        "invoke_tool",
+                        &serde_json::json!({"toolkit": "release intelligence", "tool": "read_release_07",
+                                            "arguments": {"release": "1.2", "extra": null}}),
+                    )),
+                    TestModelGatewayOutcome::Response(text_response("Done.")),
+                ],
+                runtime_context,
+                Arc::new(InMemorySessionService::new()),
+            );
+            let assembler = assembler.with_mcp_connector(Arc::new(ManyToolsConnector {
+                names: names.clone(),
+                calls: Arc::clone(&calls),
+            }));
+            run(
+                &assembler,
+                &many_tool_request(kind, &["lazy_tools_mode"], &names),
+            )
+            .await;
+            let seen = requests(&captured);
+            assert_eq!(seen.len(), 3);
+            let mut bound = tool_names(&seen[0]);
+            bound.sort();
+            assert_eq!(bound, ["get_tool_schema", "invoke_tool"]);
+            let system = system_text(&seen[0]);
+            assert!(system.contains("# Available Tools"), "{system}");
+            assert!(system.contains("Total: 1 toolkits, 24 tools"), "{system}");
+            assert!(system.contains("read_release_00") && system.contains("read_release_23"));
+            let schema = tool_results(&seen[1]);
+            let schema: serde_json::Value = serde_json::from_str(&schema[0]).expect("schema json");
+            assert_eq!(schema["name"], "read_release_07");
+            assert_eq!(
+                schema["parameters"]["required"],
+                serde_json::json!(["release"])
+            );
+            assert_eq!(
+                tool_results(&seen[2])[1],
+                r#"{"release":"1.2","tool":"read_release_07"}"#
+            );
+            assert_eq!(
+                calls.lock().expect("calls").as_slice(),
+                [(
+                    "read_release_07".to_owned(),
+                    serde_json::json!({"release": "1.2"})
+                )],
+                "the tool ran once, without the null argument"
+            );
+
+            // Toggle OFF: all 24 bound directly, no meta-tool, no index.
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let (runtime_context, _) = runtime_context_client();
+            let (assembler, captured) = assembler_with(
+                vec![TestModelGatewayOutcome::Response(text_response("Plain."))],
+                runtime_context,
+                Arc::new(InMemorySessionService::new()),
+            );
+            let assembler = assembler.with_mcp_connector(Arc::new(ManyToolsConnector {
+                names: names.clone(),
+                calls,
+            }));
+            run(&assembler, &many_tool_request(kind, &[], &names)).await;
+            let seen = requests(&captured);
+            let mut bound = tool_names(&seen[0]);
+            bound.sort();
+            assert_eq!(bound, names);
+            assert!(!system_text(&seen[0]).contains("# Available Tools"));
+
+            // Toggle ON but too few tools to be worth it: bound directly.
+            let few = release_names(3);
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let (runtime_context, _) = runtime_context_client();
+            let (assembler, captured) = assembler_with(
+                vec![TestModelGatewayOutcome::Response(text_response("Plain."))],
+                runtime_context,
+                Arc::new(InMemorySessionService::new()),
+            );
+            let assembler = assembler.with_mcp_connector(Arc::new(ManyToolsConnector {
+                names: few.clone(),
+                calls,
+            }));
+            run(
+                &assembler,
+                &many_tool_request(kind, &["lazy_tools_mode"], &few),
+            )
+            .await;
+            let seen = requests(&captured);
+            let mut bound = tool_names(&seen[0]);
+            bound.sort();
+            assert_eq!(
+                bound, few,
+                "below the threshold the mode switches itself off"
+            );
+            assert!(!system_text(&seen[0]).contains("# Available Tools"));
+        }
+    }
+
+    /// A sensitive tool is never reachable through `invoke_tool`: it stays
+    /// bound directly (where ADK's confirmation applies) and is not advertised
+    /// in the index.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_lazy_tools_toggle_leaves_a_sensitive_tool_bound_directly() {
+        let mut names = release_names(24);
+        names.push("lookup_release".to_owned());
+        let (runtime_context, _) = runtime_context_client();
+        let (gateway, captured) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(text_response("Plain."))],
+            test_model_gateway_config(),
+        )
+        .expect("gateway");
+        let assembler = OrdinaryNativeAgentAssembler::new(
+            platform_client(runtime_context),
+            Arc::new(ModelFacade::from_gateway(gateway)),
+            sensitive_mcp_policy(),
+        )
+        .with_sessions(Arc::new(InMemorySessionService::new()))
+        .with_mcp_connector(Arc::new(ManyToolsConnector {
+            names: names.clone(),
+            calls: Arc::default(),
+        }));
+        run(
+            &assembler,
+            &many_tool_request(AgentExecutionKind::Adhoc, &["lazy_tools_mode"], &names),
+        )
+        .await;
+        let seen = requests(&captured);
+        let mut bound = tool_names(&seen[0]);
+        bound.sort();
+        assert_eq!(bound, ["get_tool_schema", "invoke_tool", "lookup_release"]);
+        let system = system_text(&seen[0]);
+        assert!(system.contains("Total: 1 toolkits, 24 tools"), "{system}");
+        assert!(
+            !system.contains("lookup_release"),
+            "a guarded tool is not advertised"
+        );
+    }
+
+    fn attachment_id_of(name: &str) -> String {
+        use std::fmt::Write as _;
+        let mut identity = b"chat-attachments".to_vec();
+        identity.push(0);
+        identity.extend_from_slice(name.as_bytes());
+        let hash = ring::digest::digest(&ring::digest::SHA256, &identity);
+        let mut id = String::from("att-");
+        for byte in &hash.as_ref()[..4] {
+            let _ = write!(id, "{byte:02x}");
+        }
+        id
+    }
+
+    /// The Attachments toggle binds the three attachment tools on a turn with
+    /// no attachment of its own, lists the conversation's stored files over
+    /// the claim's artifact route, and reads one over the attachment route —
+    /// a file attached before this message. Off, none of it is bound.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_attachments_toggle_lists_and_reads_the_conversations_earlier_files() {
+        for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
+            let key = format!("{UUID}/notes.txt");
+            let id = attachment_id_of(&key);
+            let paths = Arc::new(Mutex::new(Vec::new()));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let redeem = runtime_context_response(&serde_json::json!({
+                "schema_version": "elitea.runtime.elitea-client-token.v1",
+                "project_id": 17,
+                "token": TOKEN,
+            }));
+            let listing = runtime_context_response(&serde_json::json!({
+                "schema_version": "elitea.runtime.artifact-list.v1",
+                "project_id": 17,
+                "bucket": "chat-attachments",
+                "files": [{"name": key, "byte_length": 31, "media_type": "text/plain",
+                           "modified_at": "2026-10-01T00:00:00Z"}],
+                "truncated": false,
+            }));
+            let document = runtime_context_response(&serde_json::json!({
+                "schema_version": "elitea.runtime.attachment-object.v1",
+                "project_id": 17,
+                "bucket": "chat-attachments",
+                "name": key,
+                "media_type": "text/plain",
+                "byte_length": 31,
+                "content": "The launch word is QUOKKAWORD.\n",
+            }));
+            let runtime_context = runtime_context_client_from(
+                VecDeque::from([redeem, listing, document]),
+                Arc::clone(&calls),
+                Arc::clone(&paths),
+            );
+            let (assembler, captured) = assembler_with(
+                vec![
+                    TestModelGatewayOutcome::Response(call_response(
+                        "call_list",
+                        "list_attachments",
+                        &serde_json::json!({}),
+                    )),
+                    TestModelGatewayOutcome::Response(call_response(
+                        "call_read",
+                        "read_attachment",
+                        &serde_json::json!({"attachment_id": id}),
+                    )),
+                    TestModelGatewayOutcome::Response(text_response("Read.")),
+                ],
+                runtime_context,
+                Arc::new(InMemorySessionService::new()),
+            );
+            let mut request = with_toggles(kind, &["attachments"]);
+            request.payload.conversation_id = Some(UUID.to_owned());
+            run(&assembler, &request).await;
+            let seen = requests(&captured);
+            assert_eq!(seen.len(), 3);
+            let mut bound = tool_names(&seen[0]);
+            bound.sort();
+            assert_eq!(
+                bound,
+                ["list_attachments", "read_attachment", "search_attachment"]
+            );
+            let listed: serde_json::Value =
+                serde_json::from_str(&tool_results(&seen[1])[0]).expect("listing json");
+            assert_eq!(listed["count"], 1);
+            assert_eq!(listed["attachments"][0]["attachment_id"], id);
+            assert_eq!(listed["attachments"][0]["name"], "notes.txt");
+            assert_eq!(listed["attachments"][0]["size_bytes"], 31);
+            assert_eq!(listed["attachments"][0]["in_this_message"], false);
+            let read: serde_json::Value =
+                serde_json::from_str(&tool_results(&seen[2])[1]).expect("read json");
+            assert!(
+                read["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("QUOKKAWORD")),
+                "{read}"
+            );
+            assert_eq!(
+                paths.lock().expect("paths").len(),
+                3,
+                "one redemption, one listing, one read"
+            );
+
+            // Toggle OFF: no attachment tool on a turn with no attachment.
+            let (runtime_context, _) = runtime_context_client();
+            let (assembler, captured) = assembler_with(
+                vec![TestModelGatewayOutcome::Response(text_response("Plain."))],
+                runtime_context,
+                Arc::new(InMemorySessionService::new()),
+            );
+            run(&assembler, &with_toggles(kind, &[])).await;
+            assert!(tool_names(&requests(&captured)[0]).is_empty());
+        }
+    }
+}

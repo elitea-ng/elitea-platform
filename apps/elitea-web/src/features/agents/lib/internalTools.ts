@@ -57,8 +57,9 @@ export interface InternalToolDescriptor {
  *
  * `available` defaults to `true` (see `isInternalToolAvailable`'s own doc
  * comment) for any tool this endpoint has not been taught to answer for yet
- * — currently `attachments` and `pyodide`, #866's own disclosed scope
- * boundary — so those two keep behaving exactly as before this change.
+ * — currently only `pyodide`, #866's own disclosed scope boundary — so that
+ * toggle keeps behaving exactly as before. `planner`, `lazy_tools_mode` and
+ * `attachments` are served by BOTH workers and read available on either.
  */
 export interface AvailableInternalTool extends InternalToolDescriptor {
   readonly available: boolean;
@@ -121,16 +122,14 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
     // #872: as of the Python worker's image, this toggle actually executes
     // (a pinned `deno` binary plus the SDK's own sandbox entrypoint, both
     // baked in at build time — services/elitea-worker-python/Containerfile).
-    // The Rust worker still skips it, the same as every other entry in this
-    // list without a `requiredToolkitType` gate. GET /elitea_core/
-    // runtime_capabilities (#865, #866) now exists and would answer this the
-    // same way it answers for the six tools `useAvailableInternalTools`
-    // checks against it, but its `internal_tools` map deliberately does not
-    // name `pyodide` (nor `attachments`) — see
+    // The Rust worker still skips it. GET /elitea_core/runtime_capabilities
+    // (#865, #866) would answer this the same way it answers for the other
+    // tools `useAvailableInternalTools` checks against it, but its
+    // `internal_tools` map deliberately does not name `pyodide` — see
     // internal/api/v2/toolkits/capabilities_handler.go's own doc comment for
-    // why those two stayed out of #866's scope. So this toggle still cannot
-    // be conditionally disabled the way the six others now are. See
-    // /menus/internal-tools for the operator-facing note instead.
+    // why it stayed out of #866's scope. So this toggle still cannot be
+    // conditionally disabled the way the others are. See /menus/internal-tools
+    // for the operator-facing note instead.
     name: 'pyodide',
     title: 'Python sandbox',
     icon: 'PythonIcon',
@@ -161,7 +160,7 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
     // #940 A8. Unlike every entry above, these two are served by the NATIVE
     // runtime and NOT by the Python SDK worker — `useAvailableInternalTools`
     // below reads that verdict off `/elitea_core/runtime_capabilities` the
-    // same way it does for the six the Rust worker skips, so on a Python
+    // same way it does for the tools the Rust worker skips, so on a Python
     // deployment they render disabled-with-a-reason rather than silently
     // doing nothing. Both default to OFF, like every other entry here: a
     // toggle nobody switched on binds no tool

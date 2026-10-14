@@ -79,6 +79,7 @@
 //! `item_id` for #607) without making the two services undeployable apart.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use adk_rust::{Content, Part};
 use base64::Engine as _;
@@ -364,6 +365,14 @@ pub(crate) struct AttachmentReference {
 }
 
 impl AttachmentReference {
+    #[cfg(test)]
+    pub(crate) fn new(bucket: &str, name: &str) -> Self {
+        Self {
+            bucket: bucket.to_owned(),
+            name: name.to_owned(),
+        }
+    }
+
     /// The bucket the object is stored in.
     #[must_use]
     pub(crate) fn bucket(&self) -> &str {
@@ -500,6 +509,147 @@ pub(crate) async fn read_attachment_documents(
         );
     }
     reads
+}
+
+/// The bucket every chat upload is stored in
+/// (`internal/api/v2/conversations/attachments.go`).
+const CONVERSATION_ATTACHMENT_BUCKET: &str = "chat-attachments";
+/// The most objects one conversation listing asks for.
+const CONVERSATION_LISTING_LIMIT: i32 = 200;
+
+/// The Attachments module's channel to the conversation's stored files, over
+/// the same live claim that read this turn's own attachments.
+///
+/// Listing goes through the claim-bound artifact route (`list_artifacts`,
+/// which applies the actor's bucket access list), reading through the
+/// attachment route (`read_attachment_object`, which refuses any key outside
+/// the claim's own conversation). Neither names a project. No new internal
+/// route: both are the ones the `artifact` toolkit family and the turn's input
+/// already use.
+pub(crate) struct ClaimAttachmentSource {
+    platform: Arc<PlatformClient>,
+    authority: Arc<ClaimBoundRuntimeContextAuthority>,
+    /// The `{conversation uuid}` every stored key starts with.
+    prefix: Option<String>,
+    current_turn: Vec<AttachmentReference>,
+}
+
+impl ClaimAttachmentSource {
+    /// `conversation_id` is the request's; when it is not a canonical UUID the
+    /// prefix is taken from this turn's own attachment keys, which carry it.
+    pub(crate) fn new(
+        platform: Arc<PlatformClient>,
+        authority: Arc<ClaimBoundRuntimeContextAuthority>,
+        conversation_id: Option<&str>,
+        current_turn: Vec<AttachmentReference>,
+    ) -> Self {
+        let prefix = conversation_id
+            .filter(|id| looks_like_uuid(id))
+            .map(str::to_owned)
+            .or_else(|| {
+                current_turn
+                    .first()
+                    .and_then(|reference| reference.name.split_once('/'))
+                    .map(|(prefix, _)| prefix.to_owned())
+            });
+        Self {
+            platform,
+            authority,
+            prefix,
+            current_turn,
+        }
+    }
+}
+
+fn looks_like_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
+}
+
+#[async_trait::async_trait]
+impl super::attachment_tools::AttachmentSource for ClaimAttachmentSource {
+    async fn list(
+        &self,
+    ) -> Result<Vec<super::attachment_tools::ListedAttachment>, super::attachment_tools::SourceError>
+    {
+        use super::attachment_tools::{ListedAttachment, SourceError};
+        let mut found: BTreeMap<AttachmentReference, u64> = BTreeMap::new();
+        let mut failure = None;
+        if let Some(prefix) = &self.prefix {
+            let request = crate::transport::runtime_context::ArtifactListRequest {
+                bucket: CONVERSATION_ATTACHMENT_BUCKET.to_owned(),
+                prefix: format!("{prefix}/"),
+                recursive: false,
+                limit: CONVERSATION_LISTING_LIMIT,
+            };
+            match self
+                .platform
+                .list_artifacts(&self.authority, &request)
+                .await
+            {
+                Ok(outcome) => {
+                    for file in outcome.files {
+                        let name = if file.name.starts_with(&format!("{prefix}/")) {
+                            file.name
+                        } else {
+                            format!("{prefix}/{}", file.name)
+                        };
+                        found.insert(
+                            AttachmentReference {
+                                bucket: CONVERSATION_ATTACHMENT_BUCKET.to_owned(),
+                                name,
+                            },
+                            file.byte_length,
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::info!(
+                        event = "agent_attachments_listing_failed",
+                        error_code = error.code(),
+                        "the conversation's attachments could not be listed; \
+                         only this message's own attachments are named"
+                    );
+                    failure = Some(match error {
+                        RuntimeContextError::AuthorizationFailed(_)
+                        | RuntimeContextError::NotFound(_) => SourceError::NotAvailable,
+                        _ => SourceError::Unavailable,
+                    });
+                }
+            }
+        }
+        for reference in &self.current_turn {
+            found.entry(reference.clone()).or_insert(0);
+        }
+        if found.is_empty() {
+            return failure.map_or_else(|| Ok(Vec::new()), Err);
+        }
+        Ok(found
+            .into_iter()
+            .map(|(reference, size_bytes)| ListedAttachment {
+                reference,
+                size_bytes,
+            })
+            .collect())
+    }
+
+    async fn read(&self, reference: &AttachmentReference) -> AttachmentRead {
+        let mut reads = read_attachment_documents(
+            &self.platform,
+            &self.authority,
+            std::slice::from_ref(reference),
+        )
+        .await;
+        reads
+            .remove(reference)
+            .unwrap_or(AttachmentRead::Unreadable("unavailable"))
+    }
 }
 
 /// Project the admitted chunks with this turn's reads spliced in.

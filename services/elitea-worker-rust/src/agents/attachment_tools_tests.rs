@@ -174,7 +174,7 @@ fn search_finds_the_page_that_holds_the_term() {
 #[test]
 fn every_search_snippet_is_inside_the_documents_untrusted_block() {
     let library = library(16_000);
-    let tag = library.documents[0].tag.clone();
+    let tag = library.snapshot()[0].tag.clone();
     let answer = library.search("filler warranty quokkaword", None, Some(20));
     let results = answer["results"].as_array().expect("results");
     assert!(results.len() > 1);
@@ -242,4 +242,301 @@ fn reads_never_split_a_character() {
         let answer = library.read("att1", None, Some(offset), Some(1_001));
         assert!(answer["content"].is_string(), "offset {offset}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The Attachments module: a library with a source loads stored files on demand.
+// ---------------------------------------------------------------------------
+
+use std::sync::Mutex;
+
+use super::{AttachmentSource, ListedAttachment, SourceError, attachment_id};
+use crate::agents::attachments::{AttachmentRead, AttachmentReference};
+
+fn stored(name: &str) -> AttachmentReference {
+    AttachmentReference::new("chat-attachments", name)
+}
+
+fn plain_document(text: &str) -> AttachmentDocument {
+    AttachmentDocument {
+        content: text.to_owned(),
+        layout: AttachmentTextLayout {
+            format: "txt".to_owned(),
+            units: vec![AttachmentTextUnit {
+                kind: "section".to_owned(),
+                label: "1".to_owned(),
+                start: 0,
+                end: text.len(),
+                has_text: true,
+            }],
+            unit_count: 1,
+            low_text_units: Vec::new(),
+            text_bytes: text.len() as u64,
+            complete: true,
+            partial_reason: String::new(),
+        },
+    }
+}
+
+/// A source over a fixed set of stored files that counts what it reads.
+struct FakeSource {
+    files: Vec<(AttachmentReference, &'static str)>,
+    unreadable: Vec<AttachmentReference>,
+    listing: Result<(), SourceError>,
+    reads: Mutex<Vec<String>>,
+    lists: Mutex<usize>,
+}
+
+impl FakeSource {
+    fn new(files: Vec<(&str, &'static str)>) -> Arc<Self> {
+        Arc::new(Self {
+            files: files
+                .into_iter()
+                .map(|(name, text)| (stored(name), text))
+                .collect(),
+            unreadable: Vec::new(),
+            listing: Ok(()),
+            reads: Mutex::default(),
+            lists: Mutex::default(),
+        })
+    }
+}
+
+#[async_trait]
+impl AttachmentSource for FakeSource {
+    async fn list(&self) -> Result<Vec<ListedAttachment>, SourceError> {
+        *self.lists.lock().expect("lists") += 1;
+        self.listing?;
+        Ok(self
+            .files
+            .iter()
+            .map(|(reference, text)| ListedAttachment {
+                reference: reference.clone(),
+                size_bytes: text.len() as u64,
+            })
+            .collect())
+    }
+
+    async fn read(&self, reference: &AttachmentReference) -> AttachmentRead {
+        self.reads
+            .lock()
+            .expect("reads")
+            .push(reference.name().to_owned());
+        if self.unreadable.contains(reference) {
+            return AttachmentRead::Unreadable("encrypted");
+        }
+        self.files
+            .iter()
+            .find(|(candidate, _)| candidate == reference)
+            .map_or(AttachmentRead::Unreadable("not_found"), |(_, text)| {
+                AttachmentRead::Document(plain_document(text))
+            })
+    }
+}
+
+fn sourced(source: Arc<FakeSource>, current: &[AttachmentReference]) -> Arc<AttachmentLibrary> {
+    let library = Arc::new(AttachmentLibrary::new(Vec::new(), 4_000));
+    library.attach_source(source, current);
+    library
+}
+
+fn ctx() -> Arc<dyn ToolContext> {
+    Arc::new(adk_rust::tool::SimpleToolContext::new("attachments-test"))
+}
+
+async fn tool_named(library: &Arc<AttachmentLibrary>, name: &str) -> Arc<dyn Tool> {
+    library
+        .toolset()
+        .tools(Arc::new(adk_rust::tool::SimpleToolContext::new(
+            "attachments-test",
+        )))
+        .await
+        .expect("attachment tools")
+        .into_iter()
+        .find(|tool| tool.name() == name)
+        .expect("attachment tool")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_library_without_a_source_binds_two_tools_and_with_one_binds_three() {
+    let names = |library: &Arc<AttachmentLibrary>| {
+        let library = Arc::clone(library);
+        async move {
+            library
+                .toolset()
+                .tools(Arc::new(adk_rust::tool::SimpleToolContext::new("t")))
+                .await
+                .expect("tools")
+                .iter()
+                .map(|tool| tool.name().to_owned())
+                .collect::<Vec<_>>()
+        }
+    };
+    let plain = Arc::new(AttachmentLibrary::new(Vec::new(), 4_000));
+    assert_eq!(
+        names(&plain).await,
+        ["read_attachment", "search_attachment"]
+    );
+    let with_source = sourced(FakeSource::new(vec![]), &[]);
+    assert_eq!(
+        names(&with_source).await,
+        ["list_attachments", "read_attachment", "search_attachment"]
+    );
+    assert!(with_source.has_source() && !plain.has_source());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn list_attachments_names_every_stored_file_and_flags_the_current_message() {
+    let source = FakeSource::new(vec![
+        ("conv/old.txt", "an earlier file"),
+        ("conv/new.txt", "this message's file"),
+    ]);
+    let library = sourced(Arc::clone(&source), &[stored("conv/new.txt")]);
+    let list = tool_named(&library, "list_attachments").await;
+    let answer = list.execute(ctx(), json!({})).await.expect("listing");
+    assert_eq!(answer["count"], 2);
+    let by_name = |name: &str| {
+        answer["attachments"]
+            .as_array()
+            .expect("attachments")
+            .iter()
+            .find(|entry| entry["name"] == name)
+            .cloned()
+            .expect("listed")
+    };
+    assert_eq!(
+        by_name("old.txt")["attachment_id"],
+        attachment_id(&stored("conv/old.txt"))
+    );
+    assert_eq!(by_name("old.txt")["in_this_message"], false);
+    assert_eq!(by_name("new.txt")["in_this_message"], true);
+    assert_eq!(by_name("old.txt")["size_bytes"], 15);
+    assert_eq!(by_name("old.txt")["loaded"], false);
+    // Listed once per run, however often it is asked.
+    list.execute(ctx(), json!({})).await.expect("listing");
+    assert_eq!(*source.lists.lock().expect("lists"), 1);
+    assert!(
+        source.reads.lock().expect("reads").is_empty(),
+        "listing reads nothing"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_file_is_read_the_first_time_a_tool_names_it_and_not_again() {
+    let source = FakeSource::new(vec![("conv/old.txt", "The launch word is QUOKKAWORD.")]);
+    let library = sourced(Arc::clone(&source), &[]);
+    let id = attachment_id(&stored("conv/old.txt"));
+    let read = tool_named(&library, "read_attachment").await;
+    for _ in 0..2 {
+        let answer = read
+            .execute(ctx(), json!({"attachment_id": id}))
+            .await
+            .expect("read");
+        assert!(
+            answer["content"]
+                .as_str()
+                .expect("content")
+                .contains("QUOKKAWORD")
+        );
+    }
+    assert_eq!(
+        source.reads.lock().expect("reads").as_slice(),
+        ["conv/old.txt"]
+    );
+    // An id that is neither loaded nor listed is the library's own answer.
+    let unknown = read
+        .execute(ctx(), json!({"attachment_id": "att-00000000"}))
+        .await
+        .expect("read");
+    assert_eq!(unknown["error"], "attachment_not_found");
+    assert_eq!(unknown["available_attachment_ids"], json!([id]));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_unreadable_stored_file_is_named_with_its_reason() {
+    let mut source = FakeSource::new(vec![("conv/locked.pdf", "x")]);
+    Arc::get_mut(&mut source)
+        .expect("sole owner")
+        .unreadable
+        .push(stored("conv/locked.pdf"));
+    let library = sourced(source, &[]);
+    let read = tool_named(&library, "read_attachment").await;
+    let answer = read
+        .execute(
+            ctx(),
+            json!({"attachment_id": attachment_id(&stored("conv/locked.pdf"))}),
+        )
+        .await
+        .expect("read");
+    assert_eq!(answer["error"], "attachment_unreadable");
+    assert_eq!(answer["reason"], "encrypted");
+    assert_eq!(answer["name"], "locked.pdf");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_search_without_an_id_loads_a_bounded_number_of_files_and_says_what_it_skipped() {
+    let texts: [&'static str; 10] = [
+        "alpha one",
+        "alpha two",
+        "alpha three",
+        "alpha four",
+        "alpha five",
+        "alpha six",
+        "alpha seven",
+        "alpha eight QUOKKAWORD",
+        "alpha nine",
+        "alpha ten",
+    ];
+    let files = texts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| (format!("conv/file{index}.txt"), *text))
+        .collect::<Vec<_>>();
+    let source = FakeSource::new(
+        files
+            .iter()
+            .map(|(name, text)| (name.as_str(), *text))
+            .collect(),
+    );
+    let library = sourced(Arc::clone(&source), &[]);
+    let search = tool_named(&library, "search_attachment").await;
+    let answer = search
+        .execute(ctx(), json!({"query": "alpha"}))
+        .await
+        .expect("search");
+    assert_eq!(source.reads.lock().expect("reads").len(), MAX_SEARCH_LOADS);
+    assert!(
+        answer["not_searched"]
+            .as_str()
+            .is_some_and(|note| note.starts_with("2 more attachment(s) were not searched")),
+        "{answer}"
+    );
+    // Naming a file covers it: the skipped one is read on request.
+    let answer = search
+        .execute(
+            ctx(),
+            json!({"query": "alpha", "attachment_id": attachment_id(&stored("conv/file9.txt"))}),
+        )
+        .await
+        .expect("search");
+    assert_eq!(
+        source.reads.lock().expect("reads").len(),
+        MAX_SEARCH_LOADS + 1
+    );
+    assert_eq!(answer["results"].as_array().expect("results").len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_listing_the_platform_refuses_is_an_answer_not_a_failure() {
+    let source = Arc::new(FakeSource {
+        files: Vec::new(),
+        unreadable: Vec::new(),
+        listing: Err(SourceError::NotAvailable),
+        reads: Mutex::default(),
+        lists: Mutex::default(),
+    });
+    let library = sourced(source, &[]);
+    let list = tool_named(&library, "list_attachments").await;
+    let answer = list.execute(ctx(), json!({})).await.expect("answer");
+    assert_eq!(answer["error"], "attachments_not_available");
 }
