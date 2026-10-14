@@ -39,9 +39,13 @@ type internalToolCapability struct {
 //     served by BOTH workers (libs/rust/agent-runtime planner.rs and
 //     lazy_tools.rs; the worker's attachment_tools.rs), so the form shows
 //     them enabled on either deployment;
-//   - image_generation, data_analysis, internal_mcp and swarm are still
-//     recognized and SKIPPED there (PLATFORM_INTERNAL_TOOLS,
-//     agent_internal_tool_skipped), so they are rustAvailable: false;
+//   - data_analysis is served by both too, differently (ADR-0033): the Rust
+//     worker serves structured table tools over CSV, JSON and Excel
+//     attachments (and, with a sandbox, free-form code) instead of the SDK's
+//     model-written pandas;
+//   - image_generation, internal_mcp and swarm are still recognized and
+//     SKIPPED there (PLATFORM_INTERNAL_TOOLS, agent_internal_tool_skipped),
+//     so they are rustAvailable: false;
 //   - skills_builder and project_context_builder run the other way round
 //     (native only), below.
 //
@@ -55,7 +59,7 @@ type internalToolCapability struct {
 // the other.
 var platformInternalTools = []internalToolCapability{
 	{name: "image_generation", pythonAvailable: true, rustAvailable: false},
-	{name: "data_analysis", pythonAvailable: true, rustAvailable: false},
+	{name: "data_analysis", pythonAvailable: true, rustAvailable: true},
 	{name: "internal_mcp", pythonAvailable: true, rustAvailable: false},
 	{name: "planner", pythonAvailable: true, rustAvailable: true},
 	{name: "swarm", pythonAvailable: true, rustAvailable: false},

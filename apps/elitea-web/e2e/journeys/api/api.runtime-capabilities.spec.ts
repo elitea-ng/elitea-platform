@@ -44,8 +44,9 @@ test.use({ storageState: STORAGE_STATE.admin });
 // reported — see `internal/api/v2/toolkits/capabilities_handler.go`'s own doc
 // comment). Four are still skipped by the Rust worker; `planner`,
 // `lazy_tools_mode` and `attachments` are served by both workers.
-const RUST_SKIPPED_INTERNAL_TOOLS = ['image_generation', 'data_analysis', 'internal_mcp', 'swarm'] as const;
-const BOTH_WORKERS_INTERNAL_TOOLS = ['planner', 'lazy_tools_mode', 'attachments'] as const;
+const RUST_SKIPPED_INTERNAL_TOOLS = ['image_generation', 'internal_mcp', 'swarm'] as const;
+// data_analysis is served by Rust as structured table tools (ADR-0033).
+const BOTH_WORKERS_INTERNAL_TOOLS = ['planner', 'lazy_tools_mode', 'attachments', 'data_analysis'] as const;
 const REPORTED_INTERNAL_TOOLS = [...RUST_SKIPPED_INTERNAL_TOOLS, ...BOTH_WORKERS_INTERNAL_TOOLS] as const;
 
 interface RuntimeCapabilities {

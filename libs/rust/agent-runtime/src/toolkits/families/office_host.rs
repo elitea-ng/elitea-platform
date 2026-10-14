@@ -215,6 +215,14 @@ pub trait OfficeToolHost: Send + Sync {
     /// Returns the reply text.
     async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError>;
 
+    /// A link a person can open to see one stored object (the platform's
+    /// artifact route under the turn's project), when the host knows one.
+    /// `data_analysis` puts it in the Markdown image a chart answer offers;
+    /// the default is no link, and the answer then names the file only.
+    fn object_link(&self, _bucket: &str, _name: &str) -> Option<String> {
+        None
+    }
+
     /// Generate images on the gateway's images API under the turn's own
     /// credential (the same budget, request log and execution attribution as
     /// a chat call). Returns one slot per item of the answer's `data` array,

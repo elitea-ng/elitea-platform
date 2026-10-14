@@ -28,7 +28,7 @@ This proves editor selection and persistence. Live child clarification and worke
 | Module | Current reference and native boundary | Required outcome |
 | --- | --- | --- |
 | Attachments | Core attachment delivery and SDK file tools; gate 7 artifact authority | Use the actor's authorized attachments and persist valid artifact references across replacement. **Served** (2026-10-13): see "Planner, Attachments and Smart Tools Selection" below. |
-| Data Analysis | SDK `runtime/tools/data_analysis.py`; Rust tool boundary | Execute analysis through a bounded runtime with declared file and artifact access. |
+| Data Analysis | SDK `runtime/tools/data_analysis.py`; Rust tool boundary | Execute analysis through a bounded runtime with declared file and artifact access. **Served** as deterministic table tools plus the code sandbox (ADR-0033); the SDK's model-written pandas is not ported. |
 | Image Creation | SDK `runtime/clients/client.py` image-generation operation; Main model and artifact grants | Use an authorized image model and return a durable image artifact to chat. |
 | Ask User | Rust `src/agents/internal_tools.rs` already supplies the tool and durable clarification contract | Reuse it; verify UI selection, exact question/answer identity, and recovery instead of adding another tool. |
 | Planner | SDK `runtime/clients/client.py` PlanningMiddleware injection | Preserve the plan and task status as execution state across compaction and replacement. **Served** (2026-10-13). |

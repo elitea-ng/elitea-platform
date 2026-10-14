@@ -41,6 +41,8 @@ use crate::indexing::tools::{LazyStepbackModel, generate_text};
 /// guarded HTTP client to it.
 pub(crate) struct OfficeRuntime {
     origin: String,
+    /// The deployment's public base URL, when it has stated one.
+    public_base_url: Option<String>,
     http: SourceHttp,
 }
 
@@ -66,9 +68,18 @@ impl OfficeRuntime {
         };
         Ok(Self {
             origin: platform_origin.to_owned(),
+            public_base_url: None,
             http: SourceHttp::new(HostAllowlist::parse(Some(&host)), Arc::new(transport))
                 .with_limits(limits),
         })
+    }
+
+    /// The public base URL links in answers are built against. Absent, links
+    /// are root-relative.
+    #[must_use]
+    pub(crate) fn with_public_base_url(mut self, public_base_url: Option<String>) -> Self {
+        self.public_base_url = public_base_url;
+        self
     }
 
     /// Whether the guard admits `url`'s host.
@@ -88,6 +99,7 @@ impl OfficeRuntime {
             .unwrap_or_default();
         Self {
             origin: platform_origin.to_owned(),
+            public_base_url: None,
             http: SourceHttp::new(HostAllowlist::parse(Some(&host)), transport).with_limits(
                 SourceLimits {
                     max_document_bytes: elitea_agent_runtime::toolkits::MAX_OFFICE_OBJECT_BYTES,
@@ -103,6 +115,7 @@ pub(crate) struct ClaimOfficeHost {
     runtime: Arc<OfficeRuntime>,
     platform: ArtifactPlatform,
     model: LazyStepbackModel,
+    project_id: String,
     /// The gateway's images routes under the claim (the `imagegen` toolkit,
     /// #864); `None` leaves that toolkit out as unsupported.
     images: Option<(ImagesClient, Arc<ClaimScopedEliteaContext>)>,
@@ -127,6 +140,7 @@ impl ClaimOfficeHost {
             runtime,
             platform,
             model,
+            project_id: project_id.to_owned(),
             images: None,
         })
     }
@@ -470,6 +484,40 @@ impl OfficeToolHost for ClaimOfficeHost {
                 .get("size_bytes")
                 .and_then(Value::as_u64)
                 .unwrap_or(byte_length),
+        })
+    }
+
+    /// The link the SDK's chart answer used
+    /// (`{base}/api/v2/artifacts/artifact/default/{project}/{bucket}/{file}`).
+    /// `base` is the deployment's PUBLIC base URL when it has one; the
+    /// platform origin this host reaches is the in-cluster edge, which a
+    /// browser cannot open, so it is never used. With no public base URL the
+    /// link is root-relative and the chat UI resolves it against its own
+    /// origin.
+    fn object_link(&self, bucket: &str, name: &str) -> Option<String> {
+        if !valid_segment(bucket) || !valid_object_key(name) {
+            return None;
+        }
+        let base = self.runtime.public_base_url.as_deref();
+        // Percent-encoding comes from the URL type's path-segment rules.
+        let mut url = Url::parse(base.unwrap_or("https://relative.invalid/")).ok()?;
+        {
+            let mut segments = url.path_segments_mut().ok()?;
+            segments.pop_if_empty().extend([
+                "api",
+                "v2",
+                "artifacts",
+                "artifact",
+                "default",
+                self.project_id.as_str(),
+                bucket,
+            ]);
+            segments.extend(name.split('/'));
+        }
+        Some(if base.is_some() {
+            url.to_string()
+        } else {
+            url.path().to_owned()
         })
     }
 

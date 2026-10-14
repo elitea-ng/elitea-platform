@@ -201,6 +201,9 @@ where
         requested = signal => {
             requested?;
             tracing::info!(event = "production_stop_requested");
+            // Analyses queued for a slot are told the worker is shutting down;
+            // the ones running finish within the drain.
+            elitea_agent_runtime::toolkits::close_analysis_gate();
             if stop.send(true).is_err() {
                 return running.await.map_err(map_runtime_error);
             }
@@ -215,6 +218,7 @@ where
                 error_code = "worker_serve.office_core_stuck",
                 "a document-library call will not give its thread back: draining and exiting"
             );
+            elitea_agent_runtime::toolkits::close_analysis_gate();
             if stop.send(true).is_ok() {
                 // Whatever the drain says, the process exits with the error.
                 let _ = tokio::time::timeout(shutdown_timeout, running).await;
@@ -344,7 +348,9 @@ impl ProductionAgentRuntime {
         // `platform_origin`, and only it.
         let office_runtime =
             crate::transport::office_host::OfficeRuntime::new(&deployment.platform_origin)
-                .map(Arc::new)
+                .map(|runtime| {
+                    Arc::new(runtime.with_public_base_url(deployment.public_base_url.clone()))
+                })
                 .ok();
         if office_runtime.is_none() {
             tracing::warn!(
@@ -702,6 +708,28 @@ mod tests {
             "worker_serve.office_core_stuck"
         );
         assert_eq!(started.elapsed(), Duration::from_secs(30));
+    }
+
+    /// A drain closes the worker-wide analysis gate, so a queued analysis is
+    /// told the worker is shutting down instead of waiting for a slot.
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_request_closes_the_analysis_gate() {
+        use elitea_agent_runtime::toolkits::AnalysisGate;
+        let (stop, mut stopped) = watch::channel(false);
+        let running = Box::pin(async move {
+            let _ = stopped.changed().await;
+            Ok::<(), ProductionAgentRuntimeError>(())
+        });
+        let result = drive(
+            running,
+            &stop,
+            std::future::ready(Ok(())),
+            std::future::pending::<()>(),
+            Duration::from_secs(30),
+        )
+        .await;
+        assert!(result.is_ok());
+        assert!(AnalysisGate::process().is_closed());
     }
 
     /// Without a stuck engine, a signal still drains and returns the drain's

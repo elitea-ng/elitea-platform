@@ -60,6 +60,7 @@ use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use elitea_agent_runtime::host::PlatformWriter;
+use elitea_agent_runtime::toolkits::DataAnalysisAuthority;
 use sqlx::PgPool;
 
 /// Shared ordinary application/ad-hoc assembler used after `AUTHORIZED_NOW`.
@@ -372,10 +373,33 @@ impl OrdinaryNativeAgentAssembler {
         // The Office host (ADR-0032) rides on the artifact authority, built
         // only when the snapshot has an Office toolkit: it mints a credential
         // and binds nothing until a tool calls the model.
-        if snapshot_carries_office_family(tool_snapshot)
+        let carries_office_family = snapshot_carries_office_family(tool_snapshot);
+        // The Data Analysis toggle (ADR-0033) reads the attachment bucket
+        // through the same host, and runs free-form code on the sandbox the
+        // pipeline `code` nodes use, when this run has one.
+        let wants_data_analysis = profile.internal_tools().data_analysis_enabled();
+        let mut data_analysis_authority: Option<DataAnalysisAuthority> = None;
+        if (carries_office_family || wants_data_analysis)
             && let Some(office) = self.office_host(&context, profile)
         {
-            artifact_authority = artifact_authority.with_office(office);
+            if wants_data_analysis {
+                let mut authority = DataAnalysisAuthority::new(Arc::clone(&office));
+                authority = authority.with_bucket_resolver(Arc::new(
+                    super::attachments::ClaimAttachmentBucket::new(
+                        Arc::clone(&self.platform),
+                        Arc::clone(runtime_context),
+                    ),
+                ));
+                if let Some(runtime) = code.clone() {
+                    authority = authority.with_code_runner(Arc::new(
+                        super::graph::SandboxAnalysisRunner::new(runtime),
+                    ));
+                }
+                data_analysis_authority = Some(authority);
+            }
+            if carries_office_family {
+                artifact_authority = artifact_authority.with_office(office);
+            }
         }
         // The index tools (ADR-0030 I1) act under the same claim: its vector
         // token, its redeemed context for the query embedding, and a chat
@@ -412,8 +436,16 @@ impl OrdinaryNativeAgentAssembler {
             .iter()
             .map(|toolset| toolset.name().to_owned())
             .collect();
-        let internal_tools = profile.internal_tools();
+        let mut internal_tools = profile.internal_tools();
+        // Bound only when the run has the host and the tool policy consents; a
+        // toggle that binds nothing keeps its "not available" notice.
+        let data_toolset =
+            internal_tools.data_analysis_toolset(data_analysis_authority.as_ref(), tool_policy);
+        if data_toolset.is_some() {
+            internal_tools = internal_tools.serving_data_analysis();
+        }
         toolsets.extend(internal_tools.toolsets(Some(&BuilderToolAuthority::new(platform_writer))));
+        toolsets.extend(data_toolset);
         toolsets.extend(profile.instruction_plan().toolsets());
         // The attachment tools exist only when a document of this turn was
         // shown as an overview; the note in the prompt offers them by name.

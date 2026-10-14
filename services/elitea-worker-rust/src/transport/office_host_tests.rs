@@ -654,3 +654,38 @@ async fn a_pptx_toolkit_round_trips_a_deck_through_the_worker_host() {
     assert_eq!(prompts.len(), 1);
     assert!(prompts[0].0.contains("greet Ada"));
 }
+
+#[test]
+fn an_object_link_is_root_relative_and_never_the_in_cluster_origin() {
+    let api = ObjectApi::new();
+    let (host, _) = host(&api, vec![]);
+    let link = host
+        .object_link("chat-attachments", "conv 1/chart_ab.png")
+        .expect("link");
+    assert_eq!(
+        link,
+        "/api/v2/artifacts/artifact/default/42/chat-attachments/conv%201/chart_ab.png"
+    );
+    assert!(!link.contains("platform.internal") && !link.contains("://"));
+    assert!(host.object_link("chat-attachments", "../x.png").is_none());
+    assert!(host.object_link("bad/bucket", "x.png").is_none());
+}
+
+#[test]
+fn with_a_public_base_url_the_link_is_absolute_on_it_and_never_the_edge() {
+    let api = ObjectApi::new();
+    let runtime = Arc::new(
+        OfficeRuntime::with_transport(ORIGIN, Arc::clone(&api) as Arc<dyn Transport>)
+            .with_public_base_url(Some("https://elitea.example.com".to_owned())),
+    );
+    let model = LazyStepbackModel::unbound();
+    let host = ClaimOfficeHost::new(runtime, "pat-token", "42", model).expect("host");
+    let link = host
+        .object_link("chat-attachments", "conv 1/chart_ab.png")
+        .expect("link");
+    assert_eq!(
+        link,
+        "https://elitea.example.com/api/v2/artifacts/artifact/default/42/chat-attachments/conv%201/chart_ab.png"
+    );
+    assert!(!link.contains("platform.internal"));
+}

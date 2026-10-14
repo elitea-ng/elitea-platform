@@ -40,12 +40,12 @@ func getCapabilities(t *testing.T, opts ...toolkits.Option) toolkits.RuntimeCapa
 var (
 	// Still skipped by internal_tools.rs's PLATFORM_INTERNAL_TOOLS.
 	rustSkippedInternalTools = []string{
-		"image_generation", "data_analysis", "internal_mcp", "swarm",
+		"image_generation", "internal_mcp", "swarm",
 	}
 	// Served natively since the planner / Smart Tools Selection / attachments
 	// port (libs/rust/agent-runtime planner.rs and lazy_tools.rs, the
 	// worker's attachment_tools.rs).
-	rustServedInternalTools = []string{"planner", "lazy_tools_mode", "attachments"}
+	rustServedInternalTools = []string{"planner", "lazy_tools_mode", "attachments", "data_analysis"}
 	// Every toggle the Python worker runs.
 	allInternalTools = []string{
 		"image_generation", "data_analysis", "internal_mcp",

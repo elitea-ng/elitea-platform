@@ -8,7 +8,7 @@ const RUST: RuntimeCapabilities = {
   worker: 'rust',
   internal_tools: {
     image_generation: false,
-    data_analysis: false,
+    data_analysis: true,
     internal_mcp: false,
     swarm: false,
     // Served natively by the Rust worker (planner, Smart Tools Selection and
@@ -37,13 +37,14 @@ const PYTHON: RuntimeCapabilities = {
 describe('isInternalToolAvailable', () => {
   it('reports false for a tool the Rust worker still skips on a Rust deployment (#866)', () => {
     expect(isInternalToolAvailable(RUST, 'swarm')).toBe(false);
-    expect(isInternalToolAvailable(RUST, 'data_analysis')).toBe(false);
+    expect(isInternalToolAvailable(RUST, 'image_generation')).toBe(false);
   });
 
   it('reports true on a Rust deployment for the tools it serves natively', () => {
     expect(isInternalToolAvailable(RUST, 'planner')).toBe(true);
     expect(isInternalToolAvailable(RUST, 'lazy_tools_mode')).toBe(true);
     expect(isInternalToolAvailable(RUST, 'attachments')).toBe(true);
+    expect(isInternalToolAvailable(RUST, 'data_analysis')).toBe(true);
   });
 
   it('reports true for the same tools on a Python deployment', () => {

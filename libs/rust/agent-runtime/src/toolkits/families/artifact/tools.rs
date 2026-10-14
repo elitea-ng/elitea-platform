@@ -439,6 +439,7 @@ impl Tool for ListFilesTool {
             prefix: normalized_key(&folder),
             recursive: optional_bool(&arguments, "recursive").unwrap_or(false),
             limit: DEFAULT_LIST_LIMIT,
+            bucket_only: false,
         };
         let include = pattern_list(&arguments, "include");
         let skip = pattern_list(&arguments, "skip");
