@@ -431,7 +431,8 @@ func (h *Handler) resolveMCPOAuthCredentials(
 	if needsStoredScope {
 		credentials.scope = firstOAuthScope(layers)
 	}
-	if storedSecret != "" && !oauthTokenEndpointIsBound(tokenEndpoint, layers) {
+	if storedSecret != "" && !oauthTokenEndpointIsBound(tokenEndpoint, layers) &&
+		!h.mcpDiscoveryBindsTokenEndpoint(ctx, effectiveType, settings, tokenEndpoint) {
 		return mcpOAuthCredentials{}, &mcpOAuthResolutionError{http.StatusBadRequest, "untrusted_token_endpoint"}
 	}
 	return credentials, nil
@@ -715,4 +716,49 @@ func safeOAuthProviderError(code string, provider map[string]any, sensitive ...s
 		response["error_description"] = description
 	}
 	return response
+}
+
+// mcpDiscoveryBindsTokenEndpoint binds a Remote MCP toolkit's stored client
+// secret to the token endpoint its own server advertises. A direct `mcp`
+// toolkit stores no token URL, so Main repeats the public discovery the worker
+// ran: the toolkit's saved URL names the protected resource, whose metadata
+// names the authorization servers, whose metadata names the token endpoint.
+// Nothing here comes from the request except the endpoint being checked, so
+// the model or a caller cannot nominate a destination for the secret.
+func (h *Handler) mcpDiscoveryBindsTokenEndpoint(
+	ctx context.Context,
+	toolkitType string,
+	settings map[string]any,
+	tokenEndpoint *url.URL,
+) bool {
+	if toolkitType != "mcp" && !mcpregistry.IsPrebuiltToolkitType(toolkitType) {
+		return false
+	}
+	address, _ := settings["url"].(string)
+	resourceURL, err := validateMCPMetadataURL(address)
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, mcpOAuthProxyTimeout)
+	defer cancel()
+	resource, _, err := h.mcpProtectedMetadata(ctx, resourceURL, "")
+	if err != nil {
+		return false
+	}
+	servers, ok := boundedMCPMetadataList(resource["authorization_servers"])
+	if !ok || len(servers) == 0 || len(servers) > 16 {
+		return false
+	}
+	for _, server := range servers {
+		metadata, err := h.mcpAuthorizationServerMetadata(ctx, server)
+		if err != nil {
+			continue
+		}
+		advertised, _ := metadata["token_endpoint"].(string)
+		trusted, err := validateMCPProxyURL(advertised)
+		if err == nil && sameMCPProxyEndpoint(tokenEndpoint, trusted) {
+			return true
+		}
+	}
+	return false
 }

@@ -171,6 +171,9 @@ pub struct RemoteMcpConfig {
     /// Public identifiers only: the secret stays in Main, which performs the
     /// code exchange and refresh, so only its presence is kept here.
     oauth_client: Option<OAuthClient>,
+    /// The saved toolkit's id, stamped on the authorization signal so Main can
+    /// load its stored secret and save the token against it.
+    toolkit_id: Option<u64>,
     /// `None` when `enable_caching` is false: every materialization lists.
     tool_list_ttl: Option<Duration>,
 }
@@ -186,6 +189,7 @@ impl RemoteMcpConfig {
         let settings = reference.settings().ok_or_else(invalid_configuration)?;
         let prebuilt = parse_mcp_authority(reference.tool_type())?;
         let oauth_client = parse_oauth_client(settings)?;
+        let toolkit_id = reference.tool_id();
         let requested_scopes = parse_requested_scopes(settings)?;
         let endpoint = parse_endpoint(settings)?;
         let timeout = Duration::from_secs(parse_bounded_integer(
@@ -250,7 +254,10 @@ impl RemoteMcpConfig {
             requested_scopes,
             static_headers,
             access_token,
-            oauth_client,
+            // Identity comes only from Main's materializer for an internal
+            // builder; it is never offered a registered OAuth app.
+            oauth_client: oauth_client.filter(|_| !reference.is_internal_builder()),
+            toolkit_id,
             // An internal builder's bearer is minted per execution, so its
             // listing could never be reused: caching it would only pin memory.
             tool_list_ttl: (enable_caching && !reference.is_internal_builder())
@@ -347,6 +354,13 @@ impl RemoteMcpConfig {
             .values()
             .filter_map(|value| value.to_str().ok());
         McpErrorRedaction::new(headers.chain(self.access_token()), &self.endpoint)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn oauth_client_for_test(&self) -> Option<&str> {
+        self.oauth_client
+            .as_ref()
+            .map(|client| client.client_id.as_str())
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -995,8 +1009,8 @@ fn parse_mcp_authority(tool_type: &str) -> Result<bool, McpMaterializationError>
 }
 
 /// Accepts the SDK's `client_id` / `client_secret` pair without reading the
-/// secret. A non-string value is a configuration error, not a way to smuggle
-/// a different authority.
+/// secret. Blank values are unset; a secret with no client id names no app and
+/// is refused rather than dropped; a non-string value is a configuration error.
 fn parse_oauth_client(
     settings: &Map<String, Value>,
 ) -> Result<Option<OAuthClient>, McpMaterializationError> {
@@ -1016,15 +1030,21 @@ fn parse_oauth_client(
     let client_id = text("client_id")?;
     let secret_present = match settings.get("client_secret") {
         None | Some(Value::Null) => false,
-        Some(Value::String(value)) => !value.is_empty(),
+        Some(Value::String(value)) => !value.trim().is_empty(),
         Some(Value::Object(_)) => true,
         Some(_) => return Err(invalid_configuration()),
     };
-    let configuration_uuid = text("configuration_uuid")?;
-    Ok(client_id.map(|client_id| OAuthClient {
+    let Some(client_id) = client_id else {
+        return if secret_present {
+            Err(unsupported_authority())
+        } else {
+            Ok(None)
+        };
+    };
+    Ok(Some(OAuthClient {
         client_id: client_id.to_owned(),
         secret_present,
-        configuration_uuid: configuration_uuid.map(str::to_owned),
+        configuration_uuid: text("configuration_uuid")?.map(str::to_owned),
     }))
 }
 
@@ -1312,32 +1332,27 @@ async fn authorization_required_with_metadata(
                 .map(Box::new)
         });
     }
-    attach_oauth_client(config, &mut error);
+    finish_authorization(config, &mut error);
     error
 }
 
-/// Carries the toolkit's registered OAuth app on the authorization signal. A
-/// requirement that cannot take it stays as it was: the user can still be
-/// asked to authorize, just without the pre-registered app.
-fn attach_oauth_client(config: &RemoteMcpConfig, error: &mut McpMaterializationError) {
-    let Some(client) = &config.oauth_client else {
-        return;
-    };
+/// Completes the authorization signal for Main: the saved toolkit's id and,
+/// when configured, its registered OAuth app. Both attach only to discovered
+/// metadata; a requirement without any stays as it was.
+fn finish_authorization(config: &RemoteMcpConfig, error: &mut McpMaterializationError) {
     let Some(requirement) = error.authorization.take() else {
         return;
     };
-    let requirement = *requirement;
-    error.authorization = Some(Box::new(
-        requirement
-            .clone()
-            .with_oauth_client(
-                &client.client_id,
-                client.secret_present,
-                &config.requested_scopes,
-                client.configuration_uuid.as_deref(),
-            )
-            .unwrap_or(requirement),
-    ));
+    let mut requirement = *requirement;
+    if let Some(client) = &config.oauth_client {
+        requirement = requirement.with_oauth_client(
+            &client.client_id,
+            client.secret_present,
+            &config.requested_scopes,
+            client.configuration_uuid.as_deref(),
+        );
+    }
+    error.authorization = Some(Box::new(requirement.with_toolkit_id(config.toolkit_id)));
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -1346,7 +1361,24 @@ pub fn mcp_authorization_required_fixture(
     challenge: &str,
 ) -> McpMaterializationError {
     let mut error = authorization_required(config, Some(challenge));
-    attach_oauth_client(config, &mut error);
+    finish_authorization(config, &mut error);
+    error
+}
+
+/// The signal a server with discoverable authorization metadata produces.
+#[cfg(test)]
+pub(crate) fn mcp_authorization_required_with_metadata_fixture(
+    config: &RemoteMcpConfig,
+    challenge: &str,
+    resource_metadata: Value,
+) -> McpMaterializationError {
+    let mut error = authorization_required(config, Some(challenge));
+    error.authorization = error.authorization.take().and_then(|requirement| {
+        requirement
+            .with_resource_metadata(resource_metadata)
+            .map(Box::new)
+    });
+    finish_authorization(config, &mut error);
     error
 }
 

@@ -53,6 +53,34 @@ impl McpConnector for AuthorizationConnector {
     }
 }
 
+fn discovered_metadata() -> Value {
+    json!({
+        "authorization_servers": ["https://login.example.invalid/"],
+        "oauth_authorization_server": {
+            "authorization_endpoint": "https://login.example.invalid/authorize",
+            "token_endpoint": "https://login.example.invalid/token"
+        }
+    })
+}
+
+struct DiscoveringConnector;
+
+#[async_trait]
+impl McpConnector for DiscoveringConnector {
+    async fn connect(
+        &self,
+        config: &RemoteMcpConfig,
+    ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        Err(
+            super::mcp::mcp_authorization_required_with_metadata_fixture(
+                config,
+                "Bearer",
+                discovered_metadata(),
+            ),
+        )
+    }
+}
+
 struct TokenConnector;
 
 #[async_trait]
@@ -633,6 +661,9 @@ async fn malformed_scope_hints_and_inline_clients_fail_before_connecting() {
         value["scopes"] = scopes;
         cases.push(value);
     }
+    let mut secret_only = settings(&[]);
+    secret_only["client_secret"] = json!("orphan-secret");
+    cases.push(secret_only);
     for (field, bad) in [
         ("client_id", json!(7)),
         ("client_id", json!({"id": "x"})),
@@ -1646,30 +1677,122 @@ async fn an_oauth_app_toolkit_is_not_refused_and_applies_the_claim_token() {
     assert_eq!(toolsets.len(), 1);
 }
 
-#[tokio::test]
-async fn an_unauthorized_oauth_app_toolkit_names_its_app_and_never_the_secret() {
-    let version = frozen("mcp", &oauth_client_settings());
+async fn oauth_app_authorization(configured: Value, connector: &dyn McpConnector) -> Value {
+    let version = frozen("mcp", &configured);
     let snapshot = FrozenToolSnapshot::from_version_details(&version)
         .expect("MCP snapshot")
         .apply_policy(policy(&[]).as_ref());
     let (_, authorization) = materialize_mcp_toolsets_with_tokens_and_authorization(
         &snapshot,
-        &AuthorizationConnector,
+        connector,
         &policy(&[]),
         &Map::new(),
     )
     .await
     .expect("authorization catalog");
-    let requirement = authorization
+    authorization
         .requirement_for("lookup_release")
-        .expect("guarded tool");
-    let metadata = requirement.resource_metadata().expect("metadata");
+        .expect("guarded tool")
+        .resource_metadata()
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[tokio::test]
+async fn an_unauthorized_oauth_app_toolkit_names_its_app_its_id_and_never_the_secret() {
+    let metadata = oauth_app_authorization(oauth_client_settings(), &DiscoveringConnector).await;
     assert_eq!(
         metadata["provided_settings"],
-        json!({"mcp_client_id": "registered-app", "mcp_client_secret": "********", "scopes": ["mcp:read"]})
+        json!({
+            "mcp_client_id": "registered-app",
+            "mcp_client_secret": "********",
+            "scopes": ["offline_access", "mcp:read"]
+        })
     );
     assert_eq!(metadata["configuration_uuid"], "cfg-1");
-    assert!(!format!("{metadata}").contains("super-secret-client-value"));
+    assert_eq!(metadata["toolkit_id"], "41", "Main loads the secret by id");
+    assert_eq!(
+        metadata["oauth_authorization_server"]["token_endpoint"],
+        "https://login.example.invalid/token"
+    );
+    assert!(!metadata.to_string().contains("super-secret-client-value"));
+}
+
+#[tokio::test]
+async fn without_discovered_metadata_no_authorization_server_is_invented() {
+    let metadata = oauth_app_authorization(oauth_client_settings(), &AuthorizationConnector).await;
+    assert!(
+        metadata.is_null(),
+        "no issuer is guessed from the MCP origin"
+    );
+}
+
+#[test]
+fn an_internal_builder_is_never_offered_an_oauth_app() {
+    let version = json!({
+        "tools": [{
+            "type": "mcp_elitea_internal_chat",
+            "toolkit_name": "Elitea Chat",
+            "name": "Elitea Chat",
+            "meta": {"mcp": true, "internal_builder": true},
+            "settings": {
+                "server_name": "mcp_elitea_internal_chat",
+                "url": "https://elitea.example.invalid/app/7/mcp/chat",
+                "headers": {"Authorization": "Bearer per-execution-actor-token"},
+                "client_id": "registered-app",
+                "client_secret": "super-secret-client-value",
+                "selected_tools": [],
+                "ssl_verify": true
+            }
+        }]
+    })
+    .as_object()
+    .cloned()
+    .expect("internal builder version");
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let reference = snapshot
+        .iter()
+        .find(|reference| reference.is_internal_builder())
+        .expect("internal builder reference");
+    let config = RemoteMcpConfig::parse_for_test(reference, &Map::new()).expect("config");
+    assert!(config.oauth_client_for_test().is_none());
+}
+
+#[tokio::test]
+async fn a_stored_token_is_used_on_the_next_turn_without_a_new_challenge() {
+    // Main materializes the saved grant under the canonical resource URL.
+    let version = frozen("mcp", &oauth_client_settings());
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let first = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &DiscoveringConnector,
+        &policy(&[]),
+        &Map::new(),
+    )
+    .await
+    .expect("first turn");
+    assert!(!first.1.is_empty(), "the first turn asks to authorize");
+    let tokens = Map::from_iter([(
+        "https://mcp.example.invalid/v1/mcp".to_owned(),
+        json!({"access_token": "runtime-secret"}),
+    )]);
+    let second = materialize_mcp_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &TokenConnector,
+        &policy(&[]),
+        &tokens,
+    )
+    .await
+    .expect("next turn");
+    assert!(
+        second.1.is_empty(),
+        "no new challenge once the token is stored"
+    );
+    assert_eq!(second.0.len(), 1);
 }
 
 #[test]
