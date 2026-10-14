@@ -93,10 +93,14 @@ field that failed with its sentence, and the fields not tried (the SDK stops at 
 field and reports its error text as the list of updated fields). A date that cannot be read
 (`YYYY-MM-DD`, optionally `THH:MM[:SS]`) is reported as an invalid field value; the SDK's
 `dateutil` fallback writes the current time. The board is looked up among the repository's first
-20 projects (the SDK's 10) by fields only; the issue is found by repository AND number (the same
-number can exist in two repositories on one board) by paging the chosen project's items once from
-the start (at most 50 pages of 100). The lookups are reads (a failure is an outage, nothing changed);
-only a mutation's `INTERNAL`/`SERVICE_UNAVAILABLE`, lost answer or 5xx is an unknown outcome. A
+20 projects (the SDK's 10) by fields only; the issue is looked up DIRECTLY by repository and number
+(`repository(owner,name){issue(number){projectItems}}`, one request, then the item of this project;
+the same number can exist in two repositories). `issue_repo` names the repository, default the
+board's; if it is not there and `issue_repo` was absent the answer says so and asks for it; the board
+is never scanned. The lookups are reads (a failure is an outage, nothing changed);
+a mutation's error is a definite refusal only when every error is typed (not found, no permission,
+rate limit, unprocessable) and no data came with it; untyped errors, other types, `INTERNAL`,
+partial data, a lost answer or a 5xx are an unknown outcome. A
 conversion whose answer is lost says it may have applied and to check the board before retrying.
 
 ### Deliberate differences, in one place
@@ -110,9 +114,12 @@ conversion whose answer is lost says it may have applied and to check the board 
 3. `create_branch` finds a free name from the matching refs. A branch, tag or ref name, and every
    path in a patch, with a `.`, `..` or empty segment is refused before any request (it would
    address another ref or file in the URL). Integer arguments are read as pydantic reads them
-   (`"5"` is 5; a non-number is "must be a number"). Writes go over a transport built without
-   protocol-level retries (`EFFECT_POLICY`), as ado, bitbucket and gitlab do; a retried POST is a
-   second effect. Reads keep theirs.
+   (`"5"` is 5; a non-number is "must be a number"). The GitHub HTTP client is built without
+   protocol-level retries (`CLIENT_POLICY.disable_retries`), as ado, bitbucket and gitlab are; a
+   retried POST is a second effect. So is the Office host's (`OFFICE_POLICY`), which carries object
+   writes and bucket creation. A full ref (`refs/heads/x`) is refused where a branch name is
+   expected. A CRLF patch applies (the CR is not part of a path), and a patch that touches one path
+   twice (two diffs, a rename whose target is modified) is refused whole.
 4. `apply_git_patch` is checked before it writes (above).
 5. `get_workflow_logs` returns job details only; `search_project_issues` filters.
 6. Active-branch state lives on the invocation's client, as the SDK's lives on its wrapper.
@@ -130,8 +137,8 @@ Code: `libs/rust/agent-runtime/src/toolkits/families/artifact/extra_tools.rs` (n
 |---|---|---|
 | `read_multiple_files` | read | Files in order, each a string, the `content_too_large` object for a file over the per-file cap, or `Error reading file: <cause>`; a cumulative 200,000-character budget, after which the rest are skipped with the SDK's notice and not fetched. A leading `/` names the bucket (`/bucket/file`). At most 32 files. |
 | `grep_file` | read | The artifact wrapper's `Found N match(es) in p:` layout (not the repository families'), case-insensitive; an invalid regular expression finds nothing, as in the SDK. Stops at 2,000 matches or 200,000 characters and says how many it did not show. |
-| `edit_file` | effect | OLD/NEW pairs applied one by one with the SDK's exact and tolerant matching; a pair that does not match or matches twice is reported and the rest still go in (`Successfully applied N edit(s) ... WARNING: ...`); nothing is written when none applies. Writes the whole file back (65,536-character write cap; the real size is in the refusal). It reads the file again just before writing and refuses if it changed; the platform's text routes carry no version or conditional write, so the race between that read and the write remains. |
-| `append_data` | effect | `\n` + data after non-empty content; answers the SDK's JSON text. A missing file is created only when the platform says it does not exist: the SDK creates it on ANY failed download, so a refused bucket or an outage overwrote the file. `.docx` (HTML/Markdown append) and other binary types are refused with a sentence. Same re-read-before-write guard as `edit_file` (a file that appeared or changed meanwhile is not overwritten). |
+| `edit_file` | effect | OLD/NEW pairs applied one by one with the SDK's exact and tolerant matching; a pair that does not match or matches twice is reported and the rest still go in (`Successfully applied N edit(s) ... WARNING: ...`); nothing is written when none applies. Writes the whole file back (65,536-character write cap; the real size is in the refusal). It lists the file's size and modified time before reading it and again just before writing (two small listings, one full read) and refuses if either changed or the file appeared or vanished; with no modified time it reads the file again and compares content. The platform's text routes carry no version or conditional write, so the race after the last check remains, and a same-size rewrite inside one timestamp tick goes unseen by the marker. |
+| `append_data` | effect | `\n` + data after non-empty content; answers the SDK's JSON text. A missing file is created only when the platform says it does not exist: the SDK creates it on ANY failed download, so a refused bucket or an outage overwrote the file. `.docx` (HTML/Markdown append) and other binary types are refused with a sentence. Same guard as `edit_file` (a file that appeared or changed meanwhile is not overwritten). |
 | `get_file_metadata` | read | The SDK's `file_metadata` object (type, extension, size, `read_limits`, `instruction_for_readFile`, line count and hints for text); per-type structure (sheets, pages, images) is not available and the `notes` field says so. Errors are the SDK's `error` object. |
 | `create_new_bucket` | effect | Name sanitized as the SDK does (`_` to `-`, lower case); `expiration_measure`/`expiration_value` become `retention_days` (days 1, weeks 7, months 30, years 365). Created through the platform's bucket API (`POST /api/v2/artifacts/buckets/{project}`) under the turn's own credential, by the same Office host that moves bytes for `pptx`. A host without one (the desktop) answers that it cannot create buckets. |
 

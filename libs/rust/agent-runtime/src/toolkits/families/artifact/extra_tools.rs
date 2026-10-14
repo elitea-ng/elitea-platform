@@ -39,6 +39,7 @@ use serde_json::{Map, Value, json};
 use crate::host::HostErrorCode;
 use crate::platform::{ArtifactListRequest, ArtifactReadRequest, ArtifactWriteRequest};
 use crate::toolkits::families::gitlab_org::edit::{EditErrorCode, apply_pairs, editable};
+use crate::toolkits::families::integer_like::unsigned_like;
 use crate::toolkits::families::office_host::OfficeFailure;
 use crate::toolkits::families::vcs_text::{
     MAX_BATCH_FILES, MAX_CONTEXT_LINES, MAX_OUTPUT_CHARS, MAX_PATTERN_BYTES, batch_skip_notice,
@@ -280,6 +281,15 @@ fn log_failure(tool: &str, error: &crate::host::HostError) {
     );
 }
 
+/// What a listing says about a file, to tell whether it changed.
+#[derive(Debug, PartialEq, Eq)]
+enum Marker {
+    Absent,
+    Present(u64, String),
+    /// Listed without a modified time: not comparable.
+    Unknown,
+}
+
 /// One whole text file, or the sentence that says why not.
 enum Read {
     Text(crate::platform::ArtifactReadOutcome),
@@ -288,18 +298,57 @@ enum Read {
 }
 
 impl ExtraTool {
+    /// The file's cheap change marker: its size and modified time from a
+    /// listing of that one key (no file content). `Unknown` when the platform
+    /// gives no modified time, which sends the guard to a content comparison.
+    async fn marker(
+        &self,
+        tool: &str,
+        action: &str,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Marker, String> {
+        let request = ArtifactListRequest {
+            bucket: bucket.to_owned(),
+            prefix: key.to_owned(),
+            recursive: true,
+            limit: 50,
+            bucket_only: false,
+        };
+        match self.authority.writer().list_artifacts(&request).await {
+            Ok(listed) => Ok(listed.files.iter().find(|file| file.name == key).map_or(
+                Marker::Absent,
+                |file| {
+                    if file.modified_at.is_empty() {
+                        Marker::Unknown
+                    } else {
+                        Marker::Present(file.byte_length, file.modified_at.clone())
+                    }
+                },
+            )),
+            Err(error) => {
+                log_failure(tool, &error);
+                Err(artifact_failure_text(action, &error))
+            }
+        }
+    }
+
     /// The write is a whole-file replace and the platform's text routes carry
-    /// no version, etag or conditional write, so the closest guard is to read
-    /// the file again just before writing and refuse if it is not what the
-    /// change was made against (`original`, `None` for a file that was
-    /// absent). That leaves the race between this read and the write, which
-    /// only a conditional write on the platform could close.
+    /// no version, etag or conditional write. The guard is the file's size and
+    /// modified time, listed before the file is read and again just before it
+    /// is written (a small listing each, not a second full read): a change in
+    /// either, or a file that appeared or vanished, refuses the write. When
+    /// the platform gives no modified time the file is read again and its
+    /// content compared. The race between the last check and the write
+    /// remains; only a conditional write on the platform could close it. A
+    /// same-size rewrite inside one timestamp tick goes unseen by the marker.
     async fn changed_since(
         &self,
         tool: &str,
         action: &str,
         bucket: &str,
         key: &str,
+        before: &Marker,
         original: Option<&str>,
     ) -> Option<String> {
         let changed = || {
@@ -307,6 +356,13 @@ impl ExtraTool {
                 "Could not {action}: the file was changed by someone else while this change was being made, so nothing was written. Read the file again and redo the change."
             )
         };
+        let now = match self.marker(tool, action, bucket, key).await {
+            Ok(now) => now,
+            Err(text) => return Some(text),
+        };
+        if *before != Marker::Unknown && now != Marker::Unknown {
+            return (now != *before).then(changed);
+        }
         match self.read_text(tool, action, bucket, key).await {
             Read::Text(now) if original == Some(now.content.as_str()) => None,
             Read::Missing if original.is_none() => None,
@@ -465,7 +521,8 @@ impl ExtraTool {
         let is_regex = optional_bool(arguments, "is_regex").unwrap_or(true);
         let context_lines = match arguments.get("context_lines") {
             None | Some(Value::Null) => 2,
-            Some(value) => match value.as_u64().and_then(|value| usize::try_from(value).ok()) {
+            Some(value) => match unsigned_like(value).and_then(|value| usize::try_from(value).ok())
+            {
                 Some(value) if value <= MAX_CONTEXT_LINES => value,
                 _ => {
                     return sentence(format!(
@@ -513,6 +570,10 @@ impl ExtraTool {
         }
         let bucket = target_bucket(arguments, &self.bucket);
         let key = normalized_key(&file_path);
+        let before = match self.marker(EDIT_FILE, "edit the file", &bucket, &key).await {
+            Ok(before) => before,
+            Err(text) => return Value::String(text),
+        };
         let outcome = match self
             .read_text(EDIT_FILE, "edit the file", &bucket, &key)
             .await
@@ -558,6 +619,7 @@ impl ExtraTool {
                 "edit the file",
                 &bucket,
                 &key,
+                &before,
                 Some(&outcome.content),
             )
             .await
@@ -608,6 +670,13 @@ impl ExtraTool {
                 "Cannot append to '{filename}': File type is not text-editable and this runtime has no binary append handler (it appends text only). Binary files (PDF, images, Office documents) cannot be safely appended to as text. Consider creating a new file instead using the create_file tool."
             ));
         }
+        let before = match self
+            .marker(APPEND_DATA, "append to the file", &bucket, &key)
+            .await
+        {
+            Ok(before) => before,
+            Err(text) => return Value::String(text),
+        };
         let mut original: Option<String> = None;
         let combined = match self
             .read_text(APPEND_DATA, "append to the file", &bucket, &key)
@@ -650,6 +719,7 @@ impl ExtraTool {
                 "append to the file",
                 &bucket,
                 &key,
+                &before,
                 original.as_deref(),
             )
             .await
@@ -858,7 +928,7 @@ impl ExtraTool {
         };
         let value = match arguments.get("expiration_value") {
             None | Some(Value::Null) => 1,
-            Some(value) => match value.as_u64() {
+            Some(value) => match unsigned_like(value) {
                 Some(value) if value >= 1 => value,
                 _ => {
                     return sentence(

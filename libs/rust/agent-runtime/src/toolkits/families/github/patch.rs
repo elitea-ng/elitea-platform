@@ -72,7 +72,10 @@ pub(super) fn parse_patch(patch: &str) -> Vec<FileChange> {
 }
 
 fn parse_file_change(lines: &[&str], start: usize) -> Option<(FileChange, usize)> {
-    let rest = lines[start].strip_prefix("diff --git a/")?;
+    // A CRLF patch leaves a CR on the header line; it is not part of the path.
+    let rest = lines[start]
+        .strip_prefix("diff --git a/")?
+        .trim_end_matches('\r');
     // The SDK's greedy `(.+) b/(.+)`: the old path runs to the LAST ` b/`.
     let split = rest.rfind(" b/")?;
     let old_path = &rest[..split];

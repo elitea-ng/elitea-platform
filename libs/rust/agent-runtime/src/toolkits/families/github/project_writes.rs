@@ -25,14 +25,13 @@ use std::fmt::Write as _;
 
 use serde_json::{Map, Value, json};
 
+use crate::toolkits::families::integer_like::integer_like;
 use crate::toolkits::families::python_repr::{repr, repr_str_list};
 
 use super::client::{GitHubClient, GitHubClientErrorCode, error};
 use super::writes::{Fail, Outcome, argument, optional_str, required_str, text};
 
 const MAX_GRAPHQL_BYTES: usize = 4 * 1_024 * 1_024;
-const MAX_PAGES: usize = 50;
-const PAGE_SIZE: usize = 100;
 
 const BOARD_QUERY: &str = r"
 query EliteaBoard($owner: String!, $name: String!) {
@@ -67,25 +66,20 @@ query EliteaIssueRepo($owner: String!, $name: String!) {
 }
 ";
 
-const ITEMS_PAGE_QUERY: &str = r"
-query EliteaBoardItems($owner: String!, $name: String!, $number: Int!, $count: Int!, $after: String) {
+/// One issue, directly by repository and number, with the board items it is
+/// on (one request; a number is only unique inside its repository).
+const ISSUE_QUERY: &str = r"
+query EliteaBoardIssue($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
-    projectV2(number: $number) {
-      items(first: $count, after: $after) {
-        nodes {
-          id
-          content {
-            ... on Issue {
-              id
-              number
-              repository { nameWithOwner }
-              labels(first: 20) { nodes { id name } }
-              assignees(first: 20) { nodes { id name } }
-            }
-          }
-        }
-        pageInfo { hasNextPage endCursor }
+    issue(number: $number) {
+      id
+      number
+      projectItems(first: 50) {
+        nodes { id project { id } }
+        pageInfo { hasNextPage }
       }
+      labels(first: 20) { nodes { id name } }
+      assignees(first: 20) { nodes { id name } }
     }
   }
 }
@@ -187,7 +181,7 @@ impl GitHubClient {
             .and_then(Value::as_array)
             .filter(|e| !e.is_empty())
         {
-            return Err(graphql_failure(errors, false));
+            return Err(graphql_failure(errors, false, false));
         }
         Ok(body.get("data").cloned().unwrap_or(Value::Null))
     }
@@ -214,7 +208,12 @@ impl GitHubClient {
             .and_then(Value::as_array)
             .filter(|e| !e.is_empty())
         {
-            return Err(graphql_failure(errors, true));
+            // Partial data beside errors means part of the mutation ran.
+            let ran = body
+                .get("data")
+                .and_then(Value::as_object)
+                .is_some_and(|data| data.values().any(|value| !value.is_null()));
+            return Err(graphql_failure(errors, true, ran));
         }
         Ok(body.get("data").cloned().unwrap_or(Value::Null))
     }
@@ -224,7 +223,7 @@ impl GitHubClient {
 /// (`effect`) an `INTERNAL` or `SERVICE_UNAVAILABLE` error is an unknown
 /// outcome (the server may have applied it before failing); for a read it is
 /// an outage and nothing was changed.
-fn graphql_failure(errors: &[Value], effect: bool) -> Fail {
+fn graphql_failure(errors: &[Value], effect: bool, data_present: bool) -> Fail {
     let kind = |item: &Value| {
         item.pointer("/extensions/type")
             .or_else(|| item.pointer("/type"))
@@ -232,14 +231,35 @@ fn graphql_failure(errors: &[Value], effect: bool) -> Fail {
             .unwrap_or_default()
             .to_ascii_uppercase()
     };
-    let code = match errors.first().map(kind).as_deref() {
-        Some("NOT_FOUND") => GitHubClientErrorCode::NotFound,
-        Some("FORBIDDEN" | "INSUFFICIENT_SCOPES") => GitHubClientErrorCode::Authorization,
-        Some("UNAUTHORIZED") => GitHubClientErrorCode::Authentication,
-        Some("RATE_LIMITED") => GitHubClientErrorCode::RateLimited,
-        Some("INTERNAL" | "SERVICE_UNAVAILABLE") if effect => GitHubClientErrorCode::UnknownOutcome,
-        Some("INTERNAL" | "SERVICE_UNAVAILABLE") => GitHubClientErrorCode::DependencyUnavailable,
-        _ => GitHubClientErrorCode::InvalidInput,
+    // A mutation's error is a DEFINITE refusal only when every error names a
+    // type that is decided before anything runs (not found, no permission,
+    // rate limit, invalid input) and no data came back with it. Untyped errors,
+    // other types, `INTERNAL` and partial data may follow a mutation that ran.
+    let definite = |kind: &str| {
+        matches!(
+            kind,
+            "NOT_FOUND"
+                | "FORBIDDEN"
+                | "INSUFFICIENT_SCOPES"
+                | "UNAUTHORIZED"
+                | "RATE_LIMITED"
+                | "UNPROCESSABLE"
+        )
+    };
+    let code = if effect && (data_present || !errors.iter().map(&kind).all(|kind| definite(&kind)))
+    {
+        GitHubClientErrorCode::UnknownOutcome
+    } else {
+        match errors.first().map(kind).as_deref() {
+            Some("NOT_FOUND") => GitHubClientErrorCode::NotFound,
+            Some("FORBIDDEN" | "INSUFFICIENT_SCOPES") => GitHubClientErrorCode::Authorization,
+            Some("UNAUTHORIZED") => GitHubClientErrorCode::Authentication,
+            Some("RATE_LIMITED") => GitHubClientErrorCode::RateLimited,
+            Some("INTERNAL" | "SERVICE_UNAVAILABLE") => {
+                GitHubClientErrorCode::DependencyUnavailable
+            }
+            _ => GitHubClientErrorCode::InvalidInput,
+        }
     };
     let reason: String = errors
         .iter()
@@ -1008,23 +1028,17 @@ async fn update_flow(
     };
     let (updates, missing) = plan_fields(&board.project, fields, &labels, &users);
 
-    // Find the issue's board item by repository AND number (two repositories
-    // can both have #42 on one board), paging the project's items from the
-    // start: the board query read its fields only.
-    let project_number = board
-        .project
-        .get("number")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            Stop::Say("Project number not available for pagination search.".to_owned())
-        })?;
-    let issue_in = issue_repo.unwrap_or(board_repo);
-    let located = page_for_item(
+    // Find the issue's board item directly, by repository AND number (two
+    // repositories can both have #42): in issue_repo, else in the board's own
+    // repository. If it is not there the answer asks for issue_repo; the
+    // board is never scanned.
+    let located = locate_issue(
         client,
-        &owner,
-        &name,
-        project_number,
-        issue_in,
+        issue_repo.unwrap_or(board_repo),
+        issue_repo.is_some(),
+        board_repo,
+        &board,
+        project_title,
         issue_number,
     )
     .await?;
@@ -1076,78 +1090,79 @@ struct Located {
     assignee_ids: Vec<String>,
 }
 
-fn find_item(items: &[&Value], repository: &str, issue_number: &str) -> Option<Located> {
-    items.iter().find_map(|item| {
-        let content = item.get("content").filter(|content| !content.is_null())?;
-        if content.get("number")?.as_u64()?.to_string() != issue_number {
-            return None;
-        }
-        // The same number in another repository is another issue.
-        let owner_and_name = content.pointer("/repository/nameWithOwner")?.as_str()?;
-        if !owner_and_name.eq_ignore_ascii_case(repository) {
-            return None;
-        }
-        Some(Located {
-            item_id: id_of(item)?,
-            issue_node_id: id_of(content)?,
-            label_ids: nodes(content, "/labels/nodes")
-                .iter()
-                .filter_map(|node| id_of(node))
-                .collect(),
-            assignee_ids: nodes(content, "/assignees/nodes")
-                .iter()
-                .filter_map(|node| id_of(node))
-                .collect(),
-        })
-    })
-}
-
-async fn page_for_item(
+/// The board item of an issue, found directly by repository and number.
+async fn locate_issue(
     client: &GitHubClient,
-    owner: &str,
-    name: &str,
-    project_number: u64,
     repository: &str,
+    explicit_repository: bool,
+    board_repo: &str,
+    board: &Board,
+    project_title: &str,
     issue_number: &str,
 ) -> Step<Located> {
-    let mut after = Value::Null;
-    for _ in 0..MAX_PAGES {
-        let data = client
-            .graphql_read(
-                ITEMS_PAGE_QUERY,
-                json!({"owner": owner, "name": name, "number": project_number,
-                       "count": PAGE_SIZE, "after": after}),
+    let number = integer_like(&Value::String(issue_number.to_owned()))
+        .filter(|number| *number > 0 && i32::try_from(*number).is_ok())
+        .ok_or_else(|| Stop::Say("issue_number must be a number such as '42'.".to_owned()))?;
+    let (owner, name) = parse_repo(repository)?;
+    let data = client
+        .graphql_read(
+            ISSUE_QUERY,
+            json!({"owner": owner, "name": name, "number": number}),
+        )
+        .await
+        .map_err(lookup_failure)?;
+    let repository_data = data
+        .get("repository")
+        .filter(|repository| !repository.is_null())
+        .ok_or_else(|| Stop::Say(format_project_error("No repository data found.")))?;
+    let Some(issue) = repository_data
+        .get("issue")
+        .filter(|issue| !issue.is_null())
+    else {
+        return Err(Stop::Say(if explicit_repository {
+            format!("Issue number {issue_number} was not found in {repository}.")
+        } else {
+            format!(
+                "Issue number {issue_number} was not found in {board_repo}, the repository of the board. If the issue is in another repository, pass issue_repo."
             )
-            .await
-            .map_err(|fail| {
-                Stop::Say(format!(
-                    "Error occurred while searching for issue: {}",
-                    sentence_of(fail)
-                ))
-            })?;
-        let connection = data
-            .pointer("/repository/projectV2/items")
-            .filter(|items| !items.is_null())
-            .ok_or_else(|| Stop::Say("No project data found during pagination.".to_owned()))?;
-        let page: Vec<&Value> = nodes(connection, "/nodes");
-        if let Some(found) = find_item(&page, repository, issue_number) {
-            return Ok(found);
-        }
-        let more = connection
-            .pointer("/pageInfo/hasNextPage")
+        }));
+    };
+    let on_board = nodes(issue, "/projectItems/nodes")
+        .into_iter()
+        .find(|item| {
+            item.pointer("/project/id").and_then(Value::as_str) == Some(board.project_id.as_str())
+        });
+    let (Some(item), Some(issue_node_id)) = (on_board, id_of(issue)) else {
+        let more = issue
+            .pointer("/projectItems/pageInfo/hasNextPage")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let cursor = connection
-            .pointer("/pageInfo/endCursor")
-            .and_then(Value::as_str);
-        match (more, cursor) {
-            (true, Some(cursor)) => after = Value::String(cursor.to_owned()),
-            _ => break,
-        }
-    }
-    Err(Stop::Say(format!(
-        "Issue number {issue_number} not found in project."
-    )))
+        return Err(Stop::Say(format!(
+            "Issue number {issue_number} of {repository} is not on the project '{project_title}'{}.",
+            if more {
+                " (it is on more than 50 projects; only the first 50 were checked)"
+            } else {
+                ""
+            }
+        )));
+    };
+    let item_id = id_of(item).ok_or_else(|| {
+        Stop::Say(format_project_error(
+            "The board item has no id in GitHub's answer.",
+        ))
+    })?;
+    Ok(Located {
+        item_id,
+        issue_node_id,
+        label_ids: nodes(issue, "/labels/nodes")
+            .iter()
+            .filter_map(|node| id_of(node))
+            .collect(),
+        assignee_ids: nodes(issue, "/assignees/nodes")
+            .iter()
+            .filter_map(|node| id_of(node))
+            .collect(),
+    })
 }
 
 /// The classified sentence of a failure, for the SDK's `Error: ...` tails.

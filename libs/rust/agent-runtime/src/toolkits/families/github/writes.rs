@@ -688,6 +688,17 @@ fn plain_name(label: &str, value: &str, max: usize) -> Result<(), Fail> {
 /// `.`, `..` or empty segment is refused (`./main` would otherwise address
 /// another ref, `../main` the one above).
 fn branch_name(label: &str, value: &str) -> Result<(), Fail> {
+    if value.starts_with("refs/") {
+        return Err(argument(format!(
+            "`{label}` must be a branch name such as `main`, not a full ref such as `refs/heads/main`"
+        )));
+    }
+    ref_name(label, value)
+}
+
+/// A branch or tag name, or a ref, as a URL path: no empty, `.` or `..`
+/// segment.
+fn ref_name(label: &str, value: &str) -> Result<(), Fail> {
     plain_name(label, value, 1_024)?;
     if value
         .split('/')
@@ -700,31 +711,14 @@ fn branch_name(label: &str, value: &str) -> Result<(), Fail> {
     Ok(())
 }
 
-/// An integer argument the way the SDK's pydantic models read one: a number,
-/// or a string of digits ("42"); anything else is "must be a number".
+/// An integer argument the way the SDK's pydantic models read one (the shared
+/// reading in `integer_like.rs`); anything else is "must be a number".
 fn integer_like(arguments: &Map<String, Value>, key: &str) -> Result<Option<u64>, Fail> {
-    let refuse = || argument(format!("`{key}` must be a number"));
     match arguments.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(number)) => number
-            .as_u64()
-            .or_else(|| {
-                number
-                    .as_f64()
-                    .filter(|value| value.fract() == 0.0 && *value >= 0.0 && *value < 9.0e15)
-                    .and_then(|value| format!("{value:.0}").parse().ok())
-            })
+        Some(value) => crate::toolkits::families::integer_like::unsigned_like(value)
             .map(Some)
-            .ok_or_else(refuse),
-        Some(Value::String(text)) => {
-            let text = text.trim();
-            if !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()) {
-                text.parse().map(Some).map_err(|_| refuse())
-            } else {
-                Err(refuse())
-            }
-        }
-        Some(_) => Err(refuse()),
+            .ok_or_else(|| argument(format!("`{key}` must be a number"))),
     }
 }
 
@@ -1553,7 +1547,7 @@ async fn comment_on_issue(client: &GitHubClient, arguments: &Map<String, Value>)
 async fn trigger_workflow(client: &GitHubClient, arguments: &Map<String, Value>) -> Outcome {
     let workflow_id = required_str(arguments, "workflow_id")?.trim();
     let reference = required_str(arguments, "ref")?;
-    branch_name("ref", reference)?;
+    ref_name("ref", reference)?;
     let inputs = match arguments.get("inputs") {
         None | Some(Value::Null) => json!({}),
         Some(value @ Value::Object(_)) => value.clone(),
@@ -1755,6 +1749,26 @@ async fn apply_patch(
     for change in &changes {
         file_path("a file path in the patch", &change.path)?;
         file_path("a file path in the patch", &change.old_path)?;
+    }
+    // Each file is planned from the branch as it is now, so a patch that
+    // touches one path twice (two diffs of it, a rename whose target is also
+    // modified, a delete and a create) cannot be applied in order. Refused
+    // whole, before anything is read or written.
+    let mut touched: Vec<&str> = Vec::with_capacity(changes.len() + 1);
+    for change in &changes {
+        let paths = if change.operation == Operation::Rename {
+            vec![change.old_path.as_str(), change.path.as_str()]
+        } else {
+            vec![change.path.as_str()]
+        };
+        for path in paths {
+            if touched.contains(&path) {
+                return Err(argument(format!(
+                    "the patch changes `{path}` more than once; split it into separate patches, one per change to that file"
+                )));
+            }
+            touched.push(path);
+        }
     }
 
     // Phase 1: read every file the patch touches and check that it applies.

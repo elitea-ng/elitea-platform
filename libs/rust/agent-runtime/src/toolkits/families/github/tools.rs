@@ -1469,19 +1469,8 @@ fn required_directory<'a>(
         .ok_or_else(invalid_arguments)
 }
 
-/// An integer the way the SDK's pydantic models read one: a JSON integer or a
-/// string of digits ("42").
 fn integer_value(value: &Value) -> Option<u64> {
-    match value {
-        Value::Number(number) => number.as_u64(),
-        Value::String(text) => {
-            let text = text.trim();
-            (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
-                .then(|| text.parse().ok())
-                .flatten()
-        }
-        _ => None,
-    }
+    crate::toolkits::families::integer_like::unsigned_like(value)
 }
 
 fn optional_positive_usize(

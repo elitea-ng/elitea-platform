@@ -38,15 +38,62 @@ struct Bucket {
     fail_reads: Mutex<Option<HostErrorCode>>,
     fail_writes: Mutex<Option<HostErrorCode>>,
     writes: Mutex<Vec<(String, String, String)>>,
-    /// Someone else writes `(name, content)` right after the N-th read.
+    /// Someone else writes `(name, content)` right after the N-th call (a
+    /// listing or a read, counted together).
     interfere: Mutex<Option<(usize, String, String)>>,
-    /// Every read after the N-th fails as unreachable.
+    /// Every call after the N-th fails as unreachable.
     fail_reads_after: Mutex<Option<usize>>,
-    reads: Mutex<usize>,
+    calls: Mutex<usize>,
+    /// Whole-file reads only.
+    full_reads: Mutex<usize>,
+    /// How many times each file was written, shown as its modified time.
+    versions: Mutex<BTreeMap<(String, String), u64>>,
+    /// List without a modified time.
+    blank_modified: Mutex<bool>,
 }
 
 impl Bucket {
+    /// Counts a call; fails it when the switch says the platform is down.
+    fn tick(&self) -> Result<usize, HostError> {
+        let number = {
+            let mut calls = self.calls.lock().expect("calls");
+            *calls += 1;
+            *calls
+        };
+        if self
+            .fail_reads_after
+            .lock()
+            .expect("after")
+            .is_some_and(|after| number > after)
+        {
+            return Err(HostError::new(
+                HostErrorCode::DependencyUnavailable,
+                "fixture",
+            ));
+        }
+        Ok(number)
+    }
+
+    fn interfere_after(&self, number: usize, bucket: &str) {
+        let interfere = self.interfere.lock().expect("interfere").clone();
+        if let Some((at, name, content)) = interfere
+            && at == number
+        {
+            self.put(bucket, &name, &content);
+        }
+    }
+
+    fn full_reads(&self) -> usize {
+        *self.full_reads.lock().expect("full")
+    }
+
     fn put(&self, bucket: &str, name: &str, content: &str) {
+        *self
+            .versions
+            .lock()
+            .expect("versions")
+            .entry((bucket.to_owned(), name.to_owned()))
+            .or_default() += 1;
         self.files
             .lock()
             .expect("files")
@@ -75,6 +122,9 @@ impl PlatformWriter for Bucket {
         if let Some(code) = *self.fail_reads.lock().expect("fail") {
             return Err(HostError::new(code, "fixture"));
         }
+        let number = self.tick()?;
+        let blank = *self.blank_modified.lock().expect("blank");
+        let versions = self.versions.lock().expect("versions").clone();
         let files = self
             .files
             .lock()
@@ -83,7 +133,7 @@ impl PlatformWriter for Bucket {
             .filter(|((bucket, name), _)| {
                 *bucket == request.bucket && name.starts_with(&request.prefix)
             })
-            .map(|((_, name), content)| ArtifactFile {
+            .map(|((bucket, name), content)| ArtifactFile {
                 name: name.clone(),
                 byte_length: content.len() as u64,
                 media_type: if std::path::Path::new(name)
@@ -94,9 +144,20 @@ impl PlatformWriter for Bucket {
                 } else {
                     "text/plain".to_owned()
                 },
-                modified_at: "2026-10-01T00:00:00Z".to_owned(),
+                modified_at: if blank {
+                    String::new()
+                } else {
+                    format!(
+                        "v{}",
+                        versions
+                            .get(&(bucket.clone(), name.clone()))
+                            .copied()
+                            .unwrap_or_default()
+                    )
+                },
             })
             .collect();
+        self.interfere_after(number, &request.bucket);
         Ok(ArtifactListOutcome {
             bucket: request.bucket.clone(),
             files,
@@ -111,29 +172,10 @@ impl PlatformWriter for Bucket {
         if let Some(code) = *self.fail_reads.lock().expect("fail") {
             return Err(HostError::new(code, "fixture"));
         }
+        let number = self.tick()?;
+        *self.full_reads.lock().expect("full") += 1;
         let found = self.get(&request.bucket, &request.name);
-        let number = {
-            let mut reads = self.reads.lock().expect("reads");
-            *reads += 1;
-            *reads
-        };
-        if self
-            .fail_reads_after
-            .lock()
-            .expect("after")
-            .is_some_and(|after| number > after)
-        {
-            return Err(HostError::new(
-                HostErrorCode::DependencyUnavailable,
-                "fixture",
-            ));
-        }
-        let interfere = self.interfere.lock().expect("interfere").clone();
-        if let Some((at, name, content)) = interfere
-            && at == number
-        {
-            self.put(&request.bucket, &name, &content);
-        }
+        self.interfere_after(number, &request.bucket);
         let content = found.ok_or_else(|| HostError::new(HostErrorCode::NotFound, "missing"))?;
         let chars = content.chars().count() as u64;
         let over_limit = chars > READ_LIMIT;
@@ -1042,7 +1084,7 @@ async fn an_edit_is_refused_when_the_file_changed_after_it_was_read() {
     rig.bucket.put("docs", "n.md", "hello\n");
     // Someone else rewrites the file right after the edit read it.
     *rig.bucket.interfere.lock().expect("interfere") = Some((
-        1,
+        2,
         "n.md".to_owned(),
         "hello, changed by someone else\n".to_owned(),
     ));
@@ -1082,7 +1124,7 @@ async fn an_append_is_refused_when_the_file_changed_or_appeared_meanwhile() {
     let rig = rig().await;
     rig.bucket.put("docs", "log.txt", "first");
     *rig.bucket.interfere.lock().expect("interfere") = Some((
-        1,
+        2,
         "log.txt".to_owned(),
         "first\nsecond (someone else)".to_owned(),
     ));
@@ -1103,7 +1145,7 @@ async fn an_append_is_refused_when_the_file_changed_or_appeared_meanwhile() {
     // overwritten by the create.
     let rig = self::rig().await;
     *rig.bucket.interfere.lock().expect("interfere") =
-        Some((1, "new.txt".to_owned(), "theirs".to_owned()));
+        Some((2, "new.txt".to_owned(), "theirs".to_owned()));
     let says = rig
         .says(
             "append_data",
@@ -1116,26 +1158,119 @@ async fn an_append_is_refused_when_the_file_changed_or_appeared_meanwhile() {
 }
 
 #[tokio::test]
-async fn the_recheck_failing_to_read_refuses_the_write() {
-    // The second read is the guard: if the platform cannot answer it, the
-    // write is not made on a guess.
+async fn the_recheck_failing_refuses_the_write() {
+    // Calls: 1 listing, 2 read, 3 the guard's listing. If the platform cannot
+    // answer the guard, the write is not made on a guess.
     let rig = rig().await;
     rig.bucket.put("docs", "n.md", "hello\n");
-    let tool_says = {
-        // Fail every read after the first by flipping the switch from a hook:
-        // the hook runs after read #1, so read #2 (the guard) fails.
-        *rig.bucket.interfere.lock().expect("interfere") =
-            Some((1, "other".to_owned(), String::new()));
-        *rig.bucket.fail_reads_after.lock().expect("after") = Some(1);
-        rig.says(
+    *rig.bucket.fail_reads_after.lock().expect("after") = Some(2);
+    let says = rig
+        .says(
             "edit_file",
             json!({"file_path": "n.md", "file_query": edit("hello", "bye")}),
         )
-        .await
-    };
-    assert!(
-        tool_says.starts_with("Could not edit the file:"),
-        "{tool_says}"
-    );
+        .await;
+    assert!(says.starts_with("Could not edit the file:"), "{says}");
     assert!(rig.bucket.writes().is_empty());
+}
+
+/// The guard compares size and modified time from a small listing, so a
+/// successful edit or append reads the whole file ONCE.
+#[tokio::test]
+async fn the_guard_does_not_read_the_whole_file_twice() {
+    let rig = rig().await;
+    rig.bucket.put("docs", "n.md", "hello\n");
+    let says = rig
+        .says(
+            "edit_file",
+            json!({"file_path": "n.md", "file_query": edit("hello", "bye")}),
+        )
+        .await;
+    assert!(says.starts_with("Successfully applied"), "{says}");
+    assert_eq!(rig.bucket.full_reads(), 1);
+    rig.says(
+        "append_data",
+        json!({"filename": "n.md", "filedata": "more"}),
+    )
+    .await;
+    assert_eq!(rig.bucket.full_reads(), 2, "one read per tool call");
+    // A rewrite of the same size is seen through the modified time.
+    *rig.bucket.interfere.lock().expect("interfere") = Some((
+        *rig.bucket.calls.lock().expect("calls") + 2,
+        "n.md".to_owned(),
+        "bye\nmore".to_owned().replace('b', "c"),
+    ));
+    let says = rig
+        .says("append_data", json!({"filename": "n.md", "filedata": "x"}))
+        .await;
+    assert!(says.contains("changed by someone else"), "{says}");
+}
+
+/// Without a modified time the guard falls back to reading the file again and
+/// comparing its content.
+#[tokio::test]
+async fn without_a_modified_time_the_guard_compares_content() {
+    let rig = rig().await;
+    *rig.bucket.blank_modified.lock().expect("blank") = true;
+    rig.bucket.put("docs", "n.md", "hello\n");
+    let says = rig
+        .says(
+            "edit_file",
+            json!({"file_path": "n.md", "file_query": edit("hello", "bye")}),
+        )
+        .await;
+    assert!(says.starts_with("Successfully applied"), "{says}");
+    assert_eq!(rig.bucket.full_reads(), 2, "the content comparison");
+    rig.bucket.put("docs", "n.md", "hello\n");
+    let calls = *rig.bucket.calls.lock().expect("calls");
+    // Call numbers: listing, read, listing, guard read; the rewrite lands
+    // after the first read.
+    *rig.bucket.interfere.lock().expect("interfere") =
+        Some((calls + 2, "n.md".to_owned(), "hellO\n".to_owned()));
+    let says = rig
+        .says(
+            "edit_file",
+            json!({"file_path": "n.md", "file_query": edit("hello", "bye")}),
+        )
+        .await;
+    assert!(says.contains("changed by someone else"), "{says}");
+}
+
+/// Integers are read the way the SDK's pydantic reads them in every artifact
+/// tool that takes one.
+#[tokio::test]
+async fn artifact_integer_arguments_accept_integer_like_values() {
+    let office = Arc::new(Buckets::default());
+    let rig = rig_with(Some(office.clone())).await;
+    rig.bucket.put("docs", "a.txt", "l1\nl2\nl3\nfoo\n");
+    let result = rig
+        .call(
+            "read_multiple_files",
+            json!({"file_paths": ["a.txt"], "offset": "2", "limit": 1.0}),
+        )
+        .await;
+    assert_eq!(result["a.txt"], "l2\n");
+    let found = rig
+        .says(
+            "grep_file",
+            json!({"file_path": "a.txt", "pattern": "foo", "context_lines": "1"}),
+        )
+        .await;
+    assert!(found.contains("  l3"), "{found}");
+    let result = rig
+        .call(
+            "create_new_bucket",
+            json!({"bucket_name": "temp", "expiration_measure": "weeks", "expiration_value": "2"}),
+        )
+        .await;
+    assert_eq!(result["retention_days"], 14);
+    for bad in [json!("two"), json!(2.5), json!(true)] {
+        let says = rig
+            .says(
+                "create_new_bucket",
+                json!({"bucket_name": "temp2", "expiration_value": bad}),
+            )
+            .await;
+        assert!(says.contains("whole number of at least 1"), "{says}");
+    }
 }

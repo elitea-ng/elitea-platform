@@ -391,7 +391,7 @@ pub(super) fn optional_line(arguments: &Value, key: &str) -> Option<i64> {
     arguments
         .as_object()
         .and_then(|object| object.get(key))
-        .and_then(Value::as_i64)
+        .and_then(crate::toolkits::families::integer_like::integer_like)
 }
 
 /// Lines `start..=end` (1-indexed, inclusive; `end` absent reads to the end)

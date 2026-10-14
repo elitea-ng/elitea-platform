@@ -358,19 +358,15 @@ impl GitHubRest {
         request: Request,
         max_response_bytes: usize,
     ) -> Result<EffectReply, GitHubClientError> {
-        let mut response = self
-            .transport
-            .execute(request)
-            .await
-            .map_err(|source| {
-                if source.is_refused() {
-                    error(GitHubClientErrorCode::EgressRefused)
-                } else if source.is_connect() {
-                    error(GitHubClientErrorCode::DependencyUnavailable)
-                } else {
-                    error(GitHubClientErrorCode::UnknownOutcome)
-                }
-            })?;
+        let mut response = self.transport.execute(request).await.map_err(|source| {
+            if source.is_refused() {
+                error(GitHubClientErrorCode::EgressRefused)
+            } else if source.is_connect() {
+                error(GitHubClientErrorCode::DependencyUnavailable)
+            } else {
+                error(GitHubClientErrorCode::UnknownOutcome)
+            }
+        })?;
         let status = response.status();
         let rate_limited = status == StatusCode::TOO_MANY_REQUESTS
             || (status == StatusCode::FORBIDDEN && github_rate_limited(response.headers()));

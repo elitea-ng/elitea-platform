@@ -285,7 +285,6 @@ fn context() -> Arc<SimpleToolContext> {
     )
 }
 
-
 async fn rig_with(script: Arc<Script>, store: Option<Arc<Store>>) -> Rig {
     let config = GitHubToolkitConfig::parse(&settings(&[])).expect("config");
     let client =
@@ -1813,27 +1812,24 @@ fn board_data() -> Value {
     }})
 }
 
-/// One page of board items (the last).
-fn items_page(items: Value) -> Value {
-    json!({"repository": {"projectV2": {"items": {
-        "nodes": items,
-        "pageInfo": {"hasNextPage": false, "endCursor": null}}}}})
-}
-
-/// An item whose issue lives in `repository`.
-fn board_item(item: &str, issue: &str, number: u64, repository: &str) -> Value {
-    json!({"id": item, "content": {"id": issue, "number": number,
-        "repository": {"nameWithOwner": repository},
+/// What GitHub answers for `repository(...).issue(number)`: the issue's node
+/// id, the board items it is on (`(item id, project id)`) and its labels and
+/// assignees.
+fn issue_data(issue: &str, number: u64, on: &[(&str, &str)]) -> Value {
+    let items: Vec<Value> = on
+        .iter()
+        .map(|(item, project)| json!({"id": item, "project": {"id": project}}))
+        .collect();
+    json!({"repository": {"issue": {
+        "id": issue, "number": number,
+        "projectItems": {"nodes": items, "pageInfo": {"hasNextPage": false}},
         "labels": {"nodes": [{"id": "L1", "name": "bug"}]},
-        "assignees": {"nodes": [{"id": "U1", "name": "Dev Lead"}]}}})
+        "assignees": {"nodes": [{"id": "U1", "name": "Dev Lead"}]}}}})
 }
 
-fn create_script(items: Value) -> Arc<Script> {
+fn create_script() -> Arc<Script> {
     let script = Arc::new(Script::default());
     script.data("EliteaBoard(", board_data());
-    if !items.is_null() {
-        script.data("EliteaBoardItems(", items_page(items));
-    }
     script.data(
         "EliteaDraft",
         json!({"addProjectV2DraftIssue": {"projectItem": {"id": "DRAFT"}}}),
@@ -1861,7 +1857,7 @@ fn names(ops: &[(String, Value)]) -> Vec<&str> {
 
 #[tokio::test]
 async fn an_issue_is_created_on_the_board_and_its_fields_are_set_in_order() {
-    let script = create_script(json!([]));
+    let script = create_script();
     let rig = rig(&script).await;
     let says = rig
         .says(
@@ -1938,7 +1934,7 @@ async fn an_issue_is_created_on_the_board_and_its_fields_are_set_in_order() {
 async fn creating_an_issue_on_a_board_names_what_went_wrong_at_each_step() {
     let args = json!({"board_repo": "EliteaAI/board", "project_title": "WebApp Redesign", "title": "t", "body": "b"});
     // A missing board lists the boards there are.
-    let script = create_script(json!([]));
+    let script = create_script();
     let rig_ = rig(&script).await;
     let mut other = args.clone();
     other["project_title"] = json!("Roadmap");
@@ -1962,7 +1958,7 @@ async fn creating_an_issue_on_a_board_names_what_went_wrong_at_each_step() {
     let mut bad = args.clone();
     bad["board_repo"] = json!("justname");
     assert!(
-        rig(&create_script(json!([])))
+        rig(&create_script())
             .await
             .says("create_issue_on_project", bad)
             .await
@@ -2023,7 +2019,7 @@ async fn creating_an_issue_on_a_board_names_what_went_wrong_at_each_step() {
 
 #[tokio::test]
 async fn a_field_that_fails_stops_the_rest_and_is_reported_with_what_was_set() {
-    let script = create_script(json!([]));
+    let script = create_script();
     script.on_graph(
         "EliteaClearField",
         Reply::Json(
@@ -2069,16 +2065,13 @@ async fn a_field_that_fails_stops_the_rest_and_is_reported_with_what_was_set() {
     assert!(!names(&script.operations()).contains(&"EliteaSetField"));
 }
 
-fn existing_items(number: u64) -> Value {
-    json!([
-        board_item("OTHER", "X", 1, "EliteaAI/board"),
-        board_item("ITEM", "ISSUE", number, "EliteaAI/board")
-    ])
-}
-
 #[tokio::test]
 async fn an_issue_on_the_board_is_found_updated_and_its_fields_changed() {
-    let script = create_script(existing_items(7));
+    let script = create_script();
+    script.data(
+        "EliteaBoardIssue(",
+        issue_data("ISSUE", 7, &[("ITEM", "PROJ")]),
+    );
     script.data(
         "EliteaUpdateIssue",
         json!({"updateIssue": {"issue": {"id": "ISSUE", "number": 7}}}),
@@ -2098,9 +2091,14 @@ async fn an_issue_on_the_board_is_found_updated_and_its_fields_changed() {
         ),
         "{says}"
     );
+    // One lookup of the issue itself: the board query, the issue, the update.
     let ops = script.operations();
     assert_eq!(ops[0].0, "EliteaBoard");
-    assert_eq!(ops[1].0, "EliteaBoardItems");
+    assert_eq!(ops[1].0, "EliteaBoardIssue");
+    assert_eq!(
+        ops[1].1,
+        json!({"owner": "EliteaAI", "name": "board", "number": 7})
+    );
     assert_eq!(ops[2].0, "EliteaUpdateIssue");
     assert_eq!(
         ops[2].1,
@@ -2117,74 +2115,82 @@ async fn an_issue_on_the_board_is_found_updated_and_its_fields_changed() {
         .find(|(name, _)| name == "EliteaRemoveAssignees")
         .expect("remove assignees");
     assert_eq!(remove_assignees.1, json!({"id": "ISSUE", "ids": ["U1"]}));
+    let item_edit = ops
+        .iter()
+        .find(|(name, _)| name == "EliteaSetField")
+        .expect("status");
+    assert_eq!(item_edit.1["itemId"], "ITEM", "the item of THIS project");
     assert!(
-        names(&ops)
-            .iter()
-            .filter(|name| **name == "EliteaBoardItems")
-            .count()
-            == 1,
-        "found on the first page: one page read"
+        !script.hits()[0].body.as_ref().expect("body")["query"]
+            .as_str()
+            .expect("q")
+            .contains("items("),
+        "the board query carries no items"
     );
 }
 
 #[tokio::test]
-async fn an_issue_beyond_the_first_hundred_items_is_found_by_paging() {
-    let script = create_script(Value::Null);
-    script.data(
-        "EliteaUpdateIssue",
-        json!({"updateIssue": {"issue": {"id": "ISSUE", "number": 9}}}),
-    );
-    script.data(
-        "EliteaBoardItems(",
-        json!({"repository": {"projectV2": {"items": {
-            "nodes": [board_item("B", "Y", 2, "EliteaAI/board")],
-            "pageInfo": {"hasNextPage": true, "endCursor": "CUR1"}}}}}),
-    );
-    script.data(
-        "EliteaBoardItems(",
-        json!({"repository": {"projectV2": {"items": {
-            "nodes": [board_item("ITEM", "ISSUE", 9, "EliteaAI/board")],
-            "pageInfo": {"hasNextPage": false, "endCursor": null}}}}}),
-    );
-    let rig = rig(&script).await;
-    let says = rig
-        .says(
-            "update_issue_on_project",
-            json!({"board_repo": "EliteaAI/board", "issue_number": "9", "project_title": "WebApp Redesign", "title": "t", "body": "b"}),
-        )
-        .await;
-    assert!(
-        says.starts_with("The issue with number '9' has been updated."),
-        "{says}"
-    );
-    let ops = script.operations();
-    assert_eq!(
-        names(&ops),
-        [
-            "EliteaBoard",
-            "EliteaBoardItems",
-            "EliteaBoardItems",
-            "EliteaUpdateIssue"
-        ]
-    );
-    assert_eq!(ops[1].1["after"], Value::Null);
-    assert_eq!(ops[2].1["after"], "CUR1");
-    assert_eq!(ops[2].1["number"], 4);
-}
-
-#[tokio::test]
-async fn updating_a_missing_issue_or_failing_the_title_writes_no_fields() {
-    let script = create_script(json!([]));
-    let rig_ = rig(&script).await;
+async fn a_missing_or_off_board_issue_is_told_so_and_a_failed_title_writes_no_fields() {
     let args = json!({"board_repo": "EliteaAI/board", "issue_number": "99", "project_title": "WebApp Redesign",
                       "title": "t", "body": "b", "fields": {"Status": "Done"}});
+    // Not in the board's repository, no issue_repo: say so and ask, never scan.
+    let script = create_script();
+    script.data("EliteaBoardIssue(", json!({"repository": {"issue": null}}));
     assert_eq!(
-        rig_.says("update_issue_on_project", args.clone()).await,
-        "Issue number 99 not found in project."
+        rig(&script)
+            .await
+            .says("update_issue_on_project", args.clone())
+            .await,
+        "Issue number 99 was not found in EliteaAI/board, the repository of the board. If the issue is in another repository, pass issue_repo."
+    );
+    assert_eq!(
+        names(&script.operations()),
+        ["EliteaBoard", "EliteaBoardIssue"]
+    );
+    // Not found in the repository that was named.
+    let script = create_script();
+    script.data("EliteaIssueRepo", json!({"repository": {"id": "R2", "labels": {"nodes": []}, "assignableUsers": {"nodes": []}}}));
+    script.data("EliteaBoardIssue(", json!({"repository": {"issue": null}}));
+    let mut named = args.clone();
+    named["issue_repo"] = json!("EliteaAI/other");
+    assert_eq!(
+        rig(&script)
+            .await
+            .says("update_issue_on_project", named)
+            .await,
+        "Issue number 99 was not found in EliteaAI/other."
+    );
+    // The issue exists but is on another board.
+    let script = create_script();
+    script.data(
+        "EliteaBoardIssue(",
+        issue_data("ISSUE", 99, &[("X", "OTHER-PROJECT")]),
+    );
+    assert_eq!(
+        rig(&script)
+            .await
+            .says("update_issue_on_project", args.clone())
+            .await,
+        "Issue number 99 of EliteaAI/board is not on the project 'WebApp Redesign'."
     );
     assert!(!names(&script.operations()).contains(&"EliteaUpdateIssue"));
-
-    let script = create_script(existing_items(7));
+    // A bad number.
+    let mut bad = args.clone();
+    bad["issue_number"] = json!("nine");
+    let script = create_script();
+    assert_eq!(
+        rig(&script)
+            .await
+            .says("update_issue_on_project", bad)
+            .await,
+        "issue_number must be a number such as '42'."
+    );
+    // The title and body are refused: the fields are not set.
+    let script = create_script();
+    script.data(
+        "EliteaBoardIssue(",
+        issue_data("ISSUE", 7, &[("ITEM", "PROJ")]),
+    );
     script.on_graph(
         "EliteaUpdateIssue",
         Reply::Json(
@@ -2304,148 +2310,56 @@ async fn a_patch_path_with_a_dot_or_empty_segment_is_refused_before_any_request(
 }
 
 #[tokio::test]
-async fn the_board_issue_is_found_by_repository_and_number() {
-    // #42 exists in two repositories on the board.
-    let items = json!([
-        board_item("ITEM-OTHER", "ISSUE-OTHER", 42, "EliteaAI/other"),
-        board_item("ITEM-BOARD", "ISSUE-BOARD", 42, "EliteaAI/board"),
-    ]);
-    let script = create_script(items);
+async fn the_board_issue_is_looked_up_directly_in_the_repository_named() {
+    // #42 exists in two repositories; each lookup names its own repository.
+    let script = create_script();
     script.data(
-        "EliteaUpdateIssue",
-        json!({"updateIssue": {"issue": {"id": "x", "number": 42}}}),
+        "EliteaBoardIssue(",
+        issue_data("ISSUE-BOARD", 42, &[("ITEM-BOARD", "PROJ")]),
+    );
+    script.data(
+        "EliteaBoardIssue(",
+        issue_data("ISSUE-OTHER", 42, &[("ITEM-OTHER", "PROJ")]),
     );
     script.data(
         "EliteaIssueRepo",
         json!({"repository": {"id": "R2", "labels": {"nodes": []}, "assignableUsers": {"nodes": []}}}),
+    );
+    script.data(
+        "EliteaUpdateIssue",
+        json!({"updateIssue": {"issue": {"id": "x", "number": 42}}}),
     );
     let rig = rig(&script).await;
     let base = json!({"board_repo": "EliteaAI/board", "issue_number": "42",
         "project_title": "WebApp Redesign", "title": "t", "body": "b"});
     // The board's own repository by default.
     rig.says("update_issue_on_project", base.clone()).await;
-    let ops = script.operations();
-    let update = ops
-        .iter()
-        .find(|(name, _)| name == "EliteaUpdateIssue")
-        .expect("update");
-    assert_eq!(update.1["issueId"], "ISSUE-BOARD");
-    // issue_repo names the other one (case does not matter).
+    // issue_repo names the other one.
     let mut other = base;
-    other["issue_repo"] = json!("EliteaAI/OTHER");
+    other["issue_repo"] = json!("EliteaAI/other");
     rig.says("update_issue_on_project", other).await;
     let ops = script.operations();
+    let lookups: Vec<_> = ops
+        .iter()
+        .filter(|(name, _)| name == "EliteaBoardIssue")
+        .collect();
+    assert_eq!(lookups.len(), 2, "one request per update, no scan");
+    assert_eq!(
+        lookups[0].1,
+        json!({"owner": "EliteaAI", "name": "board", "number": 42})
+    );
+    assert_eq!(
+        lookups[1].1,
+        json!({"owner": "EliteaAI", "name": "other", "number": 42})
+    );
     let updates: Vec<_> = ops
         .iter()
         .filter(|(name, _)| name == "EliteaUpdateIssue")
         .collect();
+    assert_eq!(updates[0].1["issueId"], "ISSUE-BOARD");
     assert_eq!(updates[1].1["issueId"], "ISSUE-OTHER");
-    // A number that exists only in another repository is not found.
-    let mut missing = json!({"board_repo": "EliteaAI/board", "issue_number": "42",
-        "project_title": "WebApp Redesign", "title": "t", "body": "b"});
-    let script = create_script(json!([board_item(
-        "ITEM-OTHER",
-        "ISSUE-OTHER",
-        42,
-        "EliteaAI/other"
-    )]));
-    missing["issue_number"] = json!("42");
-    assert_eq!(
-        self::rig(&script)
-            .await
-            .says("update_issue_on_project", missing)
-            .await,
-        "Issue number 42 not found in project."
-    );
-    assert!(!names(&script.operations()).contains(&"EliteaUpdateIssue"));
 }
 
-#[tokio::test]
-async fn the_board_query_reads_fields_only_and_the_items_are_paged_once_from_the_start() {
-    let script = create_script(Value::Null);
-    script.data(
-        "EliteaUpdateIssue",
-        json!({"updateIssue": {"issue": {"id": "x", "number": 9}}}),
-    );
-    for (nodes, more, cursor) in [
-        (
-            json!([board_item("A", "XA", 1, "EliteaAI/board")]),
-            true,
-            json!("C1"),
-        ),
-        (
-            json!([board_item("B", "XB", 2, "EliteaAI/board")]),
-            true,
-            json!("C2"),
-        ),
-        (
-            json!([board_item("ITEM", "ISSUE", 9, "EliteaAI/board")]),
-            false,
-            Value::Null,
-        ),
-    ] {
-        script.data(
-            "EliteaBoardItems(",
-            json!({"repository": {"projectV2": {"items": {
-                "nodes": nodes, "pageInfo": {"hasNextPage": more, "endCursor": cursor}}}}}),
-        );
-    }
-    let rig = rig(&script).await;
-    rig.says(
-        "update_issue_on_project",
-        json!({"board_repo": "EliteaAI/board", "issue_number": "9",
-               "project_title": "WebApp Redesign", "title": "t", "body": "b"}),
-    )
-    .await;
-    let hits = script.hits();
-    let board = body_of(&hits[0])["query"].as_str().expect("query");
-    assert!(board.contains("EliteaBoard("), "{board}");
-    assert!(
-        !board.contains("items("),
-        "the board query carries no items"
-    );
-    let ops = script.operations();
-    let afters: Vec<_> = ops
-        .iter()
-        .filter(|(name, _)| name == "EliteaBoardItems")
-        .map(|(_, vars)| vars["after"].clone())
-        .collect();
-    assert_eq!(
-        afters,
-        [Value::Null, json!("C1"), json!("C2")],
-        "no page is read twice"
-    );
-}
-
-#[tokio::test]
-async fn an_oversize_board_answer_is_refused_with_a_sentence_not_buffered() {
-    let script = create_script(Value::Null);
-    let padding = "x".repeat(4 * 1024 * 1024 + 1024);
-    script.data(
-        "EliteaBoardItems(",
-        json!({"repository": {"projectV2": {"items": {
-            "nodes": [{"id": "PAD", "content": {"id": "P", "number": 1, "title": padding,
-                "repository": {"nameWithOwner": "EliteaAI/board"}}}],
-            "pageInfo": {"hasNextPage": false, "endCursor": null}}}}}),
-    );
-    let says = rig(&script)
-        .await
-        .says(
-            "update_issue_on_project",
-            json!({"board_repo": "EliteaAI/board", "issue_number": "9",
-                   "project_title": "WebApp Redesign", "title": "t", "body": "b"}),
-        )
-        .await;
-    assert!(
-        says.starts_with("Error occurred while searching for issue:"),
-        "{says}"
-    );
-    assert!(says.contains("larger than this runtime handles"), "{says}");
-    assert!(!names(&script.operations()).contains(&"EliteaUpdateIssue"));
-}
-
-/// A lookup that fails is an outage ("nothing was changed"); a mutation whose
-/// answer is lost, or that GitHub fails with INTERNAL, may have applied.
 #[tokio::test]
 async fn board_lookups_map_as_reads_and_mutations_as_effects() {
     let args = json!({"board_repo": "EliteaAI/board", "project_title": "WebApp Redesign",
@@ -2565,4 +2479,181 @@ async fn string_numbers_are_read_by_the_project_reads_too() {
     let hits = script.hits();
     assert_eq!(body_of(&hits[0])["variables"]["projectNumber"], 4);
     assert_eq!(body_of(&hits[0])["variables"]["itemsCount"], 5);
+}
+
+// ----- review round 2 ---------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_crlf_patch_applies_and_its_paths_carry_no_carriage_return() {
+    let script = Arc::new(Script::default());
+    script.json(
+        "GET",
+        "/contents/src/a.txt",
+        200,
+        file_json("one\r\ntwo\r\nthree\r\n", 'a'),
+    );
+    script.json("PUT", "/contents/src/a.txt", 200, json!({}));
+    let rig = rig(&script).await;
+    let patch = "diff --git a/src/a.txt b/src/a.txt\r\nindex 1..2 100644\r\n--- a/src/a.txt\r\n+++ b/src/a.txt\r\n@@ -1,3 +1,3 @@\r\n one\r\n-two\r\n+TWO\r\n three\r\n";
+    let result = rig
+        .call(
+            "apply_git_patch",
+            json!({"patch_content": patch, "branch": "work"}),
+        )
+        .await;
+    assert_eq!(
+        result["applied_changes"],
+        json!(["Modified: src/a.txt"]),
+        "{result}"
+    );
+    let writes = script.writes();
+    assert_eq!(writes.len(), 1);
+    assert!(
+        writes[0].path.ends_with("/contents/src/a.txt"),
+        "{}",
+        writes[0].path
+    );
+    assert_eq!(
+        body_of(&writes[0])["content"],
+        STANDARD.encode("one\r\nTWO\r\nthree\r\n"),
+        "the file keeps its CRLF line ends"
+    );
+}
+
+#[tokio::test]
+async fn a_patch_that_touches_one_path_twice_is_refused_whole() {
+    let script = Arc::new(Script::default());
+    let rig = rig(&script).await;
+    let two = |a: &str, b: &str| format!("{a}{b}");
+    let modify = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+b\n";
+    let cases = [
+        // The same file in two diffs.
+        (two(modify, modify), "f.txt"),
+        // A rename whose target is also modified.
+        (
+            two(
+                "diff --git a/old.txt b/new.txt\nrename from old.txt\nrename to new.txt\n",
+                "diff --git a/new.txt b/new.txt\n--- a/new.txt\n+++ b/new.txt\n@@ -1 +1 @@\n-a\n+b\n",
+            ),
+            "new.txt",
+        ),
+        // A delete and a create of one path.
+        (
+            two(
+                "diff --git a/g.txt b/g.txt\ndeleted file mode 100644\n--- a/g.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-a\n",
+                "diff --git a/g.txt b/g.txt\nnew file mode 100644\n--- /dev/null\n+++ b/g.txt\n@@ -0,0 +1 @@\n+a\n",
+            ),
+            "g.txt",
+        ),
+        // A rename's source modified too.
+        (
+            two(
+                "diff --git a/s.txt b/t.txt\nrename from s.txt\nrename to t.txt\n",
+                "diff --git a/s.txt b/s.txt\n--- a/s.txt\n+++ b/s.txt\n@@ -1 +1 @@\n-a\n+b\n",
+            ),
+            "s.txt",
+        ),
+    ];
+    for (patch, path) in cases {
+        let says = rig
+            .says(
+                "apply_git_patch",
+                json!({"patch_content": patch, "branch": "work"}),
+            )
+            .await;
+        assert_eq!(
+            says,
+            format!(
+                "the patch changes `{path}` more than once; split it into separate patches, one per change to that file"
+            )
+        );
+    }
+    assert!(script.hits().is_empty(), "nothing was read or written");
+}
+
+#[tokio::test]
+async fn a_full_ref_is_refused_where_a_branch_name_is_expected() {
+    let script = Arc::new(Script::default());
+    let rig = rig(&script).await;
+    for (tool, arguments) in [
+        ("delete_branch", json!({"branch_name": "refs/heads/main"})),
+        (
+            "set_active_branch",
+            json!({"branch_name": "refs/heads/main"}),
+        ),
+        (
+            "create_branch",
+            json!({"proposed_branch_name": "refs/heads/x"}),
+        ),
+        (
+            "create_file",
+            json!({"file_path": "a.txt", "branch": "refs/heads/main", "file_contents": "x"}),
+        ),
+        (
+            "create_pull_request",
+            json!({"title": "t", "body": "b", "head": "refs/heads/work"}),
+        ),
+    ] {
+        let says = rig.says(tool, arguments).await;
+        assert!(
+            says.contains("must be a branch name such as `main`, not a full ref"),
+            "{tool}: {says}"
+        );
+    }
+    assert!(script.hits().is_empty(), "refs/heads/main deleted nothing");
+    // A branch that merely starts with "refs" is a branch.
+    script.json("DELETE", "/git/refs/heads/refs-fix", 204, json!(null));
+    assert_eq!(
+        rig.says("delete_branch", json!({"branch_name": "refs-fix"}))
+            .await,
+        "Branch 'refs-fix' deleted successfully."
+    );
+}
+
+/// An error that is not clearly decided before the mutation ran (untyped,
+/// timed out, or beside partial data) may follow a mutation that applied.
+#[tokio::test]
+async fn a_mutation_error_is_definite_only_when_it_is_typed_and_carries_no_data() {
+    let args = json!({"board_repo": "EliteaAI/board", "project_title": "WebApp Redesign",
+                      "title": "t", "body": "b"});
+    let draft_with = |body: Value| {
+        let script = Arc::new(Script::default());
+        script.data("EliteaBoard(", board_data());
+        script.on_graph("EliteaDraft", Reply::Json(200, body));
+        script
+    };
+    for body in [
+        json!({"errors": [{"message": "Something timed out, please try again"}]}),
+        json!({"errors": [{"message": "Timeout on validation of query"}]}),
+        json!({"errors": [{"type": "SOMETHING_NEW", "message": "x"}]}),
+        json!({"errors": [{"type": "NOT_FOUND", "message": "x"}, {"message": "untyped"}]}),
+        json!({"data": {"addProjectV2DraftIssue": {"projectItem": {"id": "D"}}},
+               "errors": [{"type": "FORBIDDEN", "message": "one field was hidden"}]}),
+    ] {
+        let says = rig(&draft_with(body.clone()))
+            .await
+            .says("create_issue_on_project", args.clone())
+            .await;
+        assert!(
+            says.contains("may or may not have been made"),
+            "{body}: {says}"
+        );
+    }
+    for (kind, expected) in [
+        ("NOT_FOUND", "did not find"),
+        ("UNPROCESSABLE", "Draft Issue Not Created"),
+        ("FORBIDDEN", "Draft Issue Not Created"),
+    ] {
+        let says = rig(&draft_with(
+            json!({"data": null, "errors": [{"type": kind, "message": "decided"}]}),
+        ))
+        .await
+        .says("create_issue_on_project", args.clone())
+        .await;
+        assert!(!says.contains("may or may not"), "{kind}: {says}");
+        assert!(
+            says.contains(expected) || says.contains("Draft Issue Not Created"),
+            "{kind}: {says}"
+        );
+    }
 }

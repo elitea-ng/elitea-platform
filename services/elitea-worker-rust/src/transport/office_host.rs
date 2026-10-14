@@ -67,7 +67,7 @@ impl OfficeRuntime {
             .and_then(|url| url.host_str().map(str::to_owned))
             .ok_or(OfficeRuntimeError)?;
         let transport = elitea_connectors::reqwest012::ReqwestTransport::hardened(&OFFICE_POLICY)
-        .map_err(|_| OfficeRuntimeError)?;
+            .map_err(|_| OfficeRuntimeError)?;
         let limits = SourceLimits {
             max_document_bytes: elitea_agent_runtime::toolkits::MAX_OFFICE_OBJECT_BYTES,
             ..SourceLimits::default()

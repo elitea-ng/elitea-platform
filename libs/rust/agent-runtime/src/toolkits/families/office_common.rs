@@ -425,9 +425,9 @@ pub(crate) fn host_sentence(action: &str, error: &OfficeHostError, kind: &Office
         OfficeFailure::Unreachable => format!(
             "Could not {action}: the platform could not be reached. Tell the user it did not happen."
         ),
-        OfficeFailure::Unsupported => format!(
-            "Could not {action}: this runtime does not offer that operation."
-        ),
+        OfficeFailure::Unsupported => {
+            format!("Could not {action}: this runtime does not offer that operation.")
+        }
     }
 }
 
