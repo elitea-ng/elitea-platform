@@ -127,6 +127,11 @@ var pythonVerifiedImportKeys = []string{
 // enables and the desktop host does not), and it serves the SDK's two tools
 // plus nineteen of its own, so no per-tool list is needed here.
 //
+// `imagegen` (#864) is a claim-scoped family like `pptx`: it materialises only
+// where the Office host that reaches the gateway's images API is lent (the
+// ordinary agent path and a pipeline's nodes of the cloud worker), and it
+// serves the SDK's two tools, `generate_image` and `edit_image`, unchanged.
+//
 // `artifact` (#906) is the odd one: it materialises only where the live
 // execution claim is in scope (the ordinary agent path and a root pipeline's
 // direct and LLM nodes), because its authority is that claim rather than a
@@ -160,6 +165,7 @@ var rustNativeToolTypes = []string{
 	"gitlab",
 	"gitlab_org",
 	"google_places",
+	"imagegen",
 	"jira",
 	"k8s",
 	"keycloak",

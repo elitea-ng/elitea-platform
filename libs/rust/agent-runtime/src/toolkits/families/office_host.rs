@@ -113,6 +113,43 @@ pub struct OfficeModelRequest {
     pub images_png: std::sync::Arc<[Vec<u8>]>,
 }
 
+/// One image-generation call: the gateway's `POST /llm/v1/images/generations`
+/// body, as the `imagegen` toolkit builds it.
+#[derive(Clone, Debug)]
+pub struct ImageGenerateRequest {
+    /// The toolkit's configured image-generation model (a registry name).
+    pub model: String,
+    /// The text prompt.
+    pub prompt: String,
+    /// `WIDTHxHEIGHT`, or `None` for the model's default.
+    pub size: Option<String>,
+    /// How many images to ask for.
+    pub count: u32,
+}
+
+/// One input image of an edit: its file name and bytes.
+#[derive(Clone, Debug)]
+pub struct ImageEditInput {
+    /// The name the upload carries.
+    pub name: String,
+    /// The image bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// One image-edit call: the gateway's multipart
+/// `POST /llm/v1/images/edits`, as the `imagegen` toolkit builds it.
+#[derive(Clone, Debug)]
+pub struct ImageEditRequest {
+    /// The toolkit's configured image-generation model (a registry name).
+    pub model: String,
+    /// The edit prompt.
+    pub prompt: String,
+    /// The source image.
+    pub image: ImageEditInput,
+    /// The optional mask (transparent areas mark where the edit applies).
+    pub mask: Option<ImageEditInput>,
+}
+
 /// The host side of the Office families.
 #[async_trait]
 pub trait OfficeToolHost: Send + Sync {
@@ -143,6 +180,42 @@ pub trait OfficeToolHost: Send + Sync {
     /// budgeted by the model gateway like every other call the run makes.
     /// Returns the reply text.
     async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError>;
+
+    /// Generate images on the gateway's images API under the turn's own
+    /// credential (the same budget, request log and execution attribution as
+    /// a chat call). Returns the decoded bytes of every image the answer
+    /// carried inline; an answer item that is only a URL is not fetched (the
+    /// runtime opens no connection of its own beyond the platform).
+    ///
+    /// The default is a host with no images API: the `imagegen` toolkit is
+    /// then left out as unsupported before this is reached.
+    async fn generate_images(
+        &self,
+        _request: ImageGenerateRequest,
+    ) -> Result<Vec<Vec<u8>>, OfficeHostError> {
+        Err(OfficeHostError::new(
+            OfficeFailure::NoModel,
+            "office_host.no_images_api",
+        ))
+    }
+
+    /// Edit an image on the gateway's images API; see
+    /// [`OfficeToolHost::generate_images`].
+    async fn edit_images(
+        &self,
+        _request: ImageEditRequest,
+    ) -> Result<Vec<Vec<u8>>, OfficeHostError> {
+        Err(OfficeHostError::new(
+            OfficeFailure::NoModel,
+            "office_host.no_images_api",
+        ))
+    }
+
+    /// Whether this host reaches the images API. The `imagegen` toolkit is
+    /// served only where it does.
+    fn serves_images(&self) -> bool {
+        false
+    }
 }
 
 /// The Office host shared for one run.

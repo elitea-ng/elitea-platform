@@ -46,8 +46,8 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 ## Common issues
 
-<Note title="Python worker only">
-ImageGen ships as a Python-worker toolkit only. On a deployment running the Rust worker, the type shows in the picker greyed out with a reason rather than being offered — see [Toolkit catalogue](/reference/toolkit-catalogue) for the current worker split.
+<Note title="Both workers">
+ImageGen runs on the Python and the Rust worker. On either, image generation goes through the gateway with your project's budget, and a model that does not support image generation (or an unreachable gateway) is reported to the agent as a plain sentence. The Rust worker does not download an image the model returns only as a link; it uses images returned inline, which is what the gateway asks for.
 </Note>
 
 <Note>

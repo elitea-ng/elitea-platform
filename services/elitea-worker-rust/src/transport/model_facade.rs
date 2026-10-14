@@ -60,6 +60,11 @@ impl ModelFacade {
         super::embeddings_facade::EmbeddingsClient::from_gateway(&self.gateway)
     }
 
+    /// The gateway's images routes over the same channel (#864).
+    pub(crate) fn images(&self) -> super::images_facade::ImagesClient {
+        super::images_facade::ImagesClient::from_gateway(&self.gateway)
+    }
+
     /// Consume the claim credential into the selected native ADK adapter.
     pub(crate) fn bind(
         &self,

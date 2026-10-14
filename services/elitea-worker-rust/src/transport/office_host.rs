@@ -22,14 +22,18 @@ use std::sync::Arc;
 use adk_rust::Part;
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
-    OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
+    ImageEditRequest, ImageGenerateRequest, OfficeFailure, OfficeHostError, OfficeModelRequest,
+    OfficeObjectWritten, OfficeToolHost,
 };
 use elitea_connectors::artifact::client::{ArtifactPlatform, valid_object_key, valid_segment};
 use elitea_connectors::egress::HostAllowlist;
 use elitea_connectors::source::{Failure, SourceHttp, SourceLimits};
 use elitea_connectors::transport::{Body, Method, Url, header};
+use elitea_llm_wire::refusal::Refusal;
 use serde_json::Value;
 
+use super::images_facade::{EditFile, ImageCall, ImagesClient, ImagesError};
+use super::runtime_context::ClaimScopedEliteaContext;
 use crate::indexing::tools::{LazyStepbackModel, generate_text};
 
 /// What every Office host of the worker shares: the platform origin and the
@@ -98,6 +102,9 @@ pub(crate) struct ClaimOfficeHost {
     runtime: Arc<OfficeRuntime>,
     platform: ArtifactPlatform,
     model: LazyStepbackModel,
+    /// The gateway's images routes under the claim (the `imagegen` toolkit,
+    /// #864); `None` leaves that toolkit out as unsupported.
+    images: Option<(ImagesClient, Arc<ClaimScopedEliteaContext>)>,
 }
 
 impl ClaimOfficeHost {
@@ -119,7 +126,21 @@ impl ClaimOfficeHost {
             runtime,
             platform,
             model,
+            images: None,
         })
+    }
+
+    /// This host with the gateway's images API, called under `context`'s
+    /// credential, project and execution (the same attribution, budget and
+    /// request log as the turn's chat calls).
+    #[must_use]
+    pub(crate) fn with_images(
+        mut self,
+        client: ImagesClient,
+        context: Arc<ClaimScopedEliteaContext>,
+    ) -> Self {
+        self.images = Some((client, context));
+        self
     }
 
     fn object_request(
@@ -193,8 +214,92 @@ pub(crate) fn model_failure(message: &str) -> OfficeHostError {
     }
 }
 
+/// An images-API failure as the host classifies it: the gateway's budget
+/// refusal is its own cause, as for a chat call.
+pub(crate) fn images_failure(error: &ImagesError) -> OfficeHostError {
+    match error {
+        ImagesError::Refused { refusal } => match refusal {
+            Refusal::BudgetExhausted(_) => {
+                OfficeHostError::new(OfficeFailure::BudgetRefused, "office_host.budget_refused")
+            }
+            Refusal::Unauthorized | Refusal::Forbidden => {
+                OfficeHostError::new(OfficeFailure::AccessRefused, "office_host.images_refused")
+            }
+            Refusal::Rejected => {
+                OfficeHostError::new(OfficeFailure::InvalidRequest, "office_host.images_rejected")
+            }
+            _ => OfficeHostError::new(OfficeFailure::Unreachable, "office_host.images_unavailable"),
+        },
+        ImagesError::TooLarge => {
+            OfficeHostError::new(OfficeFailure::TooLarge, "office_host.images_too_large")
+        }
+        ImagesError::Transport | ImagesError::InvalidResponse(_) => {
+            OfficeHostError::new(OfficeFailure::Unreachable, "office_host.images_unavailable")
+        }
+    }
+}
+
 #[async_trait]
 impl OfficeToolHost for ClaimOfficeHost {
+    fn serves_images(&self) -> bool {
+        self.images.is_some()
+    }
+
+    async fn generate_images(
+        &self,
+        request: ImageGenerateRequest,
+    ) -> Result<Vec<Vec<u8>>, OfficeHostError> {
+        let Some((client, context)) = &self.images else {
+            return Err(OfficeHostError::new(
+                OfficeFailure::NoModel,
+                "office_host.no_images_api",
+            ));
+        };
+        let call = ImageCall {
+            model: &request.model,
+            prompt: &request.prompt,
+            size: request.size.as_deref(),
+            count: request.count,
+        };
+        client.generate(context, &call).await.map_err(|error| {
+            tracing::warn!(event = "imagegen_call_failed", error = %error, "an image generation call failed");
+            images_failure(&error)
+        })
+    }
+
+    async fn edit_images(
+        &self,
+        request: ImageEditRequest,
+    ) -> Result<Vec<Vec<u8>>, OfficeHostError> {
+        let Some((client, context)) = &self.images else {
+            return Err(OfficeHostError::new(
+                OfficeFailure::NoModel,
+                "office_host.no_images_api",
+            ));
+        };
+        let call = ImageCall {
+            model: &request.model,
+            prompt: &request.prompt,
+            size: None,
+            count: 1,
+        };
+        let image = EditFile {
+            name: &request.image.name,
+            bytes: &request.image.bytes,
+        };
+        let mask = request.mask.as_ref().map(|mask| EditFile {
+            name: &mask.name,
+            bytes: &mask.bytes,
+        });
+        client
+            .edit(context, &call, &image, mask.as_ref())
+            .await
+            .map_err(|error| {
+                tracing::warn!(event = "imagegen_call_failed", error = %error, "an image edit call failed");
+                images_failure(&error)
+            })
+    }
+
     async fn read_object(
         &self,
         bucket: &str,

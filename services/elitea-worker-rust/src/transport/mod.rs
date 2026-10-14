@@ -5,6 +5,9 @@ pub mod command_bus;
 pub mod control_grpc;
 pub(crate) mod embeddings_facade;
 pub(crate) mod extractor_client;
+pub(crate) mod images_facade;
+#[cfg(test)]
+mod images_host_tests;
 pub mod input_content;
 #[cfg(test)]
 mod input_content_tests;
