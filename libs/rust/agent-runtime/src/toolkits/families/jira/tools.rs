@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
 use crate::toolkits::families::UnsupportedSetting;
+use crate::toolkits::families::attachment_host::AttachmentHost;
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
@@ -17,18 +18,11 @@ const MAX_ARGUMENT_BYTES: usize = 256 * 1_024;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 const MAX_LABELS: usize = 64;
 
-/// SDK tools this runtime does not serve, and why (`SOURCE_PARITY.md`):
-/// the two image-description tools need a vision model call and the
-/// attachment reader needs the SDK's document/image content parser, neither
-/// of which a toolkit family is given; the two file tools need verified
-/// artifact bytes, which no host provides. The six index tools need the
-/// indexing plane, which does not exist in Rust.
-const UNSERVED_TOOLS: [&str; 11] = [
-    "get_field_with_image_descriptions",
-    "get_comments_with_image_descriptions",
-    "get_attachments_content",
-    "add_file_to_issue_description",
-    "update_comment_with_file",
+/// SDK tools this runtime does not serve through this family (`SOURCE_PARITY.md`):
+/// the six index tools need the indexing plane, which does not exist in the
+/// Jira family. The five attachment tools ([`JiraToolKind::needs_attachments`])
+/// are served only when the host lends the run's artifact store and model.
+const UNSERVED_TOOLS: [&str; 6] = [
     "index_data",
     "search_index",
     "stepback_search_index",
@@ -132,9 +126,26 @@ pub(crate) fn build_jira_toolset(
     toolkit_name: &str,
     config: JiraToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
+    attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, JiraToolsetError> {
-    let kinds = served_selection(config.selected_tools())?;
+    let kinds = served_selection(config.selected_tools(), attachments.is_some())?;
     let omitted = config.selected_tools().len().saturating_sub(kinds.len());
+    if attachments.is_none()
+        && (config.selected_tools().is_empty()
+            || config.selected_tools().iter().any(|name| {
+                JiraToolKind::ALL
+                    .iter()
+                    .any(|kind| kind.needs_attachments() && kind.name() == name.as_ref())
+            }))
+    {
+        tracing::warn!(
+            event = "agent_toolkit_tools_skipped",
+            reason_code = "attachment_host_unavailable",
+            toolkit_type = "jira",
+            toolkit_name,
+            "Jira attachment tools were omitted: this run lends no artifact store or model"
+        );
+    }
     if !config.selected_tools().is_empty() && omitted > 0 {
         tracing::warn!(
             event = "agent_toolkit_tools_skipped",
@@ -147,11 +158,14 @@ pub(crate) fn build_jira_toolset(
             "Jira tools this runtime does not serve were omitted from the native toolset"
         );
     }
-    let client: Arc<dyn JiraApi> = Arc::new(JiraClient::new(config)?);
+    let client: Arc<dyn JiraApi> = Arc::new(JiraClient::new(config)?.with_attachments(attachments));
     admit_kinds(toolkit_name, &kinds, policy, &client)
 }
 
-fn served_selection(selected: &[Box<str>]) -> Result<Vec<JiraToolKind>, JiraToolsetError> {
+fn served_selection(
+    selected: &[Box<str>],
+    has_attachments: bool,
+) -> Result<Vec<JiraToolKind>, JiraToolsetError> {
     if selected.iter().any(|name| {
         !UNSERVED_TOOLS.contains(&name.as_ref())
             && !JiraToolKind::ALL
@@ -163,7 +177,8 @@ fn served_selection(selected: &[Box<str>]) -> Result<Vec<JiraToolKind>, JiraTool
     let kinds = JiraToolKind::ALL
         .into_iter()
         .filter(|kind| {
-            selected.is_empty() || selected.iter().any(|name| name.as_ref() == kind.name())
+            (has_attachments || !kind.needs_attachments())
+                && (selected.is_empty() || selected.iter().any(|name| name.as_ref() == kind.name()))
         })
         .collect::<Vec<_>>();
     if kinds.is_empty() {
@@ -198,7 +213,32 @@ pub(in crate::toolkits) fn test_build_with_api(
         .iter()
         .map(|name| (*name).into())
         .collect::<Vec<Box<str>>>();
-    admit_kinds(toolkit_name, &served_selection(&selected)?, policy, client)
+    admit_kinds(
+        toolkit_name,
+        &served_selection(&selected, true)?,
+        policy,
+        client,
+    )
+}
+
+/// [`test_build_with_api`] for a run whose host lends no attachment authority.
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_without_attachments(
+    toolkit_name: &str,
+    selected: &[&str],
+    policy: &Arc<ToolAdmissionPolicy>,
+    client: &Arc<dyn JiraApi>,
+) -> Result<BasicToolset, JiraToolsetError> {
+    let selected = selected
+        .iter()
+        .map(|name| (*name).into())
+        .collect::<Vec<Box<str>>>();
+    admit_kinds(
+        toolkit_name,
+        &served_selection(&selected, false)?,
+        policy,
+        client,
+    )
 }
 
 #[cfg(test)]
@@ -223,11 +263,16 @@ enum JiraToolKind {
     GetRemoteLinks,
     LinkIssues,
     ExecuteGenericRq,
+    GetFieldWithImageDescriptions,
+    GetCommentsWithImageDescriptions,
+    GetAttachmentsContent,
+    AddFileToIssueDescription,
+    UpdateCommentWithFile,
 }
 
 impl JiraToolKind {
     /// The SDK's `get_available_tools` order, without the unserved tools.
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 17] = [
         Self::SearchUsingJql,
         Self::CreateIssue,
         Self::UpdateIssue,
@@ -240,7 +285,24 @@ impl JiraToolKind {
         Self::GetRemoteLinks,
         Self::LinkIssues,
         Self::ExecuteGenericRq,
+        Self::GetFieldWithImageDescriptions,
+        Self::GetCommentsWithImageDescriptions,
+        Self::GetAttachmentsContent,
+        Self::AddFileToIssueDescription,
+        Self::UpdateCommentWithFile,
     ];
+
+    /// Whether the tool reads the artifact store or calls the run's model.
+    const fn needs_attachments(self) -> bool {
+        matches!(
+            self,
+            Self::GetFieldWithImageDescriptions
+                | Self::GetCommentsWithImageDescriptions
+                | Self::GetAttachmentsContent
+                | Self::AddFileToIssueDescription
+                | Self::UpdateCommentWithFile
+        )
+    }
 
     const fn name(self) -> &'static str {
         match self {
@@ -256,6 +318,11 @@ impl JiraToolKind {
             Self::GetRemoteLinks => "get_remote_links",
             Self::LinkIssues => "link_issues",
             Self::ExecuteGenericRq => "execute_generic_rq",
+            Self::GetFieldWithImageDescriptions => "get_field_with_image_descriptions",
+            Self::GetCommentsWithImageDescriptions => "get_comments_with_image_descriptions",
+            Self::GetAttachmentsContent => "get_attachments_content",
+            Self::AddFileToIssueDescription => "add_file_to_issue_description",
+            Self::UpdateCommentWithFile => "update_comment_with_file",
         }
     }
 
@@ -267,6 +334,9 @@ impl JiraToolKind {
                 | Self::ListProjects
                 | Self::GetSpecificFieldInfo
                 | Self::GetRemoteLinks
+                | Self::GetFieldWithImageDescriptions
+                | Self::GetCommentsWithImageDescriptions
+                | Self::GetAttachmentsContent
         )
     }
 
@@ -303,6 +373,21 @@ impl JiraToolKind {
             }
             Self::ExecuteGenericRq => {
                 "Execute a generic Jira REST request on this Jira instance. relative_url starts with '/rest/api/2/...' or '/rest/api/3/...' and carries no query string; params is a JSON object string sent as query parameters for GET and as the JSON body otherwise. For searches always request key, summary, status, assignee and issuetype and set maxResults. Non-GET methods are remote writes that must be reconciled, not retried automatically, after an unknown outcome."
+            }
+            Self::GetFieldWithImageDescriptions => {
+                "Get a field of a Jira issue (for example description) and replace each image in it with a text description from the run's model, using the surrounding text as context. process_images=false returns the raw field text and needs no model. At most 20 pictures of up to 5 MiB are described per call; pictures are read only from this Jira's own attachments."
+            }
+            Self::GetCommentsWithImageDescriptions => {
+                "Get all comments of a Jira issue and replace each image in them with a text description from the run's model, using the surrounding text as context. process_images=false returns the raw comments and needs no model. At most 20 pictures of up to 5 MiB are described per call; pictures are read only from this Jira's own attachments."
+            }
+            Self::GetAttachmentsContent => {
+                "Extract the content of the attachments of a Jira issue, optionally only those whose file name matches attachment_pattern (a regular expression). Only parsable attachments are considered: plain text, YAML, CSV and pictures (described by the run's model); other file types are skipped."
+            }
+            Self::AddFileToIssueDescription => {
+                "Upload a file from artifact storage (filepath /{bucket}/{filename}) to a Jira issue as an attachment and reference it in the description: images and videos inline, other files as a link, at the end (append) or the start (prepend). A same-named attachment is not replaced; the new one is added beside it. If the description update fails after the upload, the error says the file was uploaded. This remote write must be reconciled, not retried automatically, after an unknown outcome."
+            }
+            Self::UpdateCommentWithFile => {
+                "Upload a file from artifact storage (filepath /{bucket}/{filename}) to a Jira issue as an attachment and reference it in an existing comment: images and videos inline, other files as a link, at the end (append) or the start (prepend). A same-named attachment is not replaced; the new one is added beside it. If the comment update fails after the upload, the error says the file was uploaded. This remote write must be reconciled, not retried automatically, after an unknown outcome."
             }
         }
     }
@@ -416,6 +501,40 @@ fn operation(
             method: required_text(arguments, "method")?,
             relative_url: required_text(arguments, "relative_url")?,
             params: optional_text(arguments, "params")?,
+        },
+        JiraToolKind::GetFieldWithImageDescriptions => {
+            JiraOperation::GetFieldWithImageDescriptions {
+                issue_key: required_text(arguments, "jira_issue_key")?,
+                field_name: required_text(arguments, "field_name")?,
+                prompt: optional_text(arguments, "prompt")?,
+                context_radius: coerced_integer(arguments, "context_radius")?.unwrap_or(500),
+                process_images: optional_flag(arguments, "process_images")?.unwrap_or(true),
+            }
+        }
+        JiraToolKind::GetCommentsWithImageDescriptions => {
+            JiraOperation::GetCommentsWithImageDescriptions {
+                issue_key: required_text(arguments, "jira_issue_key")?,
+                prompt: optional_text(arguments, "prompt")?,
+                context_radius: coerced_integer(arguments, "context_radius")?.unwrap_or(500),
+                process_images: optional_flag(arguments, "process_images")?.unwrap_or(true),
+            }
+        }
+        JiraToolKind::GetAttachmentsContent => JiraOperation::GetAttachmentsContent {
+            issue_key: required_text(arguments, "jira_issue_key")?,
+            attachment_pattern: optional_text(arguments, "attachment_pattern")?,
+        },
+        JiraToolKind::AddFileToIssueDescription => JiraOperation::AddFileToIssueDescription {
+            issue_key: required_text(arguments, "issue_key")?,
+            filepath: required_text(arguments, "filepath")?,
+            filename: optional_text(arguments, "filename")?,
+            prepend: position(arguments)?,
+        },
+        JiraToolKind::UpdateCommentWithFile => JiraOperation::UpdateCommentWithFile {
+            issue_key: required_text(arguments, "issue_key")?,
+            comment_id: required_text(arguments, "comment_id")?,
+            filepath: required_text(arguments, "filepath")?,
+            filename: optional_text(arguments, "filename")?,
+            prepend: position(arguments)?,
         },
     })
 }
@@ -583,6 +702,132 @@ fn schema_for(kind: JiraToolKind) -> Value {
             ],
             &["method", "relative_url"],
         ),
+        JiraToolKind::GetFieldWithImageDescriptions => (
+            vec![
+                (
+                    "jira_issue_key",
+                    text(
+                        "Jira issue key from which field with images will be extracted, e.g. TEST-1234",
+                    ),
+                ),
+                (
+                    "field_name",
+                    text(
+                        "Field name containing images to be processed. Common values are 'description', 'comment', or custom fields like 'customfield_10300'",
+                    ),
+                ),
+                (
+                    "prompt",
+                    optional_string(
+                        "Custom prompt to use for image description generation. If not provided, a default prompt will be used",
+                    ),
+                ),
+                ("context_radius", context_radius()),
+                (
+                    "process_images",
+                    process_images(
+                        "Whether to process images with LLM and replace references with descriptions. Set to False to return raw field content without image processing. Default is True",
+                    ),
+                ),
+            ],
+            &["jira_issue_key", "field_name"],
+        ),
+        JiraToolKind::GetCommentsWithImageDescriptions => (
+            vec![
+                (
+                    "jira_issue_key",
+                    text(
+                        "Jira issue key from which comments with images will be extracted, e.g. TEST-1234",
+                    ),
+                ),
+                (
+                    "prompt",
+                    optional_string(
+                        "Custom prompt to use for image description generation. If not provided, a default prompt will be used",
+                    ),
+                ),
+                ("context_radius", context_radius()),
+                (
+                    "process_images",
+                    process_images(
+                        "Whether to process images with LLM and replace references with descriptions. Set to False to return raw comments without image processing. Default is True",
+                    ),
+                ),
+            ],
+            &["jira_issue_key"],
+        ),
+        JiraToolKind::GetAttachmentsContent => (
+            vec![
+                (
+                    "jira_issue_key",
+                    text("Jira issue key from which the attachments will be read, e.g. TEST-1234"),
+                ),
+                (
+                    "attachment_pattern",
+                    optional_string(
+                        "Regex pattern to filter attachment filenames. If not provided, all attachments will be processed",
+                    ),
+                ),
+            ],
+            &["jira_issue_key"],
+        ),
+        JiraToolKind::AddFileToIssueDescription => (
+            vec![
+                (
+                    "issue_key",
+                    text(
+                        "Jira issue key where file will be added, e.g. 'PROJ-123'. The file will be uploaded as attachment and referenced in the description.",
+                    ),
+                ),
+                (
+                    "filepath",
+                    text(
+                        "File path in format /{bucket}/{filename} containing the file to attach. Artifact can be any file type (image, PDF, video, document, etc.). Get this from the file/image generation tool's response.",
+                    ),
+                ),
+                (
+                    "filename",
+                    optional_string(
+                        "Filename for the attachment, e.g. 'diagram.png', 'report.pdf'. If not provided, uses the original filename from artifact. Should include file extension.",
+                    ),
+                ),
+                (
+                    "position",
+                    position_schema(
+                        "Where to place the file reference in description: 'append' (end) or 'prepend' (beginning).",
+                    ),
+                ),
+            ],
+            &["issue_key", "filepath"],
+        ),
+        JiraToolKind::UpdateCommentWithFile => (
+            vec![
+                ("issue_key", text("Jira issue key, e.g. 'PROJ-123'.")),
+                (
+                    "comment_id",
+                    text("ID of the existing comment to update. Get from list_comments tool."),
+                ),
+                (
+                    "filepath",
+                    text(
+                        "File path in format /{bucket}/{filename} containing the file. Get this from the file/image generation tool's response.",
+                    ),
+                ),
+                (
+                    "filename",
+                    optional_string(
+                        "Filename for the attachment, e.g. 'screenshot.png', 'report.pdf'. If not provided, uses the original filename from artifact.",
+                    ),
+                ),
+                (
+                    "position",
+                    position_schema(
+                        "Where to place file: 'append' (end) or 'prepend' (beginning) of existing comment.",
+                    ),
+                ),
+            ],
+            &["issue_key", "comment_id", "filepath"],
+        ),
     };
     json!({
         "type": "object",
@@ -590,6 +835,34 @@ fn schema_for(kind: JiraToolKind) -> Value {
         "required": required,
         "additionalProperties": false,
     })
+}
+
+fn optional_string(description: &str) -> Value {
+    nullable(
+        json!({"type":"string","description":description}),
+        Value::Null,
+    )
+}
+
+fn context_radius() -> Value {
+    nullable(
+        json!({"type":"integer","minimum":0,"description":"Number of characters to include before and after each image for context. Default is 500"}),
+        json!(500),
+    )
+}
+
+fn process_images(description: &str) -> Value {
+    nullable(
+        json!({"type":"boolean","description":description}),
+        Value::Bool(true),
+    )
+}
+
+fn position_schema(description: &str) -> Value {
+    nullable(
+        json!({"type":"string","enum":["append","prepend"],"description":description}),
+        Value::String("append".to_owned()),
+    )
 }
 
 fn text(description: &str) -> Value {
@@ -665,6 +938,49 @@ fn optional_integer(arguments: &Map<String, Value>, name: &str) -> adk_core::Res
         None | Some(Value::Null) => Ok(None),
         Some(Value::Number(value)) => value.as_i64().map(Some).ok_or_else(invalid_arguments),
         _ => Err(invalid_arguments()),
+    }
+}
+
+/// An SDK `int`: a JSON integer, an integral float, or a decimal string
+/// (pydantic's coercion). Null means absent.
+#[allow(clippy::cast_possible_truncation)] // The float is integral and under 9e15.
+fn coerced_integer(arguments: &Map<String, Value>, name: &str) -> adk_core::Result<Option<i64>> {
+    match arguments.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(value)) => value
+            .as_i64()
+            .or_else(|| {
+                value
+                    .as_f64()
+                    .filter(|float| float.fract() == 0.0 && float.abs() < 9.0e15)
+                    .map(|float| float as i64)
+            })
+            .map(Some)
+            .ok_or_else(invalid_arguments),
+        Some(Value::String(value)) => value
+            .trim()
+            .parse::<i64>()
+            .map(Some)
+            .map_err(|_| invalid_arguments()),
+        _ => Err(invalid_arguments()),
+    }
+}
+
+/// A boolean argument (only booleans); null means absent.
+fn optional_flag(arguments: &Map<String, Value>, name: &str) -> adk_core::Result<Option<bool>> {
+    match arguments.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        _ => Err(invalid_arguments()),
+    }
+}
+
+/// `position`: `append` (the default) or `prepend`; `true` when prepending.
+fn position(arguments: &Map<String, Value>) -> adk_core::Result<bool> {
+    match optional_text(arguments, "position")? {
+        None | Some("append") => Ok(false),
+        Some("prepend") => Ok(true),
+        Some(_) => Err(invalid_arguments()),
     }
 }
 

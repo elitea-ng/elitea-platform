@@ -35,6 +35,7 @@ use adk_core::Toolset;
 use super::DelegatedAuthorizationCatalog;
 use super::families::UnsupportedSetting;
 use super::families::artifact::ArtifactToolAuthority;
+use super::families::attachment_host::AttachmentHost;
 use super::families::bigquery;
 use super::families::confluence;
 use super::families::index_tools::{
@@ -544,6 +545,11 @@ async fn materialize(
     }
     let settings = reference.settings().ok_or_else(invalid_configuration)?;
     let name = reference.toolkit_name();
+    // The platform side of the attachment tools (files and pictures), when the
+    // path lends the artifact authority with its Office capability.
+    let attachments = artifacts
+        .and_then(ArtifactToolAuthority::office)
+        .map(|host| AttachmentHost::new(Arc::clone(host)));
     if reference.tool_type() == "artifact" {
         // No authority lent means no family: the toolkit is skipped with the
         // warning the caller above logs, not bound to tools that would fail on
@@ -568,7 +574,13 @@ async fn materialize(
         reference.tool_type(),
         "aha" | "bigquery" | "bitbucket" | "carrier" | "confluence" | "figma" | "gitlab" | "jira"
     ) {
-        let toolset = materialize_ported_saas(reference.tool_type(), name, settings, policy)?;
+        let toolset = materialize_ported_saas(
+            reference.tool_type(),
+            name,
+            settings,
+            policy,
+            attachments.as_ref(),
+        )?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
     if matches!(
@@ -626,18 +638,36 @@ async fn materialize(
             materialized.delegated_authorization,
         ));
     }
-    if let Some(toolset) = materialize_zephyr_rest(reference.tool_type(), name, settings, policy)? {
+    if let Some(toolset) = materialize_zephyr_rest(
+        reference.tool_type(),
+        name,
+        settings,
+        policy,
+        attachments.as_ref(),
+    )? {
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
     if reference.tool_type().starts_with("ado_") {
-        let toolset = materialize_ado(reference.tool_type(), name, settings, policy)?;
+        let toolset = materialize_ado(
+            reference.tool_type(),
+            name,
+            settings,
+            policy,
+            attachments.as_ref(),
+        )?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
     if matches!(
         reference.tool_type(),
         "qtest" | "testio" | "testrail" | "xray_cloud"
     ) {
-        let toolset = materialize_test_management(reference.tool_type(), name, settings, policy)?;
+        let toolset = materialize_test_management(
+            reference.tool_type(),
+            name,
+            settings,
+            policy,
+            attachments.as_ref(),
+        )?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
     let toolset = materialize_p_to_z(reference.tool_type(), name, settings, policy)?;
@@ -651,6 +681,7 @@ fn materialize_zephyr_rest(
     name: &str,
     settings: &serde_json::Map<String, serde_json::Value>,
     policy: &Arc<ToolAdmissionPolicy>,
+    attachments: Option<&AttachmentHost>,
 ) -> Result<Option<Arc<dyn Toolset>>, ToolsetMaterializationError> {
     use super::families::{zephyr_enterprise, zephyr_essential, zephyr_scale};
     let toolset = match tool_type {
@@ -665,6 +696,7 @@ fn materialize_zephyr_rest(
             zephyr_essential::config::ZephyrEssentialToolkitConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
+            attachments.cloned(),
         ),
         "zephyr_scale" => zephyr_scale::tools::build_zephyr_scale_toolset(
             name,
@@ -684,6 +716,7 @@ fn materialize_ado(
     name: &str,
     settings: &serde_json::Map<String, serde_json::Value>,
     policy: &Arc<ToolAdmissionPolicy>,
+    attachments: Option<&AttachmentHost>,
 ) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
     use super::families::ado_boards;
     use super::families::ado_plans;
@@ -695,6 +728,7 @@ fn materialize_ado(
             ado_boards::config::AdoBoardsToolkitConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
+            attachments.cloned(),
         )
         .map_err(|error| family_error(error.code()))?,
         "ado_plans" => ado_plans::tools::build_ado_plans_toolset(
@@ -808,6 +842,7 @@ fn materialize_ported_saas(
     name: &str,
     settings: &serde_json::Map<String, serde_json::Value>,
     policy: &Arc<ToolAdmissionPolicy>,
+    attachments: Option<&AttachmentHost>,
 ) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
     let toolset = match tool_type {
         // No runtime host has an artifact-read grant plane, so Aha is built
@@ -817,7 +852,7 @@ fn materialize_ported_saas(
             aha::config::AhaToolkitConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
-            None,
+            attachments.cloned(),
         )
         .map_err(|error| family_error(error.code()))?,
         "bigquery" => bigquery::tools::build_bigquery_toolset(
@@ -839,6 +874,7 @@ fn materialize_ported_saas(
             carrier::config::CarrierToolkitConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
+            attachments.cloned(),
         )
         .map_err(|error| family_error(error.code()))?,
         "confluence" => confluence::tools::build_confluence_toolset(
@@ -846,6 +882,7 @@ fn materialize_ported_saas(
             confluence::config::ConfluenceToolkitConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
+            attachments.cloned(),
         )
         .map_err(|error| family_error(error.code()))?,
         "figma" => figma::tools::build_figma_toolset(
@@ -853,6 +890,7 @@ fn materialize_ported_saas(
             figma::config::FigmaToolkitConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
+            attachments.cloned(),
         )
         .map_err(|error| family_error(error.code()))?,
         "gitlab" => gitlab::tools::build_gitlab_toolset(
@@ -867,6 +905,7 @@ fn materialize_ported_saas(
             jira::config::JiraToolkitConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
+            attachments.cloned(),
         )
         .map_err(|error| family_error(error.code()))?,
         _ => return Err(unsupported_toolkit()),
@@ -974,6 +1013,7 @@ fn materialize_test_management(
     name: &str,
     settings: &serde_json::Map<String, serde_json::Value>,
     policy: &Arc<ToolAdmissionPolicy>,
+    attachments: Option<&AttachmentHost>,
 ) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
     let toolset = match tool_type {
         "qtest" => qtest::tools::build_qtest_toolset(
@@ -981,6 +1021,7 @@ fn materialize_test_management(
             qtest::config::QtestToolkitConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
+            attachments.cloned(),
         )
         .map_err(|error| family_error(error.code()))?,
         "testio" => testio::tools::build_testio_toolset(
@@ -995,6 +1036,7 @@ fn materialize_test_management(
             testrail::config::TestRailToolkitConfig::parse(settings)
                 .map_err(|error| family_error(error.code()))?,
             policy,
+            attachments.cloned(),
         )
         .map_err(|error| family_error(error.code()))?,
         "xray_cloud" => xray_cloud::tools::build_xray_cloud_toolset(

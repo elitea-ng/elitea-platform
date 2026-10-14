@@ -9,13 +9,32 @@ use reqwest::{Request, StatusCode};
 use serde_json::{Map, Value, json};
 
 use super::families::testio::client::{
-    TestIoApi, TestIoClient, TestIoClientError, TestIoHttpResponse, TestIoTransport,
+    TestIoApi, TestIoClient, TestIoClientError, TestIoClientErrorCode, TestIoHttpResponse,
+    TestIoTransport,
 };
 use super::families::testio::config::{TestIoConfigErrorCode, TestIoToolkitConfig};
-use super::families::testio::tools::{
-    TestIoToolsetErrorCode, build_testio_toolset, test_build_with_api,
-};
+use super::families::testio::tools::{TestIoToolsetErrorCode, test_build_with_api};
 use super::policy::ToolAdmissionPolicy;
+
+const WRITES: [&str; 2] = ["create_exploratory_test", "confirm_bug_fix"];
+
+const ALL: [&str; 15] = [
+    "list_products",
+    "get_product",
+    "list_features",
+    "get_feature",
+    "list_user_stories",
+    "get_user_story",
+    "list_exploratory_tests",
+    "get_exploratory_test",
+    "create_exploratory_test",
+    "list_test_cases",
+    "get_test_case",
+    "confirm_bug_fix",
+    "get_test_cases_for_test",
+    "get_test_cases_statuses_for_test",
+    "list_bugs_for_test_with_filter",
+];
 
 const READS: [&str; 13] = [
     "list_products",
@@ -96,7 +115,11 @@ impl FixtureTransport {
 
 #[async_trait]
 impl TestIoTransport for FixtureTransport {
-    async fn execute(&self, request: Request) -> Result<TestIoHttpResponse, TestIoClientError> {
+    async fn execute(
+        &self,
+        request: Request,
+        _effect: bool,
+    ) -> Result<TestIoHttpResponse, TestIoClientError> {
         let url = request.url().as_str().to_owned();
         let authorization = request
             .headers()
@@ -203,9 +226,14 @@ async fn reads_use_token_auth_fixed_paths_and_sdk_result_members() {
     let tools = tools_with(Arc::clone(&transport)).await;
     assert_eq!(
         tools.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
-        READS
+        ALL
     );
-    assert!(tools.iter().all(|tool| tool.is_read_only()));
+    for tool in &tools {
+        let effect = WRITES.contains(&tool.name());
+        assert_eq!(tool.is_read_only(), !effect, "{}", tool.name());
+        assert_eq!(tool.is_concurrency_safe(), !effect, "{}", tool.name());
+    }
+    assert!(READS.iter().all(|name| ALL.contains(name)));
     assert!(tools[0].description().starts_with("Toolkit: qa\n"));
 
     let products = tool(&tools, "list_products")
@@ -353,12 +381,12 @@ async fn provider_failures_map_to_categories_and_arguments_fail_before_network()
 }
 
 #[tokio::test]
-async fn selection_keeps_named_reads_and_skips_unserved_writes() {
+async fn selection_keeps_named_tools_and_rejects_unknown_names() {
     let transport = FixtureTransport::new(provider);
     let client: Arc<dyn TestIoApi> = Arc::new(TestIoClient::with_transport(config(), transport));
     let toolset = test_build_with_api(
         "qa",
-        &["get_product", "confirm_bug_fix"],
+        &["get_product", "confirm_bug_fix", "not_a_tool"],
         &policy(&[]),
         &client,
     )
@@ -371,18 +399,10 @@ async fn selection_keeps_named_reads_and_skips_unserved_writes() {
         .iter()
         .map(|tool| tool.name().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(names, ["get_product"]);
+    assert_eq!(names, ["get_product", "confirm_bug_fix"]);
 
-    let Err(error) = test_build_with_api("qa", &["create_exploratory_test"], &policy(&[]), &client)
-    else {
-        panic!("a selection of unserved writes must not build");
-    };
-    assert_eq!(error.code(), TestIoToolsetErrorCode::UnsupportedSelection);
-
-    let writes_only = TestIoToolkitConfig::parse(&settings(&["confirm_bug_fix"]))
-        .expect("bounded selection parses");
-    let Err(error) = build_testio_toolset("qa", writes_only, &policy(&[])) else {
-        panic!("writes-only selection must not build");
+    let Err(error) = test_build_with_api("qa", &["not_a_tool"], &policy(&[]), &client) else {
+        panic!("a selection of unknown names must not build");
     };
     assert_eq!(error.code(), TestIoToolsetErrorCode::UnsupportedSelection);
 
@@ -408,4 +428,262 @@ async fn selection_keeps_named_reads_and_skips_unserved_writes() {
 async fn every_tool_keeps_the_sdk_contract() {
     let tools = tools_with(FixtureTransport::new(provider)).await;
     super::sdk_conformance::assert_sdk_conformance("testio", &tools);
+}
+
+/// Records every request (method, url, body, effect flag) and answers with a
+/// scripted result.
+struct WriteTransport {
+    requests: Mutex<Vec<(String, String, Value, bool)>>,
+    answer: Box<Handler>,
+}
+
+impl WriteTransport {
+    fn new(
+        answer: impl Fn(&str) -> Result<TestIoHttpResponse, TestIoClientError> + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            requests: Mutex::new(Vec::new()),
+            answer: Box::new(answer),
+        })
+    }
+
+    fn sent(&self) -> Vec<(String, String, Value, bool)> {
+        self.requests.lock().expect("lock").clone()
+    }
+}
+
+#[async_trait]
+impl TestIoTransport for WriteTransport {
+    async fn execute(
+        &self,
+        request: Request,
+        effect: bool,
+    ) -> Result<TestIoHttpResponse, TestIoClientError> {
+        let body = request
+            .body()
+            .and_then(|body| body.as_bytes())
+            .map_or(Value::Null, |bytes| {
+                serde_json::from_slice(bytes).expect("JSON request body")
+            });
+        let url = request.url().as_str().to_owned();
+        self.requests.lock().expect("lock").push((
+            request.method().as_str().to_owned(),
+            url.clone(),
+            body,
+            effect,
+        ));
+        (self.answer)(&url)
+    }
+}
+
+async fn write_tools(transport: Arc<WriteTransport>) -> Vec<Arc<dyn Tool>> {
+    let client: Arc<dyn TestIoApi> = Arc::new(TestIoClient::with_transport(config(), transport));
+    let toolset = test_build_with_api("qa", &WRITES, &policy(&[]), &client).expect("writes");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    toolset.tools(readonly).await.expect("TestIO write tools")
+}
+
+fn create_arguments() -> Value {
+    json!({
+        "product_id":11, "section_id":"5", "test_type":"coverage",
+        "devices":[1,2], "features":[31], "start_date":"2026-01-01",
+        "end_date":"2026-01-08", "test_goal":"Check checkout",
+        "out_of_scope":"", "requirements":[]
+    })
+}
+
+#[tokio::test]
+async fn create_exploratory_test_posts_the_sdk_payload_once() {
+    let transport = WriteTransport::new(|_| {
+        Ok(TestIoHttpResponse::fixture(
+            StatusCode::CREATED,
+            Some(json!({"exploratory_test":{"id":77}})),
+        ))
+    });
+    let tools = write_tools(Arc::clone(&transport)).await;
+    let created = tool(&tools, "create_exploratory_test")
+        .execute(context(), create_arguments())
+        .await
+        .expect("created");
+    assert_eq!(created, json!({"exploratory_test":{"id":77}}));
+    let sent = transport.sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0, "POST");
+    assert_eq!(
+        sent[0].1,
+        "https://api.test.io/customer/v2/exploratory_tests"
+    );
+    // Empty optionals are dropped, as the SDK's `if out_of_scope:` does.
+    assert_eq!(
+        sent[0].2,
+        json!({
+            "product_id":11, "section_id":5, "test_type":"coverage",
+            "devices":[1,2], "features":[31], "start_date":"2026-01-01",
+            "end_date":"2026-01-08", "test_goal":"Check checkout"
+        })
+    );
+    assert!(sent[0].3);
+
+    let mut full = create_arguments();
+    full["out_of_scope"] = json!("billing");
+    full["requirements"] = json!(["a", "b"]);
+    tool(&tools, "create_exploratory_test")
+        .execute(context(), full)
+        .await
+        .expect("created with optionals");
+    let sent = transport.sent();
+    assert_eq!(sent[1].2["out_of_scope"], "billing");
+    assert_eq!(sent[1].2["requirements"], json!(["a", "b"]));
+}
+
+#[tokio::test]
+async fn confirm_bug_fix_posts_and_projects_the_answer() {
+    let transport = WriteTransport::new(|_| {
+        Ok(TestIoHttpResponse::fixture(
+            StatusCode::OK,
+            Some(json!({"id":9,"status":"fixed","comment":"ok"})),
+        ))
+    });
+    let tools = write_tools(Arc::clone(&transport)).await;
+    let confirmed = tool(&tools, "confirm_bug_fix")
+        .execute(
+            context(),
+            json!({"bug_id":81,"status":"fixed","comment":"verified","client_fields":["status"]}),
+        )
+        .await
+        .expect("confirmed");
+    assert_eq!(confirmed, json!({"status":"fixed"}));
+    let sent = transport.sent();
+    assert_eq!(
+        sent[0].1,
+        "https://api.test.io/customer/v2/bug_report_confirmations"
+    );
+    assert_eq!(
+        sent[0].2,
+        json!({"bug_id":81,"status":"fixed","comment":"verified"})
+    );
+    tool(&tools, "confirm_bug_fix")
+        .execute(context(), json!({"bug_id":81,"status":"fixed"}))
+        .await
+        .expect("no comment");
+    assert_eq!(transport.sent()[1].2, json!({"bug_id":81,"status":"fixed"}));
+}
+
+#[tokio::test]
+async fn write_arguments_fail_before_the_network() {
+    let transport = WriteTransport::new(|_| panic!("no request expected"));
+    let tools = write_tools(Arc::clone(&transport)).await;
+    for (name, arguments) in [
+        ("create_exploratory_test", json!({})),
+        ("create_exploratory_test", {
+            let mut bad = create_arguments();
+            bad["devices"] = json!("1,2");
+            bad
+        }),
+        ("create_exploratory_test", {
+            let mut bad = create_arguments();
+            bad["test_goal"] = json!(5);
+            bad
+        }),
+        ("create_exploratory_test", {
+            let mut bad = create_arguments();
+            bad["extra"] = json!(1);
+            bad
+        }),
+        ("confirm_bug_fix", json!({"bug_id":81})),
+        ("confirm_bug_fix", json!({"bug_id":true,"status":"x"})),
+        (
+            "confirm_bug_fix",
+            json!({"bug_id":1,"status":"x","extra":1}),
+        ),
+    ] {
+        assert!(
+            tool(&tools, name)
+                .execute(context(), arguments.clone())
+                .await
+                .is_err(),
+            "{name} accepted {arguments}"
+        );
+    }
+    assert!(transport.sent().is_empty());
+}
+
+#[tokio::test]
+async fn write_failures_have_their_own_cause_and_never_retry() {
+    for (status, category, expect) in [
+        (
+            StatusCode::UNAUTHORIZED,
+            ErrorCategory::Unauthorized,
+            "Unauthorized",
+        ),
+        (StatusCode::FORBIDDEN, ErrorCategory::Forbidden, "authorize"),
+        (StatusCode::NOT_FOUND, ErrorCategory::NotFound, "Not Found"),
+        (
+            StatusCode::CONFLICT,
+            ErrorCategory::InvalidInput,
+            "conflict",
+        ),
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorCategory::InvalidInput,
+            "invalid",
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            ErrorCategory::RateLimited,
+            "rate limited",
+        ),
+        (
+            StatusCode::BAD_GATEWAY,
+            ErrorCategory::Internal,
+            "may have applied",
+        ),
+        (
+            StatusCode::REQUEST_TIMEOUT,
+            ErrorCategory::Internal,
+            "may have applied",
+        ),
+    ] {
+        let transport = WriteTransport::new(move |_| Ok(TestIoHttpResponse::fixture(status, None)));
+        // The family's own sentence, before the invocation wrapper sanitizes it.
+        let client = TestIoClient::with_transport(config(), Arc::clone(&transport) as _);
+        let family = client
+            .post(&["bug_report_confirmations".to_owned()], &json!({}))
+            .await
+            .expect_err("failure")
+            .into_adk();
+        assert!(
+            family
+                .message
+                .to_lowercase()
+                .contains(&expect.to_lowercase()),
+            "{status}: {}",
+            family.message
+        );
+        assert!(!family.is_retryable(), "{status}");
+
+        let tools = write_tools(Arc::clone(&transport)).await;
+        let outcome = tool(&tools, "confirm_bug_fix")
+            .execute(context(), json!({"bug_id":1,"status":"fixed"}))
+            .await;
+        if expect == "may have applied" {
+            // The sentence is the answer: an Err message would be replaced.
+            let text = outcome.expect("an unknown outcome is an answer");
+            assert!(text.as_str().expect("text").contains(expect), "{status}");
+        } else {
+            let error = outcome.expect_err("failure");
+            assert_eq!(error.category, category, "{status}");
+            assert!(!error.is_retryable(), "{status}");
+        }
+        assert_eq!(transport.sent().len(), 2, "{status} must not retry");
+    }
+    // A 2xx with an unreadable body: the effect happened, the answer is lost.
+    let transport = WriteTransport::new(|_| Ok(TestIoHttpResponse::fixture(StatusCode::OK, None)));
+    let client = TestIoClient::with_transport(config(), transport);
+    let error = client
+        .post(&["exploratory_tests".to_owned()], &json!({}))
+        .await
+        .expect_err("unreadable answer");
+    assert_eq!(error.code(), TestIoClientErrorCode::UnknownOutcome);
+    assert!(error.into_adk().message.contains("may have applied"));
 }

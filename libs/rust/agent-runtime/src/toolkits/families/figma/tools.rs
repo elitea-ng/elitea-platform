@@ -9,6 +9,7 @@ use futures::StreamExt as _;
 use reqwest::Method;
 use serde_json::{Map, Value, json};
 
+use crate::toolkits::families::attachment_host::AttachmentHost;
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
@@ -140,6 +141,7 @@ pub(crate) fn build_figma_toolset(
     toolkit_name: &str,
     config: FigmaToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
+    _attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, FigmaToolsetError> {
     let selected = served_selection(config.selected_tools())?;
     if !config.selected_tools().is_empty() && selected.len() < config.selected_tools().len() {

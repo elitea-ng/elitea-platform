@@ -4,6 +4,7 @@ pub(crate) mod ado_plans;
 pub(crate) mod ado_repos;
 pub(crate) mod ado_wiki;
 pub(crate) mod aha;
+pub(crate) mod attachment_host;
 // Public only to the worker's composition suites (`test-support`).
 #[cfg(any(test, feature = "test-support"))]
 pub mod artifact;

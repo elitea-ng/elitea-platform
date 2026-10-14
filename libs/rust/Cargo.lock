@@ -1607,6 +1607,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-general-category",
  "zeroize",
+ "zip 8.6.0",
 ]
 
 [[package]]

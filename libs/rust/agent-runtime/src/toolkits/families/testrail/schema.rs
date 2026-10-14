@@ -25,12 +25,14 @@ pub(super) enum TestRailToolKind {
     GetResultsForRun,
     GetResultsForCase,
     GetResults,
+    AddFileToCase,
 }
 
 impl TestRailToolKind {
-    /// The SDK's `get_available_tools` order without `add_file_to_case` and
-    /// the inherited index tools.
-    pub(super) const ALL: [Self; 16] = [
+    /// The SDK's `get_available_tools` order without the inherited index
+    /// tools. `add_file_to_case` is served only when the run lends artifact
+    /// authority.
+    pub(super) const ALL: [Self; 17] = [
         Self::GetCase,
         Self::GetCases,
         Self::GetCasesByFilter,
@@ -47,6 +49,7 @@ impl TestRailToolKind {
         Self::GetResultsForRun,
         Self::GetResultsForCase,
         Self::GetResults,
+        Self::AddFileToCase,
     ];
 
     pub(super) const fn name(self) -> &'static str {
@@ -67,13 +70,20 @@ impl TestRailToolKind {
             Self::GetResultsForRun => "get_results_for_run",
             Self::GetResultsForCase => "get_results_for_case",
             Self::GetResults => "get_results",
+            Self::AddFileToCase => "add_file_to_case",
         }
+    }
+
+    /// Whether the tool reads or writes artifacts, so it needs the host.
+    pub(super) const fn needs_host(self) -> bool {
+        matches!(self, Self::AddFileToCase)
     }
 
     pub(super) const fn is_read_only(self) -> bool {
         !matches!(
             self,
             Self::AddCase
+                | Self::AddFileToCase
                 | Self::AddCases
                 | Self::UpdateCase
                 | Self::DeleteCase
@@ -126,6 +136,9 @@ impl TestRailToolKind {
             Self::GetResultsForCase => {
                 "Extracts the test results for a run + case combination from Testrail. A 'test' is the instance of a case within a run; this returns that test's result history (auto-paginated). Pass an optional result_filter to narrow by status or defect."
             }
+            Self::AddFileToCase => {
+                "Upload a file from artifact storage (filepath: /{bucket}/{filename}, at most 50 MiB in this runtime) and attach it to a TestRail test case. TestRail keeps every upload, so attaching the same file name twice creates two attachments. Optionally pass embed_in_field (e.g. custom_steps, custom_preconds, custom_expected) to also set that rich-text field to the inline reference of the new attachment, with embed_text_before / embed_text_after around it: this REPLACES the field's whole current value. The upload and the field update are two requests; if the update fails the reply says the file is attached but not embedded."
+            }
             Self::GetResults => {
                 "Extracts the result history for a single test from Testrail. A 'test' is an instance of a case within a run. Results are auto-paginated. Supported filters: status_id, defects_filter."
             }
@@ -169,6 +182,7 @@ pub(super) fn schema(kind: TestRailToolKind) -> Value {
         | TestRailToolKind::GetResultsForRun
         | TestRailToolKind::GetResultsForCase
         | TestRailToolKind::GetResults => run_properties(kind),
+        TestRailToolKind::AddFileToCase => file_properties(),
         _ => effect_properties(kind),
     };
     json!({
@@ -330,4 +344,21 @@ fn effect_properties(kind: TestRailToolKind) -> (Value, &'static [&'static str])
             &["section_id"],
         ),
     }
+}
+
+fn file_properties() -> (Value, &'static [&'static str]) {
+    (
+        json!({
+            "case_id":id("The ID of the test case to attach the file to"),
+            "filepath":{"type":"string","minLength":1,"maxLength":2048,"description":"File path in format /{bucket}/{filename} from artifact storage"},
+            "filename":{"type":["string","null"],"maxLength":255,"default":null,"description":"The name of the file to upload. If not provided, uses the original filename from artifact."},
+            "embed_in_field":{
+                "type":["string","null"],"maxLength":128,"default":null,
+                "description":"Optional: the custom field name to embed the uploaded file inline (e.g. 'custom_steps', 'custom_preconds', 'custom_expected'). Works for any file type - TestRail renders all attachments as inline icons using the data-attachment-id attribute. You can provide prefix/suffix text around the attachment using embed_text_before and embed_text_after."
+            },
+            "embed_text_before":{"type":["string","null"],"maxLength":65536,"default":"","description":"Text/HTML to insert before the inline attachment in the field. Example: 'Expected UI state:<br/>'"},
+            "embed_text_after":{"type":["string","null"],"maxLength":65536,"default":"","description":"Text/HTML to insert after the inline attachment in the field."}
+        }),
+        &["case_id", "filepath"],
+    )
 }

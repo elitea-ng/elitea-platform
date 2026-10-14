@@ -385,7 +385,11 @@ impl PptxToolImpl {
     ) -> Result<String, Sentence> {
         self.io
             .host
-            .complete(OfficeModelRequest { prompt, images_png })
+            .complete(OfficeModelRequest {
+                prompt,
+                images_png,
+                ..OfficeModelRequest::default()
+            })
             .await
             .map_err(|e| host_sentence("call the model", &e))
     }

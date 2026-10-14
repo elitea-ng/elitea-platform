@@ -8,6 +8,9 @@ use reqwest::header::AUTHORIZATION;
 use reqwest::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
 
+use super::attachment_test_support::{FakePlatform, PNG};
+use super::families::attachment_host::AttachmentHost;
+use super::families::office_host::OfficeFailure;
 use super::families::qtest::client::{
     QtestApi, QtestClient, QtestClientError, QtestHttpResponse, QtestTransport,
 };
@@ -44,6 +47,8 @@ struct Captured {
     method: Method,
     target: String,
     body: Option<Value>,
+    /// The headers and raw body of an upload (a body that is not JSON).
+    upload: Option<(BTreeMap<String, String>, Vec<u8>)>,
 }
 
 type Handler = dyn Fn(&Method, &str, Option<&Value>) -> QtestHttpResponse + Send + Sync;
@@ -94,10 +99,26 @@ impl QtestTransport for FixtureTransport {
             "Bearer qtest-secret"
         );
         assert!(authorization.is_sensitive());
-        let body = request
-            .body()
-            .and_then(reqwest::Body::as_bytes)
-            .map(|bytes| serde_json::from_slice(bytes).expect("JSON body"));
+        let raw = request.body().and_then(reqwest::Body::as_bytes);
+        let is_upload = target.ends_with("/blob-handles");
+        let upload = is_upload.then(|| {
+            let headers = request
+                .headers()
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.as_str().to_owned(),
+                        value.to_str().expect("ASCII header").to_owned(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            (headers, raw.expect("upload body").to_vec())
+        });
+        let body = if is_upload {
+            None
+        } else {
+            raw.map(|bytes| serde_json::from_slice(bytes).expect("JSON body"))
+        };
         self.requests
             .lock()
             .expect("qTest fixture lock")
@@ -105,6 +126,7 @@ impl QtestTransport for FixtureTransport {
                 method: request.method().clone(),
                 target: target.clone(),
                 body: body.clone(),
+                upload,
             });
         Ok((self.handler)(request.method(), &target, body.as_ref()))
     }
@@ -162,6 +184,10 @@ fn search(body: &Value) -> QtestHttpResponse {
             false,
         ),
         ("requirements", "Id = 'RQ-15'") => page(json!([{"pid":"RQ-15","id":41}]), false),
+        ("test-runs", "Id = 'TR-5'") => page(
+            json!([{"pid":"TR-5","id":10,"name":"Bare","properties":[]}]),
+            false,
+        ),
         other => panic!("unexpected qTest search {other:?}"),
     }
 }
@@ -201,7 +227,7 @@ fn provider(method: &Method, target: &str, body: Option<&Value>) -> QtestHttpRes
         ("GET", "test-runs/execution-statuses") => ok(json!([
             {"id":601,"name":"Passed"},{"id":602,"name":"Failed"}
         ])),
-        ("GET", "test-cases/501/versions/999") => {
+        ("GET", "test-cases/501/versions/999") | ("POST", "test-cases/702/blob-handles") => {
             QtestHttpResponse::fixture(StatusCode::NOT_FOUND, None)
         }
         ("GET", "test-cases/501/versions/4001") => ok(json!({"test_case_version_id":4001})),
@@ -210,14 +236,38 @@ fn provider(method: &Method, target: &str, body: Option<&Value>) -> QtestHttpRes
             {"test_case_version_id":4002,"version":"2.0","name":"Login"}
         ])),
         ("POST", "test-runs/9/test-logs") => ok(json!({"id":880})),
+        ("GET", "test-cases/501") if query == "expand=teststep" => ok(json!({
+            "id":501,"test_steps":[{"id":9001,"order":1},{"id":9002,"order":2}]
+        })),
+        ("POST", "test-cases/501/blob-handles") => ok(json!({"id":"blob-1"})),
+        ("POST", "test-steps/9002/blob-handles") => ok(json!({"id":"blob-step"})),
+        ("POST", "test-logs/77/blob-handles") => ok(json!({"id":"blob-log"})),
+        ("POST", "test-cases/700/blob-handles") => ok(json!({})),
+        ("POST", "test-cases/701/blob-handles") => {
+            QtestHttpResponse::fixture(StatusCode::INTERNAL_SERVER_ERROR, None)
+        }
+        ("POST", "test-cases/703/blob-handles") => {
+            QtestHttpResponse::fixture(StatusCode::UNAUTHORIZED, None)
+        }
+        ("POST", "test-cases/704/blob-handles") => {
+            QtestHttpResponse::fixture(StatusCode::BAD_REQUEST, Some(json!({"message":"x"})))
+        }
         other => panic!("unexpected qTest request {other:?} {query}"),
     }
 }
 
 async fn tools_with(transport: Arc<FixtureTransport>) -> Vec<Arc<dyn Tool>> {
+    tools_with_host(transport, None).await
+}
+
+async fn tools_with_host(
+    transport: Arc<FixtureTransport>,
+    host: Option<AttachmentHost>,
+) -> Vec<Arc<dyn Tool>> {
     let config = QtestToolkitConfig::parse(&settings(&[])).expect("valid qTest configuration");
     let client: Arc<dyn QtestApi> = Arc::new(QtestClient::with_transport(config, transport));
-    let toolset = test_build_with_api("qa", 7, &[], &policy(), client).expect("qTest toolset");
+    let toolset =
+        test_build_with_api("qa", 7, &[], &policy(), client, host).expect("qTest toolset");
     let readonly: Arc<dyn ReadonlyContext> = context();
     toolset.tools(readonly).await.expect("qTest tools")
 }
@@ -554,13 +604,14 @@ async fn selection_skips_artifact_and_index_tools_and_the_contract_holds() {
         "index_data",
     ]))
     .expect("bounded selection parses");
-    let Err(error) = build_qtest_toolset("qa", only_unserved, &policy()) else {
+    let Err(error) = build_qtest_toolset("qa", only_unserved, &policy(), None) else {
         panic!("an unserved-only selection must not build");
     };
     assert_eq!(error.code(), QtestToolsetErrorCode::UnsupportedSelection);
 
-    let tools = tools_with(FixtureTransport::new(provider)).await;
-    assert_eq!(tools.len(), 17);
+    let platform = FakePlatform::new();
+    let tools = tools_with_host(FixtureTransport::new(provider), Some(platform.host())).await;
+    assert_eq!(tools.len(), 19);
     assert_eq!(
         tools
             .iter()
@@ -573,8 +624,276 @@ async fn selection_skips_artifact_and_index_tools_and_the_contract_holds() {
             "update_test_run_status",
             "delete_test_case",
             "link_tests_to_jira_requirement",
-            "link_tests_to_qtest_requirement"
+            "link_tests_to_qtest_requirement",
+            "add_file_to_test_case",
+            "upload_attachment_to_test_run"
         ]
     );
     super::sdk_conformance::assert_sdk_conformance("qtest", &tools);
+}
+
+async fn attach_tools(platform: &Arc<FakePlatform>) -> (Arc<FixtureTransport>, Vec<Arc<dyn Tool>>) {
+    let transport = FixtureTransport::new(provider);
+    let tools = tools_with_host(Arc::clone(&transport), Some(platform.host())).await;
+    (transport, tools)
+}
+
+fn find<'a>(tools: &'a [Arc<dyn Tool>], name: &str) -> &'a Arc<dyn Tool> {
+    tools
+        .iter()
+        .find(|tool| tool.name() == name)
+        .unwrap_or_else(|| panic!("qTest tool {name}"))
+}
+
+async fn text(tools: &[Arc<dyn Tool>], name: &str, arguments: Value) -> String {
+    call(tools, name, arguments)
+        .await
+        .as_str()
+        .expect("a text result")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn the_uploads_are_served_only_with_a_host_and_are_effects() {
+    let none = tools_with(FixtureTransport::new(provider)).await;
+    assert_eq!(none.len(), 17);
+    let platform = FakePlatform::new();
+    let (_, tools) = attach_tools(&platform).await;
+    assert_eq!(tools.len(), 19);
+    for name in ["add_file_to_test_case", "upload_attachment_to_test_run"] {
+        let tool = find(&tools, name);
+        assert!(!tool.is_read_only(), "{name}");
+        assert!(!tool.is_concurrency_safe(), "{name}");
+        assert!(tool.description().contains("50 MiB"), "{name}");
+    }
+    let config = QtestToolkitConfig::parse(&settings(&["upload_attachment_to_test_run"]))
+        .expect("selection parses");
+    assert!(build_qtest_toolset("qa", config, &policy(), None).is_err());
+}
+
+#[tokio::test]
+async fn add_file_to_test_case_uploads_the_raw_body_to_the_case_or_the_step() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "shots/login.png", PNG);
+    let (transport, tools) = attach_tools(&platform).await;
+    assert_eq!(
+        text(
+            &tools,
+            "add_file_to_test_case",
+            json!({"test_case_id":"TC-1","filepath":"/bucket/shots/login.png"})
+        )
+        .await,
+        "File 'login.png' successfully uploaded to test case TC-1. Attachment ID: blob-1"
+    );
+    let captured = transport.captured();
+    let upload = captured
+        .iter()
+        .find(|request| request.target.ends_with("blob-handles"))
+        .expect("an upload");
+    assert_eq!(upload.target, "test-cases/501/blob-handles");
+    let (headers, body) = upload.upload.clone().expect("upload");
+    assert_eq!(body, PNG);
+    assert_eq!(headers["file-name"], "login.png");
+    assert_eq!(headers["content-type"], "image/png");
+    assert_eq!(headers["authorization"], "Bearer qtest-secret");
+    // A numeric id, a name override and a step.
+    assert_eq!(
+        text(
+            &tools,
+            "add_file_to_test_case",
+            json!({"test_case_id":"501","filepath":"bucket/shots/login.png","filename":"step.png","test_step_number":2})
+        )
+        .await,
+        "File 'step.png' successfully uploaded to test case 501, step 2. Attachment ID: blob-step"
+    );
+    assert!(
+        transport
+            .targets()
+            .contains(&"GET test-cases/501?expand=teststep".to_owned())
+    );
+    // A step that does not exist uploads nothing.
+    let before = transport.targets().len();
+    assert_eq!(
+        text(
+            &tools,
+            "add_file_to_test_case",
+            json!({"test_case_id":"501","filepath":"/bucket/shots/login.png","test_step_number":9})
+        )
+        .await,
+        "Test step 9 not found in test case 501; nothing was uploaded."
+    );
+    assert_eq!(transport.targets().len(), before + 1);
+}
+
+#[tokio::test]
+async fn upload_attachment_to_test_run_resolves_the_target_and_reports_the_object() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    let (transport, tools) = attach_tools(&platform).await;
+    assert_eq!(
+        text(
+            &tools,
+            "upload_attachment_to_test_run",
+            json!({"test_run_id":"TR-3","attachment_type":"test-case","filepath":"/bucket/a.txt"})
+        )
+        .await,
+        "File 'a.txt' successfully uploaded to test run TR-3's test-case (object id 501). Attachment ID: blob-1"
+    );
+    assert_eq!(
+        text(
+            &tools,
+            "upload_attachment_to_test_run",
+            json!({"test_run_id":"TR-3","attachment_type":"test-log","filepath":"/bucket/a.txt","filename":"log.txt"})
+        )
+        .await,
+        "File 'log.txt' successfully uploaded to test run TR-3's test-log (object id 77). Attachment ID: blob-log"
+    );
+    let uploads = transport
+        .captured()
+        .into_iter()
+        .filter_map(|request| {
+            request
+                .upload
+                .map(|upload| (request.target, upload.0["content-type"].clone()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        uploads,
+        [
+            (
+                "test-cases/501/blob-handles".to_owned(),
+                "text/plain".to_owned()
+            ),
+            (
+                "test-logs/77/blob-handles".to_owned(),
+                "text/plain".to_owned()
+            ),
+        ]
+    );
+    for (arguments, expected) in [
+        (
+            json!({"test_run_id":"TR-404","attachment_type":"test-case","filepath":"/bucket/a.txt"}),
+            "Test run TR-404 not found in project 7.",
+        ),
+        (
+            json!({"test_run_id":"TR-5","attachment_type":"test-case","filepath":"/bucket/a.txt"}),
+            "Test run TR-5 has no associated test case.",
+        ),
+        (
+            json!({"test_run_id":"TR-5","attachment_type":"test-log","filepath":"/bucket/a.txt"}),
+            "Test run TR-5 has no test log yet. Submit a status with 'update_test_run_status' first.",
+        ),
+    ] {
+        assert_eq!(
+            text(&tools, "upload_attachment_to_test_run", arguments).await,
+            expected
+        );
+    }
+    assert_eq!(
+        uploads_of(&transport),
+        2,
+        "no refused call uploaded anything"
+    );
+}
+
+fn uploads_of(transport: &FixtureTransport) -> usize {
+    transport
+        .captured()
+        .iter()
+        .filter(|request| request.upload.is_some())
+        .count()
+}
+
+#[tokio::test]
+async fn upload_failures_name_their_cause_and_never_retry() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    let (transport, tools) = attach_tools(&platform).await;
+    let upload = |id: &str| json!({"test_case_id":id,"filepath":"/bucket/a.txt"});
+    let lost = text(&tools, "add_file_to_test_case", upload("701")).await;
+    assert!(
+        lost.contains("may have applied the requested effect"),
+        "{lost}"
+    );
+    assert!(
+        lost.contains("may or may not be attached to test case 701"),
+        "{lost}"
+    );
+    assert_eq!(
+        text(&tools, "add_file_to_test_case", upload("702")).await,
+        "qTest did not find test case 702; nothing was uploaded."
+    );
+    let denied = text(&tools, "add_file_to_test_case", upload("703")).await;
+    assert!(denied.contains("rejected the credentials"), "{denied}");
+    let invalid = text(&tools, "add_file_to_test_case", upload("704")).await;
+    assert!(invalid.contains("as invalid"), "{invalid}");
+    // A success without an id is the SDK's 'unknown', not a failure.
+    assert_eq!(
+        text(&tools, "add_file_to_test_case", upload("700")).await,
+        "File 'a.txt' successfully uploaded to test case 700. Attachment ID: unknown"
+    );
+    assert_eq!(
+        uploads_of(&transport),
+        5,
+        "one request per call, none retried"
+    );
+}
+
+#[tokio::test]
+async fn uploads_validate_and_report_host_failures_before_sending_anything() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    platform.put("bucket", "empty.txt", b"");
+    platform.put("bucket", "big.bin", &vec![1_u8; (50 << 20) + 1]);
+    platform.put("bucket", "n\u{e9}.txt", b"x");
+    let (transport, tools) = attach_tools(&platform).await;
+    for (name, arguments) in [
+        (
+            "add_file_to_test_case",
+            json!({"test_case_id":"abc","filepath":"/bucket/a.txt"}),
+        ),
+        ("add_file_to_test_case", json!({"test_case_id":"5"})),
+        (
+            "add_file_to_test_case",
+            json!({"test_case_id":"5","filepath":"/bucket/a.txt","x":1}),
+        ),
+        (
+            "add_file_to_test_case",
+            json!({"test_case_id":"5","filepath":"/bucket/a.txt","test_step_number":"1"}),
+        ),
+        (
+            "upload_attachment_to_test_run",
+            json!({"test_run_id":"TR-3","attachment_type":"bogus","filepath":"/bucket/a.txt"}),
+        ),
+        (
+            "upload_attachment_to_test_run",
+            json!({"test_run_id":"TR-3","filepath":"/bucket/a.txt"}),
+        ),
+    ] {
+        assert!(
+            find(&tools, name)
+                .execute(context(), arguments.clone())
+                .await
+                .is_err(),
+            "{name} accepted {arguments}"
+        );
+    }
+    let ask = |path: &str| json!({"test_case_id":"501","filepath":path});
+    let bad_path = text(&tools, "add_file_to_test_case", ask("/bucket/../x")).await;
+    assert!(
+        bad_path.contains("artifact path is not valid"),
+        "{bad_path}"
+    );
+    let missing = text(&tools, "add_file_to_test_case", ask("/bucket/none")).await;
+    assert!(missing.contains("was not found"), "{missing}");
+    let empty = text(&tools, "add_file_to_test_case", ask("/bucket/empty.txt")).await;
+    assert!(empty.contains("empty"), "{empty}");
+    let big = text(&tools, "add_file_to_test_case", ask("/bucket/big.bin")).await;
+    assert!(big.contains("50 MiB"), "{big}");
+    let header = text(&tools, "add_file_to_test_case", ask("/bucket/n\u{e9}.txt")).await;
+    assert!(header.contains("plain ASCII"), "{header}");
+    platform.fail_reads(OfficeFailure::AccessRefused);
+    let denied = text(&tools, "add_file_to_test_case", ask("/bucket/a.txt")).await;
+    assert!(denied.contains("refused access"), "{denied}");
+    assert_eq!(uploads_of(&transport), 0);
 }

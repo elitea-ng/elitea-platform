@@ -1329,6 +1329,7 @@ dependencies = [
  "tracing",
  "unicode-general-category",
  "zeroize",
+ "zip 8.6.0",
 ]
 
 [[package]]

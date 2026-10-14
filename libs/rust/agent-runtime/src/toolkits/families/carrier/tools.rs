@@ -12,6 +12,7 @@ use regex::Regex;
 use reqwest::Method;
 use serde_json::{Map, Value, json};
 
+use crate::toolkits::families::attachment_host::AttachmentHost;
 use crate::toolkits::families::python_repr;
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
@@ -21,6 +22,7 @@ use super::client::{
     json_success, list_field, response_shape_failure, status_error,
 };
 use super::config::{CarrierConfigError, CarrierToolkitConfig};
+use super::reports;
 
 const GET_TICKET_LIST: &str = "get_ticket_list";
 const CREATE_TICKET: &str = "create_ticket";
@@ -41,17 +43,9 @@ const CREATE_UI_EXCEL_REPORT: &str = "create_ui_excel_report";
 const CREATE_UI_TEST: &str = "create_ui_test";
 const CANCEL_UI_TEST: &str = "cancel_ui_test";
 
-/// SDK tools this family does not serve: they download, unzip, merge and
-/// re-upload result archives or build `.xlsx` workbooks.
-const SDK_ONLY_TOOLS: [&str; 3] = [
-    GET_REPORT_BY_ID,
-    CREATE_EXCEL_REPORT,
-    CREATE_UI_EXCEL_REPORT,
-];
-
-const MAX_TEXT_BYTES: usize = 16 * 1_024;
+pub(super) const MAX_TEXT_BYTES: usize = 16 * 1_024;
 const MAX_DESCRIPTION_TEXT_BYTES: usize = 64 * 1_024;
-const MAX_ID_BYTES: usize = 256;
+pub(super) const MAX_ID_BYTES: usize = 256;
 const MAX_ARGUMENT_BYTES: usize = 256 * 1_024;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 const REPORT_LINK_PREFIX: &str = "https://platform.getcarrier.io/api/v1/artifacts/artifact/default";
@@ -142,29 +136,31 @@ impl From<MaterializedToolsetError> for CarrierToolsetError {
 
 /// Build the fifteen served Carrier tools.
 ///
-/// An empty selection serves all of them. An explicit selection keeps the
-/// served names and omits the three SDK-only archive tools with one bounded
-/// warning (elitea-main's per-tool capability marks those unavailable); a
-/// name the SDK does not declare is refused.
+/// An empty selection serves every tool the run can back. `create_excel_report`
+/// and `create_ui_excel_report` write a spreadsheet into the artifact store, so
+/// they are served only with that store lent to the run and a build that
+/// links the spreadsheet writer (`toolkit-office`); otherwise they are omitted
+/// with one bounded warning (elitea-main's per-tool capability marks them
+/// unavailable). A name the SDK does not declare is refused.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the signature every family builder shares"
+)]
 pub(crate) fn build_carrier_toolset(
     toolkit_name: &str,
     config: CarrierToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
+    attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, CarrierToolsetError> {
     let selected = served_selection(config.selected_tools())?;
-    if !config.selected_tools().is_empty() && selected.len() < config.selected_tools().len() {
-        tracing::warn!(
-            event = "agent_toolkit_tools_skipped",
-            reason_code = "unsupported_tool_selection",
-            toolkit_type = "carrier",
-            toolkit_name,
-            selected_count = config.selected_tools().len(),
-            materialized_count = selected.len(),
-            "Carrier archive tools are not served by this runtime and were omitted"
-        );
-    }
     let client = Arc::new(CarrierClient::new(config)?);
-    build_with_client(toolkit_name, &selected, policy, &client)
+    build_with_client(
+        toolkit_name,
+        &selected,
+        policy,
+        &client,
+        attachments.as_ref(),
+    )
 }
 
 fn served_selection(selected: &[Box<str>]) -> Result<Vec<String>, CarrierToolsetError> {
@@ -175,18 +171,18 @@ fn served_selection(selected: &[Box<str>]) -> Result<Vec<String>, CarrierToolset
     for name in selected {
         if CarrierToolKind::from_name(name).is_some() {
             served.push(name.to_string());
-        } else if !SDK_ONLY_TOOLS.contains(&name.as_ref()) {
+        } else {
             return Err(CarrierToolsetError {
                 code: CarrierToolsetErrorCode::UnsupportedSelection,
             });
         }
     }
-    if served.is_empty() {
-        return Err(CarrierToolsetError {
-            code: CarrierToolsetErrorCode::UnsupportedSelection,
-        });
-    }
     Ok(served)
+}
+
+/// Whether this run can back the spreadsheet tools.
+fn spreadsheet_backed(attachments: Option<&AttachmentHost>) -> bool {
+    cfg!(feature = "toolkit-office") && attachments.is_some()
 }
 
 fn build_with_client(
@@ -194,29 +190,64 @@ fn build_with_client(
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
     client: &Arc<CarrierClient>,
+    attachments: Option<&AttachmentHost>,
 ) -> Result<BasicToolset, CarrierToolsetError> {
     let include_all = selected.is_empty();
+    let backed = spreadsheet_backed(attachments);
     let mut tools: Vec<Arc<dyn Tool>> = Vec::with_capacity(CarrierToolKind::ALL.len());
+    let mut omitted = 0_usize;
     for kind in CarrierToolKind::ALL {
-        if include_all || selected.iter().any(|name| name == kind.name()) {
-            tools.push(Arc::new(CarrierTool::new(
-                kind,
-                toolkit_name,
-                Arc::clone(client),
-            )));
+        if !(include_all || selected.iter().any(|name| name == kind.name())) {
+            continue;
         }
+        if kind.needs_spreadsheet() && !backed {
+            omitted += 1;
+            continue;
+        }
+        tools.push(Arc::new(CarrierTool::new(
+            kind,
+            toolkit_name,
+            Arc::clone(client),
+            attachments.cloned(),
+        )));
+    }
+    if omitted > 0 {
+        tracing::warn!(
+            event = "agent_toolkit_tools_skipped",
+            reason_code = "attachments_unavailable",
+            toolkit_type = "carrier",
+            toolkit_name,
+            omitted_count = omitted,
+            "Carrier Excel report tools need the artifact store and the spreadsheet writer, which this run does not have; they were omitted"
+        );
+    }
+    if tools.is_empty() {
+        return Err(CarrierToolsetError {
+            code: CarrierToolsetErrorCode::UnsupportedSelection,
+        });
     }
     admit_materialized_toolset(toolkit_name, "carrier", policy, tools).map_err(Into::into)
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "mirrors the production builder"
+)]
 pub(in crate::toolkits) fn test_build_with_client(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
     client: CarrierClient,
+    attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, CarrierToolsetError> {
-    build_with_client(toolkit_name, selected, policy, &Arc::new(client))
+    build_with_client(
+        toolkit_name,
+        selected,
+        policy,
+        &Arc::new(client),
+        attachments.as_ref(),
+    )
 }
 
 #[cfg(test)]
@@ -231,7 +262,9 @@ enum CarrierToolKind {
     GetTicketList,
     CreateTicket,
     GetReports,
+    GetReportById,
     AddTagToReport,
+    CreateExcelReport,
     GetTests,
     GetTestById,
     RunTestById,
@@ -241,17 +274,20 @@ enum CarrierToolKind {
     GetUiTests,
     RunUiTest,
     UpdateUiTestSchedule,
+    CreateUiExcelReport,
     CreateUiTest,
     CancelUiTest,
 }
 
 impl CarrierToolKind {
-    /// The SDK's `tools.__all__` order, without the three archive tools.
-    const ALL: [Self; 15] = [
+    /// The SDK's `tools.__all__` order.
+    const ALL: [Self; 18] = [
         Self::GetTicketList,
         Self::CreateTicket,
         Self::GetReports,
+        Self::GetReportById,
         Self::AddTagToReport,
+        Self::CreateExcelReport,
         Self::GetTests,
         Self::GetTestById,
         Self::RunTestById,
@@ -261,6 +297,7 @@ impl CarrierToolKind {
         Self::GetUiTests,
         Self::RunUiTest,
         Self::UpdateUiTestSchedule,
+        Self::CreateUiExcelReport,
         Self::CreateUiTest,
         Self::CancelUiTest,
     ];
@@ -270,7 +307,9 @@ impl CarrierToolKind {
             Self::GetTicketList => GET_TICKET_LIST,
             Self::CreateTicket => CREATE_TICKET,
             Self::GetReports => GET_REPORTS,
+            Self::GetReportById => GET_REPORT_BY_ID,
             Self::AddTagToReport => ADD_TAG_TO_REPORT,
+            Self::CreateExcelReport => CREATE_EXCEL_REPORT,
             Self::GetTests => GET_TESTS,
             Self::GetTestById => GET_TEST_BY_ID,
             Self::RunTestById => RUN_TEST_BY_ID,
@@ -280,6 +319,7 @@ impl CarrierToolKind {
             Self::GetUiTests => GET_UI_TESTS,
             Self::RunUiTest => RUN_UI_TEST,
             Self::UpdateUiTestSchedule => UPDATE_UI_TEST_SCHEDULE,
+            Self::CreateUiExcelReport => CREATE_UI_EXCEL_REPORT,
             Self::CreateUiTest => CREATE_UI_TEST,
             Self::CancelUiTest => CANCEL_UI_TEST,
         }
@@ -289,10 +329,18 @@ impl CarrierToolKind {
         Self::ALL.into_iter().find(|kind| kind.name() == name)
     }
 
+    /// The two tools that write a spreadsheet into the artifact store.
+    const fn needs_spreadsheet(self) -> bool {
+        matches!(self, Self::CreateExcelReport | Self::CreateUiExcelReport)
+    }
+
     /// Tools that can change Carrier state. `run_test_by_id`, `run_ui_test`,
     /// `create_backend_test`, `update_ui_test_schedule` and `cancel_ui_test`
     /// are effects only on their final step, but the model cannot tell which
     /// step a call will reach, so the whole tool is treated as one.
+    /// `get_report_by_id` uploads a zip of the errors log to the report's
+    /// bucket on every call and the two Excel tools store a spreadsheet, so
+    /// none of the three is a read although the SDK files the first as one.
     const fn is_read_only(self) -> bool {
         matches!(
             self,
@@ -314,6 +362,12 @@ impl CarrierToolKind {
                 "Create a new ticket on Carrier with required fields: title, description, severity, type, board_id, start_date, end_date. Optional: external_link, engagement, assignee, tags."
             }
             Self::GetReports => "Get list of reports from the Carrier platform.",
+            Self::GetReportById => {
+                "Get report data from the Carrier platform. Also uploads a zip of the report's merged errors log to the report's Carrier bucket (link_to_errors_file) on every call, so it is not a pure read: after a timeout, do not assume the upload did not happen. Reads only the report's simulation-errors.log files (the SDK also merges the summary logs, which the answer never uses)."
+            }
+            Self::CreateExcelReport => {
+                "Create excel report by report ID from Carrier. Give report_id, or bucket and file_name of a .jtl/.log file; with none of think_time, pct, tp_threshold, rt_threshold, er_threshold, include_group_pauses the tool only returns the default parameters to confirm. The .xlsx (sheet 'Test results': title block, header row, one row per transaction) is stored in the project's artifact store without replacing any file, and the answer names its path; it is not uploaded to Carrier. Cell values only: no colours, borders, number formats, conditional formatting or hyperlink."
+            }
             Self::AddTagToReport => "Add tag to backend report",
             Self::GetTests => "Get list of tests from the Carrier platform.",
             Self::GetTestById => "Get test data from the Carrier platform.",
@@ -332,6 +386,9 @@ impl CarrierToolKind {
             Self::UpdateUiTestSchedule => {
                 "Update UI test schedule on the Carrier platform. Use this tool when user wants to update, modify, or change a UI test schedule. Provide test_id, schedule_name, and cron_timer, or leave empty to see available tests."
             }
+            Self::CreateUiExcelReport => {
+                "Create Excel report from UI test results JSON files from the Carrier platform. The .xlsx (one sheet per Lighthouse JSON: step names down, audits across) is stored in the project's artifact store without replacing any file, and the answer names its path; it is not uploaded to Carrier. Cell values only: no colours, borders or conditional formatting. At most 64 JSON files of 16 MiB are read."
+            }
             Self::CreateUiTest => "Create a new UI test in the Carrier platform.",
             Self::CancelUiTest => {
                 "Cancel a UI test or show available tests to cancel in the Carrier platform."
@@ -343,16 +400,23 @@ impl CarrierToolKind {
 struct CarrierTool {
     kind: CarrierToolKind,
     client: Arc<CarrierClient>,
+    attachments: Option<AttachmentHost>,
     description: Box<str>,
 }
 
 impl CarrierTool {
-    fn new(kind: CarrierToolKind, toolkit_name: &str, client: Arc<CarrierClient>) -> Self {
+    fn new(
+        kind: CarrierToolKind,
+        toolkit_name: &str,
+        client: Arc<CarrierClient>,
+        attachments: Option<AttachmentHost>,
+    ) -> Self {
         // The Carrier SDK appends the toolkit line, unlike most families.
         let description = format!("{}\nToolkit: {toolkit_name}", kind.sdk_description());
         Self {
             kind,
             client,
+            attachments,
             description: description
                 .chars()
                 .take(MAX_DESCRIPTION_BYTES)
@@ -404,7 +468,14 @@ impl Tool for CarrierTool {
             CarrierToolKind::GetTicketList => get_ticket_list(client, arguments).await,
             CarrierToolKind::CreateTicket => create_ticket(client, arguments).await,
             CarrierToolKind::GetReports => get_reports(client, arguments).await,
+            CarrierToolKind::GetReportById => reports::get_report_by_id(client, arguments).await,
             CarrierToolKind::AddTagToReport => add_tag_to_report(client, arguments).await,
+            CarrierToolKind::CreateExcelReport => {
+                reports::create_excel_report(client, self.attachments.as_ref(), arguments).await
+            }
+            CarrierToolKind::CreateUiExcelReport => {
+                reports::create_ui_excel_report(client, self.attachments.as_ref(), arguments).await
+            }
             CarrierToolKind::GetTests => get_tests(client).await,
             CarrierToolKind::GetTestById => get_test_by_id(client, arguments).await,
             CarrierToolKind::RunTestById => run_test_by_id(client, arguments).await,
@@ -419,15 +490,22 @@ impl Tool for CarrierTool {
             CarrierToolKind::CreateUiTest => create_ui_test(client, arguments).await,
             CarrierToolKind::CancelUiTest => cancel_ui_test(client, arguments).await,
         };
-        result.map_err(ToolFailure::into_adk)
+        match result {
+            Err(ToolFailure::Sentence(text)) => Ok(Value::String(text)),
+            other => other.map_err(ToolFailure::into_adk),
+        }
     }
 }
 
 /// A failed call: an argument the schema admits but the operation cannot
 /// use, or a redacted Carrier failure.
-enum ToolFailure {
+pub(super) enum ToolFailure {
     Arguments,
     Client(CarrierClientError),
+    /// A refusal the model reads as the tool's answer: one sentence naming the
+    /// cause (a report that cannot be built, an artifact that cannot be read
+    /// or stored), as the Office families answer.
+    Sentence(String),
 }
 
 impl ToolFailure {
@@ -435,6 +513,12 @@ impl ToolFailure {
         match self {
             Self::Arguments => invalid_arguments(),
             Self::Client(error) => error.into_adk(),
+            Self::Sentence(text) => AdkError::new(
+                ErrorComponent::Tool,
+                ErrorCategory::InvalidInput,
+                "carrier.report.unusable",
+                text,
+            ),
         }
     }
 }
@@ -445,7 +529,7 @@ impl From<CarrierClientError> for ToolFailure {
     }
 }
 
-type ToolResult = Result<Value, ToolFailure>;
+pub(super) type ToolResult = Result<Value, ToolFailure>;
 
 // ---------------------------------------------------------------------------
 // Tickets
@@ -1117,7 +1201,7 @@ const UI_REPORT_FIELDS: [&str; 13] = [
     "passed",
 ];
 
-async fn ui_reports(client: &CarrierClient) -> Result<Vec<Value>, CarrierClientError> {
+pub(super) async fn ui_reports(client: &CarrierClient) -> Result<Vec<Value>, CarrierClientError> {
     client
         .rows(&["ui_performance", "reports", client.project_id()], &[])
         .await
@@ -1289,7 +1373,7 @@ fn html_name_pattern() -> Option<&'static Regex> {
         .as_ref()
 }
 
-async fn ui_report_links(
+pub(super) async fn ui_report_links(
     client: &CarrierClient,
     uid: &str,
 ) -> Result<Vec<String>, CarrierClientError> {
@@ -2470,6 +2554,28 @@ fn schema(kind: CarrierToolKind) -> Value {
             }),
             &[],
         ),
+        CarrierToolKind::GetReportById => object_schema(
+            json!({"report_id":string_property("Report id to retrieve", MAX_ID_BYTES)}),
+            &["report_id"],
+        ),
+        CarrierToolKind::CreateExcelReport => object_schema(
+            json!({
+                "report_id":nullable_string("Report ID to retrieve", MAX_ID_BYTES),
+                "bucket":nullable_string("Bucket with jtl/log file", MAX_ID_BYTES),
+                "file_name":nullable_string("File name for .jtl or .log report", MAX_TEXT_BYTES),
+                "think_time":nullable_string("Think time parameter", MAX_TEXT_BYTES),
+                "pct":nullable_string("Percentile parameter", MAX_ID_BYTES),
+                "tp_threshold":{"type":["integer","null"],"default":null,"description":"Throughput threshold"},
+                "rt_threshold":{"type":["integer","null"],"default":null,"description":"Response time threshold"},
+                "er_threshold":{"type":["integer","null"],"default":null,"description":"Error rate threshold"},
+                "include_group_pauses":{"type":["boolean","null"],"default":false,"description":"Include group pauses in Gatling Excel report"},
+            }),
+            &[],
+        ),
+        CarrierToolKind::CreateUiExcelReport => object_schema(
+            json!({"report_id":defaulted_string("UI Report ID to generate Excel report for", MAX_ID_BYTES, "")}),
+            &[],
+        ),
         CarrierToolKind::AddTagToReport => object_schema(
             json!({
                 "report_id":string_property("Report id to update", MAX_ID_BYTES),
@@ -2605,7 +2711,7 @@ fn schema(kind: CarrierToolKind) -> Value {
 /// `str(value)` for the JSON values Carrier returns (`python_repr::str_of`:
 /// lists, dicts and floats as `CPython` prints them); an absent value is
 /// Python's `None`.
-fn py_str(value: Option<&Value>) -> String {
+pub(super) fn py_str(value: Option<&Value>) -> String {
     value.map_or_else(|| "None".to_owned(), python_repr::str_of)
 }
 
@@ -2615,7 +2721,7 @@ fn py_str_or_empty(value: Option<&Value>) -> String {
 }
 
 /// Python truthiness of a JSON value.
-fn py_truthy(value: &Value) -> bool {
+pub(super) fn py_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(value) => *value,
@@ -2664,7 +2770,7 @@ fn name_default_pairs(parameters: Option<&Value>) -> Value {
 // Argument helpers
 // ---------------------------------------------------------------------------
 
-fn required_text<'a>(
+pub(super) fn required_text<'a>(
     arguments: &'a Map<String, Value>,
     name: &str,
     limit: usize,
@@ -2672,7 +2778,7 @@ fn required_text<'a>(
     optional_text(arguments, name, limit)?.ok_or(ToolFailure::Arguments)
 }
 
-fn optional_text<'a>(
+pub(super) fn optional_text<'a>(
     arguments: &'a Map<String, Value>,
     name: &str,
     limit: usize,

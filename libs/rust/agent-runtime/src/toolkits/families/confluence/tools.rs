@@ -7,10 +7,14 @@ use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
 use crate::toolkits::families::UnsupportedSetting;
+use crate::toolkits::families::attachment_host::AttachmentHost;
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
-use super::client::{ConfluenceApi, ConfluenceClient, ConfluenceClientError, ConfluenceOperation};
+use super::client::{
+    ConfluenceApi, ConfluenceClient, ConfluenceClientError, ConfluenceOperation, MAX_ATTACHMENTS,
+    MAX_CONTENT_LENGTH,
+};
 use super::config::{ConfluenceConfigError, ConfluenceConfigErrorCode, ConfluenceToolkitConfig};
 
 const MAX_ARGUMENT_BYTES: usize = 2 * 1_024 * 1_024;
@@ -18,14 +22,11 @@ const MAX_DESCRIPTION_BYTES: usize = 1_000;
 const MAX_LIST_ITEMS: usize = 64;
 const MAX_LIST_ITEM_BYTES: usize = 1_024 * 1_024;
 
-/// SDK tools this runtime does not serve, and why (`SOURCE_PARITY.md`):
-/// the image-description read needs a vision model call, the attachment
-/// reader the SDK's content parser and an LLM, and the file upload verified
-/// artifact bytes; the six index tools need the indexing plane.
-const UNSERVED_TOOLS: [&str; 9] = [
-    "get_page_with_image_descriptions",
-    "get_page_attachments",
-    "add_file_to_page",
+/// SDK tools this runtime does not serve through this family
+/// (`SOURCE_PARITY.md`): the six index tools need the indexing plane. The
+/// three attachment tools ([`ConfluenceToolKind::needs_attachments`]) are
+/// served only when the host lends the run's artifact store and model.
+const UNSERVED_TOOLS: [&str; 6] = [
     "index_data",
     "search_index",
     "stepback_search_index",
@@ -133,9 +134,26 @@ pub(crate) fn build_confluence_toolset(
     toolkit_name: &str,
     config: ConfluenceToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
+    attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, ConfluenceToolsetError> {
-    let kinds = served_selection(config.selected_tools())?;
+    let kinds = served_selection(config.selected_tools(), attachments.is_some())?;
     let omitted = config.selected_tools().len().saturating_sub(kinds.len());
+    if attachments.is_none()
+        && (config.selected_tools().is_empty()
+            || config.selected_tools().iter().any(|name| {
+                ConfluenceToolKind::ALL
+                    .iter()
+                    .any(|kind| kind.needs_attachments() && kind.name() == name.as_ref())
+            }))
+    {
+        tracing::warn!(
+            event = "agent_toolkit_tools_skipped",
+            reason_code = "attachment_host_unavailable",
+            toolkit_type = "confluence",
+            toolkit_name,
+            "Confluence attachment tools were omitted: this run lends no artifact store or model"
+        );
+    }
     if !config.selected_tools().is_empty() && omitted > 0 {
         tracing::warn!(
             event = "agent_toolkit_tools_skipped",
@@ -148,12 +166,14 @@ pub(crate) fn build_confluence_toolset(
             "Confluence tools this runtime does not serve were omitted from the native toolset"
         );
     }
-    let client: Arc<dyn ConfluenceApi> = Arc::new(ConfluenceClient::new(config)?);
+    let client: Arc<dyn ConfluenceApi> =
+        Arc::new(ConfluenceClient::new(config)?.with_attachments(attachments));
     admit_kinds(toolkit_name, &kinds, policy, &client)
 }
 
 fn served_selection(
     selected: &[Box<str>],
+    has_attachments: bool,
 ) -> Result<Vec<ConfluenceToolKind>, ConfluenceToolsetError> {
     if selected.iter().any(|name| {
         !UNSERVED_TOOLS.contains(&name.as_ref())
@@ -166,7 +186,8 @@ fn served_selection(
     let kinds = ConfluenceToolKind::ALL
         .into_iter()
         .filter(|kind| {
-            selected.is_empty() || selected.iter().any(|name| name.as_ref() == kind.name())
+            (has_attachments || !kind.needs_attachments())
+                && (selected.is_empty() || selected.iter().any(|name| name.as_ref() == kind.name()))
         })
         .collect::<Vec<_>>();
     if kinds.is_empty() {
@@ -201,7 +222,32 @@ pub(in crate::toolkits) fn test_build_with_api(
         .iter()
         .map(|name| (*name).into())
         .collect::<Vec<Box<str>>>();
-    admit_kinds(toolkit_name, &served_selection(&selected)?, policy, client)
+    admit_kinds(
+        toolkit_name,
+        &served_selection(&selected, true)?,
+        policy,
+        client,
+    )
+}
+
+/// [`test_build_with_api`] for a run whose host lends no attachment authority.
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_without_attachments(
+    toolkit_name: &str,
+    selected: &[&str],
+    policy: &Arc<ToolAdmissionPolicy>,
+    client: &Arc<dyn ConfluenceApi>,
+) -> Result<BasicToolset, ConfluenceToolsetError> {
+    let selected = selected
+        .iter()
+        .map(|name| (*name).into())
+        .collect::<Vec<Box<str>>>();
+    admit_kinds(
+        toolkit_name,
+        &served_selection(&selected, false)?,
+        policy,
+        client,
+    )
 }
 
 #[cfg(test)]
@@ -230,11 +276,14 @@ enum ConfluenceToolKind {
     SiteSearch,
     ExecuteGenericConfluence,
     GetPageIdByTitle,
+    GetPageWithImageDescriptions,
+    GetPageAttachments,
+    AddFileToPage,
 }
 
 impl ConfluenceToolKind {
     /// The SDK's `get_available_tools` order, without the unserved tools.
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 19] = [
         Self::CreatePage,
         Self::CreatePages,
         Self::DeletePage,
@@ -251,7 +300,18 @@ impl ConfluenceToolKind {
         Self::SiteSearch,
         Self::ExecuteGenericConfluence,
         Self::GetPageIdByTitle,
+        Self::GetPageWithImageDescriptions,
+        Self::GetPageAttachments,
+        Self::AddFileToPage,
     ];
+
+    /// Whether the tool reads the artifact store or calls the run's model.
+    const fn needs_attachments(self) -> bool {
+        matches!(
+            self,
+            Self::GetPageWithImageDescriptions | Self::GetPageAttachments | Self::AddFileToPage
+        )
+    }
 
     const fn name(self) -> &'static str {
         match self {
@@ -271,6 +331,9 @@ impl ConfluenceToolKind {
             Self::SiteSearch => "site_search",
             Self::ExecuteGenericConfluence => "execute_generic_confluence",
             Self::GetPageIdByTitle => "get_page_id_by_title",
+            Self::GetPageWithImageDescriptions => "get_page_with_image_descriptions",
+            Self::GetPageAttachments => "get_page_attachments",
+            Self::AddFileToPage => "add_file_to_page",
         }
     }
 
@@ -285,6 +348,8 @@ impl ConfluenceToolKind {
                 | Self::SearchByTitle
                 | Self::SiteSearch
                 | Self::GetPageIdByTitle
+                | Self::GetPageWithImageDescriptions
+                | Self::GetPageAttachments
         )
     }
 
@@ -337,6 +402,15 @@ impl ConfluenceToolKind {
             }
             Self::GetPageIdByTitle => {
                 "Provide the page id of a page or blogpost found by its exact title in the toolkit's space."
+            }
+            Self::GetPageWithImageDescriptions => {
+                "Get a Confluence page as Markdown and replace each image in it (attached, linked or embedded) with a text description from the run's model, using the surrounding text as context. At most 20 pictures of up to 5 MiB are described per call; pictures are read only from this Confluence."
+            }
+            Self::GetPageAttachments => {
+                "Retrieve the attachments visible on a Confluence page: metadata, the text of text, JSON, XML, Markdown, CSV and HTML files (cut at max_content_length) and a description of pictures from the run's model. Word, Excel, PDF and draw.io files are listed without extracted content. Returns a list of {metadata, comments, content, llm_analysis}, with a final {notice} entry when results were limited."
+            }
+            Self::AddFileToPage => {
+                "Upload a file from artifact storage (filepath /{bucket}/{filename}) to a Confluence page as an attachment and add it to the page content: images inline with an optional visible caption, other files as an attachment link, at the end (append) or the start (prepend). A same-named attachment gets a new version. If the page update fails after the upload, the error says the file was uploaded. This remote write must be reconciled, not retried automatically, after an unknown outcome."
             }
         }
     }
@@ -401,6 +475,7 @@ impl Tool for ConfluenceTool {
     }
 }
 
+#[allow(clippy::too_many_lines)] // One arm per SDK tool keeps the argument mapping auditable.
 fn operation(
     kind: ConfluenceToolKind,
     arguments: &Map<String, Value>,
@@ -483,6 +558,29 @@ fn operation(
         ConfluenceToolKind::GetPageIdByTitle => ConfluenceOperation::GetPageIdByTitle {
             title: required_text(arguments, "title")?,
             page_type: optional_text(arguments, "type")?,
+        },
+        ConfluenceToolKind::GetPageWithImageDescriptions => {
+            ConfluenceOperation::GetPageWithImageDescriptions {
+                page_id: required_text(arguments, "page_id")?,
+                prompt: optional_text(arguments, "prompt")?,
+                context_radius: coerced_integer(arguments, "context_radius")?.unwrap_or(500),
+            }
+        }
+        ConfluenceToolKind::GetPageAttachments => ConfluenceOperation::GetPageAttachments {
+            page_id: required_text(arguments, "page_id")?,
+            max_content_length: coerced_integer(arguments, "max_content_length")?.unwrap_or(10_000),
+            custom_prompt: optional_text(arguments, "custom_prompt")?,
+            allowed_extensions: optional_list(arguments, "allowed_extensions")?,
+            name_pattern: optional_text(arguments, "name_pattern")?,
+            max_attachments: coerced_integer(arguments, "max_attachments")?.unwrap_or(50),
+        },
+        ConfluenceToolKind::AddFileToPage => ConfluenceOperation::AddFileToPage {
+            page_id: required_text(arguments, "page_id")?,
+            filepath: required_text(arguments, "filepath")?,
+            filename: optional_text(arguments, "filename")?,
+            caption: optional_text(arguments, "caption")?,
+            // The SDK prepends only on the exact word and appends otherwise.
+            prepend: optional_text(arguments, "position")? == Some("prepend"),
         },
     })
 }
@@ -673,6 +771,93 @@ fn schema_for(kind: ConfluenceToolKind) -> Value {
             ],
             &["title"],
         ),
+        ConfluenceToolKind::GetPageWithImageDescriptions => (
+            vec![
+                (
+                    "page_id",
+                    text("Confluence page ID from which content with images will be extracted"),
+                ),
+                (
+                    "prompt",
+                    optional_text_schema(
+                        "Custom prompt to use for image description generation. If not provided, a default prompt will be used",
+                    ),
+                ),
+                (
+                    "context_radius",
+                    nullable(
+                        json!({"type":"integer","minimum":0,"description":"Number of characters to include before and after each image for context. Default is 500"}),
+                        json!(500),
+                    ),
+                ),
+            ],
+            &["page_id"],
+        ),
+        ConfluenceToolKind::GetPageAttachments => (
+            vec![
+                (
+                    "page_id",
+                    text("Confluence page ID from which attachments will be retrieved"),
+                ),
+                (
+                    "max_content_length",
+                    json!({"type":"integer","minimum":0,"maximum":MAX_CONTENT_LENGTH,"default":10_000,"description":"Maximum number of characters to return for attachment content. Content will be truncated if longer. Default is 10000."}),
+                ),
+                (
+                    "custom_prompt",
+                    optional_text_schema(
+                        "Custom prompt to use for LLM-based analysis of attachments (images, pdfs, etc). If not provided, a default prompt will be used.",
+                    ),
+                ),
+                (
+                    "allowed_extensions",
+                    nullable(
+                        json!({"type":"array","items":{"type":"string"},"maxItems":MAX_LIST_ITEMS,"examples":[["pdf","docx"]],"description":"List of file extensions to include (e.g. ['pdf', 'docx']). If None, all extensions are included."}),
+                        Value::Null,
+                    ),
+                ),
+                (
+                    "name_pattern",
+                    optional_text_schema(
+                        "Regex pattern to filter attachment names (e.g. '^report_.*\\.pdf$'). If None, all names are included.",
+                    ),
+                ),
+                (
+                    "max_attachments",
+                    json!({"type":"integer","minimum":1,"maximum":MAX_ATTACHMENTS,"default":50,"description":"Maximum number of visible attachments to process and return. A notice entry is appended when more exist. Default is 50."}),
+                ),
+            ],
+            &["page_id"],
+        ),
+        ConfluenceToolKind::AddFileToPage => (
+            vec![
+                ("page_id", text("Confluence page ID to add file to")),
+                (
+                    "filepath",
+                    text("File path in format /{bucket}/{filename} from artifact storage"),
+                ),
+                (
+                    "filename",
+                    optional_text_schema(
+                        "Filename to use for the upload. If not provided, uses the original filename from artifact.",
+                    ),
+                ),
+                (
+                    "caption",
+                    optional_text_schema(
+                        "Visible caption displayed below image attachments. Not applicable for other file types.",
+                    ),
+                ),
+                (
+                    "position",
+                    nullable(
+                        json!({"type":"string","description":"Position to add file reference: 'append' or 'prepend'"}),
+                        Value::String("append".to_owned()),
+                    ),
+                ),
+            ],
+            &["page_id", "filepath"],
+        ),
     };
     json!({
         "type": "object",
@@ -758,6 +943,31 @@ fn optional_text<'a>(
     match arguments.get(name) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value)),
+        _ => Err(invalid_arguments()),
+    }
+}
+
+/// An SDK `int`: a JSON integer, an integral float, or a decimal string
+/// (pydantic's coercion). Null means absent.
+#[allow(clippy::cast_possible_truncation)] // The float is integral and under 9e15.
+fn coerced_integer(arguments: &Map<String, Value>, name: &str) -> adk_core::Result<Option<i64>> {
+    match arguments.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(value)) => value
+            .as_i64()
+            .or_else(|| {
+                value
+                    .as_f64()
+                    .filter(|float| float.fract() == 0.0 && float.abs() < 9.0e15)
+                    .map(|float| float as i64)
+            })
+            .map(Some)
+            .ok_or_else(invalid_arguments),
+        Some(Value::String(value)) => value
+            .trim()
+            .parse::<i64>()
+            .map(Some)
+            .map_err(|_| invalid_arguments()),
         _ => Err(invalid_arguments()),
     }
 }

@@ -5,13 +5,15 @@ use async_trait::async_trait;
 use reqwest::Method;
 use serde_json::{Map, Value};
 
+use crate::toolkits::families::attachment_host::{AttachmentHost, MAX_ATTACH_BYTES};
 use crate::toolkits::families::zephyr_rest::client::{
-    ZephyrRestClient, ZephyrRestError, ZephyrRestFamily, invalid_response, python_str,
+    MAX_FILE_BYTES, MultipartFile, ZephyrRestClient, ZephyrRestError, ZephyrRestErrorCode,
+    ZephyrRestFamily, invalid_response, python_str,
 };
 use crate::toolkits::families::zephyr_rest::tools::{
     Arguments, ZephyrArgumentCodes, ZephyrRestToolsetError, ZephyrToolSpec, build_toolset,
     identifier_property, integer_property, json_text_property, object_schema,
-    optional_identifier_property, optional_integer_property, text_property,
+    optional_bool_property, optional_identifier_property, optional_integer_property, text_property,
 };
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
@@ -31,11 +33,23 @@ pub(crate) fn build_zephyr_essential_toolset(
     toolkit_name: &str,
     config: ZephyrEssentialToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
+    attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, ZephyrRestToolsetError> {
     let (base_url, token, selected) = config.into_parts();
-    let client = Arc::new(ZephyrEssentialClient::new(ZephyrRestClient::new(
-        base_url, token,
-    )?));
+    if attachments.is_none() {
+        tracing::warn!(
+            event = "agent_toolkit_tools_skipped",
+            reason_code = "attachments_unavailable",
+            toolkit_type = TOOLKIT_TYPE,
+            toolkit_name,
+            "Zephyr Essential result uploads and the BDD archive download need the artifact store, which this run does not lend; they were omitted"
+        );
+    }
+    let mut client = ZephyrEssentialClient::new(ZephyrRestClient::new(base_url, token)?);
+    if let Some(attachments) = attachments {
+        client = client.with_attachments(attachments);
+    }
+    let client = Arc::new(client);
     build_with_client(toolkit_name, &selected, policy, &client)
 }
 
@@ -45,7 +59,11 @@ fn build_with_client(
     policy: &Arc<ToolAdmissionPolicy>,
     client: &Arc<ZephyrEssentialClient>,
 ) -> Result<BasicToolset, ZephyrRestToolsetError> {
-    let kinds = OPERATIONS.iter().map(EssentialTool).collect::<Vec<_>>();
+    let kinds = OPERATIONS
+        .iter()
+        .filter(|operation| !operation.special.needs_artifacts() || client.attachments().is_some())
+        .map(EssentialTool)
+        .collect::<Vec<_>>();
     build_toolset(
         toolkit_name,
         TOOLKIT_TYPE,
@@ -75,7 +93,7 @@ pub(in crate::toolkits) fn test_build_with_client(
 pub(in crate::toolkits) fn test_catalog() -> Vec<(&'static str, bool)> {
     OPERATIONS
         .iter()
-        .map(|operation| (operation.name, operation.verb == Verb::Get))
+        .map(|operation| (operation.name, operation.is_read_only()))
         .collect()
 }
 
@@ -107,6 +125,8 @@ enum ArgumentKind {
     Json,
     /// A required free-text value.
     Text,
+    /// An optional boolean.
+    OptionalBool,
 }
 
 struct Argument {
@@ -127,6 +147,42 @@ enum Special {
     CreateFolder,
     /// The SDK's client-side folder lookup by name.
     FindFolder,
+    /// Upload a result file read from the artifact store as the `file` part
+    /// of a multipart POST (the SDK's `files=` argument).
+    Upload(UploadKind),
+    /// Download the BDD test case archive and store it as an artifact.
+    BddArchive,
+}
+
+impl Special {
+    const fn needs_artifacts(self) -> bool {
+        matches!(self, Self::Upload(_) | Self::BddArchive)
+    }
+}
+
+/// The three automation result formats the API takes.
+#[derive(Clone, Copy)]
+enum UploadKind {
+    Custom,
+    Cucumber,
+    Junit,
+}
+
+impl UploadKind {
+    const fn segment(self) -> &'static str {
+        match self {
+            Self::Custom => "custom",
+            Self::Cucumber => "cucumber",
+            Self::Junit => "junit",
+        }
+    }
+
+    const fn media_type(self) -> &'static str {
+        match self {
+            Self::Custom | Self::Cucumber => "application/json",
+            Self::Junit => "application/xml",
+        }
+    }
 }
 
 struct Operation {
@@ -149,7 +205,9 @@ const fn arg(name: &'static str, kind: ArgumentKind, description: &'static str) 
     }
 }
 
-use ArgumentKind::{Identifier, Integer, Json, OptionalIdentifier, OptionalInteger, Text};
+use ArgumentKind::{
+    Identifier, Integer, Json, OptionalBool, OptionalIdentifier, OptionalInteger, Text,
+};
 use Segment::{Argument as A, Literal as L};
 
 const MAX_RESULTS: Argument = arg(
@@ -164,6 +222,16 @@ const START_AT: Argument = arg(
 );
 const PAGING: [(&str, &str); 2] = [("maxResults", "max_results"), ("startAt", "start_at")];
 
+const UPLOAD_PATH_CUSTOM: &str = "Artifact path (/{bucket}/{filename}) of the file for custom executions (Zephyr custom execution JSON).";
+const UPLOAD_PATH_CUCUMBER: &str = "Artifact path (/{bucket}/{filename}) of the file for cucumber executions (Cucumber JSON results).";
+const UPLOAD_PATH_JUNIT: &str =
+    "Artifact path (/{bucket}/{filename}) of the file for JUnit executions (JUnit XML results).";
+const AUTO_CREATE: Argument = arg(
+    "auto_create_test_cases",
+    OptionalBool,
+    "Whether to auto-create test cases.",
+);
+
 const ISSUE_LINK_JSON: &str = "JSON body to create an issue link. Example: {\"issueId\": 10100} where issueId - Jira issue id (numeric; an issue key is not accepted).";
 const WEB_LINK_JSON: &str = "JSON body to create a web link. Example: {\"url\": \"https://example.com\", \"description\": \"Web Link Description\"}";
 
@@ -176,7 +244,23 @@ macro_rules! effect_note {
     };
 }
 
-static OPERATIONS: [Operation; 41] = [
+impl Operation {
+    /// `retrieve_bdd_test_cases` is a GET but stores an artifact.
+    fn is_read_only(&self) -> bool {
+        self.verb == Verb::Get && !matches!(self.special, Special::BddArchive)
+    }
+}
+
+macro_rules! upload_note {
+    ($text:literal) => {
+        concat!(
+            $text,
+            " `files` is the artifact path (/{bucket}/{filename}) of the result file, uploaded once as the multipart `file` part (at most 50 MiB). This is a remote change; after a timeout or unknown outcome, read the current state before retrying."
+        )
+    };
+}
+
+static OPERATIONS: [Operation; 45] = [
     Operation {
         name: "list_test_cases",
         title: "ListTestCases",
@@ -928,6 +1012,81 @@ static OPERATIONS: [Operation; 41] = [
         special: Special::None,
     },
     Operation {
+        name: "create_custom_executions",
+        title: "CreateCustomExecutions",
+        description: upload_note!("Create custom executions."),
+        verb: Verb::Post,
+        path: &[L("automations"), L("executions"), L("custom")],
+        arguments: &[
+            arg(
+                "project_key",
+                Identifier,
+                "Project key for the custom executions.",
+            ),
+            arg("files", Text, UPLOAD_PATH_CUSTOM),
+            AUTO_CREATE,
+        ],
+        query: &[],
+        special: Special::Upload(UploadKind::Custom),
+    },
+    Operation {
+        name: "create_cucumber_executions",
+        title: "CreateCucumberExecutions",
+        description: upload_note!("Create cucumber executions."),
+        verb: Verb::Post,
+        path: &[L("automations"), L("executions"), L("cucumber")],
+        arguments: &[
+            arg(
+                "project_key",
+                Identifier,
+                "Project key for the cucumber executions.",
+            ),
+            arg("files", Text, UPLOAD_PATH_CUCUMBER),
+            AUTO_CREATE,
+        ],
+        query: &[],
+        special: Special::Upload(UploadKind::Cucumber),
+    },
+    Operation {
+        name: "create_junit_executions",
+        title: "CreateJUnitExecutions",
+        description: upload_note!("Create JUnit executions."),
+        verb: Verb::Post,
+        path: &[L("automations"), L("executions"), L("junit")],
+        arguments: &[
+            arg(
+                "project_key",
+                Identifier,
+                "Project key for the JUnit executions.",
+            ),
+            arg("files", Text, UPLOAD_PATH_JUNIT),
+            AUTO_CREATE,
+        ],
+        query: &[],
+        special: Special::Upload(UploadKind::Junit),
+    },
+    Operation {
+        name: "retrieve_bdd_test_cases",
+        title: "RetrieveBDDTestCases",
+        description: "Retrieve BDD test cases. Zephyr answers with a ZIP archive, which cannot be shown as text, so it is stored as a new artifact (never replacing a file; a taken name gets a numeric suffix) and the answer names the bucket and file. Optional `bucket` picks the artifact bucket (default zephyr-bdd). Stores a file: read the current state before retrying after a timeout or unknown outcome.",
+        verb: Verb::Get,
+        path: &[L("automations"), L("testcases")],
+        arguments: &[
+            arg(
+                "project_key",
+                Identifier,
+                "Project key to retrieve BDD test cases for.",
+            ),
+            arg(
+                "bucket",
+                OptionalIdentifier,
+                "Artifact bucket to store the ZIP archive in (default zephyr-bdd).",
+            ),
+        ],
+        query: &[],
+        special: Special::BddArchive,
+    },
+    Operation {
         name: "healthcheck",
         title: "NoInput",
         description: "Perform a health check on the API.",
@@ -955,7 +1114,7 @@ impl ZephyrToolSpec for EssentialTool {
     }
 
     fn is_read_only(self) -> bool {
-        self.0.verb == Verb::Get
+        self.0.is_read_only()
     }
 
     fn schema(self) -> Value {
@@ -971,6 +1130,7 @@ impl ZephyrToolSpec for EssentialTool {
                     OptionalInteger => optional_integer_property(argument.description),
                     Json => json_text_property(argument.description),
                     Text => text_property(argument.description),
+                    OptionalBool => optional_bool_property(argument.description),
                 };
                 (argument.name, schema)
             })
@@ -993,6 +1153,10 @@ impl ZephyrToolSpec for EssentialTool {
         &ARGUMENTS
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one dispatch over the catalogue, kept in one place"
+    )]
     async fn execute(
         self,
         api: &ZephyrEssentialClient,
@@ -1019,6 +1183,12 @@ impl ZephyrToolSpec for EssentialTool {
             return Ok(found.unwrap_or(Value::Null));
         }
 
+        match operation.special {
+            Special::Upload(kind) => return upload_executions(api, kind, &args).await,
+            Special::BddArchive => return retrieve_bdd(api, &args).await,
+            _ => {}
+        }
+
         // Every argument is read and validated before the request is built.
         let mut rendered = Vec::with_capacity(operation.arguments.len());
         for argument in operation.arguments {
@@ -1029,7 +1199,7 @@ impl ZephyrToolSpec for EssentialTool {
                 OptionalInteger => args
                     .optional_integer(argument.name)?
                     .map(|value| value.to_string()),
-                Json | Text => None,
+                Json | Text | OptionalBool => None,
             };
             rendered.push((argument.name, value));
         }
@@ -1075,7 +1245,11 @@ impl ZephyrToolSpec for EssentialTool {
                     return Ok(Value::String(message));
                 }
             }
-            Special::None | Special::Values | Special::FindFolder => {}
+            Special::None
+            | Special::Values
+            | Special::FindFolder
+            | Special::Upload(_)
+            | Special::BddArchive => {}
         }
 
         let method = match operation.verb {
@@ -1168,4 +1342,102 @@ async fn resolve_parent_folder(
         .ok_or_else(|| invalid_response().into_adk(&FAMILY))?;
     object.insert("parentId".to_owned(), parent_id);
     Ok(None)
+}
+
+/// The bucket `retrieve_bdd_test_cases` stores into when none is named.
+const DEFAULT_BDD_BUCKET: &str = "zephyr-bdd";
+
+/// `create_*_executions`: read the result file from the artifact store, then
+/// upload it once. Nothing is sent when the file cannot be read.
+async fn upload_executions(
+    api: &ZephyrEssentialClient,
+    kind: UploadKind,
+    args: &Arguments<'_>,
+) -> adk_core::Result<Value> {
+    let project_key = args.identifier("project_key")?;
+    let path = args.text("files")?;
+    let auto_create = args
+        .optional_bool("auto_create_test_cases")?
+        .unwrap_or(false);
+    let host = api.attachments().ok_or_else(|| args.invalid())?;
+    let file = match host
+        .read_artifact(path, MAX_ATTACH_BYTES.min(MAX_FILE_BYTES as u64))
+        .await
+    {
+        Ok(file) => file,
+        // The sentence is the answer: nothing was sent.
+        Err(error) => return Ok(Value::String(error.sentence())),
+    };
+    let query = [
+        ("projectKey", project_key.to_owned()),
+        // Zephyr's documented spelling; Python's `requests` sends `False`.
+        ("autoCreateTestCases", auto_create.to_string()),
+    ];
+    api.upload(
+        &["automations", "executions", kind.segment()],
+        &query,
+        &MultipartFile {
+            field: "file",
+            file_name: &file.name,
+            media_type: kind.media_type(),
+            bytes: &file.bytes,
+        },
+    )
+    .await
+    .or_else(|error| {
+        if error.code() == ZephyrRestErrorCode::UnknownOutcome {
+            // The sentence is the answer; an Err message would be replaced.
+            Ok(Value::String(error.into_adk(&FAMILY).message))
+        } else {
+            Err(error.into_adk(&FAMILY))
+        }
+    })
+}
+
+/// `retrieve_bdd_test_cases`: the answer is a ZIP, stored as a new artifact.
+async fn retrieve_bdd(
+    api: &ZephyrEssentialClient,
+    args: &Arguments<'_>,
+) -> adk_core::Result<Value> {
+    let project_key = args.identifier("project_key")?;
+    let bucket = args
+        .optional_identifier("bucket")?
+        .unwrap_or(DEFAULT_BDD_BUCKET);
+    let host = api.attachments().ok_or_else(|| args.invalid())?;
+    let into_adk = |error: ZephyrRestError| error.into_adk(&FAMILY);
+    let bytes = api.download_bdd(project_key).await.map_err(into_adk)?;
+    if bytes.is_empty() {
+        return Ok(Value::String(format!(
+            "Zephyr Essential returned no BDD test cases for project {project_key}; nothing was stored."
+        )));
+    }
+    // A ZIP starts with a local-file or end-of-directory signature.
+    if !(bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06")) {
+        return Err(invalid_response().into_adk(&FAMILY));
+    }
+    let stem = format!("zephyr-bdd-{}", file_safe(project_key));
+    // A lost answer on this write says "may or may not have been stored".
+    let stored = match host
+        .write_unique_artifact(bucket, &stem, "zip", "application/zip", bytes)
+        .await
+    {
+        Ok(stored) => stored,
+        Err(error) => return Ok(Value::String(error.sentence())),
+    };
+    Ok(Value::String(format!(
+        "BDD test cases for project {project_key} retrieved as a ZIP archive ({} bytes) and stored as artifact /{}/{}",
+        stored.byte_length, stored.bucket, stored.key
+    )))
+}
+
+fn file_safe(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }

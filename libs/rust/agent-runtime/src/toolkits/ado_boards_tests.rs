@@ -4,15 +4,17 @@ use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 
 use super::ado_test_support::{
-    FixtureTransport, TOKEN, client, collection, context, expected_authorization, ok, policy,
-    settings, status, tool, tools,
+    CapturedRequest, FixtureTransport, TOKEN, client, collection, context, expected_authorization,
+    file, ok, policy, settings, status, tool, tools,
 };
+use super::attachment_test_support::{FakePlatform, PNG};
 use super::families::ado::client::{AdoClientError, AdoClientErrorCode, IntoAdk};
 use super::families::ado::config::{AdoConfigErrorCode, AdoToolkitConfig};
 use super::families::ado::toolset::AdoToolsetErrorCode;
 use super::families::ado_boards::client::{AdoBoardsClient, GetComments, SearchWorkItems};
 use super::families::ado_boards::config::AdoBoardsToolkitConfig;
 use super::families::ado_boards::tools::{build_ado_boards_toolset, build_with_client};
+use super::families::office_host::OfficeFailure;
 
 fn boards(transport: Arc<FixtureTransport>) -> AdoBoardsClient {
     let (ado, family) = client(&json!({}), transport);
@@ -559,6 +561,7 @@ async fn selection_omits_unserved_sdk_tools_and_policy_still_applies() {
         "boards",
         AdoBoardsToolkitConfig::parse(&settings(&json!({}))).expect("config"),
         &policy(&[]),
+        None,
     ) else {
         panic!("the production constructor builds without network");
     };
@@ -598,8 +601,10 @@ async fn arguments_are_validated_before_any_provider_call() {
 #[tokio::test]
 async fn every_tool_keeps_the_sdk_contract() {
     let transport = FixtureTransport::new(|_, _| ok(json!({})));
-    let toolset = build_with_client("gate", &[], &policy(&[]), Arc::new(boards(transport)))
-        .expect("complete ado_boards toolset");
+    let platform = FakePlatform::new();
+    let client = Arc::new(boards(transport).with_attachments(Some(platform.host())));
+    let toolset =
+        build_with_client("gate", &[], &policy(&[]), client).expect("complete ado_boards toolset");
     super::sdk_conformance::assert_sdk_conformance("ado_boards", &tools(&toolset).await);
 }
 
@@ -607,4 +612,565 @@ async fn every_tool_keeps_the_sdk_contract() {
 fn client_errors_never_render_provider_text() {
     let error = AdoClientError::fixture(AdoClientErrorCode::NotFound, false);
     assert_eq!(error.into_adk().code, "ado.resource.not_found");
+}
+
+// ---- attach_file_to_work_item and get_image_by_url -------------------------
+
+const ATTACHMENT_URL: &str =
+    "https://dev.azure.com/contoso/_apis/wit/attachments/a-1?fileName=x.png";
+const WI: &str = "/contoso/Fabrikam Fiber/_apis/wit/workitems/42";
+
+fn host_tools(
+    transport: &Arc<FixtureTransport>,
+    platform: &Arc<FakePlatform>,
+) -> Arc<AdoBoardsClient> {
+    Arc::new(boards(Arc::clone(transport)).with_attachments(Some(platform.host())))
+}
+
+async fn host_toolset(
+    transport: &Arc<FixtureTransport>,
+    platform: &Arc<FakePlatform>,
+) -> Vec<Arc<dyn adk_core::Tool>> {
+    let toolset = build_with_client("boards", &[], &policy(&[]), host_tools(transport, platform))
+        .expect("toolset with a host");
+    tools(&toolset).await
+}
+
+/// A provider that accepts an upload, a link, a field read and a comment.
+fn attach_provider(
+    request: &CapturedRequest,
+    _: usize,
+) -> Result<super::families::ado::client::AdoHttpResponse, AdoClientError> {
+    match (request.method.as_str(), request.path.as_str()) {
+        ("POST", "/contoso/Fabrikam Fiber/_apis/wit/attachments") => {
+            ok(json!({"id":"a-1","url":ATTACHMENT_URL}))
+        }
+        ("PATCH", WI) => ok(json!({"id":42,"rev":4})),
+        ("GET", WI) => ok(work_item(42, &json!({"System.Description":"<p>old</p>"}))),
+        ("POST", "/contoso/Fabrikam Fiber/_apis/wit/workItems/42/comments") => {
+            ok(json!({"id":7,"text":"x"}))
+        }
+        other => panic!("unexpected request {other:?}"),
+    }
+}
+
+async fn attach(tools: &[Arc<dyn adk_core::Tool>], arguments: Value) -> Value {
+    tool(tools, "attach_file_to_work_item")
+        .execute(context(), arguments)
+        .await
+        .expect("a result")
+}
+
+#[tokio::test]
+async fn the_host_tools_are_served_only_with_a_host_and_classified() {
+    let transport = FixtureTransport::new(attach_provider);
+    let none = build_with_client(
+        "boards",
+        &[],
+        &policy(&[]),
+        Arc::new(boards(transport.clone())),
+    )
+    .expect("toolset");
+    assert_eq!(tools(&none).await.len(), 11);
+    let platform = FakePlatform::new();
+    let served = host_toolset(&transport, &platform).await;
+    assert_eq!(served.len(), 13);
+    let attach = tool(&served, "attach_file_to_work_item");
+    assert!(!attach.is_read_only() && !attach.is_concurrency_safe());
+    assert!(attach.description().contains("50 MiB"));
+    let image = tool(&served, "get_image_by_url");
+    assert!(image.is_read_only() && image.is_concurrency_safe());
+    super::sdk_conformance::assert_sdk_conformance("ado_boards", &served);
+    // Selecting only the host tools builds with a host and not without.
+    let only = ["get_image_by_url".into(), "attach_file_to_work_item".into()];
+    assert!(build_with_client("b", &only, &policy(&[]), host_tools(&transport, &platform)).is_ok());
+    assert!(build_with_client("b", &only, &policy(&[]), Arc::new(boards(transport))).is_err());
+}
+
+#[tokio::test]
+async fn attaching_uploads_the_bytes_then_adds_the_relation() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "shots/x.png", PNG);
+    let transport = FixtureTransport::new(attach_provider);
+    let served = host_toolset(&transport, &platform).await;
+    let result = attach(
+        &served,
+        json!({"work_item_id":42,"filepath":"/bucket/shots/x.png","comment":"login screen"}),
+    )
+    .await;
+    assert_eq!(
+        result,
+        json!({
+            "work_item_id":42,"attachment_id":"a-1","attachment_url":ATTACHMENT_URL,
+            "filename":"x.png","mime_type":"image/png","inline_field":null,
+            "message":"File 'x.png' attached to work item 42."
+        })
+    );
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 2);
+    let upload = &requests[0];
+    assert_eq!(upload.raw, PNG);
+    assert_eq!(
+        upload.content_type.as_deref(),
+        Some("application/octet-stream")
+    );
+    assert_eq!(upload.query_value("fileName"), Some("x.png"));
+    assert_eq!(upload.query_value("uploadType"), Some("Simple"));
+    assert_eq!(upload.query_value("api-version"), Some("7.1-preview.3"));
+    assert!(upload.effect);
+    assert_eq!(
+        upload.authorization.as_deref(),
+        Some(expected_authorization().as_str())
+    );
+    assert_eq!(
+        requests[1].body,
+        Some(json!([{"op":"add","path":"/relations/-","value":{
+            "rel":"AttachedFile","url":ATTACHMENT_URL,
+            "attributes":{"name":"x.png","comment":"login screen"}
+        }}]))
+    );
+    // The same file again is a second upload and a second relation, as in the SDK.
+    attach(
+        &served,
+        json!({"work_item_id":42,"filepath":"/bucket/shots/x.png","filename":"y.png"}),
+    )
+    .await;
+    assert_eq!(transport.requests().len(), 4);
+    assert_eq!(
+        transport.requests()[2].query_value("fileName"),
+        Some("y.png")
+    );
+}
+
+#[tokio::test]
+async fn the_inline_field_keeps_its_content_and_the_comment_follows() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "n.txt", b"notes");
+    let transport = FixtureTransport::new(attach_provider);
+    let served = host_toolset(&transport, &platform).await;
+    let result = attach(
+        &served,
+        json!({"work_item_id":"42","filepath":"/bucket/n.txt","filename":"a<b>\"c.txt","inline_field":"System.Description","add_as_comment":true}),
+    )
+    .await;
+    let markup = format!("<div><a href=\"{ATTACHMENT_URL}\">a&lt;b&gt;&quot;c.txt</a></div>");
+    assert_eq!(result["inline_field"], "System.Description");
+    assert_eq!(result["comment_added"], true);
+    assert_eq!(result["mime_type"], "text/plain");
+    assert!(result.get("warnings").is_none());
+    let requests = transport.requests();
+    let patch = requests
+        .iter()
+        .find(|request| request.method == Method::PATCH)
+        .expect("patch");
+    assert_eq!(
+        patch.body.as_ref().expect("body")[1],
+        json!({"op":"add","path":"/fields/System.Description","value":format!("<p>old</p>{markup}")})
+    );
+    let comment = requests.last().expect("comment");
+    assert_eq!(comment.body, Some(json!({"text":markup})));
+    assert_eq!(comment.query_value("api-version"), Some("7.1-preview.4"));
+    // An image is an <img>.
+    platform.put("bucket", "p.png", PNG);
+    let image = attach(
+        &served,
+        json!({"work_item_id":42,"filepath":"/bucket/p.png","inline_field":"System.Description"}),
+    )
+    .await;
+    assert_eq!(image["inline_field"], "System.Description");
+    let patch = transport
+        .requests()
+        .into_iter()
+        .rfind(|r| r.method == Method::PATCH)
+        .expect("patch");
+    assert!(
+        patch.body.expect("body")[1]["value"]
+            .as_str()
+            .expect("text")
+            .contains("<img src=")
+    );
+}
+
+#[tokio::test]
+async fn an_unreadable_field_is_left_alone_and_a_failed_comment_is_reported() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "n.txt", b"notes");
+    let transport = FixtureTransport::new(|request, index| {
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", WI) => status(StatusCode::FORBIDDEN, None),
+            ("POST", path) if path.ends_with("/comments") => {
+                status(StatusCode::INTERNAL_SERVER_ERROR, None)
+            }
+            _ => attach_provider(request, index),
+        }
+    });
+    let served = host_toolset(&transport, &platform).await;
+    let result = attach(
+        &served,
+        json!({"work_item_id":42,"filepath":"/bucket/n.txt","inline_field":"System.Description","add_as_comment":true}),
+    )
+    .await;
+    assert_eq!(result["inline_field"], Value::Null);
+    assert_eq!(result["comment_added"], false);
+    let warnings = result["warnings"].as_array().expect("warnings");
+    assert_eq!(warnings.len(), 2);
+    assert!(
+        warnings[0]
+            .as_str()
+            .expect("text")
+            .contains("'System.Description' was not updated")
+    );
+    assert!(
+        warnings[1]
+            .as_str()
+            .expect("text")
+            .contains("may or may not have been added")
+    );
+    let message = result["message"].as_str().expect("message");
+    assert!(
+        message.starts_with("File 'n.txt' attached to work item 42. Warning: "),
+        "{message}"
+    );
+    let patch = transport
+        .requests()
+        .into_iter()
+        .find(|r| r.method == Method::PATCH)
+        .expect("patch");
+    assert_eq!(
+        patch.body.expect("body").as_array().map(Vec::len),
+        Some(1),
+        "only the relation"
+    );
+}
+
+#[tokio::test]
+async fn an_upload_that_is_not_linked_says_so_precisely() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "n.txt", b"notes");
+    for (patch, expected) in [
+        (
+            status(
+                StatusCode::BAD_REQUEST,
+                Some("TF401320: Rule Error for field X"),
+            ),
+            "'n.txt' was uploaded as attachment a-1 but NOT linked to work item 42, which is unchanged; retrying uploads the file again: Azure DevOps refused the request: TF401320: Rule Error for field X.",
+        ),
+        (
+            status(StatusCode::NOT_FOUND, None),
+            "'n.txt' was uploaded as attachment a-1 but NOT linked to work item 42, which is unchanged; retrying uploads the file again: Azure DevOps did not find the work item (or the attachment).",
+        ),
+        (
+            status(StatusCode::INTERNAL_SERVER_ERROR, None),
+            "'n.txt' was uploaded as attachment a-1 and may or may not be linked to work item 42; check the work item's attachments before retrying: Azure DevOps may have applied the requested effect; reconcile it before retrying.",
+        ),
+    ] {
+        let patch = std::sync::Mutex::new(Some(patch));
+        let transport = FixtureTransport::new(move |request, index| {
+            if request.method == Method::PATCH {
+                return patch.lock().expect("lock").take().expect("one patch");
+            }
+            attach_provider(request, index)
+        });
+        let served = host_toolset(&transport, &platform).await;
+        let text = attach(
+            &served,
+            json!({"work_item_id":42,"filepath":"/bucket/n.txt"}),
+        )
+        .await;
+        assert_eq!(text, Value::String(expected.to_owned()));
+        assert_eq!(transport.requests().len(), 2, "nothing was retried");
+    }
+}
+
+#[tokio::test]
+async fn upload_failures_say_nothing_was_attached() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "n.txt", b"notes");
+    for (code, expected) in [
+        (
+            StatusCode::UNAUTHORIZED,
+            "Could not upload 'n.txt' to Azure DevOps: Azure DevOps rejected the credentials (the PAT); do not retry, tell the user; nothing was attached to work item 42.",
+        ),
+        (
+            StatusCode::FORBIDDEN,
+            "Could not upload 'n.txt' to Azure DevOps: Azure DevOps did not authorize the request; nothing was attached to work item 42.",
+        ),
+        (
+            StatusCode::BAD_REQUEST,
+            "Could not upload 'n.txt' to Azure DevOps: Azure DevOps refused the request as invalid; nothing was attached to work item 42.",
+        ),
+        (
+            StatusCode::BAD_GATEWAY,
+            "Could not upload 'n.txt' to Azure DevOps: Azure DevOps may have applied the requested effect; reconcile it before retrying; the file may or may not have been uploaded, and it was not linked to work item 42.",
+        ),
+    ] {
+        let transport = FixtureTransport::new(move |_, _| status(code, None));
+        let served = host_toolset(&transport, &platform).await;
+        let text = attach(
+            &served,
+            json!({"work_item_id":42,"filepath":"/bucket/n.txt"}),
+        )
+        .await;
+        assert_eq!(text, Value::String(expected.to_owned()));
+        assert_eq!(transport.requests().len(), 1);
+    }
+    // No URL back, or one outside the organization: not linked.
+    for (reply, expected) in [
+        (
+            json!({"id":"a-1"}),
+            "Azure DevOps stored the upload but returned no attachment URL, so 'n.txt' could not be linked to work item 42; nothing was attached.",
+        ),
+        (
+            json!({"id":"a-1","url":"https://evil.example/x"}),
+            "Azure DevOps returned an attachment URL outside the configured organization, so 'n.txt' was uploaded but NOT linked to work item 42.",
+        ),
+    ] {
+        let transport = FixtureTransport::new(move |_, _| ok(reply.clone()));
+        let served = host_toolset(&transport, &platform).await;
+        let text = attach(
+            &served,
+            json!({"work_item_id":42,"filepath":"/bucket/n.txt"}),
+        )
+        .await;
+        assert_eq!(text, Value::String(expected.to_owned()));
+        assert_eq!(transport.requests().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn attaching_validates_and_reports_host_failures_before_any_request() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "n.txt", b"notes");
+    platform.put("bucket", "empty.txt", b"");
+    platform.put("bucket", "big.bin", &vec![1_u8; (50 << 20) + 1]);
+    let transport = FixtureTransport::new(|_, _| panic!("no request before the file is read"));
+    let served = host_toolset(&transport, &platform).await;
+    for arguments in [
+        json!({"filepath":"/bucket/n.txt"}),
+        json!({"work_item_id":0,"filepath":"/bucket/n.txt"}),
+        json!({"work_item_id":42,"filepath":"/bucket/n.txt","extra":1}),
+        json!({"work_item_id":42,"filepath":"/bucket/n.txt","inline_field":"System.Description/../x"}),
+        json!({"work_item_id":42,"filepath":"/bucket/n.txt","filename":"a\nb"}),
+        json!({"work_item_id":42,"filepath":"/bucket/n.txt","add_as_comment":"yes"}),
+    ] {
+        assert!(
+            tool(&served, "attach_file_to_work_item")
+                .execute(context(), arguments.clone())
+                .await
+                .is_err(),
+            "{arguments}"
+        );
+    }
+    for (path, expected) in [
+        ("/bucket/../x", "artifact path is not valid"),
+        ("/bucket/missing", "was not found"),
+        ("/bucket/empty.txt", "empty"),
+        ("/bucket/big.bin", "50 MiB"),
+    ] {
+        let text = attach(&served, json!({"work_item_id":42,"filepath":path})).await;
+        assert!(
+            text.as_str().expect("text").contains(expected),
+            "{path}: {text}"
+        );
+    }
+    platform.fail_reads(OfficeFailure::AccessRefused);
+    let denied = attach(
+        &served,
+        json!({"work_item_id":42,"filepath":"/bucket/n.txt"}),
+    )
+    .await;
+    assert!(
+        denied.as_str().expect("text").contains("refused access"),
+        "{denied}"
+    );
+}
+
+fn image_provider(
+    request: &CapturedRequest,
+    _: usize,
+) -> Result<super::families::ado::client::AdoHttpResponse, AdoClientError> {
+    match request.path.as_str() {
+        "/contoso/_apis/wit/attachments/guid-1" => file(PNG),
+        "/contoso/_apis/wit/attachments/missing" => status(StatusCode::NOT_FOUND, None),
+        "/contoso/_apis/wit/attachments/big" => {
+            Err(super::families::ado::client::resource_exhausted())
+        }
+        "/contoso/_apis/wit/attachments/junk" => file(b"not an image at all"),
+        "/contoso/_apis/wit/attachments/huge" => {
+            let mut header = PNG[..24].to_vec();
+            header[16..20].copy_from_slice(&7_000_u32.to_be_bytes());
+            header[20..24].copy_from_slice(&7_000_u32.to_be_bytes());
+            file(&header)
+        }
+        other => panic!("unexpected request {other}"),
+    }
+}
+
+async fn describe(tools: &[Arc<dyn adk_core::Tool>], arguments: Value) -> String {
+    tool(tools, "get_image_by_url")
+        .execute(context(), arguments)
+        .await
+        .expect("a result")
+        .as_str()
+        .expect("text")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn an_image_is_read_through_the_connection_and_described_by_the_model() {
+    let platform = FakePlatform::new();
+    platform.reply("A login form.");
+    platform.reply("A second reply.");
+    platform.reply("A third reply.");
+    platform.reply("   ");
+    let transport = FixtureTransport::new(image_provider);
+    let served = host_toolset(&transport, &platform).await;
+    let url = "https://dev.azure.com/contoso/Fabrikam/_apis/wit/attachments/guid-1?fileName=screen%20one.PNG";
+    assert_eq!(
+        describe(&served, json!({"attachment_url":url})).await,
+        "A login form."
+    );
+    let request = &transport.requests()[0];
+    assert_eq!(request.method, Method::GET);
+    assert_eq!(
+        request.path, "/contoso/_apis/wit/attachments/guid-1",
+        "the connection's organization, not the URL's project"
+    );
+    assert_eq!(request.query_value("download"), Some("true"));
+    assert_eq!(request.accept.as_deref(), Some("application/octet-stream"));
+    assert_eq!(
+        request.authorization.as_deref(),
+        Some(expected_authorization().as_str())
+    );
+    assert!(!request.effect);
+    let calls = platform.model_calls();
+    assert!(
+        calls[0]
+            .prompt
+            .trim_start()
+            .starts_with("You are an AI model designed for analyzing images.")
+    );
+    assert_eq!(&*calls[0].image_media_types, ["image/png"]);
+    assert_eq!(calls[0].images_png[0], PNG);
+    // A custom prompt, a name override for a URL without one, the other address
+    // form and a relative URL.
+    for (url, reply) in [
+        (
+            "https://dev.azure.com/contoso/_apis/wit/attachments/guid-1",
+            "A second reply.",
+        ),
+        (
+            "https://contoso.visualstudio.com/_apis/wit/attachments/guid-1",
+            "A third reply.",
+        ),
+    ] {
+        let text = describe(
+            &served,
+            json!({"attachment_url":url,"file_name":"s.png","prompt":"What is shown?"}),
+        )
+        .await;
+        assert_eq!(text, reply);
+    }
+    assert_eq!(platform.model_calls()[1].prompt, "What is shown?");
+    assert_eq!(
+        describe(
+            &served,
+            json!({"attachment_url":"/_apis/wit/attachments/guid-1?fileName=a.png"})
+        )
+        .await,
+        "[No readable text detected by LLM]"
+    );
+}
+
+#[tokio::test]
+async fn an_image_that_cannot_be_described_says_why_without_a_model_call() {
+    let platform = FakePlatform::new();
+    let transport = FixtureTransport::new(image_provider);
+    let served = host_toolset(&transport, &platform).await;
+    let prefix = "Error analyzing attachment image: ";
+    for (arguments, expected) in [
+        (
+            json!({"attachment_url":"data:image/png;base64,AAAA"}),
+            "data: URIs are not supported; provide an Azure DevOps attachment URL.",
+        ),
+        (
+            json!({"attachment_url":"https://dev.azure.com/contoso/_apis/git/x?fileName=a.png"}),
+            "URL must be an Azure DevOps work item attachment URL (containing /_apis/wit/attachments/).",
+        ),
+        (
+            json!({"attachment_url":"https://dev.azure.com/contoso/_apis/wit/attachments/?fileName=a.png"}),
+            "Could not determine the attachment id from the URL.",
+        ),
+        (
+            json!({"attachment_url":"https://dev.azure.com/contoso/_apis/wit/attachments/guid-1"}),
+            "Provide file_name; the URL has no fileName parameter.",
+        ),
+        (
+            json!({"attachment_url":"https://dev.azure.com/contoso/_apis/wit/attachments/guid-1?fileName=a.pdf"}),
+            "Unsupported image format '.pdf'; supported: png, jpg, jpeg, gif, webp, bmp, svg",
+        ),
+        (
+            json!({"attachment_url":"https://dev.azure.com/contoso/_apis/wit/attachments/guid-1?fileName=a.svg"}),
+            ".svg images cannot be described in this runtime (it takes png, jpg, jpeg, gif and webp).",
+        ),
+        (
+            json!({"attachment_url":"https://dev.azure.com/other/_apis/wit/attachments/guid-1?fileName=a.png"}),
+            "The attachment URL is not on the configured Azure DevOps organization; nothing was fetched.",
+        ),
+        (
+            json!({"attachment_url":"https://evil.example/contoso/_apis/wit/attachments/guid-1?fileName=a.png"}),
+            "The attachment URL is not on the configured Azure DevOps organization; nothing was fetched.",
+        ),
+        (
+            json!({"attachment_url":"https://dev.azure.com/contoso/_apis/wit/attachments/missing?fileName=a.png"}),
+            "Could not download the attachment: Azure DevOps did not find the work item (or the attachment)",
+        ),
+        (
+            json!({"attachment_url":"https://dev.azure.com/contoso/_apis/wit/attachments/big?fileName=a.png"}),
+            "Image exceeds the 5 MB processing limit",
+        ),
+        (
+            json!({"attachment_url":"https://dev.azure.com/contoso/_apis/wit/attachments/junk?fileName=a.png"}),
+            "Could not read image dimensions",
+        ),
+        (
+            json!({"attachment_url":"https://dev.azure.com/contoso/_apis/wit/attachments/huge?fileName=a.png"}),
+            "Image dimensions 7000x7000 exceed the processing limit",
+        ),
+    ] {
+        assert_eq!(
+            describe(&served, arguments.clone()).await,
+            format!("{prefix}{expected}"),
+            "{arguments}"
+        );
+    }
+    assert!(platform.model_calls().is_empty());
+    // Argument errors.
+    for arguments in [
+        json!({}),
+        json!({"attachment_url":"x","extra":1}),
+        json!({"attachment_url":5}),
+    ] {
+        assert!(
+            tool(&served, "get_image_by_url")
+                .execute(context(), arguments)
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn model_failures_are_named_and_never_retried() {
+    let platform = FakePlatform::new();
+    let transport = FixtureTransport::new(image_provider);
+    let served = host_toolset(&transport, &platform).await;
+    let url = json!({"attachment_url":"https://dev.azure.com/contoso/_apis/wit/attachments/guid-1?fileName=a.png"});
+    platform.fail_model(OfficeFailure::BudgetRefused);
+    let text = describe(&served, url.clone()).await;
+    assert!(text.contains("The model budget is exhausted"), "{text}");
+    platform.fail_model(OfficeFailure::NoModel);
+    let text = describe(&served, url).await;
+    assert!(text.contains("none is bound in this run"), "{text}");
+    assert_eq!(platform.model_calls().len(), 2);
 }

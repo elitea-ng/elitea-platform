@@ -68,6 +68,8 @@ mod ado_wiki_tests;
 #[cfg(test)]
 mod aha_tests;
 #[cfg(test)]
+mod attachment_test_support;
+#[cfg(test)]
 mod azure_search_tests;
 #[cfg(test)]
 mod azure_tests;
@@ -76,7 +78,11 @@ mod bigquery_tests;
 #[cfg(test)]
 mod bitbucket_tests;
 #[cfg(test)]
+mod carrier_reports_tests;
+#[cfg(test)]
 mod carrier_tests;
+#[cfg(test)]
+mod confluence_attachment_tests;
 #[cfg(test)]
 mod confluence_tests;
 #[cfg(all(test, feature = "toolkit-data-analysis"))]
@@ -105,6 +111,8 @@ mod imagegen_tests;
 mod index_tools_tests;
 #[cfg(test)]
 mod invocation_tests;
+#[cfg(test)]
+mod jira_attachment_tests;
 #[cfg(test)]
 mod jira_tests;
 #[cfg(test)]

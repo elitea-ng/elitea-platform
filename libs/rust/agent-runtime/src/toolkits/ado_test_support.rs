@@ -89,6 +89,9 @@ pub(super) struct CapturedRequest {
     pub(super) path: String,
     pub(super) query: Vec<(String, String)>,
     pub(super) body: Option<Value>,
+    /// The raw request body (an upload is not JSON).
+    pub(super) raw: Vec<u8>,
+    pub(super) accept: Option<String>,
     pub(super) content_type: Option<String>,
     pub(super) authorization: Option<String>,
     pub(super) authorization_sensitive: bool,
@@ -160,6 +163,12 @@ impl AdoTransport for FixtureTransport {
                 .body()
                 .and_then(Body::as_bytes)
                 .and_then(|bytes| serde_json::from_slice(bytes).ok()),
+            raw: request
+                .body()
+                .and_then(Body::as_bytes)
+                .map(<[u8]>::to_vec)
+                .unwrap_or_default(),
+            accept: header(reqwest::header::ACCEPT),
             content_type: header(CONTENT_TYPE),
             authorization: header(AUTHORIZATION),
             authorization_sensitive: request
@@ -187,6 +196,13 @@ pub(super) fn ok(body: Value) -> Result<AdoHttpResponse, AdoClientError> {
     Ok(AdoHttpResponse::fixture(
         StatusCode::OK,
         AdoBody::Json(body),
+    ))
+}
+
+pub(super) fn file(bytes: &[u8]) -> Result<AdoHttpResponse, AdoClientError> {
+    Ok(AdoHttpResponse::fixture(
+        StatusCode::OK,
+        AdoBody::Bytes(bytes.to_vec()),
     ))
 }
 

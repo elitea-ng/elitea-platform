@@ -1,9 +1,10 @@
 use reqwest::Method;
 use serde_json::Value;
 
+use crate::toolkits::families::attachment_host::AttachmentHost;
 use crate::toolkits::families::zephyr_rest::client::{
-    ZephyrRestClient, ZephyrRestError, ZephyrRestErrorCode, ZephyrRestFamily, bounded_value,
-    invalid_response, resource_exhausted,
+    MAX_FILE_BYTES, MultipartFile, ZephyrReply, ZephyrRestClient, ZephyrRestError,
+    ZephyrRestErrorCode, ZephyrRestFamily, bounded_value, invalid_response, resource_exhausted,
 };
 
 /// Page size and page ceiling of the folder-name lookup.
@@ -35,11 +36,55 @@ const fn error_code(code: ZephyrRestErrorCode) -> &'static str {
 /// The SDK's `ZephyrEssentialAPI` over one bearer client.
 pub(crate) struct ZephyrEssentialClient {
     rest: ZephyrRestClient,
+    attachments: Option<AttachmentHost>,
 }
 
 impl ZephyrEssentialClient {
     pub(crate) const fn new(rest: ZephyrRestClient) -> Self {
-        Self { rest }
+        Self {
+            rest,
+            attachments: None,
+        }
+    }
+
+    /// Lend the artifact store: it enables the result uploads and the BDD
+    /// archive download, which read and write artifacts.
+    #[must_use]
+    pub(crate) fn with_attachments(mut self, attachments: AttachmentHost) -> Self {
+        self.attachments = Some(attachments);
+        self
+    }
+
+    pub(in crate::toolkits) const fn attachments(&self) -> Option<&AttachmentHost> {
+        self.attachments.as_ref()
+    }
+
+    /// `POST /automations/executions/{kind}` with one multipart `file`. Sent
+    /// once; an unreadable answer after the send is an unknown outcome.
+    pub(in crate::toolkits) async fn upload(
+        &self,
+        segments: &[&str],
+        query: &[(&str, String)],
+        file: &MultipartFile<'_>,
+    ) -> Result<Value, ZephyrRestError> {
+        let reply: ZephyrReply = self.rest.upload(segments, query, file).await?;
+        bounded_value(reply.into_value(), true)
+    }
+
+    /// `GET /automations/testcases?projectKey=` as `application/zip`: the raw
+    /// archive, refused over 50 MiB before it is buffered.
+    pub(in crate::toolkits) async fn download_bdd(
+        &self,
+        project_key: &str,
+    ) -> Result<Vec<u8>, ZephyrRestError> {
+        self.rest
+            .get_bytes(
+                &["automations", "testcases"],
+                &[("projectKey", project_key.to_owned())],
+                "application/zip",
+                MAX_FILE_BYTES,
+            )
+            .await
     }
 
     /// The SDK's `_do_request`: the decoded JSON, the text, or `""`.

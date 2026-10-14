@@ -19,6 +19,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_mins(3);
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
 const MAX_IDLE_PER_HOST: usize = 4;
 const MAX_REQUEST_BYTES: usize = 1_024 * 1_024;
+/// The largest file one upload sends (the Office host's cap).
+const MAX_UPLOAD_BYTES: u64 = crate::toolkits::families::attachment_host::MAX_ATTACH_BYTES;
 const MAX_RESPONSE_BYTES: usize = 8 * 1_024 * 1_024;
 const USER_AGENT_VALUE: &str = "elitea-worker-rust/0.1";
 const JSON_CONTENT_TYPE: &str = "application/json";
@@ -281,6 +283,17 @@ pub(in crate::toolkits) trait QtestApi: Send + Sync {
     /// The response whatever its status, for callers that read a 400/404.
     async fn exchange(&self, call: QtestCall<'_>) -> Result<QtestHttpResponse, QtestClientError>;
 
+    /// `POST {path}` of one file as the raw request body (qTest's
+    /// `blob-handles`), with `File-Name` and `Content-Type` headers. The body
+    /// of a success is returned. An effect: never retried.
+    async fn upload(
+        &self,
+        path: &str,
+        file_name: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<Value, QtestClientError>;
+
     /// A successful response's body; any other status is an error.
     async fn call(&self, call: QtestCall<'_>) -> Result<Value, QtestClientError> {
         let effect = call.effect;
@@ -372,6 +385,55 @@ impl QtestApi for QtestClient {
         }
         self.transport.execute(request, call.effect).await
     }
+
+    async fn upload(
+        &self,
+        path: &str,
+        file_name: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<Value, QtestClientError> {
+        if path.is_empty()
+            || path.starts_with('/')
+            || path.contains("..")
+            || !path
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'/'))
+            || bytes.is_empty()
+            || bytes.len() as u64 > MAX_UPLOAD_BYTES
+        {
+            return Err(invalid_input());
+        }
+        let url = Url::parse(&format!(
+            "{}/api/v3/projects/{}/{path}",
+            self.config.base_url(),
+            self.config.project_id(),
+        ))
+        .map_err(|_| invalid_configuration())?;
+        let mut request = Request::new(Method::POST, url);
+        let header = Zeroizing::new(format!("Bearer {}", self.config.token()));
+        let mut authorization =
+            HeaderValue::from_str(&header).map_err(|_| invalid_configuration())?;
+        authorization.set_sensitive(true);
+        let headers = request.headers_mut();
+        headers.insert(AUTHORIZATION, authorization);
+        headers.insert(ACCEPT, HeaderValue::from_static(JSON_CONTENT_TYPE));
+        headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
+        headers.insert(
+            "File-Name",
+            HeaderValue::from_str(file_name).map_err(|_| invalid_input())?,
+        );
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_str(content_type).map_err(|_| invalid_input())?,
+        );
+        *request.body_mut() = Some(bytes.into());
+        let response = self.transport.execute(request, true).await?;
+        if !response.status.is_success() {
+            return Err(status_error(response.status, true));
+        }
+        Ok(response.body.unwrap_or(Value::Null))
+    }
 }
 
 pub(super) fn status_error(status: StatusCode, effect: bool) -> QtestClientError {
@@ -385,9 +447,9 @@ pub(super) fn status_error(status: StatusCode, effect: bool) -> QtestClientError
         return unknown_outcome();
     }
     let code = match status {
-        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
-            QtestClientErrorCode::InvalidInput
-        }
+        StatusCode::BAD_REQUEST
+        | StatusCode::UNPROCESSABLE_ENTITY
+        | StatusCode::PAYLOAD_TOO_LARGE => QtestClientErrorCode::InvalidInput,
         StatusCode::UNAUTHORIZED => QtestClientErrorCode::Authentication,
         StatusCode::FORBIDDEN => QtestClientErrorCode::Authorization,
         StatusCode::NOT_FOUND => QtestClientErrorCode::NotFound,

@@ -8,6 +8,9 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
 
+use super::attachment_test_support::{FakePlatform, PNG};
+use super::families::attachment_host::AttachmentHost;
+use super::families::office_host::OfficeFailure;
 use super::families::testrail::client::{
     TestRailApi, TestRailClient, TestRailClientError, TestRailHttpResponse, TestRailTransport,
 };
@@ -59,6 +62,8 @@ struct Captured {
     method: Method,
     endpoint: String,
     body: Option<Value>,
+    /// The raw body and content type of a multipart upload.
+    upload: Option<(String, Vec<u8>)>,
 }
 
 type Handler = dyn Fn(&Method, &str) -> TestRailHttpResponse + Send + Sync;
@@ -112,17 +117,29 @@ impl TestRailTransport for FixtureTransport {
             "Basic cWFAZXhhbXBsZS50ZXN0OnRlc3RyYWlsLXNlY3JldA=="
         );
         assert!(authorization.is_sensitive());
-        assert_eq!(
-            request
-                .headers()
-                .get(CONTENT_TYPE)
-                .map(reqwest::header::HeaderValue::as_bytes),
-            Some(&b"application/json"[..])
-        );
-        let body = request
-            .body()
-            .and_then(reqwest::Body::as_bytes)
-            .map(|bytes| serde_json::from_slice(bytes).expect("JSON request body"));
+        let content_type = request
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let raw = request.body().and_then(reqwest::Body::as_bytes);
+        let (body, upload) = if endpoint.starts_with("add_attachment_to_case/") {
+            assert!(
+                content_type.starts_with("multipart/form-data; boundary="),
+                "{content_type}"
+            );
+            (
+                None,
+                Some((content_type, raw.expect("upload body").to_vec())),
+            )
+        } else {
+            assert_eq!(content_type, "application/json");
+            (
+                raw.map(|bytes| serde_json::from_slice(bytes).expect("JSON request body")),
+                None,
+            )
+        };
         self.requests
             .lock()
             .expect("TestRail fixture lock")
@@ -130,6 +147,7 @@ impl TestRailTransport for FixtureTransport {
                 method: request.method().clone(),
                 endpoint: endpoint.clone(),
                 body,
+                upload,
             });
         Ok((self.handler)(request.method(), &endpoint))
     }
@@ -185,8 +203,21 @@ fn provider(method: &Method, endpoint: &str) -> TestRailHttpResponse {
         ("POST", "delete_case/42" | "delete_section/5") => {
             TestRailHttpResponse::fixture(StatusCode::OK, None)
         }
+        ("POST", "add_attachment_to_case/42") => ok(json!({"attachment_id":777})),
+        ("POST", "add_attachment_to_case/43") => ok(json!({})),
+        ("POST", "add_attachment_to_case/45") => {
+            TestRailHttpResponse::fixture(StatusCode::NOT_FOUND, Some(json!({"error":"x"})))
+        }
+        ("POST", "add_attachment_to_case/46") => {
+            TestRailHttpResponse::fixture(StatusCode::UNAUTHORIZED, None)
+        }
+        ("POST", "update_case/50") => {
+            TestRailHttpResponse::fixture(StatusCode::BAD_REQUEST, Some(json!({"error":"field"})))
+        }
+        ("POST", "add_attachment_to_case/50") => ok(json!({"attachment_id":888})),
+        ("POST", "add_attachment_to_case/51") => ok(json!({"attachment_id":889})),
         ("POST", "add_section/2") => ok(json!({"id":6,"name":"Payments"})),
-        ("POST", "add_case/500") => {
+        ("POST", "add_case/500" | "update_case/51" | "add_attachment_to_case/44") => {
             TestRailHttpResponse::fixture(StatusCode::INTERNAL_SERVER_ERROR, None)
         }
         other => panic!("unexpected TestRail request {other:?}"),
@@ -194,6 +225,13 @@ fn provider(method: &Method, endpoint: &str) -> TestRailHttpResponse {
 }
 
 async fn tools_with(transport: Arc<FixtureTransport>) -> Vec<Arc<dyn Tool>> {
+    tools_with_host(transport, None).await
+}
+
+async fn tools_with_host(
+    transport: Arc<FixtureTransport>,
+    host: Option<&AttachmentHost>,
+) -> Vec<Arc<dyn Tool>> {
     let client: Arc<dyn TestRailApi> =
         Arc::new(TestRailClient::with_transport(config(), transport));
     let toolset = test_build_with_api(
@@ -202,6 +240,7 @@ async fn tools_with(transport: Arc<FixtureTransport>) -> Vec<Arc<dyn Tool>> {
         &[],
         &policy(&[]),
         &client,
+        host,
     )
     .expect("TestRail toolset");
     let readonly: Arc<dyn ReadonlyContext> = context();
@@ -526,6 +565,7 @@ async fn selection_skips_unserved_tools_and_policy_filters() {
         &["get_case", "add_file_to_case", "index_data"],
         &policy(&[("testrail", &["delete_case"])]),
         &client,
+        None,
     )
     .expect("selected TestRail tools");
     let readonly: Arc<dyn ReadonlyContext> = context();
@@ -539,7 +579,7 @@ async fn selection_skips_unserved_tools_and_policy_filters() {
     assert_eq!(names, ["get_case"]);
     let only_unserved = TestRailToolkitConfig::parse(&settings(&["add_file_to_case"]))
         .expect("bounded selection parses");
-    let Err(error) = build_testrail_toolset("qa", only_unserved, &policy(&[])) else {
+    let Err(error) = build_testrail_toolset("qa", only_unserved, &policy(&[]), None) else {
         panic!("an unserved-only selection must not build");
     };
     assert_eq!(error.code(), TestRailToolsetErrorCode::UnsupportedSelection);
@@ -547,8 +587,10 @@ async fn selection_skips_unserved_tools_and_policy_filters() {
 
 #[tokio::test]
 async fn every_tool_keeps_the_sdk_contract() {
-    let tools = tools_with(FixtureTransport::new(provider)).await;
-    assert_eq!(tools.len(), 16);
+    let platform = FakePlatform::new();
+    let host = platform.host();
+    let tools = tools_with_host(FixtureTransport::new(provider), Some(&host)).await;
+    assert_eq!(tools.len(), 17);
     let writes = tools
         .iter()
         .filter(|tool| !tool.is_read_only())
@@ -562,8 +604,267 @@ async fn every_tool_keeps_the_sdk_contract() {
             "update_case",
             "delete_case",
             "add_section",
-            "delete_section"
+            "delete_section",
+            "add_file_to_case"
         ]
     );
     super::sdk_conformance::assert_sdk_conformance("testrail", &tools);
+}
+
+async fn attach_tools(platform: &Arc<FakePlatform>) -> (Arc<FixtureTransport>, Vec<Arc<dyn Tool>>) {
+    let transport = FixtureTransport::new(provider);
+    let host = platform.host();
+    let tools = tools_with_host(Arc::clone(&transport), Some(&host)).await;
+    (transport, tools)
+}
+
+/// A failure the model reads as the tool result (not an error).
+async fn failure(tools: &[Arc<dyn Tool>], arguments: Value) -> String {
+    call(tools, "add_file_to_case", arguments)
+        .await
+        .as_str()
+        .expect("a sentence")
+        .to_owned()
+}
+
+async fn refusal(tools: &[Arc<dyn Tool>], arguments: Value) -> adk_core::AdkError {
+    tool(tools, "add_file_to_case")
+        .execute(context(), arguments)
+        .await
+        .expect_err("the call must be refused")
+}
+
+#[tokio::test]
+async fn add_file_to_case_is_served_only_with_a_host_and_is_an_effect() {
+    let none = tools_with(FixtureTransport::new(provider)).await;
+    assert_eq!(none.len(), 16);
+    assert!(none.iter().all(|tool| tool.name() != "add_file_to_case"));
+    let platform = FakePlatform::new();
+    let (_, tools) = attach_tools(&platform).await;
+    assert_eq!(tools.len(), 17);
+    let attach = tool(&tools, "add_file_to_case");
+    assert!(!attach.is_read_only());
+    assert!(!attach.is_concurrency_safe());
+    assert!(attach.description().contains("REPLACES"));
+    super::sdk_conformance::assert_sdk_conformance("testrail", &tools);
+    // A selection of only the host tool builds with a host, not without.
+    let client: Arc<dyn TestRailApi> = Arc::new(TestRailClient::with_transport(
+        config(),
+        FixtureTransport::new(provider),
+    ));
+    let host = platform.host();
+    assert!(
+        test_build_with_api(
+            "qa",
+            "i",
+            &["add_file_to_case"],
+            &policy(&[]),
+            &client,
+            Some(&host)
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        test_build_with_api(
+            "qa",
+            "i",
+            &["add_file_to_case"],
+            &policy(&[]),
+            &client,
+            None
+        )
+        .err()
+        .map(|error| error.code()),
+        Some(TestRailToolsetErrorCode::UnsupportedSelection)
+    );
+}
+
+#[tokio::test]
+async fn add_file_to_case_uploads_multipart_and_reports_the_attachment() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "shots/login.png", PNG);
+    let (transport, tools) = attach_tools(&platform).await;
+    let text = call(
+        &tools,
+        "add_file_to_case",
+        json!({"case_id":"42","filepath":"/bucket/shots/login.png"}),
+    )
+    .await;
+    assert_eq!(
+        text,
+        json!(
+            "File 'login.png' successfully attached to test case 42. Attachment ID: 777. To embed this file inline in a rich-text field (e.g. custom_steps, custom_preconds, custom_expected), use update_case with: <img src=\"index.php?/attachments/get/777\" id=\"attachment-777\" data-attachment-id=\"777\" />"
+        )
+    );
+    let captured = transport.captured();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].method, Method::POST);
+    let (content_type, body) = captured[0].upload.clone().expect("upload");
+    let boundary = content_type.split("boundary=").nth(1).expect("boundary");
+    let head = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"attachment\"; filename=\"login.png\"\r\n\r\n"
+    );
+    assert!(body.starts_with(head.as_bytes()));
+    assert!(body.ends_with(format!("\r\n--{boundary}--\r\n").as_bytes()));
+    assert_eq!(&body[head.len()..head.len() + PNG.len()], PNG);
+    // The filename argument wins over the artifact's name.
+    call(
+        &tools,
+        "add_file_to_case",
+        json!({"case_id":42,"filepath":"bucket/shots/login.png","filename":"renamed.png"}),
+    )
+    .await;
+    let body = transport.captured()[1].upload.clone().expect("upload").1;
+    assert!(String::from_utf8_lossy(&body).contains("filename=\"renamed.png\""));
+    // The same name twice is two uploads: TestRail keeps both, as the SDK does.
+    assert_eq!(transport.endpoints().len(), 2);
+}
+
+#[tokio::test]
+async fn add_file_to_case_embeds_inline_and_reports_a_failed_embed_exactly() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    let (transport, tools) = attach_tools(&platform).await;
+    let text = call(
+        &tools,
+        "add_file_to_case",
+        json!({"case_id":"50","filepath":"/bucket/a.txt","embed_in_field":"custom_steps","embed_text_before":"Before:<br/>","embed_text_after":null}),
+    )
+    .await;
+    assert_eq!(
+        text,
+        json!(
+            "File 'a.txt' attached to test case 50 (attachment_id: 888), but failed to embed in field 'custom_steps': TestRail rejected the update as invalid (does the field exist and accept HTML?). The file is attached; the field was not confirmed updated."
+        )
+    );
+    let captured = transport.captured();
+    assert_eq!(captured[1].endpoint, "update_case/50");
+    assert_eq!(
+        captured[1].body,
+        Some(
+            json!({"custom_steps":"Before:<br/><img src=\"index.php?/attachments/get/888\" id=\"attachment-888\" data-attachment-id=\"888\" />"})
+        )
+    );
+    // A lost answer on the second request: attached, outcome of the embed unknown.
+    let text = call(
+        &tools,
+        "add_file_to_case",
+        json!({"case_id":"51","filepath":"/bucket/a.txt","embed_in_field":"custom_expected"}),
+    )
+    .await;
+    let text = text.as_str().expect("text");
+    assert!(
+        text.contains("(attachment_id: 889), but failed to embed"),
+        "{text}"
+    );
+    assert!(
+        text.contains("may have applied the requested effect"),
+        "{text}"
+    );
+    assert!(!text.contains("successfully"), "{text}");
+}
+
+#[tokio::test]
+async fn add_file_to_case_embeds_on_success() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    let (transport, tools) = attach_tools(&platform).await;
+    // case 42 answers update_case/42 with a success.
+    let text = call(
+        &tools,
+        "add_file_to_case",
+        json!({"case_id":"42","filepath":"/bucket/a.txt","embed_in_field":"custom_preconds"}),
+    )
+    .await;
+    assert_eq!(
+        text,
+        json!(
+            "File 'a.txt' attached to test case 42 (attachment_id: 777) and embedded inline in field 'custom_preconds'."
+        )
+    );
+    assert_eq!(
+        transport.endpoints(),
+        ["add_attachment_to_case/42", "update_case/42"]
+    );
+}
+
+#[tokio::test]
+async fn add_file_to_case_names_each_failure_and_never_retries() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    let (transport, tools) = attach_tools(&platform).await;
+    let args = |case: &str| json!({"case_id":case,"filepath":"/bucket/a.txt"});
+    let lost = failure(&tools, args("44")).await;
+    assert!(
+        lost.contains("may have applied the requested effect"),
+        "{lost}"
+    );
+    assert!(
+        lost.contains("may or may not be attached to test case 44"),
+        "{lost}"
+    );
+    let missing = failure(&tools, args("45")).await;
+    assert_eq!(
+        missing,
+        "TestRail did not find test case 45; nothing was attached."
+    );
+    let denied = failure(&tools, args("46")).await;
+    assert!(denied.contains("rejected the credentials"), "{denied}");
+    let no_id = failure(&tools, args("43")).await;
+    assert!(no_id.contains("returned no attachment id"), "{no_id}");
+    assert!(no_id.contains("may be attached"), "{no_id}");
+    // One request each: nothing was retried and no embed was attempted.
+    assert_eq!(transport.endpoints().len(), 4);
+}
+
+#[tokio::test]
+async fn add_file_to_case_validates_before_touching_the_store_or_provider() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    let (transport, tools) = attach_tools(&platform).await;
+    for arguments in [
+        json!({"case_id":"abc","filepath":"/bucket/a.txt"}),
+        json!({"case_id":"42"}),
+        json!({"case_id":"42","filepath":"/bucket/a.txt","extra":1}),
+        json!({"case_id":"42","filepath":"/bucket/a.txt","embed_in_field":"a b"}),
+        json!({"case_id":"42","filepath":"/bucket/a.txt","filename":"x/y.png"}),
+        json!({"case_id":"42","filepath":"/bucket/a.txt","filename":"x\"y.png"}),
+        json!({"case_id":"42","filepath":"/bucket/a.txt","filename":".."}),
+        json!({"case_id":"42","filepath":"/bucket/a.txt","embed_text_before":5}),
+    ] {
+        let error = refusal(&tools, arguments.clone()).await;
+        assert_eq!(error.category, ErrorCategory::InvalidInput, "{arguments}");
+    }
+    assert!(transport.endpoints().is_empty());
+}
+
+#[tokio::test]
+async fn add_file_to_case_reports_host_failures_before_sending_anything() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "a.txt", b"hello");
+    platform.put("bucket", "empty.txt", b"");
+    platform.put("bucket", "big.bin", &vec![1_u8; (50 << 20) + 1]);
+    let (transport, tools) = attach_tools(&platform).await;
+    let ask = |path: &str| json!({"case_id":"42","filepath":path});
+    let bad_path = failure(&tools, ask("/bucket/../x")).await;
+    assert!(
+        bad_path.contains("artifact path is not valid"),
+        "{bad_path}"
+    );
+    let missing = failure(&tools, ask("/bucket/none.txt")).await;
+    assert!(missing.contains("was not found"), "{missing}");
+    let empty = failure(&tools, ask("/bucket/empty.txt")).await;
+    assert!(empty.contains("empty"), "{empty}");
+    let big = failure(&tools, ask("/bucket/big.bin")).await;
+    assert!(big.contains("50 MiB"), "{big}");
+    assert_eq!(
+        platform.read_count(),
+        2,
+        "the over-cap file is refused from its size"
+    );
+    platform.fail_reads(OfficeFailure::AccessRefused);
+    let denied = failure(&tools, ask("/bucket/a.txt")).await;
+    assert!(denied.contains("refused access"), "{denied}");
+    assert!(denied.contains("Nothing was sent"), "{denied}");
+    assert!(transport.endpoints().is_empty());
 }

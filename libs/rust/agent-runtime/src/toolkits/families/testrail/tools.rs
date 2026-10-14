@@ -6,6 +6,7 @@ use adk_tool::BasicToolset;
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
+use crate::toolkits::families::attachment_host::{AttachmentHost, MAX_ATTACH_BYTES};
 use crate::toolkits::families::python_repr::{repr, repr_str, str_of};
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
@@ -195,30 +196,41 @@ impl From<MaterializedToolsetError> for TestRailToolsetError {
     }
 }
 
-/// Build the sixteen served `TestRail` tools.
+/// Build the served `TestRail` tools: sixteen, plus `add_file_to_case` when
+/// the run lends its artifact store.
 ///
-/// `add_file_to_case` (it reads raw bytes from artifact storage, which this
-/// runtime's artifact authority does not expose) and the six index tools are
-/// not served. A selection keeps the served tools it names; one that names
+/// The six index tools are not served. A selection keeps the served tools it names; one that names
 /// none of them is `UnsupportedSelection`, which skips the toolkit.
+#[allow(clippy::needless_pass_by_value)] // The materializer lends the host by value.
 pub(crate) fn build_testrail_toolset(
     toolkit_name: &str,
     config: TestRailToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
+    attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, TestRailToolsetError> {
-    let selected = served_selection(config.selected_tools())?;
+    let selected = served_selection(config.selected_tools(), attachments.is_some())?;
     let instance = config.instance().to_owned();
     let client: Arc<dyn TestRailApi> = Arc::new(TestRailClient::new(config)?);
-    build_with_api(toolkit_name, &instance, &selected, policy, &client)
+    build_with_api(
+        toolkit_name,
+        &instance,
+        &selected,
+        policy,
+        &client,
+        attachments.as_ref(),
+    )
 }
 
-fn served_selection(selected: &[Box<str>]) -> Result<Vec<String>, TestRailToolsetError> {
+fn served_selection(
+    selected: &[Box<str>],
+    attachments: bool,
+) -> Result<Vec<String>, TestRailToolsetError> {
     let served = selected
         .iter()
         .filter(|name| {
             TestRailToolKind::ALL
                 .iter()
-                .any(|kind| kind.name() == name.as_ref())
+                .any(|kind| kind.name() == name.as_ref() && (attachments || !kind.needs_host()))
         })
         .map(ToString::to_string)
         .collect::<Vec<_>>();
@@ -236,16 +248,27 @@ fn build_with_api(
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
     client: &Arc<dyn TestRailApi>,
+    attachments: Option<&AttachmentHost>,
 ) -> Result<BasicToolset, TestRailToolsetError> {
     let include_all = selected.is_empty();
     let mut tools: Vec<Arc<dyn Tool>> = Vec::with_capacity(TestRailToolKind::ALL.len());
     for kind in TestRailToolKind::ALL {
         if include_all || selected.iter().any(|name| name == kind.name()) {
+            if kind.needs_host() && attachments.is_none() {
+                tracing::warn!(
+                    event = "testrail_tool_unserved",
+                    tool = kind.name(),
+                    reason = "this run lends no artifact authority",
+                    "a TestRail tool that needs the artifact store is left out"
+                );
+                continue;
+            }
             tools.push(Arc::new(TestRailTool::new(
                 kind,
                 toolkit_name,
                 instance,
                 Arc::clone(client),
+                attachments.cloned(),
             )));
         }
     }
@@ -259,19 +282,29 @@ pub(in crate::toolkits) fn test_build_with_api(
     selected: &[&str],
     policy: &Arc<ToolAdmissionPolicy>,
     client: &Arc<dyn TestRailApi>,
+    attachments: Option<&AttachmentHost>,
 ) -> Result<BasicToolset, TestRailToolsetError> {
     let selected = served_selection(
         &selected
             .iter()
             .map(|name| (*name).into())
             .collect::<Vec<Box<str>>>(),
+        attachments.is_some(),
     )?;
-    build_with_api(toolkit_name, instance, &selected, policy, client)
+    build_with_api(
+        toolkit_name,
+        instance,
+        &selected,
+        policy,
+        client,
+        attachments,
+    )
 }
 
 struct TestRailTool {
     kind: TestRailToolKind,
     client: Arc<dyn TestRailApi>,
+    attachments: Option<AttachmentHost>,
     description: Box<str>,
 }
 
@@ -281,6 +314,7 @@ impl TestRailTool {
         toolkit_name: &str,
         instance: &str,
         client: Arc<dyn TestRailApi>,
+        attachments: Option<AttachmentHost>,
     ) -> Self {
         let description = format!(
             "Toolkit: {toolkit_name}\n{}\nTestrail instance: {instance}",
@@ -289,6 +323,7 @@ impl TestRailTool {
         Self {
             kind,
             client,
+            attachments,
             description: description
                 .chars()
                 .take(MAX_DESCRIPTION_CHARS)
@@ -341,8 +376,10 @@ impl Tool for TestRailTool {
         }
         let operations = Operations {
             client: self.client.as_ref(),
+            attachments: self.attachments.as_ref(),
         };
         let output = match self.kind {
+            TestRailToolKind::AddFileToCase => operations.add_file_to_case(arguments).await?,
             TestRailToolKind::GetCase
             | TestRailToolKind::GetCases
             | TestRailToolKind::GetCasesByFilter => {
@@ -378,6 +415,7 @@ fn bounded(output: Value) -> Result<Value, AdkError> {
 
 struct Operations<'a> {
     client: &'a dyn TestRailApi,
+    attachments: Option<&'a AttachmentHost>,
 }
 
 impl Operations<'_> {
@@ -835,6 +873,97 @@ impl Operations<'_> {
         }
     }
 
+    /// `add_file_to_case`: read the artifact, upload it to the case, then
+    /// optionally replace one rich-text field with the inline reference. Two
+    /// requests, so the reply says which of them happened.
+    async fn add_file_to_case(&self, arguments: &Map<String, Value>) -> Result<Value, AdkError> {
+        let host = self.attachments.ok_or_else(invalid_arguments)?;
+        let case = required_id(arguments, "case_id")?;
+        let filepath = required_text(arguments, "filepath")?;
+        let filename = optional_text(arguments, "filename")?;
+        if filename.is_some_and(|name| !name.is_empty() && !bare_file_name(name)) {
+            return Err(invalid_arguments());
+        }
+        let embed_field =
+            optional_text(arguments, "embed_in_field")?.filter(|field| !field.is_empty());
+        if let Some(field) = &embed_field
+            && (field.len() > 128
+                || !field
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))
+        {
+            return Err(invalid_arguments());
+        }
+        let before = optional_text(arguments, "embed_text_before")?.unwrap_or_default();
+        let after = optional_text(arguments, "embed_text_after")?.unwrap_or_default();
+        // Every failure from here on is a tool RESULT the model reads: the
+        // admission layer reduces an error to a generic line, which would
+        // lose what did and did not happen.
+        let file = match host.read_artifact(filepath, MAX_ATTACH_BYTES).await {
+            Ok(file) => file,
+            Err(error) => return Ok(Value::String(error.sentence())),
+        };
+        // `filename or artifact_filename`.
+        let filename = filename
+            .filter(|name| !name.is_empty())
+            .map_or(file.name, ToOwned::to_owned);
+        if !bare_file_name(&filename) {
+            return Ok(Value::String(
+                "The artifact's file name has characters TestRail cannot take (a quote, slash, backslash or control character); nothing was attached. Pass `filename` with a plain name.".to_owned(),
+            ));
+        }
+        let uploaded = match self
+            .client
+            .post_attachment(
+                &format!("add_attachment_to_case/{case}"),
+                &filename,
+                file.bytes,
+            )
+            .await
+        {
+            Ok(uploaded) => uploaded,
+            Err(error) => return Ok(Value::String(upload_failure(&error, case))),
+        };
+        let Some(attachment) = uploaded.get("attachment_id").filter(|id| !id.is_null()) else {
+            return Ok(Value::String(format!(
+                "TestRail accepted the upload but returned no attachment id, so the file may be attached to test case {case}. Check the case's attachments before retrying."
+            )));
+        };
+        let attachment_id = str_of(attachment);
+        let inline_ref = format!(
+            "<img src=\"index.php?/attachments/get/{attachment_id}\" id=\"attachment-{attachment_id}\" data-attachment-id=\"{attachment_id}\" />"
+        );
+        let Some(field) = embed_field else {
+            return Ok(Value::String(format!(
+                "File '{filename}' successfully attached to test case {case}. Attachment ID: {attachment_id}. To embed this file inline in a rich-text field (e.g. custom_steps, custom_preconds, custom_expected), use update_case with: {inline_ref}"
+            )));
+        };
+        let mut body = Map::new();
+        body.insert(
+            field.to_owned(),
+            Value::String(format!("{before}{inline_ref}{after}")),
+        );
+        Ok(Value::String(
+            match self
+                .client
+                .post(
+                    &format!("update_case/{case}"),
+                    &Vec::new(),
+                    &Value::Object(body),
+                )
+                .await
+            {
+                Ok(_) => format!(
+                    "File '{filename}' attached to test case {case} (attachment_id: {attachment_id}) and embedded inline in field '{field}'."
+                ),
+                Err(error) => format!(
+                    "File '{filename}' attached to test case {case} (attachment_id: {attachment_id}), but failed to embed in field '{field}': {}. The file is attached; the field was not confirmed updated.",
+                    embed_failure(&error)
+                ),
+            },
+        ))
+    }
+
     async fn add_cases(&self, arguments: &Map<String, Value>) -> Result<Value, AdkError> {
         let source = required_text(arguments, "add_test_cases_data")?;
         let cases = serde_json::from_str::<Value>(source)
@@ -1154,6 +1283,55 @@ fn required_text<'a>(arguments: &'a Map<String, Value>, name: &str) -> Result<&'
         .and_then(Value::as_str)
         .filter(|text| !text.is_empty())
         .ok_or_else(invalid_arguments)
+}
+
+/// A name the multipart header can carry unchanged: no path, quote or control
+/// character, at most 255 bytes.
+fn bare_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && name != "."
+        && name != ".."
+        && !name
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '"' | '/' | '\\'))
+}
+
+/// What the model reads when the upload request failed.
+fn upload_failure(error: &TestRailClientError, case: u64) -> String {
+    match error.code() {
+        TestRailClientErrorCode::Authentication => "TestRail rejected the credentials; nothing was attached. Do not retry; tell the user.".to_owned(),
+        TestRailClientErrorCode::Authorization => "TestRail did not authorize attaching files to this test case; nothing was attached.".to_owned(),
+        TestRailClientErrorCode::NotFound => format!("TestRail did not find test case {case}; nothing was attached."),
+        TestRailClientErrorCode::InvalidInput | TestRailClientErrorCode::Conflict => "TestRail rejected the upload as invalid (for example a file type or size it does not accept); nothing was attached.".to_owned(),
+        TestRailClientErrorCode::InvalidConfiguration => "The TestRail toolkit configuration is invalid; nothing was attached.".to_owned(),
+        _ => format!("TestRail may have applied the requested effect: the file may or may not be attached to test case {case}. Check the case's attachments before retrying; never retry blindly."),
+    }
+}
+
+/// What the model reads when the field update after the upload failed.
+fn embed_failure(error: &TestRailClientError) -> &'static str {
+    match error.code() {
+        TestRailClientErrorCode::Authentication => "TestRail rejected the credentials",
+        TestRailClientErrorCode::Authorization => "TestRail did not authorize the update",
+        TestRailClientErrorCode::NotFound => "TestRail did not find the test case",
+        TestRailClientErrorCode::InvalidInput | TestRailClientErrorCode::Conflict => {
+            "TestRail rejected the update as invalid (does the field exist and accept HTML?)"
+        }
+        _ => "TestRail may have applied the requested effect; reconcile it before retrying",
+    }
+}
+
+/// A string argument that may be absent or null.
+fn optional_text<'a>(
+    arguments: &'a Map<String, Value>,
+    name: &str,
+) -> Result<Option<&'a str>, AdkError> {
+    match arguments.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text)),
+        Some(_) => Err(invalid_arguments()),
+    }
 }
 
 fn optional_bool(

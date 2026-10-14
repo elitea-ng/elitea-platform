@@ -22,6 +22,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
 const MAX_IDLE_PER_HOST: usize = 4;
 const MAX_REQUEST_BYTES: usize = 256 * 1_024;
+/// The largest file one attachment upload sends (the Office host's cap).
+pub(in crate::toolkits) const MAX_ATTACHMENT_BYTES: u64 =
+    crate::toolkits::families::attachment_host::MAX_ATTACH_BYTES;
+const MAX_ATTACHMENT_NAME_BYTES: usize = 255;
 const MAX_RESPONSE_BYTES: usize = 4 * 1_024 * 1_024;
 const USER_AGENT_VALUE: &str = "elitea-worker-rust/0.1";
 const JSON_CONTENT_TYPE: &str = "application/json";
@@ -268,6 +272,15 @@ pub(in crate::toolkits) trait TestRailApi: Send + Sync {
         params: &Params,
         body: &Value,
     ) -> Result<Value, TestRailClientError>;
+    /// `POST` of one file as `multipart/form-data`, field `attachment`, the
+    /// way `testrail_api` uploads an attachment. The file name must be a bare
+    /// name; the upload is an effect and is never retried.
+    async fn post_attachment(
+        &self,
+        endpoint: &str,
+        filename: &str,
+        bytes: Vec<u8>,
+    ) -> Result<Value, TestRailClientError>;
 }
 
 /// Invocation-scoped `TestRail` API v2 client.
@@ -329,15 +342,8 @@ impl TestRailClient {
         Url::parse(&target).map_err(|_| invalid_input())
     }
 
-    async fn call(
-        &self,
-        method: Method,
-        endpoint: &str,
-        params: &Params,
-        body: Option<&Value>,
-    ) -> Result<Value, TestRailClientError> {
-        let effect = method != Method::GET;
-        let mut request = Request::new(method, self.url(endpoint, params)?);
+    /// The headers every request carries: the credential, `Accept`, agent.
+    fn authorize(&self, request: &mut Request) -> Result<(), TestRailClientError> {
         let mut source = Zeroizing::new(String::with_capacity(
             self.config.email().len() + self.config.password().len() + 1,
         ));
@@ -354,9 +360,24 @@ impl TestRailClient {
         let headers = request.headers_mut();
         headers.insert(AUTHORIZATION, authorization);
         headers.insert(ACCEPT, HeaderValue::from_static(JSON_CONTENT_TYPE));
-        // `testrail_api` sets this on every non-attachment request.
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static(JSON_CONTENT_TYPE));
         headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
+        Ok(())
+    }
+
+    async fn call(
+        &self,
+        method: Method,
+        endpoint: &str,
+        params: &Params,
+        body: Option<&Value>,
+    ) -> Result<Value, TestRailClientError> {
+        let effect = method != Method::GET;
+        let mut request = Request::new(method, self.url(endpoint, params)?);
+        self.authorize(&mut request)?;
+        // `testrail_api` sets this on every non-attachment request.
+        request
+            .headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(JSON_CONTENT_TYPE));
         if let Some(body) = body {
             let encoded = serde_json::to_vec(body).map_err(|_| invalid_input())?;
             if encoded.len() > MAX_REQUEST_BYTES {
@@ -389,6 +410,63 @@ impl TestRailApi for TestRailClient {
     ) -> Result<Value, TestRailClientError> {
         self.call(Method::POST, endpoint, params, Some(body)).await
     }
+
+    async fn post_attachment(
+        &self,
+        endpoint: &str,
+        filename: &str,
+        bytes: Vec<u8>,
+    ) -> Result<Value, TestRailClientError> {
+        if filename.is_empty()
+            || filename.len() > MAX_ATTACHMENT_NAME_BYTES
+            || filename
+                .chars()
+                .any(|character| character.is_control() || matches!(character, '"' | '/' | '\\'))
+            || bytes.is_empty()
+            || bytes.len() as u64 > MAX_ATTACHMENT_BYTES
+        {
+            return Err(invalid_input());
+        }
+        let mut request = Request::new(Method::POST, self.url(endpoint, &Vec::new())?);
+        self.authorize(&mut request)?;
+        let (content_type, body) = multipart_file("attachment", filename, &bytes);
+        drop(bytes);
+        request.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&content_type).map_err(|_| invalid_input())?,
+        );
+        *request.body_mut() = Some(body.into());
+        let response = self.transport.execute(request, true).await?;
+        if !response.status.is_success() {
+            return Err(status_error(response.status, true));
+        }
+        Ok(response.body.unwrap_or(Value::Null))
+    }
+}
+
+/// `requests`' `files={name: (filename, data)}`: one form-data part. The
+/// boundary is chosen so it occurs nowhere in the file.
+fn multipart_file(field: &str, filename: &str, bytes: &[u8]) -> (String, Vec<u8>) {
+    let mut boundary = String::from("elitea-testrail-attachment-boundary");
+    while contains(bytes, boundary.as_bytes()) {
+        boundary.push('x');
+    }
+    let mut body = Vec::with_capacity(bytes.len() + 256);
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 fn status_error(status: StatusCode, effect: bool) -> TestRailClientError {
@@ -402,9 +480,9 @@ fn status_error(status: StatusCode, effect: bool) -> TestRailClientError {
         return unknown_outcome();
     }
     let code = match status {
-        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
-            TestRailClientErrorCode::InvalidInput
-        }
+        StatusCode::BAD_REQUEST
+        | StatusCode::UNPROCESSABLE_ENTITY
+        | StatusCode::PAYLOAD_TOO_LARGE => TestRailClientErrorCode::InvalidInput,
         StatusCode::UNAUTHORIZED => TestRailClientErrorCode::Authentication,
         StatusCode::FORBIDDEN => TestRailClientErrorCode::Authorization,
         StatusCode::NOT_FOUND => TestRailClientErrorCode::NotFound,
