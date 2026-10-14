@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -81,7 +82,7 @@ func TestRateLimitMonitor_LifecycleWithoutTraffic(t *testing.T) {
 	c := &fakeCounter{}
 	r := &fakeRedialer{c: c}
 	l := newMonLimiter()
-	m := rateLimitMonitor{srv: r, limiter: l, logger: quiet(), interval: time.Hour}
+	m := &rateLimitMonitor{srv: r, limiter: l, logger: quiet(), interval: time.Hour}
 
 	if l.Status() != policy.RateStatusUnbound {
 		t.Fatalf("boot = %s", l.Status())
@@ -140,7 +141,7 @@ func TestRateLimitMonitor_StopsOnCancelNoLeak(t *testing.T) {
 	before := runtime.NumGoroutine()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	m := rateLimitMonitor{srv: &fakeRedialer{c: &fakeCounter{}}, limiter: newMonLimiter(), logger: quiet(), interval: 5 * time.Millisecond}
+	m := &rateLimitMonitor{srv: &fakeRedialer{c: &fakeCounter{}}, limiter: newMonLimiter(), logger: quiet(), interval: 5 * time.Millisecond}
 	go func() { m.run(ctx); close(done) }()
 	time.Sleep(30 * time.Millisecond)
 	cancel()
@@ -161,11 +162,11 @@ func TestRateLimitMonitor_StopsOnCancelNoLeak(t *testing.T) {
 // NATS deliberately unset: reported as off, and no gauge is exported at all.
 func TestRateLimitReporting_NotConfigured(t *testing.T) {
 	l := newMonLimiter()
-	if m := rateLimitsMetric(l, false); len(m) != 0 {
+	if m := rateLimitsMetric(l, false, nil); len(m) != 0 {
 		t.Fatalf("gauge exported for a NATS-less deployment: %v", m)
 	}
 	rec := httptest.NewRecorder()
-	makeReadyzHandler(nil, nil, rateLimitsCheck(l, false)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	makeReadyzHandler(nil, nil, rateLimitsCheck(l, false, nil)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"rate_limits":"off (not configured)"`) {
 		t.Fatalf("readyz = %d %s", rec.Code, rec.Body.String())
 	}
@@ -173,11 +174,11 @@ func TestRateLimitReporting_NotConfigured(t *testing.T) {
 
 func TestRateLimitReporting_Configured(t *testing.T) {
 	l := newMonLimiter()
-	g := rateLimitsMetric(l, true)
-	if len(g) != 1 || g[0].v.String() != "0" {
+	g := rateLimitsMetric(l, true, func() int { return 3 })
+	if len(g) != 2 || g[0].v.String() != "0" || g[1].v.String() != "3" {
 		t.Fatalf("unbound gauge = %v", g)
 	}
-	k, v := rateLimitsCheck(l, true)()
+	k, v := rateLimitsCheck(l, true, func() int { return 3 })()
 	if k != "rate_limits" || v != "unbound" {
 		t.Fatalf("check = %q %q", k, v)
 	}
@@ -185,7 +186,7 @@ func TestRateLimitReporting_Configured(t *testing.T) {
 	if g[0].v.String() != "1" {
 		t.Fatal("gauge not 1 when enforced")
 	}
-	if k, _ := rateLimitsCheck(l, true)(); k != "" {
+	if k, _ := rateLimitsCheck(l, true, func() int { return 3 })(); k != "" {
 		t.Fatal("check reported while enforced")
 	}
 }
@@ -203,8 +204,111 @@ func TestRateLimitMonitor_BindsEvenWhenBudgetInstalledElsewhere(t *testing.T) {
 	r := &fakeRedialer{c: &fakeCounter{}}
 	r.up.Store(true)
 	l := newMonLimiter()
-	rateLimitMonitor{srv: r, limiter: l, logger: quiet(), interval: time.Hour}.step(context.Background())
+	(&rateLimitMonitor{srv: r, limiter: l, logger: quiet(), interval: time.Hour}).step(context.Background())
 	if l.Status() != policy.RateStatusEnforced {
 		t.Fatalf("limiter status = %s", l.Status())
+	}
+}
+
+// Counter health vs rules: with no rule authored, an unenforced counter is
+// reported as harmless; the rules gauge lets alerts key on rules>0 && enforced==0.
+func TestRateLimitReporting_RulesAwareness(t *testing.T) {
+	l := newMonLimiter()
+	rules := 0
+	g := rateLimitsMetric(l, true, func() int { return rules })
+	if len(g) != 2 || g[1].name != metricRateLimitRules || g[1].v.String() != "0" {
+		t.Fatalf("metrics = %+v", g)
+	}
+	if _, v := rateLimitsCheck(l, true, func() int { return rules })(); v != "unbound (no rules authored)" {
+		t.Fatalf("no-rules detail = %q", v)
+	}
+	rules = 2
+	if g[1].v.String() != "2" {
+		t.Fatal("rules gauge not live")
+	}
+	if _, v := rateLimitsCheck(l, true, func() int { return rules })(); v != "unbound" {
+		t.Fatalf("with rules detail = %q", v)
+	}
+}
+
+// flappyCounter fails its first n reads, then succeeds.
+type flappyCounter struct {
+	fakeCounter
+	failFirst int
+	reads     int
+}
+
+func (c *flappyCounter) ReadRateLimit(ctx context.Context, s string) (int64, error) {
+	c.mu.Lock()
+	c.reads++
+	fail := c.reads <= c.failFirst
+	c.mu.Unlock()
+	if fail {
+		return 0, errors.New("flap")
+	}
+	return c.fakeCounter.ReadRateLimit(ctx, s)
+}
+
+// Bind must not claim enforced without a successful read.
+func TestLimiterBind_ProbesBeforeClaimingEnforced(t *testing.T) {
+	l := newMonLimiter()
+	c := &flappyCounter{failFirst: 1}
+	l.Bind(c)
+	if l.Status() != policy.RateStatusDegraded {
+		t.Fatalf("after failing first probe: %s", l.Status())
+	}
+	l.Probe(context.Background())
+	if l.Status() != policy.RateStatusEnforced {
+		t.Fatalf("after good probe: %s", l.Status())
+	}
+}
+
+// /governance/status must agree with /readyz and the gauge.
+func TestGovernanceStatus_RateLimitsEnforceableFollowsStatus(t *testing.T) {
+	l := newMonLimiter()
+	c := &fakeCounter{}
+	get := func() (bool, string) {
+		rec := httptest.NewRecorder()
+		makeGovernanceStatusHandler(nil, l, "", nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/governance/status", nil))
+		var b struct {
+			E bool   `json:"rate_limits_enforceable"`
+			S string `json:"rate_limiter_status"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &b); err != nil {
+			t.Fatal(err)
+		}
+		return b.E, b.S
+	}
+	if e, s := get(); e || s != "unbound" {
+		t.Fatalf("unbound: %v %s", e, s)
+	}
+	l.Bind(c)
+	if e, s := get(); !e || s != "enforced" {
+		t.Fatalf("enforced: %v %s", e, s)
+	}
+	c.set(true)
+	l.Probe(context.Background())
+	if e, s := get(); e || s != "degraded" {
+		t.Fatalf("degraded must not be enforceable: %v %s", e, s)
+	}
+}
+
+// One loop: the monitor notifies the budget consumer once NATS is up, and a
+// finished consumer is not called again.
+func TestRateLimitMonitor_NotifiesBudgetConsumerOnce(t *testing.T) {
+	r := &fakeRedialer{c: &fakeCounter{}}
+	l := newMonLimiter()
+	m := &rateLimitMonitor{srv: r, limiter: l, logger: quiet(), interval: time.Hour}
+	var calls int
+	m.subscribe(func(context.Context) bool { calls++; return true })
+	m.step(context.Background())
+	if calls != 0 {
+		t.Fatal("consumer called while NATS was down")
+	}
+	r.up.Store(true)
+	m.step(context.Background())
+	m.step(context.Background())
+	if calls != 1 {
+		t.Fatalf("consumer calls = %d, want exactly 1", calls)
 	}
 }

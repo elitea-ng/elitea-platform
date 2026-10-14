@@ -35,23 +35,36 @@ type natsRedialer interface {
 	RedialNATS(ctx context.Context) (server.NATSClient, error)
 }
 
+// natsConsumer is something that must act once NATS is reachable (the budget
+// gate's recovery). It reports whether it is finished and should not be called
+// again.
+type natsConsumer func(ctx context.Context) (done bool)
+
+// rateLimitMonitor is the ONE background NATS loop. It owns the (timeout
+// bounded) re-dial and fans the result out to the limiter and to any
+// registered consumer, so no second poller contends for the dial.
 type rateLimitMonitor struct {
 	srv      natsRedialer
 	limiter  *policy.Limiter
 	logger   *slog.Logger
 	interval time.Duration
+	// consumers are registered before the loop starts and only touched by it.
+	consumers []natsConsumer
 }
 
-// startRateLimitMonitor starts the loop only when there is something to do: a
-// limiter exists and NATS is configured.
-func startRateLimitMonitor(ctx context.Context, m rateLimitMonitor, natsConfigured bool) {
-	if m.limiter == nil || !natsConfigured {
+// subscribe registers a consumer. Call before startRateLimitMonitor.
+func (m *rateLimitMonitor) subscribe(c natsConsumer) { m.consumers = append(m.consumers, c) }
+
+// startRateLimitMonitor starts the loop only when there is something to do:
+// NATS is configured and there is a limiter or a consumer.
+func startRateLimitMonitor(ctx context.Context, m *rateLimitMonitor, natsConfigured bool) {
+	if !natsConfigured || (m.limiter == nil && len(m.consumers) == 0) {
 		return
 	}
 	go m.run(ctx)
 }
 
-func (m rateLimitMonitor) run(ctx context.Context) {
+func (m *rateLimitMonitor) run(ctx context.Context) {
 	if m.step(ctx) {
 		return
 	}
@@ -69,36 +82,48 @@ func (m rateLimitMonitor) run(ctx context.Context) {
 	}
 }
 
-// step performs one bind-or-probe. It reports whether the loop should stop.
-func (m rateLimitMonitor) step(ctx context.Context) (stop bool) {
+// step performs one dial-or-probe and notifies consumers. It reports whether
+// the loop should stop for good.
+func (m *rateLimitMonitor) step(ctx context.Context) (stop bool) {
 	before := m.limiter.Status()
-	if !m.limiter.Enabled() {
-		nc, err := m.srv.RedialNATS(ctx)
-		if err != nil {
-			if errors.Is(err, server.ErrNATSNotConfigured) || errors.Is(err, server.ErrServerClosed) {
-				return true
-			}
-			if ctx.Err() == nil {
-				m.logger.Warn("rate limits: NATS still unreachable; per-minute limits stay disabled (fail-open) and are retried",
-					"err", err, "retry_in", m.interval)
-			}
-			return false
-		}
-		rc, ok := nc.(policy.RateCounter)
-		if !ok {
-			m.logger.Error("rate limits: the NATS client has no rate-limit counter; limits cannot be enforced")
+	nc, err := m.srv.RedialNATS(ctx) // bounded by the server's redial timeout
+	if err != nil {
+		if errors.Is(err, server.ErrNATSNotConfigured) || errors.Is(err, server.ErrServerClosed) {
 			return true
 		}
-		m.limiter.Bind(rc)
-	} else {
-		m.limiter.Probe(ctx)
+		if ctx.Err() == nil {
+			m.logger.Warn("NATS still unreachable; per-minute rate limits and budget recovery are retried (limits fail open meanwhile)",
+				"err", err, "retry_in", m.interval)
+		}
+		return false
 	}
-	after := m.limiter.Status()
-	if after != before {
-		switch after {
-		case policy.RateStatusEnforced:
-			m.logger.Info("GOVERNANCE RATE LIMITS ENFORCED: the NATS counter is reachable; per-minute limits are in force", "was", string(before))
-		default:
+	if m.limiter != nil {
+		if !m.limiter.Enabled() {
+			rc, ok := nc.(policy.RateCounter)
+			if !ok {
+				m.logger.Error("rate limits: the NATS client has no rate-limit counter; limits cannot be enforced")
+			} else {
+				m.limiter.Bind(rc) // probes immediately
+			}
+		} else {
+			m.limiter.Probe(ctx)
+		}
+	}
+	pending := m.consumers[:0]
+	for _, c := range m.consumers {
+		if !c(ctx) {
+			pending = append(pending, c)
+		}
+	}
+	m.consumers = pending
+	if m.limiter == nil && len(m.consumers) == 0 {
+		return true
+	}
+
+	if after := m.limiter.Status(); after != before && m.limiter != nil {
+		if after == policy.RateStatusEnforced {
+			m.logger.Info("GOVERNANCE RATE LIMITS ENFORCED: the NATS counter probe succeeded; per-minute limits are in force", "was", string(before))
+		} else {
 			m.logger.Warn("GOVERNANCE RATE LIMITS DEGRADED: the NATS counter probe failed; requests are admitted without their per-minute ceiling (fail-open) until it recovers", "status", string(after))
 		}
 	}

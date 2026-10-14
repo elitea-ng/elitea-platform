@@ -427,7 +427,7 @@ func (h *Handler) UploadObjectS3(w http.ResponseWriter, r *http.Request) {
 		contentType = mimeFromExtension(key)
 	}
 
-	info, _, code, message := h.storeObject(r.Context(), storeObjectInput{
+	info, row, code, message := h.storeObject(r.Context(), storeObjectInput{
 		projectID:   projectID,
 		bucketRow:   bucketRow,
 		ref:         ref,
@@ -450,8 +450,13 @@ func (h *Handler) UploadObjectS3(w http.ResponseWriter, r *http.Request) {
 		Size:   info.Size,
 		ETag:   info.ETag,
 	}
-	if !info.LastModified.IsZero() {
+	// The backend's Put may report no time (the real S3 client does); fall back
+	// to the persisted row's updated_at — this write's time.
+	switch {
+	case !info.LastModified.IsZero():
 		resp.LastModified = &info.LastModified
+	case !row.UpdatedAt.IsZero():
+		resp.LastModified = &row.UpdatedAt
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -101,6 +101,10 @@ type budgetRecovery struct {
 	// all — governance needs the pool.
 	policy *policy.Store
 	logger *slog.Logger
+	// hub, when set, is the single NATS recovery loop; the budget recovery
+	// subscribes to it instead of running a second poller. nil (tests) falls
+	// back to a private loop.
+	hub *rateLimitMonitor
 	// build assembles the governance engine. It is nil in production, where
 	// attempt uses buildGovernance. It is a TEST SEAM: buildGovernance needs a
 	// live database pool, and without this seam the install half of the loop —
@@ -134,6 +138,10 @@ func startBudgetRecovery(ctx context.Context, r budgetRecovery) {
 	r.logger.Warn("BUDGET ENFORCEMENT RECOVERY ARMED: NATS is configured but was not reachable at startup. "+
 		"The gateway re-dials it and installs enforcement without a restart; /readyz reports not_ready until then",
 		"interval", budgetRecoveryInterval)
+	if r.hub != nil {
+		r.hub.subscribe(r.attempt)
+		return
+	}
 	go r.run(ctx)
 }
 

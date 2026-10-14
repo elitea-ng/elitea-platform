@@ -109,16 +109,20 @@ const (
 	stateEnforced
 )
 
-// Bind installs the counter after construction and marks the limiter enforced.
-// It is how a gateway that started without NATS begins enforcing when NATS
-// appears, without a restart. A nil counter is ignored. Call it only from the
-// monitor goroutine (single writer), or before the limiter is shared.
+// Bind installs the counter after construction. It is how a gateway that
+// started without NATS begins enforcing when NATS appears, without a restart.
+//
+// Bind never reports enforced on faith: the state starts degraded and one
+// Probe runs immediately, so "enforced" always means a read succeeded. A nil
+// counter is ignored. Call it only from the monitor goroutine (single writer),
+// or before the limiter is shared.
 func (l *Limiter) Bind(c RateCounter) {
 	if l == nil || c == nil {
 		return
 	}
+	l.state.Store(stateDegraded)
 	l.counter.Store(&counterBox{c: c})
-	l.state.Store(stateEnforced)
+	l.Probe(context.Background())
 }
 
 // Probe performs one cheap counter read with the caller's own context and
@@ -185,7 +189,12 @@ func NewLimiter(cfg LimiterConfig) *Limiter {
 		nowFn = time.Now
 	}
 	l := &Limiter{subject: cfg.Subject, log: log, now: nowFn}
-	l.Bind(cfg.Counter)
+	if cfg.Counter != nil {
+		// Configured counters start unprobed (degraded) and do not read at
+		// construction; the monitor's first Probe promotes them to enforced.
+		l.counter.Store(&counterBox{c: cfg.Counter})
+		l.state.Store(stateDegraded)
+	}
 	return l
 }
 

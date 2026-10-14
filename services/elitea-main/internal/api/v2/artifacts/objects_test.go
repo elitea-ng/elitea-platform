@@ -701,3 +701,76 @@ func TestUploadObject_OverwriteKeepsRowCreatedAt(t *testing.T) {
 		t.Fatalf("overwrite created_at = %v, want the row's original %v", second, first)
 	}
 }
+
+func postUpload(t *testing.T, h *artifacts.Handler, query string, content []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	newObjectTestRouter(h).ServeHTTP(rr, newUploadRequest(t, "/objects/1/reports"+query, "a.txt", content))
+	return rr
+}
+
+// DATA LOSS regression: an overwrite that would exceed the project quota must
+// be refused WITHOUT destroying the previous version (bytes and row).
+func TestUploadObject_OverQuotaOverwriteKeepsOriginal(t *testing.T) {
+	h, repo, store := newObjectTestHandler(t)
+	limit := int64(10)
+	repo.setPolicy(repos.ProjectStoragePolicy{ProjectID: 1, MaxTotalBytes: &limit})
+
+	if rr := postUpload(t, h, "", []byte("origin")); rr.Code != http.StatusCreated {
+		t.Fatalf("seed upload = %d %s", rr.Code, rr.Body.String())
+	}
+	rr := postUpload(t, h, "?overwrite=true", []byte("0123456789ABCDEF")) // 16 > 10
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-quota overwrite = %d %s, want 413", rr.Code, rr.Body.String())
+	}
+	ref, _ := storage.NewObjectRef("1", "reports", "a.txt")
+	rc, info, err := store.Get(t.Context(), ref, nil)
+	if err != nil {
+		t.Fatalf("original object destroyed: %v", err)
+	}
+	got, _ := io.ReadAll(rc)
+	if string(got) != "origin" || info.Size != 6 {
+		t.Fatalf("original bytes = %q (size %d), want origin", got, info.Size)
+	}
+	if total, _ := repo.SumProjectBytes(t.Context(), 1); total != 6 {
+		t.Fatalf("metadata row total = %d, want the original 6", total)
+	}
+}
+
+// An overwrite that fits (projected = current - old + new) still succeeds.
+func TestUploadObject_OverwriteWithinQuotaSucceeds(t *testing.T) {
+	h, repo, _ := newObjectTestHandler(t)
+	limit := int64(10)
+	repo.setPolicy(repos.ProjectStoragePolicy{ProjectID: 1, MaxTotalBytes: &limit})
+	postUpload(t, h, "", []byte("origin"))
+	if rr := postUpload(t, h, "?overwrite=true", []byte("0123456789")); rr.Code != http.StatusCreated {
+		t.Fatalf("fitting overwrite = %d %s", rr.Code, rr.Body.String())
+	}
+	if total, _ := repo.SumProjectBytes(t.Context(), 1); total != 10 {
+		t.Fatalf("total = %d, want 10", total)
+	}
+}
+
+// The response carries created_at (first appearance) AND updated_at (this write).
+func TestUploadObject_ResponseHasUpdatedAt(t *testing.T) {
+	h, _, _ := newObjectTestHandler(t)
+	read := func(rr *httptest.ResponseRecorder) (c, u time.Time) {
+		var b struct {
+			C time.Time `json:"created_at"`
+			U time.Time `json:"updated_at"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &b); err != nil {
+			t.Fatal(err)
+		}
+		return b.C, b.U
+	}
+	c1, u1 := read(postUpload(t, h, "", []byte("a")))
+	if u1.IsZero() || !u1.Equal(c1) {
+		t.Fatalf("first write: created %v updated %v", c1, u1)
+	}
+	time.Sleep(5 * time.Millisecond)
+	c2, u2 := read(postUpload(t, h, "?overwrite=true", []byte("b")))
+	if !c2.Equal(c1) || !u2.After(u1) {
+		t.Fatalf("overwrite: created %v (want %v) updated %v (want after %v)", c2, c1, u2, u1)
+	}
+}

@@ -542,5 +542,6 @@ func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter
 		"media_type": grant.ContentType,
 		"etag":       info.ETag,
 		"created_at": row.CreatedAt,
+		"updated_at": row.UpdatedAt,
 	})
 }
