@@ -68,6 +68,8 @@ mod ado_wiki_tests;
 #[cfg(test)]
 mod aha_tests;
 #[cfg(test)]
+mod artifact_extra_tests;
+#[cfg(test)]
 mod azure_search_tests;
 #[cfg(test)]
 mod azure_tests;
@@ -89,6 +91,8 @@ mod figma_tests;
 mod gcp_tests;
 #[cfg(test)]
 mod github_tests;
+#[cfg(test)]
+mod github_writes_tests;
 #[cfg(test)]
 mod gitlab_org_tests;
 #[cfg(test)]
@@ -179,8 +183,8 @@ pub use families::index_tools::{
     SharedIndexCatalog, is_index_family, is_sdk_index_tool_name,
 };
 pub use families::office_host::{
-    MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError, OfficeModelRequest,
-    OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
+    MAX_OFFICE_OBJECT_BYTES, OfficeBucketCreated, OfficeFailure, OfficeHostError,
+    OfficeModelRequest, OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
 };
 pub use materialize::{
     ConfiguredToolsets, RefusedToolkit, ToolsetMaterializationError,

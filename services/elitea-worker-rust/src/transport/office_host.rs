@@ -22,7 +22,8 @@ use std::sync::Arc;
 use adk_rust::Part;
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
-    OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
+    OfficeBucketCreated, OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten,
+    OfficeToolHost,
 };
 use elitea_connectors::artifact::client::{ArtifactPlatform, valid_object_key, valid_segment};
 use elitea_connectors::egress::HostAllowlist;
@@ -293,6 +294,69 @@ impl OfficeToolHost for ClaimOfficeHost {
                 .get("size_bytes")
                 .and_then(Value::as_u64)
                 .unwrap_or(bytes.len() as u64),
+        })
+    }
+
+    async fn create_bucket(
+        &self,
+        name: &str,
+        retention_days: Option<u32>,
+    ) -> Result<OfficeBucketCreated, OfficeHostError> {
+        // The platform's own rule (`^[a-z][a-z0-9-]{1,62}$`), checked here too
+        // so a name that could never exist is not sent.
+        if !valid_segment(name) || name.len() < 2 || name.len() > 63 {
+            return Err(OfficeHostError::new(
+                OfficeFailure::InvalidRequest,
+                "office_host.invalid_name",
+            ));
+        }
+        let mut request = self
+            .platform
+            .get(self.platform.buckets_url())
+            .map_err(|_| {
+                OfficeHostError::new(
+                    OfficeFailure::AccessRefused,
+                    "office_host.credential_unusable",
+                )
+            })?;
+        *request.method_mut() = Method::POST;
+        request.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+        let mut body = serde_json::json!({"name": name});
+        if let (Some(days), Some(object)) = (retention_days, body.as_object_mut()) {
+            object.insert("retention_days".to_owned(), serde_json::json!(days));
+        }
+        *request.body_mut() = Some(Body::from(body.to_string()));
+        let mut response = self
+            .runtime
+            .http
+            .send(request)
+            .await
+            .map_err(|e| failure(&e))?;
+        if !response.status().is_success() {
+            return Err(failure(&Failure::Status(response.status())));
+        }
+        // The bucket exists once the platform says 2xx; a reply that cannot be
+        // read only costs the echo of what it stored.
+        let reply = SourceHttp::body(&mut response, 64 * 1024)
+            .await
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        Ok(OfficeBucketCreated {
+            name: reply
+                .as_ref()
+                .and_then(|reply| reply.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or(name)
+                .to_owned(),
+            retention_days: reply
+                .as_ref()
+                .and_then(|reply| reply.get("retention_days"))
+                .and_then(Value::as_u64)
+                .and_then(|days| u32::try_from(days).ok())
+                .or(retention_days),
         })
     }
 

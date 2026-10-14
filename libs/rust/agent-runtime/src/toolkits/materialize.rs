@@ -541,19 +541,16 @@ async fn materialize(
     let settings = reference.settings().ok_or_else(invalid_configuration)?;
     let name = reference.toolkit_name();
     if reference.tool_type() == "artifact" {
-        // No authority lent means no family: the toolkit is skipped with the
-        // warning the caller above logs, not bound to tools that would fail on
-        // every call.
-        let authority = artifacts.ok_or_else(unsupported_toolkit)?;
-        let config = artifact::config::ArtifactToolkitConfig::parse(settings)
-            .map_err(|error| artifact_config_materialization_error(error.code()))?;
-        let toolset = artifact::tools::build_artifact_toolset(name, &config, policy, authority)
-            .map_err(|error| artifact_toolset_materialization_error(error.code()))?;
-        return Ok((Arc::new(toolset), DelegatedAuthorizationCatalog::default()));
+        let toolset = materialize_artifact(name, settings, policy, artifacts)?;
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
     #[cfg(feature = "toolkit-pptx")]
     if reference.tool_type() == "pptx" {
         let toolset = materialize_pptx(name, settings, policy, artifacts)?;
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
+    if reference.tool_type() == "github" {
+        let toolset = materialize_github(name, settings, policy, artifacts)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
     if matches!(
@@ -569,7 +566,6 @@ async fn materialize(
             | "azure_search"
             | "elastic"
             | "gcp"
-            | "github"
             | "gitlab_org"
             | "google_places"
             | "k8s"
@@ -749,13 +745,6 @@ fn materialize_a_to_k(
             policy,
         )
         .map_err(|_| invalid_configuration())?,
-        "github" => github::tools::build_github_read_only_toolset(
-            name,
-            github::config::GitHubToolkitConfig::parse(settings)
-                .map_err(|_| invalid_configuration())?,
-            policy,
-        )
-        .map_err(|error| github_toolset_materialization_error(error.code()))?,
         "gitlab_org" => gitlab_org::tools::build_gitlab_org_toolset(
             name,
             gitlab_org::config::GitLabOrgToolkitConfig::parse(settings)
@@ -1011,6 +1000,44 @@ const fn unsupported_toolkit() -> ToolsetMaterializationError {
 
 const fn resource_exhausted() -> ToolsetMaterializationError {
     ToolsetMaterializationError::new(ToolsetMaterializationErrorCode::ResourceExhausted)
+}
+
+/// The `artifact` family. No authority lent means no family: the toolkit is
+/// skipped (logged by the caller), not bound to tools that would fail on
+/// every call.
+fn materialize_artifact(
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    artifacts: Option<&ArtifactToolAuthority>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    let authority = artifacts.ok_or_else(unsupported_toolkit)?;
+    let config = artifact::config::ArtifactToolkitConfig::parse(settings)
+        .map_err(|error| artifact_config_materialization_error(error.code()))?;
+    let toolset = artifact::tools::build_artifact_toolset(name, &config, policy, authority)
+        .map_err(|error| artifact_toolset_materialization_error(error.code()))?;
+    Ok(Arc::new(toolset))
+}
+
+/// The `github` family. Like `pptx`, it may lend the platform file store it
+/// copies from (`create_file`'s filepath, `apply_git_patch_from_file`); a path
+/// that lends none still serves every other tool.
+fn materialize_github(
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    artifacts: Option<&ArtifactToolAuthority>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    let office = artifacts.and_then(|authority| authority.office().cloned());
+    let toolset = github::tools::build_github_toolset(
+        name,
+        github::config::GitHubToolkitConfig::parse(settings)
+            .map_err(|_| invalid_configuration())?,
+        policy,
+        office,
+    )
+    .map_err(|error| github_toolset_materialization_error(error.code()))?;
+    Ok(Arc::new(toolset))
 }
 
 /// The `pptx` family (ADR-0032 P3). Like `artifact`, its authority is the
