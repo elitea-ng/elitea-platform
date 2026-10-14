@@ -142,7 +142,9 @@ impl AdoWikiClient {
         let etag = response.etag().map(ToOwned::to_owned);
         match response.into_body() {
             AdoBody::Json(page) => Ok(PageResponse { etag, page }),
-            AdoBody::Empty | AdoBody::Text(_) => Err(response_shape_failure(false)),
+            AdoBody::Empty | AdoBody::Text(_) | AdoBody::Bytes(_) => {
+                Err(response_shape_failure(false))
+            }
         }
     }
 

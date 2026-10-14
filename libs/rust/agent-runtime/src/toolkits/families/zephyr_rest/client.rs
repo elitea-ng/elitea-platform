@@ -11,6 +11,8 @@ use reqwest::{Method, Request, StatusCode, Url};
 use serde_json::Value;
 use zeroize::Zeroizing;
 
+use crate::toolkits::families::attachment_host::multipart_upload;
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
@@ -20,6 +22,9 @@ const MAX_RESPONSE_BYTES: usize = 4 * 1_024 * 1_024;
 const MAX_SEGMENT_BYTES: usize = 1_024;
 /// The ceiling on one tool's model-visible text.
 pub(in crate::toolkits) const MAX_OUTPUT_BYTES: usize = 512 * 1_024;
+/// The most bytes of a result file one upload sends, and of a binary answer
+/// one download buffers (the platform's own artifact cap).
+pub(in crate::toolkits) const MAX_FILE_BYTES: usize = 50 * 1_024 * 1_024;
 const JSON_CONTENT_TYPE: &str = "application/json";
 const USER_AGENT_VALUE: &str = "elitea-worker-rust/0.1";
 
@@ -243,6 +248,18 @@ impl ZephyrRestResponse {
 #[async_trait]
 pub(in crate::toolkits) trait ZephyrRestTransport: Send + Sync {
     async fn execute(&self, request: Request) -> Result<ZephyrRestResponse, ZephyrRestError>;
+
+    /// As [`Self::execute`], buffering at most `max_body` bytes of a
+    /// successful answer (an error answer stays at the JSON bound). The
+    /// default ignores the bound; the client re-checks the length it gets, and
+    /// the real transport enforces it before buffering.
+    async fn execute_capped(
+        &self,
+        request: Request,
+        _max_body: usize,
+    ) -> Result<ZephyrRestResponse, ZephyrRestError> {
+        self.execute(request).await
+    }
 }
 
 struct ReqwestZephyrRestTransport {
@@ -252,6 +269,14 @@ struct ReqwestZephyrRestTransport {
 #[async_trait]
 impl ZephyrRestTransport for ReqwestZephyrRestTransport {
     async fn execute(&self, request: Request) -> Result<ZephyrRestResponse, ZephyrRestError> {
+        self.execute_capped(request, MAX_RESPONSE_BYTES).await
+    }
+
+    async fn execute_capped(
+        &self,
+        request: Request,
+        max_body: usize,
+    ) -> Result<ZephyrRestResponse, ZephyrRestError> {
         let effect = request.method() != Method::GET;
         let mut response = self
             .http
@@ -264,9 +289,15 @@ impl ZephyrRestTransport for ReqwestZephyrRestTransport {
             .get(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(Box::<str>::from);
+        // Only a successful answer may be larger than the JSON bound.
+        let limit = if status.is_success() {
+            max_body
+        } else {
+            MAX_RESPONSE_BYTES
+        };
         if response
             .content_length()
-            .is_some_and(|length| length > u64::try_from(MAX_RESPONSE_BYTES).unwrap_or(u64::MAX))
+            .is_some_and(|length| length > u64::try_from(limit).unwrap_or(u64::MAX))
         {
             return Err(resource_exhausted(effect));
         }
@@ -280,7 +311,7 @@ impl ZephyrRestTransport for ReqwestZephyrRestTransport {
                 .len()
                 .checked_add(chunk.len())
                 .ok_or_else(|| resource_exhausted(effect))?;
-            if next > MAX_RESPONSE_BYTES {
+            if next > limit {
                 return Err(resource_exhausted(effect));
             }
             body.extend_from_slice(&chunk);
@@ -349,6 +380,34 @@ impl ZephyrRestClient {
         query: &[(&str, String)],
         body: Option<&Value>,
     ) -> Result<Request, ZephyrRestError> {
+        let mut request = self.base_request(method, segments, query)?;
+        if let Some(body) = body {
+            let encoded = serde_json::to_vec(body).map_err(|_| invalid_input())?;
+            if encoded.len() > MAX_REQUEST_BYTES {
+                return Err(ZephyrRestError {
+                    code: ZephyrRestErrorCode::InvalidInput,
+                    retryable: false,
+                });
+            }
+            request
+                .headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static(JSON_CONTENT_TYPE));
+            request.headers_mut().insert(
+                CONTENT_LENGTH,
+                HeaderValue::from_str(&encoded.len().to_string()).map_err(|_| invalid_input())?,
+            );
+            *request.body_mut() = Some(encoded.into());
+        }
+        Ok(request)
+    }
+
+    /// The request line and the bearer headers, without a body.
+    fn base_request(
+        &self,
+        method: Method,
+        segments: &[&str],
+        query: &[(&str, String)],
+    ) -> Result<Request, ZephyrRestError> {
         let mut url = self.base.clone();
         {
             let mut path = url
@@ -380,24 +439,57 @@ impl ZephyrRestClient {
             HeaderValue::from_str(&authorization).map_err(|_| invalid_configuration())?;
         value.set_sensitive(true);
         request.headers_mut().insert(AUTHORIZATION, value);
-        if let Some(body) = body {
-            let encoded = serde_json::to_vec(body).map_err(|_| invalid_input())?;
-            if encoded.len() > MAX_REQUEST_BYTES {
-                return Err(ZephyrRestError {
-                    code: ZephyrRestErrorCode::InvalidInput,
-                    retryable: false,
-                });
-            }
-            request
-                .headers_mut()
-                .insert(CONTENT_TYPE, HeaderValue::from_static(JSON_CONTENT_TYPE));
-            request.headers_mut().insert(
-                CONTENT_LENGTH,
-                HeaderValue::from_str(&encoded.len().to_string()).map_err(|_| invalid_input())?,
-            );
-            *request.body_mut() = Some(encoded.into());
-        }
         Ok(request)
+    }
+
+    /// One multipart POST of a single file (`requests`' `files=`), sent at
+    /// most once: an effect, so any failure after the request may have been
+    /// sent is an unknown outcome.
+    pub(in crate::toolkits) async fn upload(
+        &self,
+        segments: &[&str],
+        query: &[(&str, String)],
+        file: &MultipartFile<'_>,
+    ) -> Result<ZephyrReply, ZephyrRestError> {
+        if file.bytes.len() > MAX_FILE_BYTES {
+            return Err(invalid_input());
+        }
+        let (content_type, body) = encode_multipart(file)?;
+        let mut request = self.base_request(Method::POST, segments, query)?;
+        request.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&content_type).map_err(|_| invalid_input())?,
+        );
+        request.headers_mut().insert(
+            CONTENT_LENGTH,
+            HeaderValue::from_str(&body.len().to_string()).map_err(|_| invalid_input())?,
+        );
+        *request.body_mut() = Some(body.into());
+        let response = self.transport.execute(request).await?;
+        map_http_status(response.status, true)?;
+        decode_reply(&response, true)
+    }
+
+    /// A GET whose answer is a file: the raw bytes of a successful answer,
+    /// never more than `max_bytes` (checked before buffering by the real
+    /// transport and again here), with `accept` as the media type asked for.
+    pub(in crate::toolkits) async fn get_bytes(
+        &self,
+        segments: &[&str],
+        query: &[(&str, String)],
+        accept: &'static str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, ZephyrRestError> {
+        let mut request = self.base_request(Method::GET, segments, query)?;
+        request
+            .headers_mut()
+            .insert(ACCEPT, HeaderValue::from_static(accept));
+        let response = self.transport.execute_capped(request, max_bytes).await?;
+        map_http_status(response.status, false)?;
+        if response.body.len() > max_bytes {
+            return Err(resource_exhausted(false));
+        }
+        Ok(response.body)
     }
 
     /// One request to `base/segments...?query`.
@@ -501,6 +593,32 @@ impl ZephyrRestClient {
     ) -> Result<Request, ZephyrRestError> {
         self.request(method, segments, query, body)
     }
+}
+
+/// One file of a multipart upload.
+pub(in crate::toolkits) struct MultipartFile<'a> {
+    /// The form field name.
+    pub(in crate::toolkits) field: &'a str,
+    pub(in crate::toolkits) file_name: &'a str,
+    pub(in crate::toolkits) media_type: &'a str,
+    pub(in crate::toolkits) bytes: &'a [u8],
+}
+
+/// `multipart/form-data` with one file part, under a random boundary the
+/// content cannot collide with.
+fn encode_multipart(file: &MultipartFile<'_>) -> Result<(String, Vec<u8>), ZephyrRestError> {
+    let unsafe_header = |text: &str| {
+        text.is_empty()
+            || text
+                .chars()
+                .any(|c| c.is_control() || c == '"' || c == '\\')
+    };
+    if unsafe_header(file.field) || unsafe_header(file.file_name) || unsafe_header(file.media_type)
+    {
+        return Err(invalid_input());
+    }
+    let body = multipart_upload(&[], file.field, file.file_name, file.media_type, file.bytes);
+    Ok((body.content_type, body.bytes))
 }
 
 /// A dynamic path segment from a tool argument.
@@ -684,5 +802,30 @@ pub(in crate::toolkits) const fn unknown_outcome() -> ZephyrRestError {
     ZephyrRestError {
         code: ZephyrRestErrorCode::UnknownOutcome,
         retryable: false,
+    }
+}
+
+#[cfg(test)]
+mod multipart_tests {
+    use super::{MultipartFile, encode_multipart};
+
+    #[test]
+    fn a_non_ascii_name_is_sent_as_it_is_with_one_boundary() {
+        let (content_type, body) = encode_multipart(&MultipartFile {
+            field: "file",
+            file_name: "результаты.xml",
+            media_type: "application/xml",
+            bytes: b"<x/>",
+        })
+        .expect("part");
+        let text = String::from_utf8(body).expect("utf8");
+        assert!(
+            text.contains("name=\"file\"; filename=\"результаты.xml\"\r\n"),
+            "{text}"
+        );
+        assert!(text.contains("Content-Type: application/xml\r\n"), "{text}");
+        assert!(!text.contains("filename*"), "{text}");
+        let boundary = content_type.split("boundary=").nth(1).expect("boundary");
+        assert!(text.ends_with(&format!("\r\n--{boundary}--\r\n")));
     }
 }

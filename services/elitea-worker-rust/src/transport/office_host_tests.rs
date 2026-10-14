@@ -507,6 +507,10 @@ async fn the_model_call_sends_the_prompt_and_images_on_the_runs_model() {
                 vec![0x89, b'P', b'N', b'G'],
                 vec![0x89, b'P', b'N', b'G'],
             ]),
+            image_media_types: std::sync::Arc::from(vec![
+                "image/png".to_owned(),
+                "image/jpeg".to_owned(),
+            ]),
         })
         .await
         .expect("reply");

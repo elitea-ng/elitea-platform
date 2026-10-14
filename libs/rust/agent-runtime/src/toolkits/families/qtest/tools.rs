@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use serde_json::{Map, Value};
 use tokio::sync::Mutex;
 
+use crate::toolkits::families::attachment_host::AttachmentHost;
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
@@ -122,6 +123,8 @@ pub(super) struct Qtest {
     pub(super) client: Arc<dyn QtestApi>,
     pub(super) project_id: u64,
     pub(super) shown_results: usize,
+    /// The artifact store and chat model the run lends, when it lends them.
+    pub(super) attachments: Option<AttachmentHost>,
     pub(super) fields: Mutex<Option<FieldDefinitions>>,
     pub(super) modules: Mutex<Option<Vec<(Value, String)>>>,
 }
@@ -145,8 +148,9 @@ pub(crate) fn build_qtest_toolset(
     toolkit_name: &str,
     config: QtestToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
+    attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, QtestToolsetError> {
-    let selected = served_selection(config.selected_tools())?;
+    let selected = served_selection(config.selected_tools(), attachments.is_some())?;
     let base_url = config.base_url().to_owned();
     let project_id = config.project_id();
     let shown_results = config.shown_results();
@@ -159,16 +163,20 @@ pub(crate) fn build_qtest_toolset(
         &selected,
         policy,
         client,
+        attachments,
     )
 }
 
-fn served_selection(selected: &[Box<str>]) -> Result<Vec<String>, QtestToolsetError> {
+fn served_selection(
+    selected: &[Box<str>],
+    attachments: bool,
+) -> Result<Vec<String>, QtestToolsetError> {
     let served = selected
         .iter()
         .filter(|name| {
             QtestToolKind::ALL
                 .iter()
-                .any(|kind| kind.name() == name.as_ref())
+                .any(|kind| kind.name() == name.as_ref() && (attachments || !kind.needs_host()))
         })
         .map(ToString::to_string)
         .collect::<Vec<_>>();
@@ -180,6 +188,7 @@ fn served_selection(selected: &[Box<str>]) -> Result<Vec<String>, QtestToolsetEr
     Ok(served)
 }
 
+#[allow(clippy::too_many_arguments)] // The toolkit's settings, as the toolset takes them.
 fn build_with_api(
     toolkit_name: &str,
     base_url: &str,
@@ -188,11 +197,13 @@ fn build_with_api(
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
     client: Arc<dyn QtestApi>,
+    attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, QtestToolsetError> {
     let state = Arc::new(Qtest {
         client,
         project_id,
         shown_results,
+        attachments,
         fields: Mutex::new(None),
         modules: Mutex::new(None),
     });
@@ -200,6 +211,15 @@ fn build_with_api(
     let mut tools: Vec<Arc<dyn Tool>> = Vec::with_capacity(QtestToolKind::ALL.len());
     for kind in QtestToolKind::ALL {
         if include_all || selected.iter().any(|name| name == kind.name()) {
+            if kind.needs_host() && state.attachments.is_none() {
+                tracing::warn!(
+                    event = "qtest_tool_unserved",
+                    tool = kind.name(),
+                    reason = "this run lends no artifact authority",
+                    "a qTest tool that needs the artifact store is left out"
+                );
+                continue;
+            }
             // `f"{description}\nUrl: {base_url}. Project id: {id}"`, then the
             // toolkit, then the 1000-character cut.
             let description = format!(
@@ -227,12 +247,14 @@ pub(in crate::toolkits) fn test_build_with_api(
     selected: &[&str],
     policy: &Arc<ToolAdmissionPolicy>,
     client: Arc<dyn QtestApi>,
+    attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, QtestToolsetError> {
     let selected = served_selection(
         &selected
             .iter()
             .map(|name| (*name).into())
             .collect::<Vec<Box<str>>>(),
+        attachments.is_some(),
     )?;
     build_with_api(
         toolkit_name,
@@ -242,6 +264,7 @@ pub(in crate::toolkits) fn test_build_with_api(
         &selected,
         policy,
         client,
+        attachments,
     )
 }
 
@@ -327,6 +350,9 @@ impl Qtest {
             | QtestToolKind::FindTestRunsByTestCaseId
             | QtestToolKind::FindDefectsByTestRunId
             | QtestToolKind::GetTestCaseVersions => self.relation(kind, arguments).await,
+            QtestToolKind::AddFileToTestCase | QtestToolKind::UploadAttachmentToTestRun => {
+                self.attach(kind, arguments).await
+            }
             _ => self.effect(kind, arguments).await,
         }
     }

@@ -265,13 +265,13 @@ fn configuration_normalises_urls_hosting_versions_and_bounds_like_the_sdk() {
 
 #[tokio::test]
 async fn catalog_selection_policy_and_the_sdk_contract() {
-    assert_eq!(test_catalog().len(), 16);
+    assert_eq!(test_catalog().len(), 19);
     assert_eq!(
         test_catalog()
             .iter()
             .filter(|(_, read_only)| *read_only)
             .count(),
-        8
+        10
     );
     let (client, _) = fixture_client(&server_settings(), Vec::new());
     let api: Arc<dyn ConfluenceApi> = Arc::new(client);
@@ -280,7 +280,7 @@ async fn catalog_selection_policy_and_the_sdk_contract() {
     let names = names.iter().map(String::as_str).collect::<Vec<_>>();
     let toolset = test_build_with_api("wiki", &names, &policy(&[]), &api).expect("all");
     let tools = toolset.tools(readonly.clone()).await.expect("tools");
-    assert_eq!(tools.len(), 16);
+    assert_eq!(tools.len(), 19);
     super::sdk_conformance::assert_sdk_conformance("confluence", &tools);
     for tool in &tools {
         assert!(tool.description().starts_with("Toolkit: wiki\n"));
@@ -292,7 +292,7 @@ async fn catalog_selection_policy_and_the_sdk_contract() {
     }
     let mixed = test_build_with_api(
         "wiki",
-        &["add_file_to_page", "site_search"],
+        &["add_file_to_page", "site_search", "index_data"],
         &policy(&[]),
         &api,
     )
@@ -305,10 +305,9 @@ async fn catalog_selection_policy_and_the_sdk_contract() {
             .iter()
             .map(|tool| tool.name())
             .collect::<Vec<_>>(),
-        ["site_search"]
+        ["site_search", "add_file_to_page"]
     );
-    let Err(error) = test_build_with_api("wiki", &["get_page_attachments"], &policy(&[]), &api)
-    else {
+    let Err(error) = test_build_with_api("wiki", &["index_data"], &policy(&[]), &api) else {
         panic!("unserved-only selection");
     };
     assert_eq!(
@@ -322,7 +321,7 @@ async fn catalog_selection_policy_and_the_sdk_contract() {
         &api,
     )
     .expect("blocked");
-    assert_eq!(blocked.tools(readonly).await.expect("tools").len(), 15);
+    assert_eq!(blocked.tools(readonly).await.expect("tools").len(), 18);
 
     let config = ConfluenceToolkitConfig::parse(&with(
         server_settings(),
@@ -330,7 +329,7 @@ async fn catalog_selection_policy_and_the_sdk_contract() {
         json!(["no_such_tool"]),
     ))
     .expect("config");
-    let Err(error) = build_confluence_toolset("wiki", config, &policy(&[])) else {
+    let Err(error) = build_confluence_toolset("wiki", config, &policy(&[]), None) else {
         panic!("unknown tool");
     };
     assert_eq!(

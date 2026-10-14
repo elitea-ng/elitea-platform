@@ -12,6 +12,7 @@ use serde_json::Value;
 use zeroize::Zeroizing;
 
 use super::config::CarrierToolkitConfig;
+use crate::toolkits::families::attachment_host::multipart_upload;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -191,6 +192,14 @@ impl CarrierHttpResponse {
         }
     }
 
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture_bytes(status: StatusCode, body: &[u8]) -> Self {
+        Self {
+            status,
+            body: body.to_vec(),
+        }
+    }
+
     pub(super) const fn status(&self) -> StatusCode {
         self.status
     }
@@ -212,10 +221,15 @@ impl CarrierHttpResponse {
 
 #[async_trait]
 pub(in crate::toolkits) trait CarrierTransport: Send + Sync {
+    /// Send one request and buffer at most `max_body` bytes of a successful
+    /// answer (an error answer is held to the JSON bound). The real transport
+    /// refuses a larger one before buffering it; the client re-checks the
+    /// length it is handed, so a fixture may ignore the bound.
     async fn execute(
         &self,
         request: Request,
         effect: bool,
+        max_body: usize,
     ) -> Result<CarrierHttpResponse, CarrierClientError>;
 }
 
@@ -229,18 +243,24 @@ impl CarrierTransport for ReqwestCarrierTransport {
         &self,
         request: Request,
         effect: bool,
+        max_body: usize,
     ) -> Result<CarrierHttpResponse, CarrierClientError> {
         let mut response = self
             .http
             .execute(request)
             .await
             .map_err(|source| map_reqwest_error(&source, effect))?;
+        let limit = if response.status().is_success() {
+            max_body
+        } else {
+            MAX_RESPONSE_BYTES
+        };
         if response
             .headers()
             .get(CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES)
+            .is_some_and(|length| length > limit)
         {
             return Err(response_bound_failure(effect));
         }
@@ -254,7 +274,7 @@ impl CarrierTransport for ReqwestCarrierTransport {
                 .len()
                 .checked_add(chunk.len())
                 .ok_or_else(|| response_bound_failure(effect))?;
-            if next > MAX_RESPONSE_BYTES {
+            if next > limit {
                 return Err(response_bound_failure(effect));
             }
             body.extend_from_slice(&chunk);
@@ -282,7 +302,18 @@ pub(super) enum CarrierBody<'a> {
     Json(&'a Value),
     /// `requests.post(data={...})`: URL-encoded form fields.
     Form(&'a [(&'a str, &'a str)]),
+    /// `requests.post(files={'file': ...})`: one multipart file part.
+    File {
+        file_name: &'a str,
+        bytes: &'a [u8],
+    },
 }
+
+/// The most bytes of one artifact download or upload (a result archive, a log
+/// file, an errors-log archive).
+pub(super) const MAX_FILE_BYTES: usize = 50 * 1_024 * 1_024;
+/// The most bytes of one raw result log downloaded by bucket and file name.
+pub(super) const MAX_LOG_DOWNLOAD_BYTES: usize = 100 * 1_024 * 1_024;
 
 /// One invocation-scoped Carrier REST authority.
 pub(crate) struct CarrierClient {
@@ -365,6 +396,33 @@ impl CarrierClient {
         auth: CarrierAuth,
         effect: bool,
     ) -> Result<CarrierHttpResponse, CarrierClientError> {
+        self.send_capped(
+            method,
+            segments,
+            query,
+            body,
+            auth,
+            effect,
+            MAX_RESPONSE_BYTES,
+        )
+        .await
+    }
+
+    /// [`Self::send`] with a larger bound on a successful answer.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one request line, its body, its authentication and its bounds"
+    )]
+    pub(super) async fn send_capped(
+        &self,
+        method: Method,
+        segments: &[&str],
+        query: &[(&str, &str)],
+        body: CarrierBody<'_>,
+        auth: CarrierAuth,
+        effect: bool,
+        max_body: usize,
+    ) -> Result<CarrierHttpResponse, CarrierClientError> {
         let url = self.endpoint(segments, query)?;
         let mut request = Request::new(method, url);
         let headers = request.headers_mut();
@@ -393,6 +451,11 @@ impl CarrierClient {
                     .map_err(|_| invalid_configuration())?,
             );
         }
+        let request_limit = if matches!(body, CarrierBody::File { .. }) {
+            MAX_FILE_BYTES + 1_024
+        } else {
+            MAX_REQUEST_BYTES
+        };
         let encoded = match body {
             CarrierBody::Empty => None,
             CarrierBody::Json(value) => {
@@ -408,9 +471,17 @@ impl CarrierClient {
                 form.query_pairs_mut().extend_pairs(fields.iter().copied());
                 Some(form.query().unwrap_or_default().as_bytes().to_vec())
             }
+            CarrierBody::File { file_name, bytes } => {
+                let (content_type, encoded) = encode_file_part(file_name, bytes)?;
+                headers.insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_str(&content_type).map_err(|_| invalid_input())?,
+                );
+                Some(encoded)
+            }
         };
         if let Some(encoded) = encoded {
-            if encoded.len() > MAX_REQUEST_BYTES {
+            if encoded.len() > request_limit {
                 return Err(CarrierClientError {
                     code: CarrierClientErrorCode::ResourceExhausted,
                     retryable: false,
@@ -418,7 +489,63 @@ impl CarrierClient {
             }
             *request.body_mut() = Some(encoded.into());
         }
-        self.transport.execute(request, effect).await
+        let response = self.transport.execute(request, effect, max_body).await?;
+        if response.body.len() > max_body {
+            return Err(response_bound_failure(effect));
+        }
+        Ok(response)
+    }
+
+    /// GET the bytes of one artifact object, refusing a non-2xx status and an
+    /// answer over `max_body` (checked before buffering by the transport).
+    pub(super) async fn download(
+        &self,
+        segments: &[&str],
+        query: &[(&str, &str)],
+        auth: CarrierAuth,
+        max_body: usize,
+    ) -> Result<Vec<u8>, CarrierClientError> {
+        let response = self
+            .send_capped(
+                Method::GET,
+                segments,
+                query,
+                CarrierBody::Empty,
+                auth,
+                false,
+                max_body,
+            )
+            .await?;
+        if !response.status().is_success() {
+            return Err(status_error(response.status(), false));
+        }
+        Ok(response.body)
+    }
+
+    /// The SDK's `upload_file`: one multipart POST of `file_name` to a bucket
+    /// with the bare (`bearer`) header and the fixed storage query. Sent once;
+    /// the SDK ignores the status, this refuses a non-2xx one.
+    pub(super) async fn upload(
+        &self,
+        bucket: &str,
+        file_name: &str,
+        bytes: &[u8],
+    ) -> Result<(), CarrierClientError> {
+        let response = self
+            .send(
+                Method::POST,
+                &["artifacts", "artifacts", self.project_id(), bucket],
+                &[("integration_id", "1"), ("is_local", "False")],
+                CarrierBody::File { file_name, bytes },
+                CarrierAuth::Bare,
+                true,
+            )
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(status_error(response.status(), true))
+        }
     }
 
     /// The SDK's `CarrierClient.request`: session headers, a raised non-2xx
@@ -450,6 +577,22 @@ impl CarrierClient {
             .await?;
         list_field(&document, "rows")
     }
+}
+
+/// `multipart/form-data` with one `file` part under a random boundary.
+fn encode_file_part(
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<(String, Vec<u8>), CarrierClientError> {
+    if file_name.is_empty()
+        || file_name
+            .chars()
+            .any(|c| c.is_control() || c == '"' || c == '\\')
+    {
+        return Err(invalid_input());
+    }
+    let body = multipart_upload(&[], "file", file_name, "application/octet-stream", bytes);
+    Ok((body.content_type, body.bytes))
 }
 
 /// A raised non-2xx status, then a body that must be JSON.
@@ -567,5 +710,21 @@ const fn unknown_outcome() -> CarrierClientError {
     CarrierClientError {
         code: CarrierClientErrorCode::UnknownOutcome,
         retryable: false,
+    }
+}
+
+#[cfg(test)]
+mod multipart_tests {
+    use super::encode_file_part;
+
+    #[test]
+    fn a_non_ascii_name_is_sent_as_it_is_with_one_boundary() {
+        let (content_type, body) = encode_file_part("отчёт_2026.zip", b"zip bytes").expect("part");
+        let text = String::from_utf8(body).expect("utf8");
+        assert!(text.contains("filename=\"отчёт_2026.zip\"\r\n"), "{text}");
+        assert!(!text.contains("filename*"), "{text}");
+        let boundary = content_type.split("boundary=").nth(1).expect("boundary");
+        assert!(text.ends_with(&format!("\r\n--{boundary}--\r\n")));
+        assert!(encode_file_part("", b"x").is_err());
     }
 }

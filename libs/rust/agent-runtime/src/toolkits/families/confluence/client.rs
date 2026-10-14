@@ -15,6 +15,10 @@ use serde_json::{Map, Value, json};
 use zeroize::Zeroizing;
 
 use super::config::{ConfluenceApiVersion, ConfluenceCredential, ConfluenceToolkitConfig};
+use crate::toolkits::families::attachment_host::AttachmentHost;
+
+mod attachments;
+pub(in crate::toolkits) use attachments::{MAX_ATTACHMENTS, MAX_CONTENT_LENGTH};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -62,6 +66,10 @@ pub(crate) enum ConfluenceClientErrorCode {
 pub(crate) struct ConfluenceClientError {
     code: ConfluenceClientErrorCode,
     retryable: bool,
+    /// The tool error to report instead of the code's fixed sentence: the
+    /// attachment tools say exactly what did and did not happen (a file that
+    /// was uploaded while the page was not updated).
+    detail: Option<Box<AdkError>>,
 }
 
 impl ConfluenceClientError {
@@ -77,7 +85,29 @@ impl ConfluenceClientError {
         self.retryable
     }
 
+    /// A tool error with its own sentence.
+    pub(in crate::toolkits) fn described(
+        code: ConfluenceClientErrorCode,
+        category: ErrorCategory,
+        reason: &'static str,
+        message: String,
+    ) -> Self {
+        Self {
+            code,
+            retryable: false,
+            detail: Some(Box::new(AdkError::new(
+                ErrorComponent::Tool,
+                category,
+                reason,
+                message,
+            ))),
+        }
+    }
+
     pub(crate) fn into_adk(self) -> AdkError {
+        if let Some(detail) = self.detail {
+            return *detail;
+        }
         let (category, code, message) = match self.code {
             ConfluenceClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -137,7 +167,11 @@ impl ConfluenceClientError {
         code: ConfluenceClientErrorCode,
         retryable: bool,
     ) -> Self {
-        Self { code, retryable }
+        Self {
+            code,
+            retryable,
+            detail: None,
+        }
     }
 }
 
@@ -253,6 +287,26 @@ pub(in crate::toolkits) enum ConfluenceOperation<'a> {
         title: &'a str,
         page_type: Option<&'a str>,
     },
+    GetPageWithImageDescriptions {
+        page_id: &'a str,
+        prompt: Option<&'a str>,
+        context_radius: i64,
+    },
+    GetPageAttachments {
+        page_id: &'a str,
+        max_content_length: i64,
+        custom_prompt: Option<&'a str>,
+        allowed_extensions: Option<Vec<String>>,
+        name_pattern: Option<&'a str>,
+        max_attachments: i64,
+    },
+    AddFileToPage {
+        page_id: &'a str,
+        filepath: &'a str,
+        filename: Option<&'a str>,
+        caption: Option<&'a str>,
+        prepend: bool,
+    },
 }
 
 #[async_trait]
@@ -267,6 +321,10 @@ pub(in crate::toolkits) struct ConfluenceHttpResponse {
     status: StatusCode,
     body: Vec<u8>,
     json_content_type: bool,
+    /// The `Content-Type` media type, lower-cased, when the answer names one.
+    media_type: Option<String>,
+    /// The `Location` of a redirect (never followed by the transport).
+    location: Option<String>,
 }
 
 impl ConfluenceHttpResponse {
@@ -278,6 +336,25 @@ impl ConfluenceHttpResponse {
                 .map(|value| serde_json::to_vec(&value).unwrap_or_default())
                 .unwrap_or_default(),
             json_content_type: true,
+            media_type: Some("application/json".to_owned()),
+            location: None,
+        }
+    }
+
+    /// A binary answer (an attachment download) or a redirect.
+    #[cfg(test)]
+    pub(in crate::toolkits) fn raw_fixture(
+        status: StatusCode,
+        body: &[u8],
+        media_type: Option<&str>,
+        location: Option<&str>,
+    ) -> Self {
+        Self {
+            status,
+            body: body.to_vec(),
+            json_content_type: false,
+            media_type: media_type.map(str::to_owned),
+            location: location.map(str::to_owned),
         }
     }
 
@@ -296,6 +373,20 @@ pub(in crate::toolkits) trait ConfluenceTransport: Send + Sync {
         request: Request,
         effect: bool,
     ) -> Result<ConfluenceHttpResponse, ConfluenceClientError>;
+
+    /// [`Self::execute`] with the largest answer body the caller accepts
+    /// (an attachment download): the declared length is checked before the
+    /// body is read, and a body over the bound is never buffered. A transport
+    /// with a fixed bound answers as `execute` does.
+    async fn execute_bounded(
+        &self,
+        request: Request,
+        effect: bool,
+        max_body: usize,
+    ) -> Result<ConfluenceHttpResponse, ConfluenceClientError> {
+        let _ = max_body;
+        self.execute(request, effect).await
+    }
 }
 
 struct ReqwestConfluenceTransport {
@@ -309,6 +400,16 @@ impl ConfluenceTransport for ReqwestConfluenceTransport {
         request: Request,
         effect: bool,
     ) -> Result<ConfluenceHttpResponse, ConfluenceClientError> {
+        self.execute_bounded(request, effect, MAX_RESPONSE_BYTES)
+            .await
+    }
+
+    async fn execute_bounded(
+        &self,
+        request: Request,
+        effect: bool,
+        max_body: usize,
+    ) -> Result<ConfluenceHttpResponse, ConfluenceClientError> {
         let mut response = self
             .http
             .execute(request)
@@ -319,26 +420,31 @@ impl ConfluenceTransport for ReqwestConfluenceTransport {
             .get(CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES)
+            .is_some_and(|length| length > max_body)
         {
             return Err(response_bound_failure(effect));
         }
-        let json_content_type = response
+        let media_type = response
             .headers()
             .get(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.split(';').next())
-            .is_some_and(|value| {
-                let value = value.trim();
-                value.eq_ignore_ascii_case("application/json") || value.ends_with("+json")
-            });
+            .map(|value| value.trim().to_ascii_lowercase());
+        let json_content_type = media_type
+            .as_deref()
+            .is_some_and(|value| value == "application/json" || value.ends_with("+json"));
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
         let mut body = Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
             .map_err(|source| map_reqwest_error(&source, effect))?
         {
-            if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            if body.len().saturating_add(chunk.len()) > max_body {
                 return Err(response_bound_failure(effect));
             }
             body.extend_from_slice(&chunk);
@@ -347,6 +453,8 @@ impl ConfluenceTransport for ReqwestConfluenceTransport {
             status: response.status(),
             body,
             json_content_type,
+            media_type,
+            location,
         })
     }
 }
@@ -371,6 +479,9 @@ struct PageDocument {
 pub(in crate::toolkits) struct ConfluenceClient {
     config: ConfluenceToolkitConfig,
     transport: Arc<dyn ConfluenceTransport>,
+    /// The artifact store and chat model of the run; `None` when the host
+    /// lends none (the attachment tools are then not served).
+    attachments: Option<AttachmentHost>,
 }
 
 impl ConfluenceClient {
@@ -392,7 +503,18 @@ impl ConfluenceClient {
         Ok(Self {
             config,
             transport: Arc::new(ReqwestConfluenceTransport { http }),
+            attachments: None,
         })
+    }
+
+    /// Lend the client the run's artifact store and chat model.
+    #[must_use]
+    pub(in crate::toolkits) fn with_attachments(
+        mut self,
+        attachments: Option<AttachmentHost>,
+    ) -> Self {
+        self.attachments = attachments;
+        self
     }
 
     #[cfg(test)]
@@ -400,7 +522,11 @@ impl ConfluenceClient {
         config: ConfluenceToolkitConfig,
         transport: Arc<dyn ConfluenceTransport>,
     ) -> Self {
-        Self { config, transport }
+        Self {
+            config,
+            transport,
+            attachments: None,
+        }
     }
 
     /// `{api_root}/{segments...}` with every segment percent-encoded.
@@ -1673,8 +1799,26 @@ impl ConfluenceClient {
 
 #[async_trait]
 impl ConfluenceApi for ConfluenceClient {
-    #[allow(clippy::too_many_lines)] // One arm per SDK tool.
+    /// The tool error layer replaces every `Err` message with a generic line,
+    /// so a failure that carries its own sentence (a refused artifact, an
+    /// upload whose follow-up step failed) is returned as the tool's text.
     async fn execute(
+        &self,
+        operation: ConfluenceOperation<'_>,
+    ) -> Result<Value, ConfluenceClientError> {
+        match self.dispatch(operation).await {
+            Err(ConfluenceClientError {
+                detail: Some(detail),
+                ..
+            }) => Ok(Value::String(detail.message)),
+            other => other,
+        }
+    }
+}
+
+impl ConfluenceClient {
+    #[allow(clippy::too_many_lines)] // One arm per SDK tool.
+    async fn dispatch(
         &self,
         operation: ConfluenceOperation<'_>,
     ) -> Result<Value, ConfluenceClientError> {
@@ -1804,6 +1948,45 @@ impl ConfluenceApi for ConfluenceClient {
             } => self.execute_generic(method, relative_url, params).await?,
             ConfluenceOperation::GetPageIdByTitle { title, page_type } => {
                 (self.get_page_id_by_title(title, page_type).await?, false)
+            }
+            ConfluenceOperation::GetPageWithImageDescriptions {
+                page_id,
+                prompt,
+                context_radius,
+            } => (
+                self.get_page_with_image_descriptions(page_id, prompt, context_radius)
+                    .await?,
+                false,
+            ),
+            ConfluenceOperation::GetPageAttachments {
+                page_id,
+                max_content_length,
+                custom_prompt,
+                allowed_extensions,
+                name_pattern,
+                max_attachments,
+            } => {
+                return self
+                    .get_page_attachments(
+                        page_id,
+                        max_content_length,
+                        custom_prompt,
+                        allowed_extensions.as_deref(),
+                        name_pattern,
+                        max_attachments,
+                    )
+                    .await;
+            }
+            ConfluenceOperation::AddFileToPage {
+                page_id,
+                filepath,
+                filename,
+                caption,
+                prepend,
+            } => {
+                return self
+                    .add_file_to_page(page_id, filepath, filename, caption, prepend)
+                    .await;
             }
         };
         text(output, effect)
@@ -2128,7 +2311,11 @@ const fn response_bound_failure(effect: bool) -> ConfluenceClientError {
 }
 
 const fn error(code: ConfluenceClientErrorCode, retryable: bool) -> ConfluenceClientError {
-    ConfluenceClientError { code, retryable }
+    ConfluenceClientError {
+        code,
+        retryable,
+        detail: None,
+    }
 }
 
 const fn invalid_configuration() -> ConfluenceClientError {

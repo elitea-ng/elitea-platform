@@ -172,9 +172,15 @@ pub struct OfficeBucketCreated {
 pub struct OfficeModelRequest {
     /// The user message text.
     pub prompt: String,
-    /// PNG images sent with the prompt (low detail), in order. Shared, so a
-    /// tool that sends them with one batch and not the next copies nothing.
+    /// Images sent with the prompt (low detail), in order: PNG unless
+    /// `image_media_types` says otherwise. Shared, so a tool that sends them
+    /// with one batch and not the next copies nothing.
     pub images_png: std::sync::Arc<[Vec<u8>]>,
+    /// The media type of each image of `images_png` (`image/jpeg`,
+    /// `image/gif`, `image/webp`): the tracker families send pictures as
+    /// their provider stores them. Empty, or shorter than the images, means
+    /// `image/png` for the rest.
+    pub image_media_types: std::sync::Arc<[String]>,
 }
 
 /// One image-generation call: the gateway's `POST /llm/v1/images/generations`

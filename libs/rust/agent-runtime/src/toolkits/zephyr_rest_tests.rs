@@ -27,6 +27,10 @@ pub(super) struct RecordedRequest {
     pub(super) url: String,
     pub(super) authorization: Option<String>,
     pub(super) body: Option<Value>,
+    /// The raw body of a request that is not JSON (a multipart upload).
+    pub(super) raw_body: Option<Vec<u8>>,
+    pub(super) content_type: Option<String>,
+    pub(super) accept: Option<String>,
 }
 
 /// Replays canned provider responses and records every request it is sent.
@@ -80,10 +84,36 @@ impl ZephyrRestTransport for FixtureTransport {
                     .get(reqwest::header::AUTHORIZATION)
                     .and_then(|value| value.to_str().ok())
                     .map(str::to_owned),
+                content_type: request
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned),
+                accept: request
+                    .headers()
+                    .get(reqwest::header::ACCEPT)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned),
                 body: request
                     .body()
                     .and_then(reqwest::Body::as_bytes)
+                    .filter(|_| {
+                        request
+                            .headers()
+                            .get(reqwest::header::CONTENT_TYPE)
+                            .is_some_and(|value| value == "application/json")
+                    })
                     .map(|bytes| serde_json::from_slice(bytes).expect("JSON request body")),
+                raw_body: request
+                    .body()
+                    .and_then(reqwest::Body::as_bytes)
+                    .filter(|_| {
+                        request
+                            .headers()
+                            .get(reqwest::header::CONTENT_TYPE)
+                            .is_none_or(|value| value != "application/json")
+                    })
+                    .map(<[u8]>::to_vec),
             });
         self.responses
             .lock()

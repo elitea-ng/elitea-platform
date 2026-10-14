@@ -132,14 +132,14 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `github` | `configurations/github.py::GithubConfiguration` | `tools/github::EliteAGitHubToolkit` | 37 of 44 | Yes | `toolkits/families/github/{config,client,code_search,commits,projects,pull_requests,workflow_runs,writes,project_writes,patch,tools}.rs`; common configured-tool materializer | Partial family (37 of 44, `supported_tools.github`): strict anonymous/PAT/basic probe parsing, twenty-two reads (identity, branch, file, repository navigation, issue, pull request, commit, server-side code search, workflow status and logs, Project V2 list and search) and fifteen effects (branches, files, pull requests, issues and comments, workflow dispatch, patches, issues on a project board); a mixed explicit SDK selection keeps what is served and omits the rest with one bounded warning, and an empty selection means every served tool. Not served: `generic_github_api_call` (a `PyGithub` method dispatcher), the log archive text, GitHub App writes and the six index tools. See [GitHub effects and the rest of the artifact tools](github-artifact-tools-20261013.md) |
 | `ado_repos` | `configurations/ado.py::AdoConfiguration` | `tools/ado/repos::AzureDevOpsReposToolkit` | 21 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_repos}/` | Partial native family: all 15 repository operations; the 6 indexing tools stay on the Python worker |
 | `ado_plans` | `configurations/ado.py::AdoConfiguration` | `tools/ado/test_plan::AzureDevOpsPlansToolkit` | 18 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_plans}/` | Partial native family: all 12 test-plan operations; the 6 indexing tools stay on the Python worker |
-| `ado_boards` | `configurations/ado.py::AdoConfiguration` | `tools/ado/work_item::AzureDevOpsWorkItemsToolkit` | 19 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_boards}/` | Partial native family: 11 of 13 work-item operations; `get_image_by_url` (vision LLM), `attach_file_to_work_item` (artifact storage) and the 6 indexing tools stay on the Python worker |
+| `ado_boards` | `configurations/ado.py::AdoConfiguration` | `tools/ado/work_item::AzureDevOpsWorkItemsToolkit` | 19 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_boards}/` | Partial native family: 13 of 13 non-index operations. `attach_file_to_work_item` and `get_image_by_url` are served only where the run lends the artifact authority's Office capability (`families/attachment_host.rs`: artifact object API in/out and the run's chat model, budgeted by the gateway); without it the tool is omitted with one warning; bmp/svg pictures are refused (the SDK converts them). The 6 indexing tools stay on the Python worker |
 | `ado_wiki` | `configurations/ado.py::AdoConfiguration` | `tools/ado/wiki::AzureDevOpsWikiToolkit` | 14 | Yes | `configurations/families/ado.rs`; `toolkits/families/{ado,ado_wiki}/` | Partial native family: all 8 wiki operations (image description in page content omitted); the 6 indexing tools stay on the Python worker |
 | `gitlab` | `configurations/gitlab.py::GitlabConfiguration` | `tools/gitlab::EliteAGitlabToolkit` | 27 | Yes | `toolkits/families/gitlab/{config,client,tools}.rs`, shared `families/vcs_text.rs`; reuses `gitlab_org` transport, status/effect mapping, OLD/NEW editor and MR diff positions | Partial capability-disabled family (per-tool capability): all 21 non-index tools (10 reads, 9 writes, 2 deletes) keep SDK names, argument schemas, messages, protected-base-branch rules, the invocation-local active branch (moved by reads, as in the SDK) and first-page vs all-pages pagination. A selected index tool is omitted with a warning; the 6 index tools, non-UTF-8 document/image parsing, live check, exact-interrupt HITL and effect reconciliation remain gates |
 | `gitlab_org` | shared `configurations/gitlab.py::GitlabConfiguration` | `tools/gitlab_org::EliteAGitlabSpaceToolkit` | 17 | Yes | `toolkits/families/gitlab_org/{config,client,edit,diff,tools}.rs` | Capability-disabled complete family: 8 reads, 8 writes and 1 delete; dynamic-project authority, live check, HITL and effect reconciliation remain gates |
-| `qtest` | `configurations/qtest.py::QtestConfiguration` | `tools/qtest::QtestToolkit` | 25 | Yes | `toolkits/families/qtest/{config,client,search,ops,effects,fields,html,schema,tools}.rs` | Partial family (17 of 25): every DQL/lookup/relationship/module/field/version read plus test-case create/update/delete, requirement links and test-run status; the two artifact-upload tools need raw artifact bytes the runtime cannot read, and the six index tools wait for Rust indexing. The capability snapshot lists the 17 served tools |
+| `qtest` | `configurations/qtest.py::QtestConfiguration` | `tools/qtest::QtestToolkit` | 25 | Yes | `toolkits/families/qtest/{config,client,search,ops,effects,fields,html,schema,tools}.rs` | Partial family (19 of 25): every DQL/lookup/relationship/module/field/version read, test-case create/update/delete, requirement links, test-run status and the two upload tools `add_file_to_test_case` and `upload_attachment_to_test_run` (served only where the run lends the artifact authority's Office capability (`families/attachment_host.rs`: artifact object API in/out and the run's chat model, budgeted by the gateway); without it the tool is omitted with one warning); the six index tools wait for Rust indexing |
 | `bitbucket` | `configurations/bitbucket.py::BitbucketConfiguration` | `tools/bitbucket::EliteABitbucketToolkit` | 22 | Yes | `toolkits/families/bitbucket/{config,client,tools}.rs`, shared `families/vcs_text.rs` and the `gitlab_org` OLD/NEW editor | Partial capability-disabled family (per-tool capability): all 16 non-index tools (8 reads, 7 writes, 1 delete) over Bitbucket Cloud REST 2.0 or Server REST 1.0 with a sensitive Basic credential, SDK names/schemas/messages and the invocation-local active branch. Several SDK paths that could never succeed are repaired rather than copied (Server PR commits/changes returned a generator repr, Server decline and inline comments raised `TypeError`, Server file listing indexed strings, Cloud PR reads leaked the client's `__dict__`, and an unset `cloud` never detected bitbucket.org). The 6 index tools, SDK 429 retry/backoff, live check, exact-interrupt HITL and effect reconciliation remain gates |
-| `confluence` | `configurations/confluence.py::ConfluenceConfiguration` | `tools/confluence::ConfluenceToolkit` | 16 of 25 | Yes | `toolkits/families/confluence/{config,client,tools}.rs`; `toolkits/materialize.rs` | Materialized partial family (2026-10-09): the sixteen REST tools; image-description, attachment and file-upload tools and the six index tools are not served (`supported_tools.confluence`); see [Confluence REST family](#confluence-rest-family) |
-| `jira` | `configurations/jira.py::JiraConfiguration` | `tools/jira::JiraToolkit` | 12 of 23 | Yes | `toolkits/families/jira/{config,client,tools}.rs`; `toolkits/materialize.rs` | Materialized partial family (2026-10-09): the twelve REST tools; image-description, attachment-content and artifact-upload tools and the six index tools are not served (`supported_tools.jira`); see [Jira REST family](#jira-rest-family) |
+| `confluence` | `configurations/confluence.py::ConfluenceConfiguration` | `tools/confluence::ConfluenceToolkit` | 19 of 25 | Yes | `toolkits/families/confluence/{config,client,tools}.rs`; `toolkits/materialize.rs` | Materialized partial family: the sixteen REST tools plus `get_page_with_image_descriptions`, `get_page_attachments` and `add_file_to_page` (served only where the run lends the artifact authority's Office capability (`families/attachment_host.rs`: artifact object API in/out and the run's chat model, budgeted by the gateway); without it the tool is omitted with one warning); the six index tools are not served. `get_page_attachments` parses text/markup/CSV/JSON and describes pictures; Word, Excel, PDF and draw.io attachments return a marker sentence (no document parser is linked); see [Confluence REST family](#confluence-rest-family) |
+| `jira` | `configurations/jira.py::JiraConfiguration` | `tools/jira::JiraToolkit` | 17 of 23 | Yes | `toolkits/families/jira/{config,client,tools}.rs`; `toolkits/materialize.rs` | Materialized partial family: twelve REST tools plus `get_field_with_image_descriptions`, `get_comments_with_image_descriptions`, `get_attachments_content`, `add_file_to_issue_description` and `update_comment_with_file` (served only where the run lends the artifact authority's Office capability (`families/attachment_host.rs`: artifact object API in/out and the run's chat model, budgeted by the gateway); without it the tool is omitted with one warning); `get_attachments_content` parses text, YAML, CSV and pictures and skips other types silently (no document parser is linked); the six index tools are not served |
 | `postman` | `configurations/postman.py::PostmanConfiguration` | `tools/postman::PostmanToolkit` | 31 | No | `toolkits/families/postman/` | Capability-disabled complete family: 8 reads, 19 writes, 3 deletes and 1 execute surface; management authority is fixed to the claimed Postman origin, while stored-request execution remains behind a separate sealed dynamic-egress authority |
 | `elastic` | None; cluster origin and optional encoded API key are inline toolkit settings | `tools/elastic::ElasticToolkit` | 1 | No | `toolkits/families/elastic/{config,client,tools}.rs` | Capability-disabled complete read family: one bounded Query DSL search against a fixed verified-TLS cluster; approved DNS/IP egress, authorized materialization and live read/load proof remain gates |
 | `keycloak` | None; authority and service-account credentials are inline toolkit settings | `tools/keycloak::KeycloakToolkit` | 1 | No | `toolkits/families/keycloak/{config,client,tools}.rs` | Capability-disabled complete family: one generic Admin REST execute surface retains reads, writes, deletes and actions inside one frozen HTTPS realm; exact-interrupt HITL, effect reconciliation, approved egress and live provider proof remain gates |
@@ -147,18 +147,18 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `gcp` | None; the service-account JSON is an inline sealed toolkit setting | `tools/cloud/gcp::GcpToolkit` | 1 | No | `toolkits/families/gcp/{config,client,tools}.rs` | Capability-disabled complete family: one generic scoped Google REST surface retains reads, writes, deletes and actions on approved `googleapis.com` origins; exact-interrupt HITL, effect reconciliation, DNS/IP egress and live service-account role proof remain gates |
 | `kubernetes` | None; cluster origin and Bearer token are inline toolkit settings | `tools/cloud/k8s::KubernetesToolkit` | 2 | No | `toolkits/families/kubernetes/{config,client,tools}.rs` | Capability-disabled complete family: one generic Kubernetes REST execute surface plus its `/version` health read on an exact verified-TLS origin; exact-interrupt HITL, effect reconciliation, approved DNS/IP egress, CA policy and live RBAC proof remain gates |
 | `service_now` | `configurations/service_now.py::ServiceNowConfiguration` | `tools/servicenow::ServiceNowToolkit` | 3 | No | `toolkits/families/service_now/{config,client,tools}.rs` | Capability-disabled complete family: one bounded incident read plus create and update effects over fixed-origin Table API; shared durable sensitive-tool approval, authorized materialization and cancellation-safe effect reconciliation remain gates |
-| `testrail` | `configurations/testrail.py::TestRailConfiguration` | `tools/testrail::TestrailToolkit` | 23 | Yes | `toolkits/families/testrail/{config,client,format,schema,tools}.rs` (+ shared `families/python_repr.rs`) | Partial family (16 of 23): every case/suite/section/run/result read and the six case/section effects over the `testrail_api==1.13.4` wire contract; `add_file_to_case` needs raw artifact bytes the runtime cannot read, and the six index tools wait for Rust indexing. The capability snapshot lists the 16 served tools |
+| `testrail` | `configurations/testrail.py::TestRailConfiguration` | `tools/testrail::TestrailToolkit` | 23 | Yes | `toolkits/families/testrail/{config,client,format,schema,tools}.rs` (+ shared `families/python_repr.rs`) | Partial family (17 of 23): every case/suite/section/run/result read, the six case/section effects and `add_file_to_case` (served only where the run lends the artifact authority's Office capability (`families/attachment_host.rs`: artifact object API in/out and the run's chat model, budgeted by the gateway); without it the tool is omitted with one warning); the six index tools wait for Rust indexing |
 | `slack` | `configurations/slack.py::SlackConfiguration` | `tools/slack::SlackToolkit` | 7 | No | `toolkits/families/slack/{config,client,tools}.rs` | Capability-disabled complete family: seven bounded fixed-origin messaging, membership and workspace operations; authorized materialization, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
 | `azure_search` | `configurations/azure_search.py::AzureSearchConfiguration` | `tools/azure_ai/search::AzureSearchToolkit` | 2 | No | `toolkits/families/azure_search/{config,client,tools}.rs` | Capability-disabled complete read family: fixed configured index, two bounded reads, SDK 11.5.2 wire/result projection and no unbounded continuation; authorized materialization and live provider proof remain gates |
 | `delta_lake` | `configurations/delta_lake.py::DeltaLakeConfiguration` | `tools/aws/delta_lake::DeltaLakeToolkit` | 3 | No | None | Blocked (`toolkit-port-b7-20261010.md`): needs Delta log replay, Parquet/Arrow over S3 and pandas `DataFrame.query` semantics; the Python image does not ship its dependencies either |
 | `aws` | None; region and access-key credentials are inline toolkit settings | `tools/cloud/aws::AWSToolkit` | 1 | No | None | Blocked (`toolkit-port-b7-20261010.md`): the pinned SDK never binds it and cannot construct it; `execute_aws` needs botocore service models and SigV4, which the runtime does not have |
-| `bigquery` | `configurations/bigquery.py::BigQueryConfiguration` | `tools/google/bigquery::BigQueryToolkit` | 11 | No | `toolkits/families/bigquery/{config,client,format,tools}.rs` | Partial capability-disabled family: 8 of 11 tools (reads, nearest-neighbour searches, job statistics, vector-index DDL and Delta Lake external-table creation); `similarity_search`, `similarity_search_with_score` and `execute` are not served |
+| `bigquery` | `configurations/bigquery.py::BigQueryConfiguration` | `tools/google/bigquery::BigQueryToolkit` | 11 | No | `toolkits/families/bigquery/{config,client,format,tools}.rs` | Partial capability-disabled family: 8 of 11 tools; `execute` (arbitrary client-method reflection with no REST equivalent) is not ported, and `similarity_search`, `similarity_search_with_score` are not ported because the SDK builds `BigQueryApiWrapper` without an embedding, so they always fail there |
 | `xray` | `configurations/xray.py::XrayConfiguration` | `tools/xray::XrayToolkit` as `xray_cloud` | 12 | Yes | `toolkits/families/xray_cloud/{config,client,tools}.rs` | Partial family under the preserved `xray_cloud` runtime alias (6 of 12): all six GraphQL business tools over one client-credential token per invocation; `add_attachment_to_test_step` serves `filedata` and explains why `filepath` (raw artifact bytes) is unavailable; the six index tools wait for Rust indexing |
 | `zephyr` | None; base URL and Basic-auth credentials are inline toolkit settings | `tools/zephyr::ZephyrToolkit` | 4 | No | `toolkits/families/zephyr/{config,client,tools}.rs` | Capability-disabled complete legacy family: one bounded step read plus all three sequential create effects; exact-interrupt HITL, durable partial-effect reconciliation, approved egress and live legacy-ZAPI proof remain gates |
 | `zephyr_scale` | `configurations/zephyr.py::ZephyrConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_scale::ZephyrScaleToolkit` | 26 | Yes | `toolkits/families/zephyr_scale/{config,client,folders,render,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: all 20 business operations against the fixed Cloud API with the token; the 6 inherited indexing tools are not served |
 | `zephyr_squad` | None; credentials are inline toolkit settings | `tools/zephyr_squad::ZephyrSquadToolkit` | 15 | No | `toolkits/families/zephyr_squad/{config,client,tools}.rs` | Capability-disabled complete family: five bounded reads plus all eight writes and two deletes over fixed Squad Cloud JWT routes; authorized materialization, live credential proof, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
 | `zephyr_enterprise` | `configurations/zephyr_enterprise.py::ZephyrEnterpriseConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_enterprise::ZephyrEnterpriseToolkit` | 11 | Yes | `toolkits/families/zephyr_enterprise/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: all five business operations (three reads, two effects) over one bearer flex-REST client; the six inherited indexing tools are not served and the capability snapshot lists the family per tool |
-| `zephyr_essential` | `configurations/zephyr_essential.py::ZephyrEssentialConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_essential::ZephyrEssentialToolkit` | 51 | Yes | `toolkits/families/zephyr_essential/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: 41 of the 45 business operations (24 reads, 17 effects); not served are the six indexing tools, the three automation-result uploads and the BDD ZIP download (see the family section) |
+| `zephyr_essential` | `configurations/zephyr_essential.py::ZephyrEssentialConfiguration` plus optional `PgVectorConfiguration` | `tools/zephyr_essential::ZephyrEssentialToolkit` | 51 | Yes | `toolkits/families/zephyr_essential/{config,client,tools}.rs` over shared `toolkits/families/zephyr_rest/` | Partial: 45 of 45 business operations; the three automation-result uploads read an artifact (`files` is `/{bucket}/{file}`, a contract the SDK never had) and `retrieve_bdd_test_cases` stores the ZIP as an artifact (served only where the run lends the artifact authority's Office capability (`families/attachment_host.rs`: artifact object API in/out and the run's chat model, budgeted by the gateway); without it the tool is omitted with one warning); the six indexing tools are not served |
 | `figma` | `configurations/figma.py::FigmaConfiguration` | `tools/figma::FigmaToolkit` | 17 | Yes | `toolkits/families/figma/{config,client,output,tokens,tools}.rs` | Partial capability-disabled family: eight REST reads/comment with the SDK's `extra_params` output reduction plus both design-token extractors; `analyze_file` (LLM/TOON) and the six indexing tools stay SDK-only; exact-interrupt HITL for the comment effect, approved egress and live proof remain gates |
 | `rally` | `configurations/rally.py::RallyConfiguration` | `tools/rally::RallyToolkit` | 8 | No | `toolkits/families/rally/{config,client,tools}.rs` | Capability-disabled complete family: six bounded WSAPI reads plus create/update, with lazy per-invocation API-key/Basic authority; authorized materialization, exact-interrupt HITL, live WSAPI proof and cancellation-safe effect reconciliation remain gates |
 | `sonar` | `configurations/sonar.py::SonarConfiguration` | `tools/code/sonar::SonarToolkit` | 1 | No | `toolkits/families/sonar/{config,client,tools}.rs` | Capability-disabled complete read family: one project-bound `/api/issues/search` request with bounded filters and raw JSON projection; authorized materialization and live Sonar TLS proof remain gates |
@@ -166,12 +166,12 @@ Indexing tools are recorded as a later overlay in `indexing.md`.
 | `google_places` | `configurations/google_places.py::GooglePlacesConfiguration` | `tools/google_places::GooglePlacesToolkit` | 2 | No | `toolkits/families/google_places/{config,client,tools}.rs` | Capability-disabled complete read family: supported Places API (New) projection for `places` and `find_near`; attribution/persisted-result policy, authorized materialization and live provider proof remain gates |
 | `salesforce` | `configurations/salesforce.py::SalesforceConfiguration` | `tools/salesforce::SalesforceToolkit` | 6 | No | `toolkits/families/salesforce/{config,client,tools}.rs` | Capability-disabled complete family: six bounded CRM tools, including create/update and generic GET/POST/PATCH/DELETE; authorized materialization, exact-interrupt HITL and cancellation-safe effect reconciliation remain gates |
 | `sharepoint` | `configurations/sharepoint.py::SharepointConfiguration` | `tools/sharepoint::SharepointToolkit` | 28 | Yes | `toolkits/families/sharepoint/{config,client,tools,reader,html}.rs`, `client/{content,onenote_ops}.rs` | Delegated Graph family: 22 of the 28 SDK tools (lists, columns, list-item creation, recursive file metadata, `read_document`, `upload_file`, `read_file_from_sharing_link` and all 14 OneNote tools); the other six are the index tools, which the index family adds. Documents are read as text through the Office host's document reader (the extraction sidecar), uploads read artifacts through the same host, changes are sent once and never retried. An app-only credential (no OAuth discovery endpoint) is refused by name. Pictures are not described, page/sheet selection is not applied, ACS/app-only auth, rich OAuth discovery/DCR/refresh metadata, model-loop reactive 401 confirmation, approved egress and live-provider proof remain gates |
-| `carrier` | `configurations/carrier.py::CarrierConfiguration` | `tools/carrier::EliteACarrierToolkit` | 18 | No | `toolkits/families/carrier/{config,client,tools}.rs` | Partial capability-disabled family: 15 ticket, backend and UI test/report operations with the SDK's confirmation steps; the archive tools `get_report_by_id`, `create_excel_report` and `create_ui_excel_report` stay SDK-only (archive/xlsx writers), and exact-interrupt HITL, effect reconciliation, approved egress and live proof remain gates |
+| `carrier` | `configurations/carrier.py::CarrierConfiguration` | `tools/carrier::EliteACarrierToolkit` | 18 | No | `toolkits/families/carrier/{config,client,tools}.rs` | Capability-disabled family: all 18 operations. `create_excel_report` and `create_ui_excel_report` need `toolkit-office` and store the workbook as an artifact (served only where the run lends the artifact authority's Office capability (`families/attachment_host.rs`: artifact object API in/out and the run's chat model, budgeted by the gateway); without it the tool is omitted with one warning); the workbook carries the SDK's sheets and values but not its styling; `get_report_by_id` uploads the merged-errors archive to Carrier (an effect) as the SDK does. Exact-interrupt HITL, effect reconciliation, approved egress and live proof remain gates |
 | `report_portal` | `configurations/report_portal.py::ReportPortalConfiguration` | `tools/report_portal::ReportPortalToolkit` | 9 | Yes | `toolkits/families/report_portal/{config,client,tools}.rs` | Capability-disabled complete read family: nine bounded project/report reads, including explicit UTF-8 HTML and base64 PDF export projections; authorized materialization, egress policy and live provider proof remain gates |
 | `testio` | `configurations/testio.py::TestIOConfiguration` | `tools/testio::TestIOToolkit` | 15 | Yes | `toolkits/families/testio/{config,client,tools}.rs` | Partial read family (13 of 15): every read over `Authorization: Token`; the two SDK writes stay unserved because their payloads do not map to the current provider create/confirmation operations (below), and the capability snapshot lists the 13 served tools so the catalogue marks the writes unavailable |
 | `openapi` | `configurations/openapi.py::OpenApiConfiguration` | `tools/openapi::{EliteAOpenAPIToolkit,OpenApiAction}`, `tools/openapi/{api_wrapper,response_selection}.py` | Dynamic | Yes | `toolkits/families/openapi/{config,spec,client,response_selection,tools}.rs` | Partial capability-disabled family: bounded inline OpenAPI 3.x JSON/YAML parsing, selected dynamic operations, exact request schemas, fixed-origin JSON calls, static secret headers, anonymous/API-key/client-credentials/delegated OAuth and bounded schema-aware response search are implemented. A Private-project UI rehearsal proved selected `echo_marker` materialization, provider dispatch, same-call result, second model turn, persistence and retirement. Direct-node delegated 401 recovery has component proof in `delegated-auth-expiry.md`. Remote specifications, legacy auth objects, rich OAuth discovery/DCR, model-loop 401 re-authorization, non-JSON request bodies, binary/artifact routing and production egress remain gates |
 | `langfuse` | `LangfuseConfiguration` | No standard toolkit | 0 | Yes | `configurations/families/langfuse.rs` | Planned; observability support configuration |
-| `aha` | `configurations/aha.py::AhaConfiguration` | `tools/aha::AhaToolkit` | 32 of 33 | Yes | `toolkits/families/aha/`; `toolkits/materialize.rs` | Materialized partial family (2026-10-09): all 25 reads, 5 writes, 1 delete and the effectful combined execute surface pass the SDK conformance gate and are served; `attach_file` is implemented behind a claim-scoped verified temp-spool resolver but omitted from the served set (`supported_tools.aha`) until an artifact-read grant plane exists |
+| `aha` | `configurations/aha.py::AhaConfiguration` | `tools/aha::AhaToolkit` | 32 of 33 | Yes | `toolkits/families/aha/`; `toolkits/materialize.rs` | Materialized family: all 33 tools. `attach_file` reads its artifact through the host (served only where the run lends the artifact authority's Office capability (`families/attachment_host.rs`: artifact object API in/out and the run's chat model, budgeted by the gateway); without it the tool is omitted with one warning); the cap in this runtime is 50 MiB |
 | `pgvector` | `PgVectorConfiguration` | No standalone toolkit | 0 | No | `configurations/families/pgvector.rs` | Planned; shared indexing/runtime dependency |
 
 The OpenAPI slice follows the current SDK business boundary without copying its
@@ -1291,13 +1291,14 @@ Not served, and absent from `supported_tools.zephyr_essential`:
 - the six indexing tools (no indexing in this runtime);
 - `create_custom_executions`, `create_cucumber_executions` and
   `create_junit_executions`: the SDK passes its `files` argument, a path
-  string, to `requests` as `files=`, which raises before any request (a string
-  is not a 2-tuple list), so these tools cannot succeed in the SDK; serving
-  them needs a defined file source (for example an artifact) and multipart
-  upload, which is a new contract rather than a port;
+  string, to `requests` as `files=`, which raises before any request, so these
+  tools never succeeded in the SDK. Here `files` is an artifact path
+  `/{bucket}/{file}` (at most 50 MiB), uploaded once as the multipart `file`
+  part on a no-retry path: a new contract, stated in the tool descriptions;
 - `retrieve_bdd_test_cases`: the endpoint answers `application/zip`; the SDK
-  returns the archive decoded as text, which is not usable, and this runtime
-  has no ZIP reader to return the feature files instead.
+  returned it decoded as unusable text. Here the archive (at most 50 MiB,
+  checked before buffering, ZIP header verified) is stored as an artifact
+  (default bucket `zephyr-bdd`, never overwriting) and the answer names it.
 
 Proof: `toolkits/zephyr_essential_tests.rs` (configuration and default base,
 catalogue groups and unserved selection, the exact method/route/query/body of
@@ -1817,21 +1818,23 @@ failures are typed `AdkError`s, and any failure after an effect was sent is a
 nonretryable unknown outcome. Reads above 512 KiB are refused; effect
 confirmations are truncated instead.
 
-Not served, each listed in `supported_tools.jira` by omission and dropped with
-one `agent_toolkit_tools_skipped` warning when selected:
+Attachment tools (served through `families/attachment_host.rs`, omitted with
+one `agent_toolkit_tools_skipped` warning where no host is lent):
 `get_field_with_image_descriptions` and `get_comments_with_image_descriptions`
-(their default path is a vision-model call per image; toolkit families are
-given no model handle), `get_attachments_content` (the SDK's
-`process_content_by_type` document/OCR/LLM parser; `libs/rust/doc-extract`
-exists but is not linked into the runtime and has no image path),
-`add_file_to_issue_description` and `update_comment_with_file` (they upload
-artifact bytes; the host's artifact reader returns capped text, not verified
-bytes), and the six index tools. A selection with nothing served left skips
-the toolkit as unsupported; empty selection serves the twelve.
+fetch pictures through the Jira client's own authentication (configured origin
+only; at most 20 pictures, 5 MiB each, 12 MiB together, declared size checked
+first) and describe each with the run's chat model (budgeted by the gateway; a
+budget refusal stops the loop and is reported; `process_images=false` needs no
+model); `get_attachments_content` parses text, YAML, CSV and pictures and skips
+every other type, as the SDK skips what it cannot parse (no document parser is
+linked into the runtime); `add_file_to_issue_description` and
+`update_comment_with_file` upload an artifact and edit the text, and say
+exactly which half happened when the second fails. Not served: the six index
+tools (selecting only those skips the toolkit as unsupported).
 
 ### Confluence REST family
 
-`confluence` serves sixteen of the SDK type's twenty-five tools against the
+`confluence` serves nineteen of the SDK type's twenty-five tools against the
 same worker-pinned SDK revision and `atlassian-python-api==4.0.7` as Jira. Tool
 names and argument schemas pass the conformance gate with no exemption.
 
@@ -1866,10 +1869,17 @@ text with the provider's `message`/`errors`; 401, 429, 5xx and transport
 failures are typed, and any failure after an effect was sent is a nonretryable
 unknown outcome.
 
-Not served: `get_page_with_image_descriptions` (a vision-model call per
-image), `get_page_attachments` (the SDK's attachment parser and LLM analysis),
-`add_file_to_page` (artifact bytes), and the six index tools — the same gaps,
-for the same reasons, as Jira's.
+Attachment tools (served through `families/attachment_host.rs`, omitted where
+no host is lent): `get_page_with_image_descriptions` and `get_page_attachments`
+fetch through the Confluence client's own authentication (configured origin
+only, same picture bounds as Jira) and describe pictures with the run's
+budgeted chat model; `get_page_attachments` reads text, JSON, XML, Markdown,
+SVG, CSV and HTML, and returns a marker sentence for Word, Excel, PDF and
+draw.io attachments (no document parser or PDF renderer is linked).
+`add_file_to_page` uploads an artifact (a same-named attachment gets a new
+version, as the SDK's `attach_content`) and appends the markup, retrying the
+page edit only on a definite version conflict, and says exactly which half
+happened when the edit fails. Not served: the six index tools.
 
 ### Postman complete collection-management family
 
@@ -2524,14 +2534,17 @@ Deliberate differences, each a repair of a source defect:
 - The SDK raises `KeyError` when a test parameter lacks `default`/`type`;
   Rust projects `null`.
 
-Not ported: `get_report_by_id` downloads every `reports_test_results_<build>`
-zip from the report bucket, unzips and merges JMeter/Gatling logs, re-zips the
-merged errors and uploads that archive back to Carrier; `create_excel_report`
-and `create_ui_excel_report` additionally parse the logs and write `.xlsx`
-workbooks. Those need zip read/write and an xlsx writer that neither the
-worker's nor the desktop host's Cargo lock carries (the libs workspace has
-`zip` only transitively through `calamine`). The capability snapshot lists
-the fifteen served tools, so elitea-main marks the three unavailable.
+Archive and workbook tools (ported with the attachment host): `get_report_by_id`
+uploads the merged-errors archive to the Carrier report bucket on every call
+(an effect on the no-retry path, as in the SDK); `create_excel_report` and
+`create_ui_excel_report` parse the JMeter/Gatling/Lighthouse logs and write an
+`.xlsx` with `elitea-office-core`, stored as a new artifact (never
+overwriting) and named in the answer. The workbook has the SDK's sheets, rows
+and values but not its styling (fills, borders, number formats, merged
+titles, hyperlinks, conditional colours, widths, filters, frozen panes).
+Bounds: 20 archives of 50 MiB, 1 GiB decompressed, 5 million samples. The two
+workbook tools store into a bucket named from the report's (lowercased, hyphenated) Carrier bucket, created in the project when missing (an existing bucket is success), and need the `toolkit-office` feature and a host; otherwise they
+are omitted with one warning.
 
 ### Toolkit types that cannot be ported as configured families yet
 
@@ -2707,11 +2720,13 @@ Served tools, in SDK order, with their routes:
 
 Gaps and deliberate differences:
 
-- `get_image_by_url` describes an attachment with the toolkit's vision LLM,
-  and `attach_file_to_work_item` reads artifact storage. A configured toolkit
-  holds neither authority in this runtime, so both are unserved and listed
-  out of `supported_tools.ado_boards`; a selection naming only unserved tools
-  skips the toolkit.
+- `get_image_by_url` (vision model) and `attach_file_to_work_item` (artifact
+  bytes) use the host's artifact object API and chat model
+  (`families/attachment_host.rs`). Where no host is lent the two are omitted
+  with one warning. `attach_file_to_work_item` is four steps (upload, optional
+  field read, one patch linking the `AttachedFile` relation, optional comment)
+  and reports the exact state when a step fails: uploaded but not linked, or
+  linked with the comment not added. bmp and svg pictures are refused.
 - `get_work_item(parse_attachments=true)` and `get_comments(process_images=true)`
   return the work item or comments without image descriptions or parsed
   attachment content, which is what the SDK returns when no LLM is
