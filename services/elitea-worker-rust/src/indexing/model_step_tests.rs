@@ -34,6 +34,7 @@ fn admitted(model: Arc<dyn Llm>) -> AdmittedChat {
     AdmittedChat {
         model,
         config: adk_rust::GenerateContentConfig::default(),
+        budget: None,
     }
 }
 use super::pipeline::RunLiveness;

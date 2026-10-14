@@ -1259,13 +1259,8 @@ async fn a_reasoning_models_thinking_is_not_the_description() {
                 delta("content", " It is blue.</think>\n\nA blue square."),
                 finish("stop"),
             ]),
-            // The chat template put the opening tag in the prompt: only the
-            // closing one comes back.
-            gateway_answer(&[
-                delta("content", "It is green.</think>"),
-                delta("content", "A green square."),
-                finish("stop"),
-            ]),
+            // A lone closing tag is literal text, not reasoning.
+            gateway_answer(&[delta("content", "A green square.</think>"), finish("stop")]),
         ],
     );
     let documents = vec![
@@ -1289,9 +1284,8 @@ async fn a_reasoning_models_thinking_is_not_the_description() {
     let text = found.to_string();
     assert!(text.contains("A red square."), "{text}");
     assert!(text.contains("A blue square."), "{text}");
-    assert!(text.contains("A green square."), "{text}");
-    assert!(!text.contains("It is green"), "{text}");
-    assert!(!text.contains("think"), "{text}");
+    assert!(text.contains("A green square.</think>"), "{text}");
+    assert!(!text.contains("<think>"), "{text}");
     assert!(!text.contains("Let me look"), "{text}");
 }
 
@@ -1348,4 +1342,21 @@ async fn a_think_tag_in_the_middle_of_a_description_is_kept() {
         .await
         .expect("summary");
     assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reply_that_is_only_a_closed_think_block_is_retryable() {
+    let mut harness = harness(4, None).await;
+    with_real_facade(
+        &mut harness,
+        vec![gateway_answer(&[
+            delta("content", "<think>It is a square.</think>\n"),
+            finish("stop"),
+        ])],
+    );
+    let tiny = real_image("shots/tiny.png", ImageFormat::Png, 32, 32, "tiny");
+    let summary = run_model(&harness, vec![tiny], None, &defaults(), Some("Qwen3.8"))
+        .await
+        .expect("summary");
+    assert_eq!(summary.skipped.get("model_failed"), Some(&1), "{summary:?}");
 }

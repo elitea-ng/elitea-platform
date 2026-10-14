@@ -249,7 +249,10 @@ impl Failure {
             (Self::Changed, Some(key)) => SourceError::Changed(key.to_owned()),
             (failure, key) => {
                 let what = key.map_or_else(String::new, |key| format!(" for '{key}'"));
-                let rate_limited = matches!(failure, Self::RateLimited);
+                let rate_limited = matches!(
+                    failure,
+                    Self::RateLimited | Self::Status(StatusCode::TOO_MANY_REQUESTS)
+                );
                 let message = match failure {
                     Self::Refused => format!(
                         "{provider}: the host is not on the egress allowlist, so the request{what} was refused before it was sent"
@@ -1033,5 +1036,26 @@ mod tests {
             .into_source_error("GitHub", None)
             .to_string();
         assert!(refused.contains("egress allowlist"), "{refused}");
+    }
+
+    #[test]
+    fn a_429_and_a_backoff_that_ran_out_are_both_rate_limited_for_a_document() {
+        use elitea_content_source::SourceError;
+        for failure in [
+            Failure::RateLimited,
+            Failure::Status(StatusCode::TOO_MANY_REQUESTS),
+        ] {
+            assert!(
+                matches!(
+                    failure.clone().into_source_error("GitHub", Some("a.png")),
+                    SourceError::RateLimited(_)
+                ),
+                "{failure:?}"
+            );
+        }
+        assert!(matches!(
+            Failure::Status(StatusCode::BAD_GATEWAY).into_source_error("GitHub", Some("a.png")),
+            SourceError::Unavailable(_)
+        ));
     }
 }

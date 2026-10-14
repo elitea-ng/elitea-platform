@@ -962,6 +962,7 @@ async fn the_step_back_model_makes_the_admitted_streaming_request_and_its_text_i
             model: Arc::clone(&model) as Arc<dyn Llm>,
             model_name: "chat-model".to_owned(),
             config: adk_rust::GenerateContentConfig::default(),
+            budget: None,
         }),
     );
     // stepback_summary_index returns the model's second reply verbatim: a
@@ -1009,6 +1010,7 @@ async fn the_step_back_model_is_bound_lazily_and_once() {
                 model: Arc::clone(&model) as Arc<dyn Llm>,
                 model_name: "chat-model".to_owned(),
                 config: adk_rust::GenerateContentConfig::default(),
+                budget: None,
             })
         })
     };
@@ -1053,7 +1055,7 @@ async fn the_step_back_model_is_bound_lazily_and_once() {
     );
 
     // A binder that fails leaves the two step-back tools refusing with a
-    // sentence, tried once.
+    // sentence, tried once per call.
     let failures = Arc::new(AtomicUsize::new(0));
     let failing = {
         let failures = Arc::clone(&failures);
@@ -1075,9 +1077,7 @@ async fn the_step_back_model_is_bound_lazily_and_once() {
         )
         .await;
         assert!(
-            text.as_str()
-                .expect("text")
-                .contains("needs the agent's chat model"),
+            text.as_str().expect("text").contains("could not be bound"),
             "{text}"
         );
     }
@@ -1142,6 +1142,7 @@ async fn two_step_back_calls_in_one_run_each_bind_a_fresh_model() {
                 }) as Arc<dyn Llm>,
                 model_name: "chat-model".to_owned(),
                 config: adk_rust::GenerateContentConfig::default(),
+                budget: None,
             })
         })
     };
@@ -1170,6 +1171,7 @@ async fn two_step_back_calls_in_one_run_each_bind_a_fresh_model() {
                 }) as Arc<dyn Llm>,
                 model_name: "chat-model".to_owned(),
                 config: adk_rust::GenerateContentConfig::default(),
+                budget: None,
             })
         })
     });
@@ -1186,4 +1188,138 @@ async fn two_step_back_calls_in_one_run_each_bind_a_fresh_model() {
         assert_eq!(reply, "alpha text");
     }
     assert_eq!(binds.load(Ordering::SeqCst), binds_before + 2);
+}
+
+/// The claim's toolkit completion budget is shared by every binding and stops
+/// parallel step-back calls at the cap; the agent's own turns are a different
+/// counter (each binding is a single-use model with `max_model_turns = 1`).
+#[tokio::test]
+async fn parallel_step_back_calls_stop_at_the_claims_completion_budget() {
+    use crate::transport::model_text::ModelCallBudget;
+
+    let harness = harness().await;
+    seed(&harness).await;
+    let budget = ModelCallBudget::new(3);
+    let binds = Arc::new(AtomicUsize::new(0));
+    let lazy = LazyStepbackModel::new({
+        let (budget, binds) = (budget.clone(), Arc::clone(&binds));
+        Box::new(move || {
+            binds.fetch_add(1, Ordering::SeqCst);
+            Ok(StepbackBinding {
+                model: Arc::new(SingleUseModel {
+                    used: AtomicBool::new(false),
+                }) as Arc<dyn Llm>,
+                model_name: "chat-model".to_owned(),
+                config: adk_rust::GenerateContentConfig::default(),
+                budget: Some(budget.clone()),
+            })
+        })
+    });
+    let host = host_with_lazy_model(&harness, &harness.token, Some(lazy));
+    // Five step-back searches at once (one completion each) against a budget
+    // of three: exactly three get an answer.
+    let args = json!({"query": "alpha", "index_name": "docs"});
+    let results = adk_rust::futures::future::join_all(
+        (0..5).map(|_| call(&host, IndexToolName::StepbackSearchIndex, args.clone())),
+    )
+    .await;
+    let refused = results
+        .iter()
+        .filter(|text| {
+            text.as_str()
+                .is_some_and(|text| text.contains("model call budget for this run is exhausted"))
+        })
+        .count();
+    assert_eq!(refused, 2, "{results:?}");
+    assert!(!budget.try_take(), "the budget is spent");
+}
+
+/// Arguments and the index are checked BEFORE a model is bound: a call that
+/// is refused for its arguments or an unknown index binds nothing.
+#[tokio::test]
+async fn a_refused_step_back_call_binds_no_model() {
+    let harness = harness().await;
+    seed(&harness).await;
+    let binds = Arc::new(AtomicUsize::new(0));
+    let lazy = LazyStepbackModel::new({
+        let binds = Arc::clone(&binds);
+        Box::new(move || {
+            binds.fetch_add(1, Ordering::SeqCst);
+            Ok(StepbackBinding {
+                model: Arc::new(SingleUseModel {
+                    used: AtomicBool::new(false),
+                }) as Arc<dyn Llm>,
+                model_name: "chat-model".to_owned(),
+                config: adk_rust::GenerateContentConfig::default(),
+                budget: None,
+            })
+        })
+    });
+    let host = host_with_lazy_model(&harness, &harness.token, Some(lazy));
+    for args in [
+        json!({"query": "alpha", "index_name": "no-such-index"}),
+        json!({"query": "", "index_name": "docs"}),
+        json!({"index_name": "docs"}),
+    ] {
+        for tool in [
+            IndexToolName::StepbackSearchIndex,
+            IndexToolName::StepbackSummaryIndex,
+        ] {
+            let _ = call(&host, tool, args.clone()).await;
+        }
+    }
+    assert_eq!(binds.load(Ordering::SeqCst), 0);
+}
+
+/// `generate_text` reports a reply with no text as an error, never `Ok("")`.
+#[tokio::test]
+async fn generate_text_refuses_an_empty_or_reasoning_only_reply() {
+    struct Reply(&'static str);
+    #[async_trait]
+    impl Llm for Reply {
+        fn name(&self) -> &'static str {
+            "reply-fixture"
+        }
+        async fn generate_content(
+            &self,
+            _: LlmRequest,
+            _: bool,
+        ) -> adk_rust::Result<LlmResponseStream> {
+            let text = self.0;
+            Ok(Box::pin(stream::iter(vec![
+                Ok(LlmResponse {
+                    content: (!text.is_empty()).then(|| Content::new("model").with_text(text)),
+                    partial: true,
+                    ..Default::default()
+                }),
+                Ok(LlmResponse {
+                    turn_complete: true,
+                    finish_reason: Some(adk_rust::FinishReason::Stop),
+                    ..Default::default()
+                }),
+            ])))
+        }
+    }
+    let binding = |text: &'static str| StepbackBinding {
+        model: Arc::new(Reply(text)) as Arc<dyn Llm>,
+        model_name: "m".to_owned(),
+        config: adk_rust::GenerateContentConfig::default(),
+        budget: None,
+    };
+    let ask = |text: &'static str| async move {
+        super::tools::generate_text(
+            &binding(text),
+            vec![adk_rust::Part::Text {
+                text: "p".to_owned(),
+            }],
+        )
+        .await
+    };
+    assert_eq!(
+        ask("").await.expect_err("empty"),
+        crate::transport::model_text::EMPTY_REPLY
+    );
+    assert!(ask("<think>all of it</think>\n").await.is_err());
+    assert!(ask("<think>unclosed").await.is_err());
+    assert_eq!(ask("  keep\n").await.expect("text"), "  keep\n");
 }

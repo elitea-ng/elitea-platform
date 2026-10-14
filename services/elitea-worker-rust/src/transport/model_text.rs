@@ -20,16 +20,54 @@
 //!   nothing but reasoning ([`TextReply::reasoning_only`]).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use adk_rust::futures::StreamExt as _;
 use adk_rust::{AdkError, Content, FinishReason, GenerateContentConfig, Llm, LlmRequest, Part};
 
+/// The model completions a claim's toolkits may make in total (the step-back
+/// tools, the Office host's prompts): one shared counter per claim, handed to
+/// every per-call binding. It is NOT the agent's own `max_model_turns`: each
+/// binding is a single-use model (`max_model_turns = 1`), so these calls never
+/// spend the agent's turns.
+#[derive(Clone, Debug)]
+pub(crate) struct ModelCallBudget {
+    remaining: Arc<AtomicU32>,
+}
+
+/// Completions one claim's toolkits may make when the deployment sets none.
+pub(crate) const DEFAULT_TOOLKIT_MODEL_CALLS: u32 = 200;
+
+impl ModelCallBudget {
+    #[must_use]
+    pub(crate) fn new(calls: u32) -> Self {
+        Self {
+            remaining: Arc::new(AtomicU32::new(calls)),
+        }
+    }
+
+    /// Takes one completion; `false` once none is left.
+    pub(crate) fn try_take(&self) -> bool {
+        self.remaining
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+    }
+}
+
+/// The sentence of a refused call, for callers that report text.
+pub(crate) const BUDGET_EXHAUSTED: &str = "the model call budget for this run is exhausted";
+/// The sentence of a reply with nothing in it.
+pub(crate) const EMPTY_REPLY: &str = "the model returned an empty reply";
+
 /// A chat model bound for one call, with the generation config its facade
-/// admits.
+/// admits and the claim's completion budget, if it has one.
 #[derive(Clone)]
 pub(crate) struct AdmittedChat {
     pub(crate) model: Arc<dyn Llm>,
     pub(crate) config: GenerateContentConfig,
+    pub(crate) budget: Option<ModelCallBudget>,
 }
 
 /// What a model answered in text.
@@ -58,6 +96,8 @@ pub(crate) enum TextFailure {
     TooLarge,
     /// The stream held no complete reply.
     NoReply,
+    /// The claim's completion budget is spent; no request was made.
+    BudgetExhausted,
 }
 
 /// One user message on `chat`, and the text of its reply.
@@ -71,6 +111,11 @@ pub(crate) async fn stream_text(
     user: Content,
     max_reply_bytes: usize,
 ) -> Result<TextReply, TextFailure> {
+    if let Some(budget) = &chat.budget
+        && !budget.try_take()
+    {
+        return Err(TextFailure::BudgetExhausted);
+    }
     let request = LlmRequest {
         model: model_name.to_owned(),
         contents: vec![user],
@@ -114,7 +159,10 @@ pub(crate) async fn stream_text(
     }
     let length_cut = ended.ok_or(TextFailure::NoReply)?;
     let stripped = strip_reasoning(&raw);
-    let reasoning_only = stripped.text.is_empty() && (length_cut || stripped.unclosed);
+    // Nothing but reasoning: a block that was never closed, a reply that was
+    // entirely a closed block, or a reply cut off with nothing in it.
+    let reasoning_only =
+        stripped.text.trim().is_empty() && (length_cut || stripped.unclosed || stripped.removed);
     Ok(TextReply {
         text: stripped.text,
         length_cut,
@@ -128,6 +176,8 @@ pub(crate) struct Stripped {
     pub(crate) text: String,
     /// The reply began a `<think>` block and never closed it.
     pub(crate) unclosed: bool,
+    /// A closed `<think>` block was removed.
+    pub(crate) removed: bool,
 }
 
 const OPEN: &str = "<think>";
@@ -135,34 +185,39 @@ const CLOSE: &str = "</think>";
 
 /// `text` without the reasoning a model wrote into it.
 ///
-/// * `<think>…</think>` blocks at the START of the reply (after whitespace)
-///   are removed, one after another;
-/// * a `<think>` at the start that is never closed is all reasoning: the
-///   result is empty and `unclosed` is set;
-/// * a reply with a `</think>` and no `<think>` before it (the template put
-///   the opening tag in the prompt) loses everything up to and including it;
-/// * a `<think>` anywhere else is literal text and stays.
+/// Only a reply that STARTS (after whitespace) with `<think>` has any:
+///
+/// * each leading `<think>…</think>` block is removed with the whitespace
+///   directly after it, one block after another;
+/// * a leading `<think>` that is never closed is all reasoning: the result is
+///   empty and `unclosed` is set.
+///
+/// Everything else is literal and untouched, a `</think>` or a `<think>`
+/// further in included; the visible text is not trimmed.
 #[must_use]
 pub(crate) fn strip_reasoning(text: &str) -> Stripped {
     let mut rest = text.trim_start();
-    if rest.starts_with(OPEN) {
-        while let Some(after_open) = rest.strip_prefix(OPEN) {
-            let Some(end) = after_open.find(CLOSE) else {
-                return Stripped {
-                    text: String::new(),
-                    unclosed: true,
-                };
+    if !rest.starts_with(OPEN) {
+        return Stripped {
+            text: text.to_owned(),
+            unclosed: false,
+            removed: false,
+        };
+    }
+    while let Some(after_open) = rest.strip_prefix(OPEN) {
+        let Some(end) = after_open.find(CLOSE) else {
+            return Stripped {
+                text: String::new(),
+                unclosed: true,
+                removed: false,
             };
-            rest = after_open[end + CLOSE.len()..].trim_start();
-        }
-    } else if let Some(close) = rest.find(CLOSE)
-        && !rest[..close].contains(OPEN)
-    {
-        rest = &rest[close + CLOSE.len()..];
+        };
+        rest = after_open[end + CLOSE.len()..].trim_start();
     }
     Stripped {
-        text: rest.trim().to_owned(),
+        text: rest.to_owned(),
         unclosed: false,
+        removed: true,
     }
 }
 
@@ -175,32 +230,37 @@ mod tests {
     }
 
     #[test]
-    fn a_leading_block_is_removed() {
+    fn a_leading_block_and_the_whitespace_after_it_are_removed() {
         assert_eq!(text("<think>a</think>\nB"), "B");
-        assert_eq!(text("  \n<think>a</think><think>b</think>  C "), "C");
+        assert_eq!(text("  \n<think>a</think><think>b</think>  C "), "C ");
     }
 
     #[test]
-    fn a_reply_with_only_a_closing_tag_loses_everything_up_to_it() {
-        assert_eq!(
-            text("I should look.</think>\n\nA red square."),
-            "A red square."
-        );
-        assert_eq!(text("a</think>b</think>c"), "b</think>c");
+    fn the_visible_text_is_not_trimmed() {
+        assert_eq!(text("<think>a</think>\n  code\n"), "code\n");
+        assert_eq!(text("  indented\n"), "  indented\n");
+        assert_eq!(text("line\n"), "line\n");
+    }
+
+    #[test]
+    fn a_closing_tag_without_a_leading_block_is_literal() {
+        let reply = "I should look.</think>\n\nA red square.";
+        assert_eq!(text(reply), reply);
+        assert_eq!(text("a</think>b"), "a</think>b");
     }
 
     #[test]
     fn an_unclosed_leading_block_is_all_reasoning() {
         let stripped = strip_reasoning("  <think>Let me think");
-        assert_eq!(
-            stripped,
-            Stripped {
-                text: String::new(),
-                unclosed: true
-            }
-        );
+        assert!(stripped.unclosed && stripped.text.is_empty());
         let after_a_closed_one = strip_reasoning("<think>a</think><think>b");
         assert!(after_a_closed_one.unclosed && after_a_closed_one.text.is_empty());
+    }
+
+    #[test]
+    fn a_reply_that_is_only_a_closed_block_has_no_text() {
+        let stripped = strip_reasoning("<think>all of it</think>\n");
+        assert!(stripped.removed && stripped.text.is_empty());
     }
 
     #[test]
@@ -211,5 +271,15 @@ mod tests {
         assert_eq!(text("kept <think>cut off"), "kept <think>cut off");
         assert_eq!(text("plain"), "plain");
         assert_eq!(text(""), "");
+    }
+
+    #[test]
+    fn the_budget_stops_at_its_cap() {
+        let budget = ModelCallBudget::new(2);
+        let other = budget.clone();
+        assert!(budget.try_take());
+        assert!(other.try_take());
+        assert!(!budget.try_take());
+        assert!(!other.try_take());
     }
 }

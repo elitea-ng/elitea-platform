@@ -923,13 +923,6 @@ async fn vision_call(
         settings,
         &spec,
         |reply: Reply| {
-            if reply.truncated {
-                tracing::warn!(
-                    event = "index_image_description_truncated",
-                    max_tokens = settings.max_tokens,
-                    "the model's description was cut off by max_tokens; kept as it is"
-                );
-            }
             // Reasoning the model wrote into its reply is already removed.
             // A reply that held nothing but reasoning (cut off by
             // `max_tokens` while thinking, or a `<think>` never closed): the
@@ -942,9 +935,16 @@ async fn vision_call(
                 tracing::warn!(
                     event = "index_image_description_reasoning_only",
                     max_tokens = settings.max_tokens,
-                    "the model spent its max_tokens thinking and described nothing; raise `max_tokens` in the toolkit's llm settings, the picture is retried by the next run"
+                    "the model produced only reasoning and described nothing (cut off by max_tokens while thinking?); raise `max_tokens` in the toolkit's llm settings, the picture is retried by the next run"
                 );
                 return Err(CallFailure::ImageSkip(SKIP_MODEL_FAILED));
+            }
+            if reply.truncated {
+                tracing::warn!(
+                    event = "index_image_description_truncated",
+                    max_tokens = settings.max_tokens,
+                    "the model's description was cut off by max_tokens; kept as it is"
+                );
             }
             let description = reply.text;
             Ok(description)
@@ -1116,6 +1116,9 @@ async fn complete(
         }),
         Err(TextFailure::NoReply) => Err(CallFailure::Retryable(
             "the model returned no reply".to_owned(),
+        )),
+        Err(TextFailure::BudgetExhausted) => Err(CallFailure::Cap(
+            crate::transport::model_text::BUDGET_EXHAUSTED.to_owned(),
         )),
     }
 }

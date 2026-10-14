@@ -155,6 +155,7 @@ impl BoundModelFacade {
         super::model_text::AdmittedChat {
             model: BoundOrdinaryAgentModel::adk_model(self),
             config,
+            budget: None,
         }
     }
 }

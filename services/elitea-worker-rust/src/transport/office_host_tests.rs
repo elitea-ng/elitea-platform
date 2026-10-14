@@ -302,6 +302,7 @@ fn host(api: &Arc<ObjectApi>, replies: Vec<&str>) -> (Arc<ClaimOfficeHost>, Arc<
         model: Arc::clone(&llm) as Arc<dyn Llm>,
         model_name: "gpt-test".to_owned(),
         config: adk_rust::GenerateContentConfig::default(),
+        budget: None,
     });
     let host = ClaimOfficeHost::new(runtime, "pat-token", "42", model).expect("host");
     (Arc::new(host), llm)
