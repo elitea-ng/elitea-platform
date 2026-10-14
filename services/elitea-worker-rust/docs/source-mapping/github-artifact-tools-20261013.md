@@ -28,7 +28,7 @@ Code: `libs/rust/agent-runtime/src/toolkits/families/github/{writes,project_writ
 | `update_file` | effect | `Updated file p` | Reads the file with its sha, applies the OLD/NEW pairs (all or nothing, the family's shared editor), writes with that sha. A file that changed meanwhile is a conflict, not a lost update. |
 | `delete_file` | effect | `Deleted file p` | Sends the sha it read. A directory is refused. |
 | `create_pull_request` | effect | `Pull request created successfully! PR #n, URL: u` | `base` defaults to the base branch. GitHub's own reason (for example "A pull request already exists") rides in the failure. |
-| `create_issue` / `update_issue` / `comment_on_issue` | effect | the SDK's texts | `update_issue` is ONE request; per the SDK's own tool prompt, labels and assignees that are not passed or are empty are REMOVED, and the answer says so (see below). |
+| `create_issue` / `update_issue` / `comment_on_issue` | effect | the SDK's texts | `update_issue` is ONE request; labels and assignees replace the current ones when given, an explicit `[]` clears them (the answer says so), and leaving them out keeps them. |
 | `trigger_workflow` | effect | the SDK's result object | Resolves the workflow by id or file name, then dispatches by id. |
 | `apply_git_patch` / `apply_git_patch_from_file` | effect | the SDK's result object (`success`, `applied_changes`, `failed_changes`, counts, `message`) | See "Patches". The file form reads the patch from a platform bucket (1 MiB cap). |
 | `create_issue_on_project` / `update_issue_on_project` | effect | the SDK's texts | See "Project boards". |
@@ -93,16 +93,26 @@ field that failed with its sentence, and the fields not tried (the SDK stops at 
 field and reports its error text as the list of updated fields). A date that cannot be read
 (`YYYY-MM-DD`, optionally `THH:MM[:SS]`) is reported as an invalid field value; the SDK's
 `dateutil` fallback writes the current time. The board is looked up among the repository's first
-20 projects (the SDK's 10) and the issue among the first 5,100 board items.
+20 projects (the SDK's 10) by fields only; the issue is found by repository AND number (the same
+number can exist in two repositories on one board) by paging the chosen project's items once from
+the start (at most 50 pages of 100). The lookups are reads (a failure is an outage, nothing changed);
+only a mutation's `INTERNAL`/`SERVICE_UNAVAILABLE`, lost answer or 5xx is an unknown outcome. A
+conversion whose answer is lost says it may have applied and to check the board before retrying.
 
 ### Deliberate differences, in one place
 
-1. `update_issue` removes labels and assignees that are not passed (the SDK's tool prompt says so;
-   its schema text says "replace"). The answer says "No labels or assignees were passed, so all
-   ... were removed". Closing an issue through this tool therefore strips them, as before.
+1. `update_issue` leaves labels and assignees alone when they are not passed (owner decision). The
+   SDK's schema text says an empty list removes them, but its code removes them whenever they are
+   absent, so closing an issue stripped them. An explicit `[]` still clears (the answer says so).
+   With no field given at all it is refused instead of sending an empty PATCH.
 2. No silent overwrite: `create_file` never replaces; `update_file`, `delete_file` and the patch
    send the sha they read.
-3. `create_branch` finds a free name from the matching refs.
+3. `create_branch` finds a free name from the matching refs. A branch, tag or ref name, and every
+   path in a patch, with a `.`, `..` or empty segment is refused before any request (it would
+   address another ref or file in the URL). Integer arguments are read as pydantic reads them
+   (`"5"` is 5; a non-number is "must be a number"). Writes go over a transport built without
+   protocol-level retries (`EFFECT_POLICY`), as ado, bitbucket and gitlab do; a retried POST is a
+   second effect. Reads keep theirs.
 4. `apply_git_patch` is checked before it writes (above).
 5. `get_workflow_logs` returns job details only; `search_project_issues` filters.
 6. Active-branch state lives on the invocation's client, as the SDK's lives on its wrapper.
@@ -120,8 +130,8 @@ Code: `libs/rust/agent-runtime/src/toolkits/families/artifact/extra_tools.rs` (n
 |---|---|---|
 | `read_multiple_files` | read | Files in order, each a string, the `content_too_large` object for a file over the per-file cap, or `Error reading file: <cause>`; a cumulative 200,000-character budget, after which the rest are skipped with the SDK's notice and not fetched. A leading `/` names the bucket (`/bucket/file`). At most 32 files. |
 | `grep_file` | read | The artifact wrapper's `Found N match(es) in p:` layout (not the repository families'), case-insensitive; an invalid regular expression finds nothing, as in the SDK. Stops at 2,000 matches or 200,000 characters and says how many it did not show. |
-| `edit_file` | effect | OLD/NEW pairs applied one by one with the SDK's exact and tolerant matching; a pair that does not match or matches twice is reported and the rest still go in (`Successfully applied N edit(s) ... WARNING: ...`); nothing is written when none applies. Writes the whole file back (65,536-character write cap; the real size is in the refusal). |
-| `append_data` | effect | `\n` + data after non-empty content; answers the SDK's JSON text. A missing file is created only when the platform says it does not exist: the SDK creates it on ANY failed download, so a refused bucket or an outage overwrote the file. `.docx` (HTML/Markdown append) and other binary types are refused with a sentence. |
+| `edit_file` | effect | OLD/NEW pairs applied one by one with the SDK's exact and tolerant matching; a pair that does not match or matches twice is reported and the rest still go in (`Successfully applied N edit(s) ... WARNING: ...`); nothing is written when none applies. Writes the whole file back (65,536-character write cap; the real size is in the refusal). It reads the file again just before writing and refuses if it changed; the platform's text routes carry no version or conditional write, so the race between that read and the write remains. |
+| `append_data` | effect | `\n` + data after non-empty content; answers the SDK's JSON text. A missing file is created only when the platform says it does not exist: the SDK creates it on ANY failed download, so a refused bucket or an outage overwrote the file. `.docx` (HTML/Markdown append) and other binary types are refused with a sentence. Same re-read-before-write guard as `edit_file` (a file that appeared or changed meanwhile is not overwritten). |
 | `get_file_metadata` | read | The SDK's `file_metadata` object (type, extension, size, `read_limits`, `instruction_for_readFile`, line count and hints for text); per-type structure (sheets, pages, images) is not available and the `notes` field says so. Errors are the SDK's `error` object. |
 | `create_new_bucket` | effect | Name sanitized as the SDK does (`_` to `-`, lower case); `expiration_measure`/`expiration_value` become `retention_days` (days 1, weeks 7, months 30, years 365). Created through the platform's bucket API (`POST /api/v2/artifacts/buckets/{project}`) under the turn's own credential, by the same Office host that moves bytes for `pptx`. A host without one (the desktop) answers that it cannot create buckets. |
 

@@ -38,6 +38,11 @@ struct Bucket {
     fail_reads: Mutex<Option<HostErrorCode>>,
     fail_writes: Mutex<Option<HostErrorCode>>,
     writes: Mutex<Vec<(String, String, String)>>,
+    /// Someone else writes `(name, content)` right after the N-th read.
+    interfere: Mutex<Option<(usize, String, String)>>,
+    /// Every read after the N-th fails as unreachable.
+    fail_reads_after: Mutex<Option<usize>>,
+    reads: Mutex<usize>,
 }
 
 impl Bucket {
@@ -106,9 +111,30 @@ impl PlatformWriter for Bucket {
         if let Some(code) = *self.fail_reads.lock().expect("fail") {
             return Err(HostError::new(code, "fixture"));
         }
-        let content = self
-            .get(&request.bucket, &request.name)
-            .ok_or_else(|| HostError::new(HostErrorCode::NotFound, "missing"))?;
+        let found = self.get(&request.bucket, &request.name);
+        let number = {
+            let mut reads = self.reads.lock().expect("reads");
+            *reads += 1;
+            *reads
+        };
+        if self
+            .fail_reads_after
+            .lock()
+            .expect("after")
+            .is_some_and(|after| number > after)
+        {
+            return Err(HostError::new(
+                HostErrorCode::DependencyUnavailable,
+                "fixture",
+            ));
+        }
+        let interfere = self.interfere.lock().expect("interfere").clone();
+        if let Some((at, name, content)) = interfere
+            && at == number
+        {
+            self.put(&request.bucket, &name, &content);
+        }
+        let content = found.ok_or_else(|| HostError::new(HostErrorCode::NotFound, "missing"))?;
         let chars = content.chars().count() as u64;
         let over_limit = chars > READ_LIMIT;
         Ok(ArtifactReadOutcome {
@@ -1006,4 +1032,110 @@ async fn create_new_bucket_failures_are_told_apart() {
         says.contains("no access to the platform's bucket API"),
         "{says}"
     );
+}
+
+// ----- a file changed while it was being edited ---------------------------------------------------
+
+#[tokio::test]
+async fn an_edit_is_refused_when_the_file_changed_after_it_was_read() {
+    let rig = rig().await;
+    rig.bucket.put("docs", "n.md", "hello\n");
+    // Someone else rewrites the file right after the edit read it.
+    *rig.bucket.interfere.lock().expect("interfere") = Some((
+        1,
+        "n.md".to_owned(),
+        "hello, changed by someone else\n".to_owned(),
+    ));
+    let says = rig
+        .says(
+            "edit_file",
+            json!({"file_path": "n.md", "file_query": edit("hello", "bye")}),
+        )
+        .await;
+    assert!(
+        says.contains("changed by someone else while this change was being made"),
+        "{says}"
+    );
+    assert!(says.contains("nothing was written"), "{says}");
+    assert!(
+        rig.bucket.writes().is_empty(),
+        "the other writer's content is kept"
+    );
+    assert_eq!(
+        rig.bucket.get("docs", "n.md").as_deref(),
+        Some("hello, changed by someone else\n")
+    );
+    // Unchanged, the same edit goes through (two reads, one write).
+    *rig.bucket.interfere.lock().expect("interfere") = None;
+    rig.bucket.put("docs", "n.md", "hello\n");
+    let says = rig
+        .says(
+            "edit_file",
+            json!({"file_path": "n.md", "file_query": edit("hello", "bye")}),
+        )
+        .await;
+    assert!(says.starts_with("Successfully applied 1 edit(s)"), "{says}");
+}
+
+#[tokio::test]
+async fn an_append_is_refused_when_the_file_changed_or_appeared_meanwhile() {
+    let rig = rig().await;
+    rig.bucket.put("docs", "log.txt", "first");
+    *rig.bucket.interfere.lock().expect("interfere") = Some((
+        1,
+        "log.txt".to_owned(),
+        "first\nsecond (someone else)".to_owned(),
+    ));
+    let says = rig
+        .says(
+            "append_data",
+            json!({"filename": "log.txt", "filedata": "mine"}),
+        )
+        .await;
+    assert!(says.contains("changed by someone else"), "{says}");
+    assert!(rig.bucket.writes().is_empty());
+    assert_eq!(
+        rig.bucket.get("docs", "log.txt").as_deref(),
+        Some("first\nsecond (someone else)")
+    );
+
+    // A file that did not exist when the append began, and exists now, is not
+    // overwritten by the create.
+    let rig = self::rig().await;
+    *rig.bucket.interfere.lock().expect("interfere") =
+        Some((1, "new.txt".to_owned(), "theirs".to_owned()));
+    let says = rig
+        .says(
+            "append_data",
+            json!({"filename": "new.txt", "filedata": "mine"}),
+        )
+        .await;
+    assert!(says.contains("changed by someone else"), "{says}");
+    assert!(rig.bucket.writes().is_empty());
+    assert_eq!(rig.bucket.get("docs", "new.txt").as_deref(), Some("theirs"));
+}
+
+#[tokio::test]
+async fn the_recheck_failing_to_read_refuses_the_write() {
+    // The second read is the guard: if the platform cannot answer it, the
+    // write is not made on a guess.
+    let rig = rig().await;
+    rig.bucket.put("docs", "n.md", "hello\n");
+    let tool_says = {
+        // Fail every read after the first by flipping the switch from a hook:
+        // the hook runs after read #1, so read #2 (the guard) fails.
+        *rig.bucket.interfere.lock().expect("interfere") =
+            Some((1, "other".to_owned(), String::new()));
+        *rig.bucket.fail_reads_after.lock().expect("after") = Some(1);
+        rig.says(
+            "edit_file",
+            json!({"file_path": "n.md", "file_query": edit("hello", "bye")}),
+        )
+        .await
+    };
+    assert!(
+        tool_says.starts_with("Could not edit the file:"),
+        "{tool_says}"
+    );
+    assert!(rig.bucket.writes().is_empty());
 }

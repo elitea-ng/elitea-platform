@@ -51,19 +51,6 @@ query EliteaBoard($owner: String!, $name: String!) {
             ... on ProjectV2FieldCommon { id dataType name }
           }
         }
-        items(first: 100) {
-          nodes {
-            id
-            content {
-              ... on Issue {
-                id
-                number
-                labels(first: 20) { nodes { id name } }
-                assignees(first: 20) { nodes { id name } }
-              }
-            }
-          }
-        }
       }
     }
   }
@@ -91,6 +78,7 @@ query EliteaBoardItems($owner: String!, $name: String!, $number: Int!, $count: I
             ... on Issue {
               id
               number
+              repository { nameWithOwner }
               labels(first: 20) { nodes { id name } }
               assignees(first: 20) { nodes { id name } }
             }
@@ -185,7 +173,26 @@ impl From<Fail> for Stop {
 type Step<T> = Result<T, Stop>;
 
 impl GitHubClient {
-    /// One GraphQL document. `data` of the answer, or the failure: an HTTP
+    /// A read-only GraphQL query, through the client's READ path (its retries
+    /// are safe, nothing is changed): a failure is mapped as a read, so an
+    /// outage is "could not be reached", never "may have been applied".
+    async fn graphql_read(&self, document: &str, variables: Value) -> Result<Value, Fail> {
+        let payload = json!({"query": document, "variables": variables});
+        let body = self
+            .rest
+            .post_graphql_json(&payload, MAX_GRAPHQL_BYTES)
+            .await?;
+        if let Some(errors) = body
+            .get("errors")
+            .and_then(Value::as_array)
+            .filter(|e| !e.is_empty())
+        {
+            return Err(graphql_failure(errors, false));
+        }
+        Ok(body.get("data").cloned().unwrap_or(Value::Null))
+    }
+
+    /// One GraphQL mutation. `data` of the answer, or the failure: an HTTP
     /// status by the write rules, a GraphQL `errors` list by its `type`.
     async fn graphql(&self, document: &str, variables: Value) -> Result<Value, Fail> {
         let payload = json!({"query": document, "variables": variables});
@@ -207,15 +214,17 @@ impl GitHubClient {
             .and_then(Value::as_array)
             .filter(|e| !e.is_empty())
         {
-            return Err(graphql_failure(errors));
+            return Err(graphql_failure(errors, true));
         }
         Ok(body.get("data").cloned().unwrap_or(Value::Null))
     }
 }
 
-/// A GraphQL `errors` list as the cause it names. The answer to a mutation
-/// that carries errors did not apply it.
-fn graphql_failure(errors: &[Value]) -> Fail {
+/// A GraphQL `errors` list as the cause it names. For a mutation
+/// (`effect`) an `INTERNAL` or `SERVICE_UNAVAILABLE` error is an unknown
+/// outcome (the server may have applied it before failing); for a read it is
+/// an outage and nothing was changed.
+fn graphql_failure(errors: &[Value], effect: bool) -> Fail {
     let kind = |item: &Value| {
         item.pointer("/extensions/type")
             .or_else(|| item.pointer("/type"))
@@ -228,6 +237,7 @@ fn graphql_failure(errors: &[Value]) -> Fail {
         Some("FORBIDDEN" | "INSUFFICIENT_SCOPES") => GitHubClientErrorCode::Authorization,
         Some("UNAUTHORIZED") => GitHubClientErrorCode::Authentication,
         Some("RATE_LIMITED") => GitHubClientErrorCode::RateLimited,
+        Some("INTERNAL" | "SERVICE_UNAVAILABLE") if effect => GitHubClientErrorCode::UnknownOutcome,
         Some("INTERNAL" | "SERVICE_UNAVAILABLE") => GitHubClientErrorCode::DependencyUnavailable,
         _ => GitHubClientErrorCode::InvalidInput,
     };
@@ -360,7 +370,7 @@ fn users_of(list: &[&Value]) -> Vec<(String, String, String)> {
 
 async fn get_board(client: &GitHubClient, owner: &str, name: &str, title: &str) -> Step<Board> {
     let data = client
-        .graphql(BOARD_QUERY, json!({"owner": owner, "name": name}))
+        .graphql_read(BOARD_QUERY, json!({"owner": owner, "name": name}))
         .await
         .map_err(lookup_failure)?;
     let repository = data
@@ -409,7 +419,7 @@ async fn get_issue_repo(
     name: &str,
 ) -> Step<(String, Vec<(String, String)>, Vec<(String, String, String)>)> {
     let data = client
-        .graphql(REPO_QUERY, json!({"owner": owner, "name": name}))
+        .graphql_read(REPO_QUERY, json!({"owner": owner, "name": name}))
         .await
         .map_err(lookup_failure)?;
     let repository = data
@@ -902,10 +912,18 @@ async fn create_flow(
         )
         .await
         .map_err(|fail| {
-            Stop::Say(format!(
-                "Convert Issue Failed. Error: {} A draft item '{draft_id}' was added to the project '{project_title}' and was not converted; remove it from the board before trying again.",
-                sentence_of(fail)
-            ))
+            if matches!(&fail, Fail::Client(cause, _) if cause.code() == GitHubClientErrorCode::UnknownOutcome) {
+                // The request was sent and the answer lost: the conversion may
+                // have been applied. Only a definite failure says "not converted".
+                Stop::Say(format!(
+                    "Convert Issue Failed. Error: GitHub did not confirm the conversion, so it may or may not have been applied. A draft item '{draft_id}' was added to the project '{project_title}'; check the board (the draft, or a new issue in its place) before trying again, so the issue is not created twice."
+                ))
+            } else {
+                Stop::Say(format!(
+                    "Convert Issue Failed. Error: {} A draft item '{draft_id}' was added to the project '{project_title}' and was not converted; remove it from the board before trying again.",
+                    sentence_of(fail)
+                ))
+            }
         })?;
     let item = converted.pointer("/convertProjectV2DraftIssueItemToIssue/item");
     let number = item
@@ -990,21 +1008,26 @@ async fn update_flow(
     };
     let (updates, missing) = plan_fields(&board.project, fields, &labels, &users);
 
-    // Find the issue's board item: the first 100 items came with the board;
-    // the rest are paged.
-    let located =
-        if let Some(found) = find_item(&nodes(&board.project, "/items/nodes"), issue_number) {
-            found
-        } else {
-            let number = board
-                .project
-                .get("number")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| {
-                    Stop::Say("Project number not available for pagination search.".to_owned())
-                })?;
-            page_for_item(client, &owner, &name, number, issue_number).await?
-        };
+    // Find the issue's board item by repository AND number (two repositories
+    // can both have #42 on one board), paging the project's items from the
+    // start: the board query read its fields only.
+    let project_number = board
+        .project
+        .get("number")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            Stop::Say("Project number not available for pagination search.".to_owned())
+        })?;
+    let issue_in = issue_repo.unwrap_or(board_repo);
+    let located = page_for_item(
+        client,
+        &owner,
+        &name,
+        project_number,
+        issue_in,
+        issue_number,
+    )
+    .await?;
 
     // The title and body first; the fields only when this succeeded.
     client
@@ -1053,10 +1076,15 @@ struct Located {
     assignee_ids: Vec<String>,
 }
 
-fn find_item(items: &[&Value], issue_number: &str) -> Option<Located> {
+fn find_item(items: &[&Value], repository: &str, issue_number: &str) -> Option<Located> {
     items.iter().find_map(|item| {
         let content = item.get("content").filter(|content| !content.is_null())?;
         if content.get("number")?.as_u64()?.to_string() != issue_number {
+            return None;
+        }
+        // The same number in another repository is another issue.
+        let owner_and_name = content.pointer("/repository/nameWithOwner")?.as_str()?;
+        if !owner_and_name.eq_ignore_ascii_case(repository) {
             return None;
         }
         Some(Located {
@@ -1079,12 +1107,13 @@ async fn page_for_item(
     owner: &str,
     name: &str,
     project_number: u64,
+    repository: &str,
     issue_number: &str,
 ) -> Step<Located> {
     let mut after = Value::Null;
     for _ in 0..MAX_PAGES {
         let data = client
-            .graphql(
+            .graphql_read(
                 ITEMS_PAGE_QUERY,
                 json!({"owner": owner, "name": name, "number": project_number,
                        "count": PAGE_SIZE, "after": after}),
@@ -1101,7 +1130,7 @@ async fn page_for_item(
             .filter(|items| !items.is_null())
             .ok_or_else(|| Stop::Say("No project data found during pagination.".to_owned()))?;
         let page: Vec<&Value> = nodes(connection, "/nodes");
-        if let Some(found) = find_item(&page, issue_number) {
+        if let Some(found) = find_item(&page, repository, issue_number) {
             return Ok(found);
         }
         let more = connection

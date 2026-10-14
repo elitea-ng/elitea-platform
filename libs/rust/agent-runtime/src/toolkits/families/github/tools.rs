@@ -1469,14 +1469,28 @@ fn required_directory<'a>(
         .ok_or_else(invalid_arguments)
 }
 
+/// An integer the way the SDK's pydantic models read one: a JSON integer or a
+/// string of digits ("42").
+fn integer_value(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => {
+            let text = text.trim();
+            (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
+                .then(|| text.parse().ok())
+                .flatten()
+        }
+        _ => None,
+    }
+}
+
 fn optional_positive_usize(
     arguments: &Map<String, Value>,
     key: &str,
 ) -> adk_core::Result<Option<usize>> {
     match arguments.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
+        Some(value) => integer_value(value)
             .and_then(|value| usize::try_from(value).ok())
             .filter(|value| *value > 0)
             .map(Some)
@@ -1487,7 +1501,7 @@ fn optional_positive_usize(
 fn required_positive_u64(arguments: &Map<String, Value>, key: &str) -> adk_core::Result<u64> {
     arguments
         .get(key)
-        .and_then(Value::as_u64)
+        .and_then(integer_value)
         .filter(|value| *value > 0 && i64::try_from(*value).is_ok())
         .ok_or_else(invalid_arguments)
 }

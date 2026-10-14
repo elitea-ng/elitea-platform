@@ -286,9 +286,28 @@ fn context() -> Arc<SimpleToolContext> {
 }
 
 async fn rig_with(script: Arc<Script>, store: Option<Arc<Store>>) -> Rig {
+    rig_over(script, None, store).await
+}
+
+/// Reads go to `reads`, writes to `effects` (the client keeps the two apart
+/// so the host can build the write transport without retries).
+async fn rig_split(reads: &Arc<Script>, effects: &Arc<Script>) -> Rig {
+    rig_over(reads.clone(), Some(effects.clone()), None).await
+}
+
+async fn rig_over(
+    script: Arc<Script>,
+    effects: Option<Arc<Script>>,
+    store: Option<Arc<Store>>,
+) -> Rig {
     let config = GitHubToolkitConfig::parse(&settings(&[])).expect("config");
-    let client =
-        Arc::new(GitHubClient::test_with_transport(config, script.clone()).expect("client"));
+    let client = Arc::new(
+        match effects {
+            Some(effects) => GitHubClient::test_with_transports(config, script.clone(), effects),
+            None => GitHubClient::test_with_transport(config, script.clone()),
+        }
+        .expect("client"),
+    );
     let api: Arc<dyn GitHubApi> = client.clone();
     let writer = WriteBinding {
         client: client.clone(),
@@ -538,7 +557,7 @@ async fn create_branch_failures_are_told_apart() {
         ),
         (
             Reply::Transport(TransportError::connect()),
-            "Nothing was sent",
+            "Nothing was changed",
         ),
     ] {
         let script = Arc::new(Script::default());
@@ -1131,7 +1150,7 @@ async fn create_issue_sends_empty_lists_when_none_are_given() {
 }
 
 #[tokio::test]
-async fn update_issue_says_when_it_removes_labels_and_assignees() {
+async fn update_issue_leaves_labels_and_assignees_alone_unless_told() {
     let script = Arc::new(Script::default());
     script.json(
         "PATCH",
@@ -1140,6 +1159,7 @@ async fn update_issue_says_when_it_removes_labels_and_assignees() {
         json!({"number": 5, "html_url": "https://github.example.test/EliteaAI/elitea-platform/issues/5"}),
     );
     let rig = rig(&script).await;
+    // Closing an issue sends no labels and no assignees: GitHub keeps them.
     let says = rig
         .says("update_issue", json!({"issue_id": 5, "state": "closed"}))
         .await;
@@ -1147,28 +1167,49 @@ async fn update_issue_says_when_it_removes_labels_and_assignees() {
         says.starts_with("Issue updated successfully! Updated details: ID: 5, URL: https://github"),
         "{says}"
     );
-    assert!(
-        says.ends_with("No labels or assignees were passed, so all labels and assignees were removed from the issue."),
-        "{says}"
-    );
-    assert_eq!(
-        body_of(&script.writes()[0]),
-        &json!({"labels": [], "assignees": [], "state": "closed"})
-    );
+    assert!(!says.contains("removed"), "{says}");
+    assert_eq!(body_of(&script.writes()[0]), &json!({"state": "closed"}));
 
+    // Given, they replace; an explicit empty list clears, and the answer says so.
     let says = rig
         .says(
             "update_issue",
             json!({"issue_id": 5, "title": "New", "body": "B", "labels": ["bug"], "assignees": ["octocat"]}),
         )
         .await;
-    assert!(!says.contains("were removed"), "{says}");
+    assert!(!says.contains("removed"), "{says}");
     assert_eq!(
         body_of(&script.writes()[1]),
         &json!({"labels": ["bug"], "assignees": ["octocat"], "title": "New", "body": "B"})
     );
+    let says = rig
+        .says(
+            "update_issue",
+            json!({"issue_id": 5, "labels": [], "assignees": []}),
+        )
+        .await;
+    assert_eq!(
+        body_of(&script.writes()[2]),
+        &json!({"labels": [], "assignees": []})
+    );
+    assert!(
+        says.ends_with(
+            "An empty list was passed, so all labels and assignees were removed from the issue."
+        ),
+        "{says}"
+    );
+    let says = rig
+        .says("update_issue", json!({"issue_id": 5, "labels": []}))
+        .await;
+    assert!(
+        says.ends_with("so all labels were removed from the issue."),
+        "{says}"
+    );
 
+    // Nothing to change sends nothing.
     let before = script.writes().len();
+    let says = rig.says("update_issue", json!({"issue_id": 5})).await;
+    assert!(says.starts_with("Nothing to update"), "{says}");
     let says = rig
         .says("update_issue", json!({"issue_id": 5, "state": "done"}))
         .await;
@@ -1182,6 +1223,51 @@ async fn update_issue_says_when_it_removes_labels_and_assignees() {
         .says("update_issue", json!({"issue_id": 99, "title": "x"}))
         .await;
     assert!(says.contains("(404)"), "{says}");
+}
+
+/// The SDK's pydantic models read "5" as 5; anything that is not a number is
+/// told so, and nothing is sent.
+#[tokio::test]
+async fn integer_ids_are_read_the_way_the_sdk_reads_them() {
+    let script = Arc::new(Script::default());
+    script.json(
+        "PATCH",
+        "/issues/5",
+        200,
+        json!({"number": 5, "html_url": "https://github.example.test/x/5"}),
+    );
+    let rig = rig(&script).await;
+    for id in [json!("5"), json!(" 5 "), json!(5.0)] {
+        let says = rig
+            .says("update_issue", json!({"issue_id": id, "state": "open"}))
+            .await;
+        assert!(
+            says.starts_with("Issue updated successfully!"),
+            "{id}: {says}"
+        );
+    }
+    for id in [
+        json!("five"),
+        json!("5x"),
+        json!(""),
+        json!(-5),
+        json!(true),
+        json!(5.5),
+        json!([5]),
+    ] {
+        let says = rig
+            .says(
+                "update_issue",
+                json!({"issue_id": id.clone(), "state": "open"}),
+            )
+            .await;
+        assert_eq!(says, "`issue_id` must be a number", "{id}");
+    }
+    assert_eq!(
+        script.writes().len(),
+        3,
+        "only the three readable ids were sent"
+    );
 }
 
 #[tokio::test]
@@ -1323,7 +1409,7 @@ async fn every_simple_effect_maps_each_failure_to_its_own_sentence() {
         (Reply::Json(503, json!({})), "may or may not have been made"),
         (
             Reply::Transport(TransportError::connect()),
-            "Nothing was sent",
+            "Nothing was changed",
         ),
     ];
     let calls: [(&str, &str, &str, Value); 4] = [
@@ -1726,7 +1812,7 @@ async fn project_search_sends_the_query_to_github() {
 
 // ----- issues on a project board --------------------------------------------------------------------------
 
-fn board_data(items: Value) -> Value {
+fn board_data() -> Value {
     json!({"repository": {
         "id": "REPO",
         "labels": {"nodes": [{"id": "L1", "name": "bug"}, {"id": "L2", "name": "ui"}]},
@@ -1740,15 +1826,32 @@ fn board_data(items: Value) -> Value {
                 {"id": "F-LABELS", "dataType": "LABELS", "name": "Labels"},
                 {"id": "F-ASSIGN", "dataType": "ASSIGNEES", "name": "Assignees"},
                 {"id": "F-EST", "dataType": "NUMBER", "name": "Estimate"}
-            ]},
-            "items": {"nodes": items}
+            ]}
         }]}
     }})
 }
 
+/// One page of board items (the last).
+fn items_page(items: Value) -> Value {
+    json!({"repository": {"projectV2": {"items": {
+        "nodes": items,
+        "pageInfo": {"hasNextPage": false, "endCursor": null}}}}})
+}
+
+/// An item whose issue lives in `repository`.
+fn board_item(item: &str, issue: &str, number: u64, repository: &str) -> Value {
+    json!({"id": item, "content": {"id": issue, "number": number,
+        "repository": {"nameWithOwner": repository},
+        "labels": {"nodes": [{"id": "L1", "name": "bug"}]},
+        "assignees": {"nodes": [{"id": "U1", "name": "Dev Lead"}]}}})
+}
+
 fn create_script(items: Value) -> Arc<Script> {
     let script = Arc::new(Script::default());
-    script.data("EliteaBoard(", board_data(items));
+    script.data("EliteaBoard(", board_data());
+    if !items.is_null() {
+        script.data("EliteaBoardItems(", items_page(items));
+    }
     script.data(
         "EliteaDraft",
         json!({"addProjectV2DraftIssue": {"projectItem": {"id": "DRAFT"}}}),
@@ -1886,7 +1989,7 @@ async fn creating_an_issue_on_a_board_names_what_went_wrong_at_each_step() {
 
     // The draft fails: nothing else is sent.
     let script = Arc::new(Script::default());
-    script.data("EliteaBoard(", board_data(json!([])));
+    script.data("EliteaBoard(", board_data());
     script.on_graph(
         "EliteaDraft",
         Reply::Json(
@@ -1907,7 +2010,7 @@ async fn creating_an_issue_on_a_board_names_what_went_wrong_at_each_step() {
 
     // The conversion fails: the draft is left, and the answer says where.
     let script = Arc::new(Script::default());
-    script.data("EliteaBoard(", board_data(json!([])));
+    script.data("EliteaBoard(", board_data());
     script.data(
         "EliteaDraft",
         json!({"addProjectV2DraftIssue": {"projectItem": {"id": "DRAFT"}}}),
@@ -1985,10 +2088,10 @@ async fn a_field_that_fails_stops_the_rest_and_is_reported_with_what_was_set() {
 }
 
 fn existing_items(number: u64) -> Value {
-    json!([{"id": "OTHER", "content": {"id": "X", "number": 1}},
-           {"id": "ITEM", "content": {"id": "ISSUE", "number": number,
-              "labels": {"nodes": [{"id": "L1", "name": "bug"}]},
-              "assignees": {"nodes": [{"id": "U1", "name": "Dev Lead"}]}}}])
+    json!([
+        board_item("OTHER", "X", 1, "EliteaAI/board"),
+        board_item("ITEM", "ISSUE", number, "EliteaAI/board")
+    ])
 }
 
 #[tokio::test]
@@ -2015,9 +2118,10 @@ async fn an_issue_on_the_board_is_found_updated_and_its_fields_changed() {
     );
     let ops = script.operations();
     assert_eq!(ops[0].0, "EliteaBoard");
-    assert_eq!(ops[1].0, "EliteaUpdateIssue");
+    assert_eq!(ops[1].0, "EliteaBoardItems");
+    assert_eq!(ops[2].0, "EliteaUpdateIssue");
     assert_eq!(
-        ops[1].1,
+        ops[2].1,
         json!({"issueId": "ISSUE", "title": "New title", "body": "New body"})
     );
     // An empty list removes what the issue has now; nothing else is touched.
@@ -2032,14 +2136,18 @@ async fn an_issue_on_the_board_is_found_updated_and_its_fields_changed() {
         .expect("remove assignees");
     assert_eq!(remove_assignees.1, json!({"id": "ISSUE", "ids": ["U1"]}));
     assert!(
-        !names(&ops).contains(&"EliteaBoardItems"),
-        "found on the first page: no paging"
+        names(&ops)
+            .iter()
+            .filter(|name| **name == "EliteaBoardItems")
+            .count()
+            == 1,
+        "found on the first page: one page read"
     );
 }
 
 #[tokio::test]
 async fn an_issue_beyond_the_first_hundred_items_is_found_by_paging() {
-    let script = create_script(json!([{"id": "A", "content": {"id": "X", "number": 1}}]));
+    let script = create_script(Value::Null);
     script.data(
         "EliteaUpdateIssue",
         json!({"updateIssue": {"issue": {"id": "ISSUE", "number": 9}}}),
@@ -2047,13 +2155,13 @@ async fn an_issue_beyond_the_first_hundred_items_is_found_by_paging() {
     script.data(
         "EliteaBoardItems(",
         json!({"repository": {"projectV2": {"items": {
-            "nodes": [{"id": "B", "content": {"id": "Y", "number": 2}}],
+            "nodes": [board_item("B", "Y", 2, "EliteaAI/board")],
             "pageInfo": {"hasNextPage": true, "endCursor": "CUR1"}}}}}),
     );
     script.data(
         "EliteaBoardItems(",
         json!({"repository": {"projectV2": {"items": {
-            "nodes": [{"id": "ITEM", "content": {"id": "ISSUE", "number": 9}}],
+            "nodes": [board_item("ITEM", "ISSUE", 9, "EliteaAI/board")],
             "pageInfo": {"hasNextPage": false, "endCursor": null}}}}}),
     );
     let rig = rig(&script).await;
@@ -2085,10 +2193,6 @@ async fn an_issue_beyond_the_first_hundred_items_is_found_by_paging() {
 #[tokio::test]
 async fn updating_a_missing_issue_or_failing_the_title_writes_no_fields() {
     let script = create_script(json!([]));
-    script.data(
-        "EliteaBoardItems(",
-        json!({"repository": {"projectV2": {"items": {"nodes": [], "pageInfo": {"hasNextPage": false, "endCursor": null}}}}}),
-    );
     let rig_ = rig(&script).await;
     let args = json!({"board_repo": "EliteaAI/board", "issue_number": "99", "project_title": "WebApp Redesign",
                       "title": "t", "body": "b", "fields": {"Status": "Done"}});
@@ -2125,7 +2229,7 @@ async fn updating_a_missing_issue_or_failing_the_title_writes_no_fields() {
 #[tokio::test]
 async fn an_unreadable_answer_to_a_board_write_is_an_unknown_outcome() {
     let script = Arc::new(Script::default());
-    script.data("EliteaBoard(", board_data(json!([])));
+    script.data("EliteaBoard(", board_data());
     script.on_graph("EliteaDraft", Reply::Transport(TransportError::timeout()));
     let says = rig(&script)
         .await
@@ -2135,4 +2239,405 @@ async fn an_unreadable_answer_to_a_board_write_is_an_unknown_outcome() {
         )
         .await;
     assert!(says.contains("may or may not have been made"), "{says}");
+}
+
+// ----- review round 1 -----------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_ref_name_with_a_dot_or_empty_segment_is_refused_before_any_request() {
+    let script = Arc::new(Script::default());
+    let rig = rig(&script).await;
+    for name in [
+        "./main",
+        "../main",
+        "a/../main",
+        "a//b",
+        "a/./b",
+        "feature/",
+        "/main",
+        ".",
+    ] {
+        for (tool, arguments) in [
+            ("delete_branch", json!({"branch_name": name})),
+            ("set_active_branch", json!({"branch_name": name})),
+            ("create_branch", json!({"proposed_branch_name": name})),
+            (
+                "create_file",
+                json!({"file_path": "a.txt", "branch": name, "file_contents": "x"}),
+            ),
+            (
+                "update_file",
+                json!({"file_query": "a.md\nOLD <<<<\nx\n>>>> OLD\nNEW <<<<\ny\n>>>> NEW", "branch": name}),
+            ),
+            ("delete_file", json!({"file_path": "a.txt", "branch": name})),
+            (
+                "create_pull_request",
+                json!({"title": "t", "body": "b", "head": name}),
+            ),
+            (
+                "trigger_workflow",
+                json!({"workflow_id": "ci.yml", "ref": name}),
+            ),
+        ] {
+            let says = rig.says(tool, arguments).await;
+            assert!(
+                says.contains("must not contain empty, `.` or `..` segments"),
+                "{tool} {name}: {says}"
+            );
+        }
+    }
+    assert!(
+        script.hits().is_empty(),
+        "nothing was sent, nothing deleted"
+    );
+    // A real nested branch is still fine.
+    script.json("DELETE", "/git/refs/heads/feature/x", 204, json!(null));
+    assert_eq!(
+        rig.says("delete_branch", json!({"branch_name": "feature/x"}))
+            .await,
+        "Branch 'feature/x' deleted successfully."
+    );
+}
+
+#[tokio::test]
+async fn a_patch_path_with_a_dot_or_empty_segment_is_refused_before_any_request() {
+    let script = Arc::new(Script::default());
+    let rig = rig(&script).await;
+    for path in ["../../etc/x", "a//b", "a/./b", "a/b/"] {
+        let patch = format!(
+            "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-a\n+b\n"
+        );
+        let says = rig
+            .says(
+                "apply_git_patch",
+                json!({"patch_content": patch, "branch": "work"}),
+            )
+            .await;
+        assert!(
+            says.contains("a file path in the patch") && says.contains("segments"),
+            "{path}: {says}"
+        );
+    }
+    assert!(script.hits().is_empty());
+}
+
+#[tokio::test]
+async fn the_board_issue_is_found_by_repository_and_number() {
+    // #42 exists in two repositories on the board.
+    let items = json!([
+        board_item("ITEM-OTHER", "ISSUE-OTHER", 42, "EliteaAI/other"),
+        board_item("ITEM-BOARD", "ISSUE-BOARD", 42, "EliteaAI/board"),
+    ]);
+    let script = create_script(items);
+    script.data(
+        "EliteaUpdateIssue",
+        json!({"updateIssue": {"issue": {"id": "x", "number": 42}}}),
+    );
+    script.data(
+        "EliteaIssueRepo",
+        json!({"repository": {"id": "R2", "labels": {"nodes": []}, "assignableUsers": {"nodes": []}}}),
+    );
+    let rig = rig(&script).await;
+    let base = json!({"board_repo": "EliteaAI/board", "issue_number": "42",
+        "project_title": "WebApp Redesign", "title": "t", "body": "b"});
+    // The board's own repository by default.
+    rig.says("update_issue_on_project", base.clone()).await;
+    let ops = script.operations();
+    let update = ops
+        .iter()
+        .find(|(name, _)| name == "EliteaUpdateIssue")
+        .expect("update");
+    assert_eq!(update.1["issueId"], "ISSUE-BOARD");
+    // issue_repo names the other one (case does not matter).
+    let mut other = base;
+    other["issue_repo"] = json!("EliteaAI/OTHER");
+    rig.says("update_issue_on_project", other).await;
+    let ops = script.operations();
+    let updates: Vec<_> = ops
+        .iter()
+        .filter(|(name, _)| name == "EliteaUpdateIssue")
+        .collect();
+    assert_eq!(updates[1].1["issueId"], "ISSUE-OTHER");
+    // A number that exists only in another repository is not found.
+    let mut missing = json!({"board_repo": "EliteaAI/board", "issue_number": "42",
+        "project_title": "WebApp Redesign", "title": "t", "body": "b"});
+    let script = create_script(json!([board_item(
+        "ITEM-OTHER",
+        "ISSUE-OTHER",
+        42,
+        "EliteaAI/other"
+    )]));
+    missing["issue_number"] = json!("42");
+    assert_eq!(
+        self::rig(&script)
+            .await
+            .says("update_issue_on_project", missing)
+            .await,
+        "Issue number 42 not found in project."
+    );
+    assert!(!names(&script.operations()).contains(&"EliteaUpdateIssue"));
+}
+
+#[tokio::test]
+async fn the_board_query_reads_fields_only_and_the_items_are_paged_once_from_the_start() {
+    let script = create_script(Value::Null);
+    script.data(
+        "EliteaUpdateIssue",
+        json!({"updateIssue": {"issue": {"id": "x", "number": 9}}}),
+    );
+    for (nodes, more, cursor) in [
+        (
+            json!([board_item("A", "XA", 1, "EliteaAI/board")]),
+            true,
+            json!("C1"),
+        ),
+        (
+            json!([board_item("B", "XB", 2, "EliteaAI/board")]),
+            true,
+            json!("C2"),
+        ),
+        (
+            json!([board_item("ITEM", "ISSUE", 9, "EliteaAI/board")]),
+            false,
+            Value::Null,
+        ),
+    ] {
+        script.data(
+            "EliteaBoardItems(",
+            json!({"repository": {"projectV2": {"items": {
+                "nodes": nodes, "pageInfo": {"hasNextPage": more, "endCursor": cursor}}}}}),
+        );
+    }
+    let rig = rig(&script).await;
+    rig.says(
+        "update_issue_on_project",
+        json!({"board_repo": "EliteaAI/board", "issue_number": "9",
+               "project_title": "WebApp Redesign", "title": "t", "body": "b"}),
+    )
+    .await;
+    let hits = script.hits();
+    let board = body_of(&hits[0])["query"].as_str().expect("query");
+    assert!(board.contains("EliteaBoard("), "{board}");
+    assert!(
+        !board.contains("items("),
+        "the board query carries no items"
+    );
+    let ops = script.operations();
+    let afters: Vec<_> = ops
+        .iter()
+        .filter(|(name, _)| name == "EliteaBoardItems")
+        .map(|(_, vars)| vars["after"].clone())
+        .collect();
+    assert_eq!(
+        afters,
+        [Value::Null, json!("C1"), json!("C2")],
+        "no page is read twice"
+    );
+}
+
+#[tokio::test]
+async fn an_oversize_board_answer_is_refused_with_a_sentence_not_buffered() {
+    let script = create_script(Value::Null);
+    let padding = "x".repeat(4 * 1024 * 1024 + 1024);
+    script.data(
+        "EliteaBoardItems(",
+        json!({"repository": {"projectV2": {"items": {
+            "nodes": [{"id": "PAD", "content": {"id": "P", "number": 1, "title": padding,
+                "repository": {"nameWithOwner": "EliteaAI/board"}}}],
+            "pageInfo": {"hasNextPage": false, "endCursor": null}}}}}),
+    );
+    let says = rig(&script)
+        .await
+        .says(
+            "update_issue_on_project",
+            json!({"board_repo": "EliteaAI/board", "issue_number": "9",
+                   "project_title": "WebApp Redesign", "title": "t", "body": "b"}),
+        )
+        .await;
+    assert!(
+        says.starts_with("Error occurred while searching for issue:"),
+        "{says}"
+    );
+    assert!(says.contains("larger than this runtime handles"), "{says}");
+    assert!(!names(&script.operations()).contains(&"EliteaUpdateIssue"));
+}
+
+/// A lookup that fails is an outage ("nothing was changed"); a mutation whose
+/// answer is lost, or that GitHub fails with INTERNAL, may have applied.
+#[tokio::test]
+async fn board_lookups_map_as_reads_and_mutations_as_effects() {
+    let args = json!({"board_repo": "EliteaAI/board", "project_title": "WebApp Redesign",
+                      "title": "t", "body": "b"});
+    for (kind, how) in [
+        ("INTERNAL", "graphql"),
+        ("SERVICE_UNAVAILABLE", "graphql"),
+        ("", "http"),
+    ] {
+        // The lookup fails.
+        let script = Arc::new(Script::default());
+        let reply = if how == "http" {
+            Reply::Json(503, json!({}))
+        } else {
+            Reply::Json(200, json!({"errors": [{"type": kind, "message": "boom"}]}))
+        };
+        script.on_graph("EliteaBoard(", reply);
+        let says = rig(&script)
+            .await
+            .says("create_issue_on_project", args.clone())
+            .await;
+        assert!(!says.contains("may or may not"), "a read: {says}");
+        assert!(
+            says.contains("GitHub could not be reached") || says.contains("Failed"),
+            "{says}"
+        );
+        assert!(
+            says.contains("Nothing was changed") || says.contains("Failed to access"),
+            "{says}"
+        );
+        assert_eq!(names(&script.operations()), ["EliteaBoard"]);
+    }
+    // The draft mutation fails with INTERNAL: it may have applied.
+    for kind in ["INTERNAL", "SERVICE_UNAVAILABLE"] {
+        let script = Arc::new(Script::default());
+        script.data("EliteaBoard(", board_data());
+        script.on_graph(
+            "EliteaDraft",
+            Reply::Json(200, json!({"errors": [{"type": kind, "message": "boom"}]})),
+        );
+        let says = rig(&script)
+            .await
+            .says("create_issue_on_project", args.clone())
+            .await;
+        assert!(
+            says.contains("may or may not have been made"),
+            "{kind}: {says}"
+        );
+        assert!(!says.contains("Nothing was sent"), "{says}");
+    }
+}
+
+#[tokio::test]
+async fn a_lost_conversion_answer_may_have_applied_and_only_a_refusal_is_not_converted() {
+    let args = json!({"board_repo": "EliteaAI/board", "project_title": "WebApp Redesign",
+                      "title": "t", "body": "b"});
+    let make = |reply: Reply| {
+        let script = Arc::new(Script::default());
+        script.data("EliteaBoard(", board_data());
+        script.data(
+            "EliteaDraft",
+            json!({"addProjectV2DraftIssue": {"projectItem": {"id": "DRAFT"}}}),
+        );
+        script.on_graph("EliteaConvert", reply);
+        script
+    };
+    for reply in [
+        Reply::Transport(TransportError::timeout()),
+        Reply::Json(502, json!({})),
+        Reply::Json(
+            200,
+            json!({"errors": [{"type": "INTERNAL", "message": "boom"}]}),
+        ),
+    ] {
+        let says = rig(&make(reply))
+            .await
+            .says("create_issue_on_project", args.clone())
+            .await;
+        assert!(says.contains("may or may not have been applied"), "{says}");
+        assert!(says.contains("check the board"), "{says}");
+        assert!(!says.contains("was not converted"), "{says}");
+    }
+    let says = rig(&make(Reply::Json(
+        200,
+        json!({"errors": [{"type": "FORBIDDEN", "message": "no access"}]}),
+    )))
+    .await
+    .says("create_issue_on_project", args)
+    .await;
+    assert!(says.contains("was not converted"), "{says}");
+}
+
+/// Lookups use the retrying read transport; every write goes over the one
+/// built without retries.
+#[tokio::test]
+async fn writes_go_over_the_effect_transport_and_reads_over_the_read_one() {
+    use elitea_connectors::github::client::{CLIENT_POLICY, EFFECT_POLICY};
+    let (effects_retry, reads_retry) = std::hint::black_box((
+        !EFFECT_POLICY.disable_retries,
+        !CLIENT_POLICY.disable_retries,
+    ));
+    assert!(!effects_retry, "a retried write is a second effect");
+    assert!(reads_retry, "reads keep reqwest's retries");
+
+    let reads = Arc::new(Script::default());
+    let effects = Arc::new(Script::default());
+    reads.json(
+        "GET",
+        "/branches/feature%2Fruntime",
+        200,
+        json!({"commit": {"sha": sha('c')}}),
+    );
+    effects.json("POST", "/git/refs", 201, json!({}));
+    let rig = rig_split(&reads, &effects).await;
+    rig.says("create_branch", json!({"proposed_branch_name": "work"}))
+        .await;
+    assert_eq!(
+        reads
+            .hits()
+            .iter()
+            .map(|hit| hit.method.as_str())
+            .collect::<Vec<_>>(),
+        ["GET"]
+    );
+    assert_eq!(
+        effects
+            .hits()
+            .iter()
+            .map(|hit| hit.method.as_str())
+            .collect::<Vec<_>>(),
+        ["POST"]
+    );
+
+    // The board is looked up on the read transport; its mutations on the other.
+    let reads = Arc::new(Script::default());
+    let effects = Arc::new(Script::default());
+    reads.data("EliteaBoard(", board_data());
+    effects.data(
+        "EliteaDraft",
+        json!({"addProjectV2DraftIssue": {"projectItem": {"id": "DRAFT"}}}),
+    );
+    effects.data(
+        "EliteaConvert",
+        json!({"convertProjectV2DraftIssueItemToIssue": {"item": {"id": "I", "content": {"id": "C", "number": 1}}}}),
+    );
+    let rig = rig_split(&reads, &effects).await;
+    rig.says(
+        "create_issue_on_project",
+        json!({"board_repo": "EliteaAI/board", "project_title": "WebApp Redesign", "title": "t", "body": "b"}),
+    )
+    .await;
+    assert_eq!(names(&reads.operations()), ["EliteaBoard"]);
+    assert_eq!(
+        names(&effects.operations()),
+        ["EliteaDraft", "EliteaConvert"]
+    );
+}
+
+#[tokio::test]
+async fn string_numbers_are_read_by_the_project_reads_too() {
+    let script = Arc::new(Script::default());
+    script.data(
+        "EliteaProjectSearch",
+        json!({"repository": {"projectV2": {"id": "P", "title": "B", "url": "u",
+            "fields": {"nodes": []},
+            "items": {"totalCount": 0, "pageInfo": {"hasNextPage": false}, "nodes": []}}}}),
+    );
+    let rig = rig(&script).await;
+    rig.call(
+        "search_project_issues",
+        json!({"board_repo": "EliteaAI/board", "project_number": "4", "search_query": "q", "items_count": "5"}),
+    )
+    .await;
+    let hits = script.hits();
+    assert_eq!(body_of(&hits[0])["variables"]["projectNumber"], 4);
+    assert_eq!(body_of(&hits[0])["variables"]["itemsCount"], 5);
 }

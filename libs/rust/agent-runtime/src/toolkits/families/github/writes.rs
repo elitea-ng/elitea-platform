@@ -186,7 +186,7 @@ impl WriteKind {
                 "Create an issue with title and optional Markdown body, labels and assignees. Returns the issue number and URL. This is a remote write."
             }
             Self::UpdateIssue => {
-                "Update an issue: title, body, state (open or closed). Labels and assignees REPLACE the current ones; when labels or assignees are not passed or are empty they are REMOVED from the issue. This is a remote write."
+                "Update an issue: title, body, state (open or closed). Labels and assignees REPLACE the current ones when given; pass an empty list [] to remove them all; leave them out to keep them. This is a remote write."
             }
             Self::ApplyGitPatch => {
                 "Apply a unified diff (git patch) to branch, one commit per file. Every file is checked against the branch first and nothing is written if any file does not match. The base branch is protected. This is a remote write."
@@ -310,8 +310,8 @@ impl WriteKind {
                     "issue_id": {"type": "integer", "minimum": 1, "description": "Issue number to update. Example: 42. This is the issue number shown in the URL, not the internal ID."},
                     "title": {"type": ["string", "null"], "maxLength": 1_024, "description": "New title for the issue."},
                     "body": {"type": ["string", "null"], "maxLength": MAX_WRITE_BYTES, "description": "New description in Markdown format. Set to update the full issue body."},
-                    "labels": {"type": ["array", "null"], "items": {"type": "string"}, "maxItems": 100, "description": "Replace all labels with this list. Example: ['bug', 'wontfix']. Not passed or an empty list removes all labels."},
-                    "assignees": {"type": ["array", "null"], "items": {"type": "string"}, "maxItems": 10, "description": "Replace all assignees with this list. Example: ['octocat']. Not passed or an empty list unassigns everyone."},
+                    "labels": {"type": ["array", "null"], "items": {"type": "string"}, "maxItems": 100, "description": "Replace all labels with this list. Example: ['bug', 'wontfix']. Pass empty list [] to remove all labels."},
+                    "assignees": {"type": ["array", "null"], "items": {"type": "string"}, "maxItems": 10, "description": "Replace all assignees with this list. Example: ['octocat']. Pass empty list [] to unassign everyone."},
                     "state": {"type": ["string", "null"], "description": "Set issue state. Must be 'open' or 'closed'. Example: 'closed' to close the issue."},
                     "repo_name": repo
                 },
@@ -578,7 +578,7 @@ impl Fail {
             GitHubClientErrorCode::Timeout | GitHubClientErrorCode::DependencyUnavailable => (
                 "github.write.unreachable",
                 format!(
-                    "Could not {action}: GitHub could not be reached. Nothing was sent; try again later."
+                    "Could not {action}: GitHub could not be reached. Nothing was changed; try again later."
                 ),
             ),
             GitHubClientErrorCode::UnknownOutcome => (
@@ -684,8 +684,48 @@ fn plain_name(label: &str, value: &str, max: usize) -> Result<(), Fail> {
     Ok(())
 }
 
+/// A branch, tag or ref name. It ends up in a URL path and in a ref, so a
+/// `.`, `..` or empty segment is refused (`./main` would otherwise address
+/// another ref, `../main` the one above).
 fn branch_name(label: &str, value: &str) -> Result<(), Fail> {
-    plain_name(label, value, 1_024)
+    plain_name(label, value, 1_024)?;
+    if value
+        .split('/')
+        .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+    {
+        return Err(argument(format!(
+            "`{label}` must not contain empty, `.` or `..` segments or end with a slash"
+        )));
+    }
+    Ok(())
+}
+
+/// An integer argument the way the SDK's pydantic models read one: a number,
+/// or a string of digits ("42"); anything else is "must be a number".
+fn integer_like(arguments: &Map<String, Value>, key: &str) -> Result<Option<u64>, Fail> {
+    let refuse = || argument(format!("`{key}` must be a number"));
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .or_else(|| {
+                number
+                    .as_f64()
+                    .filter(|value| value.fract() == 0.0 && *value >= 0.0 && *value < 9.0e15)
+                    .and_then(|value| format!("{value:.0}").parse().ok())
+            })
+            .map(Some)
+            .ok_or_else(refuse),
+        Some(Value::String(text)) => {
+            let text = text.trim();
+            if !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()) {
+                text.parse().map(Some).map_err(|_| refuse())
+            } else {
+                Err(refuse())
+            }
+        }
+        Some(_) => Err(refuse()),
+    }
 }
 
 fn file_path(label: &str, value: &str) -> Result<(), Fail> {
@@ -1412,9 +1452,7 @@ async fn create_issue(client: &GitHubClient, arguments: &Map<String, Value>) -> 
 }
 
 async fn update_issue(client: &GitHubClient, arguments: &Map<String, Value>) -> Outcome {
-    let number = arguments
-        .get("issue_id")
-        .and_then(Value::as_u64)
+    let number = integer_like(arguments, "issue_id")?
         .filter(|number| *number > 0)
         .ok_or_else(|| argument("Issue ID is required."))?;
     let title = optional_str(arguments, "title")?.filter(|value| !value.is_empty());
@@ -1425,16 +1463,20 @@ async fn update_issue(client: &GitHubClient, arguments: &Map<String, Value>) -> 
     {
         return Err(argument("`state` must be 'open' or 'closed'"));
     }
-    // The SDK's contract (its tool prompt): labels and assignees REPLACE the
-    // current ones, and when they are not passed or are empty they are
-    // removed. Said in the answer, so a close that also strips them is not
-    // silent.
-    let labels = string_list(arguments, "labels")?.unwrap_or_default();
-    let assignees = string_list(arguments, "assignees")?.unwrap_or_default();
+    // Labels and assignees REPLACE the current ones when given; an explicit
+    // empty list clears them; absent leaves them as they are (the SDK's schema
+    // text; its code removes them whenever they are absent, which a close
+    // would silently turn into stripping an issue: owner decision).
+    let labels = string_list(arguments, "labels")?;
+    let assignees = string_list(arguments, "assignees")?;
     let (owner, repo) = repository(client, arguments)?;
     let mut request = Map::new();
-    request.insert("labels".to_owned(), json!(labels));
-    request.insert("assignees".to_owned(), json!(assignees));
+    if let Some(labels) = &labels {
+        request.insert("labels".to_owned(), json!(labels));
+    }
+    if let Some(assignees) = &assignees {
+        request.insert("assignees".to_owned(), json!(assignees));
+    }
     if let Some(title) = title {
         request.insert("title".to_owned(), json!(title));
     }
@@ -1443,6 +1485,11 @@ async fn update_issue(client: &GitHubClient, arguments: &Map<String, Value>) -> 
     }
     if let Some(state) = state {
         request.insert("state".to_owned(), json!(state));
+    }
+    if request.is_empty() {
+        return Err(argument(
+            "Nothing to update: pass at least one of title, body, state, labels or assignees.",
+        ));
     }
     let number_text = number.to_string();
     let reply = client
@@ -1455,19 +1502,18 @@ async fn update_issue(client: &GitHubClient, arguments: &Map<String, Value>) -> 
     let (number, url) = created(&reply, "number")?;
     let mut answer =
         format!("Issue updated successfully! Updated details: ID: {number}, URL: {url}");
-    let mut removed = Vec::new();
-    if labels.is_empty() {
-        removed.push("labels");
+    let mut cleared = Vec::new();
+    if labels.as_ref().is_some_and(Vec::is_empty) {
+        cleared.push("labels");
     }
-    if assignees.is_empty() {
-        removed.push("assignees");
+    if assignees.as_ref().is_some_and(Vec::is_empty) {
+        cleared.push("assignees");
     }
-    if !removed.is_empty() {
+    if !cleared.is_empty() {
         let _ = write!(
             answer,
-            " No {} were passed, so all {} were removed from the issue.",
-            removed.join(" or "),
-            removed.join(" and ")
+            " An empty list was passed, so all {} were removed from the issue.",
+            cleared.join(" and ")
         );
     }
     text(answer)
@@ -1702,6 +1748,13 @@ async fn apply_patch(
             "the patch changes {} files, over the {MAX_PATCH_FILES} this tool applies at once",
             changes.len()
         )));
+    }
+    // A path in a diff is as untrusted as an argument: `a/../x` or an empty
+    // segment would address another file in the contents URL. Nothing is read
+    // or written until every path is clean.
+    for change in &changes {
+        file_path("a file path in the patch", &change.path)?;
+        file_path("a file path in the patch", &change.old_path)?;
     }
 
     // Phase 1: read every file the patch touches and check that it applies.

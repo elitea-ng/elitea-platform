@@ -46,6 +46,15 @@ pub const CLIENT_POLICY: ClientPolicy = ClientPolicy {
     disable_retries: false,
 };
 
+/// The client the WRITES use: the same, with reqwest's protocol-level retries
+/// off. A retried POST or PUT is a second effect, and a retry that finishes
+/// after the first answer was lost hides the unknown outcome; ado, bitbucket
+/// and gitlab do the same.
+pub const EFFECT_POLICY: ClientPolicy = ClientPolicy {
+    disable_retries: true,
+    ..CLIENT_POLICY
+};
+
 /// Stable, data-free failure categories for GitHub transport and response use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitHubClientErrorCode {
@@ -152,6 +161,9 @@ pub enum GitHubRequestKind {
 /// arguments cannot select another origin.
 pub struct GitHubRest {
     transport: Arc<dyn Transport>,
+    /// Carries writes ([`Self::send_effect`], [`Self::execute_effect`]); the
+    /// host builds it to [`EFFECT_POLICY`]. The same transport unless given.
+    effect_transport: Arc<dyn Transport>,
     config: GitHubToolkitConfig,
 }
 
@@ -166,7 +178,19 @@ impl GitHubRest {
             let (_, key) = config.auth().app().ok_or_else(invalid_configuration)?;
             let _ = parse_rsa_key(key)?;
         }
-        Ok(Self { transport, config })
+        Ok(Self {
+            effect_transport: Arc::clone(&transport),
+            transport,
+            config,
+        })
+    }
+
+    /// This client with writes sent over `transport` (built with
+    /// [`EFFECT_POLICY`]), reads staying on the one given to [`Self::new`].
+    #[must_use]
+    pub fn with_effect_transport(mut self, transport: Arc<dyn Transport>) -> Self {
+        self.effect_transport = transport;
+        self
     }
 
     pub fn config(&self) -> &GitHubToolkitConfig {
@@ -356,15 +380,19 @@ impl GitHubRest {
         request: Request,
         max_response_bytes: usize,
     ) -> Result<EffectReply, GitHubClientError> {
-        let mut response = self.transport.execute(request).await.map_err(|source| {
-            if source.is_refused() {
-                error(GitHubClientErrorCode::EgressRefused)
-            } else if source.is_connect() {
-                error(GitHubClientErrorCode::DependencyUnavailable)
-            } else {
-                error(GitHubClientErrorCode::UnknownOutcome)
-            }
-        })?;
+        let mut response = self
+            .effect_transport
+            .execute(request)
+            .await
+            .map_err(|source| {
+                if source.is_refused() {
+                    error(GitHubClientErrorCode::EgressRefused)
+                } else if source.is_connect() {
+                    error(GitHubClientErrorCode::DependencyUnavailable)
+                } else {
+                    error(GitHubClientErrorCode::UnknownOutcome)
+                }
+            })?;
         let status = response.status();
         let rate_limited = status == StatusCode::TOO_MANY_REQUESTS
             || (status == StatusCode::FORBIDDEN && github_rate_limited(response.headers()));

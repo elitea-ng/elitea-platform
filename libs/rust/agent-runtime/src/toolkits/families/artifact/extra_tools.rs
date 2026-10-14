@@ -17,6 +17,10 @@
 //! * `append_data` creates a missing file only when the platform says the
 //!   file does not exist. The SDK creates it on ANY download error, so a
 //!   refused bucket or an outage would overwrite the file with the new data.
+//! * `edit_file` and `append_data` write the whole file back. The platform's
+//!   text routes have no version or conditional write, so each reads the file
+//!   again just before writing and refuses if it changed; the race between
+//!   that read and the write remains.
 //! * A write that would not fit the platform's write cap is refused before
 //!   anything is read back or written, with the real size, instead of failing
 //!   at the platform.
@@ -284,6 +288,33 @@ enum Read {
 }
 
 impl ExtraTool {
+    /// The write is a whole-file replace and the platform's text routes carry
+    /// no version, etag or conditional write, so the closest guard is to read
+    /// the file again just before writing and refuse if it is not what the
+    /// change was made against (`original`, `None` for a file that was
+    /// absent). That leaves the race between this read and the write, which
+    /// only a conditional write on the platform could close.
+    async fn changed_since(
+        &self,
+        tool: &str,
+        action: &str,
+        bucket: &str,
+        key: &str,
+        original: Option<&str>,
+    ) -> Option<String> {
+        let changed = || {
+            format!(
+                "Could not {action}: the file was changed by someone else while this change was being made, so nothing was written. Read the file again and redo the change."
+            )
+        };
+        match self.read_text(tool, action, bucket, key).await {
+            Read::Text(now) if original == Some(now.content.as_str()) => None,
+            Read::Missing if original.is_none() => None,
+            Read::Text(_) | Read::Missing => Some(changed()),
+            Read::Failed(text) => Some(text),
+        }
+    }
+
     async fn read_text(&self, tool: &str, action: &str, bucket: &str, key: &str) -> Read {
         let request = ArtifactReadRequest {
             bucket: bucket.to_owned(),
@@ -521,6 +552,18 @@ impl ExtraTool {
                 "Could not edit the file: the edited file would have {chars} characters, over the {MAX_CONTENT_CHARS} this platform accepts in one write. Nothing was changed; make smaller edits."
             ));
         }
+        if let Some(text) = self
+            .changed_since(
+                EDIT_FILE,
+                "edit the file",
+                &bucket,
+                &key,
+                Some(&outcome.content),
+            )
+            .await
+        {
+            return Value::String(text);
+        }
         let request = ArtifactWriteRequest {
             bucket,
             name: key,
@@ -565,6 +608,7 @@ impl ExtraTool {
                 "Cannot append to '{filename}': File type is not text-editable and this runtime has no binary append handler (it appends text only). Binary files (PDF, images, Office documents) cannot be safely appended to as text. Consider creating a new file instead using the create_file tool."
             ));
         }
+        let mut original: Option<String> = None;
         let combined = match self
             .read_text(APPEND_DATA, "append to the file", &bucket, &key)
             .await
@@ -575,11 +619,13 @@ impl ExtraTool {
                         "Cannot append to '{filename}': File type is not text-editable and no binary append handler is available. Binary files (PDF, images, etc.) cannot be safely appended to as text. Consider creating a new file instead using the create_file tool."
                     ));
                 }
-                if outcome.content.is_empty() {
+                let joined = if outcome.content.is_empty() {
                     filedata.to_owned()
                 } else {
                     format!("{}\n{filedata}", outcome.content)
-                }
+                };
+                original = Some(outcome.content);
+                joined
             }
             // Only the platform's own "no such file" creates the file. Any
             // other failure (a refused bucket, an outage) leaves the file
@@ -597,6 +643,18 @@ impl ExtraTool {
             return sentence(format!(
                 "Could not append to the file: it would have {chars} characters after the append, over the {MAX_CONTENT_CHARS} this platform accepts in one write. Nothing was changed. Put the new data in a new file instead."
             ));
+        }
+        if let Some(text) = self
+            .changed_since(
+                APPEND_DATA,
+                "append to the file",
+                &bucket,
+                &key,
+                original.as_deref(),
+            )
+            .await
+        {
+            return Value::String(text);
         }
         let request = ArtifactWriteRequest {
             bucket,
