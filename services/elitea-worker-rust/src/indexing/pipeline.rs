@@ -413,6 +413,9 @@ struct Tally {
     /// chat model, a model that refuses images): nothing was asked of the
     /// extractor for them.
     pictures_not_read: BTreeMap<&'static str, u64>,
+    /// The same two counts for the pictures a connector's documents LINK.
+    linked_skipped: BTreeMap<&'static str, u64>,
+    linked_not_read: BTreeMap<&'static str, u64>,
     unchanged_documents: u64,
     unchanged_chunks: u64,
     /// The documents written: key, version, chunk count.
@@ -437,16 +440,6 @@ impl Tally {
     fn skip_document(&mut self, reason: &'static str, lost: bool) {
         *self.skipped.entry(reason).or_default() += 1;
         self.lost_skips += u64::from(lost);
-    }
-
-    fn pictures_not_read(&mut self, reason: &'static str) {
-        *self.pictures_not_read.entry(reason).or_default() += 1;
-    }
-
-    fn picture_skip(&mut self, reason: &'static str, count: u64) {
-        if count > 0 {
-            *self.pictures_skipped.entry(reason).or_default() += count;
-        }
     }
 
     fn written_keys(&self) -> BTreeSet<&str> {
@@ -512,6 +505,9 @@ struct PictureTally {
     skipped: BTreeMap<&'static str, u64>,
     /// The reason the document's pictures were not even asked for.
     not_read: Option<&'static str>,
+    /// The pictures are the ones a connector's document LINKS, not ones
+    /// embedded in a file: reported under their own label.
+    linked: bool,
 }
 
 impl PictureTally {
@@ -523,11 +519,18 @@ impl PictureTally {
 
     /// Adds the document's counts to the run's, once, when it is indexed.
     fn settle(self, tally: &mut Tally) {
+        let (skipped, not_read) = if self.linked {
+            (&mut tally.linked_skipped, &mut tally.linked_not_read)
+        } else {
+            (&mut tally.pictures_skipped, &mut tally.pictures_not_read)
+        };
         for (reason, count) in self.skipped {
-            tally.picture_skip(reason, count);
+            if count > 0 {
+                *skipped.entry(reason).or_default() += count;
+            }
         }
         if let Some(reason) = self.not_read {
-            tally.pictures_not_read(reason);
+            *not_read.entry(reason).or_default() += 1;
         }
     }
 }
@@ -1491,6 +1494,7 @@ impl Runner<'_> {
             batch,
             prompt,
         } = job;
+        shell.pictures.linked = true;
         for (reason, count) in &batch.skipped {
             shell.pictures.skip(reason, u64::from(*count));
         }
@@ -1948,29 +1952,26 @@ impl Runner<'_> {
                 .collect();
             let _ = write!(message, " Skipped: {}.", reasons.join(", "));
         }
-        if !tally.pictures_skipped.is_empty() {
-            let reasons: Vec<String> = tally
-                .pictures_skipped
+        for (counts, label) in [
+            (&tally.pictures_skipped, "Embedded pictures not described"),
+            (
+                &tally.pictures_not_read,
+                "Embedded pictures not requested for documents",
+            ),
+            (&tally.linked_skipped, "Linked pictures not described"),
+            (
+                &tally.linked_not_read,
+                "Linked pictures not requested for documents",
+            ),
+        ] {
+            if counts.is_empty() {
+                continue;
+            }
+            let reasons: Vec<String> = counts
                 .iter()
                 .map(|(reason, count)| format!("{count} {reason}"))
                 .collect();
-            let _ = write!(
-                message,
-                " Embedded pictures not described: {}.",
-                reasons.join(", ")
-            );
-        }
-        if !tally.pictures_not_read.is_empty() {
-            let reasons: Vec<String> = tally
-                .pictures_not_read
-                .iter()
-                .map(|(reason, count)| format!("{count} {reason}"))
-                .collect();
-            let _ = write!(
-                message,
-                " Embedded pictures not requested for documents: {}.",
-                reasons.join(", ")
-            );
+            let _ = write!(message, " {label}: {}.", reasons.join(", "));
         }
         if tally.failed_chunks > 0 {
             let _ = write!(message, " {} chunks failed to embed.", tally.failed_chunks);
@@ -2452,7 +2453,11 @@ async fn prepare(
     let mut picture_tally = PictureTally::default();
     // The pictures the text of a connector's document links: read through
     // the connector, described by the run's loop.
-    if let Some(PictureStep::Inline { prompt }) = step {
+    if let Some(PictureStep::Inline { prompt }) = step
+        && source.may_have_pictures(&key, &bytes)
+    {
+        // These pictures are reported as the document's LINKED ones.
+        picture_tally.linked = true;
         match pictures.clone().resolve().await {
             Ok(true) => {
                 if let Some(batch) = source.pictures(&key, &bytes).await {

@@ -661,7 +661,26 @@ connectors in `libs/rust/connectors/src/{confluence,jira}` over what
 custom headers, ADF rendering, base64 image stripping), dispatched by
 `src/indexing/source.rs`, with the five index tools attached in
 `elitea-agent-runtime` (`INDEX_FAMILIES`) and the catalog frozen
-by elitea-main (`indexcatalog.Families`). Proving tests: the connector suites
+by elitea-main (`indexcatalog.Families`). Review round 1 changes: the picture pass reads each work item once (the body
+`fetch` read is kept for it); a boards `<img>` gets a picture of its own per
+occurrence (equal bytes still cost one model call through the cache); read
+failures are classified (`pictures::skip_reason`): only a 5xx, 408, 429, a
+timeout or a broken connection is `fetch_failed` and marks the document for
+another run, 401/403 is `forbidden`, a missing file, an invalid or tiny
+body `unreadable`, an egress or other-origin refusal `unsupported_type`, all
+final. A failed extra read (the Jira attachment list) keeps the text as
+fetched and is counted the same way. Jira reads the attachment list once per
+issue per run, downloads each attachment once per document, bounds every
+download by 5 MiB whatever the listing declared, and only treats
+`!name.<image ext>!`, `!id!` and `!attachment:id!` as picture markup (prose
+like "Done! Thanks!" costs no request). Wiki links accept Azure DevOps'
+` =WxH` suffix, `?query` and `#fragment`, every skipped link is counted, and
+the description is made one line with `\`, `]` and `)` escaped. The run
+asks for a document's pictures (and waits for the model) only when the
+document has picture markup, and reports them as "Linked pictures not
+described" / "not requested", apart from "Embedded pictures".
+
+Proving tests: the connector suites
 (pagination, dependents, selection, restricted pages, 401/403, 429 with
 `Retry-After`, the version pin) and `src/indexing/atlassian_tests.rs`
 (Verification (2) against the `elitea-vector` fake: unchanged source writes
@@ -1013,7 +1032,7 @@ both final.
 | **ado_boards** `process_images`, `image_description_prompt`: each `<img src>` of the work item's HTML fields (before `sanitize`) is described; the text is `[image: <description or alt>]` (or an `image-description` attribute with `sanitize: false`); at most 200 images | Same, over the fields the document keeps. An `<img>` whose `src` is an attachment URL of the organization with a `fileName` of an image type is read with the PAT; the others (external, `data:`, no `fileName`) keep the SDK's `[image: alt]` / dropped form. Whitespace of a description is normalised as `get_text` would | 20 pictures, not 200; an external image is not fetched. Comments are not described (the SDK describes them only in its `get_comments` tool) |
 | **jira** `process_images` (index default False): `!ref!` / `!ref\|opts!` in the description and in comments, resolved against the issue's attachments (id, `attachment:id`, name, case-insensitive, suffix); the image goes to the model with the SDK's analysis prompt, the image name and 500 characters of context either side; the markup becomes `[Image <name> Description: <d>]` | Same resolver, prompt (byte for byte), context and replacement, for the issue document and for each comment document. The attachment list is one extra `issue/{id}?fields=attachment` read; the download is the connector's own (`AttachmentDownloader`: the credential stays on the Jira origin) | A reference that names no attachment, a non-image attachment, a failed download and an `http(s)` reference (fetched unauthenticated by the SDK) stay as written instead of becoming failure text. A download under 100 bytes is a failed one, as in the SDK. The SDK's `image_description_prompt` does not exist for Jira, so none is read |
 | **confluence** `bins_with_llm` (index default False): while loading a page's attachments, PNG/JPG/JPEG are described with the loader's own multi-type prompt, a PDF is rendered page by page and each page described (`Page N:`), the result appended to the page. Page bodies' images are never described | Attachments are documents of their own here. With `bins_with_llm` the vision step is FORCED on, with the loader's prompt (byte for byte), for `.png .jpg .jpeg` attachments (over the extension's `use_llm`/`prompt`), and the pictures embedded in `.pdf` attachments are described with the same prompt | PDF pages are not rendered and described (the extractor has no rasteriser): a PDF keeps its text and gains descriptions of its embedded pictures. Without `bins_with_llm` the SDK ran OCR; this runtime has none and keeps describing image attachments by default (PR-B), unchanged. `gif`/`webp`/`bmp` attachments are not touched by the switch |
-| **sharepoint** `include_onenote` (+ `onenote_filter`) | **Still refused**, with the reason | See below |
+| **sharepoint** `include_onenote` (+ `onenote_filter`) | **Still refused**, with the reason: needs a delegated user token (the app-only OneNote API was retired, MC1011142). Recommended to drop; awaiting the owner's decision | See below |
 
 ### OneNote
 

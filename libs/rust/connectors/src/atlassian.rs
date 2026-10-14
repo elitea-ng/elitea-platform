@@ -1042,6 +1042,28 @@ mod listing {
         where
             F: Fn(Url) -> Result<Request, Failure>,
         {
+            self.download_within(http, url, authorize, name, media_type, u64::MAX)
+                .await
+        }
+
+        /// [`Self::download`] with the body read to at most `limit` bytes
+        /// (whatever the listing declared): more is [`Failure::TooLarge`].
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::download`], and a body over `limit`.
+        pub async fn download_within<F>(
+            &self,
+            http: &SourceHttp,
+            url: Url,
+            authorize: F,
+            name: &str,
+            media_type: Option<&str>,
+            limit: u64,
+        ) -> Result<Vec<u8>, Failure>
+        where
+            F: Fn(Url) -> Result<Request, Failure>,
+        {
             if !same_origin(&self.origin, &url) {
                 return Err(Failure::Client(
                     "the attachment's link is not on the configured origin, so the download was refused (the credential is sent only there)"
@@ -1096,7 +1118,11 @@ mod listing {
                         "the attachment download answered an HTML page, not the file (a login or error page)",
                     ));
                 }
-                return SourceHttp::body(&mut response, http.limits().max_document_bytes).await;
+                return SourceHttp::body(
+                    &mut response,
+                    http.limits().max_document_bytes.min(limit),
+                )
+                .await;
             }
         }
     }

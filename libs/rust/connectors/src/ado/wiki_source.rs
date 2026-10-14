@@ -36,7 +36,7 @@ use super::config::{AdoFamilySettings, AdoToolkitConfig};
 use super::text::{optional_bool, optional_text, optional_text_list};
 use crate::egress::HostAllowlist;
 use crate::pictures::{
-    self, Budget, FETCH_FAILED, PictureBatch, PictureStep, SourcePicture, TOO_LARGE, UNREADABLE,
+    self, Budget, Escape, PictureBatch, PictureStep, SourcePicture, TOO_LARGE, UNREADABLE,
     UNSUPPORTED,
 };
 use crate::source::glob::NameFilter;
@@ -487,26 +487,20 @@ impl AdoWikiSource {
         };
         let mut budget = Budget::default();
         for link in links {
-            if link.url.is_empty() {
-                continue;
-            }
-            let local = link.url.starts_with("/.attachments/");
-            if !local {
-                if link.url.starts_with("http://") || link.url.starts_with("https://") {
-                    batch.skip(UNSUPPORTED);
-                }
-                continue;
-            }
-            // A link to a file that is not a picture is the attachment
-            // path's business (`include_attachments`).
-            if !pictures::has_image_extension(&link.url) {
+            // The target without Azure DevOps' ` =WxH` size, `?query`, `#fragment`.
+            let target = attachment_target(&link.url);
+            if !target.starts_with("/.attachments/") || !pictures::has_image_extension(target) {
+                // An external link (the SDK fetched it unauthenticated; no
+                // request leaves for a host the toolkit is not configured
+                // for), or a file that is not a picture.
+                batch.skip(UNSUPPORTED);
                 continue;
             }
             if let Err(reason) = budget.may_read() {
                 batch.skip(reason);
                 continue;
             }
-            let relative = pictures::percent_decode(link.url.trim_start_matches('/'));
+            let relative = pictures::percent_decode(target.trim_start_matches('/'));
             let path = if prefix.is_empty() {
                 relative
             } else {
@@ -534,7 +528,7 @@ impl AdoWikiSource {
             let Ok(mut request) =
                 self.build(AdoRequest::get(&segments, GIT_API).query("$format", "octetstream"))
             else {
-                batch.skip(FETCH_FAILED);
+                batch.skip(UNSUPPORTED);
                 continue;
             };
             request
@@ -546,14 +540,9 @@ impl AdoWikiSource {
                 .await
             {
                 Ok(data) => data,
-                Err(Failure::TooLarge(_)) => {
-                    batch.skip(TOO_LARGE);
-                    continue;
-                }
-                Err(error) => {
+                Err(failure) => {
                     tracing::debug!(page = key, "a wiki picture could not be read");
-                    let _ = error;
-                    batch.skip(FETCH_FAILED);
+                    batch.skip(pictures::skip_reason(&failure));
                     continue;
                 }
             };
@@ -572,10 +561,24 @@ impl AdoWikiSource {
                 before: format!("![{}](", link.alt),
                 after: ")".to_owned(),
                 fallback: markup,
-                escapes: &[],
+                escapes: &[Escape::MarkdownLink],
             });
         }
         (!batch.pictures.is_empty() || !batch.skipped.is_empty()).then_some(batch)
+    }
+
+    /// Whether the page `bytes` link a wiki attachment picture: asked
+    /// before anything else is, so a page without one costs no wait for
+    /// the model.
+    #[must_use]
+    pub fn may_have_pictures(&self, bytes: &[u8]) -> bool {
+        self.params.process_images
+            && std::str::from_utf8(bytes).is_ok_and(|text| {
+                markdown_images(text).iter().any(|link| {
+                    let target = attachment_target(&link.url);
+                    target.starts_with("/.attachments/") && pictures::has_image_extension(target)
+                })
+            })
     }
 
     /// The repository folder a code wiki shows, without slashes at the ends
@@ -619,6 +622,23 @@ impl AdoWikiSource {
             })
             .await
     }
+}
+
+/// A link's target as a path: Azure DevOps' ` =WxH` size suffix, the
+/// `?query` and the `#fragment` cut.
+fn attachment_target(url: &str) -> &str {
+    let mut target = url.trim();
+    if let Some(at) = target.rfind(" =")
+        && target[at + 2..]
+            .split_once('x')
+            .is_some_and(|(width, height)| {
+                width.bytes().all(|b| b.is_ascii_digit())
+                    && height.bytes().all(|b| b.is_ascii_digit())
+            })
+    {
+        target = target[..at].trim_end();
+    }
+    target.split(['?', '#']).next().unwrap_or(target)
 }
 
 /// One `![alt](url)` the SDK's `!\[(.*?)\]\((.*?)\)` finds: neither part
@@ -1094,11 +1114,11 @@ and ![gone](/.attachments/missing.png) and ![doc](/.attachments/spec.pdf) end ![
         assert_eq!(batch.pictures[0].bytes, b"PNGDATA");
         assert_eq!(
             batch.skipped.get(UNSUPPORTED),
-            Some(&1),
-            "the external link"
+            Some(&2),
+            "the external link and the pdf"
         );
         assert_eq!(batch.skipped.get(UNREADABLE), Some(&1), "the missing file");
-        assert!(!batch.skipped.contains_key(FETCH_FAILED));
+        assert!(!batch.skipped.contains_key(pictures::FETCH_FAILED));
         assert_eq!(
             batch.render(&[Some("A chart")]),
             "intro ![diagram](A chart) and ![ext](https://example.com/x.png) \
@@ -1120,5 +1140,85 @@ and ![gone](/.attachments/missing.png) and ![doc](/.attachments/spec.pdf) end ![
             .map(|l| (l.alt.as_str(), l.url.as_str()))
             .collect();
         assert_eq!(pairs, [("a", "x"), ("b", " y z "), ("c", "x")]);
+    }
+
+    fn picture_wiki() -> AdoWikiSource {
+        AdoWikiSource::new(
+            config(),
+            params(&json!({"process_images": true})),
+            allow(),
+            wiki_fixture(),
+        )
+        .expect("source")
+    }
+
+    #[tokio::test]
+    async fn size_suffixes_queries_and_fragments_do_not_hide_a_picture() {
+        let source = picture_wiki();
+        source.list().await.expect("listing");
+        let text = "![a](/.attachments/diagram.png =300x200) ![b](/.attachments/diagram.png?raw=1) ![c](/.attachments/diagram.png#top) ![d](/.attachments/diagram.png =x100) ![e](/.attachments/notes.txt =1x1)";
+        assert!(source.may_have_pictures(text.as_bytes()));
+        let batch = source
+            .pictures("Home.md", text.as_bytes())
+            .await
+            .expect("batch");
+        assert_eq!(batch.pictures.len(), 4, "{:?}", batch.skipped);
+        assert!(batch.pictures.iter().all(|p| p.bytes == b"PNGDATA"));
+        assert_eq!(batch.skipped.get(UNSUPPORTED), Some(&1), "the txt, counted");
+        // Each link is replaced as written, size suffix and all.
+        assert_eq!(
+            batch.render(&[Some("x"), Some("x"), Some("x"), Some("x")]),
+            "![a](x) ![b](x) ![c](x) ![d](x) ![e](/.attachments/notes.txt =1x1)"
+        );
+        assert!(
+            !source.may_have_pictures(
+                b"![ext](https://example.com/x.png) ![doc](/.attachments/a.pdf)"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_description_cannot_break_out_of_the_link() {
+        let source = picture_wiki();
+        source.list().await.expect("listing");
+        let batch = source
+            .pictures("Home.md", b"x ![a](/.attachments/diagram.png) y")
+            .await
+            .expect("batch");
+        assert_eq!(
+            batch.render(&[Some("A (graph)\n\n of [x] and \\ done")]),
+            "x ![a](A (graph\\) of [x\\] and \\\\ done) y"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blob_that_fails_is_retried_only_when_the_failure_is_transient() {
+        let status = |code: StatusCode| {
+            let fixture = Scripted::new(move |request, _| {
+                if request.url().path().ends_with(&format!("/blobs/{IMAGE}")) {
+                    Reply::status(code)
+                } else {
+                    wiki_reply(request)
+                }
+            });
+            AdoWikiSource::new(
+                config(),
+                params(&json!({"process_images": true})),
+                allow(),
+                fixture,
+            )
+            .expect("source")
+        };
+        let text = b"![a](/.attachments/diagram.png)";
+        let transient = status(StatusCode::BAD_GATEWAY);
+        transient.list().await.expect("listing");
+        let batch = transient.pictures("Home.md", text).await.expect("counted");
+        assert_eq!(batch.template.as_bytes(), text);
+        assert_eq!(batch.skipped.get(pictures::FETCH_FAILED), Some(&1));
+        let denied = status(StatusCode::FORBIDDEN);
+        denied.list().await.expect("listing");
+        let batch = denied.pictures("Home.md", text).await.expect("counted");
+        assert_eq!(batch.skipped.get(pictures::FORBIDDEN), Some(&1));
+        assert_eq!(batch.skipped.get(pictures::FETCH_FAILED), None);
     }
 }

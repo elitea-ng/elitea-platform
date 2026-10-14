@@ -153,7 +153,7 @@ async fn without_a_chat_model_the_document_is_indexed_as_the_connector_fetched_i
     assert!(
         summary
             .message
-            .contains("not requested for documents: 1 no_model."),
+            .contains("Linked pictures not requested for documents: 1 no_model."),
         "{summary:?}"
     );
     assert_eq!(summary.documents[0].version, "v1");
@@ -186,7 +186,7 @@ async fn a_picture_that_fails_never_fails_the_document_and_marks_it_for_another_
     assert!(
         summary
             .message
-            .contains("Embedded pictures not described: 1 model_failed."),
+            .contains("Linked pictures not described: 1 model_failed."),
         "{summary:?}"
     );
     assert_eq!(summary.documents[0].version, "v1#pictures-pending-1");
@@ -227,7 +227,7 @@ async fn pictures_the_connector_could_not_read_are_counted_and_a_failed_fetch_is
     assert_eq!(summary.indexed_documents, 2);
     assert!(
         summary.message.contains(
-            "Embedded pictures not described: 1 fetch_failed, 2 too_large, 1 unsupported_type."
+            "Linked pictures not described: 1 fetch_failed, 2 too_large, 1 unsupported_type."
         ),
         "{summary:?}"
     );
@@ -270,4 +270,55 @@ fn bins_with_llm_forces_the_vision_step_on_for_the_named_extensions_with_the_loa
     // Other extensions are untouched, and so is the original config.
     assert!(binary_overlay(&off, &step, "page/1/attachment/9/notes.docx").is_none());
     assert_eq!(plan_image(".png", &off), ImagePlan::Disabled);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_without_a_picture_link_neither_waits_for_the_model_nor_is_counted() {
+    // No chat model: a document that links pictures is counted `no_model`,
+    // one that links none is not, and says nothing of pictures.
+    let harness = harness(4, None).await;
+    let plain = document("plain.md", "v1", "No pictures here.");
+    let summary = run_model(
+        &harness,
+        vec![plain, page("page.md", &["one"], None, &json!({}))],
+        None,
+        &parameters(false, json!({})),
+        None,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 2, "{summary:?}");
+    assert!(
+        summary
+            .message
+            .contains("Linked pictures not requested for documents: 1 no_model."),
+        "one document, not two: {summary:?}"
+    );
+    assert!(!summary.message.contains("Embedded"), "{summary:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn linked_and_embedded_pictures_are_reported_apart() {
+    let mut harness = harness(4, None).await;
+    let chat = by_tag();
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        vec![page("a.md", &["one"], None, &json!({"too_large": 1}))],
+        None,
+        &parameters(false, json!({})),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert!(
+        summary
+            .message
+            .contains("Linked pictures not described: 1 too_large."),
+        "{summary:?}"
+    );
+    assert!(
+        !summary.message.contains("Embedded pictures"),
+        "{summary:?}"
+    );
 }

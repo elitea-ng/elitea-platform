@@ -391,12 +391,28 @@ impl IndexSource {
         }
     }
 
+    /// Whether a fetched document has anything a picture could be read
+    /// for. Asked before the run's model is waited for, so a document
+    /// without a picture link neither waits nor is counted.
+    pub(crate) fn may_have_pictures(&self, key: &str, bytes: &[u8]) -> bool {
+        match self {
+            Self::AdoWiki(source) => source.may_have_pictures(bytes),
+            Self::AdoBoards(source) => source.may_have_pictures(key),
+            Self::Jira(source) => source.may_have_pictures(key, bytes),
+            #[cfg(test)]
+            Self::Fixture(documents, _) => documents.iter().any(|document| {
+                document.reference.key == key && document.metadata.contains_key("fixture_pictures")
+            }),
+            _ => false,
+        }
+    }
+
     /// The pictures a fetched document links, read through the connector's
     /// own authenticated transport; `None` when there is nothing to read.
     pub(crate) async fn pictures(&self, key: &str, bytes: &[u8]) -> Option<PictureBatch> {
         match self {
             Self::AdoWiki(source) => source.pictures(key, bytes).await,
-            Self::AdoBoards(source) => source.pictures(key).await,
+            Self::AdoBoards(source) => source.pictures(key, bytes).await,
             Self::Jira(source) => source.pictures(key, bytes).await,
             #[cfg(test)]
             Self::Fixture(documents, _) => {

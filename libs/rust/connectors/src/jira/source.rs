@@ -60,7 +60,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use elitea_content_source::{
     Acl, ContentSource, Document, DocumentRef, Principal, PrincipalKind, SourceError,
@@ -75,7 +75,7 @@ use crate::atlassian::{
 };
 use crate::egress::HostAllowlist;
 use crate::pictures::{
-    self, Budget, FETCH_FAILED, PictureBatch, PictureStep, SourcePicture, TOO_LARGE, UNSUPPORTED,
+    self, Budget, PictureBatch, PictureStep, SourcePicture, TOO_LARGE, UNSUPPORTED,
 };
 use crate::source::{
     Backoff, Failure, Listed, SourceHttp, SourceLimits, Timeouts, references, web_url,
@@ -117,6 +117,9 @@ pub struct JiraSource {
     http: SourceHttp,
     downloads: AttachmentDownloader,
     listing: DetailedListing,
+    /// Each issue's attachment list, read once for the issue and its
+    /// comment documents (`process_images`).
+    attachment_lists: Mutex<BTreeMap<String, Arc<Vec<Value>>>>,
 }
 
 impl JiraSource {
@@ -164,6 +167,7 @@ impl JiraSource {
             http,
             downloads,
             listing: DetailedListing::default(),
+            attachment_lists: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -671,25 +675,23 @@ impl JiraSource {
     /// fetched an `http(s)` reference with an unauthenticated request; no
     /// request leaves for a host the toolkit is not configured for.
     pub async fn pictures(&self, key: &str, bytes: &[u8]) -> Option<PictureBatch> {
-        if !self.arguments.process_images {
-            return None;
-        }
-        let issue_id = issue_of_key(key)?;
-        let text = std::str::from_utf8(bytes).ok()?;
-        if pictures::holds_token(text) {
-            return None;
-        }
-        let references = wiki_images(text);
-        if references.is_empty() {
-            return None;
-        }
-        let attachments = self.issue_attachments(issue_id).await.ok()?;
+        let (issue_id, text, references) = self.picture_candidates(key, bytes)?;
+        let attachments = match self.issue_attachments(issue_id).await {
+            Ok(attachments) => attachments,
+            // The document is indexed as written; a failure another run
+            // cures marks it for one, a final one is only counted.
+            Err(failure) => {
+                return Some(PictureBatch::unread(text, pictures::skip_reason(&failure)));
+            }
+        };
         let resolver = Resolver::new(&attachments);
         let mut batch = PictureBatch {
             template: text.to_owned(),
             ..PictureBatch::default()
         };
         let mut budget = Budget::default();
+        // One download per attachment, whatever markup names it.
+        let mut downloaded: BTreeMap<String, Option<Vec<u8>>> = BTreeMap::new();
         for markup in references {
             let reference = markup_reference(&markup);
             let Some(attachment) = resolver.find(reference) else {
@@ -703,40 +705,46 @@ impl JiraSource {
                 batch.skip(UNSUPPORTED);
                 continue;
             }
-            if let Err(reason) = budget.may_read() {
-                batch.skip(reason);
-                continue;
-            }
-            if size_of(attachment, "/size") > pictures::MAX_PICTURE_BYTES {
-                batch.skip(TOO_LARGE);
-                continue;
-            }
             let Some(attachment_id) = id_of(attachment, "/id").filter(|id| safe_identifier(id))
             else {
-                batch.skip(FETCH_FAILED);
+                batch.skip(pictures::UNREADABLE);
                 continue;
             };
-            let data = match self.read_attachment(attachment, &attachment_id).await {
-                Ok(data) => data,
-                Err(Failure::TooLarge(_)) => {
+            let data = if let Some(known) = downloaded.get(&attachment_id) {
+                match known {
+                    Some(data) => data.clone(),
+                    None => continue,
+                }
+            } else {
+                if let Err(reason) = budget.may_read() {
+                    batch.skip(reason);
+                    continue;
+                }
+                if size_of(attachment, "/size") > pictures::MAX_PICTURE_BYTES {
                     batch.skip(TOO_LARGE);
+                    downloaded.insert(attachment_id, None);
                     continue;
                 }
-                Err(Failure::Status(crate::transport::StatusCode::NOT_FOUND)) => {
-                    batch.skip(pictures::UNREADABLE);
-                    continue;
-                }
-                Err(_) => {
-                    tracing::debug!(issue = issue_id, "a Jira picture could not be read");
-                    batch.skip(FETCH_FAILED);
-                    continue;
+                match self.read_attachment(attachment, &attachment_id).await {
+                    // The SDK treats a body under 100 bytes as a failed
+                    // download; here it is no picture, for good.
+                    Ok(data) if data.len() < 100 => {
+                        batch.skip(pictures::UNREADABLE);
+                        downloaded.insert(attachment_id, None);
+                        continue;
+                    }
+                    Ok(data) => {
+                        downloaded.insert(attachment_id, Some(data.clone()));
+                        data
+                    }
+                    Err(failure) => {
+                        tracing::debug!(issue = issue_id, "a Jira picture could not be read");
+                        batch.skip(pictures::skip_reason(&failure));
+                        downloaded.insert(attachment_id, None);
+                        continue;
+                    }
                 }
             };
-            // The SDK treats a body under 100 bytes as a failed download.
-            if data.len() < 100 {
-                batch.skip(FETCH_FAILED);
-                continue;
-            }
             if let Err(reason) = budget.take(data.len() as u64) {
                 batch.skip(reason);
                 continue;
@@ -757,16 +765,61 @@ impl JiraSource {
         (!batch.pictures.is_empty() || !batch.skipped.is_empty()).then_some(batch)
     }
 
-    /// The issue's `attachment` field.
-    async fn issue_attachments(&self, issue_id: &str) -> Result<Vec<Value>, Failure> {
+    /// Whether `bytes` (the document `key`) hold markup that can name an
+    /// image attachment: asked before anything else is, so a document
+    /// without it costs no request and no wait for the model.
+    #[must_use]
+    pub fn may_have_pictures(&self, key: &str, bytes: &[u8]) -> bool {
+        self.picture_candidates(key, bytes).is_some()
+    }
+
+    /// The issue id, the text and the `!ref!` markup in it that can name an
+    /// image attachment.
+    fn picture_candidates<'a>(
+        &self,
+        key: &'a str,
+        bytes: &'a [u8],
+    ) -> Option<(&'a str, &'a str, Vec<String>)> {
+        if !self.arguments.process_images {
+            return None;
+        }
+        let issue_id = issue_of_key(key)?;
+        let text = std::str::from_utf8(bytes).ok()?;
+        if pictures::holds_token(text) {
+            return None;
+        }
+        let references: Vec<String> = wiki_images(text)
+            .into_iter()
+            .filter(|markup| image_candidate(markup_reference(markup)))
+            .collect();
+        (!references.is_empty()).then_some((issue_id, text, references))
+    }
+
+    /// The issue's `attachment` field, read once per issue for the run.
+    async fn issue_attachments(&self, issue_id: &str) -> Result<Arc<Vec<Value>>, Failure> {
+        if let Some(known) = self
+            .attachment_lists
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(issue_id)
+        {
+            return Ok(Arc::clone(known));
+        }
         let mut url = self.api(&["issue", issue_id])?;
         url.query_pairs_mut().append_pair("fields", "attachment");
         let issue = self.json(url).await?;
-        Ok(issue
-            .pointer("/fields/attachment")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default())
+        let list = Arc::new(
+            issue
+                .pointer("/fields/attachment")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        self.attachment_lists
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(issue_id.to_owned(), Arc::clone(&list));
+        Ok(list)
     }
 
     async fn read_attachment(
@@ -785,7 +838,8 @@ impl JiraSource {
             }
         }
         let listed = Listed::new(String::new(), String::new(), 0, attachment_id.to_owned());
-        self.download(&listed, &details).await
+        self.download(&listed, &details, pictures::MAX_PICTURE_BYTES)
+            .await
     }
 
     /// An attachment's bytes, from the Jira origin only: the listed
@@ -799,6 +853,7 @@ impl JiraSource {
         &self,
         listed: &Listed,
         details: &Map<String, Value>,
+        limit: u64,
     ) -> Result<Vec<u8>, Failure> {
         let url = match details.get("content_url").and_then(Value::as_str) {
             Some(content) => {
@@ -833,12 +888,13 @@ impl JiraSource {
             .and_then(Value::as_str)
             .unwrap_or("attachment");
         self.downloads
-            .download(
+            .download_within(
                 &self.http,
                 url,
                 |url| self.get(url),
                 filename,
                 details.get("mimeType").and_then(Value::as_str),
+                limit,
             )
             .await
     }
@@ -878,7 +934,10 @@ impl ContentSource for JiraSource {
                 self.http
                     .check_size(listed.reference.size)
                     .map_err(failed)?;
-                let bytes = self.download(listed, &metadata).await.map_err(failed)?;
+                let bytes = self
+                    .download(listed, &metadata, u64::MAX)
+                    .await
+                    .map_err(failed)?;
                 let title = metadata
                     .get("filename")
                     .and_then(Value::as_str)
@@ -1027,6 +1086,19 @@ fn wiki_images(text: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// Whether `!reference!` can name an image attachment: a file name with an
+/// image extension, an attachment id, or `attachment:id`. Prose between two
+/// exclamation marks ("Done! Thanks!") is not.
+fn image_candidate(reference: &str) -> bool {
+    let name = reference.trim();
+    pictures::has_image_extension(name)
+        || (!name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit()))
+        || (name.starts_with("attachment")
+            && name
+                .split_once(':')
+                .is_some_and(|(_, id)| !id.trim().is_empty()))
 }
 
 /// The `ref` of `!ref|options!`.
@@ -1201,6 +1273,7 @@ fn field_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pictures::FETCH_FAILED;
     use crate::source::fixture::{Reply, Scripted, query};
     use crate::transport::StatusCode;
     use serde_json::json;
@@ -2139,9 +2212,118 @@ mod tests {
             }
             "/rest/api/3/attachment/content/9002" => Reply::bytes(&[7; 200]),
             "/rest/api/3/attachment/content/9004" => Reply::bytes(&[7; 50]),
-            "/rest/api/3/attachment/content/9005" => Reply::status(StatusCode::NOT_FOUND),
+            "/rest/api/3/attachment/content/9005" | "/rest/api/3/issue/3" => {
+                Reply::status(StatusCode::NOT_FOUND)
+            }
+            "/rest/api/3/issue/2" => Reply::status(StatusCode::BAD_GATEWAY),
             other => panic!("unexpected request {other}"),
         })
+    }
+
+    fn picture_source(fixture: Arc<Scripted>) -> JiraSource {
+        JiraSource::new(
+            cloud(),
+            arguments(&json!({"process_images": true})),
+            allow(),
+            fixture,
+        )
+        .expect("source")
+    }
+
+    #[tokio::test]
+    async fn the_attachment_list_is_read_once_per_issue_and_each_file_once_per_document() {
+        let fixture = attachment_fixture();
+        let source = picture_source(fixture.clone());
+        let text = "!shot.png|thumbnail! !shot.png|width=10! !9002! !attachment:9002!";
+        let batch = source
+            .pictures("issue/1.md", text.as_bytes())
+            .await
+            .expect("batch");
+        assert_eq!(
+            batch.pictures.len(),
+            4,
+            "every markup keeps its own context"
+        );
+        source
+            .pictures("issue/1/comment/5.md", b"again !shot.png!")
+            .await
+            .expect("comment");
+        let seen = fixture.seen();
+        let count = |what: &str| seen.iter().filter(|s| s.contains(what)).count();
+        assert_eq!(count("/rest/api/3/issue/1"), 1, "{seen:?}");
+        assert_eq!(
+            count("attachment/content/9002"),
+            2,
+            "once per document: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prose_between_exclamation_marks_costs_no_request() {
+        let source = picture_source(Scripted::new(|request, _| {
+            panic!("no request expected, got {}", request.url())
+        }));
+        let text = "Done! Thanks! See !this, and that! also !notes.txt!";
+        assert!(!source.may_have_pictures("issue/1.md", text.as_bytes()));
+        assert!(
+            source
+                .pictures("issue/1.md", text.as_bytes())
+                .await
+                .is_none()
+        );
+        assert!(source.may_have_pictures("issue/1.md", b"a !9002! b"));
+        assert!(source.may_have_pictures("issue/1.md", b"a !x.PNG|thumbnail! b"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_attachment_list_leaves_the_text_and_is_retried_only_when_transient() {
+        let source = picture_source(attachment_fixture());
+        let transient = source
+            .pictures("issue/2.md", b"a !x.png! b")
+            .await
+            .expect("counted");
+        assert_eq!(transient.template, "a !x.png! b");
+        assert_eq!(transient.skipped.get(FETCH_FAILED), Some(&1));
+        let permanent = source
+            .pictures("issue/3.md", b"a !x.png! b")
+            .await
+            .expect("counted");
+        assert_eq!(permanent.skipped.get(FETCH_FAILED), None);
+        assert_eq!(permanent.skipped.get(pictures::UNREADABLE), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn a_download_is_bounded_whatever_the_listing_declared() {
+        let big = vec![7_u8; usize::try_from(pictures::MAX_PICTURE_BYTES).unwrap() + 1];
+        let fixture = Scripted::new(move |request, _| match request.url().path() {
+            "/rest/api/3/issue/1" => Reply::json(&json!({"fields": {"attachment": [
+                {"id": "7", "filename": "nosize.png", "mimeType": "image/png"},
+                {"id": "8", "filename": "denied.png", "size": 200},
+                {"id": "9", "filename": "flaky.png", "size": 200},
+            ]}})),
+            "/rest/api/3/attachment/content/7" => Reply::bytes(&big),
+            "/rest/api/3/attachment/content/8" => Reply::status(StatusCode::FORBIDDEN),
+            "/rest/api/3/attachment/content/9" => Reply::status(StatusCode::SERVICE_UNAVAILABLE),
+            other => panic!("unexpected request {other}"),
+        });
+        let source = picture_source(fixture);
+        let batch = source
+            .pictures("issue/1.md", b"!nosize.png! !denied.png! !flaky.png!")
+            .await
+            .expect("batch");
+        assert!(batch.pictures.is_empty());
+        assert_eq!(
+            batch.skipped.get(TOO_LARGE),
+            Some(&1),
+            "{:?}",
+            batch.skipped
+        );
+        assert_eq!(batch.skipped.get(pictures::FORBIDDEN), Some(&1));
+        assert_eq!(
+            batch.skipped.get(FETCH_FAILED),
+            Some(&1),
+            "only the 503 is retried"
+        );
     }
 
     #[tokio::test]
@@ -2159,7 +2341,7 @@ mod tests {
         ));
         assert!(source.picture_step("issue/1/comment/5.md").is_some());
         assert!(source.picture_step("issue/1/attachment/2/a.png").is_none());
-        let text = "# Description\nSee !shot.png|thumbnail! and !9001! and !nothing! then !huge.png! !tiny.png! !gone.png! and !shot.png|width=10! again.";
+        let text = "# Description\nSee !shot.png|thumbnail! and !9001! and !nothing.png! then !huge.png! !tiny.png! !gone.png! and !shot.png|width=10! again.";
         let batch = source
             .pictures("issue/1.md", text.as_bytes())
             .await
@@ -2177,17 +2359,21 @@ mod tests {
             "\nPlease incorporate this contextual information in your description when relevant."
         ));
         assert_eq!(batch.skipped.get(UNSUPPORTED), Some(&1), "the pdf");
+        assert_eq!(batch.skipped.get(TOO_LARGE), Some(&1), "huge");
         assert_eq!(
-            batch.skipped.get(TOO_LARGE),
-            Some(&1),
-            "huge and the 50 byte download is a failure"
+            batch.skipped.get(FETCH_FAILED),
+            None,
+            "nothing is retryable"
         );
-        assert_eq!(batch.skipped.get(FETCH_FAILED), Some(&1), "tiny");
-        assert_eq!(batch.skipped.get(pictures::UNREADABLE), Some(&1), "gone");
+        assert_eq!(
+            batch.skipped.get(pictures::UNREADABLE),
+            Some(&2),
+            "the 50 byte download (no picture) and the 404"
+        );
         let rendered = batch.render(&[Some("A login form"), Some("A login form")]);
         assert!(
             rendered.contains(
-                "See [Image shot.PNG Description: A login form] and !9001! and !nothing!"
+                "See [Image shot.PNG Description: A login form] and !9001! and !nothing.png!"
             ),
             "{rendered}"
         );

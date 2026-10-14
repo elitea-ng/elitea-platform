@@ -32,6 +32,8 @@ pub const TOO_LARGE: &str = "too_large";
 /// A reference to a file that is not there.
 pub const UNREADABLE: &str = "unreadable";
 pub const TOO_MANY: &str = "too_many_pictures";
+/// The provider refused the credential (401, 403): another run does not cure it.
+pub const FORBIDDEN: &str = "forbidden";
 
 /// What a connector asks of the worker for a document's pictures.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +78,8 @@ pub enum Escape {
     HtmlAttribute,
     /// As the contents of a JSON string (the template is JSON text).
     Json,
+    /// As the target of a markdown link: one line, `\`, `]` and `)` escaped.
+    MarkdownLink,
 }
 
 /// A document with its pictures read.
@@ -118,6 +122,29 @@ impl PictureBatch {
         text
     }
 
+    /// A batch with no picture: the document as it is and one picture
+    /// that could not be read, for `reason` (a retryable one marks the
+    /// document for another run).
+    #[must_use]
+    pub fn unread(text: &str, reason: &'static str) -> Self {
+        let mut batch = Self {
+            template: text.to_owned(),
+            ..Self::default()
+        };
+        batch.skip(reason);
+        batch
+    }
+
+    /// [`Self::unread`] with several skips.
+    #[must_use]
+    pub fn with_skips(text: String, skipped: BTreeMap<&'static str, u32>) -> Self {
+        Self {
+            template: text,
+            skipped,
+            ..Self::default()
+        }
+    }
+
     pub fn skip(&mut self, reason: &'static str) {
         *self.skipped.entry(reason).or_default() += 1;
     }
@@ -138,6 +165,13 @@ impl Escape {
                 .replace('>', "&gt;")
                 .replace('"', "&quot;"),
             Self::Json => json_contents(text),
+            Self::MarkdownLink => text
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .replace('\\', "\\\\")
+                .replace(']', "\\]")
+                .replace(')', "\\)"),
         }
     }
 }
@@ -151,6 +185,31 @@ pub fn json_contents(text: &str) -> String {
         .and_then(|inner| inner.strip_suffix('"'))
         .unwrap_or_default()
         .to_owned()
+}
+
+/// The skip reason of a failed picture read. Only what another run can
+/// cure (a 5xx, 408, 429, a timeout or a broken connection) is
+/// [`FETCH_FAILED`], which marks the document for a retry; a missing file,
+/// a refused credential, a request this runtime will not send (egress,
+/// another origin) and a body that is no picture are final.
+#[must_use]
+pub fn skip_reason(failure: &crate::source::Failure) -> &'static str {
+    use crate::source::Failure;
+    use crate::transport::StatusCode;
+    match failure {
+        Failure::TooLarge(_) => TOO_LARGE,
+        Failure::Status(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) => FORBIDDEN,
+        Failure::Status(status)
+            if status.is_server_error()
+                || *status == StatusCode::TOO_MANY_REQUESTS
+                || *status == StatusCode::REQUEST_TIMEOUT =>
+        {
+            FETCH_FAILED
+        }
+        Failure::Transport(_) | Failure::RateLimited => FETCH_FAILED,
+        Failure::Refused | Failure::Client(_) => UNSUPPORTED,
+        Failure::Status(_) | Failure::Changed | Failure::InvalidResponse(_) => UNREADABLE,
+    }
 }
 
 /// The token for the `index`-th picture of a template: private-use
@@ -297,6 +356,14 @@ mod tests {
     }
 
     #[test]
+    fn a_description_is_one_line_with_the_link_closers_escaped() {
+        assert_eq!(
+            Escape::MarkdownLink.apply("A (chart)\n\nof [x] \\ ok"),
+            "A (chart\\) of [x\\] \\\\ ok"
+        );
+    }
+
+    #[test]
     fn the_budget_bounds_count_each_picture_and_the_total() {
         let mut budget = Budget::default();
         assert_eq!(budget.take(MAX_PICTURE_BYTES + 1), Err(TOO_LARGE));
@@ -314,6 +381,31 @@ mod tests {
             budget.take(1).expect("within");
         }
         assert_eq!(budget.may_read(), Err(TOO_MANY));
+    }
+
+    #[test]
+    fn only_what_another_run_cures_is_a_retryable_read_failure() {
+        use crate::source::Failure;
+        use crate::transport::StatusCode;
+        let reason = |f: Failure| skip_reason(&f);
+        assert_eq!(
+            reason(Failure::Status(StatusCode::BAD_GATEWAY)),
+            FETCH_FAILED
+        );
+        assert_eq!(
+            reason(Failure::Status(StatusCode::TOO_MANY_REQUESTS)),
+            FETCH_FAILED
+        );
+        assert_eq!(reason(Failure::Transport("timed out".into())), FETCH_FAILED);
+        assert_eq!(reason(Failure::RateLimited), FETCH_FAILED);
+        assert_eq!(reason(Failure::Status(StatusCode::UNAUTHORIZED)), FORBIDDEN);
+        assert_eq!(reason(Failure::Status(StatusCode::FORBIDDEN)), FORBIDDEN);
+        assert_eq!(reason(Failure::Status(StatusCode::NOT_FOUND)), UNREADABLE);
+        assert_eq!(reason(Failure::Status(StatusCode::BAD_REQUEST)), UNREADABLE);
+        assert_eq!(reason(Failure::Refused), UNSUPPORTED);
+        assert_eq!(reason(Failure::Client("other origin".into())), UNSUPPORTED);
+        assert_eq!(reason(Failure::InvalidResponse("html")), UNREADABLE);
+        assert_eq!(reason(Failure::TooLarge(1)), TOO_LARGE);
     }
 
     #[test]
