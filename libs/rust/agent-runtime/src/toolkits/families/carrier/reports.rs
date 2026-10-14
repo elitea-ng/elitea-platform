@@ -19,7 +19,8 @@ use reqwest::Method;
 use serde_json::{Map, Value, json};
 
 use crate::toolkits::families::attachment_host::{
-    AttachmentError, AttachmentHost, derived_bucket_name,
+    AttachmentError, AttachmentHost, ENGINE_BUSY, ENGINE_BUSY_BACKOFF, ENGINE_BUSY_RETRIES,
+    derived_bucket_name,
 };
 
 use super::client::{
@@ -40,7 +41,6 @@ const MAX_ERRORS_BYTES: u64 = 64 * 1_024 * 1_024;
 /// `errors = list(islice(f, 100))`.
 const ERROR_LINES: usize = 100;
 /// How many times a workbook build waits for an engine permit.
-const WORKBOOK_ATTEMPTS: u32 = 10;
 /// The most Lighthouse JSON files, and bytes of each, one UI report reads.
 const MAX_UI_FILES: usize = 64;
 const MAX_UI_JSON_BYTES: usize = 16 * 1_024 * 1_024;
@@ -610,20 +610,20 @@ where
     F: Fn() -> Result<Vec<u8>, SheetError> + Send + Sync + 'static,
 {
     let make = Arc::new(make);
-    for attempt in 1..=WORKBOOK_ATTEMPTS {
+    let mut attempt = 0;
+    loop {
         let run = Arc::clone(&make);
         match blocking(move || run()).await? {
             Ok(bytes) => return Ok(bytes),
             Err(SheetError::Refused(message)) => return Err(sentence(message)),
-            Err(SheetError::Busy) => {
-                tokio::time::sleep(std::time::Duration::from_millis(100 * u64::from(attempt)))
-                    .await;
+            Err(SheetError::Busy) if attempt < ENGINE_BUSY_RETRIES => {
+                attempt += 1;
+                tokio::time::sleep(ENGINE_BUSY_BACKOFF * attempt).await;
             }
+            // Still busy after the shared wait: the shared sentence.
+            Err(SheetError::Busy) => return Err(sentence(ENGINE_BUSY)),
         }
     }
-    Err(sentence(
-        "The document engine is busy with other files; nothing was generated. Try again shortly.",
-    ))
 }
 
 #[cfg(feature = "toolkit-office")]

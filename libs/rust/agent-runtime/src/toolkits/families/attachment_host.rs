@@ -41,6 +41,15 @@ pub(crate) const MAX_PICTURES: usize = 20;
 pub(crate) const MAX_DESCRIPTION_CHARS: usize = 8_000;
 /// How many names `write_unique_artifact` tries before giving up.
 const MAX_NAME_ATTEMPTS: u32 = 20;
+/// The document engine admits a few documents at a time per process and
+/// answers `Busy` at once; every caller waits its turn the same way: up to 8
+/// retries at 250 ms, 500 ms, ... (9 s in all), under the engine's 20 s call
+/// deadline. The Office families and the Carrier workbook tools share these.
+pub(crate) const ENGINE_BUSY_RETRIES: u32 = 8;
+pub(crate) const ENGINE_BUSY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(250);
+/// The sentence for an engine that stayed busy.
+pub(crate) const ENGINE_BUSY: &str =
+    "The document engine is busy with other work. Try again in a moment.";
 /// The longest artifact path a tool accepts.
 const MAX_PATH_BYTES: usize = 2_048;
 

@@ -761,9 +761,7 @@ async fn excel_report_from_a_report_id_stores_the_sdk_sheet_in_the_artifact_stor
             "reports_test_results_b7_excel_report.xlsx",
         )
         .expect("stored");
-    let workbook =
-        elitea_office_core::Workbook::open(&stored, &elitea_office_core::Limits::default())
-            .expect("xlsx");
+    let workbook = open_workbook(&stored).expect("xlsx");
     assert_eq!(workbook.sheet_names().expect("names"), ["Test results"]);
     assert_eq!(cell(&workbook, 0, 0), json!("Users"));
     assert_eq!(cell(&workbook, 0, 1), json!(2.0));
@@ -838,9 +836,7 @@ async fn excel_report_from_a_bucket_file_reads_it_with_the_bare_header() {
     let stored = platform
         .get("carrier-results", &writes[0].1)
         .expect("stored");
-    let workbook =
-        elitea_office_core::Workbook::open(&stored, &elitea_office_core::Limits::default())
-            .expect("xlsx");
+    let workbook = open_workbook(&stored).expect("xlsx");
     assert_eq!(cell(&workbook, 3, 1), json!("1,0-2,0"));
     assert_eq!(cell(&workbook, 8, 1), json!("not specified"));
     assert_eq!(cell(&workbook, 12, 0), json!("Login"));
@@ -1072,9 +1068,7 @@ async fn ui_excel_report_stores_one_sheet_per_lighthouse_json() {
     let stored = platform
         .get("carrier-checkoutflow", &writes[0].1)
         .expect("stored");
-    let workbook =
-        elitea_office_core::Workbook::open(&stored, &elitea_office_core::Limits::default())
-            .expect("xlsx");
+    let workbook = open_workbook(&stored).expect("xlsx");
     assert_eq!(
         workbook.sheet_names().expect("names"),
         ["24Jun2025_02_14_37", "25Jun2025_03_15_38"]
@@ -1133,4 +1127,23 @@ async fn ui_excel_report_reports_files_it_skipped_and_store_failures() {
         .await
         .expect("sentence");
     assert!(answer.as_str().expect("text").contains("refused access"));
+}
+
+/// Open a workbook the tool stored. The document engine admits a few
+/// documents per process and answers `Busy` at once, and the suite runs in
+/// parallel, so a test waits its turn exactly as the tool does.
+#[cfg(feature = "toolkit-office")]
+fn open_workbook(
+    bytes: &[u8],
+) -> Result<elitea_office_core::Workbook, elitea_office_core::OfficeError> {
+    let mut attempt = 0_u32;
+    loop {
+        match elitea_office_core::Workbook::open(bytes, &elitea_office_core::Limits::default()) {
+            Err(elitea_office_core::OfficeError::Busy) if attempt < 600 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            other => return other,
+        }
+    }
 }
