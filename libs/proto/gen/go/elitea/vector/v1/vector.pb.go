@@ -128,7 +128,7 @@ func (Source) EnumDescriptor() ([]byte, []int) {
 //
 // The owner is never taken from the request: a token cannot name another
 // user, and an administrator caller cannot use these scopes at all (it has
-// DeleteMemoryUser and DeleteMemoryNamespace).
+// DeleteMemoryUser and DeleteMemoryToolkit).
 type MemoryScope int32
 
 const (
@@ -2736,9 +2736,11 @@ func (x *ReadMemoryRequest) GetLimit() uint32 {
 type ReadMemoryResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// points are the newest first: by the version's valid_from
-	// (metadata.t.valid_from) descending, then by point id, across every
-	// collection read; score is 0. Every matching point of each collection is
-	// read (a read that matches more than 5000 points is refused with
+	// (metadata.t.valid_from) descending, then by the larger version id
+	// (metadata.t.id, the tie-break the client uses to pick the current
+	// version), then by the larger point id, across every collection read;
+	// score is 0. Every matching point of each collection is read (a read that
+	// matches more than 5000 points is refused with
 	// RESOURCE_EXHAUSTED) before the first `limit` are kept, so the answer does not
 	// depend on how the points are spread over collections.
 	Points        []*ScoredPoint `protobuf:"bytes,1,rep,name=points,proto3" json:"points,omitempty"`

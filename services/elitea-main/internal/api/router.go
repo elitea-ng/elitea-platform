@@ -65,6 +65,7 @@ import (
 	v2tracing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tracing"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/nativepolicy"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
@@ -92,7 +93,6 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/scimdirectory"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -1724,9 +1724,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// user-deleting handlers (a user's personal memories) and SCIM (a group
 	// withdrawal), and the process's reconciler drains it.
 	var cleanupJournal *toolkitcleanup.Journal
-	var memoryUserJournal interface {
-		EnqueueMemoryUsers(ctx context.Context, tx pgx.Tx, projectID int64, userIDs ...int64) (string, error)
-	}
+	var memoryUserJournal cleanupjournal.MemoryUserJournal
 	if cfg.Pool != nil {
 		cleanupJournal = newToolkitCleanupJournal(cfg)
 		memoryUserJournal = cleanupJournal

@@ -57,7 +57,7 @@ type CallbackFacts interface {
 // ClaimTokenFacts reads a live worker claim token by its hash
 // (*repos.VectorClaimTokens).
 type ClaimTokenFacts interface {
-	Facts(ctx context.Context, tokenSHA256 [32]byte) (repos.VectorClaimTokenFacts, error)
+	Facts(ctx context.Context, tokenSHA256 [32]byte, intent repos.MemoryIntent) (repos.VectorClaimTokenFacts, error)
 }
 
 var (
@@ -87,6 +87,20 @@ var sourceKeywords = map[string]vectorv1.Source{
 	"deepwiki":      vectorv1.Source_SOURCE_DEEPWIKI,
 	"inventory":     vectorv1.Source_SOURCE_INVENTORY,
 	"memory":        vectorv1.Source_SOURCE_MEMORY,
+}
+
+// memoryIntent maps the wire intent to the repository's. An intent this build
+// cannot name is no intent: no memory decision is made for it.
+func memoryIntent(intent vectorv1.MemoryIntent) repos.MemoryIntent {
+	switch intent {
+	case vectorv1.MemoryIntent_MEMORY_INTENT_PERSONAL_READ:
+		return repos.MemoryIntentPersonalRead
+	case vectorv1.MemoryIntent_MEMORY_INTENT_PERSONAL_WRITE:
+		return repos.MemoryIntentPersonalWrite
+	case vectorv1.MemoryIntent_MEMORY_INTENT_PROJECT_WRITE:
+		return repos.MemoryIntentProjectWrite
+	}
+	return repos.MemoryIntentNone
 }
 
 // Server is the introspection service.
@@ -140,18 +154,18 @@ func (s *Server) IntrospectToken(ctx context.Context, request *vectorv1.Introspe
 	// A claim token never reaches the PAT validator, and a PAT never reaches
 	// the claim token store.
 	if strings.HasPrefix(token, ClaimTokenPrefix) {
-		return s.introspectClaimToken(ctx, token)
+		return s.introspectClaimToken(ctx, token, memoryIntent(request.GetMemoryIntent()))
 	}
 	return s.introspectCallbackToken(ctx, token)
 }
 
-func (s *Server) introspectClaimToken(ctx context.Context, token string) (*vectorv1.IntrospectTokenResponse, error) {
+func (s *Server) introspectClaimToken(ctx context.Context, token string, intent repos.MemoryIntent) (*vectorv1.IntrospectTokenResponse, error) {
 	inactive := &vectorv1.IntrospectTokenResponse{}
 	hash, ok := HashClaimToken(token)
 	if !ok {
 		return inactive, nil
 	}
-	facts, err := s.claimTokens.Facts(ctx, hash)
+	facts, err := s.claimTokens.Facts(ctx, hash, intent)
 	if err != nil {
 		if errors.Is(err, repos.ErrVectorClaimTokenFactsNotFound) {
 			return inactive, nil
@@ -178,9 +192,13 @@ func (s *Server) introspectClaimToken(ctx context.Context, token string) (*vecto
 		Kind:           vectorv1.TokenKind_TOKEN_KIND_WORKER_CLAIM,
 		ExpiresAtUnix:  facts.ExpiresAt.Unix(),
 		AllowedSources: sources,
-		// Decided when the token was minted, from the execution's
-		// conversation; elitea-vector enforces it.
-		PersonalMemoryAllowed: facts.PersonalMemoryAllowed,
+		// Decided at this introspection, for the intent the request carried;
+		// elitea-vector enforces both.
+		PersonalMemoryAllowed:     facts.PersonalMemoryAllowed,
+		ProjectMemoryWriteRefused: facts.ProjectMemoryWriteRefused,
+		// The memory toolkits the claim was given, all of its own project;
+		// elitea-vector refuses a memory request for any other toolkit.
+		MemoryToolkitIds: facts.MemoryToolkits,
 	}, nil
 }
 

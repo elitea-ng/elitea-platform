@@ -26,7 +26,7 @@ use qdrant_client::qdrant::{
 use tokio_stream::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::auth::{Authenticator, Caller};
+use crate::auth::{Authenticator, Caller, MemoryBinding, MemoryIntent};
 use crate::fanout::fan_out;
 use crate::layout::{self, BM25_MODEL, BM25_VECTOR, DENSE_VECTOR, Space, key};
 use crate::pb;
@@ -117,6 +117,89 @@ pub struct VectorService {
 }
 
 impl VectorService {
+    /// For a MEMORY request that needs a memory decision (a personal-scope
+    /// request, or a project-scope write), replaces the cached caller with one
+    /// verified afresh: elitea-main then re-checks the conversation and, for a
+    /// personal read, records it. Every other request keeps `caller`, which
+    /// came from the claim cache (a toolkit-index search or upsert never asks
+    /// elitea-main again within the cache lifetime).
+    async fn memory_caller(
+        &self,
+        token: Option<&str>,
+        caller: Caller,
+        source_scope_toolkit: Option<(i32, i32, i64)>,
+        write: bool,
+    ) -> Result<Caller, Status> {
+        let Some((source, memory_scope, toolkit_id)) = source_scope_toolkit else {
+            return Ok(caller);
+        };
+        if source != pb::Source::Memory as i32 || !matches!(caller, Caller::Token(_)) {
+            return Ok(caller);
+        }
+        let intent = MemoryIntent::of(memory_scope, write);
+        if intent == MemoryIntent::None {
+            return Ok(caller);
+        }
+        // Everything the cached grant can refuse is refused BEFORE elitea-main
+        // is asked afresh: a personal-read introspection records the read, and
+        // a request refused afterwards (a toolkit the run was not given, a bad
+        // scope) must not mark the run as having read personal memory. The
+        // memory toolkits and the sources are fixed at mint, so the cached
+        // grant is authoritative for them. Only the write-after-read refusal is
+        // left to the fresh answer (it is what the fresh answer decides).
+        caller.precheck_memory(source, memory_scope, toolkit_id)?;
+        let token = token.ok_or_else(|| Status::unauthenticated("a project token is required"))?;
+        self.auth.fresh_token(token, intent).await
+    }
+
+    /// Re-verifies an Upsert stream's token before a batch. The introspection
+    /// cache keeps this cheap (a memory write asks afresh); a token that went
+    /// inactive, moved project, lost the source or whose memory binding
+    /// changed (another owner, a project write refused after a personal read)
+    /// ends the stream.
+    async fn reverify_upsert(
+        &self,
+        token: &str,
+        namespace: &pb::Namespace,
+        project_id: i64,
+        binding: Option<&MemoryBinding>,
+    ) -> Result<(), Status> {
+        let current = self.auth.verify_token(token).await?;
+        let current = self
+            .memory_caller(
+                Some(token),
+                current,
+                Some((
+                    namespace.source,
+                    namespace.memory_scope,
+                    namespace.toolkit_id,
+                )),
+                true,
+            )
+            .await?;
+        if current.project(0)? != project_id {
+            return Err(Status::permission_denied(
+                "the token's project changed during the stream",
+            ));
+        }
+        current.require_source(namespace.source)?;
+        if current
+            .memory_binding(
+                namespace.source,
+                namespace.memory_scope,
+                namespace.toolkit_id,
+                true,
+            )?
+            .as_ref()
+            != binding
+        {
+            return Err(Status::permission_denied(
+                "the token's memory owner changed during the stream",
+            ));
+        }
+        Ok(())
+    }
+
     /// A service over `store`, admitting callers through `auth`, with the
     /// default [`SpaceLimits`].
     #[must_use]
@@ -168,12 +251,26 @@ impl pb::vector_service_server::VectorService for VectorService {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
         caller.require_source(namespace.source)?;
+        // A memory write needs a memory decision made now, not a cached one.
+        let caller = self
+            .memory_caller(
+                Some(&token),
+                caller,
+                Some((
+                    namespace.source,
+                    namespace.memory_scope,
+                    namespace.toolkit_id,
+                )),
+                true,
+            )
+            .await?;
         // The owner of a memory point comes from the token, here and nowhere
         // else; a request cannot name one.
         let binding = caller.memory_binding(
             namespace.source,
             namespace.memory_scope,
             namespace.toolkit_id,
+            true,
         )?;
         let target = UpsertTarget {
             project_id,
@@ -198,25 +295,8 @@ impl pb::vector_service_server::VectorService for VectorService {
                     "only the first Upsert message is a header",
                 ));
             };
-            // The introspection cache keeps this cheap; a token that went
-            // inactive, moved project or lost the source ends the stream.
-            let current = self.auth.verify_token(&token).await?;
-            if current.project(0)? != project_id {
-                return Err(Status::permission_denied(
-                    "the token's project changed during the stream",
-                ));
-            }
-            current.require_source(namespace.source)?;
-            if current.memory_binding(
-                namespace.source,
-                namespace.memory_scope,
-                namespace.toolkit_id,
-            )? != binding
-            {
-                return Err(Status::permission_denied(
-                    "the token's memory owner changed during the stream",
-                ));
-            }
+            self.reverify_upsert(&token, namespace, project_id, binding.as_ref())
+                .await?;
             if batch.points.len() > MAX_BATCH_POINTS {
                 return Err(Status::invalid_argument("at most 512 points per batch"));
             }
@@ -247,6 +327,7 @@ impl pb::vector_service_server::VectorService for VectorService {
         request: Request<pb::DeleteRequest>,
     ) -> Result<Response<pb::DeleteResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
         let project_id = caller.project(request.project_id)?;
         let space = request
@@ -259,12 +340,25 @@ impl pb::vector_service_server::VectorService for VectorService {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
         caller.require_source(namespace.source)?;
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                Some((
+                    namespace.source,
+                    namespace.memory_scope,
+                    namespace.toolkit_id,
+                )),
+                true,
+            )
+            .await?;
         let source = layout::source_keyword(namespace.source)?;
         layout::namespace_uuid(&namespace.namespace_id)?;
         let binding = caller.memory_binding(
             namespace.source,
             namespace.memory_scope,
             namespace.toolkit_id,
+            true,
         )?;
         let scope = Scope::project(project_id)
             .source(source)
@@ -337,7 +431,19 @@ impl pb::vector_service_server::VectorService for VectorService {
     ) -> Result<Response<pb::SearchResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
         caller.require_token()?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                request
+                    .scope
+                    .as_ref()
+                    .map(|scope| (scope.source, scope.memory_scope, scope.toolkit_id)),
+                false,
+            )
+            .await?;
         let (filter, space) = read_parts(
             &caller,
             request.scope.as_ref(),
@@ -384,7 +490,19 @@ impl pb::vector_service_server::VectorService for VectorService {
     ) -> Result<Response<pb::HybridSearchResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
         caller.require_token()?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                request
+                    .scope
+                    .as_ref()
+                    .map(|scope| (scope.source, scope.memory_scope, scope.toolkit_id)),
+                false,
+            )
+            .await?;
         let (filter, space) = read_parts(
             &caller,
             request.scope.as_ref(),
@@ -474,6 +592,7 @@ impl pb::vector_service_server::VectorService for VectorService {
         request: Request<pb::CountRequest>,
     ) -> Result<Response<pb::CountResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
         let read = request
             .scope
@@ -481,6 +600,14 @@ impl pb::vector_service_server::VectorService for VectorService {
             .ok_or_else(|| Status::invalid_argument("scope is required"))?;
         let project_id = caller.project(read.project_id)?;
         caller.require_source(read.source)?;
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                Some((read.source, read.memory_scope, read.toolkit_id)),
+                false,
+            )
+            .await?;
         let scope = owned_read_scope(&caller, project_id, read, false)?;
         let narrowing = scope::translate(request.filter.as_ref())?;
         let space = request
@@ -598,6 +725,7 @@ impl pb::vector_service_server::VectorService for VectorService {
         request: Request<pb::ListDocumentsRequest>,
     ) -> Result<Response<Self::ListDocumentsStream>, Status> {
         let caller = self.auth.authenticate(&request).await?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
         let project_id = caller.project(request.project_id)?;
         let namespace = request
@@ -605,12 +733,25 @@ impl pb::vector_service_server::VectorService for VectorService {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
         caller.require_source(namespace.source)?;
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                Some((
+                    namespace.source,
+                    namespace.memory_scope,
+                    namespace.toolkit_id,
+                )),
+                false,
+            )
+            .await?;
         let source = layout::source_keyword(namespace.source)?;
         layout::namespace_uuid(&namespace.namespace_id)?;
         let binding = caller.memory_binding(
             namespace.source,
             namespace.memory_scope,
             namespace.toolkit_id,
+            false,
         )?;
         let generation = layout::generation(&namespace.generation)?;
         let space = request
@@ -692,6 +833,7 @@ impl pb::vector_service_server::VectorService for VectorService {
     ) -> Result<Response<pb::ReadMemoryResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
         caller.require_token()?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
         let read = request
             .scope
@@ -700,6 +842,14 @@ impl pb::vector_service_server::VectorService for VectorService {
         require_memory_scope(read)?;
         let project_id = caller.project(read.project_id)?;
         caller.require_source(read.source)?;
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                Some((read.source, read.memory_scope, read.toolkit_id)),
+                false,
+            )
+            .await?;
         let scope = owned_read_scope(&caller, project_id, read, true)?;
         let narrowing = scope::translate(request.filter.as_ref())?;
         let limit = check_limit(request.limit)?;
@@ -753,9 +903,11 @@ impl pb::vector_service_server::VectorService for VectorService {
             .map(|point| scored_from_payload(point.id, 0.0, &point.payload))
             .collect();
         // Newest version first, whatever collection holds it: the version's
-        // valid_from, then the larger point id.
+        // valid_from, then the larger version id (/t/id, the tie-break the
+        // client uses to pick the current version), then the point id.
         points.sort_by_cached_key(|point| {
-            std::cmp::Reverse((valid_from_of(&point.metadata_json), point.id.clone()))
+            let (valid_from, version_id) = version_order_of(&point.metadata_json);
+            std::cmp::Reverse((valid_from, version_id, point.id.clone()))
         });
         points.truncate(limit as usize);
         Ok(Response::new(pb::ReadMemoryResponse { points }))
@@ -767,6 +919,7 @@ impl pb::vector_service_server::VectorService for VectorService {
     ) -> Result<Response<pb::SetMemoryMetadataResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
         caller.require_token()?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
         let project_id = caller.project(0)?;
         let namespace = request
@@ -780,11 +933,24 @@ impl pb::vector_service_server::VectorService for VectorService {
         }
         caller.require_source(namespace.source)?;
         layout::namespace_uuid(&namespace.namespace_id)?;
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                Some((
+                    namespace.source,
+                    namespace.memory_scope,
+                    namespace.toolkit_id,
+                )),
+                true,
+            )
+            .await?;
         let binding = caller
             .memory_binding(
                 namespace.source,
                 namespace.memory_scope,
                 namespace.toolkit_id,
+                true,
             )?
             .ok_or_else(|| Status::invalid_argument("memory_scope is required"))?;
         let generation = layout::generation(&namespace.generation)?;
@@ -895,17 +1061,22 @@ const MEMORY_SCROLL_PAGE: u32 = 512;
 /// refused rather than answered from a part of what it matched.
 const MAX_MEMORY_MATCHED: u64 = 5000;
 
-/// The `valid_from` of a memory point's metadata (`t.valid_from`), 0 when it
-/// has none.
-fn valid_from_of(metadata_json: &str) -> i64 {
-    serde_json::from_str::<serde_json::Value>(metadata_json)
-        .ok()
-        .and_then(|value| {
-            value
-                .pointer("/t/valid_from")
-                .and_then(serde_json::Value::as_i64)
-        })
-        .unwrap_or(0)
+/// The ordering keys of a memory point's metadata: `t.valid_from` (0 when it
+/// has none) and the version id `t.id` (empty when it has none; a number is
+/// read as its decimal text).
+fn version_order_of(metadata_json: &str) -> (i64, String) {
+    let value = serde_json::from_str::<serde_json::Value>(metadata_json).ok();
+    let valid_from = value
+        .as_ref()
+        .and_then(|value| value.pointer("/t/valid_from"))
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+    let version_id = match value.as_ref().and_then(|value| value.pointer("/t/id")) {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(serde_json::Value::Number(number)) => number.to_string(),
+        _ => String::new(),
+    };
+    (valid_from, version_id)
 }
 
 /// A memory read names the memory source, one namespace and no generation.
@@ -1240,7 +1411,7 @@ fn owned_read_scope(
     read: &pb::Scope,
     require_namespace: bool,
 ) -> Result<Scope, Status> {
-    let binding = caller.memory_binding(read.source, read.memory_scope, read.toolkit_id)?;
+    let binding = caller.memory_binding(read.source, read.memory_scope, read.toolkit_id, false)?;
     let scope = scope::read_scope(project_id, read, require_namespace)?;
     Ok(match &binding {
         Some(binding) => scope.bound_to(binding),

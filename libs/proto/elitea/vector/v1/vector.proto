@@ -462,9 +462,11 @@ message ReadMemoryRequest {
 
 message ReadMemoryResponse {
   // points are the newest first: by the version's valid_from
-  // (metadata.t.valid_from) descending, then by the larger point id, across every
-  // collection read; score is 0. Every matching point of each collection is
-  // read (a read that matches more than 5000 points is refused with
+  // (metadata.t.valid_from) descending, then by the larger version id
+  // (metadata.t.id, the tie-break the client uses to pick the current
+  // version), then by the larger point id, across every collection read;
+  // score is 0. Every matching point of each collection is read (a read that
+  // matches more than 5000 points is refused with
   // RESOURCE_EXHAUSTED) before the first `limit` are kept, so the answer does not
   // depend on how the points are spread over collections.
   repeated ScoredPoint points = 1;

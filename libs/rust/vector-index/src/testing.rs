@@ -896,14 +896,21 @@ impl VectorService for FakeVector {
             .into_iter()
             .map(|stored| scored(stored, 0.0))
             .collect();
-        // Newest version first (valid_from, then the larger id), like the
-        // service.
+        // Newest version first (valid_from, then the larger version id
+        // /t/id, then the point id), like the service.
         points.sort_by_cached_key(|point| {
-            let valid_from = serde_json::from_str::<Value>(&point.metadata_json)
-                .ok()
-                .and_then(|value| value.pointer("/t/valid_from").and_then(Value::as_i64))
+            let value = serde_json::from_str::<Value>(&point.metadata_json).ok();
+            let valid_from = value
+                .as_ref()
+                .and_then(|value| value.pointer("/t/valid_from"))
+                .and_then(Value::as_i64)
                 .unwrap_or(0);
-            std::cmp::Reverse((valid_from, point.id.clone()))
+            let version_id = match value.as_ref().and_then(|value| value.pointer("/t/id")) {
+                Some(Value::String(text)) => text.clone(),
+                Some(Value::Number(number)) => number.to_string(),
+                _ => String::new(),
+            };
+            std::cmp::Reverse((valid_from, version_id, point.id.clone()))
         });
         points.truncate(request.limit as usize);
         Ok(Response::new(pb::ReadMemoryResponse { points }))

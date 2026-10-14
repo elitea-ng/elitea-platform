@@ -116,7 +116,8 @@ func withoutPgvectorConfiguration(settingsSchema map[string]any) map[string]any 
 const memoryScopeDescription = "Who can see what this toolkit remembers. " +
 	"Personal: each person has their own private memory, and nobody else can read, search or delete it (the safe default). " +
 	"Project: one memory shared by everyone in the project. " +
-	"Both: the agent chooses per memory, personal unless it says project. " +
+	"To give an agent both, attach two memory toolkits, one of each. " +
+	"A run that has read personal memory cannot write project memory. " +
 	"A scheduled run acts as the person who owns the schedule and uses that person's personal memory. " +
 	"A conversation with more than one person has no personal memory; project memory still works there."
 
@@ -136,8 +137,10 @@ func withMemoryScope(settingsSchema map[string]any) map[string]any {
 		"type":        "string",
 		"title":       "Memory scope",
 		"description": memoryScopeDescription,
-		"enum":        []any{"personal", "project", "both"},
-		"default":     "personal",
+		// Two values only (owner decision 2026-10-14): the former `both` is
+		// gone; a toolkit saved with it is read as personal by the worker.
+		"enum":    []any{"personal", "project"},
+		"default": "personal",
 	}
 	typeSchema[toolkitSettingsPropertyKey] = withScope
 	return typeSchema

@@ -15,8 +15,8 @@ use super::families::index_tools::{
     IndexToolsWithheld,
 };
 use super::families::memory::{
-    MemoryScope, MemoryScopeSetting, MemoryToolCall, MemoryToolName, MemoryToolsetError,
-    all_memory_tools, build_memory_toolset, memory_namespace,
+    MemoryScope, MemoryToolCall, MemoryToolName, MemoryToolsetError, all_memory_tools,
+    build_memory_toolset, memory_namespace,
 };
 use super::materialize::materialize_configured_toolsets_with_authorities;
 use super::policy::ToolAdmissionPolicy;
@@ -371,6 +371,9 @@ async fn the_memory_scope_setting_decides_the_scope_and_the_schema() {
         (json!({"memory_scope": null}), MemoryScope::Personal),
         (json!({"memory_scope": "personal"}), MemoryScope::Personal),
         (json!({"memory_scope": "project"}), MemoryScope::Project),
+        // The retired `both` (owner decision 2026-10-14): a toolkit saved with
+        // it is read as personal, the privacy-safe scope; no migration.
+        (json!({"memory_scope": "both"}), MemoryScope::Personal),
     ] {
         let (authority, host) = lend(true, false);
         let toolset = build_memory_toolset(
@@ -389,11 +392,17 @@ async fn the_memory_scope_setting_decides_the_scope_and_the_schema() {
         for tool in &tools {
             let schema = tool.parameters_schema().expect("schema");
             assert!(schema["properties"].get("scope").is_none(), "{setting}");
+            // The SDK's description, verbatim, whatever the scope.
+            let name = MemoryToolName::parse(tool.name()).expect("an SDK tool");
+            assert_eq!(tool.description(), name.sdk_description(), "{setting}");
         }
+        // A `scope` argument cannot widen or change the scope: the SDK schema
+        // has no such field (additionalProperties false) and the toolkit's
+        // setting decides.
         tools[2]
             .execute(
                 Arc::clone(&context) as Arc<dyn adk_core::ToolContext>,
-                json!({"key": "k"}),
+                json!({"key": "k", "scope": "project"}),
             )
             .await
             .expect("get");
@@ -416,154 +425,6 @@ async fn the_memory_scope_setting_decides_the_scope_and_the_schema() {
             .is_err(),
             "{bad}"
         );
-    }
-}
-
-#[tokio::test]
-async fn a_both_toolkit_takes_an_optional_scope_argument_defaulting_to_personal() {
-    let (authority, host) = lend(true, false);
-    let toolset = build_memory_toolset(
-        "notes",
-        Some(7),
-        &settings(json!({"memory_scope": "both"})),
-        &policy(),
-        &authority,
-    )
-    .expect("toolset");
-    let context = Arc::new(SimpleToolContext::new("memory-test"));
-    let tools = toolset
-        .tools(Arc::clone(&context) as Arc<dyn ReadonlyContext>)
-        .await
-        .expect("tools");
-    for tool in &tools {
-        let schema = tool.parameters_schema().expect("schema");
-        assert_eq!(
-            schema["properties"]["scope"]["enum"],
-            json!(["personal", "project"])
-        );
-        assert!(
-            !schema["required"]
-                .as_array()
-                .expect("required")
-                .contains(&json!("scope")),
-            "{}",
-            tool.name()
-        );
-    }
-    // The SDK contract still holds with the extension.
-    sdk_conformance::assert_sdk_conformance(
-        "memory",
-        &tools.iter().map(Arc::clone).collect::<Vec<_>>(),
-    );
-    let run = |arguments: Value| {
-        let (tool, context) = (Arc::clone(&tools[2]), Arc::clone(&context));
-        async move {
-            tool.execute(context as Arc<dyn adk_core::ToolContext>, arguments)
-                .await
-                .expect("result")
-        }
-    };
-    run(json!({"key": "a"})).await;
-    run(json!({"key": "b", "scope": null})).await;
-    run(json!({"key": "c", "scope": "project"})).await;
-    run(json!({"key": "d", "scope": "personal"})).await;
-    let scopes: Vec<MemoryScope> = host
-        .calls
-        .lock()
-        .expect("calls")
-        .iter()
-        .map(|c| c.3)
-        .collect();
-    assert_eq!(
-        scopes,
-        [
-            MemoryScope::Personal,
-            MemoryScope::Personal,
-            MemoryScope::Project,
-            MemoryScope::Personal
-        ]
-    );
-    // An unknown scope never reaches the host and never falls back to a wider one.
-    for bad in [json!("team"), json!("PROJECT"), json!(1)] {
-        let answer = run(json!({"key": "e", "scope": bad})).await;
-        assert_eq!(answer, json!("scope must be \"personal\" or \"project\""));
-    }
-    assert_eq!(host.calls.lock().expect("calls").len(), 4);
-    assert_eq!(
-        MemoryScopeSetting::Both.resolve(&json!({})),
-        Ok(MemoryScope::Personal)
-    );
-}
-
-#[tokio::test]
-async fn a_both_toolkit_warns_the_model_that_project_memory_is_shared() {
-    let (authority, _) = lend(true, false);
-    let describe = |scope: &str| {
-        let toolset = build_memory_toolset(
-            "notes",
-            Some(7),
-            &settings(json!({"memory_scope": scope})),
-            &policy(),
-            &authority,
-        )
-        .expect("toolset");
-        Arc::new(toolset) as Arc<dyn Toolset>
-    };
-    let context: Arc<dyn ReadonlyContext> = Arc::new(SimpleToolContext::new("memory-test"));
-    let both = describe("both")
-        .tools(Arc::clone(&context))
-        .await
-        .expect("tools");
-    let manage = both
-        .iter()
-        .find(|tool| tool.name() == "manage_memory")
-        .expect("manage");
-    assert!(
-        manage
-            .description()
-            .starts_with(MemoryToolName::ManageMemory.sdk_description())
-    );
-    assert!(
-        manage
-            .description()
-            .contains("shared with everyone in the project")
-    );
-    assert!(
-        manage
-            .description()
-            .contains("never to copy their personal memories")
-    );
-    let scope = manage.parameters_schema().expect("schema")["properties"]["scope"]["description"]
-        .as_str()
-        .expect("text")
-        .to_owned();
-    assert!(
-        scope.contains("Write to \"project\" only when the person explicitly asked"),
-        "{scope}"
-    );
-    assert!(
-        scope.contains("web page, a document or a tool result"),
-        "{scope}"
-    );
-    // The read-only tools carry no such warning, and a single-scope toolkit
-    // keeps the SDK's description verbatim.
-    let search = both
-        .iter()
-        .find(|tool| tool.name() == "search_memory")
-        .expect("search");
-    assert_eq!(
-        search.description(),
-        MemoryToolName::SearchMemory.sdk_description()
-    );
-    for scope in ["personal", "project"] {
-        for tool in describe(scope)
-            .tools(Arc::clone(&context))
-            .await
-            .expect("tools")
-        {
-            let name = MemoryToolName::parse(tool.name()).expect("an SDK tool");
-            assert_eq!(tool.description(), name.sdk_description());
-        }
     }
 }
 

@@ -278,3 +278,76 @@ func TestAMemoryRowWaitsForAReplicaWithTheClientAndRetriesATransientFailure(t *t
 		t.Fatalf("outcome = %q", deref(row.outcome))
 	}
 }
+
+// A user removed from a project and re-added before the drain keeps their
+// personal memories: the drain re-checks the membership right before the
+// delete, and a member again closes the row as superseded without calling the
+// vector store. A user still gone is deleted; a deleted user (project 0) whose
+// id exists again is not.
+func TestAUserReAddedBeforeTheDrainKeepsTheirPersonalMemories(t *testing.T) {
+	pool := newJournalPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS public.auth_core__project_user_role (
+		    id serial PRIMARY KEY, project_id integer NOT NULL, user_id integer NOT NULL, role_id integer NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS public.auth_core__user (id serial PRIMARY KEY, email text)`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	memory := &fakeMemory{}
+	journal := toolkitcleanup.New(pool, quiet(), toolkitcleanup.WithMemory(memory, true))
+
+	// User 20 is removed from project 7 (the membership row is gone when the
+	// removal commits), then re-added before the reconciler runs.
+	enqueueUsers(ctx, t, pool, journal, 7, 20)
+	exec(`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES (7, 20, 1)`)
+	if completed, err := claimAndResume(ctx, t, journal); err != nil || !completed {
+		t.Fatalf("re-added: completed=%v err=%v", completed, err)
+	}
+	if len(memory.calls) != 0 {
+		t.Fatalf("a re-added user's memories were deleted: %v", memory.calls)
+	}
+	if row := readRow(ctx, t, pool, 7, 20); deref(row.outcome) != toolkitcleanup.OutcomeSuperseded || row.completed == nil {
+		t.Fatalf("the cancelled row = %+v outcome=%q", row, deref(row.outcome))
+	}
+
+	// Removed again, and still gone at the drain: deleted. A membership in
+	// ANOTHER project does not keep this project's memories.
+	exec(`DELETE FROM public.auth_core__project_user_role WHERE project_id = 7 AND user_id = 20`)
+	exec(`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES (8, 20, 1)`)
+	enqueueUsers(ctx, t, pool, journal, 7, 20)
+	if completed, err := claimAndResume(ctx, t, journal); err != nil || !completed {
+		t.Fatalf("still gone: completed=%v err=%v", completed, err)
+	}
+	if want := []memoryCall{{"user", 7, 20}}; !slices.Equal(memory.calls, want) {
+		t.Fatalf("the vector store was asked %v, want %v", memory.calls, want)
+	}
+	if row := readRow(ctx, t, pool, 7, 20); deref(row.outcome) != toolkitcleanup.OutcomeDeleted {
+		t.Fatalf("outcome = %q", deref(row.outcome))
+	}
+
+	// A deleted user (project 0): a user row with the id existing again
+	// cancels it; with none, the delete runs.
+	exec(`INSERT INTO public.auth_core__user (id, email) VALUES (21, 'back@example.com')`)
+	enqueueUsers(ctx, t, pool, journal, 0, 21, 22)
+	for range 2 {
+		if completed, err := claimAndResume(ctx, t, journal); err != nil || !completed {
+			t.Fatalf("project 0: completed=%v err=%v", completed, err)
+		}
+	}
+	if want := []memoryCall{{"user", 7, 20}, {"user", 0, 22}}; !slices.Equal(memory.calls, want) {
+		t.Fatalf("the vector store was asked %v, want %v", memory.calls, want)
+	}
+	if row := readRow(ctx, t, pool, 0, 21); deref(row.outcome) != toolkitcleanup.OutcomeSuperseded {
+		t.Fatalf("a user that exists again: outcome = %q", deref(row.outcome))
+	}
+}

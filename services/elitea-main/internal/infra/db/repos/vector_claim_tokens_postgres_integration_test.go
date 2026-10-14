@@ -90,7 +90,7 @@ func (f vectorClaimFixture) active(t *testing.T, bearer string) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := f.store.Facts(ctx, sha256.Sum256([]byte(bearer)))
+	_, err := f.store.Facts(ctx, sha256.Sum256([]byte(bearer)), MemoryIntentNone)
 	if errors.Is(err, ErrVectorClaimTokenFactsNotFound) {
 		return false
 	}
@@ -128,7 +128,7 @@ func TestPostgresVectorClaimTokenIsBoundToTheLiveClaim(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	facts, err := f.store.Facts(ctx, sha256.Sum256([]byte("bearer-one")))
+	facts, err := f.store.Facts(ctx, sha256.Sum256([]byte("bearer-one")), MemoryIntentNone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,115 +393,183 @@ VALUES ($1, $2, $3, clock_timestamp() - interval '1 minute', clock_timestamp() +
 	})
 }
 
-// Personal memory is allowed only for a claim in a PRIVATE conversation whose
-// only user participant is the actor, and that is re-checked at EVERY
-// introspection (nothing is stored at mint). Everything else, and any doubt,
-// is refused: no conversation (a direct toolkit call), a missing row, a public
-// conversation, another single participant, a participant added mid-run, a
-// failed lookup.
-func TestPostgresVectorClaimTokenPersonalMemoryIsRecheckedAtEveryIntrospection(t *testing.T) {
-	f := newVectorClaimFixture(t, "vector-claim-personal-memory")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// memoryFixture is a claim of user 42 with a tenant schema holding the tables
+// the personal-memory check reads, and helpers to shape the execution as an
+// agent chat turn.
+type memoryFixture struct {
+	vectorClaimFixture
+	schema string
+}
+
+func newMemoryFixture(t *testing.T, name string) memoryFixture {
+	t.Helper()
+	f := newVectorClaimFixture(t, name)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
-	mintMemory := func(bearer string) {
-		t.Helper()
-		minted, err := f.store.Mint(ctx, VectorClaimTokenMint{
-			Fence:        f.fence,
-			TokenSHA256:  sha256.Sum256([]byte(bearer)),
-			Capabilities: vectorClaimCapabilities,
-			Sources:      []string{"toolkit_index", "memory"},
-			MaxLifetime:  6 * time.Hour,
-		})
-		if err != nil || !minted.Minted {
-			t.Fatalf("mint: %+v %v", minted, err)
-		}
-	}
-	allowed := func(bearer string) bool {
-		t.Helper()
-		got, err := f.store.Facts(ctx, sha256.Sum256([]byte(bearer)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return got.PersonalMemoryAllowed
-	}
-
-	// A direct toolkit call has no agent_execution_jobs row: not allowed.
-	mintMemory("bearer-call")
-	if allowed("bearer-call") {
-		t.Fatal("a call without a conversation was allowed personal memory")
-	}
-
 	var projection int64
 	if err := f.pool.QueryRow(ctx, `SELECT projection_project_id FROM elitea_runtime.execution_jobs WHERE execution_id = $1`, f.fence.ExecutionID).Scan(&projection); err != nil {
 		t.Fatal(err)
 	}
-	schema := fmt.Sprintf("p_%d", projection)
+	m := memoryFixture{vectorClaimFixture: f, schema: fmt.Sprintf("p_%d", projection)}
 	// The fixture database is private: its tenant schema is replaced by the
-	// three tables the check reads. Actor is user 42.
+	// four tables the check reads. Actor is user 42.
+	//  1: private chat, the actor alone (and an agent) -- the turn's response
+	//     group is here when respond(1) is called.
+	//  2: private, the actor and someone else.  3: the actor alone, PUBLIC.
+	//  4: another person alone.  5: the actor alone, private, but an MCP one.
 	for _, statement := range []string{
 		`DROP SCHEMA IF EXISTS @S@ CASCADE`,
 		`CREATE SCHEMA @S@`,
-		`CREATE TABLE @S@.chat_conversations (id serial PRIMARY KEY, uuid uuid NOT NULL, is_private boolean NOT NULL DEFAULT false)`,
+		`CREATE TABLE @S@.chat_conversations (id serial PRIMARY KEY, uuid uuid NOT NULL, is_private boolean NOT NULL DEFAULT false, source varchar(64) NOT NULL DEFAULT 'elitea')`,
 		`CREATE TABLE @S@.chat_participants (id serial PRIMARY KEY, entity_name text NOT NULL, entity_meta jsonb NOT NULL)`,
 		`CREATE TABLE @S@.chat_participant_mapping (conversation_id int NOT NULL, participant_id int NOT NULL)`,
+		`CREATE TABLE @S@.chat_message_group (id serial PRIMARY KEY, conversation_id int NOT NULL, task_id varchar(64))`,
 		`INSERT INTO @S@.chat_participants (id, entity_name, entity_meta) VALUES
 		    (1, 'user', '{"id": 42}'), (2, 'user', '{"id": 43}'), (3, 'application', '{"id": 7}'), (4, 'dummy', '{}')`,
-		`INSERT INTO @S@.chat_conversations (id, uuid, is_private) VALUES
-		    (1, '11111111-1111-4111-8111-111111111111', true),
-		    (2, '22222222-2222-4222-8222-222222222222', true),
-		    (3, '33333333-3333-4333-8333-333333333333', false),
-		    (4, '44444444-4444-4444-8444-444444444444', true)`,
-		// 1: the actor alone (and an agent). 2: the actor and someone else.
-		// 3: the actor alone, but PUBLIC. 4: another person alone.
-		`INSERT INTO @S@.chat_participant_mapping VALUES (1, 1), (1, 3), (1, 4), (2, 1), (2, 2), (2, 3), (3, 1), (4, 2)`,
+		`INSERT INTO @S@.chat_conversations (id, uuid, is_private, source) VALUES
+		    (1, '11111111-1111-4111-8111-111111111111', true, 'elitea'),
+		    (2, '22222222-2222-4222-8222-222222222222', true, 'elitea'),
+		    (3, '33333333-3333-4333-8333-333333333333', false, 'elitea'),
+		    (4, '44444444-4444-4444-8444-444444444444', true, 'elitea'),
+		    (5, '55555555-5555-4555-8555-555555555555', true, 'mcp')`,
+		`INSERT INTO @S@.chat_participant_mapping VALUES (1, 1), (1, 3), (1, 4), (2, 1), (2, 2), (2, 3), (3, 1), (4, 2), (5, 1), (5, 3)`,
 	} {
-		f.exec(t, strings.ReplaceAll(statement, "@S@", schema))
+		m.exec(t, m.tenant(statement))
 	}
+	return m
+}
 
-	// A bare agent_execution_jobs row for the execution (its foreign keys need
-	// the whole admission kernel; the check reads two columns).
-	withStream := func(stream string) {
-		t.Helper()
-		conn, err := f.pool.Acquire(ctx)
-		if err != nil {
+func (m memoryFixture) tenant(statement string) string {
+	return strings.ReplaceAll(statement, "@S@", m.schema)
+}
+
+func (m memoryFixture) conversationUUID(id int) string {
+	return fmt.Sprintf("%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d-%[1]d%[1]d%[1]d%[1]d-4%[1]d%[1]d%[1]d-8%[1]d%[1]d%[1]d-%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d", id)
+}
+
+// turn makes the execution an agent turn whose admission-written stream is
+// `stream` ("" removes the row), started by `origin`, with its response group
+// in conversation `respondIn` (0: none).
+func (m memoryFixture) turn(t *testing.T, stream, origin string, respondIn int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := m.pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	// A bare agent_execution_jobs row (its foreign keys need the whole
+	// admission kernel; the check reads two columns).
+	if _, err := conn.Exec(ctx, `SET session_replication_role = replica`); err != nil {
+		t.Skipf("cannot relax foreign keys for the fixture: %v", err)
+	}
+	defer func() { _, _ = conn.Exec(ctx, `SET session_replication_role = DEFAULT`) }()
+	for _, statement := range []string{
+		`DELETE FROM elitea_runtime.agent_execution_jobs WHERE execution_id = $1`,
+	} {
+		if _, err := conn.Exec(ctx, statement, m.fence.ExecutionID); err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Release()
-		if _, err := conn.Exec(ctx, `SET session_replication_role = replica`); err != nil {
-			t.Skipf("cannot relax foreign keys for the fixture: %v", err)
-		}
-		defer func() { _, _ = conn.Exec(ctx, `SET session_replication_role = DEFAULT`) }()
-		if _, err := conn.Exec(ctx, `DELETE FROM elitea_runtime.agent_execution_jobs WHERE execution_id = $1`, f.fence.ExecutionID); err != nil {
+	}
+	if _, err := conn.Exec(ctx, m.tenant(`DELETE FROM @S@.chat_message_group`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET trigger_origin = $2 WHERE execution_id = $1`, m.fence.ExecutionID, origin); err != nil {
+		t.Fatal(err)
+	}
+	if respondIn > 0 {
+		if _, err := conn.Exec(ctx, m.tenant(`INSERT INTO @S@.chat_message_group (conversation_id, task_id) VALUES ($1, $2)`), respondIn, m.fence.ExecutionID); err != nil {
 			t.Fatal(err)
 		}
-		if stream == "" {
-			return
-		}
-		if _, err := conn.Exec(ctx, `
+	}
+	if stream == "" {
+		return
+	}
+	if _, err := conn.Exec(ctx, `
 INSERT INTO elitea_runtime.agent_execution_jobs
     (execution_id, generation, capability_id, input_bundle_id, request_entry_id,
      client_stream_id, client_message_id, client_execution_generation, sio_event)
 VALUES ($1, $2, 'agent.execute.application.v1', 'bundle', 'entry', $3, 'm', 'g', 'chat_predict')`,
-			f.fence.ExecutionID, int64(f.fence.Generation), stream); err != nil {
-			t.Fatal(err)
-		}
+		m.fence.ExecutionID, int64(m.fence.Generation), stream); err != nil {
+		t.Fatal(err)
 	}
-	mintMemory("bearer")
+}
+
+func (m memoryFixture) mintMemory(t *testing.T, bearer string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	minted, err := m.store.Mint(ctx, VectorClaimTokenMint{
+		Fence:        m.fence,
+		TokenSHA256:  sha256.Sum256([]byte(bearer)),
+		Capabilities: vectorClaimCapabilities,
+		Sources:      []string{"toolkit_index", "memory"},
+		MaxLifetime:  6 * time.Hour,
+	})
+	if err != nil || !minted.Minted {
+		t.Fatalf("mint: %+v %v", minted, err)
+	}
+}
+
+func (m memoryFixture) facts(t *testing.T, bearer string, intent MemoryIntent) VectorClaimTokenFacts {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := m.store.Facts(ctx, sha256.Sum256([]byte(bearer)), intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// Personal memory is allowed only for a person's own chat turn (an agent job
+// started from the product, trigger_origin manual) in a PRIVATE chat
+// conversation whose only user participant is the actor -- the conversation
+// bound server-side (the admission's stream compared as a uuid AND the
+// response group whose task_id is the execution) -- and that is re-checked at
+// EVERY introspection (nothing is stored at mint). Everything else, and any
+// doubt, is refused.
+func TestPostgresVectorClaimTokenPersonalMemoryIsRecheckedAtEveryIntrospection(t *testing.T) {
+	m := newMemoryFixture(t, "vector-claim-personal-memory")
+	allowed := func(bearer string) bool {
+		t.Helper()
+		return m.facts(t, bearer, MemoryIntentPersonalRead).PersonalMemoryAllowed
+	}
+
+	// A direct toolkit call has no agent_execution_jobs row: not allowed.
+	m.mintMemory(t, "bearer-call")
+	if allowed("bearer-call") {
+		t.Fatal("a call without a conversation was allowed personal memory")
+	}
+
+	m.mintMemory(t, "bearer")
 	for name, tc := range map[string]struct {
-		stream  string
-		allowed bool
+		stream    string
+		origin    string
+		respondIn int
+		allowed   bool
 	}{
-		"private, the actor alone and an agent": {"11111111-1111-4111-8111-111111111111", true},
-		"private, two people":                   {"22222222-2222-4222-8222-222222222222", false},
-		"public conversation":                   {"33333333-3333-4333-8333-333333333333", false},
-		"private, another single participant":   {"44444444-4444-4444-8444-444444444444", false},
-		"no such conversation":                  {"55555555-5555-4555-8555-555555555555", false},
-		"not a uuid":                            {"not-a-uuid", false},
-		"missing agent_execution_jobs row":      {"", false},
+		"private, the actor alone and an agent": {m.conversationUUID(1), "manual", 1, true},
+		"private, two people":                   {m.conversationUUID(2), "manual", 2, false},
+		"public conversation":                   {m.conversationUUID(3), "manual", 3, false},
+		"private, another single participant":   {m.conversationUUID(4), "manual", 4, false},
+		"an MCP conversation":                   {m.conversationUUID(5), "manual", 5, false},
+		"no such conversation":                  {"66666666-6666-4666-8666-666666666666", "manual", 1, false},
+		"not a uuid":                            {"not-a-uuid", "manual", 1, false},
+		"missing agent_execution_jobs row":      {"", "manual", 1, false},
+		// The server-side binding: a stream naming the actor's private chat
+		// while the turn's response is in another conversation is refused.
+		"the stream names a conversation the turn did not answer in": {m.conversationUUID(1), "manual", 2, false},
+		"no response group for the execution":                        {m.conversationUUID(1), "manual", 0, false},
+		// Non-chat admission paths: an MCP tools/call or a PAT start (api), a
+		// schedule, a webhook. Not allowed, whatever conversation they name.
+		"an API or MCP start": {m.conversationUUID(1), "api", 1, false},
+		"a schedule":          {m.conversationUUID(1), "schedule", 1, false},
+		"a webhook":           {m.conversationUUID(1), "webhook", 1, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			withStream(tc.stream)
+			m.turn(t, tc.stream, tc.origin, tc.respondIn)
 			if got := allowed("bearer"); got != tc.allowed {
 				t.Fatalf("allowed = %v, want %v", got, tc.allowed)
 			}
@@ -509,42 +577,241 @@ VALUES ($1, $2, 'agent.execute.application.v1', 'bundle', 'entry', $3, 'm', 'g',
 	}
 
 	t.Run("a participant added mid-run withdraws it at the next introspection", func(t *testing.T) {
-		withStream("11111111-1111-4111-8111-111111111111")
+		m.turn(t, m.conversationUUID(1), "manual", 1)
 		if !allowed("bearer") {
 			t.Fatal("precondition: allowed")
 		}
-		f.exec(t, strings.ReplaceAll(`INSERT INTO @S@.chat_participant_mapping VALUES (1, 2)`, "@S@", schema))
+		m.exec(t, m.tenant(`INSERT INTO @S@.chat_participant_mapping VALUES (1, 2)`))
 		if allowed("bearer") {
 			t.Fatal("still allowed after a second person joined")
 		}
 	})
 
 	t.Run("a conversation made public mid-run withdraws it", func(t *testing.T) {
-		withStream("11111111-1111-4111-8111-111111111111")
-		f.exec(t, strings.ReplaceAll(`DELETE FROM @S@.chat_participant_mapping WHERE conversation_id = 1 AND participant_id = 2`, "@S@", schema))
+		m.turn(t, m.conversationUUID(1), "manual", 1)
+		m.exec(t, m.tenant(`DELETE FROM @S@.chat_participant_mapping WHERE conversation_id = 1 AND participant_id = 2`))
 		if !allowed("bearer") {
 			t.Fatal("precondition: allowed again")
 		}
-		f.exec(t, strings.ReplaceAll(`UPDATE @S@.chat_conversations SET is_private = false WHERE id = 1`, "@S@", schema))
+		m.exec(t, m.tenant(`UPDATE @S@.chat_conversations SET is_private = false WHERE id = 1`))
 		if allowed("bearer") {
 			t.Fatal("still allowed after the conversation became public")
+		}
+		m.exec(t, m.tenant(`UPDATE @S@.chat_conversations SET is_private = true WHERE id = 1`))
+	})
+
+	t.Run("no intent, or a project intent, decides nothing personal", func(t *testing.T) {
+		m.turn(t, m.conversationUUID(1), "manual", 1)
+		for _, intent := range []MemoryIntent{MemoryIntentNone, MemoryIntentProjectWrite} {
+			if m.facts(t, "bearer", intent).PersonalMemoryAllowed {
+				t.Fatalf("intent %d answered a personal permission", intent)
+			}
 		}
 	})
 
 	t.Run("a failed lookup is a refusal", func(t *testing.T) {
-		withStream("11111111-1111-4111-8111-111111111111")
-		f.exec(t, strings.ReplaceAll(`DROP TABLE @S@.chat_participant_mapping`, "@S@", schema))
+		m.turn(t, m.conversationUUID(1), "manual", 1)
+		m.exec(t, m.tenant(`DROP TABLE @S@.chat_participant_mapping`))
 		if allowed("bearer") {
 			t.Fatal("allowed although the lookup failed")
 		}
 	})
 
 	t.Run("a token without the memory source is never asked", func(t *testing.T) {
-		if _, err := f.mint(t, f.fence, "bearer-index-only"); err != nil {
+		if _, err := m.mint(t, m.fence, "bearer-index-only"); err != nil {
 			t.Fatal(err)
 		}
 		if allowed("bearer-index-only") {
 			t.Fatal("an index-only token carries personal memory")
 		}
 	})
+}
+
+// The cross-scope rule (owner decision 2026-10-14): once a run has READ
+// personal memory, its project-memory WRITES are refused, from any claim
+// token of the execution. A personal write is not a read; a project write
+// before any personal read is allowed; another run is unaffected.
+func TestPostgresVectorClaimTokenProjectWriteIsRefusedAfterAPersonalRead(t *testing.T) {
+	m := newMemoryFixture(t, "vector-claim-cross-scope")
+	m.turn(t, m.conversationUUID(1), "manual", 1)
+	m.mintMemory(t, "bearer")
+	refused := func(bearer string) bool {
+		t.Helper()
+		return m.facts(t, bearer, MemoryIntentProjectWrite).ProjectMemoryWriteRefused
+	}
+
+	if refused("bearer") {
+		t.Fatal("a project write before any personal read was refused")
+	}
+	if !m.facts(t, "bearer", MemoryIntentPersonalWrite).PersonalMemoryAllowed {
+		t.Fatal("precondition: the personal write is allowed")
+	}
+	if refused("bearer") {
+		t.Fatal("a personal WRITE counted as a read")
+	}
+	// A personal read that is NOT allowed (the conversation is shared) reads
+	// nothing, so it does not mark the run.
+	m.exec(t, m.tenant(`INSERT INTO @S@.chat_participant_mapping VALUES (1, 2)`))
+	if m.facts(t, "bearer", MemoryIntentPersonalRead).PersonalMemoryAllowed {
+		t.Fatal("precondition: refused in a shared conversation")
+	}
+	if refused("bearer") {
+		t.Fatal("a refused personal read marked the run")
+	}
+	m.exec(t, m.tenant(`DELETE FROM @S@.chat_participant_mapping WHERE conversation_id = 1 AND participant_id = 2`))
+
+	// The read marks the run.
+	if !m.facts(t, "bearer", MemoryIntentPersonalRead).PersonalMemoryAllowed {
+		t.Fatal("precondition: the personal read is allowed")
+	}
+	if !refused("bearer") {
+		t.Fatal("a project write after a personal read was allowed")
+	}
+	// A project READ is unaffected (no decision is made for it).
+	if got := m.facts(t, "bearer", MemoryIntentNone); got.ProjectMemoryWriteRefused {
+		t.Fatalf("a non-write intent answered refused: %+v", got)
+	}
+
+	// Another token of the SAME execution (a later claim's re-mint keeps the
+	// row; a second row of the execution is what a takeover leaves) is refused
+	// too: the flag is read across the execution's rows.
+	m.exec(t, `UPDATE elitea_runtime.vector_claim_tokens SET token_sha256 = $1 WHERE execution_id = $2`,
+		func() []byte { h := sha256.Sum256([]byte("bearer-after-remint")); return h[:] }(), m.fence.ExecutionID)
+	m.exec(t, `UPDATE elitea_runtime.vector_claim_tokens SET personal_memory_read = false WHERE execution_id = $1`, m.fence.ExecutionID)
+	if refused("bearer-after-remint") {
+		t.Fatal("precondition: the flag was cleared")
+	}
+	m.exec(t, `UPDATE elitea_runtime.vector_claim_tokens SET personal_memory_read = true WHERE execution_id = $1`, m.fence.ExecutionID)
+	if !refused("bearer-after-remint") {
+		t.Fatal("the flag of the execution's row was not read")
+	}
+
+	// A separate run is unaffected.
+	other := newMemoryFixture(t, "vector-claim-cross-scope-other")
+	other.turn(t, other.conversationUUID(1), "manual", 1)
+	other.mintMemory(t, "bearer-other")
+	if other.facts(t, "bearer-other", MemoryIntentProjectWrite).ProjectMemoryWriteRefused {
+		t.Fatal("another run's project write was refused")
+	}
+}
+
+// A personal read and a project write of ONE run asked at the same time are
+// decided one after the other (both serialise on the execution's advisory
+// lock): whichever order the database picks, a write decided after the read
+// was recorded is refused, and no write is ever admitted after the read was.
+func TestPostgresVectorClaimTokenParallelReadAndWriteAreSerialised(t *testing.T) {
+	m := newMemoryFixture(t, "vector-claim-cross-scope-parallel")
+	m.turn(t, m.conversationUUID(1), "manual", 1)
+	m.mintMemory(t, "bearer")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	// Hold the execution's lock so both requests queue on it.
+	tx, err := m.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, memoryRunLock, m.fence.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		facts VectorClaimTokenFacts
+		err   error
+		at    time.Time
+	}
+	read := make(chan answer, 1)
+	write := make(chan answer, 1)
+	hash := sha256.Sum256([]byte("bearer"))
+	go func() {
+		got, err := m.store.Facts(ctx, hash, MemoryIntentPersonalRead)
+		read <- answer{got, err, time.Now()}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	go func() {
+		got, err := m.store.Facts(ctx, hash, MemoryIntentProjectWrite)
+		write <- answer{got, err, time.Now()}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-read:
+		t.Fatal("the read was decided while the execution was locked")
+	case <-write:
+		t.Fatal("the write was decided while the execution was locked")
+	default:
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r, w := <-read, <-write
+	if r.err != nil || w.err != nil {
+		t.Fatalf("read %v, write %v", r.err, w.err)
+	}
+	if !r.facts.PersonalMemoryAllowed {
+		t.Fatal("precondition: the read is allowed")
+	}
+	// The read queued first, so it was recorded first: the write is refused.
+	if !w.facts.ProjectMemoryWriteRefused {
+		t.Fatal("a project write decided after a personal read was allowed")
+	}
+}
+
+// Main adds the `memory` source to a claim token only when the claim's frozen
+// toolkits include a memory toolkit, so an older elitea-vector is never shown
+// a source it cannot name and a run without a memory toolkit has no memory
+// reach.
+func TestPostgresVectorClaimTokenMemorySourceOnlyForAMemoryToolkit(t *testing.T) {
+	f := newVectorClaimFixture(t, "vector-claim-memory-source")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mint := func(bearer string) []string {
+		t.Helper()
+		minted, err := f.store.Mint(ctx, VectorClaimTokenMint{
+			Fence:        f.fence,
+			TokenSHA256:  sha256.Sum256([]byte(bearer)),
+			Capabilities: vectorClaimCapabilities,
+			Sources:      []string{"toolkit_index"},
+			MemorySource: "memory",
+			MaxLifetime:  6 * time.Hour,
+		})
+		if err != nil || !minted.Minted {
+			t.Fatalf("mint: %+v %v", minted, err)
+		}
+		return minted.Sources
+	}
+	if got := mint("bearer-none"); !slices.Equal(got, []string{"toolkit_index"}) {
+		t.Fatalf("no memory toolkit: sources %v", got)
+	}
+	// Freeze a memory toolkit into the execution's input bundle.
+	content := []byte(`{"version_details": {"tools": [{"id": 9, "type": "memory", "toolkit_name": "notes", "settings": {"memory_scope": "personal"}}]}}`)
+	digest := sha256.Sum256(content)
+	f.exec(t, `
+INSERT INTO elitea_runtime.input_bundle_entries (
+    input_bundle_id, entry_id, entry_version, semantic_role, media_type,
+    content_digest, content_size, content_reference, classification,
+    required_grant_audience, content_bytes)
+SELECT input_bundle_id, 'agent-request', 'v1', 'agent.request', 'application/json',
+       $2, $3, 'content://memory-test', 'internal', 'elitea-main', $4
+FROM elitea_runtime.execution_jobs WHERE execution_id = $1`,
+		f.fence.ExecutionID, digest[:], int64(len(content)), content)
+	if got := mint("bearer-memory"); !slices.Equal(got, []string{"toolkit_index", "memory"}) {
+		t.Fatalf("a memory toolkit: sources %v", got)
+	}
+	// The token carries the claim's memory toolkits (all of its project), and
+	// elitea-vector refuses any other toolkit id.
+	facts, err := f.store.Facts(ctx, sha256.Sum256([]byte("bearer-memory")), MemoryIntentNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(facts.MemoryToolkits, []int64{9}) {
+		t.Fatalf("memory toolkits = %v, want [9]", facts.MemoryToolkits)
+	}
+	// A "memory" word that is not a tool entry does not count, and neither
+	// does a memory entry without a positive integer id.
+	found := map[int64]bool{}
+	collectMemoryToolkits(map[string]any{
+		"meta":  map[string]any{"type": "memory"},
+		"tools": []any{map[string]any{"type": "memory", "settings": map[string]any{}, "id": 1.5}, map[string]any{"type": "memory", "settings": map[string]any{}, "id": -2.0}, map[string]any{"type": "memory", "id": 4.0}},
+	}, found)
+	if len(found) != 0 {
+		t.Fatalf("non-entries counted: %v", found)
+	}
 }

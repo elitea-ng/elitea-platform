@@ -35,6 +35,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 )
 
@@ -242,24 +243,18 @@ type User struct {
 // Store reads and writes the directory.
 type Store struct {
 	pool        *pgxpool.Pool
-	memoryUsers MemoryUserJournal
+	memoryUsers cleanupjournal.MemoryUserJournal
 }
 
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
-// MemoryUserJournal records, in the transaction that removes people from a
-// project, that their personal memories there owe the vector store a deletion
-// (worker unit M9). *toolkitcleanup.Journal satisfies it.
-type MemoryUserJournal interface {
-	EnqueueMemoryUsers(ctx context.Context, tx pgx.Tx, projectID int64, userIDs ...int64) (string, error)
-}
-
 // WithMemoryUserJournal wires the journal a SCIM group withdrawal writes to
 // when a person ends with no role in the project. A nil journal leaves
-// memories alone (a deployment that keeps none in the vector store).
-func (s *Store) WithMemoryUserJournal(journal MemoryUserJournal) *Store {
-	if journal != nil {
-		s.memoryUsers = journal
+// memories alone (a deployment that keeps none in the vector store); so does a
+// typed nil (cleanupjournal.UsableMemoryUserJournal).
+func (s *Store) WithMemoryUserJournal(journal cleanupjournal.MemoryUserJournal) *Store {
+	if usable := cleanupjournal.UsableMemoryUserJournal(journal); usable != nil {
+		s.memoryUsers = usable
 	}
 	return s
 }

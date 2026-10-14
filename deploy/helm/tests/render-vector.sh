@@ -103,6 +103,19 @@ control_from="$(select_one "$on" NetworkPolicy elitea-main-netpol \
   && note "elitea-main's NetworkPolicy admits elitea-vector on the control port only" \
   || fail "no control-port-only ingress from elitea-vector on elitea-main (got '$control_from')"
 
+# Rollout order (worker unit M9): the whole vector stack is in Argo CD
+# sync-wave -5, so elitea-vector is healthy before elitea-main (wave 0) starts
+# minting memory sources it introspects for. Every vector manifest shares the
+# wave (a Deployment ahead of its own certificates would never become ready).
+off_wave="$(printf '%s' "$on" | yq eval 'select((.metadata.labels."app.kubernetes.io/component" == "vector" or .metadata.name == "elitea-qdrant" or .metadata.name == "elitea-qdrant-headless" or .metadata.name == "elitea-qdrant-netpol") and .metadata.annotations."argocd.argoproj.io/sync-wave" != "-5") | .kind + "/" + .metadata.name' - | grep -v '^---$' || true)"
+main_wave="$(select_one "$on" Deployment elitea-main '.metadata.annotations."argocd.argoproj.io/sync-wave" // "0"')"
+vector_wave="$(select_one "$on" Deployment elitea-vector '.metadata.annotations."argocd.argoproj.io/sync-wave"')"
+if [ -z "$off_wave" ] && [ "$vector_wave" = "-5" ] && [ "$main_wave" -gt "$vector_wave" ]; then
+  note "the vector stack is in sync-wave -5, before elitea-main (wave $main_wave)"
+else
+  fail "rollout order: vector wave '$vector_wave', main wave '$main_wave', vector manifests outside wave -5: $off_wave"
+fi
+
 dep_key="$(select_one "$on" Deployment elitea-vector '.spec.template.spec.volumes[] | select(.name == "qdrant-api-key") | .secret.secretName')"
 sts_key="$(select_one "$on" StatefulSet elitea-qdrant '.spec.template.spec.containers[0].env[] | select(.name == "QDRANT__SERVICE__API_KEY") | .valueFrom.secretKeyRef.name')"
 [ "$dep_key" = "elitea-qdrant-api-key" ] && [ "$sts_key" = "elitea-qdrant-api-key" ] \

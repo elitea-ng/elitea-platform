@@ -81,10 +81,77 @@ func (TokenKind) EnumDescriptor() ([]byte, []int) {
 	return file_elitea_vector_v1_introspection_proto_rawDescGZIP(), []int{0}
 }
 
+// MemoryIntent says what a memory request is about to do, so elitea-main
+// decides the memory permissions at that moment and, for a personal read,
+// records it. elitea-vector sends anything but NONE only for a memory-source
+// request, and asks afresh each time (such an answer is never cached).
+type MemoryIntent int32
+
+const (
+	// MEMORY_INTENT_UNSPECIFIED: no memory decision is wanted (every non-memory
+	// request, and project-scope memory reads). personal_memory_allowed is then
+	// false and project_memory_write_refused is false.
+	MemoryIntent_MEMORY_INTENT_UNSPECIFIED MemoryIntent = 0
+	// A read (search, count, list, read) in the PERSONAL scope. When the
+	// personal scope is allowed, elitea-main records that this claim's run has
+	// read personal memory.
+	MemoryIntent_MEMORY_INTENT_PERSONAL_READ MemoryIntent = 1
+	// A write (upsert, delete, metadata update) in the PERSONAL scope.
+	MemoryIntent_MEMORY_INTENT_PERSONAL_WRITE MemoryIntent = 2
+	// A write in the PROJECT scope. Refused (project_memory_write_refused) once
+	// the run has read personal memory.
+	MemoryIntent_MEMORY_INTENT_PROJECT_WRITE MemoryIntent = 3
+)
+
+// Enum value maps for MemoryIntent.
+var (
+	MemoryIntent_name = map[int32]string{
+		0: "MEMORY_INTENT_UNSPECIFIED",
+		1: "MEMORY_INTENT_PERSONAL_READ",
+		2: "MEMORY_INTENT_PERSONAL_WRITE",
+		3: "MEMORY_INTENT_PROJECT_WRITE",
+	}
+	MemoryIntent_value = map[string]int32{
+		"MEMORY_INTENT_UNSPECIFIED":    0,
+		"MEMORY_INTENT_PERSONAL_READ":  1,
+		"MEMORY_INTENT_PERSONAL_WRITE": 2,
+		"MEMORY_INTENT_PROJECT_WRITE":  3,
+	}
+)
+
+func (x MemoryIntent) Enum() *MemoryIntent {
+	p := new(MemoryIntent)
+	*p = x
+	return p
+}
+
+func (x MemoryIntent) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (MemoryIntent) Descriptor() protoreflect.EnumDescriptor {
+	return file_elitea_vector_v1_introspection_proto_enumTypes[1].Descriptor()
+}
+
+func (MemoryIntent) Type() protoreflect.EnumType {
+	return &file_elitea_vector_v1_introspection_proto_enumTypes[1]
+}
+
+func (x MemoryIntent) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use MemoryIntent.Descriptor instead.
+func (MemoryIntent) EnumDescriptor() ([]byte, []int) {
+	return file_elitea_vector_v1_introspection_proto_rawDescGZIP(), []int{1}
+}
+
 type IntrospectTokenRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// token is the bearer string, without the "Bearer " prefix.
-	Token         string `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	Token string `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	// memory_intent is what the request is about to do with memory.
+	MemoryIntent  MemoryIntent `protobuf:"varint,2,opt,name=memory_intent,json=memoryIntent,proto3,enum=elitea.vector.v1.MemoryIntent" json:"memory_intent,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -126,6 +193,13 @@ func (x *IntrospectTokenRequest) GetToken() string {
 	return ""
 }
 
+func (x *IntrospectTokenRequest) GetMemoryIntent() MemoryIntent {
+	if x != nil {
+		return x.MemoryIntent
+	}
+	return MemoryIntent_MEMORY_INTENT_UNSPECIFIED
+}
+
 type IntrospectTokenResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// active is false for a token that is malformed, unknown, revoked,
@@ -144,15 +218,28 @@ type IntrospectTokenResponse struct {
 	// that minted it. elitea-vector refuses every other source.
 	AllowedSources []Source `protobuf:"varint,6,rep,packed,name=allowed_sources,json=allowedSources,proto3,enum=elitea.vector.v1.Source" json:"allowed_sources,omitempty"`
 	// personal_memory_allowed says whether this token may use the PERSONAL
-	// memory scope: a worker claim token of a run by a user whose conversation
-	// has one human participant (or no conversation). False for every callback
-	// token, and for a claim that runs in a conversation with more than one
-	// person, where a personal memory would be read into, or written from, a
-	// transcript other people see. Decided by elitea-main when the claim token
-	// is minted.
+	// memory scope: a worker claim token of an agent chat turn in a PRIVATE
+	// conversation whose only user participant is the actor. False for every
+	// callback token, for a claim outside such a conversation (a direct toolkit
+	// call, an MCP or API run, a shared or public conversation) and when the
+	// lookup fails. Decided by elitea-main at THIS introspection, and only when
+	// memory_intent asks for a personal decision.
 	PersonalMemoryAllowed bool `protobuf:"varint,7,opt,name=personal_memory_allowed,json=personalMemoryAllowed,proto3" json:"personal_memory_allowed,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// project_memory_write_refused is true for a MEMORY_INTENT_PROJECT_WRITE
+	// asked by a run that has already read personal memory: shared project
+	// memory must not be written from a run that saw personal memory. The
+	// default (false) is "not refused", so an older elitea-main never refuses.
+	ProjectMemoryWriteRefused bool `protobuf:"varint,8,opt,name=project_memory_write_refused,json=projectMemoryWriteRefused,proto3" json:"project_memory_write_refused,omitempty"`
+	// memory_toolkit_ids are the memory toolkits this worker claim's frozen
+	// toolkits name, every one a toolkit of the token's project (Main freezes a
+	// run's toolkits from the run's own project). elitea-vector refuses a memory
+	// request whose toolkit_id is not listed, so a token cannot reach a memory
+	// store of a toolkit its run was not given. Empty for every callback token and
+	// for a token without the memory source; a memory-source token with none
+	// reaches no memory at all.
+	MemoryToolkitIds []int64 `protobuf:"varint,9,rep,packed,name=memory_toolkit_ids,json=memoryToolkitIds,proto3" json:"memory_toolkit_ids,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *IntrospectTokenResponse) Reset() {
@@ -234,13 +321,28 @@ func (x *IntrospectTokenResponse) GetPersonalMemoryAllowed() bool {
 	return false
 }
 
+func (x *IntrospectTokenResponse) GetProjectMemoryWriteRefused() bool {
+	if x != nil {
+		return x.ProjectMemoryWriteRefused
+	}
+	return false
+}
+
+func (x *IntrospectTokenResponse) GetMemoryToolkitIds() []int64 {
+	if x != nil {
+		return x.MemoryToolkitIds
+	}
+	return nil
+}
+
 var File_elitea_vector_v1_introspection_proto protoreflect.FileDescriptor
 
 const file_elitea_vector_v1_introspection_proto_rawDesc = "" +
 	"\n" +
-	"$elitea/vector/v1/introspection.proto\x12\x10elitea.vector.v1\x1a\x1delitea/vector/v1/vector.proto\".\n" +
+	"$elitea/vector/v1/introspection.proto\x12\x10elitea.vector.v1\x1a\x1delitea/vector/v1/vector.proto\"s\n" +
 	"\x16IntrospectTokenRequest\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"\xc2\x02\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12C\n" +
+	"\rmemory_intent\x18\x02 \x01(\x0e2\x1e.elitea.vector.v1.MemoryIntentR\fmemoryIntent\"\xb1\x03\n" +
 	"\x17IntrospectTokenResponse\x12\x16\n" +
 	"\x06active\x18\x01 \x01(\bR\x06active\x12\x1d\n" +
 	"\n" +
@@ -249,11 +351,18 @@ const file_elitea_vector_v1_introspection_proto_rawDesc = "" +
 	"\x04kind\x18\x04 \x01(\x0e2\x1b.elitea.vector.v1.TokenKindR\x04kind\x12&\n" +
 	"\x0fexpires_at_unix\x18\x05 \x01(\x03R\rexpiresAtUnix\x12A\n" +
 	"\x0fallowed_sources\x18\x06 \x03(\x0e2\x18.elitea.vector.v1.SourceR\x0eallowedSources\x126\n" +
-	"\x17personal_memory_allowed\x18\a \x01(\bR\x15personalMemoryAllowed*d\n" +
+	"\x17personal_memory_allowed\x18\a \x01(\bR\x15personalMemoryAllowed\x12?\n" +
+	"\x1cproject_memory_write_refused\x18\b \x01(\bR\x19projectMemoryWriteRefused\x12,\n" +
+	"\x12memory_toolkit_ids\x18\t \x03(\x03R\x10memoryToolkitIds*d\n" +
 	"\tTokenKind\x12\x1a\n" +
 	"\x16TOKEN_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17TOKEN_KIND_WORKER_CLAIM\x10\x01\x12\x1e\n" +
-	"\x1aTOKEN_KIND_ENGINE_CALLBACK\x10\x022\x83\x01\n" +
+	"\x1aTOKEN_KIND_ENGINE_CALLBACK\x10\x02*\x91\x01\n" +
+	"\fMemoryIntent\x12\x1d\n" +
+	"\x19MEMORY_INTENT_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bMEMORY_INTENT_PERSONAL_READ\x10\x01\x12 \n" +
+	"\x1cMEMORY_INTENT_PERSONAL_WRITE\x10\x02\x12\x1f\n" +
+	"\x1bMEMORY_INTENT_PROJECT_WRITE\x10\x032\x83\x01\n" +
 	"\x19TokenIntrospectionService\x12f\n" +
 	"\x0fIntrospectToken\x12(.elitea.vector.v1.IntrospectTokenRequest\x1a).elitea.vector.v1.IntrospectTokenResponseBQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
 
@@ -269,24 +378,26 @@ func file_elitea_vector_v1_introspection_proto_rawDescGZIP() []byte {
 	return file_elitea_vector_v1_introspection_proto_rawDescData
 }
 
-var file_elitea_vector_v1_introspection_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_elitea_vector_v1_introspection_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_elitea_vector_v1_introspection_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_elitea_vector_v1_introspection_proto_goTypes = []any{
 	(TokenKind)(0),                  // 0: elitea.vector.v1.TokenKind
-	(*IntrospectTokenRequest)(nil),  // 1: elitea.vector.v1.IntrospectTokenRequest
-	(*IntrospectTokenResponse)(nil), // 2: elitea.vector.v1.IntrospectTokenResponse
-	(Source)(0),                     // 3: elitea.vector.v1.Source
+	(MemoryIntent)(0),               // 1: elitea.vector.v1.MemoryIntent
+	(*IntrospectTokenRequest)(nil),  // 2: elitea.vector.v1.IntrospectTokenRequest
+	(*IntrospectTokenResponse)(nil), // 3: elitea.vector.v1.IntrospectTokenResponse
+	(Source)(0),                     // 4: elitea.vector.v1.Source
 }
 var file_elitea_vector_v1_introspection_proto_depIdxs = []int32{
-	0, // 0: elitea.vector.v1.IntrospectTokenResponse.kind:type_name -> elitea.vector.v1.TokenKind
-	3, // 1: elitea.vector.v1.IntrospectTokenResponse.allowed_sources:type_name -> elitea.vector.v1.Source
-	1, // 2: elitea.vector.v1.TokenIntrospectionService.IntrospectToken:input_type -> elitea.vector.v1.IntrospectTokenRequest
-	2, // 3: elitea.vector.v1.TokenIntrospectionService.IntrospectToken:output_type -> elitea.vector.v1.IntrospectTokenResponse
-	3, // [3:4] is the sub-list for method output_type
-	2, // [2:3] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	1, // 0: elitea.vector.v1.IntrospectTokenRequest.memory_intent:type_name -> elitea.vector.v1.MemoryIntent
+	0, // 1: elitea.vector.v1.IntrospectTokenResponse.kind:type_name -> elitea.vector.v1.TokenKind
+	4, // 2: elitea.vector.v1.IntrospectTokenResponse.allowed_sources:type_name -> elitea.vector.v1.Source
+	2, // 3: elitea.vector.v1.TokenIntrospectionService.IntrospectToken:input_type -> elitea.vector.v1.IntrospectTokenRequest
+	3, // 4: elitea.vector.v1.TokenIntrospectionService.IntrospectToken:output_type -> elitea.vector.v1.IntrospectTokenResponse
+	4, // [4:5] is the sub-list for method output_type
+	3, // [3:4] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_elitea_vector_v1_introspection_proto_init() }
@@ -300,7 +411,7 @@ func file_elitea_vector_v1_introspection_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_vector_v1_introspection_proto_rawDesc), len(file_elitea_vector_v1_introspection_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   1,

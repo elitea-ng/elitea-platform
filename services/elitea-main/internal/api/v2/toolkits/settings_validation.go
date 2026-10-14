@@ -449,8 +449,11 @@ func (h *Handler) storedToolkitType(ctx context.Context, projectID, toolkitID st
 // skips a toolkit that breaks it.
 const memoryNamespaceMaxBytes = 256
 
-// memoryScopes are the values of a memory toolkit's `memory_scope`.
-var memoryScopes = map[string]bool{"personal": true, "project": true, "both": true}
+// memoryScopes are the values of a memory toolkit's `memory_scope`. A toolkit
+// is personal OR project (owner decision 2026-10-14): the former `both` is not
+// saved any more. A toolkit already stored with it is read as personal by the
+// worker (no data migration), and a save must pick one of the two.
+var memoryScopes = map[string]bool{"personal": true, "project": true}
 
 // memorySettingsProblems lists what is wrong with a memory toolkit's
 // `namespace` and `memory_scope` (an absent or null value is fine: the
@@ -479,7 +482,7 @@ func memorySettingsProblems(settings map[string]any) []map[string]any {
 	if value, present := settings["memory_scope"]; present && value != nil {
 		scope, isText := value.(string)
 		if !isText || !memoryScopes[scope] {
-			problem("memory_scope", "The memory scope must be personal, project or both.")
+			problem("memory_scope", "The memory scope must be personal or project. To use both, attach two memory toolkits.")
 		}
 	}
 	return problems

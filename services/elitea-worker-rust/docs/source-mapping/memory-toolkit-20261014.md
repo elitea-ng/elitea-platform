@@ -16,10 +16,13 @@ the design decisions, the evaluations and the follow-ups.
   `libs/rust/agent-runtime/src/toolkits/families/memory/mod.rs`,
   `services/elitea-worker-rust/src/indexing/tools.rs`.
 * **Two kinds of memory** (owner decision). `memory_scope` on the toolkit:
-  `personal` (default, privacy-safe), `project`, or `both` (every tool then
-  takes an optional `scope`, `personal` by default; a single-scope toolkit has
-  no such argument). A *personal* memory belongs to one authenticated user and
-  is invisible to every other user, through search, get and delete. A *project*
+  `personal` (default, privacy-safe) or `project`. A toolkit is one or the
+  other (owner decision, review round 3): the former `both` mode and its
+  per-call `scope` argument are removed, and an agent that needs both attaches
+  two memory toolkits. A toolkit saved with `both` is read as `personal` (no
+  data migration); Main no longer saves `both`, and the create form offers the
+  two values. A *personal* memory belongs to one authenticated user and is
+  invisible to every other user, through search, get and delete. A *project*
   memory is shared by everyone in the project (the SDK's behaviour).
 * **Who may see a memory is decided by `elitea-vector`, not by the worker.** See
   "Security model" below. The worker only says which scope a call works in.
@@ -83,17 +86,57 @@ enforces it:
   actor must be a positive user id), and scheduled runs act as their owner and
   use the owner's personal memory; a run that has no token has no vector access,
   so no memory at all.
-* **Personal memory is re-checked on every call.** Main answers
-  `personal_memory_allowed` at EVERY introspection, from the conversation as it
-  is now, and stores nothing at mint. It is true only if the claim has a
-  conversation (an `agent_execution_jobs` row whose `client_stream_id` is the
-  conversation uuid), the conversation is private (`is_private`), its user
-  participants are exactly one, and that one is the actor. A public
-  conversation, another single participant, a participant added mid-run, a
-  missing row, a direct toolkit call and any lookup error all answer false (a
-  doubt about privacy answers no). `elitea-vector` does not cache the answer of
-  a token that may use personal memory, so every call asks Main; a refusal is
-  `memory.personal_shared_conversation` and the project scope keeps working.
+* **Personal memory is re-checked on every personal-scope call (round 3).**
+  elitea-vector tells Main what a memory request is about to do
+  (`IntrospectTokenRequest.memory_intent`: personal read, personal write,
+  project write). A personal-scope request and a project-scope WRITE are
+  introspected afresh, never from the cache; every other request (toolkit-index
+  search and upsert, a project-scope read) keeps the claim-TTL cache, so the
+  index hot path costs Main nothing extra. Main answers
+  `personal_memory_allowed` only for a personal intent, from the conversation
+  as it is now, and stores nothing at mint. It is true only if the run is a
+  person's own chat turn: an `agent_execution_jobs` row and
+  `trigger_origin = 'manual'` (an MCP `tools/call`, an API/PAT start, a
+  schedule, a webhook, a direct toolkit call and an index run are refused); the
+  conversation is bound server-side: the stream the admission wrote is compared
+  as a uuid (`conversation.uuid = $1::uuid`, a non-uuid fails closed) AND that
+  conversation holds the response message group whose `task_id` is this
+  execution (written by the admission transaction), so a caller-supplied stream
+  id naming another conversation finds no response there; the conversation is a
+  chat one (`source = 'elitea'`), private, and its only user participant is the
+  actor. Anything else, a participant added mid-run and any lookup error
+  included, answers false; a refusal is `memory.personal_shared_conversation`.
+* **A run that read personal memory cannot write project memory (owner
+  decision, round 3).** When Main allows a personal READ it records it
+  (`vector_claim_tokens.personal_memory_read`, shared/0166) before answering;
+  a project-write introspection of the same execution (any claim token row of
+  it) answers `project_memory_write_refused`, and elitea-vector refuses the
+  write with `memory.project_write_after_personal_read: this run read personal
+  memory, so it cannot write shared project memory`. The record and the check
+  take the same per-execution advisory lock, so a parallel read and write of
+  one run are decided one after the other: a write decided after the read was
+  recorded is refused, and a write decided before it was fixed before the read
+  was admitted. A personal WRITE is not a read, but `manage_memory` reads the
+  key's versions first, so in practice a personal `manage_memory` also marks
+  the run (conservative: a version read is personal content). A refused
+  personal read (shared conversation) marks nothing, and a request refused for
+  a fixed reason (a toolkit the run was not given, a bad scope) is refused
+  before Main is asked, so it marks nothing either. Another run is unaffected.
+* **The run's own toolkits only (round 3).** Main writes the claim's frozen
+  memory toolkit ids (`vector_claim_tokens.memory_toolkit_ids`) at mint and
+  returns them at introspection (`memory_toolkit_ids`); elitea-vector refuses
+  a memory request for any other toolkit id
+  (`memory.toolkit_not_in_run`). Main freezes a run's toolkits from the run's
+  own project, so this also binds the toolkit to the token's project; the
+  points carry the token's `project_id` (never a request's), the point id
+  includes it, and every read, delete and update is scoped by it.
+* **Rollout safety (round 3).** Main adds the `memory` source to a claim token
+  only when the claim's frozen toolkits include a memory toolkit, so a run
+  without one has no memory reach and an older elitea-vector is never shown a
+  source it cannot name. elitea-vector ignores a source value it cannot name
+  and keeps the ones it can (it never rejects the whole token for it). The
+  chart puts the whole vector stack in Argo CD sync-wave -5, before elitea-main
+  (wave 0).
 * **The store is the toolkit's.** The worker names the toolkit id (from the
   run's frozen toolkit reference, not from the model); the facade stamps it as
   the `toolkit_id` payload key, includes it in the point id, and narrows every
@@ -110,28 +153,37 @@ enforces it:
   `DeleteMemoryToolkit` (every point of one toolkit of a project, every
   namespace and owner: a toolkit delete) and `DeleteMemoryUser` (every personal
   point of one user in one project, or with project 0 in every project). `DropProject` still removes everything of a project.
+  `DeleteMemoryToolkit` is deliberately NOT a cross-project delete: toolkit ids
+  are a `SERIAL` per tenant schema, so toolkit 41 of project A and toolkit 41
+  of project B are different toolkits, and a delete keyed on the id alone
+  would erase another project's memories. A run's points always carry the
+  run's resource project, which is the toolkit's own project (the freeze reads
+  toolkits from the run's project; a catalogue version carries no toolkits),
+  and the toolkit binding above makes that structural, so `(project, toolkit)`
+  is the toolkit's whole store (round 3 review item 7, decided with the
+  owner).
 * **The namespace id holds no secret.** It is a hash of the toolkit id and the
   `namespace` label; elitea-main needs neither (it deletes by toolkit id).
 * **`ReadMemory` is deterministic.** The facade reads every matching point of
   each collection in pages (refusing, `RESOURCE_EXHAUSTED`, past 5000 matched),
-  sorts them newest first by `valid_from` (then the larger id) across all
-  collections and only then keeps `limit`, so versions beyond a page, or spread
-  over two embedding spaces, still come back newest first.
+  sorts them newest first by `valid_from`, then by the larger version id
+  (`metadata.t.id`, the tie-break the client uses to pick the current version),
+  then by the point id, across all collections, and only then keeps `limit`,
+  so versions beyond a page, or spread over two embedding spaces, still come
+  back newest first and in the client's order.
 
-### Prompt injection and the `both` scope
+### Prompt injection and cross-scope copying
 
-Anything the model writes into a memory is later read back as a fact. In `both`
-mode, a model that moves content from `personal` to `project` scope shares one
-person's words with everyone in the project, and a model that saves text taken
-from a web page, a document or a tool result into `project` memory lets that
-text steer every later conversation of the project. So: project writes are
-explicit calls (nothing copies implicitly between scopes), `personal` stays the
-default of the `scope` argument, and the `manage_memory` description and the
-`scope` argument tell the model to write to `project` only when the person asked
-and never to copy personal memories or content that came from a tool. This is a
-mitigation, not a guarantee; a toolkit that must never share should be
-`personal` only, and `project` only toolkits should be attached to agents whose
-inputs are trusted.
+Anything the model writes into a memory is later read back as a fact. A model
+that moves content from personal to project memory shares one person's words
+with everyone in the project, and a model that saves text taken from a web
+page, a document or a tool result into project memory lets that text steer
+every later conversation of the project. Round 3 closes the first path on the
+SERVER: a toolkit is personal or project (no `both`, no per-call scope), and a
+run that has read personal memory is refused every project-memory write, even
+through a second (project) toolkit attached to the same agent. The second path
+(untrusted content into project memory) is a mitigation, not a guarantee:
+project toolkits should be attached to agents whose inputs are trusted.
 
 ### Lifecycle
 
@@ -147,6 +199,11 @@ inputs are trusted.
   transaction that removes the user or the membership, by one helper
   (`Journal.EnqueueMemoryUsers`), and the reconciler retries it until
   `elitea-vector` has done it; a vector service that is down only delays it.
+  The drain re-checks, right before the delete, that the user is still not a
+  member of the project (for a project-0 row: that no user row with the id
+  exists again); a user re-added before the drain closes the row as
+  `superseded` and keeps their memories (round 3). The three hooks share one
+  `cleanupjournal.MemoryUserJournal` interface and one typed-nil guard.
   Hooked: the project members route (`DELETE users`), the administrators' user
   delete (project 0: every project, no membership lookup), and SCIM group sync
   (a withdrawal that leaves the person with no role in the project, including

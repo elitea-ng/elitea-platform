@@ -50,7 +50,10 @@ func (f fakeFacts) Facts(_ context.Context, tokenID int64) (repos.CallbackTokenF
 
 type fakeClaimTokens map[[32]byte]repos.VectorClaimTokenFacts
 
-func (f fakeClaimTokens) Facts(_ context.Context, hash [32]byte) (repos.VectorClaimTokenFacts, error) {
+// Facts answers like the repository: the personal permission only for a
+// personal intent, and a project-write refusal only for a project-write intent
+// on a token marked as having read personal memory (0x16).
+func (f fakeClaimTokens) Facts(_ context.Context, hash [32]byte, intent repos.MemoryIntent) (repos.VectorClaimTokenFacts, error) {
 	if hash == sha256.Sum256([]byte(claimToken(0x99))) {
 		return repos.VectorClaimTokenFacts{}, errors.New("db down")
 	}
@@ -58,6 +61,11 @@ func (f fakeClaimTokens) Facts(_ context.Context, hash [32]byte) (repos.VectorCl
 	if !ok {
 		return repos.VectorClaimTokenFacts{}, repos.ErrVectorClaimTokenFactsNotFound
 	}
+	if intent != repos.MemoryIntentPersonalRead && intent != repos.MemoryIntentPersonalWrite {
+		facts.PersonalMemoryAllowed = false
+	}
+	facts.ProjectMemoryWriteRefused = intent == repos.MemoryIntentProjectWrite &&
+		hash == sha256.Sum256([]byte(claimToken(0x16)))
 	return facts, nil
 }
 
@@ -126,6 +134,8 @@ func newTestServer(t *testing.T) *Server {
 			// one in a conversation with several people.
 			mustHash(t, claimToken(0x14)): {ProjectID: 7, ActorID: 42, Sources: []string{"toolkit_index", "memory"}, ExpiresAt: expires, PersonalMemoryAllowed: true},
 			mustHash(t, claimToken(0x15)): {ProjectID: 7, ActorID: 42, Sources: []string{"toolkit_index", "memory"}, ExpiresAt: expires},
+			// A run that has read personal memory.
+			mustHash(t, claimToken(0x16)): {ProjectID: 7, ActorID: 42, Sources: []string{"toolkit_index", "memory"}, ExpiresAt: expires, PersonalMemoryAllowed: true},
 		},
 		[]string{"dns:elitea-vector"},
 		nil,
@@ -268,8 +278,9 @@ func TestIntrospectRefusesEveryOtherClaimToken(t *testing.T) {
 
 func TestIntrospectNamesTheMemorySourceAndWhetherPersonalMemoryIsAllowed(t *testing.T) {
 	server := newTestServer(t)
+	personalRead := vectorv1.MemoryIntent_MEMORY_INTENT_PERSONAL_READ
 	for token, allowed := range map[byte]bool{0x14: true, 0x15: false} {
-		response, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: claimToken(token)})
+		response, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: claimToken(token), MemoryIntent: personalRead})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -281,8 +292,25 @@ func TestIntrospectNamesTheMemorySourceAndWhetherPersonalMemoryIsAllowed(t *test
 		}
 	}
 	// A callback token never carries the personal scope.
-	callback, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: "callback"})
+	callback, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: "callback", MemoryIntent: personalRead})
 	if err != nil || callback.GetPersonalMemoryAllowed() {
 		t.Fatalf("callback token: %v %v", callback, err)
+	}
+	// The intent travels: no intent (a toolkit-index request, a project read)
+	// answers no personal permission; an unknown intent value is no intent.
+	for _, intent := range []vectorv1.MemoryIntent{vectorv1.MemoryIntent_MEMORY_INTENT_UNSPECIFIED, vectorv1.MemoryIntent(99)} {
+		response, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: claimToken(0x14), MemoryIntent: intent})
+		if err != nil || !response.GetActive() || response.GetPersonalMemoryAllowed() || response.GetProjectMemoryWriteRefused() {
+			t.Fatalf("intent %v: %v %v", intent, response, err)
+		}
+	}
+	// A project write of a run that read personal memory is refused; the same
+	// token's personal read, and another run's project write, are not.
+	projectWrite := vectorv1.MemoryIntent_MEMORY_INTENT_PROJECT_WRITE
+	for token, refused := range map[byte]bool{0x16: true, 0x14: false} {
+		response, err := server.IntrospectToken(peerContext("elitea-vector"), &vectorv1.IntrospectTokenRequest{Token: claimToken(token), MemoryIntent: projectWrite})
+		if err != nil || !response.GetActive() || response.GetProjectMemoryWriteRefused() != refused {
+			t.Fatalf("token %#x project write: %v %v", token, response, err)
+		}
 	}
 }

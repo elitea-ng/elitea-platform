@@ -11,7 +11,7 @@ func TestMemorySettingsAreValidatedOnSave(t *testing.T) {
 	t.Parallel()
 	valid := []map[string]any{
 		{},
-		{"namespace": "team-notes", "memory_scope": "both"},
+		{"namespace": "team-notes", "memory_scope": "project"},
 		{"namespace": nil, "memory_scope": nil},
 		{"namespace": strings.Repeat("n", 256), "memory_scope": "project"},
 		{"memory_scope": "personal", "pgvector_configuration": map[string]any{}},
@@ -27,6 +27,8 @@ func TestMemorySettingsAreValidatedOnSave(t *testing.T) {
 		"namespace  ":  {"namespace": strings.Repeat("n", 257)},
 		"namespace   ": {"namespace": "a\nb"},
 		"memory_scope": {"memory_scope": "everyone"},
+		// The retired value is not saved any more (owner decision 2026-10-14).
+		"memory_scope ": {"memory_scope": "both"},
 	}
 	for field, settings := range invalid {
 		problems := memorySettingsProblems(settings)

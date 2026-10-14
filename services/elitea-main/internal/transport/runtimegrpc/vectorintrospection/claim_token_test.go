@@ -66,8 +66,11 @@ func TestClaimTokenIssuerStoresOnlyTheHashOfTheBearerItReturns(t *testing.T) {
 		if request.Fence != testFence() || request.MaxLifetime != MaxClaimTokenLifetime {
 			t.Fatalf("unexpected mint request %+v", request)
 		}
-		if !slices.Equal(request.Sources, []string{"toolkit_index", "memory"}) {
-			t.Fatalf("sources = %v", request.Sources)
+		// Every claim token gets toolkit_index; memory is asked for apart
+		// (MemorySource), and the store adds it only for a claim whose frozen
+		// toolkits include a memory toolkit.
+		if !slices.Equal(request.Sources, []string{"toolkit_index"}) || request.MemorySource != "memory" {
+			t.Fatalf("sources = %v, memory source = %q", request.Sources, request.MemorySource)
 		}
 		if !slices.Equal(request.Capabilities, []string{
 			"index.ingest.v1", "toolkit.call_tool.v1", "agent.execute.application.v1", "agent.execute.adhoc.v1",

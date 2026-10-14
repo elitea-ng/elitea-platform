@@ -193,19 +193,15 @@ func WithInviteMailer(m InviteMailer) Option {
 
 type Option func(*Handler)
 
-// MemoryUserJournal records, in the transaction that removes users from a
-// project, that their personal memories there owe the vector store a deletion
-// (worker unit M9). *toolkitcleanup.Journal satisfies it.
-type MemoryUserJournal interface {
-	EnqueueMemoryUsers(ctx context.Context, tx pgx.Tx, projectID int64, userIDs ...int64) (string, error)
-}
+// MemoryUserJournal is cleanupjournal's one interface (worker unit M9).
+type MemoryUserJournal = cleanupjournal.MemoryUserJournal
 
 // WithMemoryUserJournal wires the journal a project-membership removal writes
 // to. Unwired, nothing is journaled.
 func WithMemoryUserJournal(journal MemoryUserJournal) Option {
 	return func(handler *Handler) {
-		if journal != nil && !cleanupjournal.IsNilPointer(journal) {
-			handler.memoryUsers = journal
+		if usable := cleanupjournal.UsableMemoryUserJournal(journal); usable != nil {
+			handler.memoryUsers = usable
 		}
 	}
 }

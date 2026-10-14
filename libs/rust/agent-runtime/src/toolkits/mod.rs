@@ -215,8 +215,8 @@ pub use families::index_tools::{
     SharedIndexCatalog, is_index_family, is_sdk_index_tool_name,
 };
 pub use families::memory::{
-    MAX_NAMESPACE_BYTES, MEMORY_TOOLKIT_TYPE, MemoryScope, MemoryScopeSetting, MemoryToolCall,
-    MemoryToolName, memory_namespace,
+    MAX_NAMESPACE_BYTES, MEMORY_TOOLKIT_TYPE, MemoryScope, MemoryToolCall, MemoryToolName,
+    memory_namespace,
 };
 pub use families::office_host::{
     ImageEditInput, ImageEditRequest, ImageGenerateRequest, MAX_IMAGE_EDIT_INPUT_BYTES,

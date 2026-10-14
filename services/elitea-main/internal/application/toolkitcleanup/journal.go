@@ -126,6 +126,11 @@ const (
 	NoteRefused        = cleanupjournal.NoteRefused
 	NoteInvalidRequest = cleanupjournal.NoteInvalidRequest
 	noteSuperseded     = "a toolkit with this id exists again; nothing was touched"
+	// noteUserBack closes a memory_user row whose user is back: a member of
+	// the project again (or, for a project-0 row, a user row with the id
+	// exists). Re-adding the person cancels the pending cleanup, so the
+	// memories they write after coming back are not deleted.
+	noteUserBack = "the user is a member again; nothing was deleted"
 )
 
 // The last_error classes a failed run records (never the raw error: it can
@@ -457,10 +462,15 @@ func (j *Journal) run(parent context.Context, r row) (bool, error) {
 	defer cancel()
 	attrs := []any{"journal_id", r.id, "generation", r.generation, "app", r.app, "project_id", r.projectID, "toolkit_id", r.toolkitID}
 
-	// A user's memory cleanup has no toolkit to be superseded by.
+	// A toolkit row is superseded by a toolkit with its id existing again; a
+	// user's memory cleanup by the user being back (re-added to the project,
+	// or a user row with the id existing again), re-checked at the moment the
+	// row is worked, right before the delete.
 	var exists bool
 	var err error
-	if r.app != AppMemoryUser {
+	if r.app == AppMemoryUser {
+		exists, err = j.memoryUserBack(ctx, r)
+	} else {
 		exists, err = j.toolkitRowExists(ctx, r)
 	}
 	switch {
@@ -470,6 +480,9 @@ func (j *Journal) run(parent context.Context, r row) (bool, error) {
 	case err != nil:
 		j.logger.ErrorContext(ctx, "toolkit delete cleanup: could not check whether the toolkit exists again; the journal retries it", append(attrs, "err", err)...)
 		return false, j.fail(ctx, r, lastErrorCheckFailed, err)
+	case exists && r.app == AppMemoryUser:
+		j.logger.InfoContext(ctx, "memory cleanup cancelled: the user is a member of the project again, so their personal memories stay", attrs...)
+		return j.closeOrFail(ctx, r, OutcomeSuperseded, noteUserBack)
 	case exists:
 		j.logger.WarnContext(ctx, "toolkit delete cleanup superseded: a toolkit with this id exists again, so nothing is deleted", attrs...)
 		return j.closeOrFail(ctx, r, OutcomeSuperseded, noteSuperseded)
@@ -614,6 +627,36 @@ func (j *Journal) toolkitRowExists(ctx context.Context, r row) (bool, error) {
 		return false, fmt.Errorf("look for the toolkit row: %w", err)
 	}
 	return exists, nil
+}
+
+// memoryUserBack reports whether a memory_user row's user is back, so its
+// cleanup is cancelled: for a project row, the user holds a role in the
+// project again (public.auth_core__project_user_role, the membership the
+// removal deleted); for a project-0 row (a deleted user), a user row with the
+// id exists again. A database without the table has no such user. A failed
+// read is an error (the row retries): a cleanup that cannot tell must not
+// delete.
+func (j *Journal) memoryUserBack(ctx context.Context, r row) (bool, error) {
+	// The table is looked for on its own first: a statement naming a missing
+	// table fails at planning, whatever guards it.
+	table := "public.auth_core__project_user_role"
+	query := `SELECT EXISTS (SELECT 1 FROM public.auth_core__project_user_role WHERE project_id = $1 AND user_id = $2)`
+	if r.projectID == 0 {
+		table = "public.auth_core__user"
+		query = `SELECT $1::bigint = 0 AND EXISTS (SELECT 1 FROM public.auth_core__user WHERE id = $2)`
+	}
+	var present bool
+	if err := j.pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&present); err != nil {
+		return false, fmt.Errorf("look for the membership table: %w", err)
+	}
+	if !present {
+		return false, nil
+	}
+	var back bool
+	if err := j.pool.QueryRow(ctx, query, r.projectID, r.toolkitID).Scan(&back); err != nil {
+		return false, fmt.Errorf("look for the user's membership: %w", err)
+	}
+	return back, nil
 }
 
 // close ends a row with its outcome and note, the lease released, if the row

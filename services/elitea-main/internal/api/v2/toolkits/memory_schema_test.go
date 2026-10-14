@@ -55,8 +55,9 @@ func TestMemorySchemaKeepsPgvectorRequiredUnlessItLivesOnTheVectorStore(t *testi
 	if scope == nil || scope["default"] != "personal" {
 		t.Fatalf("memory_scope = %v, want a setting defaulting to personal", scope)
 	}
-	if values, _ := scope["enum"].([]any); len(values) != 3 {
-		t.Fatalf("memory_scope enum = %v", values)
+	// Two values: a toolkit is personal OR project (the former `both` is gone).
+	if values, _ := scope["enum"].([]any); len(values) != 2 || values[0] != "personal" || values[1] != "project" {
+		t.Fatalf("memory_scope enum = %v, want [personal project]", values)
 	}
 	if !strings.Contains(scope["description"].(string), "Personal") || !strings.Contains(scope["description"].(string), "Project") {
 		t.Fatalf("the scope setting is not described in plain words: %v", scope["description"])

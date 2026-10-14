@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
@@ -91,19 +90,15 @@ type Handler struct {
 // Option configures a Handler at construction time.
 type Option func(*Handler)
 
-// MemoryUserJournal records, in the transaction that deletes users, that their
-// personal memories (in every project) owe the vector store a deletion (worker
-// unit M9). *toolkitcleanup.Journal satisfies it.
-type MemoryUserJournal interface {
-	EnqueueMemoryUsers(ctx context.Context, tx pgx.Tx, projectID int64, userIDs ...int64) (string, error)
-}
+// MemoryUserJournal is cleanupjournal's one interface (worker unit M9).
+type MemoryUserJournal = cleanupjournal.MemoryUserJournal
 
 // WithMemoryUserJournal wires the journal a user deletion writes to (project 0:
 // every project). Unwired, nothing is journaled.
 func WithMemoryUserJournal(journal MemoryUserJournal) Option {
 	return func(h *Handler) {
-		if journal != nil && !cleanupjournal.IsNilPointer(journal) {
-			h.memoryUsers = journal
+		if usable := cleanupjournal.UsableMemoryUserJournal(journal); usable != nil {
+			h.memoryUsers = usable
 		}
 	}
 }

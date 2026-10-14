@@ -6,9 +6,11 @@
 //!   verifies the token ([`Introspector`]); the answer is cached until the
 //!   token expires, and never longer than the configured maximum (shorter
 //!   still for a worker claim token, whose revocation its expiry does not
-//!   show, and not at all for a token that may use PERSONAL memory: its
-//!   permission depends on the conversation's participants, which elitea-main
-//!   re-checks on every call). The token's project is the request's project, and the token's
+//!   show). A request that needs a memory decision (a personal-scope request
+//!   or a project-scope write) is NOT served from the cache: it asks
+//!   elitea-main afresh ([`Authenticator::fresh_token`]), because its permission
+//!   depends on the conversation's participants and on whether the run has
+//!   read personal memory. The token's project is the request's project, and the token's
 //!   sources are the only sources the request may name
 //!   ([`Caller::require_source`]).
 //!
@@ -100,6 +102,54 @@ pub struct TokenGrant {
     /// so for a worker claim of a run whose conversation has one human
     /// participant. Never true for a callback token.
     pub personal_memory_allowed: bool,
+    /// Set by elitea-main for a project-memory WRITE asked by a run that has
+    /// already read personal memory: shared memory must not be written from
+    /// such a run.
+    pub project_memory_write_refused: bool,
+    /// The memory toolkits a worker claim was given (every one a toolkit of
+    /// the token's project, frozen by elitea-main from the run's own
+    /// toolkits). A memory request naming any other toolkit id is refused, so
+    /// a token cannot reach the memory store of a toolkit its run was not
+    /// given. Empty for a callback token.
+    pub memory_toolkit_ids: Vec<i64>,
+}
+
+/// What a memory request is about to do, told to elitea-main with the
+/// introspection so it decides the memory permissions at that moment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MemoryIntent {
+    /// No memory decision wanted: every non-memory request and project-scope
+    /// memory reads. Such an answer comes from the claim cache.
+    #[default]
+    None,
+    /// A read in the personal scope.
+    PersonalRead,
+    /// A write in the personal scope.
+    PersonalWrite,
+    /// A write in the project scope.
+    ProjectWrite,
+}
+
+impl MemoryIntent {
+    /// The intent of an operation in `scope` (`write` or read).
+    #[must_use]
+    pub fn of(memory_scope: i32, write: bool) -> Self {
+        match (pb::MemoryScope::try_from(memory_scope), write) {
+            (Ok(pb::MemoryScope::Personal), false) => Self::PersonalRead,
+            (Ok(pb::MemoryScope::Personal), true) => Self::PersonalWrite,
+            (Ok(pb::MemoryScope::Project), true) => Self::ProjectWrite,
+            _ => Self::None,
+        }
+    }
+
+    const fn wire(self) -> pb::MemoryIntent {
+        match self {
+            Self::None => pb::MemoryIntent::Unspecified,
+            Self::PersonalRead => pb::MemoryIntent::PersonalRead,
+            Self::PersonalWrite => pb::MemoryIntent::PersonalWrite,
+            Self::ProjectWrite => pb::MemoryIntent::ProjectWrite,
+        }
+    }
 }
 
 impl TokenGrant {
@@ -234,6 +284,37 @@ impl Caller {
         source: i32,
         memory_scope: i32,
         toolkit_id: i64,
+        write: bool,
+    ) -> Result<Option<MemoryBinding>, Status> {
+        self.binding_checked(source, memory_scope, toolkit_id, write, true)
+    }
+
+    /// The checks of [`Self::memory_binding`] that a CACHED grant answers
+    /// (the scope, the toolkit, the token's user): everything but the
+    /// per-moment decisions (the personal permission and the write-after-read
+    /// refusal), which only a fresh introspection makes. Run before asking
+    /// elitea-main afresh, so a request refused for a fixed reason never
+    /// reaches the introspection that would record a personal read.
+    ///
+    /// # Errors
+    /// As [`Self::memory_binding`], without the per-moment refusals.
+    pub fn precheck_memory(
+        &self,
+        source: i32,
+        memory_scope: i32,
+        toolkit_id: i64,
+    ) -> Result<(), Status> {
+        self.binding_checked(source, memory_scope, toolkit_id, false, false)
+            .map(|_| ())
+    }
+
+    fn binding_checked(
+        &self,
+        source: i32,
+        memory_scope: i32,
+        toolkit_id: i64,
+        write: bool,
+        per_moment: bool,
     ) -> Result<Option<MemoryBinding>, Status> {
         let is_memory = source == pb::Source::Memory as i32;
         if !is_memory {
@@ -255,15 +336,33 @@ impl Caller {
                 "toolkit_id is required for the memory source",
             ));
         }
+        // The toolkit must be one the run was given: elitea-main froze them
+        // from the run's own project, so this also binds the toolkit to the
+        // token's project (the point's project_id and the scope of every
+        // operation are the token's).
+        if !grant.memory_toolkit_ids.contains(&toolkit_id) {
+            return Err(Status::permission_denied(
+                "memory.toolkit_not_in_run: this run was not given that memory toolkit",
+            ));
+        }
         let owner = match pb::MemoryScope::try_from(memory_scope) {
-            Ok(pb::MemoryScope::Project) => PROJECT_OWNER.to_owned(),
+            Ok(pb::MemoryScope::Project) => {
+                // Shared memory is not written from a run that has read
+                // personal memory: what it saw could be copied into it.
+                if per_moment && write && grant.project_memory_write_refused {
+                    return Err(Status::permission_denied(
+                        "memory.project_write_after_personal_read: this run read personal memory, so it cannot write shared project memory",
+                    ));
+                }
+                PROJECT_OWNER.to_owned()
+            }
             Ok(pb::MemoryScope::Personal) => {
                 let user = grant.memory_user().ok_or_else(|| {
                     Status::permission_denied(
                         "memory.personal_unavailable: this token names no user, so there is no personal memory",
                     )
                 })?;
-                if !grant.personal_memory_allowed {
+                if per_moment && !grant.personal_memory_allowed {
                     return Err(Status::permission_denied(
                         "memory.personal_shared_conversation: personal memory is only available in a private conversation that only this person is in",
                     ));
@@ -359,6 +458,21 @@ pub trait Introspector: Send + Sync {
     /// # Errors
     /// [`IntrospectError::Unavailable`] when no answer could be had.
     async fn introspect(&self, token: &str) -> Result<Option<TokenGrant>, IntrospectError>;
+
+    /// Like [`Self::introspect`], telling elitea-main what a memory request is
+    /// about to do. An answer for an intent other than [`MemoryIntent::None`]
+    /// is made afresh and is never cached. The default ignores the intent.
+    ///
+    /// # Errors
+    /// As [`Self::introspect`].
+    async fn introspect_for(
+        &self,
+        token: &str,
+        intent: MemoryIntent,
+    ) -> Result<Option<TokenGrant>, IntrospectError> {
+        let _ = intent;
+        self.introspect(token).await
+    }
 }
 
 /// The seconds since the Unix epoch.
@@ -438,9 +552,18 @@ impl GrpcIntrospector {
 #[async_trait]
 impl Introspector for GrpcIntrospector {
     async fn introspect(&self, token: &str) -> Result<Option<TokenGrant>, IntrospectError> {
+        self.introspect_for(token, MemoryIntent::None).await
+    }
+
+    async fn introspect_for(
+        &self,
+        token: &str,
+        intent: MemoryIntent,
+    ) -> Result<Option<TokenGrant>, IntrospectError> {
         let mut client = TokenIntrospectionServiceClient::clone(&self.client.load());
         let call = client.introspect_token(pb::IntrospectTokenRequest {
             token: token.to_owned(),
+            memory_intent: intent.wire() as i32,
         });
         let outcome = tokio::time::timeout(self.timeout, call)
             .await
@@ -476,12 +599,17 @@ pub fn grant_from_response(response: &pb::IntrospectTokenResponse, now: i64) -> 
     {
         return None;
     }
-    // No source, or one this build cannot name, admits nothing: a token is
-    // never widened to "every source" by an answer it cannot read.
+    // A source this build cannot name is IGNORED and the ones it can name are
+    // kept: a newer elitea-main may add a source, and rejecting the whole
+    // token for it would take down the sources this build does serve (a
+    // rolling upgrade). Nothing is widened: an ignored source admits nothing,
+    // and a token left with no known source admits nothing at all.
     let mut sources = Vec::with_capacity(response.allowed_sources.len());
     for raw in &response.allowed_sources {
         match pb::Source::try_from(*raw) {
-            Ok(pb::Source::Unspecified) | Err(_) => return None,
+            Ok(pb::Source::Unspecified) | Err(_) => {
+                tracing::debug!(source = *raw, "ignoring an unknown source in a grant");
+            }
             Ok(source) => {
                 if !sources.contains(&source) {
                     sources.push(source);
@@ -500,6 +628,18 @@ pub fn grant_from_response(response: &pb::IntrospectTokenResponse, now: i64) -> 
         sources,
         personal_memory_allowed: response.personal_memory_allowed
             && kind == pb::TokenKind::WorkerClaim,
+        project_memory_write_refused: response.project_memory_write_refused
+            && kind == pb::TokenKind::WorkerClaim,
+        memory_toolkit_ids: if kind == pb::TokenKind::WorkerClaim {
+            response
+                .memory_toolkit_ids
+                .iter()
+                .copied()
+                .filter(|id| *id > 0)
+                .collect()
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -610,12 +750,6 @@ impl CachingIntrospector {
 
     fn valid_until(&self, grant: Option<&TokenGrant>, now: i64) -> i64 {
         match grant {
-            // A token that may use PERSONAL memory is asked about on every
-            // call: elitea-main re-checks the conversation (private, only this
-            // person in it) at each introspection, so a participant added
-            // mid-run withdraws the permission on the very next call, not
-            // after a cache lifetime.
-            Some(grant) if grant.personal_memory_allowed => now,
             Some(grant) => {
                 let ttl = if grant.kind == pb::TokenKind::WorkerClaim {
                     self.policy
@@ -659,6 +793,24 @@ impl CachingIntrospector {
 
 #[async_trait]
 impl Introspector for CachingIntrospector {
+    async fn introspect_for(
+        &self,
+        token: &str,
+        intent: MemoryIntent,
+    ) -> Result<Option<TokenGrant>, IntrospectError> {
+        if intent == MemoryIntent::None {
+            return self.introspect(token).await;
+        }
+        // A memory decision is made at the moment of the request and never
+        // stored: not read from the cache, not written to it.
+        let now = (self.clock)();
+        Ok(self
+            .inner
+            .introspect_for(token, intent)
+            .await?
+            .filter(|grant| now < grant.expires_at_unix))
+    }
+
     async fn introspect(&self, token: &str) -> Result<Option<TokenGrant>, IntrospectError> {
         let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
         let now = (self.clock)();
@@ -727,6 +879,26 @@ impl Authenticator {
                     "elitea-main refuses this service's token introspection; \
                      check ELITEA_VECTOR_INTROSPECTION_CLIENTS and the client certificate"
                 );
+                Err(Status::failed_precondition(NOT_AUTHORIZED_MESSAGE))
+            }
+            Err(error) => {
+                tracing::warn!(%error, "token introspection failed; request refused");
+                Err(Status::unavailable("token verification is unavailable"))
+            }
+        }
+    }
+
+    /// Verifies `token` afresh (never from the cache) for a memory request
+    /// about to do `intent`. Only a token caller is asked: an administrator
+    /// has no memory scope.
+    ///
+    /// # Errors
+    /// As [`Self::verify_token`].
+    pub async fn fresh_token(&self, token: &str, intent: MemoryIntent) -> Result<Caller, Status> {
+        match self.introspector.introspect_for(token, intent).await {
+            Ok(Some(grant)) => Ok(Caller::Token(grant)),
+            Ok(None) => Err(Status::unauthenticated("the token is not accepted")),
+            Err(IntrospectError::NotAuthorized) => {
                 Err(Status::failed_precondition(NOT_AUTHORIZED_MESSAGE))
             }
             Err(error) => {
@@ -805,6 +977,8 @@ mod tests {
             expires_at_unix,
             sources: vec![pb::Source::Deepwiki],
             personal_memory_allowed: false,
+            project_memory_write_refused: false,
+            memory_toolkit_ids: vec![5, 9],
         }
     }
 
@@ -834,37 +1008,126 @@ mod tests {
         assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
     }
 
+    /// Counts the plain and the intent-carrying introspections.
+    struct Intents {
+        plain: AtomicUsize,
+        fresh: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl Introspector for Intents {
+        async fn introspect(&self, _: &str) -> Result<Option<TokenGrant>, IntrospectError> {
+            self.plain.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(claim_grant(7, 100_000)))
+        }
+
+        async fn introspect_for(
+            &self,
+            _: &str,
+            intent: MemoryIntent,
+        ) -> Result<Option<TokenGrant>, IntrospectError> {
+            if intent == MemoryIntent::None {
+                return self.introspect("").await;
+            }
+            self.fresh.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(claim_grant(7, 100_000)))
+        }
+    }
+
     #[tokio::test]
-    async fn a_token_that_may_use_personal_memory_is_introspected_on_every_call() {
-        let personal = TokenGrant {
-            sources: vec![pb::Source::Memory],
-            personal_memory_allowed: true,
-            ..claim_grant(7, 100_000)
-        };
-        let inner = Arc::new(Counting {
-            calls: AtomicUsize::new(0),
-            answer: Some(personal),
+    async fn only_a_memory_intent_asks_main_afresh_and_everything_else_uses_the_cache() {
+        let inner = Arc::new(Intents {
+            plain: AtomicUsize::new(0),
+            fresh: AtomicUsize::new(0),
         });
         let now = Arc::new(AtomicI64::new(1_000));
         let cache = CachingIntrospector::new(inner.clone(), CachePolicy::default(), clock(&now));
-        for expected in 1..=3 {
+        // A toolkit-index request (no intent): one call, then the cache.
+        for _ in 0..5 {
             cache.introspect("t").await.expect("ok");
-            assert_eq!(inner.calls.load(Ordering::SeqCst), expected);
+            cache
+                .introspect_for("t", MemoryIntent::None)
+                .await
+                .expect("ok");
         }
-        // A token that may not (the shared-conversation answer) is cached as
-        // any worker claim token is.
-        let shared = Arc::new(Counting {
-            calls: AtomicUsize::new(0),
-            answer: Some(TokenGrant {
-                sources: vec![pb::Source::Memory],
-                personal_memory_allowed: false,
-                ..claim_grant(7, 100_000)
-            }),
+        assert_eq!(inner.plain.load(Ordering::SeqCst), 1);
+        assert_eq!(inner.fresh.load(Ordering::SeqCst), 0);
+        // Personal-scope requests and project writes ask every time and do not
+        // disturb the cache.
+        for intent in [
+            MemoryIntent::PersonalRead,
+            MemoryIntent::PersonalWrite,
+            MemoryIntent::ProjectWrite,
+            MemoryIntent::PersonalRead,
+        ] {
+            cache.introspect_for("t", intent).await.expect("ok");
+        }
+        assert_eq!(inner.fresh.load(Ordering::SeqCst), 4);
+        cache.introspect("t").await.expect("ok");
+        assert_eq!(inner.plain.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_intent_of_a_request_follows_its_scope_and_direction() {
+        let personal = pb::MemoryScope::Personal as i32;
+        let project = pb::MemoryScope::Project as i32;
+        assert_eq!(
+            MemoryIntent::of(personal, false),
+            MemoryIntent::PersonalRead
+        );
+        assert_eq!(
+            MemoryIntent::of(personal, true),
+            MemoryIntent::PersonalWrite
+        );
+        assert_eq!(MemoryIntent::of(project, true), MemoryIntent::ProjectWrite);
+        // A project read keeps the claim cache.
+        assert_eq!(MemoryIntent::of(project, false), MemoryIntent::None);
+        assert_eq!(MemoryIntent::of(0, true), MemoryIntent::None);
+    }
+
+    #[test]
+    fn an_unknown_source_is_ignored_and_the_known_ones_are_kept() {
+        let now = 1_000;
+        let response = pb::IntrospectTokenResponse {
+            active: true,
+            project_id: 7,
+            principal: "user:1".to_owned(),
+            kind: pb::TokenKind::WorkerClaim as i32,
+            expires_at_unix: now + 60,
+            // toolkit_index, then a source a future elitea-main might add.
+            allowed_sources: vec![pb::Source::ToolkitIndex as i32, 99],
+            personal_memory_allowed: false,
+            project_memory_write_refused: false,
+            memory_toolkit_ids: Vec::new(),
+        };
+        let grant = grant_from_response(&response, now).expect("kept");
+        assert_eq!(grant.sources, vec![pb::Source::ToolkitIndex]);
+        assert!(grant.allows(pb::Source::ToolkitIndex));
+        // Only unknown sources admit nothing.
+        let only_unknown = pb::IntrospectTokenResponse {
+            allowed_sources: vec![99, 0],
+            ..response.clone()
+        };
+        assert!(grant_from_response(&only_unknown, now).is_none());
+    }
+
+    #[test]
+    fn a_project_write_is_refused_after_a_personal_read_and_a_read_is_not() {
+        let refused = Caller::Token(TokenGrant {
+            sources: vec![pb::Source::Memory],
+            project_memory_write_refused: true,
+            ..claim_grant(7, 100_000)
         });
-        let cache = CachingIntrospector::new(shared.clone(), CachePolicy::default(), clock(&now));
-        cache.introspect("t").await.expect("ok");
-        cache.introspect("t").await.expect("ok");
-        assert_eq!(shared.calls.load(Ordering::SeqCst), 1);
+        let status = refused
+            .memory_binding(MEMORY, PROJECT, 5, true)
+            .expect_err("write after a personal read");
+        assert_eq!(status.code(), tonic::Code::PermissionDenied);
+        assert!(
+            status
+                .message()
+                .starts_with("memory.project_write_after_personal_read")
+        );
+        assert!(refused.memory_binding(MEMORY, PROJECT, 5, false).is_ok());
     }
 
     /// Slow enough that every concurrent request arrives while the first
@@ -1289,6 +1552,8 @@ mod tests {
             expires_at_unix: 2_000,
             allowed_sources: vec![pb::Source::Deepwiki as i32],
             personal_memory_allowed: false,
+            project_memory_write_refused: false,
+            memory_toolkit_ids: Vec::new(),
         };
         assert_eq!(
             grant_from_response(&good, 1_000).expect("good").sources,
@@ -1324,9 +1589,11 @@ mod tests {
                 allowed_sources: vec![pb::Source::Unspecified as i32],
                 ..good.clone()
             },
-            // A source this build cannot name.
+            // Only sources this build cannot name: nothing is left to admit
+            // (a known source beside an unknown one is kept; see
+            // `an_unknown_source_is_ignored_and_the_known_ones_are_kept`).
             pb::IntrospectTokenResponse {
-                allowed_sources: vec![pb::Source::Deepwiki as i32, 99],
+                allowed_sources: vec![99, 100],
                 ..good.clone()
             },
         ] {
@@ -1342,6 +1609,8 @@ mod tests {
             expires_at_unix: i64::MAX,
             sources: vec![pb::Source::Memory],
             personal_memory_allowed: personal,
+            project_memory_write_refused: false,
+            memory_toolkit_ids: vec![5, 9],
         }
     }
 
@@ -1357,7 +1626,7 @@ mod tests {
             } else {
                 0
             };
-            self.memory_binding(source, scope, toolkit)
+            self.memory_binding(source, scope, toolkit, false)
                 .map(|binding| binding.map(|binding| binding.owner))
         }
     }
@@ -1469,7 +1738,7 @@ mod tests {
     fn a_memory_binding_names_the_toolkit_and_requires_it() {
         let claim = Caller::Token(memory_grant("user:42", pb::TokenKind::WorkerClaim, true));
         let binding = claim
-            .memory_binding(MEMORY, PROJECT, 9)
+            .memory_binding(MEMORY, PROJECT, 9, false)
             .expect("binding")
             .expect("some");
         assert_eq!(binding.toolkit_id, 9);
@@ -1477,7 +1746,7 @@ mod tests {
         for toolkit in [0, -1] {
             assert_eq!(
                 claim
-                    .memory_binding(MEMORY, PROJECT, toolkit)
+                    .memory_binding(MEMORY, PROJECT, toolkit, false)
                     .expect_err("toolkit")
                     .code(),
                 tonic::Code::InvalidArgument
@@ -1486,10 +1755,85 @@ mod tests {
         // Another source takes no toolkit.
         assert_eq!(
             claim
-                .memory_binding(pb::Source::ToolkitIndex as i32, 0, 9)
+                .memory_binding(pb::Source::ToolkitIndex as i32, 0, 9, false)
                 .expect_err("toolkit")
                 .code(),
             tonic::Code::InvalidArgument
+        );
+        // A toolkit the run was not given (another toolkit of the project, or
+        // a toolkit id of another project) is refused, in both scopes.
+        for scope in [PROJECT, PERSONAL] {
+            let status = claim
+                .memory_binding(MEMORY, scope, 77, false)
+                .expect_err("not the run's toolkit");
+            assert_eq!(status.code(), tonic::Code::PermissionDenied);
+            assert!(
+                status.message().starts_with("memory.toolkit_not_in_run"),
+                "{}",
+                status.message()
+            );
+        }
+    }
+
+    #[test]
+    fn the_precheck_refuses_fixed_reasons_and_leaves_the_per_moment_ones_to_main() {
+        // A cached grant never carries the personal permission or the
+        // write-after-read refusal; the precheck does not judge them.
+        let cached = Caller::Token(TokenGrant {
+            project_memory_write_refused: true,
+            ..memory_grant("user:42", pb::TokenKind::WorkerClaim, false)
+        });
+        assert!(cached.precheck_memory(MEMORY, PERSONAL, 5).is_ok());
+        assert!(cached.precheck_memory(MEMORY, PROJECT, 5).is_ok());
+        // Fixed reasons are refused before elitea-main is asked (and so
+        // before a personal read could be recorded).
+        for (toolkit, scope, code) in [
+            (77, PERSONAL, tonic::Code::PermissionDenied),
+            (0, PERSONAL, tonic::Code::InvalidArgument),
+            (5, 0, tonic::Code::InvalidArgument),
+        ] {
+            assert_eq!(
+                cached
+                    .precheck_memory(MEMORY, scope, toolkit)
+                    .expect_err("fixed")
+                    .code(),
+                code
+            );
+        }
+        let no_user = Caller::Token(memory_grant("service", pb::TokenKind::WorkerClaim, true));
+        assert_eq!(
+            no_user
+                .precheck_memory(MEMORY, PERSONAL, 5)
+                .expect_err("no user")
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn the_run_s_memory_toolkits_survive_introspection_only_for_a_worker_claim() {
+        let answer = |kind: pb::TokenKind| pb::IntrospectTokenResponse {
+            active: true,
+            project_id: 7,
+            principal: "user:42".to_owned(),
+            kind: kind as i32,
+            expires_at_unix: 2_000,
+            allowed_sources: vec![pb::Source::Memory as i32],
+            personal_memory_allowed: false,
+            project_memory_write_refused: false,
+            memory_toolkit_ids: vec![3, 0, -4, 8],
+        };
+        assert_eq!(
+            grant_from_response(&answer(pb::TokenKind::WorkerClaim), 1_000)
+                .expect("claim")
+                .memory_toolkit_ids,
+            vec![3, 8]
+        );
+        assert!(
+            grant_from_response(&answer(pb::TokenKind::EngineCallback), 1_000)
+                .expect("callback")
+                .memory_toolkit_ids
+                .is_empty()
         );
     }
 
@@ -1503,6 +1847,8 @@ mod tests {
             expires_at_unix: 2_000,
             allowed_sources: vec![pb::Source::Memory as i32],
             personal_memory_allowed: personal,
+            project_memory_write_refused: false,
+            memory_toolkit_ids: Vec::new(),
         };
         assert!(
             grant_from_response(&answer(pb::TokenKind::WorkerClaim, true), 1_000)
