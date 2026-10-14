@@ -29,6 +29,7 @@ use super::families::carrier::perf_report::{
     self, LogLines, Parameters, eastern_for_tests, parse_gatling, parse_jmeter,
 };
 use super::families::carrier::tools::test_build_with_client;
+#[cfg(feature = "toolkit-office")]
 use super::families::office_host::OfficeFailure;
 use super::policy::ToolAdmissionPolicy;
 
@@ -645,6 +646,7 @@ async fn report_by_id_failures_before_the_upload_are_errors() {
 // create_excel_report
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "toolkit-office")]
 fn gatling_archive() -> Vec<u8> {
     zip_of(&[
         ("run-1/simulation.log", SIMULATION.as_bytes()),
@@ -652,6 +654,7 @@ fn gatling_archive() -> Vec<u8> {
     ])
 }
 
+#[cfg(feature = "toolkit-office")]
 fn excel_transport() -> Arc<Transport> {
     let archive = gatling_archive();
     Transport::new(move |seen| {
@@ -957,6 +960,7 @@ async fn excel_report_arguments_are_validated_before_any_request() {
 // create_ui_excel_report
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "toolkit-office")]
 fn lighthouse_json(fcp: &str) -> Value {
     json!({"steps":[{"name":"home","lhr":{"audits":{
         "first-contentful-paint":{"displayValue":fcp},
@@ -964,6 +968,7 @@ fn lighthouse_json(fcp: &str) -> Value {
     }}}]})
 }
 
+#[cfg(feature = "toolkit-office")]
 fn ui_transport(fail_second: bool) -> Arc<Transport> {
     Transport::new(move |seen| {
         let path = seen.url.strip_prefix(BASE).unwrap_or_default();
