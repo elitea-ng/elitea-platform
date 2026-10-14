@@ -67,15 +67,15 @@
   elitea_runtime.index_registry table (rust). An explicit env entry still wins.
 */ -}}
 {{- /*
-  The default is rust (worker.indexingRuntime), but elitea-main refuses
-  ELITEA_INDEXING_RUNTIME=rust when its runtime plane is off
-  (runtimecomposition.ConfigFromEnv), and the chart's default install has no
-  worker and no runtime plane. With no worker there is nothing to index with,
-  so the dark plane is written as python (inert); guards.yaml makes an install
-  that DOES enable a worker choose its indexing prerequisites explicitly.
+  The effective runtime is chosen by the "elitea.indexingRuntime" helper:
+  worker.indexingRuntime is auto by default (rust only when the Rust worker, the
+  runtime plane with index ingest dispatch and a vector store are all on), and
+  an explicit rust is never rewritten (guards.yaml refuses it when a
+  prerequisite is missing, because elitea-main refuses ELITEA_INDEXING_RUNTIME=rust
+  with its runtime plane off).
 */ -}}
 {{- if not (get $env "ELITEA_INDEXING_RUNTIME") }}
-{{- $indexingRuntime := ternary (default "python" $.Values.worker.indexingRuntime) "python" (default false $.Values.worker.enabled) }}
+{{- $indexingRuntime := include "elitea.indexingRuntime" $ }}
 {{- $env = merge (deepCopy $env) (dict "ELITEA_INDEXING_RUNTIME" $indexingRuntime) }}
 {{- end }}
 {{- /*

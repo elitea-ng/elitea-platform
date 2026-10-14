@@ -95,7 +95,7 @@ data:
     for both implementations (render-worker.sh). The worker reaches
     elitea-vector with its runtime mTLS identity; nothing else is mounted. The
     guard in guards.yaml has already refused rust indexing with no target. */}}
-    {{- if eq (default "python" .Values.worker.indexingRuntime) "rust" }}
+    {{- if eq (include "elitea.indexingRuntime" .) "rust" }}
     {{- $target := $r.vectorTarget | default (printf "%s:%v" .Values.vector.service.name .Values.vector.service.port) }}
     {{- $_ := set $config "vector_target" $target }}
     {{- if $r.indexEgressAllowlist }}

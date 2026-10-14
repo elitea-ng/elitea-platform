@@ -2925,7 +2925,7 @@ SET is_streaming = FALSE,
         || CASE WHEN jsonb_typeof(sqlc.arg(pipeline_static_tools)::jsonb) = 'object'
             THEN jsonb_build_object('pipeline_static_tools_v1', sqlc.arg(pipeline_static_tools)::jsonb)
             ELSE '{}'::jsonb END
-        || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'array'
+        || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'object'
             THEN jsonb_build_object('skipped_capabilities', sqlc.arg(skipped_capabilities)::jsonb)
             ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
@@ -2934,7 +2934,7 @@ WHERE id = sqlc.arg(message_group_id)::bigint;
 -- name: FinalizeCurrentAgentHITLPause :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupts' - 'authorization_requests')
+    meta = (meta - 'hitl_interrupts' - 'authorization_requests' - 'skipped_capabilities')
         || jsonb_build_object(
             'thread_id', sqlc.arg(thread_id)::text,
             'hitl_interrupt', sqlc.arg(hitl_interrupt)::jsonb,
@@ -2942,21 +2942,27 @@ SET is_streaming = FALSE,
             'is_error', FALSE,
             'error', '',
             'invoked_skills', sqlc.arg(invoked_skills)::jsonb
-        ),
+        )
+        || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'object'
+            THEN jsonb_build_object('skipped_capabilities', sqlc.arg(skipped_capabilities)::jsonb)
+            ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
 WHERE id = sqlc.arg(message_group_id)::bigint;
 
 -- name: FinalizeCurrentAgentAuthorizationPause :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts')
+    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'skipped_capabilities')
         || jsonb_build_object(
             'thread_id', sqlc.arg(thread_id)::text,
             'authorization_requests', sqlc.arg(authorization_requests)::jsonb,
             'is_error', FALSE,
             'error', '',
             'invoked_skills', sqlc.arg(invoked_skills)::jsonb
-        ),
+        )
+        || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'object'
+            THEN jsonb_build_object('skipped_capabilities', sqlc.arg(skipped_capabilities)::jsonb)
+            ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
 WHERE id = sqlc.arg(message_group_id)::bigint;
 

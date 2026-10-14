@@ -1,0 +1,18 @@
+{{- if not .Values.worker.enabled }}
+NOTE: this release deploys no agent worker (worker.enabled=false). elitea-main
+assumes the Rust worker (ELITEA_WORKER_IMPLEMENTATION={{ .Values.worker.implementation }}) when it
+decides which toolkit types and built-in tools a user can turn on. If you run a
+Python worker separately, set worker.implementation: python so the catalogue
+matches the worker you actually run.
+{{- end }}
+{{- if and .Values.worker.enabled (eq .Values.worker.implementation "rust") (not (default "" .Values.worker.indexingRuntime)) (eq (include "elitea.indexingRuntime" .) "python") }}
+
+NOTE: the Rust worker is running with PYTHON indexing, because Rust indexing
+needs a vector store, the runtime plane with index ingest dispatch and
+elitea-main's vector client, and not all of them are on. To switch to Rust
+indexing, set vector.enabled=true (with vector.qdrant.apiKeySecret.name),
+main.runtime.enabled=true and main.runtime.indexIngestDispatch.enabled=true; the
+chart then selects it by itself, or force it with worker.indexingRuntime: rust
+(which fails the render, naming what is missing). Indexes are NOT migrated
+between the two: users create their indexes again.
+{{- end }}

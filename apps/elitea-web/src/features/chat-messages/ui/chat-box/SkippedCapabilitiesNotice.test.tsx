@@ -14,18 +14,19 @@ const base: ChatMessage = { id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', role: 'a
 
 describe('skipped capabilities notice', () => {
   it('names each skipped capability once with its reason, from the live final frame', () => {
-    renderWithTheme(<ApplicationAnswer answer={{ ...base, responseMetadata: { skipped_capabilities: [...skipped, skipped[0]] } }} messageId={base.id} />);
+    renderWithTheme(<ApplicationAnswer answer={{ ...base, responseMetadata: { skipped_capabilities: { items: [...skipped, skipped[0]], more: 4 } } }} messageId={base.id} />);
     const notice = screen.getByTestId('skipped-capabilities-notice');
     expect(notice).toHaveTextContent('Some tools were not available in this reply');
     expect(notice).toHaveTextContent('Toolkit wiki (confluence): this toolkit type is not available on this worker yet, so its tools were left out.');
     expect(notice).toHaveTextContent('Built-in capability swarm');
-    expect(notice.querySelectorAll('p')).toHaveLength(2);
+    expect(notice.querySelectorAll('p')).toHaveLength(3);
+    expect(notice).toHaveTextContent('4 more not shown.');
   });
 
   it('is restored from the persisted message after a reload', () => {
     const [restored] = convertMessagesToChatHistory([{
       id: 1, uuid: base.id, role: 'assistant', content: 'Done.', is_streaming: false, created_at: '',
-      meta: { skipped_capabilities: skipped },
+      meta: { skipped_capabilities: { items: skipped } },
     } as MessageGroupWire]);
     renderWithTheme(<ApplicationAnswer answer={restored!} messageId={base.id} />);
     expect(screen.getByTestId('skipped-capabilities-notice')).toHaveTextContent('Toolkit wiki (confluence)');
@@ -35,7 +36,7 @@ describe('skipped capabilities notice', () => {
     const { unmount } = renderWithTheme(<ApplicationAnswer answer={base} messageId={base.id} />);
     expect(screen.queryByTestId('skipped-capabilities-notice')).not.toBeInTheDocument();
     unmount();
-    renderWithTheme(<ApplicationAnswer answer={{ ...base, responseMetadata: { skipped_capabilities: skipped } }} messageId={base.id} status={{ isStreaming: true }} />);
+    renderWithTheme(<ApplicationAnswer answer={{ ...base, responseMetadata: { skipped_capabilities: { items: skipped } } }} messageId={base.id} status={{ isStreaming: true }} />);
     expect(screen.queryByTestId('skipped-capabilities-notice')).not.toBeInTheDocument();
   });
 });

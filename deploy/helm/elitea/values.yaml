@@ -3821,12 +3821,21 @@ worker:
   # `${STANDALONE_WORKER:-rust}` and elitea-main's own default for
   # ELITEA_WORKER_IMPLEMENTATION. UPGRADING: an install that enables the worker
   # and never set `implementation` was on Python and is now on Rust; keep Python
-  # with `implementation: python` AND `indexingRuntime: python` (see below).
+  # with `implementation: python`; indexing then stays python by itself (see
+  # `indexingRuntime` below).
   # elitea-main serves a toolkit type or an internal-tool toggle as
   # `metadata.hidden`/unavailable whenever the CONFIGURED worker cannot run it
   # (`internal/runtimecomposition/worker_toolkit_capability.go`,
   # `ELITEA_WORKER_IMPLEMENTATION`, set from this field just below), so the
-  # choice here is not cosmetic — it decides what a user can turn on. What the
+  # choice here is not cosmetic — it decides what a user can turn on.
+  #
+  # NO WORKER IN THIS RELEASE (worker.enabled=false, the default): elitea-main is
+  # still told this value, because it decides which toolkit types the catalogue
+  # offers. A Python worker that you deploy separately therefore needs
+  # `implementation: python` here, or users are offered the Rust worker's
+  # catalogue. templates/NOTES.txt repeats this whenever the worker is off.
+  #
+  # What the
   # chosen worker cannot serve is also named in the chat: each reply that was
   # configured with a toolkit, tool or built-in capability this worker cannot
   # run carries a compact notice listing what was left out and why.
@@ -3892,27 +3901,25 @@ worker:
   # ADR-0031). Written to elitea-main as ELITEA_INDEXING_RUNTIME. A deployment
   # runs indexing entirely on one side; there is no per-toolkit routing.
   #
-  #   rust (default) -- the index routes (list, delete, configuration save) and
-  #     the admission initializer read and write elitea_runtime.index_registry,
-  #     a table only elitea-main writes. NOTHING IS MIGRATED: indexes created
-  #     under python are not listed, and users create their indexes again.
-  #     Requires worker.implementation=rust (only the Rust worker searches the
-  #     new vector store) and the index ingest dispatch plane.
-  #     Because it is the default, an install that ENABLES the worker must also
-  #     provide what Rust indexing needs, and the render refuses it otherwise
-  #     (guards.yaml, each message names the value to set): vector.enabled=true
-  #     (or worker.runtime.vectorTarget), vector.mainClient (on by default with
-  #     vector.enabled), main.runtime.enabled=true and
-  #     main.runtime.indexIngestDispatch.enabled=true. values-standalone.yaml
-  #     already sets the dispatch half; render-indexing-runtime.sh shows the
-  #     full set. A chart default install has NO worker and NO runtime plane,
-  #     where the setting is inert: elitea-main is given `python` then, because
-  #     it refuses `rust` with its runtime plane off.
-  #   python -- the legacy path, unchanged. Index metadata is the `index_meta`
-  #     row in the project's pgvector database, written by the SDK and by
-  #     elitea-main. Set this together with worker.implementation=python to
-  #     stay on the Python worker.
-  indexingRuntime: rust
+  #   "" (the default, AUTO) -- rust when everything Rust indexing needs is on
+  #     (worker.enabled with implementation rust, main.runtime.enabled and
+  #     main.runtime.indexIngestDispatch.enabled, a vector store -- vector.enabled
+  #     or worker.runtime.vectorTarget -- and elitea-main's vector client),
+  #     python otherwise. So an install that only enables the worker, or that
+  #     pins implementation: python, keeps rendering with the Python indexing it
+  #     had, and templates/NOTES.txt says how to switch. Turn on vector.enabled
+  #     (with vector.qdrant.apiKeySecret.name) beside the runtime plane and the
+  #     chart selects rust by itself.
+  #   rust -- force it. NOTHING IS MIGRATED: the index routes read and write
+  #     elitea_runtime.index_registry, indexes created under python are not
+  #     listed and users create them again. NEVER rewritten: a missing
+  #     prerequisite (the Rust worker, the runtime plane, index ingest dispatch,
+  #     a vector store, the vector client) fails the render and names the value,
+  #     because elitea-main refuses ELITEA_INDEXING_RUNTIME=rust with its runtime
+  #     plane off.
+  #   python -- the legacy path: index metadata is the `index_meta` row in the
+  #     project's pgvector database, written by the SDK and by elitea-main.
+  indexingRuntime: ""
 
   image:
     # Built, signed and published by this repository's own release workflow
@@ -3923,7 +3930,7 @@ worker:
     # Empty derives the repository from `implementation` above. Setting it wins
     # over `implementation`, and is how you pin an image by digest or run the
     # worker from a mirror. To stay on the Python worker, either set
-    # `implementation: python` (with `indexingRuntime: python`) or pin this to
+    # `implementation: python` or pin this to
     # `ghcr.io/elitea-ng/elitea-worker-python`.
     repository: ""
     # tag comes from the single top-level image.tag

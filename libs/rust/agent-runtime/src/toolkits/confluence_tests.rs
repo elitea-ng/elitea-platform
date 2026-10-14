@@ -25,7 +25,7 @@ use super::families::confluence::tools::{
 };
 use super::families::index_tools::{IndexToolSupport, IndexToolsWithheld};
 use super::materialize::{
-    materialize_configured_toolsets_reporting_refusals, refused_toolkits_notice_text,
+    left_out_toolkits_notice_text, materialize_configured_toolsets_reporting_refusals,
 };
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::FrozenToolSnapshot;
@@ -1054,7 +1054,7 @@ async fn a_refused_setting_is_named_in_the_run_notice() {
     .await
     .expect("a refused toolkit does not fail the agent");
     assert_eq!(materialized.toolsets.len(), 1);
-    let notice = refused_toolkits_notice_text(&materialized.refused).expect("a notice");
+    let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
     assert!(
         notice.contains(&format!(
             "toolkit 'wiki' (confluence) is not enabled on this worker: {}",

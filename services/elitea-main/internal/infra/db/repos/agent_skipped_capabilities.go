@@ -37,18 +37,33 @@ func validSkippedCapabilityText(value string, required bool) bool {
 		!strings.ContainsAny(value, "\x00\r\n")
 }
 
-// sanitizeSkippedCapabilities returns the canonical JSON array to persist, or
-// nil when there is nothing valid to keep.
+// skippedCapabilitiesFromMetadata reads and sanitizes the list from a node
+// event's response metadata; nil when absent or invalid.
+func skippedCapabilitiesFromMetadata(responseMetadata json.RawMessage) json.RawMessage {
+	var metadata struct {
+		SkippedCapabilities json.RawMessage `json:"skipped_capabilities"`
+	}
+	if json.Unmarshal(responseMetadata, &metadata) != nil {
+		return nil
+	}
+	return sanitizeSkippedCapabilities(metadata.SkippedCapabilities)
+}
+
+// sanitizeSkippedCapabilities returns the canonical JSON object to persist
+// (`{"items": [...], "more": N}`), or nil when there is nothing valid to keep.
 func sanitizeSkippedCapabilities(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return nil
 	}
-	var entries []skippedCapability
-	if json.Unmarshal(raw, &entries) != nil {
+	var list struct {
+		Items []skippedCapability `json:"items"`
+		More  int                 `json:"more"`
+	}
+	if json.Unmarshal(raw, &list) != nil {
 		return nil
 	}
-	kept := make([]skippedCapability, 0, len(entries))
-	for _, entry := range entries {
+	kept := make([]skippedCapability, 0, len(list.Items))
+	for _, entry := range list.Items {
 		switch entry.Kind {
 		case "toolkit", "internal_tool", "application":
 		default:
@@ -68,7 +83,14 @@ func sanitizeSkippedCapabilities(raw json.RawMessage) json.RawMessage {
 	if len(kept) == 0 {
 		return nil
 	}
-	encoded, err := json.Marshal(kept)
+	more := list.More
+	if more < 0 || more > 1_000_000 {
+		more = 0
+	}
+	encoded, err := json.Marshal(struct {
+		Items []skippedCapability `json:"items"`
+		More  int                 `json:"more,omitempty"`
+	}{kept, more})
 	if err != nil {
 		return nil
 	}

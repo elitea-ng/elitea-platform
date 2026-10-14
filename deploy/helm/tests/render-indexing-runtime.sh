@@ -110,13 +110,14 @@ PY
 [ "$(mainenv "$TMP/default.yaml")" = "python" ] \
   && ok "python indexing is written explicitly as python" \
   || bad "the python render does not carry ELITEA_INDEXING_RUNTIME=python"
-# The shipped defaults are rust/rust (the Rust-only future), and a chart default
+# The shipped defaults are rust with AUTOMATIC indexing: rust only when every
+# prerequisite is on, python otherwise. A chart default
 # install has no worker and no runtime plane, where elitea-main would refuse
 # ELITEA_INDEXING_RUNTIME=rust: the dark plane is written as python.
-python3 - "$CHART/values.yaml" <<'PY' && ok "the shipped defaults are worker.implementation=rust and worker.indexingRuntime=rust" || bad "the shipped worker defaults are not rust/rust"
+python3 - "$CHART/values.yaml" <<'PY' && ok "the shipped defaults are worker.implementation=rust and an automatic (empty) worker.indexingRuntime" || bad "the shipped worker defaults are not rust/auto"
 import sys, yaml
 worker = yaml.safe_load(open(sys.argv[1]))["worker"]
-assert worker["implementation"] == "rust" and worker["indexingRuntime"] == "rust", worker
+assert worker["implementation"] == "rust" and worker["indexingRuntime"] == "", worker
 PY
 "$HELM" template t "$CHART" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1 \
@@ -199,16 +200,39 @@ refuses 'worker.indexingRuntime must be' --set worker.indexingRuntime=golang \
   && ok "an unknown worker.indexingRuntime is refused" \
   || bad "an unknown worker.indexingRuntime is not refused"
 
-refuses 'needs worker.implementation=rust' --set worker.implementation=python --set worker.indexingRuntime=rust \
+refuses 'worker.implementation=rust' --set worker.implementation=python --set worker.indexingRuntime=rust \
   && ok "indexingRuntime=rust with the Python worker is refused" \
   || bad "indexingRuntime=rust with the Python worker is not refused"
 
-# The defaults themselves (rust/rust) with only the worker enabled: the install
-# must choose its indexing prerequisites (or python) rather than get a worker
-# that silently refuses every index run.
-refuses 'worker.indexingRuntime=rust needs a vector store' \
-  && ok "enabling the worker on the rust/rust defaults without a vector store is refused" \
-  || bad "the rust/rust defaults with a worker and no vector store are not refused"
+# Upgrade compatibility. Old values that only pin the Python worker render, and
+# index with python.
+"$HELM" template t "$CHART" "${RENDER[@]}" --set worker.implementation=python >"$TMP/oldpy.yaml" 2>"$TMP/oldpy.err" \
+  && [ "$(mainenv "$TMP/oldpy.yaml")" = "python" ] \
+  && ok "old values with only implementation=python still render, with python indexing" \
+  || bad "implementation=python alone does not render as python indexing: $(tail -1 "$TMP/oldpy.err")"
+# Enabling the worker WITHOUT a vector store renders, on python indexing, and
+# the release notes say how to switch.
+"$HELM" template t "$CHART" "${RENDER[@]}" >"$TMP/auto-novec.yaml" 2>"$TMP/auto-novec.err" \
+  && [ "$(mainenv "$TMP/auto-novec.yaml")" = "python" ] \
+  && ok "the Rust worker without a vector store renders with python indexing" \
+  || bad "the Rust worker without a vector store does not render as python indexing: $(tail -1 "$TMP/auto-novec.err")"
+"$HELM" install t "$CHART" --dry-run=client "${RENDER[@]}" 2>/dev/null | grep -q 'PYTHON indexing' \
+  && ok "the release notes say how to switch to rust indexing" \
+  || bad "the release notes do not explain python indexing under the Rust worker"
+# With every prerequisite on, AUTO selects rust (no explicit indexingRuntime).
+"$HELM" template t "$CHART" "${RENDER[@]}" --set worker.implementation=rust \
+  --set vector.enabled=true --set main.autoscaling.maxReplicas=3 \
+  --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key >"$TMP/auto-rust.yaml" 2>"$TMP/auto-rust.err" \
+  && [ "$(mainenv "$TMP/auto-rust.yaml")" = "rust" ] \
+  && ok "with the vector store and the runtime plane on, auto indexing selects rust" \
+  || bad "auto indexing did not select rust with every prerequisite on: $(tail -1 "$TMP/auto-rust.err")"
+# An explicit rust is never rewritten, even with nothing to run it on.
+refuses 'worker.indexingRuntime=rust needs' --set worker.enabled=false --set worker.indexingRuntime=rust \
+  && ok "an explicit indexingRuntime=rust without a worker is refused, not rewritten" \
+  || bad "an explicit indexingRuntime=rust without a worker is not refused"
+refuses 'runtime' --set main.runtime.enabled=false --set worker.enabled=false --set worker.indexingRuntime=rust \
+  && ok "an explicit indexingRuntime=rust with the runtime plane off is refused" \
+  || bad "an explicit indexingRuntime=rust with the runtime plane off is not refused"
 
 # No vector store anywhere: neither this chart's elitea-vector nor an external
 # target. The worker would start without a vector_target and refuse every

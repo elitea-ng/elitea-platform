@@ -80,7 +80,7 @@ use crate::toolkits::{
     DELEGATED_AUTHORIZATION_METADATA_KEY, DelegatedAuthorizationCatalog,
     encode_delegated_authorization_requirement,
 };
-use crate::toolkits::{RefusedToolkit, refused_toolkits_notice_text};
+use crate::toolkits::{LeftOutToolkit, left_out_toolkits_notice_text};
 
 const APP_NAME: &str = "elitea-agent-v1";
 const ROOT_AGENT_NAME: &str = "elitea-agent";
@@ -276,7 +276,7 @@ pub(crate) struct OrdinaryRuntimeBindings {
     renamed_tools: Vec<RenamedTool>,
     /// Configured toolkits left out for a setting this runtime refuses
     /// (#1207 review round 2), named in the same opening notice.
-    refused_toolkits: Vec<RefusedToolkit>,
+    left_out_toolkits: Vec<LeftOutToolkit>,
     /// The toolkit each bound tool came from, named on its browser frames.
     toolkit_attribution: ToolkitAttributionCatalog,
     application_runtime: ApplicationRuntimeProjection,
@@ -302,7 +302,7 @@ impl OrdinaryRuntimeBindings {
             internal_tools: InternalToolCatalog::empty(),
             skipped_application_children: Vec::new(),
             renamed_tools: Vec::new(),
-            refused_toolkits: Vec::new(),
+            left_out_toolkits: Vec::new(),
             toolkit_attribution: ToolkitAttributionCatalog::default(),
             application_runtime,
             lazy_tools_index: None,
@@ -368,8 +368,8 @@ impl OrdinaryRuntimeBindings {
     }
 
     #[must_use]
-    pub(crate) fn with_refused_toolkits(mut self, refused: Vec<RefusedToolkit>) -> Self {
-        self.refused_toolkits = refused;
+    pub(crate) fn with_left_out_toolkits(mut self, refused: Vec<LeftOutToolkit>) -> Self {
+        self.left_out_toolkits = refused;
         self
     }
 
@@ -2197,7 +2197,7 @@ where
     // The user-visible half: the same facts, on the turn's own node events.
     let projection =
         projection.with_skipped_capabilities(super::skipped_capabilities::skipped_capabilities(
-            &runtime.refused_toolkits,
+            &runtime.left_out_toolkits,
             internal_tools,
             &runtime.skipped_application_children,
         ));
@@ -2349,7 +2349,7 @@ fn build_runtime_agent(
         // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
         renamed_tools: _,
-        refused_toolkits: _,
+        left_out_toolkits: _,
         toolkit_attribution,
         application_runtime,
         instruction_plan,
@@ -2546,7 +2546,7 @@ async fn prepare_direct_resume(
         // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
         renamed_tools: _,
-        refused_toolkits: _,
+        left_out_toolkits: _,
         toolkit_attribution,
         application_runtime,
         instruction_plan,
@@ -2876,7 +2876,7 @@ async fn seed_skipped_internal_tools_notice(
 struct FreshSessionNotices {
     skipped_application_children: Vec<SkippedApplicationChild>,
     renamed_tools: Vec<RenamedTool>,
-    refused_toolkits: Vec<RefusedToolkit>,
+    left_out_toolkits: Vec<LeftOutToolkit>,
 }
 
 impl FreshSessionNotices {
@@ -2884,7 +2884,7 @@ impl FreshSessionNotices {
         Self {
             skipped_application_children: runtime.skipped_application_children.clone(),
             renamed_tools: runtime.renamed_tools.clone(),
-            refused_toolkits: runtime.refused_toolkits.clone(),
+            left_out_toolkits: runtime.left_out_toolkits.clone(),
         }
     }
 }
@@ -2907,7 +2907,7 @@ async fn seed_fresh_session_notices(
     )
     .await?;
     seed_renamed_tools_notice(sessions, identity, &notices.renamed_tools).await?;
-    seed_refused_toolkits_notice(sessions, identity, &notices.refused_toolkits).await
+    seed_left_out_toolkits_notice(sessions, identity, &notices.left_out_toolkits).await
 }
 
 /// #1207 review round 2: append ONE role-`"tool"` event naming every
@@ -2919,12 +2919,12 @@ async fn seed_fresh_session_notices(
 /// it, such a toolkit was skipped with one worker log line while the
 /// capability snapshot listed it as supported: the user saw an enabled
 /// toolkit that did nothing, and the model could not say why.
-async fn seed_refused_toolkits_notice(
+async fn seed_left_out_toolkits_notice(
     sessions: &dyn SessionService,
     identity: &AdkIdentity,
-    refused: &[RefusedToolkit],
+    refused: &[LeftOutToolkit],
 ) -> Result<(), NativeAgentAssemblyError> {
-    let Some(notice) = refused_toolkits_notice_text(refused) else {
+    let Some(notice) = left_out_toolkits_notice_text(refused) else {
         return Ok(());
     };
     let mut event = Event::new("elitea-refused-toolkits");

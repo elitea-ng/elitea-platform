@@ -134,18 +134,6 @@ COMPOSE_F="-p ${PROJECT} -f ${REPO_ROOT}/deploy/docker-compose.standalone-full.y
 # legacy Python worker until it is removed. STANDALONE_OVERLAY takes an
 # explicit space-separated list of paths for anything else.
 OVERLAY="${STANDALONE_OVERLAY:-}"
-case "${STANDALONE_WORKER:-rust}" in
-  python) ;;
-  rust) OVERLAY="${REPO_ROOT}/deploy/docker-compose.standalone-rust-agent.yml ${OVERLAY}" ;;
-  *) echo "ERROR: STANDALONE_WORKER must be python or rust (got '${STANDALONE_WORKER}')." >&2; exit 1 ;;
-esac
-for overlay_file in $OVERLAY; do
-  if [ ! -f "$overlay_file" ]; then
-    echo "ERROR: overlay '$overlay_file' does not exist." >&2
-    exit 1
-  fi
-  COMPOSE_F="${COMPOSE_F} -f ${overlay_file}"
-done
 
 # Shared with apps/elitea-web/scripts/e2e-stack.sh: CI has the docker compose
 # v2 plugin, this machine has podman.
@@ -156,6 +144,52 @@ done
 # shellcheck source=../../scripts/lib/assertion-floor.sh
 . "${REPO_ROOT}/scripts/lib/assertion-floor.sh"
 detect_compose_bin
+
+# Which worker this stack runs. New stacks run the native Rust worker. An
+# EXISTING stack is not switched silently: its choice is recorded on `up`, and
+# an unset STANDALONE_WORKER keeps it (a stack with no record whose worker
+# container is the Python one counts as python, which is what every stack was
+# before the default changed). Switching changes the indexing runtime too, and
+# indexes created under the other runtime are NOT migrated.
+WORKER_STATE_DIR="${REPO_ROOT}/deploy/certs"
+WORKER_STATE="${WORKER_STATE_DIR}/.worker-${PROJECT}"
+recorded_worker=""
+if [ -f "$WORKER_STATE" ]; then
+  recorded_worker="$(tr -d '[:space:]' <"$WORKER_STATE")"
+else
+  existing_ps="$($COMPOSE_BIN $COMPOSE_F ps -a 2>/dev/null || true)"
+  if printf '%s' "$existing_ps" | grep -q 'worker-rust'; then
+    recorded_worker=rust
+  elif printf '%s' "$existing_ps" | grep -q 'elitea-worker'; then
+    recorded_worker=python
+  fi
+fi
+WORKER_CHOICE="${STANDALONE_WORKER:-}"
+if [ -z "$WORKER_CHOICE" ]; then
+  WORKER_CHOICE="${recorded_worker:-rust}"
+  if [ "$WORKER_CHOICE" = python ] && [ -n "$recorded_worker" ]; then
+    echo "NOTE: the existing '${PROJECT}' stack runs the PYTHON worker, so it stays on it." >&2
+    echo "      New stacks default to the native Rust worker. To switch this one:" >&2
+    echo "        STANDALONE_WORKER=rust ${0} up" >&2
+    echo "      WARNING: that also switches indexing to the Rust runtime, and indexes created" >&2
+    echo "      under the Python worker are NOT migrated (users create their indexes again)." >&2
+  fi
+elif [ -n "$recorded_worker" ] && [ "$recorded_worker" != "$WORKER_CHOICE" ]; then
+  echo "WARNING: the existing '${PROJECT}' stack runs the ${recorded_worker} worker and you selected ${WORKER_CHOICE}." >&2
+  echo "         Indexes created under the ${recorded_worker} runtime are NOT migrated." >&2
+fi
+case "$WORKER_CHOICE" in
+  python) ;;
+  rust) OVERLAY="${REPO_ROOT}/deploy/docker-compose.standalone-rust-agent.yml ${OVERLAY}" ;;
+  *) echo "ERROR: STANDALONE_WORKER must be python or rust (got '${WORKER_CHOICE}')." >&2; exit 1 ;;
+esac
+for overlay_file in $OVERLAY; do
+  if [ ! -f "$overlay_file" ]; then
+    echo "ERROR: overlay '$overlay_file' does not exist." >&2
+    exit 1
+  fi
+  COMPOSE_F="${COMPOSE_F} -f ${overlay_file}"
+done
 
 # The one-SQL-string reader `resolve_seeded_driver` calls, in the same shape
 # sdk-client-check.sh and embedding-path-check.sh already define for
@@ -873,6 +907,9 @@ case "${1:-}" in
       echo "ERROR: mTLS material missing. Run: $0 certs" >&2
       exit 1
     fi
+    # Record the worker this stack runs, so a later `up` with no
+    # STANDALONE_WORKER keeps it instead of switching it.
+    printf '%s\n' "$WORKER_CHOICE" >"$WORKER_STATE"
     # Same, for the runtime plane. Without it runtime-material aborts and every
     # dependent service is stuck in `created` with no obvious cause.
     if [ ! -f "${REPO_ROOT}/deploy/certs/runtime/runtime-ca.crt" ]; then
@@ -976,6 +1013,9 @@ case "${1:-}" in
 
   down)
     $COMPOSE_BIN $COMPOSE_F down --remove-orphans "${@:2}"
+    # Volumes gone (`down -v`): the next stack on this project is a new one and
+    # takes the default worker.
+    case " ${*:2} " in *" -v "* | *" --volumes "*) rm -f "$WORKER_STATE" ;; esac
     ;;
 
   seed)

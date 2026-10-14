@@ -321,15 +321,19 @@ starts and then fails.
 Two images share one chart component. The `worker` component runs either
 `elitea-worker-rust` (the default, matching `deploy/scripts/
 standalone-stack.sh`'s own default) or `elitea-worker-python` while it still
-exists, selected by `worker.implementation`. The default also flipped
-`worker.indexingRuntime` to `rust`: an install that enables the worker must
-then provide Rust indexing's prerequisites (`vector.enabled=true`, the runtime
-plane and `main.runtime.indexIngestDispatch.enabled=true`; the render refuses
-otherwise and names the value), or keep the legacy pairing with
-`worker.implementation=python` and `worker.indexingRuntime=python`. A chart
-default install (no worker, no runtime plane) is unaffected: elitea-main is
-given `ELITEA_INDEXING_RUNTIME=python` there because it refuses `rust` with its
-runtime plane off. `worker.runtime.agentModelCheckpointRecovery` and
+exists, selected by `worker.implementation`. `worker.indexingRuntime` is
+automatic (empty): Rust indexing when the Rust worker, the runtime plane with
+`main.runtime.indexIngestDispatch.enabled=true` and a vector store
+(`vector.enabled=true`) are all on, Python indexing otherwise, so an install
+that merely enables the worker, or pins `worker.implementation=python`, renders
+as before and `helm install` prints a note on how to switch. Setting
+`worker.indexingRuntime=rust` explicitly is never rewritten: a missing
+prerequisite fails the render and names the value. A release with
+`worker.enabled=false` still tells elitea-main `ELITEA_WORKER_IMPLEMENTATION=rust`
+(the toolkit catalogue follows it): a Python worker you deploy separately needs
+`worker.implementation: python`. `deploy/scripts/standalone-stack.sh` does not
+switch an existing stack: it records the worker on `up` and keeps it until you
+set `STANDALONE_WORKER`. `worker.runtime.agentModelCheckpointRecovery` and
 `agentNodeRecovery` stay `false` by default until the pod-replacement proofs in
 `services/elitea-worker-rust/docs/recovery-guarantees.md` (ruling D1) pass. The Rust worker is a smaller, faster
 process but — as of this release — has no adapter for 18 of the 52 catalogued

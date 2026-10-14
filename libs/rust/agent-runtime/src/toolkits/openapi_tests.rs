@@ -421,12 +421,49 @@ async fn an_unported_family_is_reported_to_the_ordinary_agent_path() {
     .await
     .expect("an unported family does not fail the agent");
     assert!(materialized.toolsets.is_empty());
-    assert_eq!(materialized.refused.len(), 1);
-    let skipped = &materialized.refused[0];
+    assert_eq!(materialized.left_out.len(), 1);
+    let skipped = &materialized.left_out[0];
     assert_eq!(skipped.toolkit_name(), "roadmap");
     assert_eq!(skipped.toolkit_type(), "not_a_toolkit_family");
     assert_eq!(skipped.reason_code(), "unsupported_toolkit_family");
     assert!(skipped.reason().contains("not available on this worker"));
+    // The sentence the MODEL reads (seeded into the session's history).
+    assert_eq!(
+        super::left_out_toolkits_notice_text(&materialized.left_out).as_deref(),
+        Some(
+            "toolkit 'roadmap' (not_a_toolkit_family) is not enabled on this worker: this toolkit type is not available on this worker yet, so its tools were left out"
+        )
+    );
+}
+
+/// A family that is not ported but whose index tools are served says so
+/// precisely, instead of claiming the whole toolkit was left out.
+#[test]
+fn an_unported_family_with_index_tools_is_only_partly_enabled() {
+    use super::materialize::{LeftOutReason, LeftOutToolkit};
+    let toolkit = LeftOutToolkit::fixture(
+        "code",
+        "github",
+        LeftOutReason::FamilyNotPortedIndexToolsKept,
+        "only its index tools are available (its other tools are not ported)",
+    );
+    assert_eq!(toolkit.reason_code(), "index_tools_only");
+    assert_eq!(
+        super::left_out_toolkits_notice_text(&[toolkit]).as_deref(),
+        Some(
+            "toolkit 'code' (github) is only partly enabled on this worker: only its index tools are available (its other tools are not ported)"
+        )
+    );
+}
+
+#[test]
+fn notice_labels_and_lists_are_bounded_in_bytes_and_count_what_was_cut() {
+    let label = super::bounded_label(&"ж".repeat(500));
+    assert!(label.len() <= super::MAX_NOTICE_LABEL_BYTES && label.chars().all(|c| c == 'ж'));
+    let lines: Vec<String> = (0..40).map(|i| format!("line {i:02}")).collect();
+    let text = super::capped_notice_lines(lines, 32);
+    assert!(text.ends_with("(8 more not shown)"));
+    assert_eq!(text.lines().count(), 33);
 }
 
 struct FixtureTransport {

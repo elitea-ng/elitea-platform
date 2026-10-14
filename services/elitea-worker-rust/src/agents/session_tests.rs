@@ -2777,7 +2777,7 @@ async fn a_fresh_session_names_a_toolkit_refused_for_its_settings() {
         DelegatedAuthorizationCatalog::default(),
         ApplicationRuntimeProjection::default(),
     )
-    .with_refused_toolkits(materialized.refused);
+    .with_left_out_toolkits(materialized.left_out);
     let assembled = assemble_ordinary_native_with_sessions_and_runtime_catalogs(
         bound_model("unused — assembly alone is under test"),
         plan,
@@ -2799,7 +2799,7 @@ async fn a_fresh_session_names_a_toolkit_refused_for_its_settings() {
         &crate::protocol::node_event::encode_current_node_event_json(&start).expect("encode"),
     )
     .expect("start json");
-    let skipped = &start["response_metadata"]["skipped_capabilities"];
+    let skipped = &start["response_metadata"]["skipped_capabilities"]["items"];
     assert_eq!(skipped[0]["kind"], "toolkit");
     assert_eq!(skipped[0]["name"], "tracker");
     assert_eq!(skipped[0]["type"], "jira");

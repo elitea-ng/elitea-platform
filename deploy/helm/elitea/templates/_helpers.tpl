@@ -212,3 +212,29 @@ value for a deployment that did not ask for one.
 {{- end -}}
 {{- $chosen -}}
 {{- end }}
+
+{{/*
+  The indexing runtime this release actually uses (ADR-0030 decision 6).
+
+  worker.indexingRuntime is "" by default, which means AUTO: rust only when
+  everything Rust indexing needs is on (the Rust worker, the runtime plane and
+  index ingest dispatch, a vector store and elitea-main's vector client),
+  python otherwise. That keeps an install that merely enables the worker, or
+  that pins worker.implementation=python, rendering as it did, with the Python
+  indexing it had. An EXPLICIT "rust" is never rewritten: guards.yaml refuses it
+  loudly when a prerequisite is missing. An explicit "python" stays python.
+*/}}
+{{- define "elitea.indexingRuntime" -}}
+{{- $worker := .Values.worker -}}
+{{- $explicit := default "" $worker.indexingRuntime -}}
+{{- $dispatch := (.Values.main.runtime.indexIngestDispatch | default dict).enabled -}}
+{{- $vectorStore := or .Values.vector.enabled ((.Values.worker.runtime | default dict).vectorTarget) -}}
+{{- $mainClient := or (include "elitea-vector.mainClientEnabled" .) (get (.Values.main.env | default dict) "ELITEA_VECTOR_GRPC_TARGET") -}}
+{{- if or (eq $explicit "rust") (eq $explicit "python") -}}
+{{- $explicit -}}
+{{- else if and $worker.enabled (eq $worker.implementation "rust") .Values.main.runtime.enabled $dispatch $vectorStore $mainClient -}}
+rust
+{{- else -}}
+python
+{{- end -}}
+{{- end }}

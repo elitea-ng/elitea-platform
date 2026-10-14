@@ -22,8 +22,8 @@ use super::families::sharepoint::tools::{
     SharePointToolsetErrorCode, build_sharepoint_toolset, test_build_with_api,
 };
 use super::materialize::{
-    materialize_configured_toolsets_reporting_refusals,
-    materialize_configured_toolsets_with_tokens_and_authorization, refused_toolkits_notice_text,
+    left_out_toolkits_notice_text, materialize_configured_toolsets_reporting_refusals,
+    materialize_configured_toolsets_with_tokens_and_authorization,
 };
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::FrozenToolSnapshot;
@@ -764,7 +764,7 @@ async fn an_app_only_credential_is_refused_with_the_reason_not_silently_skipped(
     .await
     .expect("a refused toolkit does not fail the agent");
     assert!(materialized.toolsets.is_empty());
-    let notice = refused_toolkits_notice_text(&materialized.refused).expect("a notice");
+    let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
     assert!(notice.starts_with("toolkit 'App Only' (sharepoint) is not enabled on this worker: "));
     assert!(notice.contains("MC1011142"), "{notice}");
     assert!(notice.contains("OAuth discovery endpoint"), "{notice}");

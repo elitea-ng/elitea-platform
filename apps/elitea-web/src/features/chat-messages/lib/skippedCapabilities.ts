@@ -30,7 +30,25 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' && value.length <= 512 ? value : undefined;
 }
 
-export function parseSkippedCapabilities(raw: unknown): readonly SkippedCapability[] {
+export interface SkippedCapabilities {
+  readonly items: readonly SkippedCapability[];
+  /** How many more were left out of `items` (the list is bounded); 0 when none. */
+  readonly more: number;
+}
+
+const NONE: SkippedCapabilities = { items: [], more: 0 };
+
+/** The wire value is `{items: [...], more?: N}`. */
+export function parseSkippedCapabilities(raw: unknown): SkippedCapabilities {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return NONE;
+  const record = raw as Record<string, unknown>;
+  const items = parseItems(record['items']);
+  const more = record['more'];
+  const count = typeof more === 'number' && Number.isSafeInteger(more) && more > 0 && more <= 1_000_000 ? more : 0;
+  return items.length === 0 ? NONE : { items, more: count };
+}
+
+function parseItems(raw: unknown): readonly SkippedCapability[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const out: SkippedCapability[] = [];
@@ -53,7 +71,7 @@ export function parseSkippedCapabilities(raw: unknown): readonly SkippedCapabili
 }
 
 /** The turn's skipped capabilities: the live final frame first, the persisted copy otherwise. */
-export function skippedCapabilitiesOf(message: Pick<ChatMessage, 'responseMetadata' | 'skippedCapabilities'>): readonly SkippedCapability[] {
+export function skippedCapabilitiesOf(message: Pick<ChatMessage, 'responseMetadata' | 'skippedCapabilities'>): SkippedCapabilities {
   const live = parseSkippedCapabilities(message.responseMetadata?.['skipped_capabilities']);
-  return live.length > 0 ? live : parseSkippedCapabilities(message.skippedCapabilities);
+  return live.items.length > 0 ? live : parseSkippedCapabilities(message.skippedCapabilities);
 }

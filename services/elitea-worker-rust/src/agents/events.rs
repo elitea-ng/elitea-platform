@@ -320,7 +320,7 @@ pub(crate) struct AgentEventProjectionContext {
     applied_skills: Vec<Value>,
     /// What this turn could not serve (`skipped_capabilities`), reported on
     /// `agent_start` and the final `full_message` so the chat can say so.
-    skipped_capabilities: Vec<Value>,
+    skipped_capabilities: Option<Value>,
     output_limit_behavior: OutputLimitBehavior,
     continuation_prefix: Option<String>,
 }
@@ -659,7 +659,7 @@ impl AgentEventProjectionContext {
         self.applied_skills = skills;
         self
     }
-    pub(crate) fn with_skipped_capabilities(mut self, skipped: Vec<Value>) -> Self {
+    pub(crate) fn with_skipped_capabilities(mut self, skipped: Option<Value>) -> Self {
         self.skipped_capabilities = skipped;
         self
     }
@@ -683,7 +683,7 @@ impl AgentEventProjectionContext {
             parallel_reconcile: false,
             invoked_skills: Vec::new(),
             applied_skills: Vec::new(),
-            skipped_capabilities: Vec::new(),
+            skipped_capabilities: None,
             output_limit_behavior: OutputLimitBehavior::UserControlled,
             continuation_prefix: input.continuation_prefix,
         };
@@ -726,7 +726,7 @@ impl AgentEventProjectionContext {
             parallel_reconcile: self.parallel_reconcile,
             invoked_skills: Vec::new(),
             applied_skills: Vec::new(),
-            skipped_capabilities: Vec::new(),
+            skipped_capabilities: None,
             output_limit_behavior: OutputLimitBehavior::Suppressed,
             continuation_prefix: None,
         };
@@ -755,7 +755,7 @@ impl AgentEventProjectionContext {
             parallel_reconcile: false,
             invoked_skills: Vec::new(),
             applied_skills: Vec::new(),
-            skipped_capabilities: Vec::new(),
+            skipped_capabilities: None,
             output_limit_behavior: OutputLimitBehavior::UserControlled,
             continuation_prefix: None,
         }
@@ -1102,10 +1102,10 @@ impl AgentEventProjector {
             "agent_start",
             &Value::Null,
             None,
-            &self.with_skipped_capabilities(json!({
+            &json!({
                 "invoked_skills": self.context.invoked_skills,
                 "should_continue": self.context.should_continue && !self.checkpoint_recovery,
-            })),
+            }),
             occurred_at,
         )?;
         let mut batch = ProjectedAgentEventBatch::new();
@@ -3425,7 +3425,7 @@ impl AgentEventProjector {
             "full_message",
             &response,
             None,
-            &self.with_skipped_capabilities(json!({
+            &json!({
                 "project_id": self.context.project_id,
                 "chat_project_id": self.context.chat_project_id,
                 "application_details": self.context.application_details,
@@ -3445,25 +3445,11 @@ impl AgentEventProjector {
                 "invoked_skills": self.context.applied_skills,
                 "result_ref_v1": result_ref,
                 "pipeline_static_v1": self.static_pause_proof,
-            })),
+            }),
             occurred_at,
         )?)?;
         self.state = ProjectionState::Finished;
         Ok(batch)
-    }
-
-    /// Add the turn's `skipped_capabilities` to a metadata object, and only
-    /// when there is something to say (an absent key means "served it all").
-    fn with_skipped_capabilities(&self, mut metadata: Value) -> Value {
-        if !self.context.skipped_capabilities.is_empty()
-            && let Some(object) = metadata.as_object_mut()
-        {
-            object.insert(
-                "skipped_capabilities".to_owned(),
-                Value::Array(self.context.skipped_capabilities.clone()),
-            );
-        }
-        metadata
     }
 
     fn bind_invocation_id(&mut self, event: &Event) {
@@ -3498,6 +3484,18 @@ impl AgentEventProjector {
                 .as_object_mut()
                 .ok_or_else(AgentEventProjectionError::invalid_state)?
                 .remove("pipeline_static_v1");
+        }
+        // What the turn could not serve rides every event Main persists a turn
+        // from: its start, a pause (human-in-the-loop or authorization) and its
+        // final message. Absent when the turn served everything.
+        if let Some(skipped) = &self.context.skipped_capabilities
+            && (matches!(
+                event_type,
+                "agent_start" | "full_message" | "agent_hitl_interrupt"
+            ) || response_metadata.get("authorization_requests").is_some())
+            && let Some(object) = response_metadata.as_object_mut()
+        {
+            object.insert("skipped_capabilities".to_owned(), skipped.clone());
         }
         let event = NodeEventV1 {
             r#type: event_type.to_owned(),

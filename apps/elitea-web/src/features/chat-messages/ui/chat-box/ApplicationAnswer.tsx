@@ -291,7 +291,7 @@ export function ApplicationAnswer({
         </Box>
       )}
 
-      {!isProcessing && <SkippedCapabilitiesNotice items={skippedCapabilities} />}
+      {!isProcessing && <SkippedCapabilitiesNotice skipped={skippedCapabilities} />}
 
       {shouldRenderAnswerBlock && (
         <Box
