@@ -554,10 +554,13 @@ impl ClaimAttachmentSource {
     }
 }
 
-/// The project's attachment bucket for the claim's conversation, asked of the
-/// platform the way the Attachments listing asks (an empty bucket and prefix
-/// mean "this claim's conversation, in the project's attachment bucket"), so
-/// `data_analysis` reads from the same bucket without assuming its name.
+/// The project's attachment bucket for the claim's conversation, learned the
+/// way the Attachments listing learns it: the claim-bound listing is sent an
+/// empty bucket and prefix, which Main reads as "this claim's conversation, in
+/// the project's attachment bucket" (storage policy, else its default), and the
+/// bucket it echoes is the answer. The worker holds no bucket name of its own;
+/// the data tools handle binary objects through the object API, which needs
+/// the name in its URL, so this is the one lookup (limit 1, once per run).
 pub(crate) struct ClaimAttachmentBucket {
     platform: Arc<PlatformClient>,
     authority: Arc<ClaimBoundRuntimeContextAuthority>,
@@ -589,6 +592,7 @@ impl elitea_agent_runtime::toolkits::AttachmentBucketResolver for ClaimAttachmen
             .await
             .ok()
             .map(|outcome| outcome.bucket)
+            .filter(|bucket| !bucket.is_empty())
     }
 }
 

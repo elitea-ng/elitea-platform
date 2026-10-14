@@ -196,7 +196,9 @@ impl Rig {
     ) -> Self {
         let host = Arc::new(host);
         let shared: SharedOfficeToolHost = Arc::clone(&host) as SharedOfficeToolHost;
-        let mut authority = DataAnalysisAuthority::new(shared).with_gate(gate);
+        let mut authority = DataAnalysisAuthority::new(shared)
+            .with_gate(gate)
+            .with_bucket_resolver(Arc::new(FixedBucket::new(Some(BUCKET))));
         if let Some(runner) = runner {
             authority = authority.with_code_runner(runner);
         }
@@ -461,7 +463,7 @@ async fn unsupported_and_unknown_files_get_their_own_sentence() {
             json!({"filename": "a.csv", "bucket_name": "Bad_Bucket"}),
         )
         .await;
-    assert!(message.contains("not a valid bucket name"), "{message}");
+    assert!(message.contains("Invalid bucket name"), "{message}");
 }
 
 // ---------------------------------------------------------------------------
@@ -1720,21 +1722,37 @@ async fn a_result_over_the_answer_budget_is_shown_cut_and_says_so() {
     assert_eq!(out["result"], json!({"n": 3}));
 }
 
-struct FixedBucket(Option<&'static str>);
+/// Main's answer for the conversation's attachment bucket, and how often it
+/// was asked.
+struct FixedBucket {
+    bucket: Option<&'static str>,
+    asked: std::sync::atomic::AtomicUsize,
+}
+
+impl FixedBucket {
+    fn new(bucket: Option<&'static str>) -> Self {
+        Self {
+            bucket,
+            asked: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
 
 #[async_trait]
 impl AttachmentBucketResolver for FixedBucket {
     async fn attachment_bucket(&self) -> Option<String> {
-        self.0.map(str::to_owned)
+        self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.bucket.map(str::to_owned)
     }
 }
 
-async fn rig_resolving(bucket: Option<&'static str>) -> Rig {
+async fn rig_resolving(bucket: Option<&'static str>) -> (Rig, Arc<FixedBucket>) {
     let host = Arc::new(FakeHost::default());
     let shared: SharedOfficeToolHost = Arc::clone(&host) as SharedOfficeToolHost;
+    let resolver = Arc::new(FixedBucket::new(bucket));
     let authority = DataAnalysisAuthority::new(shared)
         .with_gate(AnalysisGate::new(4))
-        .with_bucket_resolver(Arc::new(FixedBucket(bucket)));
+        .with_bucket_resolver(Arc::clone(&resolver) as Arc<dyn AttachmentBucketResolver>);
     let toolset = build_with(&authority, &policy(), test_limits())
         .expect("toolset")
         .expect("not blocked");
@@ -1742,51 +1760,137 @@ async fn rig_resolving(bucket: Option<&'static str>) -> Rig {
         .tools(context() as Arc<dyn ReadonlyContext>)
         .await
         .expect("tools");
-    Rig { host, tools }
+    (Rig { host, tools }, resolver)
+}
+
+fn has(rig: &Rig, bucket: &str, name: &str) -> bool {
+    rig.host
+        .objects
+        .lock()
+        .unwrap()
+        .contains_key(&(bucket.to_owned(), name.to_owned()))
 }
 
 #[tokio::test]
-async fn the_default_bucket_is_the_projects_attachment_bucket_when_the_platform_names_it() {
-    let rig = rig_resolving(Some("project-files")).await;
-    rig.host.put_in("project-files", "c1/a.csv", "x\n1\n");
-    rig.host.put_in("chat-attachments", "c1/b.csv", "y\n2\n");
-    let out = rig
-        .ok("describe_data", json!({"filename": "c1/a.csv"}))
+async fn a_project_with_its_own_attachment_bucket_reads_writes_and_joins_there() {
+    let (rig, resolver) = rig_resolving(Some("team-files")).await;
+    rig.host
+        .put_in("team-files", "c1/a.csv", "id,x\n1,a\n2,b\n");
+    rig.host
+        .put_in("team-files", "c1/b.csv", "id,y\n1,p\n2,q\n");
+    rig.host.put_in("other-files", "z/c.csv", "id,w\n1,m\n");
+    // Read: no bucket_name, and the printed path form with the RESOLVED
+    // bucket's prefix works as a name.
+    for name in ["c1/a.csv", "/team-files/c1/a.csv"] {
+        let out = rig.ok("describe_data", json!({"filename": name})).await;
+        assert_eq!(out["source"]["bucket"], "team-files", "{name}");
+        assert_eq!(out["source"]["file"], "c1/a.csv", "{name}");
+    }
+    // The old literal prefix is just a folder name now: nothing is stripped.
+    let m = rig
+        .err(
+            "describe_data",
+            json!({"filename": "/chat-attachments/c1/a.csv"}),
+        )
         .await;
-    assert_eq!(out["source"]["bucket"], "project-files");
-    // An explicit bucket still wins over the resolved default.
+    assert!(m.contains("no such file"), "{m}");
+    // Write: the result lands in the bucket Main named.
+    let out = rig
+        .ok(
+            "filter_data",
+            json!({"filename": "c1/a.csv", "output_file": "out.csv"}),
+        )
+        .await;
+    assert_eq!(out["saved"]["bucket"], "team-files");
+    assert!(has(&rig, "team-files", "c1/out.csv"));
+    assert!(!has(&rig, "chat-attachments", "c1/out.csv"));
+    // Join: right_bucket_name defaults exactly like bucket_name.
+    let out = rig
+        .ok(
+            "join_data",
+            json!({"filename": "c1/a.csv", "right_filename": "/team-files/c1/b.csv", "on": ["id"]}),
+        )
+        .await;
+    assert_eq!(out["right_source"]["bucket"], "team-files");
+    assert_eq!(out["columns"], json!(["id", "x", "y"]));
+    // An explicit right bucket still wins.
+    let out = rig
+        .ok(
+            "join_data",
+            json!({"filename": "c1/a.csv", "right_filename": "z/c.csv",
+                "right_bucket_name": "other-files", "on": ["id"]}),
+        )
+        .await;
+    assert_eq!(out["right_source"]["bucket"], "other-files");
+    // Main was asked once for the whole run.
+    assert_eq!(resolver.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_bucket_that_cannot_be_resolved_is_unavailable_and_nothing_is_touched() {
+    let (rig, resolver) = rig_resolving(None).await;
+    rig.host.put("c1/a.csv", "x\n1\n");
+    for (tool, args) in [
+        ("describe_data", json!({"filename": "c1/a.csv"})),
+        (
+            "filter_data",
+            json!({"filename": "c1/a.csv", "output_file": "o.csv"}),
+        ),
+        (
+            "join_data",
+            json!({"filename": "c1/a.csv", "bucket_name": "team-files",
+                "right_filename": "c1/a.csv", "on": ["x"]}),
+        ),
+    ] {
+        let m = rig.err(tool, args).await;
+        assert!(
+            m.contains("attachments are unavailable right now"),
+            "{tool}: {m}"
+        );
+    }
+    assert!(rig.host.reads.lock().unwrap().is_empty());
+    assert!(rig.host.writes.lock().unwrap().is_empty());
+    // A failed answer is not cached: the next call asks again.
+    assert_eq!(resolver.asked.load(std::sync::atomic::Ordering::SeqCst), 3);
+    // Naming the bucket needs no lookup, so it works while Main cannot say.
+    rig.host.put_in("team-files", "c1/a.csv", "x\n1\n");
+    let before = resolver.asked.load(std::sync::atomic::Ordering::SeqCst);
     let out = rig
         .ok(
             "describe_data",
-            json!({"filename": "c1/b.csv", "bucket_name": "chat-attachments"}),
+            json!({"filename": "c1/a.csv", "bucket_name": "team-files"}),
         )
         .await;
-    assert_eq!(out["source"]["bucket"], "chat-attachments");
-    // Results are written to the bucket the source was read from.
-    rig.ok(
-        "filter_data",
-        json!({"filename": "c1/a.csv", "output_file": "out.csv"}),
-    )
-    .await;
-    assert!(
-        rig.host
-            .objects
-            .lock()
-            .unwrap()
-            .contains_key(&("project-files".to_owned(), "c1/out.csv".to_owned()))
+    assert_eq!(out["source"]["bucket"], "team-files");
+    assert_eq!(
+        resolver.asked.load(std::sync::atomic::Ordering::SeqCst),
+        before
     );
 }
 
 #[tokio::test]
-async fn an_unresolvable_or_invalid_bucket_falls_back_to_the_platform_default_name() {
-    for resolved in [None, Some("Bad Bucket!")] {
-        let rig = rig_resolving(resolved).await;
-        rig.host.put("c1/a.csv", "x\n1\n");
-        let out = rig
-            .ok("describe_data", json!({"filename": "c1/a.csv"}))
+async fn an_explicit_invalid_bucket_name_is_an_error_not_a_fallback() {
+    let (rig, resolver) = rig_resolving(Some("team-files")).await;
+    rig.host.put_in("team-files", "c1/a.csv", "x\n1\n");
+    for bad in ["Bad Bucket!", "UPPER", "9lives", "a/b", "x"] {
+        let m = rig
+            .err(
+                "describe_data",
+                json!({"filename": "c1/a.csv", "bucket_name": bad}),
+            )
             .await;
-        assert_eq!(out["source"]["bucket"], "chat-attachments", "{resolved:?}");
+        assert!(m.contains("Invalid bucket name"), "{bad}: {m}");
     }
+    let m = rig
+        .err(
+            "join_data",
+            json!({"filename": "c1/a.csv", "right_filename": "c1/a.csv",
+                "right_bucket_name": "Bad!", "on": ["x"]}),
+        )
+        .await;
+    assert!(m.contains("Invalid bucket name `Bad!`"), "{m}");
+    assert!(rig.host.reads.lock().unwrap().is_empty());
+    assert_eq!(resolver.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

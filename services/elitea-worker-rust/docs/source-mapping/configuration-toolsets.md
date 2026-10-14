@@ -2624,9 +2624,15 @@ What the Rust worker serves instead, behind the same toggle and the same
 | `save_dataframe` | Converts between `.csv`, `.tsv`, `.json` and `.xlsx` (SDK wrapper name and arguments) |
 | `run_analysis_code` | Python or JavaScript on up to 50,000 cells (fewer when bytes or JSON nodes run out first), in the platform code sandbox; offered only when the run has a sandbox runtime |
 
-Files are read from the project's conversation attachments bucket (resolved
-from the platform the way the Attachments module resolves it, `chat-attachments`
-if the platform cannot say, unless `bucket_name` says otherwise) through the Office object host that the
+Files are read from the conversation's attachment bucket, which main names
+(the claim-bound listing is sent an empty bucket, exactly as the Attachments
+module does: project storage policy, else `storage.DefaultAttachmentBucket`)
+unless `bucket_name` (or, for `join_data`, `right_bucket_name`) says otherwise.
+The worker holds no bucket name and no fallback: a failed resolution answers
+that the attachments are unavailable and reads and writes nothing, and an
+invalid explicit bucket name is an error. The attachment message's printed path
+(`/<bucket>/<conversation>/<file>`) works as a name, the resolved bucket's prefix
+being stripped. Bytes (xlsx, png) travel through the Office object host that the
 `pptx` family already uses: the turn's own credential, the platform's object
 API, no new route. A result file is written only when `output_file` is given,
 next to the source for a bare name, refused when the name is taken unless

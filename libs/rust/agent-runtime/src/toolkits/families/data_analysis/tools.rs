@@ -29,7 +29,7 @@ use super::code::{
 };
 use super::formats::{self, Format, Loaded, SourceInfo, WriteNotes};
 use super::ops::{self, Func, How, JoinSpec, PivotSpec};
-use super::schema::{ALL_TOOLS, DEFAULT_BUCKET, DataTool};
+use super::schema::{ALL_TOOLS, DataTool};
 use super::table::{Cell, Column, DataError, DataResult, Deadline, Limits, Table, argument};
 
 /// The toolkit type the tool admission policy names this tool set by.
@@ -110,10 +110,9 @@ const PNG_MEDIA_TYPE: &str = "image/png";
 
 type Sentence = String;
 
-/// The conversation's attachment bucket, as the platform names it for this
-/// project (its storage policy, else the platform default). The worker lends
-/// the resolver the Attachments module already uses, so a project whose
-/// attachments live in another bucket is read from it.
+/// The conversation's attachment bucket as the platform names it (the
+/// project's storage policy, else the platform default): the worker has no
+/// name of its own to offer. `None` means the platform could not say.
 #[async_trait]
 pub trait AttachmentBucketResolver: Send + Sync {
     /// The bucket name, or `None` when the platform cannot say right now.
@@ -350,12 +349,17 @@ fn bool_arg(args: &Value, key: &str) -> bool {
     args.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
-fn bucket_arg(args: &Value, key: &str, default_bucket: &str) -> Result<String, Sentence> {
+/// The bucket of a file: the model's explicit `bucket_name` (which must be a
+/// valid name; there is no fallback for a bad one), else the bucket the
+/// platform resolved for the conversation. No bucket is ever guessed.
+fn bucket_arg(args: &Value, key: &str, resolved: Option<&str>) -> Result<String, Sentence> {
     match text_arg(args, key) {
-        None => Ok(default_bucket.to_owned()),
+        None => resolved.map(str::to_owned).ok_or_else(|| {
+            format!("`{key}` was not given and the conversation's attachment bucket is not known.")
+        }),
         Some(bucket) if valid_bucket_name(&bucket) => Ok(bucket),
         Some(bucket) => Err(format!(
-            "`{bucket}` is not a valid bucket name (lowercase letters, digits and hyphens, starting with a letter)."
+            "Invalid bucket name `{bucket}`: a bucket name is lowercase letters, digits and hyphens, starting with a letter."
         )),
     }
 }
@@ -432,13 +436,13 @@ struct Source {
 }
 
 fn source(
-    default_bucket: &str,
+    resolved: Option<&str>,
     args: &Value,
     name_key: &str,
     bucket_key: &str,
     sheet_key: &str,
 ) -> Result<Source, Sentence> {
-    let bucket = bucket_arg(args, bucket_key, default_bucket)?;
+    let bucket = bucket_arg(args, bucket_key, resolved)?;
     let key = object_key(&bucket, &required(args, name_key)?)?;
     let format = Format::from_name(&key).map_err(|e| e.to_string())?;
     Ok(Source {
@@ -504,16 +508,20 @@ impl DataToolImpl {
             return Err("The arguments must be a JSON object.".to_owned());
         }
         let deadline = Deadline::after(self.limits.deadline);
-        let default_bucket = self.default_bucket().await;
+        // The platform names the attachment bucket (project policy, else its
+        // default); it is asked only when a file is given without a bucket,
+        // and a failure is "unavailable", never a guess.
+        let resolved = self.resolve_bucket(args).await?;
+        let default_bucket = resolved.as_deref();
         let primary = match self.tool {
             DataTool::SaveDataframe => {
-                source(&default_bucket, args, "source_df", "bucket_name", "sheet")?
+                source(default_bucket, args, "source_df", "bucket_name", "sheet")?
             }
-            _ => source(&default_bucket, args, "filename", "bucket_name", "sheet")?,
+            _ => source(default_bucket, args, "filename", "bucket_name", "sheet")?,
         };
         let second = if self.tool == DataTool::JoinData {
             Some(source(
-                &default_bucket,
+                default_bucket,
                 args,
                 "right_filename",
                 "right_bucket_name",
@@ -664,24 +672,34 @@ impl DataToolImpl {
         Ok(Value::Object(answer))
     }
 
-    /// The bucket a call without `bucket_name` reads from: the platform's
-    /// attachment bucket for this project when it can be resolved (once per
-    /// run), else the platform default name.
-    async fn default_bucket(&self) -> String {
-        if let Some(resolver) = &self.buckets {
-            return self
-                .resolved
-                .get_or_init(|| async {
-                    resolver
-                        .attachment_bucket()
-                        .await
-                        .filter(|bucket| valid_bucket_name(bucket))
-                        .unwrap_or_else(|| DEFAULT_BUCKET.to_owned())
-                })
-                .await
-                .clone();
+    /// The bucket a call without `bucket_name` (or, for `join_data`, without
+    /// `right_bucket_name`) reads from and writes to: the platform's own
+    /// answer for this conversation, asked once per run. `None` when every
+    /// file names its bucket.
+    async fn resolve_bucket(&self, args: &Value) -> Result<Option<String>, Sentence> {
+        let needs = |key: &str| text_arg(args, key).is_none();
+        let wanted =
+            needs("bucket_name") || (self.tool == DataTool::JoinData && needs("right_bucket_name"));
+        if !wanted {
+            return Ok(None);
         }
-        DEFAULT_BUCKET.to_owned()
+        let unavailable = || {
+            "The conversation's attachments are unavailable right now, so the file's bucket cannot be determined. Retry shortly, or pass `bucket_name`.".to_owned()
+        };
+        let Some(resolver) = &self.buckets else {
+            return Err(unavailable());
+        };
+        self.resolved
+            .get_or_try_init(|| async {
+                resolver
+                    .attachment_bucket()
+                    .await
+                    .filter(|bucket| valid_bucket_name(bucket))
+                    .ok_or(())
+            })
+            .await
+            .map(|bucket| Some(bucket.clone()))
+            .map_err(|()| unavailable())
     }
 
     async fn read(&self, source: Source, deadline: &Deadline) -> Result<Input, Sentence> {

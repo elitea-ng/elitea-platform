@@ -40,9 +40,6 @@ pub(crate) const ALL_TOOLS: [DataTool; 10] = [
     DataTool::RunCode,
 ];
 
-/// The default bucket: where chat attachments are stored.
-pub(crate) const DEFAULT_BUCKET: &str = "chat-attachments";
-
 impl DataTool {
     pub(crate) const fn name(self) -> &'static str {
         match self {
@@ -320,7 +317,7 @@ fn sheet() -> Value {
 }
 
 fn bucket() -> Value {
-    json!({"type": "string", "description": "The bucket the file is in (default: the project's conversation attachments bucket)."})
+    json!({"type": "string", "description": "The bucket the file is in (default: the bucket the platform names for this conversation's attachments)."})
 }
 
 fn columns(description: &str) -> Value {
