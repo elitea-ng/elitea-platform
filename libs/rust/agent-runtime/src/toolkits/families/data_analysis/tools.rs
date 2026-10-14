@@ -98,6 +98,10 @@ pub fn close_analysis_gate() {
     AnalysisGate::process().close();
 }
 
+/// The run has no conversation attachments: there is nothing to retry.
+const NO_ATTACHMENTS: &str = "This run has no conversation attachments, so there is no default bucket. Name the bucket with `bucket_name` (and `right_bucket_name` for the second file), or write the file as `/<bucket>/<name>`.";
+/// The platform could not be asked: worth trying again.
+const ATTACHMENTS_UNAVAILABLE: &str = "The conversation's attachments are unavailable right now, so the file's bucket cannot be determined. Retry shortly, or name the bucket with `bucket_name`.";
 const MAX_CHART_CATEGORIES: usize = 100;
 const MAX_SCATTER_POINTS: usize = 5_000;
 /// Bytes of the request around the data: the job envelope and key names.
@@ -110,13 +114,25 @@ const PNG_MEDIA_TYPE: &str = "image/png";
 
 type Sentence = String;
 
+/// Why the platform did not name the conversation's attachment bucket, split
+/// as the Attachments module splits its listing failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttachmentBucketError {
+    /// This run has no conversation attachments to speak of (the claim was
+    /// refused, or has no canonical conversation, as a scheduled or pipeline
+    /// run does). Not retried.
+    NotAvailable,
+    /// The platform could not be asked right now. Worth a retry.
+    Unavailable,
+}
+
 /// The conversation's attachment bucket as the platform names it (the
 /// project's storage policy, else the platform default): the worker has no
-/// name of its own to offer. `None` means the platform could not say.
+/// name of its own to offer.
 #[async_trait]
 pub trait AttachmentBucketResolver: Send + Sync {
-    /// The bucket name, or `None` when the platform cannot say right now.
-    async fn attachment_bucket(&self) -> Option<String>;
+    /// The bucket name, or why it is not known.
+    async fn attachment_bucket(&self) -> Result<String, AttachmentBucketError>;
 }
 
 /// What the host lends the tool set for one run: the object store (and a link
@@ -357,11 +373,34 @@ fn bucket_arg(args: &Value, key: &str, resolved: Option<&str>) -> Result<String,
         None => resolved.map(str::to_owned).ok_or_else(|| {
             format!("`{key}` was not given and the conversation's attachment bucket is not known.")
         }),
-        Some(bucket) if valid_bucket_name(&bucket) => Ok(bucket),
-        Some(bucket) => Err(format!(
-            "Invalid bucket name `{bucket}`: a bucket name is lowercase letters, digits and hyphens, starting with a letter."
-        )),
+        Some(bucket) => valid_bucket(bucket),
     }
+}
+
+fn valid_bucket(bucket: String) -> Result<String, Sentence> {
+    if valid_bucket_name(&bucket) {
+        Ok(bucket)
+    } else {
+        Err(format!(
+            "Invalid bucket name `{bucket}`: a bucket name is lowercase letters, digits and hyphens, starting with a letter."
+        ))
+    }
+}
+
+/// The artifact toolkit's rule for the `/{bucket}/{key}` form the attachment
+/// message prints: a name that starts with a slash and has a second segment
+/// names its bucket (first segment) and its key (the rest). Anything else is a
+/// plain key.
+fn rooted(name: &str) -> Option<(&str, &str)> {
+    let path = name.trim().strip_prefix('/')?.trim_start_matches('/');
+    let (bucket, key) = path.split_once('/')?;
+    let key = key.trim();
+    (!bucket.is_empty() && !key.is_empty()).then_some((bucket, key))
+}
+
+/// A key with its leading slashes dropped and its shape checked.
+fn plain_key(name: &str) -> Result<String, Sentence> {
+    object_key("", name.trim().trim_start_matches('/'))
 }
 
 /// The object key a name denotes: a leading slash is dropped, and so is a
@@ -442,8 +481,13 @@ fn source(
     bucket_key: &str,
     sheet_key: &str,
 ) -> Result<Source, Sentence> {
-    let bucket = bucket_arg(args, bucket_key, resolved)?;
-    let key = object_key(&bucket, &required(args, name_key)?)?;
+    let name = required(args, name_key)?;
+    // A rooted `/<bucket>/<key>` names its bucket, and that wins over
+    // `bucket_name` and over the platform's answer, as in the artifact toolkit.
+    let (bucket, key) = match rooted(&name) {
+        Some((bucket, key)) => (valid_bucket(bucket.to_owned())?, plain_key(key)?),
+        None => (bucket_arg(args, bucket_key, resolved)?, plain_key(&name)?),
+    };
     let format = Format::from_name(&key).map_err(|e| e.to_string())?;
     Ok(Source {
         bucket,
@@ -672,34 +716,45 @@ impl DataToolImpl {
         Ok(Value::Object(answer))
     }
 
-    /// The bucket a call without `bucket_name` (or, for `join_data`, without
-    /// `right_bucket_name`) reads from and writes to: the platform's own
-    /// answer for this conversation, asked once per run. `None` when every
-    /// file names its bucket.
+    /// The bucket a file named without one reads from and writes to: the
+    /// platform's own answer for this conversation. Asked only when some file
+    /// of the call names no bucket (by `bucket_name`, or by a rooted
+    /// `/<bucket>/...` path); a success is kept for the run (concurrent first
+    /// calls share one lookup); a failure is never kept. `None` when every file
+    /// names its bucket.
     async fn resolve_bucket(&self, args: &Value) -> Result<Option<String>, Sentence> {
-        let needs = |key: &str| text_arg(args, key).is_none();
-        let wanted =
-            needs("bucket_name") || (self.tool == DataTool::JoinData && needs("right_bucket_name"));
+        let unnamed = |name_key: &str, bucket_key: &str| {
+            text_arg(args, bucket_key).is_none()
+                && text_arg(args, name_key).is_none_or(|name| rooted(&name).is_none())
+        };
+        let primary = if self.tool == DataTool::SaveDataframe {
+            "source_df"
+        } else {
+            "filename"
+        };
+        let wanted = unnamed(primary, "bucket_name")
+            || (self.tool == DataTool::JoinData && unnamed("right_filename", "right_bucket_name"));
         if !wanted {
             return Ok(None);
         }
-        let unavailable = || {
-            "The conversation's attachments are unavailable right now, so the file's bucket cannot be determined. Retry shortly, or pass `bucket_name`.".to_owned()
-        };
         let Some(resolver) = &self.buckets else {
-            return Err(unavailable());
+            return Err(NO_ATTACHMENTS.to_owned());
         };
         self.resolved
             .get_or_try_init(|| async {
-                resolver
-                    .attachment_bucket()
-                    .await
-                    .filter(|bucket| valid_bucket_name(bucket))
-                    .ok_or(())
+                let bucket = resolver.attachment_bucket().await?;
+                if valid_bucket_name(&bucket) {
+                    Ok(bucket)
+                } else {
+                    Err(AttachmentBucketError::Unavailable)
+                }
             })
             .await
             .map(|bucket| Some(bucket.clone()))
-            .map_err(|()| unavailable())
+            .map_err(|error| match error {
+                AttachmentBucketError::NotAvailable => NO_ATTACHMENTS.to_owned(),
+                AttachmentBucketError::Unavailable => ATTACHMENTS_UNAVAILABLE.to_owned(),
+            })
     }
 
     async fn read(&self, source: Source, deadline: &Deadline) -> Result<Input, Sentence> {

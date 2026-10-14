@@ -2624,15 +2624,22 @@ What the Rust worker serves instead, behind the same toggle and the same
 | `save_dataframe` | Converts between `.csv`, `.tsv`, `.json` and `.xlsx` (SDK wrapper name and arguments) |
 | `run_analysis_code` | Python or JavaScript on up to 50,000 cells (fewer when bytes or JSON nodes run out first), in the platform code sandbox; offered only when the run has a sandbox runtime |
 
-Files are read from the conversation's attachment bucket, which main names
-(the claim-bound listing is sent an empty bucket, exactly as the Attachments
-module does: project storage policy, else `storage.DefaultAttachmentBucket`)
-unless `bucket_name` (or, for `join_data`, `right_bucket_name`) says otherwise.
-The worker holds no bucket name and no fallback: a failed resolution answers
-that the attachments are unavailable and reads and writes nothing, and an
-invalid explicit bucket name is an error. The attachment message's printed path
-(`/<bucket>/<conversation>/<file>`) works as a name, the resolved bucket's prefix
-being stripped. Bytes (xlsx, png) travel through the Office object host that the
+Files are read from the conversation's attachment bucket, which main names.
+Only the claim-bound artifact LIST route resolves an empty bucket (project
+storage policy, else `storage.DefaultAttachmentBucket`) and echoes it; the
+claim-bound text Read and Write do not accept an empty bucket. So a call whose
+file names no bucket sends one bucketless list call with `bucket_only` (main
+authorizes and resolves exactly as for the conversation listing but reads and
+orders no keys), keeps the answer for the run (a success only; parallel first
+calls share the one lookup), and then uses the object API with that explicit
+bucket for the bytes. The worker holds no bucket name and no fallback. A
+refused claim (no canonical conversation: a scheduled or pipeline run) answers
+that the run has no conversation attachments and to name `bucket_name`, with no
+retry hint; a transient failure answers to retry; either way nothing is read or
+written. A name written `/<bucket>/<key>` (the attachment message's form) names
+its bucket, which wins over `bucket_name` and over the resolution, as in the
+artifact toolkit; an invalid explicit or prefixed bucket name is an error.
+`join_data`'s `right_bucket_name` defaults the same way. Bytes (xlsx, png) travel through the Office object host that the
 `pptx` family already uses: the turn's own credential, the platform's object
 API, no new route. A result file is written only when `output_file` is given,
 next to the source for a bare name, refused when the name is taken unless

@@ -554,13 +554,19 @@ impl ClaimAttachmentSource {
     }
 }
 
-/// The project's attachment bucket for the claim's conversation, learned the
-/// way the Attachments listing learns it: the claim-bound listing is sent an
-/// empty bucket and prefix, which Main reads as "this claim's conversation, in
-/// the project's attachment bucket" (storage policy, else its default), and the
-/// bucket it echoes is the answer. The worker holds no bucket name of its own;
-/// the data tools handle binary objects through the object API, which needs
-/// the name in its URL, so this is the one lookup (limit 1, once per run).
+/// The project's attachment bucket for the claim's conversation, learned from
+/// Main. Only the claim-bound LIST route resolves an empty bucket and echoes it
+/// (storage policy, else `storage.DefaultAttachmentBucket`), so the worker
+/// sends one bucketless list call asking for the name alone
+/// (`bucket_only`: nothing is listed, no keys are read or ordered) and keeps
+/// the answer for the run. The worker holds no bucket name of its own. The data
+/// tools move binary objects (xlsx, PNG) through the object API, which needs
+/// the name in its URL; the claim-bound text Read and Write do not accept an
+/// empty bucket.
+///
+/// The failures split as the Attachments listing's do: an authorization
+/// refusal (a claim with no canonical conversation, a scheduled or pipeline
+/// run) is `NotAvailable`, and nothing else is retried.
 pub(crate) struct ClaimAttachmentBucket {
     platform: Arc<PlatformClient>,
     authority: Arc<ClaimBoundRuntimeContextAuthority>,
@@ -580,19 +586,34 @@ impl ClaimAttachmentBucket {
 
 #[async_trait::async_trait]
 impl elitea_agent_runtime::toolkits::AttachmentBucketResolver for ClaimAttachmentBucket {
-    async fn attachment_bucket(&self) -> Option<String> {
+    async fn attachment_bucket(
+        &self,
+    ) -> Result<String, elitea_agent_runtime::toolkits::AttachmentBucketError> {
+        use elitea_agent_runtime::toolkits::AttachmentBucketError as Failure;
         let request = crate::transport::runtime_context::ArtifactListRequest {
             bucket: String::new(),
             prefix: String::new(),
             recursive: false,
             limit: 1,
+            bucket_only: true,
         };
-        self.platform
+        match self
+            .platform
             .list_artifacts(&self.authority, &request)
             .await
-            .ok()
-            .map(|outcome| outcome.bucket)
-            .filter(|bucket| !bucket.is_empty())
+        {
+            Ok(outcome) if !outcome.bucket.is_empty() => Ok(outcome.bucket),
+            Ok(_) => Err(Failure::Unavailable),
+            Err(RuntimeContextError::AuthorizationFailed(_)) => Err(Failure::NotAvailable),
+            Err(error) => {
+                tracing::info!(
+                    event = "data_analysis_bucket_unresolved",
+                    error_code = error.code(),
+                    "the conversation's attachment bucket could not be resolved"
+                );
+                Err(Failure::Unavailable)
+            }
+        }
     }
 }
 
@@ -607,6 +628,7 @@ impl super::attachment_tools::AttachmentSource for ClaimAttachmentSource {
             prefix: String::new(),
             recursive: false,
             limit: CONVERSATION_LISTING_LIMIT,
+            bucket_only: false,
         };
         let outcome = match self
             .platform

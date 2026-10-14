@@ -116,6 +116,11 @@ type RuntimeArtifactListRequest struct {
 	Prefix    string `json:"prefix"`
 	Recursive bool   `json:"recursive"`
 	Limit     int32  `json:"limit"`
+	// BucketOnly asks, with an empty Bucket, for the bucket name alone: the
+	// same authorization and the same resolution (storage policy, else
+	// DefaultAttachmentBucket) as the conversation listing, but no listing, so
+	// no keys are read or ordered. Ignored when Bucket is named.
+	BucketOnly bool `json:"bucket_only,omitempty"`
 }
 
 // RuntimeArtifactReadRequest is the wire body for `read_file`.
@@ -394,7 +399,7 @@ func (service *RuntimeArtifactObjectService) List(
 	// numeric id), so the request's prefix is ignored and the answer says which
 	// bucket was used.
 	if bucket == "" {
-		return service.listConversationAttachments(ctx, claim, limit)
+		return service.listConversationAttachments(ctx, claim, limit, request.BucketOnly)
 	}
 	if !addressableAttachmentBucket(bucket) || !addressableArtifactPrefix(prefix) {
 		return RuntimeArtifactListContext{}, ErrContentRejected
@@ -432,6 +437,7 @@ func (service *RuntimeArtifactObjectService) listConversationAttachments(
 	ctx context.Context,
 	claim ContentClaim,
 	limit int32,
+	bucketOnly bool,
 ) (RuntimeArtifactListContext, error) {
 	source, ok := service.artifacts.(AttachmentListingSource)
 	if !ok {
@@ -455,6 +461,14 @@ func (service *RuntimeArtifactObjectService) listConversationAttachments(
 	}
 	if !addressableAttachmentBucket(bucket) {
 		return RuntimeArtifactListContext{}, ErrContentRejected
+	}
+	if bucketOnly {
+		return RuntimeArtifactListContext{
+			SchemaVersion: RuntimeArtifactListSchemaVersion,
+			ProjectID:     principal.projectID,
+			Bucket:        bucket,
+			Files:         []RuntimeArtifactFile{},
+		}, nil
 	}
 	records, truncated, err := source.ListAttachmentsNewestFirst(
 		ctx, principal.projectID, principal.actorID, bucket, authorization.ConversationID+"/", limit,

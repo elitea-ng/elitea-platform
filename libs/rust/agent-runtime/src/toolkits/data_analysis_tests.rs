@@ -23,7 +23,8 @@ use super::families::data_analysis::code::{
 use super::families::data_analysis::schema::ALL_TOOLS;
 use super::families::data_analysis::table::Limits;
 use super::families::data_analysis::tools::{
-    AnalysisGate, AttachmentBucketResolver, DataAnalysisAuthority, build_with,
+    AnalysisGate, AttachmentBucketError, AttachmentBucketResolver, DataAnalysisAuthority,
+    build_with,
 };
 use super::families::office_host::{
     OfficeFailure, OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
@@ -198,7 +199,7 @@ impl Rig {
         let shared: SharedOfficeToolHost = Arc::clone(&host) as SharedOfficeToolHost;
         let mut authority = DataAnalysisAuthority::new(shared)
             .with_gate(gate)
-            .with_bucket_resolver(Arc::new(FixedBucket::new(Some(BUCKET))));
+            .with_bucket_resolver(Arc::new(FixedBucket::new(Ok(BUCKET))));
         if let Some(runner) = runner {
             authority = authority.with_code_runner(runner);
         }
@@ -1725,33 +1726,47 @@ async fn a_result_over_the_answer_budget_is_shown_cut_and_says_so() {
 /// Main's answer for the conversation's attachment bucket, and how often it
 /// was asked.
 struct FixedBucket {
-    bucket: Option<&'static str>,
+    answer: Mutex<Result<&'static str, AttachmentBucketError>>,
     asked: std::sync::atomic::AtomicUsize,
+    /// Held open for a moment, so parallel first calls overlap.
+    slow: bool,
 }
 
 impl FixedBucket {
-    fn new(bucket: Option<&'static str>) -> Self {
+    fn new(answer: Result<&'static str, AttachmentBucketError>) -> Self {
         Self {
-            bucket,
+            answer: Mutex::new(answer),
             asked: std::sync::atomic::AtomicUsize::new(0),
+            slow: false,
         }
+    }
+
+    fn set(&self, answer: Result<&'static str, AttachmentBucketError>) {
+        *self.answer.lock().unwrap() = answer;
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
 #[async_trait]
 impl AttachmentBucketResolver for FixedBucket {
-    async fn attachment_bucket(&self) -> Option<String> {
+    async fn attachment_bucket(&self) -> Result<String, AttachmentBucketError> {
         self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.bucket.map(str::to_owned)
+        if self.slow {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        (*self.answer.lock().unwrap()).map(str::to_owned)
     }
 }
 
-async fn rig_resolving(bucket: Option<&'static str>) -> (Rig, Arc<FixedBucket>) {
+async fn rig_with(resolver: FixedBucket) -> (Rig, Arc<FixedBucket>) {
     let host = Arc::new(FakeHost::default());
     let shared: SharedOfficeToolHost = Arc::clone(&host) as SharedOfficeToolHost;
-    let resolver = Arc::new(FixedBucket::new(bucket));
+    let resolver = Arc::new(resolver);
     let authority = DataAnalysisAuthority::new(shared)
-        .with_gate(AnalysisGate::new(4))
+        .with_gate(AnalysisGate::new(8))
         .with_bucket_resolver(Arc::clone(&resolver) as Arc<dyn AttachmentBucketResolver>);
     let toolset = build_with(&authority, &policy(), test_limits())
         .expect("toolset")
@@ -1761,6 +1776,10 @@ async fn rig_resolving(bucket: Option<&'static str>) -> (Rig, Arc<FixedBucket>) 
         .await
         .expect("tools");
     (Rig { host, tools }, resolver)
+}
+
+async fn rig_resolving(bucket: &'static str) -> (Rig, Arc<FixedBucket>) {
+    rig_with(FixedBucket::new(Ok(bucket))).await
 }
 
 fn has(rig: &Rig, bucket: &str, name: &str) -> bool {
@@ -1773,27 +1792,17 @@ fn has(rig: &Rig, bucket: &str, name: &str) -> bool {
 
 #[tokio::test]
 async fn a_project_with_its_own_attachment_bucket_reads_writes_and_joins_there() {
-    let (rig, resolver) = rig_resolving(Some("team-files")).await;
+    let (rig, resolver) = rig_resolving("team-files").await;
     rig.host
         .put_in("team-files", "c1/a.csv", "id,x\n1,a\n2,b\n");
     rig.host
         .put_in("team-files", "c1/b.csv", "id,y\n1,p\n2,q\n");
     rig.host.put_in("other-files", "z/c.csv", "id,w\n1,m\n");
-    // Read: no bucket_name, and the printed path form with the RESOLVED
-    // bucket's prefix works as a name.
-    for name in ["c1/a.csv", "/team-files/c1/a.csv"] {
-        let out = rig.ok("describe_data", json!({"filename": name})).await;
-        assert_eq!(out["source"]["bucket"], "team-files", "{name}");
-        assert_eq!(out["source"]["file"], "c1/a.csv", "{name}");
-    }
-    // The old literal prefix is just a folder name now: nothing is stripped.
-    let m = rig
-        .err(
-            "describe_data",
-            json!({"filename": "/chat-attachments/c1/a.csv"}),
-        )
+    // A plain key uses the platform's answer.
+    let out = rig
+        .ok("describe_data", json!({"filename": "c1/a.csv"}))
         .await;
-    assert!(m.contains("no such file"), "{m}");
+    assert_eq!(out["source"]["bucket"], "team-files");
     // Write: the result lands in the bucket Main named.
     let out = rig
         .ok(
@@ -1808,7 +1817,7 @@ async fn a_project_with_its_own_attachment_bucket_reads_writes_and_joins_there()
     let out = rig
         .ok(
             "join_data",
-            json!({"filename": "c1/a.csv", "right_filename": "/team-files/c1/b.csv", "on": ["id"]}),
+            json!({"filename": "c1/a.csv", "right_filename": "c1/b.csv", "on": ["id"]}),
         )
         .await;
     assert_eq!(out["right_source"]["bucket"], "team-files");
@@ -1823,38 +1832,103 @@ async fn a_project_with_its_own_attachment_bucket_reads_writes_and_joins_there()
         .await;
     assert_eq!(out["right_source"]["bucket"], "other-files");
     // Main was asked once for the whole run.
-    assert_eq!(resolver.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(resolver.asked(), 1);
 }
 
 #[tokio::test]
-async fn a_bucket_that_cannot_be_resolved_is_unavailable_and_nothing_is_touched() {
-    let (rig, resolver) = rig_resolving(None).await;
+async fn a_rooted_path_names_its_bucket_and_wins_over_resolution_and_bucket_name() {
+    // The project's policy is now team-files; an old attachment still prints
+    // /chat-attachments/...
+    let (rig, resolver) = rig_resolving("team-files").await;
+    rig.host.put_in("chat-attachments", "conv/a.csv", "x\n1\n");
+    rig.host.put_in("team-files", "conv/a.csv", "x\n2\n");
+    let bucket_of = |out: &Value| out["source"]["bucket"].as_str().unwrap().to_owned();
+    // The prefix names the bucket whether or not it is the policy bucket.
+    let old = rig
+        .ok(
+            "describe_data",
+            json!({"filename": "/chat-attachments/conv/a.csv"}),
+        )
+        .await;
+    assert_eq!(bucket_of(&old), "chat-attachments");
+    assert_eq!(old["source"]["file"], "conv/a.csv");
+    let current = rig
+        .ok(
+            "describe_data",
+            json!({"filename": "/team-files/conv/a.csv"}),
+        )
+        .await;
+    assert_eq!(bucket_of(&current), "team-files");
+    // ... and over an explicit bucket_name.
+    let both = rig
+        .ok(
+            "describe_data",
+            json!({"filename": "/chat-attachments/conv/a.csv", "bucket_name": "team-files"}),
+        )
+        .await;
+    assert_eq!(bucket_of(&both), "chat-attachments");
+    // A plain key uses the resolution.
+    let plain = rig
+        .ok("describe_data", json!({"filename": "conv/a.csv"}))
+        .await;
+    assert_eq!(bucket_of(&plain), "team-files");
+    // A prefix that is not a bucket name is an error, not a folder.
+    let m = rig
+        .err(
+            "describe_data",
+            json!({"filename": "/Bad Bucket/conv/a.csv"}),
+        )
+        .await;
+    assert!(m.contains("Invalid bucket name"), "{m}");
+    // The two rooted calls above needed no lookup; the plain one did, once.
+    assert_eq!(resolver.asked(), 1);
+    // A rooted path with no resolver at all still works (nothing to resolve).
+    let (solo, none) = rig_with(FixedBucket::new(Err(AttachmentBucketError::NotAvailable))).await;
+    solo.host.put_in("chat-attachments", "conv/a.csv", "x\n1\n");
+    solo.ok(
+        "describe_data",
+        json!({"filename": "/chat-attachments/conv/a.csv"}),
+    )
+    .await;
+    assert_eq!(none.asked(), 0);
+}
+
+#[tokio::test]
+async fn a_failed_resolution_splits_into_no_attachments_and_try_again_and_touches_nothing() {
+    let (rig, resolver) = rig_with(FixedBucket::new(Err(AttachmentBucketError::Unavailable))).await;
     rig.host.put("c1/a.csv", "x\n1\n");
-    for (tool, args) in [
-        ("describe_data", json!({"filename": "c1/a.csv"})),
-        (
-            "filter_data",
-            json!({"filename": "c1/a.csv", "output_file": "o.csv"}),
-        ),
-        (
-            "join_data",
-            json!({"filename": "c1/a.csv", "bucket_name": "team-files",
+    let call = |tool: &'static str| {
+        let args = match tool {
+            "filter_data" => json!({"filename": "c1/a.csv", "output_file": "o.csv"}),
+            "join_data" => json!({"filename": "c1/a.csv", "bucket_name": "team-files",
                 "right_filename": "c1/a.csv", "on": ["x"]}),
-        ),
-    ] {
+            _ => json!({"filename": "c1/a.csv"}),
+        };
+        (tool, args)
+    };
+    // A transient failure says to retry.
+    for tool in ["describe_data", "filter_data", "join_data"] {
+        let (tool, args) = call(tool);
         let m = rig.err(tool, args).await;
-        assert!(
-            m.contains("attachments are unavailable right now"),
-            "{tool}: {m}"
-        );
+        assert!(m.contains("unavailable right now"), "{tool}: {m}");
+        assert!(m.contains("Retry shortly"), "{tool}: {m}");
     }
     assert!(rig.host.reads.lock().unwrap().is_empty());
     assert!(rig.host.writes.lock().unwrap().is_empty());
-    // A failed answer is not cached: the next call asks again.
-    assert_eq!(resolver.asked.load(std::sync::atomic::Ordering::SeqCst), 3);
+    // Failures are never cached: each call asked again.
+    assert_eq!(resolver.asked(), 3);
+    // A run with no conversation attachments says so, with no retry hint.
+    resolver.set(Err(AttachmentBucketError::NotAvailable));
+    let m = rig
+        .err("describe_data", json!({"filename": "c1/a.csv"}))
+        .await;
+    assert!(m.contains("no conversation attachments"), "{m}");
+    assert!(m.contains("bucket_name"), "{m}");
+    assert!(!m.to_lowercase().contains("retry"), "{m}");
+    assert!(rig.host.reads.lock().unwrap().is_empty());
     // Naming the bucket needs no lookup, so it works while Main cannot say.
     rig.host.put_in("team-files", "c1/a.csv", "x\n1\n");
-    let before = resolver.asked.load(std::sync::atomic::Ordering::SeqCst);
+    let before = resolver.asked();
     let out = rig
         .ok(
             "describe_data",
@@ -1862,15 +1936,46 @@ async fn a_bucket_that_cannot_be_resolved_is_unavailable_and_nothing_is_touched(
         )
         .await;
     assert_eq!(out["source"]["bucket"], "team-files");
-    assert_eq!(
-        resolver.asked.load(std::sync::atomic::Ordering::SeqCst),
-        before
-    );
+    assert_eq!(resolver.asked(), before);
+    // And once Main answers, the next call succeeds (the failure was not kept).
+    resolver.set(Ok("chat-attachments"));
+    let out = rig
+        .ok("describe_data", json!({"filename": "c1/a.csv"}))
+        .await;
+    assert_eq!(out["source"]["bucket"], "chat-attachments");
+}
+
+#[tokio::test]
+async fn only_a_success_is_kept_and_parallel_first_calls_share_one_lookup() {
+    let mut slow = FixedBucket::new(Ok("team-files"));
+    slow.slow = true;
+    let (rig, resolver) = rig_with(slow).await;
+    let rig = Arc::new(rig);
+    rig.host.put_in("team-files", "c1/a.csv", "x\n1\n");
+    let mut calls = Vec::new();
+    for _ in 0..6 {
+        let rig = Arc::clone(&rig);
+        calls.push(tokio::spawn(async move {
+            rig.ok("describe_data", json!({"filename": "c1/a.csv"}))
+                .await
+        }));
+    }
+    for call in calls {
+        assert_eq!(call.await.unwrap()["source"]["bucket"], "team-files");
+    }
+    assert_eq!(resolver.asked(), 1, "six parallel first calls, one lookup");
+    // The success is kept for the run, even if the answer would now differ.
+    resolver.set(Ok("moved-files"));
+    let out = rig
+        .ok("describe_data", json!({"filename": "c1/a.csv"}))
+        .await;
+    assert_eq!(out["source"]["bucket"], "team-files");
+    assert_eq!(resolver.asked(), 1);
 }
 
 #[tokio::test]
 async fn an_explicit_invalid_bucket_name_is_an_error_not_a_fallback() {
-    let (rig, resolver) = rig_resolving(Some("team-files")).await;
+    let (rig, resolver) = rig_resolving("team-files").await;
     rig.host.put_in("team-files", "c1/a.csv", "x\n1\n");
     for bad in ["Bad Bucket!", "UPPER", "9lives", "a/b", "x"] {
         let m = rig
@@ -1890,7 +1995,7 @@ async fn an_explicit_invalid_bucket_name_is_an_error_not_a_fallback() {
         .await;
     assert!(m.contains("Invalid bucket name `Bad!`"), "{m}");
     assert!(rig.host.reads.lock().unwrap().is_empty());
-    assert_eq!(resolver.asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(resolver.asked(), 1);
 }
 
 #[tokio::test]

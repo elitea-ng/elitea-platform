@@ -236,6 +236,7 @@ type attachmentArtifactSourceStub struct {
 	records      []RuntimeArtifactRecord
 	truncated    bool
 	limit        int32
+	listed       int
 }
 
 func (stub *attachmentArtifactSourceStub) AttachmentBucket(context.Context, int64) (string, error) {
@@ -246,6 +247,7 @@ func (stub *attachmentArtifactSourceStub) ListAttachmentsNewestFirst(
 	_ context.Context, projectID, actorID int64, bucket, prefix string, limit int32,
 ) ([]RuntimeArtifactRecord, bool, error) {
 	stub.projectID, stub.actorID, stub.bucket, stub.prefix, stub.limit = projectID, actorID, bucket, prefix, limit
+	stub.listed++
 	return stub.records, stub.truncated, nil
 }
 
@@ -325,4 +327,50 @@ func TestArtifactListWithoutABucketIsRefusedWhenTheSourceCannotResolveIt(t *test
 		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+call.operation, call.body))
 		require.GreaterOrEqual(t, response.Code, 400, call.operation)
 	}
+}
+
+// bucket_only asks for the bucket name alone: resolved exactly like the
+// conversation listing (policy, else the default; the claim must carry a
+// canonical conversation), but nothing is listed, so no keys are read or
+// ordered, and a named bucket ignores it.
+func TestArtifactListBucketOnlyResolvesTheBucketWithoutListing(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ policy, want string }{
+		{"team-files", "team-files"},
+		{"", DefaultAttachmentBucket},
+	} {
+		source := &attachmentArtifactSourceStub{
+			policyBucket: tc.policy,
+			records:      []RuntimeArtifactRecord{{Name: "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/a.csv"}},
+		}
+		server := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+		listed := artifactCall[RuntimeArtifactListContext](
+			t, server, "list", `{"bucket":"","prefix":"","recursive":false,"limit":1,"bucket_only":true}`,
+		)
+		require.Equal(t, tc.want, listed.Bucket)
+		require.Equal(t, int64(7), listed.ProjectID)
+		require.Empty(t, listed.Files)
+		require.False(t, listed.Truncated)
+		require.Zero(t, source.listed, "no listing is read for a bucket-only answer")
+	}
+
+	// Without the flag the same request still lists.
+	source := &attachmentArtifactSourceStub{
+		records: []RuntimeArtifactRecord{{Name: "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/a.csv"}},
+	}
+	server := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+	listed := artifactCall[RuntimeArtifactListContext](
+		t, server, "list", `{"bucket":"","prefix":"","recursive":false,"limit":1}`,
+	)
+	require.Len(t, listed.Files, 1)
+	require.Equal(t, 1, source.listed)
+
+	// A named bucket ignores bucket_only: it is an ordinary listing there.
+	named := &artifactSourceStub{}
+	server = newArtifactTestServer(t, builderAuthorizerForProject(7), named)
+	_ = artifactCall[RuntimeArtifactListContext](
+		t, server, "list", `{"bucket":"reports","prefix":"","recursive":false,"limit":5,"bucket_only":true}`,
+	)
+	require.Equal(t, "reports", named.bucket)
 }
