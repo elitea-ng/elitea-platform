@@ -252,7 +252,9 @@ type IntrospectTokenResponse struct {
 	// turn is bound through its parent. elitea-vector skips the shared-write
 	// question (MEMORY_INTENT_SHARED_INDEX_WRITE) only when this is true; the
 	// default (false) means "ask", so an answer that omits it fails safe.
-	ConversationUnbound bool `protobuf:"varint,10,opt,name=conversation_unbound,json=conversationUnbound,proto3" json:"conversation_unbound,omitempty"`
+	// Field 10 was an unreleased draft with the opposite meaning
+	// (conversation_bound); it is never reused.
+	ConversationUnbound bool `protobuf:"varint,11,opt,name=conversation_unbound,json=conversationUnbound,proto3" json:"conversation_unbound,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -364,7 +366,7 @@ const file_elitea_vector_v1_introspection_proto_rawDesc = "" +
 	"$elitea/vector/v1/introspection.proto\x12\x10elitea.vector.v1\x1a\x1delitea/vector/v1/vector.proto\"s\n" +
 	"\x16IntrospectTokenRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12C\n" +
-	"\rmemory_intent\x18\x02 \x01(\x0e2\x1e.elitea.vector.v1.MemoryIntentR\fmemoryIntent\"\xe4\x03\n" +
+	"\rmemory_intent\x18\x02 \x01(\x0e2\x1e.elitea.vector.v1.MemoryIntentR\fmemoryIntent\"\xfe\x03\n" +
 	"\x17IntrospectTokenResponse\x12\x16\n" +
 	"\x06active\x18\x01 \x01(\bR\x06active\x12\x1d\n" +
 	"\n" +
@@ -376,8 +378,8 @@ const file_elitea_vector_v1_introspection_proto_rawDesc = "" +
 	"\x17personal_memory_allowed\x18\a \x01(\bR\x15personalMemoryAllowed\x12?\n" +
 	"\x1cproject_memory_write_refused\x18\b \x01(\bR\x19projectMemoryWriteRefused\x12,\n" +
 	"\x12memory_toolkit_ids\x18\t \x03(\x03R\x10memoryToolkitIds\x121\n" +
-	"\x14conversation_unbound\x18\n" +
-	" \x01(\bR\x13conversationUnbound*d\n" +
+	"\x14conversation_unbound\x18\v \x01(\bR\x13conversationUnboundJ\x04\b\n" +
+	"\x10\vR\x12conversation_bound*d\n" +
 	"\tTokenKind\x12\x1a\n" +
 	"\x16TOKEN_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17TOKEN_KIND_WORKER_CLAIM\x10\x01\x12\x1e\n" +

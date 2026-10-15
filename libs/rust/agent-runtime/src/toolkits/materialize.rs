@@ -43,7 +43,7 @@ use super::families::index_tools::{
     build_index_toolset, is_index_family, selection_is_index_only,
 };
 use super::families::jira;
-use super::families::memory::{MemoryToolsetError, build_memory_toolset};
+use super::families::memory::{MemoryToolName, MemoryToolsetError, build_memory_toolset};
 use super::families::qtest;
 #[cfg(feature = "toolkit-sql")]
 use super::families::sql;
@@ -576,6 +576,7 @@ async fn materialize_all(
         if reference.tool_type() == "memory" {
             if let Some(toolset) = memory_toolset_for(reference, policy, index_tools, on_refused)? {
                 toolsets.push(Arc::new(toolset) as Arc<dyn Toolset>);
+                report_unserved_selected_tools(reference, policy, artifacts, false, on_refused);
             }
             continue;
         }
@@ -785,6 +786,10 @@ fn family_tool_catalog(tool_type: &str) -> Option<Vec<(&'static str, bool)>> {
         "github" => github::tools::tool_catalog(),
         "gitlab" => gitlab::tools::tool_catalog(),
         "jira" => jira::tools::tool_catalog(),
+        "memory" => MemoryToolName::ALL
+            .iter()
+            .map(|tool| (tool.as_str(), false))
+            .collect(),
         _ => return None,
     })
 }

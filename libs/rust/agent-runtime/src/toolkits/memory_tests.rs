@@ -459,3 +459,30 @@ async fn malformed_settings_skip_the_toolkit_with_a_visible_reason_and_do_not_fa
         assert!(!notice.contains("xxxx"), "no value in the notice: {notice}");
     }
 }
+
+#[tokio::test]
+async fn a_selected_memory_tool_the_toolkit_does_not_serve_is_named_in_the_notice() {
+    use super::materialize::materialize_configured_toolsets_reporting_refusals;
+    let (authority, _) = lend(true, false);
+    let version = version(&memory_tool(&json!({
+        "namespace": "n",
+        "selected_tools": ["delete_memory", "forget_everything"]
+    })));
+    let configured = materialize_configured_toolsets_reporting_refusals(
+        &admitted(&version),
+        &policy(),
+        &Map::new(),
+        None,
+        IndexToolSupport::Lent(&authority),
+    )
+    .await
+    .expect("the run is not failed");
+    assert_eq!(
+        tool_names(&configured.toolsets).await,
+        vec!["delete_memory"]
+    );
+    assert_eq!(configured.left_out.len(), 1);
+    let notice =
+        super::materialize::left_out_toolkits_notice_text(&configured.left_out).expect("a notice");
+    assert!(notice.contains("forget_everything"), "{notice}");
+}

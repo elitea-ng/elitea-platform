@@ -11,7 +11,7 @@
 //! Like the index tools, the family has no credential and no model of its
 //! own. It acts under the authority the host lends for the run (the claim's
 //! vector token and the memory embedding model), through
-//! [`IndexToolHost::memory`]; where the host does not serve memory (no vector
+//! [`IndexToolHost::memory`](super::index_tools::IndexToolHost::memory); where the host does not serve memory (no vector
 //! store, no token, no memory embedding model) the toolkit is skipped with the
 //! reason logged, as an unserved family always was.
 //!

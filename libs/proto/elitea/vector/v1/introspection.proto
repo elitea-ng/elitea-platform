@@ -107,5 +107,9 @@ message IntrospectTokenResponse {
   // turn is bound through its parent. elitea-vector skips the shared-write
   // question (MEMORY_INTENT_SHARED_INDEX_WRITE) only when this is true; the
   // default (false) means "ask", so an answer that omits it fails safe.
-  bool conversation_unbound = 10;
+  // Field 10 was an unreleased draft with the opposite meaning
+  // (conversation_bound); it is never reused.
+  bool conversation_unbound = 11;
+  reserved 10;
+  reserved "conversation_bound";
 }
