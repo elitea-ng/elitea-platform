@@ -469,6 +469,17 @@ jobs:
             build_args: ""
             expect_type: rustbinary
             blocking: true
+          # elitea-workspace-runner (ADR-0034 decision 9): the cloud
+          # executor's workspace sandbox, a Debian 13 userland with git and a
+          # build toolchain. `debian` is what trivy reports for that base;
+          # exempt for its unfixed findings (.github/image-scan-exempt.txt).
+          - name: elitea-workspace-runner
+            context: .
+            dockerfile: ./libs/rust/workspace-runner/Containerfile
+            target: ""
+            build_args: ""
+            expect_type: debian
+            blocking: false
 
     steps:
       - uses: actions/checkout@v7

@@ -82,3 +82,18 @@
 #   image. Size it before taking it.
 elitea-worker-python
 
+
+# findings — NOT YET MEASURED: the image is new (ADR-0034, branch
+#   feat/handoff-executor) and was not built locally. It is
+#   debian:trixie-slim plus build-essential, git, python3 and curl, the
+#   userland the agent's `run_command` needs to build a user's project; a
+#   trixie-slim base alone reported 43 HIGH lines with no fixed version on
+#   2026-10-06 (debian13-single-os-family), so this image cannot block on
+#   criterion 1. The first scan run records the count; file the findings
+#   issue from it and name it here.
+# retirement — the image stays a full Debian userland by design (decision 9:
+#   the sandbox builds and tests the user's project). The entry ends when
+#   Debian publishes fixes for the base findings, or when the workspace
+#   sandbox moves to a minimal base with toolchains installed per project.
+#   File that issue with the findings issue and name it here.
+elitea-workspace-runner

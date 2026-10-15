@@ -295,6 +295,12 @@ jobs:
           - name: elitea-doc-extractor
             context: .
             dockerfile: ./services/elitea-doc-extractor/Containerfile
+          # elitea-workspace-runner (ADR-0034 decision 9): the cloud
+          # executor's workspace sandbox. Repo ROOT context: the Containerfile
+          # COPYs libs/rust.
+          - name: elitea-workspace-runner
+            context: .
+            dockerfile: ./libs/rust/workspace-runner/Containerfile
         platform:
           - runner: ubuntu-latest
             arch: linux/amd64
@@ -504,6 +510,14 @@ jobs:
           - name: elitea-doc-extractor
             expect_type: rustbinary
             blocking: true
+          # elitea-workspace-runner (ADR-0034 decision 9): a Debian 13 userland
+          # with git and a build toolchain (the agent builds the user's
+          # project in it), so trivy reports a `debian` Result, and the image
+          # is exempt for the Debian base's unfixed findings
+          # (.github/image-scan-exempt.txt).
+          - name: elitea-workspace-runner
+            expect_type: debian
+            blocking: false
 
     steps:
       - name: Checkout
@@ -663,6 +677,14 @@ jobs:
           - name: elitea-doc-extractor
             expect_type: rustbinary
             blocking: true
+          # elitea-workspace-runner (ADR-0034 decision 9): a Debian 13 userland
+          # with git and a build toolchain (the agent builds the user's
+          # project in it), so trivy reports a `debian` Result, and the image
+          # is exempt for the Debian base's unfixed findings
+          # (.github/image-scan-exempt.txt).
+          - name: elitea-workspace-runner
+            expect_type: debian
+            blocking: false
 
     steps:
       - name: Checkout
@@ -1023,7 +1045,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 
