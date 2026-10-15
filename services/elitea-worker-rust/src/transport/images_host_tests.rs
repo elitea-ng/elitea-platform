@@ -649,14 +649,14 @@ async fn stepback_office_and_images_stop_at_the_one_shared_cap() {
             .await
             .expect_err("spent")
             .kind(),
-        elitea_agent_runtime::toolkits::OfficeFailure::BudgetRefused
+        elitea_agent_runtime::toolkits::OfficeFailure::RunCallCapReached
     );
     assert_eq!(
         host.complete(OfficeModelRequest::default())
             .await
             .expect_err("spent")
             .kind(),
-        elitea_agent_runtime::toolkits::OfficeFailure::BudgetRefused
+        elitea_agent_runtime::toolkits::OfficeFailure::RunCallCapReached
     );
     let refused = crate::indexing::tools::generate_text(
         binding,

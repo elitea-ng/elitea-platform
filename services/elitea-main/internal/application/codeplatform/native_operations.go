@@ -145,10 +145,15 @@ func toolOutcome(result toolkit.RunOutcome, owner string) (Outcome, error) {
 		// The deployment's policy refused the tool: a denial, not a missing
 		// operation.
 		outcome.Status = "authorization_denied"
+	case toolkit.RunStatusSensitiveRefused:
+		outcome.Status = "sensitive_rejected"
 	case toolkit.RunStatusRuntimeFailure:
-		// An older worker's refusal of the tool arrives as a runtime failure;
-		// it is not a dependency being down.
-		if result.WorkerRefusedTool() {
+		switch {
+		case result.RunCredentialsRefused():
+			// The run's credentials or context were refused: an
+			// authorization answer, not a retryable dependency outage.
+			outcome.Status = "authentication_denied"
+		case result.WorkerCannotRunTool():
 			outcome.Status = "unsupported_operation"
 		}
 	case toolkit.RunStatusToolError:

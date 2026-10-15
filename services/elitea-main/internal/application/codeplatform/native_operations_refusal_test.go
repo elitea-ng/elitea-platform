@@ -18,8 +18,11 @@ func TestToolOutcomeClassifiesWorkerRefusals(t *testing.T) {
 		{"effect refused", toolkit.RunOutcome{Status: toolkit.RunStatusEffectRefused}, "unsupported_operation"},
 		{"policy refused", toolkit.RunOutcome{Status: toolkit.RunStatusPolicyRefused}, "authorization_denied"},
 		{"unknown tool", toolkit.RunOutcome{Status: toolkit.RunStatusUnknownTool}, "unsupported_operation"},
-		{"older worker effect", toolkit.RunOutcome{Status: toolkit.RunStatusRuntimeFailure, FailureCode: toolkit.FailureCodeUnsupportedCapability}, "unsupported_operation"},
-		{"older worker authorization", toolkit.RunOutcome{Status: toolkit.RunStatusRuntimeFailure, FailureCode: toolkit.FailureCodeAuthorizationFailed, ErrorMessage: "Execution authorization failed."}, "unsupported_operation"},
+		{"sensitive refused", toolkit.RunOutcome{Status: toolkit.RunStatusSensitiveRefused}, "sensitive_rejected"},
+		{"worker cannot run it", toolkit.RunOutcome{Status: toolkit.RunStatusRuntimeFailure, FailureCode: toolkit.FailureCodeUnsupportedCapability}, "unsupported_operation"},
+		// #1292 round 3: the run's credentials refused is an authorization
+		// answer, not a retryable dependency outage (any worker's sentence).
+		{"run credentials refused", toolkit.RunOutcome{Status: toolkit.RunStatusRuntimeFailure, FailureCode: toolkit.FailureCodeAuthorizationFailed, ErrorMessage: "Execution authorization failed."}, "authentication_denied"},
 		{"provider down", toolkit.RunOutcome{Status: toolkit.RunStatusRuntimeFailure, FailureCode: "RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE"}, "dependency_unavailable"},
 		{"tool error", toolkit.RunOutcome{Status: toolkit.RunStatusToolError}, "dependency_unavailable"},
 	} {

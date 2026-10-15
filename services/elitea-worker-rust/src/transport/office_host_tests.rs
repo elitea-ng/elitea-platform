@@ -485,7 +485,34 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
         (
             C::RateLimited,
             "model.toolkit_budget_exhausted",
-            OfficeFailure::BudgetRefused,
+            OfficeFailure::RunCallCapReached,
+        ),
+        // Round 3, item 4: the categories `bind_error` actually produces.
+        (
+            C::InvalidInput,
+            "model_gateway.invalid_configuration",
+            OfficeFailure::ModelUnusable,
+        ),
+        (
+            C::InvalidInput,
+            "model_gateway.invalid_invocation",
+            OfficeFailure::ModelUnusable,
+        ),
+        // Item 7: reply-side size errors.
+        (
+            C::Unavailable,
+            "model_gateway.stream_too_large",
+            OfficeFailure::ReplyTooLarge,
+        ),
+        (
+            C::Unavailable,
+            "model_gateway.event_too_large",
+            OfficeFailure::ReplyTooLarge,
+        ),
+        (
+            C::Internal,
+            "toolkit_completion.reply_size",
+            OfficeFailure::ReplyTooLarge,
         ),
         (
             C::InvalidInput,

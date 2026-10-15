@@ -987,10 +987,6 @@ pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>
     })
 }
 
-/// Whether a configured toolkit needs the Office host built for the run. The
-/// Office families and `imagegen` always do; `sharepoint` only when its
-/// selected tools include one that reads a document or an artifact, so a
-/// `get_lists`-only toolkit redeems nothing.
 /// Binds one provider model for one toolkit completion.
 pub(crate) type BindOne =
     Arc<dyn Fn(ModelInvocation) -> Result<Arc<dyn adk_rust::Llm>, ModelFacadeError> + Send + Sync>;
@@ -1038,6 +1034,10 @@ fn bind_error(error: ModelFacadeError) -> adk_rust::AdkError {
     )
 }
 
+/// Whether a configured toolkit needs the Office host built for the run. The
+/// Office families and `imagegen` always do; `sharepoint` only when its
+/// selected tools include one that reads a document or an artifact, so a
+/// `get_lists`-only toolkit redeems nothing.
 fn toolkit_needs_office_host(
     tool_type: &str,
     settings: Option<&serde_json::Map<String, serde_json::Value>>,

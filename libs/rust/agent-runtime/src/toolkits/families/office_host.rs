@@ -73,6 +73,12 @@ pub enum OfficeFailure {
     BudgetRefused,
     /// The run binds no chat model (a pipeline node).
     NoModel,
+    /// The run has a chat model, but it cannot be bound for this tool's call
+    /// (its configuration or invocation is not usable here).
+    ModelUnusable,
+    /// The run used up the tool model calls one run may make (the per-run
+    /// cap, `worker.runtime.toolkitModelCallCap`); not a billing budget.
+    RunCallCapReached,
     /// The model gateway is rate-limiting the call; trying again shortly may work.
     RateLimited,
     /// The model call timed out; trying again may work.

@@ -116,11 +116,13 @@ func (h *Handler) runToolkitTool(
 			"The agent worker runs only read-only tools on this path, and this tool changes data.")
 	case toolkitcalltoolapp.RunStatusPolicyRefused:
 		return unsupportedToolkitResult(tool,
-			"This deployment's tool policy blocks this tool or marks it sensitive, so the agent worker refused it.")
+			"This deployment's tool policy blocks this tool, so the agent worker refused it.")
+	case toolkitcalltoolapp.RunStatusSensitiveRefused:
+		return unsupportedToolkitResult(tool,
+			"This deployment's tool policy marks this tool sensitive, and this path cannot ask for the confirmation it needs.")
 	default:
-		if outcome.WorkerRefusedTool() {
-			// An older worker's refusal of the tool, as a runtime failure.
-			return unsupportedToolkitResult(tool, "The agent worker refused to run this tool on this path.")
+		if outcome.WorkerCannotRunTool() {
+			return unsupportedToolkitResult(tool, "This deployment's agent worker cannot run this tool.")
 		}
 		message := outcome.ErrorMessage
 		if message == "" {

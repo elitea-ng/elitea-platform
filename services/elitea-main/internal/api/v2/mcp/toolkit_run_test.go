@@ -195,12 +195,19 @@ func TestToolkitCallMapsEveryOutcomeOntoAnMCPResult(t *testing.T) {
 			isError: true, contains: "tool policy blocks this tool",
 		},
 		{
-			name: "an older worker's refusal as a runtime failure",
+			name: "a worker that cannot run the tool",
 			outcome: toolkitcalltoolapp.RunOutcome{
 				ExecutionID: "e4d", Status: toolkitcalltoolapp.RunStatusRuntimeFailure,
-				FailureCode: "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED", ErrorMessage: "Execution authorization failed.",
+				FailureCode: "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY", ErrorMessage: "Configuration type is not supported.",
 			},
-			isError: true, contains: "refused to run this tool",
+			isError: true, contains: "agent worker cannot run this tool",
+		},
+		{
+			name: "a sensitive tool",
+			outcome: toolkitcalltoolapp.RunOutcome{
+				ExecutionID: "e4e", Status: toolkitcalltoolapp.RunStatusSensitiveRefused,
+			},
+			isError: true, contains: "marks this tool sensitive",
 		},
 		{
 			// A truncated result is NOT reported as an empty success: an agent

@@ -43,6 +43,40 @@ pub enum ModelBudgetScope {
     Member,
 }
 
+/// The terminal in the shape THIS claim's Main reads. A Main that advertised
+/// `toolkit_typed_refusals` gets the typed refusals as they are. An older
+/// Main refuses statuses it does not know (and the run would never settle),
+/// so it gets the round-1 shapes: `EFFECT_REFUSED` / `POLICY_REFUSED` as
+/// `UNKNOWN_TOOL` with the same fixed sentence, and the run-credentials
+/// failure as the generic `AUTHORIZATION_FAILED`.
+pub(crate) fn terminal_for_main(
+    terminal: ToolkitExecuteReadTerminalOutput,
+    typed_refusals: bool,
+) -> ToolkitExecuteReadTerminalOutput {
+    if typed_refusals {
+        return terminal;
+    }
+    match terminal {
+        ToolkitExecuteReadTerminalOutput::CallTool(mut result) => {
+            if let Some(summary) = result.result_summary.as_mut()
+                && matches!(
+                    ToolkitCallToolStatusV1::try_from(summary.status),
+                    Ok(ToolkitCallToolStatusV1::EffectRefused
+                        | ToolkitCallToolStatusV1::PolicyRefused
+                        | ToolkitCallToolStatusV1::SensitiveRefused)
+                )
+            {
+                summary.status = ToolkitCallToolStatusV1::UnknownTool as i32;
+            }
+            ToolkitExecuteReadTerminalOutput::CallTool(result)
+        }
+        ToolkitExecuteReadTerminalOutput::Failure(
+            RuntimeFailureKind::ToolkitRunAuthorizationFailed,
+        ) => ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::AuthorizationFailed),
+        other => other,
+    }
+}
+
 /// Main's `ToolkitRunCredentialsRefusedMessage`.
 pub(crate) const TOOLKIT_RUN_AUTHORIZATION_FAILED_MESSAGE: &str =
     "The platform could not authorize this tool run's credentials or context.";
@@ -1390,7 +1424,8 @@ fn validate_toolkit_call_tool_summary(
         ToolkitCallToolStatusV1::UnsupportedToolkit
         | ToolkitCallToolStatusV1::UnknownTool
         | ToolkitCallToolStatusV1::EffectRefused
-        | ToolkitCallToolStatusV1::PolicyRefused => {
+        | ToolkitCallToolStatusV1::PolicyRefused
+        | ToolkitCallToolStatusV1::SensitiveRefused => {
             if summary.error_message.is_empty()
                 || !summary.result_json.is_empty()
                 || summary.truncated
@@ -1737,6 +1772,89 @@ mod code_preparation_failure_tests {
         assert_eq!(
             canonical_runtime_failure(&historical),
             Some(RuntimeFailureKind::PipelineCodeFailed)
+        );
+    }
+}
+
+#[cfg(test)]
+mod typed_refusal_gate_tests {
+    use super::*;
+
+    fn refusal(status: ToolkitCallToolStatusV1) -> ToolkitExecuteReadTerminalOutput {
+        ToolkitExecuteReadTerminalOutput::CallTool(Box::new(ToolkitCallToolResultV1 {
+            result_summary: Some(ToolkitCallToolSummaryV1 {
+                status: status as i32,
+                error_message: "This tool changes data, and this path runs read-only tools only."
+                    .to_owned(),
+                ..ToolkitCallToolSummaryV1::default()
+            }),
+            ..ToolkitCallToolResultV1::default()
+        }))
+    }
+
+    fn status(terminal: &ToolkitExecuteReadTerminalOutput) -> i32 {
+        match terminal {
+            ToolkitExecuteReadTerminalOutput::CallTool(result) => {
+                result.result_summary.as_ref().expect("summary").status
+            }
+            _ => panic!("not a call result"),
+        }
+    }
+
+    /// #1292 round 3 (rollout new worker -> old Main): an older Main refuses
+    /// statuses 6/7 and the new sentence, so without its advertisement the
+    /// worker sends the round-1 shapes; with it, the typed ones.
+    #[test]
+    fn typed_refusals_are_sent_only_to_a_main_that_reads_them() {
+        for typed in [
+            ToolkitCallToolStatusV1::EffectRefused,
+            ToolkitCallToolStatusV1::PolicyRefused,
+            ToolkitCallToolStatusV1::SensitiveRefused,
+        ] {
+            assert_eq!(
+                status(&terminal_for_main(refusal(typed), true)),
+                typed as i32
+            );
+            let old = terminal_for_main(refusal(typed), false);
+            assert_eq!(status(&old), ToolkitCallToolStatusV1::UnknownTool as i32);
+            let ToolkitExecuteReadTerminalOutput::CallTool(result) = old else {
+                unreachable!()
+            };
+            assert!(
+                !result
+                    .result_summary
+                    .expect("summary")
+                    .error_message
+                    .is_empty()
+            );
+        }
+        // Other statuses are untouched either way.
+        assert_eq!(
+            status(&terminal_for_main(
+                refusal(ToolkitCallToolStatusV1::ToolError),
+                false
+            )),
+            ToolkitCallToolStatusV1::ToolError as i32
+        );
+        let credentials = || {
+            ToolkitExecuteReadTerminalOutput::Failure(
+                RuntimeFailureKind::ToolkitRunAuthorizationFailed,
+            )
+        };
+        assert!(matches!(
+            terminal_for_main(credentials(), true),
+            ToolkitExecuteReadTerminalOutput::Failure(
+                RuntimeFailureKind::ToolkitRunAuthorizationFailed
+            )
+        ));
+        assert!(matches!(
+            terminal_for_main(credentials(), false),
+            ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::AuthorizationFailed)
+        ));
+        // The older Main's exact policy pair stays what it accepts.
+        assert_eq!(
+            runtime_error(RuntimeFailureKind::AuthorizationFailed).safe_message,
+            "Execution authorization failed."
         );
     }
 }

@@ -1585,7 +1585,7 @@ fn bind_call_result(
 }
 
 /// A tool run's terminal as published. On `toolkit.call_tool.v1` a refusal
-/// of the TOOL is its own typed result (`EFFECT_REFUSED` / `POLICY_REFUSED`), so
+/// of the TOOL is its own typed result (`EFFECT_REFUSED` / `POLICY_REFUSED` / `SENSITIVE_REFUSED`), so
 /// an authorization failure left over is always the run's own credentials or
 /// context: it carries that sentence (#1292 round 2, item 4), which Main reads
 /// as "the credentials" while an older worker's generic one reads as a
@@ -1641,9 +1641,13 @@ fn call_summary(
                 None,
                 EFFECTFUL_TOOL_MESSAGE,
             ),
-            DirectToolkitRuntimeErrorCode::ToolBlocked
-            | DirectToolkitRuntimeErrorCode::SensitiveToolUnavailable => (
+            DirectToolkitRuntimeErrorCode::ToolBlocked => (
                 ToolkitCallToolStatusV1::PolicyRefused,
+                None,
+                POLICY_REFUSED_MESSAGE,
+            ),
+            DirectToolkitRuntimeErrorCode::SensitiveToolUnavailable => (
+                ToolkitCallToolStatusV1::SensitiveRefused,
                 None,
                 POLICY_REFUSED_MESSAGE,
             ),
@@ -2155,7 +2159,7 @@ mod shared_result_tests {
             ),
             (
                 Code::SensitiveToolUnavailable,
-                ToolkitCallToolStatusV1::PolicyRefused,
+                ToolkitCallToolStatusV1::SensitiveRefused,
                 POLICY_REFUSED_MESSAGE,
             ),
         ] {

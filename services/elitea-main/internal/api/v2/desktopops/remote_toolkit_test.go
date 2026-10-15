@@ -292,10 +292,16 @@ func TestRemoteToolkitOutcomesMapToTypedAnswers(t *testing.T) {
 			Status: toolkitcalltoolapp.RunStatusPolicyRefused, ToolName: "delete_repo",
 			ErrorMessage: executiondomain.ToolkitPolicyRefusedMessage,
 		}, http.StatusUnprocessableEntity, []string{`"worker_refused"`, "non-sensitive", `\"delete_repo\"`}},
-		"older worker's bare authorization failure": {"rust", toolkitcalltoolapp.RunOutcome{
+		"rust refuses a sensitive tool (typed status)": {"rust", toolkitcalltoolapp.RunOutcome{
+			Status: toolkitcalltoolapp.RunStatusSensitiveRefused, ToolName: "delete_repo",
+			ErrorMessage: executiondomain.ToolkitPolicyRefusedMessage,
+		}, http.StatusUnprocessableEntity, []string{`"worker_refused"`}},
+		// #1292 round 3: a Python-shaped AUTHORIZATION_FAILED is a failure
+		// of the run, not a refusal of the tool.
+		"python worker's authorization failure is a failure": {"python", toolkitcalltoolapp.RunOutcome{
 			Status: toolkitcalltoolapp.RunStatusRuntimeFailure, ToolName: "delete_repo",
 			FailureCode: "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED", ErrorMessage: "Execution authorization failed.",
-		}, http.StatusUnprocessableEntity, []string{`"worker_refused"`}},
+		}, http.StatusBadGateway, []string{`"remote_toolkit_failed"`}},
 		"run credentials refused is a failure, not a refusal": {"rust", toolkitcalltoolapp.RunOutcome{
 			Status: toolkitcalltoolapp.RunStatusRuntimeFailure, ToolName: "t",
 			FailureCode: "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED", ErrorMessage: executiondomain.ToolkitRunCredentialsRefusedMessage,

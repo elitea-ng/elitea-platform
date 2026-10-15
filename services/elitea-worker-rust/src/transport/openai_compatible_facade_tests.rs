@@ -1024,6 +1024,8 @@ async fn model_credential_and_completion_are_single_use() {
     };
     assert_eq!(error.code, "model_gateway.turn_limit");
     assert_eq!(error.category, ErrorCategory::InvalidInput);
+    // #1292 round 3: the facade marks its own pre-send refusals.
+    assert!(super::openai_compatible_facade::was_not_sent(&error));
     assert_eq!(captured.lock().expect("captured requests").len(), 1);
     assert_eq!(
         bound.take_completion_for_test().expect("completion once"),
@@ -1066,6 +1068,7 @@ async fn request_profile_and_local_bounds_fail_before_network() {
             panic!("outside-profile request must fail")
         };
         assert_eq!(error.code, "model_gateway.invalid_request");
+        assert!(super::openai_compatible_facade::was_not_sent(&error));
         assert!(captured.lock().expect("captured requests").is_empty());
     }
 
@@ -1088,7 +1091,31 @@ async fn request_profile_and_local_bounds_fail_before_network() {
         panic!("oversized request must fail")
     };
     assert_eq!(error.code, "model_gateway.request_too_large");
+    assert!(super::openai_compatible_facade::was_not_sent(&error));
     assert!(captured.lock().expect("captured requests").is_empty());
+
+    // A request that WAS sent (the gateway is unavailable) is not marked.
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Unavailable],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let Err(error) = bound.generate_for_test(test_model_request("valid")).await else {
+        panic!("an unavailable gateway fails the call")
+    };
+    assert!(
+        !super::openai_compatible_facade::was_not_sent(&error),
+        "{}",
+        error.code
+    );
+    assert_eq!(captured.lock().expect("captured requests").len(), 1);
 }
 
 /// Demo issue 1: the provider's reason for a 400 is the operator's only clue.

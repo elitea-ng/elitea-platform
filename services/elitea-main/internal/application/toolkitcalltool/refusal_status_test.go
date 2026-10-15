@@ -40,6 +40,7 @@ func TestDecodeSettlementClassifiesToolRefusalsByStatus(t *testing.T) {
 		{"typed effect", effect, executiondomain.ToolkitEffectfulToolMessage, RunStatusEffectRefused},
 		{"typed effect, any sentence", effect, anySimple, RunStatusEffectRefused},
 		{"typed policy", policy, executiondomain.ToolkitPolicyRefusedMessage, RunStatusPolicyRefused},
+		{"typed sensitive", runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_SENSITIVE_REFUSED, executiondomain.ToolkitPolicyRefusedMessage, RunStatusSensitiveRefused},
 		{"older worker effect", unknown, executiondomain.ToolkitEffectfulToolMessage, RunStatusEffectRefused},
 		{"older worker policy", unknown, executiondomain.ToolkitPolicyRefusedMessage, RunStatusPolicyRefused},
 		{"a truly unknown tool", unknown, "The toolkit operation is not selected.", RunStatusUnknownTool},
@@ -53,29 +54,29 @@ func TestDecodeSettlementClassifiesToolRefusalsByStatus(t *testing.T) {
 	}
 }
 
-// Item 4 (rolling deploy): only the current worker's run-credentials sentence
-// means the credentials; an older worker's bare AUTHORIZATION_FAILED is its
-// refusal of the tool.
-func TestRuntimeFailureClassificationForRollingDeploy(t *testing.T) {
+// #1292 round 3: any AUTHORIZATION_FAILED (a Python-shaped "Execution
+// authorization failed." included) is the run's credentials or context, never
+// a refusal of the tool; UNSUPPORTED_CAPABILITY is "this worker cannot run
+// it", never "it changes data".
+func TestRuntimeFailureClassification(t *testing.T) {
 	failure := func(code, message string) RunOutcome {
 		return RunOutcome{Status: RunStatusRuntimeFailure, FailureCode: code, ErrorMessage: message}
 	}
-	credentials := failure(FailureCodeAuthorizationFailed, executiondomain.ToolkitRunCredentialsRefusedMessage)
-	if !credentials.RunCredentialsRefused() || credentials.WorkerRefusedTool() {
-		t.Fatal("the current worker's credentials refusal is about the credentials")
+	for _, message := range []string{executiondomain.ToolkitRunCredentialsRefusedMessage, "Execution authorization failed."} {
+		outcome := failure(FailureCodeAuthorizationFailed, message)
+		if !outcome.RunCredentialsRefused() || outcome.WorkerCannotRunTool() {
+			t.Fatalf("%q is the run's credentials", message)
+		}
 	}
-	older := failure(FailureCodeAuthorizationFailed, "Execution authorization failed.")
-	if older.RunCredentialsRefused() || !older.WorkerRefusedTool() {
-		t.Fatal("an older worker's AUTHORIZATION_FAILED is a refusal of the tool")
-	}
-	if !failure(FailureCodeUnsupportedCapability, "x").WorkerRefusedTool() {
-		t.Fatal("UNSUPPORTED_CAPABILITY is an older worker's effect refusal")
+	unsupported := failure(FailureCodeUnsupportedCapability, "Configuration type is not supported.")
+	if !unsupported.WorkerCannotRunTool() || unsupported.RunCredentialsRefused() {
+		t.Fatal("UNSUPPORTED_CAPABILITY is the worker not running the tool")
 	}
 	for _, other := range []RunOutcome{
 		failure("RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE", "down"),
 		{Status: RunStatusUnknownTool, FailureCode: FailureCodeAuthorizationFailed},
 	} {
-		if other.WorkerRefusedTool() || other.RunCredentialsRefused() {
+		if other.WorkerCannotRunTool() || other.RunCredentialsRefused() {
 			t.Fatalf("misclassified %+v", other)
 		}
 	}

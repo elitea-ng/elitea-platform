@@ -182,8 +182,8 @@ impl ClaimOfficeHost {
     fn charge_image_call(&self) -> Result<(), OfficeHostError> {
         match &self.budget {
             Some(budget) if !budget.try_take() => Err(OfficeHostError::new(
-                OfficeFailure::BudgetRefused,
-                "office_host.budget_refused",
+                OfficeFailure::RunCallCapReached,
+                "office_host.run_call_cap",
             )),
             _ => Ok(()),
         }
@@ -274,19 +274,37 @@ pub(crate) fn failure(error: &Failure) -> OfficeHostError {
 }
 
 /// A model-call failure, classified on the error's CODE and CATEGORY (review
-/// round 2: never on its message). The run's toolkit budget and the gateway's
-/// budget refusal are their own cause; a request the model gateway refused as
-/// invalid is not "the platform could not be reached" (live defect D3).
+/// round 2: never on its message). The run's per-run cap and the gateway's
+/// billing refusal are two causes with two sentences; a model the run cannot
+/// bind is unusable, not an invalid request; a request the model gateway
+/// refused as invalid is not "the platform could not be reached" (D3).
 pub(crate) fn model_failure(error: &adk_rust::AdkError) -> OfficeHostError {
     use super::toolkit_completion::TOOLKIT_BUDGET_EXHAUSTED_CODE;
     use adk_rust::ErrorCategory;
     let kind = |kind, reason| OfficeHostError::new(kind, reason);
     match error.code {
-        TOOLKIT_BUDGET_EXHAUSTED_CODE
-        | "model_gateway.budget_exhausted"
+        // The per-run cap: its own cause, not a billing refusal.
+        TOOLKIT_BUDGET_EXHAUSTED_CODE => {
+            return kind(OfficeFailure::RunCallCapReached, "office_host.run_call_cap");
+        }
+        "model_gateway.budget_exhausted"
         | "model_gateway.project_budget_exhausted"
         | "model_gateway.member_budget_exhausted" => {
             return kind(OfficeFailure::BudgetRefused, "office_host.budget_refused");
+        }
+        // The run's model could not be bound for this call: the model is
+        // unusable here, not a request the gateway refused.
+        "model_gateway.invalid_configuration" | "model_gateway.invalid_invocation" => {
+            return kind(OfficeFailure::ModelUnusable, "office_host.model_unusable");
+        }
+        // The reply was over a bound on the way back (charged: it was sent).
+        "model_gateway.stream_too_large"
+        | "model_gateway.event_too_large"
+        | "model_gateway.output_too_large"
+        | "model_gateway.too_many_events"
+        | "anthropic_gateway.output_too_large"
+        | "toolkit_completion.reply_size" => {
+            return kind(OfficeFailure::ReplyTooLarge, "office_host.reply_too_large");
         }
         "toolkit_completion.cut" | "toolkit_completion.cut_while_reasoning" => {
             return kind(OfficeFailure::ReplyCutOff, "office_host.reply_cut_off");

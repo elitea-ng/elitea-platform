@@ -443,9 +443,16 @@ type ClaimReceiptV1 struct {
 	// Carried only by ACCEPTED, RECOVER_AGENT_MODEL_CHECKPOINT and
 	// RECOVER_NODE_VISIT receipts of a capability that may use vectors, and
 	// only where Main serves vector token introspection. Absent otherwise.
-	VectorToken   *VectorClaimTokenV1 `protobuf:"bytes,17,opt,name=vector_token,json=vectorToken,proto3" json:"vector_token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	VectorToken *VectorClaimTokenV1 `protobuf:"bytes,17,opt,name=vector_token,json=vectorToken,proto3" json:"vector_token,omitempty"`
+	// Main reads the typed tool-run refusals of a toolkit.call_tool.v1 result
+	// (TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED / _POLICY_REFUSED, and the
+	// AUTHORIZATION_FAILED run-credentials sentence). Set only on ACCEPTED
+	// receipts of that capability. A worker that does not see it (an older Main)
+	// sends the older shapes: UNKNOWN_TOOL with the fixed refusal sentence, and
+	// the generic authorization sentence.
+	ToolkitTypedRefusals bool `protobuf:"varint,18,opt,name=toolkit_typed_refusals,json=toolkitTypedRefusals,proto3" json:"toolkit_typed_refusals,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ClaimReceiptV1) Reset() {
@@ -574,6 +581,13 @@ func (x *ClaimReceiptV1) GetVectorToken() *VectorClaimTokenV1 {
 		return x.VectorToken
 	}
 	return nil
+}
+
+func (x *ClaimReceiptV1) GetToolkitTypedRefusals() bool {
+	if x != nil {
+		return x.ToolkitTypedRefusals
+	}
+	return false
 }
 
 // VectorClaimTokenV1 is a short-lived bearer bound to one claim: its
@@ -1557,7 +1571,7 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\x0fproposal_digest\x18\x02 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x0eproposalDigest\x12'\n" +
 	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\x122\n" +
 	"\x15settlement_receipt_id\x18\x04 \x01(\tR\x13settlementReceiptId\x12?\n" +
-	"\aoutcome\x18\x05 \x01(\x0e2%.elitea.runtime.v1.ExecutionOutcomeV1R\aoutcomeJ\x04\b\x06\x10\x10\"\xd2\a\n" +
+	"\aoutcome\x18\x05 \x01(\x0e2%.elitea.runtime.v1.ExecutionOutcomeV1R\aoutcomeJ\x04\b\x06\x10\x10\"\x88\b\n" +
 	"\x0eClaimReceiptV1\x12G\n" +
 	"\vdisposition\x18\x01 \x01(\x0e2%.elitea.runtime.v1.ClaimDispositionV1R\vdisposition\x12B\n" +
 	"\bidentity\x18\x02 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
@@ -1575,7 +1589,8 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"retirement\x12>\n" +
 	"\x1cclaim_started_at_unix_micros\x18\f \x01(\x03R\x18claimStartedAtUnixMicros\x12;\n" +
 	"\x1anode_recovery_receipt_json\x18\x10 \x01(\fR\x17nodeRecoveryReceiptJson\x12H\n" +
-	"\fvector_token\x18\x11 \x01(\v2%.elitea.runtime.v1.VectorClaimTokenV1R\vvectorTokenJ\x04\b\r\x10\x10\"\x90\x01\n" +
+	"\fvector_token\x18\x11 \x01(\v2%.elitea.runtime.v1.VectorClaimTokenV1R\vvectorToken\x124\n" +
+	"\x16toolkit_typed_refusals\x18\x12 \x01(\bR\x14toolkitTypedRefusalsJ\x04\b\r\x10\x10\"\x90\x01\n" +
 	"\x12VectorClaimTokenV1\x12\x16\n" +
 	"\x06bearer\x18\x01 \x01(\tR\x06bearer\x123\n" +
 	"\x16expires_at_unix_millis\x18\x02 \x01(\x03R\x13expiresAtUnixMillis\x12'\n" +

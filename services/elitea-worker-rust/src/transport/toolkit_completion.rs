@@ -53,7 +53,9 @@ pub(crate) const REPLY_DECLINED: &str = "the model declined to reply";
 pub(crate) const REPLY_EMPTY: &str = "the model's reply held no usable text";
 
 /// Completions one run may make through toolkit tools when the deployment
-/// sets none. Same name and value as PR #1291's `model_text`.
+/// sets none (Helm `worker.runtime.toolkitModelCallCap`, runtime config
+/// `toolkit_model_call_cap`, from #1291). Same name and value as #1291's
+/// `model_text`.
 pub(crate) const DEFAULT_TOOLKIT_MODEL_CALLS: u32 = 200;
 
 /// The code of a call refused because the run's toolkit budget is spent
@@ -107,31 +109,21 @@ pub(crate) fn budget_exhausted() -> AdkError {
         ErrorComponent::Model,
         ErrorCategory::RateLimited,
         TOOLKIT_BUDGET_EXHAUSTED_CODE,
-        "the toolkit model call budget is exhausted for this run",
+        TOOLKIT_BUDGET_EXHAUSTED_MESSAGE,
     )
 }
 
+/// The sentence of the per-run cap. It is NOT the gateway's billing budget
+/// (`model_gateway.*budget_exhausted`): nothing is owed, the run just used up
+/// the tool model calls one run may make.
+pub(crate) const TOOLKIT_BUDGET_EXHAUSTED_MESSAGE: &str = "this run used up its tool model calls; start a new run or ask an operator to raise worker.runtime.toolkitModelCallCap";
+
 /// Whether a model error was raised locally, before any byte reached the
-/// gateway (the facades' own admission and encoding checks): such a call is
-/// not charged to the run's budget.
+/// gateway: the facades mark such errors themselves
+/// ([`was_not_sent`](super::openai_compatible_facade::was_not_sent)), so no
+/// list of codes is kept here. A call refused that way is not charged.
 pub(crate) fn failed_before_sending(error: &AdkError) -> bool {
-    matches!(
-        error.code,
-        "model_gateway.invalid_request"
-            | "model_gateway.request_too_large"
-            | "model_gateway.request_encoding"
-            | "model_gateway.turn_limit"
-            | "model_gateway.completion_reused"
-            | "model_gateway.completion_state"
-            | "anthropic_gateway.invalid_request"
-            | "anthropic_gateway.sampling_unsupported"
-            | "anthropic_gateway.request_too_large"
-            | "anthropic_gateway.turn_limit"
-            | "anthropic_gateway.completion_reused"
-            | "anthropic_gateway.completion_state"
-            | "context_budget_exceeded"
-            | "model_request_bytes_exceeded"
-    )
+    super::openai_compatible_facade::was_not_sent(error)
 }
 
 /// Binds a fresh provider model for ONE completion.
@@ -536,11 +528,14 @@ mod tests {
         assert!(budget.try_take(), "a failed bind spent no budget");
     }
 
-    /// The owner's rule (#1291 round 3): a call refused locally before a byte
-    /// is sent is refunded; one the provider answered is charged.
+    /// The owner's rule (#1291 round 3): a call refused before a byte is sent
+    /// is refunded; one the provider answered is charged. Round 3, item 7:
+    /// "before sending" is the facade's own typed marker, not a list of codes
+    /// here, and a reply-side size error (the reply was sent and came back
+    /// too large) is charged.
     #[tokio::test]
     async fn a_call_refused_before_sending_is_refunded() {
-        struct Refusing(&'static str);
+        struct Refusing(&'static str, bool);
         #[async_trait]
         impl Llm for Refusing {
             fn name(&self) -> &'static str {
@@ -551,29 +546,55 @@ mod tests {
                 _: LlmRequest,
                 _: bool,
             ) -> adk_rust::Result<LlmResponseStream> {
-                Err(AdkError::new(
+                let error = AdkError::new(
                     ErrorComponent::Model,
                     ErrorCategory::InvalidInput,
                     self.0,
                     "refused",
-                ))
+                );
+                Err(if self.1 {
+                    super::super::openai_compatible_facade::not_sent(error)
+                } else {
+                    error
+                })
             }
         }
         let invocation = test_model_facade_invocation();
         let budget = ModelCallBudget::new(1);
-        let local: FreshModelBinder =
-            Arc::new(|| Ok(Arc::new(Refusing("model_gateway.invalid_request")) as Arc<dyn Llm>));
-        let model = toolkit_completion_model(local, &invocation, budget.clone());
+        let model_with = |code: &'static str, marked: bool| {
+            let bind: FreshModelBinder =
+                Arc::new(move || Ok(Arc::new(Refusing(code, marked)) as Arc<dyn Llm>));
+            toolkit_completion_model(bind, &invocation, budget.clone())
+        };
+        // Marked by the facade: refunded, whatever its code.
+        let local = model_with("model_gateway.some_future_local_check", true);
         for _ in 0..3 {
-            assert!(run(&model, request()).await.is_err());
+            assert!(run(&local, request()).await.is_err());
         }
         assert!(budget.try_take(), "local refusals were refunded");
         budget.refund();
-        let upstream: FreshModelBinder =
-            Arc::new(|| Ok(Arc::new(Refusing("model_gateway.rejected")) as Arc<dyn Llm>));
-        let model = toolkit_completion_model(upstream, &invocation, budget.clone());
-        assert!(run(&model, request()).await.is_err());
-        assert!(!budget.try_take(), "an upstream answer is charged");
+        // The same code without the marker: it was sent, so it is charged.
+        let unmarked = model_with("model_gateway.invalid_request", false);
+        assert!(run(&unmarked, request()).await.is_err());
+        assert!(!budget.try_take(), "an unmarked error is charged");
+        budget.refund();
+        let too_large = model_with("model_gateway.stream_too_large", false);
+        assert!(run(&too_large, request()).await.is_err());
+        assert!(
+            !budget.try_take(),
+            "a reply that came back too large is charged"
+        );
+    }
+
+    /// Round 3, item 6: the per-run cap names the knob, and is not the
+    /// gateway's billing sentence.
+    #[test]
+    fn the_run_cap_is_not_a_billing_refusal() {
+        let error = budget_exhausted();
+        assert_eq!(error.code, TOOLKIT_BUDGET_EXHAUSTED_CODE);
+        assert!(error.message.contains("worker.runtime.toolkitModelCallCap"));
+        assert!(error.message.contains("start a new run"));
+        assert!(!error.message.contains("budget"));
     }
 
     #[tokio::test]

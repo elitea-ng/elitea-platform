@@ -408,6 +408,14 @@ pub(crate) fn host_sentence(action: &str, error: &OfficeHostError, kind: &Office
         OfficeFailure::BudgetRefused => format!(
             "Could not {action}: the model budget is exhausted. Do not retry; tell the user."
         ),
+        OfficeFailure::RunCallCapReached => {
+            format!(
+                "Could not {action}: this run used up its tool model calls; start a new run or ask an operator to raise worker.runtime.toolkitModelCallCap. Do not retry in this run."
+            )
+        }
+        OfficeFailure::ModelUnusable => format!(
+            "Could not {action}: the run's chat model cannot be used for this tool (its configuration is not usable for a tool's model call); pick another model for the agent, or tell the user."
+        ),
         OfficeFailure::NoModel => format!(
             "Could not {action}: this tool needs a chat model and none is bound in this run (a pipeline node binds none). Use list_placeholders and replace_placeholders with your own content, or run it from an agent."
         ),

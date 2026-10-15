@@ -326,9 +326,12 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> Sentence {
         OfficeFailure::TooLarge => {
             format!("Could not {action}: the file is larger than the platform accepts.")
         }
-        OfficeFailure::BudgetRefused | OfficeFailure::NoModel => {
+        OfficeFailure::BudgetRefused | OfficeFailure::NoModel | OfficeFailure::ModelUnusable => {
             format!("Could not {action}: the platform refused the request.")
         }
+        OfficeFailure::RunCallCapReached => format!(
+            "Could not {action}: this run used up its tool model calls; start a new run or ask an operator to raise worker.runtime.toolkitModelCallCap."
+        ),
         OfficeFailure::RateLimited | OfficeFailure::Timeout | OfficeFailure::Conflict => {
             format!("Could not {action}: the platform is busy or timed out. Try again shortly.")
         }

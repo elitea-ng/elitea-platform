@@ -211,6 +211,10 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The claim creation time is unavailable.", false), nil
 	}
 	receipt.ClaimStartedAtUnixMicros = claimStartedAtUnixMicros
+	// This Main reads the typed tool-run refusals; a worker only sends them
+	// when told so (an older Main would refuse them and the run would never
+	// settle).
+	receipt.ToolkitTypedRefusals = advertisesTypedToolRefusals(command)
 
 	manifest, err := s.inputs.ResolveClaimInput(ctx, lease.Fence, command.GetInputBundleRef())
 	if err != nil {
@@ -243,6 +247,12 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	receipt.InputBundleRef = proto.Clone(command.GetInputBundleRef()).(*runtimev1.ExecutionInputBundleReferenceV1)
 	receipt.InputBundle = proto.Clone(manifest).(*runtimev1.ExecutionInputBundleV1)
 	return &runtimev1.ClaimCommandResponseV1{Receipt: receipt}, nil
+}
+
+// advertisesTypedToolRefusals: a tool run's receipt tells the worker this Main
+// reads EFFECT_REFUSED / POLICY_REFUSED and the run-credentials sentence.
+func advertisesTypedToolRefusals(command *runtimev1.WorkerCommandV1) bool {
+	return command.GetCapabilityId() == executiondomain.ToolkitCallToolCapability
 }
 
 // degradeVectorToken records that a live claim's vector token could not be

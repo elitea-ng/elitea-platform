@@ -424,8 +424,13 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> String {
         OfficeFailure::BudgetRefused => format!(
             "Could not {action}: the model budget is exhausted. Do not retry; tell the user."
         ),
-        OfficeFailure::NoModel => {
+        OfficeFailure::NoModel | OfficeFailure::ModelUnusable => {
             format!("Could not {action}: image generation is not available in this run.")
+        }
+        OfficeFailure::RunCallCapReached => {
+            format!(
+                "Could not {action}: this run used up its tool model calls; start a new run or ask an operator to raise worker.runtime.toolkitModelCallCap. Do not retry in this run."
+            )
         }
         OfficeFailure::RateLimited => format!(
             "Could not {action}: the image model is rate-limited right now. Try again shortly."

@@ -143,7 +143,12 @@ impl AttachmentError {
                 OfficeFailure::BudgetRefused => {
                     (ErrorCategory::RateLimited, "attachment.budget_refused")
                 }
-                OfficeFailure::NoModel => (ErrorCategory::Unavailable, "attachment.no_model"),
+                OfficeFailure::NoModel | OfficeFailure::ModelUnusable => {
+                    (ErrorCategory::Unavailable, "attachment.no_model")
+                }
+                OfficeFailure::RunCallCapReached => {
+                    (ErrorCategory::RateLimited, "attachment.run_call_cap")
+                }
                 OfficeFailure::RateLimited => {
                     (ErrorCategory::RateLimited, "attachment.rate_limited")
                 }
@@ -204,6 +209,8 @@ fn write_sentence(failure: OfficeFailure) -> String {
 fn model_sentence(failure: OfficeFailure) -> String {
     match failure {
         OfficeFailure::BudgetRefused => "The model budget is exhausted. Do not retry; tell the user.".to_owned(),
+        OfficeFailure::RunCallCapReached => "This run used up its tool model calls; start a new run or ask an operator to raise worker.runtime.toolkitModelCallCap. Do not retry in this run.".to_owned(),
+        OfficeFailure::ModelUnusable => "The run's chat model cannot be used for this tool (its configuration is not usable for a tool's model call). Pick another model for the agent, or turn picture description off.".to_owned(),
         OfficeFailure::NoModel => "This tool needs a chat model and none is bound in this run (a pipeline node binds none). Run it from an agent, or turn picture description off.".to_owned(),
         OfficeFailure::RateLimited => "The model gateway is rate-limiting this call. Try again shortly.".to_owned(),
         OfficeFailure::Timeout => "The model call timed out. It may work if tried again.".to_owned(),
@@ -592,7 +599,9 @@ pub(crate) async fn describe_for_text(
             error @ AttachmentError::Host(
                 Step::Model,
                 OfficeFailure::BudgetRefused
+                | OfficeFailure::RunCallCapReached
                 | OfficeFailure::NoModel
+                | OfficeFailure::ModelUnusable
                 | OfficeFailure::RateLimited
                 | OfficeFailure::AccessRefused
                 | OfficeFailure::Unreachable,

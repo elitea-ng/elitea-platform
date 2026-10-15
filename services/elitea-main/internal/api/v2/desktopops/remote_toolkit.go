@@ -633,7 +633,7 @@ func (h *remoteToolkitHandler) writeOutcome(writer http.ResponseWriter, toolkitI
 		body["reason"] = string(outcome.Status)
 		body["message"] = outcome.ErrorMessage
 		desktopwire.WriteJSON(writer, http.StatusUnprocessableEntity, body)
-	case toolkitcalltoolapp.RunStatusEffectRefused, toolkitcalltoolapp.RunStatusPolicyRefused:
+	case toolkitcalltoolapp.RunStatusEffectRefused, toolkitcalltoolapp.RunStatusPolicyRefused, toolkitcalltoolapp.RunStatusSensitiveRefused:
 		// The worker's typed refusal of the tool (API_CONTRACT: 422
 		// worker_refused, the read-only sentence). Before the typed statuses
 		// this arrived as an UNKNOWN_TOOL result and read "unknown_tool".
@@ -643,8 +643,10 @@ func (h *remoteToolkitHandler) writeOutcome(writer http.ResponseWriter, toolkitI
 		desktopwire.WriteJSON(writer, http.StatusUnprocessableEntity, body)
 	default:
 		switch {
-		case outcome.WorkerRefusedTool():
-			// An older worker's refusal, as a runtime failure.
+		case outcome.WorkerCannotRunTool():
+			// UNSUPPORTED_CAPABILITY: the worker cannot run the tool here
+			// (the documented worker_refused answer; an older Rust worker's
+			// effect refusal arrived this way).
 			body["error"] = "remote_tool_unsupported"
 			body["reason"] = "worker_refused"
 			body["message"] = h.workerRefusalSentence(outcome.ToolName)

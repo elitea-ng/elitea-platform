@@ -264,6 +264,10 @@ pub struct AcceptedAgentClaim {
     arguments_entry: Option<ExecutionInputEntryV1>,
     /// The elitea-vector bearer Main minted for this claim, if any.
     vector_token: Option<VectorClaimToken>,
+    /// Main reads the typed tool-run refusals (`ClaimReceiptV1`
+    /// `toolkit_typed_refusals`); without it the terminal is downgraded to
+    /// the shapes an older Main accepts.
+    toolkit_typed_refusals: bool,
 }
 
 impl AcceptedAgentClaim {
@@ -618,6 +622,7 @@ impl AcceptedAgentClaim {
             arguments_entry: _,
             // Output replay needs no vector access; the bearer is erased here.
             vector_token: _,
+            toolkit_typed_refusals: _,
         } = self;
         AcceptedTerminalClaimRecovery {
             binding: RecoveryClaimBinding {
@@ -1396,6 +1401,8 @@ impl AgentExecutionOutputAuthority {
                 "the toolkit result does not match its admitted inputs",
             ));
         }
+        let terminal =
+            super::output::terminal_for_main(terminal, self.claim.toolkit_typed_refusals);
         build_toolkit_execute_read_terminal_output_frame(
             verified,
             &self.claim.fence,
@@ -1746,6 +1753,7 @@ pub(crate) fn test_lease_monitored_input_execution(
             input_bundle: ExecutionInputBundleV1::default(),
             arguments_entry: None,
             vector_token: None,
+            toolkit_typed_refusals: false,
             request_entry: ExecutionInputEntryV1 {
                 entry_id: "agent-request".to_owned(),
                 immutable_version: "v/1".to_owned(),
@@ -3084,6 +3092,7 @@ fn parse_input_claim_binding(
         request_entry,
         arguments_entry,
         vector_token: VectorClaimToken::from_receipt(receipt.vector_token),
+        toolkit_typed_refusals: receipt.toolkit_typed_refusals,
     })
 }
 

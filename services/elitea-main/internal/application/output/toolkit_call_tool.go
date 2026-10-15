@@ -53,6 +53,7 @@ const (
 	ToolkitCallToolStatusUnknownTool           ToolkitCallToolStatus = "unknown_tool"
 	ToolkitCallToolStatusEffectRefused         ToolkitCallToolStatus = "effect_refused"
 	ToolkitCallToolStatusPolicyRefused         ToolkitCallToolStatus = "policy_refused"
+	ToolkitCallToolStatusSensitiveRefused      ToolkitCallToolStatus = "sensitive_refused"
 )
 
 // ToolkitCallToolSummary is the bounded typed terminal result. The outer SDK
@@ -70,7 +71,7 @@ func (s ToolkitCallToolSummary) Validate() error {
 	switch s.Status {
 	case ToolkitCallToolStatusOK, ToolkitCallToolStatusToolError, ToolkitCallToolStatusAuthorizationRequired,
 		ToolkitCallToolStatusUnsupportedToolkit, ToolkitCallToolStatusUnknownTool,
-		ToolkitCallToolStatusEffectRefused, ToolkitCallToolStatusPolicyRefused:
+		ToolkitCallToolStatusEffectRefused, ToolkitCallToolStatusPolicyRefused, ToolkitCallToolStatusSensitiveRefused:
 	default:
 		return ErrInvalidToolkitCallToolOutput
 	}
@@ -96,7 +97,7 @@ func (s ToolkitCallToolSummary) Validate() error {
 	// result, and each must say why.
 	switch s.Status {
 	case ToolkitCallToolStatusUnsupportedToolkit, ToolkitCallToolStatusUnknownTool,
-		ToolkitCallToolStatusEffectRefused, ToolkitCallToolStatusPolicyRefused:
+		ToolkitCallToolStatusEffectRefused, ToolkitCallToolStatusPolicyRefused, ToolkitCallToolStatusSensitiveRefused:
 		if s.ResultJSON != "" || s.Truncated || s.ErrorMessage == "" {
 			return ErrInvalidToolkitCallToolOutput
 		}
@@ -196,7 +197,7 @@ func (f ToolkitCallToolFrame) Validate() error {
 	expectedOutcome := executionapp.SettlementSucceeded
 	switch f.Result.ResultSummary.Status {
 	case ToolkitCallToolStatusUnsupportedToolkit, ToolkitCallToolStatusUnknownTool,
-		ToolkitCallToolStatusEffectRefused, ToolkitCallToolStatusPolicyRefused:
+		ToolkitCallToolStatusEffectRefused, ToolkitCallToolStatusPolicyRefused, ToolkitCallToolStatusSensitiveRefused:
 		expectedOutcome = executionapp.SettlementFailed
 	}
 	if err := f.Settlement.Validate(); err != nil ||

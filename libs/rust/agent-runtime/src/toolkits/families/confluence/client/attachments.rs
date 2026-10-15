@@ -105,12 +105,25 @@ fn refuse(message: String) -> ConfluenceClientError {
 fn attachment_failure(error: AttachmentError) -> ConfluenceClientError {
     let code = match &error {
         AttachmentError::Host(_, OfficeFailure::Timeout) => ConfluenceClientErrorCode::Timeout,
-        AttachmentError::Host(_, OfficeFailure::RateLimited | OfficeFailure::BudgetRefused) => {
+        AttachmentError::Host(
+            _,
+            OfficeFailure::RateLimited
+            | OfficeFailure::BudgetRefused
+            | OfficeFailure::RunCallCapReached,
+        ) => {
             ConfluenceClientErrorCode::RateLimited
         }
         AttachmentError::Host(
             _,
-            OfficeFailure::Unreachable | OfficeFailure::NoModel | OfficeFailure::ReplyUnusable,
+            OfficeFailure::Unreachable
+            | OfficeFailure::NoModel
+            | OfficeFailure::ModelUnusable
+            | OfficeFailure::ReplyUnusable
+            // A model reply that was cut off, declined or empty is a model
+            // failure, not a bad argument (#1292 round 3).
+            | OfficeFailure::ReplyCutOff
+            | OfficeFailure::ReplyDeclined
+            | OfficeFailure::ReplyEmpty,
         ) => ConfluenceClientErrorCode::DependencyUnavailable,
         _ => ConfluenceClientErrorCode::InvalidInput,
     };
@@ -1707,5 +1720,31 @@ mod prefix_tests {
         );
         assert_eq!(strip_path_prefix("/download/x", "/wiki"), "/download/x");
         assert_eq!(strip_path_prefix("/download/x", ""), "/download/x");
+    }
+}
+
+#[cfg(test)]
+mod attachment_failure_tests {
+    use super::*;
+    use crate::toolkits::families::attachment_host::Step;
+
+    #[test]
+    fn a_unusable_model_reply_is_a_model_failure_not_invalid_input() {
+        for failure in [
+            OfficeFailure::ReplyCutOff,
+            OfficeFailure::ReplyDeclined,
+            OfficeFailure::ReplyEmpty,
+            OfficeFailure::ReplyUnusable,
+        ] {
+            assert_eq!(
+                attachment_failure(AttachmentError::Host(Step::Model, failure)).code,
+                ConfluenceClientErrorCode::DependencyUnavailable,
+                "{failure:?}"
+            );
+        }
+        assert_eq!(
+            attachment_failure(AttachmentError::Path).code,
+            ConfluenceClientErrorCode::InvalidInput
+        );
     }
 }

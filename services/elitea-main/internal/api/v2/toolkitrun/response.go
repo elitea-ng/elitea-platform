@@ -221,7 +221,11 @@ func WriteOutcome(w http.ResponseWriter, outcome toolkitcalltoolapp.RunOutcome) 
 		writeJSON(w, http.StatusUnprocessableEntity, body)
 	case toolkitcalltoolapp.RunStatusPolicyRefused:
 		body["reason"] = ReasonToolRefused
-		body["error"] = toolSubject(outcome.ToolName) + " is blocked or sensitive under this deployment's policy, so it cannot be run here."
+		body["error"] = toolSubject(outcome.ToolName) + " is blocked by this deployment's tool policy, so it cannot be run here."
+		writeJSON(w, http.StatusUnprocessableEntity, body)
+	case toolkitcalltoolapp.RunStatusSensitiveRefused:
+		body["reason"] = ReasonToolRefused
+		body["error"] = toolSubject(outcome.ToolName) + " is marked sensitive by this deployment's tool policy and needs a confirmation this route cannot ask for, so it was not run."
 		writeJSON(w, http.StatusUnprocessableEntity, body)
 	default:
 		// A runtime failure that is a statement about the RUN or the tool, not
@@ -244,6 +248,7 @@ func WriteOutcome(w http.ResponseWriter, outcome toolkitcalltoolapp.RunOutcome) 
 const (
 	ReasonEffectfulToolUnavailable = "effectful_tool_unavailable"
 	ReasonToolRefused              = "tool_refused"
+	ReasonUnsupportedTool          = "unsupported_tool"
 	ReasonAuthorizationFailed      = "authorization_failed"
 )
 
@@ -255,25 +260,27 @@ func toolSubject(name string) string {
 	return "The tool " + strconv.Quote(name)
 }
 
-// workerRefusal classifies a runtime failure. Only AUTHORIZATION_FAILED with
-// the current worker's run-credentials sentence is about the credentials
-// (403). An OLDER worker's UNSUPPORTED_CAPABILITY is its refusal of an
-// effectful tool, and its bare AUTHORIZATION_FAILED its refusal of a blocked
-// or sensitive tool (it did not tell the two apart): a neutral 422 that does
-// not send the person to retry credentials that were never at fault.
+// workerRefusal classifies a runtime failure. AUTHORIZATION_FAILED, from any
+// worker, is the run's credentials or context (403, with a retry hint): the
+// typed POLICY_REFUSED / SENSITIVE_REFUSED statuses are the only policy
+// signal. UNSUPPORTED_CAPABILITY says only that this deployment's worker
+// cannot run the tool, never WHY, so it is a neutral 422 (it is not "the tool
+// changes data": only EFFECT_REFUSED says that).
 func workerRefusal(outcome toolkitcalltoolapp.RunOutcome) (status int, reason, sentence string, ok bool) {
 	switch {
 	case outcome.RunCredentialsRefused():
 		return http.StatusForbidden, ReasonAuthorizationFailed,
 			"The platform could not authorize this run's credentials or context. Try again; if it persists, ask an administrator.", true
-	case outcome.FailureCode == toolkitcalltoolapp.FailureCodeUnsupportedCapability:
-		return http.StatusUnprocessableEntity, ReasonEffectfulToolUnavailable,
-			toolSubject(outcome.ToolName) + " changes data, and this route only runs read-only tools.", true
-	case outcome.WorkerRefusedTool():
-		return http.StatusUnprocessableEntity, ReasonToolRefused,
-			toolSubject(outcome.ToolName) + " was refused by the agent worker on this route, so nothing was run.", true
+	case outcome.WorkerCannotRunTool():
+		return http.StatusUnprocessableEntity, ReasonUnsupportedTool,
+			"This deployment's worker cannot run " + lowerFirst(toolSubject(outcome.ToolName)) + ".", true
 	}
 	return 0, "", "", false
+}
+
+// lowerFirst is "the tool \"x\"" / "this tool" inside a sentence.
+func lowerFirst(subject string) string {
+	return strings.ToLower(subject[:1]) + subject[1:]
 }
 
 // WriteError maps a run that never settled. It is the only place a tool-run

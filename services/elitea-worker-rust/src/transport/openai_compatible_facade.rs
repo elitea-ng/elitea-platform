@@ -525,11 +525,11 @@ impl Llm for EliteaOpenAiCompatibleModel {
             })
             .map(|current| current + 1)
             .map_err(|_| {
-                model_error(
+                not_sent(model_error(
                     ErrorCategory::InvalidInput,
                     "model_gateway.turn_limit",
                     "the claim-scoped model invocation exceeded its approved turn limit",
-                )
+                ))
             })?;
         let span = tracing::info_span!(
             "agent.model.request",
@@ -546,13 +546,15 @@ impl Llm for EliteaOpenAiCompatibleModel {
         let result: Result<LlmResponseStream, AdkError> = async {
             tracing::info!(event = "agent_model_request_started");
             let allowed_tools = request.tools.keys().cloned().collect();
-            let body = build_request_body(&request, stream, &self.invocation, &self.config)?;
+            let body = build_request_body(&request, stream, &self.invocation, &self.config)
+                .map_err(not_sent)?;
             let request = build_http_request(
                 body,
                 self.billing_project_id,
                 self.token.as_str(),
                 self.execution_id.as_str(),
-            )?;
+            )
+            .map_err(not_sent)?;
             let response = timeout(
                 self.config.response_header_timeout,
                 self.transport.post(request),
@@ -1817,6 +1819,26 @@ pub(super) fn model_error(
     message: &'static str,
 ) -> AdkError {
     AdkError::new(ErrorComponent::Model, category, code, message).with_provider("elitea")
+}
+
+/// The metadata key a facade sets on an error raised BEFORE any byte of the
+/// request left the worker (admission, encoding, turn limit): such a call
+/// cost the gateway nothing, so a caller that budgets calls refunds it.
+const NOT_SENT_KEY: &str = "elitea.not_sent";
+
+/// `error`, marked as raised before the request was sent.
+pub(super) fn not_sent(mut error: AdkError) -> AdkError {
+    error
+        .details
+        .metadata
+        .insert(NOT_SENT_KEY.to_owned(), serde_json::Value::Bool(true));
+    error
+}
+
+/// Whether a facade marked `error` as raised before the request was sent.
+#[must_use]
+pub(crate) fn was_not_sent(error: &AdkError) -> bool {
+    error.details.metadata.get(NOT_SENT_KEY) == Some(&serde_json::Value::Bool(true))
 }
 
 fn canonical_https_origin(value: &str) -> Result<String, ModelFacadeError> {

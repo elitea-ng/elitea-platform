@@ -42,8 +42,8 @@ use zeroize::Zeroizing;
 use super::openai_compatible_facade::{
     ModelFacadeError, ModelFacadeInvocation, ModelGatewayClient, ModelReasoningEffort,
     budget_refusal, gateway_sse_splitter, is_generic_rejection, model_error, next_response_chunk,
-    rejection_with_detail, sse_error, valid_execution_id, valid_tool_call_id, valid_tool_name,
-    validate_invocation, validate_llm_request, validate_response_head,
+    not_sent, rejection_with_detail, sse_error, valid_execution_id, valid_tool_call_id,
+    valid_tool_name, validate_invocation, validate_llm_request, validate_response_head,
 };
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::context_budget::RequestContextBudget;
@@ -306,11 +306,11 @@ impl Llm for EliteaAnthropicModel {
             })
             .map(|current| current + 1)
             .map_err(|_| {
-                anthropic_error(
+                not_sent(anthropic_error(
                     ErrorCategory::InvalidInput,
                     "turn_limit",
                     "the claim-scoped native Anthropic invocation exceeded its approved turn limit",
-                )
+                ))
             })?;
         let span = tracing::info_span!(
             "agent.model.request",
@@ -404,7 +404,17 @@ impl Llm for EliteaAnthropicModel {
     }
 }
 
+/// The request body, or the refusal marked as raised before sending.
 fn build_anthropic_body(
+    request: &LlmRequest,
+    stream: bool,
+    invocation: &ModelFacadeInvocation,
+    config: &super::openai_compatible_facade::ModelGatewayConfig,
+) -> Result<Bytes, AdkError> {
+    encode_checked_anthropic_body(request, stream, invocation, config).map_err(not_sent)
+}
+
+fn encode_checked_anthropic_body(
     request: &LlmRequest,
     stream: bool,
     invocation: &ModelFacadeInvocation,
@@ -793,7 +803,18 @@ fn rejects_explicit_sampling(model_name: &str) -> bool {
     .any(|pattern| name.contains(pattern))
 }
 
+/// The HTTP request, or the refusal marked as raised before sending.
 fn build_anthropic_request(
+    body: Bytes,
+    billing_project_id: u64,
+    token: &str,
+    execution_id: &str,
+) -> Result<Request<Body>, AdkError> {
+    build_unmarked_anthropic_request(body, billing_project_id, token, execution_id)
+        .map_err(not_sent)
+}
+
+fn build_unmarked_anthropic_request(
     body: Bytes,
     billing_project_id: u64,
     token: &str,

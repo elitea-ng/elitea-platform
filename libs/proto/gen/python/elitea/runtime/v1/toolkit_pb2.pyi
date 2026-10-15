@@ -17,6 +17,7 @@ class ToolkitCallToolStatusV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper)
     TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED: _ClassVar[ToolkitCallToolStatusV1]
     TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED: _ClassVar[ToolkitCallToolStatusV1]
     TOOLKIT_CALL_TOOL_STATUS_V1_POLICY_REFUSED: _ClassVar[ToolkitCallToolStatusV1]
+    TOOLKIT_CALL_TOOL_STATUS_V1_SENSITIVE_REFUSED: _ClassVar[ToolkitCallToolStatusV1]
 TOOLKIT_CALL_TOOL_STATUS_V1_UNSPECIFIED: ToolkitCallToolStatusV1
 TOOLKIT_CALL_TOOL_STATUS_V1_OK: ToolkitCallToolStatusV1
 TOOLKIT_CALL_TOOL_STATUS_V1_TOOL_ERROR: ToolkitCallToolStatusV1
@@ -25,6 +26,7 @@ TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL: ToolkitCallToolStatusV1
 TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED: ToolkitCallToolStatusV1
 TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED: ToolkitCallToolStatusV1
 TOOLKIT_CALL_TOOL_STATUS_V1_POLICY_REFUSED: ToolkitCallToolStatusV1
+TOOLKIT_CALL_TOOL_STATUS_V1_SENSITIVE_REFUSED: ToolkitCallToolStatusV1
 
 class ToolkitAvailableToolsCommandV1(_message.Message):
     __slots__ = ("toolkit_type", "settings_entry_id", "toolkit_id")
