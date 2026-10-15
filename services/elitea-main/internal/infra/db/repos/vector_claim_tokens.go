@@ -263,10 +263,9 @@ LEFT JOIN minted ON true`,
 // false and fails closed: the question is about privacy. Project memory is not
 // affected. Because the answer is read each time, a participant added to the
 // conversation mid-run withdraws the permission at the next call.
-func (s *VectorClaimTokens) personalMemoryTurn(ctx context.Context, executionID string, generation int64, actor string) (conversationTurn, bool) {
-	turn, err := s.executionConversation(ctx, executionID, generation)
-	if err != nil {
-		slog.WarnContext(ctx, "vector claim token: could not read the execution; personal memory is withheld", "err", err)
+func (s *VectorClaimTokens) personalMemoryTurn(ctx context.Context, turn conversationTurn, lineageErr error, actor string) (conversationTurn, bool) {
+	if lineageErr != nil {
+		slog.WarnContext(ctx, "vector claim token: could not read the execution; personal memory is withheld", "err", lineageErr)
 		return conversationTurn{}, false
 	}
 	// No conversation (no agent job, a stream that is not a uuid), or not a
@@ -372,15 +371,18 @@ WHERE t.token_sha256 = $1
 	}
 	// Only a token admitted for memory has memory decisions to make, and only
 	// when the request says what it is about to do.
+	// The execution's lineage is read ONCE per answer; every decision below
+	// uses it (review 7: it was read up to three times).
+	lineage, lineageErr := s.executionConversation(ctx, execution, claimGen)
 	// Bound to no conversation: elitea-vector need not ask the shared-write
 	// question for this token. A failed read leaves it false ("ask").
-	if turn, err := s.executionConversation(ctx, execution, claimGen); err == nil && turn.conversation == "" {
+	if lineageErr == nil && lineage.conversation == "" {
 		facts.ConversationUnbound = true
 	}
 	if intent == MemoryIntentSharedIndexWrite && !slices.Contains(sources, "memory") {
 		// A toolkit-index write is decided for every token: an index is
 		// shared, whatever sources the token carries.
-		refused, err := s.conversationTainted(ctx, execution, claimGen)
+		refused, err := s.turnTainted(ctx, lineage, lineageErr)
 		if err != nil {
 			slog.WarnContext(ctx, "vector claim token: could not read whether the conversation is tainted; the shared write is refused", "err", err)
 			refused = true
@@ -394,7 +396,7 @@ WHERE t.token_sha256 = $1
 	facts.MemoryToolkits = memoryToolkits
 	switch intent {
 	case MemoryIntentPersonalRead, MemoryIntentPersonalWrite:
-		turn, allowed := s.personalMemoryTurn(ctx, execution, claimGen, actor)
+		turn, allowed := s.personalMemoryTurn(ctx, lineage, lineageErr, actor)
 		facts.PersonalMemoryAllowed = allowed
 		if allowed && intent == MemoryIntentPersonalRead {
 			// Recorded before the read runs: from here on, no execution bound
@@ -405,7 +407,7 @@ WHERE t.token_sha256 = $1
 			}
 		}
 	case MemoryIntentProjectWrite, MemoryIntentSharedIndexWrite:
-		refused, err := s.conversationTainted(ctx, execution, claimGen)
+		refused, err := s.turnTainted(ctx, lineage, lineageErr)
 		if err != nil {
 			// A doubt about whether shared memory may be written refuses it.
 			slog.WarnContext(ctx, "vector claim token: could not read whether the conversation is tainted; the shared write is refused", "err", err)
@@ -453,14 +455,6 @@ ON CONFLICT DO NOTHING`, turn.project, turn.conversation)
 	})
 }
 
-// conversationTainted reports whether the execution's conversation is
-// tainted, under the conversation's lock. An execution bound to no
-// conversation (a direct tool call, an index run) is not: it cannot have read
-// personal memory, which needs a private chat turn.
-func (s *VectorClaimTokens) conversationTainted(ctx context.Context, executionID string, generation int64) (bool, error) {
-	return s.ExecutionConversationTainted(ctx, executionID, generation)
-}
-
 // ExecutionConversationTainted reports whether the execution is bound to a
 // conversation in which personal memory was read, under the conversation's
 // lock: the check of every shared write (elitea-vector's shared writes
@@ -471,14 +465,23 @@ func (s *VectorClaimTokens) ExecutionConversationTainted(ctx context.Context, ex
 		return false, errors.New("no database")
 	}
 	turn, err := s.executionConversation(ctx, executionID, generation)
-	if err != nil {
-		return false, err
+	return s.turnTainted(ctx, turn, err)
+}
+
+// turnTainted is ExecutionConversationTainted for a lineage already read
+// (lineageErr is its read's error, returned as is: the caller fails closed).
+// A turn bound to no conversation (a direct tool call, an index run) is not
+// tainted: it cannot have read personal memory, which needs a private chat
+// turn.
+func (s *VectorClaimTokens) turnTainted(ctx context.Context, turn conversationTurn, lineageErr error) (bool, error) {
+	if lineageErr != nil {
+		return false, lineageErr
 	}
 	if turn.conversation == "" {
 		return false, nil
 	}
 	var tainted bool
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, conversationLock, turn.project, turn.conversation); err != nil {
 			return err
 		}

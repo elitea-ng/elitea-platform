@@ -343,18 +343,11 @@ async fn one_lease_holder_at_a_time<S: GraphStore>(store: &S, key: GraphKey) {
     );
     assert!(other.is_some(), "another graph's lease is independent");
     drop(first);
-    // A store may free a dropped lease asynchronously (PostgreSQL releases a
-    // session advisory lock once its backend sees the closed connection), so
-    // the graph must come free promptly, not necessarily on the next call.
-    let mut freed = None;
-    for _ in 0..100 {
-        freed = ok("lease", store.lease(key).await);
-        if freed.is_some() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    assert!(freed.is_some(), "a dropped lease frees the graph");
+    // The graph must come free promptly, not necessarily on the next call.
+    assert!(
+        lease_when_free(store, key).await.is_some(),
+        "a dropped lease frees the graph"
+    );
 }
 
 async fn ranking<S: GraphStore>(store: &S, key: GraphKey) {
@@ -618,6 +611,28 @@ async fn delete_under_lease<S: GraphStore>(
     store.delete(key).await.map(Some)
 }
 
+/// The lease of `key` once a just-dropped holder's release has landed, or
+/// `None` if it never comes free. A store may free a dropped lease
+/// asynchronously (PostgreSQL releases a session advisory lock once its
+/// backend sees the closed connection), so a check made right after a drop
+/// waits briefly instead of racing it (CI flake on PR #1288).
+async fn lease_when_free<S: GraphStore>(store: &S, key: GraphKey) -> Option<S::Lease> {
+    for _ in 0..100 {
+        if let Some(lease) = ok("lease", store.lease(key).await) {
+            return Some(lease);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    None
+}
+
+/// [`delete_under_lease`] for a graph whose previous holder was just
+/// dropped: the lease is awaited ([`lease_when_free`]) rather than raced.
+async fn delete_once_free<S: GraphStore>(store: &S, key: GraphKey) -> Option<bool> {
+    let _lease = lease_when_free(store, key).await?;
+    Some(ok("delete", store.delete(key).await))
+}
+
 /// A delete under the lease leaves nothing of a graph, and of no other: every table's
 /// rows for the key are gone (the graph, its sources, its documents), a
 /// neighbour's are not, and it is REFUSED while a writer holds the lease,
@@ -665,10 +680,7 @@ async fn a_delete_waits_for_no_one<S: GraphStore>(store: &S, key: GraphKey) {
 
     // Free, it deletes every table's rows for the key, and the lease is
     // released afterwards.
-    assert_eq!(
-        ok("delete", delete_under_lease(store, key).await),
-        Some(true)
-    );
+    assert_eq!(delete_once_free(store, key).await, Some(true));
     assert!(ok("load", store.load(key).await).is_none());
     assert!(ok("versions", store.document_versions(key, "repo").await).is_empty());
     assert!(ok("restricted", store.restricted_documents(key).await).is_empty());
@@ -677,12 +689,12 @@ async fn a_delete_waits_for_no_one<S: GraphStore>(store: &S, key: GraphKey) {
         json!({})
     );
     assert_eq!(
-        ok("delete", delete_under_lease(store, key).await),
+        delete_once_free(store, key).await,
         Some(false),
         "deleting what is gone is not an error"
     );
     assert!(
-        ok("lease", store.lease(key).await).is_some(),
+        lease_when_free(store, key).await.is_some(),
         "the delete released its lease"
     );
 
