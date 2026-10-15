@@ -521,6 +521,10 @@ impl PipelineNativeAgentAssembler {
                 .redeem_elitea_context(runtime_context)
                 .await
                 .map_err(NativeAgentAssemblyError::from)?;
+            // ADR-0034 Phase 1: a handed-off thread runs direct agents only.
+            if context.workspace().is_some() {
+                return Err(super::workspace::workspace_run_unavailable());
+            }
             Some(Arc::new(context))
         } else {
             None

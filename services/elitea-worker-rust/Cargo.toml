@@ -71,6 +71,14 @@ image = { version = "=0.25.10", default-features = false, features = ["bmp", "gi
 elitea-doc-chunk = { path = "../../libs/rust/doc-chunk" }
 elitea-doc-extract = { path = "../../libs/rust/doc-extract", features = ["html"] }
 elitea-vector-index = { path = "../../libs/rust/vector-index" }
+# ADR-0034: the cloud executor's bundle codec. Without `rest`: the worker
+# reaches the store over its gRPC runtime plane, never the desktop routes.
+elitea-workspace-store = { path = "../../libs/rust/workspace-store" }
+# The turn's commit is written as loose objects into the quarantine the
+# store crate verified the segment into (src/workspace_run/gix_codec.rs).
+gix-hash = { version = "=0.27.0", features = ["sha1"] }
+gix-object = { version = "=0.65.0", features = ["sha1"] }
+gix-odb = { version = "=0.85.0", features = ["sha1"] }
 futures-util = { version = "=0.3.34", optional = true, default-features = false, features = ["io"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"

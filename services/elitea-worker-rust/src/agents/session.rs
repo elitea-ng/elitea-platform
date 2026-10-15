@@ -1599,6 +1599,20 @@ impl SessionService for RunnerSessionService {
 pub(crate) struct OrdinaryAgentCompletion<M> {
     model: M,
     thread_id: String,
+    /// ADR-0034: the cloud executor's workspace, published once the run
+    /// completes or pauses, and never when it fails.
+    workspace: Option<Arc<crate::workspace_run::turn::WorkspaceTurn>>,
+}
+
+impl<M> OrdinaryAgentCompletion<M> {
+    #[must_use]
+    pub(crate) fn with_workspace(
+        mut self,
+        workspace: Option<Arc<crate::workspace_run::turn::WorkspaceTurn>>,
+    ) -> Self {
+        self.workspace = workspace;
+        self
+    }
 }
 
 #[async_trait]
@@ -1607,9 +1621,35 @@ where
     M: BoundOrdinaryAgentModel,
 {
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
-        let content = self.model.take_completed_text()?;
+        let content = match self.model.take_completed_text() {
+            Ok(content) => content,
+            Err(error) => {
+                if let Some(workspace) = &self.workspace {
+                    let _ = workspace
+                        .finish(crate::workspace_run::turn::TurnEnd::Failed)
+                        .await;
+                }
+                return Err(error);
+            }
+        };
+        if let Some(workspace) = &self.workspace {
+            workspace
+                .finish(crate::workspace_run::turn::TurnEnd::Completed)
+                .await
+                .map_err(|error| super::workspace::publish_error(&error))?;
+        }
         CompletedAgentBrowserOutput::ordinary(content, self.thread_id)
             .map_err(|error| completed_output_error(&error))
+    }
+
+    async fn paused(&mut self) -> Result<(), NativeAgentAssemblyError> {
+        if let Some(workspace) = &self.workspace {
+            workspace
+                .finish(crate::workspace_run::turn::TurnEnd::Paused)
+                .await
+                .map_err(|error| super::workspace::publish_error(&error))?;
+        }
+        Ok(())
     }
 }
 
@@ -2319,7 +2359,11 @@ where
         AssembledNativeAgentInvocation::new(
             invocation,
             projector,
-            OrdinaryAgentCompletion { model, thread_id },
+            OrdinaryAgentCompletion {
+                model,
+                thread_id,
+                workspace: None,
+            },
         ),
         evidence,
     ))
@@ -2719,7 +2763,11 @@ where
     Ok(AssembledNativeAgentInvocation::new(
         NativeAgentInvocation::new_direct_hitl(runner, user_id, session_id, prepared.run_input),
         projector,
-        OrdinaryAgentCompletion { model, thread_id },
+        OrdinaryAgentCompletion {
+            model,
+            thread_id,
+            workspace: None,
+        },
     ))
 }
 

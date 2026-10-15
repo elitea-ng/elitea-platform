@@ -87,6 +87,9 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     /// The platform object client the Office families (`pptx`, `docx`, `xlsx`) read and write
     /// documents with (ADR-0032); `None` leaves them out as unsupported.
     office_runtime: Option<Arc<OfficeRuntime>>,
+    /// The cloud executor (ADR-0034): `None` on a worker that cannot run a
+    /// handed-off thread's turn, which then fails such a turn.
+    workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
 }
 
 /// Shared provider/session dependencies; constructing them never starts Runner.
@@ -97,6 +100,8 @@ struct OrdinaryRunnerInputs {
     mode: NativeToolExecutionMode,
     sessions: Arc<dyn adk_rust::session::SessionService>,
     start: AdmittedNativeStart,
+    /// The hydrated workspace of a cloud-executor turn.
+    workspace: Option<Arc<crate::workspace_run::turn::WorkspaceTurn>>,
 }
 
 impl OrdinaryNativeAgentAssembler {
@@ -124,7 +129,18 @@ impl OrdinaryNativeAgentAssembler {
             index_runtime: None,
             toolkit_model_call_cap: crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS,
             office_runtime: None,
+            workspace_runs: None,
         }
+    }
+
+    /// Lend the cloud executor's workspace runs (ADR-0034).
+    #[must_use]
+    pub(crate) fn with_workspace_runs(
+        mut self,
+        workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
+    ) -> Self {
+        self.workspace_runs = workspace_runs;
+        self
     }
 
     /// Lend the Office runtime, so an Office toolkit reads and writes its
@@ -198,10 +214,11 @@ impl OrdinaryNativeAgentAssembler {
             mode: fresh_execution_mode,
             sessions,
             start,
+            workspace,
         } = self
             .prepare_runner_inputs(redeemed, tool_policy, false)
             .await?;
-        match start {
+        let assembled = match start {
             AdmittedNativeStart::Fresh
             | AdmittedNativeStart::Regenerate
             | AdmittedNativeStart::OutputContinuation => {
@@ -240,7 +257,8 @@ impl OrdinaryNativeAgentAssembler {
                 )
                 .await
             }
-        }
+        }?;
+        Ok(assembled.map_completion(|completion| completion.with_workspace(workspace)))
     }
 
     async fn prepare_runner_inputs(
@@ -275,6 +293,28 @@ impl OrdinaryNativeAgentAssembler {
         };
         let context = Arc::new(claim_context);
         let runtime_context = Arc::new(runtime_context);
+        // ADR-0034: a cloud turn of a handed-off thread hydrates its workspace
+        // before anything else is bound, and is refused where it cannot run.
+        let workspace = match context.workspace() {
+            None => None,
+            Some(field) => {
+                // A recovered checkpoint believes tool calls ran in a sandbox
+                // that no longer exists; it is not resumed.
+                if checkpoint_recovery {
+                    return Err(super::workspace::workspace_run_unavailable());
+                }
+                let runs = self
+                    .workspace_runs
+                    .as_ref()
+                    .ok_or_else(super::workspace::workspace_run_unavailable)?;
+                let claim = runtime_context.workspace_claim(&field.thread, field.epoch);
+                Some(
+                    runs.begin(field, claim, context.execution_id())
+                        .await
+                        .map_err(|error| super::workspace::hydrate_error(&error))?,
+                )
+            }
+        };
         // The Attachments module (`attachments`): the same tools as an
         // overview turn gets, bound on every turn and reaching every stored
         // file of the conversation, not only this message's.
@@ -331,6 +371,7 @@ impl OrdinaryNativeAgentAssembler {
             mode: fresh_execution_mode,
             sessions,
             start,
+            workspace,
         })
     }
 

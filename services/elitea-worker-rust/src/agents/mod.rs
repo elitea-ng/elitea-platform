@@ -34,6 +34,8 @@ pub(crate) mod session;
 pub(crate) mod skipped_capabilities;
 pub(crate) use elitea_agent_runtime::tool_namespacing;
 pub(crate) mod variables;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod workspace;
 
 #[cfg(test)]
 mod application_pipeline_tests;
