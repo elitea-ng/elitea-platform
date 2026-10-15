@@ -48,7 +48,7 @@ func cloudExecutorSection() map[string]any {
 				"section": section, "default": []any{}, "maxItems": platformconfig.MaxCloudExecutorAllowlistHosts},
 			{"key": platformconfig.KeyCloudExecutorHistoryFullAllowed, "type": "boolean", "title": "Allow Full History",
 				"description": "Whether a send may carry the repository history, not only the current tree.",
-				"section": section, "default": defaults.HistoryFullAllowed},
+				"section":     section, "default": defaults.HistoryFullAllowed},
 			integer(platformconfig.KeyCloudExecutorMaxSegmentMB, "Maximum Upload (MB)", "The largest bundle one send uploads.",
 				defaults.MaxSegmentMB, 1, platformconfig.MaxCloudExecutorSegmentMB),
 			integer(platformconfig.KeyCloudExecutorMaxFileMB, "Maximum File Size (MB)", "The largest single file a send carries.",

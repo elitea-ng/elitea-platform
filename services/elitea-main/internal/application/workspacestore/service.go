@@ -338,15 +338,16 @@ type CompletedPart struct {
 }
 
 // CompleteUpload finishes a multipart grant.
-func (s *Service) CompleteUpload(ctx context.Context, projectID int64, caller Caller, grantID string, parts []CompletedPart) error {
-	if projectID <= 0 || !validCaller(caller) || !ValidUUID(grantID) || len(parts) == 0 || len(parts) > 10000 {
+// uploadID must be the one the grant answered.
+func (s *Service) CompleteUpload(ctx context.Context, projectID int64, caller Caller, grantID, uploadID string, parts []CompletedPart) error {
+	if projectID <= 0 || !validCaller(caller) || !ValidUUID(grantID) || uploadID == "" || len(parts) == 0 || len(parts) > 10000 {
 		return ErrInvalid
 	}
 	grant, ok, err := s.repo.ReadGrant(ctx, projectID, grantID)
 	if err != nil {
 		return err
 	}
-	if !ok || grant.UploadID == nil || grant.ConsumedAt != nil || !grant.ExpiresAt.After(s.now()) {
+	if !ok || grant.UploadID == nil || *grant.UploadID != uploadID || grant.ConsumedAt != nil || !grant.ExpiresAt.After(s.now()) {
 		return ErrNotFound
 	}
 	conversation, ok := conversationOfKey(grant.Key)
@@ -812,7 +813,7 @@ func (s *Service) SweepObjects(ctx context.Context, batch int) (SweepResult, err
 	if result.SupersededDeleted+result.OrphansDeleted > 0 {
 		s.audit.StoreEvent(ctx, AuditEvent{
 			Name: "store.gc", Count: result.SupersededDeleted + result.OrphansDeleted,
-			Reason: fmt.Sprintf("superseded=%d orphans=%d", result.SupersededDeleted, result.OrphansDeleted),
+			Reason:  fmt.Sprintf("superseded=%d orphans=%d", result.SupersededDeleted, result.OrphansDeleted),
 			Started: started, Succeeded: err == nil,
 		})
 	}
@@ -876,4 +877,13 @@ func newGrantID() (string, error) {
 	b[8] = (b[8] & 0x3f) | 0x80
 	h := hex.EncodeToString(b[:])
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32], nil
+}
+
+// ThreadBytes answers the size of a thread's live cloud copy (the banner's
+// `workspace_bytes`).
+func (s *Service) ThreadBytes(ctx context.Context, thread Thread) (int64, error) {
+	if !validThread(thread) {
+		return 0, ErrInvalid
+	}
+	return s.repo.ThreadWorkspaceBytes(ctx, thread)
 }

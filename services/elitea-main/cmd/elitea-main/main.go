@@ -391,10 +391,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// this avoids adding a second storage service or inventing a filesystem
 	// compatibility backend.
 	var objectStore storage.ObjectStore
+	// The workspace store's physical buckets (ADR-0034 decision 3): the
+	// deployment's own, and the optional dedicated one.
+	var workspaceInputs workspaceHandoffInputs
 	if os.Getenv("ELITEA_ARTIFACTS_ENABLED") != "false" {
 		storageCfg, err := storage.ConfigFromEnv(os.LookupEnv)
 		if err != nil {
 			return fmt.Errorf("load storage configuration: %w", err)
+		}
+		workspaceInputs, err = workspaceStorageFromEnv(ctx, storageCfg, os.LookupEnv)
+		if err != nil {
+			return err
 		}
 		objectStore, err = newObjectStore(ctx, storageCfg)
 		if err != nil {
@@ -1751,6 +1758,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentNodeRecovery http.Handler
 	var currentExecutionInterrupts http.Handler
 	var currentAgentCancel http.Handler
+	// The cloud turn canceller of the workspace handoff (ADR-0034): the same
+	// stop use case the chat's DELETE route drives.
+	var workspaceTurnCanceller agentexecutionapi.CurrentAgentCanceller
 	var currentApplicationTask http.Handler
 	var currentIndexCancel http.Handler
 	var currentIndexMeta http.Handler
@@ -2010,6 +2020,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			}
 		}
 		if publicRoutes.AgentCancel != nil {
+			workspaceTurnCanceller = publicRoutes.AgentCancel
 			currentAgentCancel, err = agentexecutionapi.NewCurrentAgentCancelRoute(
 				publicRoutes.AgentCancel,
 				apiGroupAuth,
@@ -2427,6 +2438,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose local turn routes: %w", err)
 	}
+	// The desktop ⇄ cloud handoff (ADR-0034). The native policy reader is the
+	// router's own, so a save of local_work_cloud_handoff reaches the next send.
+	workspaceHandoff, err := composeWorkspaceHandoff(ctx, pool, objectStore, workspaceInputs, nativePolicy,
+		workspaceTurnCanceller, auditRecorder, apiGroupAuth, logger)
+	if err != nil {
+		return fmt.Errorf("compose workspace handoff routes: %w", err)
+	}
+	runWorkspaceHandoffSweeper(ctx, workspaceHandoff, logger)
 	currentResolvedVersion, err := composeResolvedVersion(pool, clientApplicationVersions, apiGroupAuth)
 	if err != nil {
 		return fmt.Errorf("compose resolved version route: %w", err)
@@ -2553,6 +2572,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SCIMClientAddresses:        scimClientAddresses,
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentLocalTurns:          currentLocalTurns,
+		CurrentWorkspaceHandoff:    workspaceHandoff.Route,
 		CurrentResolvedVersion:     currentResolvedVersion,
 		CurrentRemoteToolkit:       currentRemoteToolkit,
 		CurrentNodeRecovery:        currentNodeRecovery,

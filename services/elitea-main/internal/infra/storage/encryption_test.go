@@ -10,7 +10,9 @@ type encryptedStub struct {
 	confirmed bool
 }
 
-func (s encryptedStub) DefaultEncryptionConfirmed(context.Context) (bool, error) { return s.confirmed, nil }
+func (s encryptedStub) DefaultEncryptionConfirmed(context.Context) (bool, error) {
+	return s.confirmed, nil
+}
 
 func TestDefaultEncryptionConfirmedThroughTheInstrumentedWrapper(t *testing.T) {
 	ctx := context.Background()

@@ -738,6 +738,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		"guardrails": true, "dedicated_banner": true,
 		"maintenance": true, "analytics": true, "default_secrets": true,
 		"native_client_policy": true,
+		// ADR-0034: every send and cloud turn claim reads it
+		// (workspacehandoff.PolicyService).
+		"cloud_executor": true,
 	}
 	for id := range want {
 		if !available[id] {

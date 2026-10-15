@@ -163,7 +163,9 @@ func (s *Store) CompleteMultipart(context.Context, storage.ObjectRef, storage.Up
 	return storage.ObjectInfo{}, nil
 }
 
-func (s *Store) AbortMultipart(context.Context, storage.ObjectRef, storage.UploadID) error { return nil }
+func (s *Store) AbortMultipart(context.Context, storage.ObjectRef, storage.UploadID) error {
+	return nil
+}
 
 func (s *Store) Capabilities() storage.Capabilities {
 	return storage.Capabilities{Presign: s.Presign, NativeMultipart: s.Multipart}

@@ -583,6 +583,11 @@ type RouterConfig struct {
 	// 1.5). Composed in cmd/elitea-main wherever a database is configured;
 	// it needs no runtime, because no worker runs a local turn.
 	CurrentLocalTurns http.Handler
+	// CurrentWorkspaceHandoff serves the desktop ⇄ cloud handoff and the
+	// workspace store's desktop routes (ADR-0034 decision 14, client contract
+	// 1.8). Composed in cmd/elitea-main wherever a database and an object
+	// store are configured; nil registers none of its routes.
+	CurrentWorkspaceHandoff http.Handler
 	// CurrentResolvedVersion serves resolveApplicationVersion (ADR-0029
 	// decision 5a, client contract 1.6). Composed in cmd/elitea-main wherever
 	// a database is configured; it answers 501 where no agent plane is.

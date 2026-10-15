@@ -1369,6 +1369,19 @@ main:
     # Optional key prefix under which every object this deployment writes is
     # scoped (multi-environment sharing of one bucket/container).
     STORAGE_KEY_PREFIX: ""
+    # Optional dedicated physical bucket for the desktop-to-cloud handoff's
+    # workspace store (ADR-0034 decision 3), on the same backend and
+    # credentials. Empty keeps the workspace bucket in STORAGE_CONTAINER.
+    # Main checks its default encryption at rest at startup, as it checks
+    # STORAGE_CONTAINER's; Send to cloud stays off when it cannot confirm it.
+    STORAGE_WORKSPACE_BUCKET: ""
+    # The cloud executor's sandbox limits (ADR-0034 decision 11). Empty takes
+    # the service defaults (one hour of wall time per turn; the sandbox
+    # backend's own CPU, memory and disk defaults).
+    ELITEA_CLOUD_EXECUTOR_TURN_WALL_SECONDS: ""
+    ELITEA_CLOUD_EXECUTOR_CPU: ""
+    ELITEA_CLOUD_EXECUTOR_MEMORY: ""
+    ELITEA_CLOUD_EXECUTOR_DISK: ""
     # S3-only. Leave S3_ENDPOINT_URL empty for real AWS S3; set it for an
     # S3-compatible endpoint (RustFS, MinIO, etc.). S3_ACCESS_KEY/S3_SECRET_KEY
     # are NOT here — see the secrets: block below.

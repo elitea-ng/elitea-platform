@@ -82,6 +82,7 @@ import type {
   ExportConversationParams,
   GetConversationParams,
   GetMessageTraceParams,
+  GetWorkspaceFetchPlanParams,
   InvalidClientVersionError,
   InvalidClientVersionResponse,
   ListConversationMessagesParams,
@@ -124,6 +125,25 @@ import type {
   UpdateConversationRequest,
   UpdatedConversation,
   UploadConversationAttachmentBody,
+  WorkspaceFetchPlan,
+  WorkspaceHandoffBeginRequest,
+  WorkspaceHandoffBegun,
+  WorkspaceHandoffCompleteRequest,
+  WorkspaceHandoffEmpty,
+  WorkspaceHandoffErased,
+  WorkspaceHandoffError,
+  WorkspaceHandoffReclaimPending,
+  WorkspaceHandoffReclaimRequest,
+  WorkspaceHandoffReclaimed,
+  WorkspaceHandoffReleaseRequest,
+  WorkspaceHandoffReleased,
+  WorkspaceHandoffState,
+  WorkspaceHandoffTransition,
+  WorkspaceSegmentPublishRequest,
+  WorkspaceSegmentPublished,
+  WorkspaceSegmentUploadComplete,
+  WorkspaceSegmentUploadGrant,
+  WorkspaceSegmentUploadRequest,
 } from "../model";
 
 import { eliteaFetch } from ".././mutator";
@@ -5969,6 +5989,4381 @@ export function useCommitLocalTurn<
     projectId,
     executionId,
     localTurnCommitRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type beginWorkspaceHandoffResponse201 = {
+  data: WorkspaceHandoffBegun;
+  status: 201;
+};
+
+export type beginWorkspaceHandoffResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type beginWorkspaceHandoffResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type beginWorkspaceHandoffResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type beginWorkspaceHandoffResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type beginWorkspaceHandoffResponse409 = {
+  data: WorkspaceHandoffError;
+  status: 409;
+};
+
+export type beginWorkspaceHandoffResponse413 = {
+  data: WorkspaceHandoffError;
+  status: 413;
+};
+
+export type beginWorkspaceHandoffResponse415 = {
+  data: WorkspaceHandoffError;
+  status: 415;
+};
+
+export type beginWorkspaceHandoffResponse422 = {
+  data: WorkspaceHandoffError;
+  status: 422;
+};
+
+export type beginWorkspaceHandoffResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type beginWorkspaceHandoffResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type beginWorkspaceHandoffResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type beginWorkspaceHandoffResponseSuccess =
+  beginWorkspaceHandoffResponse201 & {
+    headers: Headers;
+  };
+export type beginWorkspaceHandoffResponseError = (
+  | beginWorkspaceHandoffResponse400
+  | beginWorkspaceHandoffResponse401
+  | beginWorkspaceHandoffResponse403
+  | beginWorkspaceHandoffResponse404
+  | beginWorkspaceHandoffResponse409
+  | beginWorkspaceHandoffResponse413
+  | beginWorkspaceHandoffResponse415
+  | beginWorkspaceHandoffResponse422
+  | beginWorkspaceHandoffResponse426
+  | beginWorkspaceHandoffResponse500
+  | beginWorkspaceHandoffResponse503
+) & {
+  headers: Headers;
+};
+
+export type beginWorkspaceHandoffResponse =
+  beginWorkspaceHandoffResponseSuccess | beginWorkspaceHandoffResponseError;
+
+export const getBeginWorkspaceHandoffUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/workspace_handoff/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decisions 1, 7 and 11). Moves the thread
+ * from LOCAL to HANDING_OFF and answers the epoch, the refs the desktop
+ * may publish, their expected old values and the effective limits. The
+ * send must be completed within 15 minutes (`expires_at`), or the thread
+ * falls back to LOCAL and its objects are erased.
+ *
+ * WHO. A native app access token only (403 `handoff_requires_token`
+ * otherwise), of the conversation's creator, with
+ * `models.chat.messages.create`. The conversation must be a Local work
+ * thread (`source: local_work`) with no uncommitted local turn.
+ *
+ * POLICY. The effective policy (the platform `cloud_executor` section,
+ * narrowed by the project setting and the native client policy's
+ * `local_work.cloud_handoff`) must allow the cloud executor: 403
+ * `cloud_handoff_disabled` otherwise.
+ * @summary Send a Local work thread to the cloud executor
+ */
+export const beginWorkspaceHandoff = async (
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffBeginRequest: WorkspaceHandoffBeginRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<beginWorkspaceHandoffResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<beginWorkspaceHandoffResponse>(
+    getBeginWorkspaceHandoffUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(workspaceHandoffBeginRequest),
+    },
+  );
+};
+
+export const getBeginWorkspaceHandoffQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffBeginRequest?: WorkspaceHandoffBeginRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/workspace_handoff/prompt_lib/${projectId}/${conversationUuid}`,
+    workspaceHandoffBeginRequest,
+  ] as const;
+};
+
+export const getBeginWorkspaceHandoffQueryOptions = <
+  TData = Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffBeginRequest: WorkspaceHandoffBeginRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getBeginWorkspaceHandoffQueryKey(
+      projectId,
+      conversationUuid,
+      workspaceHandoffBeginRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof beginWorkspaceHandoff>>
+  > = ({ signal }) =>
+    beginWorkspaceHandoff(
+      projectId,
+      conversationUuid,
+      workspaceHandoffBeginRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type BeginWorkspaceHandoffQueryResult = NonNullable<
+  Awaited<ReturnType<typeof beginWorkspaceHandoff>>
+>;
+export type BeginWorkspaceHandoffQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useBeginWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffBeginRequest: WorkspaceHandoffBeginRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof beginWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useBeginWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffBeginRequest: WorkspaceHandoffBeginRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof beginWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useBeginWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffBeginRequest: WorkspaceHandoffBeginRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Send a Local work thread to the cloud executor
+ */
+
+export function useBeginWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffBeginRequest: WorkspaceHandoffBeginRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof beginWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getBeginWorkspaceHandoffQueryOptions(
+    projectId,
+    conversationUuid,
+    workspaceHandoffBeginRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getWorkspaceHandoffResponse200 = {
+  data: WorkspaceHandoffState;
+  status: 200;
+};
+
+export type getWorkspaceHandoffResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type getWorkspaceHandoffResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getWorkspaceHandoffResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type getWorkspaceHandoffResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type getWorkspaceHandoffResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getWorkspaceHandoffResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getWorkspaceHandoffResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type getWorkspaceHandoffResponseSuccess =
+  getWorkspaceHandoffResponse200 & {
+    headers: Headers;
+  };
+export type getWorkspaceHandoffResponseError = (
+  | getWorkspaceHandoffResponse400
+  | getWorkspaceHandoffResponse401
+  | getWorkspaceHandoffResponse403
+  | getWorkspaceHandoffResponse404
+  | getWorkspaceHandoffResponse426
+  | getWorkspaceHandoffResponse500
+  | getWorkspaceHandoffResponse503
+) & {
+  headers: Headers;
+};
+
+export type getWorkspaceHandoffResponse =
+  getWorkspaceHandoffResponseSuccess | getWorkspaceHandoffResponseError;
+
+export const getGetWorkspaceHandoffUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/workspace_handoff/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decision 14). The banner state. A thread
+ * with no handoff answers `{"state": "LOCAL", "epoch": 0}`. Any caller who
+ * may read the conversation (cookie or token, with
+ * `models.chat.conversation.details`).
+ * @summary Read a thread's handoff state
+ */
+export const getWorkspaceHandoff = async (
+  projectId: string,
+  conversationUuid: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getWorkspaceHandoffResponse> => {
+  return eliteaFetch<getWorkspaceHandoffResponse>(
+    getGetWorkspaceHandoffUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetWorkspaceHandoffQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return [
+    `/elitea_core/workspace_handoff/prompt_lib/${projectId}/${conversationUuid}`,
+  ] as const;
+};
+
+export const getGetWorkspaceHandoffQueryOptions = <
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetWorkspaceHandoffQueryKey(projectId, conversationUuid);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getWorkspaceHandoff>>
+  > = ({ signal }) =>
+    getWorkspaceHandoff(projectId, conversationUuid, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetWorkspaceHandoffQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getWorkspaceHandoff>>
+>;
+export type GetWorkspaceHandoffQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGetWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a thread's handoff state
+ */
+
+export function useGetWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetWorkspaceHandoffQueryOptions(
+    projectId,
+    conversationUuid,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type eraseWorkspaceHandoffResponse200 = {
+  data: WorkspaceHandoffErased;
+  status: 200;
+};
+
+export type eraseWorkspaceHandoffResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type eraseWorkspaceHandoffResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type eraseWorkspaceHandoffResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type eraseWorkspaceHandoffResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type eraseWorkspaceHandoffResponse409 = {
+  data: WorkspaceHandoffError;
+  status: 409;
+};
+
+export type eraseWorkspaceHandoffResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type eraseWorkspaceHandoffResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type eraseWorkspaceHandoffResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type eraseWorkspaceHandoffResponseSuccess =
+  eraseWorkspaceHandoffResponse200 & {
+    headers: Headers;
+  };
+export type eraseWorkspaceHandoffResponseError = (
+  | eraseWorkspaceHandoffResponse400
+  | eraseWorkspaceHandoffResponse401
+  | eraseWorkspaceHandoffResponse403
+  | eraseWorkspaceHandoffResponse404
+  | eraseWorkspaceHandoffResponse409
+  | eraseWorkspaceHandoffResponse426
+  | eraseWorkspaceHandoffResponse500
+  | eraseWorkspaceHandoffResponse503
+) & {
+  headers: Headers;
+};
+
+export type eraseWorkspaceHandoffResponse =
+  eraseWorkspaceHandoffResponseSuccess | eraseWorkspaceHandoffResponseError;
+
+export const getEraseWorkspaceHandoffUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/workspace_handoff/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decision 12). Ends the handoff in any
+ * state (a send in HANDING_OFF is cancelled), cancels a running cloud
+ * turn, sets the state to LOCAL and erases the cloud copy's objects. The
+ * owner, or a caller with `models.project_settings.edit`. Idempotent.
+ * @summary Erase a thread's cloud copy
+ */
+export const eraseWorkspaceHandoff = async (
+  projectId: string,
+  conversationUuid: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<eraseWorkspaceHandoffResponse> => {
+  return eliteaFetch<eraseWorkspaceHandoffResponse>(
+    getEraseWorkspaceHandoffUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getEraseWorkspaceHandoffQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/workspace_handoff/prompt_lib/${projectId}/${conversationUuid}`,
+  ] as const;
+};
+
+export const getEraseWorkspaceHandoffQueryOptions = <
+  TData = Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getEraseWorkspaceHandoffQueryKey(projectId, conversationUuid);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof eraseWorkspaceHandoff>>
+  > = ({ signal }) =>
+    eraseWorkspaceHandoff(projectId, conversationUuid, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type EraseWorkspaceHandoffQueryResult = NonNullable<
+  Awaited<ReturnType<typeof eraseWorkspaceHandoff>>
+>;
+export type EraseWorkspaceHandoffQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useEraseWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof eraseWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useEraseWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof eraseWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useEraseWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Erase a thread's cloud copy
+ */
+
+export function useEraseWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof eraseWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getEraseWorkspaceHandoffQueryOptions(
+    projectId,
+    conversationUuid,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type completeWorkspaceHandoffResponse200 = {
+  data: WorkspaceHandoffTransition;
+  status: 200;
+};
+
+export type completeWorkspaceHandoffResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type completeWorkspaceHandoffResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type completeWorkspaceHandoffResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type completeWorkspaceHandoffResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type completeWorkspaceHandoffResponse409 = {
+  data: WorkspaceHandoffError;
+  status: 409;
+};
+
+export type completeWorkspaceHandoffResponse415 = {
+  data: WorkspaceHandoffError;
+  status: 415;
+};
+
+export type completeWorkspaceHandoffResponse422 = {
+  data: WorkspaceHandoffError;
+  status: 422;
+};
+
+export type completeWorkspaceHandoffResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type completeWorkspaceHandoffResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type completeWorkspaceHandoffResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type completeWorkspaceHandoffResponseSuccess =
+  completeWorkspaceHandoffResponse200 & {
+    headers: Headers;
+  };
+export type completeWorkspaceHandoffResponseError = (
+  | completeWorkspaceHandoffResponse400
+  | completeWorkspaceHandoffResponse401
+  | completeWorkspaceHandoffResponse403
+  | completeWorkspaceHandoffResponse404
+  | completeWorkspaceHandoffResponse409
+  | completeWorkspaceHandoffResponse415
+  | completeWorkspaceHandoffResponse422
+  | completeWorkspaceHandoffResponse426
+  | completeWorkspaceHandoffResponse500
+  | completeWorkspaceHandoffResponse503
+) & {
+  headers: Headers;
+};
+
+export type completeWorkspaceHandoffResponse =
+  | completeWorkspaceHandoffResponseSuccess
+  | completeWorkspaceHandoffResponseError;
+
+export const getCompleteWorkspaceHandoffUrl = (
+  projectId: string,
+  handoffId: string,
+) => {
+  return `/elitea_core/workspace_handoff_complete/prompt_lib/${projectId}/${handoffId}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decision 7). Moves HANDING_OFF to
+ * CLOUD_IDLE (a new epoch) once the store holds the snapshot ref with
+ * this sha, and appends the system event message to the conversation.
+ * @summary Complete a send
+ */
+export const completeWorkspaceHandoff = async (
+  projectId: string,
+  handoffId: string,
+  workspaceHandoffCompleteRequest: WorkspaceHandoffCompleteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<completeWorkspaceHandoffResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<completeWorkspaceHandoffResponse>(
+    getCompleteWorkspaceHandoffUrl(projectId, handoffId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(workspaceHandoffCompleteRequest),
+    },
+  );
+};
+
+export const getCompleteWorkspaceHandoffQueryKey = (
+  projectId: string,
+  handoffId: string,
+  workspaceHandoffCompleteRequest?: WorkspaceHandoffCompleteRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/workspace_handoff_complete/prompt_lib/${projectId}/${handoffId}`,
+    workspaceHandoffCompleteRequest,
+  ] as const;
+};
+
+export const getCompleteWorkspaceHandoffQueryOptions = <
+  TData = Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  handoffId: string,
+  workspaceHandoffCompleteRequest: WorkspaceHandoffCompleteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCompleteWorkspaceHandoffQueryKey(
+      projectId,
+      handoffId,
+      workspaceHandoffCompleteRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof completeWorkspaceHandoff>>
+  > = ({ signal }) =>
+    completeWorkspaceHandoff(
+      projectId,
+      handoffId,
+      workspaceHandoffCompleteRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      handoffId !== null &&
+      handoffId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CompleteWorkspaceHandoffQueryResult = NonNullable<
+  Awaited<ReturnType<typeof completeWorkspaceHandoff>>
+>;
+export type CompleteWorkspaceHandoffQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useCompleteWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  handoffId: string,
+  workspaceHandoffCompleteRequest: WorkspaceHandoffCompleteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof completeWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCompleteWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  handoffId: string,
+  workspaceHandoffCompleteRequest: WorkspaceHandoffCompleteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof completeWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCompleteWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  handoffId: string,
+  workspaceHandoffCompleteRequest: WorkspaceHandoffCompleteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Complete a send
+ */
+
+export function useCompleteWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  handoffId: string,
+  workspaceHandoffCompleteRequest: WorkspaceHandoffCompleteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCompleteWorkspaceHandoffQueryOptions(
+    projectId,
+    handoffId,
+    workspaceHandoffCompleteRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type reclaimWorkspaceHandoffResponse200 = {
+  data: WorkspaceHandoffReclaimed;
+  status: 200;
+};
+
+export type reclaimWorkspaceHandoffResponse202 = {
+  data: WorkspaceHandoffReclaimPending;
+  status: 202;
+};
+
+export type reclaimWorkspaceHandoffResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type reclaimWorkspaceHandoffResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type reclaimWorkspaceHandoffResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type reclaimWorkspaceHandoffResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type reclaimWorkspaceHandoffResponse409 = {
+  data: WorkspaceHandoffError;
+  status: 409;
+};
+
+export type reclaimWorkspaceHandoffResponse415 = {
+  data: WorkspaceHandoffError;
+  status: 415;
+};
+
+export type reclaimWorkspaceHandoffResponse422 = {
+  data: WorkspaceHandoffError;
+  status: 422;
+};
+
+export type reclaimWorkspaceHandoffResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type reclaimWorkspaceHandoffResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type reclaimWorkspaceHandoffResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type reclaimWorkspaceHandoffResponseSuccess = (
+  reclaimWorkspaceHandoffResponse200 | reclaimWorkspaceHandoffResponse202
+) & {
+  headers: Headers;
+};
+export type reclaimWorkspaceHandoffResponseError = (
+  | reclaimWorkspaceHandoffResponse400
+  | reclaimWorkspaceHandoffResponse401
+  | reclaimWorkspaceHandoffResponse403
+  | reclaimWorkspaceHandoffResponse404
+  | reclaimWorkspaceHandoffResponse409
+  | reclaimWorkspaceHandoffResponse415
+  | reclaimWorkspaceHandoffResponse422
+  | reclaimWorkspaceHandoffResponse426
+  | reclaimWorkspaceHandoffResponse500
+  | reclaimWorkspaceHandoffResponse503
+) & {
+  headers: Headers;
+};
+
+export type reclaimWorkspaceHandoffResponse =
+  reclaimWorkspaceHandoffResponseSuccess | reclaimWorkspaceHandoffResponseError;
+
+export const getReclaimWorkspaceHandoffUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/workspace_handoff_reclaim/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decision 7). CLOUD_IDLE moves to
+ * RECLAIMING (200, a new epoch). During a cloud turn the take back is
+ * pending (202): the thread becomes RECLAIMING when the turn ends, or
+ * after 60 seconds, when the turn is cancelled. A native app token of the
+ * owner only.
+ * @summary Take a thread back to the desktop
+ */
+export const reclaimWorkspaceHandoff = async (
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReclaimRequest: WorkspaceHandoffReclaimRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<reclaimWorkspaceHandoffResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<reclaimWorkspaceHandoffResponse>(
+    getReclaimWorkspaceHandoffUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(workspaceHandoffReclaimRequest),
+    },
+  );
+};
+
+export const getReclaimWorkspaceHandoffQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReclaimRequest?: WorkspaceHandoffReclaimRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/workspace_handoff_reclaim/prompt_lib/${projectId}/${conversationUuid}`,
+    workspaceHandoffReclaimRequest,
+  ] as const;
+};
+
+export const getReclaimWorkspaceHandoffQueryOptions = <
+  TData = Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReclaimRequest: WorkspaceHandoffReclaimRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getReclaimWorkspaceHandoffQueryKey(
+      projectId,
+      conversationUuid,
+      workspaceHandoffReclaimRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>
+  > = ({ signal }) =>
+    reclaimWorkspaceHandoff(
+      projectId,
+      conversationUuid,
+      workspaceHandoffReclaimRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ReclaimWorkspaceHandoffQueryResult = NonNullable<
+  Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>
+>;
+export type ReclaimWorkspaceHandoffQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useReclaimWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReclaimRequest: WorkspaceHandoffReclaimRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReclaimWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReclaimRequest: WorkspaceHandoffReclaimRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReclaimWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReclaimRequest: WorkspaceHandoffReclaimRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Take a thread back to the desktop
+ */
+
+export function useReclaimWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReclaimRequest: WorkspaceHandoffReclaimRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof reclaimWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getReclaimWorkspaceHandoffQueryOptions(
+    projectId,
+    conversationUuid,
+    workspaceHandoffReclaimRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type requestWorkspaceHandoffReclaimResponse202 = {
+  data: WorkspaceHandoffEmpty;
+  status: 202;
+};
+
+export type requestWorkspaceHandoffReclaimResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type requestWorkspaceHandoffReclaimResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type requestWorkspaceHandoffReclaimResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type requestWorkspaceHandoffReclaimResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type requestWorkspaceHandoffReclaimResponse409 = {
+  data: WorkspaceHandoffError;
+  status: 409;
+};
+
+export type requestWorkspaceHandoffReclaimResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type requestWorkspaceHandoffReclaimResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type requestWorkspaceHandoffReclaimResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type requestWorkspaceHandoffReclaimResponseSuccess =
+  requestWorkspaceHandoffReclaimResponse202 & {
+    headers: Headers;
+  };
+export type requestWorkspaceHandoffReclaimResponseError = (
+  | requestWorkspaceHandoffReclaimResponse400
+  | requestWorkspaceHandoffReclaimResponse401
+  | requestWorkspaceHandoffReclaimResponse403
+  | requestWorkspaceHandoffReclaimResponse404
+  | requestWorkspaceHandoffReclaimResponse409
+  | requestWorkspaceHandoffReclaimResponse426
+  | requestWorkspaceHandoffReclaimResponse500
+  | requestWorkspaceHandoffReclaimResponse503
+) & {
+  headers: Headers;
+};
+
+export type requestWorkspaceHandoffReclaimResponse =
+  | requestWorkspaceHandoffReclaimResponseSuccess
+  | requestWorkspaceHandoffReclaimResponseError;
+
+export const getRequestWorkspaceHandoffReclaimUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/workspace_handoff_reclaim_request/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decision 7). The web or mobile Take
+ * back: it sends the owner a notification (`workspace_reclaim_requested`)
+ * and changes no state. The owner only, cookie or token.
+ * @summary Ask the owner's desktop to take a thread back
+ */
+export const requestWorkspaceHandoffReclaim = async (
+  projectId: string,
+  conversationUuid: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<requestWorkspaceHandoffReclaimResponse> => {
+  return eliteaFetch<requestWorkspaceHandoffReclaimResponse>(
+    getRequestWorkspaceHandoffReclaimUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getRequestWorkspaceHandoffReclaimQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return [
+    "POST",
+    `/elitea_core/workspace_handoff_reclaim_request/prompt_lib/${projectId}/${conversationUuid}`,
+  ] as const;
+};
+
+export const getRequestWorkspaceHandoffReclaimQueryOptions = <
+  TData = Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRequestWorkspaceHandoffReclaimQueryKey(projectId, conversationUuid);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>
+  > = ({ signal }) =>
+    requestWorkspaceHandoffReclaim(projectId, conversationUuid, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RequestWorkspaceHandoffReclaimQueryResult = NonNullable<
+  Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>
+>;
+export type RequestWorkspaceHandoffReclaimQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useRequestWorkspaceHandoffReclaim<
+  TData = Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+          TError,
+          Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRequestWorkspaceHandoffReclaim<
+  TData = Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+          TError,
+          Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRequestWorkspaceHandoffReclaim<
+  TData = Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Ask the owner's desktop to take a thread back
+ */
+
+export function useRequestWorkspaceHandoffReclaim<
+  TData = Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof requestWorkspaceHandoffReclaim>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRequestWorkspaceHandoffReclaimQueryOptions(
+    projectId,
+    conversationUuid,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type releaseWorkspaceHandoffResponse200 = {
+  data: WorkspaceHandoffReleased;
+  status: 200;
+};
+
+export type releaseWorkspaceHandoffResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type releaseWorkspaceHandoffResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type releaseWorkspaceHandoffResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type releaseWorkspaceHandoffResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type releaseWorkspaceHandoffResponse409 = {
+  data: WorkspaceHandoffError;
+  status: 409;
+};
+
+export type releaseWorkspaceHandoffResponse415 = {
+  data: WorkspaceHandoffError;
+  status: 415;
+};
+
+export type releaseWorkspaceHandoffResponse422 = {
+  data: WorkspaceHandoffError;
+  status: 422;
+};
+
+export type releaseWorkspaceHandoffResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type releaseWorkspaceHandoffResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type releaseWorkspaceHandoffResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type releaseWorkspaceHandoffResponseSuccess =
+  releaseWorkspaceHandoffResponse200 & {
+    headers: Headers;
+  };
+export type releaseWorkspaceHandoffResponseError = (
+  | releaseWorkspaceHandoffResponse400
+  | releaseWorkspaceHandoffResponse401
+  | releaseWorkspaceHandoffResponse403
+  | releaseWorkspaceHandoffResponse404
+  | releaseWorkspaceHandoffResponse409
+  | releaseWorkspaceHandoffResponse415
+  | releaseWorkspaceHandoffResponse422
+  | releaseWorkspaceHandoffResponse426
+  | releaseWorkspaceHandoffResponse500
+  | releaseWorkspaceHandoffResponse503
+) & {
+  headers: Headers;
+};
+
+export type releaseWorkspaceHandoffResponse =
+  releaseWorkspaceHandoffResponseSuccess | releaseWorkspaceHandoffResponseError;
+
+export const getReleaseWorkspaceHandoffUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/workspace_handoff_release/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decisions 7 and 12). Moves RECLAIMING
+ * to LOCAL (a new epoch) with the take back's outcome, appends the event
+ * message, and keeps the cloud copy until `cloud_copy_delete_after` (the
+ * return grace). A retried release answers the same row.
+ * @summary Finish a take back
+ */
+export const releaseWorkspaceHandoff = async (
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReleaseRequest: WorkspaceHandoffReleaseRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<releaseWorkspaceHandoffResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<releaseWorkspaceHandoffResponse>(
+    getReleaseWorkspaceHandoffUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(workspaceHandoffReleaseRequest),
+    },
+  );
+};
+
+export const getReleaseWorkspaceHandoffQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReleaseRequest?: WorkspaceHandoffReleaseRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/workspace_handoff_release/prompt_lib/${projectId}/${conversationUuid}`,
+    workspaceHandoffReleaseRequest,
+  ] as const;
+};
+
+export const getReleaseWorkspaceHandoffQueryOptions = <
+  TData = Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReleaseRequest: WorkspaceHandoffReleaseRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getReleaseWorkspaceHandoffQueryKey(
+      projectId,
+      conversationUuid,
+      workspaceHandoffReleaseRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof releaseWorkspaceHandoff>>
+  > = ({ signal }) =>
+    releaseWorkspaceHandoff(
+      projectId,
+      conversationUuid,
+      workspaceHandoffReleaseRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ReleaseWorkspaceHandoffQueryResult = NonNullable<
+  Awaited<ReturnType<typeof releaseWorkspaceHandoff>>
+>;
+export type ReleaseWorkspaceHandoffQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useReleaseWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReleaseRequest: WorkspaceHandoffReleaseRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof releaseWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReleaseWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReleaseRequest: WorkspaceHandoffReleaseRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+          TError,
+          Awaited<ReturnType<typeof releaseWorkspaceHandoff>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReleaseWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReleaseRequest: WorkspaceHandoffReleaseRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Finish a take back
+ */
+
+export function useReleaseWorkspaceHandoff<
+  TData = Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceHandoffReleaseRequest: WorkspaceHandoffReleaseRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof releaseWorkspaceHandoff>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getReleaseWorkspaceHandoffQueryOptions(
+    projectId,
+    conversationUuid,
+    workspaceHandoffReleaseRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type requestWorkspaceSegmentUploadResponse200 = {
+  data: WorkspaceSegmentUploadGrant;
+  status: 200;
+};
+
+export type requestWorkspaceSegmentUploadResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type requestWorkspaceSegmentUploadResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type requestWorkspaceSegmentUploadResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type requestWorkspaceSegmentUploadResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type requestWorkspaceSegmentUploadResponse409 = {
+  data: WorkspaceHandoffError;
+  status: 409;
+};
+
+export type requestWorkspaceSegmentUploadResponse413 = {
+  data: WorkspaceHandoffError;
+  status: 413;
+};
+
+export type requestWorkspaceSegmentUploadResponse415 = {
+  data: WorkspaceHandoffError;
+  status: 415;
+};
+
+export type requestWorkspaceSegmentUploadResponse422 = {
+  data: WorkspaceHandoffError;
+  status: 422;
+};
+
+export type requestWorkspaceSegmentUploadResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type requestWorkspaceSegmentUploadResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type requestWorkspaceSegmentUploadResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type requestWorkspaceSegmentUploadResponseSuccess =
+  requestWorkspaceSegmentUploadResponse200 & {
+    headers: Headers;
+  };
+export type requestWorkspaceSegmentUploadResponseError = (
+  | requestWorkspaceSegmentUploadResponse400
+  | requestWorkspaceSegmentUploadResponse401
+  | requestWorkspaceSegmentUploadResponse403
+  | requestWorkspaceSegmentUploadResponse404
+  | requestWorkspaceSegmentUploadResponse409
+  | requestWorkspaceSegmentUploadResponse413
+  | requestWorkspaceSegmentUploadResponse415
+  | requestWorkspaceSegmentUploadResponse422
+  | requestWorkspaceSegmentUploadResponse426
+  | requestWorkspaceSegmentUploadResponse500
+  | requestWorkspaceSegmentUploadResponse503
+) & {
+  headers: Headers;
+};
+
+export type requestWorkspaceSegmentUploadResponse =
+  | requestWorkspaceSegmentUploadResponseSuccess
+  | requestWorkspaceSegmentUploadResponseError;
+
+export const getRequestWorkspaceSegmentUploadUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/workspace_store_upload/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decision 3). An upload grant for one
+ * segment (a git bundle) at its exact content-addressed key, valid for at
+ * most 15 minutes: a presigned PUT, a native multipart upload above 64
+ * MiB, or the server's streaming facade where the store cannot presign.
+ * A digest the thread already stores answers `exists: true`.
+ * @summary Get an upload grant for a segment
+ */
+export const requestWorkspaceSegmentUpload = async (
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentUploadRequest: WorkspaceSegmentUploadRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<requestWorkspaceSegmentUploadResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<requestWorkspaceSegmentUploadResponse>(
+    getRequestWorkspaceSegmentUploadUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(workspaceSegmentUploadRequest),
+    },
+  );
+};
+
+export const getRequestWorkspaceSegmentUploadQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentUploadRequest?: WorkspaceSegmentUploadRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/workspace_store_upload/prompt_lib/${projectId}/${conversationUuid}`,
+    workspaceSegmentUploadRequest,
+  ] as const;
+};
+
+export const getRequestWorkspaceSegmentUploadQueryOptions = <
+  TData = Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentUploadRequest: WorkspaceSegmentUploadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRequestWorkspaceSegmentUploadQueryKey(
+      projectId,
+      conversationUuid,
+      workspaceSegmentUploadRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>
+  > = ({ signal }) =>
+    requestWorkspaceSegmentUpload(
+      projectId,
+      conversationUuid,
+      workspaceSegmentUploadRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RequestWorkspaceSegmentUploadQueryResult = NonNullable<
+  Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>
+>;
+export type RequestWorkspaceSegmentUploadQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useRequestWorkspaceSegmentUpload<
+  TData = Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentUploadRequest: WorkspaceSegmentUploadRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+          TError,
+          Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRequestWorkspaceSegmentUpload<
+  TData = Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentUploadRequest: WorkspaceSegmentUploadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+          TError,
+          Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRequestWorkspaceSegmentUpload<
+  TData = Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentUploadRequest: WorkspaceSegmentUploadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get an upload grant for a segment
+ */
+
+export function useRequestWorkspaceSegmentUpload<
+  TData = Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentUploadRequest: WorkspaceSegmentUploadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof requestWorkspaceSegmentUpload>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRequestWorkspaceSegmentUploadQueryOptions(
+    projectId,
+    conversationUuid,
+    workspaceSegmentUploadRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type completeWorkspaceSegmentUploadResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type completeWorkspaceSegmentUploadResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type completeWorkspaceSegmentUploadResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type completeWorkspaceSegmentUploadResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type completeWorkspaceSegmentUploadResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type completeWorkspaceSegmentUploadResponse409 = {
+  data: WorkspaceHandoffError;
+  status: 409;
+};
+
+export type completeWorkspaceSegmentUploadResponse415 = {
+  data: WorkspaceHandoffError;
+  status: 415;
+};
+
+export type completeWorkspaceSegmentUploadResponse422 = {
+  data: WorkspaceHandoffError;
+  status: 422;
+};
+
+export type completeWorkspaceSegmentUploadResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type completeWorkspaceSegmentUploadResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type completeWorkspaceSegmentUploadResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type completeWorkspaceSegmentUploadResponseSuccess =
+  completeWorkspaceSegmentUploadResponse204 & {
+    headers: Headers;
+  };
+export type completeWorkspaceSegmentUploadResponseError = (
+  | completeWorkspaceSegmentUploadResponse400
+  | completeWorkspaceSegmentUploadResponse401
+  | completeWorkspaceSegmentUploadResponse403
+  | completeWorkspaceSegmentUploadResponse404
+  | completeWorkspaceSegmentUploadResponse409
+  | completeWorkspaceSegmentUploadResponse415
+  | completeWorkspaceSegmentUploadResponse422
+  | completeWorkspaceSegmentUploadResponse426
+  | completeWorkspaceSegmentUploadResponse500
+  | completeWorkspaceSegmentUploadResponse503
+) & {
+  headers: Headers;
+};
+
+export type completeWorkspaceSegmentUploadResponse =
+  | completeWorkspaceSegmentUploadResponseSuccess
+  | completeWorkspaceSegmentUploadResponseError;
+
+export const getCompleteWorkspaceSegmentUploadUrl = (
+  projectId: string,
+  grantId: string,
+) => {
+  return `/elitea_core/workspace_store_upload_complete/prompt_lib/${projectId}/${grantId}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decision 3). Completes the native
+ * multipart upload of an upload grant with the ETags of its parts, in
+ * order.
+ * @summary Complete a multipart segment upload
+ */
+export const completeWorkspaceSegmentUpload = async (
+  projectId: string,
+  grantId: string,
+  workspaceSegmentUploadComplete: WorkspaceSegmentUploadComplete,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<completeWorkspaceSegmentUploadResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<completeWorkspaceSegmentUploadResponse>(
+    getCompleteWorkspaceSegmentUploadUrl(projectId, grantId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(workspaceSegmentUploadComplete),
+    },
+  );
+};
+
+export const getCompleteWorkspaceSegmentUploadQueryKey = (
+  projectId: string,
+  grantId: string,
+  workspaceSegmentUploadComplete?: WorkspaceSegmentUploadComplete,
+) => {
+  return [
+    "POST",
+    `/elitea_core/workspace_store_upload_complete/prompt_lib/${projectId}/${grantId}`,
+    workspaceSegmentUploadComplete,
+  ] as const;
+};
+
+export const getCompleteWorkspaceSegmentUploadQueryOptions = <
+  TData = Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  grantId: string,
+  workspaceSegmentUploadComplete: WorkspaceSegmentUploadComplete,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCompleteWorkspaceSegmentUploadQueryKey(
+      projectId,
+      grantId,
+      workspaceSegmentUploadComplete,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>
+  > = ({ signal }) =>
+    completeWorkspaceSegmentUpload(
+      projectId,
+      grantId,
+      workspaceSegmentUploadComplete,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      grantId !== null &&
+      grantId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CompleteWorkspaceSegmentUploadQueryResult = NonNullable<
+  Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>
+>;
+export type CompleteWorkspaceSegmentUploadQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useCompleteWorkspaceSegmentUpload<
+  TData = Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  grantId: string,
+  workspaceSegmentUploadComplete: WorkspaceSegmentUploadComplete,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+          TError,
+          Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCompleteWorkspaceSegmentUpload<
+  TData = Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  grantId: string,
+  workspaceSegmentUploadComplete: WorkspaceSegmentUploadComplete,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+          TError,
+          Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCompleteWorkspaceSegmentUpload<
+  TData = Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  grantId: string,
+  workspaceSegmentUploadComplete: WorkspaceSegmentUploadComplete,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Complete a multipart segment upload
+ */
+
+export function useCompleteWorkspaceSegmentUpload<
+  TData = Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  grantId: string,
+  workspaceSegmentUploadComplete: WorkspaceSegmentUploadComplete,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof completeWorkspaceSegmentUpload>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCompleteWorkspaceSegmentUploadQueryOptions(
+    projectId,
+    grantId,
+    workspaceSegmentUploadComplete,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type publishWorkspaceSegmentResponse200 = {
+  data: WorkspaceSegmentPublished;
+  status: 200;
+};
+
+export type publishWorkspaceSegmentResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type publishWorkspaceSegmentResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type publishWorkspaceSegmentResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type publishWorkspaceSegmentResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type publishWorkspaceSegmentResponse409 = {
+  data: WorkspaceHandoffError;
+  status: 409;
+};
+
+export type publishWorkspaceSegmentResponse413 = {
+  data: WorkspaceHandoffError;
+  status: 413;
+};
+
+export type publishWorkspaceSegmentResponse415 = {
+  data: WorkspaceHandoffError;
+  status: 415;
+};
+
+export type publishWorkspaceSegmentResponse422 = {
+  data: WorkspaceHandoffError;
+  status: 422;
+};
+
+export type publishWorkspaceSegmentResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type publishWorkspaceSegmentResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type publishWorkspaceSegmentResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type publishWorkspaceSegmentResponseSuccess =
+  publishWorkspaceSegmentResponse200 & {
+    headers: Headers;
+  };
+export type publishWorkspaceSegmentResponseError = (
+  | publishWorkspaceSegmentResponse400
+  | publishWorkspaceSegmentResponse401
+  | publishWorkspaceSegmentResponse403
+  | publishWorkspaceSegmentResponse404
+  | publishWorkspaceSegmentResponse409
+  | publishWorkspaceSegmentResponse413
+  | publishWorkspaceSegmentResponse415
+  | publishWorkspaceSegmentResponse422
+  | publishWorkspaceSegmentResponse426
+  | publishWorkspaceSegmentResponse500
+  | publishWorkspaceSegmentResponse503
+) & {
+  headers: Headers;
+};
+
+export type publishWorkspaceSegmentResponse =
+  publishWorkspaceSegmentResponseSuccess | publishWorkspaceSegmentResponseError;
+
+export const getPublishWorkspaceSegmentUrl = (
+  projectId: string,
+  conversationUuid: string,
+) => {
+  return `/elitea_core/workspace_store_publish/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decision 2). The server checks the stored
+ * object (its size and SHA-256) BEFORE one short transaction that checks
+ * the state, the epoch and the writer's ref allowlist, compares every
+ * expected old ref value (all or nothing), records the segment with the
+ * next `seq` and moves the refs. An identical retry answers the original
+ * result. On a conflict, `details.current` names the stored values.
+ * @summary Publish an uploaded segment and move the refs
+ */
+export const publishWorkspaceSegment = async (
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentPublishRequest: WorkspaceSegmentPublishRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<publishWorkspaceSegmentResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<publishWorkspaceSegmentResponse>(
+    getPublishWorkspaceSegmentUrl(projectId, conversationUuid),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(workspaceSegmentPublishRequest),
+    },
+  );
+};
+
+export const getPublishWorkspaceSegmentQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentPublishRequest?: WorkspaceSegmentPublishRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/workspace_store_publish/prompt_lib/${projectId}/${conversationUuid}`,
+    workspaceSegmentPublishRequest,
+  ] as const;
+};
+
+export const getPublishWorkspaceSegmentQueryOptions = <
+  TData = Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentPublishRequest: WorkspaceSegmentPublishRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getPublishWorkspaceSegmentQueryKey(
+      projectId,
+      conversationUuid,
+      workspaceSegmentPublishRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof publishWorkspaceSegment>>
+  > = ({ signal }) =>
+    publishWorkspaceSegment(
+      projectId,
+      conversationUuid,
+      workspaceSegmentPublishRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type PublishWorkspaceSegmentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof publishWorkspaceSegment>>
+>;
+export type PublishWorkspaceSegmentQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function usePublishWorkspaceSegment<
+  TData = Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentPublishRequest: WorkspaceSegmentPublishRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+          TError,
+          Awaited<ReturnType<typeof publishWorkspaceSegment>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePublishWorkspaceSegment<
+  TData = Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentPublishRequest: WorkspaceSegmentPublishRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+          TError,
+          Awaited<ReturnType<typeof publishWorkspaceSegment>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePublishWorkspaceSegment<
+  TData = Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentPublishRequest: WorkspaceSegmentPublishRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Publish an uploaded segment and move the refs
+ */
+
+export function usePublishWorkspaceSegment<
+  TData = Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  workspaceSegmentPublishRequest: WorkspaceSegmentPublishRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof publishWorkspaceSegment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getPublishWorkspaceSegmentQueryOptions(
+    projectId,
+    conversationUuid,
+    workspaceSegmentPublishRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getWorkspaceFetchPlanResponse200 = {
+  data: WorkspaceFetchPlan;
+  status: 200;
+};
+
+export type getWorkspaceFetchPlanResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type getWorkspaceFetchPlanResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getWorkspaceFetchPlanResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type getWorkspaceFetchPlanResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type getWorkspaceFetchPlanResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getWorkspaceFetchPlanResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getWorkspaceFetchPlanResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type getWorkspaceFetchPlanResponseSuccess =
+  getWorkspaceFetchPlanResponse200 & {
+    headers: Headers;
+  };
+export type getWorkspaceFetchPlanResponseError = (
+  | getWorkspaceFetchPlanResponse400
+  | getWorkspaceFetchPlanResponse401
+  | getWorkspaceFetchPlanResponse403
+  | getWorkspaceFetchPlanResponse404
+  | getWorkspaceFetchPlanResponse426
+  | getWorkspaceFetchPlanResponse500
+  | getWorkspaceFetchPlanResponse503
+) & {
+  headers: Headers;
+};
+
+export type getWorkspaceFetchPlanResponse =
+  getWorkspaceFetchPlanResponseSuccess | getWorkspaceFetchPlanResponseError;
+
+export const getGetWorkspaceFetchPlanUrl = (
+  projectId: string,
+  conversationUuid: string,
+  params?: GetWorkspaceFetchPlanParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/workspace_store_fetch/prompt_lib/${projectId}/${conversationUuid}?${stringifiedParams}`
+    : `/elitea_core/workspace_store_fetch/prompt_lib/${projectId}/${conversationUuid}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decision 2). The fetch plan from
+ * `since_seq`: in this version the newest COMPACT segment at or after it,
+ * with a URL valid until `expires_at`, and the thread's refs.
+ * @summary Read the segments a reader needs
+ */
+export const getWorkspaceFetchPlan = async (
+  projectId: string,
+  conversationUuid: string,
+  params?: GetWorkspaceFetchPlanParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getWorkspaceFetchPlanResponse> => {
+  return eliteaFetch<getWorkspaceFetchPlanResponse>(
+    getGetWorkspaceFetchPlanUrl(projectId, conversationUuid, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetWorkspaceFetchPlanQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+  params?: GetWorkspaceFetchPlanParams,
+) => {
+  return [
+    `/elitea_core/workspace_store_fetch/prompt_lib/${projectId}/${conversationUuid}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetWorkspaceFetchPlanQueryOptions = <
+  TData = Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params?: GetWorkspaceFetchPlanParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetWorkspaceFetchPlanQueryKey(projectId, conversationUuid, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getWorkspaceFetchPlan>>
+  > = ({ signal }) =>
+    getWorkspaceFetchPlan(projectId, conversationUuid, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetWorkspaceFetchPlanQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getWorkspaceFetchPlan>>
+>;
+export type GetWorkspaceFetchPlanQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGetWorkspaceFetchPlan<
+  TData = Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params: undefined | GetWorkspaceFetchPlanParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceFetchPlan>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceFetchPlan<
+  TData = Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params?: GetWorkspaceFetchPlanParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceFetchPlan>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceFetchPlan<
+  TData = Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params?: GetWorkspaceFetchPlanParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the segments a reader needs
+ */
+
+export function useGetWorkspaceFetchPlan<
+  TData = Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  params?: GetWorkspaceFetchPlanParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceFetchPlan>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetWorkspaceFetchPlanQueryOptions(
+    projectId,
+    conversationUuid,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type putWorkspaceSegmentObjectResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type putWorkspaceSegmentObjectResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type putWorkspaceSegmentObjectResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type putWorkspaceSegmentObjectResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type putWorkspaceSegmentObjectResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type putWorkspaceSegmentObjectResponse409 = {
+  data: WorkspaceHandoffError;
+  status: 409;
+};
+
+export type putWorkspaceSegmentObjectResponse413 = {
+  data: WorkspaceHandoffError;
+  status: 413;
+};
+
+export type putWorkspaceSegmentObjectResponse422 = {
+  data: WorkspaceHandoffError;
+  status: 422;
+};
+
+export type putWorkspaceSegmentObjectResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type putWorkspaceSegmentObjectResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type putWorkspaceSegmentObjectResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type putWorkspaceSegmentObjectResponseSuccess =
+  putWorkspaceSegmentObjectResponse204 & {
+    headers: Headers;
+  };
+export type putWorkspaceSegmentObjectResponseError = (
+  | putWorkspaceSegmentObjectResponse400
+  | putWorkspaceSegmentObjectResponse401
+  | putWorkspaceSegmentObjectResponse403
+  | putWorkspaceSegmentObjectResponse404
+  | putWorkspaceSegmentObjectResponse409
+  | putWorkspaceSegmentObjectResponse413
+  | putWorkspaceSegmentObjectResponse422
+  | putWorkspaceSegmentObjectResponse426
+  | putWorkspaceSegmentObjectResponse500
+  | putWorkspaceSegmentObjectResponse503
+) & {
+  headers: Headers;
+};
+
+export type putWorkspaceSegmentObjectResponse =
+  | putWorkspaceSegmentObjectResponseSuccess
+  | putWorkspaceSegmentObjectResponseError;
+
+export const getPutWorkspaceSegmentObjectUrl = (
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+) => {
+  return `/elitea_core/workspace_store_object/prompt_lib/${projectId}/${conversationUuid}/${sha256}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decision 3, ADR-0016 streaming facade).
+ * The upload URL a grant answers where the object store cannot presign:
+ * the body is the bundle, streamed to the store under the open grant for
+ * this key, measured and hashed on the way.
+ * @summary Upload a segment through the streaming facade
+ */
+export const putWorkspaceSegmentObject = async (
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  putWorkspaceSegmentObjectBody: Blob,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<putWorkspaceSegmentObjectResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<putWorkspaceSegmentObjectResponse>(
+    getPutWorkspaceSegmentObjectUrl(projectId, conversationUuid, sha256),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/x-git-bundle",
+        ...getHeaders(options?.headers),
+      },
+      body: putWorkspaceSegmentObjectBody,
+    },
+  );
+};
+
+export const getPutWorkspaceSegmentObjectQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  putWorkspaceSegmentObjectBody?: Blob,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/workspace_store_object/prompt_lib/${projectId}/${conversationUuid}/${sha256}`,
+    putWorkspaceSegmentObjectBody,
+  ] as const;
+};
+
+export const getPutWorkspaceSegmentObjectQueryOptions = <
+  TData = Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  putWorkspaceSegmentObjectBody: Blob,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getPutWorkspaceSegmentObjectQueryKey(
+      projectId,
+      conversationUuid,
+      sha256,
+      putWorkspaceSegmentObjectBody,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof putWorkspaceSegmentObject>>
+  > = ({ signal }) =>
+    putWorkspaceSegmentObject(
+      projectId,
+      conversationUuid,
+      sha256,
+      putWorkspaceSegmentObjectBody,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined &&
+      sha256 !== null &&
+      sha256 !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type PutWorkspaceSegmentObjectQueryResult = NonNullable<
+  Awaited<ReturnType<typeof putWorkspaceSegmentObject>>
+>;
+export type PutWorkspaceSegmentObjectQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function usePutWorkspaceSegmentObject<
+  TData = Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  putWorkspaceSegmentObjectBody: Blob,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+          TError,
+          Awaited<ReturnType<typeof putWorkspaceSegmentObject>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePutWorkspaceSegmentObject<
+  TData = Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  putWorkspaceSegmentObjectBody: Blob,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+          TError,
+          Awaited<ReturnType<typeof putWorkspaceSegmentObject>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePutWorkspaceSegmentObject<
+  TData = Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  putWorkspaceSegmentObjectBody: Blob,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Upload a segment through the streaming facade
+ */
+
+export function usePutWorkspaceSegmentObject<
+  TData = Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  putWorkspaceSegmentObjectBody: Blob,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof putWorkspaceSegmentObject>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getPutWorkspaceSegmentObjectQueryOptions(
+    projectId,
+    conversationUuid,
+    sha256,
+    putWorkspaceSegmentObjectBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getWorkspaceSegmentObjectResponse200 = {
+  data: Blob;
+  status: 200;
+};
+
+export type getWorkspaceSegmentObjectResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type getWorkspaceSegmentObjectResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getWorkspaceSegmentObjectResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type getWorkspaceSegmentObjectResponse404 = {
+  data: WorkspaceHandoffError;
+  status: 404;
+};
+
+export type getWorkspaceSegmentObjectResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getWorkspaceSegmentObjectResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getWorkspaceSegmentObjectResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type getWorkspaceSegmentObjectResponseSuccess =
+  getWorkspaceSegmentObjectResponse200 & {
+    headers: Headers;
+  };
+export type getWorkspaceSegmentObjectResponseError = (
+  | getWorkspaceSegmentObjectResponse400
+  | getWorkspaceSegmentObjectResponse401
+  | getWorkspaceSegmentObjectResponse403
+  | getWorkspaceSegmentObjectResponse404
+  | getWorkspaceSegmentObjectResponse426
+  | getWorkspaceSegmentObjectResponse500
+  | getWorkspaceSegmentObjectResponse503
+) & {
+  headers: Headers;
+};
+
+export type getWorkspaceSegmentObjectResponse =
+  | getWorkspaceSegmentObjectResponseSuccess
+  | getWorkspaceSegmentObjectResponseError;
+
+export const getGetWorkspaceSegmentObjectUrl = (
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+) => {
+  return `/elitea_core/workspace_store_object/prompt_lib/${projectId}/${conversationUuid}/${sha256}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decision 3). The fetch URL where the
+ * object store cannot presign: the stored segment's bytes.
+ * @summary Download a segment through the streaming facade
+ */
+export const getWorkspaceSegmentObject = async (
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getWorkspaceSegmentObjectResponse> => {
+  return eliteaFetch<getWorkspaceSegmentObjectResponse>(
+    getGetWorkspaceSegmentObjectUrl(projectId, conversationUuid, sha256),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetWorkspaceSegmentObjectQueryKey = (
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+) => {
+  return [
+    `/elitea_core/workspace_store_object/prompt_lib/${projectId}/${conversationUuid}/${sha256}`,
+  ] as const;
+};
+
+export const getGetWorkspaceSegmentObjectQueryOptions = <
+  TData = Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetWorkspaceSegmentObjectQueryKey(projectId, conversationUuid, sha256);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getWorkspaceSegmentObject>>
+  > = ({ signal }) =>
+    getWorkspaceSegmentObject(projectId, conversationUuid, sha256, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationUuid !== null &&
+      conversationUuid !== undefined &&
+      sha256 !== null &&
+      sha256 !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetWorkspaceSegmentObjectQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getWorkspaceSegmentObject>>
+>;
+export type GetWorkspaceSegmentObjectQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGetWorkspaceSegmentObject<
+  TData = Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceSegmentObject>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceSegmentObject<
+  TData = Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceSegmentObject>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceSegmentObject<
+  TData = Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Download a segment through the streaming facade
+ */
+
+export function useGetWorkspaceSegmentObject<
+  TData = Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationUuid: string,
+  sha256: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceSegmentObject>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetWorkspaceSegmentObjectQueryOptions(
+    projectId,
+    conversationUuid,
+    sha256,
     options,
   );
 
