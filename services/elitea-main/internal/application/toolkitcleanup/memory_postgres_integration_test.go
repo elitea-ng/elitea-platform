@@ -288,10 +288,18 @@ func TestAUserReAddedBeforeTheDrainKeepsTheirPersonalMemories(t *testing.T) {
 	pool := newJournalPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	// The migrated database has the auth tables (with their foreign keys);
+	// they are made here only if it does not. User 20 is the member, user 22
+	// a deleted one; role 1 exists in projects 7 and 8.
 	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS public.auth_core__user (id serial PRIMARY KEY, email text UNIQUE)`,
+		`CREATE TABLE IF NOT EXISTS public.auth_core__project_role (id serial PRIMARY KEY, project_id integer NOT NULL, name text NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS public.auth_core__project_user_role (
-		    id serial PRIMARY KEY, project_id integer NOT NULL, user_id integer NOT NULL, role_id integer NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS public.auth_core__user (id serial PRIMARY KEY, email text)`,
+		    id serial PRIMARY KEY, project_id integer NOT NULL,
+		    user_id integer NOT NULL REFERENCES public.auth_core__user (id) ON DELETE CASCADE,
+		    role_id integer NOT NULL REFERENCES public.auth_core__project_role (id) ON DELETE CASCADE)`,
+		`INSERT INTO public.auth_core__user (id, email) VALUES (20, 'member@example.com') ON CONFLICT DO NOTHING`,
+		`INSERT INTO public.auth_core__project_role (id, project_id, name) VALUES (9001, 7, 'm9-test') ON CONFLICT DO NOTHING`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -309,7 +317,7 @@ func TestAUserReAddedBeforeTheDrainKeepsTheirPersonalMemories(t *testing.T) {
 	// User 20 is removed from project 7 (the membership row is gone when the
 	// removal commits), then re-added before the reconciler runs.
 	enqueueUsers(ctx, t, pool, journal, 7, 20)
-	exec(`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES (7, 20, 1)`)
+	exec(`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES (7, 20, 9001)`)
 	if completed, err := claimAndResume(ctx, t, journal); err != nil || !completed {
 		t.Fatalf("re-added: completed=%v err=%v", completed, err)
 	}
@@ -323,7 +331,7 @@ func TestAUserReAddedBeforeTheDrainKeepsTheirPersonalMemories(t *testing.T) {
 	// Removed again, and still gone at the drain: deleted. A membership in
 	// ANOTHER project does not keep this project's memories.
 	exec(`DELETE FROM public.auth_core__project_user_role WHERE project_id = 7 AND user_id = 20`)
-	exec(`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES (8, 20, 1)`)
+	exec(`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES (8, 20, 9001)`)
 	enqueueUsers(ctx, t, pool, journal, 7, 20)
 	if completed, err := claimAndResume(ctx, t, journal); err != nil || !completed {
 		t.Fatalf("still gone: completed=%v err=%v", completed, err)
