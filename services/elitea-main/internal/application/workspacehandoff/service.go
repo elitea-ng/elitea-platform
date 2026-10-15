@@ -378,6 +378,19 @@ func (s *Service) Erase(ctx context.Context, request EraseRequest) (Handoff, err
 		return Handoff{}, err
 	}
 	s.cancelRunning(ctx, result.Previous)
+	// The objects go now, so a desktop that cancelled a send can send again at
+	// once; the sweeper finishes an erasure this pass could not.
+	if result.Changed && result.Handoff.State == workspacestore.StateLocal {
+		thread := threadOf(result.Handoff)
+		if empty, err := s.objects.EraseThreadObjects(ctx, thread); err != nil {
+			s.logger.WarnContext(ctx, "workspace handoff: erase objects failed; the sweeper retries",
+				"project_id", thread.ProjectID, "conversation_uuid", thread.ConversationUUID, "err", err)
+		} else if empty {
+			if err := s.repo.MarkErased(ctx, thread, result.Handoff.Epoch); err != nil {
+				s.logger.WarnContext(ctx, "workspace handoff: mark erased failed", "err", err)
+			}
+		}
+	}
 	if result.Changed {
 		s.record(ctx, request.Thread, request.ActorUserID, "DELETE", request.AuditRoute, started,
 			fmt.Sprintf("handoff.erase: from %s, epoch %d", result.Previous.State, result.Handoff.Epoch), false)

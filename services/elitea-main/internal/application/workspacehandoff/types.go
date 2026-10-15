@@ -162,3 +162,24 @@ var (
 	// ErrUnavailable: the policy could not be read.
 	ErrUnavailable = errors.New("handoff dependencies are unavailable")
 )
+
+// The answer meta keys of a cloud turn (decision 8). The desktop imports cloud
+// turns by them on release: `executed_by` = ExecutedByCloud, the turn's
+// `workspace_epoch` and its `workspace_commit` (the refs/elitea/cloud sha the
+// turn published). The regenerate SQL strips the last two.
+const (
+	MetaExecutedBy      = "executed_by"
+	MetaWorkspaceEpoch  = "workspace_epoch"
+	MetaWorkspaceCommit = "workspace_commit"
+)
+
+// CloudTurnMeta is the meta a cloud turn's answer group carries. The executor
+// unit merges it into the answer's meta when the turn ends. commit is "" when
+// the turn published nothing; the key is then omitted.
+func CloudTurnMeta(epoch int64, commit string) map[string]any {
+	meta := map[string]any{MetaExecutedBy: ExecutedByCloud, MetaWorkspaceEpoch: epoch}
+	if commit != "" {
+		meta[MetaWorkspaceCommit] = commit
+	}
+	return meta
+}

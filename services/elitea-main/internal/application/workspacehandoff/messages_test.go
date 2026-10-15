@@ -21,3 +21,14 @@ func TestEventMessages(t *testing.T) {
 		t.Fatalf("release message without a device = %q", got)
 	}
 }
+
+func TestCloudTurnMetaKeys(t *testing.T) {
+	meta := CloudTurnMeta(2, "0123456789abcdef0123456789abcdef01234567")
+	if meta["executed_by"] != "cloud_executor" || meta["workspace_epoch"] != int64(2) ||
+		meta["workspace_commit"] != "0123456789abcdef0123456789abcdef01234567" || len(meta) != 3 {
+		t.Fatalf("meta = %v", meta)
+	}
+	if _, present := CloudTurnMeta(2, "")["workspace_commit"]; present {
+		t.Fatalf("an unpublished turn names a commit")
+	}
+}

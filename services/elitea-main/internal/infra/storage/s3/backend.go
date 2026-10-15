@@ -532,3 +532,23 @@ func mapS3Error(err error, op string) error {
 	}
 	return fmt.Errorf("storage/s3: %s: %w", op, err)
 }
+
+// DefaultEncryptionConfirmed reads the bucket's default encryption
+// (GetBucketEncryption). Any server-side rule (SSE-S3, SSE-KMS) confirms it;
+// no configuration, or a backend that does not answer, does not (ADR-0034
+// decision 4).
+func (b *Backend) DefaultEncryptionConfirmed(ctx context.Context) (bool, error) {
+	output, err := b.client.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{Bucket: aws.String(b.bucket)})
+	if err != nil {
+		return false, fmt.Errorf("storage/s3: read bucket default encryption: %w", err)
+	}
+	if output.ServerSideEncryptionConfiguration == nil {
+		return false, nil
+	}
+	for _, rule := range output.ServerSideEncryptionConfiguration.Rules {
+		if rule.ApplyServerSideEncryptionByDefault != nil && rule.ApplyServerSideEncryptionByDefault.SSEAlgorithm != "" {
+			return true, nil
+		}
+	}
+	return false, nil
+}

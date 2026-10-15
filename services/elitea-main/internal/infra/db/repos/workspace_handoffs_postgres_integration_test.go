@@ -348,10 +348,6 @@ func TestPostgresWorkspaceHandoffConcurrentSendsOneWinner(t *testing.T) {
 		if _, err := h.service.Erase(ctx, workspacehandoff.EraseRequest{Thread: thread, ActorUserID: owner}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.workspace_handoffs SET deleted_at = clock_timestamp()
-WHERE conversation_uuid = $1::uuid`, thread.ConversationUUID); err != nil {
-			t.Fatal(err)
-		}
 		_ = view
 	}
 }
@@ -399,15 +395,17 @@ func TestPostgresWorkspaceHandoffEraseCancelsRunningTurn(t *testing.T) {
 		t.Fatalf("event messages = %q", messages)
 	}
 
-	// The sweeper erases the objects, then marks the row only after an empty
-	// listing.
+	// The erase deletes the objects at once and marks the row after an empty
+	// listing; the sweeper then has nothing left to do.
 	h.service.WithClock(func() time.Time { return time.Now().Add(2 * time.Minute) })
 	report, err := h.service.Sweep(ctx)
-	if err != nil || report.ObjectsErased != 1 {
-		t.Fatalf("sweep = %+v, %v; want one erasure", report, err)
+	if err != nil || report.ObjectsErased != 0 {
+		t.Fatalf("sweep = %+v, %v; want nothing left", report, err)
 	}
-	if h.store.Count() != 0 {
-		t.Fatalf("%d objects left after the erasure", h.store.Count())
+	// Only the late turn's upload, written after the erasure, is left: it has
+	// no segment row, so the store's orphan sweep deletes it after 24 hours.
+	if h.store.Count() != 1 {
+		t.Fatalf("%d objects left after the erasure, want only the late upload", h.store.Count())
 	}
 	view, err := h.service.State(ctx, thread)
 	if err != nil || view.Handoff.DeletedAt == nil || view.DeleteAfter != nil {
@@ -602,5 +600,46 @@ func TestPostgresWorkspaceHandoffTransitionTable(t *testing.T) {
 		if err != nil || erased.State != workspacestore.StateLocal || erased.Epoch != wantEpoch {
 			t.Fatalf("%s erase = %s/%d, %v", tc.state, erased.State, erased.Epoch, err)
 		}
+	}
+}
+
+// The desktop cancels a send (DELETE in HANDING_OFF): the thread is LOCAL at
+// once, its objects go, and a new send is accepted right away. When the store
+// cannot delete, the row waits for the sweeper, a send is refused until the
+// listing is empty, and the sweeper finishes the erasure.
+func TestPostgresWorkspaceHandoffCancelSend(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5251
+	h := newHandoffHarness(t, pool)
+	thread := seedLocalWorkThread(t, pool, owner, "local_work").thread
+	if _, err := h.service.Begin(ctx, beginRequest(thread, owner)); err != nil {
+		t.Fatal(err)
+	}
+	h.publishSnapshot(t, thread, owner, 1, "cancel")
+	cancelled, err := h.service.Erase(ctx, workspacehandoff.EraseRequest{Thread: thread, ActorUserID: owner})
+	if err != nil || cancelled.State != workspacestore.StateLocal || h.store.Count() != 0 {
+		t.Fatalf("cancel = %+v, %v, %d objects left", cancelled, err, h.store.Count())
+	}
+	again, err := h.service.Begin(ctx, beginRequest(thread, owner))
+	if err != nil || again.Handoff.State != workspacestore.StateHandingOff {
+		t.Fatalf("a send right after a cancel = %+v, %v", again, err)
+	}
+	h.publishSnapshot(t, thread, owner, again.Handoff.Epoch, "cancel two")
+	h.store.FailDelete = true
+	if _, err := h.service.Erase(ctx, workspacehandoff.EraseRequest{Thread: thread, ActorUserID: owner}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.service.Begin(ctx, beginRequest(thread, owner)); !errors.Is(err, workspacehandoff.ErrInProgress) {
+		t.Fatalf("a send while the erasure is unfinished = %v, want ErrInProgress", err)
+	}
+	h.store.FailDelete = false
+	h.service.WithClock(func() time.Time { return time.Now().Add(2 * time.Minute) })
+	if report, err := h.service.Sweep(ctx); err != nil || report.ObjectsErased != 1 || h.store.Count() != 0 {
+		t.Fatalf("sweep = %+v, %v, %d objects", report, err, h.store.Count())
+	}
+	h.service.WithClock(time.Now)
+	if _, err := h.service.Begin(ctx, beginRequest(thread, owner)); err != nil {
+		t.Fatalf("a send after the sweeper finished = %v", err)
 	}
 }

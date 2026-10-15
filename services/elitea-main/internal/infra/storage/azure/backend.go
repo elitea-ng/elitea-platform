@@ -473,3 +473,7 @@ func mapAzureError(err error, op string) error {
 	}
 	return fmt.Errorf("storage/azure: %s: %w", op, err)
 }
+
+// DefaultEncryptionConfirmed: Azure Storage encrypts every blob at rest and
+// the encryption cannot be disabled (ADR-0034 decision 4).
+func (b *Backend) DefaultEncryptionConfirmed(context.Context) (bool, error) { return true, nil }

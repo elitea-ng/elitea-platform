@@ -356,3 +356,7 @@ func mapGCSError(err error, op string) error {
 	}
 	return fmt.Errorf("storage/gcs: %s: %w", op, err)
 }
+
+// DefaultEncryptionConfirmed: Cloud Storage encrypts every object at rest by
+// default and the encryption cannot be disabled (ADR-0034 decision 4).
+func (b *Backend) DefaultEncryptionConfirmed(context.Context) (bool, error) { return true, nil }
