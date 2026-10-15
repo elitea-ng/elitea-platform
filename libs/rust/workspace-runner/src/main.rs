@@ -3,14 +3,17 @@
 //! Flags: `--root <dir>` (default `/workspace`), `--data-dir <dir>` (default
 //! `/tmp/elitea-runner`), `--policy <json>` (serve: `RunnerPolicy`),
 //! `--max-files <n>`, `--max-file-bytes <n>`, `--max-total-bytes <n>`
-//! (unpack and pack). Exit status 0 on success, 2 on bad arguments, 1 on a
+//! (unpack and pack), `--env-stdin` (serve: the first stdin line is the
+//! `{"env":{...}}` handshake). Exit status 0 on success, 2 on bad arguments, 1 on a
 //! refused or failed operation (its code on stderr).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use elitea_agent_runtime::workspace_archive::ArchiveLimits;
-use elitea_workspace_runner::{RunnerConfig, RunnerPolicy, open_session, pack, serve, unpack};
+use elitea_workspace_runner::{
+    RunnerConfig, RunnerPolicy, open_session, pack, parse_env_line, serve, unpack,
+};
 
 struct Args {
     command: String,
@@ -18,6 +21,7 @@ struct Args {
     data_dir: PathBuf,
     policy: RunnerPolicy,
     limits: ArchiveLimits,
+    env_stdin: bool,
 }
 
 fn parse() -> Option<Args> {
@@ -33,8 +37,13 @@ fn parse() -> Option<Args> {
             max_file_bytes: 25 << 20,
             max_total_bytes: 8 << 30,
         },
+        env_stdin: false,
     };
     while let Some(flag) = words.next() {
+        if flag == "--env-stdin" {
+            args.env_stdin = true;
+            continue;
+        }
         let value = words.next()?;
         match flag.as_str() {
             "--root" => args.root = PathBuf::from(value),
@@ -70,15 +79,28 @@ async fn main() -> ExitCode {
             Err(code) => fail(&code),
         },
         "serve" => {
+            use tokio::io::AsyncBufReadExt as _;
+            let mut input = tokio::io::BufReader::new(tokio::io::stdin());
+            let mut env = Vec::new();
+            if args.env_stdin {
+                let mut line = String::new();
+                if input.read_line(&mut line).await.is_err() {
+                    return fail("runner.bad_env_handshake");
+                }
+                env = match parse_env_line(line.trim_end()) {
+                    Ok(env) => env,
+                    Err(code) => return fail(&code),
+                };
+            }
             let session = match open_session(&RunnerConfig {
                 root: args.root,
                 data_dir: args.data_dir,
                 policy: args.policy,
+                env,
             }) {
                 Ok(session) => session,
                 Err(_) => return fail("runner.workspace_unavailable"),
             };
-            let input = tokio::io::BufReader::new(tokio::io::stdin());
             match serve(session, input, tokio::io::stdout()).await {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(_) => fail("runner.stream_failed"),

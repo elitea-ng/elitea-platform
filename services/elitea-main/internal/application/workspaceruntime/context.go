@@ -44,6 +44,9 @@ type Turn struct {
 	// UnpackedBytes is the unpacked tree size the desktop declared at send;
 	// the worker sizes the disk-backed workspace volume from it.
 	UnpackedBytes uint64
+	// EnvSecret: the begin stored harvested env for this thread. The values
+	// travel only over WorkspaceEnvSecret, never in this field.
+	EnvSecret bool
 }
 
 // TurnResolver reads the claimed execution's handoff state. It returns
@@ -101,6 +104,9 @@ type RuntimeContext struct {
 	Shell            bool                 `json:"shell"`
 	NetworkAllowlist []string             `json:"network_allowlist"`
 	HasUpstream      bool                 `json:"has_upstream"`
+	// EnvSecret tells the worker to redeem the thread's env over
+	// WorkspaceEnvSecret (contract 6.4). The values are never in this field.
+	EnvSecret bool `json:"env_secret"`
 }
 
 // ContextResolver builds the `workspace` field for one claimed execution.
@@ -187,6 +193,7 @@ func (r *ContextResolver) ResolveWorkspaceContext(ctx context.Context, claim Tur
 		Shell:            policy.Shell,
 		NetworkAllowlist: allowlistIf(policy.Network, allowlist),
 		HasUpstream:      turn.HasUpstream,
+		EnvSecret:        turn.EnvSecret,
 	}, nil
 }
 

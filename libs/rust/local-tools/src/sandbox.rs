@@ -210,6 +210,49 @@ pub struct SandboxConfig {
     /// [`Enforcement::Container`]. Never set on a desktop: there the process
     /// shares the machine with the person's credentials.
     pub container: bool,
+    /// With [`Self::container`]: the handed-off thread's harvested env
+    /// (ADR-0034 decision 5 amendment), added to workspace commands only
+    /// (requests with [`SandboxRequest::git_roots`], which `run_command`
+    /// builds and host git does not). Empty everywhere else.
+    pub container_env: ContainerEnv,
+}
+
+/// Environment values a container host adds to its workspace commands.
+/// `Debug` prints the names only: the values are secrets.
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct ContainerEnv(std::sync::Arc<Vec<(String, String)>>);
+
+impl ContainerEnv {
+    /// Names must be `[A-Za-z_][A-Za-z0-9_]*`; others are dropped.
+    #[must_use]
+    pub fn new(vars: Vec<(String, String)>) -> Self {
+        Self(std::sync::Arc::new(
+            vars.into_iter()
+                .filter(|(name, value)| {
+                    let mut bytes = name.bytes();
+                    bytes
+                        .next()
+                        .is_some_and(|first| first.is_ascii_alphabetic() || first == b'_')
+                        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                        && !value.contains('\0')
+                })
+                .collect(),
+        ))
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for ContainerEnv {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_list()
+            .entries(self.0.iter().map(|(name, _)| name))
+            .finish()
+    }
 }
 
 /// A command ready to spawn: the program, its arguments, and what the
@@ -257,7 +300,35 @@ pub fn prepare(
     if config.container {
         // The container holds only the workspace, a scratch directory and
         // no credential; what a request denies is not there to hide.
-        let mut prepared = unwrapped(argv, Enforcement::Container)?;
+        if argv.is_empty() {
+            return Err(ToolError::invalid("an empty command"));
+        }
+        let mut prepared = if config.container_env.is_empty() || request.git_roots.is_empty() {
+            unwrapped(argv, Enforcement::Container)?
+        } else {
+            // A workspace command gets the thread's env through env(1); the
+            // runner's own process environment never holds it.
+            let mut wrapped: Vec<String> = config
+                .container_env
+                .0
+                .iter()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect();
+            // env(1) reads every leading NAME=value word as an assignment
+            // (BSD env has no `--` after them): a program named like one is
+            // refused rather than run as something else.
+            if argv[0].contains('=') {
+                return Err(ToolError::invalid("a program name cannot contain `=`"));
+            }
+            wrapped.extend(argv.iter().cloned());
+            Prepared {
+                program: PathBuf::from("/usr/bin/env"),
+                args: wrapped,
+                enforcement: Enforcement::Container,
+                note: None,
+                hides_denied: true,
+            }
+        };
         prepared.hides_denied = true;
         return Ok(prepared);
     }
@@ -1744,6 +1815,34 @@ mod tests {
         }
         assert!(!SandboxConfig::default().container);
         assert_eq!(Enforcement::Container.as_str(), "container");
+    }
+
+    /// The harvested env reaches workspace commands only, through env(1),
+    /// and never prints its values.
+    #[test]
+    fn a_container_env_is_added_to_workspace_commands_only() {
+        let config = SandboxConfig {
+            container: true,
+            container_env: super::ContainerEnv::new(vec![
+                ("DATABASE_URL".to_owned(), "postgres://u:p@db/x".to_owned()),
+                ("bad name".to_owned(), "dropped".to_owned()),
+            ]),
+            ..SandboxConfig::default()
+        };
+        let argv = vec!["make".to_owned(), "test".to_owned()];
+        let mut workspace = request(SandboxMode::WorkspaceWrite, true);
+        workspace.git_roots = vec![PathBuf::from("/workspace")];
+        let prepared = prepare(&workspace, &argv, &config).expect("command");
+        assert_eq!(prepared.program, PathBuf::from("/usr/bin/env"));
+        assert_eq!(
+            prepared.args,
+            vec!["DATABASE_URL=postgres://u:p@db/x", "make", "test"]
+        );
+        // Host git builds its requests without git roots: no env.
+        let host_git = request(SandboxMode::ReadOnly, false);
+        let git = prepare(&host_git, &argv, &config).expect("git");
+        assert_eq!(git.program, PathBuf::from("make"));
+        assert_eq!(format!("{:?}", config.container_env), "[\"DATABASE_URL\"]");
     }
 
     /// H3: Landlock alone is partial and is refused unless the host opts in.

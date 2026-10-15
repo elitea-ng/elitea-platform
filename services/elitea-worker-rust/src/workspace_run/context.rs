@@ -46,6 +46,9 @@ pub(crate) struct WorkspaceRuntimeContext {
     pub(crate) shell: bool,
     pub(crate) network_allowlist: Vec<String>,
     pub(crate) has_upstream: bool,
+    /// The thread has harvested env (contract 6.4): the worker redeems it
+    /// over `WorkspaceEnvSecret`. The values are never in this field.
+    pub(crate) env_secret: bool,
 }
 
 impl WorkspaceRuntimeContext {
@@ -130,6 +133,7 @@ pub(crate) fn fixture() -> WorkspaceRuntimeContext {
         shell: true,
         network_allowlist: Vec::new(),
         has_upstream: true,
+        env_secret: false,
     }
 }
 
@@ -148,7 +152,8 @@ mod tests {
                 "unpacked_bytes": 5_242_880, "turn_wall_seconds": 0, "cpu_millis": 0,
                 "memory_bytes": 0, "disk_bytes": 0
             },
-            "network": true, "shell": true, "network_allowlist": [], "has_upstream": true
+            "network": true, "shell": true, "network_allowlist": [], "has_upstream": true,
+            "env_secret": false
         })
     }
 

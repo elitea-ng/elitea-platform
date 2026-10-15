@@ -23,6 +23,7 @@ use crate::protocol::elitea::runtime::v1::WorkspaceClaimV1;
 
 use super::codec::{CodecError, SegmentExpectation, TurnCommit, WorkspaceCodec};
 use super::context::WorkspaceRuntimeContext;
+use super::redact::{RedactingSandbox, SecretEnv};
 use super::sandbox::{
     SandboxRunError, WorkspaceRunDefaults, WorkspaceRunSpec, WorkspaceSandbox,
     WorkspaceSandboxLauncher,
@@ -172,7 +173,7 @@ impl WorkspaceRunFactory {
         let (hydrate_git, hydrate_tree, hydrate_checkout) =
             (git_dir.clone(), worktree.clone(), checkout.clone());
         let segment = fetched.bytes;
-        tokio::task::spawn_blocking(move || {
+        let hydrated = tokio::task::spawn_blocking(move || {
             codec.hydrate(
                 &segment,
                 &expect,
@@ -191,7 +192,12 @@ impl WorkspaceRunFactory {
             max_file_bytes: limits.max_file_bytes,
             max_files: limits.max_files,
         };
-        let findings = tokio::task::spawn_blocking(move || scan_tree(&scan_root, scan_limits))
+        let skip: std::collections::BTreeSet<PathBuf> = hydrated
+            .included_excluded
+            .iter()
+            .map(|path| PathBuf::from(path.trim_start_matches("./")))
+            .collect();
+        let findings = tokio::task::spawn_blocking(move || scan_tree(&scan_root, scan_limits, &skip))
             .await
             .map_err(|_| WorkspaceRunError::Internal)?
             .map_err(|error| match error {
@@ -222,11 +228,24 @@ impl WorkspaceRunFactory {
             &self.defaults,
         )
         .map_err(WorkspaceRunError::Sandbox)?;
-        let sandbox = self
+        // Contract 6.4: the harvested env, redeemed as a claim-bound secret,
+        // goes to the sandbox's run_command environment and nowhere else.
+        let env = if context.env_secret {
+            self.store
+                .env_secret(&claim)
+                .await
+                .map_err(WorkspaceRunError::Store)?
+        } else {
+            SecretEnv::default()
+        };
+        let redactor = env.redactor();
+        let raw = self
             .launcher
-            .launch(&spec)
+            .launch(&spec, &env)
             .await
             .map_err(WorkspaceRunError::Sandbox)?;
+        drop(env);
+        let sandbox: Arc<dyn WorkspaceSandbox> = Arc::new(RedactingSandbox::new(raw, redactor));
         if let Err(error) = sandbox.push_tree(&worktree).await {
             let _ = sandbox.destroy().await;
             return Err(WorkspaceRunError::Sandbox(error));

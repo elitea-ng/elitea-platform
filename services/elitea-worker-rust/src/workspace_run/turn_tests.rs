@@ -21,6 +21,7 @@ use super::store::{
     FetchedThread, PlannedSegment, PublishSegment, PublishedSegment, PullRequestDiff, REF_CLOUD,
     RefusalCode, StoreCallError, WorkspaceStore, sha256_hex,
 };
+use super::redact::SecretEnv;
 use super::turn::{TurnEnd, WorkspaceRunError, WorkspaceRunFactory};
 use crate::protocol::elitea::runtime::v1::WorkspaceClaimV1;
 
@@ -42,6 +43,8 @@ struct StoreState {
     publishes: Vec<PublishSegment>,
     lose_first_publish_ack: bool,
     upload_fails: bool,
+    env: Vec<(String, String)>,
+    env_reads: u32,
 }
 
 struct FakeStore(Mutex<StoreState>);
@@ -155,11 +158,18 @@ impl WorkspaceStore for FakeStore {
             current: BTreeMap::new(),
         })
     }
+
+    async fn env_secret(&self, _claim: &WorkspaceClaimV1) -> Result<SecretEnv, StoreCallError> {
+        let mut state = self.state();
+        state.env_reads += 1;
+        Ok(SecretEnv::new(state.env.clone()))
+    }
 }
 
 #[derive(Default)]
 struct FakeCodec {
     commits: Mutex<Vec<TurnCommit>>,
+    included: Mutex<Vec<String>>,
 }
 
 fn read_tree(root: &Path) -> BTreeMap<String, String> {
@@ -210,6 +220,7 @@ impl WorkspaceCodec for FakeCodec {
         Ok(HydratedTree {
             files: files.len() as u64,
             unpacked_bytes: 0,
+            included_excluded: self.included.lock().expect("included").clone(),
         })
     }
 
@@ -238,6 +249,9 @@ impl WorkspaceCodec for FakeCodec {
 struct FakeSandbox {
     files: Mutex<BTreeMap<String, String>>,
     destroyed: Mutex<u32>,
+    /// What the runner's run_command environment holds.
+    env: Mutex<Vec<(String, String)>>,
+    args_seen: Mutex<Vec<Value>>,
 }
 
 #[async_trait]
@@ -253,6 +267,13 @@ impl WorkspaceSandbox for FakeSandbox {
         _call_id: &str,
         args: Value,
     ) -> Result<Value, SandboxRunError> {
+        self.args_seen.lock().expect("args").push(args.clone());
+        if tool == "run_command" {
+            // A command that prints its environment.
+            let env = self.env.lock().expect("env");
+            let printed: Vec<String> = env.iter().map(|(name, value)| format!("{name}={value}")).collect();
+            return Ok(json!({"status": "ok", "stdout": printed.join("\n")}));
+        }
         if tool == "write_file" {
             self.files.lock().expect("files").insert(
                 args["path"].as_str().unwrap_or_default().to_owned(),
@@ -284,8 +305,13 @@ impl WorkspaceSandboxLauncher for FakeLauncher {
     async fn launch(
         &self,
         spec: &WorkspaceRunSpec,
+        env: &SecretEnv,
     ) -> Result<Arc<dyn WorkspaceSandbox>, SandboxRunError> {
         self.launched.lock().expect("launched").push(spec.clone());
+        *self.sandbox.env.lock().expect("env") = env
+            .pairs()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect();
         Ok(Arc::clone(&self.sandbox) as Arc<dyn WorkspaceSandbox>)
     }
 }
@@ -535,4 +561,82 @@ async fn a_cloud_ref_other_than_the_context_says_is_stale_state() {
         .expect("refused");
     assert_eq!(error.code(), "workspace_run.stale_epoch");
     assert!(harness.launcher.launched.lock().expect("l").is_empty());
+}
+
+/// Contract 6.4: with `env_secret`, the env is redeemed once, reaches the
+/// sandbox's run_command environment, is never in a tool argument, and is
+/// redacted (base64 included) from what the tool returns.
+#[tokio::test]
+async fn the_harvested_env_reaches_run_command_and_is_redacted_from_its_output() {
+    let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
+    harness.store.state().env = vec![
+        ("DATABASE_URL".to_owned(), "postgres://app:s3cret@db/app".to_owned()),
+        ("SHORT".to_owned(), "abc".to_owned()),
+    ];
+    let context = WorkspaceRuntimeContext {
+        env_secret: true,
+        ..later_turn()
+    };
+    let turn = harness
+        .factory
+        .begin(&context, claim(2), "execution-1")
+        .await
+        .expect("hydrated");
+    assert_eq!(harness.store.state().env_reads, 1);
+    assert!(
+        harness.launcher.sandbox.env.lock().expect("env").iter().any(|(name, _)| name == "DATABASE_URL"),
+        "the command environment holds the value"
+    );
+    let result = turn
+        .sandbox()
+        .call_tool("run_command", "call-1", json!({"command": "env"}))
+        .await
+        .expect("tool");
+    let text = result.to_string();
+    assert!(!text.contains("s3cret"), "{text}");
+    assert!(text.contains("[REDACTED]"));
+    assert!(text.contains("SHORT=abc"), "under 4 characters is not redacted");
+    // Base64 of a value is redacted too.
+    harness.launcher.sandbox.env.lock().expect("env").push((
+        "ENCODED".to_owned(),
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, "postgres://app:s3cret@db/app"),
+    ));
+    let encoded = turn
+        .sandbox()
+        .call_tool("run_command", "call-2", json!({"command": "env"}))
+        .await
+        .expect("tool")
+        .to_string();
+    assert!(encoded.contains("ENCODED=[REDACTED]"), "{encoded}");
+    for args in harness.launcher.sandbox.args_seen.lock().expect("args").iter() {
+        assert!(!args.to_string().contains("s3cret"), "a tool argument never carries the value");
+    }
+    turn.finish(TurnEnd::Completed).await.expect("published");
+}
+
+#[tokio::test]
+async fn without_env_secret_no_env_is_redeemed_or_injected() {
+    let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
+    harness.store.state().env = vec![("DATABASE_URL".to_owned(), "postgres://x:y@z/w".to_owned())];
+    let turn = harness
+        .factory
+        .begin(&later_turn(), claim(2), "execution-1")
+        .await
+        .expect("hydrated");
+    assert_eq!(harness.store.state().env_reads, 0);
+    assert!(harness.launcher.sandbox.env.lock().expect("env").is_empty());
+    turn.finish(TurnEnd::Failed).await.expect("ok");
+}
+
+/// An explicit include of the send is not re-scanned (contract 6.4).
+#[tokio::test]
+async fn an_explicit_include_is_not_re_scanned() {
+    let harness = harness(CLOUD_REFS, &[(".env", "AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\n")]);
+    harness.codec.included.lock().expect("included").push("./.env".to_owned());
+    let turn = harness
+        .factory
+        .begin(&later_turn(), claim(2), "execution-1")
+        .await
+        .expect("the included file is the person's choice");
+    turn.finish(TurnEnd::Failed).await.expect("ok");
 }

@@ -43,6 +43,7 @@ async fn unpack_serve_and_pack_a_workspace() {
             network: false,
             ..RunnerPolicy::default()
         },
+        env: Vec::new(),
     })
     .unwrap();
     let requests = [
@@ -109,6 +110,7 @@ async fn cloud_approvals_follow_the_project_policy() {
                     network,
                     ..RunnerPolicy::default()
                 },
+                env: Vec::new(),
             })
             .unwrap();
             let line = json!({"tool": "run_command", "call_id": "1",
@@ -122,4 +124,42 @@ async fn cloud_approvals_follow_the_project_policy() {
     assert_eq!(destructive["status"], "error", "{destructive}");
     let off = ask(false, "echo fetched").await;
     assert_eq!(off["status"], "error", "{off}");
+}
+
+/// Contract 6.4: the harvested env is in `run_command`'s environment, only
+/// there, and only when the worker sent it.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_harvested_env_reaches_run_command_only_when_sent() {
+    if !git_available() {
+        return;
+    }
+    let run = |env: Vec<(String, String)>| async move {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("a.txt"), "a\n").unwrap();
+        let mut archive = Vec::new();
+        workspace_archive::write_tree(source.path(), &mut archive, LIMITS).unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        unpack(&mut archive.as_slice(), workspace.path(), LIMITS).unwrap();
+        let session = open_session(&RunnerConfig {
+            root: workspace.path().to_path_buf(),
+            data_dir: data.path().to_path_buf(),
+            policy: RunnerPolicy { shell: true, ..RunnerPolicy::default() },
+            env,
+        })
+        .unwrap();
+        let line = json!({"tool": "run_command", "call_id": "1",
+            "args": {"command": "printenv HANDOFF_SECRET_VALUE", "sandbox": "workspace-write"}})
+        .to_string();
+        elitea_workspace_runner::handle_line(&session, &line).await
+    };
+    let with = run(elitea_workspace_runner::parse_env_line(
+        r#"{"env":{"HANDOFF_SECRET_VALUE":"s3cr3t-value"}}"#,
+    )
+    .unwrap())
+    .await;
+    assert!(with.to_string().contains("s3cr3t-value"), "{with}");
+    let without = run(Vec::new()).await;
+    assert!(!without.to_string().contains("s3cr3t-value"), "{without}");
+    assert!(elitea_workspace_runner::parse_env_line(r#"{"env":{},"x":1}"#).is_err());
 }

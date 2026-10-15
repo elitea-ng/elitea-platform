@@ -88,7 +88,8 @@ fn workspace() -> serde_json::Value {
             "max_unpacked_bytes": 5000, "unpacked_bytes": 4000, "turn_wall_seconds": 0,
             "cpu_millis": 0, "memory_bytes": 0, "disk_bytes": 0
         },
-        "network": false, "shell": true, "network_allowlist": [], "has_upstream": false
+        "network": false, "shell": true, "network_allowlist": [], "has_upstream": false,
+        "env_secret": true
     })
 }
 
@@ -113,6 +114,7 @@ async fn a_cloud_turn_carries_the_parsed_field() {
     let field = context.workspace().expect("the workspace field");
     assert_eq!(field.epoch, 2);
     assert!(!field.network);
+    assert!(field.env_secret);
     assert_eq!(
         field.expected_old_cloud.as_deref(),
         Some("1111111111111111111111111111111111111111")

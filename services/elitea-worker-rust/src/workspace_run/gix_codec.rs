@@ -140,9 +140,22 @@ impl WorkspaceCodec for StoreCodec {
             }
             written += 1;
         }
+        // Contract 6.4: the explicit includes, from the handoff snapshot's
+        // `Elitea-Included: <path>` trailers (one per path).
+        let mut included_excluded = Vec::new();
+        for (name, sha) in &expect.refs {
+            if name.starts_with(super::store::REF_HANDOFF_PREFIX) {
+                let snapshot = verified
+                    .db
+                    .commit(&oid(sha).map_err(|_| CodecError::Integrity)?)
+                    .map_err(|error| verify_error(&error))?;
+                included_excluded.extend(included_trailers(&snapshot.message));
+            }
+        }
         Ok(HydratedTree {
             files: written,
             unpacked_bytes: unpacked,
+            included_excluded,
         })
     }
 
@@ -198,6 +211,17 @@ impl WorkspaceCodec for StoreCodec {
             bytes: written.bytes,
         })
     }
+}
+
+/// The `Elitea-Included` trailer values of a commit message, as safe
+/// relative paths (`./` stripped); anything else is ignored.
+fn included_trailers(message: &str) -> Vec<String> {
+    message
+        .lines()
+        .filter_map(|line| line.strip_prefix("Elitea-Included:"))
+        .map(|value| value.trim().trim_start_matches("./").to_owned())
+        .filter(|path| safe_relative(path))
+        .collect()
 }
 
 struct TreeEntry {
@@ -486,6 +510,12 @@ mod tests {
             Err(CodecError::Integrity)
         );
         assert_eq!(fs::read_dir(&worktree).expect("dir").count(), 0);
+    }
+
+    #[test]
+    fn included_trailers_are_read_as_safe_paths() {
+        let message = "snapshot\n\nElitea-Base: x\nElitea-Included: ./.env\nElitea-Included: config/dev.key\nElitea-Included: ../escape\n";
+        assert_eq!(included_trailers(message), vec![".env", "config/dev.key"]);
     }
 
     #[test]

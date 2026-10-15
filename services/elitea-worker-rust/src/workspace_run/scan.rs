@@ -103,12 +103,18 @@ pub(crate) enum ScanError {
 }
 
 /// Scan every regular file under `root` (symlinks are not followed, `.git`
-/// is skipped). Returns every finding, in path order.
+/// is skipped, and so is every path in `skip`: the explicit includes of
+/// contract 6.2, which the person confirmed at send). Returns every
+/// finding, in path order.
 ///
 /// # Errors
 ///
 /// The tree cannot be read, or holds more than `max_files` files.
-pub(crate) fn scan_tree(root: &Path, limits: ScanLimits) -> Result<Vec<Finding>, ScanError> {
+pub(crate) fn scan_tree(
+    root: &Path,
+    limits: ScanLimits,
+    skip: &std::collections::BTreeSet<PathBuf>,
+) -> Result<Vec<Finding>, ScanError> {
     let mut findings = Vec::new();
     let mut files: u64 = 0;
     let mut stack = vec![root.to_path_buf()];
@@ -133,6 +139,10 @@ pub(crate) fn scan_tree(root: &Path, limits: ScanLimits) -> Result<Vec<Finding>,
             files += 1;
             if files > limits.max_files {
                 return Err(ScanError::TooManyFiles);
+            }
+            let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            if skip.contains(&relative) {
+                continue;
             }
             let size = entry.metadata().map_err(|_| ScanError::Io)?.len();
             if size > limits.max_file_bytes {
@@ -304,9 +314,21 @@ mod tests {
                 max_file_bytes: 1 << 20,
                 max_files: 10,
             },
+            &std::collections::BTreeSet::new(),
         )
         .expect("scan");
         assert_eq!(findings.len(), 1);
+        // An explicit include of the send is not re-scanned.
+        let skipped = scan_tree(
+            root.path(),
+            ScanLimits {
+                max_file_bytes: 1 << 20,
+                max_files: 10,
+            },
+            &std::collections::BTreeSet::from([std::path::PathBuf::from("src/leak.env")]),
+        )
+        .expect("scan");
+        assert!(skipped.is_empty());
         assert_eq!(findings[0].path, std::path::Path::new("src/leak.env"));
         assert_eq!(findings[0].line, 3);
         assert!(
@@ -316,6 +338,7 @@ mod tests {
                     max_file_bytes: 1 << 20,
                     max_files: 1,
                 },
+                &std::collections::BTreeSet::new(),
             )
             .is_err()
         );

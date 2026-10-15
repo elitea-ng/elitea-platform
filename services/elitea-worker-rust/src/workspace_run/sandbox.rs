@@ -189,9 +189,13 @@ pub(crate) trait WorkspaceSandbox: Send + Sync {
 /// Starts workspace sandboxes on the deployment's backend.
 #[async_trait]
 pub(crate) trait WorkspaceSandboxLauncher: Send + Sync {
+    /// `env` is the thread's harvested env (contract 6.4), for the runner's
+    /// `run_command` environment only (`serve --env-stdin`); empty when the
+    /// thread has none. A launcher never logs, labels or annotates it.
     async fn launch(
         &self,
         spec: &WorkspaceRunSpec,
+        env: &super::redact::SecretEnv,
     ) -> Result<Arc<dyn WorkspaceSandbox>, SandboxRunError>;
 }
 

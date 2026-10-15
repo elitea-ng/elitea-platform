@@ -223,11 +223,39 @@ type Store interface {
 	// PullRequestSource reads the trees for a pull-request diff
 	// (RefusalNoUpstream without refs/elitea/upstream).
 	PullRequestSource(ctx context.Context, claim ClaimRef) (PullRequestSource, error)
+	// EnvSecret reads the thread's harvested env (ADR-0034 decision 5
+	// amendment, contract 6.4): the one per-thread vault secret the begin
+	// stored. An empty map when the thread has none. The values are never
+	// logged, audited or cached.
+	EnvSecret(ctx context.Context, claim ClaimRef) (map[string]string, error)
+}
+
+const (
+	// MaxEnvVars and MaxEnvBytes are the contract's env_limits.
+	MaxEnvVars  = 200
+	MaxEnvBytes = 64 << 10
+)
+
+// ValidEnv checks a harvested env against the contract's limits and a
+// POSIX-portable name shape.
+func ValidEnv(env map[string]string) bool {
+	if len(env) > MaxEnvVars {
+		return false
+	}
+	total := 0
+	for name, value := range env {
+		total += len(name) + len(value)
+		if !envName.MatchString(name) || strings.ContainsRune(value, 0) {
+			return false
+		}
+	}
+	return total <= MaxEnvBytes
 }
 
 var (
 	hexSHA1   = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	hexSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	envName   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,255}$`)
 	uuidText  = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 

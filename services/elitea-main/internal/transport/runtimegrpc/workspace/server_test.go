@@ -53,6 +53,7 @@ type fakeStore struct {
 	claims    []workspaceruntime.ClaimRef
 	cloud     string
 	source    workspaceruntime.PullRequestSource
+	env       map[string]string
 }
 
 func (f *fakeStore) check(claim workspaceruntime.ClaimRef) error {
@@ -142,6 +143,13 @@ func (f *fakeStore) PullRequestSource(_ context.Context, claim workspaceruntime.
 		return workspaceruntime.PullRequestSource{}, workspaceruntime.Refuse(workspaceruntime.RefusalNoUpstream)
 	}
 	return f.source, nil
+}
+
+func (f *fakeStore) EnvSecret(_ context.Context, claim workspaceruntime.ClaimRef) (map[string]string, error) {
+	if err := f.check(claim); err != nil {
+		return nil, err
+	}
+	return f.env, nil
 }
 
 type blobs map[string][]byte
@@ -459,6 +467,59 @@ func TestPullRequestDiffStreamsTheHeaderAndTheDiff(t *testing.T) {
 	store.source.CloudTree["logo.png"] = workspaceruntime.TreeFile{Mode: workspaceruntime.ModeFile, OID: content.add("\x00PNG")}
 	if frames := diffFrames(t, client); frames[0].GetRefusal().GetCode() != runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY {
 		t.Fatalf("binary: %v", frames)
+	}
+}
+
+func envFrames(t *testing.T, client runtimev1.WorkspaceStoreServiceClient, epoch uint64) []*runtimev1.WorkspaceEnvSecretFrameV1 {
+	t.Helper()
+	stream, err := client.WorkspaceEnvSecret(context.Background(), &runtimev1.WorkspaceEnvSecretRequestV1{Claim: claim(epoch)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frames []*runtimev1.WorkspaceEnvSecretFrameV1
+	for {
+		frame, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return frames
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		frames = append(frames, frame)
+	}
+}
+
+func TestEnvSecretStreamsTheThreadEnvWithinTheResponseBound(t *testing.T) {
+	store := newStore()
+	store.env = map[string]string{
+		"DATABASE_URL": "postgres://app:s3cret@db/app",
+		"BIG":          strings.Repeat("v", 60_000),
+		"SMALL":        "x",
+	}
+	client := dial(t, store, verifier{})
+	frames := envFrames(t, client, 2)
+	got := map[string]string{}
+	for _, frame := range frames[:len(frames)-1] {
+		for _, entry := range frame.GetVars().GetVars() {
+			got[entry.GetName()] = entry.GetValue()
+		}
+	}
+	if frames[len(frames)-1].GetEndCount() != 3 || len(got) != 3 || got["DATABASE_URL"] != store.env["DATABASE_URL"] || got["BIG"] != store.env["BIG"] {
+		t.Fatalf("env %d frames, %v", len(frames), frames[len(frames)-1])
+	}
+	// A stale epoch gets nothing.
+	if frames := envFrames(t, client, 1); frames[0].GetRefusal().GetCode() != runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_STALE_EPOCH {
+		t.Fatalf("stale: %v", frames)
+	}
+	// No env: just the end frame.
+	store.env = nil
+	if frames := envFrames(t, client, 2); len(frames) != 1 || frames[0].GetEndCount() != 0 {
+		t.Fatalf("empty: %v", frames)
+	}
+	// Outside the limits: refused, not streamed.
+	store.env = map[string]string{"bad name": "x"}
+	if frames := envFrames(t, client, 2); frames[0].GetRejection() == nil {
+		t.Fatalf("invalid: %v", frames)
 	}
 }
 

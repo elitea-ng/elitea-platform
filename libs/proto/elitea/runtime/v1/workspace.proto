@@ -220,9 +220,46 @@ message WorkspacePullRequestDiffFrameV1 {
   reserved 5 to 15;
 }
 
+message WorkspaceEnvSecretRequestV1 {
+  WorkspaceClaimV1 claim = 1;
+  reserved 2 to 15;
+}
+
+// One harvested environment variable (ADR-0034 decision 5 amendment). The
+// worker keeps the value in memory only, injects it into the run_command
+// environment of the sandbox and nothing else, and redacts it from every
+// tool result, transcript and trace frame.
+message WorkspaceEnvVarV1 {
+  string name = 1;
+  string value = 2;
+  reserved 3 to 15;
+}
+
+// The env stream: frames of variables (each frame under the control
+// listener's 80 KiB response bound), then one end frame with the count. A
+// refusal or rejection is the only frame of a refused stream. A thread with
+// no stored env answers an end frame with count 0.
+message WorkspaceEnvSecretFrameV1 {
+  oneof frame {
+    WorkspaceEnvVarsV1 vars = 1;
+    uint32 end_count = 2;
+    WorkspaceRefusalV1 refusal = 3;
+    RuntimeErrorV1 rejection = 4;
+  }
+  reserved 5 to 15;
+}
+
+message WorkspaceEnvVarsV1 {
+  repeated WorkspaceEnvVarV1 vars = 1;
+  reserved 2 to 15;
+}
+
 service WorkspaceStoreService {
   rpc WorkspaceFetchPlan(WorkspaceFetchPlanRequestV1) returns (stream WorkspaceFetchFrameV1);
   rpc WorkspaceUpload(stream WorkspaceUploadFrameV1) returns (WorkspaceUploadResponseV1);
   rpc WorkspacePublish(WorkspacePublishRequestV1) returns (WorkspacePublishResponseV1);
   rpc WorkspacePullRequestDiff(WorkspacePullRequestDiffRequestV1) returns (stream WorkspacePullRequestDiffFrameV1);
+  // The thread's harvested env, as a claim-bound runtime secret: only when the
+  // runtime context's `workspace.env_secret` is true.
+  rpc WorkspaceEnvSecret(WorkspaceEnvSecretRequestV1) returns (stream WorkspaceEnvSecretFrameV1);
 }

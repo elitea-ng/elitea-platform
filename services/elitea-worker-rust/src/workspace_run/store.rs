@@ -21,12 +21,14 @@ use crate::protocol::elitea::runtime::v1::{
     WorkspaceFetchPlanRequestV1, WorkspacePublishRequestV1, WorkspacePublishResponseV1,
     WorkspacePullRequestDiffFrameV1, WorkspacePullRequestDiffRequestV1, WorkspaceRefUpdateV1,
     WorkspaceRefV1, WorkspaceRefusalCodeV1, WorkspaceRefusalV1, WorkspaceUploadFrameV1,
-    WorkspaceUploadHeaderV1, WorkspaceUploadResponseV1, workspace_fetch_frame_v1,
+    WorkspaceUploadHeaderV1, WorkspaceUploadResponseV1, WorkspaceEnvSecretFrameV1,
+    WorkspaceEnvSecretRequestV1, workspace_env_secret_frame_v1, workspace_fetch_frame_v1,
     workspace_pull_request_diff_frame_v1, workspace_store_service_client::WorkspaceStoreServiceClient,
     workspace_upload_frame_v1,
 };
 
 use super::context::sha1_hex;
+use super::redact::SecretEnv;
 
 /// Bytes per stream frame, both directions: under the control listener's
 /// 64 KiB request and 80 KiB response bounds.
@@ -211,6 +213,67 @@ pub(crate) trait WorkspaceStore: Send + Sync {
         &self,
         claim: &WorkspaceClaimV1,
     ) -> Result<PullRequestDiff, StoreCallError>;
+
+    /// The thread's harvested env (contract 6.4); empty when it has none.
+    async fn env_secret(&self, claim: &WorkspaceClaimV1) -> Result<SecretEnv, StoreCallError>;
+}
+
+/// The contract's env limits.
+pub(crate) const MAX_ENV_VARS: usize = 200;
+pub(crate) const MAX_ENV_BYTES: usize = 64 * 1_024;
+
+/// Read an env stream: frames of variables, then the end count.
+///
+/// # Errors
+///
+/// A refusal or rejection, a malformed name, or the limits exceeded.
+pub(crate) fn read_env_frames(
+    frames: impl IntoIterator<Item = WorkspaceEnvSecretFrameV1>,
+) -> Result<SecretEnv, StoreCallError> {
+    use workspace_env_secret_frame_v1::Frame;
+    let mut vars: Vec<(String, String)> = Vec::new();
+    let mut bytes = 0_usize;
+    let mut frames = frames.into_iter();
+    for frame in frames.by_ref() {
+        match frame.frame {
+            Some(Frame::Vars(batch)) => {
+                for entry in batch.vars {
+                    bytes += entry.name.len() + entry.value.len();
+                    let valid_name = entry
+                        .name
+                        .bytes()
+                        .next()
+                        .is_some_and(|first| first.is_ascii_alphabetic() || first == b'_')
+                        && entry
+                            .name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+                    if !valid_name
+                        || entry.value.contains('\0')
+                        || vars.iter().any(|(name, _)| *name == entry.name)
+                    {
+                        return Err(StoreCallError::Malformed("an env variable is malformed"));
+                    }
+                    vars.push((entry.name, entry.value));
+                    if vars.len() > MAX_ENV_VARS || bytes > MAX_ENV_BYTES {
+                        return Err(StoreCallError::Malformed("the env is over its limits"));
+                    }
+                }
+            }
+            Some(Frame::EndCount(count)) => {
+                if count as usize != vars.len() || frames.next().is_some() {
+                    return Err(StoreCallError::Malformed("the env stream does not match its count"));
+                }
+                return Ok(SecretEnv::new(vars));
+            }
+            Some(Frame::Refusal(refusal)) if vars.is_empty() => return Err(refused(&refusal)),
+            Some(Frame::Rejection(rejection)) if vars.is_empty() => {
+                return Err(rejected(&rejection));
+            }
+            _ => return Err(StoreCallError::Malformed("the env stream is malformed")),
+        }
+    }
+    Err(StoreCallError::Malformed("the env stream ended early"))
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
@@ -623,6 +686,31 @@ impl WorkspaceStore for GrpcWorkspaceStore {
             .await
             .map_err(|_| StoreCallError::Transport { retryable: true })?
     }
+
+    async fn env_secret(&self, claim: &WorkspaceClaimV1) -> Result<SecretEnv, StoreCallError> {
+        let mut client = self.client.clone();
+        let request = WorkspaceEnvSecretRequestV1 {
+            claim: Some(claim.clone()),
+        };
+        let operation = async move {
+            let mut stream = client
+                .workspace_env_secret(request)
+                .await
+                .map_err(|status| status_error(&status))?
+                .into_inner();
+            let mut frames = Vec::new();
+            while let Some(frame) = stream.next().await {
+                frames.push(frame.map_err(|status| status_error(&status))?);
+                if frames.len() > MAX_ENV_VARS + 2 {
+                    return Err(StoreCallError::Malformed("the env stream is too long"));
+                }
+            }
+            read_env_frames(frames)
+        };
+        timeout(self.deadline, operation)
+            .await
+            .map_err(|_| StoreCallError::Transport { retryable: true })?
+    }
 }
 
 #[cfg(test)]
@@ -751,6 +839,34 @@ mod tests {
             ..Default::default()
         };
         assert!(read_publish(&wrong, &request).is_err());
+    }
+
+    #[test]
+    fn an_env_stream_is_read_strictly() {
+        use crate::protocol::elitea::runtime::v1::{WorkspaceEnvVarV1, WorkspaceEnvVarsV1};
+        use workspace_env_secret_frame_v1::Frame;
+        let vars = |pairs: &[(&str, &str)]| WorkspaceEnvSecretFrameV1 {
+            frame: Some(Frame::Vars(WorkspaceEnvVarsV1 {
+                vars: pairs
+                    .iter()
+                    .map(|(name, value)| WorkspaceEnvVarV1 {
+                        name: (*name).to_owned(),
+                        value: (*value).to_owned(),
+                    })
+                    .collect(),
+            })),
+        };
+        let end = |count| WorkspaceEnvSecretFrameV1 {
+            frame: Some(Frame::EndCount(count)),
+        };
+        let env = read_env_frames([vars(&[("A_B", "value-1")]), vars(&[("C", "x")]), end(2)])
+            .expect("env");
+        assert_eq!(env.len(), 2);
+        assert!(read_env_frames([end(0)]).expect("none").is_empty());
+        assert!(read_env_frames([vars(&[("A", "1")]), end(2)]).is_err());
+        assert!(read_env_frames([vars(&[("bad name", "1")]), end(1)]).is_err());
+        assert!(read_env_frames([vars(&[("A", "1"), ("A", "2")]), end(2)]).is_err());
+        assert!(read_env_frames([vars(&[("A", "1")])]).is_err());
     }
 
     #[test]

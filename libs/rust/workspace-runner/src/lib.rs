@@ -69,6 +69,26 @@ pub struct RunnerConfig {
     /// workspace.
     pub data_dir: PathBuf,
     pub policy: RunnerPolicy,
+    /// The thread's harvested env (contract 6.4), for `run_command` only.
+    /// Read from the first stdin line, never from the process environment
+    /// or the arguments.
+    pub env: Vec<(String, String)>,
+}
+
+/// The `serve --env-stdin` handshake: the first line is `{"env":{...}}`.
+///
+/// # Errors
+///
+/// The line is not that object.
+pub fn parse_env_line(line: &str) -> Result<Vec<(String, String)>, String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Handshake {
+        env: std::collections::BTreeMap<String, String>,
+    }
+    serde_json::from_str::<Handshake>(line)
+        .map(|handshake| handshake.env.into_iter().collect())
+        .map_err(|_| "runner.bad_env_handshake".to_owned())
 }
 
 /// The approval channel of a cloud run.
@@ -130,6 +150,8 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
     let prompt = Arc::new(CloudPrompt::default());
     let mut shell = ShellConfig::new(config.data_dir.join("tmp"));
     shell.sandbox.container = true;
+    shell.sandbox.container_env =
+        elitea_local_tools::sandbox::ContainerEnv::new(config.env.clone());
     let session = LocalSession::open(SessionConfig {
         root: config.root.clone(),
         session_id: "cloud".to_owned(),

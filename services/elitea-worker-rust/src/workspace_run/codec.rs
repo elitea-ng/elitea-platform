@@ -32,6 +32,10 @@ pub(crate) struct SegmentExpectation {
 pub(crate) struct HydratedTree {
     pub(crate) files: u64,
     pub(crate) unpacked_bytes: u64,
+    /// The paths the person explicitly included although an exclusion
+    /// matched them (contract 6.2), from the handoff snapshot commit's
+    /// `Elitea-Included` trailers. The hydrate re-scan skips them.
+    pub(crate) included_excluded: Vec<String>,
 }
 
 /// The author and trailers of the turn's commit (decision 9).

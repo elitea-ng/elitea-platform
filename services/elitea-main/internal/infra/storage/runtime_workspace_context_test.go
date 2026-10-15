@@ -107,7 +107,7 @@ func TestRuntimeContextServesTheWorkspaceFieldToAWorkerThatAsks(t *testing.T) {
 
 	var field map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(keys["workspace"], &field))
-	require.ElementsMatch(t, []string{"thread", "epoch", "expected_old_cloud", "limits", "network", "shell", "network_allowlist", "has_upstream"}, mapKeys(field))
+	require.ElementsMatch(t, []string{"thread", "epoch", "expected_old_cloud", "limits", "network", "shell", "network_allowlist", "has_upstream", "env_secret"}, mapKeys(field))
 	var decoded workspaceruntime.RuntimeContext
 	require.NoError(t, json.Unmarshal(keys["workspace"], &decoded))
 	require.Equal(t, uint64(2), decoded.Epoch)

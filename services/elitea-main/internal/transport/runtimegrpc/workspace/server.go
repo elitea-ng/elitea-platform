@@ -19,6 +19,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -364,6 +365,63 @@ func (s *Server) WorkspacePullRequestDiff(request *runtimev1.WorkspacePullReques
 		}
 	}
 	return nil
+}
+
+// maxEnvFrameBytes keeps one env frame under the control listener's 80 KiB
+// response bound; a single variable is at most MaxEnvBytes (64 KiB).
+const maxEnvFrameBytes = 70 << 10
+
+// WorkspaceEnvSecret streams the thread's harvested env (contract 6.4). It
+// is the only path the values take to the worker; they are never logged.
+func (s *Server) WorkspaceEnvSecret(request *runtimev1.WorkspaceEnvSecretRequestV1, stream runtimev1.WorkspaceStoreService_WorkspaceEnvSecretServer) error {
+	ctx := stream.Context()
+	if request == nil {
+		return stream.Send(&runtimev1.WorkspaceEnvSecretFrameV1{Frame: &runtimev1.WorkspaceEnvSecretFrameV1_Rejection{Rejection: malformed()}})
+	}
+	claim, reject := s.authorize(ctx, request.GetClaim())
+	if reject != nil {
+		return stream.Send(&runtimev1.WorkspaceEnvSecretFrameV1{Frame: &runtimev1.WorkspaceEnvSecretFrameV1_Rejection{Rejection: reject}})
+	}
+	env, err := s.store.EnvSecret(ctx, claim)
+	if err != nil {
+		if refusal, ok := refusalProto(err); ok {
+			return stream.Send(&runtimev1.WorkspaceEnvSecretFrameV1{Frame: &runtimev1.WorkspaceEnvSecretFrameV1_Refusal{Refusal: refusal}})
+		}
+		return stream.Send(&runtimev1.WorkspaceEnvSecretFrameV1{Frame: &runtimev1.WorkspaceEnvSecretFrameV1_Rejection{Rejection: s.storeRejection(ctx, "env_secret", err)}})
+	}
+	if !workspaceruntime.ValidEnv(env) {
+		s.logger.ErrorContext(ctx, "the stored workspace env is outside the contract limits", "execution_id", claim.ExecutionID)
+		return stream.Send(&runtimev1.WorkspaceEnvSecretFrameV1{Frame: &runtimev1.WorkspaceEnvSecretFrameV1_Rejection{Rejection: rejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The workspace env is unavailable.", false)}})
+	}
+	names := make([]string, 0, len(env))
+	for name := range env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	frame := &runtimev1.WorkspaceEnvVarsV1{}
+	size := 0
+	flush := func() error {
+		if len(frame.Vars) == 0 {
+			return nil
+		}
+		err := stream.Send(&runtimev1.WorkspaceEnvSecretFrameV1{Frame: &runtimev1.WorkspaceEnvSecretFrameV1_Vars{Vars: frame}})
+		frame, size = &runtimev1.WorkspaceEnvVarsV1{}, 0
+		return err
+	}
+	for _, name := range names {
+		entry := len(name) + len(env[name]) + 16
+		if size+entry > maxEnvFrameBytes {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		frame.Vars = append(frame.Vars, &runtimev1.WorkspaceEnvVarV1{Name: name, Value: env[name]})
+		size += entry
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	return stream.Send(&runtimev1.WorkspaceEnvSecretFrameV1{Frame: &runtimev1.WorkspaceEnvSecretFrameV1_EndCount{EndCount: uint32(len(names))}})
 }
 
 func (s *Server) storeRejection(ctx context.Context, stage string, err error) *runtimev1.RuntimeErrorV1 {

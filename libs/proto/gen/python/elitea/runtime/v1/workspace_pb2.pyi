@@ -229,3 +229,35 @@ class WorkspacePullRequestDiffFrameV1(_message.Message):
     refusal: WorkspaceRefusalV1
     rejection: _errors_pb2.RuntimeErrorV1
     def __init__(self, header: _Optional[_Union[WorkspacePullRequestDiffHeaderV1, _Mapping]] = ..., chunk: _Optional[bytes] = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class WorkspaceEnvSecretRequestV1(_message.Message):
+    __slots__ = ("claim",)
+    CLAIM_FIELD_NUMBER: _ClassVar[int]
+    claim: WorkspaceClaimV1
+    def __init__(self, claim: _Optional[_Union[WorkspaceClaimV1, _Mapping]] = ...) -> None: ...
+
+class WorkspaceEnvVarV1(_message.Message):
+    __slots__ = ("name", "value")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    value: str
+    def __init__(self, name: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
+class WorkspaceEnvSecretFrameV1(_message.Message):
+    __slots__ = ("vars", "end_count", "refusal", "rejection")
+    VARS_FIELD_NUMBER: _ClassVar[int]
+    END_COUNT_FIELD_NUMBER: _ClassVar[int]
+    REFUSAL_FIELD_NUMBER: _ClassVar[int]
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    vars: WorkspaceEnvVarsV1
+    end_count: int
+    refusal: WorkspaceRefusalV1
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, vars: _Optional[_Union[WorkspaceEnvVarsV1, _Mapping]] = ..., end_count: _Optional[int] = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class WorkspaceEnvVarsV1(_message.Message):
+    __slots__ = ("vars",)
+    VARS_FIELD_NUMBER: _ClassVar[int]
+    vars: _containers.RepeatedCompositeFieldContainer[WorkspaceEnvVarV1]
+    def __init__(self, vars: _Optional[_Iterable[_Union[WorkspaceEnvVarV1, _Mapping]]] = ...) -> None: ...
