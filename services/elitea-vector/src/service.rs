@@ -26,7 +26,7 @@ use qdrant_client::qdrant::{
 use tokio_stream::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::auth::{Authenticator, Caller, MemoryBinding, MemoryIntent};
+use crate::auth::{Authenticator, Caller, MemoryBinding, MemoryIntent, SHARED_INDEX_WRITE_REFUSED};
 use crate::fanout::fan_out;
 use crate::layout::{self, BM25_MODEL, BM25_VECTOR, DENSE_VECTOR, Space, key};
 use crate::pb;
@@ -133,12 +133,22 @@ impl VectorService {
         let Some((source, memory_scope, toolkit_id)) = source_scope_toolkit else {
             return Ok(caller);
         };
-        if source != pb::Source::Memory as i32 || !matches!(caller, Caller::Token(_)) {
-            return Ok(caller);
-        }
-        let intent = MemoryIntent::of(memory_scope, write);
+        let intent = MemoryIntent::for_request(&caller, source, memory_scope, write);
         if intent == MemoryIntent::None {
             return Ok(caller);
+        }
+        if intent == MemoryIntent::SharedIndexWrite {
+            // A toolkit-index write by a worker claim: shared by the project,
+            // so refused in a conversation where personal memory was read.
+            let token =
+                token.ok_or_else(|| Status::unauthenticated("a project token is required"))?;
+            let fresh = self.auth.fresh_token(token, intent).await?;
+            if let Caller::Token(grant) = &fresh
+                && grant.project_memory_write_refused
+            {
+                return Err(Status::permission_denied(SHARED_INDEX_WRITE_REFUSED));
+            }
+            return Ok(fresh);
         }
         // Everything the cached grant can refuse is refused BEFORE elitea-main
         // is asked afresh: a personal-read introspection records the read, and
@@ -163,10 +173,14 @@ impl VectorService {
         namespace: &pb::Namespace,
         project_id: i64,
         binding: Option<&MemoryBinding>,
+        decide_afresh: bool,
     ) -> Result<(), Status> {
+        // The cached verification runs before every batch (cheap: the claim
+        // cache), so a revoked token ends the stream within the claim cache
+        // lifetime. The fresh memory / shared-write decision only when asked.
         let current = self.auth.verify_token(token).await?;
-        let current = self
-            .memory_caller(
+        let current = if decide_afresh {
+            self.memory_caller(
                 Some(token),
                 current,
                 Some((
@@ -176,7 +190,20 @@ impl VectorService {
                 )),
                 true,
             )
-            .await?;
+            .await?
+        } else {
+            current
+        };
+        if !decide_afresh {
+            // Between fresh decisions the header's binding stands; only the
+            // project and the source are re-checked from the cached grant.
+            if current.project(0)? != project_id {
+                return Err(Status::permission_denied(
+                    "the token's project changed during the stream",
+                ));
+            }
+            return current.require_source(namespace.source);
+        }
         if current.project(0)? != project_id {
             return Err(Status::permission_denied(
                 "the token's project changed during the stream",
@@ -289,14 +316,30 @@ impl pb::vector_service_server::VectorService for VectorService {
         }
         let collection = self.store.ensure(&space).await?;
         let mut upserted: u64 = 0;
+        // The header was decided afresh just above. Before every batch the
+        // token is re-verified through the claim cache (a revocation ends the
+        // stream within the cache lifetime); the fresh memory / shared-write
+        // decision is made again at most every UPSERT_REVERIFY_INTERVAL, so a
+        // conversation made shared or tainted mid-stream is seen within it.
+        let mut decided_at = std::time::Instant::now();
         while let Some(message) = stream.next().await {
             let Some(pb::upsert_request::Message::Batch(batch)) = message?.message else {
                 return Err(Status::invalid_argument(
                     "only the first Upsert message is a header",
                 ));
             };
-            self.reverify_upsert(&token, namespace, project_id, binding.as_ref())
-                .await?;
+            let decide_afresh = decided_at.elapsed() >= UPSERT_REVERIFY_INTERVAL;
+            self.reverify_upsert(
+                &token,
+                namespace,
+                project_id,
+                binding.as_ref(),
+                decide_afresh,
+            )
+            .await?;
+            if decide_afresh {
+                decided_at = std::time::Instant::now();
+            }
             if batch.points.len() > MAX_BATCH_POINTS {
                 return Err(Status::invalid_argument("at most 512 points per batch"));
             }
@@ -1054,6 +1097,12 @@ impl pb::vector_service_server::VectorService for VectorService {
         }))
     }
 }
+
+/// How often a long Upsert stream makes its fresh memory / shared-write
+/// decision again after the header's: a conversation made shared or tainted
+/// mid-stream is seen within this interval. (A revoked token is seen at the
+/// next batch through the claim cache.)
+pub const UPSERT_REVERIFY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Points read per Qdrant scroll call by `ReadMemory`.
 const MEMORY_SCROLL_PAGE: u32 = 512;

@@ -47,6 +47,9 @@ const TOKEN_ALICE: &str = "token-alice";
 const TOKEN_COUNTED: &str = "token-counted";
 const TOKEN_RUN_ONE: &str = "token-run-one";
 const TOKEN_RUN_TWO: &str = "token-run-two";
+/// A later turn (another execution, another token) of `TOKEN_RUN_ONE`'s
+/// conversation.
+const TOKEN_TURN_TWO: &str = "token-turn-two";
 /// A memory-source claim that was given only `TOOLKIT_OTHER`.
 const TOKEN_OTHER_TOOLKIT_ONLY: &str = "token-other-toolkit-only";
 const TOKEN_BOB: &str = "token-bob";
@@ -126,9 +129,18 @@ fn pki() -> Pki {
 
 struct Tokens {
     grants: HashMap<String, TokenGrant>,
-    /// The tokens (runs) that have read personal memory, as elitea-main
-    /// records it at a personal-read introspection.
+    /// The conversations in which personal memory has been read, as
+    /// elitea-main records it at a personal-read introspection (the taint).
     read_personal: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+/// The conversation a token's run is bound to: tokens of later turns of one
+/// conversation share it; every other token is its own conversation.
+fn conversation_of(token: &str) -> &str {
+    match token {
+        TOKEN_TURN_TWO => TOKEN_RUN_ONE,
+        other => other,
+    }
 }
 
 /// Introspections of [`TOKEN_COUNTED`]: from the cache-fronted path, and asked
@@ -166,10 +178,11 @@ impl Introspector for Tokens {
             grant.personal_memory_allowed = false;
         }
         let mut read = self.read_personal.lock().expect("lock");
+        let conversation = conversation_of(token).to_owned();
         if intent == MemoryIntent::PersonalRead && grant.personal_memory_allowed {
-            read.insert(token.to_owned());
+            read.insert(conversation.clone());
         }
-        if intent == MemoryIntent::ProjectWrite && read.contains(token) {
+        if intent.is_shared_write() && read.contains(&conversation) {
             grant.project_memory_write_refused = true;
         }
         Ok(Some(grant))
@@ -263,6 +276,10 @@ fn oracle_with_clock(clock: Arc<dyn Fn() -> i64 + Send + Sync>) -> Arc<dyn Intro
         ),
         (
             TOKEN_RUN_TWO.to_owned(),
+            memory_grant(PROJECT_A, "user:14", true, now + 3600),
+        ),
+        (
+            TOKEN_TURN_TWO.to_owned(),
             memory_grant(PROJECT_A, "user:14", true, now + 3600),
         ),
         (
@@ -4035,7 +4052,8 @@ async fn the_memory_tools_temporal_filters_work_on_the_real_store() {
 // ── review 3: cross-scope rule, caching, ordering ───────────────────────────
 
 #[tokio::test]
-async fn a_run_that_read_personal_memory_cannot_write_project_memory() {
+#[allow(clippy::too_many_lines)] // one conversation's whole story, in order
+async fn a_conversation_that_read_personal_memory_cannot_write_shared_data() {
     let _ = require_qdrant!();
     let mut h = harness().await.expect("harness");
     // One key per write, so every admitted write leaves its own point.
@@ -4118,10 +4136,71 @@ async fn a_run_that_read_personal_memory_cannot_write_project_memory() {
     // The shared memory was not changed by the refused writes.
     assert_eq!(h.truth_memory(PROJECT_A, Some("project")).await, 2);
 
-    // A separate run of the same user is unaffected.
+    // Turn 2 of the SAME conversation (a new execution, a new token) is
+    // refused too: the taint is the conversation's. Its toolkit-index writes
+    // (a shared index) are refused as well.
+    refused(
+        h.memory_upsert(TOKEN_TURN_TWO, PROJECT, NAMESPACE_M, point("turn two"))
+            .await
+            .expect_err("a later turn of a tainted conversation"),
+    );
+    let index_refused = |status: tonic::Status| {
+        assert_eq!(status.code(), Code::PermissionDenied);
+        assert!(
+            status
+                .message()
+                .starts_with("memory.shared_write_after_personal_read"),
+            "{}",
+            status.message()
+        );
+    };
+    index_refused(
+        h.upsert(
+            TOKEN_TURN_TWO,
+            0,
+            Harness::namespace(NAMESPACE_A),
+            vec![Harness::point(
+                "leak",
+                "personal text",
+                [1.0, 0.0, 0.0, 0.0],
+            )],
+        )
+        .await
+        .expect_err("an index upsert in a tainted conversation"),
+    );
+    index_refused(
+        h.worker
+            .delete(with_token(
+                TOKEN_TURN_TWO,
+                pb::DeleteRequest {
+                    project_id: 0,
+                    space: None,
+                    namespace: Some(Harness::namespace(NAMESPACE_A)),
+                    selector: Some(pb::delete_request::Selector::WholeNamespace(
+                        pb::WholeNamespace {},
+                    )),
+                },
+            ))
+            .await
+            .expect_err("an index delete in a tainted conversation"),
+    );
+    // Reading an index is still allowed.
+    h.search(TOKEN_TURN_TWO, Harness::scope(&[NAMESPACE_A]), None)
+        .await
+        .expect("an index read in a tainted conversation");
+
+    // Another conversation of the same user is unaffected, index writes too.
     h.memory_upsert(TOKEN_RUN_TWO, PROJECT, NAMESPACE_M, point("other run"))
         .await
-        .expect("another run's project write");
+        .expect("another conversation's project write");
+    h.upsert(
+        TOKEN_RUN_TWO,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![Harness::point("d", "t", [1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("another conversation's index write");
 }
 
 #[tokio::test]
@@ -4153,10 +4232,13 @@ async fn only_memory_scope_personal_and_project_writes_ask_main_afresh() {
             .await
             .expect("index search");
     }
+    // The index upsert of a worker claim is a shared write: decided afresh
+    // once, at the stream's header (a tainted conversation cannot write a
+    // shared index); its batch and the searches use the claim cache.
     assert_eq!(
         COUNTED_FRESH.load(SeqCst),
-        0,
-        "the index path never asks afresh"
+        1,
+        "only the index write's header asks afresh"
     );
     assert_eq!(COUNTED_PLAIN.load(SeqCst), 1, "one cached introspection");
 
@@ -4167,7 +4249,11 @@ async fn only_memory_scope_personal_and_project_writes_ask_main_afresh() {
     h.memory_search(TOKEN_COUNTED, PROJECT, NAMESPACE_M)
         .await
         .expect("project search");
-    assert_eq!(COUNTED_FRESH.load(SeqCst), 0);
+    assert_eq!(
+        COUNTED_FRESH.load(SeqCst),
+        1,
+        "project reads keep the cache"
+    );
     assert_eq!(COUNTED_PLAIN.load(SeqCst), 1);
 
     // A personal-scope request and a project write ask afresh, each time.
@@ -4182,8 +4268,16 @@ async fn only_memory_scope_personal_and_project_writes_ask_main_afresh() {
     )
     .await
     .expect("personal write");
-    // The read asked once; the upsert stream asks at its header and again
-    // before its one batch (a write is decided at the moment it is written).
+    // The read asked once; the upsert stream asks at its header, and its one
+    // batch (within UPSERT_REVERIFY_INTERVAL) uses the header's decision.
+    assert_eq!(COUNTED_FRESH.load(SeqCst), 3);
+    // A burst of personal reads in one turn reuses the first answer
+    // (PERSONAL_READ_REUSE_SECONDS; the cache clock is frozen here).
+    for _ in 0..3 {
+        h.memory_read(TOKEN_COUNTED, PERSONAL, NAMESPACE_M, None)
+            .await
+            .expect("personal read");
+    }
     assert_eq!(COUNTED_FRESH.load(SeqCst), 3);
     // (The project write is refused at its header: this token read personal
     // memory above, so its batch is never reached.)

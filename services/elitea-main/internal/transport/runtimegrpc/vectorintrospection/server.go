@@ -99,6 +99,8 @@ func memoryIntent(intent vectorv1.MemoryIntent) repos.MemoryIntent {
 		return repos.MemoryIntentPersonalWrite
 	case vectorv1.MemoryIntent_MEMORY_INTENT_PROJECT_WRITE:
 		return repos.MemoryIntentProjectWrite
+	case vectorv1.MemoryIntent_MEMORY_INTENT_SHARED_INDEX_WRITE:
+		return repos.MemoryIntentSharedIndexWrite
 	}
 	return repos.MemoryIntentNone
 }

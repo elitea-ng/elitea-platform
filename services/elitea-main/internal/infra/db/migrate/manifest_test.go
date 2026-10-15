@@ -700,8 +700,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	//
 	// 166: shared/0166_vector_claim_tokens_memory_source.sql, the check on
 	// elitea_runtime.vector_claim_tokens.allowed_sources admits the `memory`
-	// source; a personal_memory_read flag and the claim's memory_toolkit_ids
-	// per claim token are added (worker unit M9). No data, no permission.
+	// source; execution_jobs and vector_claim_tokens get memory_toolkit_ids,
+	// and elitea_runtime.memory_conversation_taints is created (worker unit
+	// M9). No data, no permission.
 	require.EqualValues(t, 166, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)

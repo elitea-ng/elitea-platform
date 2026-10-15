@@ -117,7 +117,8 @@ const memoryScopeDescription = "Who can see what this toolkit remembers. " +
 	"Personal: each person has their own private memory, and nobody else can read, search or delete it (the safe default). " +
 	"Project: one memory shared by everyone in the project. " +
 	"To give an agent both, attach two memory toolkits, one of each. " +
-	"A run that has read personal memory cannot write project memory. " +
+	"Once personal memory has been read in a conversation, that conversation can no longer write project memory or a shared index. " +
+	"Other tools attached to the agent that can send data out (for example GitHub, Slack or email) are not limited this way, so attach personal memory only to agents whose other tools you trust with what you have told it. " +
 	"A scheduled run acts as the person who owns the schedule and uses that person's personal memory. " +
 	"A conversation with more than one person has no personal memory; project memory still works there."
 

@@ -214,6 +214,9 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 		IdempotencyKey:      admission.Record.IdempotencyKey,
 		State:               string(admission.Record.Job.State),
 		AdmittedAt:          timestamp(timing.AdmittedAt),
+		// The resolved toolkit (type and id from the project's elitea_tools
+		// row, never from the call's arguments) when it is a memory toolkit.
+		MemoryToolkitIds: callToolMemoryToolkits(admission.Binding),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A concurrent admission won the unique idempotency index. Its outcome
@@ -353,3 +356,12 @@ func boundedToolRunAdmissionStrings(admission toolkitcalltoolapp.Admission) bool
 }
 
 var _ toolkitcalltoolapp.AtomicAdmissionStore = (*ToolkitCallToolJobsRepository)(nil)
+
+// callToolMemoryToolkits is the memory toolkit a direct tool call was given:
+// the resolved toolkit itself when its type is `memory`, else none.
+func callToolMemoryToolkits(binding executiondomain.ToolkitCallToolBinding) []int64 {
+	if binding.ToolkitType == "memory" && binding.ToolkitID > 0 {
+		return []int64{binding.ToolkitID}
+	}
+	return []int64{}
+}

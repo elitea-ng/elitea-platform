@@ -86,57 +86,72 @@ enforces it:
   actor must be a positive user id), and scheduled runs act as their owner and
   use the owner's personal memory; a run that has no token has no vector access,
   so no memory at all.
-* **Personal memory is re-checked on every personal-scope call (round 3).**
-  elitea-vector tells Main what a memory request is about to do
+* **Personal memory is decided at each personal-scope call (rounds 3-4).**
+  elitea-vector tells Main what a request is about to do
   (`IntrospectTokenRequest.memory_intent`: personal read, personal write,
-  project write). A personal-scope request and a project-scope WRITE are
-  introspected afresh, never from the cache; every other request (toolkit-index
-  search and upsert, a project-scope read) keeps the claim-TTL cache, so the
-  index hot path costs Main nothing extra. Main answers
-  `personal_memory_allowed` only for a personal intent, from the conversation
-  as it is now, and stores nothing at mint. It is true only if the run is a
-  person's own chat turn: an `agent_execution_jobs` row and
-  `trigger_origin = 'manual'` (an MCP `tools/call`, an API/PAT start, a
-  schedule, a webhook, a direct toolkit call and an index run are refused); the
-  conversation is bound server-side: the stream the admission wrote is compared
-  as a uuid (`conversation.uuid = $1::uuid`, a non-uuid fails closed) AND that
-  conversation holds the response message group whose `task_id` is this
-  execution (written by the admission transaction), so a caller-supplied stream
-  id naming another conversation finds no response there; the conversation is a
-  chat one (`source = 'elitea'`), private, and its only user participant is the
-  actor. Anything else, a participant added mid-run and any lookup error
-  included, answers false; a refusal is `memory.personal_shared_conversation`.
-* **A run that read personal memory cannot write project memory (owner
-  decision, round 3).** When Main allows a personal READ it records it
-  (`vector_claim_tokens.personal_memory_read`, shared/0166) before answering;
-  a project-write introspection of the same execution (any claim token row of
-  it) answers `project_memory_write_refused`, and elitea-vector refuses the
-  write with `memory.project_write_after_personal_read: this run read personal
-  memory, so it cannot write shared project memory`. The record and the check
-  take the same per-execution advisory lock, so a parallel read and write of
-  one run are decided one after the other: a write decided after the read was
-  recorded is refused, and a write decided before it was fixed before the read
-  was admitted. A personal WRITE is not a read, but `manage_memory` reads the
-  key's versions first, so in practice a personal `manage_memory` also marks
-  the run (conservative: a version read is personal content). A refused
-  personal read (shared conversation) marks nothing, and a request refused for
-  a fixed reason (a toolkit the run was not given, a bad scope) is refused
-  before Main is asked, so it marks nothing either. Another run is unaffected.
-* **The run's own toolkits only (round 3).** Main writes the claim's frozen
-  memory toolkit ids (`vector_claim_tokens.memory_toolkit_ids`) at mint and
-  returns them at introspection (`memory_toolkit_ids`); elitea-vector refuses
-  a memory request for any other toolkit id
-  (`memory.toolkit_not_in_run`). Main freezes a run's toolkits from the run's
-  own project, so this also binds the toolkit to the token's project; the
-  points carry the token's `project_id` (never a request's), the point id
-  includes it, and every read, delete and update is scoped by it.
-* **Rollout safety (round 3).** Main adds the `memory` source to a claim token
-  only when the claim's frozen toolkits include a memory toolkit, so a run
-  without one has no memory reach and an older elitea-vector is never shown a
-  source it cannot name. elitea-vector ignores a source value it cannot name
-  and keeps the ones it can (it never rejects the whole token for it). The
-  chart puts the whole vector stack in Argo CD sync-wave -5, before elitea-main
-  (wave 0).
+  project write, shared-index write). Toolkit-index reads and project-scope
+  memory reads keep the claim-TTL cache. A personal write and every shared
+  write (a project-memory write, a toolkit-index upsert or delete by a worker
+  claim) are asked afresh. An allowed personal READ answer is reused by the
+  same token for 3 seconds (`PERSONAL_READ_REUSE_SECONDS`), so a burst of
+  searches in one turn costs one call; a conversation made shared or a
+  participant added is therefore seen within 3 seconds. A long Upsert stream is
+  decided afresh at its header and then at most every 10 seconds
+  (`UPSERT_REVERIFY_INTERVAL`), so a revocation, a conversation made shared or a
+  taint is seen within 10 seconds of a stream that is already writing.
+  Main answers `personal_memory_allowed` only for a personal intent, and only
+  if the run is a person's own chat turn: an `agent_execution_jobs` row and
+  `trigger_origin = 'manual'` (start, regenerate and continue all record the
+  caller's real origin, so a PAT/API caller is `api`; an MCP `tools/call`, a
+  schedule, a webhook, a direct toolkit call and an index run are refused).
+  The conversation is bound server-side: the stream the admission wrote is
+  compared as a uuid (`conversation.uuid = $1::uuid`) AND that conversation
+  holds the response message group whose `task_id` is this execution; it is a
+  chat conversation (`source = 'elitea'`), private, and its only user
+  participant is the actor. Anything else answers false
+  (`memory.personal_shared_conversation`).
+* **A conversation that read personal memory cannot write shared data (owner
+  decision, round 4).** When Main allows a personal READ for an execution, it
+  taints the execution's conversation
+  (`elitea_runtime.memory_conversation_taints`, keyed by project and
+  conversation uuid, shared/0166) before answering. While a conversation is
+  tainted, EVERY execution bound to it (this turn, a regenerate, every later
+  turn) is refused shared writes: project-memory upserts, deletes and metadata
+  updates (`memory.project_write_after_personal_read`) and toolkit-index
+  upserts and deletes (`memory.shared_write_after_personal_read`, for every
+  claim token of the run, with or without the memory source). Reads are not
+  affected. The taint is never cleared and is deleted with the conversation
+  (and with the project). Setting and checking take one advisory lock keyed by
+  the conversation, so a parallel read and write in one conversation are
+  decided one after the other. An execution with no conversation is
+  unaffected (it cannot read personal memory). A personal WRITE is not a read,
+  but `manage_memory` reads the key's versions first, so in practice it taints
+  too (conservative). A refused personal read and a request refused for a
+  fixed reason (a toolkit the run was not given, a bad scope; checked before
+  Main is asked) taint nothing.
+* **Accepted residual risk.** The rule covers the data stores the platform
+  shares (project memory, shared indexes). Other write-capable tools the user
+  attached to the same agent (GitHub, Slack, email, an HTTP tool, ...) can still
+  carry what was read out of the conversation, for example under prompt
+  injection from a fetched page. The memory toolkit's help text in the create
+  form says so: attach personal memory only to agents whose other tools are
+  trusted with what the user tells it.
+* **The run's own toolkits only (rounds 3-4).** Main computes the run's memory
+  toolkit ids ONCE, at admission, from the server-frozen toolkit set: the
+  top-level entries of the frozen version's `tools` (an application turn) or of
+  the input's `tools` (an ad-hoc turn), which Main built from the project's own
+  toolkit rows and which the worker materializes from; for a direct toolkit
+  call, the resolved toolkit itself when it is a memory toolkit. They are stored
+  on the execution (`execution_jobs.memory_toolkit_ids`); a frozen set that
+  cannot be decoded fails the admission. Nothing a caller writes (tool
+  arguments, user input, chat history, runtime-context entries, a nested
+  settings object) contributes. The claim-token mint copies them in the same
+  statement (no bundle decoding; never NULL) and adds the `memory` source only
+  when there is one. elitea-vector refuses a memory request for any other
+  toolkit id (`memory.toolkit_not_in_run`).
+* **Rollout safety (round 3).** elitea-vector ignores a source value it cannot
+  name and keeps the ones it can. The chart puts the whole vector stack in
+  Argo CD sync-wave -5, before elitea-main (wave 0).
 * **The store is the toolkit's.** The worker names the toolkit id (from the
   run's frozen toolkit reference, not from the model); the facade stamps it as
   the `toolkit_id` payload key, includes it in the point id, and narrows every

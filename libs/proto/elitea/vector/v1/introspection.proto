@@ -41,14 +41,18 @@ enum MemoryIntent {
   // false and project_memory_write_refused is false.
   MEMORY_INTENT_UNSPECIFIED = 0;
   // A read (search, count, list, read) in the PERSONAL scope. When the
-  // personal scope is allowed, elitea-main records that this claim's run has
-  // read personal memory.
+  // personal scope is allowed, elitea-main taints the run's conversation:
+  // personal memory has been read in it.
   MEMORY_INTENT_PERSONAL_READ = 1;
   // A write (upsert, delete, metadata update) in the PERSONAL scope.
   MEMORY_INTENT_PERSONAL_WRITE = 2;
-  // A write in the PROJECT scope. Refused (project_memory_write_refused) once
-  // the run has read personal memory.
+  // A write in the PROJECT scope. Refused (project_memory_write_refused) from
+  // any execution bound to a tainted conversation.
   MEMORY_INTENT_PROJECT_WRITE = 3;
+  // A toolkit-index upsert or delete (an index is shared by the project).
+  // Refused (project_memory_write_refused) from any execution bound to a
+  // tainted conversation. Asked for every token, whatever its sources.
+  MEMORY_INTENT_SHARED_INDEX_WRITE = 4;
 }
 
 message IntrospectTokenRequest {
@@ -82,10 +86,11 @@ message IntrospectTokenResponse {
   // lookup fails. Decided by elitea-main at THIS introspection, and only when
   // memory_intent asks for a personal decision.
   bool personal_memory_allowed = 7;
-  // project_memory_write_refused is true for a MEMORY_INTENT_PROJECT_WRITE
-  // asked by a run that has already read personal memory: shared project
-  // memory must not be written from a run that saw personal memory. The
-  // default (false) is "not refused", so an older elitea-main never refuses.
+  // project_memory_write_refused is true for a MEMORY_INTENT_PROJECT_WRITE or
+  // MEMORY_INTENT_SHARED_INDEX_WRITE asked by an execution bound to a
+  // conversation in which personal memory has been read (by any turn): shared
+  // memory and shared indexes must not be written from a conversation that
+  // saw personal memory. The default (false) is "not refused".
   bool project_memory_write_refused = 8;
   // memory_toolkit_ids are the memory toolkits this worker claim's frozen
   // toolkits name, every one a toolkit of the token's project (Main freezes a

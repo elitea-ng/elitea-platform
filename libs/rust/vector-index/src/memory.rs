@@ -1038,6 +1038,14 @@ pub fn describe(error: &Error) -> String {
             Code::PermissionDenied if message.starts_with("memory.personal_shared_conversation") => {
                 "personal memory is not available in a conversation with more than one person, because what is remembered or recalled would be shown to the others. Use the project scope for shared memory, and only when asked to".to_owned()
             }
+            Code::PermissionDenied
+                if message.starts_with("memory.project_write_after_personal_read") =>
+            {
+                "this conversation read personal memory, so it cannot write shared project memory (what was read could be copied into memory everyone in the project sees). Write to personal memory instead, or start a new conversation".to_owned()
+            }
+            Code::PermissionDenied if message.starts_with("memory.toolkit_not_in_run") => {
+                "this memory toolkit was not given to this run".to_owned()
+            }
             Code::PermissionDenied | Code::FailedPrecondition => {
                 "the vector store does not allow memory for this run's project".to_owned()
             }

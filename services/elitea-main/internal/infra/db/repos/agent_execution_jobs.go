@@ -538,6 +538,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			State:               string(admission.Record.Job.State),
 			AdmittedAt:          timestamp(timing.AdmittedAt),
 			TriggerOrigin:       admission.Record.Job.TriggerOrigin.Stored(),
+			MemoryToolkitIds:    nonNilInt64s(admission.MemoryToolkitIDs),
 		},
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1397,4 +1398,13 @@ func resumeCurrentAgentStaticTools(ctx context.Context, queries *sqlcgen.Queries
 		return executionapp.ErrInvalidAdmission
 	}
 	return nil
+}
+
+// nonNilInt64s is ids, or an empty (never nil) slice: a NULL array is never
+// written.
+func nonNilInt64s(ids []int64) []int64 {
+	if ids == nil {
+		return []int64{}
+	}
+	return ids
 }

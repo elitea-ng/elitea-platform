@@ -102,9 +102,10 @@ pub struct TokenGrant {
     /// so for a worker claim of a run whose conversation has one human
     /// participant. Never true for a callback token.
     pub personal_memory_allowed: bool,
-    /// Set by elitea-main for a project-memory WRITE asked by a run that has
-    /// already read personal memory: shared memory must not be written from
-    /// such a run.
+    /// Set by elitea-main for a project-memory or shared-index WRITE asked by
+    /// an execution bound to a conversation in which personal memory was read
+    /// (by any turn): shared data must not be written from such a
+    /// conversation.
     pub project_memory_write_refused: bool,
     /// The memory toolkits a worker claim was given (every one a toolkit of
     /// the token's project, frozen by elitea-main from the run's own
@@ -113,6 +114,14 @@ pub struct TokenGrant {
     /// given. Empty for a callback token.
     pub memory_toolkit_ids: Vec<i64>,
 }
+
+/// The refusal of a project-memory write in a conversation where personal
+/// memory was read.
+pub const PROJECT_WRITE_REFUSED: &str = "memory.project_write_after_personal_read: this conversation read personal memory, so it cannot write shared project memory";
+
+/// The refusal of a toolkit-index write in a conversation where personal
+/// memory was read.
+pub const SHARED_INDEX_WRITE_REFUSED: &str = "memory.shared_write_after_personal_read: this conversation read personal memory, so it cannot write a shared index";
 
 /// What a memory request is about to do, told to elitea-main with the
 /// introspection so it decides the memory permissions at that moment.
@@ -128,10 +137,14 @@ pub enum MemoryIntent {
     PersonalWrite,
     /// A write in the project scope.
     ProjectWrite,
+    /// A toolkit-index upsert or delete by a worker claim (an index is shared
+    /// by the project): refused in a conversation where personal memory was
+    /// read.
+    SharedIndexWrite,
 }
 
 impl MemoryIntent {
-    /// The intent of an operation in `scope` (`write` or read).
+    /// The intent of a MEMORY operation in `scope` (`write` or read).
     #[must_use]
     pub fn of(memory_scope: i32, write: bool) -> Self {
         match (pb::MemoryScope::try_from(memory_scope), write) {
@@ -142,12 +155,41 @@ impl MemoryIntent {
         }
     }
 
+    /// The intent of an operation on `source` (`write` or read) by `caller`:
+    /// a memory operation by its scope, a toolkit-index write by a worker
+    /// claim (the only token that runs in a conversation) as a shared-index
+    /// write, anything else none.
+    #[must_use]
+    pub fn for_request(caller: &Caller, source: i32, memory_scope: i32, write: bool) -> Self {
+        let Caller::Token(grant) = caller else {
+            return Self::None;
+        };
+        if source == pb::Source::Memory as i32 {
+            return Self::of(memory_scope, write);
+        }
+        if write
+            && source == pb::Source::ToolkitIndex as i32
+            && grant.kind == pb::TokenKind::WorkerClaim
+        {
+            return Self::SharedIndexWrite;
+        }
+        Self::None
+    }
+
+    /// Whether the decision is a shared write (project memory or a shared
+    /// index), which a tainted conversation refuses.
+    #[must_use]
+    pub const fn is_shared_write(self) -> bool {
+        matches!(self, Self::ProjectWrite | Self::SharedIndexWrite)
+    }
+
     const fn wire(self) -> pb::MemoryIntent {
         match self {
             Self::None => pb::MemoryIntent::Unspecified,
             Self::PersonalRead => pb::MemoryIntent::PersonalRead,
             Self::PersonalWrite => pb::MemoryIntent::PersonalWrite,
             Self::ProjectWrite => pb::MemoryIntent::ProjectWrite,
+            Self::SharedIndexWrite => pb::MemoryIntent::SharedIndexWrite,
         }
     }
 }
@@ -350,9 +392,7 @@ impl Caller {
                 // Shared memory is not written from a run that has read
                 // personal memory: what it saw could be copied into it.
                 if per_moment && write && grant.project_memory_write_refused {
-                    return Err(Status::permission_denied(
-                        "memory.project_write_after_personal_read: this run read personal memory, so it cannot write shared project memory",
-                    ));
+                    return Err(Status::permission_denied(PROJECT_WRITE_REFUSED));
                 }
                 PROJECT_OWNER.to_owned()
             }
@@ -726,7 +766,15 @@ pub struct CachingIntrospector {
     policy: CachePolicy,
     clock: Clock,
     entries: Cache<[u8; 32], Arc<CacheEntry>>,
+    /// Allowed personal-read answers, reused for
+    /// [`PERSONAL_READ_REUSE_SECONDS`] (valid-until, grant).
+    personal_reads: Cache<[u8; 32], Arc<(i64, TokenGrant)>>,
 }
+
+/// How long an allowed personal-read answer is reused by the same token. A
+/// conversation made shared (or a participant added) mid-turn is seen within
+/// this window; the taint was recorded by the first answer.
+pub const PERSONAL_READ_REUSE_SECONDS: i64 = 3;
 
 impl CachingIntrospector {
     /// A cache in front of `inner`.
@@ -740,11 +788,18 @@ impl CachingIntrospector {
             // this only lets memory go once nothing could still be valid.
             .time_to_live(Duration::from_secs(u64::try_from(backstop).unwrap_or(1)))
             .build();
+        let personal_reads = Cache::builder()
+            .max_capacity(policy.max_entries as u64)
+            .time_to_live(std::time::Duration::from_secs(
+                PERSONAL_READ_REUSE_SECONDS.unsigned_abs() + 1,
+            ))
+            .build();
         Self {
             inner,
             policy,
             clock,
             entries,
+            personal_reads,
         }
     }
 
@@ -801,14 +856,43 @@ impl Introspector for CachingIntrospector {
         if intent == MemoryIntent::None {
             return self.introspect(token).await;
         }
-        // A memory decision is made at the moment of the request and never
-        // stored: not read from the cache, not written to it.
         let now = (self.clock)();
-        Ok(self
+        // A personal READ answer may be reused for PERSONAL_READ_REUSE_SECONDS
+        // by the same token: the first one already tainted the conversation
+        // and decided the participants, so a burst of searches in one turn
+        // costs elitea-main one call. A conversation made shared, or a
+        // participant added, is therefore seen within that window. Every
+        // other memory decision (a personal write, a shared write) is asked
+        // afresh each time.
+        let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+        if intent == MemoryIntent::PersonalRead
+            && let Some(hit) = self.personal_reads.get(&digest).await
+            && now < hit.0
+        {
+            return Ok(Some(hit.1.clone()).filter(|grant| now < grant.expires_at_unix));
+        }
+        let answer = self
             .inner
             .introspect_for(token, intent)
             .await?
-            .filter(|grant| now < grant.expires_at_unix))
+            .filter(|grant| now < grant.expires_at_unix);
+        if intent == MemoryIntent::PersonalRead
+            && let Some(grant) = answer
+                .as_ref()
+                .filter(|grant| grant.personal_memory_allowed)
+        {
+            self.personal_reads
+                .insert(
+                    digest,
+                    Arc::new((
+                        now.saturating_add(PERSONAL_READ_REUSE_SECONDS)
+                            .min(grant.expires_at_unix),
+                        grant.clone(),
+                    )),
+                )
+                .await;
+        }
+        Ok(answer)
     }
 
     async fn introspect(&self, token: &str) -> Result<Option<TokenGrant>, IntrospectError> {
@@ -1065,6 +1149,102 @@ mod tests {
         assert_eq!(inner.fresh.load(Ordering::SeqCst), 4);
         cache.introspect("t").await.expect("ok");
         assert_eq!(inner.plain.load(Ordering::SeqCst), 1);
+    }
+
+    /// Answers an allowed personal read and counts the calls.
+    struct AllowsPersonal(AtomicUsize);
+
+    #[async_trait]
+    impl Introspector for AllowsPersonal {
+        async fn introspect(&self, _: &str) -> Result<Option<TokenGrant>, IntrospectError> {
+            Ok(Some(claim_grant(7, 100_000)))
+        }
+
+        async fn introspect_for(
+            &self,
+            _: &str,
+            intent: MemoryIntent,
+        ) -> Result<Option<TokenGrant>, IntrospectError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(TokenGrant {
+                personal_memory_allowed: intent == MemoryIntent::PersonalRead,
+                ..claim_grant(7, 100_000)
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn an_allowed_personal_read_is_reused_for_a_few_seconds_and_nothing_else_is() {
+        let inner = Arc::new(AllowsPersonal(AtomicUsize::new(0)));
+        let now = Arc::new(AtomicI64::new(1_000));
+        let cache = CachingIntrospector::new(inner.clone(), CachePolicy::default(), clock(&now));
+        for _ in 0..5 {
+            let grant = cache
+                .introspect_for("t", MemoryIntent::PersonalRead)
+                .await
+                .expect("ok")
+                .expect("grant");
+            assert!(grant.personal_memory_allowed);
+        }
+        assert_eq!(
+            inner.0.load(Ordering::SeqCst),
+            1,
+            "a burst of reads asks once"
+        );
+        // Writes are never reused.
+        for intent in [
+            MemoryIntent::PersonalWrite,
+            MemoryIntent::ProjectWrite,
+            MemoryIntent::SharedIndexWrite,
+        ] {
+            cache.introspect_for("t", intent).await.expect("ok");
+        }
+        assert_eq!(inner.0.load(Ordering::SeqCst), 4);
+        // After the window the next read asks again (a conversation made
+        // shared meanwhile is seen then).
+        now.fetch_add(PERSONAL_READ_REUSE_SECONDS, Ordering::SeqCst);
+        cache
+            .introspect_for("t", MemoryIntent::PersonalRead)
+            .await
+            .expect("ok");
+        assert_eq!(inner.0.load(Ordering::SeqCst), 5);
+        // Another token is its own entry.
+        cache
+            .introspect_for("u", MemoryIntent::PersonalRead)
+            .await
+            .expect("ok");
+        assert_eq!(inner.0.load(Ordering::SeqCst), 6);
+    }
+
+    #[test]
+    fn a_toolkit_index_write_by_a_worker_claim_is_a_shared_index_write() {
+        let claim = Caller::Token(claim_grant(7, 100_000));
+        let callback = Caller::Token(grant(7, 100_000));
+        let index = pb::Source::ToolkitIndex as i32;
+        assert_eq!(
+            MemoryIntent::for_request(&claim, index, 0, true),
+            MemoryIntent::SharedIndexWrite
+        );
+        // A read, or a callback token (no conversation), keeps the cache.
+        assert_eq!(
+            MemoryIntent::for_request(&claim, index, 0, false),
+            MemoryIntent::None
+        );
+        assert_eq!(
+            MemoryIntent::for_request(&callback, index, 0, true),
+            MemoryIntent::None
+        );
+        assert_eq!(
+            MemoryIntent::for_request(&callback, pb::Source::Deepwiki as i32, 0, true),
+            MemoryIntent::None
+        );
+        assert_eq!(
+            MemoryIntent::for_request(&claim, MEMORY, PROJECT, true),
+            MemoryIntent::ProjectWrite
+        );
+        assert!(MemoryIntent::SharedIndexWrite.is_shared_write());
+        assert!(MemoryIntent::ProjectWrite.is_shared_write());
+        assert!(!MemoryIntent::PersonalWrite.is_shared_write());
     }
 
     #[test]

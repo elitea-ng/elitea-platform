@@ -627,115 +627,125 @@ func TestPostgresVectorClaimTokenPersonalMemoryIsRecheckedAtEveryIntrospection(t
 	})
 }
 
-// The cross-scope rule (owner decision 2026-10-14): once a run has READ
-// personal memory, its project-memory WRITES are refused, from any claim
-// token of the execution. A personal write is not a read; a project write
-// before any personal read is allowed; another run is unaffected.
-func TestPostgresVectorClaimTokenProjectWriteIsRefusedAfterAPersonalRead(t *testing.T) {
+// The cross-scope rule (owner decision 2026-10-14, round 4): once personal
+// memory has been READ in a conversation, every execution bound to that
+// conversation (this turn and every later one) is refused shared writes:
+// project memory and toolkit indexes. A personal write is not a read; a
+// shared write before any personal read is allowed; another conversation and
+// an execution without a conversation are unaffected; deleting the token rows
+// does not clear the taint.
+func TestPostgresVectorClaimTokenSharedWritesAreRefusedInATaintedConversation(t *testing.T) {
 	m := newMemoryFixture(t, "vector-claim-cross-scope")
 	m.turn(t, m.conversationUUID(1), "manual", 1)
 	m.mintMemory(t, "bearer")
-	refused := func(bearer string) bool {
+	refused := func(bearer string, intent MemoryIntent) bool {
 		t.Helper()
-		return m.facts(t, bearer, MemoryIntentProjectWrite).ProjectMemoryWriteRefused
+		return m.facts(t, bearer, intent).ProjectMemoryWriteRefused
 	}
-
-	if refused("bearer") {
-		t.Fatal("a project write before any personal read was refused")
+	for _, intent := range []MemoryIntent{MemoryIntentProjectWrite, MemoryIntentSharedIndexWrite} {
+		if refused("bearer", intent) {
+			t.Fatalf("intent %d refused before any personal read", intent)
+		}
 	}
 	if !m.facts(t, "bearer", MemoryIntentPersonalWrite).PersonalMemoryAllowed {
 		t.Fatal("precondition: the personal write is allowed")
 	}
-	if refused("bearer") {
-		t.Fatal("a personal WRITE counted as a read")
+	if refused("bearer", MemoryIntentProjectWrite) {
+		t.Fatal("a personal WRITE tainted the conversation")
 	}
-	// A personal read that is NOT allowed (the conversation is shared) reads
-	// nothing, so it does not mark the run.
+	// A refused personal read (the conversation is shared) reads nothing.
 	m.exec(t, m.tenant(`INSERT INTO @S@.chat_participant_mapping VALUES (1, 2)`))
 	if m.facts(t, "bearer", MemoryIntentPersonalRead).PersonalMemoryAllowed {
 		t.Fatal("precondition: refused in a shared conversation")
 	}
-	if refused("bearer") {
-		t.Fatal("a refused personal read marked the run")
+	if refused("bearer", MemoryIntentProjectWrite) {
+		t.Fatal("a refused personal read tainted the conversation")
 	}
 	m.exec(t, m.tenant(`DELETE FROM @S@.chat_participant_mapping WHERE conversation_id = 1 AND participant_id = 2`))
 
-	// The read marks the run.
+	// Turn 1 reads personal memory: the conversation is tainted.
 	if !m.facts(t, "bearer", MemoryIntentPersonalRead).PersonalMemoryAllowed {
 		t.Fatal("precondition: the personal read is allowed")
 	}
-	if !refused("bearer") {
-		t.Fatal("a project write after a personal read was allowed")
+	for _, intent := range []MemoryIntent{MemoryIntentProjectWrite, MemoryIntentSharedIndexWrite} {
+		if !refused("bearer", intent) {
+			t.Fatalf("intent %d allowed after a personal read", intent)
+		}
 	}
-	// A project READ is unaffected (no decision is made for it).
-	if got := m.facts(t, "bearer", MemoryIntentNone); got.ProjectMemoryWriteRefused {
-		t.Fatalf("a non-write intent answered refused: %+v", got)
-	}
-
-	// Another token of the SAME execution (a later claim's re-mint keeps the
-	// row; a second row of the execution is what a takeover leaves) is refused
-	// too: the flag is read across the execution's rows.
-	m.exec(t, `UPDATE elitea_runtime.vector_claim_tokens SET token_sha256 = $1 WHERE execution_id = $2`,
-		func() []byte { h := sha256.Sum256([]byte("bearer-after-remint")); return h[:] }(), m.fence.ExecutionID)
-	m.exec(t, `UPDATE elitea_runtime.vector_claim_tokens SET personal_memory_read = false WHERE execution_id = $1`, m.fence.ExecutionID)
-	if refused("bearer-after-remint") {
-		t.Fatal("precondition: the flag was cleared")
-	}
-	m.exec(t, `UPDATE elitea_runtime.vector_claim_tokens SET personal_memory_read = true WHERE execution_id = $1`, m.fence.ExecutionID)
-	if !refused("bearer-after-remint") {
-		t.Fatal("the flag of the execution's row was not read")
+	var taints int
+	if err := m.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM elitea_runtime.memory_conversation_taints WHERE conversation_uuid = $1::uuid`,
+		m.conversationUUID(1)).Scan(&taints); err != nil || taints != 1 {
+		t.Fatalf("taint rows = %d, %v", taints, err)
 	}
 
-	// A separate run is unaffected.
-	other := newMemoryFixture(t, "vector-claim-cross-scope-other")
-	other.turn(t, other.conversationUUID(1), "manual", 1)
-	other.mintMemory(t, "bearer-other")
-	if other.facts(t, "bearer-other", MemoryIntentProjectWrite).ProjectMemoryWriteRefused {
-		t.Fatal("another run's project write was refused")
+	// Turn 2: the token rows go (the claim settled) and a new token is minted
+	// for the same conversation: still refused, the taint is the
+	// conversation's, not the token's.
+	m.exec(t, `DELETE FROM elitea_runtime.vector_claim_tokens WHERE execution_id = $1`, m.fence.ExecutionID)
+	m.mintMemory(t, "bearer-turn-2")
+	if !refused("bearer-turn-2", MemoryIntentProjectWrite) || !refused("bearer-turn-2", MemoryIntentSharedIndexWrite) {
+		t.Fatal("a later turn of the tainted conversation was allowed a shared write")
+	}
+	// A shared-index write is refused even for a token WITHOUT the memory
+	// source (an index-only run in that conversation).
+	if _, err := m.mint(t, m.fence, "bearer-index-only"); err != nil {
+		t.Fatal(err)
+	}
+	if !refused("bearer-index-only", MemoryIntentSharedIndexWrite) {
+		t.Fatal("an index-only token wrote a shared index in a tainted conversation")
+	}
+
+	// The same execution re-bound to ANOTHER conversation is unaffected.
+	m.turn(t, m.conversationUUID(5), "manual", 5)
+	if refused("bearer-index-only", MemoryIntentSharedIndexWrite) {
+		t.Fatal("another conversation was refused")
+	}
+	// An execution with no conversation (a direct tool call) is unaffected.
+	m.turn(t, "", "manual", 0)
+	if refused("bearer-index-only", MemoryIntentSharedIndexWrite) {
+		t.Fatal("an execution without a conversation was refused")
 	}
 }
 
-// A personal read and a project write of ONE run asked at the same time are
-// decided one after the other (both serialise on the execution's advisory
-// lock): whichever order the database picks, a write decided after the read
-// was recorded is refused, and no write is ever admitted after the read was.
+// A personal read and a shared write in ONE conversation asked at the same
+// time are decided one after the other (both serialise on the conversation's
+// advisory lock): a write decided after the taint is refused.
 func TestPostgresVectorClaimTokenParallelReadAndWriteAreSerialised(t *testing.T) {
 	m := newMemoryFixture(t, "vector-claim-cross-scope-parallel")
 	m.turn(t, m.conversationUUID(1), "manual", 1)
 	m.mintMemory(t, "bearer")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	// Hold the execution's lock so both requests queue on it.
 	tx, err := m.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, memoryRunLock, m.fence.ExecutionID); err != nil {
+	if _, err := tx.Exec(ctx, conversationLock, int64(1), m.conversationUUID(1)); err != nil {
 		t.Fatal(err)
 	}
 	type answer struct {
 		facts VectorClaimTokenFacts
 		err   error
-		at    time.Time
 	}
 	read := make(chan answer, 1)
 	write := make(chan answer, 1)
 	hash := sha256.Sum256([]byte("bearer"))
 	go func() {
 		got, err := m.store.Facts(ctx, hash, MemoryIntentPersonalRead)
-		read <- answer{got, err, time.Now()}
+		read <- answer{got, err}
 	}()
 	time.Sleep(200 * time.Millisecond)
 	go func() {
 		got, err := m.store.Facts(ctx, hash, MemoryIntentProjectWrite)
-		write <- answer{got, err, time.Now()}
+		write <- answer{got, err}
 	}()
 	time.Sleep(200 * time.Millisecond)
 	select {
 	case <-read:
-		t.Fatal("the read was decided while the execution was locked")
+		t.Fatal("the read was decided while the conversation was locked")
 	case <-write:
-		t.Fatal("the write was decided while the execution was locked")
+		t.Fatal("the write was decided while the conversation was locked")
 	default:
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -745,20 +755,16 @@ func TestPostgresVectorClaimTokenParallelReadAndWriteAreSerialised(t *testing.T)
 	if r.err != nil || w.err != nil {
 		t.Fatalf("read %v, write %v", r.err, w.err)
 	}
-	if !r.facts.PersonalMemoryAllowed {
-		t.Fatal("precondition: the read is allowed")
-	}
-	// The read queued first, so it was recorded first: the write is refused.
-	if !w.facts.ProjectMemoryWriteRefused {
-		t.Fatal("a project write decided after a personal read was allowed")
+	if !r.facts.PersonalMemoryAllowed || !w.facts.ProjectMemoryWriteRefused {
+		t.Fatalf("read %+v, write %+v: the write decided after the taint was allowed", r.facts, w.facts)
 	}
 }
 
-// Main adds the `memory` source to a claim token only when the claim's frozen
-// toolkits include a memory toolkit, so an older elitea-vector is never shown
-// a source it cannot name and a run without a memory toolkit has no memory
-// reach.
-func TestPostgresVectorClaimTokenMemorySourceOnlyForAMemoryToolkit(t *testing.T) {
+// The memory source and the memory toolkits of a claim token come from the
+// EXECUTION (execution_jobs.memory_toolkit_ids, computed at admission), never
+// from the input bundle: a re-mint decodes nothing, and bundle content that
+// names a memory toolkit adds nothing.
+func TestPostgresVectorClaimTokenMemorySourceComesFromTheExecution(t *testing.T) {
 	f := newVectorClaimFixture(t, "vector-claim-memory-source")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -780,38 +786,35 @@ func TestPostgresVectorClaimTokenMemorySourceOnlyForAMemoryToolkit(t *testing.T)
 	if got := mint("bearer-none"); !slices.Equal(got, []string{"toolkit_index"}) {
 		t.Fatalf("no memory toolkit: sources %v", got)
 	}
-	// Freeze a memory toolkit into the execution's input bundle.
-	content := []byte(`{"version_details": {"tools": [{"id": 9, "type": "memory", "toolkit_name": "notes", "settings": {"memory_scope": "personal"}}]}}`)
+	// Bundle content that NAMES a memory toolkit (what a call_tool's
+	// arguments could carry) is never read.
+	content := []byte(`{"arguments": {"type": "memory", "id": 42, "settings": {}}}`)
 	digest := sha256.Sum256(content)
 	f.exec(t, `
 INSERT INTO elitea_runtime.input_bundle_entries (
     input_bundle_id, entry_id, entry_version, semantic_role, media_type,
     content_digest, content_size, content_reference, classification,
     required_grant_audience, content_bytes)
-SELECT input_bundle_id, 'agent-request', 'v1', 'agent.request', 'application/json',
+SELECT input_bundle_id, 'crafted-arguments', 'v1', 'toolkit.arguments', 'application/json',
        $2, $3, 'content://memory-test', 'internal', 'elitea-main', $4
 FROM elitea_runtime.execution_jobs WHERE execution_id = $1`,
 		f.fence.ExecutionID, digest[:], int64(len(content)), content)
+	if got := mint("bearer-crafted"); !slices.Equal(got, []string{"toolkit_index"}) {
+		t.Fatalf("bundle content added the memory source: %v", got)
+	}
+	// The execution's admitted memory toolkits are copied.
+	f.exec(t, `UPDATE elitea_runtime.execution_jobs SET memory_toolkit_ids = '{9}' WHERE execution_id = $1`, f.fence.ExecutionID)
 	if got := mint("bearer-memory"); !slices.Equal(got, []string{"toolkit_index", "memory"}) {
-		t.Fatalf("a memory toolkit: sources %v", got)
+		t.Fatalf("an admitted memory toolkit: sources %v", got)
 	}
-	// The token carries the claim's memory toolkits (all of its project), and
-	// elitea-vector refuses any other toolkit id.
 	facts, err := f.store.Facts(ctx, sha256.Sum256([]byte("bearer-memory")), MemoryIntentNone)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || !slices.Equal(facts.MemoryToolkits, []int64{9}) {
+		t.Fatalf("memory toolkits = %v, %v; want [9]", facts.MemoryToolkits, err)
 	}
-	if !slices.Equal(facts.MemoryToolkits, []int64{9}) {
-		t.Fatalf("memory toolkits = %v, want [9]", facts.MemoryToolkits)
-	}
-	// A "memory" word that is not a tool entry does not count, and neither
-	// does a memory entry without a positive integer id.
-	found := map[int64]bool{}
-	collectMemoryToolkits(map[string]any{
-		"meta":  map[string]any{"type": "memory"},
-		"tools": []any{map[string]any{"type": "memory", "settings": map[string]any{}, "id": 1.5}, map[string]any{"type": "memory", "settings": map[string]any{}, "id": -2.0}, map[string]any{"type": "memory", "id": 4.0}},
-	}, found)
-	if len(found) != 0 {
-		t.Fatalf("non-entries counted: %v", found)
+	// A re-mint decodes nothing: an unreadable bundle entry does not matter.
+	f.exec(t, `UPDATE elitea_runtime.input_bundle_entries SET content_bytes = '\xff'::bytea, content_size = 1
+WHERE entry_id = 'crafted-arguments'`)
+	if got := mint("bearer-remint"); !slices.Equal(got, []string{"toolkit_index", "memory"}) {
+		t.Fatalf("re-mint: sources %v", got)
 	}
 }

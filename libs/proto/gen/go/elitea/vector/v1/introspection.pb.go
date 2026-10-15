@@ -93,14 +93,18 @@ const (
 	// false and project_memory_write_refused is false.
 	MemoryIntent_MEMORY_INTENT_UNSPECIFIED MemoryIntent = 0
 	// A read (search, count, list, read) in the PERSONAL scope. When the
-	// personal scope is allowed, elitea-main records that this claim's run has
-	// read personal memory.
+	// personal scope is allowed, elitea-main taints the run's conversation:
+	// personal memory has been read in it.
 	MemoryIntent_MEMORY_INTENT_PERSONAL_READ MemoryIntent = 1
 	// A write (upsert, delete, metadata update) in the PERSONAL scope.
 	MemoryIntent_MEMORY_INTENT_PERSONAL_WRITE MemoryIntent = 2
-	// A write in the PROJECT scope. Refused (project_memory_write_refused) once
-	// the run has read personal memory.
+	// A write in the PROJECT scope. Refused (project_memory_write_refused) from
+	// any execution bound to a tainted conversation.
 	MemoryIntent_MEMORY_INTENT_PROJECT_WRITE MemoryIntent = 3
+	// A toolkit-index upsert or delete (an index is shared by the project).
+	// Refused (project_memory_write_refused) from any execution bound to a
+	// tainted conversation. Asked for every token, whatever its sources.
+	MemoryIntent_MEMORY_INTENT_SHARED_INDEX_WRITE MemoryIntent = 4
 )
 
 // Enum value maps for MemoryIntent.
@@ -110,12 +114,14 @@ var (
 		1: "MEMORY_INTENT_PERSONAL_READ",
 		2: "MEMORY_INTENT_PERSONAL_WRITE",
 		3: "MEMORY_INTENT_PROJECT_WRITE",
+		4: "MEMORY_INTENT_SHARED_INDEX_WRITE",
 	}
 	MemoryIntent_value = map[string]int32{
-		"MEMORY_INTENT_UNSPECIFIED":    0,
-		"MEMORY_INTENT_PERSONAL_READ":  1,
-		"MEMORY_INTENT_PERSONAL_WRITE": 2,
-		"MEMORY_INTENT_PROJECT_WRITE":  3,
+		"MEMORY_INTENT_UNSPECIFIED":        0,
+		"MEMORY_INTENT_PERSONAL_READ":      1,
+		"MEMORY_INTENT_PERSONAL_WRITE":     2,
+		"MEMORY_INTENT_PROJECT_WRITE":      3,
+		"MEMORY_INTENT_SHARED_INDEX_WRITE": 4,
 	}
 )
 
@@ -225,10 +231,11 @@ type IntrospectTokenResponse struct {
 	// lookup fails. Decided by elitea-main at THIS introspection, and only when
 	// memory_intent asks for a personal decision.
 	PersonalMemoryAllowed bool `protobuf:"varint,7,opt,name=personal_memory_allowed,json=personalMemoryAllowed,proto3" json:"personal_memory_allowed,omitempty"`
-	// project_memory_write_refused is true for a MEMORY_INTENT_PROJECT_WRITE
-	// asked by a run that has already read personal memory: shared project
-	// memory must not be written from a run that saw personal memory. The
-	// default (false) is "not refused", so an older elitea-main never refuses.
+	// project_memory_write_refused is true for a MEMORY_INTENT_PROJECT_WRITE or
+	// MEMORY_INTENT_SHARED_INDEX_WRITE asked by an execution bound to a
+	// conversation in which personal memory has been read (by any turn): shared
+	// memory and shared indexes must not be written from a conversation that
+	// saw personal memory. The default (false) is "not refused".
 	ProjectMemoryWriteRefused bool `protobuf:"varint,8,opt,name=project_memory_write_refused,json=projectMemoryWriteRefused,proto3" json:"project_memory_write_refused,omitempty"`
 	// memory_toolkit_ids are the memory toolkits this worker claim's frozen
 	// toolkits name, every one a toolkit of the token's project (Main freezes a
@@ -357,12 +364,13 @@ const file_elitea_vector_v1_introspection_proto_rawDesc = "" +
 	"\tTokenKind\x12\x1a\n" +
 	"\x16TOKEN_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17TOKEN_KIND_WORKER_CLAIM\x10\x01\x12\x1e\n" +
-	"\x1aTOKEN_KIND_ENGINE_CALLBACK\x10\x02*\x91\x01\n" +
+	"\x1aTOKEN_KIND_ENGINE_CALLBACK\x10\x02*\xb7\x01\n" +
 	"\fMemoryIntent\x12\x1d\n" +
 	"\x19MEMORY_INTENT_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bMEMORY_INTENT_PERSONAL_READ\x10\x01\x12 \n" +
 	"\x1cMEMORY_INTENT_PERSONAL_WRITE\x10\x02\x12\x1f\n" +
-	"\x1bMEMORY_INTENT_PROJECT_WRITE\x10\x032\x83\x01\n" +
+	"\x1bMEMORY_INTENT_PROJECT_WRITE\x10\x03\x12$\n" +
+	" MEMORY_INTENT_SHARED_INDEX_WRITE\x10\x042\x83\x01\n" +
 	"\x19TokenIntrospectionService\x12f\n" +
 	"\x0fIntrospectToken\x12(.elitea.vector.v1.IntrospectTokenRequest\x1a).elitea.vector.v1.IntrospectTokenResponseBQZOgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/vector/v1;vectorv1b\x06proto3"
 

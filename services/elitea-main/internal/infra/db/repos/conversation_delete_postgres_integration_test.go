@@ -685,3 +685,38 @@ func TestDeleteMessageReportsNoAttachmentsWhenItRefuses(t *testing.T) {
 		t.Fatalf("%d attachment rows left after two refused deletes, want 2", attachments)
 	}
 }
+
+// A conversation's personal-memory taint (shared/0166) goes with it, and
+// another conversation's taint stays.
+func TestDeleteConversationRemovesItsMemoryTaint(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewConversationsRepo(pool)
+	ctx := context.Background()
+	_, doomed, _ := seedConversationWithParticipant(t, repo, "question")
+	_, kept, _ := seedConversationWithParticipant(t, repo, "question")
+	for _, conversation := range []string{doomed, kept} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO elitea_runtime.memory_conversation_taints (project_id, conversation_uuid) VALUES (1, $1::uuid)`,
+			conversation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := repo.Delete(ctx, "1", doomed); err != nil {
+		t.Fatalf("delete conversation: %v", err)
+	}
+	var left []string
+	rows, err := pool.Query(ctx, `SELECT conversation_uuid::text FROM elitea_runtime.memory_conversation_taints ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, value)
+	}
+	if len(left) != 1 || left[0] != kept {
+		t.Fatalf("taints after the delete = %v, want only %s", left, kept)
+	}
+}

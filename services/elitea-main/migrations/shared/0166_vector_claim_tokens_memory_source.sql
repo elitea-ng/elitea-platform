@@ -1,35 +1,47 @@
--- 0166_vector_claim_tokens_memory_source.sql — admit the `memory` source on a
--- worker claim token (worker unit M9).
+-- 0166_vector_claim_tokens_memory_source.sql — memory on worker claim tokens
+-- (worker unit M9).
 --
--- elitea-vector keeps a memory toolkit's points under their own source,
--- `memory` (ADR-0031), so a worker-claim token must be able to name it beside
--- `toolkit_index`. shared/0160 limited allowed_sources to the three sources
--- that existed then, so a mint that included `memory` would violate the check.
--- The constraint is replaced, not relaxed further: the four sources are listed.
+-- 1. The `memory` source. elitea-vector keeps a memory toolkit's points under
+--    their own source, `memory` (ADR-0031), so a worker-claim token must be
+--    able to name it beside `toolkit_index`. shared/0160 limited
+--    allowed_sources to the three sources that existed then; the constraint is
+--    replaced (the four sources are listed), not relaxed further.
 --
--- personal_memory_read records, per claim token, that the run read PERSONAL
--- memory (set when elitea-main answers a personal-scope read introspection).
--- From then on the run's project-memory WRITES are refused (what it read could
--- be copied into memory everyone shares). A run's other claims are covered by
--- reading the flag across the execution's token rows. The personal-memory
--- PERMISSION itself is still decided at each introspection and never stored.
--- The flag and its check serialise on the execution (an advisory lock, see
--- repos.VectorClaimTokens), so a parallel read and write of one run cannot
--- both pass.
+-- 2. execution_jobs.memory_toolkit_ids: the memory toolkits a run was given,
+--    computed ONCE at admission from the server-side frozen toolkit set (an
+--    agent run: the top-level entries of the frozen version's `tools`, which
+--    Main resolves from the project's own elitea_tools rows; a direct toolkit
+--    call: the resolved toolkit itself when it is a memory toolkit). Nothing a
+--    caller writes (tool arguments, user input, chat history, runtime-context
+--    entries) contributes. Empty for every other run. ADD COLUMN with a
+--    constant default is a catalogue-only change: no table rewrite, and the
+--    ACCESS EXCLUSIVE lock is held only for the catalogue update.
 --
--- memory_toolkit_ids are the memory toolkits the claim's frozen toolkits name
--- (all of the run's own project), written at mint. elitea-vector refuses a
--- memory request for any other toolkit id, so a token reaches only the memory
--- stores of the toolkits its run was given. Empty for a claim without a memory
--- toolkit, which is also minted without the `memory` source.
--- No data is migrated.
+-- 3. vector_claim_tokens.memory_toolkit_ids: copied from the execution at mint
+--    (never decoded from the input bundle); elitea-vector refuses a memory
+--    request for any other toolkit. A claim with none is minted without the
+--    `memory` source.
+--
+-- 4. elitea_runtime.memory_conversation_taints: a conversation in which
+--    PERSONAL memory was read (set when elitea-main allows a personal-scope
+--    read for any execution bound to the conversation). While a conversation
+--    is tainted, every execution bound to it is refused shared writes: project
+--    memory and toolkit-index upserts and deletes. Never cleared; deleted with
+--    the conversation (and with the project, by the foreign key). Set and
+--    checked under an advisory lock keyed by the conversation.
+--
+-- The token-level personal_memory_read flag an earlier draft of this file
+-- added is dropped (the rule is per conversation now). No data is migrated.
 --
 -- Idempotent. No BEGIN/COMMIT: the ledgered runner wraps the file.
 
 ALTER TABLE elitea_runtime.vector_claim_tokens
-    ADD COLUMN IF NOT EXISTS personal_memory_read boolean NOT NULL DEFAULT false;
+    DROP COLUMN IF EXISTS personal_memory_read;
 
 ALTER TABLE elitea_runtime.vector_claim_tokens
+    ADD COLUMN IF NOT EXISTS memory_toolkit_ids bigint[] NOT NULL DEFAULT '{}';
+
+ALTER TABLE elitea_runtime.execution_jobs
     ADD COLUMN IF NOT EXISTS memory_toolkit_ids bigint[] NOT NULL DEFAULT '{}';
 
 ALTER TABLE elitea_runtime.vector_claim_tokens
@@ -39,3 +51,10 @@ ALTER TABLE elitea_runtime.vector_claim_tokens
     ADD CONSTRAINT vector_claim_tokens_sources
     CHECK (cardinality(allowed_sources) BETWEEN 1 AND 4
            AND allowed_sources <@ ARRAY['toolkit_index', 'deepwiki', 'inventory', 'memory']::text[]);
+
+CREATE TABLE IF NOT EXISTS elitea_runtime.memory_conversation_taints (
+    project_id        integer     NOT NULL REFERENCES centry.project (id) ON DELETE CASCADE,
+    conversation_uuid uuid        NOT NULL,
+    tainted_at        timestamptz NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (project_id, conversation_uuid)
+);

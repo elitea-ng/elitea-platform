@@ -957,15 +957,19 @@ func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationI
 		return nil, fmt.Errorf("conversations: delete selected conversations: %w", err)
 	}
 
-	q := fmt.Sprintf(`DELETE FROM %s.chat_conversations WHERE id = $1`, s)
-	ct, err := transaction.Exec(ctx, q, id)
+	q := fmt.Sprintf(`DELETE FROM %s.chat_conversations WHERE id = $1 RETURNING uuid::text`, s)
+	var conversationUUID string
+	err = transaction.QueryRow(ctx, q, id).Scan(&conversationUUID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apierr.NotFound("conversation not found")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("conversations: delete: %w", err)
 	}
-	if ct.RowsAffected() == 0 {
-		return nil, apierr.NotFound("conversation not found")
-	}
 	if err := deleteConversationPin(ctx, transaction, projectID, id); err != nil {
+		return nil, err
+	}
+	if err := deleteConversationMemoryTaint(ctx, transaction, projectID, conversationUUID); err != nil {
 		return nil, err
 	}
 	if err := transaction.Commit(ctx); err != nil {
@@ -979,6 +983,31 @@ func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationI
 // an orphan pin, but it would outlive the row in the shared table. Guarded by
 // to_regclass because fixtures build tenant tables without the shared schema;
 // on a deployment shared/0064 always declares it.
+// deleteConversationMemoryTaint removes the conversation's personal-memory
+// taint (elitea_runtime.memory_conversation_taints, shared/0166, worker unit
+// M9) in the delete's transaction: the taint lives as long as the
+// conversation. uuid is the conversation's, read before its row was deleted.
+// A database without the table (a migration not applied yet) has none.
+func deleteConversationMemoryTaint(ctx context.Context, tx pgx.Tx, projectID, uuid string) error {
+	project, err := strconv.ParseInt(projectID, 10, 32)
+	if err != nil || uuid == "" {
+		return nil
+	}
+	var present bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('elitea_runtime.memory_conversation_taints') IS NOT NULL`).Scan(&present); err != nil {
+		return fmt.Errorf("conversations: delete memory taint: %w", err)
+	}
+	if !present {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+DELETE FROM elitea_runtime.memory_conversation_taints
+WHERE project_id = $1 AND conversation_uuid = $2::uuid`, project, uuid); err != nil {
+		return fmt.Errorf("conversations: delete memory taint: %w", err)
+	}
+	return nil
+}
+
 func deleteConversationPin(ctx context.Context, tx pgx.Tx, projectID string, conversationID int64) error {
 	project, err := strconv.ParseInt(projectID, 10, 32)
 	if err != nil {

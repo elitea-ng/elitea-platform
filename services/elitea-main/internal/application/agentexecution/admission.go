@@ -3,8 +3,11 @@ package agentexecution
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"time"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
@@ -37,6 +40,10 @@ type SubmitRequest struct {
 }
 
 type Admission struct {
+	// MemoryToolkitIDs are the memory toolkits the run was given, computed
+	// once here from the server-frozen toolkit set (memoryToolkitIDs) and
+	// stored on the execution; the vector claim token copies them.
+	MemoryToolkitIDs      []int64
 	Record                executiondomain.Admission
 	Binding               executiondomain.AgentExecutionBinding
 	CurrentTurn           *CurrentApplicationTurn
@@ -174,7 +181,12 @@ func (s *AdmissionService) Submit(
 		}
 	}
 
+	memoryToolkits, err := memoryToolkitIDs(request.CapabilityID, request.Input)
+	if err != nil {
+		return executionapp.AdmissionOutcome{}, fmt.Errorf("%w: %v", ErrInvalidAgentAdmission, err)
+	}
 	outcome, err := s.store.AdmitAgentExecution(ctx, Admission{
+		MemoryToolkitIDs:      memoryToolkits,
 		Record:                record,
 		Binding:               binding,
 		CurrentTurn:           request.CurrentTurn.Clone(),
@@ -238,4 +250,65 @@ func agentRequestDigest(request SubmitRequest, content []byte) runtimedomain.Dig
 		material = append(material, value...)
 	}
 	return runtimedomain.SHA256(material)
+}
+
+// memoryToolkitIDs lists the memory toolkits an agent run was given, from the
+// toolkit set Main froze for it: the top-level entries of the frozen version's
+// `tools` (an application run, `application.version_details.tools`) or of the
+// input's `tools` (an ad-hoc run). These are exactly the references the
+// worker materializes toolkits from, and Main built them from the project's
+// own elitea_tools rows (FreezeCurrentApplicationVersion). Only an entry of
+// type "memory" with a positive integer `id` counts; nothing nested is read,
+// so text the caller supplied (user input, chat history, a tool's settings or
+// arguments) can never add one. A frozen set that cannot be decoded fails the
+// admission: an execution is never stored with a guessed set.
+func memoryToolkitIDs(capabilityID string, input *runtimev1.AgentExecutionInputV1) ([]int64, error) {
+	if input == nil {
+		return []int64{}, nil
+	}
+	var raw []byte
+	switch capabilityID {
+	case executiondomain.AgentApplicationCapability:
+		var application struct {
+			VersionDetails *struct {
+				Tools json.RawMessage `json:"tools"`
+			} `json:"version_details"`
+		}
+		if len(input.GetApplication()) != 0 {
+			if err := json.Unmarshal(input.GetApplication(), &application); err != nil {
+				return nil, fmt.Errorf("the frozen application is not readable: %w", err)
+			}
+		}
+		if application.VersionDetails != nil {
+			raw = application.VersionDetails.Tools
+		}
+	case executiondomain.AgentAdhocCapability:
+		raw = input.GetTools()
+	}
+	ids := []int64{}
+	if len(raw) == 0 || string(raw) == "null" {
+		return ids, nil
+	}
+	var tools []json.RawMessage
+	if err := json.Unmarshal(raw, &tools); err != nil {
+		return nil, fmt.Errorf("the frozen toolkit set is not a list: %w", err)
+	}
+	for _, entry := range tools {
+		var tool struct {
+			Type string          `json:"type"`
+			ID   json.RawMessage `json:"id"`
+		}
+		if json.Unmarshal(entry, &tool) != nil || tool.Type != "memory" {
+			continue
+		}
+		id, err := strconv.ParseInt(string(tool.ID), 10, 64)
+		if err != nil || id <= 0 {
+			continue
+		}
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids, nil
 }

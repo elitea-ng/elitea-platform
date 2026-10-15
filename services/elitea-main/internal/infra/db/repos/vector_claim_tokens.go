@@ -11,7 +11,6 @@ package repos
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -39,13 +38,16 @@ const (
 	// project-scope memory reads).
 	MemoryIntentNone MemoryIntent = iota
 	// MemoryIntentPersonalRead is a read in the personal scope; an allowed one
-	// is recorded on the claim.
+	// taints the run's conversation.
 	MemoryIntentPersonalRead
 	// MemoryIntentPersonalWrite is a write in the personal scope.
 	MemoryIntentPersonalWrite
-	// MemoryIntentProjectWrite is a write in the project scope; refused once
-	// the run has read personal memory.
+	// MemoryIntentProjectWrite is a write in the project scope; refused in a
+	// tainted conversation.
 	MemoryIntentProjectWrite
+	// MemoryIntentSharedIndexWrite is a toolkit-index upsert or delete (an
+	// index is shared by the project); refused in a tainted conversation.
+	MemoryIntentSharedIndexWrite
 )
 
 // VectorClaimTokenMint asks for one token for the live claim Fence names.
@@ -58,10 +60,12 @@ type VectorClaimTokenMint struct {
 	Capabilities []string
 	// Sources are the payload keywords the token is admitted for.
 	Sources []string
-	// MemorySource, when non-empty, is added to Sources only if the claim's
-	// frozen toolkits include a memory toolkit. A claim without one gets no
-	// memory source, so an older elitea-vector that cannot name it is never
-	// shown one, and a run with no memory toolkit has no memory reach.
+	// MemorySource, when non-empty, is added to Sources only if the
+	// execution was admitted with memory toolkits
+	// (execution_jobs.memory_toolkit_ids, computed from the server-frozen
+	// toolkit set). A claim without one gets no memory source, so an older
+	// elitea-vector that cannot name it is never shown one, and a run with no
+	// memory toolkit has no memory reach.
 	MemorySource string
 	// MaxLifetime caps the expiry; the command deadline is the other bound.
 	MaxLifetime time.Duration
@@ -85,12 +89,13 @@ type VectorClaimTokenFacts struct {
 	Sources   []string
 	ExpiresAt time.Time
 	// PersonalMemoryAllowed is decided at THIS introspection, from the claim's
-	// conversation as it is now (see personalMemoryAllowed), and only for a
+	// conversation as it is now (see personalMemoryTurn), and only for a
 	// personal memory intent; elitea-vector refuses the personal memory scope
 	// without it.
 	PersonalMemoryAllowed bool
-	// ProjectMemoryWriteRefused is true for a project-write intent from a run
-	// that has already read personal memory.
+	// ProjectMemoryWriteRefused is true for a project-memory or shared-index
+	// write intent from an execution whose conversation is tainted (personal
+	// memory was read in it, by this or an earlier turn).
 	ProjectMemoryWriteRefused bool
 	// MemoryToolkits are the memory toolkits the claim was given (all of the
 	// token's project); elitea-vector refuses a memory request for any other.
@@ -125,14 +130,10 @@ func (s *VectorClaimTokens) Mint(ctx context.Context, request VectorClaimTokenMi
 		request.MaxLifetime < time.Second {
 		return VectorClaimTokenMinted{}, runtimedomain.ErrInvalidFence
 	}
-	mintSources := request.Sources
-	memoryToolkits := []int64{}
-	if request.MemorySource != "" {
-		memoryToolkits = s.claimMemoryToolkits(ctx, fence.ExecutionID, int64(fence.Generation))
-		if len(memoryToolkits) > 0 {
-			mintSources = append(append([]string(nil), request.Sources...), request.MemorySource)
-		}
-	}
+	// The memory toolkits are the execution's own, computed at admission
+	// (execution_jobs.memory_toolkit_ids) and copied by the statement below:
+	// nothing is decoded here, and a claim whose execution has none gets
+	// neither memory toolkits nor the memory source.
 	var (
 		live      bool
 		project   *int32
@@ -144,6 +145,7 @@ func (s *VectorClaimTokens) Mint(ctx context.Context, request VectorClaimTokenMi
 WITH live AS (
     SELECT c.claim_id, c.execution_id, c.generation,
            j.resource_project_id, j.actor_id, j.capability_id,
+           COALESCE(j.memory_toolkit_ids, '{}') AS memory_toolkit_ids,
            LEAST(o.deadline, clock_timestamp() + ($8::bigint * interval '1 millisecond')) AS expires_at
     FROM elitea_runtime.execution_claims AS c
     JOIN elitea_runtime.execution_jobs AS j
@@ -185,8 +187,12 @@ WITH live AS (
         resource_project_id, actor_id, allowed_sources, expires_at, memory_toolkit_ids
     )
     SELECT $5, qualifying.claim_id, qualifying.execution_id, qualifying.generation,
-           qualifying.resource_project_id, qualifying.actor_id, $7::text[], qualifying.expires_at,
-           $12::bigint[]
+           qualifying.resource_project_id, qualifying.actor_id,
+           CASE WHEN $12::text <> '' AND cardinality(qualifying.memory_toolkit_ids) > 0
+                THEN $7::text[] || $12::text
+                ELSE $7::text[] END,
+           qualifying.expires_at,
+           qualifying.memory_toolkit_ids
     FROM qualifying
     ON CONFLICT (claim_id) DO UPDATE
     SET token_sha256 = EXCLUDED.token_sha256,
@@ -201,10 +207,10 @@ SELECT EXISTS (SELECT 1 FROM live),
 FROM (SELECT 1) AS one
 LEFT JOIN minted ON true`,
 		fence.ExecutionID, int64(fence.Generation), fence.WorkloadIdentity, fence.Token[:],
-		request.TokenSHA256[:], request.Capabilities, mintSources,
+		request.TokenSHA256[:], request.Capabilities, request.Sources,
 		request.MaxLifetime.Milliseconds(),
 		int64(fence.ClaimAttempt), int64(fence.LeaseEpoch), fence.CommandID,
-		memoryToolkits,
+		request.MemorySource,
 	).Scan(&live, &project, &actor, &sources, &expiresAt)
 	if err != nil {
 		return VectorClaimTokenMinted{}, fmt.Errorf("mint vector claim token: %w", err)
@@ -228,70 +234,8 @@ LEFT JOIN minted ON true`,
 	}, nil
 }
 
-// claimMemoryToolkits lists the ids of the memory toolkits the execution's
-// frozen input names (the agent version snapshot in its input bundle: entries
-// of type "memory" with a positive id). Main froze them from the run's own
-// project, so every id is a toolkit of the token's project. Any doubt (no
-// bundle, unreadable content, a failed read) answers none: the claim then gets
-// no memory source and no memory toolkit.
-func (s *VectorClaimTokens) claimMemoryToolkits(ctx context.Context, executionID string, generation int64) []int64 {
-	rows, err := s.pool.Query(ctx, `
-SELECT entry.content_bytes
-FROM elitea_runtime.execution_jobs AS job
-JOIN elitea_runtime.input_bundle_entries AS entry ON entry.input_bundle_id = job.input_bundle_id
-WHERE job.execution_id = $1 AND job.generation = $2
-  AND entry.media_type LIKE '%json%'`, executionID, generation)
-	if err != nil {
-		slog.WarnContext(ctx, "vector claim token: could not read the execution's frozen toolkits; no memory source", "err", err)
-		return nil
-	}
-	defer rows.Close()
-	found := map[int64]bool{}
-	for rows.Next() {
-		var content []byte
-		if err := rows.Scan(&content); err != nil {
-			return nil
-		}
-		var decoded any
-		if json.Unmarshal(content, &decoded) == nil {
-			collectMemoryToolkits(decoded, found)
-		}
-	}
-	if rows.Err() != nil {
-		return nil
-	}
-	ids := make([]int64, 0, len(found))
-	for id := range found {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	return ids
-}
-
-// collectMemoryToolkits walks a decoded JSON document for tool entries of
-// type "memory" (an object with that type, a settings object and a positive
-// integer id) and records their ids.
-func collectMemoryToolkits(node any, found map[int64]bool) {
-	switch value := node.(type) {
-	case map[string]any:
-		if kind, _ := value["type"].(string); kind == "memory" {
-			_, configured := value["settings"].(map[string]any)
-			if id, ok := value["id"].(float64); ok && configured && id >= 1 && id <= 1<<53 && id == float64(int64(id)) {
-				found[int64(id)] = true
-			}
-		}
-		for _, child := range value {
-			collectMemoryToolkits(child, found)
-		}
-	case []any:
-		for _, child := range value {
-			collectMemoryToolkits(child, found)
-		}
-	}
-}
-
-// personalMemoryAllowed says whether the claim's execution may use PERSONAL
-// memory right now. It is decided at the introspection of a personal-scope
+// personalMemoryTurn says whether the claim's execution may use PERSONAL
+// memory right now, and names its conversation when it may. It is decided at the introspection of a personal-scope
 // request, never stored at mint, and it is true only when ALL of these hold:
 //
 //   - the execution is an agent CHAT turn a person started in the product: it
@@ -315,7 +259,7 @@ func collectMemoryToolkits(node any, found map[int64]bool) {
 // false and fails closed: the question is about privacy. Project memory is not
 // affected. Because the answer is read each time, a participant added to the
 // conversation mid-run withdraws the permission at the next call.
-func (s *VectorClaimTokens) personalMemoryAllowed(ctx context.Context, executionID string, generation int64, actor string) bool {
+func (s *VectorClaimTokens) personalMemoryTurn(ctx context.Context, executionID string, generation int64, actor string) (conversationTurn, bool) {
 	var (
 		projection int64
 		stream     string
@@ -328,20 +272,20 @@ JOIN elitea_runtime.agent_execution_jobs AS a
 WHERE j.execution_id = $1 AND j.generation = $2
   AND j.trigger_origin = 'manual'`, executionID, generation).Scan(&projection, &stream)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false
+		return conversationTurn{}, false
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "vector claim token: could not read the execution; personal memory is withheld", "err", err)
-		return false
+		return conversationTurn{}, false
 	}
 	// Not a uuid: no conversation. Checked here as well as by the cast below,
 	// so a malformed stream never reaches the tenant query.
 	if _, err := uuid.Parse(stream); err != nil {
-		return false
+		return conversationTurn{}, false
 	}
 	schema, err := tenantschema.QuoteInt(projection)
 	if err != nil {
-		return false
+		return conversationTurn{}, false
 	}
 	var (
 		conversations int
@@ -363,9 +307,13 @@ JOIN %[1]s.chat_participants AS participant
 WHERE conversation.uuid = $1::uuid`, schema), stream, executionID, actor).Scan(&conversations, &private, &people, &isActor)
 	if err != nil {
 		slog.WarnContext(ctx, "vector claim token: could not read the turn's conversation; personal memory is withheld", "err", err)
-		return false
+		return conversationTurn{}, false
 	}
-	return conversations == 1 && private && people == 1 && isActor
+	if conversations != 1 || !private || people != 1 || !isActor {
+		return conversationTurn{}, false
+	}
+	parsed, _ := uuid.Parse(stream)
+	return conversationTurn{project: projection, conversation: parsed.String()}, true
 }
 
 // Facts reads the token whose SHA-256 is tokenSHA256. Only a live token
@@ -434,26 +382,38 @@ WHERE t.token_sha256 = $1
 	}
 	// Only a token admitted for memory has memory decisions to make, and only
 	// when the request says what it is about to do.
+	if intent == MemoryIntentSharedIndexWrite && !slices.Contains(sources, "memory") {
+		// A toolkit-index write is decided for every token: an index is
+		// shared, whatever sources the token carries.
+		refused, err := s.conversationTainted(ctx, execution, claimGen)
+		if err != nil {
+			slog.WarnContext(ctx, "vector claim token: could not read whether the conversation is tainted; the shared write is refused", "err", err)
+			refused = true
+		}
+		facts.ProjectMemoryWriteRefused = refused
+		return facts, nil
+	}
 	if !slices.Contains(sources, "memory") {
 		return facts, nil
 	}
 	facts.MemoryToolkits = memoryToolkits
 	switch intent {
 	case MemoryIntentPersonalRead, MemoryIntentPersonalWrite:
-		facts.PersonalMemoryAllowed = s.personalMemoryAllowed(ctx, execution, claimGen, actor)
-		if facts.PersonalMemoryAllowed && intent == MemoryIntentPersonalRead {
-			// Recorded before the read runs: from here on, project memory is
-			// not written by this run (any claim of this execution).
-			if err := s.recordPersonalMemoryRead(ctx, execution, tokenSHA256); err != nil {
+		turn, allowed := s.personalMemoryTurn(ctx, execution, claimGen, actor)
+		facts.PersonalMemoryAllowed = allowed
+		if allowed && intent == MemoryIntentPersonalRead {
+			// Recorded before the read runs: from here on, no execution bound
+			// to this conversation writes shared memory or a shared index.
+			if err := s.taintConversation(ctx, turn); err != nil {
 				slog.WarnContext(ctx, "vector claim token: could not record the personal memory read; personal memory is withheld", "err", err)
 				facts.PersonalMemoryAllowed = false
 			}
 		}
-	case MemoryIntentProjectWrite:
-		refused, err := s.personalMemoryWasRead(ctx, execution)
+	case MemoryIntentProjectWrite, MemoryIntentSharedIndexWrite:
+		refused, err := s.conversationTainted(ctx, execution, claimGen)
 		if err != nil {
 			// A doubt about whether shared memory may be written refuses it.
-			slog.WarnContext(ctx, "vector claim token: could not read whether the run read personal memory; the project write is refused", "err", err)
+			slog.WarnContext(ctx, "vector claim token: could not read whether the conversation is tainted; the shared write is refused", "err", err)
 			refused = true
 		}
 		facts.ProjectMemoryWriteRefused = refused
@@ -461,48 +421,87 @@ WHERE t.token_sha256 = $1
 	return facts, nil
 }
 
-// memoryRunLock serialises the personal-read record and the project-write
-// check of ONE execution (every generation and claim of it): both take this
-// transaction-scoped advisory lock first. So a personal read and a project
-// write of one run, asked in parallel, are decided one after the other: either
-// the read is recorded first and the write is refused, or the write is
-// admitted first, and then its content was fixed before the read was even
-// admitted, so it cannot carry what the read returns.
-const memoryRunLock = `SELECT pg_advisory_xact_lock(hashtextextended('elitea_vector_memory_run:' || $1::text, 0))`
+// conversationTurn names the conversation an execution is bound to: the
+// tenant (projection project) and the conversation uuid Main's admission
+// wrote. A zero value names none.
+type conversationTurn struct {
+	project      int64
+	conversation string
+}
 
-// recordPersonalMemoryRead sets personal_memory_read on the token row, under
-// the execution's memory lock.
-func (s *VectorClaimTokens) recordPersonalMemoryRead(ctx context.Context, executionID string, tokenSHA256 [32]byte) error {
+// conversationLock serialises the taint and its check for ONE conversation
+// (every execution bound to it): both take this transaction-scoped advisory
+// lock first, so a personal read and a shared write in one conversation,
+// asked in parallel, are decided one after the other.
+const conversationLock = `SELECT pg_advisory_xact_lock(hashtextextended('elitea_memory_conversation:' || ($1::bigint)::text || ':' || $2::text, 0))`
+
+// taintConversation records that personal memory was read in turn's
+// conversation. Never cleared; the row goes with the conversation.
+func (s *VectorClaimTokens) taintConversation(ctx context.Context, turn conversationTurn) error {
+	if turn.project <= 0 || turn.conversation == "" {
+		return errors.New("no conversation to taint")
+	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, memoryRunLock, executionID); err != nil {
+		if _, err := tx.Exec(ctx, conversationLock, turn.project, turn.conversation); err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx,
-			`UPDATE elitea_runtime.vector_claim_tokens SET personal_memory_read = true WHERE token_sha256 = $1 AND execution_id = $2`,
-			tokenSHA256[:], executionID)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() != 1 {
-			return errors.New("the token row is gone")
-		}
-		return nil
+		_, err := tx.Exec(ctx, `
+INSERT INTO elitea_runtime.memory_conversation_taints (project_id, conversation_uuid)
+VALUES ($1, $2::uuid)
+ON CONFLICT DO NOTHING`, turn.project, turn.conversation)
+		return err
 	})
 }
 
-// personalMemoryWasRead reports whether any token row of the execution (any
-// generation, any claim) has recorded a personal read, under the execution's
-// memory lock.
-func (s *VectorClaimTokens) personalMemoryWasRead(ctx context.Context, executionID string) (bool, error) {
-	var read bool
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, memoryRunLock, executionID); err != nil {
+// conversationTainted reports whether the execution's conversation is
+// tainted, under the conversation's lock. An execution bound to no
+// conversation (a direct tool call, an index run) is not: it cannot have read
+// personal memory, which needs a private chat turn.
+func (s *VectorClaimTokens) conversationTainted(ctx context.Context, executionID string, generation int64) (bool, error) {
+	turn, err := s.executionConversation(ctx, executionID, generation)
+	if err != nil {
+		return false, err
+	}
+	if turn.conversation == "" {
+		return false, nil
+	}
+	var tainted bool
+	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, conversationLock, turn.project, turn.conversation); err != nil {
 			return err
 		}
 		return tx.QueryRow(ctx, `
 SELECT EXISTS (
-    SELECT 1 FROM elitea_runtime.vector_claim_tokens
-    WHERE execution_id = $1 AND personal_memory_read)`, executionID).Scan(&read)
+    SELECT 1 FROM elitea_runtime.memory_conversation_taints
+    WHERE project_id = $1 AND conversation_uuid = $2::uuid)`, turn.project, turn.conversation).Scan(&tainted)
 	})
-	return read, err
+	return tainted, err
+}
+
+// executionConversation is the conversation Main's admission bound the
+// execution to (agent_execution_jobs.client_stream_id, a uuid), with its
+// projection project; none for an execution without one or with a stream that
+// is not a uuid.
+func (s *VectorClaimTokens) executionConversation(ctx context.Context, executionID string, generation int64) (conversationTurn, error) {
+	var (
+		projection int64
+		stream     string
+	)
+	err := s.pool.QueryRow(ctx, `
+SELECT j.projection_project_id, a.client_stream_id
+FROM elitea_runtime.execution_jobs AS j
+JOIN elitea_runtime.agent_execution_jobs AS a
+  ON a.execution_id = j.execution_id AND a.generation = j.generation
+WHERE j.execution_id = $1 AND j.generation = $2`, executionID, generation).Scan(&projection, &stream)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return conversationTurn{}, nil
+	}
+	if err != nil {
+		return conversationTurn{}, err
+	}
+	parsed, err := uuid.Parse(stream)
+	if err != nil {
+		return conversationTurn{}, nil
+	}
+	return conversationTurn{project: projection, conversation: parsed.String()}, nil
 }
