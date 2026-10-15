@@ -162,6 +162,11 @@ type Dependencies struct {
 	// concrete type, the same "declared locally" shape
 	// pipelinetriggers.EventEmitter uses.
 	DomainEvents pipelineruns.EventEmitter
+	// Workspace is the cloud executor's handoff seam (ADR-0034, workspace.go
+	// in this package). Every field may be nil: the workspace-store calls then
+	// answer UNSUPPORTED_CAPABILITY and the runtime context serves no
+	// `workspace` field.
+	Workspace WorkspaceDependencies
 }
 
 func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtime, error) {
@@ -1273,6 +1278,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	workspaceServer, err := newWorkspaceStoreServer(controlPeerAuthorizer, controlClaims, dependencies)
+	if err != nil {
+		return nil, err
+	}
 
 	outputInbox, err := repos.NewOutputInboxRepository(dependencies.OutputPool)
 	if err != nil {
@@ -2149,6 +2158,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		Output:              outputServer,
 		Content:             contentServer.Routes(),
 		VectorIntrospection: vectorIntrospection,
+		Workspace:           workspaceServer,
 	})
 	if err != nil {
 		return nil, err

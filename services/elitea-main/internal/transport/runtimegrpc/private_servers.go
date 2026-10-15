@@ -65,6 +65,11 @@ type PrivateServices struct {
 	// listener, which already requires a verified client certificate; the
 	// service itself admits only its configured client identities (ADR-0031).
 	VectorIntrospection vectorv1.TokenIntrospectionServiceServer
+	// Workspace is optional: the cloud executor's workspace-store calls
+	// (ADR-0034), served on the control listener for the same reason as
+	// VectorIntrospection. The service authenticates the workload and
+	// verifies the fence on every call.
+	Workspace runtimev1.WorkspaceStoreServiceServer
 }
 
 // PrivateServerSet owns the three deliberately separate authenticated data
@@ -135,6 +140,9 @@ func newPrivateServerSet(config PrivateServerConfig, services PrivateServices, l
 	runtimev1.RegisterRuntimeControlServiceServer(controlServer, services.Control)
 	if services.VectorIntrospection != nil {
 		vectorv1.RegisterTokenIntrospectionServiceServer(controlServer, services.VectorIntrospection)
+	}
+	if services.Workspace != nil {
+		runtimev1.RegisterWorkspaceStoreServiceServer(controlServer, services.Workspace)
 	}
 	runtimev1.RegisterExecutionOutputServiceServer(outputServer, services.Output)
 	contentServer := &http.Server{
