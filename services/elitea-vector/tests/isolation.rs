@@ -205,7 +205,7 @@ fn grant(project_id: i64, expires_at_unix: i64) -> TokenGrant {
         // The memory toolkits the run was given (TOOLKIT_M and TOOLKIT_OTHER).
         memory_toolkit_ids: vec![41, 42],
         // An agent turn: it can be in a conversation.
-        conversation_bound: true,
+        conversation_unbound: false,
     }
 }
 
@@ -278,7 +278,7 @@ fn oracle_with_clock(clock: Arc<dyn Fn() -> i64 + Send + Sync>) -> Arc<dyn Intro
         (
             TOKEN_COUNTED_INGEST.to_owned(),
             TokenGrant {
-                conversation_bound: false,
+                conversation_unbound: true,
                 ..grant(PROJECT_A, now + 3600)
             },
         ),

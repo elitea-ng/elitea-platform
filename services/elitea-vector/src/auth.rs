@@ -113,11 +113,10 @@ pub struct TokenGrant {
     /// a token cannot reach the memory store of a toolkit its run was not
     /// given. Empty for a callback token.
     pub memory_toolkit_ids: Vec<i64>,
-    /// Whether the token's execution can be bound to a conversation (an agent
-    /// execution's worker claim). Only such a token is asked the shared-write
-    /// question; an index ingest or a direct toolkit call cannot be in a
-    /// conversation that read personal memory.
-    pub conversation_bound: bool,
+    /// Set when elitea-main established that the token's execution is bound
+    /// to no conversation (an index ingest, a direct toolkit call). Only then
+    /// is the shared-write question skipped; the default (false) asks.
+    pub conversation_unbound: bool,
 }
 
 /// The refusal of a project-memory write in a conversation where personal
@@ -179,7 +178,7 @@ impl MemoryIntent {
         if write
             && source == pb::Source::ToolkitIndex as i32
             && grant.kind == pb::TokenKind::WorkerClaim
-            && grant.conversation_bound
+            && !grant.conversation_unbound
         {
             return Self::SharedIndexWrite;
         }
@@ -680,7 +679,9 @@ pub fn grant_from_response(response: &pb::IntrospectTokenResponse, now: i64) -> 
             && kind == pb::TokenKind::WorkerClaim,
         project_memory_write_refused: response.project_memory_write_refused
             && kind == pb::TokenKind::WorkerClaim,
-        conversation_bound: response.conversation_bound && kind == pb::TokenKind::WorkerClaim,
+        // Only a worker claim can be told it is unbound; any other kind is
+        // never asked (it cannot name toolkit_index).
+        conversation_unbound: response.conversation_unbound && kind == pb::TokenKind::WorkerClaim,
         memory_toolkit_ids: if kind == pb::TokenKind::WorkerClaim {
             response
                 .memory_toolkit_ids
@@ -1074,7 +1075,7 @@ mod tests {
             personal_memory_allowed: false,
             project_memory_write_refused: false,
             memory_toolkit_ids: vec![5, 9],
-            conversation_bound: true,
+            conversation_unbound: false,
         }
     }
 
@@ -1229,11 +1230,48 @@ mod tests {
     }
 
     #[test]
+    fn conversation_unbound_defaults_to_asking_and_holds_only_for_a_claim() {
+        let answer = |kind: pb::TokenKind, unbound| pb::IntrospectTokenResponse {
+            active: true,
+            project_id: 7,
+            principal: "user:42".to_owned(),
+            kind: kind as i32,
+            expires_at_unix: 2_000,
+            allowed_sources: vec![pb::Source::ToolkitIndex as i32],
+            conversation_unbound: unbound,
+            ..pb::IntrospectTokenResponse::default()
+        };
+        // The zero value (an answer that omits the field) asks.
+        let omitted =
+            grant_from_response(&answer(pb::TokenKind::WorkerClaim, false), 1_000).expect("grant");
+        assert!(!omitted.conversation_unbound);
+        assert_eq!(
+            MemoryIntent::for_request(
+                &Caller::Token(omitted),
+                pb::Source::ToolkitIndex as i32,
+                0,
+                true
+            ),
+            MemoryIntent::SharedIndexWrite
+        );
+        assert!(
+            grant_from_response(&answer(pb::TokenKind::WorkerClaim, true), 1_000)
+                .expect("grant")
+                .conversation_unbound
+        );
+        assert!(
+            !grant_from_response(&answer(pb::TokenKind::EngineCallback, true), 1_000)
+                .expect("grant")
+                .conversation_unbound
+        );
+    }
+
+    #[test]
     fn a_toolkit_index_write_by_a_worker_claim_is_a_shared_index_write() {
         // An index ingest's or a direct call's claim (no conversation) costs
         // no introspection.
         let unbound = Caller::Token(TokenGrant {
-            conversation_bound: false,
+            conversation_unbound: true,
             ..claim_grant(7, 100_000)
         });
         assert_eq!(
@@ -1309,7 +1347,7 @@ mod tests {
             personal_memory_allowed: false,
             project_memory_write_refused: false,
             memory_toolkit_ids: Vec::new(),
-            conversation_bound: false,
+            conversation_unbound: false,
         };
         let grant = grant_from_response(&response, now).expect("kept");
         assert_eq!(grant.sources, vec![pb::Source::ToolkitIndex]);
@@ -1765,7 +1803,7 @@ mod tests {
             personal_memory_allowed: false,
             project_memory_write_refused: false,
             memory_toolkit_ids: Vec::new(),
-            conversation_bound: false,
+            conversation_unbound: false,
         };
         assert_eq!(
             grant_from_response(&good, 1_000).expect("good").sources,
@@ -1823,7 +1861,7 @@ mod tests {
             personal_memory_allowed: personal,
             project_memory_write_refused: false,
             memory_toolkit_ids: vec![5, 9],
-            conversation_bound: true,
+            conversation_unbound: false,
         }
     }
 
@@ -2035,7 +2073,7 @@ mod tests {
             personal_memory_allowed: false,
             project_memory_write_refused: false,
             memory_toolkit_ids: vec![3, 0, -4, 8],
-            conversation_bound: true,
+            conversation_unbound: false,
         };
         assert_eq!(
             grant_from_response(&answer(pb::TokenKind::WorkerClaim), 1_000)
@@ -2063,7 +2101,7 @@ mod tests {
             personal_memory_allowed: personal,
             project_memory_write_refused: false,
             memory_toolkit_ids: Vec::new(),
-            conversation_bound: false,
+            conversation_unbound: false,
         };
         assert!(
             grant_from_response(&answer(pb::TokenKind::WorkerClaim, true), 1_000)

@@ -824,23 +824,47 @@ WHERE entry_id = 'crafted-arguments'`)
 	}
 }
 
-// Only an agent execution's token is conversation-bound: elitea-vector asks
-// the shared-write question only for it.
-func TestPostgresVectorClaimTokenIsConversationBoundOnlyForAnAgentRun(t *testing.T) {
-	f := newVectorClaimFixture(t, "vector-claim-conversation-bound")
+// Only an execution bound to a conversation is asked the shared-write
+// question; Main tells elitea-vector when an execution is bound to none
+// (conversation_unbound; the zero value asks).
+func TestPostgresVectorClaimTokenIsUnboundOnlyWithoutAConversation(t *testing.T) {
+	m := newMemoryFixture(t, "vector-claim-conversation-unbound")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := f.mint(t, f.fence, "bearer"); err != nil {
+	if _, err := m.mint(t, m.fence, "bearer"); err != nil {
 		t.Fatal(err)
 	}
-	facts, err := f.store.Facts(ctx, sha256.Sum256([]byte("bearer")), MemoryIntentNone)
-	if err != nil || facts.ConversationBound {
-		t.Fatalf("a toolkit call is conversation-bound: %+v %v", facts, err)
+	// A toolkit call with no agent job: unbound.
+	facts, err := m.store.Facts(ctx, sha256.Sum256([]byte("bearer")), MemoryIntentNone)
+	if err != nil || !facts.ConversationUnbound {
+		t.Fatalf("a direct toolkit call is not unbound: %+v %v", facts, err)
 	}
-	f.exec(t, `UPDATE elitea_runtime.execution_jobs SET capability_id = $2 WHERE execution_id = $1`,
-		f.fence.ExecutionID, executiondomain.AgentApplicationCapability)
-	facts, err = f.store.Facts(ctx, sha256.Sum256([]byte("bearer")), MemoryIntentNone)
-	if err != nil || !facts.ConversationBound {
-		t.Fatalf("an agent run is not conversation-bound: %+v %v", facts, err)
+	// An agent turn bound to a conversation: asked.
+	m.turn(t, m.conversationUUID(1), "manual", 1)
+	facts, err = m.store.Facts(ctx, sha256.Sum256([]byte("bearer")), MemoryIntentNone)
+	if err != nil || facts.ConversationUnbound {
+		t.Fatalf("an agent turn is unbound: %+v %v", facts, err)
+	}
+}
+
+// A conversation deleted mid-run fails closed: the run's shared writes are
+// refused (its taint row went with it, so what it read cannot be ruled out).
+func TestPostgresVectorClaimTokenADeletedConversationRefusesSharedWrites(t *testing.T) {
+	m := newMemoryFixture(t, "vector-claim-deleted-conversation")
+	m.turn(t, m.conversationUUID(1), "manual", 1)
+	m.mintMemory(t, "bearer")
+	if m.facts(t, "bearer", MemoryIntentSharedIndexWrite).ProjectMemoryWriteRefused {
+		t.Fatal("precondition: allowed while the conversation exists")
+	}
+	m.exec(t, m.tenant(`DELETE FROM @S@.chat_participant_mapping WHERE conversation_id = 1`))
+	m.exec(t, m.tenant(`DELETE FROM @S@.chat_message_group WHERE conversation_id = 1`))
+	m.exec(t, m.tenant(`DELETE FROM @S@.chat_conversations WHERE id = 1`))
+	for _, intent := range []MemoryIntent{MemoryIntentProjectWrite, MemoryIntentSharedIndexWrite} {
+		if !m.facts(t, "bearer", intent).ProjectMemoryWriteRefused {
+			t.Fatalf("intent %d allowed after the conversation was deleted", intent)
+		}
+	}
+	if tainted, err := m.store.ExecutionConversationTainted(context.Background(), m.fence.ExecutionID, int64(m.fence.Generation)); err != nil || !tainted {
+		t.Fatalf("remove_index allowed after the conversation was deleted: %v %v", tainted, err)
 	}
 }

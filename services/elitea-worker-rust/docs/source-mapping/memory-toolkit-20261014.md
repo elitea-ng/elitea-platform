@@ -121,11 +121,17 @@ enforces it:
   upserts and deletes (`memory.shared_write_after_personal_read`, for every
   claim token of the run, with or without the memory source), and Main's own
   `remove_index` from such a run (the claim remover answers
-  `SHARED_WRITE_REFUSED`; round 5). Only an agent execution's token is
-  conversation-bound (`conversation_bound` in the introspection answer), so an
-  index ingest's or a direct toolkit call's index writes cost no extra
-  introspection; a callback token's only source is its provider's, so it
-  never writes a toolkit index. Reads are not affected. The taint is never
+  `SHARED_WRITE_REFUSED`; round 5). An execution spawned FROM a run (a Code
+  node's toolkit_call child) is bound through its parent
+  (code_platform_toolkit_children -> code_platform_calls -> the parent's agent
+  job, recursively), so it inherits the parent's conversation, taint, trigger
+  origin and personal-memory rules (round 6). Main marks a token
+  `conversation_unbound` only when its execution's lineage has no agent turn
+  (an index ingest, a direct toolkit call from the UI or an API); only then is
+  the shared-write question skipped, and the zero value asks. A callback
+  token's only source is its provider's, so it never writes a toolkit index.
+  A conversation deleted mid-run fails closed: its runs' shared writes are
+  refused (round 6). Reads are not affected. The taint is never
   cleared and is deleted with the conversation on every delete path by a
   tenant trigger (tenant/0149: the conversation route, the MCP run cleanup,
   pipeline trigger runs, bulk deletes) and with the project (foreign key). Setting and checking take one advisory lock keyed by
@@ -148,7 +154,9 @@ enforces it:
   top-level entries of the frozen version's `tools` (an application turn) or of
   the input's `tools` (an ad-hoc turn), which Main built from the project's own
   toolkit rows and which the worker materializes from; for a direct toolkit
-  call, the resolved toolkit itself when it is a memory toolkit. A sub-agent's
+  call, the resolved toolkit itself when it is a memory toolkit, and for a Code
+  node's toolkit_call (whose toolkit id the code chose) only when the parent
+  run was given that memory toolkit (round 6). A sub-agent's
   memory toolkits are the run's too (round 5): the admission follows the
   frozen `application` entries (application and version id, built by Main)
   recursively through each sub-agent's saved version in the run's project, the

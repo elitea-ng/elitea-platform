@@ -245,15 +245,16 @@ type IntrospectTokenResponse struct {
 	// for a token without the memory source; a memory-source token with none
 	// reaches no memory at all.
 	MemoryToolkitIds []int64 `protobuf:"varint,9,rep,packed,name=memory_toolkit_ids,json=memoryToolkitIds,proto3" json:"memory_toolkit_ids,omitempty"`
-	// conversation_bound is true for a worker claim token of an agent execution
-	// (agent.execute.application / agent.execute.adhoc), the only executions
-	// that can be bound to a conversation. elitea-vector asks the shared-write
-	// question (MEMORY_INTENT_SHARED_INDEX_WRITE) only for such a token; an
-	// index ingest or a direct toolkit call cannot be in a conversation that
-	// read personal memory. False for every callback token.
-	ConversationBound bool `protobuf:"varint,10,opt,name=conversation_bound,json=conversationBound,proto3" json:"conversation_bound,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// conversation_unbound is true when elitea-main has established that the
+	// worker claim's execution is bound to NO conversation: no agent turn at the
+	// root of its lineage (an index ingest, a direct toolkit call from the UI or
+	// an API, a toolkit discovery). A Code node's toolkit_call child of an agent
+	// turn is bound through its parent. elitea-vector skips the shared-write
+	// question (MEMORY_INTENT_SHARED_INDEX_WRITE) only when this is true; the
+	// default (false) means "ask", so an answer that omits it fails safe.
+	ConversationUnbound bool `protobuf:"varint,10,opt,name=conversation_unbound,json=conversationUnbound,proto3" json:"conversation_unbound,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *IntrospectTokenResponse) Reset() {
@@ -349,9 +350,9 @@ func (x *IntrospectTokenResponse) GetMemoryToolkitIds() []int64 {
 	return nil
 }
 
-func (x *IntrospectTokenResponse) GetConversationBound() bool {
+func (x *IntrospectTokenResponse) GetConversationUnbound() bool {
 	if x != nil {
-		return x.ConversationBound
+		return x.ConversationUnbound
 	}
 	return false
 }
@@ -363,7 +364,7 @@ const file_elitea_vector_v1_introspection_proto_rawDesc = "" +
 	"$elitea/vector/v1/introspection.proto\x12\x10elitea.vector.v1\x1a\x1delitea/vector/v1/vector.proto\"s\n" +
 	"\x16IntrospectTokenRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12C\n" +
-	"\rmemory_intent\x18\x02 \x01(\x0e2\x1e.elitea.vector.v1.MemoryIntentR\fmemoryIntent\"\xe0\x03\n" +
+	"\rmemory_intent\x18\x02 \x01(\x0e2\x1e.elitea.vector.v1.MemoryIntentR\fmemoryIntent\"\xe4\x03\n" +
 	"\x17IntrospectTokenResponse\x12\x16\n" +
 	"\x06active\x18\x01 \x01(\bR\x06active\x12\x1d\n" +
 	"\n" +
@@ -374,9 +375,9 @@ const file_elitea_vector_v1_introspection_proto_rawDesc = "" +
 	"\x0fallowed_sources\x18\x06 \x03(\x0e2\x18.elitea.vector.v1.SourceR\x0eallowedSources\x126\n" +
 	"\x17personal_memory_allowed\x18\a \x01(\bR\x15personalMemoryAllowed\x12?\n" +
 	"\x1cproject_memory_write_refused\x18\b \x01(\bR\x19projectMemoryWriteRefused\x12,\n" +
-	"\x12memory_toolkit_ids\x18\t \x03(\x03R\x10memoryToolkitIds\x12-\n" +
-	"\x12conversation_bound\x18\n" +
-	" \x01(\bR\x11conversationBound*d\n" +
+	"\x12memory_toolkit_ids\x18\t \x03(\x03R\x10memoryToolkitIds\x121\n" +
+	"\x14conversation_unbound\x18\n" +
+	" \x01(\bR\x13conversationUnbound*d\n" +
 	"\tTokenKind\x12\x1a\n" +
 	"\x16TOKEN_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17TOKEN_KIND_WORKER_CLAIM\x10\x01\x12\x1e\n" +

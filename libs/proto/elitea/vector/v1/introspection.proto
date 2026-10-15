@@ -100,11 +100,12 @@ message IntrospectTokenResponse {
   // for a token without the memory source; a memory-source token with none
   // reaches no memory at all.
   repeated int64 memory_toolkit_ids = 9;
-  // conversation_bound is true for a worker claim token of an agent execution
-  // (agent.execute.application / agent.execute.adhoc), the only executions
-  // that can be bound to a conversation. elitea-vector asks the shared-write
-  // question (MEMORY_INTENT_SHARED_INDEX_WRITE) only for such a token; an
-  // index ingest or a direct toolkit call cannot be in a conversation that
-  // read personal memory. False for every callback token.
-  bool conversation_bound = 10;
+  // conversation_unbound is true when elitea-main has established that the
+  // worker claim's execution is bound to NO conversation: no agent turn at the
+  // root of its lineage (an index ingest, a direct toolkit call from the UI or
+  // an API, a toolkit discovery). A Code node's toolkit_call child of an agent
+  // turn is bound through its parent. elitea-vector skips the shared-write
+  // question (MEMORY_INTENT_SHARED_INDEX_WRITE) only when this is true; the
+  // default (false) means "ask", so an answer that omits it fails safe.
+  bool conversation_unbound = 10;
 }
