@@ -21,8 +21,10 @@
 //!   `etag` (or `modified_at`) too, and a mismatch is `Changed` rather than
 //!   newer bytes handed back under the old version. A response that
 //!   carries nothing to compare is refused.
-//! * **Egress.** The platform host passes the same allowlist as every
-//!   connector (fail-closed); a deployment names its platform host on it.
+//! * **Egress.** The platform is this deployment's own API, not a third
+//!   party: the external-source allowlist does not govern it. Every request
+//!   is pinned to the platform's exact origin (scheme, host and port) and
+//!   nothing else is reachable through this source.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -31,7 +33,6 @@ use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
 use serde_json::{Map, Value};
 
 use super::client::{ArtifactPlatform, valid_object_key, valid_segment};
-use crate::egress::HostAllowlist;
 use crate::source::{
     Backoff, Failure, Listed, ListingCache, SourceHttp, SourceLimits, Timeouts, VersionKind,
     references, title_of,
@@ -53,24 +54,19 @@ pub struct ArtifactSource {
 
 impl ArtifactSource {
     /// `bucket` (and, when `prefix` is not empty, its folder `prefix`) of the
-    /// platform's invoking project, every request through `allowlist`
-    /// (fail-closed) and then `transport`.
+    /// platform's invoking project, every request pinned to the platform's
+    /// own origin and sent through `transport`.
     ///
     /// # Errors
     ///
-    /// The platform host is not on the allowlist, the bucket is not one
-    /// segment, or the folder is not a valid key.
+    /// The bucket is not one segment, or the folder is not a valid key.
     pub fn new(
         platform: ArtifactPlatform,
         bucket: &str,
         prefix: &str,
-        allowlist: HostAllowlist,
         transport: Arc<dyn Transport>,
     ) -> Result<Self, SourceError> {
-        let http = SourceHttp::new(allowlist, transport);
-        if !http.permits(platform.base()) {
-            return Err(Failure::Refused.into_source_error(PROVIDER, None));
-        }
+        let http = SourceHttp::pinned_to_origin(platform.base(), transport);
         if !valid_segment(bucket) {
             return Err(SourceError::Unavailable(
                 "the artifact bucket name is not a single path segment".to_owned(),
@@ -340,10 +336,6 @@ mod tests {
         ArtifactPlatform::new("https://platform.example", "bearer-fixture", "7").expect("platform")
     }
 
-    fn allow() -> HostAllowlist {
-        HostAllowlist::parse(Some("platform.example"))
-    }
-
     const LIST: &str = "/api/v2/artifacts/objects/7/docs";
 
     #[tokio::test]
@@ -373,8 +365,7 @@ mod tests {
             panic!("unexpected request {path}");
         });
         let source =
-            ArtifactSource::new(platform(), "docs", "/guides/", allow(), transport.clone())
-                .expect("source");
+            ArtifactSource::new(platform(), "docs", "/guides/", transport.clone()).expect("source");
         let listed = source.list().await.expect("listing");
         let keys: Vec<_> = listed
             .iter()
@@ -401,8 +392,7 @@ mod tests {
     #[tokio::test]
     async fn a_404_is_an_error_never_an_empty_listing() {
         let transport = Scripted::new(|_, _| Reply::status(StatusCode::NOT_FOUND));
-        let source =
-            ArtifactSource::new(platform(), "docs", "", allow(), transport).expect("source");
+        let source = ArtifactSource::new(platform(), "docs", "", transport).expect("source");
         let error = source
             .list()
             .await
@@ -414,16 +404,14 @@ mod tests {
 
         // Only a successful answer with no objects is an empty listing.
         let transport = Scripted::new(|_, _| Reply::json(&json!({"objects": []})));
-        let source =
-            ArtifactSource::new(platform(), "docs", "", allow(), transport).expect("source");
+        let source = ArtifactSource::new(platform(), "docs", "", transport).expect("source");
         assert_eq!(source.list().await.expect("empty"), []);
 
         let transport = Scripted::new(|request, _| match query(request, "cursor") {
             None => Reply::json(&json!({"objects": [], "next_cursor": "c2"})),
             Some(_) => Reply::status(StatusCode::NOT_FOUND),
         });
-        let source =
-            ArtifactSource::new(platform(), "docs", "", allow(), transport).expect("source");
+        let source = ArtifactSource::new(platform(), "docs", "", transport).expect("source");
         assert!(source.list().await.is_err());
     }
 
@@ -440,8 +428,8 @@ mod tests {
                 fetch_reply(request)
             }
         });
-        let source = ArtifactSource::new(platform(), "docs", "", allow(), transport.clone())
-            .expect("source");
+        let source =
+            ArtifactSource::new(platform(), "docs", "", transport.clone()).expect("source");
         source.list().await.expect("listing");
         let fetched = source.fetch("a.md").await;
         (transport, fetched)
@@ -521,22 +509,37 @@ mod tests {
         ] {
             let transport =
                 Scripted::new(move |_, _| Reply::json(&json!({"objects": [object.clone()]})));
-            let source = ArtifactSource::new(platform(), "docs", "guides", allow(), transport)
-                .expect("source");
+            let source =
+                ArtifactSource::new(platform(), "docs", "guides", transport).expect("source");
             assert!(source.list().await.is_err());
         }
     }
 
     #[tokio::test]
-    async fn the_platform_host_passes_the_allowlist_too() {
-        let transport = Scripted::new(|_, _| panic!("no request may be sent"));
-        let refused = ArtifactSource::new(
-            platform(),
-            "docs",
-            "",
-            HostAllowlist::parse(Some("github.com")),
-            transport,
-        );
-        assert!(refused.is_err());
+    async fn the_platform_is_reached_without_any_host_allowlist() {
+        // The platform is this deployment's own API: no external-source
+        // allowlist (public SaaS hosts only, in a shipped chart) governs it.
+        let transport = Scripted::new(|request, _| {
+            assert_eq!(
+                request.url().origin().ascii_serialization(),
+                "https://platform.example"
+            );
+            Reply::json(&json!({"objects": []}))
+        });
+        let source = ArtifactSource::new(platform(), "docs", "", transport).expect("source");
+        assert!(source.list().await.expect("listing").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_platform_on_a_port_stays_pinned_to_that_exact_origin() {
+        let platform =
+            ArtifactPlatform::new("https://platform.example:8443", "bearer-fixture", "7")
+                .expect("platform");
+        let transport = Scripted::new(|request, _| {
+            assert_eq!(request.url().port(), Some(8443));
+            Reply::json(&json!({"objects": []}))
+        });
+        let source = ArtifactSource::new(platform, "docs", "", transport).expect("source");
+        assert!(source.list().await.expect("listing").is_empty());
     }
 }

@@ -243,6 +243,33 @@ async fn pictures_the_connector_could_not_read_are_counted_and_a_failed_fetch_is
     assert_eq!(versions["b.md"], "v1", "a final reason is not retried");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rate_limited_picture_read_is_retried_by_the_next_run() {
+    let mut harness = harness(4, None).await;
+    let chat = by_tag();
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        vec![page("a.md", &["one"], None, &json!({"rate_limited": 1}))],
+        None,
+        &parameters(false, json!({})),
+        Some("gpt-vision"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert!(
+        summary
+            .message
+            .contains("Linked pictures not described: 1 rate_limited."),
+        "{summary:?}"
+    );
+    assert_eq!(
+        summary.documents[0].version, "v1#pictures-pending-1",
+        "a rate limit is cured by another run"
+    );
+}
+
 #[test]
 fn bins_with_llm_forces_the_vision_step_on_for_the_named_extensions_with_the_loaders_prompt() {
     use elitea_connectors::pictures::PictureStep;

@@ -90,6 +90,25 @@ data:
     {{- if gt (len $r.sandboxRuntimes) 0 }}
     {{- $_ := set $config "sandbox_runtimes" $r.sandboxRuntimes }}
     {{- end }}
+    {{- /* The model completions one claim's toolkits may make in total (the
+    step-back index tools, the Office prompts, image generation). Written
+    only when set, and only for the Rust worker, so the default runtime.json
+    stays identical for both implementations; unset, the worker's default
+    (200) applies. Validated like indexModelCallCap: 0 is refused. */}}
+    {{- if and (hasKey $r "toolkitModelCallCap") (not (kindIs "invalid" $r.toolkitModelCallCap)) (ne (toString $r.toolkitModelCallCap) "") }}
+    {{- $cap := $r.toolkitModelCallCap }}
+    {{- if ne (include "elitea-worker.isRust" .) "true" }}
+    {{- fail "worker.runtime.toolkitModelCallCap requires the Rust worker" }}
+    {{- end }}
+    {{- if not (or (kindIs "float64" $cap) (kindIs "int64" $cap) (kindIs "int" $cap)) }}
+    {{- fail (printf "worker.runtime.toolkitModelCallCap must be an integer of at least 1, not %v (%s)" $cap (kindOf $cap)) }}
+    {{- end }}
+    {{- $f := float64 $cap }}
+    {{- if or (lt $f 1.0) (ne $f (floor $f)) (gt $f 4294967295.0) }}
+    {{- fail (printf "worker.runtime.toolkitModelCallCap must be an integer between 1 and 4294967295, not %v" $cap) }}
+    {{- end }}
+    {{- $_ := set $config "toolkit_model_call_cap" (int64 $cap) }}
+    {{- end }}
     {{- /* The vector store (ADR-0030 I1, ADR-0031): written only under
     indexingRuntime=rust, so the python-indexing runtime.json stays identical
     for both implementations (render-worker.sh). The worker reaches

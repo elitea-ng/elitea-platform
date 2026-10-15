@@ -12,6 +12,9 @@ elitea-content-source = { path = "../content-source" }
 # The tree-sitter grammars (`grammar_for`), shared with the Inventory engine
 # so a method boundary is the same tree whoever asks.
 elitea-code-parsers = { path = "../code-parsers" }
+# The one reasoning-strip rule (`<think>` blocks, Qwen's bare `</think>`),
+# shared with the worker and the model client.
+elitea-llm-wire = { path = "../llm-wire" }
 serde = { version = "1.0.228", features = ["derive"] }
 # Default features only, like code-parsers: this crate does not need
 # `preserve_order` (the JSON chunker keeps key order in its own value type),

@@ -33,6 +33,11 @@ pub enum SourceError {
     /// The source cannot be listed or a document cannot be read.
     #[error("{0}")]
     Unavailable(String),
+    /// The provider is rate limiting the caller and stayed so past the
+    /// source's backoff bound. Nothing is wrong with the document or the
+    /// credential: another run, later, can read it.
+    #[error("{0}")]
+    RateLimited(String),
     /// No document has this key.
     #[error("no document '{0}' in this source")]
     NotFound(String),

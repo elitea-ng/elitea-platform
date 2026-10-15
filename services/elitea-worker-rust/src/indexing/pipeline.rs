@@ -117,7 +117,15 @@ const SKIP_EMPTY: &str = "empty";
 /// (it declined, or the reply is over the size bound): final for the picture,
 /// never marks the document for another run.
 pub(super) const SKIP_REPLY_UNUSABLE: &str = "reply_unusable";
+/// The model spent the whole `max_tokens` on reasoning and described
+/// nothing. The same request gets the same cut, so it is final for the
+/// picture (no retry, no pending mark) and benign for the run; the summary
+/// says to raise `max_tokens`.
+pub(super) const SKIP_REASONING_EXHAUSTED_TOKENS: &str = "reasoning_exhausted_tokens";
 const SKIP_FETCH_FAILED: &str = "fetch_failed";
+/// The source stayed rate limited past its backoff bound: nothing is wrong
+/// with the document, a later run reads it. The stored version is untouched.
+pub(super) const SKIP_RATE_LIMITED: &str = "rate_limited";
 const SKIP_EMBEDDING_FAILED: &str = "embedding_failed";
 pub(super) const SKIP_TOO_LARGE: &str = "too_large";
 /// The model refused this picture alone (a text-only model, a provider's 400
@@ -156,7 +164,8 @@ pub(super) fn skip_loses_document(reason: &str, plan: Plan, explicit_model: bool
         | SKIP_TOO_LARGE
         | SKIP_TOO_MANY_PAGES
         | SKIP_TOO_MANY_PICTURES
-        | SKIP_ENCRYPTED => false,
+        | SKIP_ENCRYPTED
+        | SKIP_REASONING_EXHAUSTED_TOKENS => false,
         SKIP_NO_MODEL | SKIP_NEEDS_MODEL => explicit_model,
         _ => true,
     }
@@ -186,7 +195,11 @@ const MAX_VERSION_BYTES: usize = 1024;
 fn retryable_picture_skip(reason: &str) -> bool {
     matches!(
         reason,
-        SKIP_MODEL_FAILED | SKIP_MODEL_CAP_EXCEEDED | SKIP_EXTRACT_TIMEOUT | SKIP_FETCH_FAILED
+        SKIP_MODEL_FAILED
+            | SKIP_MODEL_CAP_EXCEEDED
+            | SKIP_EXTRACT_TIMEOUT
+            | SKIP_FETCH_FAILED
+            | SKIP_RATE_LIMITED
     )
 }
 
@@ -1975,6 +1988,18 @@ impl Runner<'_> {
                 .collect();
             let _ = write!(message, " {label}: {}.", reasons.join(", "));
         }
+        if [
+            &tally.skipped,
+            &tally.pictures_skipped,
+            &tally.linked_skipped,
+        ]
+        .iter()
+        .any(|counts| counts.contains_key(SKIP_REASONING_EXHAUSTED_TOKENS))
+        {
+            message.push_str(
+                " The chat model spent its whole max_tokens on reasoning for some pictures (reasoning_exhausted_tokens): raise max_tokens in the toolkit's LLM settings and re-run.",
+            );
+        }
         if tally.failed_chunks > 0 {
             let _ = write!(message, " {} chunks failed to embed.", tally.failed_chunks);
         }
@@ -2334,6 +2359,10 @@ async fn prepare(
         Err(SourceError::NotFound(_)) => {
             // Listed, then gone: the next run deletes it.
             return Preparation::Skipped(SKIP_FETCH_FAILED, plan).into();
+        }
+        Err(error @ SourceError::RateLimited(_)) => {
+            tracing::warn!(event = "index_document_rate_limited", error = %error);
+            return Preparation::Skipped(SKIP_RATE_LIMITED, plan).into();
         }
         Err(error) => {
             tracing::warn!(event = "index_document_fetch_failed", error = %error);

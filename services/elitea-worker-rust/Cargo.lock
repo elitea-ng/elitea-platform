@@ -1394,6 +1394,7 @@ version = "0.1.0"
 dependencies = [
  "elitea-code-parsers",
  "elitea-content-source",
+ "elitea-llm-wire",
  "serde",
  "serde_json",
  "text-splitter",

@@ -39,7 +39,7 @@ use crate::toolkits::families::artifact::ArtifactToolAuthority;
 use crate::toolkits::families::office_host::{
     ImageEditInput, ImageEditRequest, ImageGenerateRequest, MAX_IMAGE_EDIT_INPUT_BYTES,
     MAX_IMAGES_PER_REQUEST, MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError,
-    SharedOfficeToolHost, valid_upload_file_name,
+    SharedOfficeToolHost, TOOLKIT_BUDGET_SENTENCE, valid_upload_file_name,
 };
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
@@ -421,16 +421,14 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> String {
         OfficeFailure::TooLarge => {
             format!("Could not {action}: a file is larger than the platform accepts.")
         }
+        OfficeFailure::BudgetRefused if error.is_toolkit_budget() => {
+            format!("Could not {action}: {TOOLKIT_BUDGET_SENTENCE}.")
+        }
         OfficeFailure::BudgetRefused => format!(
             "Could not {action}: the model budget is exhausted. Do not retry; tell the user."
         ),
         OfficeFailure::NoModel | OfficeFailure::ModelUnusable => {
             format!("Could not {action}: image generation is not available in this run.")
-        }
-        OfficeFailure::RunCallCapReached => {
-            format!(
-                "Could not {action}: this run used up its tool model calls; start a new run or ask an operator to raise worker.runtime.toolkitModelCallCap. Do not retry in this run."
-            )
         }
         OfficeFailure::RateLimited => format!(
             "Could not {action}: the image model is rate-limited right now. Try again shortly."

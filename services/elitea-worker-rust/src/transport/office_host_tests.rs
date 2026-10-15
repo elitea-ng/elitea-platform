@@ -301,6 +301,8 @@ fn host(api: &Arc<ObjectApi>, replies: Vec<&str>) -> (Arc<ClaimOfficeHost>, Arc<
     let model = LazyStepbackModel::bound(StepbackBinding {
         model: Arc::clone(&llm) as Arc<dyn Llm>,
         model_name: "gpt-test".to_owned(),
+        config: adk_rust::GenerateContentConfig::default(),
+        budget: None,
     });
     let host = ClaimOfficeHost::new(runtime, "pat-token", "42", model).expect("host");
     (Arc::new(host), llm)
@@ -358,7 +360,6 @@ async fn objects_are_read_and_written_as_bytes_under_the_claims_credential() {
 #[tokio::test]
 #[allow(clippy::too_many_lines, reason = "one table of causes")]
 async fn failures_are_classified_and_a_large_object_is_never_buffered() {
-    use adk_rust::ErrorCategory as C;
     let api = ObjectApi::new();
     api.put("big.pptx", vec![7; 4096]);
     api.put("taken.pptx", vec![1]);
@@ -471,23 +472,67 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
     );
     let down = super::office_host::failure(&Failure::Transport("reset".into()));
     assert_eq!(down.kind(), OfficeFailure::Unreachable);
-    // Review round 2: classified on the AdkError's code and category, never
-    // on its message (the messages below are deliberately misleading).
-    let error = |category, code: &'static str| {
+}
+
+/// `model_failure` classifies on the error CODE, never its message: the
+/// claim's toolkit cap and the gateway's budgets are budget refusals (the
+/// cap with its own sentence), a reasoning-only reply is unusable, and a
+/// message that merely mentions a budget is not a budget refusal.
+#[test]
+fn model_failures_are_classified_on_their_code() {
+    use super::model_text::toolkit_budget_exhausted;
+    use crate::indexing::tools::reply_codes;
+    let error = |code: &'static str, message: &str| {
         adk_rust::AdkError::new(
             adk_rust::ErrorComponent::Model,
-            category,
+            adk_rust::ErrorCategory::Unavailable,
             code,
-            "the model gateway is unreachable; budget is exhausted",
+            message.to_owned(),
         )
     };
+    let cap = super::office_host::model_failure(&toolkit_budget_exhausted());
+    assert_eq!(cap.kind(), OfficeFailure::BudgetRefused);
+    assert!(cap.is_toolkit_budget());
+    for code in [
+        "model_gateway.budget_exhausted",
+        "model_gateway.member_budget_exhausted",
+        "model_gateway.project_budget_exhausted",
+    ] {
+        let refused = super::office_host::model_failure(&error(code, "x"));
+        assert_eq!(refused.kind(), OfficeFailure::BudgetRefused, "{code}");
+        assert!(!refused.is_toolkit_budget(), "{code}");
+    }
+    // The message is not read.
+    assert_eq!(
+        super::office_host::model_failure(&error(
+            "model_gateway.transport",
+            "the project model budget is exhausted"
+        ))
+        .kind(),
+        OfficeFailure::Unreachable
+    );
+    assert_eq!(
+        super::office_host::model_failure(&error(reply_codes::REASONING_ONLY, "x")).kind(),
+        OfficeFailure::ReplyUnusable
+    );
+    assert_eq!(
+        super::office_host::model_failure(&error("model_gateway.rate_limited", "x")).kind(),
+        OfficeFailure::RateLimited
+    );
+}
+
+/// #1292 rounds 2-3: the categories and codes the binder and the facades
+/// actually produce. An unbindable model (the facade's bind code, category
+/// `InvalidInput`) is `ModelUnusable`, never `NoModel` or `InvalidRequest`;
+/// a request refused as invalid is `InvalidRequest`, not `Unreachable` (D3);
+/// a reply that came back over a bound is `ReplyTooLarge`.
+#[test]
+fn bind_failures_invalid_requests_and_oversized_replies_have_their_own_kind() {
+    use adk_rust::ErrorCategory as C;
+    let error = |category, code: &'static str| {
+        adk_rust::AdkError::new(adk_rust::ErrorComponent::Model, category, code, "x")
+    };
     for (category, code, kind) in [
-        (
-            C::RateLimited,
-            "model.toolkit_budget_exhausted",
-            OfficeFailure::RunCallCapReached,
-        ),
-        // Round 3, item 4: the categories `bind_error` actually produces.
         (
             C::InvalidInput,
             "model_gateway.invalid_configuration",
@@ -498,7 +543,16 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
             "model_gateway.invalid_invocation",
             OfficeFailure::ModelUnusable,
         ),
-        // Item 7: reply-side size errors.
+        (
+            C::InvalidInput,
+            "model_gateway.invalid_request",
+            OfficeFailure::InvalidRequest,
+        ),
+        (
+            C::InvalidInput,
+            "model_gateway.rejected",
+            OfficeFailure::InvalidRequest,
+        ),
         (
             C::Unavailable,
             "model_gateway.stream_too_large",
@@ -510,85 +564,9 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
             OfficeFailure::ReplyTooLarge,
         ),
         (
-            C::Internal,
-            "toolkit_completion.reply_size",
-            OfficeFailure::ReplyTooLarge,
-        ),
-        (
-            C::InvalidInput,
-            "model_gateway.project_budget_exhausted",
-            OfficeFailure::BudgetRefused,
-        ),
-        (
-            C::InvalidInput,
-            "model_gateway.member_budget_exhausted",
-            OfficeFailure::BudgetRefused,
-        ),
-        (
-            C::InvalidInput,
-            "model_gateway.budget_exhausted",
-            OfficeFailure::BudgetRefused,
-        ),
-        // D3: the live refusal read as "the platform could not be reached".
-        (
-            C::InvalidInput,
-            "model_gateway.invalid_request",
-            OfficeFailure::InvalidRequest,
-        ),
-        (
-            C::InvalidInput,
-            "toolkit_completion.request",
-            OfficeFailure::InvalidRequest,
-        ),
-        (
-            C::RateLimited,
-            "model_gateway.rate_limited",
-            OfficeFailure::RateLimited,
-        ),
-        (
-            C::Timeout,
-            "model_gateway.upstream_timeout",
-            OfficeFailure::Timeout,
-        ),
-        (
-            C::Unauthorized,
-            "model_gateway.unauthorized",
-            OfficeFailure::AccessRefused,
-        ),
-        (
             C::Unavailable,
             "model_gateway.unavailable",
             OfficeFailure::Unreachable,
-        ),
-        (
-            C::Internal,
-            "toolkit_completion.cut",
-            OfficeFailure::ReplyCutOff,
-        ),
-        (
-            C::Internal,
-            "toolkit_completion.cut_while_reasoning",
-            OfficeFailure::ReplyCutOff,
-        ),
-        (
-            C::Internal,
-            "toolkit_completion.declined",
-            OfficeFailure::ReplyDeclined,
-        ),
-        (
-            C::Internal,
-            "toolkit_completion.empty",
-            OfficeFailure::ReplyEmpty,
-        ),
-        (
-            C::Internal,
-            "toolkit_completion.no_terminal",
-            OfficeFailure::ReplyUnusable,
-        ),
-        (
-            C::Internal,
-            "toolkit_completion.finish",
-            OfficeFailure::ReplyUnusable,
         ),
     ] {
         assert_eq!(
@@ -597,6 +575,87 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
             "{code}"
         );
     }
+}
+
+/// A run WITH a chat model whose binding fails is told the model is unusable
+/// for the tool; only a run with no model at all is `NoModel`.
+#[tokio::test]
+async fn an_unbindable_model_is_unusable_not_absent() {
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        ObjectApi::new() as Arc<dyn Transport>,
+    ));
+    let failing = LazyStepbackModel::new(Box::new(|| {
+        Err(crate::transport::model_facade::ModelFacadeError::InvalidConfiguration)
+    }));
+    let host = ClaimOfficeHost::new(Arc::clone(&runtime), "pat", "42", failing).expect("host");
+    assert_eq!(
+        host.complete(OfficeModelRequest::default())
+            .await
+            .expect_err("unbindable")
+            .kind(),
+        OfficeFailure::ModelUnusable
+    );
+    let none =
+        ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
+    assert_eq!(
+        none.complete(OfficeModelRequest::default())
+            .await
+            .expect_err("no model")
+            .kind(),
+        OfficeFailure::NoModel
+    );
+}
+
+/// The Office tools see the claim's spent toolkit cap as a budget refusal
+/// with the cap's sentence, through the real `complete` path; an empty reply
+/// is an answer (`Ok("")`), never "unreachable".
+#[tokio::test]
+async fn the_office_host_reports_the_toolkit_cap_and_accepts_an_empty_reply() {
+    let api = ObjectApi::new();
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        Arc::clone(&api) as Arc<dyn Transport>,
+    ));
+    let llm = Arc::new(Scripted(
+        Mutex::new(vec![String::new()]),
+        Mutex::new(Vec::new()),
+    ));
+    let budget = super::model_text::ModelCallBudget::new(1);
+    let model = LazyStepbackModel::bound(StepbackBinding {
+        model: Arc::clone(&llm) as Arc<dyn Llm>,
+        model_name: "gpt-test".to_owned(),
+        config: adk_rust::GenerateContentConfig::default(),
+        budget: Some(budget),
+    });
+    let host = ClaimOfficeHost::new(runtime, "pat-token", "42", model).expect("host");
+    let request = || OfficeModelRequest {
+        prompt: "summarise".to_owned(),
+        images_png: std::sync::Arc::from(Vec::<Vec<u8>>::new()),
+        image_media_types: std::sync::Arc::from(Vec::<String>::new()),
+    };
+    assert_eq!(
+        host.complete(request()).await.expect("empty is an answer"),
+        ""
+    );
+    let spent = host.complete(request()).await.expect_err("budget spent");
+    assert_eq!(spent.kind(), OfficeFailure::BudgetRefused);
+    assert!(spent.is_toolkit_budget());
+    assert_eq!(
+        llm.1.lock().expect("seen").len(),
+        1,
+        "the refused call sent nothing"
+    );
+    // What a tool tells the model for it.
+    let error = elitea_agent_runtime::toolkits::OfficeHostError::toolkit_budget();
+    assert!(
+        elitea_agent_runtime::toolkits::TOOLKIT_BUDGET_SENTENCE
+            .contains("worker.runtime.toolkitModelCallCap")
+    );
+    assert_eq!(
+        error.reason_code(),
+        elitea_agent_runtime::toolkits::TOOLKIT_BUDGET_REASON
+    );
 }
 
 #[test]

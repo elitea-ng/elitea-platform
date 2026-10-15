@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 
 use super::office_host::{
     MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError, SharedOfficeToolHost,
+    TOOLKIT_BUDGET_SENTENCE,
 };
 use crate::toolkits::invocation::admit_materialized_toolset;
 use crate::toolkits::policy::ToolAdmissionPolicy;
@@ -405,14 +406,12 @@ pub(crate) fn host_sentence(action: &str, error: &OfficeHostError, kind: &Office
         OfficeFailure::TooLarge => {
             format!("Could not {action}: the file is larger than the platform accepts.")
         }
+        OfficeFailure::BudgetRefused if error.is_toolkit_budget() => {
+            format!("Could not {action}: {TOOLKIT_BUDGET_SENTENCE}.")
+        }
         OfficeFailure::BudgetRefused => format!(
             "Could not {action}: the model budget is exhausted. Do not retry; tell the user."
         ),
-        OfficeFailure::RunCallCapReached => {
-            format!(
-                "Could not {action}: this run used up its tool model calls; start a new run or ask an operator to raise worker.runtime.toolkitModelCallCap. Do not retry in this run."
-            )
-        }
         OfficeFailure::ModelUnusable => format!(
             "Could not {action}: the run's chat model cannot be used for this tool (its configuration is not usable for a tool's model call); pick another model for the agent, or tell the user."
         ),

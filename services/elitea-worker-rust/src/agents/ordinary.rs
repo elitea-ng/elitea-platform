@@ -30,8 +30,8 @@ use super::sensitive_tools::{
     SensitiveToolCatalog, policy_for_guardrails, sensitive_tools_for_kind,
 };
 use super::session::{
-    ApplicationRuntimeProjection, BoundOrdinaryAgentModel as _, NativeSessionBackend,
-    NativeToolExecutionMode, OrdinaryAgentCompletion, OrdinaryRuntimeBindings,
+    ApplicationRuntimeProjection, NativeSessionBackend, NativeToolExecutionMode,
+    OrdinaryAgentCompletion, OrdinaryRuntimeBindings,
     assemble_delegated_authorization_resume_with_sessions,
     assemble_direct_hitl_resume_with_sessions_and_applications,
     assemble_ordinary_native_with_sessions_and_runtime_catalogs,
@@ -55,6 +55,7 @@ use crate::transport::model_facade::{
     BoundModelFacade, ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation,
     ModelReasoningEffort,
 };
+use crate::transport::model_text::ModelCallBudget;
 use crate::transport::office_host::{ClaimOfficeHost, OfficeRuntime};
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::ClaimPlatformWriter;
@@ -79,6 +80,10 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     /// (ADR-0030 I1); `None` on a deployment without a `vector_target`,
     /// where the indexing families carry no index tools.
     index_runtime: Option<Arc<IndexIngestRuntime>>,
+    /// Completions one claim's toolkits may make in total (step-back tools,
+    /// the Office host's prompts), `toolkit_model_call_cap` in the runtime
+    /// config.
+    toolkit_model_call_cap: u32,
     /// The platform object client the Office families (`pptx`, `docx`, `xlsx`) read and write
     /// documents with (ADR-0032); `None` leaves them out as unsupported.
     office_runtime: Option<Arc<OfficeRuntime>>,
@@ -117,6 +122,7 @@ impl OrdinaryNativeAgentAssembler {
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             sessions: NativeSessionBackend::invocation_local(),
             index_runtime: None,
+            toolkit_model_call_cap: crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS,
             office_runtime: None,
         }
     }
@@ -129,6 +135,13 @@ impl OrdinaryNativeAgentAssembler {
         office_runtime: Option<Arc<OfficeRuntime>>,
     ) -> Self {
         self.office_runtime = office_runtime;
+        self
+    }
+
+    /// The completions one claim's toolkits may make in total.
+    #[must_use]
+    pub(crate) fn with_toolkit_model_call_cap(mut self, cap: u32) -> Self {
+        self.toolkit_model_call_cap = cap;
         self
     }
 
@@ -374,19 +387,17 @@ impl OrdinaryNativeAgentAssembler {
         // only when the snapshot has an Office toolkit: it mints a credential
         // and binds nothing until a tool calls the model.
         let carries_office_family = snapshot_carries_office_family(tool_snapshot);
-        // ONE toolkit model-call budget for the whole claim (review round 2):
-        // the step-back tools, the Office host's prompts and its image calls
-        // all draw on it, so the cap is the run's, not one per call site.
-        let toolkit_budget = crate::transport::toolkit_completion::ModelCallBudget::new(
-            crate::transport::toolkit_completion::DEFAULT_TOOLKIT_MODEL_CALLS,
-        );
+        // ONE completion budget for everything this claim's toolkits ask a
+        // model (step-back tools, Office prompts). It is not the agent's
+        // `max_model_turns`: each binding is single-use.
+        let toolkit_model_budget = ModelCallBudget::new(self.toolkit_model_call_cap);
         // The Data Analysis toggle (ADR-0033) reads the attachment bucket
         // through the same host, and runs free-form code on the sandbox the
         // pipeline `code` nodes use, when this run has one.
         let wants_data_analysis = profile.internal_tools().data_analysis_enabled();
         let mut data_analysis_authority: Option<DataAnalysisAuthority> = None;
         if (carries_office_family || wants_data_analysis)
-            && let Some(office) = self.office_host(&context, profile, &toolkit_budget)
+            && let Some(office) = self.office_host(&context, profile, &toolkit_model_budget)
         {
             if wants_data_analysis {
                 let mut authority = DataAnalysisAuthority::new(Arc::clone(&office));
@@ -414,7 +425,7 @@ impl OrdinaryNativeAgentAssembler {
         // the snapshot has an I1 toolkit carrying a catalog — the only case
         // anything would call it (review round 1).
         let index_authority = if snapshot_carries_index_catalog(tool_snapshot) {
-            self.index_tool_authority(runtime_context, &context, profile, &toolkit_budget)
+            self.index_tool_authority(runtime_context, &context, profile, &toolkit_model_budget)
         } else {
             Err(IndexToolsWithheld::NotRequested)
         };
@@ -651,7 +662,7 @@ impl OrdinaryNativeAgentAssembler {
         runtime_context: &ClaimBoundRuntimeContextAuthority,
         context: &Arc<ClaimScopedEliteaContext>,
         profile: &super::assembly::OrdinaryNoToolProfile,
-        budget: &crate::transport::toolkit_completion::ModelCallBudget,
+        budget: &ModelCallBudget,
     ) -> Result<IndexToolAuthority, IndexToolsWithheld> {
         let runtime = self
             .index_runtime
@@ -677,7 +688,7 @@ impl OrdinaryNativeAgentAssembler {
         &self,
         context: &Arc<ClaimScopedEliteaContext>,
         profile: &super::assembly::OrdinaryNoToolProfile,
-        budget: &crate::transport::toolkit_completion::ModelCallBudget,
+        budget: &ModelCallBudget,
     ) -> Option<Arc<dyn elitea_agent_runtime::toolkits::OfficeToolHost>> {
         let runtime = self.office_runtime.as_ref()?;
         let bearer = context.model_facade_token();
@@ -707,45 +718,48 @@ impl OrdinaryNativeAgentAssembler {
     /// tools, for the step-back prompts: the agent's own binding captures
     /// its final answer, which a tool's model call must not touch. The
     /// binder holds only what the binding needs, so it can run after
-    /// assembly, inside the tool call. Every completion it hands out draws
-    /// on `budget`, the claim's one toolkit budget.
+    /// assembly, inside the tool call.
     fn stepback_model_binder(
         &self,
         profile: &super::assembly::OrdinaryNoToolProfile,
         context: &Arc<ClaimScopedEliteaContext>,
-        budget: &crate::transport::toolkit_completion::ModelCallBudget,
+        budget: &ModelCallBudget,
     ) -> StepbackBinder {
+        let budget = budget.clone();
         let facade = Arc::clone(&self.model_facade);
         let context = Arc::clone(context);
         let adapter = match profile.model_provider() {
             OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,
             OrdinaryModelProvider::NativeAnthropic => ModelAdapterKind::Anthropic,
         };
-        // ONE turn per completion: every toolkit completion binds its own
-        // model (fresh completion capture and turn counter), so it never
-        // spends the agent's `max_model_turns` and a second one is not a
-        // `completion_reused`.
-        let invocation = ModelInvocation {
-            response_schema: None,
-            allow_text_continuation: false,
-            context_budget: profile.context_budget(),
-            model_name: profile.model_name().to_owned(),
-            system_instruction: String::new(),
-            max_tokens: profile.max_tokens(),
-            reasoning_effort: None,
-            temperature: profile.temperature(),
-            max_model_turns: 1,
-        };
         let model_project_id = profile.model_project_id();
-        stepback_binder(
-            Arc::new(move |invocation| {
-                facade
-                    .bind(adapter, context.as_ref(), model_project_id, invocation)
-                    .map(|bound| bound.adk_model())
-            }),
-            invocation,
-            budget.clone(),
-        )
+        let model_name = profile.model_name().to_owned();
+        let context_budget = profile.context_budget();
+        let max_tokens = profile.max_tokens();
+        let temperature = profile.temperature();
+        Box::new(move || {
+            let invocation = ModelInvocation {
+                response_schema: None,
+                allow_text_continuation: false,
+                context_budget,
+                model_name: model_name.clone(),
+                system_instruction: String::new(),
+                max_tokens,
+                reasoning_effort: None,
+                temperature,
+                // Single use, enforced by the facade; never the agent's turns.
+                max_model_turns: 1,
+            };
+            let bound: Result<BoundModelFacade, ModelFacadeError> =
+                facade.bind(adapter, context.as_ref(), model_project_id, invocation);
+            let chat = bound?.admitted_chat();
+            Ok(StepbackBinding {
+                model: chat.model,
+                model_name: model_name.clone(),
+                config: chat.config,
+                budget: Some(budget.clone()),
+            })
+        })
     }
 
     fn bind_model(
@@ -985,53 +999,6 @@ pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>
         reference.kind() == FrozenToolKind::Configured
             && toolkit_needs_office_host(reference.tool_type(), reference.settings())
     })
-}
-
-/// Binds one provider model for one toolkit completion.
-pub(crate) type BindOne =
-    Arc<dyn Fn(ModelInvocation) -> Result<Arc<dyn adk_rust::Llm>, ModelFacadeError> + Send + Sync>;
-
-/// The step-back binder over `bind_one`. It binds NOTHING itself (review
-/// round 2: the throwaway probe bind is gone): the model is available when
-/// the run's model source is configured, and each completion binds its own
-/// model on first use, inside the tool call. A bind failure reaches the
-/// caller as its real code and a category that matches it.
-pub(crate) fn stepback_binder(
-    bind_one: BindOne,
-    invocation: ModelInvocation,
-    budget: crate::transport::toolkit_completion::ModelCallBudget,
-) -> StepbackBinder {
-    Box::new(move || {
-        let fresh: crate::transport::toolkit_completion::FreshModelBinder = {
-            let (bind_one, invocation) = (Arc::clone(&bind_one), invocation.clone());
-            Arc::new(move || bind_one(invocation.clone()).map_err(bind_error))
-        };
-        Ok(StepbackBinding {
-            model: crate::transport::toolkit_completion::toolkit_completion_model(
-                fresh,
-                &invocation,
-                budget.clone(),
-            ),
-            model_name: invocation.model_name.clone(),
-        })
-    })
-}
-
-/// A facade bind failure as the model error a toolkit caller classifies:
-/// the facade's own code, with the category its cause has.
-fn bind_error(error: ModelFacadeError) -> adk_rust::AdkError {
-    let category = match error {
-        ModelFacadeError::InvalidConfiguration
-        | ModelFacadeError::InvalidInvocation
-        | ModelFacadeError::ResourceExhausted => adk_rust::ErrorCategory::InvalidInput,
-        ModelFacadeError::DependencyUnavailable => adk_rust::ErrorCategory::Unavailable,
-    };
-    adk_rust::AdkError::new(
-        adk_rust::ErrorComponent::Model,
-        category,
-        error.code(),
-        "the model for a toolkit completion could not be bound",
-    )
 }
 
 /// Whether a configured toolkit needs the Office host built for the run. The

@@ -76,9 +76,6 @@ pub enum OfficeFailure {
     /// The run has a chat model, but it cannot be bound for this tool's call
     /// (its configuration or invocation is not usable here).
     ModelUnusable,
-    /// The run used up the tool model calls one run may make (the per-run
-    /// cap, `worker.runtime.toolkitModelCallCap`); not a billing budget.
-    RunCallCapReached,
     /// The model gateway is rate-limiting the call; trying again shortly may work.
     RateLimited,
     /// The model call timed out; trying again may work.
@@ -129,10 +126,31 @@ pub struct OfficeHostError {
     reason: &'static str,
 }
 
+/// The reason code of a [`OfficeFailure::BudgetRefused`] that is the CLAIM's
+/// toolkit completion cap (Helm `worker.runtime.toolkitModelCallCap`, runtime
+/// config `toolkit_model_call_cap`), not the gateway's
+/// budget: its own sentence ([`TOOLKIT_BUDGET_SENTENCE`]).
+pub const TOOLKIT_BUDGET_REASON: &str = "office_host.toolkit_budget_exhausted";
+/// What the model is told when the claim's toolkit completion cap is spent.
+pub const TOOLKIT_BUDGET_SENTENCE: &str = "this run used up its tool model calls; start a new run or ask an operator to raise worker.runtime.toolkitModelCallCap";
+
 impl OfficeHostError {
     #[must_use]
     pub const fn new(kind: OfficeFailure, reason: &'static str) -> Self {
         Self { kind, reason }
+    }
+
+    /// The claim's toolkit completion cap refused the call (a
+    /// [`OfficeFailure::BudgetRefused`] with [`TOOLKIT_BUDGET_REASON`]).
+    #[must_use]
+    pub const fn toolkit_budget() -> Self {
+        Self::new(OfficeFailure::BudgetRefused, TOOLKIT_BUDGET_REASON)
+    }
+
+    /// Whether this is [`Self::toolkit_budget`].
+    #[must_use]
+    pub fn is_toolkit_budget(&self) -> bool {
+        matches!(self.kind, OfficeFailure::BudgetRefused) && self.reason == TOOLKIT_BUDGET_REASON
     }
 
     #[must_use]

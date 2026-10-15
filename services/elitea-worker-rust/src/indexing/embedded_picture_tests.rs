@@ -1053,6 +1053,42 @@ async fn a_reply_the_model_will_not_change_is_final_and_never_marks_the_document
     let _ = std::fs::remove_file(&world.socket);
 }
 
+/// A picture whose reply was only reasoning cut by `max_tokens` is a final
+/// skip (`reasoning_exhausted_tokens`): the same `max_tokens` would be cut
+/// the same way, so the document is NOT marked `#pictures-pending`, the
+/// next run does not ask again, and the summary says to raise `max_tokens`.
+#[tokio::test(flavor = "multi_thread")]
+async fn reasoning_that_exhausts_max_tokens_is_final_and_never_marks_the_document() {
+    let page_one = end_of(PDF_TEXT, "After.");
+    let world = World::new(
+        "emb-reasoning",
+        scripted(PDF_TEXT, vec![picture("one", 0, page_one, 1, "")], None),
+        |_, _| Reply::Cut("<think>still thinking".to_owned()),
+    )
+    .await;
+    let first = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(first.indexed_documents, 1, "{first:?}");
+    assert_eq!(first.documents[0].version, "v1", "never #pictures-pending");
+    assert_eq!(
+        first.status,
+        IndexIngestStatusV1::Ok as i32,
+        "benign for the run: {first:?}"
+    );
+    assert!(
+        first.message.contains("1 reasoning_exhausted_tokens"),
+        "{first:?}"
+    );
+    assert!(first.message.contains("raise max_tokens"), "{first:?}");
+    let second = run_model(&world.harness, pdf(), None, &on(&[".pdf"]), Some("m"))
+        .await
+        .expect("summary");
+    assert_eq!(second.indexed_documents, 0, "{second:?}");
+    assert_eq!(world.chat.calls(), 1, "not asked again");
+    let _ = std::fs::remove_file(&world.socket);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_transient_failure_marks_the_document_for_a_bounded_number_of_runs() {
     let page_one = end_of(PDF_TEXT, "After.");

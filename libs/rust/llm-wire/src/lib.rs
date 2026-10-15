@@ -19,7 +19,10 @@
 //!   cached tokens), finish reason, reasoning text, and the strict chunk
 //!   reader;
 //! * [`tool_calls`] — streamed tool-call delta assembly with count, name,
-//!   id and argument limits.
+//!   id and argument limits;
+//! * [`reasoning`] — the ONE rule for reasoning a model wrote into its reply
+//!   text (`<think>` blocks, Qwen's bare `</think>`), used by the worker,
+//!   the model client and the proposal chunker.
 //!
 //! Nothing here performs I/O, holds a credential, or formats provider text
 //! into an error. Each client maps these results onto its own error
@@ -48,14 +51,16 @@
 //! * **The transport, the claim token, retries and timeouts.**
 //! * **The per-event state machine.** The worker refuses events after
 //!   completion and `[DONE]` before it, and builds ADK responses; the model
-//!   client streams text to a callback as it arrives and splits a bare
-//!   `</think>` off the answer. Both build on the primitives here.
+//!   client streams text to a callback as it arrives and splits leaked
+//!   reasoning off the answer ([`reasoning`]). Both build on the primitives
+//!   here.
 //! * **A blocking completion's parse** (model client only).
 //! * **The native Anthropic stream** (worker only): it uses [`sse`] and
 //!   [`refusal`], and keeps its own event grammar.
 
 pub mod headers;
 pub mod openai;
+pub mod reasoning;
 pub mod refusal;
 pub mod route;
 pub mod sse;

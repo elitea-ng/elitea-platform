@@ -565,23 +565,17 @@ fn reasoning_of(part: &Value) -> Result<Option<&str>, String> {
     reasoning_text(part, TypeCheck::Lenient).map_err(|error| error.to_string())
 }
 
-/// A Qwen3-style model served without a reasoning parser puts its whole
-/// monologue in `content` and leaves a BARE `</think>` (the chat template
-/// consumed the opening tag). Everything up to the last `</think>` is the
-/// reasoning, the rest the answer. A content with a matching `<think>` is
-/// treated the same way. Content without the tag is unchanged.
+/// The answer and the reasoning a model leaked into `content`, by the ONE
+/// rule every caller uses ([`elitea_llm_wire::reasoning::strip_reasoning`]):
+/// leading `<think>` blocks, or everything up to a FIRST bare `</think>`
+/// (a Qwen3-style model served without a reasoning parser). Content without
+/// the tags is unchanged.
 fn split_leaked_reasoning(content: String) -> (String, String) {
-    const CLOSE: &str = "</think>";
-    match content.rfind(CLOSE) {
-        None => (content, String::new()),
-        Some(at) => {
-            let thought = content[..at]
-                .trim_start_matches("<think>")
-                .trim()
-                .to_owned();
-            let answer = content[at + CLOSE.len()..].trim_start().to_owned();
-            (answer, thought)
-        }
+    let stripped = elitea_llm_wire::reasoning::strip_reasoning(&content);
+    if stripped.removed || stripped.unclosed {
+        (stripped.text, stripped.reasoning)
+    } else {
+        (content, String::new())
     }
 }
 
@@ -799,6 +793,21 @@ mod tests {
         assert_eq!(
             split_leaked_reasoning("no tags here".to_owned()),
             ("no tags here".to_owned(), String::new())
+        );
+        // The Qwen bare closing tag, and only the FIRST one ends the
+        // reasoning (the shared rule; this used to take the last one).
+        assert_eq!(
+            split_leaked_reasoning("Let me look…</think>\n\nA red square.".to_owned()),
+            ("A red square.".to_owned(), "Let me look…".to_owned())
+        );
+        assert_eq!(
+            split_leaked_reasoning("a</think>b</think>c".to_owned()),
+            ("b</think>c".to_owned(), "a".to_owned())
+        );
+        // A non-leading block is literal.
+        assert_eq!(
+            split_leaked_reasoning("x <think>a</think> y".to_owned()),
+            ("x <think>a</think> y".to_owned(), String::new())
         );
         let parsed = parse_completion(&json!({"choices": [{"message": {
             "content": "x</think>answer", "reasoning_content": "from the parser"}}]}));

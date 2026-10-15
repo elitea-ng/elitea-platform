@@ -14,6 +14,7 @@ pub mod input_content;
 mod input_content_tests;
 pub(crate) mod keepalive;
 pub(crate) mod model_facade;
+pub(crate) mod model_text;
 pub(crate) mod multipart;
 pub mod nats_jetstream;
 pub(crate) mod office_host;
@@ -32,7 +33,6 @@ mod runtime_context_tests;
 mod summary_model;
 #[cfg(test)]
 mod summary_selection_tests;
-pub(crate) mod toolkit_completion;
 
 pub use control_grpc::{
     ControlGrpcClient, ControlGrpcConfig, ControlGrpcError, ControlRpc, TonicControlRpc,

@@ -1024,8 +1024,6 @@ async fn model_credential_and_completion_are_single_use() {
     };
     assert_eq!(error.code, "model_gateway.turn_limit");
     assert_eq!(error.category, ErrorCategory::InvalidInput);
-    // #1292 round 3: the facade marks its own pre-send refusals.
-    assert!(super::openai_compatible_facade::was_not_sent(&error));
     assert_eq!(captured.lock().expect("captured requests").len(), 1);
     assert_eq!(
         bound.take_completion_for_test().expect("completion once"),
@@ -1068,7 +1066,6 @@ async fn request_profile_and_local_bounds_fail_before_network() {
             panic!("outside-profile request must fail")
         };
         assert_eq!(error.code, "model_gateway.invalid_request");
-        assert!(super::openai_compatible_facade::was_not_sent(&error));
         assert!(captured.lock().expect("captured requests").is_empty());
     }
 
@@ -1091,31 +1088,7 @@ async fn request_profile_and_local_bounds_fail_before_network() {
         panic!("oversized request must fail")
     };
     assert_eq!(error.code, "model_gateway.request_too_large");
-    assert!(super::openai_compatible_facade::was_not_sent(&error));
     assert!(captured.lock().expect("captured requests").is_empty());
-
-    // A request that WAS sent (the gateway is unavailable) is not marked.
-    let (client, captured) = test_model_gateway_client(
-        vec![TestModelGatewayOutcome::Unavailable],
-        test_model_gateway_config(),
-    )
-    .expect("model gateway client");
-    let bound = client
-        .bind_ordinary(
-            &ClaimScopedEliteaContext::fixture(17, TOKEN),
-            17,
-            test_model_facade_invocation(),
-        )
-        .expect("bound model");
-    let Err(error) = bound.generate_for_test(test_model_request("valid")).await else {
-        panic!("an unavailable gateway fails the call")
-    };
-    assert!(
-        !super::openai_compatible_facade::was_not_sent(&error),
-        "{}",
-        error.code
-    );
-    assert_eq!(captured.lock().expect("captured requests").len(), 1);
 }
 
 /// Demo issue 1: the provider's reason for a 400 is the operator's only clue.
@@ -2409,73 +2382,38 @@ async fn never_ending_budget_refusal_body_returns_the_unscoped_refusal_in_time()
     assert_eq!(error.code, "model_gateway.budget_exhausted");
 }
 
-/// Review round 1 (blocker): toolkit completions share neither the agent's
-/// single-use completion capture nor its turn budget. Three completions on
-/// the real facade, each on its own one-turn binding, all succeed, and the
-/// agent's own binding (one turn) still serves its call afterwards.
+/// A toolkit-internal completion binds a single-use model with
+/// `max_model_turns = 1`: the facade itself refuses a second request on it,
+/// and a separate agent binding (25 turns) is not touched by either.
 #[tokio::test(flavor = "current_thread")]
-async fn toolkit_completions_bind_fresh_and_leave_the_agents_turn_budget_alone() {
-    use super::toolkit_completion::{FreshModelBinder, ModelCallBudget, toolkit_completion_model};
-    let reply = |text: &str| {
-        let raw = format!(
-            "data: {}\n\ndata: [DONE]\n\n",
-            serde_json::json!({"choices":[{"delta":{"content":text},"finish_reason":"stop"}]})
-        );
+async fn a_single_turn_binding_serves_one_request_and_leaves_agent_turns_alone() {
+    let sse = || {
         TestModelGatewayOutcome::Response(test_model_gateway_response(stream_body(vec![
-            Bytes::from(raw),
+            Bytes::from(ordinary_sse()),
         ])))
     };
-    let (client, _) = test_model_gateway_client(
-        vec![reply("one"), reply("two"), reply("three"), reply("agent")],
-        test_model_gateway_config(),
-    )
-    .unwrap();
-    let client = std::sync::Arc::new(client);
-    let mut one_turn = test_model_facade_invocation();
-    one_turn.max_model_turns = 1;
-    one_turn.system_instruction = String::new();
-    one_turn.reasoning_effort = None;
-    let bind: FreshModelBinder = {
-        let (client, invocation) = (std::sync::Arc::clone(&client), one_turn.clone());
-        std::sync::Arc::new(move || {
-            client
-                .bind_ordinary(
-                    &ClaimScopedEliteaContext::fixture(17, TOKEN),
-                    23,
-                    invocation.clone(),
-                )
-                .map(|bound| bound.adk_model())
-                .map_err(|_| unreachable!("binds"))
-        })
-    };
-    let model = toolkit_completion_model(bind, &one_turn, ModelCallBudget::new(10));
-    let ask = || {
-        let mut request = test_model_request("go");
-        request.config = None;
-        request
-    };
-    for expected in ["one", "two", "three"] {
-        let responses = drain(model.generate_content(ask(), false).await.unwrap())
-            .await
-            .unwrap();
-        let text: String = responses
-            .iter()
-            .flat_map(|response| response.content.iter().flat_map(|c| &c.parts))
-            .filter_map(|part| match part {
-                adk_rust::Part::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(text, expected);
-    }
-    // The agent's own binding (a single turn) is untouched by all of that.
+    let (client, _) =
+        test_model_gateway_client(vec![sse(), sse(), sse()], test_model_gateway_config()).unwrap();
+    let context = ClaimScopedEliteaContext::fixture(17, TOKEN);
+    let mut single = test_model_facade_invocation();
+    single.max_model_turns = 1;
+    let internal = client.bind_ordinary(&context, 23, single).unwrap();
     let agent = client
-        .bind_ordinary(&ClaimScopedEliteaContext::fixture(17, TOKEN), 23, one_turn)
+        .bind_ordinary(&context, 23, test_model_facade_invocation())
         .unwrap();
-    let mut request = test_model_request("agent turn");
-    request.model = "fixture-model".to_owned();
-    drain(agent.generate_for_test(request).await.unwrap())
-        .await
-        .unwrap();
-    assert_eq!(agent.take_completion_for_test().unwrap(), "agent");
+    let first = internal.generate_for_test(test_model_request("hi")).await;
+    assert!(first.is_ok());
+    let second = internal.generate_for_test(test_model_request("hi")).await;
+    assert_eq!(
+        second.err().map(|error| error.code),
+        Some("model_gateway.turn_limit")
+    );
+    for _ in 0..2 {
+        assert!(
+            agent
+                .generate_for_test(test_model_request("hi"))
+                .await
+                .is_ok()
+        );
+    }
 }

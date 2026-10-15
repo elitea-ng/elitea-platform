@@ -142,21 +142,10 @@ pub fn parse_chunk_analysis(reply: &str) -> Result<Vec<ChunkDetails>, AnalysisEr
     }
 }
 
-/// `text` without its `<think>…</think>` blocks (an unclosed one runs to the
-/// end).
+/// `text` without the reasoning a model wrote into it, by the ONE rule every
+/// caller uses ([`elitea_llm_wire::reasoning::strip_reasoning`]).
 fn strip_think_blocks(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(open) = rest.find("<think>") {
-        out.push_str(&rest[..open]);
-        let after = &rest[open + "<think>".len()..];
-        match after.find("</think>") {
-            Some(close) => rest = &after[close + "</think>".len()..],
-            None => return out,
-        }
-    }
-    out.push_str(rest);
-    out
+    elitea_llm_wire::reasoning::strip_reasoning(text).text
 }
 
 /// The top-level balanced `{…}` slices of `text`, in order. Braces inside a
@@ -288,6 +277,24 @@ mod tests {
         assert_eq!(
             parse_chunk_analysis("<think>{\"chunks\":[]} never closed"),
             Err(AnalysisError::Unreadable)
+        );
+    }
+
+    /// The shared reasoning rule: Qwen's bare closing tag ends the reasoning,
+    /// so a draft object in it is never read as the answer.
+    #[test]
+    fn a_qwen_bare_closing_tag_hides_the_reasoning_draft() {
+        let reply = r#"Draft: {"chunks":[{"chunk_title":"draft","chunk_summary":"s","propositions":[]}]}</think>
+
+{"chunks":[{"chunk_title":"T","chunk_summary":"S","propositions":["a"]}]}"#;
+        // Before the shared rule the draft (the last-but-one object) was
+        // visible; now only the answer is.
+        assert_eq!(strip_think_blocks(reply).matches("chunk_title").count(), 1);
+        assert_eq!(parse_chunk_analysis(reply).unwrap()[0].chunk_title, "T");
+        // A literal tag that does not lead the reply is kept.
+        assert_eq!(
+            strip_think_blocks("x <think>a</think> y"),
+            "x <think>a</think> y"
         );
     }
 

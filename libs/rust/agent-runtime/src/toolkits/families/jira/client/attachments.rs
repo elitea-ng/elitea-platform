@@ -100,14 +100,8 @@ fn refuse(message: String) -> JiraClientError {
 fn attachment_failure(error: AttachmentError) -> JiraClientError {
     let code = match &error {
         AttachmentError::Host(_, OfficeFailure::Timeout) => JiraClientErrorCode::Timeout,
-        AttachmentError::Host(
-            _,
-            OfficeFailure::RateLimited
-            | OfficeFailure::BudgetRefused
-            | OfficeFailure::RunCallCapReached,
-        ) => {
-            JiraClientErrorCode::RateLimited
-        }
+        AttachmentError::Host(_, OfficeFailure::RateLimited | OfficeFailure::BudgetRefused)
+        | AttachmentError::ToolkitBudget => JiraClientErrorCode::RateLimited,
         AttachmentError::Host(
             _,
             OfficeFailure::Unreachable

@@ -132,6 +132,42 @@ impl Transport for EgressGuard {
     }
 }
 
+/// A transport that sends only to ONE origin (scheme, host and port all
+/// equal): the platform's own, for a source that reads this deployment's
+/// object API rather than a third party. The external-source allowlist does
+/// not apply to it, and it admits nothing but that origin: not a host that
+/// merely contains the platform's name, not the same host on another port.
+pub struct OriginGuard {
+    origin: url::Origin,
+    inner: Arc<dyn Transport>,
+}
+
+impl OriginGuard {
+    #[must_use]
+    pub fn new(origin: &url::Url, inner: Arc<dyn Transport>) -> Self {
+        Self {
+            origin: origin.origin(),
+            inner,
+        }
+    }
+
+    /// Whether `url` is on the pinned origin.
+    #[must_use]
+    pub fn permits_url(&self, url: &url::Url) -> bool {
+        self.origin.is_tuple() && url.origin() == self.origin
+    }
+}
+
+#[async_trait]
+impl Transport for OriginGuard {
+    async fn execute(&self, request: Request) -> Result<Response, TransportError> {
+        if !self.permits_url(request.url()) {
+            return Err(TransportError::egress_refused());
+        }
+        self.inner.execute(request).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +236,27 @@ mod tests {
                 .is_err()
         );
         assert_eq!(inner.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_origin_guard_admits_exactly_the_platform_origin() {
+        let platform = Url::parse("https://elitea-platform-edge:8443").expect("url");
+        let guard = OriginGuard::new(&platform, Arc::new(Counting(AtomicUsize::new(0))));
+        for (url, want) in [
+            ("https://elitea-platform-edge:8443/api/v2/artifacts/x", true),
+            ("https://ELITEA-PLATFORM-EDGE:8443/x", true),
+            ("https://elitea-platform-edge:9443/x", false),
+            ("https://elitea-platform-edge/x", false),
+            ("http://elitea-platform-edge:8443/x", false),
+            ("https://elitea-platform-edge.evil.example:8443/x", false),
+            ("https://evil-elitea-platform-edge:8443/x", false),
+            ("https://api.github.com/x", false),
+            ("https://elitea-platform-edge:8443@evil.example/x", false),
+        ] {
+            let url = Url::parse(url).expect("url");
+            assert_eq!(guard.permits_url(&url), want, "{url}");
+            let sent = guard.execute(Request::new(Method::GET, url.clone())).await;
+            assert_eq!(sent.is_ok(), want, "{url}");
+        }
     }
 }

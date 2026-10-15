@@ -8,9 +8,10 @@
 //! embeddings route the ingest run also embeds through (the query is
 //! embedded with the model the index was stamped with, by its registry
 //! name), and — for the step-back tools — a chat model bound on the worker's
-//! model path. That model is bound lazily, on the first step-back call
-//! ([`LazyStepbackModel`], review round 2): a turn that only lists or
-//! searches never binds a second model. A host without a model (a direct
+//! model path. A bound model is single-use, so one is bound for every model
+//! call, inside the call and only once the arguments and the index have been
+//! checked ([`LazyStepbackModel::bind`]): a turn that only lists or searches,
+//! or whose step-back call is refused before any prompt, never binds one. A host without a model (a direct
 //! `toolkit.call_tool.v1` run, which binds no agent model) refuses the two
 //! step-back tools with a sentence; the other three work there as in a turn.
 //!
@@ -29,10 +30,11 @@
 //! Every failure is a sentence the model reads, never a turn-aborting error.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-use adk_rust::futures::StreamExt as _;
-use adk_rust::{Content, FinishReason, Llm, LlmRequest, Part};
+use adk_rust::{
+    AdkError, Content, ErrorCategory, ErrorComponent, GenerateContentConfig, Llm, Part,
+};
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
     IndexCatalog as FrozenCatalog, IndexToolCall, IndexToolFailure, IndexToolHost, IndexToolName,
@@ -51,40 +53,69 @@ use crate::protocol::control::{IndexRemovalBinding, IndexRemovalOutcome};
 use crate::protocol::vector_token::{VectorClaimToken, VectorSource};
 use crate::transport::embeddings_facade::{EmbeddingsClient, EmbeddingsError};
 use crate::transport::model_facade::ModelFacadeError;
+use crate::transport::model_text::{
+    AdmittedChat, ModelCallBudget, TextFailure, stream_text, toolkit_budget_exhausted,
+};
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
 /// The most bytes a step-back model reply may hold.
 const MAX_MODEL_TEXT_BYTES: usize = 256 * 1024;
 
-/// The chat model the step-back tools call, bound for this claim.
+/// The chat model the step-back tools call, bound for ONE call: the facade's
+/// bound model is single-use (it captures one completion and counts a turn),
+/// so every call binds its own ([`LazyStepbackModel::bind`]).
+#[derive(Clone)]
 pub(crate) struct StepbackBinding {
     /// The bound ADK model.
     pub(crate) model: Arc<dyn Llm>,
     /// The model name the request names (the binding's own).
     pub(crate) model_name: String,
+    /// The generation config the model's facade admits
+    /// (`BoundModelFacade::admitted_chat`), never one built by hand.
+    pub(crate) config: GenerateContentConfig,
+    /// The claim's completion budget, shared by every binding of the claim.
+    pub(crate) budget: Option<ModelCallBudget>,
 }
 
-/// Binds the step-back model when first asked to.
+/// Binds the step-back model for one call.
 pub(crate) type StepbackBinder =
     Box<dyn Fn() -> Result<StepbackBinding, ModelFacadeError> + Send + Sync>;
 
-/// The step-back tools' chat model, bound on the first step-back call of the
-/// run and never for a run that makes none (review round 2). A binding that
-/// fails is logged once; the two step-back tools then refuse with a sentence
-/// for the rest of the run while the other three tools work.
+/// How often the same binding failure is logged again.
+const BIND_FAILURE_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
+
+/// The step-back tools' chat model for a claim: a way to bind one single-use
+/// model per call, never a bound model. Nothing is bound until a model call
+/// is actually made, and a run that makes none binds none. A binding that
+/// fails refuses that call with a sentence while the other three index tools
+/// work; the failure is logged when it is new, and again once a minute while
+/// it persists.
 pub(crate) struct LazyStepbackModel {
-    binder: Option<StepbackBinder>,
-    bound: OnceLock<Option<StepbackBinding>>,
+    source: StepbackSource,
+    last_failure: std::sync::Mutex<Option<(String, std::time::Instant)>>,
+}
+
+enum StepbackSource {
+    None,
+    /// A binder called afresh for every call.
+    Binder(StepbackBinder),
+    /// A fixed binding (tests with a model that allows any number of calls).
+    #[cfg(test)]
+    Fixed(Box<StepbackBinding>),
 }
 
 impl LazyStepbackModel {
-    /// A model `binder` binds on first use.
+    fn with_source(source: StepbackSource) -> Self {
+        Self {
+            source,
+            last_failure: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// A model `binder` binds, once per call, when a call is made.
     #[must_use]
     pub(crate) fn new(binder: StepbackBinder) -> Self {
-        Self {
-            binder: Some(binder),
-            bound: OnceLock::new(),
-        }
+        Self::with_source(StepbackSource::Binder(binder))
     }
 
     /// No model at all, and no binding attempt: a run that binds none (a
@@ -92,41 +123,56 @@ impl LazyStepbackModel {
     /// bound" warning that only a failed binding deserves.
     #[must_use]
     pub(crate) fn unbound() -> Self {
-        Self {
-            binder: None,
-            bound: OnceLock::new(),
-        }
+        Self::with_source(StepbackSource::None)
     }
 
     /// An already bound model.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn bound(binding: StepbackBinding) -> Self {
-        Self {
-            binder: None,
-            bound: OnceLock::from(Some(binding)),
+        Self::with_source(StepbackSource::Fixed(Box::new(binding)))
+    }
+
+    /// Whether the run has a model to bind at all (nothing is bound to find
+    /// out).
+    pub(crate) fn is_configured(&self) -> bool {
+        !matches!(self.source, StepbackSource::None)
+    }
+
+    /// A fresh binding for one call; `None` when there is no binder or
+    /// binding failed.
+    pub(crate) fn bind(&self) -> Option<StepbackBinding> {
+        match &self.source {
+            StepbackSource::None => None,
+            #[cfg(test)]
+            StepbackSource::Fixed(binding) => Some(binding.as_ref().clone()),
+            StepbackSource::Binder(binder) => match binder() {
+                Ok(binding) => Some(binding),
+                Err(error) => {
+                    self.log_bind_failure(&error.to_string());
+                    None
+                }
+            },
         }
     }
 
-    /// The bound model, binding it on the first call; `None` when there is
-    /// no binder or binding failed (logged once).
-    pub(crate) fn get(&self) -> Option<&StepbackBinding> {
-        self.bound
-            .get_or_init(|| {
-                let binder = self.binder.as_ref()?;
-                match binder() {
-                    Ok(binding) => Some(binding),
-                    Err(error) => {
-                        tracing::warn!(
-                            event = "index_tools_stepback_model_unbound",
-                            error = %error,
-                            "the step-back model could not be bound; stepback_search_index and stepback_summary_index will refuse"
-                        );
-                        None
-                    }
-                }
-            })
-            .as_ref()
+    fn log_bind_failure(&self, error: &str) {
+        let mut last = self
+            .last_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = std::time::Instant::now();
+        let repeat = last.as_ref().is_some_and(|(previous, at)| {
+            previous == error && now.duration_since(*at) < BIND_FAILURE_LOG_INTERVAL
+        });
+        if !repeat {
+            *last = Some((error.to_owned(), now));
+            tracing::warn!(
+                event = "index_tools_stepback_model_unbound",
+                error,
+                "the step-back model could not be bound; the step-back call is refused"
+            );
+        }
     }
 }
 
@@ -285,19 +331,37 @@ impl IndexToolHost for ClaimIndexToolHost {
                     .map_err(|error| failure(&error))
             }
             IndexToolName::StepbackSearchIndex | IndexToolName::StepbackSummaryIndex => {
-                let Some(binding) = self.model.as_ref().and_then(LazyStepbackModel::get) else {
+                let Some(lazy) = self.model.as_ref().filter(|model| model.is_configured()) else {
                     return Err(IndexToolFailure::new(format!(
                         "{} needs the agent's chat model, which this run does not bind; call it from an agent conversation, or use search_index",
                         call.tool.as_str()
                     )));
                 };
                 let args = search_args(call.arguments)?;
-                let model = AdkStepbackModel { binding };
+                // The model is bound lazily, at the first model call, which
+                // `elitea-vector-index` makes after the arguments and the
+                // index are checked and BEFORE any embedding or vector call:
+                // a binding that fails refuses the call with the sentence
+                // below, and nothing billed has happened.
+                let model = AdkStepbackModel::new(
+                    lazy,
+                    if call.tool == IndexToolName::StepbackSearchIndex {
+                        1
+                    } else {
+                        2
+                    },
+                );
                 let text = if call.tool == IndexToolName::StepbackSearchIndex {
                     tools.stepback_search_index(&args, &model).await
                 } else {
                     tools.stepback_summary_index(&args, &model).await
                 };
+                if model.bind_failed.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(IndexToolFailure::new(format!(
+                        "{} needs the agent's chat model; use search_index instead. The chat model could not be bound for this call.",
+                        call.tool.as_str()
+                    )));
+                }
                 text.map(Value::String).map_err(|error| failure(&error))
             }
             IndexToolName::RemoveIndex => {
@@ -366,102 +430,157 @@ fn embedding_reason(error: &EmbeddingsError) -> String {
 }
 
 /// The step-back model over the bound ADK model: one user message holding
-/// the prompt, the reply's text taken from the one non-streaming response
-/// (`generate_content(request, false)`, as the repo's other non-streaming
-/// callers do). A streaming call would hand back partial deltas AND a final
-/// response carrying the whole text, which a collector would then double.
+/// the prompt, answered through the shared admitted-request helper
+/// ([`stream_text`]).
+///
+/// Every binding the tool call needs (one per model call: the bound model is
+/// single-use) is made at its FIRST model call, which `elitea-vector-index`
+/// makes after the arguments and the index are checked and before the query
+/// is embedded or the store searched. A failed binding therefore ends the
+/// call before any billed work, and is tried once per tool call.
 struct AdkStepbackModel<'a> {
-    binding: &'a StepbackBinding,
+    model: &'a LazyStepbackModel,
+    /// Model calls this tool makes (search: 1, summary: 2).
+    needed: usize,
+    /// Bindings made and not yet used; `None` until the first call.
+    bound: std::sync::Mutex<Option<Vec<StepbackBinding>>>,
+    /// A binding failed during this tool call: the caller refuses it with
+    /// its own sentence.
+    bind_failed: std::sync::atomic::AtomicBool,
+}
+
+impl<'a> AdkStepbackModel<'a> {
+    fn new(model: &'a LazyStepbackModel, needed: usize) -> Self {
+        Self {
+            model,
+            needed,
+            bound: std::sync::Mutex::new(None),
+            bind_failed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// The binding for the next model call.
+    fn next_binding(&self) -> Option<StepbackBinding> {
+        let mut bound = self
+            .bound
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if bound.is_none() {
+            let mut all = Vec::with_capacity(self.needed);
+            for _ in 0..self.needed {
+                all.push(self.model.bind()?);
+            }
+            // Used front to back.
+            all.reverse();
+            *bound = Some(all);
+        }
+        match bound.as_mut().and_then(Vec::pop) {
+            Some(binding) => Some(binding),
+            // More calls than planned: bind afresh.
+            None => self.model.bind(),
+        }
+    }
 }
 
 impl StepbackModel for AdkStepbackModel<'_> {
     async fn invoke(&self, prompt: &str) -> elitea_vector_index::Result<Value> {
+        let binding = self.next_binding().ok_or_else(|| {
+            self.bind_failed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            VectorError::Model("the step-back model could not be bound".to_owned())
+        })?;
         generate_text(
-            self.binding,
+            &binding,
             vec![Part::Text {
                 text: prompt.to_owned(),
             }],
         )
         .await
         .map(Value::String)
-        .map_err(|error| VectorError::Model(error.to_string()))
+        .map_err(|error| VectorError::Model(error.message))
     }
 }
 
-/// One non-streaming user message of `parts` on the bound model, and the text
-/// of the one complete reply. The error is the model's own typed `AdkError`
-/// (its code and category decide how a caller classifies it, review round 2),
-/// or a local one with a fixed `toolkit_completion.*` code; its message is a
-/// data-free sentence. Shared with the Office tools' model calls (ADR-0032),
+/// The codes of a reply [`generate_text`] cannot use. Callers classify on
+/// them (`office_host::model_failure`), never on the message.
+pub(crate) mod reply_codes {
+    /// Nothing but reasoning came back; more `max_tokens` cures it.
+    pub(crate) const REASONING_ONLY: &str = "model.reply_reasoning_only";
+    /// `max_tokens` cut the answer off.
+    pub(crate) const LENGTH_CUT: &str = "model.reply_length_cut";
+    /// The reply is over the size bound.
+    pub(crate) const TOO_LARGE: &str = "model.reply_too_large";
+    /// The stream ended without a usable reply (an error frame, another
+    /// stop reason, no terminal frame).
+    pub(crate) const FAILED: &str = "model.reply_failed";
+}
+
+fn reply_error(category: ErrorCategory, code: &'static str, message: String) -> AdkError {
+    AdkError::new(ErrorComponent::Model, category, code, message)
+}
+
+/// One user message of `parts` on the bound model, and the text of its reply
+/// (through [`stream_text`]: streaming, with the config the facade admits;
+/// reasoning removed). Shared with the Office tools' model calls (ADR-0032),
 /// which send a prompt and images.
+///
+/// An EMPTY reply is a valid answer (`Ok("")`): an Office or data-analysis
+/// prompt may legitimately have nothing to say. A reply that held only
+/// reasoning is not an answer and is an error.
+///
+/// # Errors
+///
+/// A typed [`AdkError`] with a data-free message: the facade's own, the
+/// claim's spent toolkit budget
+/// ([`crate::transport::model_text::TOOLKIT_BUDGET_EXHAUSTED_CODE`]), or one
+/// of [`reply_codes`].
 pub(crate) async fn generate_text(
     binding: &StepbackBinding,
     parts: Vec<Part>,
-) -> Result<String, adk_rust::AdkError> {
-    use adk_rust::{AdkError, ErrorCategory, ErrorComponent};
-    let local = |code: &'static str, message: &'static str| {
-        AdkError::new(
-            ErrorComponent::Model,
-            ErrorCategory::Internal,
-            code,
-            message,
-        )
+) -> Result<String, AdkError> {
+    let chat = AdmittedChat {
+        model: Arc::clone(&binding.model),
+        config: binding.config.clone(),
+        budget: binding.budget.clone(),
     };
-    let request = LlmRequest {
-        model: binding.model_name.clone(),
-        contents: vec![Content {
-            role: "user".to_owned(),
-            parts,
-        }],
-        config: None,
-        tools: std::collections::HashMap::new(),
-        previous_response_id: None,
+    let user = Content {
+        role: "user".to_owned(),
+        parts,
     };
-    let mut responses = binding.model.generate_content(request, false).await?;
-    let mut text: Option<String> = None;
-    while let Some(response) = responses.next().await {
-        let response = response?;
-        if response.partial {
-            // Not expected of a non-streaming call; a partial frame is never
-            // the reply.
-            continue;
-        }
-        if response.error_code.is_some() {
-            return Err(local(
-                "toolkit_completion.finish",
-                "the model's reply could not be used: the model ended it with an error",
-            ));
-        }
-        if let Some(reason) = response.finish_reason
-            && reason != FinishReason::Stop
-        {
-            return Err(local(
-                "toolkit_completion.finish",
-                "the model's reply could not be used: the model stopped abnormally",
-            ));
-        }
-        let mut reply = String::new();
-        if let Some(content) = &response.content {
-            for part in &content.parts {
-                if let Part::Text { text: piece } = part {
-                    if reply.len().saturating_add(piece.len()) > MAX_MODEL_TEXT_BYTES {
-                        return Err(local(
-                            "toolkit_completion.reply_size",
-                            "the model's reply could not be used: it exceeds the step-back size bound",
-                        ));
-                    }
-                    reply.push_str(piece);
-                }
-            }
-        }
-        // The last complete response is the reply; a non-streaming call
-        // yields exactly one.
-        text = Some(reply);
+    match stream_text(&chat, &binding.model_name, user, MAX_MODEL_TEXT_BYTES).await {
+        Ok(reply) if reply.reasoning_only => Err(reply_error(
+            ErrorCategory::InvalidInput,
+            reply_codes::REASONING_ONLY,
+            "the model produced only reasoning and answered nothing (raise `max_tokens`?)"
+                .to_owned(),
+        )),
+        Ok(reply) if reply.length_cut => Err(reply_error(
+            ErrorCategory::InvalidInput,
+            reply_codes::LENGTH_CUT,
+            "the model's answer was cut off by `max_tokens`".to_owned(),
+        )),
+        Ok(reply) => Ok(reply.text),
+        Err(TextFailure::Model(error)) => Err(error),
+        Err(TextFailure::BudgetExhausted) => Err(toolkit_budget_exhausted()),
+        Err(TextFailure::TooLarge) => Err(reply_error(
+            ErrorCategory::InvalidInput,
+            reply_codes::TOO_LARGE,
+            "the reply exceeds the size bound".to_owned(),
+        )),
+        Err(TextFailure::ErrorCode) => Err(reply_error(
+            ErrorCategory::Unavailable,
+            reply_codes::FAILED,
+            "the model ended the reply with an error".to_owned(),
+        )),
+        Err(TextFailure::Stopped(reason)) => Err(reply_error(
+            ErrorCategory::Unavailable,
+            reply_codes::FAILED,
+            format!("the model stopped for {reason:?}"),
+        )),
+        Err(TextFailure::NoReply) => Err(reply_error(
+            ErrorCategory::Unavailable,
+            reply_codes::FAILED,
+            "the model returned no reply".to_owned(),
+        )),
     }
-    text.ok_or_else(|| {
-        local(
-            "toolkit_completion.no_terminal",
-            "the model's reply could not be used: it never completed",
-        )
-    })
 }
