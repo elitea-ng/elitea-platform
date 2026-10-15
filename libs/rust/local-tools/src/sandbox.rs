@@ -6,6 +6,7 @@
 //! | Linux, `bwrap` installed and usable | bubblewrap ([`bubblewrap`]): a read-only bind of `/`, the writable roots bound read-write, every `.git` found bound read-only, credentials and `path_deny` masked, a private network namespace when the network is off (UDP, raw and abstract sockets included), well-known pathname sockets (`/run/user`, Docker) masked; the walk is cached per session until a write | `full`; `partial` past 20 000 directories (`path_deny` matches and `.git` entries past the cap are not masked: the result carries [`BWRAP_TRUNCATED_GAPS`] and the session asks for the command), where commands that may write are **refused** unless the host sets [`SandboxConfig::allow_partial`]. A host-given `bwrap` path is probed like the well-known ones |
 //! | Linux, Landlock only | a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to; ABI 3 (truncate) required, ABI 4 (TCP) required when the network is off, abstract-socket scoping when the kernel has it | `partial`: Landlock cannot keep `.git` read-only under a writable root, cannot deny reads under `/` (so **credentials, the desktop app's data and `path_deny` files are not hidden**), has no UDP or pathname-socket rules. **Refused** unless the host sets [`SandboxConfig::allow_partial`]; when it does, every such command is asked ([`Prepared::hides_denied`] is false) and each result carries [`LANDLOCK_GAPS`] |
 //! | Windows | none (the crate does not build there yet; restricted tokens are phase D3) | `none` |
+//! | A container the host set [`SandboxConfig::container`] for (the cloud executor's workspace runner, ADR-0034 decision 9) | none in the process: the container is the confinement boundary (its own file system, no credentials, the network the project allows), so commands run unwrapped | `container` |
 //!
 //! What every confined command gets, whatever the mode:
 //!
@@ -49,6 +50,9 @@ pub enum Enforcement {
     Full,
     Partial,
     None,
+    /// The process runs inside a dedicated container that is itself the
+    /// boundary (ADR-0034 decision 9): nothing is wrapped around the command.
+    Container,
 }
 
 impl Enforcement {
@@ -58,6 +62,7 @@ impl Enforcement {
             Self::Full => "full",
             Self::Partial => "partial",
             Self::None => "none",
+            Self::Container => "container",
         }
     }
 }
@@ -199,6 +204,12 @@ pub struct SandboxConfig {
     /// The session's cache of what bubblewrap masks (see
     /// [`bubblewrap::MaskCache`]); clones share it.
     pub masks: bubblewrap::MaskCache,
+    /// The host runs inside a dedicated sandbox container (the cloud
+    /// executor's workspace runner, ADR-0034): the container is the
+    /// confinement boundary, so commands run unwrapped and report
+    /// [`Enforcement::Container`]. Never set on a desktop: there the process
+    /// shares the machine with the person's credentials.
+    pub container: bool,
 }
 
 /// A command ready to spawn: the program, its arguments, and what the
@@ -243,6 +254,13 @@ pub fn prepare(
     argv: &[String],
     config: &SandboxConfig,
 ) -> ToolResult<Prepared> {
+    if config.container {
+        // The container holds only the workspace, a scratch directory and
+        // no credential; what a request denies is not there to hide.
+        let mut prepared = unwrapped(argv, Enforcement::Container)?;
+        prepared.hides_denied = true;
+        return Ok(prepared);
+    }
     if request.is_unconfined() {
         // Full access with the network on: nothing is confined.
         return unwrapped(argv, Enforcement::None);
@@ -1701,6 +1719,31 @@ mod tests {
         };
         assert!(config.masks.discover(&other).hide_files.is_empty());
         assert_eq!(config.masks.walks(), 3, "a different request walks");
+    }
+
+    /// ADR-0034: inside the workspace runner's container, every request runs
+    /// unwrapped at the `container` level; a desktop config never does.
+    #[test]
+    fn a_container_host_runs_commands_unwrapped() {
+        let config = SandboxConfig {
+            container: true,
+            ..SandboxConfig::default()
+        };
+        let argv = vec!["cargo".to_owned(), "test".to_owned()];
+        for (mode, network) in [
+            (SandboxMode::ReadOnly, false),
+            (SandboxMode::WorkspaceWrite, false),
+            (SandboxMode::WorkspaceWrite, true),
+            (SandboxMode::FullAccess, false),
+        ] {
+            let prepared = prepare(&request(mode, network), &argv, &config).expect("container");
+            assert_eq!(prepared.enforcement, Enforcement::Container);
+            assert_eq!(prepared.program, PathBuf::from("cargo"));
+            assert_eq!(prepared.args, vec!["test".to_owned()]);
+            assert!(prepared.hides_denied);
+        }
+        assert!(!SandboxConfig::default().container);
+        assert_eq!(Enforcement::Container.as_str(), "container");
     }
 
     /// H3: Landlock alone is partial and is refused unless the host opts in.

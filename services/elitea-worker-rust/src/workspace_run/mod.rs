@@ -12,6 +12,7 @@ pub(crate) mod gix_codec;
 pub(crate) mod sandbox;
 pub(crate) mod scan;
 pub(crate) mod store;
+pub(crate) mod tools;
 pub(crate) mod turn;
 #[cfg(test)]
 mod turn_tests;

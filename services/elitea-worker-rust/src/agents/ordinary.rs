@@ -355,6 +355,13 @@ impl OrdinaryNativeAgentAssembler {
                 attachment_library,
             )
             .await?;
+        // The workspace's tools: the local tool names, run in the sandbox.
+        let runtime = match (&workspace, context.workspace()) {
+            (Some(turn), Some(field)) => runtime.with_workspace_toolset(
+                crate::workspace_run::tools::provider(turn.sandbox(), field.shell).toolset(),
+            ),
+            _ => runtime,
+        };
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
         tracing::Span::current().record("output_continuation", output_continuation);
         let model = self.bind_model(

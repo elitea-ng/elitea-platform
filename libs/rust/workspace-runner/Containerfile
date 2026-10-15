@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1.7
+#
+# The cloud executor's workspace sandbox image (ADR-0034 decision 9).
+#
+# One container per cloud turn runs `elitea-workspace-runner` over a
+# disk-backed, exec-mounted /workspace. The image ships git (the runner's git
+# tools and the baseline commit) and a general build toolchain, because the
+# agent's `run_command` builds and tests the user's project. It carries no
+# credential, no Elitea token and no store client: the worker moves the files
+# in and out through the sandbox helper protocol.
+#
+# Debian 13 (trixie), the release every image in this repository uses.
+# Build from the repository root:
+#
+#   podman build -f libs/rust/workspace-runner/Containerfile -t elitea-workspace-runner:dev .
+
+FROM rust:1.97.1-trixie AS builder
+WORKDIR /src
+COPY libs/rust/ libs/rust/
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/libs/rust/target \
+    cd libs/rust && \
+    cargo build --release --locked -p elitea-workspace-runner && \
+    install -D -m 0755 target/release/elitea-workspace-runner /out/elitea-workspace-runner
+
+FROM debian:trixie-slim AS runtime
+RUN apt-get update && \
+    apt-get install --no-install-recommends -y \
+        bash build-essential ca-certificates coreutils curl findutils git \
+        grep less procps python3 python3-venv sed tar unzip xz-utils && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=builder /out/elitea-workspace-runner /usr/local/bin/elitea-workspace-runner
+# The workspace volume is mounted here; the sandbox owner (uid 10001) owns it.
+RUN groupadd --gid 10001 elitea && \
+    useradd --uid 10001 --gid 10001 --home-dir /home/elitea --create-home --shell /bin/bash elitea && \
+    install -d -o 10001 -g 10001 -m 0700 /workspace
+USER 10001:10001
+WORKDIR /workspace
+ENV HOME=/home/elitea \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_TERMINAL_PROMPT=0
+ENTRYPOINT ["/usr/local/bin/elitea-workspace-runner"]
+CMD ["serve"]

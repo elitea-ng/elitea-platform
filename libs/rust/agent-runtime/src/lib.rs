@@ -60,6 +60,8 @@ pub mod platform;
 pub mod request;
 pub mod tool_namespacing;
 pub mod toolkits;
+pub mod workspace_archive;
+pub mod workspace_tools;
 
 /// The patched-adk guard. The two builders below exist only in the patched
 /// adk 2.2.0 crates in `libs/rust/vendor` (the registry releases have

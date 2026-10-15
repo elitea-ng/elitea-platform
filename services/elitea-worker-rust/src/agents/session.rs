@@ -379,6 +379,14 @@ impl OrdinaryRuntimeBindings {
         self
     }
 
+    /// Add the cloud executor's workspace toolset (ADR-0034), after the
+    /// configured toolkits.
+    #[must_use]
+    pub(crate) fn with_workspace_toolset(mut self, toolset: Arc<dyn Toolset>) -> Self {
+        self.toolsets.push(toolset);
+        self
+    }
+
     fn has_confirmation_guards(&self) -> bool {
         !self.sensitive_tools.is_empty()
             || !self.delegated_authorization.is_empty()
