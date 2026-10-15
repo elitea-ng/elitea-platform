@@ -248,6 +248,15 @@ fn unfetchable(key: &str, version: &str, text: &str) -> Document {
     document
 }
 
+/// A listed document whose fetch stays rate limited past the backoff bound.
+fn rate_limited(key: &str, version: &str, text: &str) -> Document {
+    let mut document = document(key, version, text);
+    document
+        .metadata
+        .insert("fixture_rate_limited".to_owned(), Value::Bool(true));
+    document
+}
+
 pub(super) fn document(key: &str, version: &str, text: &str) -> Document {
     Document {
         reference: DocumentRef {
@@ -2173,4 +2182,32 @@ async fn a_run_asking_less_extraction_time_than_the_cap_sends_its_own_figure() {
     let seen = fake.seen.lock().expect("lock").clone();
     assert_eq!(seen[0].5, 5_000, "{seen:?}");
     let _ = std::fs::remove_file(&socket);
+}
+
+/// Live defect: a source that stayed rate limited (anonymous GitHub) was
+/// reported as `fetch_failed`, i.e. "could not be read". It is `rate_limited`,
+/// a lost-for-now document the next run reads again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rate_limited_fetch_is_skipped_rate_limited_not_fetch_failed() {
+    let harness = harness(4, None).await;
+    let summary = run(
+        &harness,
+        vec![
+            document("ok.md", "v1", "readable text"),
+            rate_limited("limited.md", "v1", "never read"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(summary.skipped.get("rate_limited"), Some(&1), "{summary:?}");
+    assert_eq!(summary.skipped.get("fetch_failed"), None, "{summary:?}");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::PartlyIndexed as i32,
+        "a rate-limited document is lost work for this run: {summary:?}"
+    );
 }

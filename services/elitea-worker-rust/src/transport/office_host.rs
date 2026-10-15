@@ -34,6 +34,7 @@ use serde_json::Value;
 
 use super::extractor_client::{Extraction, ExtractorClient, SkipReason};
 use super::images_facade::{ImageCall, ImagesClient, ImagesError};
+use super::model_text::ModelCallBudget;
 use super::multipart::Multipart;
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::indexing::tools::{LazyStepbackModel, generate_text};
@@ -139,6 +140,9 @@ pub(crate) struct ClaimOfficeHost {
     /// The gateway's images routes under the claim (the `imagegen` toolkit,
     /// #864); `None` leaves that toolkit out as unsupported.
     images: Option<(ImagesClient, Arc<ClaimScopedEliteaContext>)>,
+    /// The claim's toolkit completion budget the image calls are charged to
+    /// (the chat prompts are charged through the model binding).
+    budget: Option<ModelCallBudget>,
 }
 
 impl ClaimOfficeHost {
@@ -162,7 +166,16 @@ impl ClaimOfficeHost {
             model,
             project_id: project_id.to_owned(),
             images: None,
+            budget: None,
         })
+    }
+
+    /// The claim's toolkit completion budget, shared with the chat binding:
+    /// every image call takes one unit of it.
+    #[must_use]
+    pub(crate) fn with_budget(mut self, budget: ModelCallBudget) -> Self {
+        self.budget = Some(budget);
+        self
     }
 
     /// This host with the gateway's images API, called under `context`'s
@@ -176,6 +189,31 @@ impl ClaimOfficeHost {
     ) -> Self {
         self.images = Some((client, context));
         self
+    }
+
+    /// One unit of the claim's toolkit completion budget for an image call
+    /// (generation or edit; `n` images are still ONE call): the same budget
+    /// the chat prompts and the step-back tools draw from.
+    fn charge_image_call(&self) -> Result<(), OfficeHostError> {
+        match &self.budget {
+            Some(budget) if !budget.try_take() => Err(OfficeHostError::toolkit_budget()),
+            _ => Ok(()),
+        }
+    }
+
+    /// Gives the unit back for an image call that was never sent (the
+    /// request was too large, a file name unusable, a header malformed).
+    fn refund_unsent_image_call(&self, error: &ImagesError) {
+        if let Some(budget) = &self.budget
+            && matches!(
+                error,
+                ImagesError::RequestTooLarge
+                    | ImagesError::InvalidFileName
+                    | ImagesError::Malformed
+            )
+        {
+            budget.refund();
+        }
     }
 
     fn object_request(
@@ -240,13 +278,43 @@ pub(crate) fn failure(error: &Failure) -> OfficeHostError {
     OfficeHostError::new(kind, reason)
 }
 
-/// A model-call failure: the gateway's budget refusal is its own cause.
-pub(crate) fn model_failure(message: &str) -> OfficeHostError {
-    if message.contains("budget is exhausted") {
-        OfficeHostError::new(OfficeFailure::BudgetRefused, "office_host.budget_refused")
-    } else {
-        OfficeHostError::new(OfficeFailure::Unreachable, "office_host.model_call_failed")
-    }
+/// A model-call failure, classified on the error's stable CODE (never its
+/// message): the claim's toolkit cap and the gateway's budgets are budget
+/// refusals, each with its own sentence; a reply the model spent on
+/// reasoning, or one cut off or oversized, is an unusable reply (not an
+/// unreachable platform); the gateway's own refusals keep their kinds.
+pub(crate) fn model_failure(error: &adk_rust::AdkError) -> OfficeHostError {
+    use crate::indexing::tools::reply_codes;
+    use crate::transport::model_text::TOOLKIT_BUDGET_EXHAUSTED_CODE;
+    let (kind, reason) = match error.code {
+        TOOLKIT_BUDGET_EXHAUSTED_CODE => return OfficeHostError::toolkit_budget(),
+        "model_gateway.budget_exhausted"
+        | "model_gateway.member_budget_exhausted"
+        | "model_gateway.project_budget_exhausted" => {
+            (OfficeFailure::BudgetRefused, "office_host.budget_refused")
+        }
+        reply_codes::REASONING_ONLY | reply_codes::LENGTH_CUT => (
+            OfficeFailure::ReplyUnusable,
+            "office_host.model_reply_unusable",
+        ),
+        reply_codes::TOO_LARGE => (
+            OfficeFailure::ReplyTooLarge,
+            "office_host.model_reply_too_large",
+        ),
+        "model_gateway.unauthorized" | "model_gateway.forbidden" => (
+            OfficeFailure::AccessRefused,
+            "office_host.model_call_refused",
+        ),
+        "model_gateway.rate_limited" => {
+            (OfficeFailure::RateLimited, "office_host.model_rate_limited")
+        }
+        "model_gateway.upstream_timeout" | "model_gateway.response_header_timeout" => {
+            (OfficeFailure::Timeout, "office_host.model_timeout")
+        }
+        "model_gateway.conflict" => (OfficeFailure::Conflict, "office_host.model_conflict"),
+        _ => (OfficeFailure::Unreachable, "office_host.model_call_failed"),
+    };
+    OfficeHostError::new(kind, reason)
 }
 
 /// How long the sidecar may take to read one document for a tool call.
@@ -438,8 +506,10 @@ impl OfficeToolHost for ClaimOfficeHost {
             size: request.size.as_deref(),
             count: request.count,
         };
+        self.charge_image_call()?;
         client.generate(context, &call).await.map_err(|error| {
             tracing::warn!(event = "imagegen_call_failed", error = %error, "an image generation call failed");
+            self.refund_unsent_image_call(&error);
             images_failure(&error)
         })
     }
@@ -466,11 +536,13 @@ impl OfficeToolHost for ClaimOfficeHost {
             size: None,
             count: 1,
         };
+        self.charge_image_call()?;
         client
             .edit(context, &call, image, mask)
             .await
             .map_err(|error| {
                 tracing::warn!(event = "imagegen_call_failed", error = %error, "an image edit call failed");
+                self.refund_unsent_image_call(&error);
                 images_failure(&error)
             })
     }
@@ -699,7 +771,7 @@ impl OfficeToolHost for ClaimOfficeHost {
     }
 
     async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError> {
-        let Some(binding) = self.model.get() else {
+        let Some(binding) = self.model.bind() else {
             return Err(OfficeHostError::new(
                 OfficeFailure::NoModel,
                 "office_host.no_model",
@@ -720,13 +792,13 @@ impl OfficeToolHost for ClaimOfficeHost {
                 annotations: None,
             });
         }
-        generate_text(binding, parts).await.map_err(|message| {
+        generate_text(&binding, parts).await.map_err(|error| {
             tracing::warn!(
                 event = "office_model_call_failed",
-                error = %message,
+                error_code = error.code,
                 "a document tool's model call failed"
             );
-            model_failure(&message)
+            model_failure(&error)
         })
     }
 }

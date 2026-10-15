@@ -2133,7 +2133,7 @@ mod tests {
         );
         assert_eq!(
             reason(StatusCode::TOO_MANY_REQUESTS).await,
-            [(pictures::FETCH_FAILED, 1)]
+            [(pictures::RATE_LIMITED, 1)]
         );
         assert_eq!(
             reason(StatusCode::FORBIDDEN).await,

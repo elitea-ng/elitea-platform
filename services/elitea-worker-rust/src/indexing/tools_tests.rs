@@ -899,11 +899,10 @@ async fn remove_index_renders_mains_decisions_as_sentences() {
     assert_eq!(without.fake.point_count(), 2);
 }
 
-/// A chat model that answers a streaming call the way the facades do — text
-/// deltas, then a final frame carrying the WHOLE text — and a non-streaming
-/// call with one complete frame. Collecting every frame of the streaming
-/// shape doubles the text; the step-back model must ask non-streaming
-/// (review round 1, finding 7).
+/// A chat model that behaves like the gateway facade: it admits only a
+/// STREAMING request carrying a generation config (anything else is
+/// `model_gateway.invalid_request`, local, before the gateway), and it answers
+/// with text deltas and a terminal frame that carries none of them.
 struct FramedModel {
     streamed: AtomicBool,
 }
@@ -916,44 +915,41 @@ impl Llm for FramedModel {
 
     async fn generate_content(
         &self,
-        _request: LlmRequest,
+        request: LlmRequest,
         streaming: bool,
     ) -> adk_rust::Result<LlmResponseStream> {
-        if streaming {
-            self.streamed.store(true, Ordering::SeqCst);
-            let frames = vec![
-                Ok(LlmResponse {
-                    content: Some(Content::new("model").with_text("alpha ")),
-                    partial: true,
-                    ..Default::default()
-                }),
-                Ok(LlmResponse {
-                    content: Some(Content::new("model").with_text("text")),
-                    partial: true,
-                    ..Default::default()
-                }),
-                Ok(LlmResponse {
-                    content: Some(Content::new("model").with_text("alpha text")),
-                    turn_complete: true,
-                    finish_reason: Some(adk_rust::FinishReason::Stop),
-                    ..Default::default()
-                }),
-            ];
-            return Ok(Box::pin(stream::iter(frames)));
+        if !streaming || request.config.is_none() {
+            return Err(adk_rust::AdkError::new(
+                adk_rust::ErrorComponent::Model,
+                adk_rust::ErrorCategory::InvalidInput,
+                "model_gateway.invalid_request",
+                "the ADK model request is outside the admitted ordinary profile",
+            ));
         }
-        Ok(Box::pin(stream::once(async {
+        self.streamed.store(true, Ordering::SeqCst);
+        let frames = vec![
             Ok(LlmResponse {
-                content: Some(Content::new("model").with_text("alpha text")),
+                content: Some(Content::new("model").with_text("alpha ")),
+                partial: true,
+                ..Default::default()
+            }),
+            Ok(LlmResponse {
+                content: Some(Content::new("model").with_text("text")),
+                partial: true,
+                ..Default::default()
+            }),
+            Ok(LlmResponse {
                 turn_complete: true,
                 finish_reason: Some(adk_rust::FinishReason::Stop),
                 ..Default::default()
-            })
-        })))
+            }),
+        ];
+        Ok(Box::pin(stream::iter(frames)))
     }
 }
 
 #[tokio::test]
-async fn the_step_back_model_is_called_without_streaming_so_its_text_is_not_doubled() {
+async fn the_step_back_model_makes_the_admitted_streaming_request_and_its_text_is_not_doubled() {
     let harness = harness().await;
     seed(&harness).await;
     let model = Arc::new(FramedModel {
@@ -965,6 +961,8 @@ async fn the_step_back_model_is_called_without_streaming_so_its_text_is_not_doub
         Some(StepbackBinding {
             model: Arc::clone(&model) as Arc<dyn Llm>,
             model_name: "chat-model".to_owned(),
+            config: adk_rust::GenerateContentConfig::default(),
+            budget: None,
         }),
     );
     // stepback_summary_index returns the model's second reply verbatim: a
@@ -977,8 +975,8 @@ async fn the_step_back_model_is_called_without_streaming_so_its_text_is_not_doub
     .await;
     assert_eq!(summary, json!("alpha text"));
     assert!(
-        !model.streamed.load(Ordering::SeqCst),
-        "the step-back prompts are non-streaming calls"
+        model.streamed.load(Ordering::SeqCst),
+        "the step-back prompts are the streaming, configured request the facade admits"
     );
     // stepback_search_index searches with the model's reply as the query and
     // renders the hits as text.
@@ -993,8 +991,8 @@ async fn the_step_back_model_is_called_without_streaming_so_its_text_is_not_doub
     assert!(!text.starts_with("FAILED"), "{text}");
 }
 
-/// Review round 2, finding 7: the step-back model is bound on the first
-/// step-back call and once; a turn that only lists or searches binds none.
+/// Review round 2, finding 7: the step-back model is bound on a step-back
+/// call, one binding per call (the bound model is single-use); a turn that only lists or searches binds none.
 #[tokio::test]
 async fn the_step_back_model_is_bound_lazily_and_once() {
     let harness = harness().await;
@@ -1011,6 +1009,8 @@ async fn the_step_back_model_is_bound_lazily_and_once() {
             Ok(StepbackBinding {
                 model: Arc::clone(&model) as Arc<dyn Llm>,
                 model_name: "chat-model".to_owned(),
+                config: adk_rust::GenerateContentConfig::default(),
+                budget: None,
             })
         })
     };
@@ -1039,17 +1039,23 @@ async fn the_step_back_model_is_bound_lazily_and_once() {
     )
     .await;
     assert_eq!(summary, json!("alpha text"));
-    assert_eq!(binds.load(Ordering::SeqCst), 1);
+    // The summary tool asks the model twice (the step-back question, then the
+    // summary): two single-use bindings.
+    assert_eq!(binds.load(Ordering::SeqCst), 2);
     call(
         &host,
         IndexToolName::StepbackSearchIndex,
         json!({"query": "alpha", "index_name": "docs"}),
     )
     .await;
-    assert_eq!(binds.load(Ordering::SeqCst), 1, "bound once for the run");
+    assert_eq!(
+        binds.load(Ordering::SeqCst),
+        3,
+        "every model call binds its own single-use model"
+    );
 
     // A binder that fails leaves the two step-back tools refusing with a
-    // sentence, tried once.
+    // sentence, tried once per call.
     let failures = Arc::new(AtomicUsize::new(0));
     let failing = {
         let failures = Arc::clone(&failures);
@@ -1073,9 +1079,467 @@ async fn the_step_back_model_is_bound_lazily_and_once() {
         assert!(
             text.as_str()
                 .expect("text")
-                .contains("needs the agent's chat model"),
+                .contains("needs the agent's chat model; use search_index instead"),
             "{text}"
         );
     }
-    assert_eq!(failures.load(Ordering::SeqCst), 1);
+    assert_eq!(failures.load(Ordering::SeqCst), 2, "one attempt per call");
+}
+
+/// A model that behaves like the facade's single-use bound model: a second
+/// completion on the same binding is `model_gateway.completion_reused`.
+struct SingleUseModel {
+    used: AtomicBool,
+}
+
+#[async_trait]
+impl Llm for SingleUseModel {
+    fn name(&self) -> &'static str {
+        "single-use-fixture"
+    }
+
+    async fn generate_content(
+        &self,
+        request: LlmRequest,
+        streaming: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        assert!(streaming && request.config.is_some());
+        if self.used.swap(true, Ordering::SeqCst) {
+            return Err(adk_rust::AdkError::new(
+                adk_rust::ErrorComponent::Model,
+                adk_rust::ErrorCategory::Internal,
+                "model_gateway.completion_reused",
+                "the model completion was produced more than once",
+            ));
+        }
+        Ok(Box::pin(stream::iter(vec![
+            Ok(LlmResponse {
+                content: Some(Content::new("model").with_text("alpha text")),
+                partial: true,
+                ..Default::default()
+            }),
+            Ok(LlmResponse {
+                turn_complete: true,
+                finish_reason: Some(adk_rust::FinishReason::Stop),
+                ..Default::default()
+            }),
+        ])))
+    }
+}
+
+/// Two step-back calls in one run (and two `generate_text` calls) each get
+/// their own binding, so the single-use model never sees a second completion.
+#[tokio::test]
+async fn two_step_back_calls_in_one_run_each_bind_a_fresh_model() {
+    let harness = harness().await;
+    seed(&harness).await;
+    let binds = Arc::new(AtomicUsize::new(0));
+    let binder = {
+        let binds = Arc::clone(&binds);
+        Box::new(move || {
+            binds.fetch_add(1, Ordering::SeqCst);
+            Ok(StepbackBinding {
+                model: Arc::new(SingleUseModel {
+                    used: AtomicBool::new(false),
+                }) as Arc<dyn Llm>,
+                model_name: "chat-model".to_owned(),
+                config: adk_rust::GenerateContentConfig::default(),
+                budget: None,
+            })
+        })
+    };
+    let lazy = LazyStepbackModel::new(binder);
+    let host = host_with_lazy_model(&harness, &harness.token, Some(lazy));
+    for tool in [
+        IndexToolName::StepbackSearchIndex,
+        IndexToolName::StepbackSummaryIndex,
+    ] {
+        let text = call(&host, tool, json!({"query": "alpha", "index_name": "docs"})).await;
+        let text = text.as_str().expect("text");
+        assert!(!text.starts_with("FAILED"), "{text}");
+    }
+    // The search tool asks once, the summary tool twice.
+    assert_eq!(binds.load(Ordering::SeqCst), 3);
+
+    // The shared helper, called twice from one lazy model (the Office host).
+    let binds_before = binds.load(Ordering::SeqCst);
+    let lazy = LazyStepbackModel::new({
+        let binds = Arc::clone(&binds);
+        Box::new(move || {
+            binds.fetch_add(1, Ordering::SeqCst);
+            Ok(StepbackBinding {
+                model: Arc::new(SingleUseModel {
+                    used: AtomicBool::new(false),
+                }) as Arc<dyn Llm>,
+                model_name: "chat-model".to_owned(),
+                config: adk_rust::GenerateContentConfig::default(),
+                budget: None,
+            })
+        })
+    });
+    for _ in 0..2 {
+        let binding = lazy.bind().expect("binding");
+        let reply = super::tools::generate_text(
+            &binding,
+            vec![adk_rust::Part::Text {
+                text: "prompt".to_owned(),
+            }],
+        )
+        .await
+        .expect("reply");
+        assert_eq!(reply, "alpha text");
+    }
+    assert_eq!(binds.load(Ordering::SeqCst), binds_before + 2);
+}
+
+/// The claim's toolkit completion budget is shared by every binding and stops
+/// parallel step-back calls at the cap; the agent's own turns are a different
+/// counter (each binding is a single-use model with `max_model_turns = 1`).
+#[tokio::test]
+async fn parallel_step_back_calls_stop_at_the_claims_completion_budget() {
+    use crate::transport::model_text::ModelCallBudget;
+
+    let harness = harness().await;
+    seed(&harness).await;
+    let budget = ModelCallBudget::new(3);
+    let binds = Arc::new(AtomicUsize::new(0));
+    let lazy = LazyStepbackModel::new({
+        let (budget, binds) = (budget.clone(), Arc::clone(&binds));
+        Box::new(move || {
+            binds.fetch_add(1, Ordering::SeqCst);
+            Ok(StepbackBinding {
+                model: Arc::new(SingleUseModel {
+                    used: AtomicBool::new(false),
+                }) as Arc<dyn Llm>,
+                model_name: "chat-model".to_owned(),
+                config: adk_rust::GenerateContentConfig::default(),
+                budget: Some(budget.clone()),
+            })
+        })
+    });
+    let host = host_with_lazy_model(&harness, &harness.token, Some(lazy));
+    // Five step-back searches at once (one completion each) against a budget
+    // of three: exactly three get an answer.
+    let args = json!({"query": "alpha", "index_name": "docs"});
+    let results = adk_rust::futures::future::join_all(
+        (0..5).map(|_| call(&host, IndexToolName::StepbackSearchIndex, args.clone())),
+    )
+    .await;
+    let refused = results
+        .iter()
+        .filter(|text| {
+            text.as_str()
+                .is_some_and(|text| text.contains("used up its model calls for tools"))
+        })
+        .count();
+    assert_eq!(refused, 2, "{results:?}");
+    assert!(!budget.try_take(), "the budget is spent");
+}
+
+/// Arguments and the index are checked BEFORE a model is bound: a call that
+/// is refused for its arguments or an unknown index binds nothing.
+#[tokio::test]
+async fn a_refused_step_back_call_binds_no_model() {
+    let harness = harness().await;
+    seed(&harness).await;
+    let binds = Arc::new(AtomicUsize::new(0));
+    let lazy = LazyStepbackModel::new({
+        let binds = Arc::clone(&binds);
+        Box::new(move || {
+            binds.fetch_add(1, Ordering::SeqCst);
+            Ok(StepbackBinding {
+                model: Arc::new(SingleUseModel {
+                    used: AtomicBool::new(false),
+                }) as Arc<dyn Llm>,
+                model_name: "chat-model".to_owned(),
+                config: adk_rust::GenerateContentConfig::default(),
+                budget: None,
+            })
+        })
+    });
+    let host = host_with_lazy_model(&harness, &harness.token, Some(lazy));
+    for args in [
+        json!({"query": "alpha", "index_name": "no-such-index"}),
+        json!({"query": "", "index_name": "docs"}),
+        json!({"index_name": "docs"}),
+    ] {
+        for tool in [
+            IndexToolName::StepbackSearchIndex,
+            IndexToolName::StepbackSummaryIndex,
+        ] {
+            let _ = call(&host, tool, args.clone()).await;
+        }
+    }
+    assert_eq!(binds.load(Ordering::SeqCst), 0);
+}
+
+/// `generate_text`: an empty reply is a valid answer (`Ok("")`); a reply of
+/// nothing but reasoning is a typed error.
+#[tokio::test]
+async fn generate_text_accepts_an_empty_reply_and_refuses_a_reasoning_only_one() {
+    struct Reply(&'static str);
+    #[async_trait]
+    impl Llm for Reply {
+        fn name(&self) -> &'static str {
+            "reply-fixture"
+        }
+        async fn generate_content(
+            &self,
+            _: LlmRequest,
+            _: bool,
+        ) -> adk_rust::Result<LlmResponseStream> {
+            let text = self.0;
+            Ok(Box::pin(stream::iter(vec![
+                Ok(LlmResponse {
+                    content: (!text.is_empty()).then(|| Content::new("model").with_text(text)),
+                    partial: true,
+                    ..Default::default()
+                }),
+                Ok(LlmResponse {
+                    turn_complete: true,
+                    finish_reason: Some(adk_rust::FinishReason::Stop),
+                    ..Default::default()
+                }),
+            ])))
+        }
+    }
+    let binding = |text: &'static str| StepbackBinding {
+        model: Arc::new(Reply(text)) as Arc<dyn Llm>,
+        model_name: "m".to_owned(),
+        config: adk_rust::GenerateContentConfig::default(),
+        budget: None,
+    };
+    let ask = |text: &'static str| async move {
+        super::tools::generate_text(
+            &binding(text),
+            vec![adk_rust::Part::Text {
+                text: "p".to_owned(),
+            }],
+        )
+        .await
+    };
+    assert_eq!(ask("").await.expect("empty is an answer"), "");
+    assert_eq!(ask("   ").await.expect("blank is an answer"), "   ");
+    for reasoning in [
+        "<think>all of it</think>\n",
+        "<think>unclosed",
+        "all of it</think>",
+    ] {
+        let error = ask(reasoning).await.expect_err(reasoning);
+        assert_eq!(
+            error.code,
+            super::tools::reply_codes::REASONING_ONLY,
+            "{reasoning}"
+        );
+    }
+    assert_eq!(ask("  keep\n").await.expect("text"), "  keep\n");
+    assert_eq!(
+        ask("Let me look…</think>\n\nA red square.")
+            .await
+            .expect("text"),
+        "A red square."
+    );
+}
+
+/// A model that refuses every request locally, as the facade does for a
+/// request outside its admitted profile (`model_gateway.invalid_request`,
+/// raised before a byte is sent), or answers like the gateway with a 429.
+struct RefusingModel(&'static str, adk_rust::ErrorCategory);
+
+#[async_trait]
+impl Llm for RefusingModel {
+    fn name(&self) -> &'static str {
+        "refusing-fixture"
+    }
+
+    async fn generate_content(
+        &self,
+        _: LlmRequest,
+        _: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        Err(adk_rust::AdkError::new(
+            adk_rust::ErrorComponent::Model,
+            self.1,
+            self.0,
+            "refused",
+        ))
+    }
+}
+
+/// The budget is charged only for a request that reached the gateway: a
+/// local refusal before sending (an invalid request, a request too large)
+/// and a failed binding consume nothing; a gateway 429 after sending counts.
+#[tokio::test]
+async fn only_a_request_sent_to_the_gateway_consumes_the_budget() {
+    use crate::transport::model_text::ModelCallBudget;
+    let ask = |code: &'static str, category, budget: &ModelCallBudget| {
+        let binding = StepbackBinding {
+            model: Arc::new(RefusingModel(code, category)) as Arc<dyn Llm>,
+            model_name: "m".to_owned(),
+            config: adk_rust::GenerateContentConfig::default(),
+            budget: Some(budget.clone()),
+        };
+        async move {
+            super::tools::generate_text(
+                &binding,
+                vec![adk_rust::Part::Text {
+                    text: "p".to_owned(),
+                }],
+            )
+            .await
+        }
+    };
+    let budget = ModelCallBudget::new(1);
+    for code in [
+        "model_gateway.invalid_request",
+        "model_gateway.request_too_large",
+        "anthropic_gateway.invalid_request",
+        "model_gateway.completion_reused",
+        "context_budget_exceeded",
+    ] {
+        for _ in 0..3 {
+            let error = ask(code, adk_rust::ErrorCategory::InvalidInput, &budget)
+                .await
+                .expect_err(code);
+            assert_eq!(error.code, code);
+        }
+    }
+    assert!(budget.try_take(), "local refusals consumed nothing");
+    budget.refund();
+    // A gateway refusal after sending counts.
+    let error = ask(
+        "model_gateway.rate_limited",
+        adk_rust::ErrorCategory::RateLimited,
+        &budget,
+    )
+    .await
+    .expect_err("429");
+    assert_eq!(error.code, "model_gateway.rate_limited");
+    let spent = ask(
+        "model_gateway.rate_limited",
+        adk_rust::ErrorCategory::RateLimited,
+        &budget,
+    )
+    .await
+    .expect_err("spent");
+    assert_eq!(
+        spent.code,
+        crate::transport::model_text::TOOLKIT_BUDGET_EXHAUSTED_CODE
+    );
+    assert_eq!(spent.category, adk_rust::ErrorCategory::RateLimited);
+
+    // A binding that fails takes nothing either: the budget lives on the
+    // binding, and no binding means no request.
+    let harness = harness().await;
+    seed(&harness).await;
+    let budget = ModelCallBudget::new(1);
+    let host = host_with_lazy_model(
+        &harness,
+        &harness.token,
+        Some(LazyStepbackModel::new(Box::new(|| {
+            Err(crate::transport::model_facade::ModelFacadeError::InvalidConfiguration)
+        }))),
+    );
+    let _ = call(
+        &host,
+        IndexToolName::StepbackSearchIndex,
+        json!({"query": "alpha", "index_name": "docs"}),
+    )
+    .await;
+    assert!(budget.try_take(), "a failed bind consumed nothing");
+}
+
+/// Embeddings that count their requests.
+struct CountingEmbeddings(AtomicUsize);
+
+#[async_trait]
+impl ModelGatewayTransport for CountingEmbeddings {
+    async fn post(
+        &self,
+        request: Request<Body>,
+    ) -> Result<Response<Body>, ModelGatewayTransportError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        AxisEmbeddings.post(request).await
+    }
+}
+
+/// A configured model whose binding fails refuses the step-back call with
+/// the explicit sentence BEFORE any billed work: no query embedding, no
+/// vector search. A binding that works for the first model call but not the
+/// second (the summary tool) is caught up front too: every binding the call
+/// needs is made at its first model call.
+#[tokio::test]
+async fn a_failed_bind_refuses_before_any_embedding_or_vector_call() {
+    let embeddings = Arc::new(CountingEmbeddings(AtomicUsize::new(0)));
+    let harness = harness_with(
+        Some(RecordingRemoval::new(IndexRemovalOutcome::Removed)),
+        Arc::clone(&embeddings) as Arc<dyn ModelGatewayTransport>,
+    )
+    .await;
+    seed(&harness).await;
+    let vector_calls_before = harness.fake.calls().len();
+    let host = host_with_lazy_model(
+        &harness,
+        &harness.token,
+        Some(LazyStepbackModel::new(Box::new(|| {
+            Err(crate::transport::model_facade::ModelFacadeError::InvalidConfiguration)
+        }))),
+    );
+    for tool in [
+        IndexToolName::StepbackSearchIndex,
+        IndexToolName::StepbackSummaryIndex,
+    ] {
+        let text = call(&host, tool, json!({"query": "alpha", "index_name": "docs"})).await;
+        let text = text.as_str().expect("text");
+        assert!(
+            text.contains("needs the agent's chat model; use search_index instead"),
+            "{text}"
+        );
+    }
+    // The second binding of the summary tool fails, the first works.
+    let binds = Arc::new(AtomicUsize::new(0));
+    let host = host_with_lazy_model(
+        &harness,
+        &harness.token,
+        Some(LazyStepbackModel::new({
+            let binds = Arc::clone(&binds);
+            Box::new(move || {
+                if binds.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Ok(StepbackBinding {
+                        model: Arc::new(SingleUseModel {
+                            used: AtomicBool::new(false),
+                        }) as Arc<dyn Llm>,
+                        model_name: "chat-model".to_owned(),
+                        config: adk_rust::GenerateContentConfig::default(),
+                        budget: None,
+                    })
+                } else {
+                    Err(crate::transport::model_facade::ModelFacadeError::InvalidConfiguration)
+                }
+            })
+        })),
+    );
+    let text = call(
+        &host,
+        IndexToolName::StepbackSummaryIndex,
+        json!({"query": "alpha", "index_name": "docs"}),
+    )
+    .await;
+    assert!(
+        text.as_str()
+            .expect("text")
+            .contains("needs the agent's chat model; use search_index instead"),
+        "{text}"
+    );
+    assert_eq!(
+        embeddings.0.load(Ordering::SeqCst),
+        0,
+        "no query was embedded"
+    );
+    assert_eq!(
+        harness.fake.calls().len(),
+        vector_calls_before,
+        "no vector call was made: {:?}",
+        harness.fake.calls()
+    );
 }

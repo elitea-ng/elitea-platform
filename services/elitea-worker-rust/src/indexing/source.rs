@@ -219,8 +219,8 @@ impl IndexSource {
                 // The SDK's `folder`: list under that prefix only. Parsed
                 // once, with the filter.
                 let folder = filter.artifact_folder();
-                let source = ArtifactSource::new(api, bucket, folder, allowlist.clone(), transport)
-                    .map_err(|e| refused(&e))?;
+                let source =
+                    ArtifactSource::new(api, bucket, folder, transport).map_err(|e| refused(&e))?;
                 Self::Artifact(source.with_limits(source_limits), folder.to_owned())
             }
             "confluence" => {
@@ -530,7 +530,11 @@ impl IndexSource {
                 .and_then(|document| {
                     // A listed document whose fetch fails (the test marks it
                     // with this metadata key).
-                    if document.metadata.contains_key("fixture_unfetchable") {
+                    if document.metadata.contains_key("fixture_rate_limited") {
+                        Err(SourceError::RateLimited(format!(
+                            "fixture: '{key}' stayed rate limited past the backoff bound"
+                        )))
+                    } else if document.metadata.contains_key("fixture_unfetchable") {
                         Err(SourceError::Unavailable(format!(
                             "fixture: '{key}' cannot be fetched"
                         )))
@@ -802,6 +806,7 @@ fn fixture_batch(spec: &Value) -> PictureBatch {
     for (reason, count) in spec["skipped"].as_object().into_iter().flatten() {
         let reason: &'static str = match reason.as_str() {
             "fetch_failed" => "fetch_failed",
+            "rate_limited" => "rate_limited",
             "unsupported_type" => "unsupported_type",
             "too_large" => "too_large",
             _ => "unreadable",
@@ -1128,5 +1133,76 @@ mod tests {
             .expect("no file");
         assert!(error.0.contains("urls_or_file_keys"), "{error}");
         assert!(!error.0.contains("figd_fixture"));
+    }
+
+    /// Live defect: the artifact source is the platform's own object API
+    /// and must be reached with the shipped (public-SaaS-only) allowlist,
+    /// on exactly the configured platform origin and nowhere else.
+    #[tokio::test]
+    async fn the_artifact_source_reaches_the_platform_under_the_default_allowlist() {
+        use std::sync::Mutex;
+
+        struct Recording(Mutex<Vec<String>>);
+        #[async_trait::async_trait]
+        impl Transport for Recording {
+            async fn execute(
+                &self,
+                request: elitea_connectors::transport::Request,
+            ) -> Result<
+                elitea_connectors::transport::Response,
+                elitea_connectors::transport::TransportError,
+            > {
+                self.0.lock().expect("lock").push(request.url().to_string());
+                Ok(elitea_connectors::transport::Response::from_bytes(
+                    elitea_connectors::transport::StatusCode::OK,
+                    elitea_connectors::transport::HeaderMap::new(),
+                    bytes::Bytes::from_static(br#"{"objects": []}"#),
+                ))
+            }
+        }
+
+        let default_allowlist = HostAllowlist::parse(Some(
+            "api.github.com,gitlab.com,*.atlassian.net,api.figma.com",
+        ));
+        let configuration = ToolkitConfiguration {
+            toolkit_type: "artifact".to_owned(),
+            toolkit_name: "files".to_owned(),
+            settings: serde_json::json!({"bucket": "docs"})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        };
+        let parameters = IndexParameters {
+            index_name: "x".to_owned(),
+            clean_index: false,
+            chunking_tool: None,
+            chunking_config: Value::Null,
+            branch: None,
+            whitelist: Vec::new(),
+            blacklist: Vec::new(),
+            arguments: serde_json::Map::new(),
+        };
+        let filter = PathFilter::for_run("artifact", &parameters).expect("a valid filter");
+        let transport = Arc::new(Recording(Mutex::new(Vec::new())));
+        let platform = PlatformAccess {
+            origin: "https://elitea-platform-edge",
+            bearer: "pat",
+            project_id: "7",
+        };
+        let source = IndexSource::build(
+            &configuration,
+            &parameters,
+            &filter,
+            &platform,
+            &default_allowlist,
+            transport.clone(),
+            IndexRunLimits::default(),
+        )
+        .unwrap_or_else(|error| panic!("built: {error}"));
+        source.list().await.expect("listed through the platform");
+        assert_eq!(
+            transport.0.lock().expect("lock").as_slice(),
+            ["https://elitea-platform-edge/api/v2/artifacts/objects/7/docs"]
+        );
     }
 }

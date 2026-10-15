@@ -462,3 +462,29 @@ func TestListPayloadWithDeepHistoriesStaysSmall(t *testing.T) {
 		}
 	}
 }
+
+// A source that stayed rate limited is its own group: reporting it as
+// read_error ("Could not be read") told the operator the files were broken.
+func TestRateLimitedIsNotAReadError(t *testing.T) {
+	spec, ok := skipReasonGroups["rate_limited"]
+	if !ok {
+		t.Fatal("rate_limited has no group")
+	}
+	if spec.kind != kindFailed || spec.reason == skipReasonGroups["fetch_failed"].reason {
+		t.Errorf("rate_limited must be a failed group of its own, got %+v", spec)
+	}
+}
+
+// A picture whose reply was only reasoning cut by max_tokens is not lost
+// work (the same max_tokens gets the same cut): a not-indexed group of its
+// own whose label says what to raise.
+func TestReasoningExhaustedTokensIsItsOwnNotIndexedGroup(t *testing.T) {
+	spec, ok := skipReasonGroups["reasoning_exhausted_tokens"]
+	if !ok {
+		t.Fatal("reasoning_exhausted_tokens has no group")
+	}
+	if spec.kind != kindNotIndexed || spec.reason != "reasoning_exhausted_tokens" ||
+		!strings.Contains(spec.label, "max_tokens") {
+		t.Errorf("reasoning_exhausted_tokens: %+v", spec)
+	}
+}

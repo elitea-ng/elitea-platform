@@ -27,6 +27,16 @@ use elitea_content_source::Document;
 use serde_json::{Value, json};
 
 use super::model_steps::{ChatModelBinder, ChatModelRequest};
+use crate::transport::model_text::AdmittedChat;
+
+/// A scripted model with the generation config a facade would admit.
+fn admitted(model: Arc<dyn Llm>) -> AdmittedChat {
+    AdmittedChat {
+        model,
+        config: adk_rust::GenerateContentConfig::default(),
+        budget: None,
+    }
+}
 use super::pipeline::RunLiveness;
 use super::tests::{
     Always, FIXTURE_SOURCE, Harness, MODEL, NS, binding, command, configuration, document, harness,
@@ -152,7 +162,14 @@ impl Llm for ScriptedLlm {
         request: LlmRequest,
         streaming: bool,
     ) -> adk_rust::Result<LlmResponseStream> {
-        assert!(!streaming, "the step reads one complete reply");
+        // The gateway facade admits only a streaming request that carries
+        // the generation config (anything else is `model_gateway.invalid_request`
+        // before it reaches the gateway): the step must send exactly that.
+        assert!(streaming, "the facade admits streaming requests only");
+        assert!(
+            request.config.is_some(),
+            "the facade admits requests with a generation config only"
+        );
         let index = self.state.calls.fetch_add(1, Ordering::SeqCst);
         let images: Vec<SeenImage> = request
             .contents
@@ -229,7 +246,7 @@ impl ChatModelBinder for ScriptedChat {
         &self,
         _context: &ClaimScopedEliteaContext,
         request: &ChatModelRequest<'_>,
-    ) -> Result<Arc<dyn Llm>, ModelFacadeError> {
+    ) -> Result<AdmittedChat, ModelFacadeError> {
         self.state.binds.lock().expect("binds").push((
             request.model_name.to_owned(),
             request.system_instruction.to_owned(),
@@ -237,9 +254,9 @@ impl ChatModelBinder for ScriptedChat {
         if self.state.bind_fails {
             return Err(ModelFacadeError::InvalidInvocation);
         }
-        Ok(Arc::new(ScriptedLlm {
+        Ok(admitted(Arc::new(ScriptedLlm {
             state: Arc::clone(&self.state),
-        }))
+        })))
     }
 }
 
@@ -908,9 +925,9 @@ async fn a_reply_cut_by_max_tokens_fails_the_run_naming_the_setting() {
             &self,
             _: &ClaimScopedEliteaContext,
             _: &ChatModelRequest<'_>,
-        ) -> Result<Arc<dyn Llm>, ModelFacadeError> {
+        ) -> Result<AdmittedChat, ModelFacadeError> {
             self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(Arc::new(Truncated))
+            Ok(admitted(Arc::new(Truncated)))
         }
     }
     let mut harness = harness(4, None).await;
