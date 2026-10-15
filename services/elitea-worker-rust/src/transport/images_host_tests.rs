@@ -121,6 +121,10 @@ struct Rig {
 
 impl Rig {
     async fn new() -> Self {
+        Self::with_budget(None).await
+    }
+
+    async fn with_budget(budget: Option<super::model_text::ModelCallBudget>) -> Self {
         let api = ObjectApi::new();
         let gateway = Gateway::new();
         let runtime = Arc::new(OfficeRuntime::with_transport(
@@ -135,6 +139,10 @@ impl Rig {
         let host = ClaimOfficeHost::new(runtime, "pat-token", "42", LazyStepbackModel::unbound())
             .expect("host")
             .with_images(images, context);
+        let host = match budget {
+            Some(budget) => host.with_budget(budget),
+            None => host,
+        };
         assert!(host.serves_images());
         let authority = ArtifactToolAuthority::new(Arc::new(NoPlatform) as Arc<dyn PlatformWriter>)
             .with_office(Arc::new(host));
@@ -423,12 +431,15 @@ async fn an_unusable_upload_file_name_is_an_invalid_request_and_nothing_is_sent(
         Arc::clone(&gateway) as Arc<dyn ModelGatewayTransport>,
         Duration::from_secs(5),
     );
+    // A call that is never sent gives its budget unit back.
+    let budget = super::model_text::ModelCallBudget::new(1);
     let host = ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound())
         .expect("host")
         .with_images(
             images,
             Arc::new(ClaimScopedEliteaContext::fixture(42, "pat")),
-        );
+        )
+        .with_budget(budget.clone());
     let error = host
         .edit_images(elitea_agent_runtime::toolkits::ImageEditRequest {
             model: "m".into(),
@@ -445,6 +456,7 @@ async fn an_unusable_upload_file_name_is_an_invalid_request_and_nothing_is_sent(
         error.kind(),
         elitea_agent_runtime::toolkits::OfficeFailure::InvalidRequest
     );
+    assert!(budget.try_take(), "the unsent call was refunded");
     assert_eq!(error.reason_code(), "office_host.images_file_name");
     assert!(gateway.seen.lock().expect("seen").is_empty());
 }
@@ -537,5 +549,44 @@ async fn a_host_without_the_images_client_does_not_serve_the_toolkit() {
     assert_eq!(
         refused.kind(),
         elitea_agent_runtime::toolkits::OfficeFailure::NoModel
+    );
+}
+
+/// Image generation and editing draw from the claim's toolkit completion
+/// budget, one unit per call (`n` images included), and a spent budget
+/// refuses before the gateway is called, with the toolkit cap's sentence.
+#[tokio::test]
+async fn image_calls_draw_one_unit_each_from_the_claims_toolkit_budget() {
+    let budget = super::model_text::ModelCallBudget::new(2);
+    let rig = Rig::with_budget(Some(budget.clone())).await;
+    rig.call(
+        "generate_image",
+        json!({"prompt": "two circles", "size": "512x512", "n": 2}),
+    )
+    .await;
+    rig.api.put("cat.png", b"CAT-BYTES".to_vec());
+    rig.call(
+        "edit_image",
+        json!({"image": "/pics/cat.png", "prompt": "make it blue"}),
+    )
+    .await;
+    assert_eq!(rig.seen().len(), 2, "both calls reached the gateway");
+    assert!(
+        !budget.try_take(),
+        "two calls took two units (n=2 is one call)"
+    );
+    let refused = rig
+        .call("generate_image", json!({"prompt": "one more", "n": 1}))
+        .await;
+    assert_eq!(
+        rig.seen().len(),
+        2,
+        "no gateway call once the budget is spent"
+    );
+    assert!(
+        refused
+            .to_string()
+            .contains("used up its model calls for tools"),
+        "{refused}"
     );
 }

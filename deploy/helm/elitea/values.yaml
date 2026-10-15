@@ -4299,6 +4299,12 @@ worker:
     # image_digest, policy_revision, and timeout_seconds.
     # The target hostname must match the supervisor certificate SAN.
     sandboxRuntimes: []
+    # The model completions ONE claim's toolkits may make in total (Rust
+    # worker): the step-back index tools, the Office/document tools' prompts
+    # and image generation/editing (one unit per call, n images included).
+    # Separate from the agent's own turns. Empty: the worker default, 200.
+    # Written to runtime.json as `toolkit_model_call_cap`; a positive integer.
+    toolkitModelCallCap: ""
     # Rust worker, indexingRuntime=rust only (ADR-0030 I1, ADR-0031): where
     # the worker finds elitea-vector, as `host:port`, reached with the
     # worker's own runtime mTLS identity (agent-worker-client.crt, issued by
@@ -4326,7 +4332,9 @@ worker:
     # or Azure DevOps hosts, your TestRail, qTest and Zephyr Enterprise
     # hosts, a Zephyr Essential custom `base_url` host (only the default
     # SaaS origin is named above), and your Atlassian, SharePoint and other
-    # tenant hosts.
+    # tenant hosts. The platform itself (platformOrigin above) is NOT governed
+    # by this list: the artifact toolkit's source is pinned to exactly that
+    # origin (scheme, host and port) and is never subject to it.
     indexEgressAllowlist: "github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com api.zephyrscale.smartbear.com eu.api.zephyrscale.smartbear.com prod-api.zephyr4jiracloud.com xray.cloud.getxray.app us.xray.cloud.getxray.app eu.xray.cloud.getxray.app au.xray.cloud.getxray.app api.figma.com"
     # Rust worker, indexingRuntime=rust only (worker unit M9): the gateway
     # embedding model the `memory` toolkit embeds its memories and its search

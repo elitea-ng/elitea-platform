@@ -128,6 +128,11 @@ pub struct RuntimeDeployConfig {
     /// to forbid model use, not a cap that fails every such document.
     #[serde(default)]
     pub index_model_call_cap: Option<u32>,
+    /// The model completions one claim's toolkits may make in total (the
+    /// step-back index tools, the Office families' prompts). Separate from
+    /// the agent's own `max_model_turns`. Absent, 200. Zero is refused.
+    #[serde(default)]
+    pub toolkit_model_call_cap: Option<u32>,
     pub ca_path: PathBuf,
     pub certificate_path: PathBuf,
     pub private_key_path: PathBuf,
@@ -362,7 +367,7 @@ impl RuntimeDeployConfig {
         if let Some(socket) = &self.extractor_socket {
             require_absolute_path(socket)?;
         }
-        if self.index_model_call_cap == Some(0) {
+        if self.index_model_call_cap == Some(0) || self.toolkit_model_call_cap == Some(0) {
             return Err(invalid_config());
         }
         if self.sandbox_runtimes.len() > 4 {

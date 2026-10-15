@@ -111,6 +111,14 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
         self
     }
 
+    /// The completions one claim's toolkits may make in total (direct agents;
+    /// pipeline nodes bind no toolkit model).
+    #[must_use]
+    pub(crate) fn with_toolkit_model_call_cap(mut self, cap: u32) -> Self {
+        self.direct = self.direct.with_toolkit_model_call_cap(cap);
+        self
+    }
+
     /// Lend the Office runtime to direct agents and pipeline nodes (ADR-0032
     /// P3). Direct toolkit calls (`toolkit.call_tool.v1`) do not serve the
     /// Office families.

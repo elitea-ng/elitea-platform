@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 
 use crate::toolkits::families::office_host::{
     MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError, SharedOfficeToolHost,
+    TOOLKIT_BUDGET_SENTENCE,
 };
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::{ToolAdmissionDecision, ToolAdmissionPolicy};
@@ -325,6 +326,9 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> Sentence {
         ),
         OfficeFailure::TooLarge => {
             format!("Could not {action}: the file is larger than the platform accepts.")
+        }
+        OfficeFailure::BudgetRefused if error.is_toolkit_budget() => {
+            format!("Could not {action}: {TOOLKIT_BUDGET_SENTENCE}.")
         }
         OfficeFailure::BudgetRefused | OfficeFailure::NoModel => {
             format!("Could not {action}: the platform refused the request.")

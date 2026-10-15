@@ -704,6 +704,7 @@ mod tests {
             extractor_socket: None,
             index_model_call_cap: None,
             memory_embedding_model: None,
+            toolkit_model_call_cap: None,
             agent_model_checkpoint_recovery: false,
             agent_node_recovery: false,
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),

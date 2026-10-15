@@ -30,8 +30,8 @@ use super::sensitive_tools::{
     SensitiveToolCatalog, policy_for_guardrails, sensitive_tools_for_kind,
 };
 use super::session::{
-    ApplicationRuntimeProjection, BoundOrdinaryAgentModel as _, NativeSessionBackend,
-    NativeToolExecutionMode, OrdinaryAgentCompletion, OrdinaryRuntimeBindings,
+    ApplicationRuntimeProjection, NativeSessionBackend, NativeToolExecutionMode,
+    OrdinaryAgentCompletion, OrdinaryRuntimeBindings,
     assemble_delegated_authorization_resume_with_sessions,
     assemble_direct_hitl_resume_with_sessions_and_applications,
     assemble_ordinary_native_with_sessions_and_runtime_catalogs,
@@ -55,6 +55,7 @@ use crate::transport::model_facade::{
     BoundModelFacade, ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation,
     ModelReasoningEffort,
 };
+use crate::transport::model_text::ModelCallBudget;
 use crate::transport::office_host::{ClaimOfficeHost, OfficeRuntime};
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::ClaimPlatformWriter;
@@ -79,6 +80,10 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     /// (ADR-0030 I1); `None` on a deployment without a `vector_target`,
     /// where the indexing families carry no index tools.
     index_runtime: Option<Arc<IndexIngestRuntime>>,
+    /// Completions one claim's toolkits may make in total (step-back tools,
+    /// the Office host's prompts), `toolkit_model_call_cap` in the runtime
+    /// config.
+    toolkit_model_call_cap: u32,
     /// The platform object client the Office families (`pptx`, `docx`, `xlsx`) read and write
     /// documents with (ADR-0032); `None` leaves them out as unsupported.
     office_runtime: Option<Arc<OfficeRuntime>>,
@@ -117,6 +122,7 @@ impl OrdinaryNativeAgentAssembler {
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             sessions: NativeSessionBackend::invocation_local(),
             index_runtime: None,
+            toolkit_model_call_cap: crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS,
             office_runtime: None,
         }
     }
@@ -129,6 +135,13 @@ impl OrdinaryNativeAgentAssembler {
         office_runtime: Option<Arc<OfficeRuntime>>,
     ) -> Self {
         self.office_runtime = office_runtime;
+        self
+    }
+
+    /// The completions one claim's toolkits may make in total.
+    #[must_use]
+    pub(crate) fn with_toolkit_model_call_cap(mut self, cap: u32) -> Self {
+        self.toolkit_model_call_cap = cap;
         self
     }
 
@@ -374,13 +387,17 @@ impl OrdinaryNativeAgentAssembler {
         // only when the snapshot has an Office toolkit: it mints a credential
         // and binds nothing until a tool calls the model.
         let carries_office_family = snapshot_carries_office_family(tool_snapshot);
+        // ONE completion budget for everything this claim's toolkits ask a
+        // model (step-back tools, Office prompts). It is not the agent's
+        // `max_model_turns`: each binding is single-use.
+        let toolkit_model_budget = ModelCallBudget::new(self.toolkit_model_call_cap);
         // The Data Analysis toggle (ADR-0033) reads the attachment bucket
         // through the same host, and runs free-form code on the sandbox the
         // pipeline `code` nodes use, when this run has one.
         let wants_data_analysis = profile.internal_tools().data_analysis_enabled();
         let mut data_analysis_authority: Option<DataAnalysisAuthority> = None;
         if (carries_office_family || wants_data_analysis)
-            && let Some(office) = self.office_host(&context, profile)
+            && let Some(office) = self.office_host(&context, profile, &toolkit_model_budget)
         {
             if wants_data_analysis {
                 let mut authority = DataAnalysisAuthority::new(Arc::clone(&office));
@@ -408,7 +425,7 @@ impl OrdinaryNativeAgentAssembler {
         // the snapshot has an I1 toolkit carrying a catalog — the only case
         // anything would call it (review round 1).
         let index_authority = if snapshot_carries_index_catalog(tool_snapshot) {
-            self.index_tool_authority(runtime_context, &context, profile)
+            self.index_tool_authority(runtime_context, &context, profile, &toolkit_model_budget)
         } else {
             Err(IndexToolsWithheld::NotRequested)
         };
@@ -645,6 +662,7 @@ impl OrdinaryNativeAgentAssembler {
         runtime_context: &ClaimBoundRuntimeContextAuthority,
         context: &Arc<ClaimScopedEliteaContext>,
         profile: &super::assembly::OrdinaryNoToolProfile,
+        budget: &ModelCallBudget,
     ) -> Result<IndexToolAuthority, IndexToolsWithheld> {
         let runtime = self
             .index_runtime
@@ -653,7 +671,7 @@ impl OrdinaryNativeAgentAssembler {
         let token = runtime_context
             .vector_token()
             .ok_or(IndexToolsWithheld::NoVectorToken)?;
-        let model = LazyStepbackModel::new(self.stepback_model_binder(profile, context));
+        let model = LazyStepbackModel::new(self.stepback_model_binder(profile, context, budget));
         Ok(IndexToolAuthority::new(Arc::new(ClaimIndexToolHost::new(
             Arc::clone(runtime),
             token,
@@ -670,10 +688,11 @@ impl OrdinaryNativeAgentAssembler {
         &self,
         context: &Arc<ClaimScopedEliteaContext>,
         profile: &super::assembly::OrdinaryNoToolProfile,
+        budget: &ModelCallBudget,
     ) -> Option<Arc<dyn elitea_agent_runtime::toolkits::OfficeToolHost>> {
         let runtime = self.office_runtime.as_ref()?;
         let bearer = context.model_facade_token();
-        let model = LazyStepbackModel::new(self.stepback_model_binder(profile, context));
+        let model = LazyStepbackModel::new(self.stepback_model_binder(profile, context, budget));
         let host = ClaimOfficeHost::new(
             Arc::clone(runtime),
             &bearer,
@@ -683,7 +702,9 @@ impl OrdinaryNativeAgentAssembler {
         if let Ok(host) = host {
             // The `imagegen` toolkit's images API rides on the same host and
             // the same credential (#864).
-            let host = host.with_images(self.model_facade.images(), Arc::clone(context));
+            let host = host
+                .with_images(self.model_facade.images(), Arc::clone(context))
+                .with_budget(budget.clone());
             return Some(Arc::new(host));
         }
         tracing::warn!(
@@ -702,7 +723,9 @@ impl OrdinaryNativeAgentAssembler {
         &self,
         profile: &super::assembly::OrdinaryNoToolProfile,
         context: &Arc<ClaimScopedEliteaContext>,
+        budget: &ModelCallBudget,
     ) -> StepbackBinder {
+        let budget = budget.clone();
         let facade = Arc::clone(&self.model_facade);
         let context = Arc::clone(context);
         let adapter = match profile.model_provider() {
@@ -714,7 +737,6 @@ impl OrdinaryNativeAgentAssembler {
         let context_budget = profile.context_budget();
         let max_tokens = profile.max_tokens();
         let temperature = profile.temperature();
-        let max_model_turns = profile.step_limit();
         Box::new(move || {
             let invocation = ModelInvocation {
                 response_schema: None,
@@ -725,13 +747,17 @@ impl OrdinaryNativeAgentAssembler {
                 max_tokens,
                 reasoning_effort: None,
                 temperature,
-                max_model_turns,
+                // Single use, enforced by the facade; never the agent's turns.
+                max_model_turns: 1,
             };
             let bound: Result<BoundModelFacade, ModelFacadeError> =
                 facade.bind(adapter, context.as_ref(), model_project_id, invocation);
+            let chat = bound?.admitted_chat();
             Ok(StepbackBinding {
-                model: bound?.adk_model(),
+                model: chat.model,
                 model_name: model_name.clone(),
+                config: chat.config,
+                budget: Some(budget.clone()),
             })
         })
     }

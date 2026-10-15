@@ -2381,3 +2381,39 @@ async fn never_ending_budget_refusal_body_returns_the_unscoped_refusal_in_time()
     };
     assert_eq!(error.code, "model_gateway.budget_exhausted");
 }
+
+/// A toolkit-internal completion binds a single-use model with
+/// `max_model_turns = 1`: the facade itself refuses a second request on it,
+/// and a separate agent binding (25 turns) is not touched by either.
+#[tokio::test(flavor = "current_thread")]
+async fn a_single_turn_binding_serves_one_request_and_leaves_agent_turns_alone() {
+    let sse = || {
+        TestModelGatewayOutcome::Response(test_model_gateway_response(stream_body(vec![
+            Bytes::from(ordinary_sse()),
+        ])))
+    };
+    let (client, _) =
+        test_model_gateway_client(vec![sse(), sse(), sse()], test_model_gateway_config()).unwrap();
+    let context = ClaimScopedEliteaContext::fixture(17, TOKEN);
+    let mut single = test_model_facade_invocation();
+    single.max_model_turns = 1;
+    let internal = client.bind_ordinary(&context, 23, single).unwrap();
+    let agent = client
+        .bind_ordinary(&context, 23, test_model_facade_invocation())
+        .unwrap();
+    let first = internal.generate_for_test(test_model_request("hi")).await;
+    assert!(first.is_ok());
+    let second = internal.generate_for_test(test_model_request("hi")).await;
+    assert_eq!(
+        second.err().map(|error| error.code),
+        Some("model_gateway.turn_limit")
+    );
+    for _ in 0..2 {
+        assert!(
+            agent
+                .generate_for_test(test_model_request("hi"))
+                .await
+                .is_ok()
+        );
+    }
+}

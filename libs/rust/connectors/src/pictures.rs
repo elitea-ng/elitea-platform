@@ -33,6 +33,9 @@ pub const CONTEXT_KEY: &str = "elitea.picture_context";
 
 /// Skip reasons, the worker's closed labels.
 pub const FETCH_FAILED: &str = "fetch_failed";
+/// The provider rate limited the read (429, or a limit that outlasted the
+/// source's backoff): nothing is wrong with the picture, another run reads it.
+pub const RATE_LIMITED: &str = "rate_limited";
 /// A reference that is not a picture this connector can read (an external
 /// link, a file that is not an image).
 pub const UNSUPPORTED: &str = "unsupported_type";
@@ -197,8 +200,9 @@ pub fn json_contents(text: &str) -> String {
 }
 
 /// The skip reason of a failed picture read. Only what another run can
-/// cure (a 5xx, 408, 429, a timeout or a broken connection) is
-/// [`FETCH_FAILED`], which marks the document for a retry; a missing file,
+/// cure is retried: a 5xx, 408, a timeout or a broken connection is
+/// [`FETCH_FAILED`] and a rate limit (429, or one that outlasted the
+/// backoff) is [`RATE_LIMITED`]; both mark the document for a retry. A missing file,
 /// a refused credential, a request this runtime will not send (egress,
 /// another origin) and a body that is no picture are final.
 #[must_use]
@@ -208,14 +212,13 @@ pub fn skip_reason(failure: &crate::source::Failure) -> &'static str {
     match failure {
         Failure::TooLarge(_) => TOO_LARGE,
         Failure::Status(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) => FORBIDDEN,
+        Failure::Status(StatusCode::TOO_MANY_REQUESTS) | Failure::RateLimited => RATE_LIMITED,
         Failure::Status(status)
-            if status.is_server_error()
-                || *status == StatusCode::TOO_MANY_REQUESTS
-                || *status == StatusCode::REQUEST_TIMEOUT =>
+            if status.is_server_error() || *status == StatusCode::REQUEST_TIMEOUT =>
         {
             FETCH_FAILED
         }
-        Failure::Transport(_) | Failure::RateLimited => FETCH_FAILED,
+        Failure::Transport(_) => FETCH_FAILED,
         Failure::Refused | Failure::Client(_) => UNSUPPORTED,
         Failure::Status(_) | Failure::Changed | Failure::InvalidResponse(_) => UNREADABLE,
     }
@@ -498,10 +501,10 @@ mod tests {
         );
         assert_eq!(
             reason(Failure::Status(StatusCode::TOO_MANY_REQUESTS)),
-            FETCH_FAILED
+            RATE_LIMITED
         );
         assert_eq!(reason(Failure::Transport("timed out".into())), FETCH_FAILED);
-        assert_eq!(reason(Failure::RateLimited), FETCH_FAILED);
+        assert_eq!(reason(Failure::RateLimited), RATE_LIMITED);
         assert_eq!(reason(Failure::Status(StatusCode::UNAUTHORIZED)), FORBIDDEN);
         assert_eq!(reason(Failure::Status(StatusCode::FORBIDDEN)), FORBIDDEN);
         assert_eq!(reason(Failure::Status(StatusCode::NOT_FOUND)), UNREADABLE);

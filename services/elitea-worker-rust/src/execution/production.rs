@@ -374,6 +374,11 @@ impl ProductionAgentRuntime {
             )
             .with_sandbox(sandbox)
             .with_index_runtime(index_runtime.clone())
+            .with_toolkit_model_call_cap(
+                deployment
+                    .toolkit_model_call_cap
+                    .unwrap_or(crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS),
+            )
             .with_office_runtime(office_runtime.clone()),
         );
         let clock = Arc::new(SystemUnixMillisClock);

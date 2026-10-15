@@ -124,6 +124,11 @@ pub(crate) struct BoundAnthropicFacade {
 }
 
 impl BoundAnthropicFacade {
+    /// The generation config this model's requests must carry.
+    pub(super) fn admitted_config(&self) -> adk_rust::GenerateContentConfig {
+        super::openai_compatible_facade::admitted_generation_config(&self.model.invocation)
+    }
+
     pub(super) fn summary_model_with_output(&self, output_cap: Option<u32>) -> Arc<dyn Llm> {
         let source = self.model.clone();
         Arc::new(super::summary_model::SummaryModel::new(

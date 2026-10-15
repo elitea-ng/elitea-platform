@@ -105,9 +105,8 @@ fn refuse(message: String) -> ConfluenceClientError {
 fn attachment_failure(error: AttachmentError) -> ConfluenceClientError {
     let code = match &error {
         AttachmentError::Host(_, OfficeFailure::Timeout) => ConfluenceClientErrorCode::Timeout,
-        AttachmentError::Host(_, OfficeFailure::RateLimited | OfficeFailure::BudgetRefused) => {
-            ConfluenceClientErrorCode::RateLimited
-        }
+        AttachmentError::Host(_, OfficeFailure::RateLimited | OfficeFailure::BudgetRefused)
+        | AttachmentError::ToolkitBudget => ConfluenceClientErrorCode::RateLimited,
         AttachmentError::Host(
             _,
             OfficeFailure::Unreachable | OfficeFailure::NoModel | OfficeFailure::ReplyUnusable,

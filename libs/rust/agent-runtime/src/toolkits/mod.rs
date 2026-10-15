@@ -222,7 +222,7 @@ pub use families::office_host::{
     ImageEditInput, ImageEditRequest, ImageGenerateRequest, MAX_IMAGE_EDIT_INPUT_BYTES,
     MAX_IMAGES_PER_REQUEST, MAX_OFFICE_OBJECT_BYTES, OfficeBucketCreated, OfficeFailure,
     OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
-    TextExtractionFailure, valid_upload_file_name,
+    TOOLKIT_BUDGET_REASON, TOOLKIT_BUDGET_SENTENCE, TextExtractionFailure, valid_upload_file_name,
 };
 pub use families::sharepoint::tools::{
     sharepoint_tool_names, sharepoint_tool_reads_text, sharepoint_tool_uses_office_host,
