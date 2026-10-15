@@ -99,18 +99,16 @@ describe('DesktopFrame sidebar', () => {
     rememberThreadUuid('w1', '77', 'u-77');
     rememberThreadUuid('w1', '78', 'u-78');
     const handoffIpc = createFakeHandoffIpc();
-    const real = handoffIpc.status.bind(handoffIpc);
-    handoffIpc.status = (uuid, projectId) =>
-      uuid === 'u-77'
-        ? Promise.resolve({ state: 'CLOUD_IDLE', epoch: 2, executor: 'cloud', read_only: true, sent_from_here: true })
-        : uuid === 'u-78'
-          ? Promise.resolve({ state: 'RECLAIMING', epoch: 3, executor: 'returning', read_only: true, sent_from_here: true })
-          : real(uuid, projectId);
+    handoffIpc.setStatusOf('u-77', { state: 'CLOUD_IDLE', epoch: 2, executor: 'cloud', read_only: true, sent_from_here: true });
+    handoffIpc.setStatusOf('u-78', { state: 'RECLAIMING', epoch: 3, executor: 'returning', read_only: true, sent_from_here: true });
     mount({ handoffIpc });
 
     const folders = await screen.findAllByTestId('shell-folder');
     const rows = await within(folders[0] as HTMLElement).findAllByTestId('shell-thread');
     await waitFor(() => expect(rows.map((row) => row.textContent)).toEqual(['no uuid yet', 'quick overviewReturning', 'fix the buildIn cloud']));
+    // One batched read for every visible row with a UUID, not a call per row.
+    expect(handoffIpc.calls.statusManys).toEqual([['u-77', 'u-78']]);
+    expect(handoffIpc.calls.statuses).toEqual([]);
   });
 
   it('opens a folder from the sidebar and lands in it', async () => {

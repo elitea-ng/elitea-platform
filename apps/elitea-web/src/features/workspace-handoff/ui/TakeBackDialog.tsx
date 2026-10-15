@@ -4,8 +4,14 @@
  * your folder without touching it, and then offers what is safe: apply the
  * cloud's changes to your folder, open them as a separate worktree, or
  * discard them. Applying keeps a checkpoint; Undo puts the folder back.
+ *
+ * The review shows the per-file diffs of what the take back writes, through
+ * `renderFiles` (the page passes the Workspace view's changed-files card,
+ * read-only, as for a recorded turn: a feature does not import another);
+ * a worktree result lists the excluded local files copied into it and says
+ * it can be opened as a workspace.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -18,7 +24,7 @@ import DialogTitle from '@mui/material/DialogTitle';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
-import type { ApplyResult, HandoffIpc, Preflight, TakeBackMode } from '@/shared/desktop/handoffIpc';
+import type { ApplyResult, HandoffChangedFile, HandoffIpc, Preflight, TakeBackMode } from '@/shared/desktop/handoffIpc';
 import { t } from '@/shared/i18n';
 
 import { describeHandoffError } from '../model/describeHandoffError';
@@ -32,7 +38,11 @@ export interface TakeBackDialogProps {
   conversationUuid: string;
   /** The thread's state moved (released): read it and the history again. */
   onSettled: () => void;
+  /** Renders the per-file diffs (read-only); without it, the changed paths are listed. `key` is unique per preflight. */
+  renderFiles?: ((files: readonly HandoffChangedFile[], key: string) => ReactNode) | undefined;
 }
+
+type RenderFiles = TakeBackDialogProps['renderFiles'];
 
 const mutedSx = (theme: Theme) => ({ color: theme.vars.palette.text.secondary });
 const PATHS_SHOWN = 20;
@@ -73,7 +83,23 @@ function Working({ label }: { label: string }): React.JSX.Element {
   );
 }
 
-function Review({ preflight, confirmingDiscard }: { preflight: Preflight; confirmingDiscard: boolean }): React.JSX.Element {
+/** The diffs of what the take back writes; without a renderer (or diffs), the changed paths. */
+function ChangedInCloud({ preflight, renderFiles }: { preflight: Preflight; renderFiles: RenderFiles }): React.JSX.Element | null {
+  const title = t('workspace.handoff.paths.changed', 'Changed in the cloud');
+  if (renderFiles === undefined || preflight.files.length === 0) return <Paths title={title} paths={preflight.changed_paths} testId="takeback-changed-paths" />;
+  return (
+    <Box data-testid="takeback-diffs" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+      {renderFiles(preflight.files, `takeback-${preflight.preflight_id}`)}
+      {preflight.diffs_truncated && (
+        <Typography variant="bodySmall" data-testid="takeback-diffs-truncated" sx={mutedSx}>
+          {t('workspace.handoff.review.truncated', 'Some diffs are not shown: they are too large to show here. The files are still written.')}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+function Review({ preflight, confirmingDiscard, renderFiles }: { preflight: Preflight; confirmingDiscard: boolean; renderFiles: RenderFiles }): React.JSX.Element {
   const fast = preflight.outcome === 'fast_path';
   return (
     <>
@@ -93,7 +119,7 @@ function Review({ preflight, confirmingDiscard }: { preflight: Preflight; confir
         </Alert>
       )}
       <Paths title={t('workspace.handoff.paths.conflicts', 'Changed on both sides')} paths={preflight.conflict_paths} testId="takeback-conflict-paths" />
-      <Paths title={t('workspace.handoff.paths.changed', 'Changed in the cloud')} paths={preflight.changed_paths} testId="takeback-changed-paths" />
+      <ChangedInCloud preflight={preflight} renderFiles={renderFiles} />
       <Paths title={t('workspace.handoff.paths.skipped', 'Never written or deleted here')} paths={preflight.skipped_paths} testId="takeback-skipped-paths" />
       {confirmingDiscard && (
         <Alert severity="warning" data-testid="takeback-discard-confirm">
@@ -128,9 +154,17 @@ function Done({ preflight, result, undone }: { preflight: Preflight; result: App
         </Typography>
       )}
       {result.outcome === 'worktree' && result.worktree_path !== null && (
-        <Typography variant="bodySmall" data-testid="takeback-worktree-path" sx={{ wordBreak: 'break-all' }}>
-          {t('workspace.handoff.result.worktreePath', 'Worktree: {{path}}', { path: result.worktree_path })}
-        </Typography>
+        <Box data-testid="takeback-worktree" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+          <Typography variant="bodySmall" data-testid="takeback-worktree-path" sx={{ wordBreak: 'break-all' }}>
+            {t('workspace.handoff.result.worktreePath', 'Worktree: {{path}}', { path: result.worktree_path })}
+          </Typography>
+          <Typography variant="bodySmall" sx={mutedSx}>
+            {t('workspace.handoff.result.worktreeHint', 'Open this folder from the sidebar (Open folder) to work in it as a workspace.')}
+          </Typography>
+        </Box>
+      )}
+      {result.outcome === 'worktree' && (
+        <Paths title={t('workspace.handoff.paths.copied', 'Copied from your folder into the worktree')} paths={result.copied} testId="takeback-copied-paths" />
       )}
       {result.imported_turns > 0 && (
         <Typography variant="bodySmall" sx={mutedSx}>
@@ -146,7 +180,7 @@ function Done({ preflight, result, undone }: { preflight: Preflight; result: App
   );
 }
 
-function Body({ takeBack, confirmingDiscard }: { takeBack: TakeBack; confirmingDiscard: boolean }): React.JSX.Element | null {
+function Body({ takeBack, confirmingDiscard, renderFiles }: { takeBack: TakeBack; confirmingDiscard: boolean; renderFiles: RenderFiles }): React.JSX.Element | null {
   const { step } = takeBack;
   switch (step.kind) {
     case 'idle':
@@ -160,7 +194,7 @@ function Body({ takeBack, confirmingDiscard }: { takeBack: TakeBack; confirmingD
     case 'applying':
       return <Working label={t('workspace.handoff.working.applying', 'Applying…')} />;
     case 'review':
-      return <Review preflight={step.preflight} confirmingDiscard={confirmingDiscard} />;
+      return <Review preflight={step.preflight} confirmingDiscard={confirmingDiscard} renderFiles={renderFiles} />;
     case 'done':
       return <Done preflight={step.preflight} result={step.result} undone={step.undone} />;
     case 'gone':
@@ -245,7 +279,7 @@ function Actions({ takeBack, confirmingDiscard, onConfirmDiscard, onClose }: Act
   );
 }
 
-export function TakeBackDialog({ open, onClose, ipc, conversationUuid, onSettled }: TakeBackDialogProps): React.JSX.Element {
+export function TakeBackDialog({ open, onClose, ipc, conversationUuid, onSettled, renderFiles }: TakeBackDialogProps): React.JSX.Element {
   const takeBack = useTakeBack(ipc, conversationUuid, onSettled);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const { start } = takeBack;
@@ -258,7 +292,7 @@ export function TakeBackDialog({ open, onClose, ipc, conversationUuid, onSettled
     <Dialog open={open} onClose={busy ? undefined : onClose} aria-labelledby="handoff-takeback-title" fullWidth maxWidth="sm">
       <DialogTitle id="handoff-takeback-title">{t('workspace.handoff.takeBackTitle', 'Take this thread back')}</DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <Body takeBack={takeBack} confirmingDiscard={confirmingDiscard} />
+        <Body takeBack={takeBack} confirmingDiscard={confirmingDiscard} renderFiles={renderFiles} />
         {takeBack.error !== null && takeBack.error !== undefined && (
           <Alert severity="error" data-testid="takeback-error">
             {describeHandoffError(takeBack.error)}

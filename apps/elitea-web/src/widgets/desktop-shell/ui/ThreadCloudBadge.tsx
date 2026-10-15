@@ -1,14 +1,13 @@
 /**
  * The cloud badge on a thread's row in the sidebar: shown while the thread
  * runs in the cloud or is on its way back. A thread that runs here shows
- * nothing (the thread's own header says Local). It reads the host's own
- * records, so it costs no request for a thread that was never sent.
+ * nothing (the thread's own header says Local). The status comes from the
+ * sidebar's one batched `handoff_status_many` read, not from a call per row.
  */
-import { ExecutorBadge, useHandoffIpc, useHandoffStatus } from '@/features/workspace-handoff';
+import { ExecutorBadge } from '@/features/workspace-handoff';
+import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 
-export function ThreadCloudBadge({ uuid }: { uuid: string }): React.JSX.Element | null {
-  const ipc = useHandoffIpc();
-  const { status } = useHandoffStatus(ipc, uuid);
+export function ThreadCloudBadge({ status }: { status: HandoffStatus | undefined }): React.JSX.Element | null {
   if (status === undefined || status.executor === 'local') return null;
   return <ExecutorBadge executor={status.executor} />;
 }

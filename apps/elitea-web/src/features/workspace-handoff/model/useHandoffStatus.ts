@@ -3,6 +3,10 @@
  * opens and kept current while it is not `LOCAL` (the cloud's turns, a take
  * back requested elsewhere and an erase all move it without this window
  * doing anything). A thread with no server conversation yet has no status.
+ *
+ * The sidebar badges many rows at once: `useHandoffStatusMany` reads them in
+ * one `handoff_status_many` call (the host answers from its own records and
+ * caches the server's answer 15 s), each row taking its status from it.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -37,6 +41,32 @@ export function useHandoffStatus(ipc: HandoffIpc | undefined, conversationUuid: 
     status: enabled ? query.data : undefined,
     refresh: () => queryClient.invalidateQueries({ queryKey: handoffStatusKey(conversationUuid) }),
   };
+}
+
+/** Prefix of every batched status read (the sidebar's): invalidate it when a thread moves. */
+export const handoffStatusManyKey = () => ['workspace', 'handoff', 'status-many'] as const;
+
+/** How long a batch is fresh, and how often the sidebar reads it again. */
+const STATUS_MANY_STALE_MS = 15_000;
+const STATUS_MANY_POLL_MS = 20_000;
+const EMPTY_STATUSES: Readonly<Record<string, HandoffStatus>> = Object.freeze({});
+
+/** The statuses of many threads in one host call, by UUID; empty while pending or when it failed. */
+export function useHandoffStatusMany(ipc: HandoffIpc | undefined, conversationUuids: readonly string[]): Readonly<Record<string, HandoffStatus>> {
+  const uuids = [...new Set(conversationUuids)].sort();
+  const enabled = ipc !== undefined && uuids.length > 0;
+  const query = useQuery({
+    queryKey: [...handoffStatusManyKey(), uuids],
+    queryFn: () => (ipc as HandoffIpc).statusMany(uuids),
+    enabled,
+    retry: false,
+    staleTime: STATUS_MANY_STALE_MS,
+    refetchInterval: STATUS_MANY_POLL_MS,
+    refetchOnWindowFocus: true,
+    // A row added or removed changes the key: keep showing the badges meanwhile.
+    placeholderData: (previous) => previous,
+  });
+  return (enabled ? query.data : undefined) ?? EMPTY_STATUSES;
 }
 
 /** Is the thread running (or being returned) anywhere but this computer? */

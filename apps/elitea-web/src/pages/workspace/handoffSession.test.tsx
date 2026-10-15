@@ -96,6 +96,17 @@ describe('a thread running here', () => {
     expect(handoff.calls.statuses).toContain(UUID);
   });
 
+  it('opens the folder\'s Handoff settings next to Send to cloud', async () => {
+    serve();
+    const user = userEvent.setup();
+    const handoff = createFakeHandoffIpc();
+    mount(handoff);
+    await user.click(await screen.findByRole('button', { name: 'Handoff settings' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Handoff settings' });
+    await waitFor(() => expect(handoff.calls.settingsGets).toEqual(['w1']));
+    expect(await within(dialog).findByTestId('handoff-settings-exclusions')).toBeInTheDocument();
+  });
+
   it('hides Send to cloud when the policy does not allow it', async () => {
     serve();
     const handoff = createFakeHandoffIpc({ allowed: false });
@@ -103,6 +114,7 @@ describe('a thread running here', () => {
     const session = await screen.findByTestId('workspace-session');
     await waitFor(() => expect(within(session).getByTestId('executor-badge')).toBeInTheDocument());
     expect(sendButton()).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Handoff settings' })).toBeNull();
   });
 
   it('hides Send to cloud on a new thread that has no conversation yet', async () => {
@@ -126,7 +138,7 @@ describe('a thread running here', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Send to cloud' }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(handoff.calls.sends).toEqual([{ workspaceId: 'w1', conversationUuid: UUID, leave: [] }]);
+    expect(handoff.calls.sends).toEqual([{ workspaceId: 'w1', conversationUuid: UUID, leave: [], confirmIncludes: false }]);
     expect(await screen.findByTestId('cloud-thread-banner')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Send to cloud' })).toBeNull();
   });
@@ -179,6 +191,9 @@ describe('a thread running in the cloud', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Take this thread back' });
     expect(handoff.calls.reclaims).toEqual([UUID]);
     handoff.setStatus({ state: 'LOCAL', executor: 'local', read_only: false });
+    // The review shows the diffs of what the take back writes, in the changed-files card.
+    const diffs = await within(dialog).findByTestId('takeback-diffs');
+    expect(within(diffs).getByTestId('changed-file')).toHaveTextContent('src/main.rs');
     await user.click(await within(dialog).findByRole('button', { name: 'Apply to my folder' }));
     await within(dialog).findByTestId('takeback-result');
     await user.click(within(dialog).getByRole('button', { name: 'Close' }));

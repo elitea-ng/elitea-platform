@@ -28,6 +28,15 @@ const MESSAGES: Readonly<Record<string, () => string>> = {
   handoff_conflict: () => t('workspace.handoff.error.conflict', 'The cloud copy changed while taking it back. Try Take back again.'),
   folder_changed_since_preflight: () =>
     t('workspace.handoff.error.folderChanged', 'Your folder changed since it was checked. Take back again to check it once more.'),
+  include_confirm_required: () =>
+    t('workspace.handoff.error.includeConfirm', 'Some files you chose to include look like they hold secrets. Confirm sending them for this send, or remove the include.'),
+  env_too_large: () =>
+    t('workspace.handoff.error.envTooLarge', 'The environment variables you chose are over the limit. Choose fewer, or shorter ones, and try again.'),
+  handoff_cancelled: () => t('workspace.handoff.cancelled', 'Sending was cancelled; the thread stays on this computer.'),
+  env_harvest_disabled: () => t('workspace.handoff.error.envDisabled', 'Your organisation does not allow sending environment variables with a thread.'),
+  include_not_allowed: () => t('workspace.handoff.error.includeNotAllowed', 'Your organisation does not allow including files that are left out by default.'),
+  path_denied: () => t('workspace.handoff.error.pathDenied', 'That path is blocked by your organisation and can never be sent.'),
+  env_name_denied: () => t('workspace.handoff.error.envNameDenied', 'Your organisation does not allow sending that environment variable.'),
   not_signed_in: () => t('workspace.error.notSignedIn', 'Sign in again to run agents on this computer.'),
 };
 
@@ -36,6 +45,11 @@ export function describeHandoffError(error: unknown): string {
   const known = MESSAGES[code];
   if (known !== undefined) return known();
   return message === '' ? t('workspace.failed', 'That did not work. Try again.') : message;
+}
+
+/** A send stopped by the person (`handoff_cancelled`): not an error, the thread stays here. */
+export function isCancelled(error: unknown): boolean {
+  return error !== null && error !== undefined && toHandoffIpcError(error).code === 'handoff_cancelled';
 }
 
 /** The text for a send refused for size, without an error to read it from (the preview already knows). */

@@ -4,18 +4,77 @@
  * progress channel. Wire shapes are the host's (snake_case) and are not
  * renamed here. Failures reject with a `HandoffIpcError`: the host's
  * `{code, message, details}`, where `details` carries the secret findings
- * (`secret_found`), the cap breakdown (`handoff_too_large`) or the server's
+ * (`secret_found`, `include_confirm_required`), the cap breakdown (`handoff_too_large`) or the server's
  * quota figures.
  */
 import type { HostInvoke } from './hostBridge';
-import { tauriListen, WorkspaceIpcError, type ListenFn, type TauriEventInternals } from './workspaceIpc';
+import { tauriListen, WorkspaceIpcError, type ChangedFile, type ListenFn, type TauriEventInternals } from './workspaceIpc';
 
-export type ExcludeReason = 'mandatory' | 'path_deny' | 'eliteaignore' | 'leave_on_laptop' | 'not_a_file';
+/**
+ * Why a path is not sent: the platform's or the project's exclusions, the
+ * person's own folder patterns, `.eliteaignore`, the organisation's hard
+ * deny list, left on the laptop for this send, or not a regular file.
+ */
+export type ExcludeReason = 'platform' | 'project' | 'user' | 'eliteaignore' | 'path_deny' | 'leave_on_laptop' | 'not_a_file';
 
-interface ExcludedPath {
+export interface ExcludedPath {
   path: string;
   reason: ExcludeReason;
   tracked: boolean;
+  /** The policy allows including it and it is not `path_deny`, left on the laptop or not a file. */
+  includable: boolean;
+}
+
+/** An excluded path the folder's settings include: it is sent. */
+export interface IncludedPath {
+  path: string;
+  reason: ExcludeReason;
+}
+
+/** An environment variable the desktop could send: its name and how long its value is. The value never reaches the UI. */
+export interface EnvVar {
+  name: string;
+  length: number;
+}
+
+/** The effective handoff policy (the server's, or the ADR's defaults when the server has no policy route). */
+export interface HandoffPolicy {
+  /** `defaults`: the server did not answer the policy route (an older server); the ADR's defaults are shown. */
+  source: 'server' | 'defaults';
+  exclusions: { platform: string[]; project: string[]; user: string[]; path_deny: string[] };
+  allow_user_include: boolean;
+  env_harvest: boolean;
+  env_limits: { max_vars: number; max_bytes: number };
+  limits: { max_segment_bytes: number; max_file_bytes: number; max_files: number; max_unpacked_bytes: number; project_workspace_bytes_left: number | null };
+}
+
+/** One folder's own handoff settings, kept in the app data (never in the folder). */
+export interface FolderHandoffSettings {
+  /** Matched at any depth; a leading `/` anchors at the top. */
+  exclude_patterns: string[];
+  /** An exact path, or a pattern anchored at the top. */
+  include: string[];
+  /** Variable NAMES only; values are read again at send and never stored. */
+  env_names: string[];
+}
+
+/** `handoff_settings_get` / `handoff_settings_set`. */
+export interface HandoffSettingsAnswer {
+  settings: FolderHandoffSettings;
+  policy: HandoffPolicy;
+  env_offered: EnvVar[];
+}
+
+/** The env harvest part of a preview; `null` on the preview when the policy has no env harvest. */
+export interface PreviewEnv {
+  offered: EnvVar[];
+  /** The names in the folder's settings. */
+  selected: string[];
+  /** Selected, but not in the environment now. */
+  missing: string[];
+  vars: number;
+  bytes: number;
+  over_limit: boolean;
 }
 
 /** A credential-shaped line. Never the matched text. */
@@ -44,16 +103,24 @@ export interface HandoffPreview {
   bytes: number;
   unpacked_bytes: number;
   excluded: ExcludedPath[];
+  /** Sent because the folder's settings include them. */
+  included: IncludedPath[];
+  /** Outside included files: they block the send. */
   findings: SecretFinding[];
+  /** In included files: warnings; the send needs `confirm_includes`. */
+  include_findings: SecretFinding[];
   has_upstream: boolean;
-  /** `null`: known only after the begin call. */
+  /** From the policy route; `null` when the server has none. */
   project_workspace_bytes_left: number | null;
   caps: CapsBreakdown;
   /** The folder is not a repository: a shadow git directory in the app data is used. */
   shadow: boolean;
+  policy: HandoffPolicy;
+  /** `null` when the policy has no env harvest. */
+  env: PreviewEnv | null;
 }
 
-type HandoffPhase = 'snapshot' | 'scan' | 'bundle' | 'upload' | 'publish' | 'complete' | 'error';
+type HandoffPhase = 'snapshot' | 'scan' | 'bundle' | 'begin' | 'upload' | 'publish' | 'complete' | 'cancelled' | 'error';
 
 export interface HandoffEvent {
   conversation_uuid: string;
@@ -71,6 +138,8 @@ export interface HandoffSent {
   epoch: number;
   files: number;
   excluded: number;
+  included: number;
+  env_vars: number;
 }
 
 export type HandoffExecutor = 'local' | 'cloud' | 'returning';
@@ -115,7 +184,13 @@ export interface Preflight {
   cloud_turns: number;
   /** What `handoff_apply` accepts now: `apply` only on the fast path. */
   modes: TakeBackMode[];
+  /** Per-file diffs of what the take back writes (text files only, 256 KiB of diff text at most). */
+  files: HandoffChangedFile[];
+  diffs_truncated: boolean;
 }
+
+/** A file the take back writes; the shape of the Workspace view's changed file. */
+export type HandoffChangedFile = Omit<ChangedFile, 'status'> & { status: 'added' | 'modified' | 'deleted' };
 
 export interface ApplyResult {
   applied: boolean;
@@ -127,6 +202,8 @@ export interface ApplyResult {
   imported_turns: number;
   /** The release was acknowledged; `false`: kept and sent again with the next status. */
   released: boolean;
+  /** The folder's excluded files (`.env`, keys) copied into a worktree. */
+  copied: string[];
 }
 
 export class HandoffIpcError extends WorkspaceIpcError {
@@ -154,9 +231,17 @@ export interface HandoffIpc {
   allowed(): Promise<boolean>;
   /** What a send would transfer. `leaveOnLaptop` paths are left out of it. */
   preview(workspaceId: string, conversationUuid: string, leaveOnLaptop?: readonly string[]): Promise<HandoffPreview>;
-  send(workspaceId: string, conversationUuid: string, leaveOnLaptop: readonly string[]): Promise<HandoffSent>;
+  /** `confirmIncludes`: the person confirmed the included files' findings for this send. */
+  send(workspaceId: string, conversationUuid: string, leaveOnLaptop: readonly string[], options?: { confirmIncludes?: boolean }): Promise<HandoffSent>;
+  /** Stop a running send; the thread is `LOCAL` again and the send rejects `handoff_cancelled`. */
+  cancel(conversationUuid: string): Promise<{ cancelled: boolean }>;
   /** `projectId`: for a thread this desktop holds no record of. */
   status(conversationUuid: string, projectId?: number): Promise<HandoffStatus>;
+  /** Many threads at once (the sidebar), by UUID; from the host's records. */
+  statusMany(conversationUuids: readonly string[]): Promise<Record<string, HandoffStatus>>;
+  settingsGet(workspaceId: string): Promise<HandoffSettingsAnswer>;
+  /** Rejects `invalid_request` for a bad pattern, an include that escapes the folder, or a bad env name. */
+  settingsSet(workspaceId: string, settings: FolderHandoffSettings): Promise<HandoffSettingsAnswer>;
   reclaim(conversationUuid: string): Promise<ReclaimAnswer>;
   preflight(conversationUuid: string): Promise<Preflight>;
   apply(preflightId: string, mode: TakeBackMode): Promise<ApplyResult>;
@@ -193,9 +278,21 @@ export function createHandoffIpc(hostInvoke: HostInvoke, listen: ListenFn): Hand
         conversation_uuid: uuid,
         ...(leave === undefined || leave.length === 0 ? {} : { leave_on_laptop: [...leave] }),
       }),
-    send: (workspaceId, uuid, leave) =>
-      invoke<HandoffSent>('handoff_send', { workspace_id: workspaceId, conversation_uuid: uuid, leave_on_laptop: [...leave] }),
+    send: (workspaceId, uuid, leave, options) =>
+      invoke<HandoffSent>('handoff_send', {
+        workspace_id: workspaceId,
+        conversation_uuid: uuid,
+        leave_on_laptop: [...leave],
+        ...(options?.confirmIncludes === true ? { confirm_includes: true } : {}),
+      }),
+    cancel: (uuid) => invoke<{ cancelled: boolean }>('handoff_cancel', { conversation_uuid: uuid }),
     status: (uuid, projectId) => invoke<HandoffStatus>('handoff_status', withProject(uuid, projectId)),
+    statusMany: async (uuids) =>
+      uuids.length === 0
+        ? {}
+        : (await invoke<{ statuses: Record<string, HandoffStatus> }>('handoff_status_many', { conversation_uuids: [...uuids] })).statuses,
+    settingsGet: (workspaceId) => invoke<HandoffSettingsAnswer>('handoff_settings_get', { workspace_id: workspaceId }),
+    settingsSet: (workspaceId, settings) => invoke<HandoffSettingsAnswer>('handoff_settings_set', { workspace_id: workspaceId, settings }),
     reclaim: (uuid) => invoke<ReclaimAnswer>('handoff_reclaim', { conversation_uuid: uuid }),
     preflight: (uuid) => invoke<Preflight>('handoff_preflight', { conversation_uuid: uuid }),
     apply: (preflightId, mode) => invoke<ApplyResult>('handoff_apply', { preflight_id: preflightId, mode }),

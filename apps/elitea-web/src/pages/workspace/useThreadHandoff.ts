@@ -12,10 +12,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { conversationApi } from '@/entities/conversation';
 import { threadsQueryKey } from '@/features/workspace';
-import { isOffLaptop, rememberThreadUuid, useHandoffIpc, useHandoffStatus, useTakeBackRequests } from '@/features/workspace-handoff';
+import { handoffStatusManyKey, isOffLaptop, rememberThreadUuid, useHandoffIpc, useHandoffStatus, useTakeBackRequests } from '@/features/workspace-handoff';
 import type { HandoffIpc, HandoffStatus } from '@/shared/desktop/handoffIpc';
 
-type HandoffDialog = 'send' | 'takeBack' | 'erase';
+type HandoffDialog = 'send' | 'takeBack' | 'erase' | 'settings';
 
 export interface ThreadHandoff {
   ipc: HandoffIpc | undefined;
@@ -71,6 +71,8 @@ export function useThreadHandoff(workspaceId: string, projectId: number, convers
     close: () => setDialog(null),
     moved: () => {
       void refresh();
+      // The sidebar's badges read the batch, not this thread's own status.
+      void queryClient.invalidateQueries({ queryKey: handoffStatusManyKey() });
       void queryClient.invalidateQueries({ queryKey: ['workspace', 'thread-history'] });
     },
   };

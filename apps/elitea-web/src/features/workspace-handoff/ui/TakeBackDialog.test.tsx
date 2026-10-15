@@ -7,7 +7,9 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { ChangedFilesCard } from '@/features/workspace';
 import { createFakeHandoffIpc, type FakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
+import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 
 import { RECLAIM_POLL_MS } from '../model/useTakeBack';
 import { renderWithClient } from './testing';
@@ -103,11 +105,13 @@ describe('TakeBackDialog conflicts', () => {
     const user = userEvent.setup();
     const ipc = createFakeHandoffIpc();
     ipc.setPreflight(conflicts);
-    ipc.setApply({ applied: false, outcome: 'worktree', checkpoint_id: null, worktree_path: '/Users/me/app-elitea-cloud-abcd1234', branch: 'elitea/cloud/abcd1234' });
+    ipc.setApply({ applied: false, outcome: 'worktree', checkpoint_id: null, worktree_path: '/Users/me/app-elitea-cloud-abcd1234', branch: 'elitea/cloud/abcd1234', copied: ['.env', 'keys/dev.pem'] });
     mount(ipc);
     await user.click(await screen.findByRole('button', { name: 'Open as worktree' }));
     expect(await screen.findByTestId('takeback-result')).toHaveTextContent('open as a separate worktree');
     expect(screen.getByTestId('takeback-worktree-path')).toHaveTextContent('/Users/me/app-elitea-cloud-abcd1234');
+    expect(screen.getByTestId('takeback-worktree')).toHaveTextContent('to work in it as a workspace');
+    expect(screen.getByTestId('takeback-copied-paths')).toHaveTextContent('.env');
     expect(ipc.calls.applies).toEqual([{ preflightId: 'pf-1', mode: 'worktree' }]);
     // Nothing was written to the folder: nothing to undo.
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
@@ -211,5 +215,53 @@ describe('TakeBackDialog failures', () => {
     await user.click(screen.getByRole('button', { name: 'Undo' }));
     expect(await screen.findByTestId('takeback-error')).toHaveTextContent('An agent is still working in this folder');
     expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Undo' })).toBeEnabled();
+  });
+});
+
+describe('TakeBackDialog diffs', () => {
+  const mountWithWorkspace = (ipc: FakeHandoffIpc): void => {
+    const workspaceIpc = createFakeWorkspaceIpc();
+    // As the page wires it: the Workspace view's changed-files card, read-only.
+    renderWithClient(
+      <TakeBackDialog
+        open
+        ipc={ipc}
+        conversationUuid="u1"
+        onClose={vi.fn()}
+        onSettled={vi.fn()}
+        renderFiles={(files, key) => <ChangedFilesCard ipc={workspaceIpc} turnId={key} files={files} />}
+      />,
+    );
+  };
+
+  it('shows the per-file diffs of what the take back writes, read-only', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc();
+    ipc.setPreflight({
+      changed_paths: ['src/main.rs', 'docs/new.md'],
+      files: [
+        { path: 'src/main.rs', status: 'modified', added: 1, removed: 1, diff: '--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-fn main() {}\n+fn main() { run() }\n' },
+        { path: 'docs/new.md', status: 'added', added: 2, removed: 0, diff: '' },
+      ],
+    });
+    mountWithWorkspace(ipc);
+
+    const diffs = await screen.findByTestId('takeback-diffs');
+    const rows = within(diffs).getAllByTestId('changed-file');
+    expect(rows.map((row) => within(row).getByText(/src\/main.rs|docs\/new.md/).textContent)).toEqual(['src/main.rs', 'docs/new.md']);
+    expect(rows[0]).toHaveTextContent('+1 -1');
+    // Read-only: nothing to revert or undo here.
+    expect(within(diffs).queryByRole('button', { name: /Revert|Undo turn/ })).toBeNull();
+    await user.click(within(rows[0] as HTMLElement).getByRole('button', { name: 'Show diff' }));
+    expect(await within(diffs).findByText(/run\(\)/)).toBeInTheDocument();
+    expect(screen.queryByTestId('takeback-diffs-truncated')).toBeNull();
+    expect(screen.queryByTestId('takeback-changed-paths')).toBeNull();
+  });
+
+  it('says when some diffs were left out', async () => {
+    const ipc = createFakeHandoffIpc();
+    ipc.setPreflight({ diffs_truncated: true });
+    mountWithWorkspace(ipc);
+    expect(await screen.findByTestId('takeback-diffs-truncated')).toHaveTextContent('too large to show here');
   });
 });

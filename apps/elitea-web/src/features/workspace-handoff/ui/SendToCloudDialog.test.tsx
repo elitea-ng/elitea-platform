@@ -27,8 +27,8 @@ describe('SendToCloudDialog preview', () => {
         bytes: 5 * 1024 * 1024,
         unpacked_bytes: 20 * 1024 * 1024,
         excluded: [
-          { path: '.env', reason: 'mandatory', tracked: true },
-          { path: 'secrets/', reason: 'path_deny', tracked: false },
+          { path: '.env', reason: 'platform', tracked: true, includable: false },
+          { path: 'secrets/', reason: 'path_deny', tracked: false, includable: false },
         ],
       },
     });
@@ -40,8 +40,12 @@ describe('SendToCloudDialog preview', () => {
     expect(screen.getByTestId('handoff-platform-note')).toHaveTextContent('The platform can read the files you upload');
     const excluded = screen.getByTestId('handoff-excluded');
     expect(excluded).toHaveTextContent('Left out (2)');
-    expect(excluded).toHaveTextContent('.env · never sent (secrets and keys)');
-    expect(excluded).toHaveTextContent('secrets/ · blocked by your organisation');
+    expect(within(screen.getByTestId('handoff-excluded-platform')).getByText('.env')).toBeInTheDocument();
+    expect(within(screen.getByTestId('handoff-excluded-path-deny')).getByText('secrets/')).toBeInTheDocument();
+    // Nothing includable, nothing to include.
+    expect(screen.queryByRole('button', { name: 'Include anyway' })).toBeNull();
+    expect(screen.queryByTestId('handoff-policy-defaults')).toBeNull();
+    expect(screen.queryByTestId('handoff-env')).toBeNull();
     expect(sendButton()).toBeEnabled();
     expect(ipc.calls.previews).toEqual([{ workspaceId: 'w1', conversationUuid: 'u1', leave: [] }]);
   });
@@ -81,7 +85,7 @@ describe('SendToCloudDialog preview', () => {
     await waitFor(() => expect(sendButton()).toBeEnabled());
 
     await user.click(sendButton());
-    await waitFor(() => expect(ipc.calls.sends).toEqual([{ workspaceId: 'w1', conversationUuid: 'u1', leave: ['config/prod.yml', 'deploy.sh'] }]));
+    await waitFor(() => expect(ipc.calls.sends).toEqual([{ workspaceId: 'w1', conversationUuid: 'u1', leave: ['config/prod.yml', 'deploy.sh'], confirmIncludes: false }]));
   });
 
   it('refuses an oversized folder with the breakdown of the caps and the largest files', async () => {
@@ -137,8 +141,8 @@ describe('SendToCloudDialog send', () => {
     // Another thread's progress is not this one's.
     act(() => ipc.emit({ conversation_uuid: 'other', phase: 'publish', done: 1, total: 1, message: null }));
     expect(progress).toHaveTextContent('Uploading');
-    // While sending, nothing can be cancelled or sent twice.
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    // While sending, nothing can be sent twice; Cancel stops the send.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
     expect(sendButton()).toBeDisabled();
 
     act(() => ipc.releaseSend());
@@ -216,5 +220,213 @@ describe('SendToCloudDialog send', () => {
     await waitFor(() => expect(sendButton()).toBeEnabled());
     await user.click(sendButton());
     expect(await screen.findByTestId('handoff-send-error')).toHaveTextContent('The host says this.');
+  });
+});
+
+describe('SendToCloudDialog exclusions and includes', () => {
+  const excluded = [
+    { path: '.env', reason: 'platform', tracked: false, includable: true },
+    { path: 'vendor/big.bin', reason: 'project', tracked: true, includable: true },
+    { path: 'scratch/', reason: 'user', tracked: false, includable: true },
+    { path: 'notes.md', reason: 'eliteaignore', tracked: true, includable: true },
+    { path: 'keys/prod.pem', reason: 'path_deny', tracked: false, includable: false },
+    { path: 'socket', reason: 'not_a_file', tracked: false, includable: false },
+  ] as const;
+
+  it('groups what is left out by who decided it', async () => {
+    mount(createFakeHandoffIpc({ preview: { excluded: excluded.map((entry) => ({ ...entry })) } }));
+    const platform = await screen.findByTestId('handoff-excluded-platform');
+    expect(platform).toHaveTextContent('Platform (1)');
+    expect(platform).toHaveTextContent('.env');
+    expect(screen.getByTestId('handoff-excluded-project')).toHaveTextContent('Project (1)vendor/big.bin');
+    const folder = screen.getByTestId('handoff-excluded-folder');
+    expect(folder).toHaveTextContent('Your folder (2)');
+    expect(folder).toHaveTextContent('scratch/ · matches your folder’s exclusions');
+    expect(folder).toHaveTextContent('notes.md · listed in .eliteaignore');
+    expect(screen.getByTestId('handoff-excluded-path-deny')).toHaveTextContent('Hard deny (1)keys/prod.pem');
+    expect(screen.getByTestId('handoff-excluded-other')).toHaveTextContent('socket · not a regular file');
+    // Include anyway only where it is includable.
+    expect(within(platform).getByRole('button', { name: 'Include .env anyway' })).toBeInTheDocument();
+    expect(within(screen.getByTestId('handoff-excluded-path-deny')).queryByRole('button')).toBeNull();
+  });
+
+  it('puts a file left on the laptop in your folder group', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc({ preview: { findings: [{ path: 'deploy.sh', line: 3, rule: 'github-token' }] } });
+    mount(ipc);
+    await user.click(await screen.findByRole('button', { name: 'Leave deploy.sh on my laptop' }));
+    expect(await screen.findByTestId('handoff-excluded-folder')).toHaveTextContent('deploy.sh · left on your laptop');
+  });
+
+  it('keeps a show more bound per group', async () => {
+    const user = userEvent.setup();
+    const many = Array.from({ length: 11 }, (_, index) => ({ path: `gen/${String(index)}.o`, reason: 'project' as const, tracked: false, includable: false }));
+    mount(createFakeHandoffIpc({ preview: { excluded: many } }));
+    const project = await screen.findByTestId('handoff-excluded-project');
+    expect(within(project).getAllByRole('listitem')).toHaveLength(8);
+    await user.click(within(project).getByRole('button', { name: 'and 3 more' }));
+    expect(within(project).getAllByRole('listitem')).toHaveLength(11);
+  });
+
+  it('hides Include anyway entirely when the policy does not allow includes', async () => {
+    mount(createFakeHandoffIpc({ policy: { allow_user_include: false }, preview: { excluded: excluded.map((entry) => ({ ...entry })) } }));
+    await screen.findByTestId('handoff-excluded-platform');
+    expect(screen.queryByRole('button', { name: /anyway/ })).toBeNull();
+  });
+
+  it('includes a file anyway: persists the exact path in the folder settings and previews again', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc({ preview: { excluded: excluded.map((entry) => ({ ...entry })) } });
+    mount(ipc);
+    await user.click(await screen.findByRole('button', { name: 'Include vendor/big.bin anyway' }));
+
+    await waitFor(() => expect(ipc.calls.settingsSets).toEqual([{ workspaceId: 'w1', settings: { exclude_patterns: [], include: ['vendor/big.bin'], env_names: [] } }]));
+    expect(ipc.calls.settingsGets).toEqual(['w1']);
+    const included = await screen.findByTestId('handoff-included');
+    expect(included).toHaveTextContent('vendor/big.bin');
+    expect(ipc.calls.previews.length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByTestId('handoff-excluded-project')).toBeNull();
+
+    await user.click(within(included).getByRole('button', { name: 'Stop including vendor/big.bin' }));
+    await waitFor(() => expect(ipc.calls.settingsSets.at(-1)?.settings.include).toEqual([]));
+    await waitFor(() => expect(screen.queryByTestId('handoff-included')).toBeNull());
+    expect(await screen.findByTestId('handoff-excluded-project')).toHaveTextContent('vendor/big.bin');
+  });
+
+  it('asks to confirm the findings of included files before Send, and passes the confirmation', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc({
+      preview: { excluded: [{ path: '.env.local', reason: 'platform', tracked: false, includable: true }], findings: [{ path: '.env.local', line: 2, rule: 'api-key' }] },
+      settings: { w1: { include: ['.env.local'] } },
+    });
+    mount(ipc);
+
+    const warning = await screen.findByTestId('handoff-include-findings');
+    expect(warning).toHaveTextContent('.env.local:2 · api-key');
+    // Not a blocking finding: no "Leave on my laptop" list.
+    expect(screen.queryByTestId('handoff-findings')).toBeNull();
+    const confirm = within(warning).getByRole('checkbox', { name: 'I confirm sending these included files for this send' });
+    expect(confirm).not.toBeChecked();
+    expect(sendButton()).toBeDisabled();
+
+    await user.click(confirm);
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await user.click(sendButton());
+    await waitFor(() => expect(ipc.calls.sends).toEqual([{ workspaceId: 'w1', conversationUuid: 'u1', leave: [], confirmIncludes: true }]));
+  });
+
+  it('unchecks the confirmation when the preview changes', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc({
+      preview: {
+        excluded: [{ path: '.env.local', reason: 'platform', tracked: false, includable: true }],
+        findings: [{ path: '.env.local', line: 2, rule: 'api-key' }, { path: 'deploy.sh', line: 1, rule: 'gh' }],
+      },
+      settings: { w1: { include: ['.env.local'] } },
+    });
+    mount(ipc);
+    await user.click(await screen.findByRole('checkbox', { name: 'I confirm sending these included files for this send' }));
+    expect(screen.getByRole('checkbox', { name: 'I confirm sending these included files for this send' })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Leave deploy.sh on my laptop' }));
+    await waitFor(() => expect(screen.queryByTestId('handoff-findings')).toBeNull());
+    expect(screen.getByRole('checkbox', { name: 'I confirm sending these included files for this send' })).not.toBeChecked();
+    expect(sendButton()).toBeDisabled();
+  });
+
+  it('notes when the server gave no handoff policy and the defaults are shown', async () => {
+    mount(createFakeHandoffIpc({ policy: { source: 'defaults' } }));
+    expect(await screen.findByTestId('handoff-policy-defaults')).toHaveTextContent('The server did not provide its handoff policy');
+  });
+
+  it('shows the room left in the project’s cloud storage when known', async () => {
+    mount(createFakeHandoffIpc({ preview: { project_workspace_bytes_left: 3 * 1024 * 1024 * 1024 } }));
+    expect(await screen.findByTestId('handoff-summary')).toHaveTextContent('3.0 GB left in this project’s cloud storage');
+  });
+});
+
+describe('SendToCloudDialog environment variables', () => {
+  const offered = [
+    { name: 'API_URL', length: 23 },
+    { name: 'DATABASE_URL', length: 61 },
+    { name: 'LOG_LEVEL', length: 4 },
+  ];
+
+  it('is not shown when the policy does not harvest the environment', async () => {
+    mount(createFakeHandoffIpc({ envOffered: offered }));
+    await screen.findByTestId('handoff-summary');
+    expect(screen.queryByTestId('handoff-env')).toBeNull();
+  });
+
+  it('lists names with masked lengths only, nothing preselected, and persists a toggle', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc({ policy: { env_harvest: true }, envOffered: offered });
+    mount(ipc);
+    const env = await screen.findByTestId('handoff-env');
+    expect(env).toHaveTextContent('API_URL •••••• (23 chars)');
+    expect(env).toHaveTextContent('DATABASE_URL •••••• (61 chars)');
+    for (const box of within(env).getAllByRole('checkbox')) expect(box).not.toBeChecked();
+    expect(screen.getByTestId('handoff-env-totals')).toHaveTextContent('0 of at most 50 variables');
+
+    await user.type(within(env).getByRole('textbox', { name: 'Search variables' }), 'data');
+    expect(within(env).getAllByRole('checkbox')).toHaveLength(1);
+    await user.click(within(env).getByRole('checkbox', { name: /DATABASE_URL/ }));
+    await waitFor(() => expect(ipc.calls.settingsSets.at(-1)?.settings.env_names).toEqual(['DATABASE_URL']));
+    await waitFor(() => expect(within(screen.getByTestId('handoff-env')).getByRole('checkbox', { name: /DATABASE_URL/ })).toBeChecked());
+    expect(screen.getByTestId('handoff-env-totals')).toHaveTextContent('1 of at most 50 variables');
+  });
+
+  it('preselects only the names in the folder settings and shows the ones missing now', async () => {
+    mount(createFakeHandoffIpc({ policy: { env_harvest: true }, envOffered: offered, settings: { w1: { env_names: ['LOG_LEVEL', 'GONE_TOKEN'] } } }));
+    const env = await screen.findByTestId('handoff-env');
+    expect(within(env).getByRole('checkbox', { name: /LOG_LEVEL/ })).toBeChecked();
+    expect(within(env).getByRole('checkbox', { name: /API_URL/ })).not.toBeChecked();
+    expect(screen.getByTestId('handoff-env-missing')).toHaveTextContent('GONE_TOKEN');
+  });
+
+  it('blocks the send over the limits', async () => {
+    mount(
+      createFakeHandoffIpc({
+        policy: { env_harvest: true, env_limits: { max_vars: 1, max_bytes: 1024 } },
+        envOffered: offered,
+        settings: { w1: { env_names: ['API_URL', 'LOG_LEVEL'] } },
+      }),
+    );
+    expect(await screen.findByTestId('handoff-env-over')).toHaveTextContent('over the limit');
+    expect(sendButton()).toBeDisabled();
+  });
+});
+
+describe('SendToCloudDialog cancel', () => {
+  it('cancels a running send and says the thread stays here, not as an error', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc();
+    ipc.holdSend();
+    const { onSent } = mount(ipc);
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await user.click(sendButton());
+    act(() => ipc.emit({ conversation_uuid: 'u1', phase: 'begin', done: 0, total: 0, message: null }));
+    expect(await screen.findByTestId('handoff-progress')).toHaveTextContent('Starting the handoff on the server');
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(ipc.calls.cancels).toEqual(['u1']);
+    const note = await screen.findByTestId('handoff-send-cancelled');
+    expect(note).toHaveTextContent('Sending was cancelled; the thread stays on this computer.');
+    expect(screen.queryByTestId('handoff-send-error')).toBeNull();
+    expect(onSent).not.toHaveBeenCalled();
+    expect(sendButton()).toBeEnabled();
+  });
+
+  it.each([
+    ['include_confirm_required', 'Confirm sending them for this send'],
+    ['env_too_large', 'environment variables you chose are over the limit'],
+    ['path_denied', 'blocked by your organisation'],
+  ])('says what %s means', async (code, text) => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc();
+    ipc.failNext('send', code, 'raw');
+    mount(ipc);
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await user.click(sendButton());
+    expect(await screen.findByTestId('handoff-send-error')).toHaveTextContent(text);
   });
 });
