@@ -194,6 +194,12 @@ fn all_registered_runtime_failures_use_only_canonical_safe_policy() {
             false,
         ),
         (
+            RuntimeFailureKind::ToolkitRunAuthorizationFailed,
+            RuntimeErrorCodeV1::AuthorizationFailed,
+            "The platform could not authorize this tool run's credentials or context.",
+            false,
+        ),
+        (
             RuntimeFailureKind::Cancelled,
             RuntimeErrorCodeV1::Cancelled,
             "Execution was cancelled.",

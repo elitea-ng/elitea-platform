@@ -1297,3 +1297,12 @@ fn resource_type_schema(canonical: bool) -> Value {
         text(description)
     }
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    AhaToolKind::ALL
+        .iter()
+        .map(|kind| (kind.name(), matches!(kind, AhaToolKind::AttachFile)))
+        .collect()
+}

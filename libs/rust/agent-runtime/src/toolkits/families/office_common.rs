@@ -401,7 +401,7 @@ pub(crate) fn host_sentence(action: &str, error: &OfficeHostError, kind: &Office
             kind.accepts
         ),
         OfficeFailure::InvalidRequest => format!(
-            "Could not {action}: the file name or bucket is not valid, or the request was refused as invalid."
+            "Could not {action}: the file name or bucket is not valid, or a request it needed (to the file store or to the model) was refused as invalid."
         ),
         OfficeFailure::TooLarge => {
             format!("Could not {action}: the file is larger than the platform accepts.")
@@ -412,11 +412,26 @@ pub(crate) fn host_sentence(action: &str, error: &OfficeHostError, kind: &Office
         OfficeFailure::BudgetRefused => format!(
             "Could not {action}: the model budget is exhausted. Do not retry; tell the user."
         ),
+        OfficeFailure::ContextUnusable => format!(
+            "Could not {action}: this run's context is not usable for a model call; retry the turn."
+        ),
+        OfficeFailure::ModelUnusable => format!(
+            "Could not {action}: the run's chat model cannot be used for this tool (its configuration is not usable for a tool's model call); pick another model for the agent, or tell the user."
+        ),
         OfficeFailure::NoModel => format!(
             "Could not {action}: this tool needs a chat model and none is bound in this run (a pipeline node binds none). Use list_placeholders and replace_placeholders with your own content, or run it from an agent."
         ),
         OfficeFailure::ReplyUnusable | OfficeFailure::ReplyTooLarge => format!(
             "Could not {action}: the model's reply could not be used. Do not retry without telling the user."
+        ),
+        OfficeFailure::ReplyCutOff => format!(
+            "Could not {action}: the model's reply was cut off at its length limit, or it used the whole limit reasoning and never answered. Tell the user to raise the model's max_tokens (or pick a model that does not reason at length)."
+        ),
+        OfficeFailure::ReplyDeclined => format!(
+            "Could not {action}: the model declined to answer (its safety filter ended the reply). Tell the user; do not retry unchanged."
+        ),
+        OfficeFailure::ReplyEmpty => format!(
+            "Could not {action}: the model answered with no usable text. Tell the user; it may work if tried again."
         ),
         OfficeFailure::RateLimited => format!(
             "Could not {action}: the model gateway is rate-limiting this call. Try again shortly."

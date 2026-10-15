@@ -409,6 +409,9 @@ fn shared_toolkit_call_output_binds_inputs_and_derives_refusal_outcome() {
         ToolkitCallToolStatusV1::ToolError,
         ToolkitCallToolStatusV1::UnknownTool,
         ToolkitCallToolStatusV1::UnsupportedToolkit,
+        ToolkitCallToolStatusV1::EffectRefused,
+        ToolkitCallToolStatusV1::PolicyRefused,
+        ToolkitCallToolStatusV1::SensitiveRefused,
     ] {
         let result = call_result(&claim, status);
         assert!(claim.matches_toolkit_call_tool_result_binding(&result));
@@ -431,7 +434,11 @@ fn shared_toolkit_call_output_binds_inputs_and_derives_refusal_outcome() {
                 .requested_outcome,
             if matches!(
                 status,
-                ToolkitCallToolStatusV1::UnknownTool | ToolkitCallToolStatusV1::UnsupportedToolkit
+                ToolkitCallToolStatusV1::UnknownTool
+                    | ToolkitCallToolStatusV1::UnsupportedToolkit
+                    | ToolkitCallToolStatusV1::EffectRefused
+                    | ToolkitCallToolStatusV1::PolicyRefused
+                    | ToolkitCallToolStatusV1::SensitiveRefused
             ) {
                 ExecutionOutcomeV1::Failed as i32
             } else {
@@ -1888,4 +1895,47 @@ fn a_stopped_index_run_with_the_stores_record_proposes_cancelled() {
 fn claim_again_for(command: &WorkerCommandV1) -> AcceptedAgentClaim {
     let (_, response) = fixture(ToolkitCommandKind::IndexIngest);
     claim(command, response)
+}
+
+/// #1292 round 3: the claim decides the refusal shape on the wire. A receipt
+/// that advertises `toolkit_typed_refusals` (a current Main) gets
+/// `POLICY_REFUSED`; one without it (an older Main) gets `UNKNOWN_TOOL`, the
+/// round-1 shape it accepts. Both frames validate and settle FAILED.
+#[test]
+fn the_refusal_shape_follows_mains_advertisement() {
+    for (advertised, expected) in [
+        (true, ToolkitCallToolStatusV1::PolicyRefused),
+        (false, ToolkitCallToolStatusV1::UnknownTool),
+    ] {
+        let (command, mut response) = fixture(ToolkitCommandKind::CallTool);
+        response.receipt.as_mut().unwrap().toolkit_typed_refusals = advertised;
+        let claim = claim(&command, response);
+        let verified = verified(&command);
+        let result = call_result(&claim, ToolkitCallToolStatusV1::PolicyRefused);
+        let frame = AgentExecutionOutputAuthority { claim }
+            .bind_toolkit_execute_read_terminal(
+                &verified,
+                ToolkitExecuteReadTerminalOutput::CallTool(Box::new(result)),
+                NOW,
+            )
+            .unwrap();
+        validate_restored_toolkit_execute_read_output_frame(&verified, &frame).unwrap();
+        let Some(execution_output_frame_v1::Payload::ToolkitCallTool(bound)) = &frame.payload
+        else {
+            panic!("a call-tool frame");
+        };
+        assert_eq!(
+            bound.result_summary.as_ref().unwrap().status,
+            expected as i32,
+            "advertised={advertised}"
+        );
+        assert_eq!(
+            frame
+                .settlement_proposal
+                .as_ref()
+                .unwrap()
+                .requested_outcome,
+            ExecutionOutcomeV1::Failed as i32
+        );
+    }
 }

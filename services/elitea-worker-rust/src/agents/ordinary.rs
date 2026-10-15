@@ -1106,7 +1106,9 @@ fn model_binding_error(error: ModelFacadeError) -> NativeAgentAssemblyError {
         ModelFacadeError::InvalidConfiguration => {
             NativeAgentAssemblyErrorCode::InvalidConfiguration
         }
-        ModelFacadeError::InvalidInvocation => NativeAgentAssemblyErrorCode::InvalidInput,
+        ModelFacadeError::InvalidInvocation | ModelFacadeError::InvalidClaimContext => {
+            NativeAgentAssemblyErrorCode::InvalidInput
+        }
         ModelFacadeError::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
         ModelFacadeError::DependencyUnavailable => {
             NativeAgentAssemblyErrorCode::DependencyUnavailable

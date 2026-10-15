@@ -162,12 +162,16 @@ impl std::error::Error for ToolsetMaterializationError {}
 pub struct LeftOutToolkit {
     toolkit_name: String,
     toolkit_type: String,
+    /// Set when only this one tool of an otherwise built toolkit was left
+    /// out (`unsupported_tool_selection`): the toolkit's other selected tools
+    /// are served.
+    tool_name: Option<String>,
     cause: LeftOutReason,
     reason: &'static str,
 }
 
 /// Why a configured toolkit (or part of it) was left out of the run.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum LeftOutReason {
     /// The toolkit's family is not served by this runtime at all.
     UnsupportedFamily,
@@ -176,6 +180,11 @@ pub enum LeftOutReason {
     FamilyNotPortedIndexToolsKept,
     /// The configuration asks for a setting this runtime refuses.
     UnsupportedSetting,
+    /// The toolkit is built, but one tool of its stored selection is not
+    /// served by this runtime (not ported, or not available on this path).
+    ToolNotServed,
+    /// A tool of the stored selection is blocked by the deployment's policy.
+    ToolBlockedByPolicy,
 }
 
 impl LeftOutReason {
@@ -186,20 +195,38 @@ impl LeftOutReason {
             Self::UnsupportedFamily => "unsupported_toolkit_family",
             Self::FamilyNotPortedIndexToolsKept => "index_tools_only",
             Self::UnsupportedSetting => "unsupported_setting",
+            Self::ToolNotServed => "unsupported_tool_selection",
+            Self::ToolBlockedByPolicy => "tool_blocked_by_policy",
         }
     }
 }
 
 /// What the materializer found for a toolkit it did not fully build.
 #[derive(Clone, Copy)]
-enum ToolkitSkip {
+enum ToolkitSkip<'a> {
     Setting(UnsupportedSetting),
-    UnsupportedFamily { index_tools_kept: bool },
+    UnsupportedFamily {
+        index_tools_kept: bool,
+    },
+    Tool {
+        name: &'a str,
+        cause: LeftOutReason,
+        reason: &'static str,
+    },
 }
 
 impl LeftOutToolkit {
-    fn new(reference: &FrozenToolReference<'_>, skip: ToolkitSkip) -> Self {
+    fn new(reference: &FrozenToolReference<'_>, skip: ToolkitSkip<'_>) -> Self {
+        let mut tool_name = None;
         let (cause, reason) = match skip {
+            ToolkitSkip::Tool {
+                name,
+                cause,
+                reason,
+            } => {
+                tool_name = Some(bounded_label(name));
+                (cause, reason)
+            }
             ToolkitSkip::Setting(setting) => (LeftOutReason::UnsupportedSetting, setting.reason()),
             ToolkitSkip::UnsupportedFamily {
                 index_tools_kept: false,
@@ -217,6 +244,7 @@ impl LeftOutToolkit {
         Self {
             toolkit_name: bounded_label(reference.toolkit_name()),
             toolkit_type: bounded_label(reference.tool_type()),
+            tool_name,
             cause,
             reason,
         }
@@ -232,9 +260,28 @@ impl LeftOutToolkit {
         Self {
             toolkit_name: bounded_label(name),
             toolkit_type: bounded_label(kind),
+            tool_name: None,
             cause,
             reason,
         }
+    }
+
+    /// One tool of a built toolkit that the runtime does not serve.
+    #[must_use]
+    pub fn unserved_tool(toolkit: &str, kind: &str, tool: &str, reason: &'static str) -> Self {
+        Self {
+            toolkit_name: bounded_label(toolkit),
+            toolkit_type: bounded_label(kind),
+            tool_name: Some(bounded_label(tool)),
+            cause: LeftOutReason::ToolNotServed,
+            reason,
+        }
+    }
+
+    /// The one tool left out, when only a tool (not the toolkit) was.
+    #[must_use]
+    pub fn tool_name(&self) -> Option<&str> {
+        self.tool_name.as_deref()
     }
 
     /// Machine-readable cause, for the structured run notice.
@@ -297,6 +344,45 @@ pub fn capped_notice_lines(mut lines: Vec<String>, max: usize) -> String {
     lines.join("\n")
 }
 
+/// How many leading items of each list a capped notice keeps: the lists are
+/// taken round-robin (rank 0 of every list, then rank 1, ...) while fewer
+/// than `max_items` are kept and the next item's `cost` still fits in
+/// `max_cost`, so one long list cannot push the others out. It stops at the
+/// first item that does not fit. Shared by the model notice
+/// (`left_out_toolkits_notice_text`: a line cap) and the worker's structured
+/// chat notice (`skipped_capabilities`: an entry cap and a byte budget).
+#[must_use]
+pub fn round_robin_take<T>(
+    lists: &[Vec<T>],
+    max_items: usize,
+    max_cost: usize,
+    mut cost: impl FnMut(&T) -> usize,
+) -> Vec<usize> {
+    let mut kept = vec![0; lists.len()];
+    let (mut items, mut spent) = (0usize, 0usize);
+    let mut rank = 0;
+    loop {
+        let mut took = false;
+        for (index, list) in lists.iter().enumerate() {
+            let Some(item) = list.get(rank) else {
+                continue;
+            };
+            let size = cost(item);
+            if items == max_items || spent.saturating_add(size) > max_cost {
+                return kept;
+            }
+            items += 1;
+            spent += size;
+            kept[index] += 1;
+            took = true;
+        }
+        if !took {
+            return kept;
+        }
+        rank += 1;
+    }
+}
+
 /// Most lines a model-visible toolkit notice lists.
 const MAX_NOTICE_LINES: usize = 32;
 
@@ -305,26 +391,52 @@ const MAX_NOTICE_LINES: usize = 32;
 /// the order the version listed the toolkits in.
 #[must_use]
 pub fn left_out_toolkits_notice_text(left_out: &[LeftOutToolkit]) -> Option<String> {
-    if left_out.is_empty() {
-        return None;
-    }
-    let mut lines = left_out
-        .iter()
-        .map(|toolkit| {
+    // Whole-toolkit lines come first, then per-tool lines; when the cap cuts
+    // the list, the two kinds are taken round-robin (as the chat notice
+    // does), so many omitted tools cannot push a whole toolkit out. A tool
+    // blocked by the deployment's policy is NOT named to the model: the
+    // notice never listed blocked names, and still does not.
+    let mut toolkits = Vec::new();
+    let mut tools = Vec::new();
+    for toolkit in left_out {
+        if let Some(tool) = &toolkit.tool_name {
+            if toolkit.cause == LeftOutReason::ToolBlockedByPolicy {
+                continue;
+            }
+            tools.push(format!(
+                "tool '{}.{}' ({}) is not enabled on this worker: {}",
+                toolkit.toolkit_name, tool, toolkit.toolkit_type, toolkit.reason
+            ));
+        } else {
             let state = if toolkit.cause == LeftOutReason::FamilyNotPortedIndexToolsKept {
                 "only partly enabled"
             } else {
                 "not enabled"
             };
-            format!(
+            toolkits.push(format!(
                 "toolkit '{}' ({}) is {state} on this worker: {}",
                 toolkit.toolkit_name, toolkit.toolkit_type, toolkit.reason
-            )
-        })
-        .collect::<Vec<_>>();
-    lines.sort_unstable();
-    lines.dedup();
-    Some(capped_notice_lines(lines, MAX_NOTICE_LINES))
+            ));
+        }
+    }
+    for lines in [&mut toolkits, &mut tools] {
+        lines.sort_unstable();
+        lines.dedup();
+    }
+    let total = toolkits.len() + tools.len();
+    if total == 0 {
+        return None;
+    }
+    let lists = [toolkits, tools];
+    let kept = round_robin_take(&lists, MAX_NOTICE_LINES, usize::MAX, |_| 0);
+    let [toolkits, tools] = lists;
+    let mut lines: Vec<String> = toolkits.into_iter().take(kept[0]).collect();
+    lines.extend(tools.into_iter().take(kept[1]));
+    let hidden = total - lines.len();
+    if hidden > 0 {
+        lines.push(format!("({hidden} more not shown)"));
+    }
+    Some(lines.join("\n"))
 }
 
 /// The configured toolsets one pass built, and the toolkits it refused.
@@ -447,7 +559,7 @@ async fn materialize_all(
     delegated_tokens: &serde_json::Map<String, serde_json::Value>,
     artifacts: Option<&ArtifactToolAuthority>,
     index_tools: IndexToolSupport<'_>,
-    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip) + Send),
+    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip<'_>) + Send),
 ) -> Result<ConfiguredToolsets, ToolsetMaterializationError> {
     if snapshot.len() > MAX_AGENT_TOOLSETS {
         return Err(resource_exhausted());
@@ -488,6 +600,13 @@ async fn materialize_all(
                     delegated_authorization
                         .merge(authorization)
                         .map_err(|()| invalid_configuration())?;
+                    report_unserved_selected_tools(
+                        reference,
+                        policy,
+                        artifacts,
+                        index_toolset.is_some(),
+                        on_refused,
+                    );
                     Some(toolset)
                 }
                 Err(ToolsetMaterializationError {
@@ -556,7 +675,7 @@ fn memory_toolset_for(
     reference: &FrozenToolReference<'_>,
     policy: &Arc<ToolAdmissionPolicy>,
     index_tools: IndexToolSupport<'_>,
-    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip) + Send),
+    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip<'_>) + Send),
 ) -> Result<Option<adk_tool::BasicToolset>, ToolsetMaterializationError> {
     let authority = match index_tools {
         IndexToolSupport::Lent(authority) if authority.host().serves_memory() => authority,
@@ -621,6 +740,127 @@ fn memory_toolset_for(
         on_refused(reference, ToolkitSkip::Setting(setting));
         Ok(None)
     })
+}
+
+const REASON_NOT_PORTED: &str = "this tool is not available on this worker yet, so it was left out";
+const REASON_NEEDS_FILE_STORE: &str =
+    "this tool needs the platform file store, which this run does not lend, so it was left out";
+const REASON_INDEX_RUN: &str =
+    "starting an index run is not a chat tool on this worker; use the toolkit's index action";
+const REASON_INDEX_TOOLS: &str = "the index tools are not available for this toolkit on this path";
+const REASON_POLICY: &str = "this tool is blocked by this deployment's policy";
+
+/// The stored selection's tools a family does not serve, for the run's
+/// notice: `(name, needs_file_store)`. `catalog` is the family's whole served
+/// list with, per tool, whether it needs the run's file store; a selected name
+/// outside it is not ported, and one that needs the file store is omitted when
+/// the run lends none. ONE rule for every family (review round 2: it was eight
+/// per-family copies).
+fn omitted_selection(
+    catalog: &[(&'static str, bool)],
+    selected: &[Box<str>],
+    file_store: bool,
+) -> Vec<(String, bool)> {
+    selected
+        .iter()
+        .filter_map(
+            |name| match catalog.iter().find(|(served, _)| *served == name.as_ref()) {
+                None => Some((name.to_string(), false)),
+                Some((_, true)) if !file_store => Some((name.to_string(), true)),
+                Some(_) => None,
+            },
+        )
+        .collect()
+}
+
+/// The served tool list of a family that reports per-tool omissions; `None`
+/// for one that reports none.
+fn family_tool_catalog(tool_type: &str) -> Option<Vec<(&'static str, bool)>> {
+    Some(match tool_type {
+        "aha" => aha::tools::tool_catalog(),
+        "bigquery" => bigquery::tools::tool_catalog(),
+        "bitbucket" => bitbucket::tools::tool_catalog(),
+        "confluence" => confluence::tools::tool_catalog(),
+        "figma" => figma::tools::tool_catalog(),
+        "github" => github::tools::tool_catalog(),
+        "gitlab" => gitlab::tools::tool_catalog(),
+        "jira" => jira::tools::tool_catalog(),
+        _ => return None,
+    })
+}
+
+/// Report each tool of the stored selection that the built toolkit does not
+/// serve, and each one the deployment's policy blocks. Before this the only
+/// trace was one worker log line with COUNTS (`selected_count=5
+/// materialized_count=2`): the person who enabled five tools saw an agent
+/// with two, and nobody could say which three.
+///
+/// Run by the reporting materializer ONLY; other callers (direct, pipeline)
+/// neither collect nor compute it. Index tools the composed index toolset
+/// serves are not omissions.
+fn report_unserved_selected_tools(
+    reference: &FrozenToolReference<'_>,
+    policy: &ToolAdmissionPolicy,
+    artifacts: Option<&ArtifactToolAuthority>,
+    index_tools_composed: bool,
+    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip<'_>) + Send),
+) {
+    let selected: Vec<Box<str>> = reference
+        .settings()
+        .and_then(|settings| settings.get("selected_tools"))
+        .and_then(serde_json::Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(Box::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    let file_store = artifacts.and_then(ArtifactToolAuthority::office).is_some();
+    let Some(catalog) = family_tool_catalog(reference.tool_type()) else {
+        return;
+    };
+    let unserved = omitted_selection(&catalog, &selected, file_store);
+    let mut omitted: Vec<(String, LeftOutReason, &'static str)> = Vec::new();
+    for (name, needs_file_store) in unserved {
+        if super::families::index_tools::is_sdk_index_tool_name(&name) {
+            if name == "index_data" {
+                omitted.push((name, LeftOutReason::ToolNotServed, REASON_INDEX_RUN));
+            } else if !index_tools_composed {
+                omitted.push((name, LeftOutReason::ToolNotServed, REASON_INDEX_TOOLS));
+            }
+        } else if needs_file_store {
+            omitted.push((name, LeftOutReason::ToolNotServed, REASON_NEEDS_FILE_STORE));
+        } else {
+            omitted.push((name, LeftOutReason::ToolNotServed, REASON_NOT_PORTED));
+        }
+    }
+    // Served but blocked by policy: its own cause, not "not ported".
+    for name in &selected {
+        if !omitted.iter().any(|(omitted, ..)| omitted == name.as_ref())
+            && policy.tool_decision(reference.tool_type(), name)
+                != crate::toolkits::policy::ToolAdmissionDecision::Allowed
+        {
+            omitted.push((
+                name.to_string(),
+                LeftOutReason::ToolBlockedByPolicy,
+                REASON_POLICY,
+            ));
+        }
+    }
+    omitted.sort();
+    omitted.dedup();
+    for (name, cause, reason) in &omitted {
+        on_refused(
+            reference,
+            ToolkitSkip::Tool {
+                name,
+                cause: *cause,
+                reason,
+            },
+        );
+    }
 }
 
 /// Whether, with the index toolset composed, this toolkit has no family
@@ -1457,5 +1697,63 @@ const fn sharepoint_toolset_materialization_error(
         | sharepoint::tools::SharePointToolsetErrorCode::UnsupportedSelection => {
             unsupported_toolkit()
         }
+    }
+}
+
+#[cfg(test)]
+mod notice_helper_tests {
+    use super::{family_tool_catalog, omitted_selection, round_robin_take};
+
+    fn names(selected: &[&str]) -> Vec<Box<str>> {
+        selected.iter().map(|name| Box::from(*name)).collect()
+    }
+
+    /// Review round 2: ONE rule replaces the eight per-family copies.
+    #[test]
+    fn omitted_selection_is_one_rule_over_a_family_catalog() {
+        let catalog = [("read", false), ("attach", true)];
+        let selected = names(&["read", "attach", "nope"]);
+        assert_eq!(
+            omitted_selection(&catalog, &selected, false),
+            [("attach".to_owned(), true), ("nope".to_owned(), false)]
+        );
+        assert_eq!(
+            omitted_selection(&catalog, &selected, true),
+            [("nope".to_owned(), false)]
+        );
+        assert!(omitted_selection(&catalog, &[], false).is_empty());
+    }
+
+    #[test]
+    fn each_reporting_family_states_its_file_store_tools() {
+        let needs = |family: &str| -> Vec<&'static str> {
+            family_tool_catalog(family)
+                .expect(family)
+                .into_iter()
+                .filter_map(|(name, needs)| needs.then_some(name))
+                .collect()
+        };
+        assert_eq!(needs("aha"), ["attach_file"]);
+        assert!(!needs("jira").is_empty());
+        assert!(needs("confluence").contains(&"add_file_to_page"));
+        for family in ["bigquery", "bitbucket", "figma", "github", "gitlab"] {
+            assert!(needs(family).is_empty(), "{family}");
+            assert!(!family_tool_catalog(family).expect(family).is_empty());
+        }
+        assert!(family_tool_catalog("slack").is_none());
+    }
+
+    #[test]
+    fn round_robin_take_is_fair_and_honours_both_caps() {
+        let long: Vec<u32> = (0..10).collect();
+        let short = vec![100, 101];
+        let lists = [long, short];
+        // Item cap: 2 + 2 + then the long list's tail.
+        assert_eq!(round_robin_take(&lists, 6, usize::MAX, |_| 0), [4, 2]);
+        // Cost cap: three items of cost 2 fit in 7, the fourth does not.
+        assert_eq!(round_robin_take(&lists, 100, 7, |_| 2), [2, 1]);
+        assert_eq!(round_robin_take(&lists, 100, usize::MAX, |_| 1), [10, 2]);
+        let empty: [Vec<u32>; 2] = [Vec::new(), Vec::new()];
+        assert_eq!(round_robin_take(&empty, 5, 5, |_| 1), [0, 0]);
     }
 }

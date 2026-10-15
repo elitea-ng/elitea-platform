@@ -12,7 +12,8 @@
 //! shows what the live stream showed, and the chat renders one compact notice
 //! per turn.
 //!
-//! Each entry is `{kind, name, [type], reason_code, reason}`. The set is
+//! Each entry is `{kind, name, [type], reason_code, reason}`; a `tool` entry
+//! names one tool of a built toolkit as `<toolkit>.<tool>`. The set is
 //! deduplicated, ordered by content (not by the order the version listed its
 //! tools), bounded, and carries no configuration value or credential: names
 //! and types are the stored labels, `reason` is fixed text.
@@ -34,6 +35,9 @@ pub(crate) const MAX_SKIPPED_CAPABILITIES_BYTES: usize = 4 * 1024;
 pub(crate) const KIND_TOOLKIT: &str = "toolkit";
 pub(crate) const KIND_INTERNAL_TOOL: &str = "internal_tool";
 pub(crate) const KIND_APPLICATION: &str = "application";
+/// One tool of a built toolkit that this worker does not serve. Its name is
+/// `<toolkit>.<tool>`, its `type` the toolkit's type.
+pub(crate) const KIND_TOOL: &str = "tool";
 
 const REASON_INTERNAL_TOOL: &str = "this built-in capability is not available on this worker yet, so it was turned off for this agent";
 const REASON_APPLICATION: &str =
@@ -51,7 +55,7 @@ pub(crate) fn skipped_capabilities(
     internal_tools: InternalToolCatalog,
     application_children: &[SkippedApplicationChild],
 ) -> Option<Value> {
-    let mut by_kind: [Vec<Value>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    let mut by_kind: [Vec<Value>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     let entry = |kind: &str, name: &str, kind_type: &str, code: &str, reason: &str| {
         let mut entry = json!({"kind": kind, "name": name, "reason_code": code, "reason": reason});
         if !kind_type.is_empty() {
@@ -60,6 +64,16 @@ pub(crate) fn skipped_capabilities(
         entry
     };
     for toolkit in toolkits {
+        if let Some(tool) = toolkit.tool_name() {
+            by_kind[3].push(entry(
+                KIND_TOOL,
+                &bounded_label(&format!("{}.{tool}", toolkit.toolkit_name())),
+                toolkit.toolkit_type(),
+                toolkit.reason_code(),
+                toolkit.reason(),
+            ));
+            continue;
+        }
         by_kind[0].push(entry(
             KIND_TOOLKIT,
             toolkit.toolkit_name(),
@@ -95,29 +109,20 @@ pub(crate) fn skipped_capabilities(
     if total == 0 {
         return None;
     }
+    // The shared fair cut (the model notice takes its lines the same way).
+    let kept = crate::toolkits::round_robin_take(
+        &by_kind,
+        MAX_SKIPPED_CAPABILITIES,
+        MAX_SKIPPED_CAPABILITIES_BYTES,
+        |entry| entry.to_string().len() + 1,
+    );
     let mut items = Vec::new();
-    let mut bytes = 0;
-    let mut rank = 0;
-    'fill: loop {
-        let mut took = false;
-        for list in &by_kind {
-            let Some(entry) = list.get(rank) else {
-                continue;
-            };
-            let size = entry.to_string().len() + 1;
-            if items.len() == MAX_SKIPPED_CAPABILITIES
-                || bytes + size > MAX_SKIPPED_CAPABILITIES_BYTES
-            {
-                break 'fill;
+    for rank in 0..kept.iter().copied().max().unwrap_or(0) {
+        for (list, kept) in by_kind.iter().zip(&kept) {
+            if rank < *kept {
+                items.push(list[rank].clone());
             }
-            bytes += size;
-            items.push(entry.clone());
-            took = true;
         }
-        if !took {
-            break;
-        }
-        rank += 1;
     }
     let more = total - items.len();
     let mut value = json!({ "items": items });
@@ -222,5 +227,38 @@ mod tests {
                     <= crate::toolkits::MAX_NOTICE_LABEL_BYTES
             );
         }
+    }
+
+    #[test]
+    fn omitted_tools_are_named_per_toolkit_and_do_not_crowd_out_other_kinds() {
+        let toolkits: Vec<_> = (0..100)
+            .map(|index| {
+                LeftOutToolkit::unserved_tool(
+                    "repo",
+                    "github",
+                    &format!("tool_{index:03}"),
+                    "this tool is not available on this worker yet, so it was left out",
+                )
+            })
+            .collect();
+        let catalog = InternalToolCatalog::from_values(Some(&json!(["swarm"]))).expect("names");
+        let value = skipped_capabilities(&toolkits, catalog, &[]).expect("a list");
+        let entries = items(&value);
+        assert!(entries.len() <= MAX_SKIPPED_CAPABILITIES);
+        assert!(value.to_string().len() <= MAX_SKIPPED_CAPABILITIES_BYTES + 64);
+        // Round-robin: the internal tool is not pushed out by 100 tools.
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry["kind"] == KIND_INTERNAL_TOOL)
+        );
+        let tool = entries
+            .iter()
+            .find(|entry| entry["kind"] == KIND_TOOL)
+            .expect("a tool entry");
+        assert_eq!(tool["name"], "repo.tool_000");
+        assert_eq!(tool["type"], "github");
+        assert_eq!(tool["reason_code"], "unsupported_tool_selection");
+        assert_eq!(value["more"], 101 - entries.len());
     }
 }

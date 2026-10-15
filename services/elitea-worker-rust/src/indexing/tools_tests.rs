@@ -1234,7 +1234,7 @@ async fn parallel_step_back_calls_stop_at_the_claims_completion_budget() {
         .iter()
         .filter(|text| {
             text.as_str()
-                .is_some_and(|text| text.contains("used up its model calls for tools"))
+                .is_some_and(|text| text.contains("used up its tool model calls"))
         })
         .count();
     assert_eq!(refused, 2, "{results:?}");
@@ -1362,12 +1362,15 @@ impl Llm for RefusingModel {
         _: LlmRequest,
         _: bool,
     ) -> adk_rust::Result<LlmResponseStream> {
-        Err(adk_rust::AdkError::new(
-            adk_rust::ErrorComponent::Model,
-            self.1,
-            self.0,
-            "refused",
-        ))
+        let error =
+            adk_rust::AdkError::new(adk_rust::ErrorComponent::Model, self.1, self.0, "refused");
+        // A local refusal carries the facade's own "not sent" marker, as the
+        // real facades set it; a gateway answer does not.
+        Err(if self.1 == adk_rust::ErrorCategory::InvalidInput {
+            crate::transport::model_text::not_sent(error)
+        } else {
+            error
+        })
     }
 }
 
@@ -1375,6 +1378,7 @@ impl Llm for RefusingModel {
 /// local refusal before sending (an invalid request, a request too large)
 /// and a failed binding consume nothing; a gateway 429 after sending counts.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One budget walked through every charge rule.
 async fn only_a_request_sent_to_the_gateway_consumes_the_budget() {
     use crate::transport::model_text::ModelCallBudget;
     let ask = |code: &'static str, category, budget: &ModelCallBudget| {
@@ -1399,7 +1403,6 @@ async fn only_a_request_sent_to_the_gateway_consumes_the_budget() {
         "model_gateway.invalid_request",
         "model_gateway.request_too_large",
         "anthropic_gateway.invalid_request",
-        "model_gateway.completion_reused",
         "context_budget_exceeded",
     ] {
         for _ in 0..3 {
@@ -1411,6 +1414,45 @@ async fn only_a_request_sent_to_the_gateway_consumes_the_budget() {
     }
     assert!(budget.try_take(), "local refusals consumed nothing");
     budget.refund();
+    // #1292 round 3: the facade's marker decides, not the code. The same
+    // code WITHOUT the marker (an error that came back from the gateway) is
+    // charged.
+    {
+        struct Unmarked;
+        #[async_trait]
+        impl Llm for Unmarked {
+            fn name(&self) -> &'static str {
+                "unmarked"
+            }
+            async fn generate_content(
+                &self,
+                _: LlmRequest,
+                _: bool,
+            ) -> adk_rust::Result<LlmResponseStream> {
+                Err(adk_rust::AdkError::new(
+                    adk_rust::ErrorComponent::Model,
+                    adk_rust::ErrorCategory::InvalidInput,
+                    "model_gateway.invalid_request",
+                    "refused",
+                ))
+            }
+        }
+        let binding = StepbackBinding {
+            model: Arc::new(Unmarked) as Arc<dyn Llm>,
+            model_name: "m".to_owned(),
+            config: adk_rust::GenerateContentConfig::default(),
+            budget: Some(budget.clone()),
+        };
+        let _ = super::tools::generate_text(
+            &binding,
+            vec![adk_rust::Part::Text {
+                text: "p".to_owned(),
+            }],
+        )
+        .await;
+        assert!(!budget.try_take(), "an unmarked error is charged");
+        budget.refund();
+    }
     // A gateway refusal after sending counts.
     let error = ask(
         "model_gateway.rate_limited",

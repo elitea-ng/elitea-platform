@@ -69,15 +69,35 @@ enum DirectLending {
     None,
 }
 
+/// The families whose tools act through the Office host (ADR-0032).
+fn is_office_family(toolkit_type: &str) -> bool {
+    matches!(toolkit_type, "pptx" | "docx" | "xlsx")
+}
+
 /// What to lend a direct call of `toolkit_type`. `imagegen`'s tools are all
-/// effectful and refused on this path, so it never needs the claim; `pptx`
-/// reads objects, so it does (when this worker has the Office runtime);
-/// `sharepoint` is lent the host only for the tools that read text, whose
-/// document reader it carries. Its uploads are effects and are refused here.
-fn direct_lending(toolkit_type: &str, tool_name: &str, has_office_runtime: bool) -> DirectLending {
+/// effectful and refused on this path, so it never needs the claim; the Office
+/// families (`pptx`, `docx`, `xlsx`) read objects, so a call needs it (when
+/// this worker has the Office runtime); `sharepoint` is lent the host only
+/// for the tools that read text, whose document reader it carries. Its
+/// uploads are effects and are refused here.
+///
+/// A discovery (`toolkit.available_tools.v1`) lists tools and runs none, so
+/// it needs no claim: every family that is built on a host (Office,
+/// `imagegen`) and `artifact` are lent the do-nothing host, whatever this
+/// worker carries. That is what keeps the tool list reachable when a call
+/// would be refused (a deployment with no Office runtime still lists them).
+fn direct_lending(
+    toolkit_type: &str,
+    tool_name: &str,
+    has_office_runtime: bool,
+    discovery: bool,
+) -> DirectLending {
+    if discovery && (is_office_family(toolkit_type) || toolkit_type == "artifact") {
+        return DirectLending::NoRoundTrip;
+    }
     match toolkit_type {
         "imagegen" => DirectLending::NoRoundTrip,
-        "pptx" if has_office_runtime => DirectLending::Claim,
+        office if is_office_family(office) && has_office_runtime => DirectLending::Claim,
         "sharepoint"
             if has_office_runtime
                 && elitea_agent_runtime::toolkits::sharepoint_tool_reads_text(tool_name) =>
@@ -97,29 +117,69 @@ mod direct_lending_tests {
         // Whether or not the worker has an Office runtime: no round trip.
         for runtime in [true, false] {
             assert_eq!(
-                direct_lending("imagegen", "", runtime),
+                direct_lending("imagegen", "", runtime, false),
                 DirectLending::NoRoundTrip
             );
         }
-        assert_eq!(direct_lending("pptx", "", true), DirectLending::Claim);
-        assert_eq!(direct_lending("pptx", "", false), DirectLending::None);
-        assert_eq!(direct_lending("github", "", true), DirectLending::None);
+        assert_eq!(github_none(), DirectLending::None);
         // SharePoint is lent the host for its text readers only.
         assert_eq!(
-            direct_lending("sharepoint", "read_document", true),
+            direct_lending("sharepoint", "read_document", true, false),
             DirectLending::Claim
         );
         assert_eq!(
-            direct_lending("sharepoint", "read_document", false),
+            direct_lending("sharepoint", "read_document", false, false),
             DirectLending::None
         );
         for tool in ["get_lists", "upload_file", "onenote_get_page_content", ""] {
             assert_eq!(
-                direct_lending("sharepoint", tool, true),
+                direct_lending("sharepoint", tool, true, false),
                 DirectLending::None,
                 "{tool}"
             );
         }
+    }
+
+    fn github_none() -> DirectLending {
+        direct_lending("github", "", true, false)
+    }
+
+    /// D2: `docx` and `xlsx` were refused as an unsupported family because
+    /// only `pptx` was lent the host.
+    #[test]
+    fn every_office_family_is_lent_the_claim_for_a_call() {
+        for family in ["pptx", "docx", "xlsx"] {
+            assert_eq!(
+                direct_lending(family, "read_document", true, false),
+                DirectLending::Claim,
+                "{family}"
+            );
+            assert_eq!(
+                direct_lending(family, "read_document", false, false),
+                DirectLending::None,
+                "{family} without an Office runtime"
+            );
+        }
+    }
+
+    /// D2: a discovery lists tools and runs none, so it redeems nothing and
+    /// needs no Office runtime; `artifact` was a 500 here for want of a lent
+    /// authority.
+    #[test]
+    fn discovery_is_lent_the_do_nothing_host_without_a_claim() {
+        for family in ["pptx", "docx", "xlsx", "artifact", "imagegen"] {
+            for runtime in [true, false] {
+                assert_eq!(
+                    direct_lending(family, "", runtime, true),
+                    DirectLending::NoRoundTrip,
+                    "{family} runtime={runtime}"
+                );
+            }
+        }
+        assert_eq!(
+            direct_lending("github", "", true, true),
+            DirectLending::None
+        );
     }
 }
 
@@ -995,14 +1055,17 @@ where
     /// toolkit is then unsupported here.
     async fn office_authority(
         &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
         authorized: &AuthorizedToolkitExecution,
         lease: &mut ClaimLeaseMonitor,
         request: &DirectToolkitRequest,
     ) -> Result<Option<crate::toolkits::ArtifactToolAuthority>, RuntimeFailureKind> {
+        let discovery = verified.kind() == ToolkitCommandKind::AvailableTools;
         match direct_lending(
             request.toolkit_type(),
             request.tool_name(),
             self.office.is_some(),
+            discovery,
         ) {
             DirectLending::NoRoundTrip => Ok(Some(
                 crate::toolkits::ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter))
@@ -1069,7 +1132,9 @@ where
             Ok(authority) => IndexToolSupport::Lent(authority),
             Err(reason) => IndexToolSupport::Withheld(*reason),
         };
-        let office = self.office_authority(authorized, lease, request).await?;
+        let office = self
+            .office_authority(verified, authorized, lease, request)
+            .await?;
         let operation = async {
             if is_call {
                 self.runtime
@@ -1212,6 +1277,7 @@ where
         lease: ClaimLeaseMonitor,
         proposed: ToolkitExecuteReadTerminalOutput,
     ) -> Result<(), ToolkitProcessError> {
+        let proposed = call_tool_terminal(verified.kind(), proposed);
         let result = async {
             let terminal = match lease.check_now().await {
                 Ok(()) if deadline_exceeded(&verified, self.clock.as_ref()) => {
@@ -1518,6 +1584,34 @@ fn bind_call_result(
     })
 }
 
+/// A tool run's terminal as published. On `toolkit.call_tool.v1` a refusal
+/// of the TOOL is its own typed result (`EFFECT_REFUSED` / `POLICY_REFUSED` / `SENSITIVE_REFUSED`), so
+/// an authorization failure left over is always the run's own credentials or
+/// context: it carries that sentence (#1292 round 2, item 4), which Main reads
+/// as "the credentials" while an older worker's generic one reads as a
+/// refusal of the tool.
+fn call_tool_terminal(
+    kind: ToolkitCommandKind,
+    proposed: ToolkitExecuteReadTerminalOutput,
+) -> ToolkitExecuteReadTerminalOutput {
+    match proposed {
+        ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::AuthorizationFailed)
+            if kind == ToolkitCommandKind::CallTool =>
+        {
+            ToolkitExecuteReadTerminalOutput::Failure(
+                RuntimeFailureKind::ToolkitRunAuthorizationFailed,
+            )
+        }
+        other => other,
+    }
+}
+
+/// Main's `ToolkitEffectfulToolMessage` and `ToolkitPolicyRefusedMessage`.
+pub(crate) const EFFECTFUL_TOOL_MESSAGE: &str =
+    "This tool changes data, and this path runs read-only tools only.";
+pub(crate) const POLICY_REFUSED_MESSAGE: &str =
+    "This tool is blocked or sensitive under this deployment's policy and cannot run here.";
+
 fn call_summary(
     result: Result<serde_json::Value, crate::toolkits::DirectToolkitRuntimeError>,
 ) -> Result<ToolkitCallToolSummaryV1, RuntimeFailureKind> {
@@ -1533,6 +1627,29 @@ fn call_summary(
                 ToolkitCallToolStatusV1::UnknownTool,
                 None,
                 "The toolkit operation is not selected.",
+            ),
+            // A refusal of THIS tool is a verdict on the tool, not a failure
+            // of the run: its own TYPED status (EFFECT_REFUSED /
+            // POLICY_REFUSED), never confused with the run's credentials
+            // being refused (a runtime failure, AuthorizationFailed) nor with
+            // a toolkit that has no tool by that name (UNKNOWN_TOOL). The
+            // sentence is Main's `ToolkitEffectfulToolMessage` /
+            // `ToolkitPolicyRefusedMessage`, which Main still reads as a
+            // fallback from a worker that sent UNKNOWN_TOOL (round 1).
+            DirectToolkitRuntimeErrorCode::EffectfulToolUnavailable => (
+                ToolkitCallToolStatusV1::EffectRefused,
+                None,
+                EFFECTFUL_TOOL_MESSAGE,
+            ),
+            DirectToolkitRuntimeErrorCode::ToolBlocked => (
+                ToolkitCallToolStatusV1::PolicyRefused,
+                None,
+                POLICY_REFUSED_MESSAGE,
+            ),
+            DirectToolkitRuntimeErrorCode::SensitiveToolUnavailable => (
+                ToolkitCallToolStatusV1::SensitiveRefused,
+                None,
+                POLICY_REFUSED_MESSAGE,
             ),
             DirectToolkitRuntimeErrorCode::UnsupportedToolkit => (
                 ToolkitCallToolStatusV1::UnsupportedToolkit,
@@ -1787,6 +1904,9 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::DependencyUnavailable => "runtime.dependency_unavailable",
         RuntimeFailureKind::DeadlineExceeded => "runtime.deadline_exceeded",
         RuntimeFailureKind::AuthorizationFailed => "runtime.authorization_failed",
+        RuntimeFailureKind::ToolkitRunAuthorizationFailed => {
+            "runtime.toolkit_run_authorization_failed"
+        }
         RuntimeFailureKind::Cancelled => "runtime.cancelled",
         RuntimeFailureKind::ResultRefused => "runtime.result_refused",
         RuntimeFailureKind::OutputContinuationExhausted => "runtime.output_continuation_exhausted",
@@ -2019,6 +2139,69 @@ mod shared_result_tests {
             );
             assert!(!summary.truncated);
         }
+    }
+
+    /// A policy refusal of the tool is the tool's own result with Main's
+    /// literal; the run's credentials being refused stays a runtime failure.
+    #[test]
+    fn tool_refusals_are_results_and_a_refused_run_is_a_failure() {
+        use crate::toolkits::{DirectToolkitRuntimeErrorCode as Code, test_error};
+        for (code, status, message) in [
+            (
+                Code::EffectfulToolUnavailable,
+                ToolkitCallToolStatusV1::EffectRefused,
+                EFFECTFUL_TOOL_MESSAGE,
+            ),
+            (
+                Code::ToolBlocked,
+                ToolkitCallToolStatusV1::PolicyRefused,
+                POLICY_REFUSED_MESSAGE,
+            ),
+            (
+                Code::SensitiveToolUnavailable,
+                ToolkitCallToolStatusV1::SensitiveRefused,
+                POLICY_REFUSED_MESSAGE,
+            ),
+        ] {
+            let summary = call_summary(Err(test_error(code))).expect("a result");
+            assert_eq!(summary.status, status as i32, "{code:?}");
+            assert_eq!(summary.error_message, message);
+            // The settlement the worker restores agrees: a refusal FAILS.
+        }
+        // A tool the toolkit lacks stays UNKNOWN_TOOL.
+        assert_eq!(
+            call_summary(Err(test_error(Code::ToolNotSelected)))
+                .expect("a result")
+                .status,
+            ToolkitCallToolStatusV1::UnknownTool as i32
+        );
+        assert!(matches!(
+            call_summary(Err(test_error(Code::AuthorizationRequired))),
+            Err(RuntimeFailureKind::AuthorizationFailed)
+        ));
+    }
+
+    /// Item 4: the run's own credentials refused on a tool run carry their
+    /// own sentence; other commands keep the generic one.
+    #[test]
+    fn a_tool_runs_authorization_failure_names_the_credentials() {
+        use crate::protocol::output::TOOLKIT_RUN_AUTHORIZATION_FAILED_MESSAGE;
+        let failed =
+            || ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::AuthorizationFailed);
+        assert!(matches!(
+            call_tool_terminal(ToolkitCommandKind::CallTool, failed()),
+            ToolkitExecuteReadTerminalOutput::Failure(
+                RuntimeFailureKind::ToolkitRunAuthorizationFailed
+            )
+        ));
+        assert!(matches!(
+            call_tool_terminal(ToolkitCommandKind::AvailableTools, failed()),
+            ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::AuthorizationFailed)
+        ));
+        assert_eq!(
+            TOOLKIT_RUN_AUTHORIZATION_FAILED_MESSAGE,
+            "The platform could not authorize this tool run's credentials or context."
+        );
     }
 
     #[test]

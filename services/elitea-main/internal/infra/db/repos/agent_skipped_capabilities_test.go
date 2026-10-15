@@ -2,6 +2,7 @@ package repos
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -92,5 +93,57 @@ func TestFinalizeQueriesNeverStripTheStoredList(t *testing.T) {
 		if !strings.Contains(query, "'skipped_capabilities', ") {
 			t.Fatalf("a finalize query does not write the list:\n%s", query)
 		}
+	}
+}
+
+// Review round 2: the worker's `tool` kind (one tool of a built toolkit,
+// named `<toolkit>.<tool>`) was dropped here, so the notice never named a
+// left-out tool. The shape is exactly what elitea-worker-rust
+// agents/skipped_capabilities.rs emits (its test
+// omitted_tools_are_named_per_toolkit_and_do_not_crowd_out_other_kinds):
+// round-robin across kinds, bounded, the rest counted into `more`.
+func TestSanitizerKeepsTheWorkersToolEntries(t *testing.T) {
+	toolEntry := func(index int) string {
+		return `{"kind":"tool","name":"repo.tool_` + strings.Repeat("0", 3-len(strconv.Itoa(index))) + strconv.Itoa(index) +
+			`","type":"github","reason_code":"unsupported_tool_selection","reason":"this tool is not available on this worker yet, so it was left out"}`
+	}
+	items := []string{`{"kind":"internal_tool","name":"swarm","reason_code":"internal_tool_unsupported","reason":"this built-in capability is not available on this worker yet, so it was turned off for this agent"}`}
+	for index := 0; index < 31; index++ {
+		items = append(items, toolEntry(index))
+	}
+	// What the worker sends: 32 entries, 69 more not shown (101 in all).
+	raw := json.RawMessage(`{"items":[` + strings.Join(items, ",") + `],"more":69}`)
+	got := skippedCapabilitiesFromMetadata(json.RawMessage(`{"thread_id":"t","skipped_capabilities":` + string(raw) + `}`))
+	var kept struct {
+		Items []skippedCapability `json:"items"`
+		More  int                 `json:"more"`
+	}
+	if err := json.Unmarshal(got, &kept); err != nil {
+		t.Fatal(err)
+	}
+	if len(kept.Items) != 32 || kept.More != 69 {
+		t.Fatalf("kept %d more %d: %s", len(kept.Items), kept.More, got)
+	}
+	want := skippedCapability{Kind: "tool", Name: "repo.tool_000", Type: "github", ReasonCode: "unsupported_tool_selection", Reason: "this tool is not available on this worker yet, so it was left out"}
+	if kept.Items[1] != want || kept.Items[0].Kind != "internal_tool" {
+		t.Fatalf("worker tool entry altered: %+v", kept.Items[:2])
+	}
+}
+
+// The `tool` kind obeys the same bounds as every other kind: a 33rd entry
+// and an over-long label are counted into `more`, not kept.
+func TestToolEntriesKeepTheBudget(t *testing.T) {
+	entry := `{"kind":"tool","name":"repo.create_file","type":"github","reason_code":"c","reason":"r"}`
+	tooLong := `{"kind":"tool","name":"repo.` + strings.Repeat("x", 124) + `","reason_code":"c","reason":"r"}`
+	raw := json.RawMessage(`{"items":[` + tooLong + "," + strings.Repeat(entry+",", 32) + entry + `]}`)
+	var kept struct {
+		Items []skippedCapability `json:"items"`
+		More  int                 `json:"more"`
+	}
+	if err := json.Unmarshal(sanitizeSkippedCapabilities(raw), &kept); err != nil {
+		t.Fatal(err)
+	}
+	if len(kept.Items) != maxSkippedCapabilities || kept.More != 2 {
+		t.Fatalf("kept %d more %d", len(kept.Items), kept.More)
 	}
 }

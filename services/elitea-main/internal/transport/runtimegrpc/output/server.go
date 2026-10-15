@@ -14,6 +14,7 @@ import (
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	configurationdomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/configurations"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
 	"google.golang.org/grpc"
@@ -1159,6 +1160,11 @@ func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFai
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY && payload.GetSafeMessage() == nodeTypeNotAvailableSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_NODE_TYPE_NOT_AVAILABLE", SafeMessage: nodeTypeNotAvailableSafeMessage}, true
+	}
+	// The run's own credentials or context refused on the tool-run path: a
+	// fixed sentence of its own, so a caller can tell it from a refused tool.
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED && payload.GetSafeMessage() == executiondomain.ToolkitRunCredentialsRefusedMessage {
+		return runtimeFailurePolicy{Code: "AUTHORIZATION_FAILED", SafeMessage: executiondomain.ToolkitRunCredentialsRefusedMessage}, true
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_BUDGET_EXHAUSTED {
 		if policy, ok := budgetScopePolicy(payload.GetSafeMessage()); ok {

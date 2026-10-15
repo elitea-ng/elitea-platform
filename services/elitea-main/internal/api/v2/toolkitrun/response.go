@@ -21,6 +21,8 @@
 //	TOOL_ERROR          200  ok:false with the tool's own sentence
 //	UNSUPPORTED_TOOLKIT 422  ok:false naming the type this image cannot build
 //	UNKNOWN_TOOL        422  ok:false naming the tool
+//	EFFECT_REFUSED      422  ok:false, reason effectful_tool_unavailable
+//	POLICY_REFUSED      422  ok:false, reason tool_refused
 //	runtime failure     500  ok:false with the runtime's safe message
 //	bounded wait passed 504  ok:false with the task id, so the caller can poll
 //
@@ -213,11 +215,72 @@ func WriteOutcome(w http.ResponseWriter, outcome toolkitcalltoolapp.RunOutcome) 
 		body["reason"] = "unknown_tool"
 		body["error"] = outcome.ErrorMessage
 		writeJSON(w, http.StatusUnprocessableEntity, body)
+	case toolkitcalltoolapp.RunStatusEffectRefused:
+		body["reason"] = ReasonEffectfulToolUnavailable
+		body["error"] = toolSubject(outcome.ToolName) + " changes data, and this route only runs read-only tools."
+		writeJSON(w, http.StatusUnprocessableEntity, body)
+	case toolkitcalltoolapp.RunStatusPolicyRefused:
+		body["reason"] = ReasonToolRefused
+		body["error"] = toolSubject(outcome.ToolName) + " is blocked by this deployment's tool policy, so it cannot be run here."
+		writeJSON(w, http.StatusUnprocessableEntity, body)
+	case toolkitcalltoolapp.RunStatusSensitiveRefused:
+		body["reason"] = ReasonToolRefused
+		body["error"] = toolSubject(outcome.ToolName) + " is marked sensitive by this deployment's tool policy and needs a confirmation this route cannot ask for, so it was not run."
+		writeJSON(w, http.StatusUnprocessableEntity, body)
 	default:
+		// A runtime failure that is a statement about the RUN or the tool, not
+		// a server fault, gets its own answer: the generic runtime sentence
+		// ("Configuration type is not supported.") named the wrong thing and
+		// the 500 told the person to retry.
+		if status, reason, sentence, refused := workerRefusal(outcome); refused {
+			body["reason"] = reason
+			body["error"] = sentence
+			writeJSON(w, status, body)
+			return
+		}
 		body["reason"] = "runtime_failure"
 		body["error"] = outcome.ErrorMessage
 		writeJSON(w, http.StatusInternalServerError, body)
 	}
+}
+
+// Reasons a tool is not run, beyond unsupported_toolkit and unknown_tool.
+const (
+	ReasonEffectfulToolUnavailable = "effectful_tool_unavailable"
+	ReasonToolRefused              = "tool_refused"
+	ReasonUnsupportedTool          = "unsupported_tool"
+	ReasonAuthorizationFailed      = "authorization_failed"
+)
+
+// toolSubject is "The tool "x"" or, with no name, "This tool".
+func toolSubject(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return "This tool"
+	}
+	return "The tool " + strconv.Quote(name)
+}
+
+// workerRefusal classifies a runtime failure. AUTHORIZATION_FAILED, from any
+// worker, is the run's credentials or context (403, with a retry hint): the
+// typed POLICY_REFUSED / SENSITIVE_REFUSED statuses are the only policy
+// signal. UNSUPPORTED_CAPABILITY says only that this deployment's worker
+// cannot run the tool, never WHY, so it is a neutral 422 (it is not "the tool
+// changes data": only EFFECT_REFUSED says that).
+func workerRefusal(outcome toolkitcalltoolapp.RunOutcome) (status int, reason, sentence string, ok bool) {
+	switch {
+	case outcome.RunCredentialsRefused():
+		return http.StatusForbidden, ReasonAuthorizationFailed,
+			"The platform could not authorize this run's credentials or context. Try again; if it persists, ask an administrator.", true
+	case outcome.WorkerCannotRunTool():
+		return http.StatusUnprocessableEntity, ReasonUnsupportedTool,
+			"This deployment's worker cannot run " + lowerFirst(toolSubject(outcome.ToolName)) + ".", true
+	}
+	return 0, "", "", false
+}
+
+// lowerFirst is "the tool \"x\"" / "this tool" inside a sentence.
+func lowerFirst(subject string) string {
+	return strings.ToLower(subject[:1]) + subject[1:]
 }
 
 // WriteError maps a run that never settled. It is the only place a tool-run

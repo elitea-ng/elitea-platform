@@ -390,6 +390,11 @@ fn authorization_failure(
     }
 }
 
+#[cfg(test)]
+pub(crate) const fn test_error(code: DirectToolkitRuntimeErrorCode) -> DirectToolkitRuntimeError {
+    failure(code, false)
+}
+
 const fn failure(
     code: DirectToolkitRuntimeErrorCode,
     retryable: bool,

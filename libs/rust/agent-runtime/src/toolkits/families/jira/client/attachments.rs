@@ -104,7 +104,16 @@ fn attachment_failure(error: AttachmentError) -> JiraClientError {
         | AttachmentError::ToolkitBudget => JiraClientErrorCode::RateLimited,
         AttachmentError::Host(
             _,
-            OfficeFailure::Unreachable | OfficeFailure::NoModel | OfficeFailure::ReplyUnusable,
+            OfficeFailure::Unreachable
+            | OfficeFailure::NoModel
+            | OfficeFailure::ModelUnusable
+            | OfficeFailure::ContextUnusable
+            | OfficeFailure::ReplyUnusable
+            // A model reply that was cut off, declined or empty is a model
+            // failure, not a bad argument (#1292 round 3).
+            | OfficeFailure::ReplyCutOff
+            | OfficeFailure::ReplyDeclined
+            | OfficeFailure::ReplyEmpty,
         ) => JiraClientErrorCode::DependencyUnavailable,
         _ => JiraClientErrorCode::InvalidInput,
     };
@@ -1519,5 +1528,31 @@ impl<'a> PictureWork<'a> {
                 Ok(format!("[Image: {reference} - not described: {sentence}]"))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod attachment_failure_tests {
+    use super::*;
+    use crate::toolkits::families::attachment_host::Step;
+
+    #[test]
+    fn a_unusable_model_reply_is_a_model_failure_not_invalid_input() {
+        for failure in [
+            OfficeFailure::ReplyCutOff,
+            OfficeFailure::ReplyDeclined,
+            OfficeFailure::ReplyEmpty,
+            OfficeFailure::ReplyUnusable,
+        ] {
+            assert_eq!(
+                attachment_failure(AttachmentError::Host(Step::Model, failure)).code,
+                JiraClientErrorCode::DependencyUnavailable,
+                "{failure:?}"
+            );
+        }
+        assert_eq!(
+            attachment_failure(AttachmentError::Path).code,
+            JiraClientErrorCode::InvalidInput
+        );
     }
 }

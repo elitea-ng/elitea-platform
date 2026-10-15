@@ -23,6 +23,12 @@ describe('skipped capabilities notice', () => {
     expect(notice).toHaveTextContent('4 more not shown.');
   });
 
+  it('names a left-out tool of a built toolkit', () => {
+    const tool = { kind: 'tool', name: 'github.create_file', type: 'github', reason_code: 'unsupported_tool_selection', reason: 'this tool is not available on this worker yet, so it was left out' };
+    renderWithTheme(<ApplicationAnswer answer={{ ...base, responseMetadata: { skipped_capabilities: { items: [tool] } } }} messageId={base.id} />);
+    expect(screen.getByTestId('skipped-capabilities-notice')).toHaveTextContent('Tool github.create_file: this tool is not available on this worker yet, so it was left out.');
+  });
+
   it('is restored from the persisted message after a reload', () => {
     const [restored] = convertMessagesToChatHistory([{
       id: 1, uuid: base.id, role: 'assistant', content: 'Done.', is_streaming: false, created_at: '',

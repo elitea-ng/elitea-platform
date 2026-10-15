@@ -234,7 +234,7 @@ pub use materialize::{
     materialize_configured_toolsets_reporting_refusals,
     materialize_configured_toolsets_with_artifact_authority,
     materialize_configured_toolsets_with_authorities,
-    materialize_configured_toolsets_with_tokens_and_authorization,
+    materialize_configured_toolsets_with_tokens_and_authorization, round_robin_take,
 };
 pub use mcp::{
     AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,

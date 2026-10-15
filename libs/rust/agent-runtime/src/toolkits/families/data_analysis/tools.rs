@@ -330,13 +330,20 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> Sentence {
         OfficeFailure::BudgetRefused if error.is_toolkit_budget() => {
             format!("Could not {action}: {TOOLKIT_BUDGET_SENTENCE}.")
         }
-        OfficeFailure::BudgetRefused | OfficeFailure::NoModel => {
+        OfficeFailure::BudgetRefused | OfficeFailure::NoModel | OfficeFailure::ModelUnusable => {
             format!("Could not {action}: the platform refused the request.")
         }
+        OfficeFailure::ContextUnusable => format!(
+            "Could not {action}: this run's context is not usable for a platform call; retry the turn."
+        ),
         OfficeFailure::RateLimited | OfficeFailure::Timeout | OfficeFailure::Conflict => {
             format!("Could not {action}: the platform is busy or timed out. Try again shortly.")
         }
-        OfficeFailure::ReplyUnusable | OfficeFailure::ReplyTooLarge => {
+        OfficeFailure::ReplyUnusable
+        | OfficeFailure::ReplyCutOff
+        | OfficeFailure::ReplyDeclined
+        | OfficeFailure::ReplyEmpty
+        | OfficeFailure::ReplyTooLarge => {
             format!("Could not {action}: the platform's answer could not be used. Tell the user.")
         }
         OfficeFailure::Unreachable => format!(
@@ -1708,5 +1715,17 @@ mod tests {
         );
         tokio::time::sleep(std::time::Duration::from_millis(600)).await;
         assert_eq!(gate.available(), 1, "never freed after the work ended");
+    }
+
+    /// #1292 review 5: an unusable run context tells the model to retry the
+    /// turn, not that the platform refused.
+    #[test]
+    fn an_unusable_run_context_says_retry_the_turn() {
+        let sentence = super::host_sentence(
+            "read the file",
+            &OfficeHostError::new(OfficeFailure::ContextUnusable, "x"),
+        );
+        assert!(sentence.contains("retry the turn"), "{sentence}");
+        assert!(!sentence.contains("refused"), "{sentence}");
     }
 }

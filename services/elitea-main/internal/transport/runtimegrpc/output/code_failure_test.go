@@ -87,6 +87,9 @@ func TestCodeTerminalCategoriesCrossOutputBoundary(t *testing.T) {
 	}{
 		{runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED, "PIPELINE_CODE_FAILED", "The pipeline stopped at a Code node. Check its source, selected input, and sandbox limits. Later nodes did not run. Share the support reference with your administrator before retrying."},
 		{runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED, "AUTHORIZATION_FAILED", "Execution authorization failed."},
+		// The tool-run path's run-credentials refusal (#1292 round 2) is its
+		// own accepted sentence for the same code.
+		{runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED, "AUTHORIZATION_FAILED", "The platform could not authorize this tool run's credentials or context."},
 		{runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_CANCELLED, "CANCELLED", "Execution was cancelled."},
 	} {
 		t.Run(policy.public, func(t *testing.T) {

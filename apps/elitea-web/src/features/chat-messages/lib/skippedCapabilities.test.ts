@@ -16,6 +16,20 @@ describe('skipped capabilities', () => {
     expect(parseSkippedCapabilities(wire([toolkit], -4)).more).toBe(0);
   });
 
+  // Review round 2: the worker's per-tool entry (`<toolkit>.<tool>`) was dropped.
+  it('keeps the worker\'s tool entries', () => {
+    const tool = { kind: 'tool', name: 'repo.create_file', type: 'github', reason_code: 'unsupported_tool_selection', reason: 'this tool is not available on this worker yet, so it was left out' };
+    expect(parseSkippedCapabilities(wire([tool, toolkit], 69))).toEqual({
+      more: 69,
+      items: [
+        { kind: 'tool', name: 'repo.create_file', type: 'github', reasonCode: 'unsupported_tool_selection', reason: 'this tool is not available on this worker yet, so it was left out' },
+        { kind: 'toolkit', name: 'wiki', type: 'confluence', reasonCode: 'unsupported_toolkit_family', reason: 'not available yet' },
+      ],
+    });
+    const many = Array.from({ length: 40 }, (_, index) => ({ ...tool, name: `repo.tool_${index}` }));
+    expect(parseSkippedCapabilities(wire(many)).items).toHaveLength(32);
+  });
+
   it('bounds the list', () => {
     const many = Array.from({ length: 80 }, (_, index) => ({ ...toolkit, name: `t${index}` }));
     expect(parseSkippedCapabilities(wire(many)).items).toHaveLength(32);

@@ -139,9 +139,24 @@ func toolOutcome(result toolkit.RunOutcome, owner string) (Outcome, error) {
 		outcome.Result = json.RawMessage(result.ResultJSON)
 	case toolkit.RunStatusAuthorizationRequired:
 		outcome.Status = "authentication_denied"
-	case toolkit.RunStatusUnsupportedToolkit, toolkit.RunStatusUnknownTool:
+	case toolkit.RunStatusUnsupportedToolkit, toolkit.RunStatusUnknownTool, toolkit.RunStatusEffectRefused:
 		outcome.Status = "unsupported_operation"
-	case toolkit.RunStatusToolError, toolkit.RunStatusRuntimeFailure:
+	case toolkit.RunStatusPolicyRefused:
+		// The deployment's policy refused the tool: a denial, not a missing
+		// operation.
+		outcome.Status = "authorization_denied"
+	case toolkit.RunStatusSensitiveRefused:
+		outcome.Status = "sensitive_rejected"
+	case toolkit.RunStatusRuntimeFailure:
+		switch {
+		case result.RunCredentialsRefused():
+			// The run's credentials or context were refused: an
+			// authorization answer, not a retryable dependency outage.
+			outcome.Status = "authentication_denied"
+		case result.WorkerCannotRunTool():
+			outcome.Status = "unsupported_operation"
+		}
+	case toolkit.RunStatusToolError:
 	default:
 		return Outcome{}, domain.ErrUnknown
 	}

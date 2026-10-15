@@ -513,11 +513,87 @@ fn model_failures_are_classified_on_their_code() {
     );
     assert_eq!(
         super::office_host::model_failure(&error(reply_codes::REASONING_ONLY, "x")).kind(),
-        OfficeFailure::ReplyUnusable
+        OfficeFailure::ReplyCutOff
     );
     assert_eq!(
         super::office_host::model_failure(&error("model_gateway.rate_limited", "x")).kind(),
         OfficeFailure::RateLimited
+    );
+}
+
+/// #1292 rounds 2-3: the categories and codes the binder and the facades
+/// actually produce: a request refused as invalid is `InvalidRequest`, not
+/// `Unreachable` (D3); a reply that came back over a bound is
+/// `ReplyTooLarge`. (Bind failures are classified from the surfaced
+/// `ModelFacadeError`, `a_bind_failure_names_whether_...`.)
+#[test]
+fn bind_failures_invalid_requests_and_oversized_replies_have_their_own_kind() {
+    use adk_rust::ErrorCategory as C;
+    let error = |category, code: &'static str| {
+        adk_rust::AdkError::new(adk_rust::ErrorComponent::Model, category, code, "x")
+    };
+    for (category, code, kind) in [
+        (
+            C::InvalidInput,
+            "model_gateway.invalid_request",
+            OfficeFailure::InvalidRequest,
+        ),
+        (
+            C::InvalidInput,
+            "model_gateway.rejected",
+            OfficeFailure::InvalidRequest,
+        ),
+        (
+            C::Unavailable,
+            "model_gateway.stream_too_large",
+            OfficeFailure::ReplyTooLarge,
+        ),
+        (
+            C::Unavailable,
+            "model_gateway.event_too_large",
+            OfficeFailure::ReplyTooLarge,
+        ),
+        (
+            C::Unavailable,
+            "model_gateway.unavailable",
+            OfficeFailure::Unreachable,
+        ),
+    ] {
+        assert_eq!(
+            super::office_host::model_failure(&error(category, code)).kind(),
+            kind,
+            "{code}"
+        );
+    }
+}
+
+/// A run WITH a chat model whose binding fails is told the model is unusable
+/// for the tool; only a run with no model at all is `NoModel`.
+#[tokio::test]
+async fn an_unbindable_model_is_unusable_not_absent() {
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        ObjectApi::new() as Arc<dyn Transport>,
+    ));
+    let failing = LazyStepbackModel::new(Box::new(|| {
+        Err(crate::transport::model_facade::ModelFacadeError::InvalidConfiguration)
+    }));
+    let host = ClaimOfficeHost::new(Arc::clone(&runtime), "pat", "42", failing).expect("host");
+    assert_eq!(
+        host.complete(OfficeModelRequest::default())
+            .await
+            .expect_err("unbindable")
+            .kind(),
+        OfficeFailure::ModelUnusable
+    );
+    let none =
+        ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
+    assert_eq!(
+        none.complete(OfficeModelRequest::default())
+            .await
+            .expect_err("no model")
+            .kind(),
+        OfficeFailure::NoModel
     );
 }
 
@@ -563,7 +639,8 @@ async fn the_office_host_reports_the_toolkit_cap_and_accepts_an_empty_reply() {
     // What a tool tells the model for it.
     let error = elitea_agent_runtime::toolkits::OfficeHostError::toolkit_budget();
     assert!(
-        elitea_agent_runtime::toolkits::TOOLKIT_BUDGET_SENTENCE.contains("toolkit_model_call_cap")
+        elitea_agent_runtime::toolkits::TOOLKIT_BUDGET_SENTENCE
+            .contains("worker.runtime.toolkitModelCallCap")
     );
     assert_eq!(
         error.reason_code(),
@@ -979,4 +1056,313 @@ fn a_file_is_refused_by_its_name_before_it_is_downloaded() {
         host.can_read_text("a.pdf"),
         Err(TextExtractionFailure::NoExtractor)
     );
+}
+
+/// D2: a synchronous tool run (the UI's "test tool" panel) of each Office
+/// family. The read tool reaches the tool through the lent claim host (here a
+/// fake store without the file, so the tool answers its own "not found"
+/// sentence); the write tool is refused with the typed read-only reason, never
+/// an unsupported family; and the tools are listed whether or not a host does
+/// any work (the do-nothing host a discovery is lent).
+#[tokio::test]
+async fn a_direct_run_serves_each_office_family_reads_and_refuses_its_writes() {
+    use crate::toolkits::{
+        DirectToolkitRequest, DirectToolkitRuntime, DirectToolkitRuntimeErrorCode,
+        IndexToolSupport, IndexToolsWithheld,
+    };
+    use crate::transport::office_host::NoRoundTripImagesHost;
+    use crate::transport::platform_writer::HostOnlyPlatformWriter;
+    use elitea_agent_runtime::host::PlatformWriter;
+    use elitea_agent_runtime::toolkits::ArtifactToolAuthority;
+
+    let withheld = || IndexToolSupport::Withheld(IndexToolsWithheld::NotServedOnThisPath);
+    let api = ObjectApi::new();
+    let (claim_host, _) = host(&api, vec![]);
+    let claimed =
+        ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter) as Arc<dyn PlatformWriter>)
+            .with_office(claim_host);
+    let idle =
+        ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter) as Arc<dyn PlatformWriter>)
+            .with_office(Arc::new(NoRoundTripImagesHost));
+    let cases = [
+        ("pptx", "list_placeholders", "add_slide", "x.pptx"),
+        ("docx", "read_document", "add_heading", "x.docx"),
+        ("xlsx", "list_sheets", "write_cells", "x.xlsx"),
+    ];
+    for (family, read, write, file) in cases {
+        let config = serde_json::to_vec(&json!({
+            "id": 5, "type": family, "toolkit_name": "office",
+            "settings": {"bucket_name": "decks", "selected_tools": []}
+        }))
+        .expect("config");
+        let call = |tool: &str| {
+            DirectToolkitRequest::parse_call(
+                family,
+                "5",
+                tool,
+                &config,
+                json!({"file_name": file}).to_string().as_bytes(),
+                br#"{"toolkit_security":{}}"#,
+            )
+            .expect("request")
+        };
+        let runtime = DirectToolkitRuntime::default();
+        // No host lent: the family is unsupported on the path.
+        assert_eq!(
+            runtime
+                .execute_test(&call(read), "e", "c", withheld(), None)
+                .await
+                .expect_err("no host")
+                .code(),
+            DirectToolkitRuntimeErrorCode::UnsupportedToolkit,
+            "{family}"
+        );
+        // The read tool runs.
+        runtime
+            .execute_test(&call(read), "e", "c", withheld(), Some(&claimed))
+            .await
+            .unwrap_or_else(|error| panic!("{family} {read}: {error}"));
+        // The write tool is refused as an effect, with the typed reason.
+        assert_eq!(
+            runtime
+                .execute_test(&call(write), "e", "c", withheld(), Some(&claimed))
+                .await
+                .expect_err("a write on the read-only path")
+                .code(),
+            DirectToolkitRuntimeErrorCode::EffectfulToolUnavailable,
+            "{family} {write}"
+        );
+        // Tools are listed on the do-nothing host.
+        let settings = serde_json::to_vec(&json!({"bucket_name": "decks", "selected_tools": []}))
+            .expect("settings");
+        let discovery = DirectToolkitRequest::parse_discovery(
+            family,
+            "5",
+            &settings,
+            br#"{"toolkit_security":{}}"#,
+        )
+        .expect("discovery");
+        let listed = runtime
+            .discover(&discovery, Some(&idle))
+            .await
+            .unwrap_or_else(|error| panic!("{family} discovery: {error}"));
+        let names: Vec<&str> = listed["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("name"))
+            .collect();
+        assert!(
+            names.contains(&read) && names.contains(&write),
+            "{family}: {names:?}"
+        );
+    }
+}
+
+/// D2: the artifact toolkit's tools are listed on a host-only authority (its
+/// discovery was a 500 for want of any authority).
+#[tokio::test]
+async fn artifact_tools_are_listed_without_a_claim() {
+    use crate::toolkits::{DirectToolkitRequest, DirectToolkitRuntime};
+    use crate::transport::platform_writer::HostOnlyPlatformWriter;
+    use elitea_agent_runtime::host::PlatformWriter;
+    use elitea_agent_runtime::toolkits::ArtifactToolAuthority;
+    let authority =
+        ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter) as Arc<dyn PlatformWriter>);
+    let settings =
+        serde_json::to_vec(&json!({"bucket": "files", "selected_tools": []})).expect("settings");
+    let discovery = DirectToolkitRequest::parse_discovery(
+        "artifact",
+        "6",
+        &settings,
+        br#"{"toolkit_security":{}}"#,
+    )
+    .expect("discovery");
+    let runtime = DirectToolkitRuntime::default();
+    assert!(runtime.discover(&discovery, None).await.is_err());
+    let listed = runtime
+        .discover(&discovery, Some(&authority))
+        .await
+        .expect("listed");
+    let names: Vec<&str> = listed["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("name"))
+        .collect();
+    assert!(
+        names.contains(&"list_files") && names.contains(&"read_file"),
+        "{names:?}"
+    );
+}
+
+/// A provider that streams `text` and ends the reply with `finish`.
+struct Finishing(&'static str, adk_rust::FinishReason);
+
+#[async_trait]
+impl Llm for Finishing {
+    fn name(&self) -> &'static str {
+        "finishing"
+    }
+
+    async fn generate_content(
+        &self,
+        _: LlmRequest,
+        _: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        let frames = vec![
+            Ok(LlmResponse {
+                content: Some(Content::new("model").with_text(self.0)),
+                partial: true,
+                ..Default::default()
+            }),
+            Ok(LlmResponse {
+                finish_reason: Some(self.1),
+                turn_complete: true,
+                ..Default::default()
+            }),
+        ];
+        Ok(Box::pin(stream::iter(frames)))
+    }
+}
+
+fn finishing_host(text: &'static str, finish: adk_rust::FinishReason) -> ClaimOfficeHost {
+    let runtime = Arc::new(OfficeRuntime::with_transport(ORIGIN, ObjectApi::new()));
+    let model = LazyStepbackModel::bound(StepbackBinding {
+        model: Arc::new(Finishing(text, finish)) as Arc<dyn Llm>,
+        model_name: "finishing".to_owned(),
+        config: adk_rust::GenerateContentConfig::default(),
+        budget: None,
+    });
+    ClaimOfficeHost::new(runtime, "pat", "42", model).expect("host")
+}
+
+/// #1292 round 4 (B), through the real `model_text` path (not synthetic
+/// codes): a reply cut at `max_tokens` and one that spent the limit
+/// reasoning are `ReplyCutOff` ("raise `max_tokens`"); a safety stop is
+/// `ReplyDeclined`; a reasoning-only reply that closed is not an answer.
+#[tokio::test]
+async fn reply_causes_reach_the_office_host_as_their_own_kinds() {
+    use adk_rust::FinishReason as F;
+    for (text, finish, kind) in [
+        ("half an answ", F::MaxTokens, OfficeFailure::ReplyCutOff),
+        (
+            "<think>still reasoning",
+            F::MaxTokens,
+            OfficeFailure::ReplyCutOff,
+        ),
+        (
+            "<think>all of it</think>",
+            F::Stop,
+            OfficeFailure::ReplyCutOff,
+        ),
+        ("", F::Safety, OfficeFailure::ReplyDeclined),
+        ("", F::Recitation, OfficeFailure::ReplyDeclined),
+    ] {
+        let error = finishing_host(text, finish)
+            .complete(OfficeModelRequest::default())
+            .await
+            .expect_err("unusable");
+        assert_eq!(error.kind(), kind, "{text:?} {finish:?}");
+    }
+    // A finished answer is the answer.
+    assert_eq!(
+        finishing_host("Fine.", F::Stop)
+            .complete(OfficeModelRequest::default())
+            .await
+            .expect("answer"),
+        "Fine."
+    );
+}
+
+/// #1292 round 4 (C): the bind error is surfaced and classified. A claim-side
+/// failure (empty credential, bad execution id, project 0) tells the model to
+/// retry the turn; a model-side one is `ModelUnusable`; no model is
+/// `NoModel`.
+#[tokio::test]
+async fn a_bind_failure_names_whether_the_claim_or_the_model_is_at_fault() {
+    use crate::transport::model_facade::ModelFacadeError as E;
+    let runtime = || Arc::new(OfficeRuntime::with_transport(ORIGIN, ObjectApi::new()));
+    for (error, kind) in [
+        (E::InvalidClaimContext, OfficeFailure::ContextUnusable),
+        (E::InvalidConfiguration, OfficeFailure::ModelUnusable),
+        (E::InvalidInvocation, OfficeFailure::ModelUnusable),
+        (E::DependencyUnavailable, OfficeFailure::Unreachable),
+    ] {
+        let model = LazyStepbackModel::new(Box::new(move || Err(error)));
+        let host = ClaimOfficeHost::new(runtime(), "pat", "42", model).expect("host");
+        assert_eq!(
+            host.complete(OfficeModelRequest::default())
+                .await
+                .expect_err("unbound")
+                .kind(),
+            kind,
+            "{error:?}"
+        );
+    }
+    let none =
+        ClaimOfficeHost::new(runtime(), "pat", "42", LazyStepbackModel::unbound()).expect("host");
+    assert_eq!(
+        none.complete(OfficeModelRequest::default())
+            .await
+            .expect_err("no model")
+            .kind(),
+        OfficeFailure::NoModel
+    );
+    // A real facade: a claim with no credential is the claim's fault.
+    let (client, _) = super::openai_compatible_facade::test_model_gateway_client(
+        Vec::new(),
+        super::openai_compatible_facade::test_model_gateway_config(),
+    )
+    .expect("client");
+    assert!(matches!(
+        client.bind_ordinary(
+            &super::runtime_context::ClaimScopedEliteaContext::fixture(17, ""),
+            17,
+            super::openai_compatible_facade::test_model_facade_invocation(),
+        ),
+        Err(E::InvalidClaimContext)
+    ));
+}
+
+/// #1292 round 4 (C): the native Anthropic codes map as the `OpenAI` ones do.
+#[test]
+fn anthropic_codes_map_like_the_openai_ones() {
+    use adk_rust::ErrorCategory as C;
+    let error = |code: &'static str, category| {
+        adk_rust::AdkError::new(adk_rust::ErrorComponent::Model, category, code, "x")
+    };
+    for (code, category, kind) in [
+        (
+            "anthropic_gateway.response_header_timeout",
+            C::Timeout,
+            OfficeFailure::Timeout,
+        ),
+        (
+            "model_gateway.response_header_timeout",
+            C::Timeout,
+            OfficeFailure::Timeout,
+        ),
+        (
+            "anthropic_gateway.transport",
+            C::Unavailable,
+            OfficeFailure::Unreachable,
+        ),
+        (
+            "model_gateway.transport",
+            C::Unavailable,
+            OfficeFailure::Unreachable,
+        ),
+        (
+            "anthropic_gateway.sampling_unsupported",
+            C::InvalidInput,
+            OfficeFailure::ModelUnusable,
+        ),
+    ] {
+        assert_eq!(
+            super::office_host::model_failure(&error(code, category)).kind(),
+            kind,
+            "{code}"
+        );
+    }
 }

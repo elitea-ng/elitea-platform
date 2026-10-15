@@ -2048,7 +2048,7 @@ fn the_toolkit_cap_has_its_own_budget_sentence() {
     let cap = host_sentence("call the model", &OfficeHostError::toolkit_budget());
     assert_eq!(
         cap,
-        "Could not call the model: this run used up its model calls for tools; start a new run or ask an operator to raise toolkit_model_call_cap."
+        "Could not call the model: this run used up its tool model calls; start a new run or ask an operator to raise worker.runtime.toolkitModelCallCap."
     );
     let gateway = host_sentence(
         "call the model",
@@ -2277,4 +2277,32 @@ async fn a_null_table_cell_is_an_empty_cell_not_the_word_null() {
     let md = rig.markdown("t.pptx");
     assert!(!md.contains("null"), "{md}");
     assert!(md.contains('3') && md.contains("false"), "{md}");
+}
+
+/// #1292 round 4 (B): `fill_template` needs an answer, so an empty model
+/// reply is `ReplyEmpty` with its own sentence, not a deck of SDK markers.
+#[tokio::test]
+async fn fill_template_names_an_empty_model_reply() {
+    let rig = Rig::new().await;
+    rig.host.put("t.pptx", template());
+    rig.host.reply("   ");
+    let result = rig
+        .call(
+            "fill_template",
+            json!({"file_name": "t.pptx", "output_file_name": "o.pptx", "content_description": "x"}),
+        )
+        .await;
+    assert!(result.to_string().contains("no usable text"), "{result}");
+    assert!(!rig.host.has("o.pptx"), "nothing written");
+}
+
+/// Round 4 (B, C): each reply and bind cause reads as its own sentence.
+#[test]
+fn office_sentences_name_each_reply_and_bind_cause() {
+    let say = |kind| host_sentence("fill the template", &OfficeHostError::new(kind, "x"));
+    assert!(say(OfficeFailure::ReplyCutOff).contains("max_tokens"));
+    assert!(say(OfficeFailure::ReplyDeclined).contains("declined"));
+    assert!(say(OfficeFailure::ReplyEmpty).contains("no usable text"));
+    assert!(say(OfficeFailure::ContextUnusable).contains("retry the turn"));
+    assert!(say(OfficeFailure::ModelUnusable).contains("cannot be used for this tool"));
 }

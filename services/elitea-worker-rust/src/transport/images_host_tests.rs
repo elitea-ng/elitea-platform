@@ -584,9 +584,131 @@ async fn image_calls_draw_one_unit_each_from_the_claims_toolkit_budget() {
         "no gateway call once the budget is spent"
     );
     assert!(
-        refused
-            .to_string()
-            .contains("used up its model calls for tools"),
+        refused.to_string().contains("used up its tool model calls"),
         "{refused}"
+    );
+}
+
+/// A provider that answers every completion with "ok" and counts them.
+struct CountingModel(std::sync::atomic::AtomicUsize);
+
+#[async_trait]
+impl adk_rust::Llm for CountingModel {
+    fn name(&self) -> &'static str {
+        "fixture-model"
+    }
+
+    async fn generate_content(
+        &self,
+        _: adk_rust::LlmRequest,
+        _: bool,
+    ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let frames = vec![
+            Ok(adk_rust::LlmResponse {
+                content: Some(adk_rust::Content::new("model").with_text("ok")),
+                partial: true,
+                ..Default::default()
+            }),
+            Ok(adk_rust::LlmResponse {
+                finish_reason: Some(adk_rust::FinishReason::Stop),
+                turn_complete: true,
+                ..Default::default()
+            }),
+        ];
+        Ok(Box::pin(adk_rust::futures::stream::iter(frames)))
+    }
+}
+
+/// #1292 round 2 item 3: the claim's ONE toolkit budget is shared ACROSS
+/// components: a step-back completion, an Office prompt and an image call in
+/// one run all draw on it and all stop at its cap. The binders bind nothing
+/// until a call is made.
+#[tokio::test]
+async fn stepback_office_and_images_stop_at_the_one_shared_cap() {
+    use super::model_text::ModelCallBudget;
+    use crate::indexing::tools::StepbackBinding;
+    use elitea_agent_runtime::toolkits::{ImageGenerateRequest, OfficeFailure, OfficeModelRequest};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let budget = ModelCallBudget::new(3);
+    let provider = Arc::new(CountingModel(AtomicUsize::new(0)));
+    let binds = Arc::new(AtomicUsize::new(0));
+    let model = |budget: &ModelCallBudget| {
+        let (provider, binds, budget) = (Arc::clone(&provider), Arc::clone(&binds), budget.clone());
+        LazyStepbackModel::new(Box::new(move || {
+            binds.fetch_add(1, Ordering::SeqCst);
+            Ok(StepbackBinding {
+                model: Arc::clone(&provider) as Arc<dyn adk_rust::Llm>,
+                model_name: "fixture-model".to_owned(),
+                config: adk_rust::GenerateContentConfig::default(),
+                budget: Some(budget.clone()),
+            })
+        }))
+    };
+    // As `materialize_runtime` builds them: the index authority's step-back
+    // model and the Office host's model, from the SAME budget.
+    let stepback = model(&budget);
+    let gateway = Gateway::new();
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        ObjectApi::new() as Arc<dyn Transport>,
+    ));
+    let images = ImagesClient::with_transport(
+        Arc::clone(&gateway) as Arc<dyn ModelGatewayTransport>,
+        Duration::from_secs(5),
+    );
+    let host = ClaimOfficeHost::new(runtime, "pat-token", "42", model(&budget))
+        .expect("host")
+        .with_images(
+            images,
+            Arc::new(ClaimScopedEliteaContext::fixture(42, "pat-token")),
+        )
+        .with_budget(budget.clone());
+    assert_eq!(binds.load(Ordering::SeqCst), 0, "nothing bound at assembly");
+
+    let ask = || async {
+        let binding = stepback.bind().expect("bound");
+        crate::indexing::tools::generate_text(
+            &binding,
+            vec![adk_rust::Part::Text {
+                text: "step back".to_owned(),
+            }],
+        )
+        .await
+    };
+    let image = || ImageGenerateRequest {
+        model: "img".to_owned(),
+        prompt: "a red square".to_owned(),
+        size: None,
+        count: 1,
+    };
+    ask().await.expect("step-back reply");
+    host.complete(OfficeModelRequest {
+        prompt: "fill".to_owned(),
+        ..OfficeModelRequest::default()
+    })
+    .await
+    .expect("office reply");
+    host.generate_images(image()).await.expect("image");
+    // The cap (3) is reached: each component is refused now.
+    let refused = host.generate_images(image()).await.expect_err("spent");
+    assert!(refused.is_toolkit_budget());
+    let refused = host
+        .complete(OfficeModelRequest::default())
+        .await
+        .expect_err("spent");
+    assert_eq!(refused.kind(), OfficeFailure::BudgetRefused);
+    assert!(refused.is_toolkit_budget());
+    let refused = ask().await.expect_err("spent");
+    assert_eq!(
+        refused.code,
+        super::model_text::TOOLKIT_BUDGET_EXHAUSTED_CODE
+    );
+    assert_eq!(provider.0.load(Ordering::SeqCst), 2, "two completions sent");
+    assert_eq!(
+        gateway.seen.lock().expect("seen").len(),
+        1,
+        "one image sent"
     );
 }

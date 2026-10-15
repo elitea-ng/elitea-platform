@@ -15,6 +15,8 @@ mod direct_request;
 mod direct_runtime;
 
 pub(crate) use direct_request::{DirectToolkitRequest, DirectToolkitRequestErrorCode};
+#[cfg(test)]
+pub(crate) use direct_runtime::test_error;
 pub(crate) use direct_runtime::{
     DirectToolkitRuntime, DirectToolkitRuntimeError, DirectToolkitRuntimeErrorCode,
 };

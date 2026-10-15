@@ -13,7 +13,8 @@
  */
 import type { ChatMessage } from './convertMessagesToChatHistory.types';
 
-type SkippedCapabilityKind = 'toolkit' | 'internal_tool' | 'application';
+/** `tool` is one tool of a built toolkit, named `<toolkit>.<tool>`. */
+type SkippedCapabilityKind = 'toolkit' | 'tool' | 'internal_tool' | 'application';
 
 export interface SkippedCapability {
   readonly kind: SkippedCapabilityKind;
@@ -24,7 +25,7 @@ export interface SkippedCapability {
 }
 
 const MAX_ENTRIES = 32;
-const KINDS: readonly string[] = ['toolkit', 'internal_tool', 'application'];
+const KINDS: readonly string[] = ['toolkit', 'tool', 'internal_tool', 'application'];
 
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' && value.length <= 512 ? value : undefined;

@@ -92,7 +92,7 @@ use crate::transport::embeddings_facade::EmbeddingsClient;
 use crate::transport::model_facade::{
     ModelAdapterKind, ModelFacade, ModelFacadeError, ModelInvocation,
 };
-use crate::transport::model_text::{AdmittedChat, TextFailure, stream_text};
+use crate::transport::model_text::{AdmittedChat, ReplyText, TextFailure, stream_reply};
 use crate::transport::openai_compatible_facade::MAX_INLINE_IMAGE_BYTES;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
@@ -820,6 +820,9 @@ struct CallSpec<'a> {
     /// project's or the budget's are the image's alone, and an unbindable
     /// model is `no_model`, never a failed run.
     image: bool,
+    /// How the reply's text is handed to `read`: the proposal chunker takes
+    /// it RAW and applies its own reasoning rule (#1292 round 4).
+    text: ReplyText,
 }
 
 /// What a model replied: its text, and whether `max_tokens` cut it off.
@@ -865,13 +868,14 @@ async fn call<T>(
                     CallFailure::Fatal(format!("model_facade.{error:?}"))
                 }
             })?;
-        let failure = match complete(&chat, model_name, (spec.content)(), spec.image).await {
-            Ok(reply) => match read(reply) {
-                Ok(value) => return Ok(value),
+        let failure =
+            match complete(&chat, model_name, (spec.content)(), spec.image, spec.text).await {
+                Ok(reply) => match read(reply) {
+                    Ok(value) => return Ok(value),
+                    Err(failure) => failure,
+                },
                 Err(failure) => failure,
-            },
-            Err(failure) => failure,
-        };
+            };
         match failure {
             CallFailure::Retryable(_) if attempt < CHAT_ATTEMPTS => {
                 gate.check(false)?;
@@ -914,6 +918,7 @@ async fn vision_call(
         system: "",
         content: &content,
         image: true,
+        text: ReplyText::Answer,
     };
     call(
         binder,
@@ -1062,6 +1067,7 @@ async fn chat_window(
         system: &system,
         content: &content,
         image: false,
+        text: ReplyText::Raw,
     };
     call(
         binder,
@@ -1088,14 +1094,15 @@ async fn chat_window(
 }
 
 /// One chat call through the shared admitted-request helper
-/// ([`stream_text`]): streaming, with the config the bound model admits.
+/// ([`stream_reply`]): streaming, with the config the bound model admits.
 async fn complete(
     chat: &AdmittedChat,
     model_name: &str,
     user: Content,
     image: bool,
+    text: ReplyText,
 ) -> Result<Reply, CallFailure> {
-    match stream_text(chat, model_name, user, MAX_REPLY_BYTES).await {
+    match stream_reply(chat, model_name, user, MAX_REPLY_BYTES, text).await {
         Ok(reply) => Ok(Reply {
             text: reply.text,
             truncated: reply.length_cut,

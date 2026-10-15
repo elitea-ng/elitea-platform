@@ -655,9 +655,9 @@ fn map_runtime_context_error(error: &RuntimeContextError) -> ProductionBootstrap
 
 fn map_model_error(error: ModelFacadeError) -> ProductionBootstrapError {
     match error {
-        ModelFacadeError::InvalidConfiguration | ModelFacadeError::InvalidInvocation => {
-            ProductionBootstrapError::InvalidConfiguration
-        }
+        ModelFacadeError::InvalidConfiguration
+        | ModelFacadeError::InvalidInvocation
+        | ModelFacadeError::InvalidClaimContext => ProductionBootstrapError::InvalidConfiguration,
         ModelFacadeError::ResourceExhausted => ProductionBootstrapError::ResourceExhausted,
         ModelFacadeError::DependencyUnavailable => ProductionBootstrapError::DependencyUnavailable,
     }
