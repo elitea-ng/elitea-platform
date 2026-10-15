@@ -4861,19 +4861,5 @@
   "pages.pipelines.createPipeline.admissionNode": "Node",
   "pages.pipelines.createPipeline.admissionTitle": "This pipeline cannot be saved",
   "pages.pipelines.createPipeline.admissionUnparseable": "The YAML does not parse, so the runtime cannot read a graph out of it.",
-  "features.pipelines.editorPanel.serializationError": "This change could not be written as pipeline YAML, so the stored YAML was kept: {{reason}}",
-  "pages.chat.cloud.badge": "Cloud executor",
-  "pages.chat.cloud.badgeReturning": "Returning to desktop",
-  "pages.chat.cloud.body": "This thread works on a copy of your desktop folder in the cloud. Take it back to continue on your desktop.",
-  "pages.chat.cloud.erase": "Erase cloud copy",
-  "pages.chat.cloud.eraseBody": "The files in the cloud, and the changes the cloud made to them, are deleted, and a turn that is running is stopped. The thread goes back to the desktop it came from.",
-  "pages.chat.cloud.eraseFailed": "The cloud copy could not be erased. Try again.",
-  "pages.chat.cloud.eraseTitle": "Erase the cloud copy?",
-  "pages.chat.cloud.erased": "The cloud copy was erased",
-  "pages.chat.cloud.keep": "Keep it",
-  "pages.chat.cloud.reclaimPending": "Take back requested: it starts when the running cloud turn ends.",
-  "pages.chat.cloud.requestFailed": "The request could not be sent. Try again.",
-  "pages.chat.cloud.returningBody": "This thread is being taken back to the desktop it came from. You can read it here; to continue, use the desktop app.",
-  "pages.chat.cloud.sentToDesktop": "Sent to your desktop",
-  "pages.chat.cloud.takeBack": "Take back"
+  "features.pipelines.editorPanel.serializationError": "This change could not be written as pipeline YAML, so the stored YAML was kept: {{reason}}"
 }

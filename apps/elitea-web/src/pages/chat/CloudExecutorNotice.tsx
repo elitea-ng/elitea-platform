@@ -31,8 +31,15 @@ import Typography from '@mui/material/Typography';
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
 import { eraseWorkspaceHandoff, getWorkspaceHandoff, requestWorkspaceReclaim } from '@/shared/api/workspaceHandoffApi';
-import { t } from '@/shared/i18n';
+import { i18n, t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
+
+import cloudCatalogue from './i18n/en.chatCloud.json';
+
+// The notice's strings ride with this (lazy) chat chunk, not the web app's
+// initial catalogue: only a handed-off Local work thread renders them. Deep
+// merge, no overwrite (scripts/i18n-backfill.mjs, ROUTE_CATALOGUES).
+i18n.addResourceBundle('en', 'translation', cloudCatalogue, true, false);
 
 export interface CloudExecutorNoticeProps {
   readonly projectId: string;
