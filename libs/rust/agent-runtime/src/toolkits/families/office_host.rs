@@ -73,6 +73,12 @@ pub enum OfficeFailure {
     BudgetRefused,
     /// The run binds no chat model (a pipeline node).
     NoModel,
+    /// The run has a chat model, but it cannot be bound for this tool's call
+    /// (its configuration or invocation is not usable here).
+    ModelUnusable,
+    /// The run's own context (its credential, execution or project) cannot
+    /// carry a model call; retrying the turn mints a fresh one.
+    ContextUnusable,
     /// The model gateway is rate-limiting the call; trying again shortly may work.
     RateLimited,
     /// The model call timed out; trying again may work.
@@ -80,6 +86,13 @@ pub enum OfficeFailure {
     /// The model answered, but its reply could not be used. The call may have
     /// been billed.
     ReplyUnusable,
+    /// The model's reply was cut at its length limit, or the model spent the
+    /// whole limit reasoning and never answered: raising `max_tokens` helps.
+    ReplyCutOff,
+    /// The model declined to reply (its safety filter ended the reply).
+    ReplyDeclined,
+    /// The model answered with no usable text at all.
+    ReplyEmpty,
     /// The model's answer was larger than the platform accepts.
     ReplyTooLarge,
     /// The model gateway reported a conflict; trying again may work.
@@ -117,11 +130,12 @@ pub struct OfficeHostError {
 }
 
 /// The reason code of a [`OfficeFailure::BudgetRefused`] that is the CLAIM's
-/// toolkit completion cap (`toolkit_model_call_cap`), not the gateway's
+/// toolkit completion cap (Helm `worker.runtime.toolkitModelCallCap`, runtime
+/// config `toolkit_model_call_cap`), not the gateway's
 /// budget: its own sentence ([`TOOLKIT_BUDGET_SENTENCE`]).
 pub const TOOLKIT_BUDGET_REASON: &str = "office_host.toolkit_budget_exhausted";
 /// What the model is told when the claim's toolkit completion cap is spent.
-pub const TOOLKIT_BUDGET_SENTENCE: &str = "this run used up its model calls for tools; start a new run or ask an operator to raise toolkit_model_call_cap";
+pub const TOOLKIT_BUDGET_SENTENCE: &str = "this run used up its tool model calls; start a new run or ask an operator to raise worker.runtime.toolkitModelCallCap";
 
 impl OfficeHostError {
     #[must_use]

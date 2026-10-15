@@ -1626,3 +1626,14 @@ pub(in crate::toolkits) fn test_build_with_writer(
 pub(in crate::toolkits) fn test_served_names() -> Vec<String> {
     served_names()
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    READ_NAMES
+        .iter()
+        .copied()
+        .chain(WriteKind::ALL.iter().map(|kind| kind.name()))
+        .map(|name| (name, false))
+        .collect()
+}

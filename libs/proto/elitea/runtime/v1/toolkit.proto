@@ -133,8 +133,18 @@ message ToolkitCallToolArtifactReferenceV1 {
 // ToolkitCallToolStatusV1 is the closed outcome set of one tool run. A tool
 // that raised is a completed run with a TOOL_ERROR status, not a runtime
 // failure: the caller asked whether the tool works, and "it raised" is the
-// answer. UNSUPPORTED_TOOLKIT and UNKNOWN_TOOL are refusals the worker makes
-// before any provider work happens.
+// answer. UNSUPPORTED_TOOLKIT, UNKNOWN_TOOL and the three *_REFUSED statuses
+// are refusals the worker makes before any provider work happens.
+//
+// EFFECT_REFUSED: the tool changes data and this path runs read-only tools
+// only. POLICY_REFUSED: the deployment's tool policy blocks the tool.
+// SENSITIVE_REFUSED: the policy marks the tool sensitive and this path cannot
+// ask for the confirmation it needs. All three are verdicts on the TOOL,
+// distinct from the run's own credentials or context being refused (a
+// RUNTIME_ERROR AUTHORIZATION_FAILED) and from the toolkit having no tool by
+// that name (UNKNOWN_TOOL). A worker sends them only when the claim receipt
+// advertises toolkit_typed_refusals; otherwise (an older Main) it sends
+// UNKNOWN_TOOL with a fixed sentence, which readers keep as a fallback.
 enum ToolkitCallToolStatusV1 {
   TOOLKIT_CALL_TOOL_STATUS_V1_UNSPECIFIED = 0;
   TOOLKIT_CALL_TOOL_STATUS_V1_OK = 1;
@@ -142,6 +152,9 @@ enum ToolkitCallToolStatusV1 {
   TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT = 3;
   TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL = 4;
   TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED = 5;
+  TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED = 6;
+  TOOLKIT_CALL_TOOL_STATUS_V1_POLICY_REFUSED = 7;
+  TOOLKIT_CALL_TOOL_STATUS_V1_SENSITIVE_REFUSED = 8;
 }
 
 // ToolkitCallToolSummaryV1 is the bounded typed inline form of one tool result,

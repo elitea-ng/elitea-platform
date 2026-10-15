@@ -144,6 +144,14 @@ pub fn parse_chunk_analysis(reply: &str) -> Result<Vec<ChunkDetails>, AnalysisEr
 
 /// `text` without its `<think>…</think>` blocks (an unclosed one runs to the
 /// end).
+///
+/// This is deliberately NOT the worker's answer rule
+/// (`elitea_llm_wire::reasoning`): the reply here is hunted for a JSON
+/// object, so a block ANYWHERE is removed and a trailing unclosed one cuts
+/// the rest (a draft object inside reasoning must never be chosen), while a
+/// bare `</think>` is kept literal (a proposition may quote it). The worker
+/// hands this the RAW reply, so no second rule runs before it (owner
+/// decision, #1292 round 4).
 fn strip_think_blocks(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -159,14 +167,39 @@ fn strip_think_blocks(text: &str) -> String {
     out
 }
 
+/// How many times [`balanced_objects`] restarts after an opening brace that
+/// is never closed. Each restart is one linear pass, so a long reply costs at
+/// most `MAX_RESYNCS + 1` passes, never a quadratic scan.
+const MAX_RESYNCS: usize = 8;
+
 /// The top-level balanced `{…}` slices of `text`, in order. Braces inside a
 /// JSON string (and escaped quotes in it) do not count.
+///
+/// An opening brace that is never closed (a Qwen3 reply's reasoning before a
+/// bare `</think>` writes `{chunks: [...]` and moves on) would swallow the
+/// answer after it, so when a pass ends inside an object the scan RESYNCS
+/// from the byte after that unmatched brace (at most [`MAX_RESYNCS`] times).
+/// The bare `</think>` itself stays literal text (#1292 review 5).
 fn balanced_objects(text: &str) -> Vec<&str> {
     let mut out = Vec::new();
+    let mut from = 0_usize;
+    for _ in 0..=MAX_RESYNCS {
+        match scan_objects(text, from, &mut out) {
+            Some(unmatched) => from = unmatched + 1,
+            None => break,
+        }
+    }
+    out
+}
+
+/// One pass of [`balanced_objects`] from byte `from`: pushes every balanced
+/// object, and returns where the object still open at the end began.
+fn scan_objects<'a>(text: &'a str, from: usize, out: &mut Vec<&'a str>) -> Option<usize> {
     let mut depth = 0_usize;
-    let mut start = 0_usize;
+    let mut start = from;
     let (mut in_string, mut escaped) = (false, false);
-    for (at, c) in text.char_indices() {
+    for (offset, c) in text[from..].char_indices() {
+        let at = from + offset;
         if in_string {
             match c {
                 _ if escaped => escaped = false,
@@ -193,7 +226,7 @@ fn balanced_objects(text: &str) -> Vec<&str> {
             _ => {}
         }
     }
-    out
+    (depth > 0).then_some(start)
 }
 
 /// The chunks of one window: per entry a `title`, a `summary`, a
@@ -288,6 +321,76 @@ mod tests {
         assert_eq!(
             parse_chunk_analysis("<think>{\"chunks\":[]} never closed"),
             Err(AnalysisError::Unreadable)
+        );
+    }
+
+    /// #1292 round 4: a proposition quoting a bare `</think>` survives, and a
+    /// draft object inside a trailing (unclosed or closed) `<think>` block is
+    /// never the one chosen.
+    #[test]
+    fn a_quoted_closing_tag_survives_and_a_trailing_draft_is_not_chosen() {
+        let quoting = r#"{"chunks":[{"chunk_title":"Tags","chunk_summary":"S","propositions":["The model closes reasoning with </think>."]}]}"#;
+        let parsed = parse_chunk_analysis(quoting).unwrap();
+        assert_eq!(
+            parsed[0].propositions,
+            ["The model closes reasoning with </think>."]
+        );
+        let answer = r#"{"chunks":[{"chunk_title":"T","chunk_summary":"S","propositions":["a"]}]}"#;
+        let draft = r#"{"chunks":[{"chunk_title":"draft","chunk_summary":"s","propositions":[]}]}"#;
+        for reply in [
+            format!("{answer}\n<think>maybe instead {draft}"),
+            format!("{answer}\n<think>maybe instead {draft}</think>"),
+        ] {
+            assert_eq!(
+                parse_chunk_analysis(&reply).unwrap()[0].chunk_title,
+                "T",
+                "{reply}"
+            );
+        }
+    }
+
+    /// #1292 review 5: the exact Qwen3 reply shape (no reasoning parser): the
+    /// reasoning opens `{chunks: [...]` and never closes it, then a bare
+    /// `</think>` and the answer. The scan resyncs after the unmatched brace,
+    /// and the bare tag stays literal.
+    #[test]
+    fn a_qwen_reply_with_an_unclosed_brace_before_a_bare_close_yields_the_answer() {
+        let answer = r#"{"chunks":[{"chunk_title":"T","chunk_summary":"S","propositions":["a"]}]}"#;
+        let reply =
+            format!("Okay … The format is {{chunks: [...]. Let me write it.\n</think>\n\n{answer}");
+        assert_eq!(parse_chunk_analysis(&reply).unwrap()[0].chunk_title, "T");
+        // The bare closing tag is literal (a proposition may quote it).
+        assert!(strip_think_blocks(&reply).contains("</think>"));
+    }
+
+    /// The equivalent of the deleted `a_qwen_bare_closing_tag_hides_the_
+    /// reasoning_draft`: a BALANCED draft in the reasoning before a bare
+    /// `</think>` is not the one taken; the last readable object, the
+    /// answer, is.
+    #[test]
+    fn a_balanced_draft_before_a_bare_close_is_not_taken() {
+        let reply = r#"Draft: {"chunks":[{"chunk_title":"draft","chunk_summary":"s","propositions":[]}]}</think>
+
+{"chunks":[{"chunk_title":"T","chunk_summary":"S","propositions":["a"]}]}"#;
+        assert_eq!(parse_chunk_analysis(reply).unwrap()[0].chunk_title, "T");
+    }
+
+    /// The resync is bounded: a reply of many unclosed braces is scanned a
+    /// bounded number of times and still finds an answer that follows them.
+    #[test]
+    fn the_resync_is_bounded() {
+        let answer = r#"{"chunks":[{"chunk_title":"T","chunk_summary":"S","propositions":[]}]}"#;
+        let many = "{ ".repeat(100_000);
+        // Past the resync cap, the trailing answer is swallowed by the first
+        // unmatched brace still open: Unreadable, quickly, not quadratic.
+        let started = std::time::Instant::now();
+        assert!(parse_chunk_analysis(&format!("{many}{answer}")).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        // Within the cap it is found.
+        let few = "{ ".repeat(MAX_RESYNCS);
+        assert_eq!(
+            parse_chunk_analysis(&format!("{few}{answer}")).unwrap()[0].chunk_title,
+            "T"
         );
     }
 

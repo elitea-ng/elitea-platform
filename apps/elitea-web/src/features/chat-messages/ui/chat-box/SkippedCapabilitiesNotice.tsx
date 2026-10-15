@@ -6,6 +6,7 @@ import type { SkippedCapabilities, SkippedCapability } from '../../lib/skippedCa
 
 function label(item: SkippedCapability): string {
   if (item.kind === 'internal_tool') return t('features.chatMessages.skippedCapabilities.internalTool', 'Built-in capability {{name}}', { name: item.name });
+  if (item.kind === 'tool') return t('features.chatMessages.skippedCapabilities.tool', 'Tool {{name}}', { name: item.name });
   if (item.kind === 'application') return t('features.chatMessages.skippedCapabilities.application', 'Attached agent {{name}}', { name: item.name });
   return item.type
     ? t('features.chatMessages.skippedCapabilities.toolkitTyped', 'Toolkit {{name}} ({{type}})', { name: item.name, type: item.type })

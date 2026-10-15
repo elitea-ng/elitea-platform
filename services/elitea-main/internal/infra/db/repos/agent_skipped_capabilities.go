@@ -15,6 +15,10 @@ import (
 // The list is display data, not authority: it is rebuilt into a closed shape
 // (kind, name, optional type, reason_code, reason) with bounded strings, and
 // anything malformed is dropped rather than failing the answer it rides on.
+//
+// Kinds: `toolkit` (a whole toolkit), `tool` (one tool of a built toolkit,
+// named `<toolkit>.<tool>`, its type the toolkit's), `internal_tool` and
+// `application`.
 
 const (
 	maxSkippedCapabilities = 32
@@ -42,7 +46,7 @@ func cleanSkippedCapabilityText(value string) bool {
 
 func (entry skippedCapability) valid() bool {
 	switch entry.Kind {
-	case "toolkit", "internal_tool", "application":
+	case "toolkit", "tool", "internal_tool", "application":
 	default:
 		return false
 	}

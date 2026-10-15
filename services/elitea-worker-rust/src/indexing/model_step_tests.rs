@@ -1250,3 +1250,90 @@ async fn an_unchanged_document_never_calls_the_model_and_a_changed_one_replaces_
     assert_eq!(kept[0].chunk_count, 4);
     assert_eq!(harness.fake.point_count(), 4, "the old points are gone");
 }
+
+/// #1292 round 4 (A): the proposal path hands the RAW reply to the chunker's
+/// own reasoning rule, which runs once. A proposition quoting a bare
+/// `</think>` is stored as written, and a draft object inside a trailing
+/// `<think>` block is not the one chosen.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_proposal_path_applies_the_chunkers_rule_once_on_the_raw_reply() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(|_, _| {
+        let answer = analysis(&[(
+            "Tags",
+            "About tags.",
+            &["Reasoning ends with </think> in raw output."],
+        )]);
+        let draft = analysis(&[("Draft", "A draft.", &["not this"])]);
+        Reply::Text(format!("{answer}\n<think>or maybe {draft}"))
+    });
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        vec![document("guide.md", "v1", GUIDE)],
+        None,
+        &proposal(),
+        Some("gpt-test"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{summary:?}"
+    );
+    assert_eq!(summary.indexed_chunks, 4, "one entry, four chunks");
+    let Harness {
+        runtime,
+        token,
+        _server,
+        ..
+    } = harness;
+    let runtime = Arc::new(runtime);
+    let host = search_host(&runtime, &token);
+    let found = search(
+        &host,
+        json!({"query": "tags", "index_name": "docs", "cut_off": 0,
+               "filter": {"chunk_type": "propositions"},
+               "output_fields": ["page_content"]}),
+    )
+    .await;
+    let hits = found.as_array().unwrap_or_else(|| panic!("{found}"));
+    assert_eq!(hits.len(), 1, "{found}");
+    assert_eq!(
+        hits[0]["page_content"],
+        "Reasoning ends with </think> in raw output."
+    );
+}
+
+/// #1292 review 5: a Qwen3 reply with no reasoning parser, whose reasoning
+/// opens a brace it never closes before the bare `</think>`, still yields the
+/// trailing answer on the proposal path (it regressed against main when the
+/// double strip was removed).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_qwen_bare_close_reply_with_an_unclosed_brace_indexes_the_answer() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(|_, _| {
+        let answer = analysis(&[("Food", "About food.", &["Greg likes pizza."])]);
+        Reply::Text(format!(
+            "Okay … The format is {{chunks: [...]. Let me write it.\n</think>\n\n{answer}"
+        ))
+    });
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        vec![document("guide.md", "v1", GUIDE)],
+        None,
+        &proposal(),
+        Some("gpt-test"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{summary:?}"
+    );
+    assert_eq!(summary.indexed_chunks, 4, "one entry, four chunks");
+    assert_eq!(chat.calls(), 1, "read on the first attempt");
+}

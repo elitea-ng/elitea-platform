@@ -77,7 +77,11 @@ impl ModelCallBudget {
 /// budget is spent. Callers classify on it, never on a message.
 pub(crate) const TOOLKIT_BUDGET_EXHAUSTED_CODE: &str = "model.toolkit_budget_exhausted";
 /// The sentence of that refusal: what the user can do about it.
-pub(crate) const TOOLKIT_BUDGET_EXHAUSTED: &str = "this run used up its model calls for tools; start a new run or ask an operator to raise toolkit_model_call_cap";
+/// Helm `worker.runtime.toolkitModelCallCap` (runtime config
+/// `toolkit_model_call_cap`). The same sentence as the toolkits' own
+/// `TOOLKIT_BUDGET_SENTENCE`.
+pub(crate) const TOOLKIT_BUDGET_EXHAUSTED: &str =
+    elitea_agent_runtime::toolkits::TOOLKIT_BUDGET_SENTENCE;
 
 /// The typed error of a call the claim's toolkit budget refused: rate
 /// limited in kind (a new run has a fresh budget), never retried within the
@@ -93,31 +97,29 @@ pub(crate) fn toolkit_budget_exhausted() -> AdkError {
     .with_retry(RetryHint::default())
 }
 
-/// Whether the facade raised `error` BEFORE the request was sent: its own
-/// admission (the request shape, its size, its encoding, the binding's turn
-/// limit, a reused single-use binding, the context budget). Such a call
-/// reached no gateway and is not
-/// charged to the budget. Everything else (a gateway refusal, a 429, a 5xx,
-/// a lost connection) may have reached it and counts.
+/// The metadata key a facade sets on an error raised BEFORE any byte of the
+/// request left the worker (its own admission: the request shape, its size,
+/// its encoding, the binding's turn limit). Both facades set it through
+/// [`not_sent`]; [`was_not_sent`] reads it. No list of codes is kept to drift
+/// (#1292 round 3).
+const NOT_SENT_KEY: &str = "elitea.not_sent";
+
+/// `error`, marked as raised before the request was sent.
+pub(crate) fn not_sent(mut error: AdkError) -> AdkError {
+    error
+        .details
+        .metadata
+        .insert(NOT_SENT_KEY.to_owned(), serde_json::Value::Bool(true));
+    error
+}
+
+/// Whether a facade marked `error` as raised before the request was sent:
+/// such a call reached no gateway and is not charged to the budget.
+/// Everything else (a gateway refusal, a 429, a 5xx, a lost connection, a
+/// reply that came back too large) may have reached it and counts.
 #[must_use]
-pub(crate) fn raised_before_send(error: &AdkError) -> bool {
-    matches!(
-        error.code,
-        "model_gateway.invalid_request"
-            | "model_gateway.request_too_large"
-            | "model_gateway.request_encoding"
-            | "model_gateway.turn_limit"
-            | "model_gateway.completion_reused"
-            | "model_gateway.completion_state"
-            | "anthropic_gateway.invalid_request"
-            | "anthropic_gateway.request_too_large"
-            | "anthropic_gateway.sampling_unsupported"
-            | "anthropic_gateway.turn_limit"
-            | "anthropic_gateway.completion_reused"
-            | "anthropic_gateway.completion_state"
-            | "context_budget_exceeded"
-            | "model_request_bytes_exceeded"
-    )
+pub(crate) fn was_not_sent(error: &AdkError) -> bool {
+    error.details.metadata.get(NOT_SENT_KEY) == Some(&serde_json::Value::Bool(true))
 }
 
 /// A chat model bound for one call, with the generation config its facade
@@ -171,6 +173,33 @@ pub(crate) async fn stream_text(
     user: Content,
     max_reply_bytes: usize,
 ) -> Result<TextReply, TextFailure> {
+    stream_reply(chat, model_name, user, max_reply_bytes, ReplyText::Answer).await
+}
+
+/// How [`stream_reply`] hands back the reply's text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReplyText {
+    /// An answer: reasoning written into it is removed by the worker's rule
+    /// ([`strip_reasoning`]).
+    Answer,
+    /// The raw text, for a caller with its own reasoning rule (the proposal
+    /// chunker's `parse_chunk_analysis`): one rule runs, never two (#1292
+    /// round 4). `reasoning_only` is then always false.
+    Raw,
+}
+
+/// [`stream_text`] with the reply's text handled as `mode` says.
+///
+/// # Errors
+///
+/// [`TextFailure`].
+pub(crate) async fn stream_reply(
+    chat: &AdmittedChat,
+    model_name: &str,
+    user: Content,
+    max_reply_bytes: usize,
+    mode: ReplyText,
+) -> Result<TextReply, TextFailure> {
     if let Some(budget) = &chat.budget
         && !budget.try_take()
     {
@@ -191,7 +220,7 @@ pub(crate) async fn stream_text(
         Ok(responses) => responses,
         Err(error) => {
             if let Some(budget) = &chat.budget
-                && raised_before_send(&error)
+                && was_not_sent(&error)
             {
                 budget.refund();
             }
@@ -228,148 +257,47 @@ pub(crate) async fn stream_text(
         ended = Some(length_cut);
     }
     let length_cut = ended.ok_or(TextFailure::NoReply)?;
+    if mode == ReplyText::Raw {
+        return Ok(TextReply {
+            text: raw,
+            length_cut,
+            reasoning_only: false,
+        });
+    }
     let stripped = strip_reasoning(&raw);
     // Nothing but reasoning: a block that was never closed, a reply that was
     // entirely a closed block, or a reply cut off with nothing in it.
     let reasoning_only =
         stripped.text.trim().is_empty() && (length_cut || stripped.unclosed || stripped.removed);
     Ok(TextReply {
-        text: stripped.text,
+        text: stripped.text.into_owned(),
         length_cut,
         reasoning_only,
     })
 }
 
-/// A reply with its reasoning removed.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Stripped {
-    pub(crate) text: String,
-    /// The reply began a `<think>` block and never closed it.
-    pub(crate) unclosed: bool,
-    /// Reasoning was removed: a closed leading block, or the text before a
-    /// bare closing tag.
-    pub(crate) removed: bool,
-}
-
-const OPEN: &str = "<think>";
-const CLOSE: &str = "</think>";
-
-/// `text` without the reasoning a model wrote into it.
-///
-/// * A reply that STARTS (after whitespace) with `<think>`: each leading
-///   `<think>…</think>` block is removed with the whitespace directly after
-///   it, one block after another; a leading `<think>` never closed is all
-///   reasoning (the result is empty and `unclosed` is set).
-/// * A reply with a `</think>` and NO `<think>` before it: everything up to
-///   and including that first `</think>` is reasoning, removed with the
-///   whitespace after it. This is Qwen3 on vLLM without a reasoning parser,
-///   which emits only the closing tag (`Let me look…</think>\n\nA red
-///   square.`).
-/// * Anything else is literal and untouched: a `<think>` that is not
-///   leading (with or without a later `</think>`) stays as it is.
-///
-/// Accepted edge case: an ordinary answer that literally mentions a bare
-/// `</think>` with no `<think>` before it loses the text before the tag.
-/// The visible text is not trimmed at its end.
-#[must_use]
-pub(crate) fn strip_reasoning(text: &str) -> Stripped {
-    let mut rest = text.trim_start();
-    if !rest.starts_with(OPEN) {
-        let close = text.find(CLOSE);
-        let open = text.find(OPEN);
-        return match close {
-            Some(close) if open.is_none_or(|open| open > close) => Stripped {
-                text: text[close + CLOSE.len()..].trim_start().to_owned(),
-                unclosed: false,
-                removed: true,
-            },
-            _ => Stripped {
-                text: text.to_owned(),
-                unclosed: false,
-                removed: false,
-            },
-        };
-    }
-    while let Some(after_open) = rest.strip_prefix(OPEN) {
-        let Some(end) = after_open.find(CLOSE) else {
-            return Stripped {
-                text: String::new(),
-                unclosed: true,
-                removed: false,
-            };
-        };
-        rest = after_open[end + CLOSE.len()..].trim_start();
-    }
-    Stripped {
-        text: rest.to_owned(),
-        unclosed: false,
-        removed: true,
-    }
-}
+/// The worker's reasoning-strip rule for ANSWER text
+/// (`elitea_llm_wire::reasoning`). The engines' model client and the
+/// proposal chunker keep their own rules (see that module for why).
+pub(crate) use elitea_llm_wire::reasoning::strip_reasoning;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn text(raw: &str) -> String {
-        strip_reasoning(raw).text
-    }
-
+    /// The rule itself is tested where it lives (`elitea_llm_wire::reasoning`);
+    /// this pins that the worker uses it, Qwen's bare closing tag included.
     #[test]
-    fn a_leading_block_and_the_whitespace_after_it_are_removed() {
-        assert_eq!(text("<think>a</think>\nB"), "B");
-        assert_eq!(text("  \n<think>a</think><think>b</think>  C "), "C ");
-    }
-
-    #[test]
-    fn the_visible_text_is_not_trimmed() {
-        assert_eq!(text("<think>a</think>\n  code\n"), "code\n");
-        assert_eq!(text("  indented\n"), "  indented\n");
-        assert_eq!(text("line\n"), "line\n");
-    }
-
-    #[test]
-    fn a_closing_tag_without_an_opening_one_ends_the_reasoning() {
-        // Owner decision (review round 3): Qwen3 on vLLM without a reasoning
-        // parser emits only the closing tag; what precedes it is reasoning.
+    fn the_worker_uses_the_shared_reasoning_rule() {
         assert_eq!(
-            text("Let me look…</think>\n\nA red square."),
+            strip_reasoning("Let me look…</think>\n\nA red square.").text,
             "A red square."
         );
-        assert_eq!(text("a</think>b"), "b");
-        // Only the FIRST bare closing tag ends it.
-        assert_eq!(text("a</think>b</think>c"), "b</think>c");
-        let only = strip_reasoning("thinking only</think>\n");
-        assert!(only.removed && only.text.is_empty());
-        // Accepted edge case: an answer that mentions a bare closing tag
-        // loses the text before it.
-        assert_eq!(text("Close it with </think> here"), "here");
-        // A `<think>` before the closing tag (not leading) keeps it literal.
-        assert_eq!(text("x <think>a</think> y"), "x <think>a</think> y");
-    }
-
-    #[test]
-    fn an_unclosed_leading_block_is_all_reasoning() {
-        let stripped = strip_reasoning("  <think>Let me think");
-        assert!(stripped.unclosed && stripped.text.is_empty());
-        let after_a_closed_one = strip_reasoning("<think>a</think><think>b");
-        assert!(after_a_closed_one.unclosed && after_a_closed_one.text.is_empty());
-    }
-
-    #[test]
-    fn a_reply_that_is_only_a_closed_block_has_no_text() {
-        let stripped = strip_reasoning("<think>all of it</think>\n");
-        assert!(stripped.removed && stripped.text.is_empty());
-    }
-
-    #[test]
-    fn a_think_tag_elsewhere_is_literal() {
-        let literal = "Use the <think> tag to reason; it ends with </think>.";
-        assert_eq!(text(literal), literal);
-        assert_eq!(text("x <think>a</think> y"), "x <think>a</think> y");
-        assert_eq!(text("kept <think>cut off"), "kept <think>cut off");
-        assert_eq!(text("plain"), "plain");
-        assert_eq!(text(""), "");
+        assert_eq!(strip_reasoning("<think>a</think>\nB").text, "B");
+        assert_eq!(
+            strip_reasoning("x <think>a</think> y").text,
+            "x <think>a</think> y"
+        );
     }
 
     #[test]
@@ -390,7 +318,11 @@ mod tests {
             !error.is_retryable(),
             "a spent budget is not retried in the run"
         );
-        assert!(error.message.contains("toolkit_model_call_cap"));
+        assert!(error.message.contains("worker.runtime.toolkitModelCallCap"));
+        assert!(
+            !error.message.contains("budget"),
+            "not the billing sentence"
+        );
     }
 
     #[test]

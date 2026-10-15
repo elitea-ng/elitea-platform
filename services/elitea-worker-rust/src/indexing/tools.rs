@@ -33,7 +33,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use adk_rust::{
-    AdkError, Content, ErrorCategory, ErrorComponent, GenerateContentConfig, Llm, Part,
+    AdkError, Content, ErrorCategory, ErrorComponent, FinishReason, GenerateContentConfig, Llm,
+    Part,
 };
 use async_trait::async_trait;
 use elitea_agent_runtime::toolkits::{
@@ -142,17 +143,22 @@ impl LazyStepbackModel {
     /// A fresh binding for one call; `None` when there is no binder or
     /// binding failed.
     pub(crate) fn bind(&self) -> Option<StepbackBinding> {
+        self.try_bind().ok()
+    }
+
+    /// A fresh binding for one call, or why there is none: `Err(None)` when
+    /// the run has no model at all, `Err(Some(error))` with the facade's
+    /// own bind error (logged), so a caller can tell a claim-side failure
+    /// from a model the run cannot use (#1292 round 4).
+    pub(crate) fn try_bind(&self) -> Result<StepbackBinding, Option<ModelFacadeError>> {
         match &self.source {
-            StepbackSource::None => None,
+            StepbackSource::None => Err(None),
             #[cfg(test)]
-            StepbackSource::Fixed(binding) => Some(binding.as_ref().clone()),
-            StepbackSource::Binder(binder) => match binder() {
-                Ok(binding) => Some(binding),
-                Err(error) => {
-                    self.log_bind_failure(&error.to_string());
-                    None
-                }
-            },
+            StepbackSource::Fixed(binding) => Ok(binding.as_ref().clone()),
+            StepbackSource::Binder(binder) => binder().map_err(|error| {
+                self.log_bind_failure(&error.to_string());
+                Some(error)
+            }),
         }
     }
 
@@ -510,6 +516,9 @@ pub(crate) mod reply_codes {
     pub(crate) const LENGTH_CUT: &str = "model.reply_length_cut";
     /// The reply is over the size bound.
     pub(crate) const TOO_LARGE: &str = "model.reply_too_large";
+    /// The model declined to answer: its safety (or recitation) filter
+    /// stopped the reply. Not retried unchanged.
+    pub(crate) const DECLINED: &str = "model.reply_declined";
     /// The stream ended without a usable reply (an error frame, another
     /// stop reason, no terminal frame).
     pub(crate) const FAILED: &str = "model.reply_failed";
@@ -572,6 +581,13 @@ pub(crate) async fn generate_text(
             reply_codes::FAILED,
             "the model ended the reply with an error".to_owned(),
         )),
+        Err(TextFailure::Stopped(reason @ (FinishReason::Safety | FinishReason::Recitation))) => {
+            Err(reply_error(
+                ErrorCategory::InvalidInput,
+                reply_codes::DECLINED,
+                format!("the model declined to answer (it stopped for {reason:?})"),
+            ))
+        }
         Err(TextFailure::Stopped(reason)) => Err(reply_error(
             ErrorCategory::Unavailable,
             reply_codes::FAILED,

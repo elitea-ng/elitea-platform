@@ -116,7 +116,10 @@ func (s *Server) toolkitCallToolFrame(
 	expectedOutcome := executionapp.SettlementSucceeded
 	switch result.ResultSummary.Status {
 	case outputapp.ToolkitCallToolStatusUnsupportedToolkit,
-		outputapp.ToolkitCallToolStatusUnknownTool:
+		outputapp.ToolkitCallToolStatusUnknownTool,
+		outputapp.ToolkitCallToolStatusEffectRefused,
+		outputapp.ToolkitCallToolStatusPolicyRefused,
+		outputapp.ToolkitCallToolStatusSensitiveRefused:
 		expectedOutcome = executionapp.SettlementFailed
 	}
 	settlement, encodedSettlement, err := s.settlementProposalDomain(
@@ -220,6 +223,12 @@ func toolkitCallToolSummaryDomain(
 		status = outputapp.ToolkitCallToolStatusUnsupportedToolkit
 	case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL:
 		status = outputapp.ToolkitCallToolStatusUnknownTool
+	case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED:
+		status = outputapp.ToolkitCallToolStatusEffectRefused
+	case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_POLICY_REFUSED:
+		status = outputapp.ToolkitCallToolStatusPolicyRefused
+	case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_SENSITIVE_REFUSED:
+		status = outputapp.ToolkitCallToolStatusSensitiveRefused
 	default:
 		return outputapp.ToolkitCallToolSummary{}, outputapp.ErrInvalidToolkitCallToolOutput
 	}
