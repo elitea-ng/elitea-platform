@@ -1362,7 +1362,7 @@ impl Llm for RefusingModel {
         // A local refusal carries the facade's own "not sent" marker, as the
         // real facades set it; a gateway answer does not.
         Err(if self.1 == adk_rust::ErrorCategory::InvalidInput {
-            crate::transport::openai_compatible_facade::not_sent(error)
+            crate::transport::model_text::not_sent(error)
         } else {
             error
         })

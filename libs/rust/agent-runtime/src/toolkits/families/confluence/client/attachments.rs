@@ -112,6 +112,7 @@ fn attachment_failure(error: AttachmentError) -> ConfluenceClientError {
             OfficeFailure::Unreachable
             | OfficeFailure::NoModel
             | OfficeFailure::ModelUnusable
+            | OfficeFailure::ContextUnusable
             | OfficeFailure::ReplyUnusable
             // A model reply that was cut off, declined or empty is a model
             // failure, not a bad argument (#1292 round 3).

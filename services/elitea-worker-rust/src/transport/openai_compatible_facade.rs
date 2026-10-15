@@ -164,6 +164,10 @@ impl ModelReasoningEffort {
 pub(crate) enum ModelFacadeError {
     InvalidConfiguration,
     InvalidInvocation,
+    /// The CLAIM's context cannot carry a model call (an empty credential,
+    /// an execution id the edge would drop, a project of 0): the run's
+    /// context, not the model, is at fault.
+    InvalidClaimContext,
     ResourceExhausted,
     DependencyUnavailable,
 }
@@ -174,6 +178,7 @@ impl ModelFacadeError {
         match self {
             Self::InvalidConfiguration => "model_gateway.invalid_configuration",
             Self::InvalidInvocation => "model_gateway.invalid_invocation",
+            Self::InvalidClaimContext => "model_gateway.invalid_claim_context",
             Self::ResourceExhausted => "model_gateway.resource_exhausted",
             Self::DependencyUnavailable => "model_gateway.dependency_unavailable",
         }
@@ -190,6 +195,7 @@ impl fmt::Display for ModelFacadeError {
         formatter.write_str(match self {
             Self::InvalidConfiguration => "the model facade configuration is malformed",
             Self::InvalidInvocation => "the model facade invocation is malformed",
+            Self::InvalidClaimContext => "the claim's context cannot carry a model call",
             Self::ResourceExhausted => "the model gateway request exceeds its approved limit",
             Self::DependencyUnavailable => "the model gateway is unavailable",
         })
@@ -319,7 +325,7 @@ impl ModelGatewayClient {
             || token.is_empty()
             || !valid_execution_id(&execution_id)
         {
-            return Err(ModelFacadeError::InvalidInvocation);
+            return Err(ModelFacadeError::InvalidClaimContext);
         }
         let completion = Arc::new(Mutex::new(CompletionState::default()));
         let model = Arc::new(EliteaOpenAiCompatibleModel {
@@ -401,7 +407,9 @@ fn model_completion_error(error: ModelFacadeError) -> NativeAgentAssemblyError {
         ModelFacadeError::InvalidConfiguration => {
             NativeAgentAssemblyErrorCode::InvalidConfiguration
         }
-        ModelFacadeError::InvalidInvocation => NativeAgentAssemblyErrorCode::InvalidResult,
+        ModelFacadeError::InvalidInvocation | ModelFacadeError::InvalidClaimContext => {
+            NativeAgentAssemblyErrorCode::InvalidResult
+        }
         ModelFacadeError::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
         ModelFacadeError::DependencyUnavailable => {
             NativeAgentAssemblyErrorCode::DependencyUnavailable
@@ -530,7 +538,7 @@ impl Llm for EliteaOpenAiCompatibleModel {
             })
             .map(|current| current + 1)
             .map_err(|_| {
-                not_sent(model_error(
+                super::model_text::not_sent(model_error(
                     ErrorCategory::InvalidInput,
                     "model_gateway.turn_limit",
                     "the claim-scoped model invocation exceeded its approved turn limit",
@@ -552,14 +560,14 @@ impl Llm for EliteaOpenAiCompatibleModel {
             tracing::info!(event = "agent_model_request_started");
             let allowed_tools = request.tools.keys().cloned().collect();
             let body = build_request_body(&request, stream, &self.invocation, &self.config)
-                .map_err(not_sent)?;
+                .map_err(super::model_text::not_sent)?;
             let request = build_http_request(
                 body,
                 self.billing_project_id,
                 self.token.as_str(),
                 self.execution_id.as_str(),
             )
-            .map_err(not_sent)?;
+            .map_err(super::model_text::not_sent)?;
             let response = timeout(
                 self.config.response_header_timeout,
                 self.transport.post(request),
@@ -1838,26 +1846,6 @@ pub(super) fn model_error(
     message: &'static str,
 ) -> AdkError {
     AdkError::new(ErrorComponent::Model, category, code, message).with_provider("elitea")
-}
-
-/// The metadata key a facade sets on an error raised BEFORE any byte of the
-/// request left the worker (admission, encoding, turn limit): such a call
-/// cost the gateway nothing, so a caller that budgets calls refunds it.
-const NOT_SENT_KEY: &str = "elitea.not_sent";
-
-/// `error`, marked as raised before the request was sent.
-pub(crate) fn not_sent(mut error: AdkError) -> AdkError {
-    error
-        .details
-        .metadata
-        .insert(NOT_SENT_KEY.to_owned(), serde_json::Value::Bool(true));
-    error
-}
-
-/// Whether a facade marked `error` as raised before the request was sent.
-#[must_use]
-pub(crate) fn was_not_sent(error: &AdkError) -> bool {
-    error.details.metadata.get(NOT_SENT_KEY) == Some(&serde_json::Value::Bool(true))
 }
 
 fn canonical_https_origin(value: &str) -> Result<String, ModelFacadeError> {

@@ -12,7 +12,7 @@ use crate::toolkits::families::office_common::{
     OfficeIo, OfficeToolsetError, OfficeToolsetErrorCode, Stored, beside, build_toolset,
 };
 use crate::toolkits::families::office_host::{
-    OfficeHostError, OfficeModelRequest, SharedOfficeToolHost,
+    OfficeFailure, OfficeHostError, OfficeModelRequest, SharedOfficeToolHost,
 };
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
@@ -377,13 +377,17 @@ impl PptxToolImpl {
 
     // -- Model-calling tools -------------------------------------------------
 
-    /// One model call, as the model-facing sentence on failure.
+    /// One model call, as the model-facing sentence on failure. Every caller
+    /// here (filling a template, translating) needs an ANSWER, so an empty
+    /// reply is `ReplyEmpty` (#1292 round 4); the host itself treats empty as
+    /// a valid reply for callers that may have nothing to say.
     async fn ask(
         &self,
         prompt: String,
         images_png: std::sync::Arc<[Vec<u8>]>,
     ) -> Result<String, Sentence> {
-        self.io
+        let reply = self
+            .io
             .host
             .complete(OfficeModelRequest {
                 prompt,
@@ -391,7 +395,14 @@ impl PptxToolImpl {
                 ..OfficeModelRequest::default()
             })
             .await
-            .map_err(|e| host_sentence("call the model", &e))
+            .map_err(|e| host_sentence("call the model", &e))?;
+        if reply.trim().is_empty() {
+            return Err(host_sentence(
+                "call the model",
+                &OfficeHostError::new(OfficeFailure::ReplyEmpty, "pptx.model_reply_empty"),
+            ));
+        }
+        Ok(reply)
     }
 
     #[allow(clippy::too_many_lines)]

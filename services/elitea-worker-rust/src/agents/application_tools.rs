@@ -5068,10 +5068,10 @@ const fn model_reasoning_effort(effort: ReasoningEffort) -> ModelReasoningEffort
 
 fn model_error(error: ModelFacadeError) -> AdkError {
     let category = match error {
-        ModelFacadeError::InvalidConfiguration | ModelFacadeError::InvalidInvocation => {
-            ErrorCategory::InvalidInput
-        }
-        ModelFacadeError::ResourceExhausted => ErrorCategory::InvalidInput,
+        ModelFacadeError::InvalidConfiguration
+        | ModelFacadeError::InvalidInvocation
+        | ModelFacadeError::InvalidClaimContext
+        | ModelFacadeError::ResourceExhausted => ErrorCategory::InvalidInput,
         ModelFacadeError::DependencyUnavailable => ErrorCategory::Unavailable,
     };
     AdkError::new(

@@ -42,8 +42,8 @@ use zeroize::Zeroizing;
 use super::openai_compatible_facade::{
     ModelFacadeError, ModelFacadeInvocation, ModelGatewayClient, ModelReasoningEffort,
     budget_refusal, gateway_sse_splitter, is_generic_rejection, model_error, next_response_chunk,
-    not_sent, rejection_with_detail, sse_error, valid_execution_id, valid_tool_call_id,
-    valid_tool_name, validate_invocation, validate_llm_request, validate_response_head,
+    rejection_with_detail, sse_error, valid_execution_id, valid_tool_call_id, valid_tool_name,
+    validate_invocation, validate_llm_request, validate_response_head,
 };
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::context_budget::RequestContextBudget;
@@ -97,7 +97,7 @@ impl ModelGatewayClient {
             || token.is_empty()
             || !valid_execution_id(&execution_id)
         {
-            return Err(ModelFacadeError::InvalidInvocation);
+            return Err(ModelFacadeError::InvalidClaimContext);
         }
         let completion = Arc::new(Mutex::new(AnthropicCompletionState::default()));
         let model = Arc::new(EliteaAnthropicModel {
@@ -254,7 +254,9 @@ fn anthropic_completion_error(error: ModelFacadeError) -> NativeAgentAssemblyErr
         ModelFacadeError::InvalidConfiguration => {
             NativeAgentAssemblyErrorCode::InvalidConfiguration
         }
-        ModelFacadeError::InvalidInvocation => NativeAgentAssemblyErrorCode::InvalidResult,
+        ModelFacadeError::InvalidInvocation | ModelFacadeError::InvalidClaimContext => {
+            NativeAgentAssemblyErrorCode::InvalidResult
+        }
         ModelFacadeError::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
         ModelFacadeError::DependencyUnavailable => {
             NativeAgentAssemblyErrorCode::DependencyUnavailable
@@ -311,7 +313,7 @@ impl Llm for EliteaAnthropicModel {
             })
             .map(|current| current + 1)
             .map_err(|_| {
-                not_sent(anthropic_error(
+                super::model_text::not_sent(anthropic_error(
                     ErrorCategory::InvalidInput,
                     "turn_limit",
                     "the claim-scoped native Anthropic invocation exceeded its approved turn limit",
@@ -416,7 +418,8 @@ fn build_anthropic_body(
     invocation: &ModelFacadeInvocation,
     config: &super::openai_compatible_facade::ModelGatewayConfig,
 ) -> Result<Bytes, AdkError> {
-    encode_checked_anthropic_body(request, stream, invocation, config).map_err(not_sent)
+    encode_checked_anthropic_body(request, stream, invocation, config)
+        .map_err(super::model_text::not_sent)
 }
 
 fn encode_checked_anthropic_body(
@@ -816,7 +819,7 @@ fn build_anthropic_request(
     execution_id: &str,
 ) -> Result<Request<Body>, AdkError> {
     build_unmarked_anthropic_request(body, billing_project_id, token, execution_id)
-        .map_err(not_sent)
+        .map_err(super::model_text::not_sent)
 }
 
 fn build_unmarked_anthropic_request(

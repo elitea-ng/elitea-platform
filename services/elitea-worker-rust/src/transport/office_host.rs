@@ -293,9 +293,15 @@ pub(crate) fn model_failure(error: &adk_rust::AdkError) -> OfficeHostError {
         | "model_gateway.project_budget_exhausted" => {
             (OfficeFailure::BudgetRefused, "office_host.budget_refused")
         }
+        // Round 4: each reply cause its own kind and sentence. A cut reply,
+        // or one that spent the limit reasoning, is cured by more max_tokens.
         reply_codes::REASONING_ONLY | reply_codes::LENGTH_CUT => (
-            OfficeFailure::ReplyUnusable,
-            "office_host.model_reply_unusable",
+            OfficeFailure::ReplyCutOff,
+            "office_host.model_reply_cut_off",
+        ),
+        reply_codes::DECLINED => (
+            OfficeFailure::ReplyDeclined,
+            "office_host.model_reply_declined",
         ),
         // The reply came back over a bound (it was sent, so it was charged).
         reply_codes::TOO_LARGE
@@ -307,11 +313,6 @@ pub(crate) fn model_failure(error: &adk_rust::AdkError) -> OfficeHostError {
             OfficeFailure::ReplyTooLarge,
             "office_host.model_reply_too_large",
         ),
-        // The run's model could not be bound for this call (#1292 round 3):
-        // unusable here, not "no model" and not a refused request.
-        "model_gateway.invalid_configuration" | "model_gateway.invalid_invocation" => {
-            (OfficeFailure::ModelUnusable, "office_host.model_unusable")
-        }
         "model_gateway.unauthorized" | "model_gateway.forbidden" => (
             OfficeFailure::AccessRefused,
             "office_host.model_call_refused",
@@ -319,10 +320,24 @@ pub(crate) fn model_failure(error: &adk_rust::AdkError) -> OfficeHostError {
         "model_gateway.rate_limited" => {
             (OfficeFailure::RateLimited, "office_host.model_rate_limited")
         }
-        "model_gateway.upstream_timeout" | "model_gateway.response_header_timeout" => {
+        "model_gateway.upstream_timeout"
+        | "model_gateway.response_header_timeout"
+        | "model_gateway.stream_idle_timeout"
+        | "anthropic_gateway.response_header_timeout" => {
             (OfficeFailure::Timeout, "office_host.model_timeout")
         }
+        // The native Anthropic facade refuses a sampling setting the model
+        // does not take: the run's model is not usable for the call.
+        "anthropic_gateway.sampling_unsupported" => {
+            (OfficeFailure::ModelUnusable, "office_host.model_unusable")
+        }
         "model_gateway.conflict" => (OfficeFailure::Conflict, "office_host.model_conflict"),
+        // Explicit, as on the OpenAI-compatible side (#1292 round 4).
+        "model_gateway.transport"
+        | "model_gateway.stream_transport"
+        | "anthropic_gateway.transport" => {
+            (OfficeFailure::Unreachable, "office_host.model_call_failed")
+        }
         // Live defect D3: a request the gateway (or the facade's own
         // admission) refused as invalid is not "the platform could not be
         // reached"; nothing was unreachable and retrying cannot help.
@@ -331,6 +346,29 @@ pub(crate) fn model_failure(error: &adk_rust::AdkError) -> OfficeHostError {
             "office_host.model_invalid_request",
         ),
         _ => (OfficeFailure::Unreachable, "office_host.model_call_failed"),
+    };
+    OfficeHostError::new(kind, reason)
+}
+
+/// Why the run's chat model could not be bound for one call (#1292 round 4):
+/// no model at all (a pipeline node) is `NoModel`; the CLAIM's context (its
+/// credential, execution id or project) is `ContextUnusable`, which retrying
+/// the turn cures; anything about the model or its settings is
+/// `ModelUnusable`; the gateway being down is `Unreachable`.
+pub(crate) fn bind_failure(
+    error: Option<super::model_facade::ModelFacadeError>,
+) -> OfficeHostError {
+    use super::model_facade::ModelFacadeError as E;
+    let (kind, reason) = match error {
+        None => (OfficeFailure::NoModel, "office_host.no_model"),
+        Some(E::InvalidClaimContext) => (
+            OfficeFailure::ContextUnusable,
+            "office_host.context_unusable",
+        ),
+        Some(E::InvalidConfiguration | E::InvalidInvocation | E::ResourceExhausted) => {
+            (OfficeFailure::ModelUnusable, "office_host.model_unusable")
+        }
+        Some(E::DependencyUnavailable) => (OfficeFailure::Unreachable, "office_host.model_unbound"),
     };
     OfficeHostError::new(kind, reason)
 }
@@ -789,16 +827,7 @@ impl OfficeToolHost for ClaimOfficeHost {
     }
 
     async fn complete(&self, request: OfficeModelRequest) -> Result<String, OfficeHostError> {
-        let Some(binding) = self.model.bind() else {
-            // No model at all (a pipeline node) is NoModel; a model the run
-            // has but that could not be bound for this call is unusable
-            // (#1292 round 3), never "none is bound".
-            return Err(if self.model.is_configured() {
-                OfficeHostError::new(OfficeFailure::ModelUnusable, "office_host.model_unusable")
-            } else {
-                OfficeHostError::new(OfficeFailure::NoModel, "office_host.no_model")
-            });
-        };
+        let binding = self.model.try_bind().map_err(bind_failure)?;
         let mut parts = vec![Part::Text {
             text: request.prompt,
         }];

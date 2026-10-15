@@ -76,6 +76,9 @@ pub enum OfficeFailure {
     /// The run has a chat model, but it cannot be bound for this tool's call
     /// (its configuration or invocation is not usable here).
     ModelUnusable,
+    /// The run's own context (its credential, execution or project) cannot
+    /// carry a model call; retrying the turn mints a fresh one.
+    ContextUnusable,
     /// The model gateway is rate-limiting the call; trying again shortly may work.
     RateLimited,
     /// The model call timed out; trying again may work.

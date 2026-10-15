@@ -142,10 +142,29 @@ pub fn parse_chunk_analysis(reply: &str) -> Result<Vec<ChunkDetails>, AnalysisEr
     }
 }
 
-/// `text` without the reasoning a model wrote into it, by the ONE rule every
-/// caller uses ([`elitea_llm_wire::reasoning::strip_reasoning`]).
+/// `text` without its `<think>…</think>` blocks (an unclosed one runs to the
+/// end).
+///
+/// This is deliberately NOT the worker's answer rule
+/// (`elitea_llm_wire::reasoning`): the reply here is hunted for a JSON
+/// object, so a block ANYWHERE is removed and a trailing unclosed one cuts
+/// the rest (a draft object inside reasoning must never be chosen), while a
+/// bare `</think>` is kept literal (a proposition may quote it). The worker
+/// hands this the RAW reply, so no second rule runs before it (owner
+/// decision, #1292 round 4).
 fn strip_think_blocks(text: &str) -> String {
-    elitea_llm_wire::reasoning::strip_reasoning(text).text
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find("<think>") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + "<think>".len()..];
+        match after.find("</think>") {
+            Some(close) => rest = &after[close + "</think>".len()..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The top-level balanced `{…}` slices of `text`, in order. Braces inside a
@@ -280,22 +299,29 @@ mod tests {
         );
     }
 
-    /// The shared reasoning rule: Qwen's bare closing tag ends the reasoning,
-    /// so a draft object in it is never read as the answer.
+    /// #1292 round 4: a proposition quoting a bare `</think>` survives, and a
+    /// draft object inside a trailing (unclosed or closed) `<think>` block is
+    /// never the one chosen.
     #[test]
-    fn a_qwen_bare_closing_tag_hides_the_reasoning_draft() {
-        let reply = r#"Draft: {"chunks":[{"chunk_title":"draft","chunk_summary":"s","propositions":[]}]}</think>
-
-{"chunks":[{"chunk_title":"T","chunk_summary":"S","propositions":["a"]}]}"#;
-        // Before the shared rule the draft (the last-but-one object) was
-        // visible; now only the answer is.
-        assert_eq!(strip_think_blocks(reply).matches("chunk_title").count(), 1);
-        assert_eq!(parse_chunk_analysis(reply).unwrap()[0].chunk_title, "T");
-        // A literal tag that does not lead the reply is kept.
+    fn a_quoted_closing_tag_survives_and_a_trailing_draft_is_not_chosen() {
+        let quoting = r#"{"chunks":[{"chunk_title":"Tags","chunk_summary":"S","propositions":["The model closes reasoning with </think>."]}]}"#;
+        let parsed = parse_chunk_analysis(quoting).unwrap();
         assert_eq!(
-            strip_think_blocks("x <think>a</think> y"),
-            "x <think>a</think> y"
+            parsed[0].propositions,
+            ["The model closes reasoning with </think>."]
         );
+        let answer = r#"{"chunks":[{"chunk_title":"T","chunk_summary":"S","propositions":["a"]}]}"#;
+        let draft = r#"{"chunks":[{"chunk_title":"draft","chunk_summary":"s","propositions":[]}]}"#;
+        for reply in [
+            format!("{answer}\n<think>maybe instead {draft}"),
+            format!("{answer}\n<think>maybe instead {draft}</think>"),
+        ] {
+            assert_eq!(
+                parse_chunk_analysis(&reply).unwrap()[0].chunk_title,
+                "T",
+                "{reply}"
+            );
+        }
     }
 
     #[test]

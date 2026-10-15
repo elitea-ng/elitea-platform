@@ -412,6 +412,9 @@ pub(crate) fn host_sentence(action: &str, error: &OfficeHostError, kind: &Office
         OfficeFailure::BudgetRefused => format!(
             "Could not {action}: the model budget is exhausted. Do not retry; tell the user."
         ),
+        OfficeFailure::ContextUnusable => format!(
+            "Could not {action}: this run's context is not usable for a model call; retry the turn."
+        ),
         OfficeFailure::ModelUnusable => format!(
             "Could not {action}: the run's chat model cannot be used for this tool (its configuration is not usable for a tool's model call); pick another model for the agent, or tell the user."
         ),

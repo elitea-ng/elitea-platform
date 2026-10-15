@@ -97,17 +97,29 @@ pub(crate) fn toolkit_budget_exhausted() -> AdkError {
     .with_retry(RetryHint::default())
 }
 
-/// Whether the facade raised `error` BEFORE the request was sent (its own
-/// admission: the request shape, its size, its encoding, the binding's turn
-/// limit). The facades mark such errors themselves
-/// ([`was_not_sent`](super::openai_compatible_facade::was_not_sent)), so no
-/// list of codes is kept here to drift (#1292 round 3). Such a call reached no
-/// gateway and is not charged to the budget. Everything else (a gateway
-/// refusal, a 429, a 5xx, a lost connection, a reply that came back too
-/// large) may have reached it and counts.
+/// The metadata key a facade sets on an error raised BEFORE any byte of the
+/// request left the worker (its own admission: the request shape, its size,
+/// its encoding, the binding's turn limit). Both facades set it through
+/// [`not_sent`]; [`was_not_sent`] reads it. No list of codes is kept to drift
+/// (#1292 round 3).
+const NOT_SENT_KEY: &str = "elitea.not_sent";
+
+/// `error`, marked as raised before the request was sent.
+pub(crate) fn not_sent(mut error: AdkError) -> AdkError {
+    error
+        .details
+        .metadata
+        .insert(NOT_SENT_KEY.to_owned(), serde_json::Value::Bool(true));
+    error
+}
+
+/// Whether a facade marked `error` as raised before the request was sent:
+/// such a call reached no gateway and is not charged to the budget.
+/// Everything else (a gateway refusal, a 429, a 5xx, a lost connection, a
+/// reply that came back too large) may have reached it and counts.
 #[must_use]
-pub(crate) fn raised_before_send(error: &AdkError) -> bool {
-    super::openai_compatible_facade::was_not_sent(error)
+pub(crate) fn was_not_sent(error: &AdkError) -> bool {
+    error.details.metadata.get(NOT_SENT_KEY) == Some(&serde_json::Value::Bool(true))
 }
 
 /// A chat model bound for one call, with the generation config its facade
@@ -161,6 +173,33 @@ pub(crate) async fn stream_text(
     user: Content,
     max_reply_bytes: usize,
 ) -> Result<TextReply, TextFailure> {
+    stream_reply(chat, model_name, user, max_reply_bytes, ReplyText::Answer).await
+}
+
+/// How [`stream_reply`] hands back the reply's text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReplyText {
+    /// An answer: reasoning written into it is removed by the worker's rule
+    /// ([`strip_reasoning`]).
+    Answer,
+    /// The raw text, for a caller with its own reasoning rule (the proposal
+    /// chunker's `parse_chunk_analysis`): one rule runs, never two (#1292
+    /// round 4). `reasoning_only` is then always false.
+    Raw,
+}
+
+/// [`stream_text`] with the reply's text handled as `mode` says.
+///
+/// # Errors
+///
+/// [`TextFailure`].
+pub(crate) async fn stream_reply(
+    chat: &AdmittedChat,
+    model_name: &str,
+    user: Content,
+    max_reply_bytes: usize,
+    mode: ReplyText,
+) -> Result<TextReply, TextFailure> {
     if let Some(budget) = &chat.budget
         && !budget.try_take()
     {
@@ -181,7 +220,7 @@ pub(crate) async fn stream_text(
         Ok(responses) => responses,
         Err(error) => {
             if let Some(budget) = &chat.budget
-                && raised_before_send(&error)
+                && was_not_sent(&error)
             {
                 budget.refund();
             }
@@ -218,20 +257,28 @@ pub(crate) async fn stream_text(
         ended = Some(length_cut);
     }
     let length_cut = ended.ok_or(TextFailure::NoReply)?;
+    if mode == ReplyText::Raw {
+        return Ok(TextReply {
+            text: raw,
+            length_cut,
+            reasoning_only: false,
+        });
+    }
     let stripped = strip_reasoning(&raw);
     // Nothing but reasoning: a block that was never closed, a reply that was
     // entirely a closed block, or a reply cut off with nothing in it.
     let reasoning_only =
         stripped.text.trim().is_empty() && (length_cut || stripped.unclosed || stripped.removed);
     Ok(TextReply {
-        text: stripped.text,
+        text: stripped.text.into_owned(),
         length_cut,
         reasoning_only,
     })
 }
 
-/// The ONE reasoning-strip rule, shared with the engines' model client and
-/// the proposal chunker (`elitea_llm_wire::reasoning`).
+/// The worker's reasoning-strip rule for ANSWER text
+/// (`elitea_llm_wire::reasoning`). The engines' model client and the
+/// proposal chunker keep their own rules (see that module for why).
 pub(crate) use elitea_llm_wire::reasoning::strip_reasoning;
 
 #[cfg(test)]

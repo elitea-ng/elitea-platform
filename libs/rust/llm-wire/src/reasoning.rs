@@ -1,7 +1,18 @@
-//! Reasoning a model wrote INTO its reply text, and the ONE rule every caller
-//! removes it by: the worker (`model_text::stream_text`, every toolkit and
-//! index call), the engines' model client (`chat::split_leaked_reasoning`)
-//! and the proposal chunker's reply parser (`elitea-doc-chunk`).
+//! Reasoning a model wrote INTO an ANSWER's text, and the rule the agent
+//! worker removes it by (`model_text::stream_text`: the toolkit completions,
+//! the step-back tools, image descriptions).
+//!
+//! It is deliberately NOT the rule of two other readers, whose input is not
+//! a plain answer (owner decision, #1292 review round 4):
+//!
+//! * the engines' model client (`elitea-model-client`,
+//!   `split_leaked_reasoning`) splits at the LAST `</think>` and keeps the
+//!   reasoning as its own field, because an engine answer is a whole
+//!   monologue followed by the answer;
+//! * the proposal chunker (`elitea-doc-chunk`, `parse_chunk_analysis`)
+//!   removes `<think>` blocks ANYWHERE and cuts at a trailing unclosed one,
+//!   because it hunts for a JSON object in the reply and a draft object
+//!   inside reasoning must never be chosen.
 //!
 //! * A reply that STARTS (after whitespace) with `<think>`: each leading
 //!   `<think>…</think>` block is reasoning, removed with the whitespace
@@ -20,17 +31,21 @@
 //! before the tag; leaking reasoning into answers is worse. The visible text
 //! is not trimmed at its end.
 
+use std::borrow::Cow;
+
 const OPEN: &str = "<think>";
 const CLOSE: &str = "</think>";
 
 /// A reply split into its visible text and the reasoning removed from it.
+/// Both texts borrow from the input where they can: a reply with no tag is
+/// returned without a copy.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Stripped {
+pub struct Stripped<'a> {
     /// The reply without its reasoning.
-    pub text: String,
+    pub text: Cow<'a, str>,
     /// The reasoning removed (the blocks' contents, joined by a newline, or
     /// the text before a bare closing tag), trimmed.
-    pub reasoning: String,
+    pub reasoning: Cow<'a, str>,
     /// The reply began a `<think>` block and never closed it.
     pub unclosed: bool,
     /// Reasoning was removed: a closed leading block, or the text before a
@@ -40,20 +55,20 @@ pub struct Stripped {
 
 /// `text` split by the rule above.
 #[must_use]
-pub fn strip_reasoning(text: &str) -> Stripped {
+pub fn strip_reasoning(text: &str) -> Stripped<'_> {
     let mut rest = text.trim_start();
     if !rest.starts_with(OPEN) {
         let close = text.find(CLOSE);
         let open = text.find(OPEN);
         return match close {
             Some(close) if open.is_none_or(|open| open > close) => Stripped {
-                text: text[close + CLOSE.len()..].trim_start().to_owned(),
-                reasoning: text[..close].trim().to_owned(),
+                text: Cow::Borrowed(text[close + CLOSE.len()..].trim_start()),
+                reasoning: Cow::Borrowed(text[..close].trim()),
                 unclosed: false,
                 removed: true,
             },
             _ => Stripped {
-                text: text.to_owned(),
+                text: Cow::Borrowed(text),
                 ..Stripped::default()
             },
         };
@@ -63,8 +78,8 @@ pub fn strip_reasoning(text: &str) -> Stripped {
         let Some(end) = after_open.find(CLOSE) else {
             reasoning.push(after_open.trim());
             return Stripped {
-                text: String::new(),
-                reasoning: reasoning.join("\n"),
+                text: Cow::Borrowed(""),
+                reasoning: joined(&reasoning),
                 unclosed: true,
                 removed: false,
             };
@@ -73,10 +88,18 @@ pub fn strip_reasoning(text: &str) -> Stripped {
         rest = after_open[end + CLOSE.len()..].trim_start();
     }
     Stripped {
-        text: rest.to_owned(),
-        reasoning: reasoning.join("\n"),
+        text: Cow::Borrowed(rest),
+        reasoning: joined(&reasoning),
         unclosed: false,
         removed: true,
+    }
+}
+
+/// The blocks' reasoning; one block is borrowed, several are joined.
+fn joined<'a>(blocks: &[&'a str]) -> Cow<'a, str> {
+    match blocks {
+        [one] => Cow::Borrowed(*one),
+        many => Cow::Owned(many.join("\n")),
     }
 }
 
@@ -85,14 +108,29 @@ mod tests {
     use super::*;
 
     fn text(raw: &str) -> String {
-        strip_reasoning(raw).text
+        strip_reasoning(raw).text.into_owned()
+    }
+
+    /// Round 4: the no-tag path and the stripped paths borrow, never copy.
+    #[test]
+    fn plain_and_stripped_text_is_borrowed() {
+        for raw in ["plain answer", "<think>a</think>\nB", "a</think>b"] {
+            assert!(
+                matches!(strip_reasoning(raw).text, Cow::Borrowed(_)),
+                "{raw}"
+            );
+        }
+        assert!(matches!(
+            strip_reasoning("<think>a</think><think>b</think>c").reasoning,
+            Cow::Owned(_)
+        ));
     }
 
     #[test]
     fn a_leading_block_and_the_whitespace_after_it_are_removed() {
         assert_eq!(text("<think>a</think>\nB"), "B");
         let two = strip_reasoning("  \n<think>a</think><think>b</think>  C ");
-        assert_eq!((two.text.as_str(), two.reasoning.as_str()), ("C ", "a\nb"));
+        assert_eq!((two.text.as_ref(), two.reasoning.as_ref()), ("C ", "a\nb"));
     }
 
     #[test]

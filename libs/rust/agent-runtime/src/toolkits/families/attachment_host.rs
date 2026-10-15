@@ -153,7 +153,9 @@ impl AttachmentError {
                 OfficeFailure::BudgetRefused => {
                     (ErrorCategory::RateLimited, "attachment.budget_refused")
                 }
-                OfficeFailure::NoModel | OfficeFailure::ModelUnusable => {
+                OfficeFailure::NoModel
+                | OfficeFailure::ModelUnusable
+                | OfficeFailure::ContextUnusable => {
                     (ErrorCategory::Unavailable, "attachment.no_model")
                 }
                 OfficeFailure::RateLimited => {
@@ -216,12 +218,16 @@ fn write_sentence(failure: OfficeFailure) -> String {
 fn model_sentence(failure: OfficeFailure) -> String {
     match failure {
         OfficeFailure::BudgetRefused => "The model budget is exhausted. Do not retry; tell the user.".to_owned(),
+        OfficeFailure::ContextUnusable => "This run's context is not usable for a model call; retry the turn.".to_owned(),
+        OfficeFailure::ReplyCutOff => "The model's reply was cut off at its length limit, or it spent the whole limit reasoning. Tell the user to raise the model's max_tokens.".to_owned(),
+        OfficeFailure::ReplyDeclined => "The model declined to answer (its safety filter ended the reply). Tell the user; do not retry unchanged.".to_owned(),
+        OfficeFailure::ReplyEmpty => "The model answered with no text. Tell the user; it may work if tried again.".to_owned(),
         OfficeFailure::ModelUnusable => "The run's chat model cannot be used for this tool (its configuration is not usable for a tool's model call). Pick another model for the agent, or turn picture description off.".to_owned(),
         OfficeFailure::NoModel => "This tool needs a chat model and none is bound in this run (a pipeline node binds none). Run it from an agent, or turn picture description off.".to_owned(),
         OfficeFailure::RateLimited => "The model gateway is rate-limiting this call. Try again shortly.".to_owned(),
         OfficeFailure::Timeout => "The model call timed out. It may work if tried again.".to_owned(),
         OfficeFailure::Conflict => "The model gateway reported a conflict. It may work if tried again.".to_owned(),
-        OfficeFailure::ReplyUnusable | OfficeFailure::ReplyCutOff | OfficeFailure::ReplyDeclined | OfficeFailure::ReplyEmpty | OfficeFailure::ReplyTooLarge => "The model's reply could not be used. Do not retry without telling the user.".to_owned(),
+        OfficeFailure::ReplyUnusable | OfficeFailure::ReplyTooLarge => "The model's reply could not be used. Do not retry without telling the user.".to_owned(),
         OfficeFailure::AccessRefused => "The model gateway refused the call. Do not retry; tell the user.".to_owned(),
         _ => "The model gateway could not be reached. Trying again may work.".to_owned(),
     }
@@ -397,6 +403,10 @@ impl AttachmentHost {
             })
             .await
             .map_err(|error| Self::failed(Step::Model, &error))?;
+        // An empty description is returned as such: each family answers it
+        // with the SDK's own placeholder ("[No readable text detected by
+        // LLM]"), so it is not a failure here (SDK parity; `ReplyEmpty` is for
+        // callers that cannot use an empty reply, #1292 round 4).
         Ok(clip(reply.trim(), MAX_DESCRIPTION_CHARS))
     }
 
@@ -1021,6 +1031,20 @@ mod tests {
         assert!(sentence.contains("may or may not"), "{sentence}");
         let read = AttachmentError::Host(Step::Read, OfficeFailure::Unreachable).sentence();
         assert!(read.contains("nothing was sent"), "{read}");
+    }
+
+    /// #1292 round 4 (B): each reply cause has its own sentence.
+    #[test]
+    fn reply_causes_have_their_own_sentences() {
+        let say = |failure| AttachmentError::Host(Step::Model, failure).sentence();
+        assert!(say(OfficeFailure::ReplyCutOff).contains("max_tokens"));
+        assert!(say(OfficeFailure::ReplyDeclined).contains("declined"));
+        assert!(say(OfficeFailure::ReplyEmpty).contains("no text"));
+        assert!(say(OfficeFailure::ContextUnusable).contains("retry the turn"));
+        assert_ne!(
+            say(OfficeFailure::ReplyEmpty),
+            say(OfficeFailure::ReplyUnusable)
+        );
     }
 
     #[test]

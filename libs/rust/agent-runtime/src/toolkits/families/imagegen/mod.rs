@@ -427,7 +427,7 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> String {
         OfficeFailure::BudgetRefused => format!(
             "Could not {action}: the model budget is exhausted. Do not retry; tell the user."
         ),
-        OfficeFailure::NoModel | OfficeFailure::ModelUnusable => {
+        OfficeFailure::NoModel | OfficeFailure::ModelUnusable | OfficeFailure::ContextUnusable => {
             format!("Could not {action}: image generation is not available in this run.")
         }
         OfficeFailure::RateLimited => format!(

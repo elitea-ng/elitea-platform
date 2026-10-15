@@ -1684,7 +1684,6 @@ version = "0.1.0"
 dependencies = [
  "elitea-code-parsers",
  "elitea-content-source",
- "elitea-llm-wire",
  "serde",
  "serde_json",
  "sha2 0.10.9",

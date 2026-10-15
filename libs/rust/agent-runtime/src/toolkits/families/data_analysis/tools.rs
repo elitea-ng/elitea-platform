@@ -330,7 +330,10 @@ fn host_sentence(action: &str, error: &OfficeHostError) -> Sentence {
         OfficeFailure::BudgetRefused if error.is_toolkit_budget() => {
             format!("Could not {action}: {TOOLKIT_BUDGET_SENTENCE}.")
         }
-        OfficeFailure::BudgetRefused | OfficeFailure::NoModel | OfficeFailure::ModelUnusable => {
+        OfficeFailure::BudgetRefused
+        | OfficeFailure::NoModel
+        | OfficeFailure::ModelUnusable
+        | OfficeFailure::ContextUnusable => {
             format!("Could not {action}: the platform refused the request.")
         }
         OfficeFailure::RateLimited | OfficeFailure::Timeout | OfficeFailure::Conflict => {
