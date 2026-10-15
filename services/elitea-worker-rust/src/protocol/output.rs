@@ -43,6 +43,10 @@ pub enum ModelBudgetScope {
     Member,
 }
 
+/// Main's `ToolkitRunCredentialsRefusedMessage`.
+pub(crate) const TOOLKIT_RUN_AUTHORIZATION_FAILED_MESSAGE: &str =
+    "The platform could not authorize this tool run's credentials or context.";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeFailureKind {
     UnsupportedCapability,
@@ -80,6 +84,11 @@ pub enum RuntimeFailureKind {
     ModelProviderFailure,
 
     AuthorizationFailed,
+    /// A synchronous tool run (`toolkit.call_tool.v1`) whose OWN credentials
+    /// or context were refused: `AUTHORIZATION_FAILED` with a sentence of its
+    /// own, so Main can tell it from an older worker's refusal of a tool
+    /// (which sent the generic sentence for both).
+    ToolkitRunAuthorizationFailed,
     Cancelled,
     /// The output plane refused a typed terminal result on its content
     /// (`RESULT_REFUSED`, ADR-0030 I1): the worker answers with this FAILED
@@ -864,6 +873,11 @@ pub(crate) fn runtime_error_policy(
             "Execution authorization failed.",
             false,
         ),
+        RuntimeFailureKind::ToolkitRunAuthorizationFailed => (
+            RuntimeErrorCodeV1::AuthorizationFailed,
+            TOOLKIT_RUN_AUTHORIZATION_FAILED_MESSAGE,
+            false,
+        ),
         RuntimeFailureKind::Cancelled => (
             RuntimeErrorCodeV1::Cancelled,
             "Execution was cancelled.",
@@ -985,6 +999,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::DependencyUnavailable,
         RuntimeFailureKind::DeadlineExceeded,
         RuntimeFailureKind::AuthorizationFailed,
+        RuntimeFailureKind::ToolkitRunAuthorizationFailed,
         RuntimeFailureKind::Cancelled,
         RuntimeFailureKind::ResultRefused,
         RuntimeFailureKind::OutputContinuationExhausted,
@@ -1372,7 +1387,10 @@ fn validate_toolkit_call_tool_summary(
             }
             Ok(ExecutionOutcomeV1::Succeeded)
         }
-        ToolkitCallToolStatusV1::UnsupportedToolkit | ToolkitCallToolStatusV1::UnknownTool => {
+        ToolkitCallToolStatusV1::UnsupportedToolkit
+        | ToolkitCallToolStatusV1::UnknownTool
+        | ToolkitCallToolStatusV1::EffectRefused
+        | ToolkitCallToolStatusV1::PolicyRefused => {
             if summary.error_message.is_empty()
                 || !summary.result_json.is_empty()
                 || summary.truncated

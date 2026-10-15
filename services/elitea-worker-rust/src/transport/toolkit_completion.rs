@@ -22,9 +22,11 @@
 //! many would eat the agent's turn budget. The gateway's own budget
 //! accounting still applies to every call.
 //!
-//! NOTE: the streaming-with-bound-config fold below has a twin in the
-//! indexing completion (PR #1291). When that lands, switch to its shared
-//! helper and delete this copy of the fold and of `strip_think`.
+//! TODO(#1291): the streaming-with-bound-config fold, `strip_think` and
+//! [`ModelCallBudget`] below have twins in PR #1291's `model_text`
+//! (`stream_text`, `strip_reasoning`, `ModelCallBudget`). When it merges,
+//! switch to its helpers and delete these copies; the rules and the API are
+//! kept identical so that is mechanical.
 
 use std::sync::Arc;
 
@@ -50,28 +52,86 @@ pub(crate) const REPLY_CUT_WHILE_REASONING: &str =
 pub(crate) const REPLY_DECLINED: &str = "the model declined to reply";
 pub(crate) const REPLY_EMPTY: &str = "the model's reply held no usable text";
 
-/// Completions one run may make through toolkit tools (step-back, Office,
-/// image description share one budget). Mirrors the default of PR #1291's
-/// `toolkit_model_call_cap`; switch to its handle when it lands.
-pub(crate) const DEFAULT_TOOLKIT_MODEL_CALL_CAP: u32 = 200;
+/// Completions one run may make through toolkit tools when the deployment
+/// sets none. Same name and value as PR #1291's `model_text`.
+pub(crate) const DEFAULT_TOOLKIT_MODEL_CALLS: u32 = 200;
 
-/// The run's budget of toolkit-internal model calls. Clones share it.
-#[derive(Clone)]
-pub(crate) struct ToolkitCallBudget(Arc<std::sync::atomic::AtomicU32>);
+/// The code of a call refused because the run's toolkit budget is spent
+/// (`office_host::model_failure` maps it to `BudgetRefused` by this code).
+pub(crate) const TOOLKIT_BUDGET_EXHAUSTED_CODE: &str = "model.toolkit_budget_exhausted";
 
-impl ToolkitCallBudget {
-    pub(crate) fn new(cap: u32) -> Self {
-        Self(Arc::new(std::sync::atomic::AtomicU32::new(cap)))
+/// The run's budget of toolkit-internal model calls: ONE per claim, shared by
+/// the step-back tools, the Office host's prompts and its image calls. Clones
+/// share it. A unit is charged only for a call actually sent upstream: a
+/// caller that fails locally before sending gives it back ([`Self::refund`]).
+///
+/// TODO(#1291): this is the API of `model_text::ModelCallBudget` (`new`,
+/// `try_take`, plus `refund`); replace this copy with it once #1291 merges.
+#[derive(Clone, Debug)]
+pub(crate) struct ModelCallBudget {
+    remaining: Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl ModelCallBudget {
+    #[must_use]
+    pub(crate) fn new(calls: u32) -> Self {
+        Self {
+            remaining: Arc::new(std::sync::atomic::AtomicU32::new(calls)),
+        }
     }
 
-    fn take(&self) -> bool {
+    /// Takes one call; `false` once none is left.
+    pub(crate) fn try_take(&self) -> bool {
         use std::sync::atomic::Ordering;
-        self.0
+        self.remaining
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
                 left.checked_sub(1)
             })
             .is_ok()
     }
+
+    /// Gives back a call taken for a request that was never sent.
+    pub(crate) fn refund(&self) {
+        use std::sync::atomic::Ordering;
+        let _ = self
+            .remaining
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                left.checked_add(1)
+            });
+    }
+}
+
+/// The typed refusal of a call the run's budget no longer covers.
+pub(crate) fn budget_exhausted() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Model,
+        ErrorCategory::RateLimited,
+        TOOLKIT_BUDGET_EXHAUSTED_CODE,
+        "the toolkit model call budget is exhausted for this run",
+    )
+}
+
+/// Whether a model error was raised locally, before any byte reached the
+/// gateway (the facades' own admission and encoding checks): such a call is
+/// not charged to the run's budget.
+pub(crate) fn failed_before_sending(error: &AdkError) -> bool {
+    matches!(
+        error.code,
+        "model_gateway.invalid_request"
+            | "model_gateway.request_too_large"
+            | "model_gateway.request_encoding"
+            | "model_gateway.turn_limit"
+            | "model_gateway.completion_reused"
+            | "model_gateway.completion_state"
+            | "anthropic_gateway.invalid_request"
+            | "anthropic_gateway.sampling_unsupported"
+            | "anthropic_gateway.request_too_large"
+            | "anthropic_gateway.turn_limit"
+            | "anthropic_gateway.completion_reused"
+            | "anthropic_gateway.completion_state"
+            | "context_budget_exceeded"
+            | "model_request_bytes_exceeded"
+    )
 }
 
 /// Binds a fresh provider model for ONE completion.
@@ -82,7 +142,7 @@ pub(crate) type FreshModelBinder = Arc<dyn Fn() -> Result<Arc<dyn Llm>, AdkError
 pub(crate) fn toolkit_completion_model(
     bind: FreshModelBinder,
     invocation: &ModelFacadeInvocation,
-    budget: ToolkitCallBudget,
+    budget: ModelCallBudget,
 ) -> Arc<dyn Llm> {
     Arc::new(ToolkitCompletionModel {
         bind,
@@ -97,7 +157,7 @@ pub(crate) fn toolkit_completion_model(
 
 struct ToolkitCompletionModel {
     bind: FreshModelBinder,
-    budget: ToolkitCallBudget,
+    budget: ModelCallBudget,
     model_name: String,
     temperature: Option<f32>,
     max_output_tokens: Option<i32>,
@@ -132,14 +192,23 @@ impl Llm for ToolkitCompletionModel {
             max_output_tokens: self.max_output_tokens,
             ..GenerateContentConfig::default()
         });
-        if !self.budget.take() {
-            return Err(unusable(
-                "toolkit_completion.budget",
-                "the toolkit model call budget is exhausted for this run",
-            ));
-        }
+        // Bind first: a bind failure is the binding's own cause (its real
+        // code and category, review round 2) and costs nothing. The budget
+        // is charged only for a request that is then sent; one refused
+        // locally before sending is refunded.
         let inner = (self.bind)()?;
-        let responses = inner.generate_content(request, true).await?;
+        if !self.budget.try_take() {
+            return Err(budget_exhausted());
+        }
+        let responses = match inner.generate_content(request, true).await {
+            Ok(responses) => responses,
+            Err(error) => {
+                if failed_before_sending(&error) {
+                    self.budget.refund();
+                }
+                return Err(error);
+            }
+        };
         let (text, mut response) = fold_reply(responses).await?;
         let text = strip_think(&text);
         if response.error_code.is_some() {
@@ -226,11 +295,15 @@ async fn fold_reply(mut responses: LlmResponseStream) -> adk_rust::Result<(Strin
     Ok((text, response))
 }
 
-/// `text` without its reasoning. Only a LEADING `<think>…</think>` (after
-/// whitespace; an unclosed one makes the whole reply reasoning) is removed, or,
-/// when the reply does not open one, everything up to a first bare
-/// `</think>` (a server with no reasoning parser leaves one). A tag anywhere
-/// else is the model's own text and stays.
+/// `text` without its reasoning (the owner's rule, shared with #1291):
+///
+/// * each LEADING `<think>…</think>` block (after whitespace) is removed; a
+///   leading `<think>` never closed makes the whole reply reasoning;
+/// * when the reply opens no block and no `<think>` precedes its first
+///   `</think>`, everything up to and including that `</think>` is reasoning
+///   (Qwen3 on vLLM without a reasoning parser emits only the closing tag;
+///   leaking reasoning is worse than the rare answer quoting the tag);
+/// * a `<think>…</think>` that does not lead the reply is literal text.
 pub(crate) fn strip_think(text: &str) -> String {
     const OPEN: &str = "<think>";
     const CLOSE: &str = "</think>";
@@ -399,7 +472,7 @@ mod tests {
     async fn a_toolkit_completion_reaches_the_provider_inside_the_admitted_profile() {
         let invocation = test_model_facade_invocation();
         let (bind, _, made) = binder(&["Hello, ", "world"], FinishReason::Stop);
-        let model = toolkit_completion_model(bind, &invocation, ToolkitCallBudget::new(100));
+        let model = toolkit_completion_model(bind, &invocation, ModelCallBudget::new(100));
         assert_eq!(run(&model, request()).await.expect("reply"), "Hello, world");
         let provider = made.lock().expect("made")[0].clone();
         let seen = provider.seen.lock().expect("seen");
@@ -416,7 +489,7 @@ mod tests {
     async fn every_completion_binds_its_own_single_use_model() {
         let invocation = test_model_facade_invocation();
         let (bind, binds, _) = binder(&["ok"], FinishReason::Stop);
-        let model = toolkit_completion_model(bind, &invocation, ToolkitCallBudget::new(100));
+        let model = toolkit_completion_model(bind, &invocation, ModelCallBudget::new(100));
         for _ in 0..4 {
             assert_eq!(run(&model, request()).await.expect("reply"), "ok");
         }
@@ -427,21 +500,87 @@ mod tests {
     async fn the_run_budget_is_shared_and_spent_completions_are_refused() {
         let invocation = test_model_facade_invocation();
         let (bind, binds, _) = binder(&["ok"], FinishReason::Stop);
-        let budget = ToolkitCallBudget::new(2);
+        let budget = ModelCallBudget::new(2);
         let first = toolkit_completion_model(bind.clone(), &invocation, budget.clone());
         let second = toolkit_completion_model(bind, &invocation, budget);
         assert!(run(&first, request()).await.is_ok());
         assert!(run(&second, request()).await.is_ok());
         let spent = run(&first, request()).await.expect_err("budget spent");
-        assert!(spent.to_string().contains("budget is exhausted"), "{spent}");
-        assert_eq!(binds.load(Ordering::SeqCst), 2, "nothing bound once spent");
+        assert_eq!(spent.code, TOOLKIT_BUDGET_EXHAUSTED_CODE);
+        assert_eq!(spent.category, ErrorCategory::RateLimited);
+        // The third bind happened (binding comes first), but no request was
+        // sent on it.
+        assert_eq!(binds.load(Ordering::SeqCst), 3);
+    }
+
+    /// Review round 2, item 6: a bind failure keeps its real category and
+    /// code (so `model_failure` maps it), and costs no budget.
+    #[tokio::test]
+    async fn a_bind_failure_keeps_its_cause_and_costs_nothing() {
+        let invocation = test_model_facade_invocation();
+        let budget = ModelCallBudget::new(1);
+        let failing: FreshModelBinder = Arc::new(|| {
+            Err(AdkError::new(
+                ErrorComponent::Model,
+                ErrorCategory::Unauthorized,
+                "model_gateway.invalid_configuration",
+                "the model facade configuration is malformed",
+            ))
+        });
+        let model = toolkit_completion_model(failing, &invocation, budget.clone());
+        for _ in 0..3 {
+            let error = run(&model, request()).await.expect_err("no binding");
+            assert_eq!(error.code, "model_gateway.invalid_configuration");
+            assert_eq!(error.category, ErrorCategory::Unauthorized);
+        }
+        assert!(budget.try_take(), "a failed bind spent no budget");
+    }
+
+    /// The owner's rule (#1291 round 3): a call refused locally before a byte
+    /// is sent is refunded; one the provider answered is charged.
+    #[tokio::test]
+    async fn a_call_refused_before_sending_is_refunded() {
+        struct Refusing(&'static str);
+        #[async_trait]
+        impl Llm for Refusing {
+            fn name(&self) -> &'static str {
+                "fixture-model"
+            }
+            async fn generate_content(
+                &self,
+                _: LlmRequest,
+                _: bool,
+            ) -> adk_rust::Result<LlmResponseStream> {
+                Err(AdkError::new(
+                    ErrorComponent::Model,
+                    ErrorCategory::InvalidInput,
+                    self.0,
+                    "refused",
+                ))
+            }
+        }
+        let invocation = test_model_facade_invocation();
+        let budget = ModelCallBudget::new(1);
+        let local: FreshModelBinder =
+            Arc::new(|| Ok(Arc::new(Refusing("model_gateway.invalid_request")) as Arc<dyn Llm>));
+        let model = toolkit_completion_model(local, &invocation, budget.clone());
+        for _ in 0..3 {
+            assert!(run(&model, request()).await.is_err());
+        }
+        assert!(budget.try_take(), "local refusals were refunded");
+        budget.refund();
+        let upstream: FreshModelBinder =
+            Arc::new(|| Ok(Arc::new(Refusing("model_gateway.rejected")) as Arc<dyn Llm>));
+        let model = toolkit_completion_model(upstream, &invocation, budget.clone());
+        assert!(run(&model, request()).await.is_err());
+        assert!(!budget.try_take(), "an upstream answer is charged");
     }
 
     #[tokio::test]
     async fn anything_but_one_plain_user_message_is_refused_before_binding() {
         let invocation = test_model_facade_invocation();
         let (bind, binds, _) = binder(&["x"], FinishReason::Stop);
-        let model = toolkit_completion_model(bind, &invocation, ToolkitCallBudget::new(100));
+        let model = toolkit_completion_model(bind, &invocation, ModelCallBudget::new(100));
         let mut with_config = request();
         with_config.config = Some(GenerateContentConfig::default());
         let mut with_tool = request();
@@ -465,7 +604,7 @@ mod tests {
         let model = toolkit_completion_model(
             bind,
             &test_model_facade_invocation(),
-            ToolkitCallBudget::new(100),
+            ModelCallBudget::new(100),
         );
         run(&model, request())
             .await
@@ -497,7 +636,7 @@ mod tests {
         let model = toolkit_completion_model(
             bind,
             &test_model_facade_invocation(),
-            ToolkitCallBudget::new(100),
+            ModelCallBudget::new(100),
         );
         assert_eq!(run(&model, request()).await.expect("reply"), "Answer");
     }
@@ -511,6 +650,11 @@ mod tests {
         );
         assert_eq!(strip_think("<think>only"), "");
         assert_eq!(strip_think("reasoning</think>\nAnswer"), "Answer");
+        // Qwen3 on vLLM without a reasoning parser (owner rule, #1291).
+        assert_eq!(
+            strip_think("Let me look…</think>\n\nA red square."),
+            "A red square."
+        );
         // Literal tags elsewhere are the model's own text.
         assert_eq!(
             strip_think("Use <think>x</think> tags like this."),

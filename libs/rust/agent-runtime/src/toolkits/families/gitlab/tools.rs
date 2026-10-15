@@ -1105,16 +1105,11 @@ pub(in crate::toolkits) fn test_catalog() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// The stored selection's tools this family does not serve, for the run's
-/// notice: `(name, needs_file_store)`.
-pub(crate) fn omitted_selection(selected: &[Box<str>], _file_store: bool) -> Vec<(String, bool)> {
-    selected
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    GitLabToolKind::ALL
         .iter()
-        .filter(|name| {
-            !GitLabToolKind::ALL
-                .iter()
-                .any(|kind| kind.name() == name.as_ref())
-        })
-        .map(|name| (name.to_string(), false))
+        .map(|kind| (kind.name(), false))
         .collect()
 }

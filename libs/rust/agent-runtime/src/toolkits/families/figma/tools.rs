@@ -1032,12 +1032,11 @@ fn invalid_arguments() -> AdkError {
     )
 }
 
-/// The stored selection's tools this family does not serve, for the run's
-/// notice: `(name, needs_file_store)`.
-pub(crate) fn omitted_selection(selected: &[Box<str>], _file_store: bool) -> Vec<(String, bool)> {
-    selected
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    FigmaToolKind::ALL
         .iter()
-        .filter(|name| FigmaToolKind::from_name(name).is_none())
-        .map(|name| (name.to_string(), false))
+        .map(|kind| (kind.name(), false))
         .collect()
 }

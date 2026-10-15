@@ -109,29 +109,20 @@ pub(crate) fn skipped_capabilities(
     if total == 0 {
         return None;
     }
+    // The shared fair cut (the model notice takes its lines the same way).
+    let kept = crate::toolkits::round_robin_take(
+        &by_kind,
+        MAX_SKIPPED_CAPABILITIES,
+        MAX_SKIPPED_CAPABILITIES_BYTES,
+        |entry| entry.to_string().len() + 1,
+    );
     let mut items = Vec::new();
-    let mut bytes = 0;
-    let mut rank = 0;
-    'fill: loop {
-        let mut took = false;
-        for list in &by_kind {
-            let Some(entry) = list.get(rank) else {
-                continue;
-            };
-            let size = entry.to_string().len() + 1;
-            if items.len() == MAX_SKIPPED_CAPABILITIES
-                || bytes + size > MAX_SKIPPED_CAPABILITIES_BYTES
-            {
-                break 'fill;
+    for rank in 0..kept.iter().copied().max().unwrap_or(0) {
+        for (list, kept) in by_kind.iter().zip(&kept) {
+            if rank < *kept {
+                items.push(list[rank].clone());
             }
-            bytes += size;
-            items.push(entry.clone());
-            took = true;
         }
-        if !took {
-            break;
-        }
-        rank += 1;
     }
     let more = total - items.len();
     let mut value = json!({ "items": items });

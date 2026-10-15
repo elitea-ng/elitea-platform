@@ -2388,9 +2388,7 @@ async fn never_ending_budget_refusal_body_returns_the_unscoped_refusal_in_time()
 /// agent's own binding (one turn) still serves its call afterwards.
 #[tokio::test(flavor = "current_thread")]
 async fn toolkit_completions_bind_fresh_and_leave_the_agents_turn_budget_alone() {
-    use super::toolkit_completion::{
-        FreshModelBinder, ToolkitCallBudget, toolkit_completion_model,
-    };
+    use super::toolkit_completion::{FreshModelBinder, ModelCallBudget, toolkit_completion_model};
     let reply = |text: &str| {
         let raw = format!(
             "data: {}\n\ndata: [DONE]\n\n",
@@ -2423,7 +2421,7 @@ async fn toolkit_completions_bind_fresh_and_leave_the_agents_turn_budget_alone()
                 .map_err(|_| unreachable!("binds"))
         })
     };
-    let model = toolkit_completion_model(bind, &one_turn, ToolkitCallBudget::new(10));
+    let model = toolkit_completion_model(bind, &one_turn, ModelCallBudget::new(10));
     let ask = || {
         let mut request = test_model_request("go");
         request.config = None;

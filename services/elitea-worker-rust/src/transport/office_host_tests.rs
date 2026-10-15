@@ -358,6 +358,7 @@ async fn objects_are_read_and_written_as_bytes_under_the_claims_credential() {
 #[tokio::test]
 #[allow(clippy::too_many_lines, reason = "one table of causes")]
 async fn failures_are_classified_and_a_large_object_is_never_buffered() {
+    use adk_rust::ErrorCategory as C;
     let api = ObjectApi::new();
     api.put("big.pptx", vec![7; 4096]);
     api.put("taken.pptx", vec![1]);
@@ -470,52 +471,103 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
     );
     let down = super::office_host::failure(&Failure::Transport("reset".into()));
     assert_eq!(down.kind(), OfficeFailure::Unreachable);
-    assert_eq!(
-        super::office_host::model_failure("the project model budget is exhausted").kind(),
-        OfficeFailure::BudgetRefused
-    );
-    assert_eq!(
-        super::office_host::model_failure("the model gateway timed out").kind(),
-        OfficeFailure::Unreachable
-    );
-    // D3: the live refusal read as "the platform could not be reached".
-    for (message, kind) in [
+    // Review round 2: classified on the AdkError's code and category, never
+    // on its message (the messages below are deliberately misleading).
+    let error = |category, code: &'static str| {
+        adk_rust::AdkError::new(
+            adk_rust::ErrorComponent::Model,
+            category,
+            code,
+            "the model gateway is unreachable; budget is exhausted",
+        )
+    };
+    for (category, code, kind) in [
         (
-            "model.invalid_input: the ADK model request is outside the admitted ordinary profile",
-            OfficeFailure::InvalidRequest,
-        ),
-        ("model.rate_limited: slow down", OfficeFailure::RateLimited),
-        ("model.timeout: timed out", OfficeFailure::Timeout),
-        ("model.unavailable: 503", OfficeFailure::Unreachable),
-        (
-            "model.internal: the model ran out of tokens while reasoning; raise max_tokens",
-            OfficeFailure::ReplyCutOff,
-        ),
-        (
-            "model.internal: the model's reply was cut off at its length limit; raise max_tokens",
-            OfficeFailure::ReplyCutOff,
-        ),
-        (
-            "model.internal: the model declined to reply",
-            OfficeFailure::ReplyDeclined,
-        ),
-        (
-            "model.internal: the model's reply held no usable text",
-            OfficeFailure::ReplyEmpty,
-        ),
-        (
-            "model.internal: the toolkit model call budget is exhausted for this run",
+            C::RateLimited,
+            "model.toolkit_budget_exhausted",
             OfficeFailure::BudgetRefused,
         ),
         (
-            "model.internal: the model's reply could not be used: it never completed",
+            C::InvalidInput,
+            "model_gateway.project_budget_exhausted",
+            OfficeFailure::BudgetRefused,
+        ),
+        (
+            C::InvalidInput,
+            "model_gateway.member_budget_exhausted",
+            OfficeFailure::BudgetRefused,
+        ),
+        (
+            C::InvalidInput,
+            "model_gateway.budget_exhausted",
+            OfficeFailure::BudgetRefused,
+        ),
+        // D3: the live refusal read as "the platform could not be reached".
+        (
+            C::InvalidInput,
+            "model_gateway.invalid_request",
+            OfficeFailure::InvalidRequest,
+        ),
+        (
+            C::InvalidInput,
+            "toolkit_completion.request",
+            OfficeFailure::InvalidRequest,
+        ),
+        (
+            C::RateLimited,
+            "model_gateway.rate_limited",
+            OfficeFailure::RateLimited,
+        ),
+        (
+            C::Timeout,
+            "model_gateway.upstream_timeout",
+            OfficeFailure::Timeout,
+        ),
+        (
+            C::Unauthorized,
+            "model_gateway.unauthorized",
+            OfficeFailure::AccessRefused,
+        ),
+        (
+            C::Unavailable,
+            "model_gateway.unavailable",
+            OfficeFailure::Unreachable,
+        ),
+        (
+            C::Internal,
+            "toolkit_completion.cut",
+            OfficeFailure::ReplyCutOff,
+        ),
+        (
+            C::Internal,
+            "toolkit_completion.cut_while_reasoning",
+            OfficeFailure::ReplyCutOff,
+        ),
+        (
+            C::Internal,
+            "toolkit_completion.declined",
+            OfficeFailure::ReplyDeclined,
+        ),
+        (
+            C::Internal,
+            "toolkit_completion.empty",
+            OfficeFailure::ReplyEmpty,
+        ),
+        (
+            C::Internal,
+            "toolkit_completion.no_terminal",
+            OfficeFailure::ReplyUnusable,
+        ),
+        (
+            C::Internal,
+            "toolkit_completion.finish",
             OfficeFailure::ReplyUnusable,
         ),
     ] {
         assert_eq!(
-            super::office_host::model_failure(message).kind(),
+            super::office_host::model_failure(&error(category, code)).kind(),
             kind,
-            "{message}"
+            "{code}"
         );
     }
 }

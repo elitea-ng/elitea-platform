@@ -1298,25 +1298,11 @@ fn resource_type_schema(canonical: bool) -> Value {
     }
 }
 
-/// The stored selection's tools this family does not serve, for the run's
-/// notice: `(name, needs_file_store)`. `attach_file` needs the file store.
-pub(crate) fn omitted_selection(selected: &[Box<str>], file_store: bool) -> Vec<(String, bool)> {
-    selected
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    AhaToolKind::ALL
         .iter()
-        .filter(|name| {
-            let known = AhaToolKind::ALL
-                .iter()
-                .find(|kind| kind.name() == name.as_ref());
-            match known {
-                None => true,
-                Some(kind) => !file_store && matches!(kind, AhaToolKind::AttachFile),
-            }
-        })
-        .map(|name| {
-            let known = AhaToolKind::ALL
-                .iter()
-                .any(|kind| kind.name() == name.as_ref());
-            (name.to_string(), known)
-        })
+        .map(|kind| (kind.name(), matches!(kind, AhaToolKind::AttachFile)))
         .collect()
 }

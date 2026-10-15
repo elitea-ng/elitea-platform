@@ -12,15 +12,25 @@ import (
 
 const ToolkitAuthorizationMessage = "Authorization is required to run this tool."
 
-// The worker's two refusals of a tool on the synchronous tool-run path, sent as
-// an UNKNOWN_TOOL result with exactly this message (the wire has no detail
-// code, and an older reader still shows a readable sentence). They are
-// distinct from a run whose own credentials could not be authorized, which is
-// a runtime failure. The Rust worker carries the same literals.
+// The worker's two refusals of a tool on the synchronous tool-run path. A
+// current worker sends them as the typed EFFECT_REFUSED / POLICY_REFUSED
+// results with these sentences; the round-1 worker sent them as UNKNOWN_TOOL
+// with the same sentences, which a reader still recognises as a fallback.
+// They are distinct from a run whose own credentials could not be
+// authorized, which is a runtime failure (ToolkitRunCredentialsRefusedMessage).
+// The Rust worker carries the same literals.
 const (
 	ToolkitEffectfulToolMessage = "This tool changes data, and this path runs read-only tools only."
 	ToolkitPolicyRefusedMessage = "This tool is blocked or sensitive under this deployment's policy and cannot run here."
 )
+
+// ToolkitRunCredentialsRefusedMessage is the safe message of an
+// AUTHORIZATION_FAILED runtime failure that a current worker sends when the
+// RUN's own credentials or context were refused (the claim's context could
+// not be redeemed, the delegated authorization did not match). An older
+// worker sends the generic "Execution authorization failed." for that AND for
+// a refused tool, so only this exact sentence means "the credentials".
+const ToolkitRunCredentialsRefusedMessage = "The platform could not authorize this tool run's credentials or context."
 
 // ToolkitAuthorizationRequired contains public consent metadata, never credentials.
 type ToolkitAuthorizationRequired struct {

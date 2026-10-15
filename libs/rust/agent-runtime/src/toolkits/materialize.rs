@@ -343,6 +343,45 @@ pub fn capped_notice_lines(mut lines: Vec<String>, max: usize) -> String {
     lines.join("\n")
 }
 
+/// How many leading items of each list a capped notice keeps: the lists are
+/// taken round-robin (rank 0 of every list, then rank 1, ...) while fewer
+/// than `max_items` are kept and the next item's `cost` still fits in
+/// `max_cost`, so one long list cannot push the others out. It stops at the
+/// first item that does not fit. Shared by the model notice
+/// (`left_out_toolkits_notice_text`: a line cap) and the worker's structured
+/// chat notice (`skipped_capabilities`: an entry cap and a byte budget).
+#[must_use]
+pub fn round_robin_take<T>(
+    lists: &[Vec<T>],
+    max_items: usize,
+    max_cost: usize,
+    mut cost: impl FnMut(&T) -> usize,
+) -> Vec<usize> {
+    let mut kept = vec![0; lists.len()];
+    let (mut items, mut spent) = (0usize, 0usize);
+    let mut rank = 0;
+    loop {
+        let mut took = false;
+        for (index, list) in lists.iter().enumerate() {
+            let Some(item) = list.get(rank) else {
+                continue;
+            };
+            let size = cost(item);
+            if items == max_items || spent.saturating_add(size) > max_cost {
+                return kept;
+            }
+            items += 1;
+            spent += size;
+            kept[index] += 1;
+            took = true;
+        }
+        if !took {
+            return kept;
+        }
+        rank += 1;
+    }
+}
+
 /// Most lines a model-visible toolkit notice lists.
 const MAX_NOTICE_LINES: usize = 32;
 
@@ -387,21 +426,11 @@ pub fn left_out_toolkits_notice_text(left_out: &[LeftOutToolkit]) -> Option<Stri
     if total == 0 {
         return None;
     }
-    let (mut kept_toolkits, mut kept_tools) = (0, 0);
-    let mut rank = 0;
-    while kept_toolkits + kept_tools < MAX_NOTICE_LINES
-        && (rank < toolkits.len() || rank < tools.len())
-    {
-        if rank < toolkits.len() {
-            kept_toolkits += 1;
-        }
-        if kept_toolkits + kept_tools < MAX_NOTICE_LINES && rank < tools.len() {
-            kept_tools += 1;
-        }
-        rank += 1;
-    }
-    let mut lines: Vec<String> = toolkits.into_iter().take(kept_toolkits).collect();
-    lines.extend(tools.into_iter().take(kept_tools));
+    let lists = [toolkits, tools];
+    let kept = round_robin_take(&lists, MAX_NOTICE_LINES, usize::MAX, |_| 0);
+    let [toolkits, tools] = lists;
+    let mut lines: Vec<String> = toolkits.into_iter().take(kept[0]).collect();
+    lines.extend(tools.into_iter().take(kept[1]));
     let hidden = total - lines.len();
     if hidden > 0 {
         lines.push(format!("({hidden} more not shown)"));
@@ -637,23 +666,41 @@ const REASON_INDEX_RUN: &str =
 const REASON_INDEX_TOOLS: &str = "the index tools are not available for this toolkit on this path";
 const REASON_POLICY: &str = "this tool is blocked by this deployment's policy";
 
-/// The stored selection's tools a family does not serve, from the family's
-/// own predicate (`omitted_selection`; no toolset is enumerated):
-/// `(name, needs_file_store)`. `None` for a family that reports none.
-fn family_omissions(
-    tool_type: &str,
+/// The stored selection's tools a family does not serve, for the run's
+/// notice: `(name, needs_file_store)`. `catalog` is the family's whole served
+/// list with, per tool, whether it needs the run's file store; a selected name
+/// outside it is not ported, and one that needs the file store is omitted when
+/// the run lends none. ONE rule for every family (review round 2: it was eight
+/// per-family copies).
+fn omitted_selection(
+    catalog: &[(&'static str, bool)],
     selected: &[Box<str>],
     file_store: bool,
-) -> Option<Vec<(String, bool)>> {
+) -> Vec<(String, bool)> {
+    selected
+        .iter()
+        .filter_map(
+            |name| match catalog.iter().find(|(served, _)| *served == name.as_ref()) {
+                None => Some((name.to_string(), false)),
+                Some((_, true)) if !file_store => Some((name.to_string(), true)),
+                Some(_) => None,
+            },
+        )
+        .collect()
+}
+
+/// The served tool list of a family that reports per-tool omissions; `None`
+/// for one that reports none.
+fn family_tool_catalog(tool_type: &str) -> Option<Vec<(&'static str, bool)>> {
     Some(match tool_type {
-        "aha" => aha::tools::omitted_selection(selected, file_store),
-        "bigquery" => bigquery::tools::omitted_selection(selected, file_store),
-        "bitbucket" => bitbucket::tools::omitted_selection(selected, file_store),
-        "confluence" => confluence::tools::omitted_selection(selected, file_store),
-        "figma" => figma::tools::omitted_selection(selected, file_store),
-        "github" => github::tools::omitted_selection(selected, file_store),
-        "gitlab" => gitlab::tools::omitted_selection(selected, file_store),
-        "jira" => jira::tools::omitted_selection(selected, file_store),
+        "aha" => aha::tools::tool_catalog(),
+        "bigquery" => bigquery::tools::tool_catalog(),
+        "bitbucket" => bitbucket::tools::tool_catalog(),
+        "confluence" => confluence::tools::tool_catalog(),
+        "figma" => figma::tools::tool_catalog(),
+        "github" => github::tools::tool_catalog(),
+        "gitlab" => gitlab::tools::tool_catalog(),
+        "jira" => jira::tools::tool_catalog(),
         _ => return None,
     })
 }
@@ -687,9 +734,10 @@ fn report_unserved_selected_tools(
         })
         .unwrap_or_default();
     let file_store = artifacts.and_then(ArtifactToolAuthority::office).is_some();
-    let Some(unserved) = family_omissions(reference.tool_type(), &selected, file_store) else {
+    let Some(catalog) = family_tool_catalog(reference.tool_type()) else {
         return;
     };
+    let unserved = omitted_selection(&catalog, &selected, file_store);
     let mut omitted: Vec<(String, LeftOutReason, &'static str)> = Vec::new();
     for (name, needs_file_store) in unserved {
         if super::families::index_tools::is_sdk_index_tool_name(&name) {
@@ -1565,5 +1613,63 @@ const fn sharepoint_toolset_materialization_error(
         | sharepoint::tools::SharePointToolsetErrorCode::UnsupportedSelection => {
             unsupported_toolkit()
         }
+    }
+}
+
+#[cfg(test)]
+mod notice_helper_tests {
+    use super::{family_tool_catalog, omitted_selection, round_robin_take};
+
+    fn names(selected: &[&str]) -> Vec<Box<str>> {
+        selected.iter().map(|name| Box::from(*name)).collect()
+    }
+
+    /// Review round 2: ONE rule replaces the eight per-family copies.
+    #[test]
+    fn omitted_selection_is_one_rule_over_a_family_catalog() {
+        let catalog = [("read", false), ("attach", true)];
+        let selected = names(&["read", "attach", "nope"]);
+        assert_eq!(
+            omitted_selection(&catalog, &selected, false),
+            [("attach".to_owned(), true), ("nope".to_owned(), false)]
+        );
+        assert_eq!(
+            omitted_selection(&catalog, &selected, true),
+            [("nope".to_owned(), false)]
+        );
+        assert!(omitted_selection(&catalog, &[], false).is_empty());
+    }
+
+    #[test]
+    fn each_reporting_family_states_its_file_store_tools() {
+        let needs = |family: &str| -> Vec<&'static str> {
+            family_tool_catalog(family)
+                .expect(family)
+                .into_iter()
+                .filter_map(|(name, needs)| needs.then_some(name))
+                .collect()
+        };
+        assert_eq!(needs("aha"), ["attach_file"]);
+        assert!(!needs("jira").is_empty());
+        assert!(needs("confluence").contains(&"add_file_to_page"));
+        for family in ["bigquery", "bitbucket", "figma", "github", "gitlab"] {
+            assert!(needs(family).is_empty(), "{family}");
+            assert!(!family_tool_catalog(family).expect(family).is_empty());
+        }
+        assert!(family_tool_catalog("slack").is_none());
+    }
+
+    #[test]
+    fn round_robin_take_is_fair_and_honours_both_caps() {
+        let long: Vec<u32> = (0..10).collect();
+        let short = vec![100, 101];
+        let lists = [long, short];
+        // Item cap: 2 + 2 + then the long list's tail.
+        assert_eq!(round_robin_take(&lists, 6, usize::MAX, |_| 0), [4, 2]);
+        // Cost cap: three items of cost 2 fit in 7, the fourth does not.
+        assert_eq!(round_robin_take(&lists, 100, 7, |_| 2), [2, 1]);
+        assert_eq!(round_robin_take(&lists, 100, usize::MAX, |_| 1), [10, 2]);
+        let empty: [Vec<u32>; 2] = [Vec::new(), Vec::new()];
+        assert_eq!(round_robin_take(&empty, 5, 5, |_| 1), [0, 0]);
     }
 }

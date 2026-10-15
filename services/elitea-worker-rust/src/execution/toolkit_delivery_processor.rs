@@ -1277,6 +1277,7 @@ where
         lease: ClaimLeaseMonitor,
         proposed: ToolkitExecuteReadTerminalOutput,
     ) -> Result<(), ToolkitProcessError> {
+        let proposed = call_tool_terminal(verified.kind(), proposed);
         let result = async {
             let terminal = match lease.check_now().await {
                 Ok(()) if deadline_exceeded(&verified, self.clock.as_ref()) => {
@@ -1583,6 +1584,28 @@ fn bind_call_result(
     })
 }
 
+/// A tool run's terminal as published. On `toolkit.call_tool.v1` a refusal
+/// of the TOOL is its own typed result (`EFFECT_REFUSED` / `POLICY_REFUSED`), so
+/// an authorization failure left over is always the run's own credentials or
+/// context: it carries that sentence (#1292 round 2, item 4), which Main reads
+/// as "the credentials" while an older worker's generic one reads as a
+/// refusal of the tool.
+fn call_tool_terminal(
+    kind: ToolkitCommandKind,
+    proposed: ToolkitExecuteReadTerminalOutput,
+) -> ToolkitExecuteReadTerminalOutput {
+    match proposed {
+        ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::AuthorizationFailed)
+            if kind == ToolkitCommandKind::CallTool =>
+        {
+            ToolkitExecuteReadTerminalOutput::Failure(
+                RuntimeFailureKind::ToolkitRunAuthorizationFailed,
+            )
+        }
+        other => other,
+    }
+}
+
 /// Main's `ToolkitEffectfulToolMessage` and `ToolkitPolicyRefusedMessage`.
 pub(crate) const EFFECTFUL_TOOL_MESSAGE: &str =
     "This tool changes data, and this path runs read-only tools only.";
@@ -1605,19 +1628,22 @@ fn call_summary(
                 None,
                 "The toolkit operation is not selected.",
             ),
-            // A policy refusal of THIS tool is a verdict on the tool, not a
-            // failure of the run: it is its own result (Main's two literals,
-            // `ToolkitEffectfulToolMessage` / `ToolkitPolicyRefusedMessage`),
-            // so it is never confused with the run's credentials being
-            // refused (a runtime failure, AuthorizationFailed).
+            // A refusal of THIS tool is a verdict on the tool, not a failure
+            // of the run: its own TYPED status (EFFECT_REFUSED /
+            // POLICY_REFUSED), never confused with the run's credentials
+            // being refused (a runtime failure, AuthorizationFailed) nor with
+            // a toolkit that has no tool by that name (UNKNOWN_TOOL). The
+            // sentence is Main's `ToolkitEffectfulToolMessage` /
+            // `ToolkitPolicyRefusedMessage`, which Main still reads as a
+            // fallback from a worker that sent UNKNOWN_TOOL (round 1).
             DirectToolkitRuntimeErrorCode::EffectfulToolUnavailable => (
-                ToolkitCallToolStatusV1::UnknownTool,
+                ToolkitCallToolStatusV1::EffectRefused,
                 None,
                 EFFECTFUL_TOOL_MESSAGE,
             ),
             DirectToolkitRuntimeErrorCode::ToolBlocked
             | DirectToolkitRuntimeErrorCode::SensitiveToolUnavailable => (
-                ToolkitCallToolStatusV1::UnknownTool,
+                ToolkitCallToolStatusV1::PolicyRefused,
                 None,
                 POLICY_REFUSED_MESSAGE,
             ),
@@ -1874,6 +1900,9 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::DependencyUnavailable => "runtime.dependency_unavailable",
         RuntimeFailureKind::DeadlineExceeded => "runtime.deadline_exceeded",
         RuntimeFailureKind::AuthorizationFailed => "runtime.authorization_failed",
+        RuntimeFailureKind::ToolkitRunAuthorizationFailed => {
+            "runtime.toolkit_run_authorization_failed"
+        }
         RuntimeFailureKind::Cancelled => "runtime.cancelled",
         RuntimeFailureKind::ResultRefused => "runtime.result_refused",
         RuntimeFailureKind::OutputContinuationExhausted => "runtime.output_continuation_exhausted",
@@ -2113,19 +2142,62 @@ mod shared_result_tests {
     #[test]
     fn tool_refusals_are_results_and_a_refused_run_is_a_failure() {
         use crate::toolkits::{DirectToolkitRuntimeErrorCode as Code, test_error};
-        for (code, message) in [
-            (Code::EffectfulToolUnavailable, EFFECTFUL_TOOL_MESSAGE),
-            (Code::ToolBlocked, POLICY_REFUSED_MESSAGE),
-            (Code::SensitiveToolUnavailable, POLICY_REFUSED_MESSAGE),
+        for (code, status, message) in [
+            (
+                Code::EffectfulToolUnavailable,
+                ToolkitCallToolStatusV1::EffectRefused,
+                EFFECTFUL_TOOL_MESSAGE,
+            ),
+            (
+                Code::ToolBlocked,
+                ToolkitCallToolStatusV1::PolicyRefused,
+                POLICY_REFUSED_MESSAGE,
+            ),
+            (
+                Code::SensitiveToolUnavailable,
+                ToolkitCallToolStatusV1::PolicyRefused,
+                POLICY_REFUSED_MESSAGE,
+            ),
         ] {
             let summary = call_summary(Err(test_error(code))).expect("a result");
-            assert_eq!(summary.status, ToolkitCallToolStatusV1::UnknownTool as i32);
+            assert_eq!(summary.status, status as i32, "{code:?}");
             assert_eq!(summary.error_message, message);
+            // The settlement the worker restores agrees: a refusal FAILS.
         }
+        // A tool the toolkit lacks stays UNKNOWN_TOOL.
+        assert_eq!(
+            call_summary(Err(test_error(Code::ToolNotSelected)))
+                .expect("a result")
+                .status,
+            ToolkitCallToolStatusV1::UnknownTool as i32
+        );
         assert!(matches!(
             call_summary(Err(test_error(Code::AuthorizationRequired))),
             Err(RuntimeFailureKind::AuthorizationFailed)
         ));
+    }
+
+    /// Item 4: the run's own credentials refused on a tool run carry their
+    /// own sentence; other commands keep the generic one.
+    #[test]
+    fn a_tool_runs_authorization_failure_names_the_credentials() {
+        use crate::protocol::output::TOOLKIT_RUN_AUTHORIZATION_FAILED_MESSAGE;
+        let failed =
+            || ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::AuthorizationFailed);
+        assert!(matches!(
+            call_tool_terminal(ToolkitCommandKind::CallTool, failed()),
+            ToolkitExecuteReadTerminalOutput::Failure(
+                RuntimeFailureKind::ToolkitRunAuthorizationFailed
+            )
+        ));
+        assert!(matches!(
+            call_tool_terminal(ToolkitCommandKind::AvailableTools, failed()),
+            ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::AuthorizationFailed)
+        ));
+        assert_eq!(
+            TOOLKIT_RUN_AUTHORIZATION_FAILED_MESSAGE,
+            "The platform could not authorize this tool run's credentials or context."
+        );
     }
 
     #[test]

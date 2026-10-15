@@ -409,6 +409,8 @@ fn shared_toolkit_call_output_binds_inputs_and_derives_refusal_outcome() {
         ToolkitCallToolStatusV1::ToolError,
         ToolkitCallToolStatusV1::UnknownTool,
         ToolkitCallToolStatusV1::UnsupportedToolkit,
+        ToolkitCallToolStatusV1::EffectRefused,
+        ToolkitCallToolStatusV1::PolicyRefused,
     ] {
         let result = call_result(&claim, status);
         assert!(claim.matches_toolkit_call_tool_result_binding(&result));
@@ -431,7 +433,10 @@ fn shared_toolkit_call_output_binds_inputs_and_derives_refusal_outcome() {
                 .requested_outcome,
             if matches!(
                 status,
-                ToolkitCallToolStatusV1::UnknownTool | ToolkitCallToolStatusV1::UnsupportedToolkit
+                ToolkitCallToolStatusV1::UnknownTool
+                    | ToolkitCallToolStatusV1::UnsupportedToolkit
+                    | ToolkitCallToolStatusV1::EffectRefused
+                    | ToolkitCallToolStatusV1::PolicyRefused
             ) {
                 ExecutionOutcomeV1::Failed as i32
             } else {

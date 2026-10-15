@@ -36,6 +36,7 @@ use super::extractor_client::{Extraction, ExtractorClient, SkipReason};
 use super::images_facade::{ImageCall, ImagesClient, ImagesError};
 use super::multipart::Multipart;
 use super::runtime_context::ClaimScopedEliteaContext;
+use super::toolkit_completion::ModelCallBudget;
 use crate::indexing::tools::{LazyStepbackModel, generate_text};
 
 /// The host's HTTP client: the GitHub client's timeouts and limits, with
@@ -139,6 +140,10 @@ pub(crate) struct ClaimOfficeHost {
     /// The gateway's images routes under the claim (the `imagegen` toolkit,
     /// #864); `None` leaves that toolkit out as unsupported.
     images: Option<(ImagesClient, Arc<ClaimScopedEliteaContext>)>,
+    /// The run's ONE toolkit model-call budget (shared with the step-back
+    /// tools and this host's prompts): one unit per image call sent. `None`
+    /// on a path that sets none (a direct tool run, a pipeline node).
+    budget: Option<ModelCallBudget>,
 }
 
 impl ClaimOfficeHost {
@@ -162,7 +167,35 @@ impl ClaimOfficeHost {
             model,
             project_id: project_id.to_owned(),
             images: None,
+            budget: None,
         })
+    }
+
+    /// This host charging its image calls to the run's toolkit budget.
+    #[must_use]
+    pub(crate) fn with_budget(mut self, budget: ModelCallBudget) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
+    /// Takes one unit of the run's budget for an image call.
+    fn charge_image_call(&self) -> Result<(), OfficeHostError> {
+        match &self.budget {
+            Some(budget) if !budget.try_take() => Err(OfficeHostError::new(
+                OfficeFailure::BudgetRefused,
+                "office_host.budget_refused",
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Gives the unit back when the image call failed before it was sent.
+    fn settle_image_call<T>(&self, result: &Result<T, ImagesError>) {
+        if let (Some(budget), Err(error)) = (&self.budget, result)
+            && images_failed_before_sending(error)
+        {
+            budget.refund();
+        }
     }
 
     /// This host with the gateway's images API, called under `context`'s
@@ -240,38 +273,48 @@ pub(crate) fn failure(error: &Failure) -> OfficeHostError {
     OfficeHostError::new(kind, reason)
 }
 
-/// A model-call failure: the gateway's budget refusal is its own cause.
-pub(crate) fn model_failure(message: &str) -> OfficeHostError {
-    // `message` is an `AdkError`'s display: "model.<category>: <sentence>".
-    // The category decides the sentence the person reads. A request the
-    // model gateway refused as invalid is not "the platform could not be
-    // reached" (live defect D3): nothing was unreachable, and trying again
-    // cannot help.
-    use super::toolkit_completion::{
-        REPLY_CUT_AT_LIMIT, REPLY_CUT_WHILE_REASONING, REPLY_DECLINED, REPLY_EMPTY,
-    };
+/// A model-call failure, classified on the error's CODE and CATEGORY (review
+/// round 2: never on its message). The run's toolkit budget and the gateway's
+/// budget refusal are their own cause; a request the model gateway refused as
+/// invalid is not "the platform could not be reached" (live defect D3).
+pub(crate) fn model_failure(error: &adk_rust::AdkError) -> OfficeHostError {
+    use super::toolkit_completion::TOOLKIT_BUDGET_EXHAUSTED_CODE;
+    use adk_rust::ErrorCategory;
     let kind = |kind, reason| OfficeHostError::new(kind, reason);
-    if message.contains("budget is exhausted") {
-        kind(OfficeFailure::BudgetRefused, "office_host.budget_refused")
-    } else if message.contains(REPLY_CUT_AT_LIMIT) || message.contains(REPLY_CUT_WHILE_REASONING) {
-        kind(OfficeFailure::ReplyCutOff, "office_host.reply_cut_off")
-    } else if message.contains(REPLY_DECLINED) {
-        kind(OfficeFailure::ReplyDeclined, "office_host.reply_declined")
-    } else if message.contains(REPLY_EMPTY) {
-        kind(OfficeFailure::ReplyEmpty, "office_host.reply_empty")
-    } else if message.contains("the model's reply could not be used") {
-        kind(OfficeFailure::ReplyUnusable, "office_host.reply_unusable")
-    } else if message.starts_with("model.invalid_input") {
-        kind(
+    match error.code {
+        TOOLKIT_BUDGET_EXHAUSTED_CODE
+        | "model_gateway.budget_exhausted"
+        | "model_gateway.project_budget_exhausted"
+        | "model_gateway.member_budget_exhausted" => {
+            return kind(OfficeFailure::BudgetRefused, "office_host.budget_refused");
+        }
+        "toolkit_completion.cut" | "toolkit_completion.cut_while_reasoning" => {
+            return kind(OfficeFailure::ReplyCutOff, "office_host.reply_cut_off");
+        }
+        "toolkit_completion.declined" => {
+            return kind(OfficeFailure::ReplyDeclined, "office_host.reply_declined");
+        }
+        "toolkit_completion.empty" => {
+            return kind(OfficeFailure::ReplyEmpty, "office_host.reply_empty");
+        }
+        code if code.starts_with("toolkit_completion.") && code != "toolkit_completion.request" => {
+            return kind(OfficeFailure::ReplyUnusable, "office_host.reply_unusable");
+        }
+        _ => {}
+    }
+    match error.category {
+        ErrorCategory::InvalidInput => kind(
             OfficeFailure::InvalidRequest,
             "office_host.model_invalid_request",
-        )
-    } else if message.starts_with("model.rate_limited") {
-        kind(OfficeFailure::RateLimited, "office_host.model_rate_limited")
-    } else if message.starts_with("model.timeout") {
-        kind(OfficeFailure::Timeout, "office_host.model_timeout")
-    } else {
-        kind(OfficeFailure::Unreachable, "office_host.model_call_failed")
+        ),
+        ErrorCategory::Unauthorized | ErrorCategory::Forbidden => {
+            kind(OfficeFailure::AccessRefused, "office_host.model_refused")
+        }
+        ErrorCategory::RateLimited => {
+            kind(OfficeFailure::RateLimited, "office_host.model_rate_limited")
+        }
+        ErrorCategory::Timeout => kind(OfficeFailure::Timeout, "office_host.model_timeout"),
+        _ => kind(OfficeFailure::Unreachable, "office_host.model_call_failed"),
     }
 }
 
@@ -397,6 +440,14 @@ impl OfficeToolHost for NoRoundTripImagesHost {
     }
 }
 
+/// Whether an images call failed locally, before the request was sent.
+const fn images_failed_before_sending(error: &ImagesError) -> bool {
+    matches!(
+        error,
+        ImagesError::RequestTooLarge | ImagesError::InvalidFileName | ImagesError::Malformed
+    )
+}
+
 /// An images-API failure as the host classifies it: each real cause its own
 /// kind, so the tool names it (a rate limit is not a lost connection).
 pub(crate) fn images_failure(error: &ImagesError) -> OfficeHostError {
@@ -464,7 +515,10 @@ impl OfficeToolHost for ClaimOfficeHost {
             size: request.size.as_deref(),
             count: request.count,
         };
-        client.generate(context, &call).await.map_err(|error| {
+        self.charge_image_call()?;
+        let result = client.generate(context, &call).await;
+        self.settle_image_call(&result);
+        result.map_err(|error| {
             tracing::warn!(event = "imagegen_call_failed", error = %error, "an image generation call failed");
             images_failure(&error)
         })
@@ -492,10 +546,10 @@ impl OfficeToolHost for ClaimOfficeHost {
             size: None,
             count: 1,
         };
-        client
-            .edit(context, &call, image, mask)
-            .await
-            .map_err(|error| {
+        self.charge_image_call()?;
+        let result = client.edit(context, &call, image, mask).await;
+        self.settle_image_call(&result);
+        result.map_err(|error| {
                 tracing::warn!(event = "imagegen_call_failed", error = %error, "an image edit call failed");
                 images_failure(&error)
             })
@@ -746,13 +800,14 @@ impl OfficeToolHost for ClaimOfficeHost {
                 annotations: None,
             });
         }
-        generate_text(binding, parts).await.map_err(|message| {
+        generate_text(binding, parts).await.map_err(|error| {
             tracing::warn!(
                 event = "office_model_call_failed",
-                error = %message,
+                error_code = error.code,
+                error = %error,
                 "a document tool's model call failed"
             );
-            model_failure(&message)
+            model_failure(&error)
         })
     }
 }

@@ -384,17 +384,29 @@ impl StepbackModel for AdkStepbackModel<'_> {
         )
         .await
         .map(Value::String)
-        .map_err(VectorError::Model)
+        .map_err(|error| VectorError::Model(error.to_string()))
     }
 }
 
 /// One non-streaming user message of `parts` on the bound model, and the text
-/// of the one complete reply. The error is a data-free sentence. Shared with
-/// the Office tools' model calls (ADR-0032), which send a prompt and images.
+/// of the one complete reply. The error is the model's own typed `AdkError`
+/// (its code and category decide how a caller classifies it, review round 2),
+/// or a local one with a fixed `toolkit_completion.*` code; its message is a
+/// data-free sentence. Shared with the Office tools' model calls (ADR-0032),
+/// which send a prompt and images.
 pub(crate) async fn generate_text(
     binding: &StepbackBinding,
     parts: Vec<Part>,
-) -> Result<String, String> {
+) -> Result<String, adk_rust::AdkError> {
+    use adk_rust::{AdkError, ErrorCategory, ErrorComponent};
+    let local = |code: &'static str, message: &'static str| {
+        AdkError::new(
+            ErrorComponent::Model,
+            ErrorCategory::Internal,
+            code,
+            message,
+        )
+    };
     let request = LlmRequest {
         model: binding.model_name.clone(),
         contents: vec![Content {
@@ -405,33 +417,38 @@ pub(crate) async fn generate_text(
         tools: std::collections::HashMap::new(),
         previous_response_id: None,
     };
-    let mut responses = binding
-        .model
-        .generate_content(request, false)
-        .await
-        .map_err(|error| error.to_string())?;
+    let mut responses = binding.model.generate_content(request, false).await?;
     let mut text: Option<String> = None;
     while let Some(response) = responses.next().await {
-        let response = response.map_err(|error| error.to_string())?;
+        let response = response?;
         if response.partial {
             // Not expected of a non-streaming call; a partial frame is never
             // the reply.
             continue;
         }
         if response.error_code.is_some() {
-            return Err("the model ended the reply with an error".to_owned());
+            return Err(local(
+                "toolkit_completion.finish",
+                "the model's reply could not be used: the model ended it with an error",
+            ));
         }
         if let Some(reason) = response.finish_reason
             && reason != FinishReason::Stop
         {
-            return Err(format!("the model stopped for {reason:?}"));
+            return Err(local(
+                "toolkit_completion.finish",
+                "the model's reply could not be used: the model stopped abnormally",
+            ));
         }
         let mut reply = String::new();
         if let Some(content) = &response.content {
             for part in &content.parts {
                 if let Part::Text { text: piece } = part {
                     if reply.len().saturating_add(piece.len()) > MAX_MODEL_TEXT_BYTES {
-                        return Err("the reply exceeds the step-back size bound".to_owned());
+                        return Err(local(
+                            "toolkit_completion.reply_size",
+                            "the model's reply could not be used: it exceeds the step-back size bound",
+                        ));
                     }
                     reply.push_str(piece);
                 }
@@ -441,5 +458,10 @@ pub(crate) async fn generate_text(
         // yields exactly one.
         text = Some(reply);
     }
-    text.ok_or_else(|| "the model returned no reply".to_owned())
+    text.ok_or_else(|| {
+        local(
+            "toolkit_completion.no_terminal",
+            "the model's reply could not be used: it never completed",
+        )
+    })
 }

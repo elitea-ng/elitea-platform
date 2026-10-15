@@ -55,16 +55,22 @@ func TestWriteOutcomeWorkerRefusalsAreTyped(t *testing.T) {
 		reason  string
 		has     string
 	}{
-		{"effectful (worker result)", refusal(toolkitcalltoolapp.RunStatusUnknownTool, "", executiondomain.ToolkitEffectfulToolMessage, "add_slide"),
+		{"effectful (typed)", refusal(toolkitcalltoolapp.RunStatusEffectRefused, "", executiondomain.ToolkitEffectfulToolMessage, "add_slide"),
 			http.StatusUnprocessableEntity, ReasonEffectfulToolUnavailable, `The tool "add_slide" changes data`},
-		{"policy (worker result)", refusal(toolkitcalltoolapp.RunStatusUnknownTool, "", executiondomain.ToolkitPolicyRefusedMessage, "x"),
+		{"policy (typed)", refusal(toolkitcalltoolapp.RunStatusPolicyRefused, "", executiondomain.ToolkitPolicyRefusedMessage, "x"),
 			http.StatusUnprocessableEntity, ReasonToolRefused, "blocked or sensitive"},
-		{"effectful, no tool name", refusal(toolkitcalltoolapp.RunStatusUnknownTool, "", executiondomain.ToolkitEffectfulToolMessage, " "),
+		{"effectful, no tool name", refusal(toolkitcalltoolapp.RunStatusEffectRefused, "", executiondomain.ToolkitEffectfulToolMessage, " "),
 			http.StatusUnprocessableEntity, ReasonEffectfulToolUnavailable, "This tool changes data"},
 		{"older worker effectful", refusal(toolkitcalltoolapp.RunStatusRuntimeFailure, "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY", "Configuration type is not supported.", "add_slide"),
 			http.StatusUnprocessableEntity, ReasonEffectfulToolUnavailable, "changes data"},
-		{"run credentials refused", refusal(toolkitcalltoolapp.RunStatusRuntimeFailure, "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED", "Execution authorization failed.", "add_slide"),
+		// Item 4: a current worker's run-credentials refusal is the 403...
+		{"run credentials refused", refusal(toolkitcalltoolapp.RunStatusRuntimeFailure, "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED", executiondomain.ToolkitRunCredentialsRefusedMessage, "add_slide"),
 			http.StatusForbidden, ReasonAuthorizationFailed, "credentials or context"},
+		// ...an older worker's bare AUTHORIZATION_FAILED (its refusal of a
+		// blocked or sensitive tool) is a neutral 422, never "retry
+		// credentials".
+		{"older worker authorization failed", refusal(toolkitcalltoolapp.RunStatusRuntimeFailure, "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED", "Execution authorization failed.", "add_slide"),
+			http.StatusUnprocessableEntity, ReasonToolRefused, "refused by the agent worker"},
 		{"a genuinely unknown tool stays unknown", refusal(toolkitcalltoolapp.RunStatusUnknownTool, "", "no such tool", "nope"),
 			http.StatusUnprocessableEntity, "unknown_tool", "no such tool"},
 		{"other failures stay 500", refusal(toolkitcalltoolapp.RunStatusRuntimeFailure, "RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE", "x", "t"),
@@ -85,6 +91,9 @@ func TestWriteOutcomeWorkerRefusalsAreTyped(t *testing.T) {
 			if strings.Contains(sentence, "test panel") || strings.Contains(sentence, "Configuration type") {
 				t.Fatalf("caller-specific or generic wording: %q", sentence)
 			}
+			if c.reason != ReasonAuthorizationFailed && strings.Contains(sentence, "credentials") {
+				t.Fatalf("a tool refusal tells the person to retry credentials: %q", sentence)
+			}
 		})
 	}
 }
@@ -93,7 +102,8 @@ func TestWriteOutcomeWorkerRefusalsAreTyped(t *testing.T) {
 // literals; this pins Main's side of the pair.
 func TestWorkerRefusalLiteralsMatchTheWorker(t *testing.T) {
 	if executiondomain.ToolkitEffectfulToolMessage != "This tool changes data, and this path runs read-only tools only." ||
-		executiondomain.ToolkitPolicyRefusedMessage != "This tool is blocked or sensitive under this deployment's policy and cannot run here." {
+		executiondomain.ToolkitPolicyRefusedMessage != "This tool is blocked or sensitive under this deployment's policy and cannot run here." ||
+		executiondomain.ToolkitRunCredentialsRefusedMessage != "The platform could not authorize this tool run's credentials or context." {
 		t.Fatal("the worker's refusal literals changed")
 	}
 }

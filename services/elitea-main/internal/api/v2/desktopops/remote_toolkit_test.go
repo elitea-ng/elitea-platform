@@ -281,6 +281,25 @@ func TestRemoteToolkitOutcomesMapToTypedAnswers(t *testing.T) {
 			Status: toolkitcalltoolapp.RunStatusRuntimeFailure, ToolName: "create_issue",
 			FailureCode: "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY",
 		}, http.StatusUnprocessableEntity, []string{`"worker_refused"`, "read-only", `\"create_issue\"`}},
+		// #1292 round 2: the typed refusals keep the documented 422
+		// worker_refused with the read-only sentence (round 1 had moved them
+		// to UNKNOWN_TOOL, which answered "unknown_tool").
+		"rust refuses an effectful tool (typed)": {"rust", toolkitcalltoolapp.RunOutcome{
+			Status: toolkitcalltoolapp.RunStatusEffectRefused, ToolName: "create_issue",
+			ErrorMessage: executiondomain.ToolkitEffectfulToolMessage,
+		}, http.StatusUnprocessableEntity, []string{`"worker_refused"`, "read-only", `\"create_issue\"`}},
+		"rust refuses a sensitive tool (typed)": {"rust", toolkitcalltoolapp.RunOutcome{
+			Status: toolkitcalltoolapp.RunStatusPolicyRefused, ToolName: "delete_repo",
+			ErrorMessage: executiondomain.ToolkitPolicyRefusedMessage,
+		}, http.StatusUnprocessableEntity, []string{`"worker_refused"`, "non-sensitive", `\"delete_repo\"`}},
+		"older worker's bare authorization failure": {"rust", toolkitcalltoolapp.RunOutcome{
+			Status: toolkitcalltoolapp.RunStatusRuntimeFailure, ToolName: "delete_repo",
+			FailureCode: "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED", ErrorMessage: "Execution authorization failed.",
+		}, http.StatusUnprocessableEntity, []string{`"worker_refused"`}},
+		"run credentials refused is a failure, not a refusal": {"rust", toolkitcalltoolapp.RunOutcome{
+			Status: toolkitcalltoolapp.RunStatusRuntimeFailure, ToolName: "t",
+			FailureCode: "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED", ErrorMessage: executiondomain.ToolkitRunCredentialsRefusedMessage,
+		}, http.StatusBadGateway, []string{`"remote_toolkit_failed"`, "credentials or context"}},
 		"provider failure": {"python", toolkitcalltoolapp.RunOutcome{
 			Status: toolkitcalltoolapp.RunStatusRuntimeFailure, FailureCode: "RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE", ErrorMessage: "down",
 		}, http.StatusBadGateway, []string{`"remote_toolkit_failed"`}},

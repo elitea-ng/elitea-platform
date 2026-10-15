@@ -539,3 +539,183 @@ async fn a_host_without_the_images_client_does_not_serve_the_toolkit() {
         elitea_agent_runtime::toolkits::OfficeFailure::NoModel
     );
 }
+
+/// A provider that answers every completion with "ok" and counts them.
+struct CountingModel(std::sync::atomic::AtomicUsize);
+
+#[async_trait]
+impl adk_rust::Llm for CountingModel {
+    fn name(&self) -> &'static str {
+        "fixture-model"
+    }
+
+    async fn generate_content(
+        &self,
+        _: adk_rust::LlmRequest,
+        _: bool,
+    ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let frames = vec![
+            Ok(adk_rust::LlmResponse {
+                content: Some(adk_rust::Content::new("model").with_text("ok")),
+                partial: true,
+                ..Default::default()
+            }),
+            Ok(adk_rust::LlmResponse {
+                finish_reason: Some(adk_rust::FinishReason::Stop),
+                turn_complete: true,
+                ..Default::default()
+            }),
+        ];
+        Ok(Box::pin(adk_rust::futures::stream::iter(frames)))
+    }
+}
+
+/// Review round 2, items 3 and 5: the claim's ONE toolkit budget is shared by
+/// the step-back model, the Office host's prompts and its image calls (it was
+/// one budget per call site, so the cap was 400 and images were uncapped),
+/// and the binder binds nothing until a completion is asked for.
+#[tokio::test]
+async fn stepback_office_and_images_stop_at_the_one_shared_cap() {
+    use crate::agents::ordinary::{BindOne, stepback_binder};
+    use crate::transport::toolkit_completion::ModelCallBudget;
+    use elitea_agent_runtime::toolkits::{ImageGenerateRequest, OfficeModelRequest};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let budget = ModelCallBudget::new(3);
+    let provider = Arc::new(CountingModel(AtomicUsize::new(0)));
+    let binds = Arc::new(AtomicUsize::new(0));
+    let binder = |budget: &ModelCallBudget| {
+        let (provider, binds) = (Arc::clone(&provider), Arc::clone(&binds));
+        let bind_one: BindOne = Arc::new(move |_| {
+            binds.fetch_add(1, Ordering::SeqCst);
+            Ok(Arc::clone(&provider) as Arc<dyn adk_rust::Llm>)
+        });
+        let mut invocation = super::openai_compatible_facade::test_model_facade_invocation();
+        invocation.max_model_turns = 1;
+        stepback_binder(bind_one, invocation, budget.clone())
+    };
+    // The index authority's step-back model and the Office host's model are
+    // built from the SAME budget, as `materialize_runtime` builds them.
+    let stepback = LazyStepbackModel::new(binder(&budget));
+    let office_model = LazyStepbackModel::new(binder(&budget));
+    assert_eq!(binds.load(Ordering::SeqCst), 0, "no probe bind at assembly");
+
+    let gateway = Gateway::new();
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        ObjectApi::new() as Arc<dyn Transport>,
+    ));
+    let images = ImagesClient::with_transport(
+        Arc::clone(&gateway) as Arc<dyn ModelGatewayTransport>,
+        Duration::from_secs(5),
+    );
+    let host = ClaimOfficeHost::new(runtime, "pat-token", "42", office_model)
+        .expect("host")
+        .with_images(
+            images,
+            Arc::new(ClaimScopedEliteaContext::fixture(42, "pat-token")),
+        )
+        .with_budget(budget.clone());
+
+    // 1: a step-back completion.
+    let binding = stepback.get().expect("bound lazily");
+    crate::indexing::tools::generate_text(
+        binding,
+        vec![adk_rust::Part::Text {
+            text: "step back".to_owned(),
+        }],
+    )
+    .await
+    .expect("step-back reply");
+    // 2: an Office prompt.
+    host.complete(OfficeModelRequest {
+        prompt: "fill".to_owned(),
+        ..OfficeModelRequest::default()
+    })
+    .await
+    .expect("office reply");
+    // 3: an image call.
+    let image = || ImageGenerateRequest {
+        model: "img".to_owned(),
+        prompt: "a red square".to_owned(),
+        size: None,
+        count: 1,
+    };
+    host.generate_images(image()).await.expect("image");
+    // The cap (3) is reached: each of the three is refused now.
+    assert_eq!(
+        host.generate_images(image())
+            .await
+            .expect_err("spent")
+            .kind(),
+        elitea_agent_runtime::toolkits::OfficeFailure::BudgetRefused
+    );
+    assert_eq!(
+        host.complete(OfficeModelRequest::default())
+            .await
+            .expect_err("spent")
+            .kind(),
+        elitea_agent_runtime::toolkits::OfficeFailure::BudgetRefused
+    );
+    let refused = crate::indexing::tools::generate_text(
+        binding,
+        vec![adk_rust::Part::Text {
+            text: "again".to_owned(),
+        }],
+    )
+    .await
+    .expect_err("spent");
+    assert_eq!(refused.code, "model.toolkit_budget_exhausted");
+    assert_eq!(
+        provider.0.load(Ordering::SeqCst),
+        2,
+        "two model completions sent"
+    );
+    assert_eq!(
+        gateway.seen.lock().expect("seen").len(),
+        1,
+        "one image call sent"
+    );
+    // One bind per completion that was asked for (each binds first).
+    assert_eq!(binds.load(Ordering::SeqCst), 4);
+}
+
+/// An image call refused locally (an upload name that cannot be sent) is not charged.
+#[tokio::test]
+async fn an_image_call_refused_before_sending_is_refunded() {
+    use crate::transport::toolkit_completion::ModelCallBudget;
+    use elitea_agent_runtime::toolkits::{ImageEditInput, ImageEditRequest};
+    let budget = ModelCallBudget::new(1);
+    let gateway = Gateway::new();
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        ObjectApi::new() as Arc<dyn Transport>,
+    ));
+    let images = ImagesClient::with_transport(
+        Arc::clone(&gateway) as Arc<dyn ModelGatewayTransport>,
+        Duration::from_secs(5),
+    );
+    let host = ClaimOfficeHost::new(runtime, "pat-token", "42", LazyStepbackModel::unbound())
+        .expect("host")
+        .with_images(
+            images,
+            Arc::new(ClaimScopedEliteaContext::fixture(42, "pat-token")),
+        )
+        .with_budget(budget.clone());
+    let bad = ImageEditRequest {
+        model: "img".to_owned(),
+        prompt: "add a hat".to_owned(),
+        image: ImageEditInput {
+            name: "bad\"name\r\n.png".to_owned(),
+            bytes: b"CAT".to_vec(),
+        },
+        mask: None,
+    };
+    assert!(host.edit_images(bad).await.is_err());
+    assert!(
+        gateway.seen.lock().expect("seen").is_empty(),
+        "nothing sent"
+    );
+    assert!(budget.try_take(), "the unit was refunded");
+}

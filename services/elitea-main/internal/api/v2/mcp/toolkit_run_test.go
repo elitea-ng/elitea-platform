@@ -180,6 +180,29 @@ func TestToolkitCallMapsEveryOutcomeOntoAnMCPResult(t *testing.T) {
 			isError: true, contains: "no tool by that name",
 		},
 		{
+			// #1292 round 2: a refused tool is not "no tool by that name".
+			name: "a tool the worker refuses as an effect",
+			outcome: toolkitcalltoolapp.RunOutcome{
+				ExecutionID: "e4b", Status: toolkitcalltoolapp.RunStatusEffectRefused,
+			},
+			isError: true, contains: "only read-only tools",
+		},
+		{
+			name: "a tool the policy refuses",
+			outcome: toolkitcalltoolapp.RunOutcome{
+				ExecutionID: "e4c", Status: toolkitcalltoolapp.RunStatusPolicyRefused,
+			},
+			isError: true, contains: "tool policy blocks this tool",
+		},
+		{
+			name: "an older worker's refusal as a runtime failure",
+			outcome: toolkitcalltoolapp.RunOutcome{
+				ExecutionID: "e4d", Status: toolkitcalltoolapp.RunStatusRuntimeFailure,
+				FailureCode: "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED", ErrorMessage: "Execution authorization failed.",
+			},
+			isError: true, contains: "refused to run this tool",
+		},
+		{
 			// A truncated result is NOT reported as an empty success: an agent
 			// host would read that as "the tool produced nothing".
 			name: "a truncated result",

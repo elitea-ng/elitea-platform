@@ -4506,6 +4506,7 @@
   "features.chatMessages.skippedCapabilities.title": "Some tools were not available in this reply",
   "features.chatMessages.skippedCapabilities.toolkit": "Toolkit {{name}}",
   "features.chatMessages.skippedCapabilities.toolkitTyped": "Toolkit {{name}} ({{type}})",
+  "features.chatMessages.skippedCapabilities.tool": "Tool {{name}}",
   "features.chatMessages.skippedCapabilities.internalTool": "Built-in capability {{name}}",
   "features.chatMessages.skippedCapabilities.application": "Attached agent {{name}}",
   "features.chatMessages.skippedCapabilities.more": "{{count}} more not shown.",

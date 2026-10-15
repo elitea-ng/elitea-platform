@@ -21,6 +21,8 @@
 //	TOOL_ERROR          200  ok:false with the tool's own sentence
 //	UNSUPPORTED_TOOLKIT 422  ok:false naming the type this image cannot build
 //	UNKNOWN_TOOL        422  ok:false naming the tool
+//	EFFECT_REFUSED      422  ok:false, reason effectful_tool_unavailable
+//	POLICY_REFUSED      422  ok:false, reason tool_refused
 //	runtime failure     500  ok:false with the runtime's safe message
 //	bounded wait passed 504  ok:false with the task id, so the caller can poll
 //
@@ -38,7 +40,6 @@ import (
 
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
-	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // UseCase is the seam both handlers hold. A nil one means this deployment
@@ -213,10 +214,14 @@ func WriteOutcome(w http.ResponseWriter, outcome toolkitcalltoolapp.RunOutcome) 
 	case toolkitcalltoolapp.RunStatusUnknownTool:
 		body["reason"] = "unknown_tool"
 		body["error"] = outcome.ErrorMessage
-		if reason, sentence, refused := refusedTool(outcome); refused {
-			body["reason"] = reason
-			body["error"] = sentence
-		}
+		writeJSON(w, http.StatusUnprocessableEntity, body)
+	case toolkitcalltoolapp.RunStatusEffectRefused:
+		body["reason"] = ReasonEffectfulToolUnavailable
+		body["error"] = toolSubject(outcome.ToolName) + " changes data, and this route only runs read-only tools."
+		writeJSON(w, http.StatusUnprocessableEntity, body)
+	case toolkitcalltoolapp.RunStatusPolicyRefused:
+		body["reason"] = ReasonToolRefused
+		body["error"] = toolSubject(outcome.ToolName) + " is blocked or sensitive under this deployment's policy, so it cannot be run here."
 		writeJSON(w, http.StatusUnprocessableEntity, body)
 	default:
 		// A runtime failure that is a statement about the RUN or the tool, not
@@ -250,32 +255,23 @@ func toolSubject(name string) string {
 	return "The tool " + strconv.Quote(name)
 }
 
-// refusedTool classifies an UNKNOWN_TOOL result that is the worker declining a
-// tool rather than the toolkit lacking it.
-func refusedTool(outcome toolkitcalltoolapp.RunOutcome) (reason, sentence string, ok bool) {
-	switch outcome.ErrorMessage {
-	case executiondomain.ToolkitEffectfulToolMessage:
-		return ReasonEffectfulToolUnavailable,
-			toolSubject(outcome.ToolName) + " changes data, and this route only runs read-only tools.", true
-	case executiondomain.ToolkitPolicyRefusedMessage:
-		return ReasonToolRefused,
-			toolSubject(outcome.ToolName) + " is blocked or sensitive under this deployment's policy, so it cannot be run here.", true
-	}
-	return "", "", false
-}
-
-// workerRefusal classifies a runtime failure. UNSUPPORTED_CAPABILITY on this
-// path is an older worker refusing an effectful tool; AUTHORIZATION_FAILED is
-// the run's own credentials or context being refused, which is not a verdict
-// on the tool.
+// workerRefusal classifies a runtime failure. Only AUTHORIZATION_FAILED with
+// the current worker's run-credentials sentence is about the credentials
+// (403). An OLDER worker's UNSUPPORTED_CAPABILITY is its refusal of an
+// effectful tool, and its bare AUTHORIZATION_FAILED its refusal of a blocked
+// or sensitive tool (it did not tell the two apart): a neutral 422 that does
+// not send the person to retry credentials that were never at fault.
 func workerRefusal(outcome toolkitcalltoolapp.RunOutcome) (status int, reason, sentence string, ok bool) {
-	switch outcome.FailureCode {
-	case "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY":
-		return http.StatusUnprocessableEntity, ReasonEffectfulToolUnavailable,
-			toolSubject(outcome.ToolName) + " changes data, and this route only runs read-only tools.", true
-	case "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED":
+	switch {
+	case outcome.RunCredentialsRefused():
 		return http.StatusForbidden, ReasonAuthorizationFailed,
 			"The platform could not authorize this run's credentials or context. Try again; if it persists, ask an administrator.", true
+	case outcome.FailureCode == toolkitcalltoolapp.FailureCodeUnsupportedCapability:
+		return http.StatusUnprocessableEntity, ReasonEffectfulToolUnavailable,
+			toolSubject(outcome.ToolName) + " changes data, and this route only runs read-only tools.", true
+	case outcome.WorkerRefusedTool():
+		return http.StatusUnprocessableEntity, ReasonToolRefused,
+			toolSubject(outcome.ToolName) + " was refused by the agent worker on this route, so nothing was run.", true
 	}
 	return 0, "", "", false
 }

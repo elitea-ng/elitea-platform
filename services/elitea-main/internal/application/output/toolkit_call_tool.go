@@ -51,6 +51,8 @@ const (
 	ToolkitCallToolStatusToolError             ToolkitCallToolStatus = "tool_error"
 	ToolkitCallToolStatusUnsupportedToolkit    ToolkitCallToolStatus = "unsupported_toolkit"
 	ToolkitCallToolStatusUnknownTool           ToolkitCallToolStatus = "unknown_tool"
+	ToolkitCallToolStatusEffectRefused         ToolkitCallToolStatus = "effect_refused"
+	ToolkitCallToolStatusPolicyRefused         ToolkitCallToolStatus = "policy_refused"
 )
 
 // ToolkitCallToolSummary is the bounded typed terminal result. The outer SDK
@@ -67,7 +69,8 @@ type ToolkitCallToolSummary struct {
 func (s ToolkitCallToolSummary) Validate() error {
 	switch s.Status {
 	case ToolkitCallToolStatusOK, ToolkitCallToolStatusToolError, ToolkitCallToolStatusAuthorizationRequired,
-		ToolkitCallToolStatusUnsupportedToolkit, ToolkitCallToolStatusUnknownTool:
+		ToolkitCallToolStatusUnsupportedToolkit, ToolkitCallToolStatusUnknownTool,
+		ToolkitCallToolStatusEffectRefused, ToolkitCallToolStatusPolicyRefused:
 	default:
 		return ErrInvalidToolkitCallToolOutput
 	}
@@ -92,7 +95,8 @@ func (s ToolkitCallToolSummary) Validate() error {
 	// Both refusals happen before any provider work, so neither can carry a
 	// result, and each must say why.
 	switch s.Status {
-	case ToolkitCallToolStatusUnsupportedToolkit, ToolkitCallToolStatusUnknownTool:
+	case ToolkitCallToolStatusUnsupportedToolkit, ToolkitCallToolStatusUnknownTool,
+		ToolkitCallToolStatusEffectRefused, ToolkitCallToolStatusPolicyRefused:
 		if s.ResultJSON != "" || s.Truncated || s.ErrorMessage == "" {
 			return ErrInvalidToolkitCallToolOutput
 		}
@@ -191,7 +195,8 @@ func (f ToolkitCallToolFrame) Validate() error {
 	// one way here and another there.
 	expectedOutcome := executionapp.SettlementSucceeded
 	switch f.Result.ResultSummary.Status {
-	case ToolkitCallToolStatusUnsupportedToolkit, ToolkitCallToolStatusUnknownTool:
+	case ToolkitCallToolStatusUnsupportedToolkit, ToolkitCallToolStatusUnknownTool,
+		ToolkitCallToolStatusEffectRefused, ToolkitCallToolStatusPolicyRefused:
 		expectedOutcome = executionapp.SettlementFailed
 	}
 	if err := f.Settlement.Validate(); err != nil ||

@@ -24,8 +24,16 @@ const (
 // ToolkitCallToolStatusV1 is the closed outcome set of one tool run. A tool
 // that raised is a completed run with a TOOL_ERROR status, not a runtime
 // failure: the caller asked whether the tool works, and "it raised" is the
-// answer. UNSUPPORTED_TOOLKIT and UNKNOWN_TOOL are refusals the worker makes
-// before any provider work happens.
+// answer. UNSUPPORTED_TOOLKIT, UNKNOWN_TOOL, EFFECT_REFUSED and POLICY_REFUSED
+// are refusals the worker makes before any provider work happens.
+//
+// EFFECT_REFUSED: the tool changes data and this path runs read-only tools
+// only. POLICY_REFUSED: the deployment's tool policy blocks the tool, or marks
+// it sensitive. Both are verdicts on the TOOL, distinct from the run's own
+// credentials or context being refused (a RUNTIME_ERROR AUTHORIZATION_FAILED)
+// and from the toolkit having no tool by that name (UNKNOWN_TOOL). An older
+// worker sends UNKNOWN_TOOL with a fixed sentence (or AUTHORIZATION_FAILED)
+// instead; readers keep that as a fallback only.
 type ToolkitCallToolStatusV1 int32
 
 const (
@@ -35,6 +43,8 @@ const (
 	ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT    ToolkitCallToolStatusV1 = 3
 	ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL           ToolkitCallToolStatusV1 = 4
 	ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED ToolkitCallToolStatusV1 = 5
+	ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED         ToolkitCallToolStatusV1 = 6
+	ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_POLICY_REFUSED         ToolkitCallToolStatusV1 = 7
 )
 
 // Enum value maps for ToolkitCallToolStatusV1.
@@ -46,6 +56,8 @@ var (
 		3: "TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT",
 		4: "TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL",
 		5: "TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED",
+		6: "TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED",
+		7: "TOOLKIT_CALL_TOOL_STATUS_V1_POLICY_REFUSED",
 	}
 	ToolkitCallToolStatusV1_value = map[string]int32{
 		"TOOLKIT_CALL_TOOL_STATUS_V1_UNSPECIFIED":            0,
@@ -54,6 +66,8 @@ var (
 		"TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT":    3,
 		"TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL":           4,
 		"TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED": 5,
+		"TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED":         6,
+		"TOOLKIT_CALL_TOOL_STATUS_V1_POLICY_REFUSED":         7,
 	}
 )
 
@@ -1182,14 +1196,16 @@ const file_elitea_runtime_v1_toolkit_proto_rawDesc = "" +
 	"\x15resource_metadata_url\x18\x04 \x01(\tR\x13resourceMetadataUrl\x124\n" +
 	"\x16resource_metadata_json\x18\x05 \x01(\fR\x14resourceMetadataJson\x12\x1d\n" +
 	"\n" +
-	"toolkit_id\x18\x06 \x01(\tR\ttoolkitIdJ\x04\b\a\x10\x10*\xb1\x02\n" +
+	"toolkit_id\x18\x06 \x01(\tR\ttoolkitIdJ\x04\b\a\x10\x10*\x91\x03\n" +
 	"\x17ToolkitCallToolStatusV1\x12+\n" +
 	"'TOOLKIT_CALL_TOOL_STATUS_V1_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eTOOLKIT_CALL_TOOL_STATUS_V1_OK\x10\x01\x12*\n" +
 	"&TOOLKIT_CALL_TOOL_STATUS_V1_TOOL_ERROR\x10\x02\x123\n" +
 	"/TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT\x10\x03\x12,\n" +
 	"(TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL\x10\x04\x126\n" +
-	"2TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED\x10\x05BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"2TOOLKIT_CALL_TOOL_STATUS_V1_AUTHORIZATION_REQUIRED\x10\x05\x12.\n" +
+	"*TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED\x10\x06\x12.\n" +
+	"*TOOLKIT_CALL_TOOL_STATUS_V1_POLICY_REFUSED\x10\aBSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_toolkit_proto_rawDescOnce sync.Once

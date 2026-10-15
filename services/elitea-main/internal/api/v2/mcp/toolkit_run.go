@@ -111,7 +111,17 @@ func (h *Handler) runToolkitTool(
 	case toolkitcalltoolapp.RunStatusUnknownTool:
 		return errorResult(fmt.Sprintf(
 			"the toolkit behind '%s' has no tool by that name, so nothing was executed.", tool.Name))
+	case toolkitcalltoolapp.RunStatusEffectRefused:
+		return unsupportedToolkitResult(tool,
+			"The agent worker runs only read-only tools on this path, and this tool changes data.")
+	case toolkitcalltoolapp.RunStatusPolicyRefused:
+		return unsupportedToolkitResult(tool,
+			"This deployment's tool policy blocks this tool or marks it sensitive, so the agent worker refused it.")
 	default:
+		if outcome.WorkerRefusedTool() {
+			// An older worker's refusal of the tool, as a runtime failure.
+			return unsupportedToolkitResult(tool, "The agent worker refused to run this tool on this path.")
+		}
 		message := outcome.ErrorMessage
 		if message == "" {
 			message = "the run failed without a reported reason"

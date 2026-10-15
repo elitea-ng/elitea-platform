@@ -1014,23 +1014,11 @@ const fn unsupported_selection() -> ConfluenceToolsetError {
     }
 }
 
-/// The stored selection's tools this family does not serve, for the run's
-/// notice: `(name, needs_file_store)`. The attachment tools need the file
-/// store.
-pub(crate) fn omitted_selection(selected: &[Box<str>], file_store: bool) -> Vec<(String, bool)> {
-    selected
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    ConfluenceToolKind::ALL
         .iter()
-        .filter_map(|name| {
-            match ConfluenceToolKind::ALL
-                .iter()
-                .find(|kind| kind.name() == name.as_ref())
-            {
-                None => Some((name.to_string(), false)),
-                Some(kind) if kind.needs_attachments() && !file_store => {
-                    Some((name.to_string(), true))
-                }
-                Some(_) => None,
-            }
-        })
+        .map(|kind| (kind.name(), kind.needs_attachments()))
         .collect()
 }

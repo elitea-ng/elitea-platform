@@ -132,8 +132,47 @@ const (
 	RunStatusToolError             RunStatus = "tool_error"
 	RunStatusUnsupportedToolkit    RunStatus = "unsupported_toolkit"
 	RunStatusUnknownTool           RunStatus = "unknown_tool"
-	RunStatusRuntimeFailure        RunStatus = "runtime_failure"
+	// RunStatusEffectRefused: the worker refused the tool because it changes
+	// data and this path runs read-only tools only.
+	RunStatusEffectRefused RunStatus = "effect_refused"
+	// RunStatusPolicyRefused: the deployment's tool policy blocks the tool or
+	// marks it sensitive.
+	RunStatusPolicyRefused  RunStatus = "policy_refused"
+	RunStatusRuntimeFailure RunStatus = "runtime_failure"
 )
+
+// Runtime failure codes a caller of the tool-run path classifies.
+const (
+	FailureCodeUnsupportedCapability = "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY"
+	FailureCodeAuthorizationFailed   = "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED"
+)
+
+// RunCredentialsRefused reports a runtime failure that is the run's OWN
+// credentials or context being refused: AUTHORIZATION_FAILED with the exact
+// sentence a current worker sends for it. It is not a verdict on the tool.
+func (o RunOutcome) RunCredentialsRefused() bool {
+	return o.Status == RunStatusRuntimeFailure && o.FailureCode == FailureCodeAuthorizationFailed &&
+		o.ErrorMessage == executiondomain.ToolkitRunCredentialsRefusedMessage
+}
+
+// WorkerRefusedTool reports a runtime failure that an OLDER worker sends for
+// a tool it refuses, before the typed EFFECT_REFUSED / POLICY_REFUSED results
+// existed: UNSUPPORTED_CAPABILITY (an effectful tool), or AUTHORIZATION_FAILED
+// without the run-credentials sentence (a blocked or sensitive tool, or a
+// cause that worker did not tell apart). Neither says the person's
+// credentials are at fault, so a caller must not tell them to retry them.
+func (o RunOutcome) WorkerRefusedTool() bool {
+	if o.Status != RunStatusRuntimeFailure {
+		return false
+	}
+	switch o.FailureCode {
+	case FailureCodeUnsupportedCapability:
+		return true
+	case FailureCodeAuthorizationFailed:
+		return !o.RunCredentialsRefused()
+	}
+	return false
+}
 
 // RunOutcome is one settled tool run. ResultJSON is the SDK return value's
 // canonical JSON encoding; it is EMPTY when Truncated is true, because half a
@@ -643,7 +682,22 @@ func decodeSettlement(admitted AdmittedRun, settlement Settlement) (RunOutcome, 
 		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT:
 			outcome.Status = RunStatusUnsupportedToolkit
 		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL:
-			outcome.Status = RunStatusUnknownTool
+			// A worker from before the typed refusals sent them as
+			// UNKNOWN_TOOL with a fixed sentence; read that only as a
+			// fallback, so "no tool by that name" is never said of a tool
+			// the toolkit has.
+			switch summary.GetErrorMessage() {
+			case executiondomain.ToolkitEffectfulToolMessage:
+				outcome.Status = RunStatusEffectRefused
+			case executiondomain.ToolkitPolicyRefusedMessage:
+				outcome.Status = RunStatusPolicyRefused
+			default:
+				outcome.Status = RunStatusUnknownTool
+			}
+		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED:
+			outcome.Status = RunStatusEffectRefused
+		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_POLICY_REFUSED:
+			outcome.Status = RunStatusPolicyRefused
 		default:
 			return RunOutcome{}, errors.New("tool-run result carries an unknown status")
 		}
