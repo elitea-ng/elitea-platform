@@ -1902,6 +1902,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-workspace-store"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "flate2",
+ "gix-features",
+ "gix-hash",
+ "gix-object",
+ "gix-odb",
+ "gix-pack",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "email_address"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
