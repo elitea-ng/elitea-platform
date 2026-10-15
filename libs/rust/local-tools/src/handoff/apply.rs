@@ -45,7 +45,7 @@ use elitea_workspace_store::objects::{
 use elitea_workspace_store::refs as store_refs;
 use serde::{Deserialize, Serialize};
 
-use super::exclude::{Exclusions, Reason};
+use super::exclude::{Exclusions, Reason, Rules};
 use super::snapshot::{Source, TreeLine, list_tree, snapshot_tree};
 use super::{SendRecord, TempDir, check_conversation, short_thread};
 use crate::checkpoint::Checkpoints;
@@ -135,6 +135,48 @@ impl Preflight {
         self.chain.len()
     }
 
+    /// What take-back writes, file by file: the sent and the cloud content
+    /// of every changed path (`None` where a side has no file, or the file
+    /// is larger than `max_file_bytes`, then `too_large` is set).
+    ///
+    /// # Errors
+    ///
+    /// An unreadable object.
+    pub fn changed_files(&self, max_file_bytes: u64) -> ToolResult<Vec<(FileDiff, bool)>> {
+        let db = &self.bundle.db;
+        let read =
+            |entry: Option<&FileEntry>, too_large: &mut bool| -> ToolResult<Option<Vec<u8>>> {
+                let Some(entry) = entry.filter(|entry| !entry.is_gitlink()) else {
+                    return Ok(None);
+                };
+                let bytes = db.blob(&entry.oid).map_err(|e| super::store_error(&e))?;
+                if bytes.len() as u64 > max_file_bytes {
+                    *too_large = true;
+                    return Ok(None);
+                }
+                Ok(Some(bytes))
+            };
+        let mut out = Vec::new();
+        for change in &self.changes {
+            if !self.changed_paths.contains(&change.path) {
+                continue;
+            }
+            let mut too_large = false;
+            let before = read(change.old.as_ref(), &mut too_large)?;
+            let after = read(change.new.as_ref(), &mut too_large)?;
+            out.push((
+                FileDiff {
+                    path: change.path.clone(),
+                    kind: change.kind,
+                    before,
+                    after,
+                },
+                too_large,
+            ));
+        }
+        Ok(out)
+    }
+
     /// What cloud commit `sha` changed, read from the quarantine.
     ///
     /// # Errors
@@ -209,7 +251,16 @@ fn exclusions_of(
 ) -> ToolResult<Exclusions> {
     let workspace = Workspace::open(source.top(), &[])?;
     let leave: Vec<String> = record.excluded.iter().map(|e| e.path.clone()).collect();
-    Exclusions::new(&workspace, path_deny, &leave)
+    Exclusions::new(
+        &workspace,
+        &Rules {
+            patterns: record.patterns.clone().unwrap_or_default(),
+            path_deny: path_deny.to_vec(),
+            leave_on_laptop: leave,
+            // What the send included is part of the snapshot, as sent.
+            include: record.included.clone(),
+        },
+    )
 }
 
 /// `L`: the folder's tree under the send's exclusions.

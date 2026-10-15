@@ -53,6 +53,13 @@ pub struct SendRecord {
     /// The snapshot tree.
     pub tree: String,
     pub excluded: Vec<exclude::Excluded>,
+    /// Paths sent although the exclusions match them (explicit includes).
+    #[serde(default)]
+    pub included: Vec<String>,
+    /// The exclusion patterns of the send (`None`: a record from before
+    /// they were configurable; the defaults apply).
+    #[serde(default)]
+    pub patterns: Option<exclude::Patterns>,
 }
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);

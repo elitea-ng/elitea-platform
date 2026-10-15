@@ -252,18 +252,27 @@ fn rendered(capture: &SharedCapture, cut_off: bool) -> Captured {
     )
 }
 
-fn environment(config: &ShellConfig) -> Vec<(String, String)> {
+/// The person's variables a command gets: the passthrough set (and the
+/// host's `env_passthrough`), secret-looking names dropped. `run_command`
+/// adds its own fixed settings (`TMPDIR`, `TERM`, …) on top. The handoff's
+/// env harvest offers these (ADR-0034 decision 5).
+#[must_use]
+pub fn passthrough_environment(config: &ShellConfig) -> Vec<(String, String)> {
     let names = PASSTHROUGH
         .iter()
         .map(|name| (*name).to_owned())
         .chain(config.env_passthrough.iter().cloned());
-    let mut out: Vec<(String, String)> = names
+    names
         .filter(|name| {
             let upper = name.to_ascii_uppercase();
             !SECRET_MARKERS.iter().any(|marker| upper.contains(marker))
         })
         .filter_map(|name| std::env::var(&name).ok().map(|value| (name, value)))
-        .collect();
+        .collect()
+}
+
+fn environment(config: &ShellConfig) -> Vec<(String, String)> {
+    let mut out = passthrough_environment(config);
     // PATH without relative or empty entries: a bare name never runs a
     // program from the workspace (the approval rules resolve it the same
     // way).

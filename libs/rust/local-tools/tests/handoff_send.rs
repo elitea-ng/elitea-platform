@@ -68,8 +68,8 @@ fn the_transfer_set_is_the_checkpoint_set_minus_exclusions() {
         .iter()
         .map(|e| (e.path.clone(), (e.reason, e.tracked)))
         .collect();
-    assert_eq!(excluded[".env"], (Reason::Mandatory, true));
-    assert_eq!(excluded["keys/id_rsa"], (Reason::Mandatory, true));
+    assert_eq!(excluded[".env"], (Reason::Platform, true));
+    assert_eq!(excluded["keys/id_rsa"], (Reason::Platform, true));
     assert_eq!(excluded["private/plan.md"], (Reason::PathDeny, false));
     assert_eq!(excluded["scratch/tmp.txt"], (Reason::Eliteaignore, false));
     assert_eq!(snap.files, expected.len());
@@ -588,4 +588,79 @@ fn the_segment_is_deltified_like_git_bundle_and_round_trips() {
         git(&other, &["rev-parse", "refs/elitea/handoff/1"]),
         snap.handoff
     );
+}
+
+/// The amendment (decision 5): the exclusions come by source, an explicit
+/// include sends an excluded file (scanned: its findings warn and do not
+/// block) and names it in an `Elitea-Included` trailer, and `path_deny`
+/// can never be included.
+#[test]
+fn explicit_includes_are_sent_scanned_and_named_and_path_deny_is_hard() {
+    use elitea_local_tools::handoff::exclude::Patterns;
+    let fixture = Fixture::repo();
+    let top = &fixture.top;
+    let key = ["AKIA", "Z7QWERTYUIOPASDF"].concat();
+    write(top, ".env", &format!("AWS_ACCESS_KEY_ID={key}\n"));
+    write(top, "db/dev.sqlite", "sqlite bytes\n");
+    write(top, "notes/me.md", "mine\n");
+    write(top, "private/plan.md", "denied by policy\n");
+    let mut config = fixture.config(&[]);
+    config.patterns = Patterns {
+        platform: vec![".env".into(), "id_rsa*".into()],
+        project: vec!["*.sqlite".into()],
+        user: vec!["notes/**".into()],
+    };
+    config.include = vec![".env".into(), "private/plan.md".into()];
+    let source = open_source(
+        top,
+        &fixture.data,
+        &config.sandbox,
+        &config.deny,
+        Some(&fixture.global),
+    )
+    .unwrap();
+    let snap = snapshot::take(&source, &config).unwrap();
+    let reasons: BTreeMap<String, Reason> = snap
+        .excluded
+        .iter()
+        .map(|e| (e.path.clone(), e.reason))
+        .collect();
+    assert_eq!(reasons["keys/id_rsa"], Reason::Platform);
+    assert_eq!(reasons["db/dev.sqlite"], Reason::Project);
+    assert_eq!(reasons["notes/me.md"], Reason::User);
+    assert_eq!(
+        reasons["private/plan.md"],
+        Reason::PathDeny,
+        "never includable"
+    );
+    assert!(!reasons.contains_key(".env"));
+    assert_eq!(snap.included.len(), 1);
+    assert_eq!(snap.included[0].path, ".env");
+    assert_eq!(snap.included[0].reason, Reason::Platform);
+    assert!(snap.findings.is_empty(), "{:?}", snap.findings);
+    assert_eq!(snap.include_findings[0].path, ".env");
+    assert!(!snap.blocked(), "an included file's finding only warns");
+    let files = files_of(top, &snap.tree);
+    assert!(files.contains(".env") && !files.contains("private/plan.md"));
+    let message = git(top, &["log", "-1", "--format=%B", &snap.handoff]);
+    assert!(message.contains("Elitea-Included: ./.env"), "{message}");
+    assert_eq!(message.matches("Elitea-Included").count(), 1);
+    // Parsed back the way the executor's hydrate does (one trailer per
+    // path, repo-relative, `./` stripped): exactly the included files.
+    let parsed: Vec<String> = message
+        .lines()
+        .filter_map(|line| line.strip_prefix("Elitea-Included:"))
+        .map(|value| value.trim().trim_start_matches("./").to_owned())
+        .collect();
+    assert_eq!(parsed, vec![".env".to_owned()]);
+    let record = snap.record(CONVERSATION);
+    assert_eq!(record.included, vec![".env".to_owned()]);
+    assert_eq!(record.patterns.as_ref().unwrap().project, vec!["*.sqlite"]);
+    // Not included: the same finding blocks.
+    config.include.clear();
+    let blocked = snapshot::take(&source, &config).unwrap();
+    assert!(blocked.findings.is_empty(), ".env is excluded again");
+    write(top, "config.ini", &format!("key = {key}\n"));
+    let blocked = snapshot::take(&source, &config).unwrap();
+    assert!(blocked.blocked());
 }

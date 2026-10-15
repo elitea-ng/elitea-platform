@@ -119,6 +119,8 @@ impl Fixture {
             deny: Arc::new(DenyList::new([self.data.join("secrets")])),
             path_deny: vec!["private/**".to_owned()],
             leave_on_laptop: leave.iter().map(|s| (*s).to_owned()).collect(),
+            patterns: elitea_local_tools::handoff::exclude::Patterns::default(),
+            include: Vec::new(),
             caps: Caps::default(),
             conversation_uuid: CONVERSATION.to_owned(),
             note: "Changed README; ran tests.".to_owned(),

@@ -32,10 +32,10 @@ use std::sync::Arc;
 use elitea_workspace_store::bundle::{self as segment, Limits, Written};
 use elitea_workspace_store::objects::{self as store_objects, EMPTY_TREE, ObjectDb};
 use elitea_workspace_store::refs as store_refs;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::caps::{self, CapReport, Caps, SizedPath};
-use super::exclude::{Excluded, Exclusions, Reason};
+use super::exclude::{Excluded, Exclusions, Patterns, Reason, Rules};
 use super::scan::{self, Finding};
 use super::{LOCAL_REF_PREFIX, SendRecord, TempDir, check_conversation, shadow};
 use crate::deny::DenyList;
@@ -62,11 +62,28 @@ pub struct SendConfig {
     pub deny: Arc<DenyList>,
     pub path_deny: Vec<String>,
     pub leave_on_laptop: Vec<String>,
+    /// The exclusion patterns by source (platform, project, the person's).
+    pub patterns: Patterns,
+    /// Explicit includes; empty unless the policy allows including.
+    pub include: Vec<String>,
     pub caps: Caps,
     pub conversation_uuid: String,
     pub note: String,
     /// Tests: read this file as the person's global git config.
     pub global_config: Option<PathBuf>,
+}
+
+impl SendConfig {
+    /// The exclusion rules of this send.
+    #[must_use]
+    pub fn rules(&self) -> Rules {
+        Rules {
+            patterns: self.patterns.clone(),
+            path_deny: self.path_deny.clone(),
+            leave_on_laptop: self.leave_on_laptop.clone(),
+            include: self.include.clone(),
+        }
+    }
 }
 
 /// The repository a send reads: the folder's own, or its shadow.
@@ -201,8 +218,24 @@ pub struct Snapshot {
     pub files: usize,
     pub unpacked_bytes: u64,
     pub excluded: Vec<Excluded>,
+    /// Files the exclusions match that the person included (sent; listed
+    /// as `included_excluded` and in the `Elitea-Included` trailers).
+    pub included: Vec<Included>,
+    /// Findings outside the included files: they block the send.
     pub findings: Vec<Finding>,
+    /// Findings in included files: warnings the person confirms per send.
+    pub include_findings: Vec<Finding>,
     pub caps: CapReport,
+    /// The patterns the send used (kept for take-back).
+    pub patterns: Patterns,
+}
+
+/// A file sent although the exclusions match it.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Included {
+    pub path: String,
+    /// The exclusion it overrode.
+    pub reason: Reason,
 }
 
 impl Snapshot {
@@ -225,6 +258,8 @@ impl Snapshot {
             twin: self.twin.clone(),
             tree: self.tree.clone(),
             excluded: self.excluded.clone(),
+            included: self.included.iter().map(|i| i.path.clone()).collect(),
+            patterns: Some(self.patterns.clone()),
         }
     }
 }
@@ -542,7 +577,7 @@ struct Commits {
     twin: String,
 }
 
-fn commits(source: &Source, tree: &str, note: &str) -> ToolResult<Commits> {
+fn commits(source: &Source, tree: &str, note: &str, included: &[Included]) -> ToolResult<Commits> {
     let head = source.head();
     let head_tree = match &head {
         Some(head) => source
@@ -586,10 +621,17 @@ fn commits(source: &Source, tree: &str, note: &str) -> ToolResult<Commits> {
         }
     };
     let note = clean_note(note);
+    let mut trailers = "Elitea-Handoff: 1".to_owned();
+    for file in included {
+        // One trailer per path (contract §6.4); `included()` never lets a
+        // path with a control character through.
+        trailers.push_str("\nElitea-Included: ./");
+        trailers.push_str(&file.path);
+    }
     let message = if note.is_empty() {
-        "Elitea handoff\n\nElitea-Handoff: 1".to_owned()
+        format!("Elitea handoff\n\n{trailers}")
     } else {
-        format!("Elitea handoff\n\n{note}\n\nElitea-Handoff: 1")
+        format!("Elitea handoff\n\n{note}\n\n{trailers}")
     };
     let handoff = commit(source, tree, Some(&base), &message)?;
     let twin = commit(
@@ -616,13 +658,20 @@ fn commits(source: &Source, tree: &str, note: &str) -> ToolResult<Commits> {
 pub fn take(source: &Source, config: &SendConfig) -> ToolResult<Snapshot> {
     check_conversation(&config.conversation_uuid)?;
     let workspace = Workspace::open(source.top(), &[])?;
-    let exclusions = Exclusions::new(&workspace, &config.path_deny, &config.leave_on_laptop)?;
+    let exclusions = Exclusions::new(&workspace, &config.rules())?;
     let (tree, excluded, oversize) =
         snapshot_tree(source, &exclusions, config.caps.max_file_bytes)?;
     // What is really in the tree, checked again.
     let lines = list_tree(source, &tree)?;
     let mut files = Vec::new();
+    let mut included = Vec::new();
     for line in &lines {
+        if let Some(reason) = exclusions.included_reason(&line.path) {
+            included.push(Included {
+                path: line.path.clone(),
+                reason,
+            });
+        }
         if exclusions.reason(&line.path).is_some() {
             return Err(ToolError::new(
                 ErrorCode::Denied,
@@ -642,6 +691,7 @@ pub fn take(source: &Source, config: &SendConfig) -> ToolResult<Snapshot> {
     let report = caps::check(&files, &oversize, &config.caps);
     let db = source.object_db()?;
     let mut findings = Vec::new();
+    let mut include_findings = Vec::new();
     for line in &lines {
         // Symlinks travel as their target text; gitlinks as an id.
         if line.kind != "blob" || line.mode == "120000" {
@@ -649,16 +699,23 @@ pub fn take(source: &Source, config: &SendConfig) -> ToolResult<Snapshot> {
         }
         let id = store_objects::oid(&line.oid).map_err(|e| super::store_error(&e))?;
         let bytes = db.blob(&id).map_err(|e| super::store_error(&e))?;
-        findings.extend(scan::scan(&line.path, &bytes)?);
+        let found = scan::scan(&line.path, &bytes)?;
+        if included.iter().any(|file| file.path == line.path) {
+            include_findings.extend(found);
+        } else {
+            findings.extend(found);
+        }
     }
     findings.sort();
+    include_findings.sort();
+    included.sort();
     let Commits {
         head,
         base,
         upstream,
         handoff,
         twin,
-    } = commits(source, &tree, &config.note)?;
+    } = commits(source, &tree, &config.note, &included)?;
     Ok(Snapshot {
         shadow: source.shadow,
         head,
@@ -670,8 +727,11 @@ pub fn take(source: &Source, config: &SendConfig) -> ToolResult<Snapshot> {
         files: files.len(),
         unpacked_bytes: files.iter().map(|file| file.bytes).sum(),
         excluded,
+        included,
         findings,
+        include_findings,
         caps: report,
+        patterns: config.patterns.clone(),
     })
 }
 
