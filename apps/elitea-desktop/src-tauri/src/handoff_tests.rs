@@ -916,7 +916,11 @@ async fn the_preview_honours_leave_on_laptop() {
 async fn status_many_is_local_first_and_cached() {
     let h = harness().await;
     let other = "c0ffee00-0000-4000-8000-000000000002".to_owned();
-    let answer = h.host.status_many(std::slice::from_ref(&other)).await.unwrap();
+    let answer = h
+        .host
+        .status_many(std::slice::from_ref(&other))
+        .await
+        .unwrap();
     assert_eq!(answer["statuses"][&other]["state"], "LOCAL");
     assert_eq!(h.platform.lock().unwrap().state_gets, 0);
     h.host
