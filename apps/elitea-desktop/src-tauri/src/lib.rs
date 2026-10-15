@@ -220,6 +220,9 @@ pub fn run() {
                 }
             };
             let workspaces = Arc::new(WorkspaceStore::new(data_dir.clone()));
+            // A linked worktree (a take-back's, ADR-0034) is used by host
+            // git only when its repository is a workspace the person opened.
+            handoff::trust_open_workspaces(workspaces.clone());
             let policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
             let handoff_policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
             // The local workspace indexes (ADR-0029 decision 7), opened on

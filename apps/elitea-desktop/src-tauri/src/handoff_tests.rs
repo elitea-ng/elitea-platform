@@ -635,3 +635,37 @@ fn a_version_1_history_gains_the_turn_origin_column() {
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].origin, "local");
 }
+
+/// Risk 2: a take-back worktree (the folder moved on since the send)
+/// carries the folder's `.env`, is clean, and opens as a workspace with git
+/// checkpoints once its repository is an open workspace.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_take_back_worktree_opens_as_a_workspace_with_git_checkpoints() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new())
+        .await
+        .unwrap();
+    cloud_turn(&h);
+    git(&h.folder, &["add", "-A"]);
+    git(&h.folder, &["commit", "-q", "-m", "moved on locally"]);
+    h.host.reclaim(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    assert_eq!(preflight.outcome, Outcome::Conflicts);
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Worktree)
+        .await
+        .unwrap();
+    let path = std::path::PathBuf::from(applied.worktree_path.unwrap());
+    assert_eq!(
+        std::fs::read_to_string(path.join(".env")).unwrap(),
+        "TOKEN=local\n"
+    );
+    assert_eq!(git(&path, &["status", "--porcelain"]), "");
+    super::trust_open_workspaces(h.host.deps.workspaces.clone());
+    let opened = h.host.deps.workspaces.add(&path).unwrap();
+    let session = h.agents.local_session(&opened.id, path.clone()).unwrap();
+    assert_eq!(session.checkpoints().kind(), "git");
+    assert!(session.checkpoints().git_refusal().is_none());
+}

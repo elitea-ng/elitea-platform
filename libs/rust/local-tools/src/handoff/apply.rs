@@ -45,8 +45,8 @@ use elitea_workspace_store::objects::{
 use elitea_workspace_store::refs as store_refs;
 use serde::{Deserialize, Serialize};
 
-use super::exclude::Exclusions;
-use super::snapshot::{Source, snapshot_tree};
+use super::exclude::{Exclusions, Reason};
+use super::snapshot::{Source, TreeLine, list_tree, snapshot_tree};
 use super::{SendRecord, TempDir, check_conversation, short_thread};
 use crate::checkpoint::Checkpoints;
 use crate::error::{ErrorCode, ToolError, ToolResult};
@@ -185,6 +185,8 @@ pub struct Applied {
     pub replayed: Vec<String>,
     pub written: Vec<String>,
     pub deleted: Vec<String>,
+    /// `worktree`: the folder's excluded files copied into it.
+    pub copied: Vec<String>,
 }
 
 fn flatten_commit(db: &ObjectDb, sha: &str) -> ToolResult<BTreeMap<String, FileEntry>> {
@@ -216,11 +218,37 @@ fn local_tree(source: &Source, exclusions: &Exclusions) -> ToolResult<String> {
     snapshot_tree(source, exclusions, u64::MAX).map(|(tree, _, _)| tree)
 }
 
-/// Whether take-back may write `path` (`kind` the new entry, if any).
-fn writable(path: &str, entry: Option<&FileEntry>, exclusions: &Exclusions) -> bool {
-    exclusions.reason(path).is_none()
-        && !path.split('/').any(is_protected_name)
-        && entry.is_none_or(|entry| !entry.is_link() && !entry.is_gitlink())
+/// How take-back treats one path the cloud changed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Write {
+    /// Written (or deleted) like any change.
+    Always,
+    /// An excluded path the cloud created: written only where no local
+    /// file exists (a local excluded file is never overwritten).
+    IfAbsent,
+    /// Never written or deleted.
+    Never,
+}
+
+/// How take-back may write `path` (`entry` the new entry, if any; `added`:
+/// the cloud created it).
+fn writable(path: &str, entry: Option<&FileEntry>, added: bool, exclusions: &Exclusions) -> Write {
+    if path.split('/').any(is_protected_name)
+        || entry.is_some_and(|entry| entry.is_link() || entry.is_gitlink())
+    {
+        return Write::Never;
+    }
+    match exclusions.reason(path) {
+        None => Write::Always,
+        Some(Reason::PathDeny | Reason::NotAFile) => Write::Never,
+        Some(_) if added && entry.is_some() => Write::IfAbsent,
+        Some(_) => Write::Never,
+    }
+}
+
+/// Something (a file, a link, a directory) is at `path` under `top`.
+fn present(top: &Path, path: &str) -> bool {
+    std::fs::symlink_metadata(top.join(path)).is_ok()
 }
 
 /// The cloud commits from `handoff` (excluded) to `tip`, oldest first.
@@ -318,10 +346,13 @@ pub fn preflight(
     let mut changed_paths = Vec::new();
     let mut skipped_paths = Vec::new();
     for change in &changes {
-        if writable(&change.path, change.new.as_ref(), &exclusions) {
-            changed_paths.push(change.path.clone());
-        } else {
-            skipped_paths.push(change.path.clone());
+        let added = change.kind == ChangeKind::Added;
+        match writable(&change.path, change.new.as_ref(), added, &exclusions) {
+            Write::Always => changed_paths.push(change.path.clone()),
+            Write::IfAbsent if !present(source.top(), &change.path) => {
+                changed_paths.push(change.path.clone());
+            }
+            Write::IfAbsent | Write::Never => skipped_paths.push(change.path.clone()),
         }
     }
     let conflict_paths = if fast {
@@ -362,10 +393,92 @@ pub fn preflight(
     })
 }
 
-/// Import the segment's objects and replay the cloud chain onto `H'_1`;
-/// the branch name and the replayed commits.
-fn import_and_replay(source: &Source, preflight: &Preflight) -> ToolResult<(String, Vec<String>)> {
-    let objects = source.git_dir().join("objects");
+/// `tree` with every excluded path as `HEAD` had it: the entry of `HEAD`
+/// where it has one, nothing where it has none. The branch's commits then
+/// never delete an excluded tracked file (the send left it out of the
+/// snapshot) and never carry an excluded file the cloud wrote.
+fn graft_excluded(
+    source: &Source,
+    tree: &str,
+    head_excluded: &[TreeLine],
+    exclusions: &Exclusions,
+) -> ToolResult<String> {
+    let lines = list_tree(source, tree)?;
+    let remove: Vec<&TreeLine> = lines
+        .iter()
+        .filter(|line| exclusions.reason(&line.path).is_some())
+        .filter(|line| {
+            !head_excluded.iter().any(|head| {
+                head.path == line.path && head.oid == line.oid && head.mode == line.mode
+            })
+        })
+        .collect();
+    let add: Vec<&TreeLine> = head_excluded
+        .iter()
+        .filter(|head| {
+            !lines.iter().any(|line| {
+                line.path == head.path && line.oid == head.oid && line.mode == head.mode
+            })
+        })
+        .collect();
+    if remove.is_empty() && add.is_empty() {
+        return Ok(tree.to_owned());
+    }
+    let index = TempDir::new("graft")?;
+    let index_file = index.path().join("index");
+    let index_os: &OsStr = index_file.as_os_str();
+    let index_dir = [index.path().to_path_buf()];
+    let with_objects = [index.path().to_path_buf(), source.objects()];
+    let git = || {
+        source
+            .repo
+            .git(source.top())
+            .env("GIT_INDEX_FILE", index_os)
+    };
+    git().writes(&index_dir).run(&["read-tree", tree])?;
+    let mut info = Vec::new();
+    for line in &remove {
+        // Mode 0 removes the entry.
+        info.extend_from_slice(
+            format!("0 0000000000000000000000000000000000000000\t{}", line.path).as_bytes(),
+        );
+        info.push(0);
+    }
+    for line in &add {
+        info.extend_from_slice(format!("{} {}\t{}", line.mode, line.oid, line.path).as_bytes());
+        info.push(0);
+    }
+    git()
+        .writes(&index_dir)
+        .stdin(&info)
+        .run(&["update-index", "-z", "--index-info"])?;
+    git().writes(&with_objects).text(&["write-tree"])
+}
+
+/// The excluded entries of `HEAD` at the send.
+fn head_excluded(
+    source: &Source,
+    record: &SendRecord,
+    exclusions: &Exclusions,
+) -> ToolResult<Vec<TreeLine>> {
+    let Some(head) = &record.head else {
+        return Ok(Vec::new());
+    };
+    Ok(list_tree(source, &format!("{head}^{{tree}}"))?
+        .into_iter()
+        .filter(|line| exclusions.reason(&line.path).is_some())
+        .collect())
+}
+
+/// Import the segment's objects and replay the cloud chain onto `H'_1`
+/// (each tree with the excluded paths as `HEAD` had them,
+/// [`graft_excluded`]); the branch name and the replayed commits.
+fn import_and_replay(
+    source: &Source,
+    preflight: &Preflight,
+    exclusions: &Exclusions,
+) -> ToolResult<(String, Vec<String>)> {
+    let objects = source.objects();
     source
         .repo
         .git(source.top())
@@ -374,13 +487,43 @@ fn import_and_replay(source: &Source, preflight: &Preflight) -> ToolResult<(Stri
         .run(&["index-pack", "--stdin"])?;
     let name = OsStr::new("Elitea cloud executor");
     let email = OsStr::new("cloud@elitea.invalid");
+    let head_excluded = head_excluded(source, &preflight.record, exclusions)?;
     let mut previous = preflight.record.twin.clone();
+    if !head_excluded.is_empty() {
+        // The twin, with HEAD's excluded entries back.
+        let tree = graft_excluded(source, &preflight.record.tree, &head_excluded, exclusions)?;
+        if tree != preflight.record.tree
+            && let Some(head) = &preflight.record.head
+        {
+            previous = source
+                .repo
+                .git(source.top())
+                .env("GIT_AUTHOR_NAME", name)
+                .env("GIT_AUTHOR_EMAIL", email)
+                .env("GIT_COMMITTER_NAME", name)
+                .env("GIT_COMMITTER_EMAIL", email)
+                .writes(std::slice::from_ref(&objects))
+                .text(&[
+                    "commit-tree",
+                    "--no-gpg-sign",
+                    &tree,
+                    "-p",
+                    head,
+                    "-m",
+                    &format!(
+                        "Elitea handoff (local twin)\n\nElitea-Handoff-Twin: {}",
+                        preflight.record.handoff
+                    ),
+                ])?;
+        }
+    }
     let mut replayed = Vec::new();
     for commit in &preflight.chain {
         let tree = source
             .repo
             .git(source.top())
             .text(&["rev-parse", &format!("{}^{{tree}}", commit.sha)])?;
+        let tree = graft_excluded(source, &tree, &head_excluded, exclusions)?;
         let message = if commit.message.trim().is_empty() {
             "Elitea cloud turn".to_owned()
         } else {
@@ -406,7 +549,7 @@ fn import_and_replay(source: &Source, preflight: &Preflight) -> ToolResult<(Stri
         replayed.push(previous.clone());
     }
     let short = short_thread(&preflight.record.conversation_uuid);
-    let heads = source.git_dir().join("refs/heads/elitea/cloud");
+    let heads = source.common_dir().join("refs/heads/elitea/cloud");
     std::fs::create_dir_all(&heads)
         .map_err(|error| ToolError::io("cannot create the cloud branch", &error))?;
     let mut branch = format!("elitea/cloud/{short}");
@@ -433,17 +576,20 @@ fn import_and_replay(source: &Source, preflight: &Preflight) -> ToolResult<(Stri
     Ok((branch, replayed))
 }
 
-/// Write `files` (a cloud tree's entries) into `workspace`.
+/// Write `files` (a cloud tree's entries, each with whether the cloud
+/// created it) into `workspace`.
 fn write_files<'a>(
     workspace: &Workspace,
     db: &ObjectDb,
-    files: impl Iterator<Item = (&'a String, &'a FileEntry)>,
+    files: impl Iterator<Item = (&'a String, &'a FileEntry, bool)>,
     exclusions: &Exclusions,
     applied: &mut Applied,
 ) -> ToolResult<()> {
-    for (path, entry) in files {
-        if !writable(path, Some(entry), exclusions) {
-            continue;
+    for (path, entry, added) in files {
+        match writable(path, Some(entry), added, exclusions) {
+            Write::Always => {}
+            Write::IfAbsent if !present(workspace.root(), path) => {}
+            Write::IfAbsent | Write::Never => continue,
         }
         let bytes = db.blob(&entry.oid).map_err(|e| super::store_error(&e))?;
         let ws_path = WsPath::from_relative(Path::new(path))?;
@@ -527,7 +673,7 @@ fn apply_fast(
         ),
         None => None,
     };
-    let (branch, replayed) = import_and_replay(source, preflight)?;
+    let (branch, replayed) = import_and_replay(source, preflight, exclusions)?;
     let workspace = Workspace::open(source.top(), &[])?;
     let mut applied = Applied {
         applied: true,
@@ -541,7 +687,7 @@ fn apply_fast(
         let entry = change.new.as_ref()?;
         cloud
             .get_key_value(&change.path)
-            .map(|(path, _)| (path, entry))
+            .map(|(path, _)| (path, entry, change.kind == ChangeKind::Added))
     });
     write_files(
         &workspace,
@@ -551,7 +697,9 @@ fn apply_fast(
         &mut applied,
     )?;
     for change in &preflight.changes {
-        if change.kind == ChangeKind::Deleted && writable(&change.path, None, exclusions) {
+        if change.kind == ChangeKind::Deleted
+            && writable(&change.path, None, false, exclusions) == Write::Always
+        {
             let path = WsPath::from_relative(Path::new(&change.path))?;
             if workspace.remove_file(&path)? {
                 applied.deleted.push(change.path.clone());
@@ -573,9 +721,9 @@ fn apply_worktree(
         .map_err(|error| ToolError::io("cannot create the worktree", &error))?;
     let path = std::fs::canonicalize(&path)
         .map_err(|error| ToolError::io("cannot create the worktree", &error))?;
-    let (branch, replayed) = import_and_replay(source, preflight)?;
+    let (branch, replayed) = import_and_replay(source, preflight, exclusions)?;
     if !source.shadow {
-        let admin = source.git_dir().join("worktrees");
+        let admin = source.common_dir().join("worktrees");
         std::fs::create_dir_all(&admin)
             .map_err(|error| ToolError::io("cannot create the worktree", &error))?;
         source
@@ -608,13 +756,91 @@ fn apply_worktree(
         replayed,
         ..Applied::default()
     };
+    // The person's own excluded files first (local → local), so the
+    // worktree builds like the folder; a cloud file never overwrites one.
+    applied.copied = copy_local_excluded(source, &workspace, exclusions)?;
     let cloud = flatten_commit(&preflight.bundle.db, &preflight.cloud_tip)?;
+    let sent = flatten_commit(&preflight.bundle.db, &preflight.record.handoff)?;
     write_files(
         &workspace,
         &preflight.bundle.db,
-        cloud.iter(),
+        cloud
+            .iter()
+            .map(|(path, entry)| (path, entry, !sent.contains_key(path))),
         exclusions,
         &mut applied,
     )?;
     Ok(applied)
+}
+
+/// The most local excluded files copied into a worktree, and their bytes.
+const COPY_MAX_FILES: usize = 1000;
+const COPY_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const COPY_MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Copy the folder's excluded files (tracked, untracked and ignored ones:
+/// `.env`, keys, `.eliteaignore`d files) into `worktree`, through the
+/// confined reader and writer: regular files only, never through a
+/// symlink, bounded. The paths copied.
+fn copy_local_excluded(
+    source: &Source,
+    worktree: &Workspace,
+    exclusions: &Exclusions,
+) -> ToolResult<Vec<String>> {
+    let git = || source.repo.git(source.top()).worktree();
+    let mut listed = git().run(&[
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+    ])?;
+    listed.push(0);
+    listed.extend(git().run(&[
+        "ls-files",
+        "-z",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+    ])?);
+    let mut paths: Vec<String> = listed
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty() && !path.ends_with(b"/"))
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .filter(|path| {
+            !matches!(exclusions.reason(path), None | Some(Reason::NotAFile))
+                && !path.split('/').any(is_protected_name)
+        })
+        .collect();
+    paths.sort();
+    paths.dedup();
+    let folder = Workspace::open(source.top(), &[])?;
+    let (mut copied, mut total) = (Vec::new(), 0u64);
+    for path in paths {
+        if copied.len() >= COPY_MAX_FILES {
+            break;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(source.top().join(&path)) else {
+            continue;
+        };
+        if !meta.file_type().is_file()
+            || meta.len() > COPY_MAX_FILE_BYTES
+            || total + meta.len() > COPY_MAX_BYTES
+        {
+            continue;
+        }
+        let ws_path = WsPath::from_relative(Path::new(&path))?;
+        let Ok(file) = folder.read(&ws_path, COPY_MAX_FILE_BYTES) else {
+            continue;
+        };
+        if file.path != ws_path {
+            // Reached through a symlink: not copied.
+            continue;
+        }
+        total += file.bytes.len() as u64;
+        worktree.write(&ws_path, &file.bytes, Some(file.mode & 0o777))?;
+        copied.push(path);
+    }
+    Ok(copied)
 }

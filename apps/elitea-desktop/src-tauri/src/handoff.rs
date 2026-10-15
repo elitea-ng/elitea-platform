@@ -1390,6 +1390,18 @@ fn cloud_turns(detail: &Value, from: u64, to: u64, preflight: &Preflight) -> Vec
     out
 }
 
+/// Host git uses a linked worktree (a take-back's, opened as a workspace)
+/// only when its repository is a workspace the person opened (ADR-0034
+/// decision 13; `elitea_local_tools::git::set_worktree_trust`).
+pub fn trust_open_workspaces(workspaces: Arc<WorkspaceStore>) {
+    elitea_local_tools::git::set_worktree_trust(move |top| {
+        workspaces.list().is_ok_and(|all| {
+            all.iter()
+                .any(|workspace| Path::new(&workspace.path) == top)
+        })
+    });
+}
+
 /// The host, as Tauri manages it.
 pub struct HandoffState(pub Arc<HandoffHost>);
 

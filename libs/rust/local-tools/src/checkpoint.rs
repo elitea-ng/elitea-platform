@@ -521,11 +521,11 @@ impl GitCheckpoints {
     }
 
     fn objects(&self) -> PathBuf {
-        self.repo.git_dir().join("objects")
+        self.repo.common_dir().join("objects")
     }
 
     fn refs(&self) -> PathBuf {
-        self.repo.git_dir().join("refs/elitea")
+        self.repo.common_dir().join("refs/elitea")
     }
 
     fn head(&self) -> Option<String> {
@@ -663,8 +663,8 @@ impl GitCheckpoints {
         let excess = all.len().saturating_sub(self.limits.keep.max(1));
         let writes = [
             self.refs(),
-            self.repo.git_dir().join("packed-refs"),
-            self.repo.git_dir().join("packed-refs.lock"),
+            self.repo.common_dir().join("packed-refs"),
+            self.repo.common_dir().join("packed-refs.lock"),
         ];
         for (index, info) in all.iter().enumerate() {
             let newest = index + 1 == all.len();

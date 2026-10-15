@@ -239,16 +239,18 @@ fn the_fast_path_lands_the_cloud_tree_as_uncommitted_changes_and_undo_restores()
         "3",
         "twin + 2 turns"
     );
+    // The twin sits on HEAD; the branch is the cloud tree with the
+    // excluded paths as HEAD has them, so it never deletes the tracked
+    // `.env` or key, nor carries the `.env` the cloud wrote.
+    assert_eq!(git(top, &["rev-parse", &format!("{branch}~3")]), head);
     assert_eq!(
-        git(top, &["rev-parse", &format!("{branch}~2")]),
-        sent.record.twin
+        git(top, &["diff", "--name-only", &preflight.cloud_tip, &branch]),
+        ".env\nkeys/id_rsa"
     );
-    assert_eq!(
-        git(top, &["rev-parse", &format!("{branch}^{{tree}}")]),
-        git(
-            top,
-            &["rev-parse", &format!("{}^{{tree}}", preflight.cloud_tip)]
-        )
+    let from_head = git(top, &["diff", "--name-status", &head, &branch]);
+    assert!(
+        !from_head.contains(".env") && !from_head.contains("id_rsa"),
+        "{from_head}"
     );
     assert_eq!(
         git(top, &["log", "-1", "--format=%s", &branch]),
@@ -312,14 +314,16 @@ fn a_moved_head_offers_a_worktree_and_leaves_the_folder() {
         std::fs::read_to_string(path.join("README.md")).unwrap(),
         "hello from the cloud\n"
     );
-    assert!(
-        !path.join(".env").exists(),
-        "an excluded path is not in the worktree"
+    // The folder's own excluded files are copied (local → local); the
+    // `.env` the cloud wrote never overwrites them.
+    assert_eq!(
+        std::fs::read_to_string(path.join(".env")).unwrap(),
+        "TOKEN=local-only\n"
     );
+    assert!(path.join("keys/id_rsa").exists());
     assert!(git(top, &["worktree", "list"]).contains(&path.to_string_lossy().into_owned()));
-    // The worktree is the branch, but for the excluded path the cloud
-    // wrote, which is never written to disk.
-    assert_eq!(git(&path, &["status", "--porcelain"]), "D .env");
+    // The worktree is the branch: clean.
+    assert_eq!(git(&path, &["status", "--porcelain"]), "");
     assert_eq!(
         git(&path, &["rev-parse", "HEAD"]),
         git(top, &["rev-parse", applied.branch.as_deref().unwrap()])
@@ -434,4 +438,153 @@ fn a_folder_without_a_repository_takes_back_through_its_shadow() {
         "LOCAL=1\n"
     );
     assert!(!top.join(".git").exists());
+}
+
+/// Risk 2a: the take-back worktree opens as a desktop workspace when its
+/// repository is one the person opened — host git and git checkpoints
+/// work in it — and a `.git` file is still refused otherwise.
+#[test]
+fn a_take_back_worktree_opens_as_a_workspace_of_a_trusted_repository() {
+    use elitea_local_tools::deny::DenyList;
+    use elitea_local_tools::git::{Repo, trust_worktree_parent};
+    use std::sync::Arc;
+    let fixture = Fixture::repo();
+    let top = &fixture.top;
+    let sent = send(&fixture);
+    let (bytes, refs) = cloud(&fixture, &sent, &[&cloud_edits]);
+    git(top, &["commit", "-q", "-m", "moved on"]);
+    let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
+    let applied = apply::apply(&sent.source, &preflight, Mode::Worktree, &deny(), None).unwrap();
+    let path = applied.worktree_path.unwrap();
+    let deny_list = || Arc::new(DenyList::new([fixture.data.join("secrets")]));
+    // Not trusted yet: refused as before.
+    let refused = Repo::discover(&path, &SandboxConfig::default(), deny_list()).unwrap_err();
+    assert_eq!(refused.code(), ErrorCode::UnsafeRepository);
+    trust_worktree_parent(top);
+    let repo = Repo::discover(&path, &SandboxConfig::default(), deny_list())
+        .unwrap()
+        .unwrap();
+    assert!(repo.is_linked_worktree());
+    assert_eq!(
+        repo.common_dir(),
+        std::fs::canonicalize(top.join(".git")).unwrap()
+    );
+    // Git checkpoints, not copies, and one round-trips.
+    let workspace = Workspace::open(&path, &[]).unwrap();
+    let checkpoints =
+        Checkpoints::open_with(&workspace, "wt1", &fixture.data, &SandboxConfig::default())
+            .unwrap()
+            .with_git_global_config(Some(fixture.global.clone()));
+    assert!(
+        checkpoints.git_refusal().is_none(),
+        "{:?}",
+        checkpoints.git_refusal()
+    );
+    assert_eq!(checkpoints.kind(), "git");
+    let info = checkpoints.create("before an edit").unwrap();
+    write(&path, "README.md", "edited in the worktree\n");
+    checkpoints.restore(info.seq).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path.join("README.md")).unwrap(),
+        "hello from the cloud\n"
+    );
+    assert_eq!(git(&path, &["status", "--porcelain"]), "");
+    // A `.git` file that points at the repository itself, or at a worktree
+    // that registered another folder, is refused even for a trusted parent.
+    let fake = fixture.base.join("fake");
+    std::fs::create_dir(&fake).unwrap();
+    std::fs::write(
+        fake.join(".git"),
+        format!("gitdir: {}\n", top.join(".git").display()),
+    )
+    .unwrap();
+    assert_eq!(
+        Repo::discover(&fake, &SandboxConfig::default(), deny_list())
+            .unwrap_err()
+            .code(),
+        ErrorCode::UnsafeRepository
+    );
+    let pointer = std::fs::read_to_string(path.join(".git")).unwrap();
+    std::fs::write(fake.join(".git"), pointer).unwrap();
+    assert_eq!(
+        Repo::discover(&fake, &SandboxConfig::default(), deny_list())
+            .unwrap_err()
+            .code(),
+        ErrorCode::UnsafeRepository
+    );
+}
+
+/// Risks 2b and 2c: a worktree gets the folder's excluded files (tracked,
+/// untracked and ignored), and a file the cloud created that the exclusions
+/// match is written only where no local file exists — in the worktree and
+/// on the fast path.
+#[test]
+fn cloud_created_excluded_files_never_overwrite_local_ones() {
+    let fixture = Fixture::repo();
+    let top = &fixture.top;
+    // An ignored `.env.local` the folder needs to build.
+    write(top, ".gitignore", "ignored.log\nbuild/\n.env.local\n");
+    git(top, &["add", ".gitignore"]);
+    git(top, &["commit", "-q", "-m", "ignore .env.local"]);
+    write(top, ".env.local", "LOCAL=1\n");
+    let sent = send(&fixture);
+    let created = |dir: &Path| {
+        write(dir, ".env", "TOKEN=from-the-cloud\n");
+        write(dir, "config/.env.cloud", "CLOUD=1\n");
+        write(dir, "src/ok.rs", "pub fn ok() {}\n");
+    };
+    let (bytes, refs) = cloud(&fixture, &sent, &[&created]);
+
+    // Fast path.
+    let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
+    assert_eq!(preflight.outcome, Outcome::FastPath);
+    for path in ["config/.env.cloud", "src/ok.rs"] {
+        assert!(preflight.changed_paths.contains(&path.to_owned()), "{path}");
+    }
+    assert!(preflight.skipped_paths.contains(&".env".to_owned()));
+    let applied = apply::apply(&sent.source, &preflight, Mode::Apply, &deny(), None).unwrap();
+    assert!(applied.written.contains(&"config/.env.cloud".to_owned()));
+    assert_eq!(
+        std::fs::read_to_string(top.join("config/.env.cloud")).unwrap(),
+        "CLOUD=1\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(top.join(".env")).unwrap(),
+        "TOKEN=local-only\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(top.join(".env.local")).unwrap(),
+        "LOCAL=1\n"
+    );
+
+    // Worktree (a second thread state: undo the fast path by hand first).
+    std::fs::remove_file(top.join("config/.env.cloud")).unwrap();
+    std::fs::remove_file(top.join("src/ok.rs")).unwrap();
+    let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny()).unwrap();
+    let applied = apply::apply(&sent.source, &preflight, Mode::Worktree, &deny(), None).unwrap();
+    let path = applied.worktree_path.unwrap();
+    for local in [".env", ".env.local", "keys/id_rsa"] {
+        assert!(
+            applied.copied.contains(&local.to_owned()),
+            "{local}: {:?}",
+            applied.copied
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(path.join(".env")).unwrap(),
+        "TOKEN=local-only\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join(".env.local")).unwrap(),
+        "LOCAL=1\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("config/.env.cloud")).unwrap(),
+        "CLOUD=1\n"
+    );
+    // Clean but for the cloud-created excluded file, which no commit holds.
+    assert_eq!(
+        git(&path, &["status", "--porcelain", "-uall"]),
+        "?? config/.env.cloud"
+    );
 }

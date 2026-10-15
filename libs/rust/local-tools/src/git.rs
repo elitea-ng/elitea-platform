@@ -21,7 +21,10 @@
 //!
 //! 1. **Refuse unsafe repositories** ([`Repo::check`], before any git
 //!    process): `.git` must be a plain directory (not a symlink, not a
-//!    `gitdir:` file) at the work tree's top, with no `commondir`, no
+//!    `gitdir:` file, except a linked worktree exactly as `git worktree
+//!    add` registers it in a repository the host trusts, see
+//!    [`trust_worktree_parent`]; its repository's `.git` is then checked
+//!    as below) at the work tree's top, with no `commondir`, no
 //!    `modules/`, no alternates, and a local config (and `config.worktree`)
 //!    that this module parses itself and git's own reader lists (reading
 //!    config runs no code; includes are not followed): both must agree on
@@ -463,6 +466,145 @@ pub fn dangerous_key(key: &str, value: Option<&str>) -> Option<&'static str> {
 /// (relative entries are ignored). On macOS the `/usr/bin/git` shim is
 /// resolved to the developer tools' git, which runs without `xcrun`'s
 /// cache files.
+/// The text of a config file (`name` labels it in refusals); `None` when
+/// there is none.
+fn read_config_file(path: &Path, name: &str) -> ToolResult<Option<String>> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(unsafe_repo(format!("cannot read .git/{name}"))),
+    };
+    if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {
+        return Err(unsafe_repo(format!(
+            ".git/{name} is not a plain config file"
+        )));
+    }
+    let text = std::fs::read(path).map_err(|_| unsafe_repo(format!("cannot read .git/{name}")))?;
+    String::from_utf8(text)
+        .map(Some)
+        .map_err(|_| unsafe_repo(format!(".git/{name} is not UTF-8")))
+}
+
+type WorktreeTrust = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+
+/// Repositories whose linked worktrees host git may use: the tops the host
+/// registered ([`trust_worktree_parent`]) and its check
+/// ([`set_worktree_trust`]).
+static WORKTREE_PARENTS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+static WORKTREE_TRUST: Mutex<Option<WorktreeTrust>> = Mutex::new(None);
+
+/// Trust the linked worktrees of the repository whose top is `top` (a
+/// workspace the person opened). Kept for the life of the process.
+pub fn trust_worktree_parent(top: &Path) {
+    let top = std::fs::canonicalize(top).unwrap_or_else(|_| top.to_path_buf());
+    if let Ok(mut parents) = WORKTREE_PARENTS.lock() {
+        parents.insert(top);
+    }
+}
+
+/// The host's own check of a worktree's repository top (the desktop: "a
+/// workspace the person opened"), consulted besides
+/// [`trust_worktree_parent`].
+pub fn set_worktree_trust(check: impl Fn(&Path) -> bool + Send + Sync + 'static) {
+    if let Ok(mut trust) = WORKTREE_TRUST.lock() {
+        *trust = Some(Arc::new(check));
+    }
+}
+
+fn trusted_worktree_parent(top: &Path) -> bool {
+    if WORKTREE_PARENTS
+        .lock()
+        .is_ok_and(|parents| parents.contains(top))
+    {
+        return true;
+    }
+    let check = WORKTREE_TRUST.lock().ok().and_then(|trust| trust.clone());
+    check.is_some_and(|check| check(top))
+}
+
+/// A small file's text, trimmed (`None`: missing, not a plain file, or
+/// larger than 4 KiB).
+fn small_text(path: &Path) -> Option<String> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.file_type().is_file() || meta.len() > 4096 {
+        return None;
+    }
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|text| text.trim().to_owned())
+}
+
+/// A linked worktree at `top` (its `.git` a `gitdir:` file), accepted only
+/// when it is exactly what `git worktree add` registers in a trusted
+/// repository: `.git` points (canonically) at `<P>/.git/worktrees/<name>`,
+/// `<P>/.git` is a plain directory, `<P>` is a trusted top
+/// ([`trust_worktree_parent`], [`set_worktree_trust`]), and the admin
+/// directory's `commondir` leads back to `<P>/.git` and its `gitdir` back to
+/// this `.git`. `(admin dir, <P>/.git)`; every other check of
+/// [`Repo::check`] then runs on `<P>/.git`.
+fn linked_worktree(top: &Path) -> ToolResult<(PathBuf, PathBuf)> {
+    let refuse = |why: &str| {
+        unsafe_repo(format!(
+            "the repository's .git is a file pointing at a git directory elsewhere ({why})"
+        ))
+    };
+    let dot_git = top.join(".git");
+    let pointer = small_text(&dot_git).ok_or_else(|| refuse("unreadable"))?;
+    let target = pointer
+        .strip_prefix("gitdir:")
+        .map(str::trim)
+        .filter(|target| !target.is_empty() && !target.contains('\n'))
+        .ok_or_else(|| refuse("not a gitdir pointer"))?;
+    let target = Path::new(target);
+    let target = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        top.join(target)
+    };
+    let admin = std::fs::canonicalize(&target).map_err(|_| refuse("its target is missing"))?;
+    if !std::fs::symlink_metadata(&admin).is_ok_and(|meta| meta.file_type().is_dir()) {
+        return Err(refuse("its target is not a directory"));
+    }
+    let worktrees = admin.parent().ok_or_else(|| refuse("not a worktree"))?;
+    let common = worktrees.parent().ok_or_else(|| refuse("not a worktree"))?;
+    let parent_top = common.parent().ok_or_else(|| refuse("not a worktree"))?;
+    if worktrees.file_name() != Some(OsStr::new("worktrees"))
+        || common.file_name() != Some(OsStr::new(".git"))
+    {
+        return Err(refuse("a submodule or another kind of git directory"));
+    }
+    if !std::fs::symlink_metadata(common).is_ok_and(|meta| meta.file_type().is_dir()) {
+        return Err(refuse("its repository's .git is not a directory"));
+    }
+    if !trusted_worktree_parent(parent_top) {
+        return Err(refuse(
+            "a worktree of a repository that is not an open workspace",
+        ));
+    }
+    let commondir = small_text(&admin.join("commondir")).ok_or_else(|| refuse("no commondir"))?;
+    let commondir = Path::new(&commondir);
+    let commondir = if commondir.is_absolute() {
+        commondir.to_path_buf()
+    } else {
+        admin.join(commondir)
+    };
+    if std::fs::canonicalize(commondir).ok().as_deref() != Some(common) {
+        return Err(refuse("its commondir leads elsewhere"));
+    }
+    let back = small_text(&admin.join("gitdir")).ok_or_else(|| refuse("no gitdir"))?;
+    let back = Path::new(&back);
+    let back = if back.is_absolute() {
+        back.to_path_buf()
+    } else {
+        admin.join(back)
+    };
+    if std::fs::canonicalize(back).ok() != std::fs::canonicalize(&dot_git).ok() {
+        return Err(refuse("its repository registered another worktree there"));
+    }
+    let common = common.to_path_buf();
+    Ok((admin, common))
+}
+
 fn git_binary() -> ToolResult<PathBuf> {
     static GIT: OnceLock<Option<PathBuf>> = OnceLock::new();
     GIT.get_or_init(|| {
@@ -494,6 +636,9 @@ fn git_binary() -> ToolResult<PathBuf> {
 pub struct Repo {
     top: PathBuf,
     git_dir: PathBuf,
+    /// Where objects, refs and the config live: `git_dir` itself, or for a
+    /// linked worktree ([`linked_worktree`]) its repository's `.git`.
+    common_dir: PathBuf,
     sandbox: SandboxConfig,
     /// What host git may not read or write: the session's deny list.
     deny: Arc<DenyList>,
@@ -530,9 +675,17 @@ impl Repo {
         else {
             return Ok(None);
         };
+        let dot_git = top.join(".git");
+        let (git_dir, common_dir) =
+            if std::fs::symlink_metadata(&dot_git).is_ok_and(|meta| meta.file_type().is_file()) {
+                linked_worktree(top)?
+            } else {
+                (dot_git.clone(), dot_git)
+            };
         let repo = Self {
             top: top.to_path_buf(),
-            git_dir: top.join(".git"),
+            git_dir,
+            common_dir,
             sandbox: sandbox.clone(),
             deny,
             global_config: None,
@@ -562,6 +715,7 @@ impl Repo {
         let repo = Self {
             top: work_tree.to_path_buf(),
             git_dir: git_dir.to_path_buf(),
+            common_dir: git_dir.to_path_buf(),
             sandbox: sandbox.clone(),
             deny,
             global_config: None,
@@ -592,13 +746,36 @@ impl Repo {
         &self.git_dir
     }
 
+    /// Where the objects, the shared refs and the config are: the git
+    /// directory, or a linked worktree's repository `.git`.
+    #[must_use]
+    pub fn common_dir(&self) -> &Path {
+        &self.common_dir
+    }
+
+    /// A linked worktree (its `.git` is a `gitdir:` file).
+    #[must_use]
+    pub fn is_linked_worktree(&self) -> bool {
+        self.common_dir != self.git_dir
+    }
+
     /// Layer 1: the repository's shape and config (no process runs).
     ///
     /// # Errors
     ///
     /// [`ErrorCode::UnsafeRepository`] with the reason.
     pub fn check(&self) -> ToolResult<()> {
-        let meta = std::fs::symlink_metadata(&self.git_dir)
+        if self.is_linked_worktree() {
+            // The pointer is read again on every call: a worktree whose
+            // `.git` now points elsewhere is not the one that was trusted.
+            let (admin, common) = linked_worktree(&self.top)?;
+            if admin != self.git_dir || common != self.common_dir {
+                return Err(unsafe_repo(
+                    "the worktree's .git now points at another git directory",
+                ));
+            }
+        }
+        let meta = std::fs::symlink_metadata(&self.common_dir)
             .map_err(|_| unsafe_repo("the repository's .git is gone"))?;
         if meta.file_type().is_symlink() {
             return Err(unsafe_repo("the repository's .git is a symlink"));
@@ -618,19 +795,33 @@ impl Repo {
                 "borrows objects from elsewhere (alternates)",
             ),
         ] {
-            if std::fs::symlink_metadata(self.git_dir.join(name)).is_ok() {
+            if std::fs::symlink_metadata(self.common_dir.join(name)).is_ok() {
                 return Err(unsafe_repo(format!("the repository {reason}")));
             }
         }
-        if std::fs::read_dir(self.git_dir.join("modules"))
+        if std::fs::read_dir(self.common_dir.join("modules"))
             .is_ok_and(|mut entries| entries.next().is_some())
         {
             return Err(unsafe_repo(
                 "the repository has submodules with their own git directories",
             ));
         }
-        for name in ["config", "config.worktree"] {
-            let Some(text) = self.read_config(name)? else {
+        let mut configs = vec![
+            ("config".to_owned(), self.common_dir.join("config")),
+            (
+                "config.worktree".to_owned(),
+                self.common_dir.join("config.worktree"),
+            ),
+        ];
+        if self.is_linked_worktree() {
+            configs.push((
+                "worktree config.worktree".to_owned(),
+                self.git_dir.join("config.worktree"),
+            ));
+        }
+        for (name, path) in &configs {
+            let name = name.as_str();
+            let Some(text) = read_config_file(path, name)? else {
                 continue;
             };
             let ours = parse_config(&text).map_err(|reason| {
@@ -699,26 +890,6 @@ impl Repo {
             out.push(ConfigEntry { key, value });
         }
         Ok(out)
-    }
-
-    /// The text of `.git/<name>`; `None` when there is none.
-    fn read_config(&self, name: &str) -> ToolResult<Option<String>> {
-        let path = self.git_dir.join(name);
-        let meta = match std::fs::symlink_metadata(&path) {
-            Ok(meta) => meta,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(unsafe_repo(format!("cannot read .git/{name}"))),
-        };
-        if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {
-            return Err(unsafe_repo(format!(
-                ".git/{name} is not a plain config file"
-            )));
-        }
-        let text =
-            std::fs::read(&path).map_err(|_| unsafe_repo(format!("cannot read .git/{name}")))?;
-        String::from_utf8(text)
-            .map(Some)
-            .map_err(|_| unsafe_repo(format!(".git/{name} is not UTF-8")))
     }
 
     /// How many full attribute scans ran.
@@ -884,12 +1055,15 @@ impl Repo {
         for dir in &dirs {
             stat(&self.top.join(dir).join(".gitattributes"));
         }
-        for name in ["index", "HEAD", "info/attributes", "packed-refs"] {
+        for name in ["index", "HEAD"] {
             stat(&self.git_dir.join(name));
+        }
+        for name in ["info/attributes", "packed-refs"] {
+            stat(&self.common_dir.join(name));
         }
         if let Ok(head) = std::fs::read_to_string(self.git_dir.join("HEAD")) {
             if let Some(reference) = head.trim().strip_prefix("ref: ") {
-                stat(&self.git_dir.join(reference));
+                stat(&self.common_dir.join(reference));
             }
             hash.update(head.as_bytes());
         }
@@ -926,11 +1100,13 @@ impl Repo {
         }
     }
 
-    /// What a commit may write: the git directory, except what runs code
-    /// or redirects git (hooks, config, info, modules, commondir).
+    /// What a commit may write: the git directory (a linked worktree's
+    /// repository `.git`, which holds its own), except what runs code or
+    /// redirects git (hooks, config, info, modules, commondir; a linked
+    /// worktree's `commondir`, `gitdir` and `config.worktree`).
     #[must_use]
     pub(crate) fn commit_access(&self) -> (Vec<PathBuf>, Vec<PathBuf>) {
-        let protected = [
+        let mut protected: Vec<PathBuf> = [
             "hooks",
             "config",
             "config.worktree",
@@ -939,9 +1115,16 @@ impl Repo {
             "commondir",
         ]
         .iter()
-        .map(|name| self.git_dir.join(name))
+        .map(|name| self.common_dir.join(name))
         .collect();
-        (vec![self.git_dir.clone()], protected)
+        if self.is_linked_worktree() {
+            protected.extend(
+                ["commondir", "gitdir", "config.worktree"]
+                    .iter()
+                    .map(|name| self.git_dir.join(name)),
+            );
+        }
+        (vec![self.common_dir.clone()], protected)
     }
 
     /// A git call in this repository, from `cwd` (inside the work tree).

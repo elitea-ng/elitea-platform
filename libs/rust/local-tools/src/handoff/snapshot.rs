@@ -90,12 +90,18 @@ impl Source {
         self.repo.top()
     }
 
+    /// Where objects and shared refs live (a linked worktree's repository).
+    #[must_use]
+    pub fn common_dir(&self) -> &Path {
+        self.repo.common_dir()
+    }
+
     pub(crate) fn objects(&self) -> PathBuf {
-        self.repo.git_dir().join("objects")
+        self.repo.common_dir().join("objects")
     }
 
     pub(crate) fn refs_dir(&self) -> PathBuf {
-        self.repo.git_dir().join("refs/elitea")
+        self.repo.common_dir().join("refs/elitea")
     }
 
     /// `HEAD`'s commit, when there is one.
@@ -114,7 +120,7 @@ impl Source {
     ///
     /// A sha256 repository, or one that cannot be opened.
     pub fn object_db(&self) -> ToolResult<ObjectDb> {
-        ObjectDb::open_git_dir(self.git_dir()).map_err(|e| super::store_error(&e))
+        ObjectDb::open_git_dir(self.common_dir()).map_err(|e| super::store_error(&e))
     }
 }
 
@@ -153,7 +159,7 @@ pub fn open_source(
         None => repo,
     };
     let format =
-        store_objects::object_format(repo.git_dir()).map_err(|e| super::store_error(&e))?;
+        store_objects::object_format(repo.common_dir()).map_err(|e| super::store_error(&e))?;
     if format != "sha1" {
         return Err(ToolError::new(
             ErrorCode::Unsupported,
