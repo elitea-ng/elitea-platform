@@ -3,7 +3,7 @@
 //! afterwards, the orphan base and upstream, the shadow repository, the
 //! scan and the caps, and the segment read back.
 #![cfg(feature = "handoff")]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::format_push_string)]
 
 mod handoff_common;
 
@@ -448,4 +448,144 @@ fn a_subfolder_and_a_sha256_repository_are_refused() {
     )
     .unwrap_err();
     assert!(error.message().contains("sha256"), "{}", error.message());
+}
+
+/// Risk 1 (delta packs): a realistic folder — many text files, edited over
+/// many revisions, then edited again in the working tree — sends a segment
+/// no larger than 1.2× what `git bundle create` writes for the same refs,
+/// and it round-trips: the store's reader verifies it and git fetches and
+/// fscks it.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn the_segment_is_deltified_like_git_bundle_and_round_trips() {
+    let fixture = Fixture::new();
+    let top = &fixture.top;
+    git(top, &["init", "-q"]);
+    let body = |file: usize, revision: usize| {
+        let mut text = format!("//! module {file}\n\n");
+        for line in 0..120 {
+            text.push_str(&format!(
+                "pub fn function_{line}_of_module_{file}(value: u64) -> u64 {{ value + {} }}\n",
+                line * (revision + 1)
+            ));
+        }
+        text
+    };
+    for revision in 0..6 {
+        for file in 0..150 {
+            write(top, &format!("src/m{file}.rs"), &body(file, revision));
+        }
+        git(top, &["add", "-A"]);
+        git(
+            top,
+            &["commit", "-q", "-m", &format!("revision {revision}")],
+        );
+    }
+    // The working tree edits every file again (B and H_1 differ everywhere).
+    for file in 0..150 {
+        write(top, &format!("src/m{file}.rs"), &body(file, 9));
+    }
+    let config = fixture.config(&[]);
+    let source = open_source(
+        top,
+        &fixture.data,
+        &config.sandbox,
+        &config.deny,
+        Some(&fixture.global),
+    )
+    .unwrap();
+    let snap = snapshot::take(&source, &config).unwrap();
+    let written = snapshot::bundle(&source, &snap, Limits::default()).unwrap();
+
+    // `git bundle create` of the same refs.
+    for (name, sha) in snapshot::published_refs(&snap) {
+        git(
+            top,
+            &[
+                "update-ref",
+                &name.replace("refs/elitea/", "refs/cmp/"),
+                &sha,
+            ],
+        );
+    }
+    let reference = fixture.base.join("reference.bundle");
+    git(
+        top,
+        &[
+            "bundle",
+            "create",
+            "-q",
+            reference.to_str().unwrap(),
+            "refs/cmp/base",
+            "refs/cmp/handoff/1",
+        ],
+    );
+    let reference = std::fs::metadata(&reference).unwrap().len();
+    let whole = bundle::write_compact(
+        &ObjectDb::open_git_dir(&top.join(".git")).unwrap(),
+        &snapshot::published_refs(&snap)
+            .into_iter()
+            .map(|(name, sha)| (name, objects::oid(&sha).unwrap()))
+            .collect::<Vec<_>>(),
+        Limits::default(),
+    )
+    .unwrap();
+    let size = written.bytes.len() as u64;
+    eprintln!(
+        "segment {size} bytes, git bundle {reference}, whole objects {}",
+        whole.bytes.len()
+    );
+    assert!(
+        size * 10 <= reference * 12,
+        "segment {size} > 1.2 × git bundle {reference}"
+    );
+    assert!(size < whole.bytes.len() as u64, "deltas made it smaller");
+
+    // Round trip: the store's reader, and git itself.
+    let quarantine = fixture.base.join("q");
+    bundle::init_quarantine(&quarantine).unwrap();
+    let refs: BTreeMap<String, String> = snapshot::published_refs(&snap).into_iter().collect();
+    let verified = bundle::verify_into(
+        &written.bytes,
+        &quarantine,
+        &Expect {
+            sha256: Some(&written.sha256),
+            bytes: Some(size),
+            refs: Some(&refs),
+        },
+        Limits::default(),
+    )
+    .unwrap();
+    let tree = |db: &ObjectDb| {
+        db.flatten(
+            &db.commit(&objects::oid(&snap.handoff).unwrap())
+                .unwrap()
+                .tree,
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        tree(&verified.db),
+        tree(&ObjectDb::open_git_dir(&top.join(".git")).unwrap())
+    );
+    let file = fixture.base.join("segment.bundle");
+    std::fs::write(&file, &written.bytes).unwrap();
+    let other = fixture.base.join("other");
+    std::fs::create_dir(&other).unwrap();
+    git(&other, &["init", "-q"]);
+    git(&other, &["bundle", "verify", "-q", file.to_str().unwrap()]);
+    git(
+        &other,
+        &[
+            "fetch",
+            "-q",
+            file.to_str().unwrap(),
+            "refs/elitea/*:refs/elitea/*",
+        ],
+    );
+    git(&other, &["fsck", "--strict", "--no-dangling"]);
+    assert_eq!(
+        git(&other, &["rev-parse", "refs/elitea/handoff/1"]),
+        snap.handoff
+    );
 }

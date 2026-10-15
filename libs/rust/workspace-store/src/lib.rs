@@ -7,7 +7,9 @@
 //! point (refs, the segment log, the epoch fence); this crate is the client
 //! side both writers share:
 //!
-//! * [`bundle`]: write a `COMPACT` bundle from an object database, and read
+//! * [`bundle`]: write a `COMPACT` bundle from an object database (whole
+//!   objects, [`bundle::write_compact`]) or around a deltified pack the
+//!   desktop's hardened git built ([`bundle::write_compact_with_pack`]), and read
 //!   one back: parse the header, index the pack into a quarantine, and run
 //!   the connectivity check ([`connectivity`]) before any ref or file is
 //!   touched. sha1 repositories only; sha256 ones are refused
@@ -23,7 +25,8 @@
 //!   in-process store with Main's rules, and [`fault`] a fault-injecting
 //!   wrapper for tests. Feature `rest`: the desktop's REST transport.
 //!
-//! No Tauri, no git CLI: the cloud worker links this crate too.
+//! No Tauri, no git CLI: the cloud worker links this crate too, and reads
+//! (and writes, without deltas) with no git binary.
 #![cfg_attr(
     not(test),
     deny(

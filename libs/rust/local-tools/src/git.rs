@@ -1048,8 +1048,9 @@ impl<'a> Git<'a> {
         self
     }
 
-    #[cfg(test)]
-    fn timeout(mut self, timeout: Duration) -> Self {
+    /// Another deadline (the handoff's pack of a large folder).
+    #[cfg(any(test, feature = "handoff"))]
+    pub(crate) fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }

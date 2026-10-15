@@ -681,11 +681,22 @@ pub fn published_refs(snapshot: &Snapshot) -> Vec<(String, String)> {
     refs
 }
 
-/// The `COMPACT` segment of the snapshot.
+/// How long the pack of a send may take (a 2 GB tree's deltas).
+const PACK_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(15);
+
+/// The `COMPACT` segment of the snapshot, deltified: hardened host git
+/// (`pack-objects --revs --delta-base-offset`, sandboxed, writing only into
+/// a private temporary directory) packs every object reachable from the
+/// published refs, `elitea-workspace-store` wraps the pack in the bundle
+/// header, and the result is verified with the store's own reader (content
+/// address, pack, connectivity from every ref, the refs) before anyone may
+/// upload it. The pack is about the size `git bundle create` writes for the
+/// same refs.
 ///
 /// # Errors
 ///
-/// A missing object, or the limits.
+/// A missing object, git failures, a pack that does not verify, or the
+/// limits.
 pub fn bundle(source: &Source, snapshot: &Snapshot, limits: Limits) -> ToolResult<Written> {
     let db = source.object_db()?;
     let mut refs = Vec::new();
@@ -695,7 +706,64 @@ pub fn bundle(source: &Source, snapshot: &Snapshot, limits: Limits) -> ToolResul
             store_objects::oid(&sha).map_err(|e| super::store_error(&e))?,
         ));
     }
-    segment::write_compact(&db, &refs, limits).map_err(|e| super::store_error(&e))
+    // git writes its temporary pack into the object directory: a private
+    // one, which borrows the repository's objects (read-only) as an
+    // alternate, so nothing is written to the repository.
+    let dir = TempDir::new("pack")?;
+    let objects = dir.path().join("objects");
+    std::fs::create_dir_all(objects.join("pack"))
+        .map_err(|error| ToolError::io("cannot prepare the pack", &error))?;
+    let base = dir.path().join("segment");
+    let mut tips = Vec::new();
+    for (_, id) in &refs {
+        tips.extend_from_slice(format!("{id}\n").as_bytes());
+    }
+    let repo_objects = source.objects();
+    let hash = source
+        .repo
+        .git(source.top())
+        .env("GIT_OBJECT_DIRECTORY", objects.as_os_str())
+        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", repo_objects.as_os_str())
+        .writes(&[dir.path().to_path_buf()])
+        .timeout(PACK_TIMEOUT)
+        .stdin(&tips)
+        .text(&[
+            "pack-objects",
+            "--revs",
+            "--delta-base-offset",
+            "--quiet",
+            &base.to_string_lossy(),
+        ])?;
+    if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ToolError::new(
+            ErrorCode::Git,
+            "git pack-objects named no pack",
+        ));
+    }
+    let pack = std::fs::read(dir.path().join(format!("segment-{hash}.pack")))
+        .map_err(|error| ToolError::io("cannot read the pack", &error))?;
+    let written = segment::write_compact_with_pack(&db, &refs, &pack, limits)
+        .map_err(|e| super::store_error(&e))?;
+    drop(pack);
+    let expected: std::collections::BTreeMap<String, String> = refs
+        .iter()
+        .map(|(name, id)| (name.clone(), id.to_string()))
+        .collect();
+    let quarantine = TempDir::new("verify")?;
+    let git_dir = quarantine.path().join("git");
+    segment::init_quarantine(&git_dir).map_err(|e| super::store_error(&e))?;
+    segment::verify_into(
+        &written.bytes,
+        &git_dir,
+        &segment::Expect {
+            sha256: Some(&written.sha256),
+            bytes: Some(written.bytes.len() as u64),
+            refs: Some(&expected),
+        },
+        limits,
+    )
+    .map_err(|e| super::store_error(&e))?;
+    Ok(written)
 }
 
 /// Record `H_1` and `H'_1` on the private refs of the thread.

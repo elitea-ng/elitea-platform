@@ -253,6 +253,70 @@ pub fn write_compact(
     })
 }
 
+/// A `COMPACT` bundle around a pack the caller built (the desktop's
+/// deltified `git pack-objects` output): the refs and limits are checked
+/// against `db` as [`write_compact`] does, and `pack` is used as it is.
+///
+/// This crate never runs git and does not compute deltas itself: the
+/// writer that has a hardened git (the desktop, through `elitea-local-tools`)
+/// hands its pack in; a writer without one (the cloud worker today) uses
+/// [`write_compact`], whose packs are larger but need nothing but zlib.
+/// Reading ([`verify_into`]) never needs git. A caller verifies the result
+/// with [`verify_into`] before it uploads it: a pack that misses an object,
+/// carries a thin delta or is broken fails there.
+///
+/// # Errors
+///
+/// As [`write_compact`]; [`StoreError::Invalid`] when `pack` is not a
+/// version 2 pack, or holds another number of objects than the refs reach.
+pub fn write_compact_with_pack(
+    db: &ObjectDb,
+    refs: &[(String, ObjectId)],
+    pack: &[u8],
+    limits: Limits,
+) -> Result<Written, StoreError> {
+    if refs.is_empty() {
+        return Err(StoreError::Invalid(
+            "a bundle needs at least one ref".into(),
+        ));
+    }
+    for (name, _) in refs {
+        if !valid_ref(name) {
+            return Err(StoreError::Invalid(format!(
+                "`{name}` cannot be a bundle ref"
+            )));
+        }
+    }
+    if pack.len() < 32 || !pack.starts_with(b"PACK") || pack[4..8] != 2u32.to_be_bytes() {
+        return Err(StoreError::Invalid("not a version 2 pack".into()));
+    }
+    let tips: Vec<ObjectId> = refs.iter().map(|(_, id)| *id).collect();
+    let walk = connectivity::reachable(db, &tips, limits.max_objects)?;
+    if walk.blob_bytes > limits.max_unpacked_bytes {
+        return Err(StoreError::Invalid(format!(
+            "the files hold {} bytes; the limit is {}",
+            walk.blob_bytes, limits.max_unpacked_bytes
+        )));
+    }
+    let count = u32::from_be_bytes([pack[8], pack[9], pack[10], pack[11]]) as usize;
+    if count != walk.objects.len() {
+        return Err(StoreError::Invalid(format!(
+            "the pack holds {count} objects; the refs reach {}",
+            walk.objects.len()
+        )));
+    }
+    let mut bytes = render_header(refs, &[]);
+    bytes.extend_from_slice(pack);
+    Ok(Written {
+        sha256: sha256_hex(&bytes),
+        bytes,
+        objects: walk.objects.len(),
+        commits: walk.commits,
+        blobs: walk.blobs,
+        unpacked_bytes: walk.blob_bytes,
+    })
+}
+
 /// An empty git directory to read a bundle into, outside any folder the
 /// person or the agent works in.
 ///

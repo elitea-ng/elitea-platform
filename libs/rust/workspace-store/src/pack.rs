@@ -1,7 +1,9 @@
 //! A git pack (version 2) of whole objects: no deltas, so writing it needs
 //! nothing but the objects and zlib, and every reader (git, gix) indexes it.
-//! Phase 1 segments are bounded by the caps, so the size given up to deltas
-//! is bounded too.
+//! This is the writer of a host without git (the cloud worker). The desktop
+//! builds deltified packs with its hardened git (`git pack-objects`) and
+//! wraps them with [`crate::bundle::write_compact_with_pack`]; readers take
+//! either.
 
 use std::io::Write as _;
 

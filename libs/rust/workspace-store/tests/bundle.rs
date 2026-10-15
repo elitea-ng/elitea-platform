@@ -1,6 +1,6 @@
 //! Bundles: write → read → verify → refs equal; git itself reads ours; a
 //! tampered bundle is refused with nothing usable; sha256 refused.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::format_push_string)]
 
 mod common;
 
@@ -242,4 +242,90 @@ fn limits_bound_the_writer() {
         bundle::write_compact(&db, &refs, tight).unwrap_err().code(),
         "invalid"
     );
+}
+
+#[test]
+fn a_deltified_pack_is_wrapped_verified_and_read_by_git() {
+    let (dir, top, _) = repo();
+    // Many revisions of one text file: git deltifies them.
+    let mut text = String::new();
+    for line in 0..400 {
+        text.push_str(&format!(
+            "line {line} of a longer file that git will deltify\n"
+        ));
+    }
+    let mut head = String::new();
+    for revision in 0..8 {
+        text.push_str(&format!("revision {revision}\n"));
+        head = commit_file(&top, "src/long.txt", &text);
+    }
+    let db = ObjectDb::open_git_dir(&top.join(".git")).unwrap();
+    let refs = vec![(
+        "refs/elitea/handoff/1".to_owned(),
+        objects::oid(&head).unwrap(),
+    )];
+    let packs = dir.path().join("packs");
+    std::fs::create_dir(&packs).unwrap();
+    let base = packs.join("seg");
+    let name = std::process::Command::new("git")
+        .current_dir(&top)
+        .args(["pack-objects", "--revs", "--delta-base-offset", "-q"])
+        .arg(&base)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(format!("{head}\n").as_bytes())?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    let hash = String::from_utf8_lossy(&name.stdout).trim().to_owned();
+    let pack = std::fs::read(packs.join(format!("seg-{hash}.pack"))).unwrap();
+    let written = bundle::write_compact_with_pack(&db, &refs, &pack, Limits::default()).unwrap();
+    let whole = bundle::write_compact(&db, &refs, Limits::default()).unwrap();
+    assert!(
+        written.bytes.len() < whole.bytes.len(),
+        "deltas make it smaller: {} vs {}",
+        written.bytes.len(),
+        whole.bytes.len()
+    );
+    let quarantine = dir.path().join("q");
+    bundle::init_quarantine(&quarantine).unwrap();
+    let verified = bundle::verify_into(
+        &written.bytes,
+        &quarantine,
+        &Expect {
+            sha256: Some(&written.sha256),
+            ..Expect::default()
+        },
+        Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(verified.objects, written.objects);
+    // A pack of other objects is refused before anything is wrapped.
+    let other = bundle::write_compact(
+        &db,
+        &[("refs/elitea/base".to_owned(), objects::oid(&head).unwrap())],
+        Limits::default(),
+    )
+    .unwrap();
+    let short = &other.bytes[bundle::parse_header(&other.bytes).unwrap().pack_offset..];
+    let first = git(&top, &["rev-list", "--max-parents=0", "HEAD"]);
+    assert_eq!(
+        bundle::write_compact_with_pack(
+            &db,
+            &[("refs/elitea/base".to_owned(), objects::oid(&first).unwrap())],
+            short,
+            Limits::default()
+        )
+        .unwrap_err()
+        .code(),
+        "invalid"
+    );
+    assert!(bundle::write_compact_with_pack(&db, &refs, b"not a pack", Limits::default()).is_err());
 }
