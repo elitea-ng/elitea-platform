@@ -147,6 +147,23 @@ impl WorkspaceRunSpec {
     }
 }
 
+impl WorkspaceRunSpec {
+    /// The backend-independent container of this run, in `image`.
+    #[must_use]
+    pub(crate) fn container(&self, image: &str) -> crate::sandbox::workspace_run::WorkspaceRunContainer {
+        crate::sandbox::workspace_run::WorkspaceRunContainer {
+            name: self.run_id.clone(),
+            image: image.to_owned(),
+            workspace_bytes: self.workspace_bytes,
+            egress: self.network == WorkspaceNetwork::PublicEgress,
+            cpu_millis: self.cpu_millis,
+            memory_bytes: self.memory_bytes,
+            pids_limit: self.pids_limit,
+            wall_seconds: self.turn_wall.as_secs().max(1),
+        }
+    }
+}
+
 /// One running workspace sandbox.
 #[async_trait]
 pub(crate) trait WorkspaceSandbox: Send + Sync {
@@ -233,6 +250,27 @@ mod tests {
         let mut with_proxy = defaults();
         with_proxy.host_allowlist_proxy = true;
         assert!(WorkspaceRunSpec::from_context("run".into(), &context, &with_proxy).is_ok());
+    }
+
+    #[test]
+    fn the_spec_renders_a_writable_disk_backed_container_with_the_policy_network() {
+        let image = format!("registry.example/workspace-runner@sha256:{}", "c".repeat(64));
+        let selector = std::collections::BTreeMap::from([("sandbox".to_owned(), "true".to_owned())]);
+        let spec = WorkspaceRunSpec::from_context("elitea-ws-abc".into(), &fixture(), &defaults())
+            .expect("spec");
+        let pod = spec
+            .container(&image)
+            .kubernetes_pod("elitea-execution", "gvisor", &selector)
+            .expect("pod");
+        assert!(pod["spec"]["volumes"][0]["emptyDir"].get("medium").is_none());
+        assert_eq!(pod["metadata"]["labels"]["sandbox.elitea.ai/egress"], "public");
+        let mut off = fixture();
+        off.network = false;
+        let spec = WorkspaceRunSpec::from_context("elitea-ws-abc".into(), &off, &defaults())
+            .expect("spec");
+        let plan = spec.container(&image).docker_plan(Some("elitea-workspace-egress"), &["1.1.1.1".to_owned()]).expect("plan");
+        assert_eq!(plan.network_mode, "none");
+        assert_eq!(plan.pids_limit, WORKSPACE_RUN_PIDS_LIMIT);
     }
 
     #[test]

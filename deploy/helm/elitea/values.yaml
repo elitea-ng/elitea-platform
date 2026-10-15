@@ -4550,6 +4550,41 @@ sandboxKubernetes:
   supervisorServiceAccount: elitea-sandbox-supervisor
   # This cap includes running Pods and completed Pods awaiting receipt cleanup.
   maxPods: 128
+  # ADR-0034: the cloud executor's workspace runs, one Pod per cloud turn in
+  # the execution namespace (disk-backed /workspace, the workspace runner
+  # image). Toolkit Code Pods are not affected by anything below.
+  workspaceRuns:
+    enabled: false
+    # Egress for workspace runs whose project has the network on (the Pod
+    # carries sandbox.elitea.ai/egress=public). Off: every workspace run is
+    # as denied as a Code Pod, whatever the project says.
+    egress:
+      enabled: false
+      # Required: the cluster's own ranges, denied so a workspace run cannot
+      # reach in-cluster services (Main, NATS, PostgreSQL, the store).
+      podCidrs: []
+      serviceCidrs: []
+      # Always denied: RFC 1918, carrier-grade NAT, link-local (cloud
+      # metadata 169.254.169.254), loopback, IPv6 unique-local (fd00:ec2::254)
+      # and link-local, and the IPv6 loopback.
+      denyCidrs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+        - 127.0.0.0/8
+        - 0.0.0.0/8
+        - fc00::/7
+        - fe80::/10
+        - ::1/128
+      # Allow IPv6 egress (::/0 minus the IPv6 deny ranges).
+      ipv6: true
+      # DNS goes to the cluster resolver only.
+      dnsNamespaceLabels:
+        kubernetes.io/metadata.name: kube-system
+      dnsPodLabels:
+        k8s-app: kube-dns
   # Optional Python resolver boundary. Execution keeps its deny-all policy.
   preparation:
     enabled: false

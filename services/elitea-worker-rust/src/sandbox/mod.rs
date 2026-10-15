@@ -35,3 +35,4 @@ pub mod runtime_workspace;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod service;
 pub mod workspace;
+pub mod workspace_run;
