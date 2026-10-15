@@ -1535,6 +1535,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct runtime worker client-token context: %w", err)
 		}
+		runtimeToken.WithWorkspaceContext(newWorkspaceContextResolver(dependencies))
 	}
 	// nestedApplicationVersions is what makes agent-as-tool executable at all:
 	// without this route the native worker reaches

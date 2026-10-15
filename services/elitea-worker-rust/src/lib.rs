@@ -33,6 +33,8 @@ mod toolkits;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod transport;
 pub(crate) mod validation;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod workspace_run;
 
 use std::fmt;
 use std::io::{self, Write};

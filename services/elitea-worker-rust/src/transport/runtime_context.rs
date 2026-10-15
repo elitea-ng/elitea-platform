@@ -31,6 +31,9 @@ use zeroize::Zeroizing;
 use crate::protocol::control::{
     ClaimBoundRuntimeContextAuthority, RuntimeContextRedemptionBinding,
 };
+use crate::workspace_run::context::{
+    RUNTIME_CONTEXT_FIELD as WORKSPACE_FIELD, WorkspaceRuntimeContext,
+};
 
 const TOKEN_CONTEXT_SCHEMA: &str = "elitea.runtime.elitea-client-token.v1";
 const APPLICATION_VERSION_SCHEMA: &str = "elitea.runtime.application-version.v1";
@@ -118,6 +121,11 @@ pub(crate) const MAX_ATTACHMENT_OBJECT_BYTES: usize = 6 * 1_024 * 1_024;
 const MAX_TOKEN_BYTES: usize = 16 * 1_024;
 const MAX_RUNTIME_CONTEXT_DEADLINE: Duration = Duration::from_mins(5);
 const CLAIM_HEADER: HeaderName = HeaderName::from_static("x-elitea-claim-id");
+/// The optional runtime-context fields this worker reads (Main's
+/// `runtimeContextAcceptHeader`): only `workspace` (ADR-0034). The
+/// `secrets-header-value` field is not read by this worker, so it is not
+/// asked for.
+const ACCEPT_HEADER: HeaderName = HeaderName::from_static("x-elitea-runtime-context-accept");
 const FENCE_HEADER: HeaderName = HeaderName::from_static("x-elitea-fence");
 const PRAGMA_HEADER: HeaderName = HeaderName::from_static("pragma");
 const PATH_SEGMENT: &AsciiSet = &CONTROLS
@@ -326,6 +334,8 @@ pub(crate) struct ClaimScopedEliteaContext {
     project_id: u64,
     token: Zeroizing<String>,
     execution_id: String,
+    /// ADR-0034: present only for a cloud turn of a handed-off thread.
+    workspace: Option<WorkspaceRuntimeContext>,
 }
 
 impl ClaimScopedEliteaContext {
@@ -351,6 +361,12 @@ impl ClaimScopedEliteaContext {
         self.execution_id.as_str()
     }
 
+    /// The handed-off thread this turn runs in (ADR-0034), if any.
+    #[must_use]
+    pub(crate) const fn workspace(&self) -> Option<&WorkspaceRuntimeContext> {
+        self.workspace.as_ref()
+    }
+
     #[cfg(test)]
     pub(super) const fn project_id(&self) -> u64 {
         self.project_id
@@ -367,6 +383,12 @@ impl ClaimScopedEliteaContext {
     }
 
     #[cfg(test)]
+    pub(crate) fn with_workspace(mut self, workspace: WorkspaceRuntimeContext) -> Self {
+        self.workspace = Some(workspace);
+        self
+    }
+
+    #[cfg(test)]
     pub(super) fn fixture_with_execution_id(
         project_id: u64,
         token: &str,
@@ -376,6 +398,7 @@ impl ClaimScopedEliteaContext {
             project_id,
             token: Zeroizing::new(token.to_owned()),
             execution_id: execution_id.to_owned(),
+            workspace: None,
         }
     }
 }
@@ -894,6 +917,10 @@ fn build_request(
             )
         })?,
     );
+    request.headers_mut().insert(
+        ACCEPT_HEADER,
+        HeaderValue::from_static(WORKSPACE_FIELD),
+    );
     Ok(request)
 }
 
@@ -1337,10 +1364,16 @@ async fn redeem_response(
             "the runtime context does not match the accepted execution",
         ));
     }
+    if let Some(workspace) = &decoded.workspace {
+        workspace
+            .validate()
+            .map_err(RuntimeContextError::InvalidResponse)?;
+    }
     Ok(ClaimScopedEliteaContext {
         project_id: decoded.project_id,
         token: decoded.token.0,
         execution_id: binding.execution_id.to_owned(),
+        workspace: decoded.workspace,
     })
 }
 
@@ -1786,6 +1819,10 @@ struct RuntimeContextResponse {
     schema_version: String,
     project_id: u64,
     token: SecretToken,
+    /// Served only because this worker accepts it, and only for a cloud
+    /// turn; absent otherwise. Its own keys are as strict as these.
+    #[serde(default)]
+    workspace: Option<WorkspaceRuntimeContext>,
 }
 
 #[derive(Deserialize)]
