@@ -22,7 +22,7 @@ use adk_core::{AdkError, ErrorCategory, ErrorComponent};
 
 use super::office_host::{
     MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError, OfficeModelRequest,
-    SharedOfficeToolHost,
+    SharedOfficeToolHost, TOOLKIT_BUDGET_SENTENCE,
 };
 
 /// The most bytes of one artifact a tool reads to attach it: the host's own
@@ -101,6 +101,9 @@ pub(crate) enum AttachmentError {
     TooLarge(u64),
     /// The host failed, in one of the steps.
     Host(Step, OfficeFailure),
+    /// The claim's toolkit completion cap refused the model call
+    /// ([`OfficeHostError::toolkit_budget`]); nothing was asked.
+    ToolkitBudget,
 }
 
 impl AttachmentError {
@@ -119,6 +122,9 @@ impl AttachmentError {
             Self::Host(Step::Read, failure) => read_sentence(*failure),
             Self::Host(Step::Write, failure) => write_sentence(*failure),
             Self::Host(Step::Model, failure) => model_sentence(*failure),
+            Self::ToolkitBudget => {
+                format!("{TOOLKIT_BUDGET_SENTENCE}. Do not retry; tell the user.")
+            }
         }
     }
 
@@ -126,6 +132,10 @@ impl AttachmentError {
         match self {
             Self::Path | Self::Empty => (ErrorCategory::InvalidInput, "attachment.input.invalid"),
             Self::TooLarge(_) => (ErrorCategory::InvalidInput, "attachment.too_large"),
+            Self::ToolkitBudget => (
+                ErrorCategory::RateLimited,
+                "attachment.toolkit_budget_exhausted",
+            ),
             Self::Host(_, failure) => match failure {
                 OfficeFailure::NotFound => (ErrorCategory::NotFound, "attachment.not_found"),
                 OfficeFailure::AccessRefused => {
@@ -401,6 +411,9 @@ impl AttachmentHost {
             step = ?step,
             "a tracker tool's platform call failed"
         );
+        if error.is_toolkit_budget() {
+            return AttachmentError::ToolkitBudget;
+        }
         AttachmentError::Host(step, error.kind())
     }
 }
@@ -586,14 +599,15 @@ pub(crate) async fn describe_for_text(
     match host.describe_picture(bytes, media_type, prompt).await {
         Ok(description) => Ok(description),
         Err(
-            error @ AttachmentError::Host(
+            error @ (AttachmentError::Host(
                 Step::Model,
                 OfficeFailure::BudgetRefused
                 | OfficeFailure::NoModel
                 | OfficeFailure::RateLimited
                 | OfficeFailure::AccessRefused
                 | OfficeFailure::Unreachable,
-            ),
+            )
+            | AttachmentError::ToolkitBudget),
         ) => Err(error),
         Err(error) => Ok(format!("[Image processing error: {}]", error.sentence())),
     }
@@ -1000,5 +1014,25 @@ mod tests {
         assert!(sentence.contains("may or may not"), "{sentence}");
         let read = AttachmentError::Host(Step::Read, OfficeFailure::Unreachable).sentence();
         assert!(read.contains("nothing was sent"), "{read}");
+    }
+
+    #[test]
+    fn the_toolkit_cap_is_its_own_budget_refusal() {
+        let error = AttachmentHost::failed(Step::Model, &OfficeHostError::toolkit_budget());
+        assert_eq!(error, AttachmentError::ToolkitBudget);
+        assert!(
+            error.sentence().contains("raise toolkit_model_call_cap"),
+            "{}",
+            error.sentence()
+        );
+        let adk = error.into_adk();
+        assert_eq!(adk.code, "attachment.toolkit_budget_exhausted");
+        assert_eq!(adk.category, ErrorCategory::RateLimited);
+        // The gateway's budget keeps its own sentence.
+        let gateway = AttachmentHost::failed(
+            Step::Model,
+            &OfficeHostError::new(OfficeFailure::BudgetRefused, "office_host.budget_refused"),
+        );
+        assert!(gateway.sentence().contains("model budget is exhausted"));
     }
 }

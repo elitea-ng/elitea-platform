@@ -501,6 +501,7 @@ fn from_attachment(error: &AttachmentError) -> AhaArtifactError {
     let code = match error {
         AttachmentError::Path | AttachmentError::Empty => AhaArtifactErrorCode::InvalidInput,
         AttachmentError::TooLarge(_) => AhaArtifactErrorCode::ResourceExhausted,
+        AttachmentError::ToolkitBudget => AhaArtifactErrorCode::DependencyUnavailable,
         AttachmentError::Host(step, failure) => match (step, failure) {
             (_, OfficeFailure::NotFound) => AhaArtifactErrorCode::NotFound,
             (_, OfficeFailure::AccessRefused) => AhaArtifactErrorCode::Authorization,

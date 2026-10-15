@@ -85,8 +85,8 @@ use super::image_fit::{self, FitError, ImageKind};
 use super::inputs::LlmSettings;
 use super::pipeline::{
     EmbedOutcome, Gated, IndexRunFailure, SKIP_EXTRACT_TIMEOUT, SKIP_MODEL_CAP_EXCEEDED,
-    SKIP_MODEL_FAILED, SKIP_NO_MODEL, SKIP_REPLY_UNUSABLE, SKIP_TOO_LARGE, SKIP_UNREADABLE,
-    SKIP_VISION_REFUSED, classify_embedding_error, embed_gated,
+    SKIP_MODEL_FAILED, SKIP_NO_MODEL, SKIP_REASONING_EXHAUSTED_TOKENS, SKIP_REPLY_UNUSABLE,
+    SKIP_TOO_LARGE, SKIP_UNREADABLE, SKIP_VISION_REFUSED, classify_embedding_error, embed_gated,
 };
 use crate::transport::embeddings_facade::EmbeddingsClient;
 use crate::transport::model_facade::{
@@ -924,13 +924,22 @@ async fn vision_call(
         &spec,
         |reply: Reply| {
             // Reasoning the model wrote into its reply is already removed.
-            // A reply that held nothing but reasoning (cut off by
-            // `max_tokens` while thinking, or a `<think>` never closed): the
-            // model spent its budget before it began to describe. A later
-            // run with more `max_tokens` cures it, so the picture is marked
-            // for another run (`model_failed`, like a gateway outage), and
-            // the log says what to raise. Another attempt now would be cut
-            // off the same way.
+            // A reply that held nothing but reasoning and was CUT by
+            // `max_tokens`: the model spent its budget before it began to
+            // describe. The same request (same `max_tokens`) is cut the same
+            // way, in this run or the next, so it is a FINAL skip of its own
+            // (`reasoning_exhausted_tokens`, no pending mark), and the
+            // summary says to raise `max_tokens`.
+            if reply.reasoning_only && reply.truncated {
+                tracing::warn!(
+                    event = "index_image_description_reasoning_exhausted_tokens",
+                    max_tokens = settings.max_tokens,
+                    "the model spent max_tokens on reasoning and described nothing; raise `max_tokens` in the toolkit's llm settings"
+                );
+                return Err(CallFailure::ImageSkip(SKIP_REASONING_EXHAUSTED_TOKENS));
+            }
+            // Reasoning only, not cut (a `<think>` never closed, a reply that
+            // was only a closed block): retried by the next run.
             if reply.reasoning_only {
                 tracing::warn!(
                     event = "index_image_description_reasoning_only",
@@ -1118,7 +1127,7 @@ async fn complete(
             "the model returned no reply".to_owned(),
         )),
         Err(TextFailure::BudgetExhausted) => Err(CallFailure::Cap(
-            crate::transport::model_text::BUDGET_EXHAUSTED.to_owned(),
+            crate::transport::model_text::TOOLKIT_BUDGET_EXHAUSTED.to_owned(),
         )),
     }
 }

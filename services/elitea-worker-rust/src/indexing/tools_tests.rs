@@ -1077,7 +1077,9 @@ async fn the_step_back_model_is_bound_lazily_and_once() {
         )
         .await;
         assert!(
-            text.as_str().expect("text").contains("could not be bound"),
+            text.as_str()
+                .expect("text")
+                .contains("needs the agent's chat model; use search_index instead"),
             "{text}"
         );
     }
@@ -1227,7 +1229,7 @@ async fn parallel_step_back_calls_stop_at_the_claims_completion_budget() {
         .iter()
         .filter(|text| {
             text.as_str()
-                .is_some_and(|text| text.contains("model call budget for this run is exhausted"))
+                .is_some_and(|text| text.contains("used up its model calls for tools"))
         })
         .count();
     assert_eq!(refused, 2, "{results:?}");
@@ -1271,9 +1273,10 @@ async fn a_refused_step_back_call_binds_no_model() {
     assert_eq!(binds.load(Ordering::SeqCst), 0);
 }
 
-/// `generate_text` reports a reply with no text as an error, never `Ok("")`.
+/// `generate_text`: an empty reply is a valid answer (`Ok("")`); a reply of
+/// nothing but reasoning is a typed error.
 #[tokio::test]
-async fn generate_text_refuses_an_empty_or_reasoning_only_reply() {
+async fn generate_text_accepts_an_empty_reply_and_refuses_a_reasoning_only_one() {
     struct Reply(&'static str);
     #[async_trait]
     impl Llm for Reply {
@@ -1315,11 +1318,228 @@ async fn generate_text_refuses_an_empty_or_reasoning_only_reply() {
         )
         .await
     };
-    assert_eq!(
-        ask("").await.expect_err("empty"),
-        crate::transport::model_text::EMPTY_REPLY
-    );
-    assert!(ask("<think>all of it</think>\n").await.is_err());
-    assert!(ask("<think>unclosed").await.is_err());
+    assert_eq!(ask("").await.expect("empty is an answer"), "");
+    assert_eq!(ask("   ").await.expect("blank is an answer"), "   ");
+    for reasoning in [
+        "<think>all of it</think>\n",
+        "<think>unclosed",
+        "all of it</think>",
+    ] {
+        let error = ask(reasoning).await.expect_err(reasoning);
+        assert_eq!(
+            error.code,
+            super::tools::reply_codes::REASONING_ONLY,
+            "{reasoning}"
+        );
+    }
     assert_eq!(ask("  keep\n").await.expect("text"), "  keep\n");
+    assert_eq!(
+        ask("Let me look…</think>\n\nA red square.")
+            .await
+            .expect("text"),
+        "A red square."
+    );
+}
+
+/// A model that refuses every request locally, as the facade does for a
+/// request outside its admitted profile (`model_gateway.invalid_request`,
+/// raised before a byte is sent), or answers like the gateway with a 429.
+struct RefusingModel(&'static str, adk_rust::ErrorCategory);
+
+#[async_trait]
+impl Llm for RefusingModel {
+    fn name(&self) -> &'static str {
+        "refusing-fixture"
+    }
+
+    async fn generate_content(
+        &self,
+        _: LlmRequest,
+        _: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        Err(adk_rust::AdkError::new(
+            adk_rust::ErrorComponent::Model,
+            self.1,
+            self.0,
+            "refused",
+        ))
+    }
+}
+
+/// The budget is charged only for a request that reached the gateway: a
+/// local refusal before sending (an invalid request, a request too large)
+/// and a failed binding consume nothing; a gateway 429 after sending counts.
+#[tokio::test]
+async fn only_a_request_sent_to_the_gateway_consumes_the_budget() {
+    use crate::transport::model_text::ModelCallBudget;
+    let ask = |code: &'static str, category, budget: &ModelCallBudget| {
+        let binding = StepbackBinding {
+            model: Arc::new(RefusingModel(code, category)) as Arc<dyn Llm>,
+            model_name: "m".to_owned(),
+            config: adk_rust::GenerateContentConfig::default(),
+            budget: Some(budget.clone()),
+        };
+        async move {
+            super::tools::generate_text(
+                &binding,
+                vec![adk_rust::Part::Text {
+                    text: "p".to_owned(),
+                }],
+            )
+            .await
+        }
+    };
+    let budget = ModelCallBudget::new(1);
+    for code in [
+        "model_gateway.invalid_request",
+        "model_gateway.request_too_large",
+        "anthropic_gateway.invalid_request",
+        "model_gateway.completion_reused",
+        "context_budget_exceeded",
+    ] {
+        for _ in 0..3 {
+            let error = ask(code, adk_rust::ErrorCategory::InvalidInput, &budget)
+                .await
+                .expect_err(code);
+            assert_eq!(error.code, code);
+        }
+    }
+    assert!(budget.try_take(), "local refusals consumed nothing");
+    budget.refund();
+    // A gateway refusal after sending counts.
+    let error = ask(
+        "model_gateway.rate_limited",
+        adk_rust::ErrorCategory::RateLimited,
+        &budget,
+    )
+    .await
+    .expect_err("429");
+    assert_eq!(error.code, "model_gateway.rate_limited");
+    let spent = ask(
+        "model_gateway.rate_limited",
+        adk_rust::ErrorCategory::RateLimited,
+        &budget,
+    )
+    .await
+    .expect_err("spent");
+    assert_eq!(
+        spent.code,
+        crate::transport::model_text::TOOLKIT_BUDGET_EXHAUSTED_CODE
+    );
+    assert_eq!(spent.category, adk_rust::ErrorCategory::RateLimited);
+
+    // A binding that fails takes nothing either: the budget lives on the
+    // binding, and no binding means no request.
+    let harness = harness().await;
+    seed(&harness).await;
+    let budget = ModelCallBudget::new(1);
+    let host = host_with_lazy_model(
+        &harness,
+        &harness.token,
+        Some(LazyStepbackModel::new(Box::new(|| {
+            Err(crate::transport::model_facade::ModelFacadeError::InvalidConfiguration)
+        }))),
+    );
+    let _ = call(
+        &host,
+        IndexToolName::StepbackSearchIndex,
+        json!({"query": "alpha", "index_name": "docs"}),
+    )
+    .await;
+    assert!(budget.try_take(), "a failed bind consumed nothing");
+}
+
+/// Embeddings that count their requests.
+struct CountingEmbeddings(AtomicUsize);
+
+#[async_trait]
+impl ModelGatewayTransport for CountingEmbeddings {
+    async fn post(
+        &self,
+        request: Request<Body>,
+    ) -> Result<Response<Body>, ModelGatewayTransportError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        AxisEmbeddings.post(request).await
+    }
+}
+
+/// A configured model whose binding fails refuses the step-back call with
+/// the explicit sentence BEFORE any billed work: no query embedding, no
+/// vector search. A binding that works for the first model call but not the
+/// second (the summary tool) is caught up front too: every binding the call
+/// needs is made at its first model call.
+#[tokio::test]
+async fn a_failed_bind_refuses_before_any_embedding_or_vector_call() {
+    let embeddings = Arc::new(CountingEmbeddings(AtomicUsize::new(0)));
+    let harness = harness_with(
+        Some(RecordingRemoval::new(IndexRemovalOutcome::Removed)),
+        Arc::clone(&embeddings) as Arc<dyn ModelGatewayTransport>,
+    )
+    .await;
+    seed(&harness).await;
+    let vector_calls_before = harness.fake.calls().len();
+    let host = host_with_lazy_model(
+        &harness,
+        &harness.token,
+        Some(LazyStepbackModel::new(Box::new(|| {
+            Err(crate::transport::model_facade::ModelFacadeError::InvalidConfiguration)
+        }))),
+    );
+    for tool in [
+        IndexToolName::StepbackSearchIndex,
+        IndexToolName::StepbackSummaryIndex,
+    ] {
+        let text = call(&host, tool, json!({"query": "alpha", "index_name": "docs"})).await;
+        let text = text.as_str().expect("text");
+        assert!(
+            text.contains("needs the agent's chat model; use search_index instead"),
+            "{text}"
+        );
+    }
+    // The second binding of the summary tool fails, the first works.
+    let binds = Arc::new(AtomicUsize::new(0));
+    let host = host_with_lazy_model(
+        &harness,
+        &harness.token,
+        Some(LazyStepbackModel::new({
+            let binds = Arc::clone(&binds);
+            Box::new(move || {
+                if binds.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Ok(StepbackBinding {
+                        model: Arc::new(SingleUseModel {
+                            used: AtomicBool::new(false),
+                        }) as Arc<dyn Llm>,
+                        model_name: "chat-model".to_owned(),
+                        config: adk_rust::GenerateContentConfig::default(),
+                        budget: None,
+                    })
+                } else {
+                    Err(crate::transport::model_facade::ModelFacadeError::InvalidConfiguration)
+                }
+            })
+        })),
+    );
+    let text = call(
+        &host,
+        IndexToolName::StepbackSummaryIndex,
+        json!({"query": "alpha", "index_name": "docs"}),
+    )
+    .await;
+    assert!(
+        text.as_str()
+            .expect("text")
+            .contains("needs the agent's chat model; use search_index instead"),
+        "{text}"
+    );
+    assert_eq!(
+        embeddings.0.load(Ordering::SeqCst),
+        0,
+        "no query was embedded"
+    );
+    assert_eq!(
+        harness.fake.calls().len(),
+        vector_calls_before,
+        "no vector call was made: {:?}",
+        harness.fake.calls()
+    );
 }

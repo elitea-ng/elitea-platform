@@ -474,3 +474,17 @@ func TestRateLimitedIsNotAReadError(t *testing.T) {
 		t.Errorf("rate_limited must be a failed group of its own, got %+v", spec)
 	}
 }
+
+// A picture whose reply was only reasoning cut by max_tokens is not lost
+// work (the same max_tokens gets the same cut): a not-indexed group of its
+// own whose label says what to raise.
+func TestReasoningExhaustedTokensIsItsOwnNotIndexedGroup(t *testing.T) {
+	spec, ok := skipReasonGroups["reasoning_exhausted_tokens"]
+	if !ok {
+		t.Fatal("reasoning_exhausted_tokens has no group")
+	}
+	if spec.kind != kindNotIndexed || spec.reason != "reasoning_exhausted_tokens" ||
+		!strings.Contains(spec.label, "max_tokens") {
+		t.Errorf("reasoning_exhausted_tokens: %+v", spec)
+	}
+}

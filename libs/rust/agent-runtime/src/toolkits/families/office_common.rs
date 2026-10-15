@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 
 use super::office_host::{
     MAX_OFFICE_OBJECT_BYTES, OfficeFailure, OfficeHostError, SharedOfficeToolHost,
+    TOOLKIT_BUDGET_SENTENCE,
 };
 use crate::toolkits::invocation::admit_materialized_toolset;
 use crate::toolkits::policy::ToolAdmissionPolicy;
@@ -404,6 +405,9 @@ pub(crate) fn host_sentence(action: &str, error: &OfficeHostError, kind: &Office
         ),
         OfficeFailure::TooLarge => {
             format!("Could not {action}: the file is larger than the platform accepts.")
+        }
+        OfficeFailure::BudgetRefused if error.is_toolkit_budget() => {
+            format!("Could not {action}: {TOOLKIT_BUDGET_SENTENCE}.")
         }
         OfficeFailure::BudgetRefused => format!(
             "Could not {action}: the model budget is exhausted. Do not retry; tell the user."

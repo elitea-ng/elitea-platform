@@ -702,7 +702,9 @@ impl OrdinaryNativeAgentAssembler {
         if let Ok(host) = host {
             // The `imagegen` toolkit's images API rides on the same host and
             // the same credential (#864).
-            let host = host.with_images(self.model_facade.images(), Arc::clone(context));
+            let host = host
+                .with_images(self.model_facade.images(), Arc::clone(context))
+                .with_budget(budget.clone());
             return Some(Arc::new(host));
         }
         tracing::warn!(

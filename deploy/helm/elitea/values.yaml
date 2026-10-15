@@ -4299,6 +4299,12 @@ worker:
     # image_digest, policy_revision, and timeout_seconds.
     # The target hostname must match the supervisor certificate SAN.
     sandboxRuntimes: []
+    # The model completions ONE claim's toolkits may make in total (Rust
+    # worker): the step-back index tools, the Office/document tools' prompts
+    # and image generation/editing (one unit per call, n images included).
+    # Separate from the agent's own turns. Empty: the worker default, 200.
+    # Written to runtime.json as `toolkit_model_call_cap`; a positive integer.
+    toolkitModelCallCap: ""
     # Rust worker, indexingRuntime=rust only (ADR-0030 I1, ADR-0031): where
     # the worker finds elitea-vector, as `host:port`, reached with the
     # worker's own runtime mTLS identity (agent-worker-client.crt, issued by

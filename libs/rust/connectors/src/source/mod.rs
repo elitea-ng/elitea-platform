@@ -293,13 +293,43 @@ fn transport_failure(error: TransportError) -> Failure {
     }
 }
 
+/// The one guard a source sends through: a host allowlist (third-party
+/// sources), or exactly one origin (a source that reads the platform's own
+/// API). Each variant answers the same question it enforces.
+#[derive(Clone)]
+enum SourceGuard {
+    Allowlist(Arc<EgressGuard>),
+    Origin(Arc<OriginGuard>),
+}
+
+impl SourceGuard {
+    /// Whether the guard would let a request to `url` through.
+    fn permits_url(&self, url: &Url) -> bool {
+        match self {
+            Self::Allowlist(guard) => guard.allowlist().permits_url(url),
+            Self::Origin(guard) => guard.permits_url(url),
+        }
+    }
+
+    async fn execute(&self, request: Request) -> Result<Response, TransportError> {
+        match self {
+            Self::Allowlist(guard) => guard.execute(request).await,
+            Self::Origin(guard) => guard.execute(request).await,
+        }
+    }
+
+    fn transport(&self) -> Arc<dyn Transport> {
+        match self {
+            Self::Allowlist(guard) => Arc::clone(guard) as Arc<dyn Transport>,
+            Self::Origin(guard) => Arc::clone(guard) as Arc<dyn Transport>,
+        }
+    }
+}
+
 /// The guarded transport, the caps and the backoff one source sends with.
 #[derive(Clone)]
 pub struct SourceHttp {
-    guard: Arc<dyn Transport>,
-    /// Whether a URL may be sent to: the same rule `guard` enforces, for a
-    /// source that checks before it builds a request.
-    permit: Arc<dyn Fn(&Url) -> bool + Send + Sync>,
+    guard: SourceGuard,
     limits: SourceLimits,
     backoff: Backoff,
     timeouts: Timeouts,
@@ -310,11 +340,8 @@ impl SourceHttp {
     /// refuses everything) before `transport` sees it.
     #[must_use]
     pub fn new(allowlist: HostAllowlist, transport: Arc<dyn Transport>) -> Self {
-        let guard = Arc::new(EgressGuard::new(allowlist, transport));
-        let rule = Arc::clone(&guard);
         Self {
-            guard,
-            permit: Arc::new(move |url| rule.allowlist().permits_url(url)),
+            guard: SourceGuard::Allowlist(Arc::new(EgressGuard::new(allowlist, transport))),
             limits: SourceLimits::default(),
             backoff: Backoff::default(),
             timeouts: Timeouts::default(),
@@ -326,11 +353,8 @@ impl SourceHttp {
     /// own API, which the external-source allowlist must never govern.
     #[must_use]
     pub fn pinned_to_origin(origin: &url::Url, transport: Arc<dyn Transport>) -> Self {
-        let guard = Arc::new(OriginGuard::new(origin, transport));
-        let rule = Arc::clone(&guard);
         Self {
-            guard,
-            permit: Arc::new(move |url| rule.permits_url(url)),
+            guard: SourceGuard::Origin(Arc::new(OriginGuard::new(origin, transport))),
             limits: SourceLimits::default(),
             backoff: Backoff::default(),
             timeouts: Timeouts::default(),
@@ -363,14 +387,14 @@ impl SourceHttp {
     /// The guarded transport, for a provider client built over it.
     #[must_use]
     pub fn transport(&self) -> Arc<dyn Transport> {
-        self.guard.clone()
+        self.guard.transport()
     }
 
     /// Whether this source may send to `url`: its host is on the allowlist,
     /// or (a source pinned to an origin) `url` is exactly that origin.
     #[must_use]
     pub fn permits(&self, url: &url::Url) -> bool {
-        (self.permit)(url)
+        self.guard.permits_url(url)
     }
 
     /// Send `request`, backing off on a rate limit within the bound.

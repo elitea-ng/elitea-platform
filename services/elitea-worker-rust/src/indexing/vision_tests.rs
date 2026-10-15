@@ -1259,8 +1259,12 @@ async fn a_reasoning_models_thinking_is_not_the_description() {
                 delta("content", " It is blue.</think>\n\nA blue square."),
                 finish("stop"),
             ]),
-            // A lone closing tag is literal text, not reasoning.
-            gateway_answer(&[delta("content", "A green square.</think>"), finish("stop")]),
+            // Qwen3 on vLLM without a reasoning parser: only the closing tag.
+            gateway_answer(&[
+                delta("content", "Let me look…</think>"),
+                delta("content", "\n\nA green square."),
+                finish("stop"),
+            ]),
         ],
     );
     let documents = vec![
@@ -1284,30 +1288,50 @@ async fn a_reasoning_models_thinking_is_not_the_description() {
     let text = found.to_string();
     assert!(text.contains("A red square."), "{text}");
     assert!(text.contains("A blue square."), "{text}");
-    assert!(text.contains("A green square.</think>"), "{text}");
-    assert!(!text.contains("<think>"), "{text}");
+    assert!(text.contains("A green square."), "{text}");
+    assert!(!text.contains("think>"), "{text}");
     assert!(!text.contains("Let me look"), "{text}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_model_that_spends_max_tokens_thinking_is_retryable_not_a_refusal() {
+async fn a_model_that_spends_max_tokens_thinking_is_a_final_skip_of_its_own() {
     let mut harness = harness(4, None).await;
-    with_real_facade(
+    let captured = with_real_facade(
         &mut harness,
-        vec![gateway_answer(&[
-            delta("reasoning_content", "Thinking, thinking"),
-            finish("length"),
-        ])],
+        vec![
+            gateway_answer(&[
+                delta("reasoning_content", "Thinking, thinking"),
+                finish("length"),
+            ]),
+            gateway_answer(&[delta("content", "never asked"), finish("stop")]),
+        ],
     );
     let tiny = real_image("shots/tiny.png", ImageFormat::Png, 32, 32, "tiny");
     let summary = run_model(&harness, vec![tiny], None, &defaults(), Some("Qwen3.8"))
         .await
         .expect("summary");
     assert_eq!(summary.indexed_documents, 0, "{summary:?}");
-    // Retryable (more max_tokens cures it), and never a refusal.
-    assert_eq!(summary.skipped.get("model_failed"), Some(&1), "{summary:?}");
-    assert_eq!(summary.skipped.get("reply_unusable"), None, "{summary:?}");
+    // The same max_tokens gets the same cut: a final skip of its own, never
+    // retried (only ONE gateway request) and never a refusal; benign for
+    // the run, and the summary says to raise max_tokens.
+    assert_eq!(
+        summary.skipped.get("reasoning_exhausted_tokens"),
+        Some(&1),
+        "{summary:?}"
+    );
+    assert_eq!(summary.skipped.get("model_failed"), None, "{summary:?}");
     assert_eq!(summary.skipped.get("vision_refused"), None, "{summary:?}");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{summary:?}"
+    );
+    assert!(
+        summary.message.contains("raise max_tokens"),
+        "{}",
+        summary.message
+    );
+    assert_eq!(captured.lock().expect("captured").len(), 1, "not retried");
 }
 
 #[tokio::test(flavor = "multi_thread")]

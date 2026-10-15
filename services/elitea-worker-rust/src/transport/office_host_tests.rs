@@ -472,13 +472,102 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
     );
     let down = super::office_host::failure(&Failure::Transport("reset".into()));
     assert_eq!(down.kind(), OfficeFailure::Unreachable);
+}
+
+/// `model_failure` classifies on the error CODE, never its message: the
+/// claim's toolkit cap and the gateway's budgets are budget refusals (the
+/// cap with its own sentence), a reasoning-only reply is unusable, and a
+/// message that merely mentions a budget is not a budget refusal.
+#[test]
+fn model_failures_are_classified_on_their_code() {
+    use super::model_text::toolkit_budget_exhausted;
+    use crate::indexing::tools::reply_codes;
+    let error = |code: &'static str, message: &str| {
+        adk_rust::AdkError::new(
+            adk_rust::ErrorComponent::Model,
+            adk_rust::ErrorCategory::Unavailable,
+            code,
+            message.to_owned(),
+        )
+    };
+    let cap = super::office_host::model_failure(&toolkit_budget_exhausted());
+    assert_eq!(cap.kind(), OfficeFailure::BudgetRefused);
+    assert!(cap.is_toolkit_budget());
+    for code in [
+        "model_gateway.budget_exhausted",
+        "model_gateway.member_budget_exhausted",
+        "model_gateway.project_budget_exhausted",
+    ] {
+        let refused = super::office_host::model_failure(&error(code, "x"));
+        assert_eq!(refused.kind(), OfficeFailure::BudgetRefused, "{code}");
+        assert!(!refused.is_toolkit_budget(), "{code}");
+    }
+    // The message is not read.
     assert_eq!(
-        super::office_host::model_failure("the project model budget is exhausted").kind(),
-        OfficeFailure::BudgetRefused
+        super::office_host::model_failure(&error(
+            "model_gateway.transport",
+            "the project model budget is exhausted"
+        ))
+        .kind(),
+        OfficeFailure::Unreachable
     );
     assert_eq!(
-        super::office_host::model_failure("the model gateway timed out").kind(),
-        OfficeFailure::Unreachable
+        super::office_host::model_failure(&error(reply_codes::REASONING_ONLY, "x")).kind(),
+        OfficeFailure::ReplyUnusable
+    );
+    assert_eq!(
+        super::office_host::model_failure(&error("model_gateway.rate_limited", "x")).kind(),
+        OfficeFailure::RateLimited
+    );
+}
+
+/// The Office tools see the claim's spent toolkit cap as a budget refusal
+/// with the cap's sentence, through the real `complete` path; an empty reply
+/// is an answer (`Ok("")`), never "unreachable".
+#[tokio::test]
+async fn the_office_host_reports_the_toolkit_cap_and_accepts_an_empty_reply() {
+    let api = ObjectApi::new();
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        Arc::clone(&api) as Arc<dyn Transport>,
+    ));
+    let llm = Arc::new(Scripted(
+        Mutex::new(vec![String::new()]),
+        Mutex::new(Vec::new()),
+    ));
+    let budget = super::model_text::ModelCallBudget::new(1);
+    let model = LazyStepbackModel::bound(StepbackBinding {
+        model: Arc::clone(&llm) as Arc<dyn Llm>,
+        model_name: "gpt-test".to_owned(),
+        config: adk_rust::GenerateContentConfig::default(),
+        budget: Some(budget),
+    });
+    let host = ClaimOfficeHost::new(runtime, "pat-token", "42", model).expect("host");
+    let request = || OfficeModelRequest {
+        prompt: "summarise".to_owned(),
+        images_png: std::sync::Arc::from(Vec::<Vec<u8>>::new()),
+        image_media_types: std::sync::Arc::from(Vec::<String>::new()),
+    };
+    assert_eq!(
+        host.complete(request()).await.expect("empty is an answer"),
+        ""
+    );
+    let spent = host.complete(request()).await.expect_err("budget spent");
+    assert_eq!(spent.kind(), OfficeFailure::BudgetRefused);
+    assert!(spent.is_toolkit_budget());
+    assert_eq!(
+        llm.1.lock().expect("seen").len(),
+        1,
+        "the refused call sent nothing"
+    );
+    // What a tool tells the model for it.
+    let error = elitea_agent_runtime::toolkits::OfficeHostError::toolkit_budget();
+    assert!(
+        elitea_agent_runtime::toolkits::TOOLKIT_BUDGET_SENTENCE.contains("toolkit_model_call_cap")
+    );
+    assert_eq!(
+        error.reason_code(),
+        elitea_agent_runtime::toolkits::TOOLKIT_BUDGET_REASON
     );
 }
 

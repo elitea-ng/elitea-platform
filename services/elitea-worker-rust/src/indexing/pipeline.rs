@@ -117,6 +117,11 @@ const SKIP_EMPTY: &str = "empty";
 /// (it declined, or the reply is over the size bound): final for the picture,
 /// never marks the document for another run.
 pub(super) const SKIP_REPLY_UNUSABLE: &str = "reply_unusable";
+/// The model spent the whole `max_tokens` on reasoning and described
+/// nothing. The same request gets the same cut, so it is final for the
+/// picture (no retry, no pending mark) and benign for the run; the summary
+/// says to raise `max_tokens`.
+pub(super) const SKIP_REASONING_EXHAUSTED_TOKENS: &str = "reasoning_exhausted_tokens";
 const SKIP_FETCH_FAILED: &str = "fetch_failed";
 /// The source stayed rate limited past its backoff bound: nothing is wrong
 /// with the document, a later run reads it. The stored version is untouched.
@@ -159,7 +164,8 @@ pub(super) fn skip_loses_document(reason: &str, plan: Plan, explicit_model: bool
         | SKIP_TOO_LARGE
         | SKIP_TOO_MANY_PAGES
         | SKIP_TOO_MANY_PICTURES
-        | SKIP_ENCRYPTED => false,
+        | SKIP_ENCRYPTED
+        | SKIP_REASONING_EXHAUSTED_TOKENS => false,
         SKIP_NO_MODEL | SKIP_NEEDS_MODEL => explicit_model,
         _ => true,
     }
@@ -1981,6 +1987,18 @@ impl Runner<'_> {
                 .map(|(reason, count)| format!("{count} {reason}"))
                 .collect();
             let _ = write!(message, " {label}: {}.", reasons.join(", "));
+        }
+        if [
+            &tally.skipped,
+            &tally.pictures_skipped,
+            &tally.linked_skipped,
+        ]
+        .iter()
+        .any(|counts| counts.contains_key(SKIP_REASONING_EXHAUSTED_TOKENS))
+        {
+            message.push_str(
+                " The chat model spent its whole max_tokens on reasoning for some pictures (reasoning_exhausted_tokens): raise max_tokens in the toolkit's LLM settings and re-run.",
+            );
         }
         if tally.failed_chunks > 0 {
             let _ = write!(message, " {} chunks failed to embed.", tally.failed_chunks);

@@ -17,13 +17,21 @@
 //! * reasoning a model writes INTO its text is removed
 //!   ([`strip_reasoning`]);
 //! * a reply cut by `max_tokens` is reported, with whether the cut left
-//!   nothing but reasoning ([`TextReply::reasoning_only`]).
+//!   nothing but reasoning ([`TextReply::reasoning_only`]);
+//! * the claim's toolkit completion budget ([`ModelCallBudget`]) is charged
+//!   only for a request that is sent to the gateway: a request the facade
+//!   refuses locally (before a byte leaves the worker) gets its unit back,
+//!   and an exhausted budget is the typed error
+//!   [`TOOLKIT_BUDGET_EXHAUSTED_CODE`], never a sentence to match on.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use adk_rust::futures::StreamExt as _;
-use adk_rust::{AdkError, Content, FinishReason, GenerateContentConfig, Llm, LlmRequest, Part};
+use adk_rust::{
+    AdkError, Content, ErrorCategory, ErrorComponent, FinishReason, GenerateContentConfig, Llm,
+    LlmRequest, Part, RetryHint,
+};
 
 /// The model completions a claim's toolkits may make in total (the step-back
 /// tools, the Office host's prompts): one shared counter per claim, handed to
@@ -54,12 +62,63 @@ impl ModelCallBudget {
             })
             .is_ok()
     }
+
+    /// Gives back a unit taken for a request that was never sent.
+    pub(crate) fn refund(&self) {
+        let _ = self
+            .remaining
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                left.checked_add(1)
+            });
+    }
 }
 
-/// The sentence of a refused call, for callers that report text.
-pub(crate) const BUDGET_EXHAUSTED: &str = "the model call budget for this run is exhausted";
-/// The sentence of a reply with nothing in it.
-pub(crate) const EMPTY_REPLY: &str = "the model returned an empty reply";
+/// The stable code of a call refused because the claim's toolkit completion
+/// budget is spent. Callers classify on it, never on a message.
+pub(crate) const TOOLKIT_BUDGET_EXHAUSTED_CODE: &str = "model.toolkit_budget_exhausted";
+/// The sentence of that refusal: what the user can do about it.
+pub(crate) const TOOLKIT_BUDGET_EXHAUSTED: &str = "this run used up its model calls for tools; start a new run or ask an operator to raise toolkit_model_call_cap";
+
+/// The typed error of a call the claim's toolkit budget refused: rate
+/// limited in kind (a new run has a fresh budget), never retried within the
+/// run, and no request was made.
+#[must_use]
+pub(crate) fn toolkit_budget_exhausted() -> AdkError {
+    AdkError::new(
+        ErrorComponent::Model,
+        ErrorCategory::RateLimited,
+        TOOLKIT_BUDGET_EXHAUSTED_CODE,
+        TOOLKIT_BUDGET_EXHAUSTED,
+    )
+    .with_retry(RetryHint::default())
+}
+
+/// Whether the facade raised `error` BEFORE the request was sent: its own
+/// admission (the request shape, its size, its encoding, the binding's turn
+/// limit, a reused single-use binding, the context budget). Such a call
+/// reached no gateway and is not
+/// charged to the budget. Everything else (a gateway refusal, a 429, a 5xx,
+/// a lost connection) may have reached it and counts.
+#[must_use]
+pub(crate) fn raised_before_send(error: &AdkError) -> bool {
+    matches!(
+        error.code,
+        "model_gateway.invalid_request"
+            | "model_gateway.request_too_large"
+            | "model_gateway.request_encoding"
+            | "model_gateway.turn_limit"
+            | "model_gateway.completion_reused"
+            | "model_gateway.completion_state"
+            | "anthropic_gateway.invalid_request"
+            | "anthropic_gateway.request_too_large"
+            | "anthropic_gateway.sampling_unsupported"
+            | "anthropic_gateway.turn_limit"
+            | "anthropic_gateway.completion_reused"
+            | "anthropic_gateway.completion_state"
+            | "context_budget_exceeded"
+            | "model_request_bytes_exceeded"
+    )
+}
 
 /// A chat model bound for one call, with the generation config its facade
 /// admits and the claim's completion budget, if it has one.
@@ -96,7 +155,8 @@ pub(crate) enum TextFailure {
     TooLarge,
     /// The stream held no complete reply.
     NoReply,
-    /// The claim's completion budget is spent; no request was made.
+    /// The claim's completion budget is spent; no request was made. As an
+    /// error: [`toolkit_budget_exhausted`].
     BudgetExhausted,
 }
 
@@ -123,11 +183,21 @@ pub(crate) async fn stream_text(
         tools: std::collections::HashMap::new(),
         previous_response_id: None,
     };
-    let mut responses = chat
-        .model
-        .generate_content(request, true)
-        .await
-        .map_err(TextFailure::Model)?;
+    // The unit is taken above, before the call: two calls racing for the
+    // last unit cannot both go out. A refusal the facade raised before
+    // sending gives it back; once sent (a gateway 429 or 5xx included) the
+    // call counts, it reached the gateway.
+    let mut responses = match chat.model.generate_content(request, true).await {
+        Ok(responses) => responses,
+        Err(error) => {
+            if let Some(budget) = &chat.budget
+                && raised_before_send(&error)
+            {
+                budget.refund();
+            }
+            return Err(TextFailure::Model(error));
+        }
+    };
     let mut raw = String::new();
     let mut ended: Option<bool> = None;
     while let Some(response) = responses.next().await {
@@ -176,7 +246,8 @@ pub(crate) struct Stripped {
     pub(crate) text: String,
     /// The reply began a `<think>` block and never closed it.
     pub(crate) unclosed: bool,
-    /// A closed `<think>` block was removed.
+    /// Reasoning was removed: a closed leading block, or the text before a
+    /// bare closing tag.
     pub(crate) removed: bool,
 }
 
@@ -185,23 +256,38 @@ const CLOSE: &str = "</think>";
 
 /// `text` without the reasoning a model wrote into it.
 ///
-/// Only a reply that STARTS (after whitespace) with `<think>` has any:
+/// * A reply that STARTS (after whitespace) with `<think>`: each leading
+///   `<think>…</think>` block is removed with the whitespace directly after
+///   it, one block after another; a leading `<think>` never closed is all
+///   reasoning (the result is empty and `unclosed` is set).
+/// * A reply with a `</think>` and NO `<think>` before it: everything up to
+///   and including that first `</think>` is reasoning, removed with the
+///   whitespace after it. This is Qwen3 on vLLM without a reasoning parser,
+///   which emits only the closing tag (`Let me look…</think>\n\nA red
+///   square.`).
+/// * Anything else is literal and untouched: a `<think>` that is not
+///   leading (with or without a later `</think>`) stays as it is.
 ///
-/// * each leading `<think>…</think>` block is removed with the whitespace
-///   directly after it, one block after another;
-/// * a leading `<think>` that is never closed is all reasoning: the result is
-///   empty and `unclosed` is set.
-///
-/// Everything else is literal and untouched, a `</think>` or a `<think>`
-/// further in included; the visible text is not trimmed.
+/// Accepted edge case: an ordinary answer that literally mentions a bare
+/// `</think>` with no `<think>` before it loses the text before the tag.
+/// The visible text is not trimmed at its end.
 #[must_use]
 pub(crate) fn strip_reasoning(text: &str) -> Stripped {
     let mut rest = text.trim_start();
     if !rest.starts_with(OPEN) {
-        return Stripped {
-            text: text.to_owned(),
-            unclosed: false,
-            removed: false,
+        let close = text.find(CLOSE);
+        let open = text.find(OPEN);
+        return match close {
+            Some(close) if open.is_none_or(|open| open > close) => Stripped {
+                text: text[close + CLOSE.len()..].trim_start().to_owned(),
+                unclosed: false,
+                removed: true,
+            },
+            _ => Stripped {
+                text: text.to_owned(),
+                unclosed: false,
+                removed: false,
+            },
         };
     }
     while let Some(after_open) = rest.strip_prefix(OPEN) {
@@ -243,10 +329,23 @@ mod tests {
     }
 
     #[test]
-    fn a_closing_tag_without_a_leading_block_is_literal() {
-        let reply = "I should look.</think>\n\nA red square.";
-        assert_eq!(text(reply), reply);
-        assert_eq!(text("a</think>b"), "a</think>b");
+    fn a_closing_tag_without_an_opening_one_ends_the_reasoning() {
+        // Owner decision (review round 3): Qwen3 on vLLM without a reasoning
+        // parser emits only the closing tag; what precedes it is reasoning.
+        assert_eq!(
+            text("Let me look…</think>\n\nA red square."),
+            "A red square."
+        );
+        assert_eq!(text("a</think>b"), "b");
+        // Only the FIRST bare closing tag ends it.
+        assert_eq!(text("a</think>b</think>c"), "b</think>c");
+        let only = strip_reasoning("thinking only</think>\n");
+        assert!(only.removed && only.text.is_empty());
+        // Accepted edge case: an answer that mentions a bare closing tag
+        // loses the text before it.
+        assert_eq!(text("Close it with </think> here"), "here");
+        // A `<think>` before the closing tag (not leading) keeps it literal.
+        assert_eq!(text("x <think>a</think> y"), "x <think>a</think> y");
     }
 
     #[test]
@@ -271,6 +370,27 @@ mod tests {
         assert_eq!(text("kept <think>cut off"), "kept <think>cut off");
         assert_eq!(text("plain"), "plain");
         assert_eq!(text(""), "");
+    }
+
+    #[test]
+    fn a_refund_gives_a_unit_back() {
+        let budget = ModelCallBudget::new(1);
+        assert!(budget.try_take());
+        budget.refund();
+        assert!(budget.try_take());
+        assert!(!budget.try_take());
+    }
+
+    #[test]
+    fn the_budget_refusal_is_typed() {
+        let error = toolkit_budget_exhausted();
+        assert_eq!(error.code, TOOLKIT_BUDGET_EXHAUSTED_CODE);
+        assert_eq!(error.category, ErrorCategory::RateLimited);
+        assert!(
+            !error.is_retryable(),
+            "a spent budget is not retried in the run"
+        );
+        assert!(error.message.contains("toolkit_model_call_cap"));
     }
 
     #[test]

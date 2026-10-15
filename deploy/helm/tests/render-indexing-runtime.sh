@@ -210,6 +210,29 @@ PY
   && ok "worker.runtime.indexModelCallCap sets the cap" \
   || bad "indexModelCallCap=500 rendered: $(modelcap "$TMP/cap.yaml")"
 
+# The toolkit completion cap of a claim: absent by default (worker default
+# 200), written when the operator sets it.
+toolkitcap() {
+  python3 - "$1" <<'PY'
+import json, sys, yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+cm = next(d for d in docs
+          if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "elitea-worker-runtime")
+print(json.loads(cm["data"]["runtime.json"]).get("toolkit_model_call_cap", "-"))
+PY
+}
+"$HELM" template t "$CHART" "${RENDER[@]}" "${RUST[@]}" \
+  --set worker.runtime.toolkitModelCallCap=50 \
+  >"$TMP/tcap.yaml" 2>"$TMP/tcap.err" \
+  || bad "a toolkitModelCallCap does not render: $(tail -1 "$TMP/tcap.err")"
+[ "$(toolkitcap "$TMP/rust.yaml")" = "-" ] \
+  && ok "no toolkit_model_call_cap by default (the worker's 200 applies)" \
+  || bad "default toolkit_model_call_cap leaked: $(toolkitcap "$TMP/rust.yaml")"
+[ "$(toolkitcap "$TMP/tcap.yaml")" = "50" ] \
+  && ok "worker.runtime.toolkitModelCallCap sets toolkit_model_call_cap" \
+  || bad "toolkitModelCallCap=50 rendered: $(toolkitcap "$TMP/tcap.yaml")"
+
 refuses() {
   local expect="$1"; shift
   local out
@@ -221,6 +244,10 @@ refuses() {
   echo "    refused, but not for the stated reason: $(printf '%s' "$out" | tail -1)" >&2
   return 1
 }
+
+refuses 'toolkitModelCallCap must be an integer between 1' "${RUST[@]}" --set worker.runtime.toolkitModelCallCap=0 \
+  && ok "toolkitModelCallCap=0 is refused" \
+  || bad "toolkitModelCallCap=0 is not refused"
 
 refuses 'worker.indexingRuntime must be' --set worker.indexingRuntime=golang \
   && ok "an unknown worker.indexingRuntime is refused" \

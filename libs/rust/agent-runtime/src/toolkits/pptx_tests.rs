@@ -2041,6 +2041,22 @@ fn every_host_failure_has_its_own_sentence() {
 
 /// Finding 3: the name a tool reports is a name the next call accepts, with
 /// the bucket named separately; the path form works too.
+/// The claim's toolkit completion cap is a budget refusal with its own
+/// sentence (what to do about it), not the gateway budget's.
+#[test]
+fn the_toolkit_cap_has_its_own_budget_sentence() {
+    let cap = host_sentence("call the model", &OfficeHostError::toolkit_budget());
+    assert_eq!(
+        cap,
+        "Could not call the model: this run used up its model calls for tools; start a new run or ask an operator to raise toolkit_model_call_cap."
+    );
+    let gateway = host_sentence(
+        "call the model",
+        &OfficeHostError::new(OfficeFailure::BudgetRefused, "office_host.budget_refused"),
+    );
+    assert!(gateway.contains("model budget is exhausted"), "{gateway}");
+}
+
 #[tokio::test]
 async fn a_reported_name_works_as_the_next_file_name() {
     let rig = Rig::new().await;
