@@ -15,6 +15,7 @@ mod discovery;
 mod doctor;
 mod error;
 mod handoff;
+mod handoff_settings;
 mod history;
 mod index;
 mod local_commands;
@@ -271,6 +272,12 @@ pub fn run() {
                 },
                 backoff: elitea_workspace_store::sync::Backoff::default(),
                 git_global_config: None,
+                env_source: {
+                    let shell = elitea_local_tools::shell::ShellConfig::new(
+                        data_dir.join("handoff").join("tmp"),
+                    );
+                    Arc::new(move || elitea_local_tools::shell::passthrough_environment(&shell))
+                },
             })
             .map_err(|error| error.message)?;
             let handoff = Arc::new(handoff);
@@ -352,6 +359,10 @@ pub fn run() {
             handoff::handoff_apply,
             handoff::handoff_undo,
             handoff::handoff_erase,
+            handoff::handoff_cancel,
+            handoff::handoff_status_many,
+            handoff::handoff_settings_get,
+            handoff::handoff_settings_set,
         ])
         .build(tauri::generate_context!());
     let app = match built {

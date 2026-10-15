@@ -471,34 +471,90 @@ noted). `conversation_uuid` is the server conversation's UUID.
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `handoff_preview` | `{workspace_id, conversation_uuid}` | `Preview` — what a send would transfer; sends nothing |
-| `handoff_send` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[]}` | `{handoff_id, state, epoch, files, excluded}` — progress on `handoff://event` |
-| `handoff_status` | `{conversation_uuid, project_id?}` | the server's state (contract §2.9) plus `executor: "local" \| "cloud" \| "returning"`, `read_only: boolean`, `sent_from_here: boolean` |
+| `handoff_preview` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[]}` | `Preview` — what a send would transfer under the effective policy and the folder's settings; sends nothing |
+| `handoff_send` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[], confirm_includes?: boolean}` | `{handoff_id, state, epoch, files, excluded, included, env_vars}` — progress on `handoff://event` |
+| `handoff_cancel` | `{conversation_uuid}` | `{cancelled: boolean}` — stops a running send; after begin the host cancels the handoff on the server (`DELETE workspace_handoff`), so the thread is `LOCAL` again; the send rejects `handoff_cancelled` |
+| `handoff_status` | `{conversation_uuid, project_id?}` | `HandoffStatus`: the server's state (contract §2.9) plus `executor: "local" \| "cloud" \| "returning"`, `read_only: boolean`, `sent_from_here: boolean` |
+| `handoff_status_many` | `{conversation_uuids: string[]}` | `{statuses: Record<uuid, HandoffStatus>}` — for the sidebar: a thread this desktop never sent is `LOCAL` with no request; the rest from the host's records, refreshed at most once per project per call and cached 15 s |
 | `handoff_reclaim` | `{conversation_uuid}` | `{state: "RECLAIMING", epoch, cloud_sha}`, or `{state: "CLOUD_RUNNING", reclaim_pending: true, …}` while a cloud turn runs |
-| `handoff_preflight` | `{conversation_uuid}` | `{preflight_id, outcome: "fast_path" \| "conflicts", changed_paths, conflict_paths, skipped_paths, cloud_turns, modes}` |
-| `handoff_apply` | `{preflight_id, mode: "apply" \| "worktree" \| "discard"}` | `{applied, outcome: "applied" \| "worktree" \| "discarded", checkpoint_id, worktree_path, branch, imported_turns, released}` |
+| `handoff_preflight` | `{conversation_uuid}` | `{preflight_id, outcome: "fast_path" \| "conflicts", changed_paths, conflict_paths, skipped_paths, cloud_turns, modes, files: ChangedFile[], diffs_truncated: boolean}` |
+| `handoff_apply` | `{preflight_id, mode: "apply" \| "worktree" \| "discard"}` | `{applied, outcome: "applied" \| "worktree" \| "discarded", checkpoint_id, worktree_path, branch, imported_turns, released, copied: string[]}` |
 | `handoff_undo` | `{checkpoint_id}` | `{restored: string[]}` — restores the folder to before a take-back |
 | `handoff_erase` | `{conversation_uuid, project_id?}` | the server's answer; the local folder is kept |
+| `handoff_settings_get` | `{workspace_id}` | `{settings: FolderHandoffSettings, policy: HandoffPolicy, env_offered: EnvVar[]}` |
+| `handoff_settings_set` | `{workspace_id, settings: FolderHandoffSettings}` | as `handoff_settings_get`; `invalid_request` for a bad pattern, an include that escapes the folder, or an env name that is not a variable name |
 
 ```ts
+type ExcludeReason = "platform" | "project" | "user" | "eliteaignore" | "path_deny" | "leave_on_laptop" | "not_a_file";
+type Finding = { path: string; line: number; rule: string }; // never the matched text
 type Preview = {
   files: number; bytes: number; unpacked_bytes: number;
-  excluded: { path: string; reason: "mandatory" | "path_deny" | "eliteaignore" | "leave_on_laptop" | "not_a_file"; tracked: boolean }[];
-  findings: { path: string; line: number; rule: string }[]; // never the matched text
+  // includable: the policy allows including it and it is not path_deny, left on the laptop or not a file
+  excluded: { path: string; reason: ExcludeReason; tracked: boolean; includable: boolean }[];
+  included: { path: string; reason: ExcludeReason }[];  // sent because the folder's settings include them
+  findings: Finding[];          // outside included files: they block the send
+  include_findings: Finding[];  // in included files: warnings; the send needs confirm_includes
   has_upstream: boolean;
-  project_workspace_bytes_left: number | null; // null: known only after the begin call
+  project_workspace_bytes_left: number | null; // from the policy route; null when the server has none
   caps: { violations: { cap: string; limit: number; actual: number; path: string | null }[];
           largest: { path: string; bytes: number }[] };
   shadow: boolean; // the folder is not a repository: a shadow git directory in the app data is used
+  policy: HandoffPolicy;
+  // null when the policy has no env harvest
+  env: { offered: EnvVar[]; selected: string[]; missing: string[]; vars: number; bytes: number; over_limit: boolean } | null;
 };
+type HandoffPolicy = {
+  source: "server" | "defaults"; // "defaults": the server has no policy route (404, an older server); the ADR's defaults are shown
+  exclusions: { platform: string[]; project: string[]; user: string[]; path_deny: string[] };
+  allow_user_include: boolean;
+  env_harvest: boolean;
+  env_limits: { max_vars: number; max_bytes: number };
+  limits: { max_segment_bytes: number; max_file_bytes: number; max_files: number; max_unpacked_bytes: number;
+            project_workspace_bytes_left: number | null };
+};
+type EnvVar = { name: string; length: number }; // the value is never sent to the UI
+type FolderHandoffSettings = { exclude_patterns: string[]; include: string[]; env_names: string[] };
+type ChangedFile = { path: string; status: "added" | "modified" | "deleted"; added: number; removed: number; diff: string };
 type HandoffEvent = { conversation_uuid: string;
-  phase: "snapshot" | "scan" | "bundle" | "upload" | "publish" | "complete" | "error";
+  phase: "snapshot" | "scan" | "bundle" | "begin" | "upload" | "publish" | "complete" | "cancelled" | "error";
   done: number; total: number; message: string | null };
 ```
 
+- **Effective policy before begin.** Preview, send and the settings read
+  `GET workspace_handoff_policy/prompt_lib/{project}` (contract §6.1): the
+  caps, the quota left, the exclusions, `allow_user_include`, `path_deny`
+  and the env policy. A 404 (an older server) falls back to the ADR's
+  defaults (`policy.source: "defaults"`); any other failure rejects. The
+  server's `exclusions` are one merged list; patterns of the ADR's default
+  list are shown as platform, the rest as project, unless the server sends
+  `exclusions_platform` / `exclusions_project`. `enabled: false` rejects
+  `cloud_handoff_disabled`. The begin answer's `limits` stay authoritative.
+- **Folder settings.** Per workspace, in the app data
+  (`handoff/settings/<workspace id>.json`, owner-only), never in the folder:
+  the person's exclusion patterns (matched at any depth; a leading `/`
+  anchors at the top), explicit includes (an exact path, or a pattern
+  anchored at the top) and the selected env variable NAMES (values are read
+  again at send and never stored, logged, emitted or recorded).
+- **Explicit include.** Only when `allow_user_include`; `path_deny` is never
+  includable. Included files are scanned: their findings
+  (`include_findings`) do not block, but `handoff_send` rejects
+  `include_confirm_required` (`details.findings`) unless
+  `confirm_includes: true`, which the UI passes only after the person
+  confirmed for this send. The begin call sends `included_excluded`; the
+  handoff commit carries one `Elitea-Included: ./<path>` trailer per file.
+- **Env harvest.** Only when `env_harvest`. The source is the environment
+  the desktop's own `run_command` passes through to commands; the names
+  are filtered by `env_deny` (patterns, `*` wildcard) and, when set,
+  `env_allow`; nothing is preselected. At most `env_limits.max_vars`
+  variables and `max_bytes` (names plus values); over that the send rejects
+  `env_too_large`. The values go only into the begin call's `env`.
 - **Policy.** Preview and send need the device policy's `local_work.allowed`
   and `local_work.cloud_handoff` (`cloud_handoff_disabled`). The server
   checks the platform ceiling and the project setting at begin.
+- **Cancel.** A failure after begin (the begin answer's caps, an upload or
+  publish failure, `handoff_cancel`) cancels the handoff on the server
+  (`DELETE workspace_handoff`, accepted in `HANDING_OFF`, contract §6.3), so
+  the thread is `LOCAL` again at once.
 - **Send.** The snapshot is the checkpoint set (tracked plus untracked,
   not ignored) built in a temporary index: the folder's index, `HEAD`,
   stash and working tree are not changed. The mandatory exclusions,
@@ -527,10 +583,15 @@ type HandoffEvent = { conversation_uuid: string;
   `elitea/cloud/<first 8 of the UUID>` and takes a checkpoint first
   (`checkpoint_id`, for `handoff_undo`). `conflicts`: only `worktree` (the
   cloud tip beside the folder, `<folder>-elitea-cloud-<short>`) and
-  `discard` are offered (`modes`). `handoff_apply` refuses with
+  `discard` are offered (`modes`); the worktree gets the folder's excluded
+  files (`.env`, keys; `copied`) and opens as a workspace (host git trusts a
+  linked worktree of an open workspace). `files` are the per-file diffs of
+  what the take-back writes (256 KiB of diff text at most, text files only;
+  `diffs_truncated`). `handoff_apply` refuses with
   `folder_changed_since_preflight` when the folder moved after the
   preflight. Excluded paths, symlinks and submodule entries are never
-  written or deleted (`skipped_paths`).
+  deleted or overwritten (`skipped_paths`); a file the cloud created that
+  the exclusions match is written only where no local file exists.
 - **Release and history.** `handoff_apply` releases the thread and imports
   its cloud turns into the thread history (`StoredTurn.origin: "cloud"`,
   changed files from the cloud commits' diffs). A release the server did

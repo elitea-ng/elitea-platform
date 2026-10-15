@@ -25,12 +25,16 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use elitea_local_tools::handoff::apply::{self as take_back, Mode, Outcome, Preflight};
 use elitea_local_tools::handoff::caps::{self, Caps};
+use elitea_local_tools::handoff::exclude::{Excluded, Patterns, Reason};
 use elitea_local_tools::handoff::scan::Finding;
+use elitea_local_tools::handoff::snapshot::Included;
 use elitea_local_tools::handoff::snapshot::{self, SendConfig, Snapshot, Source};
 use elitea_local_tools::handoff::{SendRecord, check_conversation};
 use elitea_local_tools::policy::LocalWorkPolicy;
@@ -46,9 +50,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::d0::api::{Answer, ApiError, Credentials, PlatformApi};
+use crate::d0::recorder::FileChange;
 use crate::d0::turn::{AgentHost, PolicySource, TurnError};
+use crate::handoff_settings::{self as settings, EffectivePolicy, FolderSettings, SettingsStore};
 use crate::history::{HistoryStore, ImportedTurn};
 use crate::workspaces::WorkspaceStore;
+
+/// How long a sidebar status is reused (`handoff_status_many`).
+const STATUS_CACHE: Duration = Duration::from_secs(15);
+
+/// The diff text a preflight returns at most, and the largest file diffed.
+const PREFLIGHT_DIFF_BYTES: usize = 256 * 1024;
+const PREFLIGHT_DIFF_FILE_BYTES: u64 = 1024 * 1024;
 
 /// The event the UI listens to for a send's progress.
 pub const EVENT_NAME: &str = "handoff://event";
@@ -83,7 +96,7 @@ pub struct HandoffError {
 }
 
 impl HandoffError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_owned(),
             message: message.into(),
@@ -232,6 +245,41 @@ pub struct HandoffDeps {
     pub backoff: Backoff,
     /// Tests: the global git config.
     pub git_global_config: Option<PathBuf>,
+    /// The variables the desktop's `run_command` passes to commands: what
+    /// the env harvest offers (values read again at every send, never
+    /// stored).
+    pub env_source: Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>,
+}
+
+/// A running send's cancel switch.
+#[derive(Default)]
+struct CancelSwitch {
+    cancelled: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl CancelSwitch {
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        self.notify.notify_one();
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    async fn wait(&self) {
+        while !self.is_cancelled() {
+            self.notify.notified().await;
+        }
+    }
+}
+
+fn cancelled() -> HandoffError {
+    HandoffError::new(
+        "handoff_cancelled",
+        "Sending was cancelled; the thread stays on this computer.",
+    )
 }
 
 /// A held preflight.
@@ -251,6 +299,44 @@ pub struct HandoffHost {
     /// Used when the session names no device id: one per install.
     install_id: String,
     preflights: Mutex<HashMap<String, Held>>,
+    settings: SettingsStore,
+    /// Running sends by conversation.
+    sends: Mutex<HashMap<String, Arc<CancelSwitch>>>,
+    /// `handoff_status_many`: the last answer per conversation.
+    status_cache: Mutex<HashMap<String, (Instant, Value)>>,
+}
+
+/// A running send's registration (removed when the send ends).
+struct SendGuard<'a> {
+    host: &'a HandoffHost,
+    uuid: String,
+    switch: Arc<CancelSwitch>,
+}
+
+impl Drop for SendGuard<'_> {
+    fn drop(&mut self) {
+        let mut sends = self
+            .host
+            .sends
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if sends
+            .get(&self.uuid)
+            .is_some_and(|switch| Arc::ptr_eq(switch, &self.switch))
+        {
+            sends.remove(&self.uuid);
+        }
+    }
+}
+
+/// One excluded path as the send dialog shows it.
+#[derive(Clone, Debug, Serialize)]
+pub struct ExcludedView {
+    pub path: String,
+    pub reason: Reason,
+    pub tracked: bool,
+    /// "Include anyway" is offered.
+    pub includable: bool,
 }
 
 /// `handoff_preview`'s answer.
@@ -259,14 +345,23 @@ pub struct Preview {
     pub files: usize,
     pub bytes: u64,
     pub unpacked_bytes: u64,
-    pub excluded: Vec<elitea_local_tools::handoff::exclude::Excluded>,
+    pub excluded: Vec<ExcludedView>,
+    pub included: Vec<Included>,
+    /// They block the send.
     pub findings: Vec<Finding>,
+    /// In included files: warnings the send needs confirmed.
+    pub include_findings: Vec<Finding>,
     pub has_upstream: bool,
-    /// Not known before the begin call (contract: the begin response).
+    /// From the policy route (`None`: the server has none).
     pub project_workspace_bytes_left: Option<u64>,
     pub caps: caps::CapReport,
     /// The folder is not a repository: its shadow is used.
     pub shadow: bool,
+    /// `HandoffPolicy` (IPC.md).
+    pub policy: Value,
+    /// `null` unless the policy harvests env variables; names and value
+    /// lengths only.
+    pub env: Value,
 }
 
 /// `handoff_send`'s answer.
@@ -277,6 +372,8 @@ pub struct Sent {
     pub epoch: u64,
     pub files: usize,
     pub excluded: usize,
+    pub included: usize,
+    pub env_vars: usize,
 }
 
 /// `handoff_preflight`'s answer.
@@ -290,6 +387,9 @@ pub struct PreflightAnswer {
     pub cloud_turns: usize,
     /// Phase 1: `apply` only on the fast path.
     pub modes: Vec<Mode>,
+    /// What the take-back writes, per file, with its diff (bounded).
+    pub files: Vec<FileChange>,
+    pub diffs_truncated: bool,
 }
 
 /// `handoff_apply`'s answer.
@@ -304,6 +404,8 @@ pub struct ApplyAnswer {
     pub imported_turns: usize,
     /// The release is acknowledged (`false`: kept and retried).
     pub released: bool,
+    /// `worktree`: the folder's excluded files copied into it.
+    pub copied: Vec<String>,
 }
 
 /// The bearer through the pinned host credentials.
@@ -418,9 +520,12 @@ impl HandoffHost {
                 dir: dir.join("threads"),
                 lock: Mutex::new(()),
             },
+            settings: SettingsStore::new(dir.join("settings")),
             api,
             install_id,
             preflights: Mutex::new(HashMap::new()),
+            sends: Mutex::new(HashMap::new()),
+            status_cache: Mutex::new(HashMap::new()),
             deps,
         })
     }
@@ -495,6 +600,8 @@ impl HandoffHost {
             deny: self.deps.agents.host_deny(),
             path_deny: policy.path_deny.clone(),
             leave_on_laptop: leave,
+            patterns: Patterns::default(),
+            include: Vec::new(),
             caps,
             conversation_uuid: uuid.to_owned(),
             note: String::new(),
@@ -549,27 +656,110 @@ impl HandoffHost {
             .is_some_and(|record| record.state != "LOCAL")
     }
 
-    /// `handoff_preview`: what a send would transfer and leave out, the
-    /// findings and the caps. Sends nothing.
+    /// The effective handoff policy of `project_id` before begin (contract
+    /// §6.1); the ADR's defaults when the server has no such route (404).
+    ///
+    /// # Errors
+    ///
+    /// The platform refused or did not answer; `cloud_handoff_disabled`
+    /// when the policy is off.
+    async fn effective_policy(&self, project_id: i64) -> Result<EffectivePolicy, HandoffError> {
+        let answer = self
+            .api
+            .send(
+                Method::GET,
+                &format!("/api/v2/elitea_core/workspace_handoff_policy/prompt_lib/{project_id}"),
+                None,
+                &[],
+            )
+            .await?;
+        let policy = if answer.status == 404 {
+            EffectivePolicy::defaults()
+        } else {
+            EffectivePolicy::from_server(&ok_body(answer)?)
+        };
+        if !policy.enabled {
+            return Err(HandoffError::new(
+                "cloud_handoff_disabled",
+                "Sending threads to the cloud is turned off for this project.",
+            ));
+        }
+        Ok(policy)
+    }
+
+    /// The device's and the server's `path_deny`, together.
+    fn path_deny(device: &LocalWorkPolicy, effective: &EffectivePolicy) -> Vec<String> {
+        let mut deny = device.path_deny.clone();
+        for pattern in &effective.path_deny {
+            if !deny.contains(pattern) {
+                deny.push(pattern.clone());
+            }
+        }
+        deny
+    }
+
+    /// A send's configuration under the effective policy and the folder's
+    /// settings.
+    fn send_config(
+        &self,
+        root: &Path,
+        uuid: &str,
+        device: &LocalWorkPolicy,
+        effective: &EffectivePolicy,
+        folder: &FolderSettings,
+        leave: Vec<String>,
+    ) -> SendConfig {
+        let mut config = self.config(root, uuid, device, leave, effective.limits);
+        config.path_deny = Self::path_deny(device, effective);
+        config.patterns = Patterns {
+            platform: effective.patterns.platform.clone(),
+            project: effective.patterns.project.clone(),
+            user: folder.exclude_patterns.clone(),
+        };
+        config.include = if effective.allow_user_include {
+            folder.include.clone()
+        } else {
+            Vec::new()
+        };
+        config
+    }
+
+    /// The env variables the folder's selection would send now.
+    fn harvest(&self, effective: &EffectivePolicy, folder: &FolderSettings) -> settings::Harvest {
+        if !effective.env_harvest {
+            return settings::Harvest::default();
+        }
+        let offered = settings::offered((self.deps.env_source)(), effective);
+        settings::harvest(&folder.env_names, &offered, effective.env_limits)
+    }
+
+    /// `handoff_preview`: what a send would transfer and leave out, under
+    /// the effective policy and the folder's settings, the findings and the
+    /// caps. Sends nothing.
     ///
     /// # Errors
     ///
     /// `cloud_handoff_disabled`, `workspace_*`, `workspace_busy`, the
-    /// folder's refusals.
+    /// folder's refusals, the policy route's failures.
     pub async fn preview(
         &self,
         workspace_id: &str,
         conversation_uuid: &str,
+        leave_on_laptop: Vec<String>,
     ) -> Result<Preview, HandoffError> {
         let uuid = canonical_uuid(conversation_uuid)?;
-        let policy = self.policy()?;
-        let (root, _) = self.workspace(workspace_id)?;
+        let device = self.policy()?;
+        let (root, project_id) = self.workspace(workspace_id)?;
+        let effective = self.effective_policy(project_id).await?;
+        let folder = self.settings.get(workspace_id)?;
         let claim = self
             .deps
             .agents
             .claim_workspace(workspace_id, "Wait for the running turn to end.")?;
-        let config = self.config(&root, &uuid, &policy, Vec::new(), Caps::default());
+        let config = self.send_config(&root, &uuid, &device, &effective, &folder, leave_on_laptop);
         let source = self.open(&config)?;
+        let limits = config.caps;
+        let path_deny = config.path_deny.clone();
         let (snap, bytes) = joined(
             tokio::task::spawn_blocking(move || {
                 let snap = snapshot::take(&source, &config)?;
@@ -582,54 +772,167 @@ impl HandoffHost {
         )?
         .map_err(|e| tool_error(&e))?;
         drop(claim);
+        let mut caps_report = snap.caps.clone();
+        caps::check_segment(&mut caps_report, bytes, &limits);
+        let env = if effective.env_harvest {
+            let offered = settings::offered((self.deps.env_source)(), &effective);
+            let harvest = settings::harvest(&folder.env_names, &offered, effective.env_limits);
+            json!({
+                "offered": settings::offered_wire(&offered),
+                "selected": harvest.env.keys().collect::<Vec<_>>(),
+                "missing": harvest.missing,
+                "vars": harvest.env.len(),
+                "bytes": harvest.bytes,
+                "over_limit": harvest.over_limit,
+            })
+        } else {
+            Value::Null
+        };
+        let includable = |entry: &Excluded| {
+            effective.allow_user_include
+                && !matches!(
+                    entry.reason,
+                    Reason::PathDeny | Reason::LeaveOnLaptop | Reason::NotAFile
+                )
+        };
         Ok(Preview {
             files: snap.files,
             bytes,
             unpacked_bytes: snap.unpacked_bytes,
             has_upstream: snap.upstream.is_some(),
-            excluded: snap.excluded,
+            excluded: snap
+                .excluded
+                .iter()
+                .map(|entry| ExcludedView {
+                    path: entry.path.clone(),
+                    reason: entry.reason,
+                    tracked: entry.tracked,
+                    includable: includable(entry),
+                })
+                .collect(),
+            included: snap.included,
             findings: snap.findings,
-            project_workspace_bytes_left: None,
-            caps: snap.caps,
+            include_findings: snap.include_findings,
+            project_workspace_bytes_left: limits.project_workspace_bytes_left,
+            caps: caps_report,
             shadow: snap.shadow,
+            policy: effective.wire(&folder.exclude_patterns, &path_deny),
+            env,
         })
     }
 
     /// `handoff_send`: snapshot, scan, bundle, begin, upload, publish,
-    /// complete; progress on `handoff://event`.
+    /// complete; progress on `handoff://event`. A failure after begin (the
+    /// begin answer's caps, the upload, a cancel) cancels the handoff on
+    /// the server, so the thread is `LOCAL` again.
     ///
     /// # Errors
     ///
-    /// `secret_found` and `handoff_too_large` (with `details`), the
-    /// server's refusals (`cloud_handoff_disabled`, `local_turn_in_progress`,
-    /// `handoff_in_progress`, `workspace_quota_exceeded`, …), store errors.
+    /// `secret_found` and `handoff_too_large` (with `details`),
+    /// `include_confirm_required`, `env_too_large`, `handoff_cancelled`, the
+    /// server's refusals (`cloud_handoff_disabled`,
+    /// `local_turn_in_progress`, `handoff_in_progress`,
+    /// `workspace_quota_exceeded`, …), store errors.
     pub async fn send(
         &self,
         workspace_id: &str,
         conversation_uuid: &str,
         leave_on_laptop: Vec<String>,
+        confirm_includes: bool,
     ) -> Result<Sent, HandoffError> {
         let uuid = canonical_uuid(conversation_uuid)?;
-        let result = self.send_inner(workspace_id, &uuid, leave_on_laptop).await;
-        if let Err(error) = &result {
-            self.emit(
+        let switch = Arc::new(CancelSwitch::default());
+        {
+            let mut sends = self
+                .sends
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if sends.contains_key(&uuid) {
+                return Err(HandoffError::new(
+                    "handoff_in_progress",
+                    "This thread is being sent already.",
+                ));
+            }
+            sends.insert(uuid.clone(), switch.clone());
+        }
+        let _guard = SendGuard {
+            host: self,
+            uuid: uuid.clone(),
+            switch: switch.clone(),
+        };
+        let result = self
+            .send_inner(
+                workspace_id,
+                &uuid,
+                leave_on_laptop,
+                confirm_includes,
+                &switch,
+            )
+            .await;
+        match &result {
+            Err(error) if error.code == "handoff_cancelled" => {
+                self.emit(&uuid, "cancelled", 0, 0, None);
+            }
+            Err(error) => self.emit(
                 &uuid,
                 "error",
                 0,
                 0,
                 Some(format!("{}: {}", error.code, error.message)),
-            );
+            ),
+            Ok(_) => {}
         }
         result
     }
 
+    /// `handoff_cancel`: stop a running send of `conversation_uuid`.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request` for a malformed UUID.
+    pub fn cancel(&self, conversation_uuid: &str) -> Result<bool, HandoffError> {
+        let uuid = canonical_uuid(conversation_uuid)?;
+        let switch = self
+            .sends
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&uuid)
+            .cloned();
+        Ok(switch.is_some_and(|switch| {
+            switch.cancel();
+            true
+        }))
+    }
+
+    /// Cancel a begun handoff on the server (`DELETE` in `HANDING_OFF`,
+    /// contract §6.3). Best effort: the server's 15-minute expiry is the
+    /// fallback.
+    async fn abandon(&self, project_id: i64, uuid: &str) {
+        let answer = self
+            .call(
+                Method::DELETE,
+                &format!("/api/v2/elitea_core/workspace_handoff/prompt_lib/{project_id}/{uuid}"),
+                None,
+            )
+            .await;
+        if let Err(error) = answer {
+            log::warn!(
+                "a begun handoff could not be cancelled ({}); the server expires it",
+                error.code
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
     async fn send_inner(
         &self,
         workspace_id: &str,
         uuid: &str,
         leave: Vec<String>,
+        confirm_includes: bool,
+        switch: &CancelSwitch,
     ) -> Result<Sent, HandoffError> {
-        let policy = self.policy()?;
+        let device = self.policy()?;
         let (root, project_id) = self.workspace(workspace_id)?;
         if self.is_away(uuid) {
             return Err(HandoffError::new(
@@ -637,12 +940,14 @@ impl HandoffHost {
                 "This thread is already in the cloud.",
             ));
         }
+        let effective = self.effective_policy(project_id).await?;
+        let folder = self.settings.get(workspace_id)?;
         let _claim = self.deps.agents.claim_workspace(
             workspace_id,
             "Wait for the running turn to end before sending this thread.",
         )?;
         self.emit(uuid, "snapshot", 0, 1, None);
-        let config = self.config(&root, uuid, &policy, leave, Caps::default());
+        let config = self.send_config(&root, uuid, &device, &effective, &folder, leave);
         let source = self.open(&config)?;
         let (source, snap) = {
             let config = config.clone();
@@ -654,6 +959,9 @@ impl HandoffHost {
             )?
             .map_err(|e| tool_error(&e))?
         };
+        if switch.is_cancelled() {
+            return Err(cancelled());
+        }
         self.emit(
             uuid,
             "scan",
@@ -666,6 +974,26 @@ impl HandoffHost {
             )),
         );
         refuse_blocked(&snap)?;
+        if !snap.include_findings.is_empty() && !confirm_includes {
+            return Err(HandoffError {
+                code: "include_confirm_required".into(),
+                message: "Some files you included look like they hold credentials. Confirm sending them for this send.".into(),
+                details: json!({ "findings": snap.include_findings }),
+            });
+        }
+        // The env selection, before begin (values only in the begin body).
+        let harvest = self.harvest(&effective, &folder);
+        if harvest.over_limit {
+            return Err(HandoffError {
+                code: "env_too_large".into(),
+                message: "The selected environment variables are more than a handoff may carry."
+                    .into(),
+                details: json!({
+                    "vars": harvest.env.len(), "bytes": harvest.bytes,
+                    "max_vars": effective.env_limits.max_vars, "max_bytes": effective.env_limits.max_bytes,
+                }),
+            });
+        }
         self.emit(uuid, "bundle", 0, 1, None);
         let (source, snap, written) = joined(
             tokio::task::spawn_blocking(move || {
@@ -682,30 +1010,114 @@ impl HandoffHost {
             1,
             Some(format!("{} bytes", written.bytes.len())),
         );
+        // The policy's caps, before begin.
+        let mut before = caps::CapReport::default();
+        caps::check_segment(&mut before, written.bytes.len() as u64, &effective.limits);
+        if !before.ok() {
+            before.largest.clone_from(&snap.caps.largest);
+            return Err(HandoffError {
+                code: "handoff_too_large".into(),
+                message: "The folder is larger than this project allows to send.".into(),
+                details: serde_json::to_value(&before).unwrap_or(Value::Null),
+            });
+        }
+        if switch.is_cancelled() {
+            return Err(cancelled());
+        }
         // Begin.
+        self.emit(uuid, "begin", 0, 1, None);
+        let mut body = json!({
+            "device_id": self.device_id(),
+            "history_mode": "none",
+            "stats": {
+                "files": snap.files,
+                "bytes": written.bytes.len(),
+                "unpacked_bytes": snap.unpacked_bytes,
+                "excluded": snap.excluded.iter().map(|e| format!("./{}", e.path)).collect::<Vec<_>>(),
+                "scan_findings": snap.include_findings.len(),
+            },
+            "has_upstream": snap.upstream.is_some(),
+            "note": handoff_note(&snap),
+        });
+        if !snap.included.is_empty() {
+            body["included_excluded"] = json!(
+                snap.included
+                    .iter()
+                    .map(|file| format!("./{}", file.path))
+                    .collect::<Vec<_>>()
+            );
+        }
+        let env_vars = harvest.env.len();
+        if effective.env_harvest {
+            body["env"] = json!(harvest.env);
+        }
+        drop(harvest);
         let begin = self
             .call(
                 Method::POST,
                 &format!("/api/v2/elitea_core/workspace_handoff/prompt_lib/{project_id}/{uuid}"),
-                Some(&json!({
-                    "device_id": self.device_id(),
-                    "history_mode": "none",
-                    "stats": {
-                        "files": snap.files,
-                        "bytes": written.bytes.len(),
-                        "unpacked_bytes": snap.unpacked_bytes,
-                        "excluded": snap.excluded.iter().map(|e| format!("./{}", e.path)).collect::<Vec<_>>(),
-                        "scan_findings": 0,
-                    },
-                    "has_upstream": snap.upstream.is_some(),
-                    "note": handoff_note(&snap),
-                })),
+                Some(&body),
             )
-            .await?;
-        let handoff_id = str_of(&begin, "handoff_id").ok_or_else(|| {
+            .await;
+        // The env values leave memory with the request.
+        drop(body);
+        let begin = begin?;
+        self.emit(uuid, "begin", 1, 1, None);
+        let after_begin = self.after_begin(project_id, workspace_id, uuid, &begin, &snap, &written);
+        let outcome = tokio::select! {
+            outcome = after_begin => outcome,
+            () = switch.wait() => Err(cancelled()),
+        };
+        let (handoff_id, state, cloud_epoch) = match outcome {
+            Ok(done) => done,
+            Err(error) => {
+                self.abandon(project_id, uuid).await;
+                return Err(error);
+            }
+        };
+        {
+            let snap = snap.clone();
+            let uuid = uuid.to_owned();
+            let kept = joined(
+                tokio::task::spawn_blocking(move || snapshot::keep_refs(&source, &snap, &uuid))
+                    .await,
+            )?;
+            if let Err(error) = kept {
+                log::warn!(
+                    "the handoff's private refs could not be kept: {}",
+                    error.message()
+                );
+            }
+        }
+        self.emit(uuid, "complete", 1, 1, Some(state.clone()));
+        Ok(Sent {
+            handoff_id,
+            state,
+            epoch: cloud_epoch,
+            files: snap.files,
+            excluded: snap.excluded.len(),
+            included: snap.included.len(),
+            env_vars,
+        })
+    }
+
+    /// Everything a send does after begin, up to the stored record:
+    /// `(handoff id, state, epoch)`. Any failure is answered by cancelling
+    /// the handoff on the server.
+    #[allow(clippy::too_many_lines)]
+    async fn after_begin(
+        &self,
+        project_id: i64,
+        workspace_id: &str,
+        uuid: &str,
+        begin: &Value,
+        snap: &Snapshot,
+        written: &elitea_workspace_store::bundle::Written,
+    ) -> Result<(String, String, u64), HandoffError> {
+        let handoff_id = str_of(begin, "handoff_id").ok_or_else(|| {
             HandoffError::new("invalid_response", "the begin answer has no handoff id")
         })?;
-        let epoch = u64_of(&begin, "epoch");
+        let epoch = u64_of(begin, "epoch");
         let server_caps: Caps = begin
             .get("limits")
             .and_then(|limits| serde_json::from_value(limits.clone()).ok())
@@ -741,8 +1153,6 @@ impl HandoffHost {
         caps::check_segment(&mut report, written.bytes.len() as u64, &server_caps);
         if !report.ok() {
             report.largest.clone_from(&snap.caps.largest);
-            // The server ends the HANDING_OFF state itself (15 minutes
-            // without complete, ADR-0034 decision 7).
             return Err(HandoffError {
                 code: "handoff_too_large".into(),
                 message: "The folder is larger than this project allows to send.".into(),
@@ -761,7 +1171,7 @@ impl HandoffHost {
             })
             .unwrap_or_default();
         let expected_old = begin.get("expected_old").cloned().unwrap_or(Value::Null);
-        let published = snapshot::published_refs(&snap);
+        let published = snapshot::published_refs(snap);
         let names: Vec<&str> = published.iter().map(|(name, _)| name.as_str()).collect();
         store_refs::check(Writer::Desktop, Some(&Allowlist::new(allowed)), &names)?;
         let request = PublishRequest {
@@ -818,28 +1228,46 @@ impl HandoffHost {
             pending_release: None,
         };
         self.records.put(&record)?;
-        {
-            let snap = snap.clone();
-            let uuid = uuid.to_owned();
-            let kept = joined(
-                tokio::task::spawn_blocking(move || snapshot::keep_refs(&source, &snap, &uuid))
-                    .await,
-            )?;
-            if let Err(error) = kept {
-                log::warn!(
-                    "the handoff's private refs could not be kept: {}",
-                    error.message()
-                );
-            }
-        }
-        self.emit(uuid, "complete", 1, 1, Some(state.clone()));
-        Ok(Sent {
-            handoff_id,
-            state,
-            epoch: cloud_epoch,
-            files: snap.files,
-            excluded: snap.excluded.len(),
-        })
+        Ok((handoff_id, state, cloud_epoch))
+    }
+
+    /// `handoff_settings_get`: the folder's settings, the effective policy
+    /// and the env variables it may offer (names and lengths).
+    ///
+    /// # Errors
+    ///
+    /// `workspace_*`, the policy route's failures.
+    pub async fn settings_get(&self, workspace_id: &str) -> Result<Value, HandoffError> {
+        let device = self.policy()?;
+        let (_, project_id) = self.workspace(workspace_id)?;
+        let effective = self.effective_policy(project_id).await?;
+        let folder = self.settings.get(workspace_id)?;
+        let offered = if effective.env_harvest {
+            settings::offered((self.deps.env_source)(), &effective)
+        } else {
+            Vec::new()
+        };
+        Ok(json!({
+            "settings": folder,
+            "policy": effective.wire(&folder.exclude_patterns, &Self::path_deny(&device, &effective)),
+            "env_offered": settings::offered_wire(&offered),
+        }))
+    }
+
+    /// `handoff_settings_set`: store the folder's settings (validated).
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`, `workspace_*`, storage.
+    pub async fn settings_set(
+        &self,
+        workspace_id: &str,
+        folder: FolderSettings,
+    ) -> Result<Value, HandoffError> {
+        self.workspace(workspace_id)?;
+        let folder = folder.validated()?;
+        self.settings.put(workspace_id, &folder)?;
+        self.settings_get(workspace_id).await
     }
 
     /// The server's state of a thread (and a pending release sent again).
@@ -893,6 +1321,90 @@ impl HandoffHost {
             object.insert("sent_from_here".into(), json!(record.is_some()));
         }
         Ok(state)
+    }
+
+    /// `handoff_status_many`: the sidebar's badges. A thread this desktop
+    /// holds no record of is `LOCAL` with no request; the others answer from
+    /// a 15-second cache, and at most one server call per project refreshes
+    /// the stalest of them (the rest answer from their records until their
+    /// turn).
+    ///
+    /// # Errors
+    ///
+    /// Storage.
+    pub async fn status_many(&self, conversation_uuids: &[String]) -> Result<Value, HandoffError> {
+        let mut out = serde_json::Map::new();
+        let mut by_project: BTreeMap<i64, Vec<(String, String)>> = BTreeMap::new();
+        for raw in conversation_uuids.iter().take(500) {
+            let Ok(uuid) = canonical_uuid(raw) else {
+                continue;
+            };
+            match self.records.get(&uuid)? {
+                None => {
+                    out.insert(
+                        raw.clone(),
+                        json!({"state": "LOCAL", "epoch": 0, "executor": "local", "read_only": false, "sent_from_here": false}),
+                    );
+                }
+                Some(record) => by_project
+                    .entry(record.project_id)
+                    .or_default()
+                    .push((raw.clone(), uuid)),
+            }
+        }
+        for (project_id, threads) in by_project {
+            let now = Instant::now();
+            let stalest = {
+                let cache = self
+                    .status_cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                threads
+                    .iter()
+                    .filter_map(|(_, uuid)| match cache.get(uuid) {
+                        Some((at, _)) if now.duration_since(*at) < STATUS_CACHE => None,
+                        Some((at, _)) => Some((Some(*at), uuid.clone())),
+                        None => Some((None, uuid.clone())),
+                    })
+                    .min()
+                    .map(|(_, uuid)| uuid)
+            };
+            if let Some(uuid) = stalest {
+                match self.status(&uuid, Some(project_id)).await {
+                    Ok(state) => {
+                        self.status_cache
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .insert(uuid, (Instant::now(), state));
+                    }
+                    Err(error) => log::warn!("a handoff status was not refreshed: {}", error.code),
+                }
+            }
+            let cache = self
+                .status_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for (raw, uuid) in threads {
+                let answer = cache
+                    .get(&uuid)
+                    .map(|(_, state)| state.clone())
+                    .or_else(|| {
+                        self.records.get(&uuid).ok().flatten().map(|record| {
+                            json!({
+                                "state": record.state, "epoch": record.epoch,
+                                "executor": executor_of(&record.state),
+                                "read_only": record.state != "LOCAL",
+                                "sent_from_here": true,
+                            })
+                        })
+                    });
+                out.insert(
+                    raw,
+                    answer.unwrap_or_else(|| json!({"state": "LOCAL", "epoch": 0, "executor": "local", "read_only": false, "sent_from_here": false})),
+                );
+            }
+        }
+        Ok(json!({ "statuses": out }))
     }
 
     /// `handoff_reclaim`: take the thread back (`CLOUD_IDLE` → `RECLAIMING`,
@@ -967,9 +1479,12 @@ impl HandoffHost {
         let source = self.open(&config)?;
         let send = record.send.clone();
         let path_deny = policy.path_deny.clone();
-        let preflight = joined(
+        let (preflight, files, diffs_truncated) = joined(
             tokio::task::spawn_blocking(move || {
-                take_back::preflight(&source, &send, &bytes, &segment.refs, &path_deny)
+                let preflight =
+                    take_back::preflight(&source, &send, &bytes, &segment.refs, &path_deny)?;
+                let (files, truncated) = preflight_files(&preflight)?;
+                Ok::<_, elitea_local_tools::error::ToolError>((preflight, files, truncated))
             })
             .await,
         )?
@@ -988,6 +1503,8 @@ impl HandoffHost {
             skipped_paths: preflight.skipped_paths.clone(),
             cloud_turns: preflight.cloud_turns(),
             modes,
+            files,
+            diffs_truncated,
         };
         let mut held = self
             .preflights
@@ -1099,6 +1616,7 @@ impl HandoffHost {
             branch: applied.branch,
             imported_turns: imported,
             released: released.is_ok(),
+            copied: applied.copied,
         })
     }
 
@@ -1240,6 +1758,44 @@ impl HandoffHost {
             .retain(|_, held| held.conversation_uuid != uuid);
         Ok(answer)
     }
+}
+
+/// The per-file diffs a take-back writes: text only, at most
+/// [`PREFLIGHT_DIFF_BYTES`] of diff text (later files keep their status and
+/// counts, without the text); whether anything was cut.
+fn preflight_files(
+    preflight: &Preflight,
+) -> elitea_local_tools::error::ToolResult<(Vec<FileChange>, bool)> {
+    let mut budget = PREFLIGHT_DIFF_BYTES;
+    let mut truncated = false;
+    let mut files = Vec::new();
+    for (diff, too_large) in preflight.changed_files(PREFLIGHT_DIFF_FILE_BYTES)? {
+        let mut change = if too_large {
+            let status = match diff.kind {
+                elitea_workspace_store::objects::ChangeKind::Added => "added",
+                elitea_workspace_store::objects::ChangeKind::Deleted => "deleted",
+                _ => "modified",
+            };
+            truncated = true;
+            FileChange {
+                path: diff.path,
+                status,
+                added: 0,
+                removed: 0,
+                diff: String::new(),
+            }
+        } else {
+            crate::d0::recorder::diff(&diff.path, diff.before.as_deref(), diff.after.as_deref())
+        };
+        if change.diff.len() > budget {
+            change.diff.clear();
+            truncated = true;
+        } else {
+            budget -= change.diff.len();
+        }
+        files.push(change);
+    }
+    Ok((files, truncated))
 }
 
 fn refuse_blocked(snap: &Snapshot) -> Result<(), HandoffError> {
@@ -1422,8 +1978,16 @@ pub async fn handoff_preview(
     state: tauri::State<'_, HandoffState>,
     workspace_id: String,
     conversation_uuid: String,
+    leave_on_laptop: Option<Vec<String>>,
 ) -> Result<Preview, HandoffError> {
-    state.0.preview(&workspace_id, &conversation_uuid).await
+    state
+        .0
+        .preview(
+            &workspace_id,
+            &conversation_uuid,
+            leave_on_laptop.unwrap_or_default(),
+        )
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1432,6 +1996,7 @@ pub async fn handoff_send(
     workspace_id: String,
     conversation_uuid: String,
     leave_on_laptop: Option<Vec<String>>,
+    confirm_includes: Option<bool>,
 ) -> Result<Sent, HandoffError> {
     state
         .0
@@ -1439,8 +2004,42 @@ pub async fn handoff_send(
             &workspace_id,
             &conversation_uuid,
             leave_on_laptop.unwrap_or_default(),
+            confirm_includes.unwrap_or(false),
         )
         .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn handoff_cancel(
+    state: tauri::State<'_, HandoffState>,
+    conversation_uuid: String,
+) -> Result<Value, HandoffError> {
+    Ok(json!({ "cancelled": state.0.cancel(&conversation_uuid)? }))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn handoff_status_many(
+    state: tauri::State<'_, HandoffState>,
+    conversation_uuids: Vec<String>,
+) -> Result<Value, HandoffError> {
+    state.0.status_many(&conversation_uuids).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn handoff_settings_get(
+    state: tauri::State<'_, HandoffState>,
+    workspace_id: String,
+) -> Result<Value, HandoffError> {
+    state.0.settings_get(&workspace_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn handoff_settings_set(
+    state: tauri::State<'_, HandoffState>,
+    workspace_id: String,
+    settings: FolderSettings,
+) -> Result<Value, HandoffError> {
+    state.0.settings_set(&workspace_id, settings).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

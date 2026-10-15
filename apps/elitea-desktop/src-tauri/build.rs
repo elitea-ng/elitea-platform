@@ -50,6 +50,10 @@ fn main() {
             "handoff_apply",
             "handoff_undo",
             "handoff_erase",
+            "handoff_cancel",
+            "handoff_status_many",
+            "handoff_settings_get",
+            "handoff_settings_set",
         ]),
     ))
     .expect("tauri build configuration is valid");
