@@ -67,6 +67,7 @@ import (
 
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // The two verbs an exception can carry. They are the legacy strings and the
@@ -233,9 +234,13 @@ func (h *Handler) ListBucketPermissions(w http.ResponseWriter, r *http.Request) 
 	}
 	out := make([]bucketPermissionRow, 0, len(rows))
 	for _, row := range rows {
-		permissions := row.BucketPermissions
-		if permissions == nil {
-			permissions = map[string][]string{}
+		permissions := map[string][]string{}
+		for bucket, verbs := range row.BucketPermissions {
+			// A row written before the name was reserved never names the
+			// hidden workspace bucket on the wire (ADR-0034 decision 3).
+			if !storage.ReservedBucketName(bucket) {
+				permissions[bucket] = verbs
+			}
 		}
 		out = append(out, bucketPermissionRow{
 			UserID:            row.UserID,
@@ -282,7 +287,7 @@ func (h *Handler) visibleACLRows(
 // `write`.
 func validateBucketPermissions(permissions map[string][]string) (string, bool) {
 	for bucket, verbs := range permissions {
-		if !bucketNamePattern.MatchString(bucket) {
+		if !bucketNamePattern.MatchString(bucket) || storage.ReservedBucketName(bucket) {
 			return "invalid bucket name " + bucket, false
 		}
 		for _, verb := range verbs {
@@ -359,6 +364,11 @@ func (h *Handler) DeleteBucketPermission(w http.ResponseWriter, r *http.Request)
 	}
 	if body.Bucket == nil || *body.Bucket == "" {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "bucket is required")
+		return
+	}
+	// The hidden workspace bucket has no access list (ADR-0034 decision 3).
+	if storage.ReservedBucketName(*body.Bucket) {
+		writeError(w, http.StatusNotFound, "NotFound", "no exception for this member and bucket")
 		return
 	}
 	removed, err := h.repo.DeleteUserBucketPermission(r.Context(), projectID, *body.UserID, *body.Bucket)

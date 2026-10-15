@@ -194,7 +194,9 @@ func (repository *CurrentRuntimeArtifactRepository) authorizeBucket(
 		repository.permissions == nil || repository.store == nil || ctx == nil {
 		return BucketRow{}, errors.New("current runtime artifact repository is unavailable")
 	}
-	if projectID <= 0 || actorID <= 0 || bucket == "" {
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent, before the
+	// access list is read.
+	if projectID <= 0 || actorID <= 0 || bucket == "" || storage.ReservedBucketName(bucket) {
 		return BucketRow{}, storage.ErrContentNotFound
 	}
 	permissions, found, err := repository.permissions.GetBucketPermission(

@@ -386,6 +386,11 @@ func (service *RuntimeArtifactObjectService) List(
 	request RuntimeArtifactListRequest,
 ) (RuntimeArtifactListContext, error) {
 	bucket := strings.TrimSpace(request.Bucket)
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if ReservedBucketName(bucket) {
+		return RuntimeArtifactListContext{}, ErrContentNotFound
+	}
 	prefix := strings.TrimPrefix(strings.TrimSpace(request.Prefix), "/")
 	limit := int32(maxRuntimeArtifactListFiles)
 	if request.Limit > 0 && request.Limit < limit {
@@ -507,6 +512,11 @@ func (service *RuntimeArtifactObjectService) Read(
 	request RuntimeArtifactReadRequest,
 ) (RuntimeArtifactReadContext, error) {
 	bucket := strings.TrimSpace(request.Bucket)
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if ReservedBucketName(bucket) {
+		return RuntimeArtifactReadContext{}, ErrContentNotFound
+	}
 	name := strings.TrimPrefix(strings.TrimSpace(request.Name), "/")
 	if !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
 		return RuntimeArtifactReadContext{}, ErrContentNotFound
@@ -571,6 +581,11 @@ func (service *RuntimeArtifactObjectService) Write(
 	request RuntimeArtifactWriteRequest,
 ) (RuntimeArtifactWriteContext, error) {
 	bucket := strings.TrimSpace(request.Bucket)
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if ReservedBucketName(bucket) {
+		return RuntimeArtifactWriteContext{}, ErrContentNotFound
+	}
 	name := strings.TrimPrefix(strings.TrimSpace(request.Name), "/")
 	content := request.Content
 	if !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
@@ -608,6 +623,11 @@ func (service *RuntimeArtifactObjectService) Delete(
 	request RuntimeArtifactDeleteRequest,
 ) (RuntimeArtifactDeleteContext, error) {
 	bucket := strings.TrimSpace(request.Bucket)
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if ReservedBucketName(bucket) {
+		return RuntimeArtifactDeleteContext{}, ErrContentNotFound
+	}
 	name := strings.TrimPrefix(strings.TrimSpace(request.Name), "/")
 	if !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
 		return RuntimeArtifactDeleteContext{}, ErrContentNotFound

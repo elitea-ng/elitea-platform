@@ -415,6 +415,12 @@ func (h *Handler) CreateBucket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "bucket name must match ^[a-z][a-z0-9-]{1,62}$")
 		return
 	}
+	// A reserved name is an invalid name, never a conflict: a 409 would tell
+	// the caller that the hidden workspace bucket exists (ADR-0034 decision 3).
+	if storage.ReservedBucketName(req.Name) {
+		writeError(w, http.StatusBadRequest, "InvalidArgument", "this bucket name is reserved")
+		return
+	}
 
 	retentionDays, allowed, err := h.resolveCreateRetention(r.Context(), projectID, req.RetentionDays)
 	if err != nil {

@@ -145,6 +145,13 @@ func mimeFromExtension(key string) string {
 // (utils/utils.py:177-238) — and it keeps a refused caller from learning
 // whether a bucket they may not touch exists.
 func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent here, and
+	// the refusal comes BEFORE the access list, so no answer differs from the
+	// one a missing bucket gets.
+	if storage.ReservedBucketName(bucket) {
+		writeError(w, http.StatusNotFound, "NotFound", "bucket not found")
+		return repos.BucketRow{}, false
+	}
 	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
 	if err != nil {
 		h.writeInternal(w, r, "authorize bucket", err)
@@ -169,6 +176,10 @@ func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectI
 // requireBucketNoBody is requireBucket for HEAD responses, which must not
 // carry a body.
 func (h *Handler) requireBucketNoBody(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
+	if storage.ReservedBucketName(bucket) {
+		w.WriteHeader(http.StatusNotFound)
+		return repos.BucketRow{}, false
+	}
 	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)

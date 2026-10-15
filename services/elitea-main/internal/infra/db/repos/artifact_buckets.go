@@ -157,6 +157,13 @@ func (r *ArtifactBucketsRepository) GetBucketByID(ctx context.Context, id int64)
 }
 
 func (r *ArtifactBucketsRepository) CreateBucket(ctx context.Context, input NewBucketInput) (BucketRow, error) {
+	// The workspace bucket is created by the workspace store alone
+	// (WorkspaceStoreRepository.EnsureWorkspaceBucket). A reserved name is an
+	// invalid name here, never a conflict, so no caller learns that the hidden
+	// bucket exists (ADR-0034 decision 3).
+	if storage.ReservedBucketName(input.Name) || input.BucketType == storage.WorkspaceBucketType {
+		return BucketRow{}, fmt.Errorf("%w: reserved bucket name", storage.ErrInvalidKey)
+	}
 	row, err := r.queries.CreateArtifactBucket(ctx, sqlcgen.CreateArtifactBucketParams{
 		ProjectID:     input.ProjectID,
 		Name:          input.Name,

@@ -360,7 +360,7 @@ func (service *RuntimeAttachmentObjectService) Resolve(
 	if err := ctx.Err(); err != nil {
 		return RuntimeAttachmentObjectContext{}, err
 	}
-	if !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
+	if ReservedBucketName(bucket) || !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
 		return RuntimeAttachmentObjectContext{}, ErrContentNotFound
 	}
 	authorization, err := service.authorizer.AuthorizeAgentRuntimeContext(ctx, claim)

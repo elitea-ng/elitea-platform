@@ -57,6 +57,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -140,6 +141,13 @@ func (h *Handler) UploadAttachment(w http.ResponseWriter, r *http.Request) {
 // turn was never started, because the upload alone already put readable
 // bytes in a bucket a same-project stranger could otherwise guess a key for.
 func (h *Handler) GetAttachment(w http.ResponseWriter, r *http.Request) {
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent here too.
+	// DownloadObject refuses it as well; answering first keeps the 404 the
+	// same whatever this route is composed with.
+	if storage.ReservedBucketName(chi.URLParam(r, "bucket")) {
+		apierr.WriteStatus(w, http.StatusNotFound, "attachment not found")
+		return
+	}
 	if h.attachmentDownloader == nil {
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "attachment storage is not configured")
 		return
