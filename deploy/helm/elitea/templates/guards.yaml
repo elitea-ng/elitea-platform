@@ -86,6 +86,9 @@
 {{- if and $indexingOverride (ne (toString $indexingOverride) (include "elitea.indexingRuntime" .)) }}
 {{- fail (printf "main.env.ELITEA_INDEXING_RUNTIME=%s disagrees with worker.indexingRuntime, which resolves to %s: elitea-main and the worker would index in different places. Set worker.indexingRuntime and remove the override." $indexingOverride (include "elitea.indexingRuntime" .)) }}
 {{- end }}
+{{- if and ((.Values.worker.runtime | default dict).memoryEmbeddingModel) (ne (include "elitea.indexingRuntime" .) "rust") }}
+{{- fail "worker.runtime.memoryEmbeddingModel needs worker.indexingRuntime=rust (which in turn needs the Rust worker, the runtime plane with index ingest dispatch and a vector store). The Rust worker's memory toolkit keeps its memories in elitea-vector and reaches it with the claim's vector token, which exists only under the Rust indexing runtime; the Python worker keeps memories in the toolkit's own pgvector database and reads no such setting (worker unit M9)." }}
+{{- end }}
 {{- if and ((.Values.worker.extractor | default dict).enabled) (ne (include "elitea.indexingRuntime" .) "rust") }}
 {{- fail "worker.extractor.enabled needs worker.indexingRuntime=rust (which in turn needs the Rust worker, the runtime plane with index ingest dispatch and a vector store). The document extraction sidecar (elitea-doc-extractor, ADR-0030 I1) is dialled by the Rust worker's index runs over a socket in the worker pod and by nothing else; the Python worker extracts documents itself." }}
 {{- end }}

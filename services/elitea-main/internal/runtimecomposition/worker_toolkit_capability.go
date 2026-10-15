@@ -109,6 +109,9 @@ type WorkerToolkitCapability struct {
 	// supportedTools is the per-tool allow list of a partial Rust family,
 	// keyed by type; a type absent from it serves every tool.
 	supportedTools map[string]map[string]struct{}
+	// withheldReasons says why a type the pinned snapshot lists is withheld by
+	// this deployment's configuration; SupportsToolkitType returns the sentence.
+	withheldReasons map[string]string
 }
 
 // WorkerImplementationFromEnv reads which worker image this deployment runs.
@@ -319,6 +322,9 @@ func (c *WorkerToolkitCapability) SupportsToolkitType(
 		if _, supported := c.supportedToolTypes[toolkitType]; supported {
 			return true, ""
 		}
+		if reason, withheld := c.withheldReasons[toolkitType]; withheld {
+			return false, reason
+		}
 		// A sentence for the person reading it in the UI (the Indexes tab
 		// and the toolkit catalogue show it verbatim). "Native worker" and
 		// "toolkit family" are internal terms (UI-DC-1).
@@ -371,10 +377,44 @@ func (c *WorkerToolkitCapability) WithRustIndexTools() *WorkerToolkitCapability 
 // configuration load, and a Config that nonetheless says so indexes with
 // nothing, so the catalogue must not offer the tools either.
 func (c *WorkerToolkitCapability) ForIndexingRuntime(config Config) *WorkerToolkitCapability {
-	if config.RustIndexing() {
-		return c.WithRustIndexTools()
+	if !config.RustIndexing() {
+		return c.withoutMemory("This deployment's agent worker serves the memory toolkit only when it indexes with the Rust runtime (the vector store holds the memories).")
 	}
-	return c
+	widened := c.WithRustIndexTools()
+	if config.MemoryEmbeddingModel == "" {
+		return widened.withoutMemory("Memory needs an embedding model configured by the operator (worker.runtime.memoryEmbeddingModel).")
+	}
+	return widened
+}
+
+// withoutMemory is a Rust capability without the memory toolkit, with the
+// sentence the catalogue shows for it. The Rust worker keeps memories in
+// elitea-vector, reached with the claim's vector token (minted only under the
+// Rust indexing runtime) and embeds them with an operator-chosen model; a
+// worker lacking either would skip the toolkit in silence while the catalogue
+// offered the tile. A Python capability is returned unchanged (the SDK serves
+// memory from the toolkit's own pgvector database).
+func (c *WorkerToolkitCapability) withoutMemory(reason string) *WorkerToolkitCapability {
+	if c == nil || c.implementation != RustWorkerImplementation {
+		return c
+	}
+	types := make(map[string]struct{}, len(c.supportedToolTypes))
+	for toolkitType := range c.supportedToolTypes {
+		types[toolkitType] = struct{}{}
+	}
+	delete(types, "memory")
+	reasons := make(map[string]string, len(c.withheldReasons)+1)
+	for toolkitType, text := range c.withheldReasons {
+		reasons[toolkitType] = text
+	}
+	reasons["memory"] = reason
+	return &WorkerToolkitCapability{
+		implementation:        c.implementation,
+		unsupportedImportKeys: c.unsupportedImportKeys,
+		supportedToolTypes:    types,
+		supportedTools:        c.supportedTools,
+		withheldReasons:       reasons,
+	}
 }
 
 // SupportsTool reports whether the configured worker serves one TOOL of a

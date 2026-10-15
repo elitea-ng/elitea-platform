@@ -2175,12 +2175,20 @@ pub(super) fn pipeline_calls_index_tool(
 ) -> bool {
     definition.direct_tool_selections().any(|selection| {
         selection.kind() == DirectToolNodeKind::Toolkit
-            && elitea_agent_runtime::toolkits::IndexToolName::parse(selection.tool()).is_some()
             && toolsets.iter().any(|reference| {
                 reference.kind() == FrozenToolKind::Configured
                     && reference.toolkit_name() == selection.alias()
-                    && crate::toolkits::is_index_family(reference.tool_type())
-                    && reference.indexes().is_some()
+                    && ((elitea_agent_runtime::toolkits::IndexToolName::parse(selection.tool())
+                        .is_some()
+                        && crate::toolkits::is_index_family(reference.tool_type())
+                        && reference.indexes().is_some())
+                        // A direct node on a `memory` toolkit (M9).
+                        || (reference.tool_type()
+                            == elitea_agent_runtime::toolkits::MEMORY_TOOLKIT_TYPE
+                            && elitea_agent_runtime::toolkits::MemoryToolName::parse(
+                                selection.tool(),
+                            )
+                            .is_some()))
             })
     })
 }

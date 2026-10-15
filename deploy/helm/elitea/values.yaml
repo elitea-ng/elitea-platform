@@ -4336,6 +4336,20 @@ worker:
     # by this list: the artifact toolkit's source is pinned to exactly that
     # origin (scheme, host and port) and is never subject to it.
     indexEgressAllowlist: "github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com api.zephyrscale.smartbear.com eu.api.zephyrscale.smartbear.com prod-api.zephyr4jiracloud.com xray.cloud.getxray.app us.xray.cloud.getxray.app eu.xray.cloud.getxray.app au.xray.cloud.getxray.app api.figma.com"
+    # Rust worker, indexingRuntime=rust only (worker unit M9): the gateway
+    # embedding model the `memory` toolkit embeds its memories and its search
+    # queries with (a model name the gateway serves for every project that uses
+    # a memory toolkit). Written to runtime.json as `memory_embedding_model`.
+    # EMPTY LEAVES THE MEMORY TOOLKIT UNSERVED on the Rust worker: a saved
+    # memory toolkit is skipped with `agent_toolkit_skipped`
+    # (reason no_memory_embedding_model), exactly as before the family
+    # existed. Memories live in elitea-vector, in the vector space of this
+    # model: changing the model strands the memories written under the old one
+    # (they stay stored, are not searched, and `delete_memory` still removes
+    # them). Memories written under the Python worker (the toolkit's pgvector
+    # database) are not carried over. The embedding spaces elitea-vector admits
+    # (`vector.allowedSpaces`, when set) must include this model's space.
+    memoryEmbeddingModel: ""
     # Rust worker, indexingRuntime=rust only (ADR-0030 I4): the model calls one
     # index run may make in its model steps, namely every chat call per window
     # of the `proposal` chunker (a retry is a call) and every embeddings

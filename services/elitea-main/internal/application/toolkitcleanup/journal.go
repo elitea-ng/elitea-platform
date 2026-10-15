@@ -81,6 +81,34 @@ type Remover interface {
 	DeleteToolkitData(ctx context.Context, projectID, toolkitID int64) (platformops.ToolkitDeletion, error)
 }
 
+// AppMemory is the application a memory toolkit's rows are filed under: the
+// vector store, which holds the toolkit's memories (every namespace of them,
+// every owner's) keyed by the toolkit id (worker unit M9). It is not an engine
+// in platformops's sense, so it has its own enqueue (EnqueueMemory) and its
+// own remover (MemoryRemover).
+const AppMemory = "memory"
+
+// AppMemoryUser is the application a USER's personal-memory cleanup is filed
+// under, in the same table with the same mechanics: the row's toolkit_id column
+// holds the user id, and project_id is the project the user left, or 0 for
+// every project (the user was deleted). It is the durable form of "a user's
+// personal memories go with the user": the row is written in the transaction
+// that removes the user or the membership, and the reconciler retries it until
+// the vector store has done it. EnqueueMemoryUsers is the one place that writes
+// these rows.
+const AppMemoryUser = "memory_user"
+
+// MemoryRemover deletes memory points from the vector store. *vectorclient.Client
+// satisfies it; the errors are platformops's classes, like Remover's.
+type MemoryRemover interface {
+	// DeleteMemoryToolkit removes every memory point of one memory toolkit of
+	// a project: every namespace, every owner.
+	DeleteMemoryToolkit(ctx context.Context, projectID, toolkitID int64) error
+	// DeleteMemoryUser removes every PERSONAL memory point of one user in one
+	// project, or (projectID 0) in every project.
+	DeleteMemoryUser(ctx context.Context, projectID, userID int64) error
+}
+
 // The outcomes a closed row records (migration shared/0163).
 const (
 	OutcomeDeleted         = "deleted"
@@ -98,6 +126,11 @@ const (
 	NoteRefused        = cleanupjournal.NoteRefused
 	NoteInvalidRequest = cleanupjournal.NoteInvalidRequest
 	noteSuperseded     = "a toolkit with this id exists again; nothing was touched"
+	// noteUserBack closes a memory_user row whose user is back: a member of
+	// the project again (or, for a project-0 row, a user row with the id
+	// exists). Re-adding the person cancels the pending cleanup, so the
+	// memories they write after coming back are not deleted.
+	noteUserBack = "the user is a member again; nothing was deleted"
 )
 
 // The last_error classes a failed run records (never the raw error: it can
@@ -135,7 +168,13 @@ var (
 type Journal struct {
 	pool     *pgxpool.Pool
 	removers map[string]Remover
-	logger   *slog.Logger
+	// memory deletes a memory toolkit's points and a user's personal ones; nil
+	// on a replica without an elitea-vector client. memoryRecorded says whether
+	// a delete decided here owes the vector store a call at all (the
+	// deployment keeps memories there: the Rust indexing runtime).
+	memory         MemoryRemover
+	memoryRecorded bool
+	logger         *slog.Logger
 }
 
 // Option configures a Journal.
@@ -152,6 +191,20 @@ func WithRemover(app string, remover Remover) Option {
 			return
 		}
 		j.removers[app] = remover
+	}
+}
+
+// WithMemory wires the vector store for memory toolkits. recorded says that a
+// delete decided on this replica owes the store a call (the deployment keeps
+// memories in elitea-vector); a replica that only drains passes false. A nil
+// remover (or a typed nil) leaves the rows this replica cannot pay pending.
+func WithMemory(remover MemoryRemover, recorded bool) Option {
+	return func(j *Journal) {
+		j.memoryRecorded = recorded
+		if remover == nil || cleanupjournal.IsNilPointer(remover) {
+			return
+		}
+		j.memory = remover
 	}
 }
 
@@ -174,9 +227,12 @@ func New(pool *pgxpool.Pool, logger *slog.Logger, options ...Option) *Journal {
 // AppsWired names the applications this journal can call, sorted. For the
 // composition root's startup log and for tests.
 func (j *Journal) AppsWired() []string {
-	apps := make([]string, 0, len(j.removers))
+	apps := make([]string, 0, len(j.removers)+1)
 	for app := range j.removers {
 		apps = append(apps, app)
+	}
+	if j.memory != nil {
+		apps = append(apps, AppMemory, AppMemoryUser)
 	}
 	sort.Strings(apps)
 	return apps
@@ -234,6 +290,78 @@ RETURNING id, generation`, projectID, toolkitID, app, toolkitType).Scan(&id, &ge
 			attrs...)
 	} else {
 		j.logger.InfoContext(ctx, "toolkit delete: engine-side deletion journaled", attrs...)
+	}
+	return app, nil
+}
+
+// EnqueueMemory records, in tx (the transaction that deletes a memory
+// toolkit's row), that the toolkit's memories owe the vector store a deletion:
+// every point stamped with the toolkit id, whatever its namespace or owner. It
+// returns AppMemory, or "" when this deployment keeps no memories in the vector
+// store (the journal was built with recorded false). Like Enqueue, a row for the
+// same toolkit is REOPENED, its generation bumped.
+func (j *Journal) EnqueueMemory(ctx context.Context, tx pgx.Tx, projectID, toolkitID int64) (string, error) {
+	return j.enqueueMemoryRows(ctx, tx, AppMemory, projectID, toolkitID)
+}
+
+// EnqueueMemoryUsers records, in tx (the transaction that deletes the users or
+// removes them from the project), that each user's PERSONAL memories owe the
+// vector store a deletion. projectID is the project the users left, or 0 when
+// they are deleted outright (their personal memories go from every project,
+// with no membership lookup). It is the ONE writer of these rows: every hook
+// (user delete in the core and admin APIs, project-membership removal, SCIM)
+// calls it, so no caller has a loop of its own. It returns AppMemoryUser, or ""
+// when this deployment keeps no memories in the vector store or userIDs names
+// nobody. Ids that are not positive are ignored. A row for the same user and
+// project is REOPENED, its generation bumped.
+func (j *Journal) EnqueueMemoryUsers(ctx context.Context, tx pgx.Tx, projectID int64, userIDs ...int64) (string, error) {
+	ids := make([]int64, 0, len(userIDs))
+	for _, id := range userIDs {
+		if id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	return j.enqueueMemoryRows(ctx, tx, AppMemoryUser, projectID, ids...)
+}
+
+// enqueueMemoryRows writes one journal row per id in one statement: the
+// toolkit id of AppMemory rows, the user ids of AppMemoryUser rows (both go in
+// the toolkit_id column).
+func (j *Journal) enqueueMemoryRows(ctx context.Context, tx pgx.Tx, app string, projectID int64, ids ...int64) (string, error) {
+	if !j.memoryRecorded {
+		return "", nil
+	}
+	if tx == nil {
+		return "", errors.New("toolkitcleanup: enqueue needs the delete's transaction")
+	}
+	if projectID < 0 || (projectID == 0 && app != AppMemoryUser) {
+		return "", fmt.Errorf("toolkitcleanup: project id %d is not valid for a %s row", projectID, app)
+	}
+	tag, err := tx.Exec(ctx, `
+INSERT INTO centry.toolkit_deletions (project_id, toolkit_id, app, toolkit_type, created_at, next_attempt_at)
+SELECT $1, id, $2, $2, clock_timestamp(), clock_timestamp() FROM unnest($3::bigint[]) AS id
+ON CONFLICT (project_id, toolkit_id, app) DO UPDATE
+SET toolkit_type = EXCLUDED.toolkit_type,
+    outcome = NULL,
+    note = NULL,
+    created_at = EXCLUDED.created_at,
+    attempts = 0,
+    last_error = NULL,
+    next_attempt_at = EXCLUDED.next_attempt_at,
+    claimed_until = NULL,
+    completed_at = NULL,
+    generation = centry.toolkit_deletions.generation + 1`, projectID, app, ids)
+	if err != nil {
+		return "", fmt.Errorf("toolkitcleanup: write cleanup journal: %w", err)
+	}
+	attrs := []any{"app", app, "project_id", projectID, "rows", tag.RowsAffected()}
+	if j.memory == nil {
+		j.logger.WarnContext(ctx, "memory cleanup: the vector-store deletion is journaled, but this process has no elitea-vector client; a replica that has one drains the row", attrs...)
+	} else {
+		j.logger.InfoContext(ctx, "memory cleanup: the vector-store deletion is journaled", attrs...)
 	}
 	return app, nil
 }
@@ -334,7 +462,17 @@ func (j *Journal) run(parent context.Context, r row) (bool, error) {
 	defer cancel()
 	attrs := []any{"journal_id", r.id, "generation", r.generation, "app", r.app, "project_id", r.projectID, "toolkit_id", r.toolkitID}
 
-	exists, err := j.toolkitRowExists(ctx, r)
+	// A toolkit row is superseded by a toolkit with its id existing again; a
+	// user's memory cleanup by the user being back (re-added to the project,
+	// or a user row with the id existing again), re-checked at the moment the
+	// row is worked, right before the delete.
+	var exists bool
+	var err error
+	if r.app == AppMemoryUser {
+		exists, err = j.memoryUserBack(ctx, r)
+	} else {
+		exists, err = j.toolkitRowExists(ctx, r)
+	}
 	switch {
 	case err != nil && parent.Err() != nil:
 		j.releaseInterrupted(ctx, r)
@@ -342,6 +480,9 @@ func (j *Journal) run(parent context.Context, r row) (bool, error) {
 	case err != nil:
 		j.logger.ErrorContext(ctx, "toolkit delete cleanup: could not check whether the toolkit exists again; the journal retries it", append(attrs, "err", err)...)
 		return false, j.fail(ctx, r, lastErrorCheckFailed, err)
+	case exists && r.app == AppMemoryUser:
+		j.logger.InfoContext(ctx, "memory cleanup cancelled: the user is a member of the project again, so their personal memories stay", attrs...)
+		return j.closeOrFail(ctx, r, OutcomeSuperseded, noteUserBack)
 	case exists:
 		j.logger.WarnContext(ctx, "toolkit delete cleanup superseded: a toolkit with this id exists again, so nothing is deleted", attrs...)
 		return j.closeOrFail(ctx, r, OutcomeSuperseded, noteSuperseded)
@@ -403,12 +544,31 @@ type outcome struct {
 // is the part of a run that needs no database.
 func (j *Journal) deleteInEngine(ctx context.Context, r row) outcome {
 	attrs := []any{"journal_id", r.id, "app", r.app, "project_id", r.projectID, "toolkit_id", r.toolkitID}
-	remover, wired := j.removers[r.app]
-	if !wired {
-		j.logger.WarnContext(ctx, "toolkit delete cleanup: this replica has no client for the application; the row is left for one that has", attrs...)
-		return outcome{kind: outcomeNotWired, cause: fmt.Errorf("toolkitcleanup: no %s client on this replica", r.app)}
+	var (
+		deletion platformops.ToolkitDeletion
+		err      error
+	)
+	if r.app == AppMemory || r.app == AppMemoryUser {
+		if j.memory == nil {
+			j.logger.WarnContext(ctx, "toolkit delete cleanup: this replica has no elitea-vector client; the memory row is left for one that has", attrs...)
+			return outcome{kind: outcomeNotWired, cause: fmt.Errorf("toolkitcleanup: no %s client on this replica", r.app)}
+		}
+		if r.app == AppMemory {
+			err = j.memory.DeleteMemoryToolkit(ctx, r.projectID, r.toolkitID)
+		} else {
+			err = j.memory.DeleteMemoryUser(ctx, r.projectID, r.toolkitID)
+		}
+		if err == nil {
+			deletion.Deleted = true
+		}
+	} else {
+		remover, wired := j.removers[r.app]
+		if !wired {
+			j.logger.WarnContext(ctx, "toolkit delete cleanup: this replica has no client for the application; the row is left for one that has", attrs...)
+			return outcome{kind: outcomeNotWired, cause: fmt.Errorf("toolkitcleanup: no %s client on this replica", r.app)}
+		}
+		deletion, err = remover.DeleteToolkitData(ctx, r.projectID, r.toolkitID)
 	}
-	deletion, err := remover.DeleteToolkitData(ctx, r.projectID, r.toolkitID)
 	switch {
 	case err == nil:
 		result, note := OutcomeDeleted, "deleted the toolkit's data"
@@ -467,6 +627,36 @@ func (j *Journal) toolkitRowExists(ctx context.Context, r row) (bool, error) {
 		return false, fmt.Errorf("look for the toolkit row: %w", err)
 	}
 	return exists, nil
+}
+
+// memoryUserBack reports whether a memory_user row's user is back, so its
+// cleanup is cancelled: for a project row, the user holds a role in the
+// project again (public.auth_core__project_user_role, the membership the
+// removal deleted); for a project-0 row (a deleted user), a user row with the
+// id exists again. A database without the table has no such user. A failed
+// read is an error (the row retries): a cleanup that cannot tell must not
+// delete.
+func (j *Journal) memoryUserBack(ctx context.Context, r row) (bool, error) {
+	// The table is looked for on its own first: a statement naming a missing
+	// table fails at planning, whatever guards it.
+	table := "public.auth_core__project_user_role"
+	query := `SELECT EXISTS (SELECT 1 FROM public.auth_core__project_user_role WHERE project_id = $1 AND user_id = $2)`
+	if r.projectID == 0 {
+		table = "public.auth_core__user"
+		query = `SELECT $1::bigint = 0 AND EXISTS (SELECT 1 FROM public.auth_core__user WHERE id = $2)`
+	}
+	var present bool
+	if err := j.pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&present); err != nil {
+		return false, fmt.Errorf("look for the membership table: %w", err)
+	}
+	if !present {
+		return false, nil
+	}
+	var back bool
+	if err := j.pool.QueryRow(ctx, query, r.projectID, r.toolkitID).Scan(&back); err != nil {
+		return false, fmt.Errorf("look for the user's membership: %w", err)
+	}
+	return back, nil
 }
 
 // close ends a row with its outcome and note, the lease released, if the row

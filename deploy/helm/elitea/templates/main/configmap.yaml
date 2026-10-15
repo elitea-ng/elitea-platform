@@ -79,6 +79,16 @@
 {{- $env = merge (deepCopy $env) (dict "ELITEA_INDEXING_RUNTIME" $indexingRuntime) }}
 {{- end }}
 {{- /*
+  ELITEA_MEMORY_EMBEDDING_MODEL (worker unit M9): the SAME value as the worker's
+  runtime.json memory_embedding_model, so elitea-main knows whether the memory
+  toolkit is actually served and withholds it from the catalogue with a reason
+  when no model is configured. Written only under the Rust indexing runtime when
+  set; an explicit env entry still wins.
+*/ -}}
+{{- if and (eq (include "elitea.indexingRuntime" $) "rust") (($.Values.worker.runtime | default dict).memoryEmbeddingModel) (not (get $env "ELITEA_MEMORY_EMBEDDING_MODEL")) }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_MEMORY_EMBEDDING_MODEL" (($.Values.worker.runtime).memoryEmbeddingModel | toString)) }}
+{{- end }}
+{{- /*
   The application engines' platform gRPC targets (#1243, #1244): where
   elitea-main deletes a project's (and a toolkit's) data in DeepWiki and
   Inventory. DERIVED from the engine's own values — <service name>:<platformGrpc

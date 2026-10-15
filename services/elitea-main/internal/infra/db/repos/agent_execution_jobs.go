@@ -538,6 +538,8 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			State:               string(admission.Record.Job.State),
 			AdmittedAt:          timestamp(timing.AdmittedAt),
 			TriggerOrigin:       admission.Record.Job.TriggerOrigin.Stored(),
+			// A nil list is NULL, which the statement's COALESCE stores as '{}'.
+			MemoryToolkitIds: admission.MemoryToolkitIDs,
 		},
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

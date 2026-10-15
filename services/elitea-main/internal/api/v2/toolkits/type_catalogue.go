@@ -64,6 +64,89 @@ func WithWorkerCapability(source ToolkitCapabilitySource) Option {
 	return func(h *Handler) { h.workerCapability = source }
 }
 
+// WithMemoryOnVectorStore states that the deployment keeps memory toolkit data
+// in elitea-vector (the Rust indexing runtime, worker unit M9). The memory
+// type is then served without its SDK `pgvector_configuration` field: the Rust
+// worker reads nothing from it and such a deployment provisions no pgvector
+// configuration, so a form that required one could not be saved. The SDK schema
+// stays as pinned everywhere else (the Python worker uses the field).
+func WithMemoryOnVectorStore(enabled bool) Option {
+	return func(h *Handler) { h.memoryOnVectorStore = enabled }
+}
+
+// withoutPgvectorConfiguration copies a settings schema without the
+// `pgvector_configuration` property and its `required` entry. Only the nodes on
+// those paths are rebuilt, so the shared pinned schema is never written to.
+func withoutPgvectorConfiguration(settingsSchema map[string]any) map[string]any {
+	typeSchema := make(map[string]any, len(settingsSchema))
+	for key, value := range settingsSchema {
+		typeSchema[key] = value
+	}
+	if properties, ok := settingsSchema[toolkitSettingsPropertyKey].(map[string]any); ok {
+		kept := make(map[string]any, len(properties))
+		for name, property := range properties {
+			if name != "pgvector_configuration" {
+				kept[name] = property
+			}
+		}
+		typeSchema[toolkitSettingsPropertyKey] = kept
+	}
+	switch required := settingsSchema["required"].(type) {
+	case []any:
+		kept := make([]any, 0, len(required))
+		for _, name := range required {
+			if name != "pgvector_configuration" {
+				kept = append(kept, name)
+			}
+		}
+		typeSchema["required"] = kept
+	case []string:
+		kept := make([]string, 0, len(required))
+		for _, name := range required {
+			if name != "pgvector_configuration" {
+				kept = append(kept, name)
+			}
+		}
+		typeSchema["required"] = kept
+	}
+	return typeSchema
+}
+
+// memoryScopeDescription is what the create form shows under "Memory scope".
+const memoryScopeDescription = "Who can see what this toolkit remembers. " +
+	"Personal: each person has their own private memory, and nobody else can read, search or delete it (the safe default). " +
+	"Project: one memory shared by everyone in the project. " +
+	"To give an agent both, attach two memory toolkits, one of each. " +
+	"Once personal memory has been read in a conversation, that conversation can no longer write project memory or a shared index. " +
+	"Other tools attached to the agent that can send data out (for example GitHub, Slack or email) are not limited this way, so attach personal memory only to agents whose other tools you trust with what you have told it. " +
+	"A scheduled run acts as the person who owns the schedule and uses that person's personal memory. " +
+	"A conversation with more than one person has no personal memory; project memory still works there."
+
+// withMemoryScope adds the `memory_scope` setting the Rust worker's memory
+// toolkit reads (worker unit M9). A copy: the shared schema is never written to.
+func withMemoryScope(settingsSchema map[string]any) map[string]any {
+	typeSchema := make(map[string]any, len(settingsSchema))
+	for key, value := range settingsSchema {
+		typeSchema[key] = value
+	}
+	properties, _ := settingsSchema[toolkitSettingsPropertyKey].(map[string]any)
+	withScope := make(map[string]any, len(properties)+1)
+	for name, property := range properties {
+		withScope[name] = property
+	}
+	withScope["memory_scope"] = map[string]any{
+		"type":        "string",
+		"title":       "Memory scope",
+		"description": memoryScopeDescription,
+		// Two values only (owner decision 2026-10-14): the former `both` is
+		// gone; a toolkit saved with it is read as personal by the worker.
+		"enum":    []any{"personal", "project"},
+		"default": "personal",
+	}
+	typeSchema[toolkitSettingsPropertyKey] = withScope
+	return typeSchema
+}
+
 // Metadata keys this package writes. They are the reference deployment's own
 // names: the web client reads metadata.hidden to drop a tile and
 // metadata.categories[0] to group it.
@@ -215,6 +298,9 @@ func (h *Handler) toolkitTypeSchema(toolkitType string) (map[string]any, error) 
 	// list here and gets no groups — which is how the client knows to keep
 	// rendering its flat list. See tool_groups.go.
 	typeSchema = withToolGroups(typeSchema)
+	if toolkitType == "memory" && h != nil && h.memoryOnVectorStore {
+		typeSchema = withMemoryScope(withoutPgvectorConfiguration(typeSchema))
+	}
 
 	typeMetadata := h.toolkitTypeMetadata(toolkitType, metadata, catalogued)
 	if unavailable := h.unavailableTools(toolkitType, typeSchema); len(unavailable) > 0 {

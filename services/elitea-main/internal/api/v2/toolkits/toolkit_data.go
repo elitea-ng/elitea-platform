@@ -58,6 +58,14 @@ type ToolkitCleanupJournal interface {
 	Enqueue(ctx context.Context, tx pgx.Tx, projectID, toolkitID int64, toolkitType string) (app string, err error)
 }
 
+// MemoryCleanupJournal is the part of the journal a MEMORY toolkit's delete
+// uses: the vector store holds its memories stamped with the toolkit id, so the
+// delete records that id. *toolkitcleanup.Journal satisfies it; a journal that
+// does not is simply not asked.
+type MemoryCleanupJournal interface {
+	EnqueueMemory(ctx context.Context, tx pgx.Tx, projectID, toolkitID int64) (app string, err error)
+}
+
 // WithToolkitCleanupJournal makes Delete row-first with a journal
 // (Repository.DeleteToolkitRowFirst). Without it Delete removes the row alone,
 // which is what every deployment did before the engines served a platform
@@ -111,6 +119,15 @@ func (r *pgRepo) DeleteToolkitRowFirst(ctx context.Context, projectID, toolkitID
 	if journal != nil {
 		if _, err := journal.Enqueue(ctx, tx, project, toolkit, toolkitType); err != nil {
 			return err
+		}
+		// A memory toolkit's memories are in the vector store, stamped with
+		// the toolkit id (every namespace of it, every owner's): the delete
+		// records them, so a rename or a changed namespace setting orphans
+		// nothing.
+		if memory, ok := journal.(MemoryCleanupJournal); ok && toolkitType == "memory" {
+			if _, err := memory.EnqueueMemory(ctx, tx, project, toolkit); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit(ctx)

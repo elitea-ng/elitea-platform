@@ -3150,6 +3150,9 @@ pub(crate) enum IndexRemovalOutcome {
     Forbidden,
     /// The index's run is still active.
     ActiveRun,
+    /// The run's conversation read personal memory: a shared index is not
+    /// changed from it (worker unit M9).
+    SharedWriteRefused,
 }
 
 /// The control-plane half of the `remove_index` tool: one `RemoveIndex`
@@ -3195,6 +3198,9 @@ fn parse_remove_index_response(
         Some(RemoveIndexDispositionV1::NotFound) => Ok(IndexRemovalOutcome::NotFound),
         Some(RemoveIndexDispositionV1::Forbidden) => Ok(IndexRemovalOutcome::Forbidden),
         Some(RemoveIndexDispositionV1::ActiveRun) => Ok(IndexRemovalOutcome::ActiveRun),
+        Some(RemoveIndexDispositionV1::SharedWriteRefused) => {
+            Ok(IndexRemovalOutcome::SharedWriteRefused)
+        }
         _ => Err(ControlSemanticError::InvalidInput(
             "the index removal disposition is malformed",
         )),
@@ -3817,3 +3823,25 @@ fn hex_lower(value: &[u8]) -> String {
 #[cfg(test)]
 #[path = "shared_toolkit_tests.rs"]
 mod shared_toolkit_tests;
+
+#[cfg(test)]
+mod remove_index_disposition_tests {
+    use super::*;
+
+    #[test]
+    fn a_shared_write_refusal_is_its_own_outcome() {
+        let response = RemoveIndexResponseV1 {
+            disposition: RemoveIndexDispositionV1::SharedWriteRefused as i32,
+            ..RemoveIndexResponseV1::default()
+        };
+        assert_eq!(
+            parse_remove_index_response(&response).expect("outcome"),
+            IndexRemovalOutcome::SharedWriteRefused
+        );
+        let unknown = RemoveIndexResponseV1 {
+            disposition: 99,
+            ..RemoveIndexResponseV1::default()
+        };
+        assert!(parse_remove_index_response(&unknown).is_err());
+    }
+}

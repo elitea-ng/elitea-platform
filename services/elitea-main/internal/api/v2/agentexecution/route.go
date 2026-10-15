@@ -420,6 +420,7 @@ func (handler *currentApplicationStartHandler) Regenerate(writer http.ResponseWr
 			RequestedParticipantID: body.ParticipantID,
 			LLMSettings:            bytes.Clone(llmSettings),
 			EditedQuestion:         edit,
+			TriggerOrigin:          startTriggerOrigin(user),
 		},
 	)
 	if err != nil {
@@ -492,7 +493,8 @@ func (handler *currentApplicationStartHandler) Continue(writer http.ResponseWrit
 	continuation := agentexecutionapp.CurrentContinuationRequest{
 		ProjectID: projectID, ActorUserID: actorUserID,
 		ConversationUUID: conversationID, ResponseMessageID: body.MessageID,
-		ThreadID: body.ThreadID,
+		ThreadID:      body.ThreadID,
+		TriggerOrigin: startTriggerOrigin(user),
 	}
 	if contract != CurrentStaticContinuationContract && (body.StaticPauseID != "" || len(body.StaticDecisions) != 0) {
 		writeUnsupported(writer)

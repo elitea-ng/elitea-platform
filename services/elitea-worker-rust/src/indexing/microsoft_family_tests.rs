@@ -190,6 +190,7 @@ async fn harness(transport: Arc<Recorded>) -> Harness {
     });
     let runtime = IndexIngestRuntime {
         chat_models: None,
+        memory_model: None,
         vector,
         embeddings: EmbeddingsClient::with_transport(
             Arc::clone(&embeddings) as Arc<dyn ModelGatewayTransport>,

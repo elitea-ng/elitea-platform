@@ -697,7 +697,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// token endpoint of a pre-built MCP catalogue entry (one text column,
 	// DEFAULT ''), the only endpoint a catalogue entry's client secret may be
 	// released to when the entry's URL is a template. No permission, no data.
-	require.EqualValues(t, 165, Head(shared))
+	//
+	// 166: shared/0166_vector_claim_tokens_memory_source.sql, the check on
+	// elitea_runtime.vector_claim_tokens.allowed_sources admits the `memory`
+	// source; execution_jobs and vector_claim_tokens get memory_toolkit_ids,
+	// and elitea_runtime.memory_conversation_taints is created (worker unit
+	// M9). No data, no permission.
+	require.EqualValues(t, 166, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -891,7 +897,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// chat_message_group (author_participant_id, created_at DESC) for the
 	// "user's previous turn" lookup memory recall makes on every turn
 	// (ADR-0029 decision 8). An index and no permission, so no shared sibling.
-	require.EqualValues(t, 148, Head(tenant))
+	// 149: tenant/0149_chat_conversation_memory_taint_cleanup.sql, an AFTER
+	// DELETE trigger on chat_conversations that removes the conversation's
+	// personal-memory taint (shared/0166, worker unit M9) on every delete path.
+	require.EqualValues(t, 149, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

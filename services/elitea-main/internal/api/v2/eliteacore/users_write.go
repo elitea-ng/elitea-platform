@@ -667,6 +667,22 @@ func (h *Handler) UsersDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
 		return
 	}
+	// A user who leaves a project leaves their personal memories there behind:
+	// the vector store keeps them under the user's id, and they would come back
+	// if the person were ever re-added. The cleanup is journaled in THIS
+	// transaction (committed or rolled back with the removal) and the
+	// reconciler retries it until the vector store has done it.
+	if h.memoryUsers != nil {
+		ids := make([]int64, len(userIDs))
+		for i, id := range userIDs {
+			ids[i] = int64(id)
+		}
+		if _, err := h.memoryUsers.EnqueueMemoryUsers(ctx, tx, int64(projectID), ids...); err != nil {
+			slog.ErrorContext(ctx, "could not journal the removed users' personal-memory cleanup", "project_id", projectID, "err", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
+			return
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
 		return

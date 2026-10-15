@@ -12,6 +12,8 @@ metadata:
   name: {{ include "elitea-vector.fullname" . }}-server
   labels:
     {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
   secretName: {{ .Values.vector.mtls.serverSecretName }}
   duration: {{ .Values.vector.mtls.duration }}
@@ -39,6 +41,8 @@ metadata:
   name: {{ include "elitea-vector.fullname" . }}-client
   labels:
     {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
   # Presented to elitea-main's control listener for token introspection.
   # elitea-main admits it as dns:{{ lower .Values.vector.mtls.clientDnsName }}
@@ -67,6 +71,8 @@ metadata:
   name: {{ include "elitea-main.fullname" . }}-vector-client
   labels:
     {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
   # elitea-main's ADMINISTRATOR identity on elitea-vector's listener (ADR-0031
   # decision 4): presented with no token to delete a toolkit index's namespace

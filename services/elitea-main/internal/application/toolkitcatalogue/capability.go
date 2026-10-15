@@ -137,6 +137,13 @@ var pythonVerifiedImportKeys = []string{
 // `toolkit.call_tool.v1` (read-only tools only) lists them and refuses to run
 // them with that reason.
 //
+// `memory` (worker unit M9) is a claim-scoped family like the index tools: it
+// serves the SDK's four tools unchanged, over elitea-vector, and materialises
+// only where the claim carries a vector token (the Rust indexing runtime) and
+// the deployment names a memory embedding model. runtimecomposition drops it
+// from the Rust worker's catalogue projection when the deployment does not
+// index with the Rust runtime.
+//
 // `artifact` (#906) is the odd one: it materialises only where the live
 // execution claim is in scope (the ordinary agent path and a root pipeline's
 // direct and LLM nodes), because its authority is that claim rather than a
@@ -175,6 +182,7 @@ var rustNativeToolTypes = []string{
 	"jira",
 	"k8s",
 	"keycloak",
+	"memory",
 	"openapi",
 	"postman",
 	"pptx",

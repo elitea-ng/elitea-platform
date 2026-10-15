@@ -49,6 +49,7 @@ class RemoveIndexDispositionV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper
     REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND: _ClassVar[RemoveIndexDispositionV1]
     REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN: _ClassVar[RemoveIndexDispositionV1]
     REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN: _ClassVar[RemoveIndexDispositionV1]
+    REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED: _ClassVar[RemoveIndexDispositionV1]
 CLAIM_DISPOSITION_V1_UNSPECIFIED: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_ACCEPTED: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_RECOVER_TERMINAL_ACK: ClaimDispositionV1
@@ -73,6 +74,7 @@ REMOVE_INDEX_DISPOSITION_V1_REMOVED: RemoveIndexDispositionV1
 REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND: RemoveIndexDispositionV1
 REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN: RemoveIndexDispositionV1
 REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN: RemoveIndexDispositionV1
+REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED: RemoveIndexDispositionV1
 
 class ClaimCommandRequestV1(_message.Message):
     __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery")

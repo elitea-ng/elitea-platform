@@ -957,6 +957,8 @@ func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationI
 		return nil, fmt.Errorf("conversations: delete selected conversations: %w", err)
 	}
 
+	// The conversation's personal-memory taint (shared/0166) goes with the
+	// row: tenant/0149's AFTER DELETE trigger, which every delete path fires.
 	q := fmt.Sprintf(`DELETE FROM %s.chat_conversations WHERE id = $1`, s)
 	ct, err := transaction.Exec(ctx, q, id)
 	if err != nil {

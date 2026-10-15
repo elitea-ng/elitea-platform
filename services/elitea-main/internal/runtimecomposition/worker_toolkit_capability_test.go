@@ -67,8 +67,8 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 48 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 48",
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 49 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 49",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	if rust.UnsupportedNames() != nil {
@@ -385,8 +385,28 @@ func TestPinnedCapabilityRealPythonOnlyAndBothWorkerTypes(t *testing.T) {
 	if ok, reason := python.SupportsToolkitType("memory", "memory"); !ok {
 		t.Errorf("memory is built by the Python worker: %q", reason)
 	}
-	if ok, reason := rust.SupportsToolkitType("memory", "memory"); ok || reason == "" {
-		t.Errorf("memory has no Rust family and must say why: ok=%v reason=%q", ok, reason)
+	if ok, reason := rust.SupportsToolkitType("memory", "memory"); !ok {
+		t.Errorf("memory has a Rust family over elitea-vector (unit M9): %q", reason)
+	}
+	// ... but only where the deployment indexes with the Rust runtime, which
+	// is what gives the worker a vector store and the claim a vector token.
+	if ok, reason := rust.ForIndexingRuntime(runtimecomposition.Config{}).SupportsToolkitType("memory", "memory"); ok || reason == "" {
+		t.Errorf("memory must be withheld from a Rust worker without the Rust indexing runtime, with a reason: ok=%v reason=%q", ok, reason)
+	}
+	rustIndexing := runtimecomposition.Config{
+		Enabled: true, IndexingRuntime: runtimecomposition.IndexingRuntimeRust,
+		IndexIngestDispatchEnabled: true,
+	}
+	if ok, reason := rust.ForIndexingRuntime(rustIndexing).SupportsToolkitType("memory", "memory"); ok ||
+		!strings.Contains(reason, "Memory needs an embedding model configured by the operator") {
+		t.Errorf("memory needs the operator's embedding model: ok=%v reason=%q", ok, reason)
+	}
+	rustIndexing.MemoryEmbeddingModel = "text-embedding-3-small"
+	if ok, reason := rust.ForIndexingRuntime(rustIndexing).SupportsToolkitType("memory", "memory"); !ok {
+		t.Errorf("memory is served under the Rust indexing runtime with a model: %q", reason)
+	}
+	if ok, _ := python.ForIndexingRuntime(runtimecomposition.Config{}).SupportsToolkitType("memory", "memory"); !ok {
+		t.Error("the Python worker serves memory whatever the indexing runtime")
 	}
 	for name, worker := range map[string]*runtimecomposition.WorkerToolkitCapability{"python": python, "rust": rust} {
 		if ok, reason := worker.SupportsToolkitType("imagegen", "imagegen"); !ok {

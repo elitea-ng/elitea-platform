@@ -29,6 +29,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
@@ -55,6 +56,10 @@ func mustJSON(v any) []byte {
 }
 
 type Handler struct {
+	// memoryUsers journals the removal of a user's personal memories from a
+	// project the user leaves; nil when the deployment keeps none in the
+	// vector store.
+	memoryUsers        MemoryUserJournal
 	pool               *pgxpool.Pool
 	permissionResolver auth.PermissionResolver
 	httpClient         *http.Client
@@ -187,6 +192,19 @@ func WithInviteMailer(m InviteMailer) Option {
 }
 
 type Option func(*Handler)
+
+// MemoryUserJournal is cleanupjournal's one interface (worker unit M9).
+type MemoryUserJournal = cleanupjournal.MemoryUserJournal
+
+// WithMemoryUserJournal wires the journal a project-membership removal writes
+// to. Unwired, nothing is journaled.
+func WithMemoryUserJournal(journal MemoryUserJournal) Option {
+	return func(handler *Handler) {
+		if usable := cleanupjournal.UsableMemoryUserJournal(journal); usable != nil {
+			handler.memoryUsers = usable
+		}
+	}
+}
 
 func WithPermissionResolver(resolver auth.PermissionResolver) Option {
 	return func(handler *Handler) {

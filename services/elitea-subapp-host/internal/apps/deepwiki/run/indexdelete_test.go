@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -363,6 +364,10 @@ type deleteRig struct {
 	store   *fakeStore
 	engine  *engineIndex
 	order   *orderLog
+	// entered counts generations that reached the tool body, past the
+	// runner's last checkpoint: only from there is a stubborn generation
+	// really unstoppable.
+	entered atomic.Int64
 }
 
 type orderLog struct {
@@ -398,6 +403,7 @@ func newDeleteRig(t *testing.T, stubborn bool, release <-chan struct{}) *deleteR
 		StopGenerations: rig.runner.StopGenerations,
 	})
 	rig.runner.Tools["generate_wiki"] = func(ctx context.Context, arguments map[string]any, tc *spi.Context) (map[string]any, error) {
+		rig.entered.Add(1)
 		result, err := generate(ctx, arguments, tc)
 		rig.order.add("generation ended")
 		return result, err
@@ -410,9 +416,13 @@ func newDeleteRig(t *testing.T, stubborn bool, release <-chan struct{}) *deleteR
 }
 
 // generate starts a generation of acme/e2e-service on main for the project
-// the organization names, and waits until it can be found by its labels.
+// the organization names, and waits until it can be found by its labels AND
+// has entered the tool body. The runner labels a generation before its last
+// checkpoint, so a deletion that came in between would stop it cooperatively
+// there and go through: the "will not stop" case raced (CI flake on #1288).
 func (r *deleteRig) generate(t *testing.T, organization string) *spi.Invocation {
 	t.Helper()
+	before := r.entered.Load()
 	settings := map[string]any{"api_base": "http://elitea-main:8080/llm/v1", "api_key": "minted", "organization": organization}
 	request := fixtureRequest("GO", settings)
 	invocation, err := r.manager.Submit(t.Context(), "Wikis", "generate_wiki", func(ctx context.Context, tc *spi.Context) (map[string]any, error) {
@@ -428,7 +438,7 @@ func (r *deleteRig) generate(t *testing.T, organization string) *spi.Invocation 
 			found = found || (running.ID == invocation.ID && running.Labels["project"] == organization && running.Labels["wiki"] != "")
 			return false
 		}, 0)
-		if found {
+		if found && r.entered.Load() > before {
 			return invocation
 		}
 		if time.Now().After(deadline) {

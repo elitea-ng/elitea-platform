@@ -366,6 +366,58 @@ func TestCurrentToolkitSettingsResolverFreezesAnAbsentOpenApiCredentialAsAnEmpty
 	}
 }
 
+// A memory toolkit saved without pgvector_configuration (the Rust indexing
+// runtime serves the type without that field; worker unit M9) freezes: the
+// walker enforces no `required`, it freezes the absent configuration as `{}`
+// and expands nothing, so the claim reaches the worker.
+func TestCurrentToolkitSettingsResolverFreezesAMemoryToolkitWithoutAPgvectorConfiguration(t *testing.T) {
+	for _, mode := range []CurrentToolkitSettingsMode{
+		CurrentToolkitSettingsReferenceMode,
+		CurrentToolkitSettingsClaimMode,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			schemas := &currentToolkitSchemaCatalogStub{schemas: map[string]CurrentToolkitSchema{
+				// The pinned SDK snapshot's `memory` properties block.
+				"memory": {Properties: map[string]any{
+					"pgvector_configuration": map[string]any{
+						"configuration_types": []any{"pgvector"},
+					},
+				}},
+			}}
+			configurations := &currentConfigurationExpanderStub{fn: func(CurrentExpansionRequest) (map[string]any, error) {
+				return nil, errors.New("no configuration is referenced, so nothing may be expanded")
+			}}
+			resolver := newCurrentToolkitSettingsResolverForTest(
+				t, schemas, &currentNestedToolkitReaderStub{}, configurations,
+				&currentModelVisibilityStub{}, &currentToolkitUnsecreterStub{},
+			)
+			result, err := resolver.Resolve(context.Background(), CurrentToolkitSettingsRequest{
+				ToolkitType: "memory",
+				Settings: map[string]any{
+					"namespace":      "team-notes",
+					"selected_tools": []any{"manage_memory", "search_memory"},
+				},
+				ProjectID: 7,
+				UserID:    42,
+				Mode:      mode,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(configurations.calls) != 0 {
+				t.Fatalf("an absent configuration must not be expanded: %#v", configurations.calls)
+			}
+			frozen, ok := result["pgvector_configuration"].(map[string]any)
+			if !ok || len(frozen) != 0 {
+				t.Fatalf("pgvector_configuration = %#v, want an empty object", result["pgvector_configuration"])
+			}
+			if result["namespace"] != "team-notes" {
+				t.Fatalf("the namespace did not survive the freeze: %#v", result)
+			}
+		})
+	}
+}
+
 func TestCurrentToolkitSettingsResolverRejectsUnmigratedPlaintextSecretsInReferenceMode(t *testing.T) {
 	schemas := &currentToolkitSchemaCatalogStub{schemas: map[string]CurrentToolkitSchema{
 		"root": {Properties: map[string]any{

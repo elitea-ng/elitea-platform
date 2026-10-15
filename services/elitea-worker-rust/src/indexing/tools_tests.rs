@@ -191,6 +191,7 @@ async fn harness_with(
     let vector = VectorClient::connect_lazy(&config).expect("client");
     let runtime = IndexIngestRuntime {
         chat_models: None,
+        memory_model: None,
         vector,
         embeddings: EmbeddingsClient::with_transport(embeddings, Duration::from_secs(5)),
         removal: removal
@@ -861,6 +862,10 @@ async fn remove_index_renders_mains_decisions_as_sentences() {
             "not allowed to remove index 'docs'",
         ),
         (Ok(IndexRemovalOutcome::ActiveRun), "still being indexed"),
+        (
+            Ok(IndexRemovalOutcome::SharedWriteRefused),
+            "this conversation read personal memory",
+        ),
         (Err("main is down"), "nothing was deleted"),
     ] {
         removal.answer(outcome);
@@ -878,7 +883,7 @@ async fn remove_index_renders_mains_decisions_as_sentences() {
             "Main's error text does not reach the model: {text}"
         );
     }
-    assert_eq!(removal.requests().len(), 4);
+    assert_eq!(removal.requests().len(), 5);
     assert_eq!(harness.fake.point_count(), 2);
 
     let without = harness_with_removal(None).await;

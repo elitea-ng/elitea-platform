@@ -250,6 +250,10 @@ enum RemoveIndexDispositionV1 {
   REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN = 3;
   // The index's run is still active; it cannot be deleted yet.
   REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN = 4;
+  // The claim's conversation read personal memory: a shared index is not
+  // changed from it (worker unit M9). An older worker reads this as a
+  // malformed disposition and removes nothing.
+  REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED = 5;
 }
 
 message RemoveIndexResponseV1 {

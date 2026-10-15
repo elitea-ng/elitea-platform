@@ -331,6 +331,83 @@ func (c *Client) classifyProjectDrop(projectID int64, err error) error {
 	return fmt.Errorf("elitea-vector drop_project %d failed: %s (%s)", projectID, message, code)
 }
 
+// DeleteMemoryToolkit removes every memory point of one memory toolkit of a
+// project, whoever owns it (the project's shared memories and every user's
+// personal ones) and whatever namespace label it used, in every collection. It
+// is the toolkit cleanup journal's call when a memory toolkit is deleted.
+// Idempotent. The errors are platformops's classes, like DeleteProjectData.
+func (c *Client) DeleteMemoryToolkit(ctx context.Context, projectID, toolkitID int64) error {
+	if c == nil {
+		return fmt.Errorf("%w: no elitea-vector client", platformops.ErrConfig)
+	}
+	if projectID <= 0 || projectID > 1<<31-1 || toolkitID <= 0 {
+		return fmt.Errorf("%w: project %d and toolkit %d must be positive", platformops.ErrConfig, projectID, toolkitID)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, c.indexTimeout)
+	defer cancel()
+	response, err := c.vectors.DeleteMemoryToolkit(callCtx, &vectorv1.DeleteMemoryToolkitRequest{
+		ProjectId: projectID,
+		ToolkitId: toolkitID,
+	})
+	if err != nil {
+		if ctxErr := callerEnded(ctx); ctxErr != nil {
+			return ctxErr
+		}
+		return c.classifyMemoryDelete("delete_memory_toolkit", projectID, err)
+	}
+	c.logger.Info("memory toolkit deleted", "project_id", projectID, "toolkit_id", toolkitID, "collections", response.GetCollections())
+	return nil
+}
+
+// DeleteMemoryUser removes every PERSONAL memory point of one user in one
+// project, or (projectID 0) in every project, in every collection: what a
+// user's removal from a project (or the user's deletion) owes. Idempotent. The
+// errors are platformops's classes.
+func (c *Client) DeleteMemoryUser(ctx context.Context, projectID, userID int64) error {
+	if c == nil {
+		return fmt.Errorf("%w: no elitea-vector client", platformops.ErrConfig)
+	}
+	if projectID < 0 || projectID > 1<<31-1 || userID <= 0 {
+		return fmt.Errorf("%w: project %d must not be negative and user %d must be positive", platformops.ErrConfig, projectID, userID)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, c.indexTimeout)
+	defer cancel()
+	response, err := c.vectors.DeleteMemoryUser(callCtx, &vectorv1.DeleteMemoryUserRequest{
+		ProjectId: projectID,
+		UserId:    userID,
+	})
+	if err != nil {
+		if ctxErr := callerEnded(ctx); ctxErr != nil {
+			return ctxErr
+		}
+		return c.classifyMemoryDelete("delete_memory_user", projectID, err)
+	}
+	c.logger.Info("a user's personal memories deleted", "project_id", projectID, "user_id", userID, "collections", response.GetCollections())
+	return nil
+}
+
+// classifyMemoryDelete turns a failed memory delete into one of platformops's
+// errors, as classifyProjectDrop does; a refused certificate is logged with
+// what to fix.
+func (c *Client) classifyMemoryDelete(operation string, projectID int64, err error) error {
+	code := status.Code(err)
+	message := status.Convert(err).Message()
+	switch code {
+	case codes.FailedPrecondition, codes.Aborted, codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
+		return fmt.Errorf("%w: elitea-vector %s (project %d): %s (%s)", platformops.ErrRetryLater, operation, projectID, message, code)
+	case codes.Unauthenticated, codes.PermissionDenied:
+		c.logger.Error("elitea-vector refused this process's client certificate; its ELITEA_VECTOR_ADMIN_IDENTITIES must name this process's identity, and the memories wait until it does",
+			"project_id", projectID, "operation", operation, "code", code.String(), "message", message)
+		return fmt.Errorf("%w: elitea-vector %s (project %d): %s (%s). Its ELITEA_VECTOR_ADMIN_IDENTITIES must name this process's client certificate identity",
+			platformops.ErrNotAllowed, operation, projectID, message, code)
+	case codes.Unimplemented:
+		return fmt.Errorf("%w: elitea-vector %s", platformops.ErrNotSupported, operation)
+	case codes.InvalidArgument:
+		return fmt.Errorf("%w: elitea-vector %s (project %d): %s (%s)", platformops.ErrConfig, operation, projectID, message, code)
+	}
+	return fmt.Errorf("elitea-vector %s (project %d) failed: %s (%s)", operation, projectID, message, code)
+}
+
 var _ indexingapp.IndexVectorDeleter = (*Client)(nil)
 
 // callerEnded reports the caller's context ending: its error, or
