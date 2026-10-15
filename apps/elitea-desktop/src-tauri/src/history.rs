@@ -51,7 +51,8 @@
 //!         prompt TEXT, mentions TEXT /* JSON string[] */,
 //!         started_at INTEGER /* Unix ms */, finished_at INTEGER NULL,
 //!         changes TEXT NULL /* JSON FileChange[] */,
-//!         events_bytes INTEGER, events_truncated INTEGER /* 0|1 */)
+//!         events_bytes INTEGER, events_truncated INTEGER /* 0|1 */,
+//!         turn_origin TEXT /* local | cloud (imported, ADR-0034) */)
 //! events (turn_id TEXT REFERENCES turns ON DELETE CASCADE, seq INTEGER,
 //!         kind TEXT, payload TEXT /* JSON */, PRIMARY KEY (turn_id, seq))
 //! ```
@@ -75,7 +76,7 @@ use crate::error::HostError;
 
 pub const FILE_NAME: &str = "threads.sqlite";
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 /// A string inside one event's payload is cut to this many bytes.
 pub const MAX_EVENT_STRING: usize = 16 * 1024;
 /// One turn's stored events, in payload bytes.
@@ -110,7 +111,8 @@ CREATE TABLE turns (
     finished_at INTEGER,
     changes TEXT,
     events_bytes INTEGER NOT NULL DEFAULT 0,
-    events_truncated INTEGER NOT NULL DEFAULT 0
+    events_truncated INTEGER NOT NULL DEFAULT 0,
+    turn_origin TEXT NOT NULL DEFAULT 'local'
 );
 CREATE INDEX turns_by_thread
     ON turns (origin, user_id, workspace_id, conversation_id, started_at);
@@ -177,6 +179,25 @@ pub struct StoredTurn {
     /// The host still keeps the turn: `turn_changes` and
     /// `checkpoint_restore` answer for it.
     pub live: bool,
+    /// `local` (ran on this desktop) or `cloud` (imported from the cloud
+    /// executor when the thread came back, ADR-0034 decision 8).
+    pub origin: String,
+}
+
+/// A turn the cloud executor ran, as the desktop imports it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportedTurn {
+    /// `cloud:<answer message uuid>`: importing twice adds nothing.
+    pub turn_id: String,
+    pub prompt: String,
+    pub answer: String,
+    pub is_error: bool,
+    pub started_at: i64,
+    pub finished_at: i64,
+    /// The question's and the answer's message UUIDs.
+    pub message_ids: Vec<String>,
+    /// From the diff of the turn's cloud commit.
+    pub changes: Vec<FileChange>,
 }
 
 fn storage(what: &str, error: &rusqlite::Error) -> HostError {
@@ -631,7 +652,7 @@ impl HistoryStore {
             let mut turns: Vec<StoredTurn> = {
                 let mut statement = conn.prepare(&format!(
                     "SELECT turn_id, conversation_id, conversation_uuid, prompt, mentions,
-                            started_at, finished_at, changes, events_truncated
+                            started_at, finished_at, changes, events_truncated, turn_origin
                      FROM turns
                      WHERE {THREAD}
                      ORDER BY started_at, rowid"
@@ -661,6 +682,7 @@ impl HistoryStore {
                                 events_truncated: row.get::<_, i64>(8)? != 0,
                                 state: "interrupted",
                                 live: false,
+                                origin: row.get(9)?,
                             })
                         },
                     )?
@@ -686,6 +708,88 @@ impl HistoryStore {
                 }
             }
             Ok(turns)
+        })
+    }
+
+    /// Add turns the cloud executor ran (ADR-0034 decision 8) to a thread,
+    /// with `turn_origin = 'cloud'`, each as the events a live turn would
+    /// have stored (`status` running, the answer as one `text_delta`,
+    /// `status` done or error, `done`). A turn already imported (same id)
+    /// is left as it is; the number added.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be written.
+    pub fn import_turns(
+        &self,
+        owner: &Owner,
+        workspace_id: &str,
+        conversation_uuid: &str,
+        turns: &[ImportedTurn],
+    ) -> Result<usize, HostError> {
+        self.flush();
+        self.with("could not import the cloud turns", |conn| {
+            let tx = conn.transaction()?;
+            let mut added = 0;
+            for turn in turns {
+                let inserted = tx.execute(
+                    "INSERT OR IGNORE INTO turns (turn_id, origin, user_id, workspace_id,
+                         conversation_id, conversation_uuid, prompt, mentions, started_at,
+                         finished_at, changes, turn_origin)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, '[]', ?7, ?8, ?9, 'cloud')",
+                    params![
+                        turn.turn_id,
+                        owner.origin,
+                        owner.user_id,
+                        workspace_id,
+                        conversation_uuid,
+                        cut(&turn.prompt, MAX_EVENT_STRING).unwrap_or_else(|| turn.prompt.clone()),
+                        turn.started_at,
+                        turn.finished_at,
+                        stored_changes(&turn.changes).to_string(),
+                    ],
+                )?;
+                if inserted == 0 {
+                    continue;
+                }
+                added += 1;
+                let phase = if turn.is_error { "error" } else { "done" };
+                let events = [
+                    (
+                        "status",
+                        serde_json::json!({"phase": "running", "message": "cloud executor"}),
+                    ),
+                    ("text_delta", serde_json::json!({"text": turn.answer})),
+                    ("status", serde_json::json!({"phase": phase})),
+                    (
+                        "done",
+                        serde_json::json!({
+                            "committed": true,
+                            "conversation_id": conversation_uuid,
+                            "message_ids": turn.message_ids,
+                            "changed_files": turn.changes.len(),
+                        }),
+                    ),
+                ];
+                for (seq, (kind, payload)) in events.into_iter().enumerate() {
+                    insert_event(
+                        &tx,
+                        &turn.turn_id,
+                        seq as u64,
+                        kind,
+                        &bounded(payload).to_string(),
+                    )?;
+                }
+            }
+            prune_thread(
+                &tx,
+                owner,
+                workspace_id,
+                conversation_uuid,
+                Some(conversation_uuid),
+            )?;
+            tx.commit()?;
+            Ok(added)
         })
     }
 
@@ -1138,6 +1242,13 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
                 "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not create the thread history", &e)),
+        // 2 (ADR-0034): turns imported from the cloud executor.
+        1 => conn
+            .execute_batch(&format!(
+                "BEGIN; ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local'; \
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))
+            .map_err(|e| storage("could not upgrade the thread history", &e)),
         SCHEMA_VERSION => Ok(()),
         newer => Err(HostError::Storage(format!(
             "the thread history was written by a newer version of the app (schema {newer})"

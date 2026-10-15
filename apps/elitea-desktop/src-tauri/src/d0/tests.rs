@@ -123,6 +123,7 @@ fn sse(chunks: &[Value]) -> Res {
         status: 200,
         headers: vec![("Content-Type", "text/event-stream".into())],
         body,
+        raw: Vec::new(),
     }
 }
 

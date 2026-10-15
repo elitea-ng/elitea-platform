@@ -4,7 +4,12 @@
 //! that leaves the folder and every ref byte-identical, the re-check before
 //! apply, a tampered segment, and the checkpoint that undoes it all.
 #![cfg(feature = "handoff")]
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines, clippy::items_after_statements)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    clippy::items_after_statements
+)]
 
 mod handoff_common;
 

@@ -212,7 +212,7 @@ type BusySet = Arc<Mutex<HashSet<String>>>;
 /// A workspace held by one turn (or one restore or removal); released when
 /// dropped, so every exit path (a refusal, a panic, the end of the run)
 /// frees it.
-struct WorkspaceClaim {
+pub(crate) struct WorkspaceClaim {
     busy: BusySet,
     workspace_id: String,
 }
@@ -717,6 +717,59 @@ impl AgentHost {
             )),
             Some(_) => Ok(workspace),
         }
+    }
+
+    /// The workspace's claim, for the handoff (ADR-0034): no turn, undo or
+    /// removal runs in it while a send snapshots or a take-back writes.
+    ///
+    /// # Errors
+    ///
+    /// `workspace_busy` with `message`.
+    pub(crate) fn claim_workspace(
+        &self,
+        workspace_id: &str,
+        message: &str,
+    ) -> Result<WorkspaceClaim, TurnError> {
+        WorkspaceClaim::take(&self.busy, workspace_id, message)
+    }
+
+    /// The workspace's local session under the policy of now (its
+    /// checkpoints are the ones `checkpoint_restore` uses). The caller holds
+    /// the workspace's claim.
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unavailable`, `storage`.
+    pub(crate) fn local_session(
+        &self,
+        workspace_id: &str,
+        root: PathBuf,
+    ) -> Result<Arc<LocalSession>, TurnError> {
+        let policy = self.policy()?;
+        Ok(self.session(workspace_id, root, &policy)?.session.clone())
+    }
+
+    /// What host git may not read: the host's directories and the
+    /// person's credentials, as every session denies them.
+    pub(crate) fn host_deny(&self) -> Arc<elitea_local_tools::deny::DenyList> {
+        Arc::new(elitea_local_tools::deny::DenyList::for_session(
+            std::env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .map(PathBuf::from)
+                .as_deref(),
+            self.deps.app_id.as_deref(),
+            true,
+            self.deps.sandbox_deny.iter().cloned(),
+        ))
+    }
+
+    /// Whose thread history the signed-in session writes.
+    ///
+    /// # Errors
+    ///
+    /// `not_signed_in`, `identity_changed`, or the user lookup failed.
+    pub(crate) async fn history_owner(&self) -> Result<Owner, TurnError> {
+        self.owner(&self.api).await
     }
 
     /// `workspace_bind_project`, under the workspace's claim: refused

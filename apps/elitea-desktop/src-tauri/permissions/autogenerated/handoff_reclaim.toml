@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-handoff-reclaim"
+description = "Enables the handoff_reclaim command without any pre-configured scope."
+commands.allow = ["handoff_reclaim"]
+
+[[permission]]
+identifier = "deny-handoff-reclaim"
+description = "Denies the handoff_reclaim command without any pre-configured scope."
+commands.deny = ["handoff_reclaim"]

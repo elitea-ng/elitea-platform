@@ -331,6 +331,7 @@ type StoredTurn = {
   events_truncated: boolean;        // the turn outgrew the per-turn cap
   state: "done" | "running" | "interrupted"; // interrupted: never ended (the app quit)
   live: boolean;                    // turn_changes / checkpoint_restore still answer for it
+  origin: "local" | "cloud";        // cloud: imported when the thread came back (ADR-0034)
 };
 ```
 
@@ -458,6 +459,87 @@ cloud Inventory tools' names and arguments. They only read, so they run
 without approval and in plan mode too. An answer from a build that may be
 out of date starts with a one-line `Note:`. A toolkit tool never takes one
 of these names (it gets a `_2` suffix), whether or not the index is on.
+
+## Cloud handoff (`src/handoff.rs`, ADR-0034)
+
+Send a Local work thread to the cloud executor and take it back. The
+folder work is `elitea-local-tools`' `handoff` module (every git call
+through its hardened git); the bytes move through `elitea-workspace-store`
+on the app's one HTTP client with the native token. Rejections are
+`HandoffError = { code, message, details }` (`details` is `null` unless
+noted). `conversation_uuid` is the server conversation's UUID.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `handoff_preview` | `{workspace_id, conversation_uuid}` | `Preview` — what a send would transfer; sends nothing |
+| `handoff_send` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[]}` | `{handoff_id, state, epoch, files, excluded}` — progress on `handoff://event` |
+| `handoff_status` | `{conversation_uuid, project_id?}` | the server's state (contract §2.9) plus `executor: "local" \| "cloud" \| "returning"`, `read_only: boolean`, `sent_from_here: boolean` |
+| `handoff_reclaim` | `{conversation_uuid}` | `{state: "RECLAIMING", epoch, cloud_sha}`, or `{state: "CLOUD_RUNNING", reclaim_pending: true, …}` while a cloud turn runs |
+| `handoff_preflight` | `{conversation_uuid}` | `{preflight_id, outcome: "fast_path" \| "conflicts", changed_paths, conflict_paths, skipped_paths, cloud_turns, modes}` |
+| `handoff_apply` | `{preflight_id, mode: "apply" \| "worktree" \| "discard"}` | `{applied, outcome: "applied" \| "worktree" \| "discarded", checkpoint_id, worktree_path, branch, imported_turns, released}` |
+| `handoff_undo` | `{checkpoint_id}` | `{restored: string[]}` — restores the folder to before a take-back |
+| `handoff_erase` | `{conversation_uuid, project_id?}` | the server's answer; the local folder is kept |
+
+```ts
+type Preview = {
+  files: number; bytes: number; unpacked_bytes: number;
+  excluded: { path: string; reason: "mandatory" | "path_deny" | "eliteaignore" | "leave_on_laptop" | "not_a_file"; tracked: boolean }[];
+  findings: { path: string; line: number; rule: string }[]; // never the matched text
+  has_upstream: boolean;
+  project_workspace_bytes_left: number | null; // null: known only after the begin call
+  caps: { violations: { cap: string; limit: number; actual: number; path: string | null }[];
+          largest: { path: string; bytes: number }[] };
+  shadow: boolean; // the folder is not a repository: a shadow git directory in the app data is used
+};
+type HandoffEvent = { conversation_uuid: string;
+  phase: "snapshot" | "scan" | "bundle" | "upload" | "publish" | "complete" | "error";
+  done: number; total: number; message: string | null };
+```
+
+- **Policy.** Preview and send need the device policy's `local_work.allowed`
+  and `local_work.cloud_handoff` (`cloud_handoff_disabled`). The server
+  checks the platform ceiling and the project setting at begin.
+- **Send.** The snapshot is the checkpoint set (tracked plus untracked,
+  not ignored) built in a temporary index: the folder's index, `HEAD`,
+  stash and working tree are not changed. The mandatory exclusions,
+  `path_deny`, `.eliteaignore` and `leave_on_laptop` apply to tracked files
+  too. History mode `none`: an orphan base, an orphan upstream (the remote
+  URL without credentials), the snapshot. A secret finding rejects with
+  `secret_found` (`details.findings`), before any request; there is no
+  override: leave the file on the laptop or edit it. A cap rejects with
+  `handoff_too_large` (`details` = `caps`), checked against the defaults
+  before begin and against the begin response's `limits` before upload.
+  The workspace is held (`workspace_busy`) while a send runs. Server codes
+  pass through (`local_turn_in_progress`, `handoff_in_progress`,
+  `thread_executor_is_cloud`, `workspace_quota_exceeded`,
+  `history_mode_not_allowed`, …). A folder inside a repository but not its
+  top level is refused (`handoff_unsupported`), so is a sha256 repository
+  (`unsupported_object_format`).
+- **Read-only.** While a thread is not `LOCAL`, `agent_turn_start` with its
+  UUID rejects `thread_executor_is_cloud` and `handoff_status` answers
+  `read_only: true`; the UI shows the transcript read-only.
+- **Take back.** `handoff_reclaim`, then `handoff_preflight` once the state
+  is `RECLAIMING` (else `handoff_not_reclaimed`). The preflight verifies the
+  segment (`integrity_failed` for a tampered one) and writes nothing to the
+  folder or any ref. `fast_path`: the folder and `HEAD` are as at send;
+  `apply` writes the cloud's changed paths as uncommitted changes (`HEAD`
+  and the index untouched), keeps the cloud commits on
+  `elitea/cloud/<first 8 of the UUID>` and takes a checkpoint first
+  (`checkpoint_id`, for `handoff_undo`). `conflicts`: only `worktree` (the
+  cloud tip beside the folder, `<folder>-elitea-cloud-<short>`) and
+  `discard` are offered (`modes`). `handoff_apply` refuses with
+  `folder_changed_since_preflight` when the folder moved after the
+  preflight. Excluded paths, symlinks and submodule entries are never
+  written or deleted (`skipped_paths`).
+- **Release and history.** `handoff_apply` releases the thread and imports
+  its cloud turns into the thread history (`StoredTurn.origin: "cloud"`,
+  changed files from the cloud commits' diffs). A release the server did
+  not acknowledge (`released: false`) is kept and sent again by the next
+  `handoff_status`; until then the thread stays read-only.
+- **Records.** What take-back needs is kept in the app data
+  (`handoff/threads/<uuid>.json`, owner-only); a shadow repository in
+  `handoff/shadow/`. Nothing is written into the folder but the take-back's
+  own files.
 
 ## App and native shell (`src/platform.rs`, `src/local_commands.rs`)
 
@@ -592,8 +674,9 @@ for them.
 
 ## Events
 
-Three event names, all emitted to the `main` window only: `app://command`
-(above), `agent://event` and `index://event`. The webview may listen
+Four event names, all emitted to the `main` window only: `app://command`
+(above), `agent://event`, `index://event` and `handoff://event` (Cloud
+handoff, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 
 `index://event`:

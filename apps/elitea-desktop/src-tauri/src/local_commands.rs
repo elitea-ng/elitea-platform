@@ -39,6 +39,9 @@ pub struct LocalState {
     pub index: Arc<crate::index::IndexRegistry>,
     /// The thread history, flushed at exit (`None` runs without one).
     pub history: Option<Arc<crate::history::HistoryStore>>,
+    /// The cloud handoff (`src/handoff.rs`): a thread in the cloud runs no
+    /// local turn.
+    pub handoff: Option<Arc<crate::handoff::HandoffHost>>,
 }
 
 /// The Doctor's repairs through the app's own paths: the agent host's (see
@@ -479,6 +482,16 @@ pub async fn agent_turn_start(
     mentions: Option<Vec<String>>,
     skills: Option<Vec<String>>,
 ) -> Result<TurnStarted, IpcError> {
+    // A thread in the cloud runs no local turn (ADR-0034 decision 7; the
+    // platform refuses it too).
+    if let (Some(handoff), Some(conversation)) = (&state.handoff, conversation_id.as_str())
+        && handoff.is_away(conversation)
+    {
+        return Err(IpcError::new(
+            "thread_executor_is_cloud",
+            "This thread is running in the cloud. Take it back to continue here.",
+        ));
+    }
     Ok(state
         .agents
         .start(TurnRequest {

@@ -21,6 +21,7 @@ on:
       # contract (ADR-0029 D0), and their path dependencies.
       - "libs/rust/agent-runtime/**"
       - "libs/rust/local-tools/**"
+      - "libs/rust/workspace-store/**"
       - "libs/rust/llm-wire/**"
       - "libs/rust/content-source/**"
       # The provider clients the toolkit families share (ADR-0030 decision 3).
@@ -51,6 +52,7 @@ on:
       # contract (ADR-0029 D0), and their path dependencies.
       - "libs/rust/agent-runtime/**"
       - "libs/rust/local-tools/**"
+      - "libs/rust/workspace-store/**"
       - "libs/rust/llm-wire/**"
       - "libs/rust/content-source/**"
       # The provider clients the toolkit families share (ADR-0030 decision 3).

@@ -330,7 +330,7 @@ fn current(workspace: &Workspace, path: &str) -> Option<Vec<u8>> {
     read_image(workspace, &resolved)
 }
 
-fn diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> FileChange {
+pub(crate) fn diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> FileChange {
     let status = match (old, new) {
         (None, _) => "added",
         (_, None) => "deleted",
