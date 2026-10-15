@@ -274,3 +274,12 @@ fn parse_steps(args: &Arguments<'_>) -> adk_core::Result<Vec<EnterpriseStep>> {
         })
         .collect()
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    EnterpriseTool::ALL
+        .iter()
+        .map(|tool| (ZephyrToolSpec::name(*tool), false))
+        .collect()
+}

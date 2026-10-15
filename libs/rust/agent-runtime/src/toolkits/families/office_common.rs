@@ -80,6 +80,9 @@ pub(crate) trait OfficeTool: Copy + Eq + 'static {
 pub(crate) enum OfficeConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
+    /// `bucket_name` is absent, blank or not a bucket name: a setting the
+    /// user can fix, so the run skips this toolkit and names it.
+    BucketName,
 }
 
 /// Stable, data-free failure for claim-materialized Office settings.
@@ -114,6 +117,9 @@ impl fmt::Display for OfficeConfigError {
                 "the {} toolkit configuration exceeds its approved limit",
                 self.family
             ),
+            OfficeConfigErrorCode::BucketName => {
+                write!(f, "the {} toolkit has no usable bucket", self.family)
+            }
         }
     }
 }
@@ -138,12 +144,12 @@ impl<T: OfficeTool> OfficeToolkitConfig<T> {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(invalid::<T>)?;
+            .ok_or_else(bucket_name::<T>)?;
         if bucket.len() > MAX_BUCKET_BYTES {
             return Err(exhausted::<T>());
         }
         if !valid_bucket_name(bucket) {
-            return Err(invalid::<T>());
+            return Err(bucket_name::<T>());
         }
         Ok(Self {
             bucket: bucket.into(),
@@ -167,6 +173,13 @@ impl<T: OfficeTool> OfficeToolkitConfig<T> {
 fn invalid<T: OfficeTool>() -> OfficeConfigError {
     OfficeConfigError {
         code: OfficeConfigErrorCode::InvalidConfiguration,
+        family: T::FAMILY,
+    }
+}
+
+fn bucket_name<T: OfficeTool>() -> OfficeConfigError {
+    OfficeConfigError {
+        code: OfficeConfigErrorCode::BucketName,
         family: T::FAMILY,
     }
 }
@@ -276,7 +289,7 @@ impl From<OfficeConfigError> for OfficeToolsetError {
     fn from(source: OfficeConfigError) -> Self {
         Self {
             code: match source.code {
-                OfficeConfigErrorCode::InvalidConfiguration => {
+                OfficeConfigErrorCode::InvalidConfiguration | OfficeConfigErrorCode::BucketName => {
                     OfficeToolsetErrorCode::InvalidConfiguration
                 }
                 OfficeConfigErrorCode::ResourceExhausted => {

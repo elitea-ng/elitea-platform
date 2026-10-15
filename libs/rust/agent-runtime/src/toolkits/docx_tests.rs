@@ -1040,3 +1040,63 @@ async fn a_null_table_cell_is_an_empty_cell_and_other_scalars_are_their_text() {
         vec![vec!["a", "", "7"], vec!["true", "1.5", "z"]]
     );
 }
+
+/// Live 4.45.0 (D2): one Office toolkit saved without `bucket_name` failed
+/// EVERY turn of the agent (`native_agent.invalid_configuration`). It is now
+/// left out alone, with the reason in the run's notice, and the agent's
+/// other toolkits are served; the selected tools it named and the family
+/// does not serve are reported too (D3).
+#[tokio::test]
+async fn an_office_toolkit_without_a_bucket_is_left_out_not_fatal() {
+    use super::families::index_tools::{IndexToolSupport, IndexToolsWithheld};
+    use super::materialize::{
+        LeftOutReason, left_out_toolkits_notice_text,
+        materialize_configured_toolsets_reporting_refusals,
+    };
+    let host = Arc::new(FakeHost::default());
+    let platform: Arc<dyn PlatformWriter> = Arc::new(NoPlatform);
+    let lent =
+        ArtifactToolAuthority::new(platform).with_office(Arc::clone(&host) as SharedOfficeToolHost);
+    let version = json!({"tools": [
+        {"id": 1, "type": "docx", "toolkit_name": "nobucket",
+         "settings": {"selected_tools": ["read_document"]}},
+        {"id": 2, "type": "xlsx", "toolkit_name": "blank",
+         "settings": {"bucket_name": "  "}},
+        {"id": 3, "type": "pptx", "toolkit_name": "deck",
+         "settings": {"bucket_name": "bucket", "selected_tools": ["to_markdown", "not_a_pptx_tool"]}},
+        {"id": 4, "type": "artifact", "toolkit_name": "files", "settings": {}}
+    ]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy().as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy(),
+        &serde_json::Map::new(),
+        Some(&lent),
+        IndexToolSupport::Withheld(IndexToolsWithheld::NoVectorStore),
+    )
+    .await
+    .expect("a toolkit without a bucket never fails the run");
+    assert_eq!(
+        materialized.toolsets.len(),
+        1,
+        "only the pptx toolkit binds"
+    );
+    let refused: Vec<_> = materialized
+        .left_out
+        .iter()
+        .filter(|toolkit| toolkit.cause() == LeftOutReason::UnsupportedSetting)
+        .map(|toolkit| toolkit.toolkit_name().to_owned())
+        .collect();
+    assert_eq!(refused, ["nobucket", "blank", "files"]);
+    let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
+    assert!(
+        notice.contains("toolkit 'nobucket' (docx) is not enabled on this worker: the toolkit has no usable bucket"),
+        "{notice}"
+    );
+    assert!(
+        notice.contains("tool 'deck.not_a_pptx_tool' (pptx) is not enabled on this worker"),
+        "{notice}"
+    );
+}

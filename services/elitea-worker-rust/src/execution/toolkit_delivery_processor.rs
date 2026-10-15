@@ -53,7 +53,7 @@ use crate::transport::command_bus::{
 };
 use crate::transport::office_host::{ClaimOfficeHost, NoRoundTripImagesHost, OfficeRuntime};
 use crate::transport::platform_client::PlatformClient;
-use crate::transport::platform_writer::HostOnlyPlatformWriter;
+use crate::transport::platform_writer::{HostOnlyPlatformWriter, ReadOnlyClaimPlatformWriter};
 use crate::transport::runtime_context::RuntimeContextError;
 use crate::transport::{ControlRpc, InputContentError, MaterializedInput};
 use crate::validation::SettingsRefusal;
@@ -65,6 +65,9 @@ enum DirectLending {
     NoRoundTrip,
     /// The claim's PAT redeemed for the platform object API.
     Claim,
+    /// The claim's artifact list and read routes (the `artifact` family):
+    /// the agent path's authority, read-only.
+    ClaimArtifacts,
     /// Nothing: the toolkit is unsupported on this path.
     None,
 }
@@ -86,6 +89,13 @@ fn is_office_family(toolkit_type: &str) -> bool {
 /// `imagegen`) and `artifact` are lent the do-nothing host, whatever this
 /// worker carries. That is what keeps the tool list reachable when a call
 /// would be refused (a deployment with no Office runtime still lists them).
+///
+/// An `artifact` CALL is lent the claim's artifact list and read routes
+/// (live 4.45.0, D4: `read_file` / `list_files` answered
+/// `unsupported_toolkit`). Main authorizes those two routes for a user's tool
+/// run, as that user, under the same per-bucket access list as an agent turn;
+/// its write routes stay agent-only, the writer lent here refuses writes, and
+/// the direct runtime refuses any tool that is not read-only before it runs.
 fn direct_lending(
     toolkit_type: &str,
     tool_name: &str,
@@ -97,6 +107,7 @@ fn direct_lending(
     }
     match toolkit_type {
         "imagegen" => DirectLending::NoRoundTrip,
+        "artifact" => DirectLending::ClaimArtifacts,
         office if is_office_family(office) && has_office_runtime => DirectLending::Claim,
         "sharepoint"
             if has_office_runtime
@@ -180,6 +191,21 @@ mod direct_lending_tests {
             direct_lending("github", "", true, true),
             DirectLending::None
         );
+    }
+
+    /// D4: an `artifact` call is lent the claim's read routes, with or
+    /// without an Office runtime.
+    #[test]
+    fn an_artifact_call_is_lent_the_claims_read_routes() {
+        for runtime in [true, false] {
+            for tool in ["read_file", "list_files", "create_file"] {
+                assert_eq!(
+                    direct_lending("artifact", tool, runtime, false),
+                    DirectLending::ClaimArtifacts,
+                    "{tool}"
+                );
+            }
+        }
     }
 }
 
@@ -1100,6 +1126,12 @@ where
                         .with_office(Arc::new(host)),
                 ))
             }
+            DirectLending::ClaimArtifacts => Ok(Some(crate::toolkits::ArtifactToolAuthority::new(
+                Arc::new(ReadOnlyClaimPlatformWriter::new(
+                    Arc::clone(&self.platform),
+                    authorized.shared_runtime_context(),
+                )),
+            ))),
             DirectLending::None => Ok(None),
         }
     }

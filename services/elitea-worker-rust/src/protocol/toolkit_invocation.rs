@@ -1,4 +1,6 @@
 //! Toolkit adaptation of the shared, owned final invocation fence.
+use std::sync::Arc;
+
 use super::{
     AgentControlError, AgentExecutionOutputAuthority, ClaimBoundRuntimeContextAuthority,
     ClaimBoundSessionAuthority, InvocationAuthorizationNoAckAuthority,
@@ -13,7 +15,7 @@ pub(crate) struct ToolkitInvocationPayload;
 /// be consumed to request another invocation permit.
 pub(crate) struct AuthorizedToolkitExecution {
     execution: LeaseMonitoredAgentExecution,
-    runtime_context: ClaimBoundRuntimeContextAuthority,
+    runtime_context: Arc<ClaimBoundRuntimeContextAuthority>,
     _permit: InvocationSubmissionPermit,
 }
 
@@ -27,6 +29,12 @@ impl AuthorizedToolkitExecution {
     /// I1). Minted at `AUTHORIZED_NOW` like the agent's.
     pub(crate) fn runtime_context(&self) -> &ClaimBoundRuntimeContextAuthority {
         &self.runtime_context
+    }
+
+    /// The same authority, shared: the `artifact` family's platform writer
+    /// holds it for the read-only tools a direct call runs (D4).
+    pub(crate) fn shared_runtime_context(&self) -> Arc<ClaimBoundRuntimeContextAuthority> {
+        Arc::clone(&self.runtime_context)
     }
 
     /// The elitea-vector token of the authorized claim (ADR-0031): the handle
@@ -70,7 +78,7 @@ impl InvocationAuthorizationPayload for ToolkitInvocationPayload {
             execution: LeaseMonitoredAgentExecution {
                 claim: output.claim,
             },
-            runtime_context,
+            runtime_context: Arc::new(runtime_context),
             _permit: permit,
         }
     }

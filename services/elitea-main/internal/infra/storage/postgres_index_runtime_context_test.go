@@ -288,6 +288,27 @@ VALUES ($1, $1, 1, 'session-1', $2, 'producer-1', $3, clock_timestamp() + interv
 	}
 	_, err = repository.AuthorizeAgentRuntimeContext(ctx, toolClaim("execution-tool"))
 	require.ErrorIs(t, err, ErrContentUnauthorized, "a tool run is not an agent turn")
+	// The artifact READ routes admit the user's tool run (an artifact
+	// toolkit's read_file / list_files test call), as that user, and nothing
+	// the agent routes refuse besides it.
+	readAuthorization, err := repository.AuthorizeArtifactReadRuntimeContext(ctx, toolClaim("execution-tool"))
+	require.NoError(t, err)
+	require.EqualValues(t, 42, readAuthorization.ResourceProjectID)
+	require.Equal(t, "17", readAuthorization.ActorID)
+	for _, id := range []string{"execution-tool-system", "execution-tool-mismatch", "execution-tool-zero"} {
+		_, err := repository.AuthorizeArtifactReadRuntimeContext(ctx, toolClaim(id))
+		require.ErrorIs(t, err, ErrContentUnauthorized, "%s is not a user's tool run", id)
+	}
+	_, err = repository.AuthorizeArtifactReadRuntimeContext(ctx, ContentClaim{
+		PeerCertificate: certificateWithURI(identity), ExecutionID: "execution-1",
+		Generation: 1, ClaimID: "claim-1", FenceToken: fence,
+	})
+	require.ErrorIs(t, err, ErrContentUnauthorized, "an index run reads no user's bucket")
+	_, err = repository.AuthorizeArtifactReadRuntimeContext(ctx, ContentClaim{
+		PeerCertificate: certificateWithURI(identity), ExecutionID: "execution-agent",
+		Generation: 1, ClaimID: "claim-agent", FenceToken: fence,
+	})
+	require.NoError(t, err, "an agent turn still reads")
 
 	claim := ContentClaim{
 		PeerCertificate: certificateWithURI(identity),

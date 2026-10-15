@@ -258,3 +258,9 @@ pub(in crate::toolkits) fn test_build_with_api(
 ) -> Result<BasicToolset, SonarToolsetError> {
     build_with_api(toolkit_name, selected, policy, client)
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    vec![(GET_SONAR_DATA, false)]
+}

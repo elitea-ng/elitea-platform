@@ -45,6 +45,36 @@ func (r *PostgresContentRepository) AuthorizeAgentRuntimeContext(
 	return r.authorizeRuntimeContext(ctx, claim, agentRuntimeContextCapabilityFilter)
 }
 
+// AuthorizeArtifactReadRuntimeContext is AuthorizeAgentRuntimeContext widened
+// by exactly one shape: an interactive `toolkit.call_tool.v1` run (the
+// toolkit "test tool" call), for the two artifact READ routes only.
+//
+// A tool run of an `artifact` toolkit's `read_file` / `list_files` used to be
+// refused here (live 4.45.0: the worker answered `unsupported_toolkit`,
+// because a direct call could lend no artifact authority). The run is the
+// requesting user's own (toolkitCallToolInteractiveJob: a positive user id as
+// actor, repeated as principal), so it reaches exactly the buckets that
+// person reaches, through the same per-bucket access list. Writes and deletes
+// stay agent-only: the direct path runs read-only tools alone, and these
+// routes are where that is enforced for the platform side too.
+func (r *PostgresContentRepository) AuthorizeArtifactReadRuntimeContext(
+	ctx context.Context,
+	claim ContentClaim,
+) (RuntimeContextAuthorization, error) {
+	return r.authorizeRuntimeContext(ctx, claim, artifactReadRuntimeContextCapabilityFilter)
+}
+
+// artifactReadRuntimeContextCapabilityFilter is the agent filter plus the
+// interactive tool-run shape; like it, it binds no parameter.
+const artifactReadRuntimeContextCapabilityFilter = `
+  AND (
+      j.capability_id IN (
+          'agent.execute.application.v1',
+          'agent.execute.adhoc.v1'
+      )
+      OR (` + toolkitCallToolInteractiveJob + `)
+  )`
+
 // agentRuntimeContextCapabilityFilter is appended to the shared authorization
 // query's WHERE clause. It carries no bind parameter deliberately: the allowed
 // set is a compile-time property of the route, never anything a request or a
@@ -204,6 +234,7 @@ WHERE c.claim_id = $1
 }
 
 var (
-	_ RuntimeContextAuthorizer      = (*PostgresContentRepository)(nil)
-	_ AgentRuntimeContextAuthorizer = (*PostgresContentRepository)(nil)
+	_ RuntimeContextAuthorizer             = (*PostgresContentRepository)(nil)
+	_ AgentRuntimeContextAuthorizer        = (*PostgresContentRepository)(nil)
+	_ ArtifactReadRuntimeContextAuthorizer = (*PostgresContentRepository)(nil)
 )

@@ -295,6 +295,14 @@ type AttachmentListingSource interface {
 	) ([]RuntimeArtifactRecord, bool, error)
 }
 
+// ArtifactReadRuntimeContextAuthorizer authorizes the two artifact READ
+// routes for an agent turn OR an interactive toolkit tool run (see
+// PostgresContentRepository.AuthorizeArtifactReadRuntimeContext). An
+// authorizer without it serves reads to agent turns only, as before.
+type ArtifactReadRuntimeContextAuthorizer interface {
+	AuthorizeArtifactReadRuntimeContext(context.Context, ContentClaim) (RuntimeContextAuthorization, error)
+}
+
 // RuntimeArtifactObjectService serves all four artifact operations under one
 // durable claim.
 //
@@ -337,6 +345,25 @@ func (service *RuntimeArtifactObjectService) authorize(
 	return principal, err
 }
 
+// authorizeRead is authorize for a named-bucket listing and a read: the same
+// project, actor and access list, from a claim that may also be a user's
+// toolkit tool run when the authorizer admits one.
+func (service *RuntimeArtifactObjectService) authorizeRead(
+	ctx context.Context,
+	claim ContentClaim,
+	stage string,
+) (runtimeArtifactPrincipal, error) {
+	if service == nil {
+		return service.authorize(ctx, claim, stage)
+	}
+	reads, ok := service.authorizer.(ArtifactReadRuntimeContextAuthorizer)
+	if !ok {
+		return service.authorize(ctx, claim, stage)
+	}
+	_, principal, err := service.authorizeClaim(ctx, claim, stage, reads.AuthorizeArtifactReadRuntimeContext)
+	return principal, err
+}
+
 func (service *RuntimeArtifactObjectService) authorizeWithConversation(
 	ctx context.Context,
 	claim ContentClaim,
@@ -345,10 +372,22 @@ func (service *RuntimeArtifactObjectService) authorizeWithConversation(
 	if service == nil || service.authorizer == nil || service.artifacts == nil {
 		return RuntimeContextAuthorization{}, runtimeArtifactPrincipal{}, runtimeContextUnavailable(stage)
 	}
+	return service.authorizeClaim(ctx, claim, stage, service.authorizer.AuthorizeAgentRuntimeContext)
+}
+
+func (service *RuntimeArtifactObjectService) authorizeClaim(
+	ctx context.Context,
+	claim ContentClaim,
+	stage string,
+	authorize func(context.Context, ContentClaim) (RuntimeContextAuthorization, error),
+) (RuntimeContextAuthorization, runtimeArtifactPrincipal, error) {
+	if service == nil || service.authorizer == nil || service.artifacts == nil {
+		return RuntimeContextAuthorization{}, runtimeArtifactPrincipal{}, runtimeContextUnavailable(stage)
+	}
 	if err := ctx.Err(); err != nil {
 		return RuntimeContextAuthorization{}, runtimeArtifactPrincipal{}, err
 	}
-	authorization, err := service.authorizer.AuthorizeAgentRuntimeContext(ctx, claim)
+	authorization, err := authorize(ctx, claim)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return RuntimeContextAuthorization{}, runtimeArtifactPrincipal{}, contextErr
@@ -404,7 +443,7 @@ func (service *RuntimeArtifactObjectService) List(
 	if !addressableAttachmentBucket(bucket) || !addressableArtifactPrefix(prefix) {
 		return RuntimeArtifactListContext{}, ErrContentRejected
 	}
-	principal, err := service.authorize(ctx, claim, runtimeContextStageArtifactList)
+	principal, err := service.authorizeRead(ctx, claim, runtimeContextStageArtifactList)
 	if err != nil {
 		return RuntimeArtifactListContext{}, err
 	}
@@ -511,7 +550,7 @@ func (service *RuntimeArtifactObjectService) Read(
 	if !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
 		return RuntimeArtifactReadContext{}, ErrContentNotFound
 	}
-	principal, err := service.authorize(ctx, claim, runtimeContextStageArtifactRead)
+	principal, err := service.authorizeRead(ctx, claim, runtimeContextStageArtifactRead)
 	if err != nil {
 		return RuntimeArtifactReadContext{}, err
 	}

@@ -10,6 +10,9 @@ const MAX_TOOL_NAME_BYTES: usize = 64;
 pub enum ArtifactConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
+    /// `bucket` is absent, blank or not a bucket name: a setting the user can
+    /// fix, so the run skips this toolkit and names it.
+    BucketName,
 }
 
 /// Stable, data-free failure for claim-materialized artifact settings.
@@ -42,6 +45,7 @@ impl fmt::Display for ArtifactConfigError {
             ArtifactConfigErrorCode::ResourceExhausted => {
                 "the artifact toolkit configuration exceeds its approved limit"
             }
+            ArtifactConfigErrorCode::BucketName => "the artifact toolkit has no usable bucket",
         })
     }
 }
@@ -66,12 +70,12 @@ impl ArtifactToolkitConfig {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(invalid_configuration)?;
+            .ok_or_else(bucket_name)?;
         if bucket.len() > MAX_BUCKET_BYTES {
             return Err(resource_exhausted());
         }
         if !valid_bucket_name(bucket) {
-            return Err(invalid_configuration());
+            return Err(bucket_name());
         }
         Ok(Self {
             bucket: bucket.into(),
@@ -151,6 +155,12 @@ fn selected_tools(settings: &Map<String, Value>) -> Result<Vec<Box<str>>, Artifa
 const fn invalid_configuration() -> ArtifactConfigError {
     ArtifactConfigError {
         code: ArtifactConfigErrorCode::InvalidConfiguration,
+    }
+}
+
+const fn bucket_name() -> ArtifactConfigError {
+    ArtifactConfigError {
+        code: ArtifactConfigErrorCode::BucketName,
     }
 }
 

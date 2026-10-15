@@ -374,3 +374,61 @@ func TestArtifactListBucketOnlyResolvesTheBucketWithoutListing(t *testing.T) {
 	)
 	require.Equal(t, "reports", named.bucket)
 }
+
+// splitArtifactAuthorizer answers the agent check and the read check from
+// different stubs, so a test can tell which one each route consulted.
+type splitArtifactAuthorizer struct {
+	agent func(context.Context, ContentClaim) (RuntimeContextAuthorization, error)
+	read  func(context.Context, ContentClaim) (RuntimeContextAuthorization, error)
+}
+
+func (a splitArtifactAuthorizer) AuthorizeAgentRuntimeContext(
+	ctx context.Context, claim ContentClaim,
+) (RuntimeContextAuthorization, error) {
+	return a.agent(ctx, claim)
+}
+
+func (a splitArtifactAuthorizer) AuthorizeArtifactReadRuntimeContext(
+	ctx context.Context, claim ContentClaim,
+) (RuntimeContextAuthorization, error) {
+	return a.read(ctx, claim)
+}
+
+// Live 4.45.0 (D4): an artifact toolkit's `read_file` / `list_files` test
+// call is a `toolkit.call_tool.v1` claim, which the agent-scoped authorizer
+// refuses. The two READ routes now ask the read authorizer (which admits a
+// user's tool run); write and delete still ask the agent one, so the direct
+// path can never reach an artifact write through them.
+func TestArtifactReadsAdmitAToolRunAndWritesStayAgentOnly(t *testing.T) {
+	t.Parallel()
+
+	toolRun := func(context.Context, ContentClaim) (RuntimeContextAuthorization, error) {
+		return RuntimeContextAuthorization{ResourceProjectID: 7, ActorID: "11"}, nil
+	}
+	refused := func(context.Context, ContentClaim) (RuntimeContextAuthorization, error) {
+		return RuntimeContextAuthorization{}, ErrContentUnauthorized
+	}
+	source := &artifactSourceStub{
+		listRecords: []RuntimeArtifactRecord{{Name: "one.txt", MediaType: "text/plain", ByteLength: 4}},
+		readRecord: RuntimeArtifactContentRecord{
+			Name: "one.txt", MediaType: "text/plain", ByteLength: 4, Content: []byte("data"),
+		},
+	}
+	server := newArtifactTestServer(t, splitArtifactAuthorizer{agent: refused, read: toolRun}, source)
+
+	listed := artifactCall[RuntimeArtifactListContext](t, server, "list", `{"bucket":"agent-artifacts"}`)
+	require.Len(t, listed.Files, 1)
+	read := artifactCall[RuntimeArtifactReadContext](t, server, "read", `{"bucket":"agent-artifacts","name":"one.txt"}`)
+	require.Equal(t, "data", read.Content)
+	require.Equal(t, int64(7), source.projectID)
+	require.Equal(t, int64(11), source.actorID, "the run's own user, through the bucket access list")
+
+	for operation, body := range map[string]string{
+		"write":  `{"bucket":"agent-artifacts","name":"one.txt","content":"x"}`,
+		"delete": `{"bucket":"agent-artifacts","name":"one.txt"}`,
+	} {
+		response := httptest.NewRecorder()
+		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+operation, body))
+		require.Equal(t, http.StatusForbidden, response.Code, operation)
+	}
+}

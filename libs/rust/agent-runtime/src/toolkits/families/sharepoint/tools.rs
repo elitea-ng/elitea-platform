@@ -1603,3 +1603,12 @@ pub fn sharepoint_tool_names() -> Vec<&'static str> {
         .map(|kind| kind.name())
         .collect()
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    SharePointToolKind::ALL
+        .iter()
+        .map(|kind| (kind.name(), kind.uses_office_host()))
+        .collect()
+}

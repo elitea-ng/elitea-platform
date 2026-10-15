@@ -2858,6 +2858,15 @@ fn invalid_arguments() -> AdkError {
     )
 }
 
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    CarrierToolKind::ALL
+        .iter()
+        .map(|kind| (kind.name(), kind.needs_spreadsheet()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

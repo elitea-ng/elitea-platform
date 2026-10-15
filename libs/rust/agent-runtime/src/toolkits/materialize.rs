@@ -593,6 +593,9 @@ async fn materialize_all(
         // serve) is left out alone: the toolkit's index tools, which depend
         // on none of the family's settings, are still served (review round
         // 2). Without an index toolset such a toolkit is omitted as before.
+        // Whether the family half was built or refused for a setting: either
+        // way the stored selection's unserved tools are named in the notice.
+        let mut report_selection = false;
         let family = if index_toolset.is_some() && index_tools_stand_alone(reference, artifacts)? {
             None
         } else {
@@ -601,19 +604,14 @@ async fn materialize_all(
                     delegated_authorization
                         .merge(authorization)
                         .map_err(|()| invalid_configuration())?;
-                    report_unserved_selected_tools(
-                        reference,
-                        policy,
-                        artifacts,
-                        index_toolset.is_some(),
-                        on_refused,
-                    );
+                    report_selection = true;
                     Some(toolset)
                 }
                 Err(ToolsetMaterializationError {
                     refusal: Some(setting),
                     ..
                 }) => {
+                    report_selection = true;
                     tracing::warn!(
                         event = "agent_toolkit_refused",
                         reason_code = "unsupported_setting",
@@ -648,6 +646,15 @@ async fn materialize_all(
                 Err(error) => return Err(error),
             }
         };
+        if report_selection {
+            report_unserved_selected_tools(
+                reference,
+                policy,
+                artifacts,
+                index_toolset.is_some(),
+                on_refused,
+            );
+        }
         let toolset: Arc<dyn Toolset> = match (family, index_toolset) {
             (Some(family), Some(index)) => Arc::new(CompositeToolset::new(
                 reference.toolkit_name(),
@@ -774,24 +781,120 @@ fn omitted_selection(
         .collect()
 }
 
-/// The served tool list of a family that reports per-tool omissions; `None`
-/// for one that reports none.
+/// The served tool list of a configured family, from the family's own tool
+/// list (so it cannot drift from what the family builds); `None` for a type
+/// this runtime does not build here (`openapi`, whose tools are the stored
+/// spec's operations, and any unported family). Live 4.45.0: the Office
+/// families had none, so a selected tool they did not serve vanished with no
+/// notice. `materialize_tests::every_served_family_reports_an_unknown_selected_tool`
+/// fails for the next family added without one.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one dispatch table over the toolkit families; each arm is a call"
+)]
 fn family_tool_catalog(tool_type: &str) -> Option<Vec<(&'static str, bool)>> {
+    use super::families::{
+        ado_boards, ado_plans, ado_repos, ado_wiki, imagegen, zephyr_enterprise, zephyr_essential,
+        zephyr_scale,
+    };
     Some(match tool_type {
+        "ado_boards" => ado_boards::tools::tool_catalog(),
+        "ado_plans" => ado_plans::tools::tool_catalog(),
+        "ado_repos" => ado_repos::tools::tool_catalog(),
+        "ado_wiki" => ado_wiki::tools::tool_catalog(),
         "aha" => aha::tools::tool_catalog(),
+        "artifact" => artifact::tools::tool_catalog(),
+        "azure" => azure::tools::tool_catalog(),
+        "azure_search" => azure_search::tools::tool_catalog(),
         "bigquery" => bigquery::tools::tool_catalog(),
         "bitbucket" => bitbucket::tools::tool_catalog(),
+        "carrier" => carrier::tools::tool_catalog(),
         "confluence" => confluence::tools::tool_catalog(),
+        #[cfg(feature = "toolkit-office")]
+        "docx" => docx::schema::tool_catalog(),
+        "elastic" => elastic::tools::tool_catalog(),
         "figma" => figma::tools::tool_catalog(),
+        "gcp" => gcp::tools::tool_catalog(),
         "github" => github::tools::tool_catalog(),
         "gitlab" => gitlab::tools::tool_catalog(),
+        "gitlab_org" => gitlab_org::tools::tool_catalog(),
+        "google_places" => google_places::tools::tool_catalog(),
+        "imagegen" => imagegen::tool_catalog(),
         "jira" => jira::tools::tool_catalog(),
+        "k8s" => kubernetes::tools::tool_catalog(),
+        "keycloak" => keycloak::tools::tool_catalog(),
         "memory" => MemoryToolName::ALL
             .iter()
             .map(|tool| (tool.as_str(), false))
             .collect(),
+        "postman" => postman::tools::tool_catalog(),
+        #[cfg(feature = "toolkit-office")]
+        "pptx" => pptx::schema::tool_catalog(),
+        "qtest" => qtest::tools::tool_catalog(),
+        "rally" => rally::tools::tool_catalog(),
+        "report_portal" => report_portal::tools::tool_catalog(),
+        "salesforce" => salesforce::tools::tool_catalog(),
+        "service_now" => service_now::tools::tool_catalog(),
+        "sharepoint" => sharepoint::tools::tool_catalog(),
+        "slack" => slack::tools::tool_catalog(),
+        "sonar" => sonar::tools::tool_catalog(),
+        #[cfg(feature = "toolkit-sql")]
+        "sql" => sql::tools::tool_catalog(),
+        "testio" => testio::tools::tool_catalog(),
+        "testrail" => testrail::tools::tool_catalog(),
+        #[cfg(feature = "toolkit-office")]
+        "xlsx" => xlsx::schema::tool_catalog(),
+        "xray_cloud" => xray_cloud::tools::tool_catalog(),
+        "yagmail" => yagmail::tools::tool_catalog(),
+        "zephyr" => zephyr::tools::tool_catalog(),
+        "zephyr_enterprise" => zephyr_enterprise::tools::tool_catalog(),
+        "zephyr_essential" => zephyr_essential::tools::tool_catalog(),
+        "zephyr_scale" => zephyr_scale::tools::tool_catalog(),
+        "zephyr_squad" => zephyr_squad::tools::tool_catalog(),
         _ => return None,
     })
+}
+
+/// The stored settings with the selected names the family does not serve
+/// removed, when at least one served name remains; `None` when nothing
+/// needs removing (or nothing would remain, which the family itself answers
+/// as before: an empty selection must never widen to "every tool").
+///
+/// Several families refuse a selection naming any tool they do not serve
+/// (`slack`, `postman`, ...): one stale or SDK-only name then left the whole
+/// toolkit out with no notice. Pruned here, the toolkit is built with the
+/// tools it does serve and each removed name is reported by
+/// [`report_unserved_selected_tools`]. Index tools are kept: they belong to
+/// the composed index toolset, and every family already knows them.
+fn prune_unserved_selection(
+    reference: &FrozenToolReference<'_>,
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let catalog = family_tool_catalog(reference.tool_type())?;
+    let names = settings.get("selected_tools")?.as_array()?;
+    let served = |name: &str| {
+        catalog.iter().any(|(tool, _)| *tool == name)
+            || super::families::index_tools::is_sdk_index_tool_name(name)
+    };
+    let mut kept = Vec::with_capacity(names.len());
+    for value in names {
+        // A malformed entry is the family's to refuse, as before.
+        let name = value.as_str()?;
+        if served(name.trim()) {
+            kept.push(value.clone());
+        }
+    }
+    if kept.len() == names.len()
+        || !kept
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(|name| !super::families::index_tools::is_sdk_index_tool_name(name.trim()))
+    {
+        return None;
+    }
+    let mut pruned = settings.clone();
+    pruned.insert("selected_tools".to_owned(), serde_json::Value::Array(kept));
+    Some(pruned)
 }
 
 /// Report each tool of the stored selection that the built toolkit does not
@@ -986,7 +1089,9 @@ async fn materialize(
     if reference.kind() != FrozenToolKind::Configured {
         return Err(unsupported_toolkit());
     }
-    let settings = reference.settings().ok_or_else(invalid_configuration)?;
+    let stored = reference.settings().ok_or_else(invalid_configuration)?;
+    let pruned = prune_unserved_selection(reference, stored);
+    let settings = pruned.as_ref().unwrap_or(stored);
     let name = reference.toolkit_name();
     // The platform side of the attachment tools (files and pictures), when the
     // path lends the artifact authority with its Office capability.
@@ -1582,6 +1687,11 @@ fn office_config_materialization_error(
     match error.code() {
         OfficeConfigErrorCode::InvalidConfiguration => invalid_configuration(),
         OfficeConfigErrorCode::ResourceExhausted => resource_exhausted(),
+        // A toolkit saved without a usable bucket is skipped and named in the
+        // run's notice (live 4.45.0: it failed every turn of the agent).
+        OfficeConfigErrorCode::BucketName => {
+            ToolsetMaterializationError::refused(UnsupportedSetting::BucketName)
+        }
     }
 }
 
@@ -1626,6 +1736,9 @@ const fn artifact_config_materialization_error(
     match code {
         artifact::config::ArtifactConfigErrorCode::InvalidConfiguration => invalid_configuration(),
         artifact::config::ArtifactConfigErrorCode::ResourceExhausted => resource_exhausted(),
+        artifact::config::ArtifactConfigErrorCode::BucketName => {
+            ToolsetMaterializationError::refused(UnsupportedSetting::BucketName)
+        }
     }
 }
 
@@ -1745,7 +1858,9 @@ mod notice_helper_tests {
             assert!(needs(family).is_empty(), "{family}");
             assert!(!family_tool_catalog(family).expect(family).is_empty());
         }
-        assert!(family_tool_catalog("slack").is_none());
+        assert!(needs("slack").is_empty());
+        // A type with no fixed tool list reports none.
+        assert!(family_tool_catalog("openapi").is_none());
     }
 
     #[test]
@@ -1760,5 +1875,159 @@ mod notice_helper_tests {
         assert_eq!(round_robin_take(&lists, 100, usize::MAX, |_| 1), [10, 2]);
         let empty: [Vec<u32>; 2] = [Vec::new(), Vec::new()];
         assert_eq!(round_robin_take(&empty, 5, 5, |_| 1), [0, 0]);
+    }
+}
+
+#[cfg(test)]
+mod materialize_tests {
+    use std::collections::BTreeMap;
+
+    use serde_json::{Map, Value, json};
+
+    use super::{
+        LeftOutReason, LeftOutToolkit, family_tool_catalog, omitted_selection,
+        prune_unserved_selection, report_unserved_selected_tools,
+    };
+    use crate::toolkits::policy::ToolAdmissionPolicy;
+    use crate::toolkits::snapshot::FrozenToolSnapshot;
+
+    const CAPABILITY: &str = include_str!(
+        "../../../../../services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
+    );
+    /// Served types whose tools are not a fixed list: MCP is materialized on
+    /// its own path, and an `openapi` toolkit's tools are its stored spec's
+    /// operations.
+    const NO_FIXED_CATALOG: [&str; 3] = ["mcp", "mcp_config", "openapi"];
+    const MADE_UP: &str = "made_up_tool_nobody_serves";
+
+    fn served_types() -> Vec<String> {
+        let document: Value = serde_json::from_str(CAPABILITY).expect("capability JSON");
+        document["supported_tool_types"]
+            .as_array()
+            .expect("supported types")
+            .iter()
+            .map(|name| name.as_str().expect("a type").to_owned())
+            .filter(|name| {
+                // A family behind a feature this build does not carry.
+                (cfg!(feature = "toolkit-office")
+                    || !matches!(name.as_str(), "pptx" | "docx" | "xlsx"))
+                    && (cfg!(feature = "toolkit-sql") || name != "sql")
+            })
+            .collect()
+    }
+
+    /// Live 4.45.0 (D3): the Office families had no catalogue, so a selected
+    /// tool they did not serve was dropped with no notice. This walks EVERY
+    /// type the worker declares served, so the next family added without a
+    /// catalogue fails here, and checks the catalogue is the family's own
+    /// served list where the capability file declares one.
+    #[test]
+    fn every_served_family_reports_an_unknown_selected_tool() {
+        let document: Value = serde_json::from_str(CAPABILITY).expect("capability JSON");
+        let declared = document["supported_tools"].as_object().expect("tools");
+        let policy = ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("policy");
+        let types = served_types();
+        assert!(
+            types.len() >= 40,
+            "the capability file stopped listing types"
+        );
+        for tool_type in &types {
+            if NO_FIXED_CATALOG.contains(&tool_type.as_str()) {
+                continue;
+            }
+            let catalog = family_tool_catalog(tool_type)
+                .unwrap_or_else(|| panic!("{tool_type} has no tool catalogue"));
+            assert!(!catalog.is_empty(), "{tool_type}");
+            if let Some(names) = declared.get(tool_type) {
+                for name in names.as_array().expect("names") {
+                    let name = name.as_str().expect("a name");
+                    assert!(
+                        catalog.iter().any(|(tool, _)| *tool == name),
+                        "{tool_type}.{name} is declared served but missing from its catalogue"
+                    );
+                }
+            }
+            let served = catalog[0].0;
+            let selected: Vec<Box<str>> = vec![served.into(), MADE_UP.into()];
+            assert_eq!(
+                omitted_selection(&catalog, &selected, true),
+                [(MADE_UP.to_owned(), false)],
+                "{tool_type}"
+            );
+
+            // Through the reporting path itself, as the run sees it.
+            let version = json!({"tools": [{
+                "id": 7, "type": tool_type, "toolkit_name": "kit",
+                "settings": {"selected_tools": [served, MADE_UP]}
+            }]});
+            let snapshot =
+                FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+                    .expect("snapshot")
+                    .apply_policy(&policy);
+            let reference = snapshot.iter().next().expect("reference");
+            let mut left_out: Vec<LeftOutToolkit> = Vec::new();
+            report_unserved_selected_tools(reference, &policy, None, false, &mut |r, skip| {
+                left_out.push(LeftOutToolkit::new(r, skip));
+            });
+            assert!(
+                left_out
+                    .iter()
+                    .any(|toolkit| toolkit.tool_name() == Some(MADE_UP)
+                        && toolkit.cause() == LeftOutReason::ToolNotServed),
+                "{tool_type}: {left_out:?}"
+            );
+        }
+    }
+
+    /// The Office families' tools all act on a document in the file store,
+    /// so a run that lends none names each selected tool as needing it.
+    #[cfg(feature = "toolkit-office")]
+    #[test]
+    fn office_tools_need_the_file_store() {
+        for family in ["pptx", "docx", "xlsx", "imagegen"] {
+            let catalog = family_tool_catalog(family).expect(family);
+            assert!(catalog.iter().all(|(_, needs)| *needs), "{family}");
+        }
+    }
+
+    /// A strict family (one that refuses a selection naming any tool it does
+    /// not serve) is built with its served tools; the unknown names are
+    /// pruned and reported, never widened to "every tool".
+    #[test]
+    fn unserved_names_are_pruned_but_never_widen_the_selection() {
+        let policy = ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("policy");
+        let version = json!({"tools": [
+            {"id": 1, "type": "slack", "toolkit_name": "a",
+             "settings": {"selected_tools": ["send_message", MADE_UP]}},
+            {"id": 2, "type": "slack", "toolkit_name": "b",
+             "settings": {"selected_tools": [MADE_UP]}},
+            {"id": 3, "type": "slack", "toolkit_name": "c",
+             "settings": {"selected_tools": ["send_message"]}},
+            {"id": 4, "type": "slack", "toolkit_name": "d",
+             "settings": {"selected_tools": ["search_index", MADE_UP]}}
+        ]});
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+                .expect("snapshot")
+                .apply_policy(&policy);
+        let pruned: Vec<Option<Map<String, Value>>> = snapshot
+            .iter()
+            .map(|reference| {
+                prune_unserved_selection(reference, reference.settings().expect("settings"))
+            })
+            .collect();
+        assert_eq!(
+            pruned[0].as_ref().expect("pruned")["selected_tools"],
+            json!(["send_message"])
+        );
+        assert!(
+            pruned[1].is_none(),
+            "nothing served remains: the family decides"
+        );
+        assert!(pruned[2].is_none(), "nothing to prune");
+        assert!(
+            pruned[3].is_none(),
+            "an index-only remainder is not widened"
+        );
     }
 }

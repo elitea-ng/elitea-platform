@@ -1737,3 +1737,12 @@ fn project_fields(case: &Value, fields: &[&str]) -> OrderedObject {
     }
     row
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    ScaleTool::ALL
+        .iter()
+        .map(|tool| (ZephyrToolSpec::name(*tool), false))
+        .collect()
+}
