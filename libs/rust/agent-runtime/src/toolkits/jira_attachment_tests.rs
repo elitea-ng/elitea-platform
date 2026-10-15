@@ -877,6 +877,45 @@ async fn attachment_pictures_stop_calling_the_model_after_a_budget_refusal() {
     assert_eq!(platform.model_calls().len(), 1, "the loop stopped");
 }
 
+/// #1292 review 5: an unusable run context (`ContextUnusable`) is met by
+/// every later picture too, so the loop stops after ONE model attempt, as
+/// it did before (it had started retrying every picture).
+#[tokio::test]
+async fn attachment_pictures_stop_calling_the_model_when_the_run_context_is_unusable() {
+    let (client, _, platform) = setup(
+        &server_settings(),
+        vec![
+            myself(),
+            attachments_issue(json!([
+                {"id": "1", "filename": "a.png", "size": 300},
+                {"id": "2", "filename": "b.png", "size": 300},
+                {"id": "3", "filename": "c.png", "size": 300}
+            ])),
+            bytes(StatusCode::OK, &picture(), "image/png"),
+            bytes(StatusCode::OK, &picture(), "image/png"),
+            bytes(StatusCode::OK, &picture(), "image/png"),
+        ],
+    );
+    platform.fail_model(OfficeFailure::ContextUnusable);
+    let text = run(
+        &client,
+        JiraOperation::GetAttachmentsContent {
+            issue_key: "PROJ-1",
+            attachment_pattern: None,
+        },
+    )
+    .await;
+    assert_eq!(platform.model_calls().len(), 1, "the loop stopped: {text}");
+    for name in ["a.png", "b.png", "c.png"] {
+        assert!(
+            text.contains(&format!(
+                "[Image: {name} - not described: This run's context is not usable for a model call; retry the turn."
+            )),
+            "{name}: {text}"
+        );
+    }
+}
+
 fn field_op<'a>(field: &'a str, prompt: Option<&'a str>, process: bool) -> JiraOperation<'a> {
     JiraOperation::GetFieldWithImageDescriptions {
         issue_key: "PROJ-1",

@@ -36,16 +36,12 @@ use std::borrow::Cow;
 const OPEN: &str = "<think>";
 const CLOSE: &str = "</think>";
 
-/// A reply split into its visible text and the reasoning removed from it.
-/// Both texts borrow from the input where they can: a reply with no tag is
-/// returned without a copy.
+/// A reply's visible text, with what was removed. The text borrows from the
+/// input: no reply is copied.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stripped<'a> {
     /// The reply without its reasoning.
     pub text: Cow<'a, str>,
-    /// The reasoning removed (the blocks' contents, joined by a newline, or
-    /// the text before a bare closing tag), trimmed.
-    pub reasoning: Cow<'a, str>,
     /// The reply began a `<think>` block and never closed it.
     pub unclosed: bool,
     /// Reasoning was removed: a closed leading block, or the text before a
@@ -63,7 +59,6 @@ pub fn strip_reasoning(text: &str) -> Stripped<'_> {
         return match close {
             Some(close) if open.is_none_or(|open| open > close) => Stripped {
                 text: Cow::Borrowed(text[close + CLOSE.len()..].trim_start()),
-                reasoning: Cow::Borrowed(text[..close].trim()),
                 unclosed: false,
                 removed: true,
             },
@@ -73,33 +68,20 @@ pub fn strip_reasoning(text: &str) -> Stripped<'_> {
             },
         };
     }
-    let mut reasoning: Vec<&str> = Vec::new();
     while let Some(after_open) = rest.strip_prefix(OPEN) {
         let Some(end) = after_open.find(CLOSE) else {
-            reasoning.push(after_open.trim());
             return Stripped {
                 text: Cow::Borrowed(""),
-                reasoning: joined(&reasoning),
                 unclosed: true,
                 removed: false,
             };
         };
-        reasoning.push(after_open[..end].trim());
         rest = after_open[end + CLOSE.len()..].trim_start();
     }
     Stripped {
         text: Cow::Borrowed(rest),
-        reasoning: joined(&reasoning),
         unclosed: false,
         removed: true,
-    }
-}
-
-/// The blocks' reasoning; one block is borrowed, several are joined.
-fn joined<'a>(blocks: &[&'a str]) -> Cow<'a, str> {
-    match blocks {
-        [one] => Cow::Borrowed(*one),
-        many => Cow::Owned(many.join("\n")),
     }
 }
 
@@ -114,23 +96,23 @@ mod tests {
     /// Round 4: the no-tag path and the stripped paths borrow, never copy.
     #[test]
     fn plain_and_stripped_text_is_borrowed() {
-        for raw in ["plain answer", "<think>a</think>\nB", "a</think>b"] {
+        for raw in [
+            "plain answer",
+            "<think>a</think>\nB",
+            "<think>a</think><think>b</think>c",
+            "a</think>b",
+        ] {
             assert!(
                 matches!(strip_reasoning(raw).text, Cow::Borrowed(_)),
                 "{raw}"
             );
         }
-        assert!(matches!(
-            strip_reasoning("<think>a</think><think>b</think>c").reasoning,
-            Cow::Owned(_)
-        ));
     }
 
     #[test]
     fn a_leading_block_and_the_whitespace_after_it_are_removed() {
         assert_eq!(text("<think>a</think>\nB"), "B");
-        let two = strip_reasoning("  \n<think>a</think><think>b</think>  C ");
-        assert_eq!((two.text.as_ref(), two.reasoning.as_ref()), ("C ", "a\nb"));
+        assert_eq!(text("  \n<think>a</think><think>b</think>  C "), "C ");
     }
 
     #[test]
@@ -144,7 +126,6 @@ mod tests {
     fn qwen_bare_closing_tag_ends_the_reasoning() {
         let qwen = strip_reasoning("Let me look…</think>\n\nA red square.");
         assert_eq!(qwen.text, "A red square.");
-        assert_eq!(qwen.reasoning, "Let me look…");
         assert!(qwen.removed && !qwen.unclosed);
         assert_eq!(text("a</think>b"), "b");
         // Only the FIRST bare closing tag ends it.
@@ -159,7 +140,6 @@ mod tests {
     fn an_unclosed_leading_block_is_all_reasoning() {
         let stripped = strip_reasoning("  <think>Let me think");
         assert!(stripped.unclosed && stripped.text.is_empty());
-        assert_eq!(stripped.reasoning, "Let me think");
         let after_a_closed_one = strip_reasoning("<think>a</think><think>b");
         assert!(after_a_closed_one.unclosed && after_a_closed_one.text.is_empty());
     }

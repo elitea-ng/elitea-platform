@@ -620,6 +620,9 @@ pub(crate) async fn describe_for_text(
                 OfficeFailure::BudgetRefused
                 | OfficeFailure::NoModel
                 | OfficeFailure::ModelUnusable
+                // The run's context is unusable for every later picture too:
+                // stop, as before this PR (#1292 review 5).
+                | OfficeFailure::ContextUnusable
                 | OfficeFailure::RateLimited
                 | OfficeFailure::AccessRefused
                 | OfficeFailure::Unreachable,

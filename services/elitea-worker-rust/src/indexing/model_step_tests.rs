@@ -1305,3 +1305,35 @@ async fn the_proposal_path_applies_the_chunkers_rule_once_on_the_raw_reply() {
         "Reasoning ends with </think> in raw output."
     );
 }
+
+/// #1292 review 5: a Qwen3 reply with no reasoning parser, whose reasoning
+/// opens a brace it never closes before the bare `</think>`, still yields the
+/// trailing answer on the proposal path (it regressed against main when the
+/// double strip was removed).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_qwen_bare_close_reply_with_an_unclosed_brace_indexes_the_answer() {
+    let mut harness = harness(4, None).await;
+    let chat = ScriptedChat::new(|_, _| {
+        let answer = analysis(&[("Food", "About food.", &["Greg likes pizza."])]);
+        Reply::Text(format!(
+            "Okay … The format is {{chunks: [...]. Let me write it.\n</think>\n\n{answer}"
+        ))
+    });
+    with_chat(&mut harness, &chat);
+    let summary = run_model(
+        &harness,
+        vec![document("guide.md", "v1", GUIDE)],
+        None,
+        &proposal(),
+        Some("gpt-test"),
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{summary:?}"
+    );
+    assert_eq!(summary.indexed_chunks, 4, "one entry, four chunks");
+    assert_eq!(chat.calls(), 1, "read on the first attempt");
+}
