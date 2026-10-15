@@ -1,0 +1,464 @@
+package repos
+
+// The workspace store (ADR-0034 decision 2) against a REAL database
+// (ELITEA_TEST_DATABASE_URL): the upload grant, the publish transaction's
+// fences (state, epoch, writer allowlist, compare-and-set, idempotent replay),
+// the object check before the transaction, the fetch plan, concurrency and the
+// object sweeper. The object store is in memory; the rules live in PostgreSQL.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore/workspacestoretest"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+)
+
+func ptr(value string) *string { return &value }
+
+func desktopPublish(thread workspacestore.Thread, owner, epoch int64, sha string, bytes int64, refs ...workspacestore.RefUpdate) workspacestore.PublishRequest {
+	return workspacestore.PublishRequest{
+		Thread: thread, Caller: workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner},
+		Epoch: epoch, Kind: workspacestore.KindCompact, SHA256: sha, Bytes: bytes,
+		Prerequisites: []string{}, Refs: refs, ObjectFormat: workspacestore.ObjectFormatSHA1,
+	}
+}
+
+func TestPostgresWorkspaceStoreUploadGrant(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5101
+	fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+	seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateHandingOff, 1, false, "")
+	desktop := workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner}
+	sha := digestOf([]byte("bundle"))
+
+	t.Run("presigned PUT for an exact key", func(t *testing.T) {
+		service, _ := newWorkspaceStoreService(t, pool, workspacestoretest.New(true), defaultWorkspaceLimits())
+		grant, err := service.RequestUpload(ctx, workspacestore.UploadRequest{Thread: fixture.thread, Caller: desktop, Epoch: 1, SHA256: sha, Bytes: 6})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantKey := "1/" + storage.WorkspaceBucketName + "/t/" + fixture.thread.ConversationUUID + "/seg/" + sha + ".seg"
+		if grant.Exists || !strings.HasSuffix(grant.PutURL, wantKey) || grant.Multipart != nil ||
+			grant.Headers["Content-Type"] != workspacestore.MediaType || grant.ExpiresAt.After(time.Now().Add(15*time.Minute+time.Second)) {
+			t.Fatalf("grant = %+v, want a presigned PUT for %s valid at most 15 minutes", grant, wantKey)
+		}
+		var rows int
+		if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM elitea_storage.transfer_grants g JOIN elitea_storage.buckets b ON b.id = g.bucket_id
+WHERE b.bucket_type = 'workspace' AND b.name = $1 AND g.key = $2 AND g.max_bytes = 6 AND g.method = 'PUT'`,
+			storage.WorkspaceBucketName, workspacestore.ObjectKey(fixture.thread.ConversationUUID, sha)).Scan(&rows); err != nil || rows != 1 {
+			t.Fatalf("grant rows = %d, %v; want one transfer grant on the workspace bucket", rows, err)
+		}
+	})
+	t.Run("streaming facade without presign", func(t *testing.T) {
+		service, _ := newWorkspaceStoreService(t, pool, workspacestoretest.New(false), defaultWorkspaceLimits())
+		grant, err := service.RequestUpload(ctx, workspacestore.UploadRequest{Thread: fixture.thread, Caller: desktop, Epoch: 1, SHA256: sha, Bytes: 6})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := workspacestore.ObjectRoutePrefix + "1/" + fixture.thread.ConversationUUID + "/" + sha
+		if grant.PutURL != want {
+			t.Fatalf("facade URL = %q, want %q", grant.PutURL, want)
+		}
+	})
+	t.Run("multipart above 64 MiB", func(t *testing.T) {
+		store := workspacestoretest.New(true)
+		store.Multipart = true
+		service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+		grant, err := service.RequestUpload(ctx, workspacestore.UploadRequest{Thread: fixture.thread, Caller: desktop, Epoch: 1, SHA256: digestOf([]byte("big")), Bytes: 130 << 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if grant.Multipart == nil || len(grant.Multipart.PartURLs) != 3 || grant.PutURL != "" ||
+			!strings.HasPrefix(grant.Multipart.CompleteURL, workspacestore.UploadCompleteRoutePrefix+"1/") {
+			t.Fatalf("grant = %+v, want 3 parts and a completion URL", grant)
+		}
+	})
+	t.Run("refusals", func(t *testing.T) {
+		limits := defaultWorkspaceLimits()
+		limits.MaxSegmentBytes = 100
+		limits.MaxProjectWorkspaceBytes = 50
+		service, _ := newWorkspaceStoreService(t, pool, workspacestoretest.New(true), limits)
+		for _, tc := range []struct {
+			name    string
+			request workspacestore.UploadRequest
+			want    error
+		}{
+			{"stale epoch", workspacestore.UploadRequest{Thread: fixture.thread, Caller: desktop, Epoch: 2, SHA256: sha, Bytes: 6}, workspacestore.ErrStaleEpoch},
+			{"too large", workspacestore.UploadRequest{Thread: fixture.thread, Caller: desktop, Epoch: 1, SHA256: sha, Bytes: 101}, workspacestore.ErrSegmentTooLarge},
+			{"quota", workspacestore.UploadRequest{Thread: fixture.thread, Caller: desktop, Epoch: 1, SHA256: sha, Bytes: 60}, workspacestore.ErrQuotaExceeded},
+			{"not the owner", workspacestore.UploadRequest{Thread: fixture.thread, Caller: workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner + 1}, Epoch: 1, SHA256: sha, Bytes: 6}, workspacestore.ErrNotFound},
+			{"the executor outside CLOUD_RUNNING", workspacestore.UploadRequest{Thread: fixture.thread, Caller: workspacestore.Caller{Writer: workspacestore.WriterCloudExecutor, ExecutionID: "e"}, Epoch: 1, SHA256: sha, Bytes: 6}, workspacestore.ErrStaleEpoch},
+		} {
+			if _, err := service.RequestUpload(ctx, tc.request); !errors.Is(err, tc.want) {
+				t.Fatalf("%s: err = %v, want %v", tc.name, err, tc.want)
+			}
+		}
+	})
+}
+
+func TestPostgresWorkspaceStorePublishFencesAndReplay(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5111
+	fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+	thread := fixture.thread
+	seedHandoffRow(t, pool, thread, owner, workspacestore.StateHandingOff, 1, false, "")
+	store := workspacestoretest.New(true)
+	service, recorder := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+
+	content := []byte("the first snapshot bundle")
+	sha := digestOf(content)
+	base, snapshot := sha1Of("base"), sha1Of("snapshot")
+	refs := []workspacestore.RefUpdate{
+		{Name: workspacestore.RefBase, New: base}, {Name: workspacestore.RefHandoff1, New: snapshot},
+	}
+
+	// The object check runs BEFORE the transaction: nothing stored yet.
+	if _, err := service.Publish(ctx, desktopPublish(thread, owner, 1, sha, int64(len(content)), refs...)); !errors.Is(err, workspacestore.ErrSegmentMissing) {
+		t.Fatalf("publish before upload = %v, want ErrSegmentMissing", err)
+	}
+	// Wrong bytes at the key: checksum mismatch, and the object is deleted.
+	forged := uploadSegment(t, store, thread, []byte("other bytes"), time.Now())
+	ref, _ := storage.NewObjectRef("1", storage.WorkspaceBucketName, workspacestore.ObjectKey(thread.ConversationUUID, sha))
+	store.Seed(ref, []byte("tampered bytes not the declared ones!!"), time.Now())
+	if _, err := service.Publish(ctx, desktopPublish(thread, owner, 1, sha, int64(len("tampered bytes not the declared ones!!")), refs...)); !errors.Is(err, workspacestore.ErrChecksumMismatch) {
+		t.Fatalf("tampered publish = %v, want ErrChecksumMismatch", err)
+	}
+	if store.Has(ref) {
+		t.Fatalf("a segment whose bytes do not match its address stayed stored")
+	}
+	_ = forged
+	uploadSegment(t, store, thread, content, time.Now())
+	if _, err := service.Publish(ctx, desktopPublish(thread, owner, 1, sha, int64(len(content))+1, refs...)); !errors.Is(err, workspacestore.ErrChecksumMismatch) {
+		t.Fatalf("a wrong declared size = %v, want ErrChecksumMismatch", err)
+	}
+
+	sha256Format := desktopPublish(thread, owner, 1, sha, int64(len(content)), refs...)
+	sha256Format.ObjectFormat = "sha256"
+	for _, tc := range []struct {
+		name    string
+		request workspacestore.PublishRequest
+		want    error
+	}{
+		{"sha256 repository", sha256Format, workspacestore.ErrUnsupportedObjectFormat},
+		{"stale epoch", desktopPublish(thread, owner, 2, sha, int64(len(content)), refs...), workspacestore.ErrStaleEpoch},
+		{"the cloud ref from the desktop", desktopPublish(thread, owner, 1, sha, int64(len(content)),
+			workspacestore.RefUpdate{Name: workspacestore.RefCloud, New: base}), workspacestore.ErrRefNotAllowed},
+		{"upstream without an upstream", desktopPublish(thread, owner, 1, sha, int64(len(content)),
+			workspacestore.RefUpdate{Name: workspacestore.RefUpstream, New: base}), workspacestore.ErrRefNotAllowed},
+		{"another user's thread", desktopPublish(thread, owner+1, 1, sha, int64(len(content)), refs...), workspacestore.ErrNotFound},
+		{"an expected old value on an absent ref", desktopPublish(thread, owner, 1, sha, int64(len(content)),
+			workspacestore.RefUpdate{Name: workspacestore.RefBase, Old: ptr(base), New: base},
+			workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, New: snapshot}), workspacestore.ErrRefConflict},
+	} {
+		if _, err := service.Publish(ctx, tc.request); !errors.Is(err, tc.want) {
+			t.Fatalf("%s: err = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+	// The failed CAS moved NOTHING (all or nothing).
+	var refCount int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.workspace_refs WHERE conversation_uuid = $1::uuid`, thread.ConversationUUID).Scan(&refCount)
+	if refCount != 0 {
+		t.Fatalf("a refused publish left %d refs", refCount)
+	}
+
+	first, err := service.Publish(ctx, desktopPublish(thread, owner, 1, sha, int64(len(content)), refs...))
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if first.Seq != 1 || first.Replayed || first.Refs[workspacestore.RefBase] != base || first.Refs[workspacestore.RefHandoff1] != snapshot {
+		t.Fatalf("publish = %+v", first)
+	}
+	// An identical retry answers the original result, not a conflict.
+	replay, err := service.Publish(ctx, desktopPublish(thread, owner, 1, sha, int64(len(content)), refs...))
+	if err != nil || !replay.Replayed || replay.Seq != 1 {
+		t.Fatalf("replay = %+v, %v; want seq 1 replayed", replay, err)
+	}
+	// The same refs with a stale expectation conflict and name the current values.
+	second := []byte("the second snapshot bundle")
+	secondSHA := uploadSegment(t, store, thread, second, time.Now())
+	_, err = service.Publish(ctx, desktopPublish(thread, owner, 1, secondSHA, int64(len(second)),
+		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, New: sha1Of("second")}))
+	var conflict *workspacestore.RefConflictError
+	if !errors.As(err, &conflict) || conflict.Current[workspacestore.RefHandoff1] == nil ||
+		*conflict.Current[workspacestore.RefHandoff1] != snapshot {
+		t.Fatalf("stale CAS = %v (%+v), want a conflict naming %s", err, conflict, snapshot)
+	}
+	advanced, err := service.Publish(ctx, desktopPublish(thread, owner, 1, secondSHA, int64(len(second)),
+		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, Old: ptr(snapshot), New: sha1Of("second")}))
+	if err != nil || advanced.Seq != 2 || len(advanced.Superseded) != 1 || advanced.Superseded[0] != 1 ||
+		advanced.Refs[workspacestore.RefBase] != base {
+		t.Fatalf("second publish = %+v, %v; want seq 2 superseding 1 and keeping base", advanced, err)
+	}
+	var cachedHandoff, consumed string
+	_ = pool.QueryRow(ctx, `SELECT handoff_sha FROM elitea_runtime.workspace_handoffs WHERE conversation_uuid = $1::uuid`,
+		thread.ConversationUUID).Scan(&cachedHandoff)
+	if cachedHandoff != sha1Of("second") {
+		t.Fatalf("handoff row sha cache = %s", cachedHandoff)
+	}
+	_ = consumed
+
+	// The fetch plan: the newest COMPACT only.
+	plan, err := service.Plan(ctx, thread, workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner}, 0)
+	if err != nil || plan.HeadSeq != 2 || len(plan.Segments) != 1 || plan.Segments[0].Seq != 2 ||
+		plan.Segments[0].SHA256 != secondSHA || !strings.HasPrefix(plan.Segments[0].URL, "https://store.test/get/") {
+		t.Fatalf("plan = %+v, %v", plan, err)
+	}
+	if plan, err := service.Plan(ctx, thread, workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner}, 3); err != nil || len(plan.Segments) != 0 {
+		t.Fatalf("plan past the head = %+v, %v; want no segment", plan, err)
+	}
+
+	// The executor writes only the cloud ref, only in CLOUD_RUNNING, only as
+	// the running turn.
+	seedHandoffRow(t, pool, thread, owner, workspacestore.StateCloudRunning, 2, false, "exec-1")
+	cloudContent := []byte("the first cloud turn")
+	cloudSHA := uploadSegment(t, store, thread, cloudContent, time.Now())
+	executor := func(execution string, refs ...workspacestore.RefUpdate) workspacestore.PublishRequest {
+		request := desktopPublish(thread, owner, 2, cloudSHA, int64(len(cloudContent)), refs...)
+		request.Caller = workspacestore.Caller{Writer: workspacestore.WriterCloudExecutor, ExecutionID: execution}
+		return request
+	}
+	if _, err := service.Publish(ctx, executor("exec-2", workspacestore.RefUpdate{Name: workspacestore.RefCloud, New: sha1Of("c1")})); !errors.Is(err, workspacestore.ErrStaleEpoch) {
+		t.Fatalf("another turn's publish = %v, want ErrStaleEpoch", err)
+	}
+	if _, err := service.Publish(ctx, executor("exec-1", workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, Old: ptr(sha1Of("second")), New: sha1Of("c1")})); !errors.Is(err, workspacestore.ErrRefNotAllowed) {
+		t.Fatalf("the executor moving the handoff ref = %v, want ErrRefNotAllowed", err)
+	}
+	cloud, err := service.Publish(ctx, executor("exec-1", workspacestore.RefUpdate{Name: workspacestore.RefCloud, New: sha1Of("c1")}))
+	if err != nil || cloud.Seq != 3 || cloud.Refs[workspacestore.RefCloud] != sha1Of("c1") {
+		t.Fatalf("cloud publish = %+v, %v", cloud, err)
+	}
+	// The desktop cannot write in CLOUD_RUNNING.
+	if _, err := service.Publish(ctx, desktopPublish(thread, owner, 2, cloudSHA, int64(len(cloudContent)),
+		workspacestore.RefUpdate{Name: workspacestore.RefBase, Old: ptr(base), New: base})); !errors.Is(err, workspacestore.ErrStaleEpoch) {
+		t.Fatalf("a desktop publish while the cloud runs = %v, want ErrStaleEpoch", err)
+	}
+
+	actions := strings.Join(recorder.actions(), "\n")
+	for _, want := range []string{"store.publish, writer desktop", "store.publish_refused", "store.integrity_failed", "store.publish, writer cloud_executor"} {
+		if !strings.Contains(actions, want) {
+			t.Fatalf("audit actions lack %q:\n%s", want, actions)
+		}
+	}
+	for _, event := range recorder.events {
+		if event.EntityType != workspacestore.AuditEntityType || event.EntityName != thread.ConversationUUID {
+			t.Fatalf("audit event %+v is not a workspace_handoff event of the thread", event)
+		}
+	}
+}
+
+// Concurrent publishes on ONE thread: exactly one wins the compare-and-set;
+// every other answers a ref conflict. Run with -race.
+func TestPostgresWorkspaceStoreConcurrentPublishOneWinner(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5121
+	fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+	seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateHandingOff, 1, false, "")
+	store := workspacestoretest.New(true)
+	service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+
+	const writers = 8
+	requests := make([]workspacestore.PublishRequest, writers)
+	for i := range requests {
+		content := []byte(fmt.Sprintf("snapshot %d", i))
+		sha := uploadSegment(t, store, fixture.thread, content, time.Now())
+		requests[i] = desktopPublish(fixture.thread, owner, 1, sha, int64(len(content)),
+			workspacestore.RefUpdate{Name: workspacestore.RefBase, New: sha1Of("base")},
+			workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, New: sha1Of(fmt.Sprintf("snap %d", i))})
+	}
+	var (
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		wins      int
+		conflicts int
+		others    []error
+	)
+	start := make(chan struct{})
+	for i := range requests {
+		wg.Add(1)
+		go func(request workspacestore.PublishRequest) {
+			defer wg.Done()
+			<-start
+			_, err := service.Publish(ctx, request)
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				wins++
+			case errors.Is(err, workspacestore.ErrRefConflict):
+				conflicts++
+			default:
+				others = append(others, err)
+			}
+		}(requests[i])
+	}
+	close(start)
+	wg.Wait()
+	if wins != 1 || conflicts != writers-1 || len(others) != 0 {
+		t.Fatalf("wins %d, conflicts %d, others %v; want exactly one winner", wins, conflicts, others)
+	}
+}
+
+// Publishes on DIFFERENT threads never wait on each other: thread A's handoff
+// row is held locked by an open transaction while thread B publishes.
+func TestPostgresWorkspaceStorePublishesOnDifferentThreadsDoNotBlock(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5131
+	store := workspacestoretest.New(true)
+	service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+	threads := make([]workspacestore.Thread, 6)
+	for i := range threads {
+		threads[i] = seedLocalWorkThread(t, pool, owner, "local_work").thread
+		seedHandoffRow(t, pool, threads[i], owner, workspacestore.StateHandingOff, 1, false, "")
+	}
+	blocker, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = blocker.Rollback(ctx) }()
+	if _, err := blocker.Exec(ctx, `SELECT 1 FROM elitea_runtime.workspace_handoffs
+WHERE conversation_uuid = $1::uuid FOR UPDATE`, threads[0].ConversationUUID); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, len(threads))
+	for i := 1; i < len(threads); i++ {
+		content := []byte("thread " + strconv.Itoa(i))
+		sha := uploadSegment(t, store, threads[i], content, time.Now())
+		wg.Add(1)
+		go func(i int, sha string, size int64) {
+			defer wg.Done()
+			bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			_, errs[i] = service.Publish(bounded, desktopPublish(threads[i], owner, 1, sha, size,
+				workspacestore.RefUpdate{Name: workspacestore.RefBase, New: sha1Of("b")},
+				workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, New: sha1Of("h")}))
+		}(i, sha, int64(len(content)))
+	}
+	wg.Wait()
+	for i := 1; i < len(threads); i++ {
+		if errs[i] != nil {
+			t.Fatalf("thread %d publish = %v while another thread's row was locked", i, errs[i])
+		}
+	}
+	// The locked thread itself does wait (the lock is real).
+	content := []byte("thread 0")
+	sha := uploadSegment(t, store, threads[0], content, time.Now())
+	bounded, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	if _, err := service.Publish(bounded, desktopPublish(threads[0], owner, 1, sha, int64(len(content)),
+		workspacestore.RefUpdate{Name: workspacestore.RefBase, New: sha1Of("b")})); err == nil {
+		t.Fatalf("a publish on the locked thread did not wait for the lock")
+	}
+}
+
+func TestPostgresWorkspaceStoreSweeper(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5141
+	fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+	thread := fixture.thread
+	seedHandoffRow(t, pool, thread, owner, workspacestore.StateHandingOff, 1, false, "")
+	store := workspacestoretest.New(true)
+	service, recorder := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+	// The first upload grant creates the project's workspace bucket, which
+	// the orphan sweep walks.
+	if _, err := service.RequestUpload(ctx, workspacestore.UploadRequest{
+		Thread: thread, Caller: workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner},
+		Epoch: 1, SHA256: digestOf([]byte("x")), Bytes: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	old, fresh := []byte("old snapshot"), []byte("new snapshot")
+	oldSHA := uploadSegment(t, store, thread, old, time.Now())
+	if _, err := service.Publish(ctx, desktopPublish(thread, owner, 1, oldSHA, int64(len(old)),
+		workspacestore.RefUpdate{Name: workspacestore.RefBase, New: sha1Of("b")})); err != nil {
+		t.Fatal(err)
+	}
+	freshSHA := uploadSegment(t, store, thread, fresh, time.Now())
+	if _, err := service.Publish(ctx, desktopPublish(thread, owner, 1, freshSHA, int64(len(fresh)),
+		workspacestore.RefUpdate{Name: workspacestore.RefBase, Old: ptr(sha1Of("b")), New: sha1Of("b2")})); err != nil {
+		t.Fatal(err)
+	}
+	// An orphan: an object with no segment row, older than 24 hours; and a
+	// young one (an upload in flight), which stays.
+	orphan := uploadSegment(t, store, thread, []byte("never published"), time.Now().Add(-25*time.Hour))
+	young := uploadSegment(t, store, thread, []byte("upload in flight"), time.Now())
+
+	// Within the grace nothing is deleted.
+	if result, err := service.SweepObjects(ctx, 10); err != nil || result.SupersededDeleted != 0 || result.OrphansDeleted != 1 {
+		t.Fatalf("first sweep = %+v, %v; want only the old orphan", result, err)
+	}
+	keyRef := func(sha string) storage.ObjectRef {
+		ref, _ := storage.NewObjectRef("1", storage.WorkspaceBucketName, workspacestore.ObjectKey(thread.ConversationUUID, sha))
+		return ref
+	}
+	if store.Has(keyRef(orphan)) || !store.Has(keyRef(young)) || !store.Has(keyRef(oldSHA)) {
+		t.Fatalf("after the first sweep: orphan %t, young %t, superseded %t", store.Has(keyRef(orphan)), store.Has(keyRef(young)), store.Has(keyRef(oldSHA)))
+	}
+	// 25 hours later the superseded segment's object goes; the row stays as a
+	// tombstone; the live segment is untouched.
+	service.WithClock(func() time.Time { return time.Now().Add(25 * time.Hour) })
+	result, err := service.SweepObjects(ctx, 10)
+	if err != nil || result.SupersededDeleted != 1 {
+		t.Fatalf("second sweep = %+v, %v; want the superseded object", result, err)
+	}
+	if store.Has(keyRef(oldSHA)) || !store.Has(keyRef(freshSHA)) {
+		t.Fatalf("superseded kept %t, live kept %t", store.Has(keyRef(oldSHA)), store.Has(keyRef(freshSHA)))
+	}
+	var tombstones int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.workspace_segments
+WHERE conversation_uuid = $1::uuid AND object_deleted_at IS NOT NULL`, thread.ConversationUUID).Scan(&tombstones)
+	if tombstones != 1 {
+		t.Fatalf("tombstones = %d, want 1", tombstones)
+	}
+	if !strings.Contains(strings.Join(recorder.actions(), "\n"), "store.gc") {
+		t.Fatalf("no store.gc audit event: %v", recorder.actions())
+	}
+
+	// A failed delete is released for the next sweep.
+	another := []byte("third snapshot")
+	anotherSHA := uploadSegment(t, store, thread, another, time.Now())
+	service.WithClock(time.Now)
+	if _, err := service.Publish(ctx, desktopPublish(thread, owner, 1, anotherSHA, int64(len(another)),
+		workspacestore.RefUpdate{Name: workspacestore.RefBase, Old: ptr(sha1Of("b2")), New: sha1Of("b3")})); err != nil {
+		t.Fatal(err)
+	}
+	store.FailDelete = true
+	service.WithClock(func() time.Time { return time.Now().Add(25 * time.Hour) })
+	if result, _ := service.SweepObjects(ctx, 10); result.SupersededDeleted != 0 {
+		t.Fatalf("a failing store counted a delete")
+	}
+	store.FailDelete = false
+	if result, err := service.SweepObjects(ctx, 10); err != nil || result.SupersededDeleted != 1 {
+		t.Fatalf("retry sweep = %+v, %v; want the released segment deleted", result, err)
+	}
+
+	// The thread erasure: every object goes, then the listing is empty.
+	empty, err := service.EraseThreadObjects(ctx, thread)
+	if err != nil || !empty {
+		t.Fatalf("erase = %t, %v", empty, err)
+	}
+	if store.Has(keyRef(anotherSHA)) || store.Has(keyRef(young)) {
+		t.Fatalf("erase left objects behind")
+	}
+	var live int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.workspace_segments
+WHERE conversation_uuid = $1::uuid AND object_deleted_at IS NULL`, thread.ConversationUUID).Scan(&live)
+	if live != 0 {
+		t.Fatalf("erase left %d live segment rows", live)
+	}
+}
