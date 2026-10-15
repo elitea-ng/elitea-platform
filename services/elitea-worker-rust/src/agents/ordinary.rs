@@ -357,9 +357,34 @@ impl OrdinaryNativeAgentAssembler {
             .await?;
         // The workspace's tools: the local tool names, run in the sandbox.
         let runtime = match (&workspace, context.workspace()) {
-            (Some(turn), Some(field)) => runtime.with_workspace_toolset(
-                crate::workspace_run::tools::provider(turn.sandbox(), field.shell).toolset(),
-            ),
+            (Some(turn), Some(field)) => {
+                let runtime = runtime.with_workspace_toolset(
+                    crate::workspace_run::tools::provider(turn.sandbox(), field.shell).toolset(),
+                );
+                // ADR-0034 decision 10: open_pull_request, only with an
+                // upstream and a bound GitHub toolkit.
+                let pull_request = if field.has_upstream {
+                    self.workspace_runs.as_ref().and_then(|runs| {
+                        use elitea_agent_runtime::toolkits::workspace_pull_request as pr;
+                        pr::open_pull_request_toolset(
+                            pr::github_pull_request_targets(&tool_snapshot),
+                            Arc::new(crate::workspace_run::tools::StoreDiffSource::new(
+                                runs.store(),
+                                turn.claim().clone(),
+                            )),
+                            Arc::new(crate::workspace_run::tools::LogPullRequestAudit::new(
+                                context.execution_id(),
+                            )),
+                        )
+                    })
+                } else {
+                    None
+                };
+                match pull_request {
+                    Some(toolset) => runtime.with_workspace_toolset(toolset),
+                    None => runtime,
+                }
+            }
             _ => runtime,
         };
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
