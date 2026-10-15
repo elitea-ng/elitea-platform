@@ -24,6 +24,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Tooltip from '@mui/material/Tooltip';
 
 import type { Project } from '@/entities/project';
+import { readThreadUuids } from '@/features/workspace-handoff';
 import { readThreads, threadsQueryKey, useWorkspaceIpc, type WorkspaceThread } from '@/features/workspace';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
@@ -32,6 +33,7 @@ import type { ShellAction } from '../lib/shellActions';
 import { WORKSPACE_LIST_KEY } from '../model/useShellActions';
 import type { ShellLocation } from '../model/useShellLocation';
 import { CHILD_INDENT, ShellRow, SectionCaption } from './rows';
+import { ThreadCloudBadge } from './ThreadCloudBadge';
 import { modKey } from './shortcutLabel';
 
 const THREADS_SHOWN = 8;
@@ -45,6 +47,8 @@ interface SectionProps {
 function FolderThreads({ workspace, location, run }: { workspace: Workspace } & Omit<SectionProps, 'projects'>): React.JSX.Element {
   const threads = useQuery({ queryKey: threadsQueryKey(workspace.id), queryFn: () => readThreads(workspace.id) });
   const [all, setAll] = useState(false);
+  // The UUIDs the thread pages read (handoff is keyed by them), to badge a row without opening it.
+  const uuids = readThreadUuids(workspace.id);
   const list: WorkspaceThread[] = threads.data ?? [];
   const shown = all ? list : list.slice(0, THREADS_SHOWN);
   const here = location.workspaceId === workspace.id;
@@ -58,6 +62,7 @@ function FolderThreads({ workspace, location, run }: { workspace: Workspace } & 
             label={thread.title === '' ? t('desktop.shell.untitledThread', 'Untitled thread') : thread.title}
             selected={here && location.conversationId === thread.id}
             onClick={() => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id })}
+            trailing={uuids[thread.id] === undefined ? undefined : <ThreadCloudBadge uuid={uuids[thread.id] as string} />}
           />
         </li>
       ))}
