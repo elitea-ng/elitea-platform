@@ -544,6 +544,35 @@ impl Repo {
         Ok(Some(repo))
     }
 
+    /// A git directory the host keeps for a folder that is not a git work
+    /// tree (`git_dir` outside the folder, `work_tree` the folder): the
+    /// handoff's shadow repository (ADR-0034 decision 5). Checked like any
+    /// other repository.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::UnsafeRepository`] as [`Self::check`].
+    #[cfg(feature = "handoff")]
+    pub(crate) fn shadow(
+        git_dir: &Path,
+        work_tree: &Path,
+        sandbox: &SandboxConfig,
+        deny: Arc<DenyList>,
+    ) -> ToolResult<Self> {
+        let repo = Self {
+            top: work_tree.to_path_buf(),
+            git_dir: git_dir.to_path_buf(),
+            sandbox: sandbox.clone(),
+            deny,
+            global_config: None,
+            verified: Arc::default(),
+            attributes_checked: Arc::default(),
+            attribute_scans: Arc::default(),
+        };
+        repo.check()?;
+        Ok(repo)
+    }
+
     /// Tests: read this file as the global config.
     #[doc(hidden)]
     #[must_use]
