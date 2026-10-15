@@ -1,0 +1,130 @@
+package workspacehandoff
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+)
+
+// EventMessage is a system-authored conversation message a transition appends
+// in its own transaction (decision 8). It is authored by the tenant schema's
+// `system` participant, never by the user's participant, so it does not move
+// the memory-recall boundary (repos.MemoriesRepo.ResolveCurrentMemoryRecall
+// treats a group authored by the user's participant as a turn).
+type EventMessage struct {
+	Event string
+	Text  string
+}
+
+// BeginRecord is a send.
+type BeginRecord struct {
+	Thread      Thread
+	ActorUserID int64
+	TokenID     string
+	DeviceID    string
+	HistoryMode string
+	HasUpstream bool
+	Stats       json.RawMessage
+	Excluded    []string
+	Note        string
+	TTL         time.Duration
+	// MaxProjectWorkspaceBytes and DeclaredBytes are the quota check, made
+	// under the thread's lock: live workspace bytes of the project (without
+	// this thread's, which the send supersedes) plus DeclaredBytes must stay
+	// within the ceiling.
+	MaxProjectWorkspaceBytes int64
+	DeclaredBytes            int64
+}
+
+// BeginResult answers a send.
+type BeginResult struct {
+	Handoff          Handoff
+	ProjectBytesUsed int64
+}
+
+// CompleteRecord moves HANDING_OFF to CLOUD_IDLE.
+type CompleteRecord struct {
+	ProjectID   int64
+	HandoffID   string
+	ActorUserID int64
+	Epoch       int64
+	HandoffRef  string
+	SHA         string
+	Message     EventMessage
+}
+
+// ReleaseRecord moves RECLAIMING to LOCAL.
+type ReleaseRecord struct {
+	Thread      Thread
+	ActorUserID int64
+	Epoch       int64
+	Grace       time.Duration
+	Message     EventMessage
+}
+
+// EraseRecord ends a handoff and erases the cloud copy.
+type EraseRecord struct {
+	Thread      Thread
+	ActorUserID int64
+	// Manager is true for a caller holding models.project_settings.edit: they
+	// may erase another user's copy.
+	Manager bool
+	Message EventMessage
+}
+
+// EraseResult answers an erase. Previous is the row before, so the caller can
+// cancel a running turn.
+type EraseResult struct {
+	Handoff  Handoff
+	Previous Handoff
+	Changed  bool
+}
+
+// TimedTransition is one sweeper-driven transition the repository performs by
+// epoch compare-and-set.
+type TimedTransition struct {
+	Thread  Thread
+	Epoch   int64
+	Message *EventMessage
+}
+
+// Repository is the state machine's persistence (repos.WorkspaceHandoffsRepository).
+type Repository interface {
+	Read(ctx context.Context, thread Thread) (Handoff, bool, error)
+	Begin(ctx context.Context, record BeginRecord) (BeginResult, error)
+	// ProjectWorkspaceBytes sums the project's live workspace bytes, without
+	// the thread's own.
+	ProjectWorkspaceBytes(ctx context.Context, thread Thread) (int64, error)
+	Complete(ctx context.Context, record CompleteRecord) (Handoff, error)
+	// Reclaim takes the thread back: CLOUD_IDLE → RECLAIMING (epoch + 1), or
+	// CLOUD_RUNNING → reclaim_pending. Replayed answers a retried reclaim.
+	Reclaim(ctx context.Context, thread Thread, actorUserID, epoch int64, deviceID string) (Handoff, error)
+	Release(ctx context.Context, record ReleaseRecord) (Handoff, error)
+	Erase(ctx context.Context, record EraseRecord) (EraseResult, error)
+	StartCloudTurn(ctx context.Context, thread Thread, epoch int64, executionID, responseMessageID string) (Handoff, error)
+	FinishCloudTurn(ctx context.Context, thread Thread, epoch int64, executionID string, message *EventMessage) (Handoff, error)
+	// NotifyReclaimRequest writes the owner's notification (deduplicated per
+	// thread, epoch and hour).
+	NotifyReclaimRequest(ctx context.Context, handoff Handoff) error
+
+	// The sweeper's claims and transitions.
+	DueHandingOff(ctx context.Context, now time.Time, limit int) ([]Handoff, error)
+	ExpireHandingOff(ctx context.Context, transition TimedTransition) (Handoff, error)
+	DueReclaimGrace(ctx context.Context, before time.Time, limit int) ([]Handoff, error)
+	ForceReclaim(ctx context.Context, transition TimedTransition) (Handoff, error)
+	DueAbandonedReclaim(ctx context.Context, before time.Time, limit int) ([]Handoff, error)
+	AbandonReclaim(ctx context.Context, transition TimedTransition) (Handoff, error)
+	DueIdle(ctx context.Context, before time.Time, limit int) ([]Handoff, error)
+	// IdleErase erases a CLOUD_IDLE thread past its idle retention.
+	IdleErase(ctx context.Context, transition TimedTransition) (Handoff, error)
+	// OrphanedThreads answers rows whose conversation or project is gone,
+	// walking the table from `after`.
+	OrphanedThreads(ctx context.Context, after Thread, limit int) (orphans []Handoff, next Thread, err error)
+	// OrphanErase erases a thread whose conversation is gone, whatever its
+	// state.
+	OrphanErase(ctx context.Context, transition TimedTransition) (Handoff, error)
+	// ClaimErasures leases LOCAL rows whose objects are due (lease: a minute).
+	ClaimErasures(ctx context.Context, now time.Time, limit int) ([]Handoff, error)
+	// MarkErased sets deleted_at, when the row is still LOCAL at that epoch.
+	MarkErased(ctx context.Context, thread Thread, epoch int64) error
+}
