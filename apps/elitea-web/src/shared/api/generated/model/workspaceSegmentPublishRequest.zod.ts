@@ -53,7 +53,7 @@ export const WorkspaceSegmentPublishRequest = zod
     object_format: zod.string().describe("`sha1` in this version."),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:548 (`publishBody`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:558 (`publishBody`).",
   );
 
 export type WorkspaceSegmentPublishRequest = zod.input<

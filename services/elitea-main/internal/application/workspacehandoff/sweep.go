@@ -151,19 +151,13 @@ func (s *Service) Sweep(ctx context.Context) (SweepReport, error) {
 		errs = append(errs, err)
 	} else {
 		for _, handoff := range due {
-			empty, err := s.objects.EraseThreadObjects(ctx, threadOf(handoff))
-			if err != nil {
+			if err := s.eraseThread(ctx, handoff); err != nil {
 				errs = append(errs, err)
 				continue
 			}
-			if !empty {
-				continue
+			if view, ok, err := s.repo.Read(ctx, threadOf(handoff)); err == nil && ok && view.DeletedAt != nil {
+				report.ObjectsErased++
 			}
-			if err := s.repo.MarkErased(ctx, threadOf(handoff), handoff.Epoch); err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			report.ObjectsErased++
 		}
 	}
 	return report, errors.Join(errs...)

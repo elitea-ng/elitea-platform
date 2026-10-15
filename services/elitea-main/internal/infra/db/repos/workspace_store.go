@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -224,15 +225,16 @@ func (r *WorkspaceStoreRepository) Publish(ctx context.Context, record workspace
 		epoch       int64
 		owner       int64
 		running     *string
+		response    *string
 		hasUpstream bool
 		lastSeq     int64
 	)
 	err = tx.QueryRow(ctx, `
-SELECT state, epoch, owner_user_id, running_execution_id, has_upstream, last_seq
+SELECT state, epoch, owner_user_id, running_execution_id, running_response_message_id::text, has_upstream, last_seq
 FROM elitea_runtime.workspace_handoffs
 WHERE project_id = $1 AND conversation_uuid = $2::uuid
 FOR UPDATE`, record.Thread.ProjectID, record.Thread.ConversationUUID).
-		Scan(&state, &epoch, &owner, &running, &hasUpstream, &lastSeq)
+		Scan(&state, &epoch, &owner, &running, &response, &hasUpstream, &lastSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspacestore.PublishResult{}, workspacestore.ErrNotFound
 	}
@@ -384,6 +386,14 @@ WHERE project_id = $1 AND conversation_uuid = $2::uuid`,
 		refValue(record.Refs, workspacestore.RefBase), refValue(record.Refs, workspacestore.RefUpstream),
 		refValue(record.Refs, workspacestore.RefHandoff1), refValue(record.Refs, workspacestore.RefCloud)); err != nil {
 		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: advance thread: %w", err)
+	}
+	// A cloud turn's commit is stamped on its answer (decision 8): the
+	// desktop imports cloud turns by executed_by, workspace_epoch and
+	// workspace_commit.
+	if record.Caller.Writer == workspacestore.WriterCloudExecutor && response != nil {
+		if err := StampCloudTurnAnswer(ctx, tx, record.Thread.ProjectID, *response, record.Epoch, current[workspacestore.RefCloud]); err != nil {
+			return workspacestore.PublishResult{}, err
+		}
 	}
 	// The grant that carried the bytes is spent.
 	if _, err := tx.Exec(ctx, `
@@ -545,4 +555,33 @@ ORDER BY project_id LIMIT $2`, after, limit)
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// StampCloudTurnAnswer merges the cloud turn markers into the answer group's
+// meta (decision 8): executed_by = cloud_executor, workspace_epoch and, when
+// the turn published, workspace_commit. The turn's finalisation keeps them
+// (it removes only its own keys), and a regenerate strips the two workspace
+// keys. A tenant schema without the chat tables takes no stamp.
+func StampCloudTurnAnswer(ctx context.Context, tx pgx.Tx, projectID int64, responseMessageID string, epoch int64, commit string) error {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return nil
+	}
+	var present bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, schema+".chat_message_group").Scan(&present); err != nil {
+		return fmt.Errorf("workspace store: tenant schema: %w", err)
+	}
+	if !present {
+		return nil
+	}
+	stamp := map[string]any{"executed_by": "cloud_executor", "workspace_epoch": epoch}
+	if commit != "" {
+		stamp["workspace_commit"] = commit
+	}
+	encoded, _ := json.Marshal(stamp)
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_message_group SET meta = meta || $2::jsonb WHERE uuid = $1::uuid`, schema),
+		responseMessageID, string(encoded)); err != nil {
+		return fmt.Errorf("workspace store: stamp cloud turn answer: %w", err)
+	}
+	return nil
 }

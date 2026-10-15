@@ -47,7 +47,7 @@ export const WorkspaceHandoffTransition = zod
     epoch: zod.int(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:353 (`complete`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:363 (`complete`).",
   );
 
 export type WorkspaceHandoffTransition = zod.input<

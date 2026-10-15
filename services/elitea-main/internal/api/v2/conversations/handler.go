@@ -592,6 +592,8 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
+	rows.Close()
+	annotateWorkspaceExecutors(ctx, pool, s, projectID, result)
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "rows": result})
 }
 

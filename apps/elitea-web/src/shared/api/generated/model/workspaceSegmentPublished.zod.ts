@@ -49,7 +49,7 @@ export const WorkspaceSegmentPublished = zod
     superseded: zod.array(zod.int()),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:558 (`publish`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:568 (`publish`).",
   );
 
 export type WorkspaceSegmentPublished = zod.input<

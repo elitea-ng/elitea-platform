@@ -48,7 +48,7 @@ export const WorkspaceHandoffReleaseRequest = zod
     applied_sha: zod.string().nullish(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:431 (`releaseBody`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:441 (`releaseBody`).",
   );
 
 export type WorkspaceHandoffReleaseRequest = zod.input<

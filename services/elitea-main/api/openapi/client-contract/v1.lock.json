@@ -985,13 +985,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -1032,13 +1041,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -1062,13 +1080,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -1092,13 +1119,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -1164,13 +1200,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -4480,6 +4525,9 @@
                         "type": "string"
                       },
                       "updated_at": {
+                        "type": "string"
+                      },
+                      "workspace_executor": {
                         "type": "string"
                       }
                     }
@@ -8241,13 +8289,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -8288,13 +8345,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -8318,13 +8384,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -8390,13 +8465,354 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "GET /elitea_core/workspace_handoff_policy/prompt_lib/{project_id}": {
+      "operation_id": "getWorkspaceHandoffPolicy",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "allow_user_include",
+                "enabled",
+                "env_allow",
+                "env_deny",
+                "env_harvest",
+                "env_limits",
+                "exclusions",
+                "history_modes",
+                "limits",
+                "network",
+                "path_deny",
+                "shell"
+              ],
+              "properties": {
+                "allow_user_include": {
+                  "type": "boolean"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "env_allow": {
+                  "type": "array",
+                  "nullable": true,
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "env_deny": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "env_harvest": {
+                  "type": "boolean"
+                },
+                "env_limits": {
+                  "type": "object",
+                  "required": [
+                    "max_bytes",
+                    "max_vars"
+                  ],
+                  "properties": {
+                    "max_bytes": {
+                      "type": "integer"
+                    },
+                    "max_vars": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "exclusions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "history_modes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "required": [
+                    "max_file_bytes",
+                    "max_files",
+                    "max_segment_bytes",
+                    "max_unpacked_bytes",
+                    "project_workspace_bytes_left"
+                  ],
+                  "properties": {
+                    "max_file_bytes": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "max_files": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "max_segment_bytes": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "max_unpacked_bytes": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "project_workspace_bytes_left": {
+                      "type": "integer",
+                      "format": "int64"
+                    }
+                  }
+                },
+                "network": {
+                  "type": "boolean"
+                },
+                "path_deny": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "shell": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "details": {
+                      "type": "object",
+                      "properties": {
+                        "current": {
+                          "type": "object",
+                          "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "details": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -8545,13 +8961,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -8592,13 +9017,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -8622,13 +9056,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -8694,13 +9137,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -8786,13 +9238,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -8833,13 +9294,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -8863,13 +9333,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -8935,13 +9414,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -14662,11 +15150,21 @@
               "device_id": {
                 "type": "string"
               },
+              "env": {
+                "type": "object",
+                "open": true
+              },
               "has_upstream": {
                 "type": "boolean"
               },
               "history_mode": {
                 "type": "string"
+              },
+              "included_excluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
               "note": {
                 "type": "string"
@@ -14809,13 +15307,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -14856,13 +15363,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -14886,13 +15402,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -14916,13 +15441,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -14946,13 +15480,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -14976,13 +15519,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15006,13 +15558,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15078,13 +15639,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15200,13 +15770,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -15247,13 +15826,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15277,13 +15865,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15307,13 +15904,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15337,13 +15943,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15367,13 +15982,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15439,13 +16063,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15589,13 +16222,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -15636,13 +16278,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15666,13 +16317,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15696,13 +16356,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15726,13 +16395,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15756,13 +16434,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15828,13 +16515,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15912,13 +16608,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -15959,13 +16664,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -15989,13 +16703,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16019,13 +16742,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16091,13 +16823,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16219,13 +16960,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -16266,13 +17016,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16296,13 +17055,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16326,13 +17094,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16356,13 +17133,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16386,13 +17172,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16458,13 +17253,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16627,13 +17431,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -16674,13 +17487,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16704,13 +17526,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16734,13 +17565,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16764,13 +17604,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16794,13 +17643,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16824,13 +17682,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -16896,13 +17763,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17066,13 +17942,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -17113,13 +17998,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17143,13 +18037,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17173,13 +18076,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17203,13 +18115,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17233,13 +18154,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17263,13 +18193,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17335,13 +18274,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17449,13 +18397,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -17496,13 +18453,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17526,13 +18492,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17556,13 +18531,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17586,13 +18570,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17616,13 +18609,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -17688,13 +18690,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -18193,13 +19204,22 @@
                   "properties": {
                     "details": {
                       "type": "object",
-                      "required": [
-                        "current"
-                      ],
                       "properties": {
                         "current": {
                           "type": "object",
                           "open": true
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         }
                       }
                     },
@@ -18240,13 +19260,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -18270,13 +19299,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -18300,13 +19338,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -18330,13 +19377,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -18360,13 +19416,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },
@@ -18432,13 +19497,22 @@
               "properties": {
                 "details": {
                   "type": "object",
-                  "required": [
-                    "current"
-                  ],
                   "properties": {
                     "current": {
                       "type": "object",
                       "open": true
+                    },
+                    "names": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 },

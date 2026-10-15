@@ -102,7 +102,18 @@ type Handoff struct {
 	UpdatedAt          time.Time
 	DeleteAfter        *time.Time
 	DeletedAt          *time.Time
+	// IncludedExcluded and EnvNames (decision 5, amended): the explicit
+	// includes and the harvested variable names. EnvSecretName names the
+	// thread's hidden vault secret, "" when it has none; it is never sent to a
+	// client.
+	IncludedExcluded []string
+	EnvNames         []string
+	EnvSecretName    string
 }
+
+// EnvSecret reports whether the thread has harvested variables (the runtime
+// context's `env_secret`).
+func (h Handoff) EnvSecret() bool { return h.EnvSecretName != "" }
 
 // Stats is what the desktop declares at send (contract §2.1).
 type Stats struct {
@@ -124,6 +135,16 @@ type Policy struct {
 	Limits             workspacestore.Limits
 	IdleRetention      time.Duration
 	ReturnGrace        time.Duration
+	// Amendment 2026-10-15 (decision 5). Exclusions are the platform
+	// patterns then the project additions; PathDeny is the effective
+	// local_work_path_deny, which nothing can include.
+	Exclusions       []string
+	PathDeny         []string
+	AllowUserInclude bool
+	EnvHarvest       bool
+	EnvDeny          []string
+	// EnvAllow, when not nil, is the only list of names that can be harvested.
+	EnvAllow *[]string
 }
 
 // PolicySource answers the effective policy, recomputed on every call.

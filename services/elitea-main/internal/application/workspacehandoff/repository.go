@@ -34,12 +34,27 @@ type BeginRecord struct {
 	// within the ceiling.
 	MaxProjectWorkspaceBytes int64
 	DeclaredBytes            int64
+	// IncludedExcluded and the environment (decision 5, amended).
+	IncludedExcluded []string
+	Env              EnvChange
+}
+
+// EnvChange is what a send does to the thread's environment secret.
+type EnvChange struct {
+	// Keep leaves the previous secret (the send carried no `env`).
+	Keep bool
+	// SecretName is the new secret ("" with Keep false clears it).
+	SecretName string
+	Names      []string
 }
 
 // BeginResult answers a send.
 type BeginResult struct {
 	Handoff          Handoff
 	ProjectBytesUsed int64
+	// PreviousEnvSecret is the secret the send replaced or cleared, for the
+	// caller to delete from the vault.
+	PreviousEnvSecret string
 }
 
 // CompleteRecord moves HANDING_OFF to CLOUD_IDLE.
@@ -91,6 +106,9 @@ type TimedTransition struct {
 // Repository is the state machine's persistence (repos.WorkspaceHandoffsRepository).
 type Repository interface {
 	Read(ctx context.Context, thread Thread) (Handoff, bool, error)
+	// ReadByRunningExecution answers the thread whose running cloud turn is
+	// this execution.
+	ReadByRunningExecution(ctx context.Context, executionID string) (Handoff, bool, error)
 	Begin(ctx context.Context, record BeginRecord) (BeginResult, error)
 	// ProjectWorkspaceBytes sums the project's live workspace bytes, without
 	// the thread's own.
@@ -125,6 +143,16 @@ type Repository interface {
 	OrphanErase(ctx context.Context, transition TimedTransition) (Handoff, error)
 	// ClaimErasures leases LOCAL rows whose objects are due (lease: a minute).
 	ClaimErasures(ctx context.Context, now time.Time, limit int) ([]Handoff, error)
-	// MarkErased sets deleted_at, when the row is still LOCAL at that epoch.
+	// MarkErased sets deleted_at, when the row is still LOCAL at that epoch,
+	// and forgets the environment secret's name (the caller deleted it).
 	MarkErased(ctx context.Context, thread Thread, epoch int64) error
+}
+
+// EnvVault keeps a thread's harvested environment as ONE hidden secret of the
+// project vault (decision 5, amended). Values never reach the database row,
+// the bundle, a log or the audit.
+type EnvVault interface {
+	PutEnv(ctx context.Context, projectID int64, name string, env map[string]string) error
+	DeleteEnv(ctx context.Context, projectID int64, name string) error
+	ReadEnv(ctx context.Context, projectID int64, name string) (map[string]string, error)
 }

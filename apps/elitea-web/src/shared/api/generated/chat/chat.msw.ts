@@ -77,6 +77,7 @@ import type {
   WorkspaceHandoffBegun,
   WorkspaceHandoffEmpty,
   WorkspaceHandoffErased,
+  WorkspaceHandoffPolicy,
   WorkspaceHandoffReclaimPending,
   WorkspaceHandoffReclaimed,
   WorkspaceHandoffReleased,
@@ -336,6 +337,10 @@ export const getListConversationsResponseMock = (
     updated_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
     duration: faker.number.int(),
     message_groups_count: faker.number.int(),
+    workspace_executor: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     is_pinned: faker.datatype.boolean(),
     meta: faker.helpers.arrayElement([
       faker.helpers.arrayElement([null]),
@@ -857,6 +862,48 @@ export const getCommitLocalTurnResponseMock = (
   memories_used: faker.number.int(),
   committed_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   created: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getGetWorkspaceHandoffPolicyResponseMock = (
+  overrideResponse: Partial<Extract<WorkspaceHandoffPolicy, object>> = {},
+): WorkspaceHandoffPolicy => ({
+  enabled: faker.datatype.boolean(),
+  shell: faker.datatype.boolean(),
+  network: faker.datatype.boolean(),
+  history_modes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  exclusions: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  path_deny: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  allow_user_include: faker.datatype.boolean(),
+  env_harvest: faker.datatype.boolean(),
+  env_deny: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  env_allow: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    null,
+  ]),
+  limits: {
+    max_segment_bytes: faker.number.int(),
+    max_file_bytes: faker.number.int(),
+    max_files: faker.number.int(),
+    max_unpacked_bytes: faker.number.int(),
+    project_workspace_bytes_left: faker.number.int(),
+  },
+  env_limits: { max_vars: faker.number.int(), max_bytes: faker.number.int() },
   ...overrideResponse,
 });
 
@@ -2288,6 +2335,32 @@ export const getCommitLocalTurnMockHandler = (
   );
 };
 
+export const getGetWorkspaceHandoffPolicyMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffPolicy
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WorkspaceHandoffPolicy> | WorkspaceHandoffPolicy),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/workspace_handoff_policy/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetWorkspaceHandoffPolicyResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getBeginWorkspaceHandoffMockHandler = (
   overrideResponse?:
     | WorkspaceHandoffBegun
@@ -3133,6 +3206,7 @@ export const getChatMock = () => [
   getSendChatMessageMockHandler(),
   getStartLocalTurnMockHandler(),
   getCommitLocalTurnMockHandler(),
+  getGetWorkspaceHandoffPolicyMockHandler(),
   getBeginWorkspaceHandoffMockHandler(),
   getGetWorkspaceHandoffMockHandler(),
   getEraseWorkspaceHandoffMockHandler(),

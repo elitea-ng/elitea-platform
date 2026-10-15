@@ -40,19 +40,17 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
-import { WorkspaceNullableRefMap } from "./workspaceNullableRefMap.zod";
 
-export const WorkspaceRefConflictDetails = zod
+export const WorkspaceHandoffEnvLimits = zod
   .object({
-    current: WorkspaceNullableRefMap,
+    max_vars: zod.int(),
+    max_bytes: zod.int(),
   })
-  .describe(
-    "The stored value (null when absent) of every ref the publish named.",
-  );
+  .describe("The harvest's caps.");
 
-export type WorkspaceRefConflictDetails = zod.input<
-  typeof WorkspaceRefConflictDetails
+export type WorkspaceHandoffEnvLimits = zod.input<
+  typeof WorkspaceHandoffEnvLimits
 >;
-export type WorkspaceRefConflictDetailsOutput = zod.output<
-  typeof WorkspaceRefConflictDetails
+export type WorkspaceHandoffEnvLimitsOutput = zod.output<
+  typeof WorkspaceHandoffEnvLimits
 >;

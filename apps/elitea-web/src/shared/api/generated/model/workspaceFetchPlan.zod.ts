@@ -50,7 +50,7 @@ export const WorkspaceFetchPlan = zod
     segments: zod.array(WorkspaceFetchSegment),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:595 (`fetch`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:605 (`fetch`).",
   );
 
 export type WorkspaceFetchPlan = zod.input<typeof WorkspaceFetchPlan>;

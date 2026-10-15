@@ -47,7 +47,7 @@ export const WorkspaceHandoffErased = zod
     epoch: zod.int(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:326 (`erase`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:336 (`erase`).",
   );
 
 export type WorkspaceHandoffErased = zod.input<typeof WorkspaceHandoffErased>;

@@ -31,6 +31,7 @@ type fakeHandoff struct {
 	began    handoffapp.BeginRequest
 	erased   handoffapp.EraseRequest
 	released handoffapp.ReleaseRequest
+	policy   handoffapp.Policy
 }
 
 func (f *fakeHandoff) Begin(_ context.Context, request handoffapp.BeginRequest) (handoffapp.BeginOutcome, error) {
@@ -55,7 +56,12 @@ func (f *fakeHandoff) Release(_ context.Context, request handoffapp.ReleaseReque
 	f.released = request
 	return f.handoff, f.err
 }
-func (f *fakeHandoff) State(context.Context, handoffapp.Thread) (handoffapp.View, error) { return f.view, f.err }
+func (f *fakeHandoff) State(context.Context, handoffapp.Thread) (handoffapp.View, error) {
+	return f.view, f.err
+}
+func (f *fakeHandoff) EffectivePolicy(context.Context, int64) (handoffapp.Policy, error) {
+	return f.policy, f.err
+}
 func (f *fakeHandoff) Erase(_ context.Context, request handoffapp.EraseRequest) (handoffapp.Handoff, error) {
 	f.erased = request
 	return f.handoff, f.err
@@ -86,11 +92,16 @@ func (f *fakeStore) PutObject(context.Context, workspacestore.Thread, workspaces
 func (f *fakeStore) OpenObject(context.Context, workspacestore.Thread, workspacestore.Caller, string) (io.ReadCloser, int64, error) {
 	return io.NopCloser(strings.NewReader("bundle")), 6, f.err
 }
-func (f *fakeStore) ThreadBytes(context.Context, workspacestore.Thread) (int64, error) { return 42, nil }
+func (f *fakeStore) ThreadBytes(context.Context, workspacestore.Thread) (int64, error) {
+	return 42, nil
+}
+func (f *fakeStore) ProjectBytes(context.Context, int64) (int64, error) { return 1000, nil }
 
 type fakeConversations struct{ err error }
 
-func (f fakeConversations) AuthorizeChatResource(context.Context, string, string, string) error { return f.err }
+func (f fakeConversations) AuthorizeChatResource(context.Context, string, string, string) error {
+	return f.err
+}
 
 type grantResolver []string
 
@@ -299,5 +310,77 @@ func TestFetchRefusesANegativeSinceSeq(t *testing.T) {
 		"/api/v2/elitea_core/workspace_store_fetch/prompt_lib/1/"+conversation+"?since_seq=-1", "")
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("fetch = %d", response.Code)
+	}
+}
+
+func TestBeginPassesIncludesAndEnvAndMapsTheirRefusals(t *testing.T) {
+	handoff := &fakeHandoff{}
+	h := &handler{handoff: handoff, store: &fakeStore{}, conversations: fakeConversations{}}
+	body := `{"device_id":"d1","stats":{"files":1},"included_excluded":["./.env"],"env":{"DATABASE_URL":"x"}}`
+	response := serve(t, h.begin, nativeUser(), []string{SendPermission}, http.MethodPost, HandoffPath, handoffURL, body)
+	if response.Code != http.StatusCreated || handoff.began.IncludedExcluded[0] != "./.env" || handoff.began.Env["DATABASE_URL"] != "x" {
+		t.Fatalf("begin = %d, request %+v", response.Code, handoff.began)
+	}
+	// An absent env stays nil (keep); `{}` is an empty map (clear).
+	serve(t, h.begin, nativeUser(), []string{SendPermission}, http.MethodPost, HandoffPath, handoffURL, `{"device_id":"d1","stats":{}}`)
+	if handoff.began.Env != nil {
+		t.Fatalf("an absent env decoded as %v", handoff.began.Env)
+	}
+	serve(t, h.begin, nativeUser(), []string{SendPermission}, http.MethodPost, HandoffPath, handoffURL, `{"device_id":"d1","stats":{},"env":{}}`)
+	if handoff.began.Env == nil || len(handoff.began.Env) != 0 {
+		t.Fatalf("env {} decoded as %v", handoff.began.Env)
+	}
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+		detail string
+	}{
+		{&handoffapp.EnvNameDeniedError{Names: []string{"SSH_AUTH_SOCK"}}, http.StatusUnprocessableEntity, "env_name_denied", "names"},
+		{&handoffapp.PathDeniedError{Paths: []string{"./.env.production"}}, http.StatusUnprocessableEntity, "path_denied", "paths"},
+		{handoffapp.ErrIncludeNotAllowed, http.StatusUnprocessableEntity, "include_not_allowed", ""},
+		{handoffapp.ErrEnvHarvestDisabled, http.StatusUnprocessableEntity, "env_harvest_disabled", ""},
+		{handoffapp.ErrEnvTooLarge, http.StatusRequestEntityTooLarge, "env_too_large", ""},
+	} {
+		recorder := httptest.NewRecorder()
+		writeError(context.Background(), recorder, "begin", tc.err)
+		answer := decode(t, recorder)
+		if recorder.Code != tc.status || answer["error"] != tc.code {
+			t.Fatalf("%v: %d %v", tc.err, recorder.Code, answer)
+		}
+		if tc.detail != "" {
+			details, _ := answer["details"].(map[string]any)
+			if list, _ := details[tc.detail].([]any); len(list) != 1 {
+				t.Fatalf("%v: details = %v", tc.err, answer["details"])
+			}
+		}
+	}
+}
+
+func TestPolicyAnswersTheEffectivePolicy(t *testing.T) {
+	allow := []string{"DATABASE_URL"}
+	h := &handler{handoff: &fakeHandoff{policy: handoffapp.Policy{
+		Enabled: true, Shell: true, Network: true, HistoryFullAllowed: true,
+		Exclusions: []string{".env", "secrets/**"}, PathDeny: []string{"**/.env.production"},
+		AllowUserInclude: true, EnvHarvest: true, EnvDeny: []string{"PATH"}, EnvAllow: &allow,
+		Limits: workspacestore.Limits{MaxSegmentBytes: 10, MaxProjectWorkspaceBytes: 5000},
+	}}, store: &fakeStore{}, conversations: fakeConversations{}}
+	response := serve(t, h.policy, &auth.User{ID: "7", UserID: "7", AuthType: "session"}, []string{SendPermission},
+		http.MethodGet, PolicyPath, "/api/v2/elitea_core/workspace_handoff_policy/prompt_lib/1", "")
+	answer := decode(t, response)
+	limits, _ := answer["limits"].(map[string]any)
+	envLimits, _ := answer["env_limits"].(map[string]any)
+	modes, _ := answer["history_modes"].([]any)
+	if response.Code != http.StatusOK || answer["enabled"] != true || len(modes) != 2 ||
+		len(answer["exclusions"].([]any)) != 2 || answer["path_deny"].([]any)[0] != "**/.env.production" ||
+		answer["env_allow"].([]any)[0] != "DATABASE_URL" || limits["project_workspace_bytes_left"] != float64(4000) ||
+		envLimits["max_vars"] != float64(200) || envLimits["max_bytes"] != float64(65536) {
+		t.Fatalf("policy = %d %v", response.Code, answer)
+	}
+	unset := &handler{handoff: &fakeHandoff{}, store: &fakeStore{}, conversations: fakeConversations{}}
+	response = serve(t, unset.policy, nativeUser(), []string{SendPermission}, http.MethodGet, PolicyPath,
+		"/api/v2/elitea_core/workspace_handoff_policy/prompt_lib/1", "")
+	if answer := decode(t, response); answer["env_allow"] != nil || answer["enabled"] != false {
+		t.Fatalf("an empty policy = %v", answer)
 	}
 }

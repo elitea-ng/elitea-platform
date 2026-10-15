@@ -51,7 +51,7 @@ export const WorkspaceSegmentUploadGrant = zod
     expires_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:474 (`upload`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:484 (`upload`).",
   );
 
 export type WorkspaceSegmentUploadGrant = zod.input<

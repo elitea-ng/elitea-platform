@@ -48,7 +48,7 @@ export const WorkspaceSegmentUploadComplete = zod
     parts: zod.array(WorkspaceSegmentPart),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:507 (`uploadCompleteBody`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:517 (`uploadCompleteBody`).",
   );
 
 export type WorkspaceSegmentUploadComplete = zod.input<

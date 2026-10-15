@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -97,6 +98,26 @@ func composeWorkspaceHandoff(
 	if err != nil {
 		return workspaceHandoffComposition{}, err
 	}
+	// The harvested environment's vault (ADR-0034 decision 5, amended). The
+	// writer and the reader take the SAME key source, so a secret this
+	// process writes is one it can open.
+	masterKey, err := encodedVaultMasterKeyFromEnv(os.LookupEnv)
+	if err != nil {
+		return workspaceHandoffComposition{}, fmt.Errorf("workspace handoff env vault: %w", err)
+	}
+	vaultWriter, err := dbrepos.NewCurrentSecretVaultRepository(pool, masterKey)
+	if err != nil {
+		return workspaceHandoffComposition{}, fmt.Errorf("workspace handoff env vault: %w", err)
+	}
+	vaultReader, err := storage.NewPostgresSecretVaultLoader(pool, masterKey)
+	if err != nil {
+		return workspaceHandoffComposition{}, fmt.Errorf("workspace handoff env vault: %w", err)
+	}
+	envVault, err := dbrepos.NewWorkspaceEnvVault(vaultWriter, vaultReader)
+	if err != nil {
+		return workspaceHandoffComposition{}, err
+	}
+	handoff.WithEnvVault(envVault)
 	route, err := workspacehandoffapi.NewRoute(handoff, store, dbrepos.NewConversationsRepo(pool), groupAuth,
 		legacyrbac.NewPostgresResolver(pool))
 	if err != nil {

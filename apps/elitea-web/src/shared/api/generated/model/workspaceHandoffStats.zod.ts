@@ -64,7 +64,7 @@ export const WorkspaceHandoffStats = zod
       .optional(),
   })
   .describe(
-    "What the desktop declares at send. `excluded` lists `./path` strings left on the laptop. NOTE(W2): internal/application/workspacehandoff/types.go:108 (`Stats`).",
+    "What the desktop declares at send. `excluded` lists `./path` strings left on the laptop. NOTE(W2): internal/application/workspacehandoff/types.go:119 (`Stats`).",
   );
 
 export type WorkspaceHandoffStats = zod.input<typeof WorkspaceHandoffStats>;

@@ -54,7 +54,7 @@ export const WorkspaceHandoffBegun = zod
     expires_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:235 (`begin`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:245 (`begin`).",
   );
 
 export type WorkspaceHandoffBegun = zod.input<typeof WorkspaceHandoffBegun>;

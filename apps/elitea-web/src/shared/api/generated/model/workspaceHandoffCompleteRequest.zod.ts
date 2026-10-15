@@ -48,7 +48,7 @@ export const WorkspaceHandoffCompleteRequest = zod
     sha: zod.string(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:347 (`completeBody`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:357 (`completeBody`).",
   );
 
 export type WorkspaceHandoffCompleteRequest = zod.input<

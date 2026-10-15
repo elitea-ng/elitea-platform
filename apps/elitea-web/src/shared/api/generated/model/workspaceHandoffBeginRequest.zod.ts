@@ -41,6 +41,7 @@
  */
 import * as zod from "zod";
 import { WorkspaceHandoffStats } from "./workspaceHandoffStats.zod";
+import { WorkspaceStringMap } from "./workspaceStringMap.zod";
 
 export const WorkspaceHandoffBeginRequest = zod
   .object({
@@ -52,9 +53,16 @@ export const WorkspaceHandoffBeginRequest = zod
     stats: WorkspaceHandoffStats,
     has_upstream: zod.boolean().optional(),
     note: zod.string().optional().describe("The handoff note, at most 8 KiB."),
+    included_excluded: zod
+      .array(zod.string())
+      .optional()
+      .describe(
+        "Contract 6.2. Excluded paths (`./path`) the user explicitly includes; refused when the policy does not allow it (`include_not_allowed`) or a path matches `local_work_path_deny` (`path_denied`).",
+      ),
+    env: WorkspaceStringMap.optional(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:227 (`beginBody`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:235 (`beginBody`).",
   );
 
 export type WorkspaceHandoffBeginRequest = zod.input<

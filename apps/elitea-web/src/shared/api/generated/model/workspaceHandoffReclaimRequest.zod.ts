@@ -47,7 +47,7 @@ export const WorkspaceHandoffReclaimRequest = zod
     device_id: zod.string().optional(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:378 (`reclaimBody`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:388 (`reclaimBody`).",
   );
 
 export type WorkspaceHandoffReclaimRequest = zod.input<

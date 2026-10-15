@@ -132,6 +132,7 @@ import type {
   WorkspaceHandoffEmpty,
   WorkspaceHandoffErased,
   WorkspaceHandoffError,
+  WorkspaceHandoffPolicy,
   WorkspaceHandoffReclaimPending,
   WorkspaceHandoffReclaimRequest,
   WorkspaceHandoffReclaimed,
@@ -5989,6 +5990,274 @@ export function useCommitLocalTurn<
     projectId,
     executionId,
     localTurnCommitRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getWorkspaceHandoffPolicyResponse200 = {
+  data: WorkspaceHandoffPolicy;
+  status: 200;
+};
+
+export type getWorkspaceHandoffPolicyResponse400 = {
+  data: WorkspaceHandoffError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type getWorkspaceHandoffPolicyResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getWorkspaceHandoffPolicyResponse403 = {
+  data: WorkspaceHandoffError;
+  status: 403;
+};
+
+export type getWorkspaceHandoffPolicyResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getWorkspaceHandoffPolicyResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getWorkspaceHandoffPolicyResponse503 = {
+  data: WorkspaceHandoffError;
+  status: 503;
+};
+
+export type getWorkspaceHandoffPolicyResponseSuccess =
+  getWorkspaceHandoffPolicyResponse200 & {
+    headers: Headers;
+  };
+export type getWorkspaceHandoffPolicyResponseError = (
+  | getWorkspaceHandoffPolicyResponse400
+  | getWorkspaceHandoffPolicyResponse401
+  | getWorkspaceHandoffPolicyResponse403
+  | getWorkspaceHandoffPolicyResponse426
+  | getWorkspaceHandoffPolicyResponse500
+  | getWorkspaceHandoffPolicyResponse503
+) & {
+  headers: Headers;
+};
+
+export type getWorkspaceHandoffPolicyResponse =
+  | getWorkspaceHandoffPolicyResponseSuccess
+  | getWorkspaceHandoffPolicyResponseError;
+
+export const getGetWorkspaceHandoffPolicyUrl = (projectId: string) => {
+  return `/elitea_core/workspace_handoff_policy/prompt_lib/${projectId}`;
+};
+
+/**
+ * Client contract 1.8 (ADR-0034 decisions 5 and 11, contract 6.1). The
+ * caller's effective policy: the platform `cloud_executor` ceiling,
+ * narrowed by the project setting and the native client policy. The
+ * desktop shows it in the send dialog; the begin answer's `limits`
+ * stay authoritative. A native token or a browser session, with
+ * `models.chat.messages.create`.
+ * @summary Read the effective handoff policy before a send
+ */
+export const getWorkspaceHandoffPolicy = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getWorkspaceHandoffPolicyResponse> => {
+  return eliteaFetch<getWorkspaceHandoffPolicyResponse>(
+    getGetWorkspaceHandoffPolicyUrl(projectId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetWorkspaceHandoffPolicyQueryKey = (projectId: string) => {
+  return [
+    `/elitea_core/workspace_handoff_policy/prompt_lib/${projectId}`,
+  ] as const;
+};
+
+export const getGetWorkspaceHandoffPolicyQueryOptions = <
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetWorkspaceHandoffPolicyQueryKey(projectId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>
+  > = ({ signal }) =>
+    getWorkspaceHandoffPolicy(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetWorkspaceHandoffPolicyQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>
+>;
+export type GetWorkspaceHandoffPolicyQueryError =
+  | WorkspaceHandoffError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useGetWorkspaceHandoffPolicy<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoffPolicy<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+          TError,
+          Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetWorkspaceHandoffPolicy<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the effective handoff policy before a send
+ */
+
+export function useGetWorkspaceHandoffPolicy<
+  TData = Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+  TError =
+    | WorkspaceHandoffError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getWorkspaceHandoffPolicy>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetWorkspaceHandoffPolicyQueryOptions(
+    projectId,
     options,
   );
 

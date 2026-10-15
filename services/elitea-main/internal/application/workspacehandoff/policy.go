@@ -39,6 +39,14 @@ type ProjectSetting struct {
 	MaxProjectWorkspaceGB *int64    `json:"max_project_workspace_gb"`
 	IdleRetentionDays     *int64    `json:"idle_retention_days"`
 	ReturnGraceDays       *int64    `json:"return_grace_days"`
+	// Amendment 2026-10-15 (decision 11): a project adds exclusion and env
+	// deny patterns, turns include and the harvest off (or on under a ceiling
+	// that allows them), and narrows env_allow.
+	ExclusionsAdd    *[]string `json:"exclusions_add"`
+	AllowUserInclude *bool     `json:"allow_user_include"`
+	EnvHarvest       *bool     `json:"env_harvest"`
+	EnvDenyAdd       *[]string `json:"env_deny_add"`
+	EnvAllow         *[]string `json:"env_allow"`
 }
 
 // PolicyService computes the effective policy (decision 11): the platform
@@ -88,7 +96,9 @@ func (p *PolicyService) Effective(ctx context.Context, projectID int64) (Policy,
 	if err != nil {
 		return Policy{}, err
 	}
-	return Narrow(ceiling, setting, device.LocalWork.CloudHandoff, p.encrypted), nil
+	policy := Narrow(ceiling, setting, device.LocalWork.CloudHandoff, p.encrypted)
+	policy.PathDeny = append([]string{}, device.LocalWork.PathDeny...)
+	return policy, nil
 }
 
 // Limits answers the effective caps (workspacestore.LimitsSource).
@@ -127,6 +137,13 @@ func Narrow(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting
 		IdleRetention: time.Duration(lower(ceiling.IdleRetentionDays, project.IdleRetentionDays)) * 24 * time.Hour,
 		ReturnGrace:   time.Duration(lower(ceiling.ReturnGraceDays, project.ReturnGraceDays)) * 24 * time.Hour,
 	}
+	// The exclusion set and the environment deny list only grow: a project
+	// adds patterns and can never remove a platform one.
+	policy.Exclusions = mergePatterns(ceiling.Exclusions, project.ExclusionsAdd)
+	policy.EnvDeny = mergePatterns(ceiling.EnvDeny, project.EnvDenyAdd)
+	policy.AllowUserInclude = and(ceiling.AllowUserInclude, project.AllowUserInclude)
+	policy.EnvHarvest = and(ceiling.EnvHarvest, project.EnvHarvest)
+	policy.EnvAllow = narrowNames(ceiling.EnvAllow, project.EnvAllow)
 	// The allowlist. Empty means the public internet, so an intersection that
 	// comes out empty must not widen into "everything": the network is then off.
 	policy.NetworkAllowlist = append([]string{}, ceiling.NetworkAllowlist...)
@@ -152,4 +169,39 @@ func Narrow(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting
 		}
 	}
 	return policy
+}
+
+func mergePatterns(platform []string, added *[]string) []string {
+	merged := append([]string{}, platform...)
+	if added != nil {
+		merged = append(merged, *added...)
+	}
+	return platformconfig.CloudExecutorPatterns(merged)
+}
+
+// narrowNames intersects two optional allow lists: unset (nil) allows
+// everything, so the project's list applies under an unset ceiling, and a
+// list under a set ceiling keeps only names the ceiling lists too.
+func narrowNames(platform, project *[]string) *[]string {
+	switch {
+	case platform == nil && project == nil:
+		return nil
+	case platform == nil:
+		names := platformconfig.CloudExecutorPatterns(*project)
+		return &names
+	case project == nil:
+		names := append([]string{}, *platform...)
+		return &names
+	}
+	allowed := map[string]bool{}
+	for _, name := range *platform {
+		allowed[name] = true
+	}
+	names := []string{}
+	for _, name := range platformconfig.CloudExecutorPatterns(*project) {
+		if allowed[name] {
+			names = append(names, name)
+		}
+	}
+	return &names
 }

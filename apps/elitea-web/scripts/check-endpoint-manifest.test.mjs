@@ -737,7 +737,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // reclaim, reclaim request, release, upload grant, upload completion,
 // publish, fetch plan, and the streaming facade's PUT and GET). The desktop
 // calls them; no web code does yet, so the manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 330;
+// 330 -> 331 (client contract 1.8, ADR-0034 amendment of 2026-10-15):
+// getWorkspaceHandoffPolicy, the effective policy the desktop's send dialog
+// reads. The manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 331;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

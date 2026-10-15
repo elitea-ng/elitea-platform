@@ -26,6 +26,7 @@ import (
 	handoffapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // The route patterns (contract §2).
@@ -40,6 +41,7 @@ const (
 	PublishPath        = "/api/v2/elitea_core/workspace_store_publish/prompt_lib/{projectID}/{conversationUUID}"
 	FetchPath          = "/api/v2/elitea_core/workspace_store_fetch/prompt_lib/{projectID}/{conversationUUID}"
 	ObjectPath         = "/api/v2/elitea_core/workspace_store_object/prompt_lib/{projectID}/{conversationUUID}/{sha256}"
+	PolicyPath         = "/api/v2/elitea_core/workspace_handoff_policy/prompt_lib/{projectID}"
 
 	// SendPermission is the chat send's: every handoff write moves the
 	// conversation. 0068 grants it, so no migration seeds anything.
@@ -50,7 +52,9 @@ const (
 	ManagePermission = "models.project_settings.edit"
 	Mode             = auth.PermissionModeDefault
 
-	maxBody = int64(64 * 1024)
+	// maxBody bounds one JSON body: a send carries its exclusion list, its
+	// includes and up to 64 KiB of environment.
+	maxBody = int64(2 * 1024 * 1024)
 )
 
 // Methods lists every (method, pattern) the route serves, for the router.
@@ -60,6 +64,7 @@ var Methods = []struct{ Method, Pattern string }{
 	{http.MethodPost, ReleasePath}, {http.MethodPost, UploadPath}, {http.MethodPost, UploadCompletePath},
 	{http.MethodPost, PublishPath}, {http.MethodGet, FetchPath},
 	{http.MethodPut, ObjectPath}, {http.MethodGet, ObjectPath},
+	{http.MethodGet, PolicyPath},
 }
 
 var ErrInvalidRoute = errors.New("invalid workspace handoff route dependencies")
@@ -73,6 +78,7 @@ type Handoff interface {
 	Release(context.Context, handoffapp.ReleaseRequest) (handoffapp.Handoff, error)
 	State(context.Context, handoffapp.Thread) (handoffapp.View, error)
 	Erase(context.Context, handoffapp.EraseRequest) (handoffapp.Handoff, error)
+	EffectivePolicy(context.Context, int64) (handoffapp.Policy, error)
 }
 
 // Store is *workspacestore.Service.
@@ -84,6 +90,7 @@ type Store interface {
 	PutObject(context.Context, workspacestore.Thread, workspacestore.Caller, string, io.Reader) error
 	OpenObject(context.Context, workspacestore.Thread, workspacestore.Caller, string) (io.ReadCloser, int64, error)
 	ThreadBytes(context.Context, workspacestore.Thread) (int64, error)
+	ProjectBytes(context.Context, int64) (int64, error)
 }
 
 // ConversationReader authorizes reading a conversation
@@ -135,6 +142,7 @@ func NewRoute(handoff Handoff, store Store, conversations ConversationReader, au
 	router.Method(http.MethodGet, FetchPath, gate(h.fetch, SendPermission))
 	router.Method(http.MethodPut, ObjectPath, gate(h.putObject, SendPermission))
 	router.Method(http.MethodGet, ObjectPath, gate(h.getObject, SendPermission))
+	router.Method(http.MethodGet, PolicyPath, gate(h.policy, SendPermission))
 	return &Route{handler: router}, nil
 }
 
@@ -225,11 +233,13 @@ func optionalString(value *string) any {
 }
 
 type beginBody struct {
-	DeviceID    string           `json:"device_id"`
-	HistoryMode string           `json:"history_mode"`
-	Stats       handoffapp.Stats `json:"stats"`
-	HasUpstream bool             `json:"has_upstream"`
-	Note        string           `json:"note"`
+	DeviceID         string            `json:"device_id"`
+	HistoryMode      string            `json:"history_mode"`
+	Stats            handoffapp.Stats  `json:"stats"`
+	HasUpstream      bool              `json:"has_upstream"`
+	Note             string            `json:"note"`
+	IncludedExcluded []string          `json:"included_excluded"`
+	Env              map[string]string `json:"env"`
 }
 
 func (h *handler) begin(writer http.ResponseWriter, request *http.Request) {
@@ -248,7 +258,7 @@ func (h *handler) begin(writer http.ResponseWriter, request *http.Request) {
 	outcome, err := h.handoff.Begin(request.Context(), handoffapp.BeginRequest{
 		Thread: target, ActorUserID: actor, TokenID: user.TokenID, DeviceID: body.DeviceID,
 		HistoryMode: body.HistoryMode, Stats: body.Stats, HasUpstream: body.HasUpstream, Note: body.Note,
-		AuditRoute: HandoffPath,
+		AuditRoute: HandoffPath, IncludedExcluded: body.IncludedExcluded, Env: body.Env,
 	})
 	if err != nil {
 		writeError(request.Context(), writer, "begin", err)
@@ -665,10 +675,88 @@ func (h *handler) getObject(writer http.ResponseWriter, request *http.Request) {
 	_, _ = io.Copy(writer, body)
 }
 
+// policy answers the caller's effective handoff policy before a send
+// (contract 6.1). The begin answer's limits stay authoritative.
+func (h *handler) policy(writer http.ResponseWriter, request *http.Request) {
+	projectID, ok := desktopwire.PositiveID(chi.URLParam(request, "projectID"))
+	if !ok {
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_handoff", "Invalid handoff request")
+		return
+	}
+	if _, _, ok := caller(writer, request, false); !ok {
+		return
+	}
+	policy, err := h.handoff.EffectivePolicy(request.Context(), projectID)
+	if err != nil {
+		writeError(request.Context(), writer, "policy", err)
+		return
+	}
+	used, err := h.store.ProjectBytes(request.Context(), projectID)
+	if err != nil {
+		writeError(request.Context(), writer, "policy", err)
+		return
+	}
+	left := policy.Limits.MaxProjectWorkspaceBytes - used
+	if left < 0 {
+		left = 0
+	}
+	modes := []string{handoffapp.HistoryNone}
+	if policy.HistoryFullAllowed {
+		modes = append(modes, handoffapp.HistoryFull)
+	}
+	var envAllow any
+	if policy.EnvAllow != nil {
+		envAllow = *policy.EnvAllow
+	}
+	nonNil := func(values []string) []string {
+		if values == nil {
+			return []string{}
+		}
+		return values
+	}
+	desktopwire.WriteJSON(writer, http.StatusOK, map[string]any{
+		"enabled": policy.Enabled, "shell": policy.Shell, "network": policy.Network,
+		"history_modes":      modes,
+		"exclusions":         nonNil(policy.Exclusions),
+		"path_deny":          nonNil(policy.PathDeny),
+		"allow_user_include": policy.AllowUserInclude,
+		"env_harvest":        policy.EnvHarvest,
+		"env_deny":           nonNil(policy.EnvDeny),
+		"env_allow":          envAllow,
+		"limits": map[string]any{
+			"max_segment_bytes":            policy.Limits.MaxSegmentBytes,
+			"max_file_bytes":               policy.Limits.MaxFileBytes,
+			"max_files":                    policy.Limits.MaxFiles,
+			"max_unpacked_bytes":           policy.Limits.MaxUnpackedBytes,
+			"project_workspace_bytes_left": left,
+		},
+		"env_limits": map[string]any{
+			"max_vars": platformconfig.MaxCloudExecutorEnvVars, "max_bytes": platformconfig.MaxCloudExecutorEnvBytes,
+		},
+	})
+}
+
 // writeError maps the application errors to the contract's codes.
 func writeError(ctx context.Context, writer http.ResponseWriter, operation string, err error) {
 	var conflict *workspacestore.RefConflictError
+	var deniedNames *handoffapp.EnvNameDeniedError
+	var deniedPaths *handoffapp.PathDeniedError
 	switch {
+	case errors.As(err, &deniedNames):
+		desktopwire.WriteErrorDetails(writer, http.StatusUnprocessableEntity, "env_name_denied",
+			"The policy refuses these environment variable names.", map[string]any{"names": deniedNames.Names})
+	case errors.As(err, &deniedPaths):
+		desktopwire.WriteErrorDetails(writer, http.StatusUnprocessableEntity, "path_denied",
+			"These includes match the path deny list, which nothing can include.", map[string]any{"paths": deniedPaths.Paths})
+	case errors.Is(err, handoffapp.ErrIncludeNotAllowed):
+		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "include_not_allowed",
+			"Explicit includes are turned off for this project or deployment.")
+	case errors.Is(err, handoffapp.ErrEnvHarvestDisabled):
+		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "env_harvest_disabled",
+			"Sending environment variables is turned off for this project or deployment.")
+	case errors.Is(err, handoffapp.ErrEnvTooLarge):
+		desktopwire.WriteError(writer, http.StatusRequestEntityTooLarge, "env_too_large",
+			"At most 200 environment variables and 64 KiB in all.")
 	case errors.As(err, &conflict):
 		current := map[string]any{}
 		for name, value := range conflict.Current {

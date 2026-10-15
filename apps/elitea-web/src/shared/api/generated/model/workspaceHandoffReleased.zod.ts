@@ -48,7 +48,7 @@ export const WorkspaceHandoffReleased = zod
     cloud_copy_delete_after: zod.iso.datetime({ offset: true }).nullable(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:437 (`release`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:447 (`release`).",
   );
 
 export type WorkspaceHandoffReleased = zod.input<

@@ -13,6 +13,7 @@ type devicePolicy struct{ cloudHandoff bool }
 func (d devicePolicy) Policy(context.Context) (platformconfig.NativeClientPolicy, error) {
 	policy := platformconfig.DefaultNativeClientPolicy()
 	policy.LocalWork.CloudHandoff = d.cloudHandoff
+	policy.LocalWork.PathDeny = []string{"**/.env.production"}
 	return policy, nil
 }
 
@@ -55,7 +56,8 @@ INSERT INTO centry.platform_config (section, key, value) VALUES ('cloud_executor
 	if _, err := pool.Exec(ctx, `
 INSERT INTO p_1.configuration (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source)
 VALUES (gen_random_uuid(), 1, 'Cloud executor', 'cloud_executor', 'cloud_executor', 'project_settings',
-        '{"shell": false, "network_allowlist": ["pypi.org"], "max_segment_mb": 500, "max_project_workspace_gb": 3}'::jsonb,
+        '{"shell": false, "network_allowlist": ["pypi.org"], "max_segment_mb": 500, "max_project_workspace_gb": 3,
+          "exclusions_add": ["secrets/**"], "allow_user_include": false, "env_harvest": true, "env_deny_add": ["AWS_*"]}'::jsonb,
         '{}'::jsonb, false, true, 'user')`); err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +66,14 @@ VALUES (gen_random_uuid(), 1, 'Cloud executor', 'cloud_executor', 'cloud_executo
 		got.NetworkAllowlist[0] != "pypi.org" || got.Limits.MaxSegmentBytes != 100<<20 ||
 		got.Limits.MaxProjectWorkspaceBytes != 3<<30 {
 		t.Fatalf("with the project setting = %+v, %v", got, err)
+	}
+	// The amendment's layers: the project adds patterns and turns include
+	// off; it cannot turn the harvest on under a ceiling that has it off; the
+	// device's path_deny is carried through.
+	if got.Exclusions[0] != ".env" || got.Exclusions[len(got.Exclusions)-1] != "secrets/**" ||
+		got.AllowUserInclude || got.EnvHarvest || got.EnvDeny[len(got.EnvDeny)-1] != "AWS_*" ||
+		len(got.PathDeny) != 1 || got.PathDeny[0] != "**/.env.production" {
+		t.Fatalf("amendment layers = %+v", got)
 	}
 	off, _ := workspacehandoff.NewPolicyService(repo, repo, devicePolicy{cloudHandoff: false}, true, platformconfig.CloudExecutorResources{})
 	if got, _ := off.Effective(ctx, 1); got.Enabled {

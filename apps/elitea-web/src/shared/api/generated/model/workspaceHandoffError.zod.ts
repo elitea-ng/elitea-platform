@@ -40,16 +40,16 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
-import { WorkspaceRefConflictDetails } from "./workspaceRefConflictDetails.zod";
+import { WorkspaceHandoffErrorDetails } from "./workspaceHandoffErrorDetails.zod";
 
 export const WorkspaceHandoffError = zod
   .object({
     error: zod.string(),
     message: zod.string().optional(),
-    details: WorkspaceRefConflictDetails.optional(),
+    details: WorkspaceHandoffErrorDetails.optional(),
   })
   .describe(
-    "A refused handoff or store call. `error` is a machine code (the operations name theirs); `details` is set for `ref_conflict` only. NOTE(W2): internal/api/v2/workspacehandoff/route.go:669 (`writeError`).",
+    "A refused handoff or store call. `error` is a machine code (the operations name theirs); `details` is set for `ref_conflict` only. NOTE(W2): internal/api/v2/workspacehandoff/route.go:740 (`writeError`).",
   );
 
 export type WorkspaceHandoffError = zod.input<typeof WorkspaceHandoffError>;

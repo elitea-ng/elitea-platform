@@ -49,7 +49,7 @@ export const WorkspaceHandoffReclaimPending = zod
     waiting_for_execution_id: zod.string(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:383 (`reclaim`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:393 (`reclaim`).",
   );
 
 export type WorkspaceHandoffReclaimPending = zod.input<

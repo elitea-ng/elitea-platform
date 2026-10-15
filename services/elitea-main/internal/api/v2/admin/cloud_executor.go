@@ -22,6 +22,13 @@ func cloudExecutorSection() map[string]any {
 			"section": section, "default": value, "minimum": minimum, "maximum": maximum,
 		}
 	}
+	patterns := func(key, title, description string, value []any) map[string]any {
+		return map[string]any{
+			"key": key, "type": "array", "items": map[string]any{"type": "string"}, "title": title,
+			"description": description, "section": section, "default": value,
+			"maxItems": platformconfig.MaxCloudExecutorPatterns,
+		}
+	}
 	return map[string]any{
 		"id":    section,
 		"title": "Cloud executor",
@@ -49,6 +56,22 @@ func cloudExecutorSection() map[string]any {
 			{"key": platformconfig.KeyCloudExecutorHistoryFullAllowed, "type": "boolean", "title": "Allow Full History",
 				"description": "Whether a send may carry the repository history, not only the current tree.",
 				"section":     section, "default": defaults.HistoryFullAllowed},
+			patterns(platformconfig.KeyCloudExecutorExclusions, "Exclusions",
+				"Files a send never uploads, as path patterns (for example .env or *.pem), even when they are "+
+					"tracked. A project can add patterns but cannot remove these.", toAny(defaults.Exclusions)),
+			{"key": platformconfig.KeyCloudExecutorAllowUserInclude, "type": "boolean", "title": "Allow Explicit Include",
+				"description": "Whether a user may send a file the exclusions match, for example a .env the cloud " +
+					"build needs. The local path deny list can never be included.",
+				"section": section, "default": defaults.AllowUserInclude},
+			{"key": platformconfig.KeyCloudExecutorEnvHarvest, "type": "boolean", "title": "Allow Environment Variables",
+				"description": "Whether a user may send selected environment variables, which the cloud sandbox's " +
+					"commands receive. They are stored in the vault, never in the uploaded files.",
+				"section": section, "default": defaults.EnvHarvest},
+			patterns(platformconfig.KeyCloudExecutorEnvDeny, "Denied Variable Names",
+				"Environment variable names (patterns such as SSH_*) that are never offered. A project can add names.",
+				toAny(defaults.EnvDeny)),
+			patterns(platformconfig.KeyCloudExecutorEnvAllow, "Allowed Variable Names",
+				"When set, the only environment variable names that can be sent.", []any{}),
 			integer(platformconfig.KeyCloudExecutorMaxSegmentMB, "Maximum Upload (MB)", "The largest bundle one send uploads.",
 				defaults.MaxSegmentMB, 1, platformconfig.MaxCloudExecutorSegmentMB),
 			integer(platformconfig.KeyCloudExecutorMaxFileMB, "Maximum File Size (MB)", "The largest single file a send carries.",
@@ -68,4 +91,12 @@ func cloudExecutorSection() map[string]any {
 				platformconfig.MaxCloudExecutorRetentionDays),
 		},
 	}
+}
+
+func toAny(values []string) []any {
+	out := make([]any, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
 }

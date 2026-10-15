@@ -87,7 +87,8 @@ const handoffColumns = `project_id, conversation_uuid::text, handoff_id::text, s
        reclaim_requested_at, owner_user_id, device_id, device_name, history_mode, has_upstream,
        base_sha, upstream_sha, handoff_sha, cloud_sha, stats, excluded, last_seq,
        COALESCE(running_execution_id, ''), COALESCE(running_response_message_id::text, ''), expires_at,
-       state_changed_at, updated_at, delete_after, deleted_at, note`
+       state_changed_at, updated_at, delete_after, deleted_at, note,
+       included_excluded, env_names, COALESCE(env_secret_name, '')`
 
 type handoffRow struct {
 	workspacehandoff.Handoff
@@ -96,16 +97,18 @@ type handoffRow struct {
 
 func scanHandoff(row pgx.Row) (handoffRow, error) {
 	var (
-		out      handoffRow
-		state    string
-		stats    []byte
-		excluded []byte
+		out                   handoffRow
+		state                 string
+		stats                 []byte
+		excluded              []byte
+		includes, environment []byte
 	)
 	err := row.Scan(&out.ProjectID, &out.ConversationUUID, &out.HandoffID, &state, &out.Epoch, &out.ReclaimPending,
 		&out.ReclaimRequestedAt, &out.OwnerUserID, &out.DeviceID, &out.DeviceName, &out.HistoryMode, &out.HasUpstream,
 		&out.BaseSHA, &out.UpstreamSHA, &out.HandoffSHA, &out.CloudSHA, &stats, &excluded, &out.LastSeq,
 		&out.RunningExecutionID, &out.RunningResponseID, &out.ExpiresAt,
-		&out.StateChangedAt, &out.UpdatedAt, &out.DeleteAfter, &out.DeletedAt, &out.note)
+		&out.StateChangedAt, &out.UpdatedAt, &out.DeleteAfter, &out.DeletedAt, &out.note,
+		&includes, &environment, &out.EnvSecretName)
 	if err != nil {
 		return handoffRow{}, err
 	}
@@ -114,6 +117,14 @@ func scanHandoff(row pgx.Row) (handoffRow, error) {
 	_ = json.Unmarshal(excluded, &out.Excluded)
 	if out.Excluded == nil {
 		out.Excluded = []string{}
+	}
+	_ = json.Unmarshal(includes, &out.IncludedExcluded)
+	if out.IncludedExcluded == nil {
+		out.IncludedExcluded = []string{}
+	}
+	_ = json.Unmarshal(environment, &out.EnvNames)
+	if out.EnvNames == nil {
+		out.EnvNames = []string{}
 	}
 	return out, nil
 }
@@ -183,7 +194,38 @@ RETURNING ` + handoffColumns
 	if err != nil {
 		return handoffRow{}, fmt.Errorf("workspace handoff: transition to %s: %w", to, err)
 	}
+	if len(from) != 1 || from[0] != to {
+		if err := stampHandoffConversation(ctx, tx, thread); err != nil {
+			return handoffRow{}, err
+		}
+	}
 	return row, nil
+}
+
+// stampHandoffConversation moves the conversation's sync_at, so the list
+// delta re-delivers the row with its new `workspace_executor` (the tenant's
+// BEFORE UPDATE trigger, tenant/0144, writes the stamp). A schema without the
+// column, or a conversation that is gone, is left alone.
+func stampHandoffConversation(ctx context.Context, tx pgx.Tx, thread workspacehandoff.Thread) error {
+	schema, err := tenantSchema(strconv.FormatInt(thread.ProjectID, 10))
+	if err != nil {
+		return nil
+	}
+	var present bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM pg_attribute
+               WHERE attrelid = to_regclass($1) AND attname = 'sync_at' AND NOT attisdropped)`,
+		schema+".chat_conversations").Scan(&present); err != nil {
+		return fmt.Errorf("workspace handoff: conversation sync column: %w", err)
+	}
+	if !present {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_conversations SET sync_at = clock_timestamp() WHERE uuid = $1::uuid`, schema),
+		thread.ConversationUUID); err != nil {
+		return fmt.Errorf("workspace handoff: stamp conversation: %w", err)
+	}
+	return nil
 }
 
 func (r *WorkspaceHandoffsRepository) inTx(ctx context.Context, fn func(pgx.Tx) error) error {
@@ -287,19 +329,37 @@ SELECT EXISTS (SELECT 1 FROM elitea_runtime.local_turn_executions
 		result.ProjectBytesUsed = used
 		deviceName := nativeDeviceName(ctx, tx, record.TokenID, record.ActorUserID)
 		excluded, _ := json.Marshal(record.Excluded)
+		includes, _ := json.Marshal(record.IncludedExcluded)
+		// The environment: kept from the previous send, replaced, or cleared.
+		envNames, _ := json.Marshal(record.Env.Names)
+		var envSecret *string
+		if record.Env.SecretName != "" {
+			name := record.Env.SecretName
+			envSecret = &name
+		}
+		if found && record.Env.Keep {
+			envNames, _ = json.Marshal(existing.EnvNames)
+			if existing.EnvSecretName != "" {
+				name := existing.EnvSecretName
+				envSecret = &name
+			}
+		}
+		if found && !record.Env.Keep && existing.EnvSecretName != "" {
+			result.PreviousEnvSecret = existing.EnvSecretName
+		}
 		handoffID := uuid.NewString()
 		var row handoffRow
 		if !found {
 			row, err = scanHandoff(tx.QueryRow(ctx, `
 INSERT INTO elitea_runtime.workspace_handoffs (
     project_id, conversation_uuid, handoff_id, state, epoch, owner_user_id, device_id, device_name, token_id,
-    history_mode, has_upstream, excluded, stats, note, expires_at
+    history_mode, has_upstream, excluded, stats, note, expires_at, included_excluded, env_names, env_secret_name
 ) VALUES ($1, $2::uuid, $3::uuid, 'HANDING_OFF', 1, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12,
-          clock_timestamp() + make_interval(secs => $13))
+          clock_timestamp() + make_interval(secs => $13), $14::jsonb, $15::jsonb, $16)
 RETURNING `+handoffColumns,
 				thread.ProjectID, thread.ConversationUUID, handoffID, record.ActorUserID, record.DeviceID, deviceName,
 				record.TokenID, record.HistoryMode, record.HasUpstream, string(excluded), string(record.Stats),
-				record.Note, record.TTL.Seconds()))
+				record.Note, record.TTL.Seconds(), string(includes), string(envNames), envSecret))
 			if err != nil {
 				return fmt.Errorf("workspace handoff: insert: %w", err)
 			}
@@ -310,9 +370,11 @@ RETURNING `+handoffColumns,
     history_mode = $12, has_upstream = $13, excluded = $14::jsonb, stats = $15::jsonb, note = $16,
     expires_at = clock_timestamp() + make_interval(secs => $17),
     base_sha = NULL, upstream_sha = NULL, handoff_sha = NULL, cloud_sha = NULL,
-    reclaim_pending = FALSE, reclaim_requested_at = NULL, delete_after = NULL, deleted_at = NULL`,
+    reclaim_pending = FALSE, reclaim_requested_at = NULL, delete_after = NULL, deleted_at = NULL,
+    included_excluded = $18::jsonb, env_names = $19::jsonb, env_secret_name = $20`,
 				handoffID, record.ActorUserID, record.DeviceID, deviceName, record.TokenID, record.HistoryMode,
-				record.HasUpstream, string(excluded), string(record.Stats), record.Note, record.TTL.Seconds())
+				record.HasUpstream, string(excluded), string(record.Stats), record.Note, record.TTL.Seconds(),
+				string(includes), string(envNames), envSecret)
 			if err != nil {
 				return err
 			}
@@ -581,6 +643,15 @@ func (r *WorkspaceHandoffsRepository) StartCloudTurn(
 		if err != nil {
 			return err
 		}
+		cloud := ""
+		if row.CloudSHA != nil {
+			cloud = *row.CloudSHA
+		}
+		// The turn's answer carries the markers from its start; a publish
+		// moves workspace_commit to the turn's own commit.
+		if err := StampCloudTurnAnswer(ctx, tx, thread.ProjectID, responseMessageID, epoch, cloud); err != nil {
+			return err
+		}
 		out = row.Handoff
 		return nil
 	})
@@ -630,8 +701,11 @@ func (r *WorkspaceHandoffsRepository) NotifyReclaimRequest(ctx context.Context, 
 	hour := time.Now().UTC().Truncate(time.Hour).Format(time.RFC3339)
 	id := uuid.NewSHA1(reclaimNotificationNamespace, []byte(fmt.Sprintf("%d:%s:%d:%s",
 		handoff.ProjectID, handoff.ConversationUUID, handoff.Epoch, hour))).String()
+	// conversation_id carries the conversation UUID (the web toast matches
+	// it); conversation_uuid repeats it under its own name.
 	meta, _ := json.Marshal(map[string]any{
-		"project_id": handoff.ProjectID, "conversation_uuid": handoff.ConversationUUID, "epoch": handoff.Epoch,
+		"project_id": handoff.ProjectID, "conversation_id": handoff.ConversationUUID,
+		"conversation_uuid": handoff.ConversationUUID, "epoch": handoff.Epoch,
 	})
 	if _, err := r.pool.Exec(ctx, `
 INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
@@ -780,7 +854,8 @@ RETURNING `+qualifiedHandoffColumns("h"), now, limit)
 
 func (r *WorkspaceHandoffsRepository) MarkErased(ctx context.Context, thread workspacehandoff.Thread, epoch int64) error {
 	if _, err := r.pool.Exec(ctx, `
-UPDATE elitea_runtime.workspace_handoffs SET deleted_at = clock_timestamp(), updated_at = clock_timestamp()
+UPDATE elitea_runtime.workspace_handoffs
+SET deleted_at = clock_timestamp(), updated_at = clock_timestamp(), env_secret_name = NULL, env_names = '[]'::jsonb
 WHERE project_id = $1 AND conversation_uuid = $2::uuid AND state = 'LOCAL' AND epoch = $3
   AND deleted_at IS NULL AND delete_after <= clock_timestamp()`, thread.ProjectID, thread.ConversationUUID, epoch); err != nil {
 		return fmt.Errorf("workspace handoff: mark erased: %w", err)
@@ -795,7 +870,8 @@ func qualifiedHandoffColumns(alias string) string {
 		alias + `.base_sha, ` + alias + `.upstream_sha, ` + alias + `.handoff_sha, ` + alias + `.cloud_sha, ` +
 		alias + `.stats, ` + alias + `.excluded, ` + alias + `.last_seq, COALESCE(` + alias + `.running_execution_id, ''), ` +
 		`COALESCE(` + alias + `.running_response_message_id::text, ''), ` + alias + `.expires_at, ` +
-		alias + `.state_changed_at, ` + alias + `.updated_at, ` + alias + `.delete_after, ` + alias + `.deleted_at, ` + alias + `.note`
+		alias + `.state_changed_at, ` + alias + `.updated_at, ` + alias + `.delete_after, ` + alias + `.deleted_at, ` + alias + `.note, ` +
+		alias + `.included_excluded, ` + alias + `.env_names, COALESCE(` + alias + `.env_secret_name, '')`
 }
 
 // handoffEventParticipantKind marks the tenant schema's system participant
@@ -856,4 +932,18 @@ RETURNING id`, schema), participantID, conversationID, string(meta)).Scan(&group
 		return fmt.Errorf("workspace handoff: event message: %w", err)
 	}
 	return insertLocalTurnText(ctx, tx, schema, groupID, text)
+}
+
+// ReadByRunningExecution answers the thread a running cloud turn belongs to
+// (the executor's claim resolves its execution id to the thread).
+func (r *WorkspaceHandoffsRepository) ReadByRunningExecution(ctx context.Context, executionID string) (workspacehandoff.Handoff, bool, error) {
+	row, err := scanHandoff(r.pool.QueryRow(ctx, `SELECT `+handoffColumns+`
+FROM elitea_runtime.workspace_handoffs WHERE running_execution_id = $1 ORDER BY state_changed_at DESC LIMIT 1`, executionID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspacehandoff.Handoff{}, false, nil
+	}
+	if err != nil {
+		return workspacehandoff.Handoff{}, false, fmt.Errorf("workspace handoff: read by execution: %w", err)
+	}
+	return row.Handoff, true, nil
 }

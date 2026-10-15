@@ -41,6 +41,15 @@ func (catalog *CurrentAvailableCatalog) addCloudExecutorProjectSetting() error {
 			"anyOf": []any{map[string]any{"type": "integer", "minimum": 1}, map[string]any{"type": "null"}},
 		}
 	}
+	optionalList := func(title, description string) map[string]any {
+		return map[string]any{
+			"title": title, "description": description, "default": nil,
+			"anyOf": []any{
+				map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 500},
+				map[string]any{"type": "null"},
+			},
+		}
+	}
 	optionalBool := func(title, description string) map[string]any {
 		return map[string]any{
 			"title": title, "description": description, "default": nil,
@@ -72,6 +81,16 @@ func (catalog *CurrentAvailableCatalog) addCloudExecutorProjectSetting() error {
 				"default": nil,
 				"anyOf":   []any{map[string]any{"type": "string", "enum": []any{"none", "full"}}, map[string]any{"type": "null"}},
 			},
+			"exclusions_add": optionalList("Exclusions to Add", "Path patterns a send never uploads, on top of the "+
+				"platform list (which a project cannot remove)."),
+			"allow_user_include": optionalBool("Allow Explicit Include", "Allow users to send a file the "+
+				"exclusions match. Cannot be turned on when the platform has it off."),
+			"env_harvest": optionalBool("Allow Environment Variables", "Allow users to send selected environment "+
+				"variables. Cannot be turned on when the platform has it off."),
+			"env_deny_add": optionalList("Denied Variable Names to Add", "Name patterns never offered, on top of "+
+				"the platform list."),
+			"env_allow": optionalList("Allowed Variable Names", "When set, the only names that can be sent; "+
+				"intersected with the platform list."),
 			"max_segment_mb":           optionalInteger("Maximum Upload (MB)", "Lower than the platform value only."),
 			"max_file_mb":              optionalInteger("Maximum File Size (MB)", "Lower than the platform value only."),
 			"max_files":                optionalInteger("Maximum Files", "Lower than the platform value only."),
@@ -102,7 +121,26 @@ func normalizeCloudExecutorSetting(data map[string]any) (map[string]any, error) 
 		return nil, currentLocalConfigurationFieldError("data")
 	}
 	normalized := map[string]any{}
-	for _, key := range []string{"enabled", "shell", "network"} {
+	for _, key := range []string{"exclusions_add", "env_deny_add", "env_allow"} {
+		raw, present := data[key]
+		if !present || raw == nil {
+			continue
+		}
+		items, ok := raw.([]any)
+		if !ok || len(items) > 500 {
+			return nil, currentLocalConfigurationFieldError("data." + key)
+		}
+		patterns := make([]any, 0, len(items))
+		for _, item := range items {
+			pattern, ok := item.(string)
+			if !ok || pattern == "" || len(pattern) > 512 {
+				return nil, currentLocalConfigurationFieldError("data." + key)
+			}
+			patterns = append(patterns, pattern)
+		}
+		normalized[key] = patterns
+	}
+	for _, key := range []string{"enabled", "shell", "network", "allow_user_include", "env_harvest"} {
 		raw, present := data[key]
 		if !present || raw == nil {
 			continue

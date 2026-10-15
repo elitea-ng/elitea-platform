@@ -28,7 +28,36 @@ const (
 	KeyCloudExecutorMaxProjectWorkspaceGB = "max_project_workspace_gb"
 	KeyCloudExecutorIdleRetentionDays     = "idle_retention_days"
 	KeyCloudExecutorReturnGraceDays       = "return_grace_days"
+	// Amendment 2026-10-15 (decision 5): the exclusion set, explicit
+	// include and the environment harvest.
+	KeyCloudExecutorExclusions       = "exclusions"
+	KeyCloudExecutorAllowUserInclude = "allow_user_include"
+	KeyCloudExecutorEnvHarvest       = "env_harvest"
+	KeyCloudExecutorEnvDeny          = "env_deny"
+	KeyCloudExecutorEnvAllow         = "env_allow"
 )
+
+// Bounds of the pattern lists and of the harvested environment.
+const (
+	MaxCloudExecutorPatterns     = 500
+	MaxCloudExecutorPatternBytes = 512
+	MaxCloudExecutorEnvVars      = 200
+	MaxCloudExecutorEnvBytes     = 64 * 1024
+)
+
+// DefaultCloudExecutorExclusions is the platform default exclusion list
+// (decision 5): never uploaded unless the user includes a file explicitly.
+func DefaultCloudExecutorExclusions() []string {
+	return []string{".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", ".npmrc", ".pypirc", ".netrc",
+		".aws/**", ".ssh/**", "*.p12", "*.pfx", "*.kdbx", "credentials*.json"}
+}
+
+// DefaultCloudExecutorEnvDeny is the platform default list of environment
+// variable names never offered for the harvest (decision 5).
+func DefaultCloudExecutorEnvDeny() []string {
+	return []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "PWD", "OLDPWD", "TMPDIR", "TERM*", "LANG", "LC_*",
+		"SSH_*", "GPG_*", "XPC_*", "__CF*", "DISPLAY", "ELITEA_*"}
+}
 
 // Bounds the loader applies, so a row written by hand cannot widen them.
 const (
@@ -54,19 +83,26 @@ type CloudExecutorResources struct {
 
 // CloudExecutorSettings is the platform ceiling.
 type CloudExecutorSettings struct {
-	Enabled               bool                   `json:"enabled"`
-	Shell                 bool                   `json:"shell"`
-	Network               bool                   `json:"network"`
-	NetworkAllowlist      []string               `json:"network_allowlist"`
-	HistoryFullAllowed    bool                   `json:"history_full_allowed"`
-	MaxSegmentMB          int64                  `json:"max_segment_mb"`
-	MaxFileMB             int64                  `json:"max_file_mb"`
-	MaxFiles              int64                  `json:"max_files"`
-	MaxUnpackedMB         int64                  `json:"max_unpacked_mb"`
-	MaxProjectWorkspaceGB int64                  `json:"max_project_workspace_gb"`
-	IdleRetentionDays     int64                  `json:"idle_retention_days"`
-	ReturnGraceDays       int64                  `json:"return_grace_days"`
-	Resources             CloudExecutorResources `json:"resources"`
+	Enabled               bool     `json:"enabled"`
+	Shell                 bool     `json:"shell"`
+	Network               bool     `json:"network"`
+	NetworkAllowlist      []string `json:"network_allowlist"`
+	HistoryFullAllowed    bool     `json:"history_full_allowed"`
+	MaxSegmentMB          int64    `json:"max_segment_mb"`
+	MaxFileMB             int64    `json:"max_file_mb"`
+	MaxFiles              int64    `json:"max_files"`
+	MaxUnpackedMB         int64    `json:"max_unpacked_mb"`
+	MaxProjectWorkspaceGB int64    `json:"max_project_workspace_gb"`
+	IdleRetentionDays     int64    `json:"idle_retention_days"`
+	ReturnGraceDays       int64    `json:"return_grace_days"`
+	Exclusions            []string `json:"exclusions"`
+	AllowUserInclude      bool     `json:"allow_user_include"`
+	EnvHarvest            bool     `json:"env_harvest"`
+	EnvDeny               []string `json:"env_deny"`
+	// EnvAllow, when set, is the only list of names that can be harvested;
+	// nil is unset.
+	EnvAllow  *[]string              `json:"env_allow"`
+	Resources CloudExecutorResources `json:"resources"`
 }
 
 // DefaultCloudExecutorSettings is the ceiling of a deployment that never saved
@@ -77,6 +113,8 @@ func DefaultCloudExecutorSettings() CloudExecutorSettings {
 		Enabled: false, Shell: true, Network: true, NetworkAllowlist: []string{}, HistoryFullAllowed: false,
 		MaxSegmentMB: 200, MaxFileMB: 25, MaxFiles: 20000, MaxUnpackedMB: 2048, MaxProjectWorkspaceGB: 50,
 		IdleRetentionDays: 30, ReturnGraceDays: 7,
+		Exclusions: DefaultCloudExecutorExclusions(), AllowUserInclude: true, EnvHarvest: false,
+		EnvDeny: DefaultCloudExecutorEnvDeny(), EnvAllow: nil,
 	}
 }
 
@@ -111,7 +149,40 @@ func CloudExecutorSettingsFromValues(values Values) CloudExecutorSettings {
 	bounded(KeyCloudExecutorMaxProjectWorkspaceGB, 1, MaxCloudExecutorProjectWorkspaceGB, &settings.MaxProjectWorkspaceGB)
 	bounded(KeyCloudExecutorIdleRetentionDays, 1, MaxCloudExecutorRetentionDays, &settings.IdleRetentionDays)
 	bounded(KeyCloudExecutorReturnGraceDays, 0, MaxCloudExecutorRetentionDays, &settings.ReturnGraceDays)
+	settings.AllowUserInclude = values.Bool(KeyCloudExecutorAllowUserInclude, settings.AllowUserInclude)
+	settings.EnvHarvest = values.Bool(KeyCloudExecutorEnvHarvest, settings.EnvHarvest)
+	// A saved list replaces the default; an absent or wrong-typed one keeps it.
+	if _, present := values[KeyCloudExecutorExclusions].([]any); present {
+		settings.Exclusions = CloudExecutorPatterns(values.Strings(KeyCloudExecutorExclusions))
+	}
+	if _, present := values[KeyCloudExecutorEnvDeny].([]any); present {
+		settings.EnvDeny = CloudExecutorPatterns(values.Strings(KeyCloudExecutorEnvDeny))
+	}
+	if _, present := values[KeyCloudExecutorEnvAllow].([]any); present {
+		allow := CloudExecutorPatterns(values.Strings(KeyCloudExecutorEnvAllow))
+		settings.EnvAllow = &allow
+	}
 	return settings
+}
+
+// CloudExecutorPatterns keeps the valid patterns of a stored list (not blank,
+// at most MaxCloudExecutorPatternBytes, no control characters), deduplicated,
+// at most MaxCloudExecutorPatterns. It never answers nil.
+func CloudExecutorPatterns(patterns []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" || len(pattern) > MaxCloudExecutorPatternBytes || seen[pattern] || strings.ContainsAny(pattern, "\x00\n\r\t") {
+			continue
+		}
+		if len(out) == MaxCloudExecutorPatterns {
+			break
+		}
+		seen[pattern] = true
+		out = append(out, pattern)
+	}
+	return out
 }
 
 // CloudExecutorHosts keeps the valid host names of an allowlist (lowercased,
@@ -150,7 +221,7 @@ func ValidCloudExecutorHost(host string) bool {
 		}
 		for i := 0; i < len(label); i++ {
 			c := label[i]
-			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
 				return false
 			}
 		}

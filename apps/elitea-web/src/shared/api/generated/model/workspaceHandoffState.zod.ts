@@ -60,7 +60,7 @@ export const WorkspaceHandoffState = zod
     workspace_bytes: zod.int().optional(),
   })
   .describe(
-    "The banner state; only `state` and `epoch` when the thread has no handoff. NOTE(W2): internal/api/v2/workspacehandoff/route.go:278 (`state`).",
+    "The banner state; only `state` and `epoch` when the thread has no handoff. NOTE(W2): internal/api/v2/workspacehandoff/route.go:288 (`state`).",
   );
 
 export type WorkspaceHandoffState = zod.input<typeof WorkspaceHandoffState>;

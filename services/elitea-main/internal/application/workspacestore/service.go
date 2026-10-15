@@ -887,3 +887,63 @@ func (s *Service) ThreadBytes(ctx context.Context, thread Thread) (int64, error)
 	}
 	return s.repo.ThreadWorkspaceBytes(ctx, thread)
 }
+
+// ProjectBytes answers the size of a project's live cloud copies.
+func (s *Service) ProjectBytes(ctx context.Context, projectID int64) (int64, error) {
+	if projectID <= 0 || projectID > 2147483647 {
+		return 0, ErrInvalid
+	}
+	return s.repo.ProjectWorkspaceBytes(ctx, projectID)
+}
+
+// UploadSegment is the cloud executor's claim-bound upload (the later
+// WorkspaceUpload gRPC call): no grant and no URL, the worker streams the
+// bundle to Main, which stores it only when its bytes match the declared size
+// and SHA-256. A digest the thread already stores answers exists=true.
+func (s *Service) UploadSegment(
+	ctx context.Context, thread Thread, caller Caller, epoch int64, sha string, size int64, body io.Reader,
+) (bool, error) {
+	if !validThread(thread) || !validCaller(caller) || epoch <= 0 || !ValidSHA256(sha) || size <= 0 || body == nil {
+		return false, ErrInvalid
+	}
+	if _, err := s.requireWriter(ctx, thread, caller, epoch); err != nil {
+		return false, err
+	}
+	limits, err := s.limits.Limits(ctx, thread.ProjectID)
+	if err != nil {
+		return false, fmt.Errorf("workspace store: limits: %w", err)
+	}
+	if size > limits.MaxSegmentBytes {
+		return false, ErrSegmentTooLarge
+	}
+	if _, stored, err := s.repo.LiveSegment(ctx, thread, sha); err != nil {
+		return false, err
+	} else if stored {
+		return true, nil
+	}
+	if err := s.checkQuota(ctx, thread, size, limits); err != nil {
+		return false, err
+	}
+	if _, err := s.repo.EnsureWorkspaceBucket(ctx, thread.ProjectID); err != nil {
+		return false, err
+	}
+	ref, err := objectRef(thread.ProjectID, ObjectKey(thread.ConversationUUID, sha))
+	if err != nil {
+		return false, ErrInvalid
+	}
+	target := s.buckets.write()
+	hasher := sha256.New()
+	counted := &countingReader{reader: io.LimitReader(body, size+1), hasher: hasher}
+	if _, err := target.Store.Put(ctx, ref, counted, storage.PutOptions{ContentType: MediaType, ContentLength: -1}); err != nil {
+		return false, fmt.Errorf("workspace store: executor put: %w", err)
+	}
+	if counted.n > size {
+		_ = target.Store.Delete(ctx, ref)
+		return false, ErrSegmentTooLarge
+	}
+	if counted.n != size || hex.EncodeToString(hasher.Sum(nil)) != sha {
+		_ = target.Store.Delete(ctx, ref)
+		return false, ErrChecksumMismatch
+	}
+	return false, nil
+}

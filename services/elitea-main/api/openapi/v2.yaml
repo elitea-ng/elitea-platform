@@ -2144,6 +2144,12 @@ components:
           type: integer
           description: Always -1 today; see the schema description.
         message_groups_count: { type: integer }
+        workspace_executor:
+          type: string
+          description: >-
+            Client contract 1.8 (ADR-0034). Who runs the thread's turns now:
+            `local`, `cloud` or `returning`. A handoff transition re-delivers
+            the row in the `changes_since` delta.
         is_pinned:
           type: boolean
           description: >
@@ -3400,20 +3406,28 @@ components:
       description: >-
         A refused handoff or store call. `error` is a machine code (the
         operations name theirs); `details` is set for `ref_conflict` only.
-        NOTE(W2): internal/api/v2/workspacehandoff/route.go:669 (`writeError`).
+        NOTE(W2): internal/api/v2/workspacehandoff/route.go:740 (`writeError`).
       required: [error]
       properties:
         error: { type: string }
         message: { type: string }
         details:
-          $ref: '#/components/schemas/WorkspaceRefConflictDetails'
-    WorkspaceRefConflictDetails:
+          $ref: '#/components/schemas/WorkspaceHandoffErrorDetails'
+    WorkspaceHandoffErrorDetails:
       type: object
-      description: The stored value (null when absent) of every ref the publish named.
-      required: [current]
+      description: >-
+        `current` for `ref_conflict` (the stored value, null when absent, of
+        every ref the publish named), `names` for `env_name_denied`, `paths`
+        for `path_denied`.
       properties:
         current:
           $ref: '#/components/schemas/WorkspaceNullableRefMap'
+        names:
+          type: array
+          items: { type: string }
+        paths:
+          type: array
+          items: { type: string }
     WorkspaceRefMap:
       type: object
       description: Ref name to commit sha (40 lowercase hex characters).
@@ -3426,7 +3440,7 @@ components:
       type: object
       description: >-
         What the desktop declares at send. `excluded` lists `./path` strings
-        left on the laptop. NOTE(W2): internal/application/workspacehandoff/types.go:108 (`Stats`).
+        left on the laptop. NOTE(W2): internal/application/workspacehandoff/types.go:119 (`Stats`).
       properties:
         files: { type: integer, format: int64, minimum: 0 }
         bytes: { type: integer, format: int64, minimum: 0 }
@@ -3437,7 +3451,7 @@ components:
         scan_findings: { type: integer, format: int64, minimum: 0 }
     WorkspaceHandoffBeginRequest:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:227 (`beginBody`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:235 (`beginBody`).'
       required: [device_id, stats]
       properties:
         device_id: { type: string, description: The native client device id. }
@@ -3446,6 +3460,57 @@ components:
           $ref: '#/components/schemas/WorkspaceHandoffStats'
         has_upstream: { type: boolean }
         note: { type: string, description: 'The handoff note, at most 8 KiB.' }
+        included_excluded:
+          type: array
+          items: { type: string }
+          description: >-
+            Contract 6.2. Excluded paths (`./path`) the user explicitly
+            includes; refused when the policy does not allow it
+            (`include_not_allowed`) or a path matches `local_work_path_deny`
+            (`path_denied`).
+        env:
+          $ref: '#/components/schemas/WorkspaceStringMap'
+    WorkspaceHandoffEnvLimits:
+      type: object
+      description: The harvest's caps.
+      required: [max_vars, max_bytes]
+      properties:
+        max_vars: { type: integer }
+        max_bytes: { type: integer }
+    WorkspaceHandoffPolicy:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:680 (`policy`).'
+      required: [enabled, shell, network, history_modes, exclusions, path_deny, allow_user_include, env_harvest,
+                 env_deny, env_allow, limits, env_limits]
+      properties:
+        enabled: { type: boolean }
+        shell: { type: boolean }
+        network: { type: boolean }
+        history_modes:
+          type: array
+          items: { type: string }
+        exclusions:
+          type: array
+          items: { type: string }
+          description: The platform patterns, then the project additions.
+        path_deny:
+          type: array
+          items: { type: string }
+          description: The effective local_work_path_deny; never includable.
+        allow_user_include: { type: boolean }
+        env_harvest: { type: boolean }
+        env_deny:
+          type: array
+          items: { type: string }
+        env_allow:
+          type: array
+          items: { type: string }
+          nullable: true
+          description: When not null, the only names that can be sent.
+        limits:
+          $ref: '#/components/schemas/WorkspaceHandoffLimits'
+        env_limits:
+          $ref: '#/components/schemas/WorkspaceHandoffEnvLimits'
     WorkspaceHandoffLimits:
       type: object
       description: The effective caps of the send.
@@ -3458,7 +3523,7 @@ components:
         project_workspace_bytes_left: { type: integer, format: int64 }
     WorkspaceHandoffBegun:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:235 (`begin`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:245 (`begin`).'
       required: [handoff_id, epoch, state, allowed_refs, expected_old, limits, expires_at]
       properties:
         handoff_id: { type: string, format: uuid }
@@ -3476,7 +3541,7 @@ components:
       type: object
       description: >-
         The banner state; only `state` and `epoch` when the thread has no
-        handoff. NOTE(W2): internal/api/v2/workspacehandoff/route.go:278 (`state`).
+        handoff. NOTE(W2): internal/api/v2/workspacehandoff/route.go:288 (`state`).
       required: [state, epoch]
       properties:
         state: { type: string, description: 'LOCAL, HANDING_OFF, CLOUD_IDLE, CLOUD_RUNNING or RECLAIMING.' }
@@ -3494,14 +3559,14 @@ components:
         workspace_bytes: { type: integer, format: int64 }
     WorkspaceHandoffErased:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:326 (`erase`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:336 (`erase`).'
       required: [state, epoch]
       properties:
         state: { type: string }
         epoch: { type: integer, format: int64 }
     WorkspaceHandoffCompleteRequest:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:347 (`completeBody`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:357 (`completeBody`).'
       required: [epoch, handoff_ref, sha]
       properties:
         epoch: { type: integer, format: int64 }
@@ -3509,21 +3574,21 @@ components:
         sha: { type: string }
     WorkspaceHandoffTransition:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:353 (`complete`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:363 (`complete`).'
       required: [state, epoch]
       properties:
         state: { type: string }
         epoch: { type: integer, format: int64 }
     WorkspaceHandoffReclaimRequest:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:378 (`reclaimBody`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:388 (`reclaimBody`).'
       required: [epoch]
       properties:
         epoch: { type: integer, format: int64 }
         device_id: { type: string }
     WorkspaceHandoffReclaimed:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:383 (`reclaim`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:393 (`reclaim`).'
       required: [state, epoch, cloud_sha]
       properties:
         state: { type: string }
@@ -3531,7 +3596,7 @@ components:
         cloud_sha: { type: string, nullable: true }
     WorkspaceHandoffReclaimPending:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:383 (`reclaim`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:393 (`reclaim`).'
       required: [state, reclaim_pending, epoch, waiting_for_execution_id]
       properties:
         state: { type: string }
@@ -3541,12 +3606,12 @@ components:
     WorkspaceHandoffEmpty:
       type: object
       description: An empty object.
-      x-elitea-passthrough: "NOTE(W2): always the empty object (internal/api/v2/workspacehandoff/route.go:428,
+      x-elitea-passthrough: "NOTE(W2): always the empty object (internal/api/v2/workspacehandoff/route.go:438,
         `reclaimRequest`); the 202 carries no field."
       properties: {}
     WorkspaceHandoffReleaseRequest:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:431 (`releaseBody`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:441 (`releaseBody`).'
       required: [epoch, outcome]
       properties:
         epoch: { type: integer, format: int64 }
@@ -3554,7 +3619,7 @@ components:
         applied_sha: { type: string, nullable: true }
     WorkspaceHandoffReleased:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:437 (`release`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:447 (`release`).'
       required: [state, epoch, cloud_copy_delete_after]
       properties:
         state: { type: string }
@@ -3562,7 +3627,7 @@ components:
         cloud_copy_delete_after: { type: string, format: date-time, nullable: true }
     WorkspaceSegmentUploadRequest:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:468 (`uploadBody`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:478 (`uploadBody`).'
       required: [epoch, sha256, bytes]
       properties:
         epoch: { type: integer, format: int64 }
@@ -3593,7 +3658,7 @@ components:
         complete_url: { type: string }
     WorkspaceSegmentUploadGrant:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:474 (`upload`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:484 (`upload`).'
       required: [exists, put, multipart, expires_at]
       properties:
         exists: { type: boolean }
@@ -3615,7 +3680,7 @@ components:
         etag: { type: string }
     WorkspaceSegmentUploadComplete:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:507 (`uploadCompleteBody`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:517 (`uploadCompleteBody`).'
       required: [upload_id, parts]
       properties:
         upload_id: { type: string }
@@ -3633,7 +3698,7 @@ components:
         new: { type: string }
     WorkspaceSegmentPublishRequest:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:548 (`publishBody`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:558 (`publishBody`).'
       required: [epoch, kind, segment_sha256, bytes, refs, object_format]
       properties:
         epoch: { type: integer, format: int64 }
@@ -3650,7 +3715,7 @@ components:
         object_format: { type: string, description: '`sha1` in this version.' }
     WorkspaceSegmentPublished:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:558 (`publish`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:568 (`publish`).'
       required: [seq, refs, superseded]
       properties:
         seq: { type: integer, format: int64 }
@@ -3677,7 +3742,7 @@ components:
         expires_at: { type: string, format: date-time }
     WorkspaceFetchPlan:
       type: object
-      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:595 (`fetch`).'
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:605 (`fetch`).'
       required: [head_seq, refs, segments]
       properties:
         head_seq: { type: integer, format: int64 }
@@ -17659,6 +17724,56 @@ paths:
                 $ref: '#/components/schemas/LocalTurnError'
         '500': { $ref: '#/components/responses/500' }
 
+  /elitea_core/workspace_handoff_policy/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getWorkspaceHandoffPolicy
+      summary: Read the effective handoff policy before a send
+      description: |
+        Client contract 1.8 (ADR-0034 decisions 5 and 11, contract 6.1). The
+        caller's effective policy: the platform `cloud_executor` ceiling,
+        narrowed by the project setting and the native client policy. The
+        desktop shows it in the send dialog; the begin answer's `limits`
+        stay authoritative. A native token or a browser session, with
+        `models.chat.messages.create`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The effective policy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffPolicy'
+        '400':
+          description: An `X-Client-Version` that does not parse, or a bad project id.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No project permission.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The policy could not be read (`handoff_unavailable`).
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
   /elitea_core/workspace_handoff/prompt_lib/{project_id}/{conversation_uuid}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -17745,7 +17860,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffError'
         '413':
-          description: The project's cloud copies would pass `max_project_workspace_gb` (`workspace_quota_exceeded`).
+          description: >-
+            The project's cloud copies would pass `max_project_workspace_gb`
+            (`workspace_quota_exceeded`), or the environment is over 200
+            variables or 64 KiB (`env_too_large`).
           content:
             application/json:
               schema:
@@ -17757,7 +17875,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffError'
         '422':
-          description: '`invalid_handoff` (a field, a cap, or not a Local work thread) or `history_mode_not_allowed`.'
+          description: >-
+            `invalid_handoff` (a field, a cap, or not a Local work thread),
+            `history_mode_not_allowed`, `include_not_allowed`, `path_denied`
+            (`details.paths`), `env_harvest_disabled` or `env_name_denied`
+            (`details.names`).
           content:
             application/json:
               schema:

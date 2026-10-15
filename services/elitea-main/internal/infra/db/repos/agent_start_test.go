@@ -211,7 +211,7 @@ func TestCurrentAgentRegenerationInAHandedOffThread(t *testing.T) {
 		_, err = repository.ResolveCurrentRegeneration(t.Context(), agentexecutionapp.CurrentRegenerationResolveRequest{
 			ProjectID: 7, ActorUserID: 11, ResponseMessageID: "40000000-0000-4000-8000-000000000034",
 		})
-		if !errors.Is(err, tc.want) && !(tc.want == nil && err == nil) {
+		if !errors.Is(err, tc.want) && (tc.want != nil || err != nil) {
 			t.Fatalf("%s: err=%v, want %v", tc.name, err, tc.want)
 		}
 		if executor.project != 7 {

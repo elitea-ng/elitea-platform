@@ -2,6 +2,8 @@ package workspacehandoff
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +40,14 @@ type Service struct {
 
 	mu       sync.Mutex
 	orphanAt Thread
+	vault    EnvVault
+}
+
+// WithEnvVault supplies the vault of the harvested environment. Without it a
+// send that carries variables answers ErrUnavailable; every other path works.
+func (s *Service) WithEnvVault(vault EnvVault) *Service {
+	s.vault = vault
+	return s
 }
 
 // NewService builds the state machine. Every dependency is required: a send
@@ -94,6 +104,11 @@ type BeginRequest struct {
 	HasUpstream bool
 	Note        string
 	AuditRoute  string
+	// IncludedExcluded are the excluded paths the user explicitly includes.
+	IncludedExcluded []string
+	// Env is the harvested environment: nil keeps the thread's previous one,
+	// an empty map clears it.
+	Env map[string]string
 }
 
 // BeginOutcome answers a send.
@@ -137,6 +152,35 @@ func (s *Service) Begin(ctx context.Context, request BeginRequest) (BeginOutcome
 		request.Stats.UnpackedBytes > limits.MaxUnpackedBytes {
 		return BeginOutcome{}, ErrOverLimits
 	}
+	// The amendment's rules, re-applied here whatever the desktop checked.
+	if err := checkIncludes(request.IncludedExcluded, policy); err != nil {
+		return BeginOutcome{}, err
+	}
+	envNames, err := checkEnv(request.Env, policy)
+	if err != nil {
+		return BeginOutcome{}, err
+	}
+	envChange := EnvChange{Keep: request.Env == nil, Names: envNames}
+	if len(request.Env) > 0 {
+		if s.vault == nil {
+			return BeginOutcome{}, ErrUnavailable
+		}
+		name, err := newEnvSecretName()
+		if err != nil {
+			return BeginOutcome{}, err
+		}
+		// The secret is written first and deleted again when the send is
+		// refused, so a row never names a secret that does not exist.
+		if err := s.vault.PutEnv(ctx, request.Thread.ProjectID, name, request.Env); err != nil {
+			s.logger.ErrorContext(ctx, "workspace handoff: env secret write failed", "project_id", request.Thread.ProjectID, "err", err)
+			return BeginOutcome{}, ErrUnavailable
+		}
+		envChange.SecretName = name
+	}
+	includes := request.IncludedExcluded
+	if includes == nil {
+		includes = []string{}
+	}
 	excluded := request.Stats.Excluded
 	if excluded == nil {
 		excluded = []string{}
@@ -151,9 +195,16 @@ func (s *Service) Begin(ctx context.Context, request BeginRequest) (BeginOutcome
 		DeviceID: request.DeviceID, HistoryMode: mode, HasUpstream: request.HasUpstream,
 		Stats: stats, Excluded: excluded, Note: request.Note, TTL: HandingOffTTL,
 		MaxProjectWorkspaceBytes: limits.MaxProjectWorkspaceBytes, DeclaredBytes: request.Stats.Bytes,
+		IncludedExcluded: includes, Env: envChange,
 	})
 	if err != nil {
+		if envChange.SecretName != "" {
+			s.deleteEnv(ctx, request.Thread.ProjectID, envChange.SecretName)
+		}
 		return BeginOutcome{}, err
+	}
+	if result.PreviousEnvSecret != "" && result.PreviousEnvSecret != result.Handoff.EnvSecretName {
+		s.deleteEnv(ctx, request.Thread.ProjectID, result.PreviousEnvSecret)
 	}
 	allowed := workspacestore.AllowedRefs(workspacestore.WriterDesktop, workspacestore.StateHandingOff, request.HasUpstream)
 	expected := map[string]*string{}
@@ -165,8 +216,9 @@ func (s *Service) Begin(ctx context.Context, request BeginRequest) (BeginOutcome
 		left = 0
 	}
 	s.record(ctx, request.Thread, request.ActorUserID, "POST", request.AuditRoute, started,
-		fmt.Sprintf("handoff.begin: epoch %d, %d files, %d bytes, %d excluded, history %s",
-			result.Handoff.Epoch, request.Stats.Files, request.Stats.Bytes, len(excluded), mode), false)
+		fmt.Sprintf("handoff.begin: epoch %d, %d files, %d bytes, %d excluded, history %s%s",
+			result.Handoff.Epoch, request.Stats.Files, request.Stats.Bytes, len(excluded), mode,
+			includeAndEnvSummary(result.Handoff.IncludedExcluded, result.Handoff.EnvNames)), false)
 	return BeginOutcome{
 		Handoff: result.Handoff, AllowedRefs: allowed, ExpectedOld: expected, Limits: limits, BytesLeft: left,
 	}, nil
@@ -200,7 +252,8 @@ func (s *Service) Complete(ctx context.Context, request CompleteRequest) (Handof
 	}
 	s.record(ctx, Thread{ProjectID: handoff.ProjectID, ConversationUUID: handoff.ConversationUUID},
 		request.ActorUserID, "POST", request.AuditRoute, started,
-		fmt.Sprintf("handoff.complete: epoch %d, snapshot %s", handoff.Epoch, request.SHA), false)
+		fmt.Sprintf("handoff.complete: epoch %d, snapshot %s%s", handoff.Epoch, request.SHA,
+			includeAndEnvSummary(handoff.IncludedExcluded, handoff.EnvNames)), false)
 	return handoff, nil
 }
 
@@ -382,13 +435,9 @@ func (s *Service) Erase(ctx context.Context, request EraseRequest) (Handoff, err
 	// once; the sweeper finishes an erasure this pass could not.
 	if result.Changed && result.Handoff.State == workspacestore.StateLocal {
 		thread := threadOf(result.Handoff)
-		if empty, err := s.objects.EraseThreadObjects(ctx, thread); err != nil {
-			s.logger.WarnContext(ctx, "workspace handoff: erase objects failed; the sweeper retries",
+		if err := s.eraseThread(ctx, result.Handoff); err != nil {
+			s.logger.WarnContext(ctx, "workspace handoff: erase failed; the sweeper retries",
 				"project_id", thread.ProjectID, "conversation_uuid", thread.ConversationUUID, "err", err)
-		} else if empty {
-			if err := s.repo.MarkErased(ctx, thread, result.Handoff.Epoch); err != nil {
-				s.logger.WarnContext(ctx, "workspace handoff: mark erased failed", "err", err)
-			}
 		}
 	}
 	if result.Changed {
@@ -476,4 +525,90 @@ func truncate(value string, limit int) string {
 		return string(runes[:limit-1]) + "…"
 	}
 	return value
+}
+
+// eraseThread erases a LOCAL thread's cloud copy: its objects, then its
+// environment secret, and only then marks the row erased, so a failure of
+// either leaves the row for the sweeper's next pass.
+func (s *Service) eraseThread(ctx context.Context, handoff Handoff) error {
+	thread := threadOf(handoff)
+	empty, err := s.objects.EraseThreadObjects(ctx, thread)
+	if err != nil {
+		return err
+	}
+	if !empty {
+		return nil
+	}
+	if handoff.EnvSecretName != "" {
+		if s.vault == nil {
+			return errors.New("the env secret cannot be erased: no vault is composed")
+		}
+		if err := s.vault.DeleteEnv(ctx, handoff.ProjectID, handoff.EnvSecretName); err != nil {
+			return fmt.Errorf("erase env secret: %w", err)
+		}
+	}
+	return s.repo.MarkErased(ctx, thread, handoff.Epoch)
+}
+
+func (s *Service) deleteEnv(ctx context.Context, projectID int64, name string) {
+	if s.vault == nil || name == "" {
+		return
+	}
+	if err := s.vault.DeleteEnv(ctx, projectID, name); err != nil {
+		s.logger.WarnContext(ctx, "workspace handoff: env secret delete failed", "project_id", projectID, "err", err)
+	}
+}
+
+// CloudTurnEnv redeems the thread's harvested environment for the running
+// cloud turn (decision 5 amended, contract 6.4). The later executor unit calls
+// it from its claim-bound runtime secret path, with the claim's epoch and
+// execution id; it answers only for that running turn. A thread without a
+// secret answers nil.
+func (s *Service) CloudTurnEnv(ctx context.Context, thread Thread, epoch int64, executionID string) (map[string]string, error) {
+	if !validThread(thread) || epoch <= 0 || executionID == "" {
+		return nil, ErrInvalid
+	}
+	handoff, ok, err := s.repo.Read(ctx, thread)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if handoff.State != workspacestore.StateCloudRunning || handoff.Epoch != epoch || handoff.RunningExecutionID != executionID {
+		return nil, ErrStaleEpoch
+	}
+	if handoff.EnvSecretName == "" {
+		return nil, nil
+	}
+	if s.vault == nil {
+		return nil, ErrUnavailable
+	}
+	env, err := s.vault.ReadEnv(ctx, thread.ProjectID, handoff.EnvSecretName)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "workspace handoff: env secret unreadable", "project_id", thread.ProjectID, "err", err)
+		return nil, ErrUnavailable
+	}
+	return env, nil
+}
+
+// includeAndEnvSummary is the audit's record of the amendment: include paths
+// and env NAMES, never values.
+func includeAndEnvSummary(includes, names []string) string {
+	out := ""
+	if len(includes) > 0 {
+		out += fmt.Sprintf(", %d included (%s)", len(includes), strings.Join(includes, " "))
+	}
+	if len(names) > 0 {
+		out += fmt.Sprintf(", env names (%s)", strings.Join(names, " "))
+	}
+	return out
+}
+
+func newEnvSecretName() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return "workspace_env_" + hex.EncodeToString(b[:]), nil
 }

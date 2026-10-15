@@ -48,7 +48,7 @@ export const WorkspaceHandoffReclaimed = zod
     cloud_sha: zod.string().nullable(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:383 (`reclaim`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:393 (`reclaim`).",
   );
 
 export type WorkspaceHandoffReclaimed = zod.input<

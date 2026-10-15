@@ -48,7 +48,7 @@ export const WorkspaceSegmentUploadRequest = zod
     bytes: zod.int(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:468 (`uploadBody`).",
+    "NOTE(W2): internal/api/v2/workspacehandoff/route.go:478 (`uploadBody`).",
   );
 
 export type WorkspaceSegmentUploadRequest = zod.input<

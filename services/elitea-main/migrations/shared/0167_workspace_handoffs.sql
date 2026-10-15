@@ -19,6 +19,11 @@
 -- THE SHAS are a cache of the thread's refs for the banner and the runtime
 -- context; workspace_refs is the authority.
 --
+-- EXPLICIT INCLUDES AND THE ENVIRONMENT (decision 5, amended 2026-10-15):
+-- included_excluded lists the paths the user included against the exclusion
+-- set; env_names lists the harvested variable names; env_secret_name names the
+-- per-thread vault secret that holds their values, erased with the thread.
+--
 -- RETENTION (decision 12). `delete_after` is when the thread's objects are
 -- erased (release + return_grace_days, explicit erase = now). `deleted_at` is
 -- set only after a listing of the thread's object prefix returned empty.
@@ -50,6 +55,14 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.workspace_handoffs (
     excluded                    jsonb       NOT NULL DEFAULT '[]'::jsonb,
     stats                       jsonb       NOT NULL DEFAULT '{}'::jsonb,
     note                        text        NOT NULL DEFAULT '',
+    -- Amendment 2026-10-15 (decision 5): the excluded paths the user
+    -- explicitly included, and the NAMES of the harvested environment
+    -- variables. The values live in one hidden per-thread vault secret, named
+    -- by env_secret_name (an unguessable name, so no configuration can
+    -- reference it); the row never holds a value.
+    included_excluded           jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    env_names                   jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    env_secret_name             text,
     last_seq                    bigint      NOT NULL DEFAULT 0,
     running_execution_id        text,
     running_response_message_id uuid,
@@ -74,7 +87,9 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.workspace_handoffs (
         (upstream_sha IS NULL OR upstream_sha ~ '^[0-9a-f]{40}$') AND
         (handoff_sha IS NULL OR handoff_sha ~ '^[0-9a-f]{40}$') AND
         (cloud_sha IS NULL OR cloud_sha ~ '^[0-9a-f]{40}$')),
-    CONSTRAINT workspace_handoffs_note_len CHECK (octet_length(note) <= 8192)
+    CONSTRAINT workspace_handoffs_note_len CHECK (octet_length(note) <= 8192),
+    CONSTRAINT workspace_handoffs_env_secret_name
+        CHECK (env_secret_name IS NULL OR env_secret_name ~ '^workspace_env_[0-9a-f]{32}$')
 );
 
 -- The sweeper's timed transitions (HANDING_OFF expiry, idle retention,
@@ -82,6 +97,11 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.workspace_handoffs (
 CREATE INDEX IF NOT EXISTS workspace_handoffs_active
     ON elitea_runtime.workspace_handoffs (state, state_changed_at)
     WHERE state <> 'LOCAL';
+
+-- The executor's calls resolve their claim's execution to its thread.
+CREATE INDEX IF NOT EXISTS workspace_handoffs_running_execution
+    ON elitea_runtime.workspace_handoffs (running_execution_id)
+    WHERE running_execution_id IS NOT NULL;
 
 -- The sweeper's erasure reads rows whose objects are due.
 CREATE INDEX IF NOT EXISTS workspace_handoffs_erase_due
