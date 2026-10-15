@@ -46,35 +46,153 @@ pub(crate) struct TokenRule {
 
 /// The token rules. Kept in step with the desktop's send-time scan.
 pub(crate) const RULES: &[TokenRule] = &[
-    TokenRule { id: "aws_access_key_id", prefix: "AKIA", body: Body::UpperAlnum, min: 16, max: 16 },
-    TokenRule { id: "aws_temporary_access_key_id", prefix: "ASIA", body: Body::UpperAlnum, min: 16, max: 16 },
-    TokenRule { id: "github_token", prefix: "ghp_", body: Body::Alnum, min: 36, max: 36 },
-    TokenRule { id: "github_oauth_token", prefix: "gho_", body: Body::Alnum, min: 36, max: 36 },
-    TokenRule { id: "github_app_token", prefix: "ghs_", body: Body::Alnum, min: 36, max: 36 },
-    TokenRule { id: "github_user_token", prefix: "ghu_", body: Body::Alnum, min: 36, max: 36 },
-    TokenRule { id: "github_refresh_token", prefix: "ghr_", body: Body::Alnum, min: 36, max: 76 },
-    TokenRule { id: "github_fine_grained_token", prefix: "github_pat_", body: Body::UrlSafe, min: 70, max: 100 },
-    TokenRule { id: "gitlab_token", prefix: "glpat-", body: Body::UrlSafe, min: 20, max: 40 },
-    TokenRule { id: "slack_token", prefix: "xoxb-", body: Body::UrlSafe, min: 20, max: 200 },
-    TokenRule { id: "slack_user_token", prefix: "xoxp-", body: Body::UrlSafe, min: 20, max: 200 },
-    TokenRule { id: "google_api_key", prefix: "AIza", body: Body::UrlSafe, min: 35, max: 35 },
-    TokenRule { id: "stripe_live_key", prefix: "sk_live_", body: Body::Alnum, min: 20, max: 120 },
-    TokenRule { id: "openai_api_key", prefix: "sk-proj-", body: Body::UrlSafe, min: 40, max: 200 },
-    TokenRule { id: "anthropic_api_key", prefix: "sk-ant-", body: Body::UrlSafe, min: 40, max: 200 },
-    TokenRule { id: "elitea_token", prefix: "elnat_", body: Body::UrlSafe, min: 20, max: 200 },
+    TokenRule {
+        id: "aws_access_key_id",
+        prefix: "AKIA",
+        body: Body::UpperAlnum,
+        min: 16,
+        max: 16,
+    },
+    TokenRule {
+        id: "aws_temporary_access_key_id",
+        prefix: "ASIA",
+        body: Body::UpperAlnum,
+        min: 16,
+        max: 16,
+    },
+    TokenRule {
+        id: "github_token",
+        prefix: "ghp_",
+        body: Body::Alnum,
+        min: 36,
+        max: 36,
+    },
+    TokenRule {
+        id: "github_oauth_token",
+        prefix: "gho_",
+        body: Body::Alnum,
+        min: 36,
+        max: 36,
+    },
+    TokenRule {
+        id: "github_app_token",
+        prefix: "ghs_",
+        body: Body::Alnum,
+        min: 36,
+        max: 36,
+    },
+    TokenRule {
+        id: "github_user_token",
+        prefix: "ghu_",
+        body: Body::Alnum,
+        min: 36,
+        max: 36,
+    },
+    TokenRule {
+        id: "github_refresh_token",
+        prefix: "ghr_",
+        body: Body::Alnum,
+        min: 36,
+        max: 76,
+    },
+    TokenRule {
+        id: "github_fine_grained_token",
+        prefix: "github_pat_",
+        body: Body::UrlSafe,
+        min: 70,
+        max: 100,
+    },
+    TokenRule {
+        id: "gitlab_token",
+        prefix: "glpat-",
+        body: Body::UrlSafe,
+        min: 20,
+        max: 40,
+    },
+    TokenRule {
+        id: "slack_token",
+        prefix: "xoxb-",
+        body: Body::UrlSafe,
+        min: 20,
+        max: 200,
+    },
+    TokenRule {
+        id: "slack_user_token",
+        prefix: "xoxp-",
+        body: Body::UrlSafe,
+        min: 20,
+        max: 200,
+    },
+    TokenRule {
+        id: "google_api_key",
+        prefix: "AIza",
+        body: Body::UrlSafe,
+        min: 35,
+        max: 35,
+    },
+    TokenRule {
+        id: "stripe_live_key",
+        prefix: "sk_live_",
+        body: Body::Alnum,
+        min: 20,
+        max: 120,
+    },
+    TokenRule {
+        id: "openai_api_key",
+        prefix: "sk-proj-",
+        body: Body::UrlSafe,
+        min: 40,
+        max: 200,
+    },
+    TokenRule {
+        id: "anthropic_api_key",
+        prefix: "sk-ant-",
+        body: Body::UrlSafe,
+        min: 40,
+        max: 200,
+    },
+    TokenRule {
+        id: "elitea_token",
+        prefix: "elnat_",
+        body: Body::UrlSafe,
+        min: 20,
+        max: 200,
+    },
 ];
 
 /// Connection-string schemes whose URL user-info is a database or broker
 /// password.
 const CONNECTION_SCHEMES: &[&str] = &[
-    "postgres://", "postgresql://", "mysql://", "mariadb://", "mongodb://", "mongodb+srv://",
-    "redis://", "rediss://", "amqp://", "amqps://", "mssql://", "sqlserver://",
+    "postgres://",
+    "postgresql://",
+    "mysql://",
+    "mariadb://",
+    "mongodb://",
+    "mongodb+srv://",
+    "redis://",
+    "rediss://",
+    "amqp://",
+    "amqps://",
+    "mssql://",
+    "sqlserver://",
 ];
 
 /// Placeholder passwords a template or a test fixture uses.
 const PLACEHOLDER_PASSWORDS: &[&str] = &[
-    "password", "pass", "secret", "changeme", "example", "xxx", "xxxx", "****", "${password}",
-    "$password", "<password>", "{password}", "pw", "test",
+    "password",
+    "pass",
+    "secret",
+    "changeme",
+    "example",
+    "xxx",
+    "xxxx",
+    "****",
+    "${password}",
+    "$password",
+    "<password>",
+    "{password}",
+    "pw",
+    "test",
 ];
 
 /// One finding: the rule and the line. The path stays in memory for the
@@ -275,7 +393,10 @@ mod tests {
         let github = format!("token: ghp_{}", "a".repeat(36));
         assert_eq!(scan_bytes(github.as_bytes()), [(1, "github_token")]);
         let url = "DATABASE_URL=postgres://app:s3cr3t-Value@db.internal:5432/app";
-        assert_eq!(scan_bytes(url.as_bytes()), [(1, "connection_string_password")]);
+        assert_eq!(
+            scan_bytes(url.as_bytes()),
+            [(1, "connection_string_password")]
+        );
     }
 
     #[test]

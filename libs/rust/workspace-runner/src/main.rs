@@ -66,7 +66,9 @@ fn fail(code: &str) -> ExitCode {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let Some(args) = parse() else {
-        eprintln!("usage: elitea-workspace-runner unpack|serve|pack [--root <dir>] [--data-dir <dir>] [--policy <json>] [--max-files <n>] [--max-file-bytes <n>] [--max-total-bytes <n>]");
+        eprintln!(
+            "usage: elitea-workspace-runner unpack|serve|pack [--root <dir>] [--data-dir <dir>] [--policy <json>] [--max-files <n>] [--max-file-bytes <n>] [--max-total-bytes <n>]"
+        );
         return ExitCode::from(2);
     };
     match args.command.as_str() {
@@ -92,14 +94,13 @@ async fn main() -> ExitCode {
                     Err(code) => return fail(&code),
                 };
             }
-            let session = match open_session(&RunnerConfig {
+            let Ok(session) = open_session(&RunnerConfig {
                 root: args.root,
                 data_dir: args.data_dir,
                 policy: args.policy,
                 env,
-            }) {
-                Ok(session) => session,
-                Err(_) => return fail("runner.workspace_unavailable"),
+            }) else {
+                return fail("runner.workspace_unavailable");
             };
             match serve(session, input, tokio::io::stdout()).await {
                 Ok(()) => ExitCode::SUCCESS,

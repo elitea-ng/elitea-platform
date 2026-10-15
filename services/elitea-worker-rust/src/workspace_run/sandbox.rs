@@ -100,7 +100,9 @@ impl WorkspaceRunSpec {
         context: &WorkspaceRuntimeContext,
         defaults: &WorkspaceRunDefaults,
     ) -> Result<Self, SandboxRunError> {
-        if context.network && !context.network_allowlist.is_empty() && !defaults.host_allowlist_proxy
+        if context.network
+            && !context.network_allowlist.is_empty()
+            && !defaults.host_allowlist_proxy
         {
             return Err(SandboxRunError::PolicyUnenforceable);
         }
@@ -150,7 +152,10 @@ impl WorkspaceRunSpec {
 impl WorkspaceRunSpec {
     /// The backend-independent container of this run, in `image`.
     #[must_use]
-    pub(crate) fn container(&self, image: &str) -> crate::sandbox::workspace_run::WorkspaceRunContainer {
+    pub(crate) fn container(
+        &self,
+        image: &str,
+    ) -> crate::sandbox::workspace_run::WorkspaceRunContainer {
         crate::sandbox::workspace_run::WorkspaceRunContainer {
             name: self.run_id.clone(),
             image: image.to_owned(),
@@ -209,7 +214,7 @@ mod tests {
             cpu_millis: 2_000,
             memory_bytes: 4 << 30,
             max_disk_bytes: 8 << 30,
-            turn_wall: Duration::from_secs(1_800),
+            turn_wall: Duration::from_mins(30),
             host_allowlist_proxy: false,
         }
     }
@@ -218,15 +223,15 @@ mod tests {
     fn the_volume_is_sized_from_the_declared_tree_plus_headroom() {
         let mut context = fixture();
         context.limits.unpacked_bytes = 3 << 30;
-        let spec = WorkspaceRunSpec::from_context("run".into(), &context, &defaults())
-            .expect("spec");
+        let spec =
+            WorkspaceRunSpec::from_context("run".into(), &context, &defaults()).expect("spec");
         assert_eq!(spec.workspace_bytes, 6 << 30);
         assert_eq!(spec.pids_limit, WORKSPACE_RUN_PIDS_LIMIT);
         assert_eq!(spec.network, WorkspaceNetwork::PublicEgress);
 
         context.limits.unpacked_bytes = 1 << 20;
-        let spec = WorkspaceRunSpec::from_context("run".into(), &context, &defaults())
-            .expect("spec");
+        let spec =
+            WorkspaceRunSpec::from_context("run".into(), &context, &defaults()).expect("spec");
         assert_eq!(spec.workspace_bytes, (1 << 20) + MIN_BUILD_HEADROOM_BYTES);
 
         context.limits.unpacked_bytes = 9 << 30;
@@ -241,8 +246,8 @@ mod tests {
     fn network_off_is_mode_none_and_an_allowlist_needs_the_proxy() {
         let mut context = fixture();
         context.network = false;
-        let spec = WorkspaceRunSpec::from_context("run".into(), &context, &defaults())
-            .expect("spec");
+        let spec =
+            WorkspaceRunSpec::from_context("run".into(), &context, &defaults()).expect("spec");
         assert_eq!(spec.network, WorkspaceNetwork::None);
 
         let mut context = fixture();
@@ -258,21 +263,35 @@ mod tests {
 
     #[test]
     fn the_spec_renders_a_writable_disk_backed_container_with_the_policy_network() {
-        let image = format!("registry.example/workspace-runner@sha256:{}", "c".repeat(64));
-        let selector = std::collections::BTreeMap::from([("sandbox".to_owned(), "true".to_owned())]);
+        let image = format!(
+            "registry.example/workspace-runner@sha256:{}",
+            "c".repeat(64)
+        );
+        let selector =
+            std::collections::BTreeMap::from([("sandbox".to_owned(), "true".to_owned())]);
         let spec = WorkspaceRunSpec::from_context("elitea-ws-abc".into(), &fixture(), &defaults())
             .expect("spec");
         let pod = spec
             .container(&image)
             .kubernetes_pod("elitea-execution", "gvisor", &selector)
             .expect("pod");
-        assert!(pod["spec"]["volumes"][0]["emptyDir"].get("medium").is_none());
-        assert_eq!(pod["metadata"]["labels"]["sandbox.elitea.ai/egress"], "public");
+        assert!(
+            pod["spec"]["volumes"][0]["emptyDir"]
+                .get("medium")
+                .is_none()
+        );
+        assert_eq!(
+            pod["metadata"]["labels"]["sandbox.elitea.ai/egress"],
+            "public"
+        );
         let mut off = fixture();
         off.network = false;
         let spec = WorkspaceRunSpec::from_context("elitea-ws-abc".into(), &off, &defaults())
             .expect("spec");
-        let plan = spec.container(&image).docker_plan(Some("elitea-workspace-egress"), &["1.1.1.1".to_owned()]).expect("plan");
+        let plan = spec
+            .container(&image)
+            .docker_plan(Some("elitea-workspace-egress"), &["1.1.1.1".to_owned()])
+            .expect("plan");
         assert_eq!(plan.network_mode, "none");
         assert_eq!(plan.pids_limit, WORKSPACE_RUN_PIDS_LIMIT);
     }
@@ -283,10 +302,10 @@ mod tests {
         context.limits.cpu_millis = 8_000;
         context.limits.memory_bytes = 1 << 30;
         context.limits.turn_wall_seconds = 60;
-        let spec = WorkspaceRunSpec::from_context("run".into(), &context, &defaults())
-            .expect("spec");
+        let spec =
+            WorkspaceRunSpec::from_context("run".into(), &context, &defaults()).expect("spec");
         assert_eq!(spec.cpu_millis, 2_000);
         assert_eq!(spec.memory_bytes, 1 << 30);
-        assert_eq!(spec.turn_wall, Duration::from_secs(60));
+        assert_eq!(spec.turn_wall, Duration::from_mins(1));
     }
 }

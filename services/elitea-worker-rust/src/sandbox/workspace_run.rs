@@ -18,7 +18,7 @@
 //!   until the supervisor execs `elitea-workspace-runner unpack|serve|pack`;
 //! * the label `sandbox.elitea.ai/kind: workspace-run`, and
 //!   `sandbox.elitea.ai/egress: public` only when the project's network is
-//!   on. The chart's label-selected NetworkPolicy opens egress for exactly
+//!   on. The chart's label-selected `NetworkPolicy` opens egress for exactly
 //!   those pods (minus private, link-local, loopback, metadata and cluster
 //!   ranges, DNS to the cluster resolver only); every other pod in the
 //!   execution namespace stays under the deny-all policy. Network off is
@@ -217,9 +217,9 @@ impl WorkspaceRunContainer {
                 .filter(|name| {
                     !name.is_empty()
                         && !matches!(*name, "host" | "bridge" | "none" | "default")
-                        && name
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+                        && name.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')
+                        })
                 })
                 .ok_or(InvalidWorkspaceRun::NoEgressNetwork)?;
             network.to_owned()
@@ -235,7 +235,11 @@ impl WorkspaceRunContainer {
             return Err(InvalidWorkspaceRun::NoEgressNetwork);
         }
         Ok(DockerRunPlan {
-            dns: if self.egress { egress_dns.to_vec() } else { Vec::new() },
+            dns: if self.egress {
+                egress_dns.to_vec()
+            } else {
+                Vec::new()
+            },
             name: self.name.clone(),
             image: self.image.clone(),
             command: vec!["sleep".to_owned(), "infinity".to_owned()],
@@ -295,7 +299,10 @@ mod tests {
     fn run(egress: bool) -> WorkspaceRunContainer {
         WorkspaceRunContainer {
             name: "elitea-ws-0123456789abcdef01234567".into(),
-            image: format!("registry.example/workspace-runner@sha256:{}", "b".repeat(64)),
+            image: format!(
+                "registry.example/workspace-runner@sha256:{}",
+                "b".repeat(64)
+            ),
             workspace_bytes: 6 << 30,
             egress,
             cpu_millis: 2_000,
@@ -320,8 +327,14 @@ mod tests {
             .expect("pod");
         let workspace = &pod["spec"]["volumes"][0];
         assert_eq!(workspace["name"], "workspace");
-        assert!(workspace["emptyDir"].get("medium").is_none(), "disk, not tmpfs");
-        assert_eq!(workspace["emptyDir"]["sizeLimit"], (6_u64 << 30).to_string());
+        assert!(
+            workspace["emptyDir"].get("medium").is_none(),
+            "disk, not tmpfs"
+        );
+        assert_eq!(
+            workspace["emptyDir"]["sizeLimit"],
+            (6_u64 << 30).to_string()
+        );
         let mount = &pod["spec"]["containers"][0]["volumeMounts"][0];
         assert_eq!(mount["mountPath"], "/workspace");
         assert!(mount.get("readOnly").is_none());
@@ -342,19 +355,26 @@ mod tests {
             .expect("pod");
         assert!(pod["metadata"]["labels"].get(EGRESS_LABEL).is_none());
         assert_eq!(pod["spec"]["dnsPolicy"], "None");
-        let docker = run(false).docker_plan(Some("elitea-workspace-egress"), &dns()).expect("plan");
+        let docker = run(false)
+            .docker_plan(Some("elitea-workspace-egress"), &dns())
+            .expect("plan");
         assert_eq!(docker.network_mode, "none");
     }
 
     #[test]
     fn docker_egress_uses_the_dedicated_network_or_refuses() {
-        let plan = run(true).docker_plan(Some("elitea-workspace-egress"), &dns()).expect("plan");
+        let plan = run(true)
+            .docker_plan(Some("elitea-workspace-egress"), &dns())
+            .expect("plan");
         assert_eq!(plan.network_mode, "elitea-workspace-egress");
         assert_eq!(plan.pids_limit, 4_096);
         assert!(plan.readonly_rootfs);
         assert_eq!(plan.cap_drop, ["ALL"]);
         assert!(plan.tmpfs["/tmp"].contains("noexec"));
-        assert!(!plan.tmpfs.contains_key("/workspace"), "the workspace is a volume, with exec");
+        assert!(
+            !plan.tmpfs.contains_key("/workspace"),
+            "the workspace is a volume, with exec"
+        );
         assert_eq!(plan.dns, dns());
         assert_eq!(
             run(true).docker_plan(Some("elitea-workspace-egress"), &[]),

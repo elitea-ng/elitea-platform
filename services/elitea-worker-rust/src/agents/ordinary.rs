@@ -135,6 +135,10 @@ impl OrdinaryNativeAgentAssembler {
 
     /// Lend the cloud executor's workspace runs (ADR-0034).
     #[must_use]
+    #[allow(
+        dead_code,
+        reason = "composed once the sandbox supervisor serves workspace runs (ADR-0034 executor deviations)"
+    )]
     pub(crate) fn with_workspace_runs(
         mut self,
         workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
@@ -261,6 +265,10 @@ impl OrdinaryNativeAgentAssembler {
         Ok(assembled.map_completion(|completion| completion.with_workspace(workspace)))
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one ordered owner of the claim, the workspace, the tools and the model"
+    )]
     async fn prepare_runner_inputs(
         &self,
         redeemed: RedeemedOrdinaryNativeAssembly<'_>,

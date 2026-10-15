@@ -17,14 +17,14 @@ use tokio_stream::StreamExt as _;
 use tonic::transport::Channel;
 
 use crate::protocol::elitea::runtime::v1::{
-    RuntimeErrorCodeV1, RuntimeErrorV1, WorkspaceClaimV1, WorkspaceFetchFrameV1,
-    WorkspaceFetchPlanRequestV1, WorkspacePublishRequestV1, WorkspacePublishResponseV1,
-    WorkspacePullRequestDiffFrameV1, WorkspacePullRequestDiffRequestV1, WorkspaceRefUpdateV1,
-    WorkspaceRefV1, WorkspaceRefusalCodeV1, WorkspaceRefusalV1, WorkspaceUploadFrameV1,
-    WorkspaceUploadHeaderV1, WorkspaceUploadResponseV1, WorkspaceEnvSecretFrameV1,
-    WorkspaceEnvSecretRequestV1, workspace_env_secret_frame_v1, workspace_fetch_frame_v1,
-    workspace_pull_request_diff_frame_v1, workspace_store_service_client::WorkspaceStoreServiceClient,
-    workspace_upload_frame_v1,
+    RuntimeErrorCodeV1, RuntimeErrorV1, WorkspaceClaimV1, WorkspaceEnvSecretFrameV1,
+    WorkspaceEnvSecretRequestV1, WorkspaceFetchFrameV1, WorkspaceFetchPlanRequestV1,
+    WorkspacePublishRequestV1, WorkspacePublishResponseV1, WorkspacePullRequestDiffFrameV1,
+    WorkspacePullRequestDiffRequestV1, WorkspaceRefUpdateV1, WorkspaceRefV1,
+    WorkspaceRefusalCodeV1, WorkspaceRefusalV1, WorkspaceUploadFrameV1, WorkspaceUploadHeaderV1,
+    WorkspaceUploadResponseV1, workspace_env_secret_frame_v1, workspace_fetch_frame_v1,
+    workspace_pull_request_diff_frame_v1,
+    workspace_store_service_client::WorkspaceStoreServiceClient, workspace_upload_frame_v1,
 };
 
 use super::context::sha1_hex;
@@ -262,7 +262,9 @@ pub(crate) fn read_env_frames(
             }
             Some(Frame::EndCount(count)) => {
                 if count as usize != vars.len() || frames.next().is_some() {
-                    return Err(StoreCallError::Malformed("the env stream does not match its count"));
+                    return Err(StoreCallError::Malformed(
+                        "the env stream does not match its count",
+                    ));
                 }
                 return Ok(SecretEnv::new(vars));
             }
@@ -407,7 +409,9 @@ pub(crate) fn read_fetch_frames(
             Some(Frame::Refusal(refusal)) => return Err(refused(&refusal)),
             Some(Frame::Rejection(rejection)) => return Err(rejected(&rejection)),
             Some(Frame::Plan(_)) | None => {
-                return Err(StoreCallError::Malformed("the fetch stream is out of order"));
+                return Err(StoreCallError::Malformed(
+                    "the fetch stream is out of order",
+                ));
             }
         }
     }
@@ -429,9 +433,13 @@ pub(crate) fn upload_frames(
             bytes: bytes.len() as u64,
         })),
     }];
-    frames.extend(bytes.chunks(CHUNK_BYTES).map(|chunk| WorkspaceUploadFrameV1 {
-        frame: Some(Frame::Chunk(chunk.to_vec())),
-    }));
+    frames.extend(
+        bytes
+            .chunks(CHUNK_BYTES)
+            .map(|chunk| WorkspaceUploadFrameV1 {
+                frame: Some(Frame::Chunk(chunk.to_vec())),
+            }),
+    );
     frames
 }
 
@@ -440,7 +448,9 @@ fn read_upload(response: &WorkspaceUploadResponseV1) -> Result<bool, StoreCallEr
         (Some(refusal), None) if !response.exists => Err(refused(refusal)),
         (None, Some(rejection)) if !response.exists => Err(rejected(rejection)),
         (None, None) => Ok(response.exists),
-        _ => Err(StoreCallError::Malformed("the upload response is ambiguous")),
+        _ => Err(StoreCallError::Malformed(
+            "the upload response is ambiguous",
+        )),
     }
 }
 
@@ -478,7 +488,11 @@ pub(crate) fn read_publish(
         (Some(refusal), None) => return Err(refused(refusal)),
         (None, Some(rejection)) => return Err(rejected(rejection)),
         (None, None) => {}
-        _ => return Err(StoreCallError::Malformed("the publish response is ambiguous")),
+        _ => {
+            return Err(StoreCallError::Malformed(
+                "the publish response is ambiguous",
+            ));
+        }
     }
     let refs = ref_map(&response.refs)?;
     if response.seq == 0 || refs.get(REF_CLOUD) != Some(&request.new_cloud) {
@@ -534,7 +548,9 @@ pub(crate) fn read_diff_frames(
         }
     }
     if text.len() as u64 != header.bytes || sha256_hex(&text) != header.diff_sha256 {
-        return Err(StoreCallError::Malformed("the diff does not match its header"));
+        return Err(StoreCallError::Malformed(
+            "the diff does not match its header",
+        ));
     }
     let text = String::from_utf8(text)
         .map_err(|_| StoreCallError::Malformed("the diff is not UTF-8 text"))?;
@@ -744,9 +760,13 @@ mod tests {
                 }],
             })),
         }];
-        frames.extend(segment.chunks(CHUNK_BYTES).map(|chunk| WorkspaceFetchFrameV1 {
-            frame: Some(Frame::SegmentChunk(chunk.to_vec())),
-        }));
+        frames.extend(
+            segment
+                .chunks(CHUNK_BYTES)
+                .map(|chunk| WorkspaceFetchFrameV1 {
+                    frame: Some(Frame::SegmentChunk(chunk.to_vec())),
+                }),
+        );
         frames.push(WorkspaceFetchFrameV1 {
             frame: Some(Frame::SegmentEnd(WorkspaceSegmentEndV1 {
                 sha256: if corrupt_end { "0".repeat(64) } else { sha },
@@ -784,10 +804,12 @@ mod tests {
     #[test]
     fn a_refused_fetch_reads_its_code() {
         let frame = WorkspaceFetchFrameV1 {
-            frame: Some(workspace_fetch_frame_v1::Frame::Refusal(WorkspaceRefusalV1 {
-                code: WorkspaceRefusalCodeV1::StaleEpoch as i32,
-                current: Vec::new(),
-            })),
+            frame: Some(workspace_fetch_frame_v1::Frame::Refusal(
+                WorkspaceRefusalV1 {
+                    code: WorkspaceRefusalCodeV1::StaleEpoch as i32,
+                    current: Vec::new(),
+                },
+            )),
         };
         assert!(matches!(
             read_fetch_frames([frame], 1 << 20),

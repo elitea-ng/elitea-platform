@@ -6,11 +6,17 @@ use elitea_local_tools::session::TOOLS;
 
 #[test]
 fn workspace_tools_are_the_local_tools_minus_git_commit() {
-    let local: Vec<_> = TOOLS.iter().filter(|spec| spec.name != REPLACED_TOOL).collect();
+    let local: Vec<_> = TOOLS
+        .iter()
+        .filter(|spec| spec.name != REPLACED_TOOL)
+        .collect();
     assert!(TOOLS.iter().any(|spec| spec.name == REPLACED_TOOL));
     assert_eq!(
         local.iter().map(|spec| spec.name).collect::<Vec<_>>(),
-        WORKSPACE_TOOLS.iter().map(|spec| spec.name).collect::<Vec<_>>(),
+        WORKSPACE_TOOLS
+            .iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>(),
         "names and order"
     );
     for (local, cloud) in local.iter().zip(WORKSPACE_TOOLS) {

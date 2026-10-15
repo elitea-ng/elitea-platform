@@ -251,7 +251,11 @@ impl Tool for WorkspaceTool {
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
         // Failures are results the model reads, not run failures.
         Ok(
-            match self.runner.call(self.spec.name, ctx.function_call_id(), args).await {
+            match self
+                .runner
+                .call(self.spec.name, ctx.function_call_id(), args)
+                .await
+            {
                 Ok(value) => value,
                 Err(error) => json!({
                     "status": "error",
@@ -323,7 +327,10 @@ impl WorkspaceToolProvider {
 
 #[async_trait]
 impl ToolProvider for WorkspaceToolProvider {
-    async fn toolsets(&self, _request: &ToolsetRequest) -> Result<Vec<Arc<dyn Toolset>>, HostError> {
+    async fn toolsets(
+        &self,
+        _request: &ToolsetRequest,
+    ) -> Result<Vec<Arc<dyn Toolset>>, HostError> {
         Ok(vec![self.toolset()])
     }
 }
@@ -391,12 +398,25 @@ mod tests {
                 .collect(),
         };
         assert_eq!(toolset.name(), "local");
-        let read = tools.tools.iter().find(|tool| tool.name() == "read_file").expect("read_file");
+        let read = tools
+            .tools
+            .iter()
+            .find(|tool| tool.name() == "read_file")
+            .expect("read_file");
         assert!(read.is_read_only());
-        let write = tools.tools.iter().find(|tool| tool.name() == "write_file").expect("write_file");
+        let write = tools
+            .tools
+            .iter()
+            .find(|tool| tool.name() == "write_file")
+            .expect("write_file");
         assert!(!write.is_read_only());
-        let status = tools.tools.iter().find(|tool| tool.name() == "git_status").expect("status");
-        let ctx: Arc<dyn ToolContext> = Arc::new(adk_tool::SimpleToolContext::new("workspace-test"));
+        let status = tools
+            .tools
+            .iter()
+            .find(|tool| tool.name() == "git_status")
+            .expect("status");
+        let ctx: Arc<dyn ToolContext> =
+            Arc::new(adk_tool::SimpleToolContext::new("workspace-test"));
         let call_id = ctx.function_call_id().to_owned();
         let result = status.execute(ctx, json!({})).await.expect("result");
         assert_eq!(result["status"], "error");

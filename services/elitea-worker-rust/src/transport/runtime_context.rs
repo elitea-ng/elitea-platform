@@ -917,10 +917,9 @@ fn build_request(
             )
         })?,
     );
-    request.headers_mut().insert(
-        ACCEPT_HEADER,
-        HeaderValue::from_static(WORKSPACE_FIELD),
-    );
+    request
+        .headers_mut()
+        .insert(ACCEPT_HEADER, HeaderValue::from_static(WORKSPACE_FIELD));
     Ok(request)
 }
 

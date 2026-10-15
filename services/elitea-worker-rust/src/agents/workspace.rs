@@ -35,12 +35,18 @@ fn code_for(error: &WorkspaceRunError) -> NativeAgentAssemblyErrorCode {
 
 /// The workspace could not be hydrated: the turn fails before the model runs.
 pub(crate) fn hydrate_error(error: &WorkspaceRunError) -> NativeAgentAssemblyError {
-    NativeAgentAssemblyError::new(code_for(error), "the handed-off workspace could not be prepared")
-        .with_cause(error.code(), None)
+    NativeAgentAssemblyError::new(
+        code_for(error),
+        "the handed-off workspace could not be prepared",
+    )
+    .with_cause(error.code(), None)
 }
 
 /// The turn's work could not be published; the turn fails and nothing moved.
 pub(crate) fn publish_error(error: &WorkspaceRunError) -> NativeAgentAssemblyError {
-    NativeAgentAssemblyError::new(code_for(error), "the cloud turn's changes could not be published")
-        .with_cause(error.code(), None)
+    NativeAgentAssemblyError::new(
+        code_for(error),
+        "the cloud turn's changes could not be published",
+    )
+    .with_cause(error.code(), None)
 }

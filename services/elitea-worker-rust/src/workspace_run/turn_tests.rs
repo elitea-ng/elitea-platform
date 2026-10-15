@@ -13,6 +13,7 @@ use super::codec::{
     BuiltSegment, CodecError, HydratedTree, SegmentExpectation, TurnCommit, WorkspaceCodec,
 };
 use super::context::{WorkspaceRuntimeContext, fixture};
+use super::redact::SecretEnv;
 use super::sandbox::{
     SandboxRunError, WorkspaceRunDefaults, WorkspaceRunSpec, WorkspaceSandbox,
     WorkspaceSandboxLauncher,
@@ -21,7 +22,6 @@ use super::store::{
     FetchedThread, PlannedSegment, PublishSegment, PublishedSegment, PullRequestDiff, REF_CLOUD,
     RefusalCode, StoreCallError, WorkspaceStore, sha256_hex,
 };
-use super::redact::SecretEnv;
 use super::turn::{TurnEnd, WorkspaceRunError, WorkspaceRunFactory};
 use crate::protocol::elitea::runtime::v1::WorkspaceClaimV1;
 
@@ -234,8 +234,9 @@ impl WorkspaceCodec for FakeCodec {
     ) -> Result<BuiltSegment, CodecError> {
         self.commits.lock().expect("commits").push(commit.clone());
         let files = read_tree(worktree);
-        let bytes = serde_json::to_vec(&json!({"files": files, "refs": refs, "parent": commit.parent}))
-            .expect("json");
+        let bytes =
+            serde_json::to_vec(&json!({"files": files, "refs": refs, "parent": commit.parent}))
+                .expect("json");
         let commit_sha = sha256_hex(&bytes)[..40].to_owned();
         Ok(BuiltSegment {
             commit: commit_sha,
@@ -249,7 +250,7 @@ impl WorkspaceCodec for FakeCodec {
 struct FakeSandbox {
     files: Mutex<BTreeMap<String, String>>,
     destroyed: Mutex<u32>,
-    /// What the runner's run_command environment holds.
+    /// What the runner's `run_command` environment holds.
     env: Mutex<Vec<(String, String)>>,
     args_seen: Mutex<Vec<Value>>,
 }
@@ -271,7 +272,10 @@ impl WorkspaceSandbox for FakeSandbox {
         if tool == "run_command" {
             // A command that prints its environment.
             let env = self.env.lock().expect("env");
-            let printed: Vec<String> = env.iter().map(|(name, value)| format!("{name}={value}")).collect();
+            let printed: Vec<String> = env
+                .iter()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect();
             return Ok(json!({"status": "ok", "stdout": printed.join("\n")}));
         }
         if tool == "write_file" {
@@ -341,7 +345,7 @@ fn harness(refs: &[(&str, &str)], files: &[(&str, &str)]) -> Harness {
             cpu_millis: 2_000,
             memory_bytes: 4 << 30,
             max_disk_bytes: 8 << 30,
-            turn_wall: Duration::from_secs(600),
+            turn_wall: Duration::from_mins(10),
             host_allowlist_proxy: false,
         },
         PathBuf::from(scratch.path()),
@@ -399,7 +403,11 @@ async fn a_completed_turn_publishes_exactly_one_segment_on_the_expected_cloud_re
         1
     );
     turn.sandbox()
-        .call_tool("write_file", "call-1", json!({"path": "README.md", "content": "hi\n"}))
+        .call_tool(
+            "write_file",
+            "call-1",
+            json!({"path": "README.md", "content": "hi\n"}),
+        )
         .await
         .expect("tool");
 
@@ -409,7 +417,10 @@ async fn a_completed_turn_publishes_exactly_one_segment_on_the_expected_cloud_re
         .expect("published")
         .expect("a stamp");
     // A second finish is the first one's result, not a second publish.
-    assert_eq!(turn.finish(TurnEnd::Completed).await.expect("same"), Some(stamp.clone()));
+    assert_eq!(
+        turn.finish(TurnEnd::Completed).await.expect("same"),
+        Some(stamp.clone())
+    );
 
     let state = harness.store.state();
     assert_eq!(state.uploads.len(), 1);
@@ -423,7 +434,11 @@ async fn a_completed_turn_publishes_exactly_one_segment_on_the_expected_cloud_re
     assert_eq!(commits.len(), 1);
     assert_eq!(commits[0].parent, CLOUD);
     assert_eq!(commits[0].author_name, "Elitea cloud executor");
-    assert!(commits[0].message.contains("\nElitea-Execution-Id: execution-1\n"));
+    assert!(
+        commits[0]
+            .message
+            .contains("\nElitea-Execution-Id: execution-1\n")
+    );
     assert!(commits[0].message.contains("\nElitea-Epoch: 2\n"));
     assert_eq!(*harness.launcher.sandbox.destroyed.lock().expect("d"), 1);
     // The spec carries the policy: network on, disk sized from the tree.
@@ -441,10 +456,7 @@ async fn the_first_cloud_turn_starts_from_the_handoff_snapshot() {
         .await
         .expect("hydrated");
     turn.finish(TurnEnd::Completed).await.expect("published");
-    assert_eq!(
-        harness.codec.commits.lock().expect("c")[0].parent,
-        HANDOFF
-    );
+    assert_eq!(harness.codec.commits.lock().expect("c")[0].parent, HANDOFF);
     assert_eq!(harness.store.state().publishes[0].old_cloud, None);
 }
 
@@ -508,7 +520,11 @@ async fn a_lost_publish_acknowledgement_is_retried_as_the_same_request() {
         .expect("published")
         .expect("stamp");
     let state = harness.store.state();
-    assert_eq!(state.publishes.len(), 1, "one segment, even across the retry");
+    assert_eq!(
+        state.publishes.len(),
+        1,
+        "one segment, even across the retry"
+    );
     assert_eq!(state.refs.get(REF_CLOUD), Some(&stamp.workspace_commit));
 }
 
@@ -564,13 +580,16 @@ async fn a_cloud_ref_other_than_the_context_says_is_stale_state() {
 }
 
 /// Contract 6.4: with `env_secret`, the env is redeemed once, reaches the
-/// sandbox's run_command environment, is never in a tool argument, and is
+/// sandbox's `run_command` environment, is never in a tool argument, and is
 /// redacted (base64 included) from what the tool returns.
 #[tokio::test]
 async fn the_harvested_env_reaches_run_command_and_is_redacted_from_its_output() {
     let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
     harness.store.state().env = vec![
-        ("DATABASE_URL".to_owned(), "postgres://app:s3cret@db/app".to_owned()),
+        (
+            "DATABASE_URL".to_owned(),
+            "postgres://app:s3cret@db/app".to_owned(),
+        ),
         ("SHORT".to_owned(), "abc".to_owned()),
     ];
     let context = WorkspaceRuntimeContext {
@@ -584,7 +603,14 @@ async fn the_harvested_env_reaches_run_command_and_is_redacted_from_its_output()
         .expect("hydrated");
     assert_eq!(harness.store.state().env_reads, 1);
     assert!(
-        harness.launcher.sandbox.env.lock().expect("env").iter().any(|(name, _)| name == "DATABASE_URL"),
+        harness
+            .launcher
+            .sandbox
+            .env
+            .lock()
+            .expect("env")
+            .iter()
+            .any(|(name, _)| name == "DATABASE_URL"),
         "the command environment holds the value"
     );
     let result = turn
@@ -595,11 +621,17 @@ async fn the_harvested_env_reaches_run_command_and_is_redacted_from_its_output()
     let text = result.to_string();
     assert!(!text.contains("s3cret"), "{text}");
     assert!(text.contains("[REDACTED]"));
-    assert!(text.contains("SHORT=abc"), "under 4 characters is not redacted");
+    assert!(
+        text.contains("SHORT=abc"),
+        "under 4 characters is not redacted"
+    );
     // Base64 of a value is redacted too.
     harness.launcher.sandbox.env.lock().expect("env").push((
         "ENCODED".to_owned(),
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, "postgres://app:s3cret@db/app"),
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            "postgres://app:s3cret@db/app",
+        ),
     ));
     let encoded = turn
         .sandbox()
@@ -608,8 +640,18 @@ async fn the_harvested_env_reaches_run_command_and_is_redacted_from_its_output()
         .expect("tool")
         .to_string();
     assert!(encoded.contains("ENCODED=[REDACTED]"), "{encoded}");
-    for args in harness.launcher.sandbox.args_seen.lock().expect("args").iter() {
-        assert!(!args.to_string().contains("s3cret"), "a tool argument never carries the value");
+    for args in harness
+        .launcher
+        .sandbox
+        .args_seen
+        .lock()
+        .expect("args")
+        .iter()
+    {
+        assert!(
+            !args.to_string().contains("s3cret"),
+            "a tool argument never carries the value"
+        );
     }
     turn.finish(TurnEnd::Completed).await.expect("published");
 }
@@ -631,8 +673,16 @@ async fn without_env_secret_no_env_is_redeemed_or_injected() {
 /// An explicit include of the send is not re-scanned (contract 6.4).
 #[tokio::test]
 async fn an_explicit_include_is_not_re_scanned() {
-    let harness = harness(CLOUD_REFS, &[(".env", "AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\n")]);
-    harness.codec.included.lock().expect("included").push("./.env".to_owned());
+    let harness = harness(
+        CLOUD_REFS,
+        &[(".env", "AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\n")],
+    );
+    harness
+        .codec
+        .included
+        .lock()
+        .expect("included")
+        .push("./.env".to_owned());
     let turn = harness
         .factory
         .begin(&later_turn(), claim(2), "execution-1")

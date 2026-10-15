@@ -137,7 +137,9 @@ impl Redactor {
         }
         match value {
             Value::String(text) => Value::String(self.text(&text)),
-            Value::Array(items) => Value::Array(items.into_iter().map(|item| self.json(item)).collect()),
+            Value::Array(items) => {
+                Value::Array(items.into_iter().map(|item| self.json(item)).collect())
+            }
             Value::Object(map) => Value::Object(
                 map.into_iter()
                     .map(|(key, item)| (self.text(&key), self.json(item)))
@@ -211,7 +213,10 @@ mod tests {
         for secret in ["s3cret", "tok-123456", encoded.as_str(), url_safe.as_str()] {
             assert!(!redacted.contains(secret), "{secret} in {redacted}");
         }
-        assert!(redacted.contains("abc"), "a value under 4 characters is kept");
+        assert!(
+            redacted.contains("abc"),
+            "a value under 4 characters is kept"
+        );
         assert!(redacted.contains(REDACTED));
         assert_eq!(format!("{env:?}"), "SecretEnv { vars: 3 }");
         assert!(!format!("{redactor:?}").contains("tok"));

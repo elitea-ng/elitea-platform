@@ -534,8 +534,7 @@ where
                 Some(assembly_failure(&error))
             } else {
                 successful_terminal = pause.selection;
-                match Box::pin(run.publish_result_event(pause.event, occurred_at_unix_millis))
-                    .await
+                match Box::pin(run.publish_result_event(pause.event, occurred_at_unix_millis)).await
                 {
                     Ok(AgentProgressPublishOutcome::Acknowledged { .. }) => None,
                     Ok(AgentProgressPublishOutcome::Rejected { .. }) => {

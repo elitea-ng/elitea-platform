@@ -70,10 +70,12 @@ fn io_error(_: io::Error) -> ArchiveError {
 pub fn safe_path(path: &str) -> bool {
     !path.is_empty()
         && !path.contains('\0')
-        && Path::new(path).components().all(|component| match component {
-            Component::Normal(name) => !name.eq_ignore_ascii_case(".git"),
-            _ => false,
-        })
+        && Path::new(path)
+            .components()
+            .all(|component| match component {
+                Component::Normal(name) => !name.eq_ignore_ascii_case(".git"),
+                _ => false,
+            })
 }
 
 /// What [`write_tree`] wrote.
@@ -151,7 +153,14 @@ fn write_directory(
                 .take(limits.max_file_bytes + 1)
                 .read_to_end(&mut content)
                 .map_err(io_error)?;
-            (if executable(&metadata) { EXECUTABLE } else { FILE }, content)
+            (
+                if executable(&metadata) {
+                    EXECUTABLE
+                } else {
+                    FILE
+                },
+                content,
+            )
         } else {
             return Err(ArchiveError::Unsupported);
         };
@@ -197,7 +206,9 @@ pub fn read_tree(
         return Err(ArchiveError::Malformed);
     }
     let mut magic = [0_u8; 6];
-    input.read_exact(&mut magic).map_err(|_| ArchiveError::Malformed)?;
+    input
+        .read_exact(&mut magic)
+        .map_err(|_| ArchiveError::Malformed)?;
     if magic != MAGIC {
         return Err(ArchiveError::Malformed);
     }
@@ -205,7 +216,9 @@ pub fn read_tree(
     let mut stats = ArchiveStats::default();
     loop {
         let mut tag = [0_u8; 1];
-        input.read_exact(&mut tag).map_err(|_| ArchiveError::Malformed)?;
+        input
+            .read_exact(&mut tag)
+            .map_err(|_| ArchiveError::Malformed)?;
         if tag[0] == END {
             // Nothing may follow the end marker.
             let mut rest = [0_u8; 1];
@@ -218,13 +231,17 @@ pub fn read_tree(
             return Err(ArchiveError::Malformed);
         }
         let mut length = [0_u8; 4];
-        input.read_exact(&mut length).map_err(|_| ArchiveError::Malformed)?;
+        input
+            .read_exact(&mut length)
+            .map_err(|_| ArchiveError::Malformed)?;
         let path_len = u32::from_be_bytes(length);
         if path_len == 0 || path_len > MAX_PATH_BYTES {
             return Err(ArchiveError::Malformed);
         }
         let mut path = vec![0_u8; path_len as usize];
-        input.read_exact(&mut path).map_err(|_| ArchiveError::Malformed)?;
+        input
+            .read_exact(&mut path)
+            .map_err(|_| ArchiveError::Malformed)?;
         let path = String::from_utf8(path).map_err(|_| ArchiveError::Malformed)?;
         if !safe_path(&path) || !seen.insert(path.clone()) {
             return Err(ArchiveError::Malformed);
@@ -239,7 +256,9 @@ pub fn read_tree(
             ancestor = parent.parent();
         }
         let mut size = [0_u8; 8];
-        input.read_exact(&mut size).map_err(|_| ArchiveError::Malformed)?;
+        input
+            .read_exact(&mut size)
+            .map_err(|_| ArchiveError::Malformed)?;
         let size = u64::from_be_bytes(size);
         stats.files += 1;
         stats.bytes = stats.bytes.saturating_add(size);
@@ -323,8 +342,11 @@ mod tests {
         fs::create_dir_all(source.path().join("src/deep")).expect("mkdir");
         fs::write(source.path().join("src/deep/a.rs"), "fn a() {}\n").expect("w");
         fs::write(source.path().join("run.sh"), "#!/bin/sh\n").expect("w");
-        fs::set_permissions(source.path().join("run.sh"), fs::Permissions::from_mode(0o755))
-            .expect("p");
+        fs::set_permissions(
+            source.path().join("run.sh"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .expect("p");
         symlink("run.sh", source.path().join("link")).expect("l");
         fs::create_dir_all(source.path().join(".git/hooks")).expect("git");
         fs::write(source.path().join(".git/hooks/pre-commit"), "evil").expect("w");
@@ -335,11 +357,21 @@ mod tests {
         let target = tempfile::tempdir().expect("target");
         let read = read_tree(&mut stream.as_slice(), target.path(), LIMITS).expect("read");
         assert_eq!(read, written);
-        assert_eq!(fs::read_to_string(target.path().join("src/deep/a.rs")).expect("r"), "fn a() {}\n");
-        assert_eq!(fs::read_link(target.path().join("link")).expect("l"), Path::new("run.sh"));
+        assert_eq!(
+            fs::read_to_string(target.path().join("src/deep/a.rs")).expect("r"),
+            "fn a() {}\n"
+        );
+        assert_eq!(
+            fs::read_link(target.path().join("link")).expect("l"),
+            Path::new("run.sh")
+        );
         assert!(!target.path().join(".git").exists());
         assert_ne!(
-            fs::metadata(target.path().join("run.sh")).expect("m").permissions().mode() & 0o111,
+            fs::metadata(target.path().join("run.sh"))
+                .expect("m")
+                .permissions()
+                .mode()
+                & 0o111,
             0
         );
     }

@@ -15,7 +15,10 @@ const LIMITS: ArchiveLimits = ArchiveLimits {
 };
 
 fn git_available() -> bool {
-    std::process::Command::new("git").arg("--version").output().is_ok()
+    std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_ok()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -55,11 +58,19 @@ async fn unpack_serve_and_pack_a_workspace() {
         json!({"tool": "git_commit", "call_id": "6", "args": {"message": "no"}}),
         json!("not a request"),
     ];
-    let input: String = requests.iter().map(|request| format!("{request}\n")).collect();
+    let mut input = String::new();
+    for request in &requests {
+        input.push_str(&request.to_string());
+        input.push('\n');
+    }
     let mut output = Vec::new();
-    serve(session, tokio::io::BufReader::new(input.as_bytes()), &mut output)
-        .await
-        .unwrap();
+    serve(
+        session,
+        tokio::io::BufReader::new(input.as_bytes()),
+        &mut output,
+    )
+    .await
+    .unwrap();
     let answers: Vec<Value> = String::from_utf8(output)
         .unwrap()
         .lines()
@@ -70,7 +81,11 @@ async fn unpack_serve_and_pack_a_workspace() {
         assert_eq!(answer["status"], "ok", "{answer}");
     }
     assert!(answers[3].to_string().contains("new.txt"), "{}", answers[3]);
-    assert!(answers[4].to_string().contains("README.md"), "{}", answers[4]);
+    assert!(
+        answers[4].to_string().contains("README.md"),
+        "{}",
+        answers[4]
+    );
     assert_eq!(answers[5]["code"], "denied", "git_commit is the worker's");
     assert_eq!(answers[6]["status"], "error");
 
@@ -79,8 +94,14 @@ async fn unpack_serve_and_pack_a_workspace() {
     pack(workspace.path(), &mut packed, LIMITS).unwrap();
     let out = tempfile::tempdir().unwrap();
     workspace_archive::read_tree(&mut packed.as_slice(), out.path(), LIMITS).unwrap();
-    assert_eq!(fs::read_to_string(out.path().join("README.md")).unwrap(), "hello cloud\n");
-    assert_eq!(fs::read_to_string(out.path().join("src/new.txt")).unwrap(), "new\n");
+    assert_eq!(
+        fs::read_to_string(out.path().join("README.md")).unwrap(),
+        "hello cloud\n"
+    );
+    assert_eq!(
+        fs::read_to_string(out.path().join("src/new.txt")).unwrap(),
+        "new\n"
+    );
     assert!(!out.path().join(".git").exists());
 }
 
@@ -144,7 +165,10 @@ async fn the_harvested_env_reaches_run_command_only_when_sent() {
         let session = open_session(&RunnerConfig {
             root: workspace.path().to_path_buf(),
             data_dir: data.path().to_path_buf(),
-            policy: RunnerPolicy { shell: true, ..RunnerPolicy::default() },
+            policy: RunnerPolicy {
+                shell: true,
+                ..RunnerPolicy::default()
+            },
             env,
         })
         .unwrap();

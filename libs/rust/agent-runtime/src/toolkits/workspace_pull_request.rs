@@ -121,7 +121,11 @@ impl GitHubPullRequestTarget {
     }
 
     #[cfg(test)]
-    pub(in crate::toolkits) fn test(name: &str, repository: &str, client: Arc<GitHubClient>) -> Self {
+    pub(in crate::toolkits) fn test(
+        name: &str,
+        repository: &str,
+        client: Arc<GitHubClient>,
+    ) -> Self {
         Self {
             toolkit_name: name.to_owned(),
             repository: repository.to_owned(),
@@ -134,7 +138,9 @@ impl GitHubPullRequestTarget {
 /// client (its own credentials, never shared with the toolkit's toolset).
 /// A toolkit whose settings do not parse is left out.
 #[must_use]
-pub fn github_pull_request_targets(snapshot: &AdmittedToolSnapshot<'_>) -> Vec<GitHubPullRequestTarget> {
+pub fn github_pull_request_targets(
+    snapshot: &AdmittedToolSnapshot<'_>,
+) -> Vec<GitHubPullRequestTarget> {
     snapshot
         .iter()
         .filter(|reference| {
@@ -224,7 +230,7 @@ impl Tool for OpenPullRequestTool {
         OPEN_PULL_REQUEST
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Open a GitHub pull request with this cloud thread's changes: everything that differs from the folder's upstream branch. The change is taken from the workspace, not from an argument. Creates a new branch from the upstream commit (a suffix is added when the name is taken), commits the changes there and opens the pull request against the upstream branch."
     }
 
@@ -257,18 +263,29 @@ impl OpenPullRequestTool {
             return answer("error", "The arguments must be an object.");
         };
         let target = match argument(arguments, "toolkit") {
-            Some(name) if !name.is_empty() => self.targets.iter().find(|target| target.toolkit_name == name),
+            Some(name) if !name.is_empty() => self
+                .targets
+                .iter()
+                .find(|target| target.toolkit_name == name),
             _ if self.targets.len() == 1 => self.targets.first(),
             _ => None,
         };
         let Some(target) = target else {
-            return answer("error", "Name the GitHub toolkit to open the pull request through (`toolkit`).");
+            return answer(
+                "error",
+                "Name the GitHub toolkit to open the pull request through (`toolkit`).",
+            );
         };
-        let (Some(title), Some(branch)) = (argument(arguments, "title"), argument(arguments, "branch")) else {
+        let (Some(title), Some(branch)) =
+            (argument(arguments, "title"), argument(arguments, "branch"))
+        else {
             return answer("error", "`title` and `branch` are required.");
         };
         if title.is_empty() || title.chars().count() > MAX_TITLE_CHARS || branch.is_empty() {
-            return answer("error", "`title` and `branch` must be non-empty and bounded.");
+            return answer(
+                "error",
+                "`title` and `branch` must be non-empty and bounded.",
+            );
         }
         let body = argument(arguments, "body").unwrap_or_default();
         if body.len() > MAX_BODY_BYTES {
@@ -347,7 +364,10 @@ mod tests {
     #[test]
     fn remote_urls_name_their_repository() {
         for (url, want) in [
-            ("https://github.com/EliteaAI/elitea-platform.git", "eliteaai/elitea-platform"),
+            (
+                "https://github.com/EliteaAI/elitea-platform.git",
+                "eliteaai/elitea-platform",
+            ),
             ("https://github.com/o/r", "o/r"),
             ("git@github.com:o/r.git", "o/r"),
             ("ssh://git@github.com/o/r.git", "o/r"),

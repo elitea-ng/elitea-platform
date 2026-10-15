@@ -28,21 +28,23 @@ impl WorkspaceRunner for SandboxWorkspaceRunner {
         self.sandbox
             .call_tool(tool, call_id, args)
             .await
-            .map_err(|error| match error {
-                SandboxRunError::Timeout => HostError::new(
-                    HostErrorCode::ResourceExhausted,
-                    "the workspace tool ran out of time",
-                ),
-                SandboxRunError::Protocol => HostError::new(
-                    HostErrorCode::InvalidResponse,
-                    "the workspace runner answered out of protocol",
-                ),
-                _ => HostError::new(
-                    HostErrorCode::DependencyUnavailable,
-                    "the workspace sandbox is unavailable",
-                ),
-            }
-            .with_reason(error.code()))
+            .map_err(|error| {
+                match error {
+                    SandboxRunError::Timeout => HostError::new(
+                        HostErrorCode::ResourceExhausted,
+                        "the workspace tool ran out of time",
+                    ),
+                    SandboxRunError::Protocol => HostError::new(
+                        HostErrorCode::InvalidResponse,
+                        "the workspace runner answered out of protocol",
+                    ),
+                    _ => HostError::new(
+                        HostErrorCode::DependencyUnavailable,
+                        "the workspace sandbox is unavailable",
+                    ),
+                }
+                .with_reason(error.code())
+            })
     }
 }
 
@@ -72,7 +74,9 @@ impl StoreDiffSource {
 }
 
 #[async_trait]
-impl elitea_agent_runtime::toolkits::workspace_pull_request::WorkspaceDiffSource for StoreDiffSource {
+impl elitea_agent_runtime::toolkits::workspace_pull_request::WorkspaceDiffSource
+    for StoreDiffSource
+{
     async fn pull_request_diff(
         &self,
     ) -> Result<
@@ -80,7 +84,9 @@ impl elitea_agent_runtime::toolkits::workspace_pull_request::WorkspaceDiffSource
         elitea_agent_runtime::toolkits::workspace_pull_request::DiffUnavailable,
     > {
         use super::store::{RefusalCode, StoreCallError};
-        use elitea_agent_runtime::toolkits::workspace_pull_request::{DiffUnavailable, WorkspaceDiff};
+        use elitea_agent_runtime::toolkits::workspace_pull_request::{
+            DiffUnavailable, WorkspaceDiff,
+        };
         match self.store.pull_request_diff(&self.claim).await {
             Ok(diff) => Ok(WorkspaceDiff {
                 upstream_sha: diff.upstream_sha,
@@ -122,7 +128,10 @@ impl LogPullRequestAudit {
 impl elitea_agent_runtime::toolkits::workspace_pull_request::PullRequestAudit
     for LogPullRequestAudit
 {
-    fn opened(&self, event: &elitea_agent_runtime::toolkits::workspace_pull_request::PullRequestOpened) {
+    fn opened(
+        &self,
+        event: &elitea_agent_runtime::toolkits::workspace_pull_request::PullRequestOpened,
+    ) {
         tracing::info!(
             event = "pull_request.opened",
             audit = "pull_request.opened",

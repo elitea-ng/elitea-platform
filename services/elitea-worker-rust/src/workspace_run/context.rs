@@ -35,6 +35,10 @@ pub(crate) struct WorkspaceLimits {
 /// The `workspace` field: which thread, which epoch, what the turn may do.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Main's wire format: one switch per policy"
+)]
 pub(crate) struct WorkspaceRuntimeContext {
     pub(crate) thread: String,
     pub(crate) epoch: u64,

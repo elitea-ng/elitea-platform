@@ -2132,26 +2132,40 @@ pub(in crate::toolkits) async fn open_pull_request_from_diff(
         })
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one ordered flow: refuse, branch, apply, open"
+)]
 async fn open_pull_request_inner(
     client: &GitHubClient,
     request: &PullRequestFromDiff<'_>,
 ) -> Result<PullRequestFromDiffOutcome, Fail> {
-    let refused = |reason: &str| Ok(PullRequestFromDiffOutcome::Refused { reason: reason.to_owned() });
+    let refused = |reason: &str| {
+        Ok(PullRequestFromDiffOutcome::Refused {
+            reason: reason.to_owned(),
+        })
+    };
     if request.diff.len() > MAX_PATCH_BYTES {
         return refused("the change is over the 1 MiB a pull request from the cloud carries");
     }
     // Binary changes are refused before anything is written.
-    if request.diff.lines().any(|line| {
-        line.starts_with("Binary files ") || line.starts_with("GIT binary patch")
-    }) {
-        return refused("the change has binary files, which a pull request from the cloud cannot carry");
+    if request
+        .diff
+        .lines()
+        .any(|line| line.starts_with("Binary files ") || line.starts_with("GIT binary patch"))
+    {
+        return refused(
+            "the change has binary files, which a pull request from the cloud cannot carry",
+        );
     }
     let changes = parse_patch(request.diff);
     if changes.is_empty() {
         return refused("there is no change to open a pull request with");
     }
     if changes.len() > MAX_PATCH_FILES {
-        return refused("the change touches more than the 100 files a pull request from the cloud carries");
+        return refused(
+            "the change touches more than the 100 files a pull request from the cloud carries",
+        );
     }
     if !valid_commit_id(request.from_sha) {
         return refused("the recorded upstream commit is not a commit id");
@@ -2159,17 +2173,34 @@ async fn open_pull_request_inner(
     branch_name("branch", request.branch)?;
     branch_name("base", request.base)?;
     let (owner, repo) = repository(client, &Map::new())?;
-    let branch = match create_branch_named(client, &owner, &repo, request.branch, Some(request.from_sha)).await? {
+    let branch = match create_branch_named(
+        client,
+        &owner,
+        &repo,
+        request.branch,
+        Some(request.from_sha),
+    )
+    .await?
+    {
         Ok(branch) => branch,
         Err(sentence) => return refused(&sentence),
     };
-    let message = format!("{}\n\nOpened from an Elitea cloud executor turn.", request.title);
+    let message = format!(
+        "{}\n\nOpened from an Elitea cloud executor turn.",
+        request.title
+    );
     let applied = apply_patch(client, request.diff, &branch, &message, &Map::new()).await?;
     let list = |key: &str| -> Vec<String> {
         applied
             .get(key)
             .and_then(Value::as_array)
-            .map(|items| items.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
             .unwrap_or_default()
     };
     let (done, failed) = (list("applied_changes"), list("failed_changes"));
@@ -2186,13 +2217,18 @@ async fn open_pull_request_inner(
             reason,
         });
     }
-    let pull = json!({"title": request.title, "body": request.body, "head": branch, "base": request.base});
+    let pull =
+        json!({"title": request.title, "body": request.body, "head": branch, "base": request.base});
     let opened = match client
-        .write(Method::POST, &["repos", &owner, &repo, "pulls"], Some(&pull))
+        .write(
+            Method::POST,
+            &["repos", &owner, &repo, "pulls"],
+            Some(&pull),
+        )
         .await
     {
         Ok(reply) => created(&reply, "number"),
-        Err(fail) => Err(Fail::from(fail)),
+        Err(fail) => Err(fail),
     };
     match opened {
         Ok((number, url)) => Ok(PullRequestFromDiffOutcome::Opened {

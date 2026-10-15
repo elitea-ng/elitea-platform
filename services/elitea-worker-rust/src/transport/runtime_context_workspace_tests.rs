@@ -46,7 +46,7 @@ impl RuntimeContextRpc for AcceptCapture {
     }
 }
 
-fn fake(body: serde_json::Value) -> (RuntimeContextClient, Arc<Mutex<Vec<String>>>) {
+fn fake(body: &serde_json::Value) -> (RuntimeContextClient, Arc<Mutex<Vec<String>>>) {
     let accept = Arc::new(Mutex::new(Vec::new()));
     let client = RuntimeContextClient::with_rpc(
         AcceptCapture {
@@ -95,7 +95,7 @@ fn workspace() -> serde_json::Value {
 
 #[tokio::test(flavor = "current_thread")]
 async fn redemption_asks_for_the_workspace_field_and_an_ordinary_turn_has_none() {
-    let (client, accept) = fake(token(None));
+    let (client, accept) = fake(&token(None));
     let context = client
         .redeem(&test_runtime_context_authority())
         .await
@@ -106,7 +106,7 @@ async fn redemption_asks_for_the_workspace_field_and_an_ordinary_turn_has_none()
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_cloud_turn_carries_the_parsed_field() {
-    let (client, _) = fake(token(Some(workspace())));
+    let (client, _) = fake(&token(Some(workspace())));
     let context = client
         .redeem(&test_runtime_context_authority())
         .await
@@ -126,7 +126,7 @@ async fn strict_parsing_is_unaffected_and_extends_into_the_field() {
     // An unknown top-level key is still refused.
     let mut unknown = token(None);
     unknown["future"] = serde_json::json!(true);
-    let (client, _) = fake(unknown);
+    let (client, _) = fake(&unknown);
     assert!(matches!(
         client.redeem(&test_runtime_context_authority()).await,
         Err(RuntimeContextError::InvalidResponse(_))
@@ -134,7 +134,7 @@ async fn strict_parsing_is_unaffected_and_extends_into_the_field() {
     // An unknown key inside the field is refused too.
     let mut inner = workspace();
     inner["future"] = serde_json::json!(true);
-    let (client, _) = fake(token(Some(inner)));
+    let (client, _) = fake(&token(Some(inner)));
     assert!(matches!(
         client.redeem(&test_runtime_context_authority()).await,
         Err(RuntimeContextError::InvalidResponse(_))
@@ -142,7 +142,7 @@ async fn strict_parsing_is_unaffected_and_extends_into_the_field() {
     // A field that parses but is malformed (stale-looking epoch 0) is refused.
     let mut zero = workspace();
     zero["epoch"] = serde_json::json!(0);
-    let (client, _) = fake(token(Some(zero)));
+    let (client, _) = fake(&token(Some(zero)));
     assert!(matches!(
         client.redeem(&test_runtime_context_authority()).await,
         Err(RuntimeContextError::InvalidResponse(_))

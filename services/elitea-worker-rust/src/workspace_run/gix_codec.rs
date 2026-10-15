@@ -132,7 +132,11 @@ impl WorkspaceCodec for StoreCodec {
                 MODE_FILE | MODE_EXECUTABLE => {
                     let mut file = File::create(&target).map_err(|_| CodecError::Io)?;
                     file.write_all(&content).map_err(|_| CodecError::Io)?;
-                    let mode = if entry.mode == MODE_EXECUTABLE { 0o755 } else { 0o644 };
+                    let mode = if entry.mode == MODE_EXECUTABLE {
+                        0o755
+                    } else {
+                        0o644
+                    };
                     fs::set_permissions(&target, fs::Permissions::from_mode(mode))
                         .map_err(|_| CodecError::Io)?;
                 }
@@ -196,12 +200,11 @@ impl WorkspaceCodec for StoreCodec {
         }
         tips.push((REF_CLOUD.to_owned(), new_commit));
         let db = ObjectDb::open_objects(&objects).map_err(|error| verify_error(&error))?;
-        let written = bundle::write_compact(&db, &tips, Limits::default()).map_err(|error| {
-            match error {
+        let written =
+            bundle::write_compact(&db, &tips, Limits::default()).map_err(|error| match error {
                 StoreError::Invalid(_) => CodecError::TooLarge,
                 other => verify_error(&other),
-            }
-        })?;
+            })?;
         if written.bytes.len() as u64 > max_segment_bytes {
             return Err(CodecError::TooLarge);
         }
@@ -357,6 +360,7 @@ mod tests {
     /// Build a first segment the way a desktop would: an orphan base and a
     /// snapshot commit, bundled with the crate, then round-trip a cloud turn.
     #[test]
+    #[allow(clippy::too_many_lines, reason = "one end-to-end round trip")]
     fn a_hydrated_tree_commits_and_bundles_back_into_a_verifiable_segment() {
         let scratch = tempfile::tempdir().expect("scratch");
         // The "desktop": a work tree committed twice into its own objects.
@@ -370,7 +374,9 @@ mod tests {
         fs::set_permissions(source.join("run.sh"), fs::Permissions::from_mode(0o755)).expect("p");
         symlink("README.md", source.join("readme-link")).expect("link");
         let loose = gix_odb::loose::Store::at(desktop.join("objects"), gix_hash::Kind::Sha1);
-        let tree = write_tree(&loose, &source, 0).expect("tree").expect("files");
+        let tree = write_tree(&loose, &source, 0)
+            .expect("tree")
+            .expect("files");
         let base_raw = format!(
             "tree {tree}\nauthor a <a@x> 1 +0000\ncommitter a <a@x> 1 +0000\n\nElitea base\n"
         );
@@ -413,9 +419,16 @@ mod tests {
             )
             .expect("hydrated");
         assert_eq!(hydrated.files, 4);
-        assert_eq!(fs::read_to_string(worktree.join("src/main.rs")).expect("r"), "fn main() {}\n");
         assert_eq!(
-            fs::metadata(worktree.join("run.sh")).expect("m").permissions().mode() & 0o111,
+            fs::read_to_string(worktree.join("src/main.rs")).expect("r"),
+            "fn main() {}\n"
+        );
+        assert_eq!(
+            fs::metadata(worktree.join("run.sh"))
+                .expect("m")
+                .permissions()
+                .mode()
+                & 0o111,
             0o111
         );
         assert_eq!(
@@ -430,7 +443,13 @@ mod tests {
         fs::create_dir_all(worktree.join(".git")).expect("git");
         fs::write(worktree.join(".git/config"), "[core]\n").expect("w");
         let built = StoreCodec
-            .commit_and_bundle(&git_dir, &worktree, &turn_commit(&handoff.to_string(), 3), &refs, 1 << 30)
+            .commit_and_bundle(
+                &git_dir,
+                &worktree,
+                &turn_commit(&handoff.to_string(), 3),
+                &refs,
+                1 << 30,
+            )
             .expect("built");
         assert_eq!(built.sha256, sha256_hex(&built.bytes));
 
@@ -445,11 +464,16 @@ mod tests {
         StoreCodec
             .hydrate(&built.bytes, &expect, &built.commit, &check, &out)
             .expect("the published segment verifies");
-        assert_eq!(fs::read_to_string(out.join("README.md")).expect("r"), "hello cloud\n");
+        assert_eq!(
+            fs::read_to_string(out.join("README.md")).expect("r"),
+            "hello cloud\n"
+        );
         assert_eq!(fs::read_to_string(out.join("NEW.txt")).expect("r"), "new\n");
         assert!(!out.join(".git").exists());
         let verified_db = ObjectDb::open_objects(&check.join("objects")).expect("db");
-        let info = verified_db.commit(&oid(&built.commit).expect("oid")).expect("commit");
+        let info = verified_db
+            .commit(&oid(&built.commit).expect("oid"))
+            .expect("commit");
         assert_eq!(info.parents, vec![handoff]);
         assert!(info.message.contains("Elitea-Epoch: 2"));
         assert_real_git_accepts(scratch.path(), &built.bytes, &built.commit);
@@ -480,9 +504,26 @@ mod tests {
             );
             String::from_utf8_lossy(&output.stdout).into_owned()
         };
-        run(&["clone", "--mirror", "-q", file.to_str().expect("utf8"), mirror.to_str().expect("utf8")]);
-        run(&["-C", mirror.to_str().expect("utf8"), "fsck", "--strict", "--no-dangling"]);
-        let heads = run(&["-C", mirror.to_str().expect("utf8"), "rev-parse", "refs/elitea/cloud"]);
+        run(&[
+            "clone",
+            "--mirror",
+            "-q",
+            file.to_str().expect("utf8"),
+            mirror.to_str().expect("utf8"),
+        ]);
+        run(&[
+            "-C",
+            mirror.to_str().expect("utf8"),
+            "fsck",
+            "--strict",
+            "--no-dangling",
+        ]);
+        let heads = run(&[
+            "-C",
+            mirror.to_str().expect("utf8"),
+            "rev-parse",
+            "refs/elitea/cloud",
+        ]);
         assert_eq!(heads.trim(), cloud);
     }
 
@@ -506,7 +547,13 @@ mod tests {
         let mut expect = expectation(&segment, &refs);
         expect.sha256 = "0".repeat(64);
         assert_eq!(
-            StoreCodec.hydrate(&segment, &expect, &"1".repeat(40), &scratch.path().join("q"), &worktree),
+            StoreCodec.hydrate(
+                &segment,
+                &expect,
+                &"1".repeat(40),
+                &scratch.path().join("q"),
+                &worktree
+            ),
             Err(CodecError::Integrity)
         );
         assert_eq!(fs::read_dir(&worktree).expect("dir").count(), 0);
@@ -521,7 +568,14 @@ mod tests {
     #[test]
     fn checkout_paths_must_be_plain_and_never_git() {
         assert!(safe_relative("src/main.rs"));
-        for bad in ["/etc/passwd", "../x", "a/../b", ".git/config", "a/.GIT/x", ""] {
+        for bad in [
+            "/etc/passwd",
+            "../x",
+            "a/../b",
+            ".git/config",
+            "a/.GIT/x",
+            "",
+        ] {
             assert!(!safe_relative(bad), "{bad}");
         }
     }

@@ -2666,17 +2666,26 @@ async fn create_branch_from_sha_branches_from_that_commit_without_reading_a_bran
     script.json("POST", "/git/refs", 201, json!({"ref": "refs/heads/work"}));
     let rig = rig(&script).await;
     let says = rig
-        .says("create_branch", json!({"proposed_branch_name": "work", "from_sha": sha('d')}))
+        .says(
+            "create_branch",
+            json!({"proposed_branch_name": "work", "from_sha": sha('d')}),
+        )
         .await;
     assert!(says.contains("Branch 'work' created"), "{says}");
     let hits = script.hits();
     assert_eq!(hits.len(), 1, "no branch read: {hits:?}");
-    assert_eq!(body_of(&hits[0]), &json!({"ref": "refs/heads/work", "sha": sha('d')}));
+    assert_eq!(
+        body_of(&hits[0]),
+        &json!({"ref": "refs/heads/work", "sha": sha('d')})
+    );
     // A malformed commit id is refused before anything is sent.
     let script = Arc::new(Script::default());
     let rig = super::github_writes_tests::rig(&script).await;
     let _ = rig
-        .call("create_branch", json!({"proposed_branch_name": "work", "from_sha": "abc"}))
+        .call(
+            "create_branch",
+            json!({"proposed_branch_name": "work", "from_sha": "abc"}),
+        )
         .await;
     assert!(script.hits().is_empty());
 }
@@ -2715,21 +2724,35 @@ mod open_pull_request {
         }
     }
 
-    async fn open(script: &Arc<Script>, source: Result<WorkspaceDiff, DiffUnavailable>, audit: &Arc<Audit>) -> Value {
+    async fn open(
+        script: &Arc<Script>,
+        source: Result<WorkspaceDiff, DiffUnavailable>,
+        audit: &Arc<Audit>,
+    ) -> Value {
         let config = GitHubToolkitConfig::parse(&settings(&[])).expect("config");
-        let client = Arc::new(GitHubClient::test_with_transport(config, script.clone()).expect("client"));
+        let client =
+            Arc::new(GitHubClient::test_with_transport(config, script.clone()).expect("client"));
         let toolset = open_pull_request_toolset(
-            vec![GitHubPullRequestTarget::test("team-github", "EliteaAI/elitea-platform", client)],
+            vec![GitHubPullRequestTarget::test(
+                "team-github",
+                "EliteaAI/elitea-platform",
+                client,
+            )],
             Arc::new(Source(source)),
             audit.clone(),
         )
         .expect("a bound GitHub toolkit offers the tool");
         let readonly: Arc<dyn ReadonlyContext> = context();
-        let tools = adk_core::Toolset::tools(toolset.as_ref(), readonly).await.expect("tools");
+        let tools = adk_core::Toolset::tools(toolset.as_ref(), readonly)
+            .await
+            .expect("tools");
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name(), "open_pull_request");
         let schema = tools[0].parameters_schema().expect("schema").to_string();
-        assert!(!schema.contains("patch") && !schema.contains("diff\""), "the diff is never an argument");
+        assert!(
+            !schema.contains("patch") && !schema.contains("diff\""),
+            "the diff is never an argument"
+        );
         let ctx: Arc<dyn ToolContext> = context();
         tools[0]
             .execute(ctx, json!({"title": "Cloud change", "body": "From the cloud", "branch": "cloud-change"}))
@@ -2741,10 +2764,25 @@ mod open_pull_request {
     async fn it_branches_from_upstream_applies_the_diff_and_opens_against_the_upstream_branch() {
         let script = Arc::new(Script::default());
         // The name is taken: the tool uses the `_vN` name GitHub accepted.
-        script.json("POST", "/git/refs", 422, json!({"message": "Reference already exists"}));
-        script.json("GET", "/git/matching-refs/heads/cloud-change_v", 200, json!([]));
+        script.json(
+            "POST",
+            "/git/refs",
+            422,
+            json!({"message": "Reference already exists"}),
+        );
+        script.json(
+            "GET",
+            "/git/matching-refs/heads/cloud-change_v",
+            200,
+            json!([]),
+        );
         script.json("POST", "/git/refs", 201, json!({}));
-        script.json("GET", "/contents/src/a.txt", 200, file_json("one\ntwo\n", 'a'));
+        script.json(
+            "GET",
+            "/contents/src/a.txt",
+            200,
+            file_json("one\ntwo\n", 'a'),
+        );
         script.json("GET", "/contents/src/new.txt", 404, json!({}));
         script.json("PUT", "/contents/src/a.txt", 200, json!({}));
         script.json("PUT", "/contents/src/new.txt", 201, json!({}));
@@ -2754,9 +2792,19 @@ mod open_pull_request {
         assert_eq!(result["status"], "ok", "{result}");
         assert_eq!(result["branch"], "cloud-change_v1");
         let writes = script.writes();
-        assert_eq!(body_of(&writes[0])["sha"], sha('d'), "from the upstream commit");
-        let pull = writes.iter().find(|hit| hit.path.ends_with("/pulls")).expect("a pull request");
-        assert_eq!(body_of(pull), &json!({"title": "Cloud change", "body": "From the cloud", "head": "cloud-change_v1", "base": "main"}));
+        assert_eq!(
+            body_of(&writes[0])["sha"],
+            sha('d'),
+            "from the upstream commit"
+        );
+        let pull = writes
+            .iter()
+            .find(|hit| hit.path.ends_with("/pulls"))
+            .expect("a pull request");
+        assert_eq!(
+            body_of(pull),
+            &json!({"title": "Cloud change", "body": "From the cloud", "head": "cloud-change_v1", "base": "main"})
+        );
         let events = audit.0.lock().expect("audit");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].number, 7);
@@ -2767,16 +2815,31 @@ mod open_pull_request {
     async fn a_write_that_fails_partway_reports_the_branch_and_opens_nothing() {
         let script = Arc::new(Script::default());
         script.json("POST", "/git/refs", 201, json!({}));
-        script.json("GET", "/contents/src/a.txt", 200, file_json("one\ntwo\n", 'a'));
+        script.json(
+            "GET",
+            "/contents/src/a.txt",
+            200,
+            file_json("one\ntwo\n", 'a'),
+        );
         script.json("GET", "/contents/src/new.txt", 404, json!({}));
         script.json("PUT", "/contents/src/a.txt", 200, json!({}));
-        script.json("PUT", "/contents/src/new.txt", 403, json!({"message": "Resource not accessible"}));
+        script.json(
+            "PUT",
+            "/contents/src/new.txt",
+            403,
+            json!({"message": "Resource not accessible"}),
+        );
         let audit = Arc::new(Audit::default());
         let result = open(&script, Ok(diff(PATCH_TWO_FILES)), &audit).await;
         assert_eq!(result["status"], "partial", "{result}");
         assert_eq!(result["branch"], "cloud-change");
         assert_eq!(result["applied_changes"], json!(["Modified: src/a.txt"]));
-        assert!(script.writes().iter().all(|hit| !hit.path.ends_with("/pulls")));
+        assert!(
+            script
+                .writes()
+                .iter()
+                .all(|hit| !hit.path.ends_with("/pulls"))
+        );
         assert!(audit.0.lock().expect("audit").is_empty());
     }
 
@@ -2787,7 +2850,12 @@ mod open_pull_request {
         let result = open(&script, Ok(diff(binary)), &Arc::new(Audit::default())).await;
         assert_eq!(result["status"], "refused", "{result}");
         assert!(script.hits().is_empty(), "nothing was sent");
-        let result = open(&script, Err(DiffUnavailable::Binary), &Arc::new(Audit::default())).await;
+        let result = open(
+            &script,
+            Err(DiffUnavailable::Binary),
+            &Arc::new(Audit::default()),
+        )
+        .await;
         assert_eq!(result["status"], "refused");
         assert!(script.hits().is_empty());
     }
@@ -2795,16 +2863,31 @@ mod open_pull_request {
     #[tokio::test]
     async fn no_upstream_or_another_repository_is_refused_and_no_toolkit_means_no_tool() {
         let script = Arc::new(Script::default());
-        let result = open(&script, Err(DiffUnavailable::NoUpstream), &Arc::new(Audit::default())).await;
+        let result = open(
+            &script,
+            Err(DiffUnavailable::NoUpstream),
+            &Arc::new(Audit::default()),
+        )
+        .await;
         assert_eq!(result["status"], "refused");
-        assert!(result["message"].as_str().expect("message").contains("no upstream"));
+        assert!(
+            result["message"]
+                .as_str()
+                .expect("message")
+                .contains("no upstream")
+        );
         let mut other = diff(PATCH_TWO_FILES);
         other.remote_url = "git@github.example.test:someone/else.git".to_owned();
         let result = open(&script, Ok(other), &Arc::new(Audit::default())).await;
         assert_eq!(result["status"], "refused");
         assert!(script.hits().is_empty());
         assert!(
-            open_pull_request_toolset(Vec::new(), Arc::new(Source(Ok(diff("")))), Arc::new(Audit::default())).is_none(),
+            open_pull_request_toolset(
+                Vec::new(),
+                Arc::new(Source(Ok(diff("")))),
+                Arc::new(Audit::default())
+            )
+            .is_none(),
             "without a bound GitHub toolkit the tool is absent"
         );
     }

@@ -127,7 +127,8 @@ impl ApprovalChannel for CloudPrompt {
                 contained.sandbox = Some(SandboxMode::WorkspaceWrite);
             }
             let policy = engine.policy();
-            if (!call.network || policy.network) && engine.decide(&contained).verdict == Verdict::Allow
+            if (!call.network || policy.network)
+                && engine.decide(&contained).verdict == Verdict::Allow
             {
                 return Ok(ApprovalOutcome::Decided {
                     action: "approve".to_owned(),
@@ -293,7 +294,10 @@ fn git_baseline(root: &Path) -> Result<(), String> {
         if status.success() {
             Ok(())
         } else {
-            Err(format!("git {} failed", args.first().copied().unwrap_or("")))
+            Err(format!(
+                "git {} failed",
+                args.first().copied().unwrap_or("")
+            ))
         }
     };
     git(&["init", "-q", "-b", "main"])?;

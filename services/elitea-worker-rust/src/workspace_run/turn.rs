@@ -68,7 +68,9 @@ pub(crate) enum WorkspaceRunError {
     /// executor moved the cloud ref, or the plan lacks the snapshot).
     StaleState,
     /// The checked-out tree holds credential-shaped content.
-    SecretFound { findings: usize },
+    SecretFound {
+        findings: usize,
+    },
     /// The secret scan could not complete.
     ScanFailed,
     /// Blocking work did not complete.
@@ -139,6 +141,10 @@ impl WorkspaceRunFactory {
     ///
     /// Any failure before the sandbox holds the tree; nothing is left
     /// running.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "hydrate is one ordered sequence: fetch, verify, scan, start"
+    )]
     pub(crate) async fn begin(
         &self,
         context: &WorkspaceRuntimeContext,
@@ -197,12 +203,13 @@ impl WorkspaceRunFactory {
             .iter()
             .map(|path| PathBuf::from(path.trim_start_matches("./")))
             .collect();
-        let findings = tokio::task::spawn_blocking(move || scan_tree(&scan_root, scan_limits, &skip))
-            .await
-            .map_err(|_| WorkspaceRunError::Internal)?
-            .map_err(|error| match error {
-                ScanError::Io | ScanError::TooManyFiles => WorkspaceRunError::ScanFailed,
-            })?;
+        let findings =
+            tokio::task::spawn_blocking(move || scan_tree(&scan_root, scan_limits, &skip))
+                .await
+                .map_err(|_| WorkspaceRunError::Internal)?
+                .map_err(|error| match error {
+                    ScanError::Io | ScanError::TooManyFiles => WorkspaceRunError::ScanFailed,
+                })?;
         if !findings.is_empty() {
             // The audit event (`handoff.scan_blocked`) records counts and the
             // rules only, never paths or content (decision 12).
@@ -368,7 +375,11 @@ impl WorkspaceTurn {
             unix_seconds: chrono::Utc::now().timestamp(),
         };
         let codec = Arc::clone(&self.codec);
-        let (git_dir, refs, max) = (self.git_dir.clone(), self.refs.clone(), self.max_segment_bytes);
+        let (git_dir, refs, max) = (
+            self.git_dir.clone(),
+            self.refs.clone(),
+            self.max_segment_bytes,
+        );
         let built = tokio::task::spawn_blocking(move || {
             codec.commit_and_bundle(&git_dir, &out, &commit, &refs, max)
         })
@@ -413,8 +424,7 @@ impl Drop for WorkspaceTurn {
         let finished = self
             .outcome
             .try_lock()
-            .map(|outcome| outcome.is_some())
-            .unwrap_or(true);
+            .map_or(true, |outcome| outcome.is_some());
         if !finished && let Ok(handle) = tokio::runtime::Handle::try_current() {
             let sandbox = Arc::clone(&self.sandbox);
             handle.spawn(async move {
