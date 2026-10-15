@@ -29,7 +29,19 @@ var (
 	// a conversation the desktop's Local work owns (source `local_work`): its
 	// turns run against a folder on the person's computer, which a cloud run
 	// cannot see. The route answers 409 `local_work_thread`.
+	//
+	// The fence is relaxed while the thread is handed off to the cloud
+	// executor (ADR-0034 decision 7): a handoff row in CLOUD_IDLE or
+	// CLOUD_RUNNING with no take back pending.
 	ErrLocalWorkThread = errors.New("conversation is a desktop Local work thread")
+	// ErrLocalWorkTurn refuses regenerating a turn the desktop ran in a
+	// thread the cloud executor now owns (ADR-0034 decision 7). The route
+	// answers 409 `local_work_turn`.
+	ErrLocalWorkTurn = errors.New("the response was executed on the desktop")
+	// ErrCloudTurnNotNewest refuses regenerating a cloud turn other than the
+	// newest one of a handed-off thread: only the newest turn's commit can be
+	// rewound. The route answers 409 `cloud_turn_not_newest`.
+	ErrCloudTurnNotNewest = errors.New("only the newest cloud turn can be regenerated")
 )
 
 // CurrentApplicationTurn is the immutable current-chat side of one durable

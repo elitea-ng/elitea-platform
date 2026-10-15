@@ -680,6 +680,10 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		// absent key read as "public" would withdraw the control from every
 		// conversation.
 		"is_private": conv.IsPrivate == nil || *conv.IsPrivate,
+		// Who runs the thread's turns now (ADR-0034): `local`, `cloud` (the
+		// cloud executor owns a handed-off Local work thread) or `returning`
+		// (a take back is under way).
+		"workspace_executor": h.workspaceExecutor(r.Context(), projectID, conv.UUID),
 	}
 
 	if testRuns != nil {

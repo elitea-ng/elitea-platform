@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/localturn"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
 )
 
 // LocalTurnsRepo implements localturn.Store.
@@ -102,6 +103,11 @@ func (r *LocalTurnsRepo) StartLocalTurn(ctx context.Context, record localturn.St
 
 	target, err := resolveLocalTurnTarget(ctx, tx, schema, record.ConversationUUID, record.ActorUserID, record.ParticipantID)
 	if err != nil {
+		return localturn.StartedTurn{}, err
+	}
+	// The handoff fence (ADR-0034 decision 7), under the thread's shared
+	// lock, so a send cannot begin between this check and the new turn.
+	if err := refuseLocalTurnWhileHandedOff(ctx, tx, record.ProjectID, record.ConversationUUID); err != nil {
 		return localturn.StartedTurn{}, err
 	}
 	applicationID, versionID, err := readLocalTurnAgent(ctx, tx, schema, target.conversationID, target.targetID, record.ProjectID)
@@ -244,6 +250,9 @@ FOR UPDATE`, record.ExecutionID, record.ProjectID, strconv.FormatInt(record.Acto
 	}
 	if expired {
 		return localturn.CommittedTurn{}, localturn.ErrExpired
+	}
+	if err := refuseLocalTurnWhileHandedOff(ctx, tx, record.ProjectID, turn.ConversationUUID); err != nil {
+		return localturn.CommittedTurn{}, err
 	}
 	target, err := resolveLocalTurnTarget(ctx, tx, schema, turn.ConversationUUID, record.ActorUserID, participant)
 	if err != nil {
@@ -494,4 +503,17 @@ VALUES ($1, $2, $3, $4, $5)`,
 		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: commit confirmation: %w", err)
 	}
 	return localturn.ConfirmationOutcome{Accepted: true}, nil
+}
+
+// refuseLocalTurnWhileHandedOff answers ErrThreadExecutorIsCloud unless the
+// desktop owns the thread (state LOCAL, or no handoff row).
+func refuseLocalTurnWhileHandedOff(ctx context.Context, tx pgx.Tx, projectID int64, conversationUUID string) error {
+	state, err := workspaceThreadState(ctx, tx, projectID, conversationUUID)
+	if err != nil {
+		return err
+	}
+	if state != workspacestore.StateLocal {
+		return localturn.ErrThreadExecutorIsCloud
+	}
+	return nil
 }

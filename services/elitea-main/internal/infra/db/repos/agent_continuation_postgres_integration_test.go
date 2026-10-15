@@ -1102,7 +1102,7 @@ WHERE uuid = $1`, response); err != nil {
 UPDATE chat_message_group
 SET meta = meta || '{"executed_by": "desktop", "local_execution_id": "abc",
     "local_work": {"commands": []}, "hitl_exchanges": [{"interrupt_id": "x"}],
-    "memories_used": 3, "is_error": false}'::jsonb
+    "memories_used": 3, "is_error": false, "workspace_epoch": 2, "workspace_commit": "abc"}'::jsonb
 WHERE uuid = $1`, response); err != nil {
 		t.Fatal(err)
 	}
@@ -1183,7 +1183,8 @@ WHERE response.uuid = $1`, response).Scan(
 SELECT COALESCE(string_agg(key, ','), '')
 FROM chat_message_group AS response, jsonb_object_keys(response.meta) AS key
 WHERE response.uuid = $1
-  AND key IN ('executed_by', 'local_execution_id', 'local_work', 'hitl_exchanges', 'memories_used')`,
+  AND key IN ('executed_by', 'local_execution_id', 'local_work', 'hitl_exchanges', 'memories_used',
+              'workspace_epoch', 'workspace_commit')`,
 		response).Scan(&leftover); err != nil {
 		t.Fatal(err)
 	}
