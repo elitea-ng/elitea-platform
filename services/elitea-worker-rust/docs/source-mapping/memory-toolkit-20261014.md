@@ -119,9 +119,16 @@ enforces it:
   turn) is refused shared writes: project-memory upserts, deletes and metadata
   updates (`memory.project_write_after_personal_read`) and toolkit-index
   upserts and deletes (`memory.shared_write_after_personal_read`, for every
-  claim token of the run, with or without the memory source). Reads are not
-  affected. The taint is never cleared and is deleted with the conversation
-  (and with the project). Setting and checking take one advisory lock keyed by
+  claim token of the run, with or without the memory source), and Main's own
+  `remove_index` from such a run (the claim remover answers
+  `SHARED_WRITE_REFUSED`; round 5). Only an agent execution's token is
+  conversation-bound (`conversation_bound` in the introspection answer), so an
+  index ingest's or a direct toolkit call's index writes cost no extra
+  introspection; a callback token's only source is its provider's, so it
+  never writes a toolkit index. Reads are not affected. The taint is never
+  cleared and is deleted with the conversation on every delete path by a
+  tenant trigger (tenant/0149: the conversation route, the MCP run cleanup,
+  pipeline trigger runs, bulk deletes) and with the project (foreign key). Setting and checking take one advisory lock keyed by
   the conversation, so a parallel read and write in one conversation are
   decided one after the other. An execution with no conversation is
   unaffected (it cannot read personal memory). A personal WRITE is not a read,
@@ -141,7 +148,12 @@ enforces it:
   top-level entries of the frozen version's `tools` (an application turn) or of
   the input's `tools` (an ad-hoc turn), which Main built from the project's own
   toolkit rows and which the worker materializes from; for a direct toolkit
-  call, the resolved toolkit itself when it is a memory toolkit. They are stored
+  call, the resolved toolkit itself when it is a memory toolkit. A sub-agent's
+  memory toolkits are the run's too (round 5): the admission follows the
+  frozen `application` entries (application and version id, built by Main)
+  recursively through each sub-agent's saved version in the run's project, the
+  same projection the nested-agent route freezes the child from; a sub-agent
+  that cannot be read fails the admission. They are stored
   on the execution (`execution_jobs.memory_toolkit_ids`); a frozen set that
   cannot be decoded fails the admission. Nothing a caller writes (tool
   arguments, user input, chat history, runtime-context entries, a nested

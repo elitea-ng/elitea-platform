@@ -177,10 +177,22 @@ impl VectorService {
     ) -> Result<(), Status> {
         // The cached verification runs before every batch (cheap: the claim
         // cache), so a revoked token ends the stream within the claim cache
-        // lifetime. The fresh memory / shared-write decision only when asked.
+        // lifetime; the project and the source are checked on it every time.
         let current = self.auth.verify_token(token).await?;
-        let current = if decide_afresh {
-            self.memory_caller(
+        if current.project(0)? != project_id {
+            return Err(Status::permission_denied(
+                "the token's project changed during the stream",
+            ));
+        }
+        current.require_source(namespace.source)?;
+        if !decide_afresh {
+            // Between fresh decisions the header's binding stands.
+            return Ok(());
+        }
+        // The fresh memory / shared-write decision, and the binding it gives
+        // compared with the header's.
+        let current = self
+            .memory_caller(
                 Some(token),
                 current,
                 Some((
@@ -190,26 +202,7 @@ impl VectorService {
                 )),
                 true,
             )
-            .await?
-        } else {
-            current
-        };
-        if !decide_afresh {
-            // Between fresh decisions the header's binding stands; only the
-            // project and the source are re-checked from the cached grant.
-            if current.project(0)? != project_id {
-                return Err(Status::permission_denied(
-                    "the token's project changed during the stream",
-                ));
-            }
-            return current.require_source(namespace.source);
-        }
-        if current.project(0)? != project_id {
-            return Err(Status::permission_denied(
-                "the token's project changed during the stream",
-            ));
-        }
-        current.require_source(namespace.source)?;
+            .await?;
         if current
             .memory_binding(
                 namespace.source,

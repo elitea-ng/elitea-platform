@@ -46,6 +46,7 @@ func TestRemoveIndexVerifiesTheClaimAndHandsItToTheRemover(t *testing.T) {
 		indexregistryapp.RemovalNotFound,
 		indexregistryapp.RemovalForbidden,
 		indexregistryapp.RemovalActiveRun,
+		indexregistryapp.RemovalSharedWriteRefused,
 	} {
 		t.Run(string(disposition), func(t *testing.T) {
 			calls := []string{}

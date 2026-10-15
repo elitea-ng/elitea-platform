@@ -216,6 +216,10 @@ const (
 	RemoveIndexDispositionV1_REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN RemoveIndexDispositionV1 = 3
 	// The index's run is still active; it cannot be deleted yet.
 	RemoveIndexDispositionV1_REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN RemoveIndexDispositionV1 = 4
+	// The claim's conversation read personal memory: a shared index is not
+	// changed from it (worker unit M9). An older worker reads this as a
+	// malformed disposition and removes nothing.
+	RemoveIndexDispositionV1_REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED RemoveIndexDispositionV1 = 5
 )
 
 // Enum value maps for RemoveIndexDispositionV1.
@@ -226,13 +230,15 @@ var (
 		2: "REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND",
 		3: "REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN",
 		4: "REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN",
+		5: "REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED",
 	}
 	RemoveIndexDispositionV1_value = map[string]int32{
-		"REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED": 0,
-		"REMOVE_INDEX_DISPOSITION_V1_REMOVED":     1,
-		"REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND":   2,
-		"REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN":   3,
-		"REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN":  4,
+		"REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED":          0,
+		"REMOVE_INDEX_DISPOSITION_V1_REMOVED":              1,
+		"REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND":            2,
+		"REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN":            3,
+		"REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN":           4,
+		"REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED": 5,
 	}
 )
 
@@ -1660,13 +1666,14 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	" AuthorizeInvocationDispositionV1\x123\n" +
 	"/AUTHORIZE_INVOCATION_DISPOSITION_V1_UNSPECIFIED\x10\x00\x126\n" +
 	"2AUTHORIZE_INVOCATION_DISPOSITION_V1_AUTHORIZED_NOW\x10\x01\x12:\n" +
-	"6AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED\x10\x02*\xf2\x01\n" +
+	"6AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED\x10\x02*\xa8\x02\n" +
 	"\x18RemoveIndexDispositionV1\x12+\n" +
 	"'REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED\x10\x00\x12'\n" +
 	"#REMOVE_INDEX_DISPOSITION_V1_REMOVED\x10\x01\x12)\n" +
 	"%REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND\x10\x02\x12)\n" +
 	"%REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN\x10\x03\x12*\n" +
-	"&REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN\x10\x042\xbc\t\n" +
+	"&REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN\x10\x04\x124\n" +
+	"0REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED\x10\x052\xbc\t\n" +
 	"\x15RuntimeControlService\x12x\n" +
 	"\x13AuthorizeSandboxJob\x12/.elitea.runtime.v1.AuthorizeSandboxJobRequestV1\x1a0.elitea.runtime.v1.AuthorizeSandboxJobResponseV1\x12\x96\x01\n" +
 	"\x1dAuthorizeRustCompiledSnapshot\x129.elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1\x1a:.elitea.runtime.v1.AuthorizeRustCompiledSnapshotResponseV1\x12c\n" +

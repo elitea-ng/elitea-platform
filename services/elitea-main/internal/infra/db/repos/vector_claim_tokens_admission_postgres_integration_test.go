@@ -54,6 +54,11 @@ func admitAgentRun(t *testing.T, pool *pgxpool.Pool, suffix, capability string, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	nested, err := NewCurrentNestedApplicationVersionRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.WithNestedMemoryToolkits(nested)
 	outcome, err := service.Submit(ctx, agentexecutionapp.SubmitRequest{
 		Identity: executionapp.AdmissionIdentity{
 			TenantID: "1", ResourceProjectID: "1", ProjectionProjectID: "1", ActorID: "42",
@@ -185,6 +190,82 @@ func TestPostgresAgentAdmissionGivesTheClaimTokenItsFrozenMemoryToolkits(t *test
 		`{"id":7,"version_id":9,"version_details":{"tools":[]}}`, `[]`))
 	if got := mint(plain, "bearer-plain"); !slices.Equal(got.Sources, []string{"toolkit_index"}) || len(toolkits("bearer-plain")) != 0 {
 		t.Fatalf("no memory toolkit: sources %v toolkits %v", got.Sources, toolkits("bearer-plain"))
+	}
+}
+
+// A sub-agent's memory toolkits are the run's too: agent A's frozen set names
+// sub-agent B (an `application` entry), B's saved version in the run's
+// project attaches memory toolkit M, and the claim token of A's run carries
+// M's id (so B's memory calls, made under A's claim, are admitted). A
+// sub-agent that does not exist fails the admission.
+func TestPostgresAgentAdmissionIncludesSubAgentMemoryToolkits(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	// The tenant agent tables (pylon-owned, absent from the migrated
+	// template) and one saved agent: application 31, version 41, which plays
+	// sub-agent B here.
+	seedCurrentAgentContinuationSchema(t, pool)
+	var memoryToolkit int64
+	for name, kind := range map[string]string{"b-notes": "memory", "b-gh": "github"} {
+		var id int64
+		if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.elitea_tools (type, name, description, settings, author_id, meta)
+VALUES ($1, $2, '', '{}'::jsonb, 1, '{}'::jsonb) RETURNING id`, kind, name).Scan(&id); err != nil {
+			t.Fatalf("seed toolkit %s: %v", name, err)
+		}
+		if kind == "memory" {
+			memoryToolkit = id
+		}
+		if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type, selected_tools)
+VALUES ($1, 31, 41, 'agent', '[]'::jsonb)`, id); err != nil {
+			t.Fatalf("attach toolkit %s to the sub-agent: %v", name, err)
+		}
+	}
+	parent := `{"id":7,"version_id":9,"version_details":{"tools":[
+	    {"id":40,"type":"application","toolkit_name":"b","name":"b","settings":{"application_id":31,"application_version_id":41}}
+	]}}`
+	execution, fence := admitAgentRun(t, pool, "nested", executiondomain.AgentApplicationCapability, memoryAgentInput(parent, `[]`))
+	var stored []int64
+	if err := pool.QueryRow(ctx, `SELECT memory_toolkit_ids FROM elitea_runtime.execution_jobs WHERE execution_id = $1`, execution).Scan(&stored); err != nil ||
+		!slices.Equal(stored, []int64{memoryToolkit}) {
+		t.Fatalf("admitted memory toolkits = %v, %v; want [%d] (the sub-agent's)", stored, err, memoryToolkit)
+	}
+	store := NewVectorClaimTokens(pool)
+	minted, err := store.Mint(ctx, VectorClaimTokenMint{
+		Fence: fence, TokenSHA256: sha256.Sum256([]byte("bearer-nested")),
+		Capabilities: vectorClaimCapabilities, Sources: []string{"toolkit_index"},
+		MemorySource: "memory", MaxLifetime: 6 * time.Hour,
+	})
+	if err != nil || !slices.Equal(minted.Sources, []string{"toolkit_index", "memory"}) {
+		t.Fatalf("mint: %+v %v", minted, err)
+	}
+	facts, err := store.Facts(ctx, sha256.Sum256([]byte("bearer-nested")), MemoryIntentNone)
+	if err != nil || !slices.Equal(facts.MemoryToolkits, []int64{memoryToolkit}) {
+		t.Fatalf("token memory toolkits = %v, %v", facts.MemoryToolkits, err)
+	}
+}
+
+// A nil memory-toolkit list (an admission store called directly, without the
+// service) is stored as an empty array, never NULL: the statement's COALESCE.
+func TestPostgresAgentAdmissionStoresNoNullMemoryToolkits(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	repository, err := NewAgentExecutionJobsRepository(pool, testAgentDispatchPolicy(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission := postgresAgentCapacityAdmission(901)
+	admission.MemoryToolkitIDs = nil
+	outcome, err := repository.AdmitAgentExecution(ctx, admission)
+	if err != nil || !outcome.Created {
+		t.Fatalf("admit: %+v %v", outcome, err)
+	}
+	var empty bool
+	if err := pool.QueryRow(ctx, `SELECT memory_toolkit_ids = '{}' FROM elitea_runtime.execution_jobs WHERE execution_id = $1`, outcome.ExecutionID).Scan(&empty); err != nil || !empty {
+		t.Fatalf("memory_toolkit_ids empty = %v, %v", empty, err)
 	}
 }
 

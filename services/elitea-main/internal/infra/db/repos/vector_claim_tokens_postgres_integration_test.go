@@ -679,6 +679,11 @@ func TestPostgresVectorClaimTokenSharedWritesAreRefusedInATaintedConversation(t 
 		t.Fatalf("taint rows = %d, %v", taints, err)
 	}
 
+	// The claim remover (remove_index) asks the same question.
+	if tainted, err := m.store.ExecutionConversationTainted(context.Background(), m.fence.ExecutionID, int64(m.fence.Generation)); err != nil || !tainted {
+		t.Fatalf("ExecutionConversationTainted = %v, %v", tainted, err)
+	}
+
 	// Turn 2: the token rows go (the claim settled) and a new token is minted
 	// for the same conversation: still refused, the taint is the
 	// conversation's, not the token's.
@@ -816,5 +821,26 @@ FROM elitea_runtime.execution_jobs WHERE execution_id = $1`,
 WHERE entry_id = 'crafted-arguments'`)
 	if got := mint("bearer-remint"); !slices.Equal(got, []string{"toolkit_index", "memory"}) {
 		t.Fatalf("re-mint: sources %v", got)
+	}
+}
+
+// Only an agent execution's token is conversation-bound: elitea-vector asks
+// the shared-write question only for it.
+func TestPostgresVectorClaimTokenIsConversationBoundOnlyForAnAgentRun(t *testing.T) {
+	f := newVectorClaimFixture(t, "vector-claim-conversation-bound")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := f.mint(t, f.fence, "bearer"); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := f.store.Facts(ctx, sha256.Sum256([]byte("bearer")), MemoryIntentNone)
+	if err != nil || facts.ConversationBound {
+		t.Fatalf("a toolkit call is conversation-bound: %+v %v", facts, err)
+	}
+	f.exec(t, `UPDATE elitea_runtime.execution_jobs SET capability_id = $2 WHERE execution_id = $1`,
+		f.fence.ExecutionID, executiondomain.AgentApplicationCapability)
+	facts, err = f.store.Facts(ctx, sha256.Sum256([]byte("bearer")), MemoryIntentNone)
+	if err != nil || !facts.ConversationBound {
+		t.Fatalf("an agent run is not conversation-bound: %+v %v", facts, err)
 	}
 }

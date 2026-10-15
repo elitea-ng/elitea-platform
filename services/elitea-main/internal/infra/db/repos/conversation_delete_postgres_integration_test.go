@@ -686,8 +686,8 @@ func TestDeleteMessageReportsNoAttachmentsWhenItRefuses(t *testing.T) {
 	}
 }
 
-// A conversation's personal-memory taint (shared/0166) goes with it, and
-// another conversation's taint stays.
+// A conversation's personal-memory taint (shared/0166) goes with it on every
+// delete path (tenant/0149's trigger), and another conversation's taint stays.
 func TestDeleteConversationRemovesItsMemoryTaint(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	repo := NewConversationsRepo(pool)
@@ -703,6 +703,22 @@ func TestDeleteConversationRemovesItsMemoryTaint(t *testing.T) {
 	}
 	if _, err := repo.Delete(ctx, "1", doomed); err != nil {
 		t.Fatalf("delete conversation: %v", err)
+	}
+	// The other delete paths (the MCP run cleanup, pipeline trigger runs,
+	// bulk deletes) issue their own DELETE on the tenant table: the trigger
+	// (tenant/0149) covers them too.
+	// No messages, like the MCP run's empty conversation it deletes.
+	_, raw, _ := seedConversationWithParticipant(t, repo)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO elitea_runtime.memory_conversation_taints (project_id, conversation_uuid) VALUES (1, $1::uuid)`, raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+DELETE FROM p_1.chat_participant_mapping WHERE conversation_id IN (SELECT id FROM p_1.chat_conversations WHERE uuid = $1::uuid)`, raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM p_1.chat_conversations AS conversation WHERE conversation.uuid = $1::uuid`, raw); err != nil {
+		t.Fatalf("raw delete: %v", err)
 	}
 	var left []string
 	rows, err := pool.Query(ctx, `SELECT conversation_uuid::text FROM elitea_runtime.memory_conversation_taints ORDER BY 1`)

@@ -45,6 +45,8 @@ const TOKEN_A_WIKI: &str = "token-a-wiki";
 /// user, and the first user's id in project B.
 const TOKEN_ALICE: &str = "token-alice";
 const TOKEN_COUNTED: &str = "token-counted";
+/// An index ingest's claim (no conversation), counted like `TOKEN_COUNTED`.
+const TOKEN_COUNTED_INGEST: &str = "token-counted-ingest";
 const TOKEN_RUN_ONE: &str = "token-run-one";
 const TOKEN_RUN_TWO: &str = "token-run-two";
 /// A later turn (another execution, another token) of `TOKEN_RUN_ONE`'s
@@ -164,7 +166,8 @@ impl Introspector for Tokens {
         token: &str,
         intent: MemoryIntent,
     ) -> Result<Option<TokenGrant>, IntrospectError> {
-        if token == TOKEN_COUNTED && intent != MemoryIntent::None {
+        if (token == TOKEN_COUNTED || token == TOKEN_COUNTED_INGEST) && intent != MemoryIntent::None
+        {
             COUNTED_FRESH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         let Some(mut grant) = self.grants.get(token).cloned() else {
@@ -201,6 +204,8 @@ fn grant(project_id: i64, expires_at_unix: i64) -> TokenGrant {
         project_memory_write_refused: false,
         // The memory toolkits the run was given (TOOLKIT_M and TOOLKIT_OTHER).
         memory_toolkit_ids: vec![41, 42],
+        // An agent turn: it can be in a conversation.
+        conversation_bound: true,
     }
 }
 
@@ -269,6 +274,13 @@ fn oracle_with_clock(clock: Arc<dyn Fn() -> i64 + Send + Sync>) -> Arc<dyn Intro
         (
             TOKEN_COUNTED.to_owned(),
             memory_grant(PROJECT_A, "user:13", true, now + 3600),
+        ),
+        (
+            TOKEN_COUNTED_INGEST.to_owned(),
+            TokenGrant {
+                conversation_bound: false,
+                ..grant(PROJECT_A, now + 3600)
+            },
         ),
         (
             TOKEN_RUN_ONE.to_owned(),
@@ -4241,6 +4253,22 @@ async fn only_memory_scope_personal_and_project_writes_ask_main_afresh() {
         "only the index write's header asks afresh"
     );
     assert_eq!(COUNTED_PLAIN.load(SeqCst), 1, "one cached introspection");
+
+    // An index ingest's claim (no conversation) writes an index without any
+    // fresh introspection: it cannot be in a tainted conversation.
+    h.upsert(
+        TOKEN_COUNTED_INGEST,
+        0,
+        Harness::namespace(NAMESPACE_A),
+        vec![Harness::point("ingest", "t", [1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .expect("ingest upsert");
+    assert_eq!(
+        COUNTED_FRESH.load(SeqCst),
+        1,
+        "an unbound token never asks afresh"
+    );
 
     // A project-scope memory READ also uses the cache.
     h.memory_read(TOKEN_COUNTED, PROJECT, NAMESPACE_M, None)

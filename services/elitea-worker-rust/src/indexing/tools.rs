@@ -270,6 +270,9 @@ impl ClaimIndexToolHost {
             Ok(IndexRemovalOutcome::ActiveRun) => Err(IndexToolFailure::new(format!(
                 "Index '{index_name}' is still being indexed and cannot be removed until that run ends"
             ))),
+            Ok(IndexRemovalOutcome::SharedWriteRefused) => Err(IndexToolFailure::new(format!(
+                "Index '{index_name}' was not removed: this conversation read personal memory, so it cannot write shared project memory or a shared index"
+            ))),
             Err(error) => {
                 tracing::warn!(
                     event = "index_tool_remove_index_failed",

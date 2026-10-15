@@ -123,3 +123,25 @@ func (repository *CurrentNestedApplicationVersionRepository) ReadCurrentApplicat
 }
 
 var _ storage.CurrentApplicationVersionSource = (*CurrentNestedApplicationVersionRepository)(nil)
+
+// NestedApplicationTools is the frozen `tools` of one saved sub-agent version
+// of projectID (agentexecution.NestedApplicationTools): the version-details
+// projection ReadCurrentApplicationVersion reads, which the nested-agent
+// runtime route freezes the child from. An absent version is an error (the
+// admission is refused rather than stored with a guessed set).
+func (repository *CurrentNestedApplicationVersionRepository) NestedApplicationTools(
+	ctx context.Context,
+	projectID, applicationID, versionID int64,
+) (json.RawMessage, error) {
+	record, err := repository.ReadCurrentApplicationVersion(ctx, projectID, applicationID, versionID)
+	if err != nil {
+		return nil, err
+	}
+	var details struct {
+		Tools json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(record.VersionDetails, &details); err != nil {
+		return nil, fmt.Errorf("decode the sub-agent's version details: %w", err)
+	}
+	return details.Tools, nil
+}

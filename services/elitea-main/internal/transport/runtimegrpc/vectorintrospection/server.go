@@ -201,6 +201,9 @@ func (s *Server) introspectClaimToken(ctx context.Context, token string, intent 
 		// The memory toolkits the claim was given, all of its own project;
 		// elitea-vector refuses a memory request for any other toolkit.
 		MemoryToolkitIds: facts.MemoryToolkits,
+		// Only an agent execution can be in a conversation: elitea-vector
+		// skips the shared-write question for every other token.
+		ConversationBound: facts.ConversationBound,
 	}, nil
 }
 

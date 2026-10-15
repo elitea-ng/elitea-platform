@@ -100,6 +100,10 @@ type VectorClaimTokenFacts struct {
 	// MemoryToolkits are the memory toolkits the claim was given (all of the
 	// token's project); elitea-vector refuses a memory request for any other.
 	MemoryToolkits []int64
+	// ConversationBound is true for an agent execution (the only kind that
+	// can be bound to a conversation); elitea-vector asks the shared-write
+	// question only for such a token.
+	ConversationBound bool
 }
 
 // VectorClaimTokens reads and writes the token hashes.
@@ -260,30 +264,17 @@ LEFT JOIN minted ON true`,
 // affected. Because the answer is read each time, a participant added to the
 // conversation mid-run withdraws the permission at the next call.
 func (s *VectorClaimTokens) personalMemoryTurn(ctx context.Context, executionID string, generation int64, actor string) (conversationTurn, bool) {
-	var (
-		projection int64
-		stream     string
-	)
-	err := s.pool.QueryRow(ctx, `
-SELECT j.projection_project_id, a.client_stream_id
-FROM elitea_runtime.execution_jobs AS j
-JOIN elitea_runtime.agent_execution_jobs AS a
-  ON a.execution_id = j.execution_id AND a.generation = j.generation
-WHERE j.execution_id = $1 AND j.generation = $2
-  AND j.trigger_origin = 'manual'`, executionID, generation).Scan(&projection, &stream)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return conversationTurn{}, false
-	}
+	turn, err := s.executionConversation(ctx, executionID, generation)
 	if err != nil {
 		slog.WarnContext(ctx, "vector claim token: could not read the execution; personal memory is withheld", "err", err)
 		return conversationTurn{}, false
 	}
-	// Not a uuid: no conversation. Checked here as well as by the cast below,
-	// so a malformed stream never reaches the tenant query.
-	if _, err := uuid.Parse(stream); err != nil {
+	// No conversation (no agent job, a stream that is not a uuid), or not a
+	// person's own chat turn: no personal memory.
+	if turn.conversation == "" || turn.origin != "manual" {
 		return conversationTurn{}, false
 	}
-	schema, err := tenantschema.QuoteInt(projection)
+	schema, err := tenantschema.QuoteInt(turn.project)
 	if err != nil {
 		return conversationTurn{}, false
 	}
@@ -304,7 +295,7 @@ JOIN %[1]s.chat_message_group AS response
 JOIN %[1]s.chat_participant_mapping AS mapping ON mapping.conversation_id = conversation.id
 JOIN %[1]s.chat_participants AS participant
   ON participant.id = mapping.participant_id AND participant.entity_name = 'user'
-WHERE conversation.uuid = $1::uuid`, schema), stream, executionID, actor).Scan(&conversations, &private, &people, &isActor)
+WHERE conversation.uuid = $1::uuid`, schema), turn.conversation, executionID, actor).Scan(&conversations, &private, &people, &isActor)
 	if err != nil {
 		slog.WarnContext(ctx, "vector claim token: could not read the turn's conversation; personal memory is withheld", "err", err)
 		return conversationTurn{}, false
@@ -312,8 +303,7 @@ WHERE conversation.uuid = $1::uuid`, schema), stream, executionID, actor).Scan(&
 	if conversations != 1 || !private || people != 1 || !isActor {
 		return conversationTurn{}, false
 	}
-	parsed, _ := uuid.Parse(stream)
-	return conversationTurn{project: projection, conversation: parsed.String()}, true
+	return turn, true
 }
 
 // Facts reads the token whose SHA-256 is tokenSHA256. Only a live token
@@ -326,17 +316,18 @@ func (s *VectorClaimTokens) Facts(ctx context.Context, tokenSHA256 [32]byte, int
 		return VectorClaimTokenFacts{}, fmt.Errorf("%w: no database", ErrVectorClaimTokenFactsNotFound)
 	}
 	var (
-		project        int32
-		actor          string
-		sources        []string
-		expiresAt      time.Time
-		execution      string
-		claimGen       int64
-		memoryToolkits []int64
+		project           int32
+		actor             string
+		sources           []string
+		expiresAt         time.Time
+		execution         string
+		claimGen          int64
+		memoryToolkits    []int64
+		conversationBound bool
 	)
 	err := s.pool.QueryRow(ctx, `
 SELECT t.resource_project_id, t.actor_id, t.allowed_sources, t.expires_at, t.execution_id, t.generation,
-       t.memory_toolkit_ids
+       t.memory_toolkit_ids, j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1')
 FROM elitea_runtime.vector_claim_tokens AS t
 JOIN elitea_runtime.execution_claims AS c
   ON c.claim_id = t.claim_id
@@ -363,7 +354,7 @@ WHERE t.token_sha256 = $1
   AND j.actor_id = t.actor_id
   AND p.suspended IS FALSE
   AND p.create_success IS TRUE`, tokenSHA256[:]).
-		Scan(&project, &actor, &sources, &expiresAt, &execution, &claimGen, &memoryToolkits)
+		Scan(&project, &actor, &sources, &expiresAt, &execution, &claimGen, &memoryToolkits, &conversationBound)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VectorClaimTokenFacts{}, ErrVectorClaimTokenFactsNotFound
 	}
@@ -375,10 +366,11 @@ WHERE t.token_sha256 = $1
 		return VectorClaimTokenFacts{}, ErrVectorClaimTokenFactsNotFound
 	}
 	facts := VectorClaimTokenFacts{
-		ProjectID: int64(project),
-		ActorID:   actorID,
-		Sources:   sources,
-		ExpiresAt: expiresAt.UTC(),
+		ProjectID:         int64(project),
+		ActorID:           actorID,
+		Sources:           sources,
+		ExpiresAt:         expiresAt.UTC(),
+		ConversationBound: conversationBound,
 	}
 	// Only a token admitted for memory has memory decisions to make, and only
 	// when the request says what it is about to do.
@@ -427,6 +419,8 @@ WHERE t.token_sha256 = $1
 type conversationTurn struct {
 	project      int64
 	conversation string
+	// origin is the execution's trigger_origin (shared 0140).
+	origin string
 }
 
 // conversationLock serialises the taint and its check for ONE conversation
@@ -458,6 +452,18 @@ ON CONFLICT DO NOTHING`, turn.project, turn.conversation)
 // conversation (a direct tool call, an index run) is not: it cannot have read
 // personal memory, which needs a private chat turn.
 func (s *VectorClaimTokens) conversationTainted(ctx context.Context, executionID string, generation int64) (bool, error) {
+	return s.ExecutionConversationTainted(ctx, executionID, generation)
+}
+
+// ExecutionConversationTainted reports whether the execution is bound to a
+// conversation in which personal memory was read, under the conversation's
+// lock: the check of every shared write (elitea-vector's shared writes
+// through Facts, Main's own remove_index through the claim remover). An
+// execution with no conversation is not.
+func (s *VectorClaimTokens) ExecutionConversationTainted(ctx context.Context, executionID string, generation int64) (bool, error) {
+	if s == nil || s.pool == nil {
+		return false, errors.New("no database")
+	}
 	turn, err := s.executionConversation(ctx, executionID, generation)
 	if err != nil {
 		return false, err
@@ -478,21 +484,24 @@ SELECT EXISTS (
 	return tainted, err
 }
 
-// executionConversation is the conversation Main's admission bound the
-// execution to (agent_execution_jobs.client_stream_id, a uuid), with its
-// projection project; none for an execution without one or with a stream that
-// is not a uuid.
+// executionConversation is THE binding of an execution to a conversation, the
+// one query both the personal-memory decision and the taint use: the
+// conversation Main's admission bound it to (agent_execution_jobs.
+// client_stream_id, a uuid), its projection project and its trigger origin.
+// None for an execution without an agent job or with a stream that is not a
+// uuid.
 func (s *VectorClaimTokens) executionConversation(ctx context.Context, executionID string, generation int64) (conversationTurn, error) {
 	var (
 		projection int64
 		stream     string
+		origin     string
 	)
 	err := s.pool.QueryRow(ctx, `
-SELECT j.projection_project_id, a.client_stream_id
+SELECT j.projection_project_id, a.client_stream_id, j.trigger_origin
 FROM elitea_runtime.execution_jobs AS j
 JOIN elitea_runtime.agent_execution_jobs AS a
   ON a.execution_id = j.execution_id AND a.generation = j.generation
-WHERE j.execution_id = $1 AND j.generation = $2`, executionID, generation).Scan(&projection, &stream)
+WHERE j.execution_id = $1 AND j.generation = $2`, executionID, generation).Scan(&projection, &stream, &origin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return conversationTurn{}, nil
 	}
@@ -503,5 +512,5 @@ WHERE j.execution_id = $1 AND j.generation = $2`, executionID, generation).Scan(
 	if err != nil {
 		return conversationTurn{}, nil
 	}
-	return conversationTurn{project: projection, conversation: parsed.String()}, nil
+	return conversationTurn{project: projection, conversation: parsed.String(), origin: origin}, nil
 }

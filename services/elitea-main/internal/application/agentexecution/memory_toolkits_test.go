@@ -1,10 +1,14 @@
 package agentexecution
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
@@ -48,5 +52,52 @@ func TestMemoryToolkitIDsReadOnlyTheFrozenTopLevelTools(t *testing.T) {
 	broken := &runtimev1.AgentExecutionInputV1{Application: []byte(`{"version_details":{"tools":{}}}`)}
 	if _, err := memoryToolkitIDs(executiondomain.AgentApplicationCapability, broken); err == nil {
 		t.Fatal("an unreadable frozen set did not fail the admission")
+	}
+}
+
+type nestedTools map[[2]int64]string
+
+func (n nestedTools) NestedApplicationTools(_ context.Context, project, application, version int64) (json.RawMessage, error) {
+	if project != 7 {
+		return nil, errors.New("wrong project")
+	}
+	tools, ok := n[[2]int64{application, version}]
+	if !ok {
+		return nil, errors.New("no such version")
+	}
+	return json.RawMessage(tools), nil
+}
+
+// The sub-agent walk: A -> B -> C, each level's memory toolkits count, a
+// cycle (C -> B) is read once, and a sub-agent that cannot be read fails the
+// admission.
+func TestRunMemoryToolkitsIncludeSubAgentsRecursively(t *testing.T) {
+	t.Parallel()
+	service := (&AdmissionService{}).WithNestedMemoryToolkits(nestedTools{
+		{31, 41}: `[{"id":5,"type":"memory","settings":{}},{"type":"application","settings":{"application_id":32,"application_version_id":42}}]`,
+		{32, 42}: `[{"id":6,"type":"memory","settings":{}},{"type":"application","settings":{"application_id":31,"application_version_id":41}}]`,
+	})
+	request := SubmitRequest{
+		Identity:     executionapp.AdmissionIdentity{ResourceProjectID: "7"},
+		CapabilityID: executiondomain.AgentApplicationCapability,
+		Input: &runtimev1.AgentExecutionInputV1{Application: []byte(`{"version_details":{"tools":[
+		    {"id":9,"type":"memory","settings":{}},
+		    {"id":40,"type":"application","settings":{"application_id":31,"application_version_id":41}}]}}`)},
+	}
+	got, err := service.runMemoryToolkits(context.Background(), request)
+	if err != nil || !slices.Equal(got, []int64{5, 6, 9}) {
+		t.Fatalf("run memory toolkits = %v, %v; want [5 6 9]", got, err)
+	}
+	request.Input = &runtimev1.AgentExecutionInputV1{Application: []byte(`{"version_details":{"tools":[
+	    {"type":"application","settings":{"application_id":99,"application_version_id":99}}]}}`)}
+	if _, err := service.runMemoryToolkits(context.Background(), request); err == nil {
+		t.Fatal("an unreadable sub-agent did not fail the admission")
+	}
+	// Without the reader only the run's own toolkits count.
+	request.Input = &runtimev1.AgentExecutionInputV1{Application: []byte(`{"version_details":{"tools":[
+	    {"id":9,"type":"memory","settings":{}},
+	    {"type":"application","settings":{"application_id":31,"application_version_id":41}}]}}`)}
+	if got, err := (&AdmissionService{}).runMemoryToolkits(context.Background(), request); err != nil || !slices.Equal(got, []int64{9}) {
+		t.Fatalf("without a reader = %v, %v", got, err)
 	}
 }
