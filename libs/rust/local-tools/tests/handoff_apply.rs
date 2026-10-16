@@ -450,7 +450,7 @@ fn a_folder_without_a_repository_takes_back_through_its_shadow() {
 #[test]
 fn a_take_back_worktree_opens_as_a_workspace_of_a_trusted_repository() {
     use elitea_local_tools::deny::DenyList;
-    use elitea_local_tools::git::{Repo, trust_worktree_parent};
+    use elitea_local_tools::git::{Repo, forget_worktree_parent, trust_worktree_parent};
     use std::sync::Arc;
     let fixture = Fixture::repo();
     let top = &fixture.top;
@@ -469,6 +469,11 @@ fn a_take_back_worktree_opens_as_a_workspace_of_a_trusted_repository() {
         .unwrap()
         .unwrap();
     assert!(repo.is_linked_worktree());
+    // Forgotten (the workspace was removed): refused again.
+    forget_worktree_parent(top);
+    let refused = Repo::discover(&path, &SandboxConfig::default(), deny_list()).unwrap_err();
+    assert_eq!(refused.code(), ErrorCode::UnsafeRepository);
+    trust_worktree_parent(top);
     assert_eq!(
         repo.common_dir(),
         std::fs::canonicalize(top.join(".git")).unwrap()

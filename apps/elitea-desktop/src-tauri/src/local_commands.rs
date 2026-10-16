@@ -455,7 +455,13 @@ pub fn workspace_list(state: State<'_, LocalState>) -> Result<Vec<Workspace>, Ip
 /// drops the agent host's session and turns of it.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn workspace_remove(state: State<'_, LocalState>, id: String) -> Result<(), IpcError> {
-    Ok(state.agents.remove_workspace(&id).await?)
+    let path = state.workspaces.get(&id)?.map(|workspace| workspace.path);
+    state.agents.remove_workspace(&id).await?;
+    // Its linked worktrees (a take-back's) are no longer trusted by host git.
+    if let Some(path) = path {
+        elitea_local_tools::git::forget_worktree_parent(std::path::Path::new(&path));
+    }
+    Ok(())
 }
 
 /// Refused (`workspace_busy`) while a turn runs in the workspace.

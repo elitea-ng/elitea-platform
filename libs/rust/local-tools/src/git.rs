@@ -502,6 +502,17 @@ pub fn trust_worktree_parent(top: &Path) {
     }
 }
 
+/// Stop trusting the linked worktrees of the repository whose top is `top`
+/// (its workspace was removed). Undoes [`trust_worktree_parent`], whether
+/// the folder still exists or not.
+pub fn forget_worktree_parent(top: &Path) {
+    let canonical = std::fs::canonicalize(top).unwrap_or_else(|_| top.to_path_buf());
+    if let Ok(mut parents) = WORKTREE_PARENTS.lock() {
+        parents.remove(&canonical);
+        parents.remove(top);
+    }
+}
+
 /// The host's own check of a worktree's repository top (the desktop: "a
 /// workspace the person opened"), consulted besides
 /// [`trust_worktree_parent`].
