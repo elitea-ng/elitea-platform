@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,7 +37,7 @@ const systemInfoBootstrapSchema = "../../../infra/db/migrations/001_initial.sql"
 var systemInfoTemplate string
 
 func TestMain(m *testing.M) {
-	databaseURL := os.Getenv(systemInfoDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(systemInfoDatabaseURLEnv))
 	if databaseURL == "" {
 		os.Exit(m.Run())
 	}
@@ -70,7 +71,7 @@ func TestMain(m *testing.M) {
 
 func newSystemInfoPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(systemInfoDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(systemInfoDatabaseURLEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", systemInfoDatabaseURLEnv)
 	}

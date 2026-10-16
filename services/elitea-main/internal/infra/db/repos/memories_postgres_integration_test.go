@@ -282,8 +282,8 @@ func TestPostgresMemoriesRepoRecordCurrentMemoryUsage(t *testing.T) {
 
 	var conversationID string
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'memory usage', 1, 'agent')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'memory usage', 1, 'agent', now() AT TIME ZONE 'UTC')
 RETURNING id::text`).Scan(&conversationID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
@@ -296,8 +296,8 @@ RETURNING id`).Scan(&participantID); err != nil {
 	}
 	responseUUID := "b3f6e6b0-0000-4000-8000-000000000870"
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta)
-VALUES ($1::uuid, $2, $3::int, '{"existing_key": true}'::jsonb)`,
+INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta, created_at)
+VALUES ($1::uuid, $2, $3::int, '{"existing_key": true}'::jsonb, now() AT TIME ZONE 'UTC')`,
 		responseUUID, participantID, conversationID); err != nil {
 		t.Fatalf("seed response message group: %v", err)
 	}

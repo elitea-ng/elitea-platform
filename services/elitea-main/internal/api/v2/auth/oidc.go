@@ -730,7 +730,7 @@ func reuseLinkedAccount(
 	// with a lower-case row and refuse a login that worked before.
 	_, err = tx.Exec(ctx,
 		`UPDATE auth_core__user
-		 SET last_login = now(),
+		 SET last_login = (now() AT TIME ZONE 'UTC'),
 		     email = CASE WHEN lower(email) = lower($2) THEN email ELSE $2 END,
 		     name = COALESCE(NULLIF(name, ''), $3)
 		 WHERE id = $1`,
@@ -830,8 +830,8 @@ func joinAccountByEmail(
 		     LIMIT 1
 		 )
 		 INSERT INTO auth_core__user (email, name, last_login)
-		 SELECT COALESCE((SELECT email FROM existing), $1::text), $2, now()
-		 ON CONFLICT (email) DO UPDATE SET last_login = now()
+		 SELECT COALESCE((SELECT email FROM existing), $1::text), $2, now() AT TIME ZONE 'UTC'
+		 ON CONFLICT (email) DO UPDATE SET last_login = (now() AT TIME ZONE 'UTC')
 		 WHERE auth_core__user.suspended = false
 		   AND `+identityrepo.AdoptionGuard("auth_core__user.id", 3, 4)+`
 		 RETURNING id`,

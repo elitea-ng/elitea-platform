@@ -50,6 +50,18 @@ fi
 helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" \
   --set worker.autoscaling.enabled=true > "$work/on.yaml"
 
+# Argo CD waits for a wave to be healthy before the next. A ScaledObject in an
+# earlier wave than the Deployment it scales reconciles against a target that
+# does not exist yet on a fresh install, reports Ready=False (Degraded), and the
+# sync stops before the wave that would create the worker. Same wave or later.
+so_wave=$(yq eval 'select(.kind == "ScaledObject") | .metadata.annotations."argocd.argoproj.io/sync-wave" // "0"' "$work/on.yaml" | grep -v '^---$' | head -1)
+dep_wave=$(yq eval 'select(.kind == "Deployment" and .metadata.name == "elitea-worker") | .metadata.annotations."argocd.argoproj.io/sync-wave" // "0"' "$work/on.yaml" | grep -v '^---$' | head -1)
+if [ -n "$so_wave" ] && [ -n "$dep_wave" ] && [ "$so_wave" -ge "$dep_wave" ]; then
+  pass "the ScaledObject (wave $so_wave) is not in an earlier Argo CD wave than its Deployment (wave $dep_wave)"
+else
+  fail "the ScaledObject is in wave '$so_wave', before its Deployment's '$dep_wave': a fresh Argo CD install never creates the worker"
+fi
+
 # The scaler must watch the SAME stream and group the worker consumes. Read
 # both out of the manifest and compare, rather than asserting a literal here:
 # a literal in this file is a third place the names are written, and the point

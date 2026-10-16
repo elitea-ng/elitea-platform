@@ -259,3 +259,23 @@ func TestArtifactBucketsRepositoryListsProjectIDsWithBuckets(t *testing.T) {
 		}
 	}
 }
+
+// Review round 3: a leftover bucket a person made under the index-artifacts
+// name is refused with ErrSystemBucketNameTaken (409 at the routes) by both
+// users of the bucket, the index result writer and the discovery inventory;
+// the platform's own system bucket is created and returned.
+func TestIndexArtifactBucketRefusesALeftoverNonSystemBucket(t *testing.T) {
+	repo := newArtifactBucketsTestRepo(t)
+	ctx := context.Background()
+	mustCreateArtifactBucket(t, repo, 1, indexArtifactBucketName)
+	if _, err := requireIndexArtifactBucket(ctx, repo, 1); !errors.Is(err, storage.ErrSystemBucketNameTaken) {
+		t.Fatalf("a leftover local bucket = %v, want ErrSystemBucketNameTaken", err)
+	}
+	row, err := requireIndexArtifactBucket(ctx, repo, 2)
+	if err != nil || row.BucketType != "system" || row.Name != indexArtifactBucketName {
+		t.Fatalf("first use = %+v, %v; want the created system bucket", row, err)
+	}
+	if again, err := requireIndexArtifactBucket(ctx, repo, 2); err != nil || again.ID != row.ID {
+		t.Fatalf("second use = %+v, %v; want the same bucket", again, err)
+	}
+}

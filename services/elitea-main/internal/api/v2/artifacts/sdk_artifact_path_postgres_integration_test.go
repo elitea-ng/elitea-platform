@@ -23,6 +23,7 @@ package artifacts_test
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -47,7 +48,7 @@ const (
 var sdkArtifactTemplate string
 
 func TestMain(m *testing.M) {
-	databaseURL := os.Getenv(sdkArtifactDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(sdkArtifactDatabaseURLEnv))
 	if databaseURL == "" {
 		os.Exit(m.Run())
 	}
@@ -80,7 +81,7 @@ func TestMain(m *testing.M) {
 
 func newSDKArtifactPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(sdkArtifactDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(sdkArtifactDatabaseURLEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", sdkArtifactDatabaseURLEnv)
 	}

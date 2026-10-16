@@ -53,23 +53,23 @@ CREATE TABLE p_3.configuration (LIKE p_2.configuration INCLUDING ALL);
 INSERT INTO p_1.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES
+, created_at) VALUES
     (11, '00000000-0000-0000-0000-000000000111', 1, 'Granted to all',
      'grant_all', 'llm_model', 'llm',
      '{"name":"grant-all","share_scope":"all"}'::jsonb,
-     '{}'::jsonb, true, true, 'test'),
+     '{}'::jsonb, true, true, 'test', now() AT TIME ZONE 'UTC'),
     (12, '00000000-0000-0000-0000-000000000112', 1, 'Granted to nobody',
      'grant_none', 'llm_model', 'llm',
      '{"name":"grant-none","share_scope":"none","shared_with":[]}'::jsonb,
-     '{}'::jsonb, true, true, 'test'),
+     '{}'::jsonb, true, true, 'test', now() AT TIME ZONE 'UTC'),
     (13, '00000000-0000-0000-0000-000000000113', 1, 'Granted to project 3',
      'grant_three', 'llm_model', 'llm',
      '{"name":"grant-three","share_scope":"projects","shared_with":[3]}'::jsonb,
-     '{}'::jsonb, true, true, 'test'),
+     '{}'::jsonb, true, true, 'test', now() AT TIME ZONE 'UTC'),
     (14, '00000000-0000-0000-0000-000000000114', 1, 'Written before the grant existed',
      'grant_absent', 'llm_model', 'llm',
      '{"name":"grant-absent"}'::jsonb,
-     '{}'::jsonb, true, true, 'test');`); err != nil {
+     '{}'::jsonb, true, true, 'test', now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatalf("seed granted catalogue models: %v", err)
 	}
 }
@@ -197,12 +197,12 @@ func TestAnOwnRowIsNeverFilteredByAGrant(t *testing.T) {
 INSERT INTO p_2.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES (
+, created_at) VALUES (
     21, '00000000-0000-0000-0000-000000000221', 2, 'Own row carrying a grant',
     'project_two_own_scoped', 'llm_model', 'llm',
     '{"name":"own-scoped","share_scope":"none"}'::jsonb,
     '{}'::jsonb, false, true, 'test'
-)`); err != nil {
+, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("seed the project's own scoped row: %v", err)
 	}
 

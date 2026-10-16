@@ -471,8 +471,8 @@ func (h *Handler) prepareRunConversation(
 	var conversationID int64
 	var conversationUUID string
 	if err := transaction.QueryRow(ctx, fmt.Sprintf(`
-INSERT INTO %s.chat_conversations (uuid, name, is_private, author_id, meta, source)
-VALUES (gen_random_uuid(), $1, TRUE, $2, $3::jsonb, $4)
+INSERT INTO %s.chat_conversations (uuid, name, is_private, author_id, meta, source, created_at)
+VALUES (gen_random_uuid(), $1, TRUE, $2, $3::jsonb, $4, now() AT TIME ZONE 'UTC')
 RETURNING id, uuid::text`, schema),
 		runConversationName(request.Origin, target.Name), request.ActorUserID,
 		string(meta), TriggerConversationSource,
@@ -557,11 +557,16 @@ const (
 )
 
 // agentTriggerAdmissible applies the agent run limit to one trigger.
+//
+// chat_conversations.created_at is a `timestamp` WITHOUT time zone holding the
+// UTC wall clock, so the window is cut from now() AT TIME ZONE 'UTC'. A bare
+// now() would be cast through the session time zone and, west of UTC, count
+// no run at all.
 func (h *Handler) agentTriggerAdmissible(ctx context.Context, schema string, triggerID int64) error {
 	var recent, inFlight int
 	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
 SELECT
-    count(*) FILTER (WHERE conversation.created_at > now() - $3::interval),
+    count(*) FILTER (WHERE conversation.created_at > (now() AT TIME ZONE 'UTC') - $3::interval),
     count(*) FILTER (WHERE EXISTS (
         SELECT 1 FROM %[1]s.chat_message_group AS response
          WHERE response.conversation_id = conversation.id
@@ -570,7 +575,7 @@ SELECT
   FROM %[1]s.chat_conversations AS conversation
  WHERE conversation.source = $1
    AND conversation.meta ->> 'trigger_id' = $2
-   AND conversation.created_at > now() - GREATEST($3::interval, $4::interval)`, schema),
+   AND conversation.created_at > (now() AT TIME ZONE 'UTC') - GREATEST($3::interval, $4::interval)`, schema),
 		TriggerConversationSource, strconv.FormatInt(triggerID, 10),
 		agentTriggerWindow, agentTriggerInFlightHorizon,
 	).Scan(&recent, &inFlight)
@@ -638,8 +643,8 @@ func mapParticipant(
 	ctx context.Context, transaction pgx.Tx, schema string, conversationID, participantID int64, settings []byte,
 ) error {
 	if _, err := transaction.Exec(ctx, fmt.Sprintf(`
-INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings)
-VALUES ($1, $2, $3::jsonb)
+INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')
 ON CONFLICT (participant_id, conversation_id) DO NOTHING`, schema),
 		conversationID, participantID, settings); err != nil {
 		return fmt.Errorf("pipelinetriggers: map participant: %w", err)

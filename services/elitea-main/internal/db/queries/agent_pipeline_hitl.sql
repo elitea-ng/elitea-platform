@@ -20,7 +20,7 @@ WITH paused AS MATERIALIZED (
     UPDATE chat_message_group AS response
     SET is_streaming = FALSE,
         task_id = sqlc.narg(previous_task_id)::text,
-        updated_at = clock_timestamp(),
+        updated_at = (clock_timestamp() AT TIME ZONE 'UTC'),
         meta = response.meta || jsonb_build_object('pipeline_hitl_resolution', jsonb_build_object(
             'interrupt_id', sqlc.arg(interrupt_id)::text,
             'node_name', sqlc.arg(node_name)::text,
@@ -34,12 +34,12 @@ WITH paused AS MATERIALIZED (
     WHERE item.message_group_id = finalized.id AND item.item_type = 'text_message'
       AND item.meta -> 'runtime_stream_provisional' = 'true'::jsonb
 ), review_item AS (
-    INSERT INTO chat_message_items (uuid, item_type, order_index, meta, message_group_id)
+    INSERT INTO chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
     SELECT gen_random_uuid(), 'text_message',
            (SELECT count(*)::integer FROM chat_message_items WHERE message_group_id = finalized.id),
            jsonb_build_object('kind', 'pipeline_hitl_prompt', 'status', 'resolved',
                'interrupt_id', sqlc.arg(interrupt_id)::text, 'node_name', sqlc.arg(node_name)::text,
-               'action', sqlc.arg(decision_action)::text), finalized.id
+               'action', sqlc.arg(decision_action)::text), finalized.id, now() AT TIME ZONE 'UTC'
     FROM finalized RETURNING id
 ), review_text AS (
     INSERT INTO chat_messages_text (id, content)
@@ -51,14 +51,14 @@ WITH paused AS MATERIALIZED (
            paused.author_participant_id,
            jsonb_build_object('pipeline_hitl_decision', jsonb_build_object(
                'interrupt_id', sqlc.arg(interrupt_id)::text, 'node_name', sqlc.arg(node_name)::text,
-               'action', sqlc.arg(decision_action)::text)), FALSE, clock_timestamp()
+               'action', sqlc.arg(decision_action)::text)), FALSE, (clock_timestamp() AT TIME ZONE 'UTC')
     FROM paused JOIN finalized ON finalized.id = paused.id
     RETURNING id, conversation_id, sent_to_id, created_at
 ), decision_item AS (
-    INSERT INTO chat_message_items (uuid, item_type, order_index, meta, message_group_id)
+    INSERT INTO chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
     SELECT gen_random_uuid(), 'text_message', 0,
            jsonb_build_object('kind', 'pipeline_hitl_decision', 'interrupt_id', sqlc.arg(interrupt_id)::text,
-               'node_name', sqlc.arg(node_name)::text, 'action', sqlc.arg(decision_action)::text), id
+               'node_name', sqlc.arg(node_name)::text, 'action', sqlc.arg(decision_action)::text), id, now() AT TIME ZONE 'UTC'
     FROM decision_group RETURNING id
 ), decision_text AS (
     INSERT INTO chat_messages_text (id, content)

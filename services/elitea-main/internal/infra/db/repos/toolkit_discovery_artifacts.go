@@ -143,12 +143,9 @@ func (r *ToolkitDiscoveryArtifactRepository) PutToolkitDiscoveryArtifact(ctx con
 		return nil, discoveryArtifactError(ctx, lookupErr)
 	}
 	wanted.projectID = projectID
-	bucket, err := r.buckets.GetBucket(ctx, projectID, indexArtifactBucketName)
-	if errors.Is(err, storage.ErrNotFound) {
-		bucket, err = r.buckets.CreateBucket(ctx, NewBucketInput{ProjectID: projectID, Name: indexArtifactBucketName, DisplayName: indexArtifactBucketName, BucketType: "system"})
-		if errors.Is(err, storage.ErrAlreadyExists) {
-			bucket, err = r.buckets.GetBucket(ctx, projectID, indexArtifactBucketName)
-		}
+	bucket, err := requireIndexArtifactBucket(ctx, r.buckets, projectID)
+	if errors.Is(err, storage.ErrSystemBucketNameTaken) {
+		return nil, err // 409 at the content route, WARN already logged
 	}
 	if err != nil {
 		return nil, discoveryArtifactError(ctx, err)

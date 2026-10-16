@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"strconv"
 	"testing"
@@ -18,7 +19,7 @@ import (
 // for: that the statement replaces `index_configuration` and nothing else, and
 // that an index that does not exist is a refusal rather than a silent success.
 func TestCurrentIndexConfigurationWriterRealPgvector(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the current index configuration test")
 	}

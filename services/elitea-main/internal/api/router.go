@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
 	"net/http"
@@ -728,10 +729,39 @@ func newArtifactHandler(cfg RouterConfig) (h *v2artifacts.Handler, ok bool) {
 	if err != nil {
 		return nil, false
 	}
-	return v2artifacts.NewHandler(
+	handler := v2artifacts.NewHandler(
 		artifactRepoAdapter{bucketsRepo, objectsRepo, grantsRepo, permissionsRepo},
 		cfg.ObjectStore,
-	).WithEvents(cfg.DomainEvents), true
+	).WithEvents(cfg.DomainEvents)
+	// A turn's Office host names its claim; the system-bucket rule verifies it.
+	if claims, err := storage.NewPostgresContentRepository(cfg.Pool); err == nil {
+		handler = handler.WithRuntimeClaims(artifactRuntimeClaims{claims})
+	}
+	return handler, true
+}
+
+// artifactRuntimeClaims adapts the content repository's public claim check to
+// the artifacts package's resolver (it cannot import storage's types back).
+type artifactRuntimeClaims struct {
+	repository *storage.PostgresContentRepository
+}
+
+func (a artifactRuntimeClaims) ResolveRuntimeClaim(
+	ctx context.Context,
+	claim v2artifacts.RuntimeClaim,
+) (v2artifacts.RuntimeClaimScope, error) {
+	scope, err := a.repository.ResolvePublicRuntimeClaim(
+		ctx, claim.ExecutionID, claim.Generation, claim.ClaimID, claim.FenceToken,
+	)
+	if errors.Is(err, storage.ErrContentUnauthorized) {
+		return v2artifacts.RuntimeClaimScope{}, v2artifacts.ErrRuntimeClaimRefused
+	}
+	if err != nil {
+		return v2artifacts.RuntimeClaimScope{}, err
+	}
+	return v2artifacts.RuntimeClaimScope{
+		ProjectID: scope.ProjectID, ActorID: scope.ActorID, ConversationID: scope.ConversationID,
+	}, nil
 }
 
 // bucketBootstrapRepoAdapter satisfies artifactbootstrap.Repository the same

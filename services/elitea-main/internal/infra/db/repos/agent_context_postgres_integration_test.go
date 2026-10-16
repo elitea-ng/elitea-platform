@@ -130,7 +130,7 @@ UPDATE p_1.chat_message_group SET meta=jsonb_set(meta, '{execution_generation}',
 	}
 	_, err = pool.Exec(t.Context(), `
 INSERT INTO p_1.chat_message_group (uuid,author_participant_id,conversation_id,meta,is_streaming,task_id,created_at)
-SELECT gen_random_uuid(),author_participant_id,conversation_id,'{}'::jsonb,FALSE,'new-unmeasured-run',CURRENT_TIMESTAMP+interval '1 minute'
+SELECT gen_random_uuid(),author_participant_id,conversation_id,'{}'::jsonb,FALSE,'new-unmeasured-run',(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')+interval '1 minute'
 FROM p_1.chat_message_group WHERE uuid::text=$1`, responseID)
 	if err != nil {
 		t.Fatal(err)

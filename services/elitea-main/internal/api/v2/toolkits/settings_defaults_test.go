@@ -37,8 +37,12 @@ import (
 type defaultsRecordingRepo struct {
 	toolkits.Repository
 	storedType string
-	creates    []map[string]any
-	updates    []map[string]any
+	// storedSettings is the stored row's settings (nil: none).
+	storedSettings map[string]any
+	creates        []map[string]any
+	updates        []map[string]any
+	// getErr fails GetToolkit (nil: the stored row is returned).
+	getErr error
 }
 
 func (r *defaultsRecordingRepo) CreateToolkit(
@@ -56,7 +60,10 @@ func (r *defaultsRecordingRepo) UpdateToolkit(
 }
 
 func (r *defaultsRecordingRepo) GetToolkit(_ context.Context, _, _ string) (map[string]any, error) {
-	return map[string]any{"id": "11", "type": r.storedType}, nil
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	return map[string]any{"id": "11", "type": r.storedType, "settings": r.storedSettings}, nil
 }
 
 // newDefaultsRouter mounts the real Create and Update behind the real pinned

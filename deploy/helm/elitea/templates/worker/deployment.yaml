@@ -5,6 +5,17 @@ metadata:
   name: {{ include "elitea-worker-python.fullname" . }}
   labels:
     {{- include "elitea-worker-python.labels" . | nindent 4 }}
+  # The worker rolls AFTER elitea-main: a new worker names its claim on the
+  # artifact object API and confines system buckets itself, but it is elitea-main
+  # that verifies the claim, so a new worker against an older elitea-main
+  # leaves only the worker's own check. Argo CD applies a wave and waits for it
+  # to be healthy before the next; only this Deployment is in wave 1. Everything
+  # it mounts (its ConfigMaps, Secrets, NATS client certificate) stays in wave 0
+  # or earlier, so the later wave never waits for something a later wave
+  # creates, and nothing in wave 0 waits for the worker. A plain `helm upgrade`
+  # has no waves; there both orders are safe (the worker's check holds alone).
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   {{- if not .Values.worker.autoscaling.enabled }}
   replicas: {{ .Values.worker.replicaCount }}

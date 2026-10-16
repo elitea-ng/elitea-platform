@@ -370,3 +370,9 @@ pub(in crate::toolkits) fn test_parse_params(
 ) -> adk_core::Result<Map<String, Value>> {
     parse_params(value)
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    vec![(EXECUTE, false)]
+}

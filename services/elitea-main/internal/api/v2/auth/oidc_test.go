@@ -164,7 +164,7 @@ func TestALinkedSubjectWithANewEmailKeepsItsAccount(t *testing.T) {
 	if userID != 7 {
 		t.Fatalf("resolved user %d, want 7; a changed address must not create a second account", userID)
 	}
-	if statementIndex(t, tx, "SET last_login = now(), email =") < 0 {
+	if statementIndex(t, tx, "SET last_login = (now() AT TIME ZONE 'UTC'), email =") < 0 {
 		t.Fatalf("the account's address was not repaired: %v", tx.statements)
 	}
 }

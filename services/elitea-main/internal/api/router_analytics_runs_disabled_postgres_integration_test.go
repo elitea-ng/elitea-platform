@@ -29,8 +29,8 @@ CREATE TABLE centry.platform_config (
     updated_by VARCHAR(255),
     PRIMARY KEY (section, key)
 );
-INSERT INTO centry.platform_config (section, key, value)
-VALUES ('analytics', 'analytics_enabled', 'false'::jsonb)`); err != nil {
+INSERT INTO centry.platform_config (section, key, value, updated_at)
+VALUES ('analytics', 'analytics_enabled', 'false'::jsonb, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("seed the analytics switch: %v", err)
 	}
 

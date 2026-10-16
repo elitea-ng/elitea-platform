@@ -92,12 +92,12 @@ VALUES (91, 81, 'draft-1', 'draft',
         '{"model_name":"premium-model","model_project_id":1}'::jsonb, 7302);
 INSERT INTO %[1]s.tags (id, name, data) VALUES (61, 'payroll', '{}'::jsonb);
 INSERT INTO %[1]s.application_version_tag_association (version_id, tag_id) VALUES (91, 61);
-INSERT INTO %[1]s.configuration (project_id, label, elitea_title, type, section, data, status_ok, shared)
+INSERT INTO %[1]s.configuration (project_id, label, elitea_title, type, section, data, status_ok, shared, created_at)
 VALUES
   (7301, 'Premium', 'model_premium_7301', 'model', 'llm',
-   '{"name":"premium-model","low_tier":false}'::jsonb, true, false),
+   '{"name":"premium-model","low_tier":false}'::jsonb, true, false, now() AT TIME ZONE 'UTC'),
   (7301, 'Tiny',    'model_tiny_7301',    'model', 'llm',
-   '{"name":"tiny-model","low_tier":true}'::jsonb,  true, false);
+   '{"name":"tiny-model","low_tier":true}'::jsonb,  true, false, now() AT TIME ZONE 'UTC');
 `
 
 func seedPublishAIFixture(t *testing.T, pool *pgxpool.Pool) {

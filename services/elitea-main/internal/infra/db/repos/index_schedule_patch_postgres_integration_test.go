@@ -137,9 +137,9 @@ CREATE TABLE p_1.elitea_tools (
 );
 INSERT INTO p_1.elitea_tools (
     id, type, name, settings, author_id, meta
-) VALUES (
+, created_at) VALUES (
     1, 'github', 'project-one', '{}'::jsonb, 11, '{}'::jsonb
-);
+, now() AT TIME ZONE 'UTC');
 
 INSERT INTO centry.project (id, create_success, suspended)
 VALUES (2, TRUE, FALSE);
@@ -159,9 +159,9 @@ CREATE TABLE p_2.elitea_tools (
 );
 INSERT INTO p_2.elitea_tools (
     id, type, name, settings, author_id, meta
-) VALUES (
+, created_at) VALUES (
     1, 'github', 'project-two', '{}'::jsonb, 12, '{}'::jsonb
-);`); err != nil {
+, now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatalf("prepare current schedule projects: %v", err)
 	}
 }

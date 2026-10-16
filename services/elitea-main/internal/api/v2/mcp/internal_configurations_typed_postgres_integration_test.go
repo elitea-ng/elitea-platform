@@ -32,12 +32,12 @@ func TestInternalTypedConfigurationPostgresDefaultAndSharedScope(t *testing.T) {
 	}
 	// Seed only the isolated database. Production discovery uses the shared sqlc repositories.
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_1.configuration (project_id, elitea_title, label, type, section, data, shared, status_ok)
-		VALUES (1, 'public_shared', 'Shared model', 'llm_model', 'llm', '{"name":"shared-model"}', true, true),
-		       (1, 'public_private', 'Private model', 'llm_model', 'llm', '{"name":"private-model"}', false, true);
-		INSERT INTO p_2.configuration (project_id, elitea_title, label, type, section, data, status_ok)
-		VALUES (2, 'own_model', 'Own model', 'llm_model', 'llm', '{"name":"own-model"}', true),
-		       (2, 'own_credential', 'Own credential', 'openapi', 'credentials', '{}', true)`); err != nil {
+		INSERT INTO p_1.configuration (project_id, elitea_title, label, type, section, data, shared, status_ok, created_at)
+		VALUES (1, 'public_shared', 'Shared model', 'llm_model', 'llm', '{"name":"shared-model"}', true, true, now() AT TIME ZONE 'UTC'),
+		       (1, 'public_private', 'Private model', 'llm_model', 'llm', '{"name":"private-model"}', false, true, now() AT TIME ZONE 'UTC');
+		INSERT INTO p_2.configuration (project_id, elitea_title, label, type, section, data, status_ok, created_at)
+		VALUES (2, 'own_model', 'Own model', 'llm_model', 'llm', '{"name":"own-model"}', true, now() AT TIME ZONE 'UTC'),
+		       (2, 'own_credential', 'Own credential', 'openapi', 'credentials', '{}', true, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := repos.NewCurrentConfigurationsRepository(pool)

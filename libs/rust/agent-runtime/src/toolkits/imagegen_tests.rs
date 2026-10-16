@@ -33,7 +33,7 @@ type Answer = Result<Vec<Option<Vec<u8>>>, OfficeHostError>;
 
 /// An in-memory bucket and a scripted images API.
 #[derive(Default)]
-struct FakeHost {
+pub(super) struct FakeHost {
     objects: Mutex<BTreeMap<(String, String), Vec<u8>>>,
     /// Every write: bucket, name, media type, overwrite.
     writes: Mutex<Vec<Written>>,
@@ -538,7 +538,7 @@ fn settings_are_bounded_and_typed() {
     assert_eq!(err.code(), ImageGenConfigErrorCode::InvalidConfiguration);
 }
 
-struct NoPlatform;
+pub(super) struct NoPlatform;
 
 #[async_trait]
 impl PlatformWriter for NoPlatform {

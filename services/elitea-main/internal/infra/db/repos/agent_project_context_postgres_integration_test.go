@@ -13,7 +13,7 @@ import (
 func TestPostgresCurrentAgentProjectContextSnapshotAndAdmission(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	seedCurrentAgentContinuationSchema(t, pool)
-	_, err := pool.Exec(t.Context(), `INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data,meta,shared,status_ok,source,author_id) VALUES (2,'60000000-0000-4000-8000-000000000039',1,'project_context_snapshot','project_context','project','{"content":" Original context ","activation_description":"when relevant"}'::jsonb,'{}'::jsonb,false,true,'user',11)`)
+	_, err := pool.Exec(t.Context(), `INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data,meta,shared,status_ok,source,author_id, created_at) VALUES (2,'60000000-0000-4000-8000-000000000039',1,'project_context_snapshot','project_context','project','{"content":" Original context ","activation_description":"when relevant"}'::jsonb,'{}'::jsonb,false,true,'user',11, now() AT TIME ZONE 'UTC')`)
 	require.NoError(t, err)
 	repo := NewCurrentAgentProjectContextRepository(pool)
 	first, err := repo.ResolveCurrentAgentProjectContext(t.Context(), 1, 11)

@@ -351,3 +351,12 @@ pub(in crate::toolkits) fn test_build_with_api(
 ) -> Result<BasicToolset, GooglePlacesToolsetError> {
     build_with_api(toolkit_name, selected, policy, client)
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    [GooglePlacesToolKind::Places, GooglePlacesToolKind::FindNear]
+        .iter()
+        .map(|kind| (kind.name(), false))
+        .collect()
+}

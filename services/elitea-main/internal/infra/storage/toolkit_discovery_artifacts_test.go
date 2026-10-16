@@ -39,6 +39,7 @@ func TestToolkitDiscoveryUploadEnforcesAuthorityBoundsAndDigest(t *testing.T) {
 		{name: "wrong digest", mutate: func(r *http.Request) { r.Header.Set("Content-Digest", "sha-256=:wrong:") }, status: 400},
 		{name: "wrong media", mutate: func(r *http.Request) { r.Header.Set("Content-Type", "text/plain") }, status: 400},
 		{name: "conflict", writeErr: ErrContentRejected, status: 409},
+		{name: "reserved bucket name held", writeErr: ErrSystemBucketNameTaken, status: 409},
 		{name: "claim lost during upload", writeErr: ErrContentUnauthorized, status: 403},
 		{name: "canceled", writeErr: context.Canceled, status: 503},
 	} {

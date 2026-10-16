@@ -15,6 +15,7 @@ package auditretention
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/testpg"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -66,7 +67,7 @@ func auditEventsDDL(t *testing.T) []string {
 // creating.
 func newAuditPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the audit retention integration tests")
 	}

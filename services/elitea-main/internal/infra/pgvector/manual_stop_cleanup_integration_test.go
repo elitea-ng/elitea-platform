@@ -3,6 +3,7 @@ package pgvector
 import (
 	"context"
 	"errors"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"strconv"
 	"testing"
@@ -17,7 +18,7 @@ import (
 // retry. It deliberately proves the current baseline's narrow NULL behavior:
 // missing/null cmetadata.type rows survive.
 func TestPostgresServiceBackedCurrentManualStopCleanupPgvector(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the manual Stop PgVector test")
 	}

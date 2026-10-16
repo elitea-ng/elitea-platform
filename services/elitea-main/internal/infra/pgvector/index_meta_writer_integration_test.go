@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	osexec "os/exec"
 	"reflect"
@@ -22,7 +23,7 @@ import (
 // index_meta_init/index_meta_update lifecycle. It does not exercise the runtime
 // admission database, Configurations/vault lookup, the command bus, or a worker.
 func TestCurrentIndexMetaWriterRealPgvector(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the current index-meta writer test")
 	}

@@ -1446,3 +1446,12 @@ fn file_safe(text: &str) -> String {
         })
         .collect()
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    OPERATIONS
+        .iter()
+        .map(|operation| (operation.name, operation.special.needs_artifacts()))
+        .collect()
+}

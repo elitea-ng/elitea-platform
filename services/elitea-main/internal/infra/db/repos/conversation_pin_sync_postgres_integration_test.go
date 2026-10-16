@@ -91,8 +91,8 @@ func TestConversationPinReachesTheOtherDeviceThroughTheDelta(t *testing.T) {
 	numericID, _, _ := seedConversationWithParticipant(t, repo, "hello")
 	private, _ := strconv.ParseInt(numericID, 10, 64)
 	var public int64
-	if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_conversations (uuid, name, author_id, is_private, source)
-		VALUES (gen_random_uuid(), 'team notes', 8, false, 'elitea') RETURNING id`).Scan(&public); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_conversations (uuid, name, author_id, is_private, source, created_at)
+		VALUES (gen_random_uuid(), 'team notes', 8, false, 'elitea', now() AT TIME ZONE 'UTC') RETURNING id`).Scan(&public); err != nil {
 		t.Fatal(err)
 	}
 	// Both rows settled well before the devices sync, so a full sync passes

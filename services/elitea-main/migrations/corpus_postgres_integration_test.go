@@ -39,6 +39,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -352,9 +353,9 @@ WHERE scope = $1 AND scope_id = $2 AND period_start = to_timestamp($3)`,
 // migration corpus. Nothing is created by hand.
 func newMigratedPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(databaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(databaseURLEnv))
 	if databaseURL == "" && os.Getenv("ELITEA_TEST_USE_SERVICE_DATABASE_URL") == "1" {
-		databaseURL = os.Getenv("DATABASE_URL")
+		databaseURL = testpg.DSN(os.Getenv("DATABASE_URL"))
 	}
 	if databaseURL == "" {
 		t.Skipf("set %s to run the migration-corpus integration test", databaseURLEnv)

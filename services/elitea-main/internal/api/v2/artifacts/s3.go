@@ -174,6 +174,12 @@ func s3Bucket(r *http.Request) string {
 // database ID (object metadata upsert/delete) and its expires_at, and looking
 // it up a second time could observe a different row.
 func (h *Handler) requireS3Bucket(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
+	return h.requireS3BucketScoped(w, r, projectID, bucket, need, scopePathKey)
+}
+
+// requireS3BucketScoped is requireS3Bucket judging the system-bucket rule on
+// `scope` (scopeListing for ListObjectsS3 only).
+func (h *Handler) requireS3BucketScoped(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string, scope bucketScope) (repos.BucketRow, bool) {
 	// The per-bucket access list, checked first and in the S3 vocabulary. The
 	// SDK reaches the same objects through these routes as the native ones, so
 	// an exception that refuses a verb there must refuse it here; an S3
@@ -208,6 +214,15 @@ func (h *Handler) requireS3Bucket(w http.ResponseWriter, r *http.Request, projec
 		h.writeInternalS3(w, r, "get bucket", err)
 		return repos.BucketRow{}, false
 	}
+	allowed, err = h.allowSystemBucket(r, projectID, row, scope)
+	if err != nil {
+		h.writeInternalS3(w, r, "authorize system bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "AccessDenied", systemBucketRefusal)
+		return repos.BucketRow{}, false
+	}
 	return row, true
 }
 
@@ -221,7 +236,7 @@ func (h *Handler) ListObjectsS3(w http.ResponseWriter, r *http.Request) {
 
 	// Same bucket resolution as the native route. A listing can only ever
 	// fail on the bucket, never on a key.
-	if _, ok := h.requireS3Bucket(w, r, projectID, bucket, accessRead); !ok {
+	if _, ok := h.requireS3BucketScoped(w, r, projectID, bucket, accessRead, scopeListing); !ok {
 		return
 	}
 

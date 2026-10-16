@@ -894,7 +894,7 @@ func (h *Handler) Like(w http.ResponseWriter, r *http.Request) {
 
 	_, err := h.pool.Exec(ctx, fmt.Sprintf(`
 		INSERT INTO %s.social_likes (entity_name, user_id, entity_id, created_at)
-		VALUES ($1, $2, $3, NOW())
+		VALUES ($1, $2, $3, (NOW() AT TIME ZONE 'UTC'))
 		ON CONFLICT (entity_name, user_id, entity_id) DO NOTHING`, schema),
 		entityType, user.ID, entityID)
 	if err != nil {

@@ -363,18 +363,35 @@ fn the_configuration_is_bounded_and_the_bucket_addressable() {
     assert_eq!(parsed.bucket(), "agent-artifacts");
     assert_eq!(parsed.selected_tools().len(), 1);
 
-    for invalid in [
-        json!({"selected_tools": []}),
-        json!({"bucket": "", "selected_tools": []}),
-        json!({"bucket": "Bad-Bucket", "selected_tools": []}),
-        json!({"bucket": "a", "selected_tools": []}),
-        json!({"bucket": "agent-artifacts", "selected_tools": "read_file"}),
+    // A missing or unusable bucket is its own code: the run skips the
+    // toolkit and names the setting instead of failing every turn.
+    for (invalid, code) in [
+        (
+            json!({"selected_tools": []}),
+            ArtifactConfigErrorCode::BucketName,
+        ),
+        (
+            json!({"bucket": "", "selected_tools": []}),
+            ArtifactConfigErrorCode::BucketName,
+        ),
+        (
+            json!({"bucket": "Bad-Bucket", "selected_tools": []}),
+            ArtifactConfigErrorCode::BucketName,
+        ),
+        (
+            json!({"bucket": "a", "selected_tools": []}),
+            ArtifactConfigErrorCode::BucketName,
+        ),
+        (
+            json!({"bucket": "agent-artifacts", "selected_tools": "read_file"}),
+            ArtifactConfigErrorCode::InvalidConfiguration,
+        ),
     ] {
         let object = invalid.as_object().expect("invalid artifact fixture");
         let Err(error) = ArtifactToolkitConfig::parse(object) else {
             panic!("a malformed artifact configuration must not parse: {invalid}");
         };
-        assert_eq!(error.code(), ArtifactConfigErrorCode::InvalidConfiguration);
+        assert_eq!(error.code(), code, "{invalid}");
     }
 
     let oversized = json!({"bucket": "b".repeat(64), "selected_tools": []});

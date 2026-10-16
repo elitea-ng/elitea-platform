@@ -145,9 +145,16 @@ func mimeFromExtension(key string) string {
 // (utils/utils.py:177-238) — and it keeps a refused caller from learning
 // whether a bucket they may not touch exists.
 func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
+	return h.requireBucketChecked(w, r, projectID, bucket, need, scopePathKey)
+}
+
+// requireBucketChecked is requireBucket judging the system-bucket rule on
+// what `scope` says the route addresses; scopeCallerKeys leaves it to the
+// caller (an upload's part, a batch's body keys).
+func (h *Handler) requireBucketChecked(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string, scope bucketScope) (repos.BucketRow, bool) {
 	// The hidden workspace bucket (ADR-0034 decision 3) is absent here, and
-	// the refusal comes BEFORE the access list, so no answer differs from the
-	// one a missing bucket gets.
+	// the refusal comes BEFORE the access list and the system-bucket rule,
+	// so no answer differs from the one a missing bucket gets.
 	if hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, bucket); err != nil {
 		h.writeInternal(w, r, "check bucket type", err)
 		return repos.BucketRow{}, false
@@ -171,6 +178,19 @@ func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectI
 		} else {
 			h.writeInternal(w, r, "get bucket", err)
 		}
+		return repos.BucketRow{}, false
+	}
+	if scope == scopeCallerKeys {
+		// The caller checks each key it names.
+		return row, true
+	}
+	allowed, err = h.allowSystemBucket(r, projectID, row, scope)
+	if err != nil {
+		h.writeInternal(w, r, "authorize system bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "Forbidden", systemBucketRefusal)
 		return repos.BucketRow{}, false
 	}
 	return row, true
@@ -202,6 +222,15 @@ func (h *Handler) requireBucketNoBody(w http.ResponseWriter, r *http.Request, pr
 		} else {
 			w.WriteHeader(http.StatusInternalServerError)
 		}
+		return repos.BucketRow{}, false
+	}
+	allowed, err = h.allowSystemBucket(r, projectID, row, scopePathKey)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		w.WriteHeader(http.StatusForbidden)
 		return repos.BucketRow{}, false
 	}
 	return row, true
@@ -302,7 +331,7 @@ func (h *Handler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := chi.URLParam(r, "projectID")
 	bucket := chi.URLParam(r, "bucket")
-	if _, ok := h.requireBucket(w, r, projectID, bucket, accessRead); !ok {
+	if _, ok := h.requireBucketChecked(w, r, projectID, bucket, accessRead, scopeListing); !ok {
 		return
 	}
 
@@ -539,7 +568,7 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := chi.URLParam(r, "projectID")
 	bucket := chi.URLParam(r, "bucket")
-	bucketRow, ok := h.requireBucket(w, r, projectID, bucket, accessWrite)
+	bucketRow, ok := h.requireBucketForUpload(w, r, projectID, bucket)
 	if !ok {
 		return
 	}
@@ -607,6 +636,10 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "InvalidKey", err.Error())
 		return
 	}
+	// The system-bucket rule, on the key the part names (system_buckets.go).
+	if !h.allowUploadKey(w, r, projectID, bucketRow, filename) {
+		return
+	}
 
 	if !overwrite {
 		if _, statErr := h.store.Stat(r.Context(), ref); statErr == nil {
@@ -663,7 +696,7 @@ func (h *Handler) BatchDeleteObjects(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := chi.URLParam(r, "projectID")
 	bucket := chi.URLParam(r, "bucket")
-	bucketRow, ok := h.requireBucket(w, r, projectID, bucket, accessWrite)
+	bucketRow, ok := h.requireBucketChecked(w, r, projectID, bucket, accessWrite, scopeCallerKeys)
 	if !ok {
 		return
 	}
@@ -677,6 +710,10 @@ func (h *Handler) BatchDeleteObjects(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Keys) == 0 {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "keys must not be empty")
+		return
+	}
+	// The system-bucket rule, on every key the body names.
+	if !h.allowKeys(w, r, projectID, bucketRow, req.Keys) {
 		return
 	}
 

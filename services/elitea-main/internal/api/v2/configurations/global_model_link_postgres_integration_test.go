@@ -233,7 +233,7 @@ func TestAnUnlinkedModelRowIsListedAsUnresolved(t *testing.T) {
 			(uuid, project_id, elitea_title, label, type, section, data, meta, shared,
 			 status_ok, source, created_at, updated_at)
 		VALUES (gen_random_uuid(), $1, $2, $2, 'llm_model', 'llm',
-			 '{"name":"autotest-legacy"}'::jsonb, '{}'::jsonb, true, true, 'user', now(), now())`,
+			 '{"name":"autotest-legacy"}'::jsonb, '{}'::jsonb, true, true, 'user', (now() AT TIME ZONE 'UTC'), (now() AT TIME ZONE 'UTC'))`,
 		globalScopeProject)
 	if _, err := pool.Exec(context.Background(), statement, globalScopeProject, title); err != nil {
 		t.Fatalf("seed the unlinked model row: %v", err)

@@ -227,7 +227,7 @@ func (r *CurrentRuntimeEntityBuilderRepository) WriteRuntimeProjectContext(
 		return fmt.Errorf("runtime project context write: encode: %w", err)
 	}
 	tag, err := r.pool.Exec(ctx, fmt.Sprintf(
-		`UPDATE %s.configuration SET data = $1, updated_at = NOW() WHERE type = 'project_context'`,
+		`UPDATE %s.configuration SET data = $1, updated_at = (NOW() AT TIME ZONE 'UTC') WHERE type = 'project_context'`,
 		tenantSchema,
 	), data)
 	if err != nil {
@@ -242,9 +242,9 @@ func (r *CurrentRuntimeEntityBuilderRepository) WriteRuntimeProjectContext(
 	if _, err := r.pool.Exec(ctx, fmt.Sprintf(`
 		INSERT INTO %s.configuration
 			(project_id, label, elitea_title, type, section, data, status_ok, created_at, updated_at)
-		VALUES ($1, 'Project Context', $2, 'project_context', 'project_context', $3, true, NOW(), NOW())
+		VALUES ($1, 'Project Context', $2, 'project_context', 'project_context', $3, true, (NOW() AT TIME ZONE 'UTC'), (NOW() AT TIME ZONE 'UTC'))
 		ON CONFLICT (elitea_title) DO UPDATE
-			SET data = EXCLUDED.data, updated_at = NOW()`, tenantSchema),
+			SET data = EXCLUDED.data, updated_at = (NOW() AT TIME ZONE 'UTC')`, tenantSchema),
 		projectID, fmt.Sprintf("project_context_%d", projectID), data,
 	); err != nil {
 		return fmt.Errorf("runtime project context write: insert: %w", err)

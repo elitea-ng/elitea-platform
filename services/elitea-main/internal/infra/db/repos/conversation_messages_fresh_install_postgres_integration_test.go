@@ -94,8 +94,8 @@ func seedFreshInstallTranscript(t *testing.T, pool *pgxpool.Pool, content string
 	var conversationID int
 	var conversationUUID string
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, is_private, author_id)
-VALUES (gen_random_uuid(), 'fresh install transcript', TRUE, 1)
+INSERT INTO p_1.chat_conversations (uuid, name, is_private, author_id, created_at)
+VALUES (gen_random_uuid(), 'fresh install transcript', TRUE, 1, now() AT TIME ZONE 'UTC')
 RETURNING id, uuid::text`).Scan(&conversationID, &conversationUUID); err != nil {
 		t.Fatalf("insert conversation: %v", err)
 	}
@@ -108,16 +108,16 @@ RETURNING id`).Scan(&participantID); err != nil {
 		t.Fatalf("insert participant: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id)
-VALUES ($1, $2)`, conversationID, participantID); err != nil {
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at)
+VALUES ($1, $2, now() AT TIME ZONE 'UTC')`, conversationID, participantID); err != nil {
 		t.Fatalf("map participant into conversation: %v", err)
 	}
 
 	var groupID int
 	if err := pool.QueryRow(ctx, `
 INSERT INTO p_1.chat_message_group
-    (uuid, author_participant_id, conversation_id, sent_to_id, reply_to_id, meta, is_streaming)
-VALUES (gen_random_uuid(), $1, $2, NULL, NULL, '{}'::jsonb, false)
+    (uuid, author_participant_id, conversation_id, sent_to_id, reply_to_id, meta, is_streaming, created_at)
+VALUES (gen_random_uuid(), $1, $2, NULL, NULL, '{}'::jsonb, false, now() AT TIME ZONE 'UTC')
 RETURNING id`, participantID, conversationID).Scan(&groupID); err != nil {
 		t.Fatalf("insert message group: %v", err)
 	}
@@ -125,8 +125,8 @@ RETURNING id`, participantID, conversationID).Scan(&groupID); err != nil {
 	var itemID int
 	if err := pool.QueryRow(ctx, `
 INSERT INTO p_1.chat_message_items
-    (uuid, item_type, order_index, meta, message_group_id)
-VALUES (gen_random_uuid(), 'text_message', 0, '{}'::jsonb, $1)
+    (uuid, item_type, order_index, meta, message_group_id, created_at)
+VALUES (gen_random_uuid(), 'text_message', 0, '{}'::jsonb, $1, now() AT TIME ZONE 'UTC')
 RETURNING id`, groupID).Scan(&itemID); err != nil {
 		t.Fatalf("insert message item: %v", err)
 	}

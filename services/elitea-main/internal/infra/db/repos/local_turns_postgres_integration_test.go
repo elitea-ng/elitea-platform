@@ -55,8 +55,8 @@ func TestPostgresLocalTurnStartCommitAndDelta(t *testing.T) {
 
 	var fixture localTurnFixture
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'local turn', $1, 'elitea')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'local turn', $1, 'elitea', now() AT TIME ZONE 'UTC')
 RETURNING id, uuid::text`, user).Scan(&fixture.conversationID, &fixture.conversationUUID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
@@ -71,7 +71,7 @@ VALUES (gen_random_uuid(), $1, $2::jsonb, '{}'::json) RETURNING id`, participant
 			t.Fatalf("seed participant: %v", err)
 		}
 		if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) VALUES ($1, $2)`,
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at) VALUES ($1, $2, now() AT TIME ZONE 'UTC')`,
 			fixture.conversationID, id); err != nil {
 			t.Fatalf("map participant: %v", err)
 		}
@@ -311,8 +311,8 @@ func TestPostgresLocalTurnExpiresLikeAnAbandonedRun(t *testing.T) {
 	var conversationID int
 	var conversationUUID string
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'expiring', $1, 'elitea') RETURNING id, uuid::text`, user).
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'expiring', $1, 'elitea', now() AT TIME ZONE 'UTC') RETURNING id, uuid::text`, user).
 		Scan(&conversationID, &conversationUUID); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ WITH p AS (
     SELECT gen_random_uuid(), v.name, v.meta::jsonb, '{}'::json FROM (VALUES `+seed+`) AS v(name, meta)
     RETURNING id
 )
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) SELECT $1, id FROM p`, conversationID); err != nil {
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at) SELECT $1, id, now() AT TIME ZONE 'UTC' FROM p`, conversationID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -379,8 +379,8 @@ func TestPostgresLocalTurnMemorySavedDuringTurnIsRecalledNextTurn(t *testing.T) 
 	var conversationID int
 	var conversationUUID string
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'memory across turns', $1, 'elitea') RETURNING id, uuid::text`, user).
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'memory across turns', $1, 'elitea', now() AT TIME ZONE 'UTC') RETURNING id, uuid::text`, user).
 		Scan(&conversationID, &conversationUUID); err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ WITH p AS (
     SELECT gen_random_uuid(), v.name, v.meta::jsonb, '{}'::json FROM (VALUES `+seed+`) AS v(name, meta)
     RETURNING id
 )
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) SELECT $1, id FROM p`, conversationID); err != nil {
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at) SELECT $1, id, now() AT TIME ZONE 'UTC' FROM p`, conversationID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -446,7 +446,7 @@ WHERE m.conversation_id = $1 AND p.entity_name = 'dummy'`, conversationID).Scan(
 	var during time.Time
 	if err := pool.QueryRow(ctx, `
 INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta, is_streaming, created_at)
-VALUES (gen_random_uuid(), $1, $2, '{}'::jsonb, FALSE, clock_timestamp() + interval '2 seconds')
+VALUES (gen_random_uuid(), $1, $2, '{}'::jsonb, FALSE, (clock_timestamp() AT TIME ZONE 'UTC') + interval '2 seconds')
 RETURNING created_at`, dummyID, conversationID).Scan(&during); err != nil {
 		t.Fatal(err)
 	}
@@ -494,8 +494,8 @@ func TestPostgresLocalTurnBindingNamesTheTurnsAgent(t *testing.T) {
 	var conversationID int
 	var conversationUUID string
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'binding', $1, 'elitea')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'binding', $1, 'elitea', now() AT TIME ZONE 'UTC')
 RETURNING id, uuid::text`, user).Scan(&conversationID, &conversationUUID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
@@ -515,7 +515,7 @@ VALUES (gen_random_uuid(), $1, $2::jsonb, '{}'::json) RETURNING id`, participant
 			t.Fatalf("seed participant: %v", err)
 		}
 		if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entity_settings) VALUES ($1, $2, $3::jsonb)`,
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at) VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`,
 			conversationID, id, participant.settings); err != nil {
 			t.Fatalf("map participant: %v", err)
 		}
@@ -593,8 +593,8 @@ func TestPostgresLocalTurnConfirmationIsSingleUse(t *testing.T) {
 	var conversationID int
 	var conversationUUID string
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'confirmations', $1, 'elitea') RETURNING id, uuid::text`, user).
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'confirmations', $1, 'elitea', now() AT TIME ZONE 'UTC') RETURNING id, uuid::text`, user).
 		Scan(&conversationID, &conversationUUID); err != nil {
 		t.Fatal(err)
 	}
@@ -605,7 +605,7 @@ WITH p AS (
     SELECT gen_random_uuid(), v.name, v.meta::jsonb, '{}'::json FROM (VALUES `+seed+`) AS v(name, meta)
     RETURNING id
 )
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) SELECT $1, id FROM p`, conversationID); err != nil {
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at) SELECT $1, id, now() AT TIME ZONE 'UTC' FROM p`, conversationID); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -466,9 +466,9 @@ func (h *Handler) storeSectionValues(
 		}
 		if _, err := tx.Exec(ctx, `
             INSERT INTO centry.platform_config (section, key, value, updated_at, updated_by)
-            VALUES ($1, $2, $3::jsonb, now(), $4)
+            VALUES ($1, $2, $3::jsonb, (now() AT TIME ZONE 'UTC'), $4)
             ON CONFLICT (section, key)
-            DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by
+            DO UPDATE SET value = EXCLUDED.value, updated_at = (now() AT TIME ZONE 'UTC'), updated_by = EXCLUDED.updated_by
         `, section, key, string(encoded), author); err != nil {
 			return err
 		}

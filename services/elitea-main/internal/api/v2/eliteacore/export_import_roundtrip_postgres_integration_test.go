@@ -216,8 +216,8 @@ func TestExportRefusesAReadThatStopsPartWayThrough(t *testing.T) {
 	seeded := seedRoundTripAgent(t, pool)
 
 	roundTripExec(t, pool, `
-INSERT INTO p_1.application_variables (application_version_id, name, value)
-VALUES ($1, 'second', 'trip')`, seeded.versionID)
+INSERT INTO p_1.application_variables (application_version_id, name, value, created_at)
+VALUES ($1, 'second', 'trip', now() AT TIME ZONE 'UTC')`, seeded.versionID)
 	roundTripExec(t, pool, `
 CREATE FUNCTION p_1.trip_on(value text) RETURNS text LANGUAGE plpgsql AS $$
 BEGIN
@@ -478,12 +478,12 @@ RETURNING id`, importLinkPrincipal).Scan(&seed.toolID); err != nil {
 		t.Fatalf("marshal the seeded selection: %v", err)
 	}
 	roundTripExec(t, pool, `
-INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools)
-VALUES ($1, $2, 'application', $3, $4::jsonb)`,
+INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
+VALUES ($1, $2, 'application', $3, $4::jsonb, now() AT TIME ZONE 'UTC')`,
 		seed.versionID, seed.applicationID, seed.toolID, string(selection))
 	roundTripExec(t, pool, `
-INSERT INTO p_1.application_variables (application_version_id, name, value)
-VALUES ($1, 'first', 'value')`, seed.versionID)
+INSERT INTO p_1.application_variables (application_version_id, name, value, created_at)
+VALUES ($1, 'first', 'value', now() AT TIME ZONE 'UTC')`, seed.versionID)
 	var tagID int
 	if err := pool.QueryRow(ctx, `
 INSERT INTO p_1.tags (name, data) VALUES ('seeded tag', '{}'::jsonb) RETURNING id`).Scan(&tagID); err != nil {

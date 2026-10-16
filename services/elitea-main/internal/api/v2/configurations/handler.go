@@ -1224,8 +1224,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	shared, _ := body["shared"].(bool)
 
 	q := fmt.Sprintf(`
-		INSERT INTO %s.configuration (project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, author_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, 'user', $9)
+		INSERT INTO %s.configuration (project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, author_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, 'user', $9, now() AT TIME ZONE 'UTC')
 		RETURNING id, uuid::text, created_at
 	`, schema)
 
@@ -1574,7 +1574,7 @@ func (h *Handler) buildConfigurationUpdate(
 		assignments = append(assignments, fmt.Sprintf("shared = $%d", len(args)))
 	}
 
-	assignments = append(assignments, "updated_at = now()")
+	assignments = append(assignments, "updated_at = (now() AT TIME ZONE 'UTC')")
 	args = append(args, configID)
 
 	query = fmt.Sprintf(`

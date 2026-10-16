@@ -525,7 +525,7 @@ LEFT JOIN LATERAL (
                   WHERE current_question.conversation_id = conversation.id
                     AND current_question.uuid = sqlc.arg(question_id)::uuid
               ),
-              statement_timestamp()
+              statement_timestamp() AT TIME ZONE 'UTC'
           )
           -- A failed response has no usable assistant content, but its user
           -- request used to survive this projection. A later regeneration
@@ -588,7 +588,7 @@ LEFT JOIN LATERAL (
                                 WHERE current_question.conversation_id = conversation.id
                                   AND current_question.uuid = sqlc.arg(question_id)::uuid
                             ),
-                            statement_timestamp()
+                            statement_timestamp() AT TIME ZONE 'UTC'
                         )
                   )
               )
@@ -749,7 +749,7 @@ WHERE conversation.uuid = sqlc.arg(conversation_uuid)::uuid
                 WHERE current_question.conversation_id = conversation.id
                   AND current_question.uuid = sqlc.arg(question_id)::uuid
             ),
-            statement_timestamp()
+            statement_timestamp() AT TIME ZONE 'UTC'
         )
         AND (
             -- #606: `attachment_message` is NOT here any more, and that
@@ -1476,7 +1476,7 @@ LEFT JOIN LATERAL (
                   WHERE current_question.conversation_id = conversation.id
                     AND current_question.uuid = sqlc.arg(question_id)::uuid
               ),
-              statement_timestamp()
+              statement_timestamp() AT TIME ZONE 'UTC'
           )
           -- Keep failed or abandoned executions from leaving an orphan user
           -- instruction in the rebuilt ad-hoc session. See the application
@@ -1535,7 +1535,7 @@ LEFT JOIN LATERAL (
                                 WHERE current_question.conversation_id = conversation.id
                                   AND current_question.uuid = sqlc.arg(question_id)::uuid
                             ),
-                            statement_timestamp()
+                            statement_timestamp() AT TIME ZONE 'UTC'
                         )
                   )
               )
@@ -1698,7 +1698,7 @@ WHERE conversation.uuid = sqlc.arg(conversation_uuid)::uuid
                 WHERE current_question.conversation_id = conversation.id
                   AND current_question.uuid = sqlc.arg(question_id)::uuid
             ),
-            statement_timestamp()
+            statement_timestamp() AT TIME ZONE 'UTC'
         )
         AND (
             -- #606: `attachment_message` is NOT here any more, and that
@@ -2085,7 +2085,7 @@ WITH resolved AS MATERIALIZED (
     SET meta = response.meta - 'output_limit_reached',
         is_streaming = TRUE,
         task_id = sqlc.arg(execution_id)::text,
-        updated_at = clock_timestamp()
+        updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
     FROM resolved
     WHERE response.id = resolved.id
     RETURNING response.id, response.uuid
@@ -2213,7 +2213,7 @@ WITH resolved AS MATERIALIZED (
             ),
         is_streaming = TRUE,
         task_id = sqlc.arg(execution_id)::text,
-        updated_at = clock_timestamp()
+        updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
     FROM resolved
     WHERE response.id = resolved.id
     RETURNING response.id, response.uuid
@@ -2443,7 +2443,7 @@ WITH resolved AS MATERIALIZED (
             ),
         is_streaming = TRUE,
         task_id = sqlc.arg(execution_id)::text,
-        updated_at = clock_timestamp()
+        updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
     FROM resolved
     WHERE response.id = resolved.id
     RETURNING response.id, response.uuid
@@ -2510,7 +2510,7 @@ WITH resolved AS MATERIALIZED (
     RETURNING text_item.id
 ), stamped AS (
     UPDATE chat_message_group AS question
-    SET updated_at = clock_timestamp()
+    SET updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
     FROM resolved
     WHERE question.id = resolved.id
       AND (SELECT count(*) FROM rewritten) = 1
@@ -2618,7 +2618,7 @@ WITH resolved AS MATERIALIZED (
         ),
         is_streaming = TRUE,
         task_id = sqlc.arg(execution_id)::text,
-        updated_at = clock_timestamp()
+        updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
     FROM resolved
     WHERE response.id = resolved.id
       AND (SELECT count(*) FROM removed_trace) >= 0
@@ -2802,7 +2802,8 @@ WITH resolved AS MATERIALIZED (
 ), question_group AS (
     INSERT INTO chat_message_group (
         uuid, author_participant_id, conversation_id, sent_to_id, meta,
-        is_streaming, created_at
+        is_streaming,
+        created_at
     )
     SELECT sqlc.arg(question_id)::uuid,
            resolved.author_participant_id,
@@ -2810,18 +2811,19 @@ WITH resolved AS MATERIALIZED (
            resolved.target_participant_id,
            sqlc.arg(question_meta)::jsonb,
            FALSE,
-           clock_timestamp()
+           (clock_timestamp() AT TIME ZONE 'UTC')
     FROM resolved
     RETURNING id, uuid, conversation_id, sent_to_id
 ), question_item AS (
     INSERT INTO chat_message_items (
-        uuid, item_type, order_index, meta, message_group_id
+        uuid, item_type, order_index, meta, message_group_id, created_at
     )
     SELECT sqlc.arg(question_item_id)::uuid,
            'text_message',
            0,
            '{}'::jsonb,
-           question_group.id
+           question_group.id,
+           now() AT TIME ZONE 'UTC'
     FROM question_group
     RETURNING id
 ), question_text AS (
@@ -2842,7 +2844,7 @@ WITH resolved AS MATERIALIZED (
                sqlc.arg(execution_generation)::text
            ),
            TRUE,
-           clock_timestamp() + interval '1 second',
+           (clock_timestamp() AT TIME ZONE 'UTC') + interval '1 second',
            sqlc.arg(execution_id)::text
     FROM question_group
     RETURNING id, uuid, reply_to_id
@@ -2866,13 +2868,14 @@ FOR UPDATE OF message_group;
 
 -- name: InsertCurrentAgentTextItem :one
 INSERT INTO chat_message_items (
-    uuid, item_type, order_index, meta, message_group_id
+    uuid, item_type, order_index, meta, message_group_id, created_at
 )
 SELECT gen_random_uuid(),
        'text_message',
        count(*),
        '{}'::jsonb,
-       sqlc.arg(message_group_id)::bigint
+       sqlc.arg(message_group_id)::bigint,
+       now() AT TIME ZONE 'UTC'
 FROM chat_message_items
 WHERE message_group_id = sqlc.arg(message_group_id)::bigint
 RETURNING id;
@@ -2932,7 +2935,7 @@ SET is_streaming = FALSE,
         || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'object'
             THEN jsonb_build_object('skipped_capabilities', sqlc.arg(skipped_capabilities)::jsonb)
             ELSE '{}'::jsonb END,
-    updated_at = clock_timestamp()
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 WHERE id = sqlc.arg(message_group_id)::bigint;
 
 -- name: FinalizeCurrentAgentHITLPause :execrows
@@ -2950,7 +2953,7 @@ SET is_streaming = FALSE,
         || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'object'
             THEN jsonb_build_object('skipped_capabilities', sqlc.arg(skipped_capabilities)::jsonb)
             ELSE '{}'::jsonb END,
-    updated_at = clock_timestamp()
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 WHERE id = sqlc.arg(message_group_id)::bigint;
 
 -- name: FinalizeCurrentAgentAuthorizationPause :execrows
@@ -2967,7 +2970,7 @@ SET is_streaming = FALSE,
         || CASE WHEN jsonb_typeof(sqlc.arg(skipped_capabilities)::jsonb) = 'object'
             THEN jsonb_build_object('skipped_capabilities', sqlc.arg(skipped_capabilities)::jsonb)
             ELSE '{}'::jsonb END,
-    updated_at = clock_timestamp()
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 WHERE id = sqlc.arg(message_group_id)::bigint;
 
 -- name: InsertCurrentAdhocTurn :one
@@ -3156,7 +3159,8 @@ WITH resolved AS MATERIALIZED (
 ), question_group AS (
     INSERT INTO chat_message_group (
         uuid, author_participant_id, conversation_id, sent_to_id, meta,
-        is_streaming, created_at
+        is_streaming,
+        created_at
     )
     SELECT sqlc.arg(question_id)::uuid,
            resolved.author_participant_id,
@@ -3164,18 +3168,19 @@ WITH resolved AS MATERIALIZED (
            resolved.target_participant_id,
            sqlc.arg(question_meta)::jsonb,
            FALSE,
-           clock_timestamp()
+           (clock_timestamp() AT TIME ZONE 'UTC')
     FROM resolved
     RETURNING id, uuid, conversation_id, sent_to_id
 ), question_item AS (
     INSERT INTO chat_message_items (
-        uuid, item_type, order_index, meta, message_group_id
+        uuid, item_type, order_index, meta, message_group_id, created_at
     )
     SELECT sqlc.arg(question_item_id)::uuid,
            'text_message',
            0,
            '{}'::jsonb,
-           question_group.id
+           question_group.id,
+           now() AT TIME ZONE 'UTC'
     FROM question_group
     RETURNING id
 ), question_text AS (
@@ -3196,7 +3201,7 @@ WITH resolved AS MATERIALIZED (
                sqlc.arg(execution_generation)::text
            ),
            TRUE,
-           clock_timestamp() + interval '1 second',
+           (clock_timestamp() AT TIME ZONE 'UTC') + interval '1 second',
            sqlc.arg(execution_id)::text
     FROM question_group
     RETURNING id, uuid, reply_to_id
@@ -3231,14 +3236,15 @@ FROM response_group;
 -- reordering and whitespace normalisation would change the stored bytes).
 WITH item AS (
     INSERT INTO chat_message_items (
-        uuid, item_type, order_index, meta, message_group_id
+        uuid, item_type, order_index, meta, message_group_id, created_at
     )
     VALUES (
         sqlc.arg(item_id)::uuid,
         'attachment_message',
         sqlc.arg(order_index)::integer,
         '{}'::jsonb,
-        sqlc.arg(message_group_id)::integer
+        sqlc.arg(message_group_id)::integer,
+        now() AT TIME ZONE 'UTC'
     )
     RETURNING id
 )

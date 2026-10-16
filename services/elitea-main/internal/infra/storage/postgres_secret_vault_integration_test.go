@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -15,7 +16,7 @@ import (
 // service, the current centry table shape and Python-Fernet-compatible reader.
 // It does not exercise mTLS, claims, HTTP, the command bus or a worker process.
 func TestPostgresCurrentSecretVaultCompatibility(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the PostgreSQL secret-vault compatibility test")
 	}

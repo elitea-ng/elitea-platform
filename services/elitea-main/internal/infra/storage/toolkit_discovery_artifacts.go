@@ -114,7 +114,7 @@ func toolkitArtifactError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrContentUnauthorized) {
 		status = http.StatusForbidden
 	}
-	if errors.Is(err, ErrContentRejected) {
+	if errors.Is(err, ErrContentRejected) || errors.Is(err, ErrSystemBucketNameTaken) {
 		status = http.StatusConflict
 	}
 	if errors.Is(err, ErrContentNotFound) {

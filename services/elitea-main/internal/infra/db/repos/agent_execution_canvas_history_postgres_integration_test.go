@@ -173,8 +173,8 @@ WHERE id IN (SELECT id FROM chat_message_items WHERE message_group_id = $1);
 	}
 	var canvasID int32
 	if err := tx.QueryRow(t.Context(), `
-INSERT INTO chat_message_items (uuid, item_type, order_index, meta, message_group_id)
-VALUES (gen_random_uuid(), 'canvas_message', 0, '{}'::jsonb, $1)
+INSERT INTO chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
+VALUES (gen_random_uuid(), 'canvas_message', 0, '{}'::jsonb, $1, now() AT TIME ZONE 'UTC')
 RETURNING id`, groupID).Scan(&canvasID); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ RETURNING id`, groupID).Scan(&canvasID); err != nil {
 		// first, and two rows inside one transaction would otherwise tie on now().
 		if _, err := tx.Exec(t.Context(), `
 INSERT INTO chat_canvas_versions (canvas_content, code_language, canvas_item_id, created_at)
-VALUES ($1, $2, $3, now() + make_interval(secs => $4))`,
+VALUES ($1, $2, $3, (now() AT TIME ZONE 'UTC') + make_interval(secs => $4))`,
 			content, language, canvasID, index,
 		); err != nil {
 			t.Fatal(err)

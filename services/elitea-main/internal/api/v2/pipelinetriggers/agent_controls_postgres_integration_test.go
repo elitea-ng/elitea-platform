@@ -336,8 +336,9 @@ func TestAnAgentTriggerIsRateLimited(t *testing.T) {
 		request, _ := h.start.last()
 		triggerID := h.conversationMeta(t, request.ConversationUUID)["trigger_id"]
 		if _, err := h.pool.Exec(context.Background(), fmt.Sprintf(`
-INSERT INTO %s.chat_conversations (uuid, name, is_private, author_id, meta, source)
-SELECT gen_random_uuid(), 'earlier run', TRUE, $1, jsonb_build_object('trigger_id', $2::text), $3
+INSERT INTO %s.chat_conversations (uuid, name, is_private, author_id, meta, source, created_at)
+SELECT gen_random_uuid(), 'earlier run', TRUE, $1, jsonb_build_object('trigger_id', $2::text), $3,
+       now() AT TIME ZONE 'UTC'
   FROM generate_series(1, 29)`, homeSchema), ownerUserID, triggerID, pipelinetriggers.TriggerConversationSource); err != nil {
 			t.Fatal(err)
 		}

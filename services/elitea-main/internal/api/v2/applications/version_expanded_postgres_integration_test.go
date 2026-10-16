@@ -89,24 +89,24 @@ func newExpandedFixtureWithHeaderValue(t *testing.T, agentType, headerValue stri
 	// key to centry.project.
 	var applicationID, versionID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.applications (name, description, owner_id)
-		VALUES ('expanded-fixture', '', 1) RETURNING id`).Scan(&applicationID); err != nil {
+		INSERT INTO p_1.applications (name, description, owner_id, created_at, updated_at)
+		VALUES ('expanded-fixture', '', 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`).Scan(&applicationID); err != nil {
 		t.Fatalf("insert fixture application: %v", err)
 	}
 	// meta carries BOTH fork markers (is_forked must be true) and an icon.
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO p_1.application_versions
-			(application_id, name, status, author_id, agent_type, instructions, llm_settings, meta)
+			(application_id, name, status, author_id, agent_type, instructions, llm_settings, meta, created_at)
 		VALUES ($1, 'base', 'draft', 7, $2, 'Use ~Alpha when the caller asks.',
 			'{"model_name":"gpt-4o","temperature":0.5}'::jsonb,
-			'{"parent_entity_id": 4, "parent_project_id": 9, "icon_meta": {"color": "teal"}}'::jsonb)
+			'{"parent_entity_id": 4, "parent_project_id": 9, "icon_meta": {"color": "teal"}}'::jsonb, now() AT TIME ZONE 'UTC')
 		RETURNING id`, applicationID, agentType).Scan(&versionID); err != nil {
 		t.Fatalf("insert fixture version: %v", err)
 	}
 
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_1.application_variables (application_version_id, name, value)
-		VALUES ($1, 'region', 'eu-west-1'), ($1, 'retries', '3')`, versionID); err != nil {
+		INSERT INTO p_1.application_variables (application_version_id, name, value, created_at)
+		VALUES ($1, 'region', 'eu-west-1', now() AT TIME ZONE 'UTC'), ($1, 'retries', '3', now() AT TIME ZONE 'UTC')`, versionID); err != nil {
 		t.Fatalf("insert fixture variables: %v", err)
 	}
 
@@ -137,19 +137,19 @@ func seedExpandedSkill(t *testing.T, pool *pgxpool.Pool, versionID int64, name, 
 
 	var skillID, skillVersionID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.skills (name, description, owner_id, author_id)
-		VALUES ($1, $2, 1, 7) RETURNING id`, name, description).Scan(&skillID); err != nil {
+		INSERT INTO p_1.skills (name, description, owner_id, author_id, created_at)
+		VALUES ($1, $2, 1, 7, now() AT TIME ZONE 'UTC') RETURNING id`, name, description).Scan(&skillID); err != nil {
 		t.Fatalf("insert skill %q: %v", name, err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id, meta)
-		VALUES ($1, 'base', $2, 7, '{"icon_meta": {"glyph": "star"}}'::jsonb)
+		INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id, meta, created_at)
+		VALUES ($1, 'base', $2, 7, '{"icon_meta": {"glyph": "star"}}'::jsonb, now() AT TIME ZONE 'UTC')
 		RETURNING id`, skillID, instructions).Scan(&skillVersionID); err != nil {
 		t.Fatalf("insert skill version for %q: %v", name, err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-		VALUES ($1, 'agent', $2, $3)`, versionID, skillID, skillVersionID); err != nil {
+		INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+		VALUES ($1, 'agent', $2, $3, now() AT TIME ZONE 'UTC')`, versionID, skillID, skillVersionID); err != nil {
 		t.Fatalf("insert skill mapping for %q: %v", name, err)
 	}
 }
