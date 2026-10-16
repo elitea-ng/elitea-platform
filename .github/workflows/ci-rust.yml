@@ -3,6 +3,9 @@ name: CI — Rust worker
 on:
   pull_request:
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-worker-rust/**"
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
@@ -40,6 +43,9 @@ on:
     branches:
       - main
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-worker-rust/**"
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
@@ -99,10 +105,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Show pinned toolchain
+      - name: Assert the pinned toolchain
         run: |
-          rustc --version
-          cargo --version
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
@@ -129,10 +134,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Show pinned toolchain
+      - name: Assert the pinned toolchain
         run: |
-          rustc --version
-          cargo --version
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       # Both jobs below used to do a COLD build of the whole 418-crate
       # dependency graph on every Rust PR — twice per PR, once here and once in
@@ -176,8 +180,11 @@ jobs:
   test:
     name: Test with PostgreSQL 18
     runs-on: ubuntu-latest
-    # 45 before the code runner image builds and the Docker supervisor tests.
-    timeout-minutes: 70
+    # About 28 min of work on a warm cache: 12 for the full test run, 3 for
+    # the code runner images, under 2 for the Docker tests once the ledger
+    # helper reuses this job's build (it once rebuilt for 7.5 min on the
+    # runner's stable rustc; the helper step now refuses any rebuild).
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:18
@@ -198,10 +205,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Show pinned toolchain
+      - name: Assert the pinned toolchain
         run: |
-          rustc --version
-          cargo --version
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       # Both jobs below used to do a COLD build of the whole 418-crate
       # dependency graph on every Rust PR — twice per PR, once here and once in
@@ -382,19 +388,80 @@ jobs:
           cache-from: type=gha,scope=elitea-code-runner-linux-amd64
           cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=elitea-code-runner-linux-amd64,ignore-error=true
 
+      # The Rust language image (vendored Cargo tree + the Rust adapter): the
+      # Docker PID-limit test compiles and runs user Rust code in it.
+      - name: Build the code runner Rust image
+        uses: docker/build-push-action@v7
+        with:
+          context: services/elitea-code-runner
+          file: services/elitea-code-runner/Containerfile
+          target: rust-runtime
+          push: false
+          load: true
+          tags: elitea-code-runner:ci-rust
+          platforms: linux/amd64
+          cache-from: type=gha,scope=elitea-code-runner-linux-amd64
+          cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=elitea-code-runner-linux-amd64,ignore-error=true
+
       # The helper starts its own disposable postgres:18 container
       # (--pull=never; the service above already pulled the image), generates
       # the TLS bundle for the mTLS case, and removes everything on exit. It
-      # runs the same --all-features lib build as the steps above.
+      # runs cargo from services/elitea-worker-rust, so it reuses this job's
+      # --all-features lib build under the pinned toolchain.
       - name: Verify sandbox supervisor recovery, submission and mTLS with Docker
         working-directory: .
         run: |
+          set -euo pipefail
           docker image inspect postgres:18 > /dev/null || docker pull -q postgres:18
           verification="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-verification)"
           deno="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-default)"
-          ELITEA_CODE_RUNNER_TEST_IMAGE="$verification" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_recovers
-          ELITEA_CODE_RUNNER_TEST_IMAGE="$verification" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_submits
-          ELITEA_CODE_RUNNER_TEST_IMAGE="$deno" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_mtls --adapter-image
+          # The lib test binary the steps above built (fresh: this compiles nothing).
+          expected="$(cd services/elitea-worker-rust && cargo test --locked --lib --all-features --no-run --message-format=json 2>/dev/null \
+            | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads, sys.stdin) if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["kind"] == ["lib"]))')"
+          echo "the job's lib test binary: ${expected##*/}"
+          # Each helper run must reuse that binary and compile NOTHING: a
+          # `Compiling` line or another binary hash means it picked another
+          # toolchain or feature set and rebuilt (PR #1297 review finding 1).
+          reused() {
+            local log="$1" took="$2" ran compiled
+            ran="$(sed -nE 's/^[[:space:]]*Running unittests src\/lib\.rs \((.*)\)$/\1/p' "$log")"
+            ran="${ran##*/}"
+            compiled="$(grep -cE '^[[:space:]]*Compiling ' "$log" || true)"
+            echo "helper ${log##*/}: ${took}s, ran ${ran:-nothing}, ${compiled} crate(s) compiled"
+            if [ "$compiled" -ne 0 ] || [ "$ran" != "${expected##*/}" ]; then
+              echo "::error::the ledger helper rebuilt the worker (${compiled} Compiling line(s), ran ${ran:-nothing}, expected ${expected##*/})"
+              exit 1
+            fi
+          }
+          started=$SECONDS
+          ELITEA_CODE_RUNNER_TEST_IMAGE="$verification" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_recovers 2>&1 | tee "${RUNNER_TEMP}/recovers.log"
+          reused "${RUNNER_TEMP}/recovers.log" $((SECONDS - started))
+          started=$SECONDS
+          ELITEA_CODE_RUNNER_TEST_IMAGE="$verification" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_submits 2>&1 | tee "${RUNNER_TEMP}/submits.log"
+          reused "${RUNNER_TEMP}/submits.log" $((SECONDS - started))
+          started=$SECONDS
+          ELITEA_CODE_RUNNER_TEST_IMAGE="$deno" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_mtls --adapter-image 2>&1 | tee "${RUNNER_TEMP}/mtls.log"
+          reused "${RUNNER_TEMP}/mtls.log" $((SECONDS - started))
+
+      # Docker-only live sandbox tests: no PostgreSQL, no cluster. Each runs a
+      # real container under the Code job policy (non-root, network none,
+      # read-only root, cgroup v2 memory/PID/CPU limits) on the runner's daemon.
+      #   dependency transfer: 2 MiB + 17 B of non-UTF-8 content through the
+      #     runner's native content helpers (the verification image has them);
+      #   workspace exhaustion: Deno fills the 256 MiB workspace -> failed receipt;
+      #   process limit: compiled Rust forks until the PID ceiling -> EAGAIN.
+      - name: Verify Docker sandbox limits and dependency transfer
+        env:
+          ELITEA_CODE_RUNNER_TEST_IMAGE: ""
+        run: |
+          set -euo pipefail
+          verification="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-verification)"
+          deno="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-default)"
+          rust="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-rust)"
+          ELITEA_CODE_RUNNER_TEST_IMAGE="$verification" \
+            cargo test --locked --lib --all-features sandbox::dependency_runtime_docker_tests:: -- --ignored
+          ELITEA_TEST_DOCKER_DENO_IMAGE="$deno" ELITEA_TEST_DOCKER_RUST_IMAGE="$rust" \
+            cargo test --locked --lib --all-features sandbox::kubernetes::live_tests::live_docker_ -- --ignored
 
       # Every #[ignore] test is either selected by a `-- --ignored` invocation
       # in this file or allowlisted with where it runs instead. Six sandbox
@@ -406,8 +473,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
+          # 2>&1: cargo's `Running <target>` headers go to stderr, and the
+          # checker needs them to tell which target each test belongs to.
           cargo test --locked --all-features --lib --bins --tests -- --list --ignored \
-            > "${RUNNER_TEMP}/worker-ignored-tests.txt"
+            > "${RUNNER_TEMP}/worker-ignored-tests.txt" 2>&1
           python3 ../../scripts/ci/check_worker_ignored_tests.py \
             --list "${RUNNER_TEMP}/worker-ignored-tests.txt" \
             --workflow ../../.github/workflows/ci-rust.yml \

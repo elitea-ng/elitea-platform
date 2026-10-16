@@ -16,6 +16,9 @@ name: CI — Desktop client
 on:
   pull_request:
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "apps/elitea-desktop/**"
       # The host links the shared runtime, the local tools and the /llm
       # contract (ADR-0029 D0), and their path dependencies.
@@ -46,6 +49,9 @@ on:
     branches:
       - main
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "apps/elitea-desktop/**"
       # The host links the shared runtime, the local tools and the /llm
       # contract (ADR-0029 D0), and their path dependencies.
@@ -116,11 +122,10 @@ jobs:
         working-directory: apps/elitea-web
         run: npm run build:desktop
 
-      - name: Show pinned toolchain
+      - name: Assert the pinned toolchain
         working-directory: apps/elitea-desktop/src-tauri
         run: |
-          rustc --version
-          cargo --version
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       # Read everywhere, write on main only: a pull request's target directory
       # is a large part of the repository's 10 GB Actions cache, duplicated per

@@ -18,6 +18,9 @@ name: CI — local tools on macOS (Seatbelt)
 on:
   pull_request:
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "libs/rust/local-tools/**"
       - "libs/rust/agent-runtime/**"
       - "libs/rust/doc-extract/**"
@@ -32,6 +35,9 @@ on:
     branches:
       - main
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "libs/rust/local-tools/**"
       - "libs/rust/agent-runtime/**"
       - "libs/rust/doc-extract/**"
@@ -69,10 +75,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Show pinned toolchain
+      - name: Assert the pinned toolchain
         run: |
-          rustc --version
-          cargo --version
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
           sw_vers
 
       - name: Cache cargo registry and build artefacts

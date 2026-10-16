@@ -19,6 +19,15 @@ if args.language == "rust" and not args.adapter_image:
 if args.test_filter == "sandbox_supervisor_mtls" and not args.adapter_image:
     parser.error("mTLS verification requires --adapter-image")
 
+def pinned_toolchain(path):
+    """The exact `channel` of a rust-toolchain.toml; refuse anything unreadable."""
+    import re
+    match = re.search(r'^\s*channel\s*=\s*"(\d+\.\d+\.\d+)"\s*$', path.read_text(), re.MULTILINE)
+    if not match:
+        raise RuntimeError(f"{path} names no exact toolchain channel")
+    return match.group(1)
+
+
 root = Path(__file__).resolve().parents[2]
 name = "elitea-sandbox-ledger-test-" + secrets.token_hex(5)
 password = secrets.token_hex(24)
@@ -94,14 +103,21 @@ try:
     env["ELITEA_TEST_DATABASE_URL"] = (
         f"postgresql://postgres:{password}@{endpoint}/postgres"
     )
+    # Build exactly what ci-rust.yml builds: --all-features, from the worker's
+    # own directory, on the worker's own pinned toolchain. rustup picks the
+    # compiler from the rust-toolchain.toml nearest the CURRENT directory, so
+    # running cargo from the repository root with --manifest-path once used
+    # the runner's default stable rustc and recompiled every dependency
+    # (7m27s, a different test binary). The cwd fixes that; RUSTUP_TOOLCHAIN,
+    # read from the worker's file, keeps it fixed even if the cwd moves or the
+    # root toolchain file is removed.
+    worker = root / "services/elitea-worker-rust"
+    env["RUSTUP_TOOLCHAIN"] = pinned_toolchain(worker / "rust-toolchain.toml")
     result = subprocess.run(
-        # --all-features, the set ci-rust.yml builds, so CI reuses that build
-        # instead of compiling the worker a second time for one feature.
-        ["cargo", "test", "--locked", "--offline", "--manifest-path",
-         "services/elitea-worker-rust/Cargo.toml", "--all-features",
-         "--lib", args.test_filter, "-j", "2",
+        ["cargo", "test", "--locked", "--offline", "--all-features",
+         "--lib", args.test_filter,
          "--", "--ignored", "--nocapture"],
-        cwd=root, env=env, timeout=600,
+        cwd=worker, env=env, timeout=600,
     )
     raise SystemExit(result.returncode)
 finally:
