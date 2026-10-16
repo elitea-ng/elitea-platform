@@ -789,7 +789,7 @@ func refusalReason(err error) string {
 		{ErrRefNotAllowed, "ref_not_allowed"}, {ErrRefConflict, "ref_conflict"},
 		{ErrSegmentMissing, "segment_missing"}, {ErrChecksumMismatch, "checksum_mismatch"},
 		{ErrUnsupportedObjectFormat, "unsupported_object_format"}, {ErrSegmentTooLarge, "segment_too_large"},
-		{ErrQuotaExceeded, "workspace_quota_exceeded"},
+		{ErrQuotaExceeded, "workspace_quota_exceeded"}, {ErrThreadBusy, "thread_busy"},
 	} {
 		if errors.Is(err, known.err) {
 			return known.reason
