@@ -63,7 +63,13 @@ fn sensitive_agent() -> Value {
 fn is_card(scenario: &str) -> bool {
     matches!(
         scenario,
-        "sensitive" | "batch" | "effectful" | "effectful_deny" | "effectful_crash"
+        "sensitive"
+            | "batch"
+            | "effectful"
+            | "effectful_deny"
+            | "effectful_crash"
+            | "effectful_later_turn"
+            | "older_effectful"
     )
 }
 
@@ -71,7 +77,12 @@ fn is_card(scenario: &str) -> bool {
 fn is_sensitive_mcp(scenario: &str) -> bool {
     matches!(
         scenario,
-        "sensitive" | "effectful" | "effectful_deny" | "effectful_crash"
+        "sensitive"
+            | "effectful"
+            | "effectful_deny"
+            | "effectful_crash"
+            | "effectful_later_turn"
+            | "older_effectful"
     )
 }
 
@@ -281,6 +292,36 @@ async fn postgres_effectful_sensitive_tool_approval_in_a_graph_agent_node_runs_o
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn postgres_effectful_approval_in_a_later_turn_of_the_conversation_runs_once() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
+        );
+        return;
+    };
+    let db = run_scenario(&url, "effectful_later_turn", &["first", "start", "answer"]).await;
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_effectful_approval_in_a_conversation_an_older_worker_paused_runs_once() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
+        );
+        return;
+    };
+    // The unscoped resolver: the card was paused without graph-call receipts.
+    let db = run_scenario(&url, "older_effectful", &["start", "answer", "repeat"]).await;
+    assert_eq!(
+        receipt_rows(&db.pool).await,
+        0,
+        "the older conversation keeps its unscoped resolver"
+    );
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn postgres_effectful_approval_dispatched_before_a_crash_is_refused_not_repeated() {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
@@ -377,7 +418,7 @@ fn assembler(
         assembler
     };
     // Only the first leg of the older scenario is the older worker.
-    let assembler = if scenario == "older" && phase == "start" {
+    let assembler = if matches!(scenario, "older" | "older_effectful") && phase == "start" {
         assembler.with_fresh_start_continuation(ApplicationContinuation::LegacyUnscoped)
     } else {
         assembler
@@ -425,7 +466,36 @@ async fn postgres_scoped_child() {
             assert_eq!(model_requests(&captured), 1, "start: one Agent model call");
             println!("{PENDING_MARKER}{card}");
         }
-        "answer" if scenario == "effectful" => {
+        "first" => {
+            // An earlier turn of the same conversation finishes before the card's turn.
+            let (assembler, _, _) = assembler(
+                &pool,
+                &scenario,
+                &phase,
+                vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                    "first turn done",
+                ))],
+            );
+            let mut request = request(&scenario);
+            request.binding.request_content_digest = [40; 32];
+            let invocation = assembler
+                .assemble(authorized_turn(&request, "execution-first", 1))
+                .await
+                .expect("first: assemble");
+            let browser = collect_pipeline_completion(invocation).await;
+            assert!(
+                browser
+                    .iter()
+                    .any(|event| event["content"] == "first turn done"),
+                "first: the earlier turn finishes: {browser:?}"
+            );
+        }
+        "answer"
+            if matches!(
+                scenario.as_str(),
+                "effectful" | "effectful_later_turn" | "older_effectful"
+            ) =>
+        {
             let card: Value = serde_json::from_str(&pending).expect("pending card");
             let (assembler, captured, tool_calls) = assembler(
                 &pool,

@@ -901,6 +901,32 @@ pub(crate) fn route_from_event(
     }))
 }
 
+/// The events of the latest occurrence of one graph call.
+///
+/// A conversation re-runs the same activation (node, step, call id) on every turn, so the
+/// session holds one original start per turn under the same call id. Each original start has
+/// its own event id, and a resume re-sends it under that id. The occurrence therefore begins at
+/// the first event that carries the id of the latest start of the call; earlier turns are cut.
+fn current_occurrence<'a>(events: &'a [Event], call_id: &str) -> &'a [Event] {
+    let Some(latest) = events.iter().rev().find(|event| {
+        event
+            .tool_calls()
+            .iter()
+            .any(|call| call.call_id == Some(call_id))
+    }) else {
+        return events;
+    };
+    occurrence_from(events, &latest.id)
+}
+
+/// The events from the first copy of one original start event onward.
+fn occurrence_from<'a>(events: &'a [Event], start_id: &str) -> &'a [Event] {
+    events
+        .iter()
+        .position(|event| event.id == start_id)
+        .map_or(events, |start| &events[start..])
+}
+
 pub(crate) fn events_for_scope(
     events: &[Event],
     leaf: &Event,
@@ -909,7 +935,7 @@ pub(crate) fn events_for_scope(
 ) -> Result<Vec<Event>, NativeAgentAssemblyError> {
     let wanted = scope_for_catalog(root_thread, catalog, leaf)?.ok_or_else(invalid_scope)?;
     let mut selected = Vec::new();
-    for event in events {
+    for event in current_occurrence(events, wanted.activation.call_id()) {
         let Some(receipt) = event_scope_for_activation(event, &wanted.activation)? else {
             continue;
         };
@@ -1603,7 +1629,17 @@ impl PipelineApplicationScopeRegistry {
         let mut selected = Vec::new();
         let mut call_events = BTreeSet::new();
         let mut root_branch = None;
-        for event in events {
+        // Earlier turns of the conversation ran the same activation; only this call's
+        // occurrence, from its checkpoint-owned original start, belongs to the proof.
+        let occurrence = occurrence_from(events, &original_receipt.original_start().id);
+        if occurrence.len() == events.len()
+            && events
+                .first()
+                .is_none_or(|first| first.id != original_receipt.original_start().id)
+        {
+            return Err(invalid_scope());
+        }
+        for event in occurrence {
             let Some(receipt) = event_scope_for_activation(event, &activation)? else {
                 continue;
             };
