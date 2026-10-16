@@ -5396,3 +5396,36 @@ async fn lease_loss_releases_a_parked_agent_stream_and_retains_the_command() {
     assert_eq!(admission.available_capacity(), 1);
     drop(temporary);
 }
+
+/// FU-227: every per-card pause frame says more cards may follow; existing
+/// metadata is kept and a non-object is refused instead of overwritten.
+#[test]
+fn per_card_pause_frames_carry_the_pause_progress_marker() {
+    use crate::protocol::elitea::runtime::v1::NodeEventV1;
+    let mut empty = NodeEventV1 {
+        r#type: "agent_hitl_interrupt".to_owned(),
+        ..NodeEventV1::default()
+    };
+    super::output_delivery::stamp_pause_progress(&mut empty).expect("stamp");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&empty.response_metadata).expect("json"),
+        json!({"pause_progress": true})
+    );
+    let mut card = NodeEventV1 {
+        r#type: "agent_hitl_interrupt".to_owned(),
+        response_metadata: serde_json::to_vec(&json!({"hitl_interrupts": [{"id": "c1"}]}))
+            .expect("json"),
+        ..NodeEventV1::default()
+    };
+    super::output_delivery::stamp_pause_progress(&mut card).expect("stamp");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&card.response_metadata).expect("json"),
+        json!({"hitl_interrupts": [{"id": "c1"}], "pause_progress": true})
+    );
+    let mut not_object = NodeEventV1 {
+        r#type: "agent_hitl_interrupt".to_owned(),
+        response_metadata: b"[1]".to_vec(),
+        ..NodeEventV1::default()
+    };
+    assert!(super::output_delivery::stamp_pause_progress(&mut not_object).is_err());
+}
