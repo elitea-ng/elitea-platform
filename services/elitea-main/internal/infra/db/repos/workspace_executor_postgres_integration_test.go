@@ -39,8 +39,8 @@ SELECT p.id FROM p_1.chat_participants p JOIN p_1.chat_participant_mapping m ON 
 WHERE m.conversation_id = $1 AND p.entity_name = 'dummy'`, fixture.conversationID).Scan(&dummy); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta)
-VALUES ($1::uuid, $2, $3, '{"is_streaming_marker": true}'::jsonb)`, response, dummy, fixture.conversationID); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta, created_at)
+VALUES ($1::uuid, $2, $3, '{"is_streaming_marker": true}'::jsonb, now() AT TIME ZONE 'UTC')`, response, dummy, fixture.conversationID); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := h.service.ResolveRunningTurn(ctx, "exec-x"); err != nil || ok {

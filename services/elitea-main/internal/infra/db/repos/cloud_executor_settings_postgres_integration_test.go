@@ -55,11 +55,11 @@ INSERT INTO centry.platform_config (section, key, value) VALUES ('cloud_executor
 		t.Fatalf("platform only = %+v, %v", got, err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.configuration (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source)
+INSERT INTO p_1.configuration (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, created_at)
 VALUES (gen_random_uuid(), 1, 'Cloud executor', 'cloud_executor', 'cloud_executor', 'project_settings',
         '{"shell": false, "network_allowlist": ["pypi.org"], "max_segment_mb": 500, "max_project_workspace_gb": 3,
           "exclusions_add": ["secrets/**"], "allow_user_include": false, "env_harvest": true, "env_deny_add": ["AWS_*"]}'::jsonb,
-        '{}'::jsonb, false, true, 'user')`); err != nil {
+        '{}'::jsonb, false, true, 'user', now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 	got, err = policy.Effective(ctx, 1)

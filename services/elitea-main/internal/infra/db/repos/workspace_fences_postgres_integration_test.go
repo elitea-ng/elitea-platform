@@ -149,7 +149,7 @@ WHERE m.conversation_id = $1 AND p.entity_name = 'dummy'`, local.conversationID)
 		t.Helper()
 		if _, err := tx.Exec(ctx, `
 INSERT INTO chat_message_group (uuid, author_participant_id, conversation_id, meta, created_at)
-VALUES ($1::uuid, $2, $3, jsonb_build_object('executed_by', $4::text), now() + $5::interval)`,
+VALUES ($1::uuid, $2, $3, jsonb_build_object('executed_by', $4::text), (now() AT TIME ZONE 'UTC') + $5::interval)`,
 			uuid, dummy, local.conversationID, executedBy, offset); err != nil {
 			t.Fatal(err)
 		}

@@ -738,8 +738,9 @@ func (r *WorkspaceHandoffsRepository) NotifyReclaimRequest(ctx context.Context, 
 		"conversation_uuid": handoff.ConversationUUID, "epoch": handoff.Epoch,
 	})
 	if _, err := r.pool.Exec(ctx, `
-INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
-VALUES ($1::uuid, FALSE, $2, $3, $4::jsonb, 'workspace_reclaim_requested')
+INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
+VALUES ($1::uuid, FALSE, $2, $3, $4::jsonb, 'workspace_reclaim_requested',
+        now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
 ON CONFLICT (uuid) DO NOTHING`, id, handoff.ProjectID, handoff.OwnerUserID, string(meta)); err != nil {
 		return fmt.Errorf("workspace handoff: notify reclaim request: %w", err)
 	}
@@ -835,8 +836,9 @@ func (r *WorkspaceHandoffsRepository) NotifyIdleExpiring(
 			" because nobody used it. Send a prompt to the thread or take it back to keep it.",
 	})
 	tag, err := r.pool.Exec(ctx, `
-INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
-VALUES ($1::uuid, FALSE, $2, $3, $4::jsonb, 'workspace_idle_expiring')
+INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
+VALUES ($1::uuid, FALSE, $2, $3, $4::jsonb, 'workspace_idle_expiring',
+        now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
 ON CONFLICT (uuid) DO NOTHING`, id, handoff.ProjectID, handoff.OwnerUserID, string(meta))
 	if err != nil {
 		return false, fmt.Errorf("workspace handoff: notify idle expiry: %w", err)
@@ -1016,7 +1018,7 @@ RETURNING id`, schema), handoffEventParticipantKind).Scan(&participantID)
 INSERT INTO %[1]s.chat_message_group
     (uuid, author_participant_id, conversation_id, meta, is_streaming, created_at)
 VALUES (gen_random_uuid(), $1, $2, $3::jsonb, FALSE, GREATEST(
-    clock_timestamp(),
+    clock_timestamp() AT TIME ZONE 'UTC',
     (SELECT max(created_at) + interval '1 millisecond'
      FROM %[1]s.chat_message_group WHERE conversation_id = $2)))
 RETURNING id`, schema), participantID, conversationID, string(meta)).Scan(&groupID); err != nil {

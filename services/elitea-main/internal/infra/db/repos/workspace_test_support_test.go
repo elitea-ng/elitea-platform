@@ -34,8 +34,8 @@ func seedLocalWorkThread(t *testing.T, pool *pgxpool.Pool, owner int64, source s
 	fixture.thread.ProjectID = 1
 	ensureWorkspaceTestUser(t, pool, owner)
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'local work', $1, $2) RETURNING id, uuid::text`, owner, source).
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'local work', $1, $2, now() AT TIME ZONE 'UTC') RETURNING id, uuid::text`, owner, source).
 		Scan(&fixture.conversationID, &fixture.thread.ConversationUUID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
@@ -49,7 +49,7 @@ VALUES (gen_random_uuid(), $1, $2::jsonb, '{}'::json) RETURNING id`, participant
 			t.Fatalf("seed participant: %v", err)
 		}
 		if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) VALUES ($1, $2)`, fixture.conversationID, id); err != nil {
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at) VALUES ($1, $2, now() AT TIME ZONE 'UTC')`, fixture.conversationID, id); err != nil {
 			t.Fatalf("map participant: %v", err)
 		}
 		if participant.entity == "user" {
