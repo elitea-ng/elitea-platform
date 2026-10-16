@@ -2199,12 +2199,19 @@ async fn sandbox_submission(over_tls: bool) {
                 }
                 Err(error) => format!("Err({error:?})"),
             };
+            // The durable outcome is asserted above: the row is Cancelled and
+            // the runtime is gone. The in-flight submission loses the race to
+            // the stop. When its receipt poll meets the container the stop just
+            // removed, it reports Runtime -> Unavailable ("reconcile the same
+            // activation"), seen in 2 of 3 CI runs. The worker treats Unavailable
+            // and Aborted alike (graph/code_remote.rs, code_attempt_remote.rs:
+            // dispatch possible, reconcile), so either is the same contract.
             assert!(
                 matches!(
                     submission,
                     Ok(SandboxOutcome::Cancelled)
                         | Err(crate::sandbox::client::SandboxCallError::Submission {
-                            code: tonic::Code::Aborted
+                            code: tonic::Code::Aborted | tonic::Code::Unavailable
                         })
                 ),
                 "a submission stopped mid-dispatch returned {returned}"
