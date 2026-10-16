@@ -10,7 +10,9 @@
 //! ```
 //!
 //! `ELITEA_HANDOFF_LIVE_SIM` plays the cloud executor (there is none yet):
-//! `-conversation <uuid> -bundle <file> -commit <sha>` runs one cloud turn
+//! `services/elitea-main/cmd/handoff-live-cloudturn` (build tag
+//! `handoff_live`; IPC.md, "Cloud handoff: live run"). `-project P
+//! -conversation <uuid> -bundle <file> -commit <sha>` runs one cloud turn
 //! through Main's application services, `-sql <query>` answers rows as JSON.
 
 use std::process::Command;

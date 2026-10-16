@@ -650,14 +650,29 @@ stale epoch; and the quota. It needs:
   `{"enabled": true, "env_harvest": true, "exclusions_add": ["secrets/**"]}`;
 - a native access token (`elnat_…`) of a project member with
   `models.chat.messages.create`, and optionally a second member's;
-- `ELITEA_HANDOFF_LIVE_SIM`: a program that plays the cloud executor until
-  the worker serves workspace turns. `-project P -conversation UUID -bundle
-  FILE -commit SHA [-hold FILE]` writes a question and an answer, starts the
-  cloud turn on the answer, uploads and publishes `refs/elitea/cloud` as
-  `cloud_executor` and ends the turn (after FILE exists, with `-hold`)
-  through Main's `workspacehandoff`/`workspacestore` services; `-sql QUERY`
-  prints rows as JSON. It runs with Main's `DATABASE_URL` and `S3_*`
-  environment.
+- `ELITEA_HANDOFF_LIVE_SIM`: the cloud-turn simulator, a program that plays
+  the cloud executor until the worker serves workspace turns. Its source is
+  `services/elitea-main/cmd/handoff-live-cloudturn/main.go`: it drives Main's
+  `workspacehandoff` and `workspacestore` services, which are `internal`
+  packages, so it has to sit inside the elitea-main module (as the other
+  `cmd/` tools do). It is behind the `handoff_live` build tag, so
+  `go build ./...`, vet, lint and CI never compile it. Build it from a tree
+  that has the handoff server (PR #1294, or main once it merged):
+
+  ```sh
+  cd services/elitea-main && go build -tags handoff_live -o /tmp/cloudturn-sim ./cmd/handoff-live-cloudturn
+  ```
+
+  (Without the server packages the tagged build fails on the imports; that
+  is why the tag exists on this branch.) `-project P -conversation UUID
+  -bundle FILE -commit SHA [-hold FILE]` writes a question and an answer,
+  starts the cloud turn on the answer, uploads and publishes
+  `refs/elitea/cloud` as `cloud_executor` and ends the turn (after FILE
+  exists, with `-hold`), printing `{state, epoch, cloud_sha, seq,
+  execution_id, answer_uuid, answer_meta}`; `-sql QUERY` prints rows as a
+  JSON array of arrays of strings. It runs with Main's `DATABASE_URL` and
+  S3 storage environment (`STORAGE_BACKEND=s3`, `STORAGE_CONTAINER`,
+  `S3_*`).
 
 ```sh
 ELITEA_HANDOFF_LIVE_URL=http://127.0.0.1:39880 ELITEA_HANDOFF_LIVE_PROJECT=1 \
