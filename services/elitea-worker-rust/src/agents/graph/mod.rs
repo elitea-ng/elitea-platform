@@ -61,6 +61,8 @@ use elitea_agent_runtime::graph::hitl;
 pub(crate) use elitea_agent_runtime::graph::{fanout_budget, fanout_trace};
 #[cfg(test)]
 mod hitl_tests;
+#[allow(dead_code, reason = "wired by the fan-out composition (2a-2 commit 10)")]
+pub(crate) mod fanout_frames;
 mod llm;
 #[cfg(test)]
 mod llm_tests;

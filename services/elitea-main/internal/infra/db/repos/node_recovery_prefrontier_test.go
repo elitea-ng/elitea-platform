@@ -185,7 +185,7 @@ func TestNodeRecoveryPreFrontierModePromotionRechecksFullFenceAndKeepsDigest(t *
 }
 
 func TestNodeRecoveryPreFrontierPrivateControlRequiresNodeMode(t *testing.T) {
-	if !strings.Contains(recoveryClaimAuthoritySQL, "c.recovery_mode='NODE_RECOVERY'") {
+	if nodeRecoveryClaimMode.recoveryMode != "NODE_RECOVERY" || !strings.Contains(agentClaimAuthoritySQL, "c.recovery_mode = $6") {
 		t.Fatal("inspection claim can use historical node control")
 	}
 	claim := recoveryClaim()

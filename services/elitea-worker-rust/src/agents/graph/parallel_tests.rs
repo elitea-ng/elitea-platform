@@ -1670,11 +1670,16 @@ async fn on_error_continue_lands_a_typed_failed_entry_and_all_failing_fails() {
             {"branch_id": "a", "node": "a", "status": "failed", "error": {
                 "code": "graph.parallel.branch_blocked",
                 "message_safe": "The branch was blocked.",
+                "support_ref": output.updates["gathered"][0]["error"]["support_ref"],
             }},
             {"branch_id": "b", "node": "b", "status": "succeeded",
              "outputs": {"output": "b", "blocked": false}},
         ])
     );
+    let support = output.updates["gathered"][0]["error"]["support_ref"]
+        .as_str()
+        .expect("support ref");
+    assert!(support.len() == 32 && support.bytes().all(|b| b.is_ascii_hexdigit()));
 
     let checkpoints = Arc::new(MemoryChildCheckpoints::default());
     let runs = run_counts(&["a", "b"]);
@@ -2886,7 +2891,9 @@ async fn join_append_keyed_and_merge_land_through_the_node() {
     .err()
     .expect("a merge conflict is refused");
     assert!(
-        error.to_string().contains("graph.fanout.join_conflict"),
+        error
+            .to_string()
+            .contains("graph.fanout_join_merge_conflict"),
         "{error}"
     );
 }

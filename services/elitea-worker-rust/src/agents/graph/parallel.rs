@@ -1358,7 +1358,13 @@ fn to_child_run(
             failure,
             checkpoint_id,
         } => ChildRun::Settled {
-            terminal: ChildTerminal::Failed(failure),
+            // The support reference names the frozen child, never the failure.
+            terminal: ChildTerminal::Failed(ChildFailure {
+                support_ref: Some(elitea_agent_runtime::graph::fanout::plan::support_ref_for(
+                    &branch.thread_id,
+                )),
+                ..failure
+            }),
             checkpoint_id: checkpoint_id.unwrap_or_else(|| fallback.to_owned()),
         },
         ParallelBranchOutcome::Paused { pause, cards } => ChildRun::Paused {

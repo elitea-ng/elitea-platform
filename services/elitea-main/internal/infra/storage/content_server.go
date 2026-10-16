@@ -114,6 +114,7 @@ type ContentServer struct {
 	codeDebug           *RuntimeCodeDebugArtifactService
 	originalCodeIntents OriginalCodeIntentStore
 	nodeRecovery        NodeRecoveryControlStore
+	executionInterrupts ExecutionInterruptControlStore
 	nodeRecoveryResults NodeRecoveryResultStore
 	authorizer          ContentAuthorizer
 	store               ContentStore
@@ -383,6 +384,10 @@ func (s *ContentServer) Routes() http.Handler {
 	if s.nodeRecovery != nil {
 		r.Post("/executions/{executionID}/generations/{generation}/node-recovery/control", s.PostNodeRecoveryControl)
 		r.Post("/executions/{executionID}/generations/{generation}/node-recovery/ack", s.PostNodeRecoveryAck)
+	}
+	if s.executionInterrupts != nil {
+		r.Post("/executions/{executionID}/generations/{generation}/interrupts/fetch", s.PostExecutionInterruptFetch)
+		r.Post("/executions/{executionID}/generations/{generation}/interrupts/ack", s.PostExecutionInterruptAck)
 	}
 	if s.originalCodeIntents != nil {
 		r.Post("/executions/{executionID}/generations/{generation}/code-sandbox/visits", s.PostOriginalCodeVisit)

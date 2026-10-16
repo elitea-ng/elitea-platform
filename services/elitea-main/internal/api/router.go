@@ -576,7 +576,7 @@ type RouterConfig struct {
 	PipelineTriggers    *v2pipelinetriggers.Handler
 	CurrentNodeRecovery http.Handler
 	// CurrentExecutionInterrupts serves the per-interrupt HITL list/decision
-	// API. It is nil unless ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED.
+	// API. It is composed whenever the agent runtime is (no separate flag).
 	CurrentExecutionInterrupts http.Handler
 	CurrentAgentCancel         http.Handler
 	// CurrentLocalTurns serves startLocalTurn and commitLocalTurn, the

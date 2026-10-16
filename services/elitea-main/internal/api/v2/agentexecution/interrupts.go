@@ -17,8 +17,8 @@ import (
 )
 
 // Per-interrupt HITL decision API (libs/proto/contracts/fanout-interrupt-decisions-v1.md §6).
-// Registered only when ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED is true;
-// no client calls it in Wave 1.
+// Registered whenever the agent runtime is composed (contract v1.1, decision
+// D3: no flag).
 const (
 	CurrentExecutionInterruptsPath        = "/api/v2/elitea_core/task/prompt_lib/{projectID}/{responseMessageID}/interrupts"
 	CurrentExecutionInterruptDecisionPath = CurrentExecutionInterruptsPath + "/{interruptKey}/decision"

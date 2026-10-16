@@ -399,6 +399,12 @@ WHERE (root_response_id, interrupt_key) IN (
 			statement: `DELETE FROM elitea_runtime.execution_interrupts
 WHERE project_id = $1 OR (execution_id, generation) IN (` + jobsOfProject + `)`,
 		},
+		// Wakes (shared/0167) reference the per-response row and the parked job.
+		{
+			table: "elitea_runtime.execution_interrupt_wakes",
+			statement: `DELETE FROM elitea_runtime.execution_interrupt_wakes
+WHERE project_id = $1 OR (parked_execution_id, parked_generation) IN (` + jobsOfProject + `)`,
+		},
 		{
 			table: "elitea_runtime.execution_interrupt_responses",
 			statement: `DELETE FROM elitea_runtime.execution_interrupt_responses

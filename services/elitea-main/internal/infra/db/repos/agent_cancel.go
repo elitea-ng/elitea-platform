@@ -7,6 +7,7 @@ import (
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	interruptdomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -137,7 +138,7 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 					return errors.New("current agent cancellation deleted an incomplete pair")
 				}
 				outcome.Deleted = true
-				return nil
+				return cancelOpenInterruptCards(ctx, tx, request)
 			}
 			if !projection.Deleted && !projection.Retained && !projection.Salvaged &&
 				!projection.QuestionDeleted {
@@ -161,7 +162,7 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 				return errors.New("current agent cancellation projection did not settle")
 			}
 			outcome.Salvaged = projection.Salvaged
-			return nil
+			return cancelOpenInterruptCards(ctx, tx, request)
 		},
 	)
 	if err != nil {
@@ -171,3 +172,15 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 }
 
 var _ agentexecutionapp.CurrentAgentCancellationStore = (*CurrentAgentCancelRepository)(nil)
+
+// cancelOpenInterruptCards closes the response's open per-interrupt cards in
+// the stop transaction (fanout-interrupt-decisions §5: atomic with the stop),
+// after the response row lock is held, and emits agent_hitl_resolved for each.
+// The cancelled fence then refuses any late ACK.
+func cancelOpenInterruptCards(ctx context.Context, tx sqlExecutor, request agentexecutionapp.CurrentAgentCancelRequest) error {
+	if _, err := closeOpenExecutionInterrupts(ctx, tx, request.ResponseMessageID, interruptdomain.StateCancelled,
+		interruptdomain.Closer{ActorUserID: request.ActorUserID}); err != nil {
+		return fmt.Errorf("cancel open interrupt cards: %w", err)
+	}
+	return nil
+}

@@ -293,6 +293,13 @@ impl FakeLedger {
         });
     }
 
+    fn decide_action(&self, key: &str, action: &str) {
+        self.decide(key);
+        if let Some(last) = self.decided.lock().expect("decided").last_mut() {
+            action.clone_into(&mut last.action);
+        }
+    }
+
     fn acks(&self) -> Vec<(String, AckResult)> {
         self.acks.lock().expect("acks").clone()
     }
@@ -909,4 +916,43 @@ async fn a_restore_with_open_cards_fetches_once_immediately_and_parks() {
     for child in 0..3 {
         assert_eq!(harness.children.runs(child), 1, "a paused child re-ran");
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delegated_auth_applies_only_at_the_park_boundary() {
+    // Child 0 asks for authorization; child 1 keeps the execution live.
+    let mut harness = Harness::new(vec![
+        vec![Step::Pause(vec!["auth"]), Step::Complete],
+        vec![Step::Gate, Step::Complete],
+    ]);
+    harness.ledger.decide_action("ik-0-1-auth", "authorize");
+    let task = tokio::spawn(harness.runner(2, OnError::Continue).run());
+    // Live ticks see the decision but leave it for the continuation.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while harness.ledger.fetches() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("live ticks");
+    assert_eq!(
+        harness.children.runs(0),
+        1,
+        "auth applied under the live claim"
+    );
+    harness.children.gates[1].add_permits(1);
+    let outcome = task.await.expect("join").expect("run");
+    assert_eq!(parked(&outcome), vec!["ik-0-1-auth"]);
+    assert!(harness.ledger.acks().is_empty());
+    // The wake continuation's restore fetch applies it.
+    harness.replace_process();
+    let joined = settled(
+        harness
+            .runner(2, OnError::Continue)
+            .run()
+            .await
+            .expect("wake"),
+    );
+    assert_eq!(joined.len(), 2);
+    assert_eq!(harness.children.received(0)[1], vec!["ik-0-1-auth"]);
 }

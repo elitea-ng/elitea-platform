@@ -358,6 +358,11 @@ SELECT COALESCE((SELECT cursor FROM updated_state LIMIT 1), 0),
 				if err := projectNodeRecovery(ctx, tx, projectionProjectID, frame, authorityClaimID); err != nil {
 					return err
 				}
+				// fanout-interrupt-decisions v1.1 §4.1: the card commits with
+				// the frame that carries it.
+				if err := projectExecutionInterrupt(ctx, tx, projectionProjectID, frame, authorityClaimID); err != nil {
+					return err
+				}
 			}
 			if capabilityID == executiondomain.IndexIngestCapability && persistTaskRestamp {
 				if err := persistCurrentIndexMetaTaskRestampIntent(

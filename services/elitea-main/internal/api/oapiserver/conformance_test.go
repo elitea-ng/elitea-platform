@@ -253,7 +253,7 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		CurrentRemoteToolkit: http.NotFoundHandler(),
 		// listExecutionInterrupts and decideExecutionInterrupt: registered only
 		// when the interrupt route is composed (production_router.go), i.e.
-		// ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true.
+		// whenever the agent runtime is.
 		CurrentExecutionInterrupts: http.NotFoundHandler(),
 		RuntimeRoutes: api.RuntimeRoutes{
 			Validation:      http.NotFoundHandler(),

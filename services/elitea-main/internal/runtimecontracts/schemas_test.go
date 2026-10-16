@@ -543,3 +543,89 @@ func TestNodeRecoveryRequiredSchemaMatchesSharedVectors(t *testing.T) {
 		}
 	}
 }
+
+// TestFanoutProgressFixturesHonourFrameRules checks the v1.1 progress-frame
+// rules JSON Schema cannot express (contract section 9.1): at most 8192 UTF-8
+// bytes of text per frame in total, strictly ascending member ordinals, and
+// every ordinal at most fanout_v1.total. Invalid fixtures are excluded: each
+// fails the schema for its own named defect.
+func TestFanoutProgressFixturesHonourFrameRules(t *testing.T) {
+	const maxFrameTextBytes = 8192
+	paths, err := filepath.Glob(filepath.Join(schemaDir, "fixtures", "fanout-progress-v1*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, path := range paths {
+		if strings.Contains(filepath.Base(path), ".invalid.") {
+			continue
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var frame struct {
+			FanoutV1 struct {
+				Total int `json:"total"`
+			} `json:"fanout_v1"`
+			Members []struct {
+				Ordinal int    `json:"ordinal"`
+				Text    string `json:"text"`
+			} `json:"members"`
+		}
+		if err := json.Unmarshal(raw, &frame); err != nil {
+			t.Fatal(path, err)
+		}
+		total, previous := 0, 0
+		for _, member := range frame.Members {
+			if member.Ordinal <= previous || member.Ordinal > frame.FanoutV1.Total {
+				t.Errorf("%s: member ordinal %d breaks the ascending/total rule", filepath.Base(path), member.Ordinal)
+			}
+			previous = member.Ordinal
+			total += len(member.Text)
+		}
+		if total > maxFrameTextBytes {
+			t.Errorf("%s: %d text bytes exceed %d", filepath.Base(path), total, maxFrameTextBytes)
+		}
+		checked++
+	}
+	if checked < 3 {
+		t.Fatalf("expected at least 3 valid progress fixtures, found %d", checked)
+	}
+	contract, err := os.ReadFile("../../../../libs/proto/contracts/fanout-interrupt-decisions-v1.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phrase := range []string{"at most 64 members and at most 8192 UTF-8 bytes of `text` in total per frame", "The canonical `error` object is at most **512 bytes**"} {
+		if !strings.Contains(string(contract), phrase) {
+			t.Errorf("contract no longer says %q; update this test and the schemas with it", phrase)
+		}
+	}
+}
+
+// TestFanoutJoinEntryErrorBoundIsExact proves the schema field bounds make the
+// canonical error object at most 512 bytes (contract section 8a): the largest
+// valid error is exactly 512 bytes and one more message character is refused.
+func TestFanoutJoinEntryErrorBoundIsExact(t *testing.T) {
+	schemas := loadContractSchemas(t)
+	entry := schemas["fanout-join-entry"].compiled
+	build := func(messageChars int) (any, int) {
+		errorObject := map[string]any{
+			"code":         "a." + strings.Repeat("b", 62),
+			"message_safe": strings.Repeat("m", messageChars),
+			"support_ref":  strings.Repeat("0", 31) + "1",
+		}
+		raw, _ := json.Marshal(errorObject)
+		size := len(canonicalJSON(t, raw))
+		value := map[string]any{"branch_id": "b", "node": "n", "status": "failed", "error": errorObject}
+		return value, size
+	}
+	atLimit, size := build(370)
+	if size != 512 || entry.Validate(atLimit) != nil {
+		t.Fatalf("largest valid error is %d bytes (want 512) or was refused", size)
+	}
+	overLimit, size := build(371)
+	if size != 513 || entry.Validate(overLimit) == nil {
+		t.Fatalf("a %d-byte error was accepted", size)
+	}
+}

@@ -20,9 +20,9 @@ import (
 
 type PublicRoutes struct {
 	NodeRecovery agentexecutionapi.CurrentNodeRecoveryUseCase
-	// ExecutionInterrupts is the per-interrupt HITL ledger. It is nil unless
-	// ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true (which itself
-	// requires agent execution dispatch), so the routes stay unregistered.
+	// ExecutionInterrupts is the per-interrupt HITL ledger. It is composed
+	// whenever agent execution dispatch is (no separate flag), so the routes
+	// exist exactly when the ledger can be written.
 	ExecutionInterrupts agentexecutionapi.ExecutionInterruptUseCase
 	Validation          http.Handler
 	ExecutionEvents     http.Handler

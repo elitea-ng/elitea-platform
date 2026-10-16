@@ -164,7 +164,7 @@ pub enum FanoutPlanError {
     ReducerMismatch,
     #[error("graph.fanout.join_merge_needs_stop")]
     MergeNeedsStop,
-    #[error("graph.fanout.join_conflict")]
+    #[error("graph.fanout_join_merge_conflict")]
     JoinConflict,
     #[error("graph.fanout.join_type_mismatch")]
     JoinTypeMismatch,
@@ -264,52 +264,97 @@ fn entry(kind: FanoutKind, child: SettledChild) -> Result<Value, FanoutPlanError
     }
 }
 
-/// A failed entry that always fits [`MAX_JOIN_ERROR_ENTRY_BYTES`]: the safe
-/// message, then the support reference, are shortened on a character
-/// boundary, never the code or the key.
-fn error_entry(kind: FanoutKind, key: &Value, node: &str, failure: &ChildFailure) -> Value {
-    let build = |message: &str, support: Option<&str>| {
-        let mut error = Map::new();
-        error.insert("code".to_owned(), Value::String(failure.code.clone()));
-        error.insert("message_safe".to_owned(), Value::String(message.to_owned()));
-        if let Some(support) = support {
-            error.insert("support_ref".to_owned(), Value::String(support.to_owned()));
-        }
-        json!({
-            kind.key_field(): key.clone(),
-            "node": node,
-            "status": "failed",
-            "error": Value::Object(error),
+/// Fallback code for a failure whose code is not in the contract grammar.
+const FALLBACK_CODE: &str = "graph.fanout.child_failed";
+/// Fallback text when the safe message has nothing printable left.
+const FALLBACK_MESSAGE: &str = "The step failed.";
+/// `message_safe` bound (contract v1.1 §8a): with a 64-character code and a
+/// 32-hex support reference, the error object stays within 512 bytes.
+const MAX_MESSAGE_SAFE: usize = 370;
+const SUPPORT_REF_DOMAIN: &[u8] = b"elitea.graph.fanout-support-ref.v1\0";
+
+/// The support reference of a member (contract v1.1 §8a): the first 128 bits,
+/// in hex, of `SHA-256(domain || LP(child_thread))`. Stable across restarts
+/// because the child thread is frozen; reveals nothing about the failure.
+#[must_use]
+pub fn support_ref_for(child_thread: &str) -> String {
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+    hash.update(SUPPORT_REF_DOMAIN);
+    hash.update(&u32::try_from(child_thread.len()).unwrap_or(u32::MAX).to_be_bytes());
+    hash.update(child_thread.as_bytes());
+    hash.finish().as_ref()[..16]
+        .iter()
+        .fold(String::with_capacity(32), |mut out, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(out, "{byte:02x}");
+            out
         })
-    };
-    let mut message = failure.message_safe.as_str();
-    let mut support = failure.support_ref.as_deref();
-    loop {
-        let candidate = build(message, support);
-        if serialized_len(&candidate) <= MAX_JOIN_ERROR_ENTRY_BYTES {
-            return candidate;
-        }
-        if !message.is_empty() {
-            message = shorten(message);
-        } else if let Some(reference) = support {
-            support = (!reference.is_empty()).then(|| shorten(reference));
-            if support == Some("") {
-                support = None;
-            }
-        } else {
-            // Only the code and key remain; both are bounded by their
-            // producers (code ≤ 128 ASCII, key ≤ 128). Keep the code.
-            return build("", None);
-        }
+}
+
+fn valid_code(code: &str) -> bool {
+    let mut parts = code.split('.');
+    (3..=64).contains(&code.len())
+        && parts.next().is_some_and(|head| {
+            head.bytes().next().is_some_and(|first| first.is_ascii_lowercase())
+                && head.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+        && code.contains('.')
+        && parts.all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+}
+
+/// Printable ASCII without `"` or `\`, at most [`MAX_MESSAGE_SAFE`] bytes.
+fn safe_message(message: &str) -> String {
+    let kept = message
+        .chars()
+        .filter(|ch| matches!(*ch, ' '..='~') && *ch != '"' && *ch != '\\')
+        .take(MAX_MESSAGE_SAFE)
+        .collect::<String>();
+    if kept.trim().is_empty() {
+        FALLBACK_MESSAGE.to_owned()
+    } else {
+        kept
     }
 }
 
-fn shorten(text: &str) -> &str {
-    let mut end = text.len().saturating_sub(text.len() / 4 + 1);
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
+fn valid_support_ref(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// A failed entry in the contract grammar (`fanout-join-entry`): the code is
+/// kept when it fits the grammar, the message is reduced to the safe charset
+/// and bound, and a missing or malformed support reference is derived from
+/// the child key (adapters supply [`support_ref_for`] of the frozen thread).
+fn error_entry(kind: FanoutKind, key: &Value, node: &str, failure: &ChildFailure) -> Value {
+    let code = if valid_code(&failure.code) {
+        failure.code.clone()
+    } else {
+        FALLBACK_CODE.to_owned()
+    };
+    let support = failure
+        .support_ref
+        .clone()
+        .filter(|reference| valid_support_ref(reference))
+        .unwrap_or_else(|| support_ref_for(&format!("{node}\0{key}")));
+    let error = json!({
+        "code": code,
+        "message_safe": safe_message(&failure.message_safe),
+        "support_ref": support,
+    });
+    debug_assert!(serialized_len(&error) <= MAX_JOIN_ERROR_ENTRY_BYTES);
+    json!({
+        kind.key_field(): key.clone(),
+        "node": node,
+        "status": "failed",
+        "error": error,
+    })
 }
 
 fn serialized_len(value: &Value) -> usize {

@@ -3,6 +3,7 @@ package executioninterrupt
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 )
 
 // maxRawCardBytes bounds parse work on a non-canonical raise before the
@@ -20,7 +21,14 @@ type Card struct {
 	Kind             Kind
 	AvailableActions []Action
 	PayloadSHA256    string
+	// Member identity of a fan-out card; empty for a coordinator card.
+	FanoutNode   string
+	Ordinal      int64
+	MemberCallID string
 }
+
+// MemberCallIDPrefix marks the fan-out member tier's call id (contract §3.3).
+const MemberCallIDPrefix = "fo1_"
 
 type cardWire struct {
 	InterruptKey     string     `json:"interrupt_key"`
@@ -30,12 +38,14 @@ type cardWire struct {
 	PayloadSHA256    string     `json:"payload_sha256"`
 	ParentAgentPath  []tierWire `json:"parent_agent_path"`
 	FanoutV1         *struct {
-		Ordinal int `json:"ordinal"`
+		Node    string `json:"node"`
+		Ordinal int    `json:"ordinal"`
 	} `json:"fanout_v1"`
 }
 
 type tierWire struct {
-	SiblingOrdinal *int `json:"sibling_ordinal"`
+	CallID         string `json:"call_id"`
+	SiblingOrdinal *int   `json:"sibling_ordinal"`
 }
 
 // ParseCard validates a raised card against the contract schema
@@ -67,13 +77,49 @@ func ParseCard(raw []byte) (Card, []byte, error) {
 	}) {
 		return Card{}, nil, ErrInvalidCard
 	}
-	return Card{
+	card := Card{
 		InterruptKey:     wire.InterruptKey,
 		InterruptID:      wire.InterruptID,
 		Kind:             wire.Kind,
 		AvailableActions: wire.AvailableActions,
 		PayloadSHA256:    wire.PayloadSHA256,
-	}, canonical, nil
+	}
+	if wire.FanoutV1 != nil {
+		// v1.1 §4.1: exactly one member tier, carrying the member ordinal.
+		members := 0
+		for _, tier := range wire.ParentAgentPath {
+			if !strings.HasPrefix(tier.CallID, MemberCallIDPrefix) {
+				continue
+			}
+			members++
+			if tier.SiblingOrdinal == nil || *tier.SiblingOrdinal != wire.FanoutV1.Ordinal || !validMemberCallID(tier.CallID) {
+				return Card{}, nil, ErrInvalidCard
+			}
+			card.MemberCallID = tier.CallID
+		}
+		if members != 1 {
+			return Card{}, nil, ErrInvalidCard
+		}
+		card.FanoutNode, card.Ordinal = wire.FanoutV1.Node, int64(wire.FanoutV1.Ordinal)
+	}
+	return card, canonical, nil
+}
+
+func validMemberCallID(value string) bool {
+	digest, ok := strings.CutPrefix(value, MemberCallIDPrefix)
+	return ok && ValidDigest(digest)
+}
+
+// MemberFrontier is the private frontier Main stores for a fan-out card
+// (contract v1.1 §4.1): the member tier call id (a digest of the frozen child
+// thread, which never leaves the Worker), the fan-out node and the ordinal. A
+// coordinator card has none: until root pauses move to the ledger it is not
+// raised through agent_interrupt_pending.
+func (c Card) MemberFrontier() (Frontier, error) {
+	if c.MemberCallID == "" || c.FanoutNode == "" || c.Ordinal < 1 {
+		return Frontier{}, ErrInvalidCard
+	}
+	return Frontier{ChildThread: c.MemberCallID, FanoutNode: c.FanoutNode, Ordinal: c.Ordinal}, nil
 }
 
 // Offers reports whether the card lists the action.

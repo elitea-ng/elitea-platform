@@ -153,6 +153,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		ProducerID:                   request.GetProducerId(),
 		AgentModelCheckpointRecovery: request.GetAgentModelCheckpointRecovery(),
 		NodeRecovery:                 request.GetNodeRecovery(),
+		FanoutInterruptDecisions:     request.GetFanoutInterruptDecisions(),
 	})
 	if err != nil {
 		logClaimRejection(ctx, "claim", command, err)

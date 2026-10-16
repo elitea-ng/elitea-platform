@@ -28,11 +28,15 @@ const (
 // scripted-store tests cannot see a column-type error in the lookup SQL.
 func seedOriginalRootTurn(t *testing.T, pool *pgxpool.Pool, project, actor int64) (*ExecutionChildScopesRepository, scope.SourceReference) {
 	t.Helper()
+	return seedOriginalRootTurnVersion(t, pool, project, actor, json.RawMessage(`{"id":145,"application_id":138,"agent_type":"pipeline","instructions":"entry_point: a\nnodes: []\n","tools":[{"type":"application","id":97,"agent_type":"agent","settings":{"application_id":137,"application_version_id":144}}]}`))
+}
+
+func seedOriginalRootTurnVersion(t *testing.T, pool *pgxpool.Pool, project, actor int64, version json.RawMessage) (*ExecutionChildScopesRepository, scope.SourceReference) {
+	t.Helper()
 	repo, err := NewExecutionChildScopesRepository(pool, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	version := json.RawMessage(`{"id":145,"application_id":138,"agent_type":"pipeline","instructions":"entry_point: a\nnodes: []\n","tools":[{"type":"application","id":97,"agent_type":"agent","settings":{"application_id":137,"application_version_id":144}}]}`)
 	ref, err := repo.CaptureOriginalRootSource(t.Context(), app.RootSourceCaptureRequest{ProjectID: project, ActorID: actor, ApplicationID: 138, VersionID: 145, VersionDetails: version})
 	if err != nil {
 		t.Fatal(err)
@@ -119,5 +123,23 @@ func TestPostgresOriginalRootContinuationReportsABrokenLookupAsUnavailable(t *te
 	_, err := repo.RestoreOriginalRootContinuation(context.Background(), continuationRequest(1, 11))
 	if !errors.Is(err, scope.ErrUnavailable) || errors.Is(err, scope.ErrDenied) || strings.Contains(err.Error(), "client_stream_id") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+// FU-066: the rehearsal pipeline whose HITL approve answered 422 had a HITL
+// node and no tools. Its continuation restores the admitted original too
+// (no application handles, nothing to rebind); the 422 itself was the
+// integer/text lookup fixed by 350c87499 and proven above.
+func TestPostgresOriginalRootContinuationRestoresAToollessHITLPipeline(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	version := json.RawMessage(`{"id":145,"application_id":138,"agent_type":"pipeline","instructions":"entry_point: review\nnodes:\n- id: review\n  type: hitl\n","tools":[]}`)
+	repo, ref := seedOriginalRootTurnVersion(t, pool, 1, 11, version)
+	restored, err := repo.RestoreOriginalRootContinuation(t.Context(), continuationRequest(1, 11))
+	if err != nil {
+		t.Fatalf("restore the toolless HITL pipeline: %v", err)
+	}
+	var handles []map[string]any
+	if restored.Source.Reference != ref || json.Unmarshal(restored.ApplicationTools, &handles) != nil || len(handles) != 0 {
+		t.Fatalf("restored=%+v handles=%s", restored.Source, restored.ApplicationTools)
 	}
 }

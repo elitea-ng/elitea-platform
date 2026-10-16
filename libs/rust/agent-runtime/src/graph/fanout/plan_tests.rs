@@ -19,7 +19,7 @@ fn failed(key: &str) -> SettledChild {
         terminal: ChildTerminal::Failed(ChildFailure {
             code: "graph.fanout.child_failed".to_owned(),
             message_safe: "The step failed.".to_owned(),
-            support_ref: Some("ref-1".to_owned()),
+            support_ref: Some("0123456789abcdef0123456789abcdef".to_owned()),
         }),
     }
 }
@@ -64,7 +64,7 @@ fn continue_lands_partial_results_with_a_status_on_every_entry() {
             json!({"branch_id": "b", "node": "node_b", "status": "failed", "error": {
                 "code": "graph.fanout.child_failed",
                 "message_safe": "The step failed.",
-                "support_ref": "ref-1"}}),
+                "support_ref": "0123456789abcdef0123456789abcdef"}}),
             json!({"branch_id": "c", "node": "node_c", "status": "succeeded", "outputs": {"out": 3}}),
         ]
     );
@@ -101,7 +101,7 @@ fn stop_fails_on_the_first_failure_in_declared_order() {
             failure: ChildFailure {
                 code: "graph.fanout.child_failed".to_owned(),
                 message_safe: "The step failed.".to_owned(),
-                support_ref: Some("ref-1".to_owned()),
+                support_ref: Some("0123456789abcdef0123456789abcdef".to_owned()),
             },
         })
     );
@@ -239,15 +239,20 @@ fn joined_result_exact_limit_and_limit_plus_one() {
 }
 
 #[test]
-fn error_entries_never_exceed_their_bound_and_keep_the_code() {
-    for message_bytes in [0, 10, 400, 512, 513, 4096] {
+fn error_objects_never_exceed_512_bytes_and_follow_the_contract_grammar() {
+    for (code, message) in [
+        ("graph.fanout.child_failed", "é".repeat(400)),
+        ("graph.fanout.child_failed", "x\"y\\z".repeat(300)),
+        (&*"a.".repeat(40), String::new()),
+        ("Not A Code", "ok".to_owned()),
+    ] {
         let child = SettledChild {
             key: "k".repeat(64),
             node: "n".repeat(64),
             terminal: ChildTerminal::Failed(ChildFailure {
-                code: "graph.fanout.child_failed".to_owned(),
-                message_safe: "é".repeat(message_bytes / 2),
-                support_ref: Some("r".repeat(200)),
+                code: code.to_owned(),
+                message_safe: message.clone(),
+                support_ref: Some("not-hex".to_owned()),
             }),
         };
         let entries = joined(
@@ -258,10 +263,23 @@ fn error_entries_never_exceed_their_bound_and_keep_the_code() {
             )
             .expect("join"),
         );
-        let bytes = serde_json::to_vec(&entries[0]).expect("encode").len();
+        let error = &entries[0]["error"];
+        let bytes = serde_json::to_vec(error).expect("encode").len();
         assert!(bytes <= MAX_JOIN_ERROR_ENTRY_BYTES, "{bytes} bytes");
-        assert_eq!(entries[0]["error"]["code"], "graph.fanout.child_failed");
+        let text = error["message_safe"].as_str().expect("message");
+        assert!(!text.is_empty() && text.len() <= 370);
+        assert!(text.bytes().all(|b| (0x20..=0x7e).contains(&b) && b != b'"' && b != b'\\'));
+        assert!(super::valid_code(error["code"].as_str().expect("code")));
+        assert_eq!(error["support_ref"].as_str().expect("ref").len(), 32);
     }
+}
+
+#[test]
+fn support_refs_are_stable_32_hex_per_child_thread() {
+    let reference = support_ref_for("p1:thread-a");
+    assert_eq!(reference.len(), 32);
+    assert_eq!(reference, support_ref_for("p1:thread-a"));
+    assert_ne!(reference, support_ref_for("p1:thread-b"));
 }
 
 #[test]

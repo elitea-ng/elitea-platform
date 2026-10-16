@@ -27,6 +27,12 @@
 //!   running children and fails.
 //! - `on_error: stop` closes admission on the first failure; the planner then
 //!   fails the node after the running children drain.
+//! - Delegated auth (`authorize`, `skip`) applies only at the park boundary
+//!   (the delegated-auth spike fallback, design §5.6): the credential reaches
+//!   a child through the continuation's command, not under the live claim.
+//!   Only an execution's restore fetch delivers these
+//!   decisions; live ticks and the final fetch leave them `DECIDED`, so Main
+//!   admits the `fanout_wake` continuation that applies them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -378,9 +384,10 @@ impl FanoutRunner {
         Self::check_open_cards(&state)?;
         let mut running: Running = FuturesUnordered::new();
         // A restore fetches once, immediately: it applies decisions for open
-        // cards and acknowledges ones applied before a crash.
+        // cards (park-boundary auth included) and acknowledges ones applied
+        // before a crash.
         if reentered {
-            self.fetch_and_apply(&mut state).await?;
+            self.fetch_and_apply(&mut state, true).await?;
         }
         if open_cards(&state) > 0 {
             state.tick = Some(Tick::reset(Instant::now()));
@@ -393,7 +400,7 @@ impl FanoutRunner {
                 }
                 // Final fetch before parking; continue only if it made a
                 // child runnable (an ACK alone never spins this loop).
-                self.fetch_and_apply(&mut state).await?;
+                self.fetch_and_apply(&mut state, false).await?;
                 if has_queued(&state) {
                     continue;
                 }
@@ -423,7 +430,7 @@ impl FanoutRunner {
                     }
                 }
                 () = sleep_until_opt(tick_at), if armed => {
-                    let news = self.fetch_and_apply(&mut state).await?;
+                    let news = self.fetch_and_apply(&mut state, false).await?;
                     if let Some(tick) = state.tick.as_mut() {
                         tick.after_fetch(Instant::now(), news);
                     }
@@ -565,7 +572,13 @@ impl FanoutRunner {
     }
 
     /// One claim-fenced fetch and apply. `true` when it changed what can run.
-    async fn fetch_and_apply(&self, state: &mut Loop) -> Result<bool, FanoutRunError> {
+    /// `restore`: the immediate fetch of an execution that restored open
+    /// cards, the only fetch that delivers park-boundary (auth) decisions.
+    async fn fetch_and_apply(
+        &self,
+        state: &mut Loop,
+        restore: bool,
+    ) -> Result<bool, FanoutRunError> {
         let batch = match self.decisions.fetch().await {
             Ok(batch) => batch,
             Err(DecisionError::Unavailable) => return Ok(false),
@@ -574,6 +587,9 @@ impl FanoutRunner {
         state.revision_seen = state.revision_seen.max(batch.decision_revision);
         let mut decisions = batch.decisions;
         decisions.truncate(MAX_FETCH_DECISIONS);
+        if !restore {
+            decisions.retain(|decision| !is_park_boundary_action(&decision.action));
+        }
         self.apply_decisions(state, decisions).await
     }
 
@@ -723,6 +739,11 @@ impl FanoutRunner {
             })
             .collect()
     }
+}
+
+/// Decisions applied only when an execution restores (delegated auth).
+fn is_park_boundary_action(action: &str) -> bool {
+    matches!(action, "authorize" | "skip")
 }
 
 fn find_card(state: &Loop, key: &str) -> Option<(usize, CardIdentity)> {

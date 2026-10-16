@@ -64,7 +64,8 @@ pub const MAX_CHILD_RESULT_BYTES: usize = 512 * 1024;
 /// Serialized bytes of the joined collection one activation lands.
 pub const MAX_JOINED_RESULT_BYTES: usize = 8 * 1024 * 1024;
 
-/// Serialized bytes of one failed-child entry in the join (no raw text).
+/// Serialized bytes of one failed child's `error` object in the join
+/// (contract v1.1 §8a; no raw text).
 pub const MAX_JOIN_ERROR_ENTRY_BYTES: usize = 512;
 
 /// The live decision tick while at least one card is open: starts here...
