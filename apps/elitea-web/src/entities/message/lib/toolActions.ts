@@ -232,6 +232,18 @@ function buildToolCallMeta(
   };
 }
 
+/** Reload carries the same ancestry the live stream had, so both group identically. */
+const MAX_PERSISTED_PATH_TIERS = 3;
+
+function persistedHierarchy(metadata: ToolCallStepWire['metadata']): { parent_agent_path?: unknown; sibling_ordinal?: number } {
+  const path = metadata?.parent_agent_path;
+  const ordinal = metadata?.sibling_ordinal;
+  return {
+    ...(Array.isArray(path) && path.length <= MAX_PERSISTED_PATH_TIERS ? { parent_agent_path: path } : {}),
+    ...(typeof ordinal === 'number' && Number.isInteger(ordinal) && ordinal > 0 ? { sibling_ordinal: ordinal } : {}),
+  };
+}
+
 /** The tool-call branch (lines 192-246). */
 function buildToolCallAction(
   step: ToolCallStepWire,
@@ -250,6 +262,7 @@ function buildToolCallAction(
     original_name: getToolActionOriginalName(step.metadata),
     parent_agent_name: step.metadata?.parent_agent_name,
     parent_agent_call_id: step.metadata?.parent_agent_call_id,
+    ...persistedHierarchy(step.metadata),
     id: step.tool_run_id,
     status: ToolActionStatus.complete,
     toolInputs: step.tool_inputs,

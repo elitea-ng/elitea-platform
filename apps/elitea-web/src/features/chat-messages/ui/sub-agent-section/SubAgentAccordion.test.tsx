@@ -1,31 +1,36 @@
+import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
-import type { PartitionedBlock, SubAgentGroupable } from '../../lib/subAgentGrouping';
 import { SubAgentAccordion } from './SubAgentAccordion';
 
-function block(toolOutputs: unknown): PartitionedBlock {
-  const action = { id: 'call-1', type: 'tool', name: 'rp-list-child', toolOutputs } as unknown as SubAgentGroupable;
-  return { kind: 'sub', instanceKey: 'call-1', name: 'rp-list-child', actions: [action], pausedForResume: false, aliasKeys: [] };
-}
+const summary = () => screen.getByTestId('chat-answer-nested-agent-accordion-summary-Sub');
 
-describe('SubAgentAccordion', () => {
-  it("previews a saved child's own result, not its response envelope", () => {
-    const fenced = '```json\n[\n  {\n    "id": "A"\n  }\n]\n```';
-    const { container } = renderWithTheme(<SubAgentAccordion blocks={[block(JSON.stringify({ response: fenced }))]} defaultExpanded />);
-    const preview = container.querySelector('pre');
-    expect(preview?.textContent).toBe('rp-list-child[\n  {\n    "id": "A"\n  }\n]');
+describe('SubAgentAccordion (reference parity)', () => {
+  it('is collapsed by default and shows the breadcrumb label', () => {
+    renderWithTheme(<SubAgentAccordion name="Sub" label="Parent (2) ▸ Sub"><span>child</span></SubAgentAccordion>);
+    expect(summary().textContent).toContain('Parent (2) ▸ Sub');
+    expect(summary().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('child')).toBeNull();
   });
 
-  it('bounds the preview height so a large result scrolls inside the card', () => {
-    const { container } = renderWithTheme(<SubAgentAccordion blocks={[block(JSON.stringify({ response: 'row;'.repeat(20000) }))]} defaultExpanded />);
-    const style = getComputedStyle(container.querySelector('pre') as Element);
-    expect([style.maxHeight, style.overflow]).toEqual(['320px', 'auto']);
+  it('opens on demand, and `defaultExpanded` opens it initially', () => {
+    renderWithTheme(<SubAgentAccordion name="Sub" defaultExpanded><span>child</span></SubAgentAccordion>);
+    expect(screen.getByText('child')).toBeTruthy();
+    fireEvent.click(summary());
+    expect(summary().getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('keeps any other tool output as it was', () => {
-    const { container } = renderWithTheme(<SubAgentAccordion blocks={[block('{"rows":2}')]} defaultExpanded />);
-    expect(container.querySelector('pre')?.textContent).toBe('rp-list-child{"rows":2}');
+  it('shows a spinner only while running and not paused', () => {
+    const { rerender } = renderWithTheme(<SubAgentAccordion name="Sub" running />);
+    expect(summary().querySelector('.MuiCircularProgress-root')).not.toBeNull();
+    rerender(<SubAgentAccordion name="Sub" running paused />);
+    expect(summary().querySelector('.MuiCircularProgress-root')).toBeNull();
+  });
+
+  it('has no italic "Paused — awaiting resume" text', () => {
+    renderWithTheme(<SubAgentAccordion name="Sub" paused defaultExpanded><span>child</span></SubAgentAccordion>);
+    expect(screen.queryByText(/awaiting resume/i)).toBeNull();
   });
 });

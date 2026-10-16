@@ -527,7 +527,7 @@ test('a paused tool call is a trace step, and survives the resume and a return t
     const resumed = page.waitForResponse((r) => CONTINUE_RE.test(r.url()) && r.request().method() === 'POST', {
       timeout: 60_000,
     });
-    await card.getByRole('button', { name: 'Approve', exact: true }).click();
+    await card.getByTestId('sensitive-action-authorize-button').click();
     expect(
       (await resumed).status(),
       'the approval was refused',

@@ -1,134 +1,42 @@
-import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
-import { t } from "@/shared/i18n";
-import {
-  useStaticPipelineContinuation,
-  type StaticContinuationParams,
-} from "./hooks/useStaticPipelineContinuation";
-import type { ChatBoxProps } from "./ChatBox.types";
-/** Authored pauses have Continue controls separate from dynamic approval cards. */
-import { useState } from "react";
-import {
-  Alert,
-  Box,
-  Button,
-  FormControlLabel,
-  Stack,
-  TextField,
-  Typography,
-} from "@mui/material";
-import type { StaticPauseBinding } from "@/features/chat-messages";
-interface Props {
+/**
+ * Authored (static) pipeline pauses: the durable REST continuation state for
+ * the inline cards `ApplicationAnswer` renders in its approval area (one card
+ * per pause, in the spawning instance's accordion). Mounting submits no work.
+ *
+ * Each card continues on its own: a root pause by itself, a saved-pipeline
+ * leaf as a one-leaf `static_decisions` set, so siblings stay answerable.
+ * The text is the fixed "Continue" the previous control defaulted to — no
+ * prefilled text box.
+ */
+import { useCallback, useMemo } from 'react';
+
+import { t } from '@/shared/i18n';
+import type { StaticPauseBinding } from '@/features/chat-messages';
+
+import { useStaticPipelineContinuation, type StaticContinuationParams } from './hooks/useStaticPipelineContinuation';
+import type { ChatBoxProps } from './ChatBox.types';
+
+type HostProps = Omit<StaticContinuationParams, 'restoredRun'> & {
+  readonly editorTest: NonNullable<ChatBoxProps['extensions']>['editorTest'];
+};
+
+/** What the message list needs to render the current pause's cards. */
+export interface StaticPauseCardsBinding {
   readonly pause: StaticPauseBinding;
   readonly busy: boolean;
   readonly error?: string | undefined;
-  readonly onContinue: (
-    text: string,
-    selected: readonly string[],
-  ) => Promise<void>;
-}
-export function StaticPipelineContinueControls({
-  pause,
-  busy,
-  error,
-  onContinue,
-}: Props) {
-  const [text, setText] = useState(
-    t("widgets.chatBox.staticPause.defaultMessage", "Continue"),
-  );
-  const [selected, setSelected] = useState<readonly string[]>([]);
-  return (
-    <Box
-      component="section"
-      aria-label={t(
-        "widgets.chatBox.staticPause.region",
-        "Static pipeline continuation",
-      )}
-      sx={{ p: 2 }}
-    >
-      <Stack spacing={1}>
-        <Typography>
-          {pause.kind === "root"
-            ? t(
-                "widgets.chatBox.staticPause.rootTitle",
-                "Paused {{kind}} {{node}}",
-                { kind: pause.proof.kind, node: pause.proof.node_name },
-              )
-            : t(
-                "widgets.chatBox.staticPause.toolsTitle",
-                "Paused saved pipelines",
-              )}
-        </Typography>
-        {pause.kind === "tools" &&
-          pause.inventory.pauses.map((leaf) => (
-            <FormControlLabel
-              key={leaf.proof.pause_id}
-              control={
-                <BaseCheckbox
-                  disabled={busy}
-                  checked={selected.includes(leaf.proof.pause_id)}
-                  onChange={(_, checked) =>
-                    setSelected((current) =>
-                      checked
-                        ? [...current, leaf.proof.pause_id]
-                        : current.filter((id) => id !== leaf.proof.pause_id),
-                    )
-                  }
-                />
-              }
-              label={`${leaf.proof.node_name} (${leaf.proof.kind}) · ${leaf.child_thread_id}`}
-            />
-          ))}
-        <TextField
-          label={t(
-            "widgets.chatBox.staticPause.message",
-            "Continuation message",
-          )}
-          value={text}
-          disabled={busy}
-          onChange={(event) => setText(event.target.value)}
-          multiline
-          maxRows={4}
-        />
-        {error && <Alert severity="error">{error}</Alert>}
-        <Button
-          disabled={
-            busy || !text.trim() || (pause.kind === "tools" && !selected.length)
-          }
-          onClick={() => {
-            void onContinue(text, selected);
-          }}
-        >
-          {pause.kind === "root"
-            ? t("widgets.chatBox.staticPause.rootContinue", "Continue pipeline")
-            : t(
-                "widgets.chatBox.staticPause.toolsContinue",
-                "Continue selected pipelines",
-              )}
-        </Button>
-      </Stack>
-    </Box>
-  );
+  readonly onContinue: (pauseId: string | undefined) => void;
 }
 
-type HostProps = Omit<StaticContinuationParams, "restoredRun"> & {
-  readonly editorTest: NonNullable<ChatBoxProps["extensions"]>["editorTest"];
-};
-/** Shared composition for main chat and Pipeline Test; mounting submits no work. */
-export function StaticPipelineContinuation({
-  editorTest,
-  ...params
-}: HostProps) {
-  const controls = useStaticPipelineContinuation({
-    ...params,
-    restoredRun: editorTest?.restoredRun,
-  });
-  return controls.pause ? (
-    <StaticPipelineContinueControls
-      key={controls.key}
-      pause={controls.pause}
-      busy={controls.busy}
-      error={controls.error}
-      onContinue={controls.submit}
-    />
-  ) : null;
+/** Shared composition for main chat and Pipeline Test. */
+export function useStaticPauseCards({ editorTest, ...params }: HostProps): StaticPauseCardsBinding | undefined {
+  const controls = useStaticPipelineContinuation({ ...params, restoredRun: editorTest?.restoredRun });
+  const { submit, pause, busy, error } = controls;
+  const onContinue = useCallback(
+    (pauseId: string | undefined) => {
+      void submit(t('widgets.chatBox.staticPause.defaultMessage', 'Continue'), pauseId ? [pauseId] : []);
+    },
+    [submit],
+  );
+  return useMemo(() => (pause ? { pause, busy, error, onContinue } : undefined), [pause, busy, error, onContinue]);
 }

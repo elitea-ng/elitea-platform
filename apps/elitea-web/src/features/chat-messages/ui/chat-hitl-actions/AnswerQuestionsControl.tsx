@@ -70,7 +70,7 @@ export interface AnswerQuestionsControlProps {
  * `AnswerQuestionsControl` — the questions, the answers, and the submit that
  * carries them back to the paused run.
  */
-function AnswerQuestionsControl({
+export function AnswerQuestionsControl({
   questions,
   disabled = false,
   onSubmit,
@@ -187,73 +187,6 @@ function AnswerQuestionsControl({
         </Button>
         )}
       </Box>
-    </Box>
-  );
-}
-
-/** @public Props for `ClarifyingQuestionCard`. */
-export interface ClarifyingQuestionCardProps {
-  /** The pause's questions, in the order the model asked them. */
-  readonly questions: readonly HitlQuestion[];
-  /** The pause's own message — rendered only when it is not already a question. */
-  readonly message?: string | undefined;
-  /** Whether the controls are disabled (a resume already in flight). */
-  readonly disabled?: boolean;
-  /** Called with the JSON-encoded answer value. */
-  readonly onSubmit: (value: string) => void;
-}
-
-/**
- * The clarification card: the same warning shell every other HITL pause
- * renders in, with the questions and their submit inside it.
- *
- * `message` is rendered only when there are NO questions. The runtime sets the
- * pause message to the FIRST question's text
- * (`AskUserRequest::message`), so printing both shows the same sentence twice.
- */
-export function ClarifyingQuestionCard({
-  questions,
-  message,
-  disabled = false,
-  onSubmit,
-}: ClarifyingQuestionCardProps): ReactNode {
-  return (
-    <Box
-      data-testid="chat-hitl-actions"
-      sx={{
-        mt: 1,
-        p: 1.5,
-        border: '1px solid',
-        borderColor: 'warning.main',
-        // eslint-disable-next-line elitea/ad-hoc-radius — warning banner border radius
-        borderRadius: 1,
-        backgroundColor: 'warning.lighter',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 0.5,
-      }}
-    >
-      <Typography
-        variant="labelMedium"
-        component="h6"
-        sx={{ color: 'warning.dark', fontWeight: 600 }}
-      >
-        {t('chatMessages.hitlAnswer.title', 'The agent needs an answer to continue')}
-      </Typography>
-      {questions.length === 0 && message && (
-        <Typography
-          variant="bodyMedium"
-          component="p"
-          sx={{ color: 'text.primary' }}
-        >
-          {message}
-        </Typography>
-      )}
-      <AnswerQuestionsControl
-        questions={questions}
-        disabled={disabled}
-        onSubmit={onSubmit}
-      />
     </Box>
   );
 }

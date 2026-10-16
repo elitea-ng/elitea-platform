@@ -11,7 +11,6 @@ import { useCallback } from 'react';
 import { currentNodeRecoveryBinding } from '@/features/chat-messages';
 import type { ChatMessage, useDeleteMessageAlert } from '@/features/chat-messages';
 
-import { deriveHitlChildThreadId } from '../ChatBox.helpers';
 import { useStableRef } from './useStableRef';
 import type { useChatBoxData } from './useChatBoxData';
 import type { useChatBoxHandlers } from './useChatBoxHandlers';
@@ -167,17 +166,24 @@ export function useChatBoxActions({
     [data, messages, handlers],
   );
 
+  // Routed by the card's identity (`getInterruptIdentity`), never by
+  // `tool_call_id` alone: two same-name sub-agents can pause the same tool.
+  // A legacy fan-out child is recognised from its own card fields downstream.
   const handleHitlResume = useCallback(
-    (payload: { action: 'approve' | 'reject' | 'edit' | 'block_with_comment' | 'answer'; value?: string | undefined; toolCallId?: string | undefined }) => {
-      const childThreadId = deriveHitlChildThreadId(data.pendingHitlMessage, payload.toolCallId);
+    (payload: {
+      action: 'approve' | 'reject' | 'edit' | 'block_with_comment' | 'answer';
+      value?: string | undefined;
+      toolCallId?: string | undefined;
+      interruptId?: string | undefined;
+    }) => {
       void handlers.continueHitl({
         action: payload.action,
         ...(payload.value !== undefined ? { value: payload.value } : {}),
         ...(payload.toolCallId !== undefined ? { toolCallId: payload.toolCallId } : {}),
-        ...(childThreadId !== undefined ? { childThreadId } : {}),
+        ...(payload.interruptId !== undefined ? { interruptId: payload.interruptId } : {}),
       });
     },
-    [data.pendingHitlMessage, handlers],
+    [handlers],
   );
 
   const handleContinueMcpExecution = useCallback(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getInterruptIdentity, mergeHitlInterrupts, normalizeHitlInterrupt } from './hitlInterrupts';
+import { getInterruptIdentity, normalizeHitlInterrupt, reconcileHitlInterrupts } from './hitlInterrupts';
 
 import type { HitlInterrupt } from '../ui/chat-hitl-actions/ChatHitlActions';
 
@@ -89,11 +89,11 @@ describe('getInterruptIdentity', () => {
   });
 });
 
-describe('mergeHitlInterrupts', () => {
+describe('reconcileHitlInterrupts', () => {
   const entry = (raw: Record<string, unknown>) => normalizeHitlInterrupt(raw);
 
   it('replaces a re-announced pause instead of duplicating it', () => {
-    const merged = mergeHitlInterrupts(
+    const merged = reconcileHitlInterrupts(
       [entry({ interrupt_id: 'i-1', message: 'first' })],
       [entry({ interrupt_id: 'i-1', message: 'revised' })],
     );
@@ -103,20 +103,46 @@ describe('mergeHitlInterrupts', () => {
   });
 
   it('keeps siblings that are still awaiting an answer', () => {
-    // Children announce one frame at a time; replacing the array wholesale is
-    // the failure this guards — the earlier sibling's card would vanish while
-    // it is still pending.
-    const merged = mergeHitlInterrupts(
-      [entry({ interrupt_id: 'i-1' })],
-      [entry({ interrupt_id: 'i-2' })],
-    );
+    // Cards announce one frame at a time; replacing the array wholesale would
+    // drop the earlier sibling's card while it is still pending.
+    const merged = reconcileHitlInterrupts([entry({ interrupt_id: 'i-1' })], [entry({ interrupt_id: 'i-2' })]);
 
     expect(merged.map((item) => item.interrupt_id)).toEqual(['i-1', 'i-2']);
   });
 
   it('appends unidentifiable entries rather than letting them overwrite each other', () => {
-    // Empty identity must mean "always new", never "matches everything".
-    const merged = mergeHitlInterrupts([entry({ message: 'a' })], [entry({ message: 'b' })]);
+    const merged = reconcileHitlInterrupts([entry({ message: 'a' })], [entry({ message: 'b' })]);
     expect(merged.map((item) => item.message)).toEqual(['a', 'b']);
+  });
+
+  it('keeps the local queued/decided state of a re-announced card, hidden', () => {
+    const merged = reconcileHitlInterrupts(
+      [{ ...entry({ interrupt_id: 'i-1' }), queued: true, hidden: true }],
+      [entry({ interrupt_id: 'i-1', message: 'again' })],
+    );
+    expect(merged[0]).toMatchObject({ interrupt_id: 'i-1', message: 'again', queued: true, decided: false, hidden: true });
+  });
+
+  it('drops a submitted card the new pause does not name', () => {
+    const merged = reconcileHitlInterrupts(
+      [{ ...entry({ interrupt_id: 'old' }), decided: true, hidden: true }],
+      [entry({ interrupt_id: 'new' })],
+    );
+    expect(merged.map((item) => item.interrupt_id)).toEqual(['new']);
+  });
+
+  it('drops cards a parallel aggregate does not name, and never adds one', () => {
+    const merged = reconcileHitlInterrupts([entry({ interrupt_id: 'i-1' }), entry({ interrupt_id: 'i-2' })], [], ['i-2', 'i-3']);
+    expect(merged.map((item) => item.interrupt_id)).toEqual(['i-2']);
+  });
+});
+
+describe('normalizeHitlInterrupt — hierarchy bounds', () => {
+  it('keeps a positive sibling ordinal and drops a path past three tiers', () => {
+    const tier = (n: number) => ({ name: `agent-${n}`, call_id: `call-${n}` });
+    expect(normalizeHitlInterrupt({ sibling_ordinal: 2 }).sibling_ordinal).toBe(2);
+    expect(normalizeHitlInterrupt({ sibling_ordinal: 0 }).sibling_ordinal).toBeUndefined();
+    expect(normalizeHitlInterrupt({ parent_agent_path: [tier(1), tier(2), tier(3)] }).parent_agent_path).toHaveLength(3);
+    expect(normalizeHitlInterrupt({ parent_agent_path: [tier(1), tier(2), tier(3), tier(4)] }).parent_agent_path).toEqual([]);
   });
 });

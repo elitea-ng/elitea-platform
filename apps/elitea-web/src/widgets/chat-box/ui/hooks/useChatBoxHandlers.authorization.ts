@@ -1,18 +1,38 @@
-/** Exact durable continuation for delegated OAuth authorization requests. */
+/**
+ * Exact durable continuation for delegated OAuth authorization requests.
+ *
+ * Each authorization card resolves on its own, like the reference
+ * (`ChatBox.jsx` `continueMcpExecution` filters out exactly the clicked request
+ * id; it has no "same server URL" grouping, so neither does this). Today's
+ * route consumes the complete pending set
+ * (`decisionsMatchCurrentAuthorizationRequests`), so a decided card waits in
+ * `model/hitlDecisionQueue` — `{interruptId, toolCallId?, action}` only, never a
+ * token — until its last sibling is decided, and the set then goes out as ONE
+ * continuation.
+ */
 import { conversationApi } from '@/entities/conversation';
 import type { ChatMessage } from '@/features/chat-messages';
 import { ToolActionStatus } from '@/shared/lib/chat';
 
 import {
+  claimHitlSubmission,
+  forgetHitlDecisions,
+  queueHitlDecision,
+  queuedHitlDecisions,
+  releaseHitlSubmission,
+  retainHitlDecisions,
+  type HitlQueueScope,
+  type QueuedHitlDecision,
+} from '../../model/hitlDecisionQueue';
+import {
   buildDeclinedServersList,
   readServerUrl,
-  revertContinuation,
   trackMcpAuthDecision,
 } from './useChatBoxHandlers.helpers';
 import type { ChatBoxHandlerDeps, ToolActionLike } from './useChatBoxHandlers.helpers';
 import { undeliveredText } from './useChatBoxHandlers.turns';
 
-import type { McpAuthorizationAction, McpAuthorizationBatch, McpAuthorizationDecision } from './useChatBoxHandlers.authorization.types';
+import type { McpAuthorizationAction } from './useChatBoxHandlers.authorization.types';
 
 function exactRequestId(action: ToolActionLike | undefined): string | undefined {
   const meta = action?.toolMeta ?? {};
@@ -40,61 +60,61 @@ function findSelectedAction(
   return actions.find((action) => exactRequestId(action) === requestId);
 }
 
-function sameAuthorizationGroup(
-  action: ToolActionLike,
-  selected: ToolActionLike,
-): boolean {
-  const selectedKey = readServerUrl(selected);
-  return action === selected || Boolean(selectedKey && readServerUrl(action) === selectedKey);
+/**
+ * Cards decided and taken off screen, held for this page life so a refused
+ * set can be put back. In memory only — they carry tool detail, which is never
+ * persisted. Bounded like the queue (oldest response evicted).
+ */
+const MAX_HELD_RESPONSES = 8;
+const heldCards = new Map<string, Map<string, ToolActionLike>>();
+
+function heldKey(scope: HitlQueueScope): string {
+  return JSON.stringify([scope.conversation, scope.message]);
 }
 
-function applyDecision(
-  deps: ChatBoxHandlerDeps,
-  batch: McpAuthorizationBatch,
-  action: ToolActionLike,
-  decision: McpAuthorizationAction,
-): void {
-  const interruptId = exactRequestId(action);
-  if (!interruptId) return;
-  batch.decisions.set(interruptId, {
-    interruptId,
-    toolCallId: toolCallId(action),
-    action: decision,
-  });
-  trackMcpAuthDecision(
-    deps.sessionDeclinedMcpServersRef,
-    action,
-    readServerUrl(action),
-    decision === 'skip',
-  );
+function holdCards(scope: HitlQueueScope, cards: readonly ToolActionLike[]): void {
+  const key = heldKey(scope);
+  const held = heldCards.get(key) ?? new Map<string, ToolActionLike>();
+  for (const card of cards) {
+    const id = exactRequestId(card);
+    if (id) held.set(id, card);
+  }
+  heldCards.delete(key);
+  heldCards.set(key, held);
+  while (heldCards.size > MAX_HELD_RESPONSES) {
+    const oldest = heldCards.keys().next().value;
+    if (oldest === undefined) break;
+    heldCards.delete(oldest);
+  }
 }
 
-function optimisticAuthorizationUpdate(
-  deps: ChatBoxHandlerDeps,
-  messageId: string,
-  decidedIds: ReadonlySet<string>,
-  startsExecution: boolean,
-): void {
-  deps.setChatHistory((previous) => previous.map((message) => {
-    if (message.id !== messageId) return message;
-    const toolActions = ((message.toolActions ?? []) as readonly ToolActionLike[])
-      .filter((action) => !decidedIds.has(exactRequestId(action) ?? ''));
-    return {
-      ...message,
-      toolActions: toolActions as unknown as ChatMessage['toolActions'],
-      ...(startsExecution ? { isLoading: true, isStreaming: true, exception: undefined } : {}),
-    };
-  }));
+function heldFor(scope: HitlQueueScope): readonly ToolActionLike[] {
+  return [...(heldCards.get(heldKey(scope))?.values() ?? [])];
+}
+
+function releaseScope(scope: HitlQueueScope): void {
+  forgetHitlDecisions(scope);
+  heldCards.delete(heldKey(scope));
+}
+
+function authorizationScope(deps: ChatBoxHandlerDeps, messageId: string): HitlQueueScope | undefined {
+  return deps.conversationUuid ? { conversation: deps.conversationUuid, message: messageId, kind: 'authorization' } : undefined;
+}
+
+function removeCards(message: ChatMessage, ids: ReadonlySet<string>, fields: Partial<ChatMessage> = {}): ChatMessage {
+  const toolActions = ((message.toolActions ?? []) as readonly ToolActionLike[])
+    .filter((action) => !ids.has(exactRequestId(action) ?? ''));
+  return { ...message, ...fields, toolActions: toolActions as unknown as ChatMessage['toolActions'] };
 }
 
 function decidedCredentialKeys(
-  message: ChatMessage,
-  decisions: readonly McpAuthorizationDecision[],
+  cards: readonly ToolActionLike[],
+  decisions: readonly QueuedHitlDecision[],
 ): { readonly tokenKeys: ReadonlySet<string>; readonly declinedUrls: ReadonlySet<string> } {
   const selected = new Map(decisions.map((decision) => [decision.interruptId, decision.action]));
   const tokenKeys = new Set<string>();
   const declinedUrls = new Set<string>();
-  for (const action of pendingActions(message)) {
+  for (const action of cards) {
     const decision = selected.get(exactRequestId(action) ?? '');
     const key = readServerUrl(action);
     if (decision === 'authorize' && key) tokenKeys.add(key);
@@ -110,11 +130,12 @@ function decidedCredentialKeys(
 function continuationBody(
   deps: ChatBoxHandlerDeps,
   message: ChatMessage,
-  decisions: readonly McpAuthorizationDecision[],
+  cards: readonly ToolActionLike[],
+  decisions: readonly QueuedHitlDecision[],
 ): Record<string, unknown> | undefined {
   const projectId = Number(deps.projectId);
   if (!Number.isSafeInteger(projectId) || projectId <= 0 || !deps.conversationUuid) return undefined;
-  const { tokenKeys, declinedUrls } = decidedCredentialKeys(message, decisions);
+  const { tokenKeys, declinedUrls } = decidedCredentialKeys(cards, decisions);
   // A continuation carries only the credentials for its exact decided cards.
   // Unrelated browser tokens and prior declines are not authority for this run.
   const tokens = Object.fromEntries(Object.entries(deps.getMcpTokens?.() ?? {})
@@ -153,27 +174,68 @@ function continuationBody(
   };
 }
 
-/** Collect decisions without granting authority to unrelated cards or tokens. */
-function collectAuthorizationBatch(
-  deps: ChatBoxHandlerDeps,
-  message: ChatMessage,
-  decision: McpAuthorizationAction,
-  selectedRequestId?: string,
-): McpAuthorizationBatch | undefined {
-  const actions = pendingActions(message);
-  const selected = findSelectedAction(actions, selectedRequestId);
-  if (!selected) return;
-
-  const batches = deps.sessionMcpAuthorizationBatchesRef?.current;
-  const batch: McpAuthorizationBatch = batches?.get(message.id) ?? { original: message, decisions: new Map() };
-  batches?.set(message.id, batch);
-  for (const action of actions.filter((item) => sameAuthorizationGroup(item, selected))) {
-    applyDecision(deps, batch, action, decision);
+/**
+ * Record the session-declined servers for exactly the decided cards — at
+ * submit, so a set restored after a reload (when the session ref is empty)
+ * still sends the declines it was decided with.
+ */
+function trackDecisions(deps: ChatBoxHandlerDeps, cards: readonly ToolActionLike[], decisions: readonly QueuedHitlDecision[]): void {
+  const byId = new Map(decisions.map((decision) => [decision.interruptId, decision.action]));
+  for (const card of cards) {
+    const action = byId.get(exactRequestId(card) ?? '');
+    if (action) trackMcpAuthDecision(deps.sessionDeclinedMcpServersRef, card, readServerUrl(card), action === 'skip');
   }
-  return batch;
 }
 
-/** Record one card decision and resume only after every parallel request has a decision. */
+function putBackCards(deps: ChatBoxHandlerDeps, messageId: string, cards: readonly ToolActionLike[], exception: string): void {
+  deps.setChatHistory((previous) => previous.map((item) => {
+    if (item.id !== messageId) return item;
+    const ids = new Set(((item.toolActions ?? []) as readonly ToolActionLike[]).map((action) => exactRequestId(action)));
+    const restored = cards.filter((card) => !ids.has(exactRequestId(card)));
+    return {
+      ...item,
+      toolActions: [...(item.toolActions ?? []), ...restored] as ChatMessage['toolActions'],
+      isLoading: false,
+      isStreaming: false,
+      exception,
+    };
+  }));
+}
+
+/** Submit the complete set and settle by the route's answer. Never falls back to the socket. */
+async function submitAuthorizationSet(
+  deps: ChatBoxHandlerDeps,
+  message: ChatMessage,
+  scope: HitlQueueScope,
+  cards: readonly ToolActionLike[],
+  decisions: readonly QueuedHitlDecision[],
+): Promise<void> {
+  trackDecisions(deps, cards, decisions);
+  const body = continuationBody(deps, message, cards, decisions);
+  if (!body || !deps.continueStreamedExecution || !deps.conversationUuid) {
+    releaseScope(scope);
+    putBackCards(deps, message.id, cards, undeliveredText());
+    return;
+  }
+  deps.setStreamingInfo(message.questionId ?? message.id);
+  const outcome = await deps.continueStreamedExecution({
+    conversationUuid: deps.conversationUuid,
+    contract: conversationApi.contracts.continueAuthorization,
+    body,
+  });
+  releaseScope(scope);
+  if (outcome.started) return;
+  if (outcome.reason === 'already-resolved') {
+    // The set was consumed elsewhere: the cards stay answered, quietly.
+    deps.setChatHistory((previous) => previous.map((item) => (
+      item.id === message.id ? { ...item, isLoading: false, isStreaming: false } : item
+    )));
+    return;
+  }
+  putBackCards(deps, message.id, cards, outcome.reason === 'rejected' ? outcome.message : undeliveredText());
+}
+
+/** Record ONE card's decision; resume only once every pending request of the response has one. */
 export async function resumeMcpAuthorization(
   deps: ChatBoxHandlerDeps,
   messageId: string,
@@ -182,34 +244,65 @@ export async function resumeMcpAuthorization(
 ): Promise<void> {
   const message = deps.chatHistory.find((item) => item.id === messageId);
   if (!message) return;
-  const batch = collectAuthorizationBatch(deps, message, decision, selectedRequestId);
-  if (!batch) return;
-  const batches = deps.sessionMcpAuthorizationBatchesRef?.current;
-
-  const originalActions = pendingActions(batch.original);
-  const unresolved = originalActions.filter((action) => !batch.decisions.has(exactRequestId(action) ?? ''));
-  optimisticAuthorizationUpdate(deps, messageId, new Set(batch.decisions.keys()), unresolved.length === 0);
-  if (unresolved.length > 0) return;
-
-  const decisions = originalActions
-    .map((action) => batch.decisions.get(exactRequestId(action) ?? ''))
-    .filter((item): item is McpAuthorizationDecision => item !== undefined);
-  const body = continuationBody(deps, batch.original, decisions);
-  batches?.delete(messageId);
-  if (!body || !deps.continueStreamedExecution || !deps.conversationUuid) {
-    revertContinuation(deps.setChatHistory, batch.original, undeliveredText());
+  const pending = pendingActions(message);
+  const selected = findSelectedAction(pending, selectedRequestId);
+  const interruptId = exactRequestId(selected);
+  const scope = authorizationScope(deps, messageId);
+  if (!selected || !interruptId) return;
+  if (!scope) {
+    deps.setChatHistory((previous) => previous.map((item) => (item.id === messageId ? { ...item, exception: undeliveredText() } : item)));
     return;
   }
-  deps.setStreamingInfo(message.questionId ?? messageId);
-  const outcome = await deps.continueStreamedExecution({
-    conversationUuid: deps.conversationUuid,
-    contract: conversationApi.contracts.continueAuthorization,
-    body,
+  const queued = queueHitlDecision(scope, { interruptId, toolCallId: toolCallId(selected), action: decision });
+  if (!queued.queued) return;
+  holdCards(scope, [selected]);
+  const byId = new Map(queuedHitlDecisions(scope).map((entry) => [entry.interruptId, entry]));
+  const remaining = pending.filter((action) => !byId.has(exactRequestId(action) ?? ''));
+  const startsExecution = remaining.length === 0;
+  deps.setChatHistory((previous) => previous.map((item) => (
+    item.id === messageId
+      ? removeCards(item, new Set([interruptId]), startsExecution ? { isLoading: true, isStreaming: true, exception: undefined } : {})
+      : item
+  )));
+  if (!startsExecution) return;
+  const cards = heldFor(scope);
+  const decisions = cards
+    .map((card) => byId.get(exactRequestId(card) ?? ''))
+    .filter((item): item is QueuedHitlDecision => item !== undefined);
+  if (!claimHitlSubmission(scope)) return;
+  try {
+    await submitAuthorizationSet(deps, message, scope, cards, decisions);
+  } finally {
+    releaseHitlSubmission(scope);
+  }
+}
+
+/**
+ * Re-apply authorization decisions persisted before a reload: their cards come
+ * off screen again (held for a possible put-back); decisions for requests the
+ * server no longer holds pending are dropped. A restore that would leave a
+ * response with no card to click drops the queue instead.
+ */
+export function restoreQueuedAuthorizations(
+  history: readonly ChatMessage[],
+  conversation: string | undefined,
+): readonly ChatMessage[] {
+  if (!conversation) return history;
+  let changed = false;
+  const restored = history.map((message) => {
+    const pending = pendingActions(message);
+    if (pending.length < 2) return message;
+    const scope: HitlQueueScope = { conversation, message: message.id, kind: 'authorization' };
+    const ids = new Set(pending.map((action) => exactRequestId(action) ?? ''));
+    const kept = new Set(retainHitlDecisions(scope, ids).map((decision) => decision.interruptId));
+    if (kept.size === 0) return message;
+    if (kept.size >= ids.size) {
+      releaseScope(scope);
+      return message;
+    }
+    holdCards(scope, pending.filter((action) => kept.has(exactRequestId(action) ?? '')));
+    changed = true;
+    return removeCards(message, kept);
   });
-  if (outcome.started) return;
-  revertContinuation(
-    deps.setChatHistory,
-    batch.original,
-    outcome.reason === 'rejected' ? outcome.message : undeliveredText(),
-  );
+  return changed ? restored : history;
 }

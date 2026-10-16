@@ -10,9 +10,23 @@
  * Its own file for the §3.5 file-length budget: `useChatBoxHandlers.helpers.ts`
  * is already at the limit.
  */
+import { conversationApi } from '@/entities/conversation';
 import type { ChatMessage } from '@/features/chat-messages';
+import { t } from '@/shared/i18n';
 
-import type { HitlInterruptAction } from './useChatBoxHandlers.helpers';
+import {
+  claimHitlSubmission,
+  forgetHitlDecisions,
+  queueHitlDecision,
+  queuedHitlDecisions,
+  releaseHitlSubmission,
+  type HitlQueueScope,
+  type QueuedHitlDecision,
+} from '../../model/hitlDecisionQueue';
+import { buildChatContinuePayload, tryEmit } from './useChatBoxHandlers.helpers';
+import type { ChatBoxHandlerDeps, HitlInterruptAction, StreamStartOutcome } from './useChatBoxHandlers.helpers';
+import { cardFlags, cardKey, cardsOf, patchMessageCards, pendingCards, type HitlCard } from './useChatBoxHandlers.hitlCards';
+import { undeliveredText } from './useChatBoxHandlers.turns';
 
 /** The five `hitl_action` values the Go route admits (`currentRootHITLAction`). */
 const ROOT_HITL_ACTIONS: readonly string[] = ['approve', 'reject', 'edit', 'block_with_comment', 'answer'];
@@ -63,27 +77,13 @@ interface HitlDecision {
   readonly value: unknown;
 }
 
-export interface HitlContinueBodyParams {
+interface HitlContinueBodyParams {
   readonly projectId: string | number | undefined;
   readonly conversationUuid: string | undefined;
   readonly messageId: string;
   readonly threadId?: string | undefined;
   readonly action: HitlInterruptAction;
   readonly interruptId?: string | undefined;
-}
-
-/**
- * The `interrupt_id` of the pause one decision answers.
- *
- * The route REQUIRES the field in every `hitl_decisions` entry, so a pause
- * that carries none cannot be resumed over REST at all.
- */
-export function findHitlInterruptId(message: ChatMessage, toolCallId: string | undefined): string | undefined {
-  const entries = (message.hitlInterrupts ?? []) as readonly { readonly interrupt_id?: string; readonly tool_call_id?: string }[];
-  const match = toolCallId ? entries.find((entry) => entry.tool_call_id === toolCallId) : entries[0];
-  const single = message.hitlInterrupt as { readonly interrupt_id?: string } | undefined;
-  const id = match?.interrupt_id ?? single?.interrupt_id;
-  return id ? id : undefined;
 }
 
 /**
@@ -139,7 +139,7 @@ function hitlFanoutDecision(params: HitlContinueBodyParams): HitlDecision | unde
  * `user_declined_mcp_servers`: the route refuses all three alongside a HITL
  * resume.
  */
-export function buildHitlContinueBody(params: HitlContinueBodyParams): Record<string, unknown> | undefined {
+function buildHitlContinueBody(params: HitlContinueBodyParams): Record<string, unknown> | undefined {
   const base = hitlContinueIdentity(params);
   if (base === undefined) return undefined;
   if (params.action.childThreadId || params.action.toolCallId) {
@@ -156,4 +156,193 @@ export function buildHitlContinueBody(params: HitlContinueBodyParams): Record<st
       }
     : {};
   return { ...base, hitl_action: params.action.action, ...withValue };
+}
+
+/**
+ * The body for a whole pending set: one entry per card, in message order.
+ *
+ * A set of one keeps the single-card body above, exactly as before. Every card
+ * of a larger set must carry an `interrupt_id`; `undefined` otherwise.
+ */
+function hitlSetBody(
+  params: Omit<HitlContinueBodyParams, 'action' | 'interruptId'>,
+  set: readonly HitlCard[],
+  decisions: readonly QueuedHitlDecision[],
+): Record<string, unknown> | undefined {
+  const [onlyCard] = set;
+  const [onlyDecision] = decisions;
+  if (set.length === 1 && onlyCard && onlyDecision) {
+    return buildHitlContinueBody({ ...params, action: decisionAction(onlyDecision), interruptId: onlyCard.interrupt_id || undefined });
+  }
+  const base = hitlContinueIdentity({ ...params, action: { action: '' } });
+  if (base === undefined) return undefined;
+  const entries = set.map((card, index) => {
+    const decision = decisions[index];
+    if (!decision) return undefined;
+    return hitlFanoutDecision({
+      ...params,
+      action: { ...decisionAction(decision), toolCallId: card.tool_call_id ?? '' },
+      interruptId: card.interrupt_id || undefined,
+    });
+  });
+  if (entries.some((entry) => entry === undefined)) return undefined;
+  return { ...base, hitl_decisions: entries };
+}
+
+function decisionAction(decision: Pick<QueuedHitlDecision, 'action' | 'value' | 'toolCallId'>): HitlInterruptAction {
+  return {
+    action: decision.action,
+    ...(decision.value !== undefined ? { value: decision.value } : {}),
+    ...(decision.toolCallId !== undefined ? { toolCallId: decision.toolCallId } : {}),
+  };
+}
+
+/** The legacy socket payload, for a deployment that serves no continuation route at all. */
+function hitlSocketPayload(deps: ChatBoxHandlerDeps, message: ChatMessage, submission: HitlSubmission): Record<string, unknown> {
+  const { set, decisions, threadId, independent } = submission;
+  const [first] = decisions;
+  const question = first?.action === 'edit' ? (first.value ?? '') : (first?.action ?? '');
+  const base = { ...buildChatContinuePayload(deps, { messageId: message.id, threadId, question }), hitl_resume: true };
+  if (set.length === 1 && first && !independent) {
+    const valued = first.action === 'edit' || first.action === 'block_with_comment';
+    return { ...base, hitl_action: first.action, ...(valued ? { hitl_value: first.value ?? '' } : {}) };
+  }
+  return {
+    ...base,
+    hitl_decisions: set.map((card, index) => ({
+      ...(independent && threadId ? { thread_id: threadId } : {}),
+      interrupt_id: card.interrupt_id ?? '',
+      tool_call_id: card.tool_call_id ?? decisions[index]?.toolCallId ?? '',
+      action: decisions[index]?.action ?? '',
+      value: decisions[index]?.value ?? '',
+    })),
+  };
+}
+
+/** A legacy fan-out child resumes on its own thread, alone, as it always has. */
+function isIndependentChild(card: HitlCard): boolean {
+  return Boolean(card.child_thread_id) && card.resume_strategy === 'aggregate_child';
+}
+
+function findTargetCard(pending: readonly HitlCard[], action: HitlInterruptAction, cards: readonly HitlCard[]): HitlCard | undefined {
+  if (action.interruptId) return pending.find((card) => cardKey(card, cards) === action.interruptId);
+  if (action.toolCallId) return pending.find((card) => card.tool_call_id === action.toolCallId);
+  return pending.find((card) => !card.queued) ?? pending[0];
+}
+
+function conversationKey(deps: ChatBoxHandlerDeps): string {
+  return deps.conversationUuid || String(deps.conversationId ?? '') || 'unsaved';
+}
+
+function refusedText(): string {
+  return t('widgets.chatBox.hitlDecisionRefused', 'The decision could not be sent. Try again.');
+}
+
+function notQueuedText(): string {
+  return t('widgets.chatBox.hitlDecisionNotQueued', 'This decision could not be recorded. Reload the conversation and try again.');
+}
+
+interface HitlSubmission {
+  readonly message: ChatMessage;
+  readonly set: readonly HitlCard[];
+  readonly decisions: readonly QueuedHitlDecision[];
+  readonly threadId: string | undefined;
+  /** A legacy fan-out child: resumed alone, on its own thread. */
+  readonly independent: boolean;
+  readonly scope: HitlQueueScope;
+}
+
+async function resumeSetOverRest(deps: ChatBoxHandlerDeps, submission: HitlSubmission): Promise<StreamStartOutcome | undefined> {
+  if (!deps.continueStreamedExecution || !deps.conversationUuid) return undefined;
+  const body = hitlSetBody(
+    { projectId: deps.projectId, conversationUuid: deps.conversationUuid, messageId: submission.message.id, threadId: submission.threadId },
+    submission.set,
+    submission.decisions,
+  );
+  if (body === undefined) return undefined;
+  return deps.continueStreamedExecution({
+    conversationUuid: deps.conversationUuid,
+    contract: conversationApi.contracts.continueHitl,
+    body,
+  });
+}
+
+/**
+ * Submit one complete set and settle the cards by the route's answer.
+ *
+ * Only here does the message start streaming. `already-resolved` (HTTP 409:
+ * the set was consumed elsewhere) keeps the cards answered and quiet. Any other
+ * route answer puts the cards back with the route's reason. The socket is
+ * tried ONLY when no REST answer exists at all.
+ */
+async function submitHitlSet(deps: ChatBoxHandlerDeps, submission: HitlSubmission): Promise<void> {
+  const { message, set, scope } = submission;
+  const cards = cardsOf(message);
+  const keys = new Set(set.map((card) => cardKey(card, cards)));
+  const settle = (fields: Partial<ChatMessage>, patch = cardFlags.restored): void =>
+    patchMessageCards(deps.setChatHistory, message.id, keys, patch, { isLoading: false, isStreaming: false, ...fields });
+  patchMessageCards(deps.setChatHistory, message.id, keys, cardFlags.decided, { isLoading: true, isStreaming: true, exception: undefined });
+  deps.setStreamingInfo(message.questionId ?? message.id);
+  const outcome = await resumeSetOverRest(deps, submission);
+  forgetHitlDecisions(scope);
+  if (outcome?.started) return;
+  if (outcome && outcome.reason === 'already-resolved') return settle({}, cardFlags.decided);
+  if (outcome && outcome.reason !== 'no-transport') {
+    return settle({ exception: outcome.reason === 'rejected' ? outcome.message : refusedText() });
+  }
+  const payload = hitlSocketPayload(deps, message, submission);
+  if (!tryEmit(() => deps.emitSocket('chat_continue_predict', payload), 'continueHitl')) {
+    settle({ exception: undeliveredText() });
+  }
+}
+
+/**
+ * Decide ONE pause card. The single owner of the queue-then-submit rule.
+ *
+ * The decision is recorded for that card's identity and only that card is
+ * marked queued and hidden; siblings stay answerable and the message's
+ * streaming state does not change. When the last pending card of the response
+ * is decided, the whole set goes out as ONE continuation, because today's
+ * route consumes the complete pending set (`decisionsMatchCurrentHITLInterrupts`).
+ * Wave 2's per-card POST changes this function and nothing else.
+ */
+export async function decideHitlCard(deps: ChatBoxHandlerDeps, action: HitlInterruptAction): Promise<void> {
+  const message = [...deps.chatHistory].reverse().find((item) => pendingCards(item).length > 0);
+  if (!message) return;
+  const cards = cardsOf(message);
+  const pending = pendingCards(message);
+  const target = findTargetCard(pending, action, cards);
+  if (!target) return;
+  const independent = Boolean(action.childThreadId) || isIndependentChild(target);
+  const set = independent ? [target] : pending.filter((card) => !isIndependentChild(card));
+  const scope: HitlQueueScope = { conversation: conversationKey(deps), message: message.id, kind: 'hitl' };
+  const decision: QueuedHitlDecision = { ...decisionAction(action), interruptId: cardKey(target, cards) };
+  let decisions: readonly QueuedHitlDecision[] = [decision];
+  if (set.length > 1) {
+    const queued = queueHitlDecision(scope, decision);
+    if (!queued.queued) {
+      deps.setChatHistory((previous) => previous.map((item) => (item.id === message.id ? { ...item, exception: notQueuedText() } : item)));
+      return;
+    }
+    const byKey = new Map(queuedHitlDecisions(scope).map((entry) => [entry.interruptId, entry]));
+    const missing = set.filter((card) => !byKey.has(cardKey(card, cards)));
+    if (missing.length > 0) {
+      patchMessageCards(deps.setChatHistory, message.id, new Set([decision.interruptId]), cardFlags.queued);
+      return;
+    }
+    decisions = set.map((card) => byKey.get(cardKey(card, cards)) ?? decision);
+  }
+  if (!claimHitlSubmission(scope)) return;
+  try {
+    await submitHitlSet(deps, {
+      message,
+      set,
+      decisions,
+      threadId: independent ? action.childThreadId || target.child_thread_id : message.threadId,
+      independent,
+      scope,
+    });
+  } finally {
+    releaseHitlSubmission(scope);
+  }
 }

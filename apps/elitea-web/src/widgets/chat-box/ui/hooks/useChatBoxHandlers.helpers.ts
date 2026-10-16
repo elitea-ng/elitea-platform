@@ -14,7 +14,6 @@ import type { SocketClient } from '@/shared/api/socket/client';
 import { ToolActionStatus } from '@/shared/lib/chat';
 import { ROLES } from '@/shared/lib/enums';
 
-import type { McpAuthorizationBatch } from './useChatBoxHandlers.authorization.types';
 export { extractCopyableContent } from './useChatBoxHandlers.content';
 
 /** A resolved HITL interrupt action from the user ('approve'/'reject'/'edit'/'block_with_comment'). `value` carries the rewritten prompt/comment text for 'edit'/'block_with_comment'. `childThreadId` (Track-2 independent fan-out child) is present only when this decision resumes ONE still-running child independently of its siblings. */
@@ -23,6 +22,8 @@ export interface HitlInterruptAction {
   readonly value?: string;
   readonly toolCallId?: string;
   readonly childThreadId?: string;
+  /** The card's `getInterruptIdentity` — what a decision is routed by. */
+  readonly interruptId?: string;
 }
 /** A single edited message item (baseline: `updatedItems`; matches `UserMessage.tsx`'s `UserMessageUpdatedItem` shape structurally). */
 export interface UpdatedMessageItem { readonly uuid?: string | undefined; readonly content: string; readonly item_type: string; }
@@ -90,8 +91,6 @@ export interface ChatBoxHandlerDeps {
   readonly socketId?: string | undefined;
   /** Session-scoped bookkeeping of MCP servers declined/authenticated this conversation (never persisted). Lifetime owned by the caller. */
   readonly sessionDeclinedMcpServersRef?: { current: Map<string, Record<string, unknown>> };
-  /** Pending exact decisions for a parallel delegated-authorization pause. */
-  readonly sessionMcpAuthorizationBatchesRef?: { current: Map<string, McpAuthorizationBatch> };
   /** Returns the credential-native token map used only by the continuation request. */
   readonly getMcpTokens?: () => Record<string, unknown>;
   /**
@@ -141,6 +140,9 @@ export interface ChatBoxHandlerDeps {
  * `rejected` — the turn cannot succeed and the reason is already known. The
  * socket fallback must NOT run, because it only hides the reason.
  *
+ * `already-resolved` — HTTP 409: the paused set was consumed elsewhere. Settle
+ * quietly: no error, no other transport.
+ *
  * `retry-later` — the server refused this attempt and said so is temporary
  * (regeneration only: HTTP 409 `agent_regeneration_pending`, `retryable: true`,
  * `Retry-After: 1`). Neither a fallback nor a failure: repeat the SAME request
@@ -153,6 +155,7 @@ export type StreamStartOutcome =
   | { readonly started: true }
   | { readonly started: false; readonly reason: 'no-transport' }
   | { readonly started: false; readonly reason: 'retry-later' }
+  | { readonly started: false; readonly reason: 'already-resolved'; readonly code: 'agent_hitl_already_resolved' | 'agent_authorization_already_resolved' }
   | { readonly started: false; readonly reason: 'rejected'; readonly message: string };
 /** No REST start happened; the socket emit is the fallback. */
 export const NO_STREAM_TRANSPORT: StreamStartOutcome = { started: false, reason: 'no-transport' };

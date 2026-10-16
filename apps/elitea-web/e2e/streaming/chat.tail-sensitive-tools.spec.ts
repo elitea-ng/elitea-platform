@@ -167,13 +167,17 @@ async function decide(page: Page, card: Locator, action: 'Approve' | 'Reject') {
   // whatever is typed, and the continuation route refuses an empty
   // `hitl_value` with 400 `Invalid agent execution request` (measured — see
   // S/tail/defects.md, and the fail-marked test at the end of this file).
-  if (action === 'Reject') {
-    await card.getByPlaceholder('Add a comment (optional)...').fill(`AUTOTESTDENIAL${String(Date.now() % 1_000_000)}`);
-  }
   const resumed = page.waitForResponse((r) => CONTINUE_RE.test(r.url()) && r.request().method() === 'POST', {
     timeout: 60_000,
   });
-  await card.getByRole('button', { name: action, exact: true }).click();
+  // Reference sensitive-action card: Authorize, or Block with Comment.
+  if (action === 'Reject') {
+    await card.getByTestId('sensitive-action-block-with-comment-button').click();
+    await card.getByTestId('sensitive-action-block-comment-input').fill(`AUTOTESTDENIAL${String(Date.now() % 1_000_000)}`);
+    await card.getByTestId('sensitive-action-block-comment-submit-button').click();
+  } else {
+    await card.getByTestId('sensitive-action-authorize-button').click();
+  }
   const response = await resumed;
   expect(
     response.status(),
@@ -486,7 +490,7 @@ test('a message typed during a pending authorization is queued, not submitted', 
       'the pause timed out on its own — a sensitive authorization has no deadline, the user does',
     ).toBeVisible();
     await expect(
-      card.getByRole('button', { name: 'Approve', exact: true }),
+      card.getByTestId('sensitive-action-authorize-button'),
       'the pause must still be decidable after a long wait',
     ).toBeVisible();
 
@@ -1027,7 +1031,7 @@ test('a sensitive call can be declined without typing a comment', async ({ page 
       timeout: 60_000,
     });
     // No comment typed — straight to the control the card offers.
-    await card.getByRole('button', { name: 'Reject', exact: true }).click();
+    await card.getByTestId('sensitive-action-block-button').click();
     const response = await resumed;
     expect(
       response.status(),

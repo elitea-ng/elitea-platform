@@ -81,4 +81,19 @@ describe('buildToolActions', () => {
     expect(result[0]?.created_at).toBe('2026-01-01T00:00:01Z');
     expect(result[1]?.created_at).toBe('2026-01-01T00:00:06Z');
   });
+
+  it('keeps the persisted ancestry so a reloaded turn groups like the live one', () => {
+    const path = [{ name: 'Sub', call_id: 'call-b', sibling_ordinal: 2 }];
+    const [action] = buildToolActions([], [{
+      tool_run_id: 't1', tool_name: 'search',
+      metadata: { parent_agent_name: 'Sub', parent_agent_call_id: 'call-b', parent_agent_path: path, sibling_ordinal: 2 },
+    }], '2026-01-01T00:00:00Z', undefined, undefined);
+    expect(action).toMatchObject({ parent_agent_path: path, sibling_ordinal: 2 });
+  });
+
+  it('drops an ancestry deeper than the 3-tier contract', () => {
+    const tier = { name: 'X', call_id: 'c' };
+    const [action] = buildToolActions([], [{ tool_run_id: 't1', tool_name: 'search', metadata: { parent_agent_path: [tier, tier, tier, tier] } }], '2026-01-01T00:00:00Z', undefined, undefined);
+    expect(action).not.toHaveProperty('parent_agent_path');
+  });
 });

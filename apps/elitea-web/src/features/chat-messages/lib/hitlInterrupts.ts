@@ -2,8 +2,9 @@
  * lib/hitlInterrupts.ts — human-in-the-loop interrupt shaping (issue #93).
  *
  * Ported from `EliteaUI/src/[fsd]/features/chat/lib/helpers/hitl.helpers.js:5-53`
- * (`getInterruptIdentity`, `normalizeHitlInterrupt`, `mergeHitlInterrupts`).
- * The reducer's interrupt slice needs all three: a pause can arrive as one
+ * (`getInterruptIdentity`, `normalizeHitlInterrupt`) and `:93-105`
+ * (`reconcileRootHitlInterrupts`, widened here to every pause shape as
+ * `reconcileHitlInterrupts`). The reducer's interrupt slice needs all three: a pause can arrive as one
  * legacy top-level blob, or as N entries in `hitl_interrupts`, and the same
  * child can re-announce a pause it already reported. Everything downstream —
  * `ChatBox.helpers.ts`'s `deriveHitlChildThreadId` routes resume by
@@ -104,6 +105,14 @@ export type NormalizedHitlInterrupt = {
   readonly parent_agent_name: string;
   readonly parent_agent_call_id: string;
   readonly parent_agent_path: readonly AgentPathTier[];
+  /** The interrupt's own sibling ordinal, when the raw interrupt states a positive integer one. */
+  readonly sibling_ordinal?: number;
+  /** The decision for this card was submitted with its whole set; nothing is owed on it. */
+  readonly decided?: boolean;
+  /** The user decided this card; the decision waits for its siblings (`hitlDecisionQueue`). */
+  readonly queued?: boolean;
+  /** Not rendered. Set together with `queued` or `decided`. */
+  readonly hidden?: boolean;
 };
 
 type RawInterrupt = Readonly<Record<string, unknown>>;
@@ -147,6 +156,7 @@ export function normalizeHitlInterrupt(raw: RawInterrupt = {}, overlay: RawInter
     (typeof raw[field] === 'string' && raw[field] ? (raw[field] as string) : '') ||
     (typeof overlay[field] === 'string' && overlay[field] ? (overlay[field] as string) : '');
 
+  const ordinal = raw['sibling_ordinal'] ?? overlay['sibling_ordinal'];
   return {
     message: pickString('message') || 'Please review and take action.',
     node_name: pickString('node_name'),
@@ -172,26 +182,120 @@ export function normalizeHitlInterrupt(raw: RawInterrupt = {}, overlay: RawInter
       nonEmpty(overlay['resume_strategy']) ||
       (childThreadId ? 'aggregate_child' : 'single'),
     ...hierarchy,
+    parent_agent_path: boundAgentPath(hierarchy.parent_agent_path),
+    ...(isPositiveOrdinal(ordinal) ? { sibling_ordinal: ordinal } : {}),
   };
 }
 
 /**
- * Merge announcements, replacing by identity rather than appending blindly.
- *
- * Fan-out children announce independently and can re-announce; appending would
- * show one pause several times, and replacing the whole array would drop the
- * siblings still awaiting an answer.
+ * The Worker's ancestry bounds (`MAX_AGENT_PATH_TIERS`, `MAX_CONTEXT_TEXT_BYTES`
+ * and the 512-byte tool identity, `services/elitea-worker-rust/src/agents/events.rs`).
+ * The reload path applies the same three (`entities/message/lib/normaliseHitlInterrupts.ts`),
+ * so a reloaded response groups exactly like the live one.
  */
-export function mergeHitlInterrupts(
-  existing: readonly NormalizedHitlInterrupt[] = [],
-  incoming: readonly NormalizedHitlInterrupt[] = [],
+const MAX_AGENT_PATH_TIERS = 3;
+const MAX_AGENT_NAME_CHARS = 2048;
+const MAX_AGENT_CALL_ID_CHARS = 512;
+
+function isPositiveOrdinal(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+/** A path past the Worker's bounds is not one it sends: it is dropped, never truncated into a different owner. */
+function boundAgentPath(path: readonly AgentPathTier[]): readonly AgentPathTier[] {
+  if (path.length > MAX_AGENT_PATH_TIERS) return [];
+  const withinBounds = path.every(
+    (tier) => tier.name.length <= MAX_AGENT_NAME_CHARS && tier.call_id.length <= MAX_AGENT_CALL_ID_CHARS,
+  );
+  return withinBounds ? path : [];
+}
+
+/**
+ * The legacy parallel-node aggregate (`elitea.graph.parallel-interrupt.v1`,
+ * `services/elitea-worker-rust/src/agents/graph/parallel.rs`, message
+ * "Parallel branches paused."). It summarises the member cards and is never a
+ * card itself (`libs/proto/contracts/fanout-interrupt-decisions-v1.md` §
+ * "reconcile-only").
+ */
+const PARALLEL_INTERRUPT_SCHEMA = 'elitea.graph.parallel-interrupt.v1';
+const PARALLEL_INTERRUPT_MESSAGE = 'Parallel branches paused.';
+
+function aggregateBody(raw: RawInterrupt | undefined): RawInterrupt | undefined {
+  if (!raw) return undefined;
+  if (raw['schema'] === PARALLEL_INTERRUPT_SCHEMA) return raw;
+  const data = raw['data'];
+  if (data && typeof data === 'object' && (data as RawInterrupt)['schema'] === PARALLEL_INTERRUPT_SCHEMA) {
+    return data as RawInterrupt;
+  }
+  return raw['message'] === PARALLEL_INTERRUPT_MESSAGE && Array.isArray(raw['cards']) ? raw : undefined;
+}
+
+/** Is this raw interrupt the reconcile-only parallel aggregate? */
+export function isParallelAggregateInterrupt(raw: RawInterrupt | undefined): boolean {
+  return aggregateBody(raw) !== undefined;
+}
+
+/** The member interrupt ids a parallel aggregate names, or `[]`. */
+export function parallelAggregateMemberIds(raw: RawInterrupt | undefined): readonly string[] {
+  const cards = aggregateBody(raw)?.['cards'];
+  if (!Array.isArray(cards)) return [];
+  return cards
+    .map((card: unknown) => (card && typeof card === 'object' ? nonEmpty((card as RawInterrupt)['interrupt_id']) : ''))
+    .filter(Boolean);
+}
+
+/** A card the user still owes an answer to: neither decided nor waiting in the queue. */
+function isAnswerableInterrupt(interrupt: NormalizedHitlInterrupt): boolean {
+  return !interrupt.decided && !interrupt.queued && !interrupt.hidden;
+}
+
+/** The first card still owed an answer — what the singular `hitlInterrupt` mirrors. */
+export function firstAnswerableInterrupt(
+  interrupts: readonly NormalizedHitlInterrupt[],
+): NormalizedHitlInterrupt | undefined {
+  return interrupts.find(isAnswerableInterrupt);
+}
+
+/**
+ * Fold a pause frame's cards into the cards already on the message.
+ *
+ * Port of `reconcileRootHitlInterrupts` (`hitl.helpers.js:93-105`) widened to
+ * every pause shape: the Worker publishes each card as its own progress frame
+ * and then one aggregate, so the list ACCUMULATES by identity. A re-announced
+ * card keeps the user's local `queued`/`decided` state and stays hidden.
+ *
+ * Two kinds of existing entry are dropped: a `decided` entry the new frame does
+ * not name (an earlier continuation consumed it), and — when a parallel
+ * aggregate names its members — any entry it does not name. The aggregate only
+ * ever removes; it never creates a card.
+ */
+export function reconcileHitlInterrupts(
+  existing: readonly NormalizedHitlInterrupt[],
+  incoming: readonly NormalizedHitlInterrupt[],
+  memberIds: readonly string[] = [],
 ): readonly NormalizedHitlInterrupt[] {
-  const result = [...existing];
+  const incomingByIdentity = new Map(
+    incoming.map((interrupt) => [getInterruptIdentity(interrupt), interrupt] as const).filter(([identity]) => identity),
+  );
+  const members = new Set(memberIds);
+  const kept = existing.filter((interrupt) => {
+    const identity = getInterruptIdentity(interrupt);
+    if (identity && incomingByIdentity.has(identity)) return true;
+    if (interrupt.decided) return false;
+    return members.size === 0 || members.has(interrupt.interrupt_id);
+  });
+  const result = kept.map((local) => {
+    const fresh = incomingByIdentity.get(getInterruptIdentity(local));
+    if (!fresh) return local;
+    if (!local.queued && !local.decided && !local.hidden) return fresh;
+    return { ...fresh, queued: Boolean(local.queued), decided: Boolean(local.decided), hidden: true };
+  });
+  const present = new Set(result.map(getInterruptIdentity));
   for (const interrupt of incoming) {
     const identity = getInterruptIdentity(interrupt);
-    const index = identity ? result.findIndex((item) => getInterruptIdentity(item) === identity) : -1;
-    if (index >= 0) result[index] = interrupt;
-    else result.push(interrupt);
+    if (identity && present.has(identity)) continue;
+    result.push(interrupt);
+    if (identity) present.add(identity);
   }
   return result;
 }
