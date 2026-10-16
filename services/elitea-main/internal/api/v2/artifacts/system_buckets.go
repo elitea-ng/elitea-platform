@@ -82,12 +82,20 @@ func (h *Handler) WithRuntimeClaims(resolver RuntimeClaimResolver) *Handler {
 
 // requestRuntimeClaim reads the claim a request names: (claim, true, nil),
 // (zero, false, nil) when it names none, or an error for a malformed one.
+//
+// A claim is NAMED by its claim id or its fence. The execution id alone is
+// not a claim: it is also the request-log tag (llmproxy.HeaderExecutionID)
+// the SDK copies from api_extra_headers onto EVERY platform call, so a
+// worker's ordinary claim-less attachment read carries it. Treating it as a
+// (malformed) claim refused those reads with 403 and emptied every chat
+// attachment the SDK read (Web E2E, chat.attachment-pdf, PR #1293). A claim
+// id or fence with any part missing is still malformed and refused.
 func requestRuntimeClaim(r *http.Request) (RuntimeClaim, bool, error) {
 	execution := r.Header.Get(RuntimeClaimExecutionHeader)
 	generation := r.Header.Get(RuntimeClaimGenerationHeader)
 	claimID := r.Header.Get(RuntimeClaimIDHeader)
 	fence := r.Header.Get(RuntimeClaimFenceHeader)
-	if execution == "" && generation == "" && claimID == "" && fence == "" {
+	if claimID == "" && fence == "" {
 		return RuntimeClaim{}, false, nil
 	}
 	parsed, err := strconv.ParseUint(generation, 10, 64)
@@ -99,21 +107,47 @@ func requestRuntimeClaim(r *http.Request) (RuntimeClaim, bool, error) {
 	return RuntimeClaim{ExecutionID: execution, Generation: parsed, ClaimID: claimID, FenceToken: token}, true, nil
 }
 
-// systemBucketScopeKey is the object key, or the listing prefix, a request
-// addresses inside the bucket.
-func systemBucketScopeKey(r *http.Request) string {
-	if key := strings.TrimPrefix(chi.URLParam(r, "*"), "/"); key != "" {
-		return key
+// bucketScope is what a route addresses inside a bucket, for the rule above.
+type bucketScope int
+
+const (
+	// scopePathKey: the object key in the route (`.../{bucket}/*`); a
+	// bucket-level verb has none and is judged with no key.
+	scopePathKey bucketScope = iota
+	// scopeListing: a listing, judged on its `?prefix=` (ListObjects and
+	// ListObjectsS3 only, review round 3).
+	scopeListing
+	// scopeCallerKeys: the route names its keys in its body or server state
+	// (an upload part, a batch delete, a grant); the caller checks each.
+	scopeCallerKeys
+)
+
+// systemBucketScopeKey is the key a route addresses in its URL.
+func systemBucketScopeKey(r *http.Request, scope bucketScope) string {
+	key := strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+	if key == "" && scope == scopeListing {
+		return strings.TrimPrefix(r.URL.Query().Get("prefix"), "/")
 	}
-	return strings.TrimPrefix(r.URL.Query().Get("prefix"), "/")
+	return key
 }
 
 // allowSystemBucket applies the rule above to a fetched bucket row, for a
 // request whose key (or listing prefix) is in its route. It reports whether
 // the request may go on. A request that addresses no key (a bucket-level verb,
-// an unscoped listing) never reaches a system bucket under a claim.
-func (h *Handler) allowSystemBucket(r *http.Request, projectID int64, row repos.BucketRow) (bool, error) {
-	return h.allowSystemBucketKey(r, projectID, row, systemBucketScopeKey(r))
+// an unscoped listing) never reaches a confined bucket under a claim.
+func (h *Handler) allowSystemBucket(r *http.Request, projectID int64, row repos.BucketRow, scope bucketScope) (bool, error) {
+	return h.allowSystemBucketKey(r, projectID, row, systemBucketScopeKey(r, scope))
+}
+
+// allowSystemBucketKeys is allowSystemBucketKey for every key a body names.
+func (h *Handler) allowSystemBucketKeys(r *http.Request, projectID int64, row repos.BucketRow, keys []string) (bool, error) {
+	for _, key := range keys {
+		allowed, err := h.allowSystemBucketKey(r, projectID, row, key)
+		if err != nil || !allowed {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // allowSystemBucketKey is allowSystemBucket for a key the route does not
@@ -129,10 +163,15 @@ func (h *Handler) allowSystemBucketKey(r *http.Request, projectID int64, row rep
 }
 
 // systemBucketPrefix is the key prefix a claim-naming request is confined to
-// in a system bucket: ("", false) when the rule does not apply (not a system
-// bucket, or no claim named), ("", true) when the claim reaches nothing in it,
-// and ("{conversation}/", true) for the claim's own conversation in the
-// project's attachment bucket.
+// in a CONFINED system bucket: ("", false) when the rule does not apply,
+// ("", true) when the claim reaches nothing in it, and ("{conversation}/",
+// true) for the claim's own conversation in the project's attachment bucket.
+//
+// The confined buckets are the project's attachment bucket (its resolved
+// name, and the default name whatever the policy says) and the index result
+// bucket (review round 3, owner decision). Any other system bucket (a
+// provisioned `reports` or `tasks`) keeps the per-bucket access list for a
+// claim as for anyone.
 func (h *Handler) systemBucketPrefix(r *http.Request, projectID int64, row repos.BucketRow) (string, bool, error) {
 	if row.BucketType != "system" {
 		return "", false, nil
@@ -140,6 +179,18 @@ func (h *Handler) systemBucketPrefix(r *http.Request, projectID int64, row repos
 	claim, named, err := requestRuntimeClaim(r)
 	if !named {
 		return "", false, nil
+	}
+	attachmentBucket, err2 := h.attachmentBucketName(r.Context(), projectID)
+	if err2 != nil {
+		return "", true, err2
+	}
+	confined := row.Name == attachmentBucket || row.Name == storage.DefaultAttachmentBucket ||
+		row.Name == indexArtifactBucketName
+	if !confined {
+		return "", false, nil
+	}
+	if row.Name == indexArtifactBucketName {
+		return "", true, nil
 	}
 	if err != nil || h.claims == nil {
 		return "", true, nil
@@ -155,13 +206,6 @@ func (h *Handler) systemBucketPrefix(r *http.Request, projectID int64, row repos
 	if !ok || caller != scope.ActorID || scope.ProjectID != projectID || !canonicalUUID(scope.ConversationID) {
 		return "", true, nil
 	}
-	attachmentBucket, err := h.attachmentBucketName(r.Context(), projectID)
-	if err != nil {
-		return "", true, err
-	}
-	if row.Name != attachmentBucket {
-		return "", true, nil
-	}
 	return scope.ConversationID + "/", true, nil
 }
 
@@ -169,13 +213,19 @@ func (h *Handler) systemBucketPrefix(r *http.Request, projectID int64, row repos
 // is the part's filename: the system-bucket rule is applied to it by
 // allowUploadKey once the part is read.
 func (h *Handler) requireBucketForUpload(w http.ResponseWriter, r *http.Request, projectID int64, bucket string) (repos.BucketRow, bool) {
-	return h.requireBucketChecked(w, r, projectID, bucket, accessWrite, false)
+	return h.requireBucketChecked(w, r, projectID, bucket, accessWrite, scopeCallerKeys)
 }
 
 // allowUploadKey answers the upload's system-bucket check for its key,
 // writing the refusal itself.
 func (h *Handler) allowUploadKey(w http.ResponseWriter, r *http.Request, projectID int64, row repos.BucketRow, key string) bool {
-	allowed, err := h.allowSystemBucketKey(r, projectID, row, key)
+	return h.allowKeys(w, r, projectID, row, []string{key})
+}
+
+// allowKeys is allowUploadKey for every key a route names (a batch delete,
+// a grant's server-derived key, a continuation's grant).
+func (h *Handler) allowKeys(w http.ResponseWriter, r *http.Request, projectID int64, row repos.BucketRow, keys []string) bool {
+	allowed, err := h.allowSystemBucketKeys(r, projectID, row, keys)
 	if err != nil {
 		h.writeInternal(w, r, "authorize system bucket", err)
 		return false

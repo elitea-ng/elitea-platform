@@ -455,7 +455,7 @@ func TestArtifactRoutesRefuseSystemBucketsByName(t *testing.T) {
 	const conversation = "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1"
 	source := &attachmentArtifactSourceStub{
 		artifactSourceStub: artifactSourceStub{
-			systemBuckets: []string{DefaultAttachmentBucket, "index-results"},
+			systemBuckets: []string{DefaultAttachmentBucket, "index-artifacts", "reports"},
 			readRecord: RuntimeArtifactContentRecord{
 				Name: conversation + "/notes.txt", MediaType: "text/plain", ByteLength: 4, Content: []byte("data"),
 			},
@@ -489,7 +489,7 @@ func TestArtifactRoutesRefuseSystemBucketsByName(t *testing.T) {
 		{"list", `{"bucket":"` + DefaultAttachmentBucket + `","prefix":"0f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/"}`},
 		{"list", `{"bucket":"` + DefaultAttachmentBucket + `","prefix":"` + conversation + `"}`},
 		{"read", `{"bucket":"` + DefaultAttachmentBucket + `","name":"0f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/notes.txt"}`},
-		{"read", `{"bucket":"index-results","name":"` + conversation + `/notes.txt"}`},
+		{"read", `{"bucket":"index-artifacts","name":"` + conversation + `/notes.txt"}`},
 		{"write", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/x.txt","content":"x"}`},
 		{"delete", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/notes.txt"}`},
 	} {
@@ -507,7 +507,16 @@ func TestArtifactRoutesRefuseSystemBucketsByName(t *testing.T) {
 	for _, body := range []struct{ operation, body string }{
 		{"read", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/notes.txt"}`},
 		{"list", `{"bucket":"` + DefaultAttachmentBucket + `"}`},
+		{"read", `{"bucket":"index-artifacts","name":"x.json"}`},
 	} {
 		require.Equal(t, http.StatusForbidden, status(tool, body.operation, body.body), body)
 	}
+
+	// Review round 3 (owner decision): a provisioned `reports` system bucket
+	// is the per-bucket access list's, for an agent turn and a tool run alike.
+	for _, server := range []*ContentServer{agent, tool} {
+		require.Equal(t, http.StatusOK, status(server, "read", `{"bucket":"reports","name":"`+conversation+`/notes.txt"}`))
+		require.Equal(t, http.StatusOK, status(server, "list", `{"bucket":"reports"}`))
+	}
+	require.Equal(t, http.StatusOK, status(agent, "write", `{"bucket":"reports","name":"q3.txt","content":"x"}`))
 }

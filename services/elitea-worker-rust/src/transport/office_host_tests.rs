@@ -1444,28 +1444,112 @@ async fn the_office_host_names_its_claim_and_keeps_to_its_conversation() {
     );
 }
 
+/// The project's attachment bucket as Main's policy names it.
+struct PolicyBucket(&'static str);
+
+#[async_trait]
+impl elitea_agent_runtime::toolkits::AttachmentBucketResolver for PolicyBucket {
+    async fn attachment_bucket(
+        &self,
+    ) -> Result<String, elitea_agent_runtime::toolkits::AttachmentBucketError> {
+        Ok(self.0.to_owned())
+    }
+}
+
+/// Review round 3: an Office toolkit whose `bucket_name` is a provisioned
+/// `reports` system bucket reads and writes it in an agent turn and in a
+/// direct call; the project's policy-named attachment bucket is confined to
+/// the turn's own conversation, like the default one.
+#[tokio::test]
+async fn a_reports_bucket_works_on_every_path_and_the_policy_bucket_is_confined() {
+    use super::office_host::OfficeClaim;
+    let api = ObjectApi::new();
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        Arc::clone(&api) as Arc<dyn Transport>,
+    ));
+    let authority = crate::protocol::control::test_runtime_context_authority();
+    for conversation in [Some(OWN_CONVERSATION.to_owned()), None] {
+        let host = ClaimOfficeHost::new(
+            Arc::clone(&runtime),
+            "pat-token",
+            "42",
+            LazyStepbackModel::unbound(),
+        )
+        .expect("host")
+        .with_claim(
+            OfficeClaim::new(&authority, conversation.clone())
+                .with_attachment_bucket(Arc::new(PolicyBucket("team-uploads"))),
+        );
+        host.write_object(
+            "reports",
+            "q3/summary.xlsx",
+            "text/plain",
+            b"r".to_vec(),
+            true,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("reports write ({conversation:?}): {error:?}"));
+        assert_eq!(
+            host.read_object("reports", "q3/summary.xlsx", 1 << 20)
+                .await
+                .expect("reports read"),
+            b"r"
+        );
+        let other = format!("{OTHER_CONVERSATION}/x.xlsx");
+        assert_eq!(
+            host.read_object("team-uploads", &other, 1 << 20)
+                .await
+                .expect_err("another conversation in the policy bucket")
+                .kind(),
+            OfficeFailure::AccessRefused
+        );
+    }
+}
+
 /// A direct toolkit call names its claim but has no conversation: it reaches
-/// no system bucket, while every bucket a person made works as before.
+/// no attachment bucket, while every bucket a person made works as before.
+/// Review round 3: the confinement is the project's RESOLVED attachment
+/// bucket (a policy may name one other than the default) and the index
+/// result bucket only; a provisioned `reports`/`tasks` system bucket is the
+/// per-bucket access list's.
 #[test]
-fn a_path_without_a_conversation_reaches_no_system_bucket() {
+fn the_confined_buckets_are_the_attachment_and_index_buckets_only() {
     use super::office_host::office_object_allowed_for_test as allowed;
-    assert!(allowed("decks", Some("q3/review.pptx"), None));
-    assert!(!allowed(
-        "chat-attachments",
-        Some(&format!("{OWN_CONVERSATION}/x")),
-        None
-    ));
-    assert!(!allowed("index-artifacts", Some("x"), None));
-    assert!(allowed(
-        "chat-attachments",
-        Some(&format!("{OWN_CONVERSATION}/x")),
-        Some(OWN_CONVERSATION)
-    ));
+    let own = format!("{OWN_CONVERSATION}/x");
+    let other = format!("{OTHER_CONVERSATION}/x");
+    // Without a conversation (a direct call).
+    assert!(allowed("decks", Some("q3/review.pptx"), None, None));
+    assert!(!allowed("chat-attachments", Some(&own), None, None));
+    assert!(!allowed("index-artifacts", Some("x"), None, None));
+    // An agent turn of OWN_CONVERSATION, the default attachment bucket.
+    let turn = Some(OWN_CONVERSATION);
+    assert!(allowed("chat-attachments", Some(&own), turn, None));
+    assert!(!allowed("chat-attachments", Some(&other), turn, None));
     assert!(!allowed(
         "chat-attachments",
         Some(OWN_CONVERSATION),
-        Some(OWN_CONVERSATION)
+        turn,
+        None
     ));
+    assert!(!allowed("index-artifacts", Some(&own), turn, None));
+    // A policy-named attachment bucket is confined too, and the default name
+    // stays confined whatever the policy says.
+    let policy = Some("team-uploads");
+    assert!(allowed("team-uploads", Some(&own), turn, policy));
+    assert!(!allowed("team-uploads", Some(&other), turn, policy));
+    assert!(!allowed("team-uploads", Some(&own), None, policy));
+    assert!(!allowed("chat-attachments", Some(&other), turn, policy));
+    // A provisioned `reports` system bucket: the access list's, on every path.
+    for conversation in [None, turn] {
+        assert!(allowed(
+            "reports",
+            Some("q3/summary.xlsx"),
+            conversation,
+            policy
+        ));
+        assert!(allowed("tasks", Some("t.txt"), conversation, policy));
+    }
 }
 
 /// Review round 2 (C2 regression): a `SharePoint` discovery is lent the

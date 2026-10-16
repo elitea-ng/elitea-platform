@@ -11,6 +11,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -109,12 +110,15 @@ func (a *attachmentRepoAdapter) RequireAttachmentBucket(ctx context.Context, pro
 // bucket is the boundary every conversation-scoped read relies on (review
 // round 2). Bucket creation reserves the names, so this is a row created
 // before that rule or by hand.
-var errAttachmentBucketNotSystem = errors.New("the attachment bucket name is held by a bucket that is not a system bucket")
+var errAttachmentBucketNotSystem = storage.ErrSystemBucketNameTaken
 
 // systemAttachmentBucket is the attachment bucket only when it is a system
-// bucket.
+// bucket; otherwise a WARN names the project and the bucket, and the upload
+// answers 409 (review round 3: no migration frees the name).
 func systemAttachmentBucket(row dbrepos.BucketRow) (int64, error) {
 	if row.BucketType != "system" {
+		slog.Warn("the attachment bucket name is held by a bucket that is not a system bucket",
+			"project_id", row.ProjectID, "bucket", row.Name, "bucket_type", row.BucketType)
 		return 0, errAttachmentBucketNotSystem
 	}
 	return row.ID, nil

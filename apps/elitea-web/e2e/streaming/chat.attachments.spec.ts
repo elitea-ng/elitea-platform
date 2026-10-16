@@ -204,6 +204,15 @@ const ATTACHMENT_BUCKET = 'chat-attachments';
 /** `chat_conversations.uuid` as it appears in a URL — the identifier an attachment is keyed by. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+// RETARGETED to the native Rust leg (owner direction, PR #1293): the Python
+// worker is being removed, so this journey asserts the runtime that stays;
+// `chat-stream-rust` runs it in full. The Python leg's "Permission denied" was
+// elitea-main refusing the SDK's claim-less read, which carries only the
+// execution-id request-log tag; that is fixed in
+// internal/api/v2/artifacts/system_buckets.go and pinned there by
+// TestAnExecutionTagAloneIsNotAClaim.
+test.skip(WORKER !== 'rust', 'retargeted to the native Rust runtime; the Python worker is being removed');
+
 test('an attachment rides a real turn: the composer sends it, the platform stores it, the reload shows it', async ({
   page,
 }) => {

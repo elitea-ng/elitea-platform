@@ -561,11 +561,18 @@ impl PipelineNativeAgentAssembler {
                     );
                     match host {
                         Ok(host) => {
-                            let host =
-                                host.with_claim(crate::transport::office_host::OfficeClaim::new(
+                            let host = host.with_claim(
+                                crate::transport::office_host::OfficeClaim::new(
                                     runtime_context,
                                     Some(conversation_id.clone()),
-                                ));
+                                )
+                                .with_attachment_bucket(Arc::new(
+                                    super::attachments::ClaimAttachmentBucket::new(
+                                        Arc::clone(platform),
+                                        Arc::clone(runtime_context),
+                                    ),
+                                )),
+                            );
                             // The `imagegen` toolkit's images API (#864): lent
                             // wherever the worker holds a model facade.
                             let host = if let Some(facade) = self.model_facade.as_ref() {

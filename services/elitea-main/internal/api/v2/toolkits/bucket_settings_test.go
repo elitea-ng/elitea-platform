@@ -8,9 +8,15 @@ package toolkits_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 )
 
 func TestAFileStoreToolkitIsNotSavedWithoutABucket(t *testing.T) {
@@ -132,4 +138,33 @@ func TestATypeOnlyUpdateToAFileStoreTypeIsJudgedOnTheStoredSettings(t *testing.T
 	if recorder := put(withBucket, `{"type": "xlsx"}`); recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
 	}
+
+	// Review round 3: the check fails CLOSED. An unreadable stored row is
+	// an error, never an unjudged save.
+	unreadable := &defaultsRecordingRepo{storedType: "docx", getErr: errors.New("connection reset")}
+	if recorder := put(unreadable, `{"type": "xlsx"}`); recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(unreadable.updates) != 0 {
+		t.Fatal("an update whose stored row could not be read was written")
+	}
+	missing := &defaultsRecordingRepo{storedType: "docx", getErr: fmt.Errorf("get toolkit: %w", pgx.ErrNoRows)}
+	if recorder := put(missing, `{"type": "xlsx"}`); recorder.Code != http.StatusNotFound || len(missing.updates) != 0 {
+		t.Fatalf("status = %d (updates %d), want 404 and no write", recorder.Code, len(missing.updates))
+	}
+}
+
+// The served artifact schema states what the save enforces: `bucket` is
+// required (the SDK's schema requires it too), so the create form asks for it.
+func TestTheServedArtifactSchemaRequiresItsBucket(t *testing.T) {
+	t.Parallel()
+	body := getToolkitTypeCatalogue(t, toolkits.WithArgumentSchemas(pinnedSnapshot(t)))
+	schema, _ := body["artifact"].(map[string]any)
+	required, _ := schema["required"].([]any)
+	for _, key := range required {
+		if key == "bucket" {
+			return
+		}
+	}
+	t.Fatalf("artifact required = %v, want it to name bucket", schema["required"])
 }

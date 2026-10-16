@@ -867,6 +867,52 @@ fn family_tool_catalog(tool_type: &str) -> Option<Vec<(&'static str, bool)>> {
     })
 }
 
+/// Whether `tool_name` of `tool_type` acts through the run's file store (the
+/// Office host): the family builds it only when the host is lent. The hosts
+/// (the agent assembly, a direct call) read this so the build, the discovery
+/// and the call agree (review round 3).
+#[must_use]
+pub fn tool_needs_file_store(tool_type: &str, tool_name: &str) -> bool {
+    family_tool_catalog(tool_type).is_some_and(|catalog| {
+        catalog
+            .iter()
+            .any(|(name, needs)| *needs && *name == tool_name)
+    })
+}
+
+/// The tools of `tool_type` that need the run's file store (empty for a
+/// family with none, or one this runtime does not build).
+#[must_use]
+pub fn file_store_tools(tool_type: &str) -> Vec<&'static str> {
+    family_tool_catalog(tool_type)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(name, needs)| needs.then_some(name))
+        .collect()
+}
+
+/// Whether a configured toolkit would build a tool that needs the file
+/// store: one of its selected tools does, or (an absent or empty selection
+/// meaning every tool) any tool of its family does.
+#[must_use]
+pub fn toolkit_needs_file_store(
+    tool_type: &str,
+    settings: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> bool {
+    let selected: Vec<&str> = settings
+        .and_then(|settings| settings.get("selected_tools"))
+        .and_then(serde_json::Value::as_array)
+        .map(|names| names.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
+    if selected.is_empty() {
+        return family_tool_catalog(tool_type)
+            .is_some_and(|catalog| catalog.iter().any(|(_, needs)| *needs));
+    }
+    selected
+        .iter()
+        .any(|name| tool_needs_file_store(tool_type, name))
+}
+
 /// The stored settings with the selected names the family does not serve
 /// removed, when at least one served name remains; `None` when nothing
 /// needs removing (or nothing would remain, which the family itself answers

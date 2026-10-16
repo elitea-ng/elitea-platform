@@ -395,6 +395,11 @@ var toolkitTypeSchemas = map[string]map[string]any{
 	},
 	"artifact": {
 		"type": "object",
+		// The SDK's own schema requires `bucket` (a `str` field with no
+		// default; ArtifactWrapper refuses a toolkit without one), and so does
+		// the save (refuseMissingToolkitBucket). Served here so the create form
+		// asks for it instead of saving into a 400.
+		"required": []any{"bucket"},
 		"properties": map[string]any{
 			"bucket":                 map[string]any{"type": "string"},
 			"pgvector_configuration": map[string]any{"type": "object"},
@@ -1354,15 +1359,23 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	// (review round 2). A rename (no type, no settings) stays unjudged.
 	if _, hasSettings := body["settings"].(map[string]any); !hasSettings && updatedType != "" {
 		if _, stores := toolkitBucketSetting[updatedType]; stores {
+			// Fails CLOSED (review round 3): a stored row that cannot be
+			// read is not saved unjudged.
 			stored, err := h.repo.GetToolkit(r.Context(), projectID, toolkitID)
-			if err == nil {
-				storedSettings, _ := stored["settings"].(map[string]any)
-				if storedSettings == nil {
-					storedSettings = map[string]any{}
-				}
-				if h.refuseMissingToolkitBucket(w, "update_toolkit", updatedType, storedSettings) {
-					return
-				}
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+				return
+			}
+			if err != nil {
+				writeToolkitInternalError(w, r, "update_toolkit", "failed to read the toolkit", err)
+				return
+			}
+			storedSettings, _ := stored["settings"].(map[string]any)
+			if storedSettings == nil {
+				storedSettings = map[string]any{}
+			}
+			if h.refuseMissingToolkitBucket(w, "update_toolkit", updatedType, storedSettings) {
+				return
 			}
 		}
 	}

@@ -142,8 +142,13 @@ pub(crate) struct OfficeClaim {
     claim_id: String,
     fence: String,
     /// The conversation the turn belongs to; `None` on a path that has none
-    /// (a direct toolkit call), which then reaches no system bucket.
+    /// (a direct toolkit call), which then reaches no attachment bucket.
     conversation: Option<String>,
+    /// The project's attachment bucket name, resolved once from Main (its
+    /// storage policy, else the default) over the claim's existing
+    /// runtime-context channel (review round 3).
+    attachment_bucket: Option<Arc<dyn elitea_agent_runtime::toolkits::AttachmentBucketResolver>>,
+    resolved: Arc<tokio::sync::OnceCell<Option<String>>>,
 }
 
 impl OfficeClaim {
@@ -160,31 +165,63 @@ impl OfficeClaim {
             claim_id: binding.claim_id.to_owned(),
             fence: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(binding.fence_token),
             conversation: conversation.filter(|value| canonical_uuid(value)),
+            attachment_bucket: None,
+            resolved: Arc::new(tokio::sync::OnceCell::new()),
         }
+    }
+
+    /// This claim, resolving the project's attachment bucket name with
+    /// `resolver` (the policy may name one other than the default).
+    #[must_use]
+    pub(crate) fn with_attachment_bucket(
+        mut self,
+        resolver: Arc<dyn elitea_agent_runtime::toolkits::AttachmentBucketResolver>,
+    ) -> Self {
+        self.attachment_bucket = Some(resolver);
+        self
+    }
+
+    /// The project's attachment bucket name, when it could be resolved.
+    async fn attachment_bucket(&self) -> Option<String> {
+        let resolver = self.attachment_bucket.clone()?;
+        self.resolved
+            .get_or_init(|| async move { resolver.attachment_bucket().await.ok() })
+            .await
+            .clone()
     }
 }
 
-/// The platform's SYSTEM bucket names a worker knows without asking: the
-/// default chat attachment bucket and the index result bucket. Main holds the
-/// authoritative rule (`bucket_type`); this is the worker's own check.
-const SYSTEM_BUCKETS: [&str; 2] = ["chat-attachments", "index-artifacts"];
+/// The default chat attachment bucket and the index result bucket. Main holds
+/// the authoritative rule (`bucket_type`); this is the worker's own check.
+const DEFAULT_ATTACHMENT_BUCKET: &str = "chat-attachments";
+const INDEX_ARTIFACT_BUCKET: &str = "index-artifacts";
 
-/// Whether an Office object request may address `bucket`/`key`: any bucket a
-/// person made, and in a system bucket only the attachment bucket under the
-/// turn's own conversation (defence in depth for the server-side rule).
-fn office_object_allowed(bucket: &str, key: Option<&str>, claim: Option<&OfficeClaim>) -> bool {
-    if !SYSTEM_BUCKETS.contains(&bucket) {
+/// Whether an Office object request may address `bucket`/`key`, given the
+/// project's resolved attachment bucket name: the index result bucket never;
+/// the attachment bucket (the resolved name, and the default whatever the
+/// policy says) only under the turn's own conversation; every other bucket
+/// (a person's, or a provisioned `reports`/`tasks` system bucket) as its
+/// per-bucket access list allows (review rounds 2 and 3).
+fn office_object_allowed(
+    bucket: &str,
+    key: Option<&str>,
+    claim: Option<&OfficeClaim>,
+    attachment_bucket: Option<&str>,
+) -> bool {
+    if bucket == INDEX_ARTIFACT_BUCKET {
+        return false;
+    }
+    if bucket != DEFAULT_ATTACHMENT_BUCKET && Some(bucket) != attachment_bucket {
         return true;
     }
     let Some(conversation) = claim.and_then(|claim| claim.conversation.as_deref()) else {
         return false;
     };
-    bucket == SYSTEM_BUCKETS[0]
-        && key.is_some_and(|key| {
-            key.strip_prefix(conversation)
-                .and_then(|rest| rest.strip_prefix('/'))
-                .is_some_and(|rest| !rest.is_empty())
-        })
+    key.is_some_and(|key| {
+        key.strip_prefix(conversation)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .is_some_and(|rest| !rest.is_empty())
+    })
 }
 
 #[cfg(test)]
@@ -192,6 +229,7 @@ pub(crate) fn office_object_allowed_for_test(
     bucket: &str,
     key: Option<&str>,
     conversation: Option<&str>,
+    attachment_bucket: Option<&str>,
 ) -> bool {
     let claim = OfficeClaim {
         execution_id: String::new(),
@@ -199,8 +237,10 @@ pub(crate) fn office_object_allowed_for_test(
         claim_id: String::new(),
         fence: String::new(),
         conversation: conversation.map(str::to_owned),
+        attachment_bucket: None,
+        resolved: Arc::new(tokio::sync::OnceCell::new()),
     };
-    office_object_allowed(bucket, key, Some(&claim))
+    office_object_allowed(bucket, key, Some(&claim), attachment_bucket)
 }
 
 fn canonical_uuid(value: &str) -> bool {
@@ -309,6 +349,28 @@ impl ClaimOfficeHost {
         }
     }
 
+    /// The worker's system-bucket check for one object (see
+    /// [`office_object_allowed`]), before any request is sent.
+    async fn check_object(&self, bucket: &str, name: &str) -> Result<(), OfficeHostError> {
+        let attachment_bucket = match &self.claim {
+            Some(claim) => claim.attachment_bucket().await,
+            None => None,
+        };
+        if office_object_allowed(
+            bucket,
+            Some(name),
+            self.claim.as_ref(),
+            attachment_bucket.as_deref(),
+        ) {
+            Ok(())
+        } else {
+            Err(OfficeHostError::new(
+                OfficeFailure::AccessRefused,
+                "office_host.system_bucket_refused",
+            ))
+        }
+    }
+
     fn object_request(
         &self,
         method: Method,
@@ -320,14 +382,6 @@ impl ClaimOfficeHost {
             return Err(OfficeHostError::new(
                 OfficeFailure::InvalidRequest,
                 "office_host.invalid_name",
-            ));
-        }
-        // A keyless request is the upload, whose key (the part's name) its
-        // caller checks first.
-        if key.is_some() && !office_object_allowed(bucket, key, self.claim.as_ref()) {
-            return Err(OfficeHostError::new(
-                OfficeFailure::AccessRefused,
-                "office_host.system_bucket_refused",
             ));
         }
         let mut url = self.platform.objects_url(bucket, key);
@@ -735,6 +789,7 @@ impl OfficeToolHost for ClaimOfficeHost {
     async fn object_size(&self, bucket: &str, name: &str) -> Result<Option<u64>, OfficeHostError> {
         // A HEAD: the size is the declared Content-Length, and nothing is
         // buffered.
+        self.check_object(bucket, name).await?;
         let head = self.object_request(Method::HEAD, bucket, Some(name), false)?;
         let response = self
             .runtime
@@ -760,6 +815,7 @@ impl OfficeToolHost for ClaimOfficeHost {
     ) -> Result<Vec<u8>, OfficeHostError> {
         // The size first, from a HEAD, so a large object is refused without
         // being buffered (and an existence check does not download a deck).
+        self.check_object(bucket, name).await?;
         let head = self.object_request(Method::HEAD, bucket, Some(name), false)?;
         let response = self
             .runtime
@@ -774,6 +830,7 @@ impl OfficeToolHost for ClaimOfficeHost {
             return Err(failure(&Failure::TooLarge(max_bytes)));
         }
         drop(response);
+        self.check_object(bucket, name).await?;
         let get = self.object_request(Method::GET, bucket, Some(name), false)?;
         let bytes = self.runtime.http.raw(get).await.map_err(|e| failure(&e))?;
         if bytes.len() as u64 > max_bytes {
@@ -796,12 +853,7 @@ impl OfficeToolHost for ClaimOfficeHost {
                 "office_host.invalid_name",
             ));
         }
-        if !office_object_allowed(bucket, Some(name), self.claim.as_ref()) {
-            return Err(OfficeHostError::new(
-                OfficeFailure::AccessRefused,
-                "office_host.system_bucket_refused",
-            ));
-        }
+        self.check_object(bucket, name).await?;
         let mut request = self.object_request(Method::POST, bucket, None, overwrite)?;
         let byte_length = bytes.len() as u64;
         // The one multipart encoder refuses a name or media type that could

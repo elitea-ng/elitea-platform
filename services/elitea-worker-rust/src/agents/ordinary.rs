@@ -406,7 +406,13 @@ impl OrdinaryNativeAgentAssembler {
                 crate::transport::office_host::OfficeClaim::new(
                     runtime_context,
                     Some(conversation_id.clone()),
-                ),
+                )
+                .with_attachment_bucket(Arc::new(
+                    super::attachments::ClaimAttachmentBucket::new(
+                        Arc::clone(&self.platform),
+                        Arc::clone(runtime_context),
+                    ),
+                )),
             )
         {
             if wants_data_analysis {
@@ -1017,7 +1023,7 @@ pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>
 /// Office families and `imagegen` always do; `sharepoint` only when its
 /// selected tools include one that reads a document or an artifact, so a
 /// `get_lists`-only toolkit redeems nothing.
-fn toolkit_needs_office_host(
+pub(crate) fn toolkit_needs_office_host(
     tool_type: &str,
     settings: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> bool {
@@ -1032,7 +1038,10 @@ fn toolkit_needs_office_host(
                     .filter_map(serde_json::Value::as_str)
                     .any(elitea_agent_runtime::toolkits::sharepoint_tool_uses_office_host)
             }),
-        _ => false,
+        // Review round 3: every family whose build serves file-store tools
+        // only with the host (the tracker attachment tools, carrier's
+        // reports), so the agent turn builds what discovery lists.
+        family => elitea_agent_runtime::toolkits::toolkit_needs_file_store(family, settings),
     }
 }
 

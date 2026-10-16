@@ -388,12 +388,8 @@ func (service *RuntimeArtifactObjectService) refuseSystemBucket(
 	if !system {
 		return nil
 	}
-	// A read names one object under the conversation; a listing (review
-	// round 2: get_file_metadata resolves a file through one) may name the
-	// conversation's own prefix itself.
-	if readKey == "" || !canonicalConversationIdentity(authorization.ConversationID) ||
-		(!conversationScopedAttachmentKey(authorization.ConversationID, readKey) &&
-			readKey != authorization.ConversationID+"/") {
+	// The index result bucket is never reached by name.
+	if bucket == IndexArtifactBucketName {
 		return ErrContentUnauthorized
 	}
 	attachments, ok := service.artifacts.(AttachmentListingSource)
@@ -407,11 +403,26 @@ func (service *RuntimeArtifactObjectService) refuseSystemBucket(
 	if attachmentBucket == "" {
 		attachmentBucket = DefaultAttachmentBucket
 	}
-	if bucket != attachmentBucket {
+	// Review round 3 (owner decision): only the attachment bucket (its
+	// resolved name, and the default) is confined; another system bucket (a
+	// provisioned `reports` or `tasks`) keeps the per-bucket access list.
+	if bucket != attachmentBucket && bucket != DefaultAttachmentBucket {
+		return nil
+	}
+	// A read names one object under the conversation; a listing (review
+	// round 2: get_file_metadata resolves a file through one) may name the
+	// conversation's own prefix itself. Writes and deletes name no readKey.
+	if readKey == "" || !canonicalConversationIdentity(authorization.ConversationID) ||
+		(!conversationScopedAttachmentKey(authorization.ConversationID, readKey) &&
+			readKey != authorization.ConversationID+"/") {
 		return ErrContentUnauthorized
 	}
 	return nil
 }
+
+// IndexArtifactBucketName is the system bucket index runs write their
+// results to.
+const IndexArtifactBucketName = "index-artifacts"
 
 func (service *RuntimeArtifactObjectService) authorizeWithConversation(
 	ctx context.Context,
