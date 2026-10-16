@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ const databaseURLEnv = "ELITEA_TEST_DATABASE_URL"
 var migrationFiles = []string{
 	"0067_gateway_budget_schema.sql",
 	"0084_budget_usage_dimensions.sql",
+	"0101_gateway_usage_event_execution_id.sql",
 }
 
 // writeBackUpsertSQL is the write-back consumer's guarded UPSERT. The consumer
@@ -382,4 +384,129 @@ func claimEvent(t *testing.T, pool *pgxpool.Pool, eventID string) bool {
 func newUUID(t *testing.T) string {
 	t.Helper()
 	return uuid.NewString()
+}
+
+// healthyDelta is a billed delta with reporting dimensions, so the
+// usage-ledger half of the write runs too. The model name is longer than its
+// VARCHAR(128) column: it must be trimmed, never fail the money write.
+func (f *pgFixture) healthyDelta(eventID string, nano int64) OutageDelta {
+	d := f.outageDelta(eventID, nano)
+	user := 5
+	d.Usage = &UsageDimensions{
+		UserID: &user, Provider: "openai", Model: strings.Repeat("m", 300),
+		PromptTokens: 3, CompletionTokens: 4, OccurredAtUnix: f.period + 60,
+		ExecutionID: strings.Repeat("e", 300),
+	}
+	return d
+}
+
+// ledgerRows counts the usage-ledger rows of one event.
+func (f *pgFixture) ledgerRows(t *testing.T, eventID string) int {
+	t.Helper()
+	var n int
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM gateway.llm_usage_events WHERE event_id = $1`, eventID).Scan(&n); err != nil {
+		t.Fatalf("count ledger rows: %v", err)
+	}
+	return n
+}
+
+// consumerApply models the write-back consumer's Apply for one delta against
+// the real tables: claim the event id, then the guarded UPSERT. It reports
+// whether the money was added.
+func (f *pgFixture) consumerApply(t *testing.T, eventID string, nano int64) bool {
+	t.Helper()
+	if !claimEvent(t, f.pool, eventID) {
+		return false
+	}
+	return f.writeBack(t, nano)
+}
+
+// TestPostgres_HealthyWrite covers PersistHealthyDelta ([human decision]
+// 2026-10-16, "Healthy write", option A) against the shipped DDL.
+func TestPostgres_HealthyWrite(t *testing.T) {
+	t.Run("a fresh row stays healthy and gets one ledger row", func(t *testing.T) {
+		f := newPGFixture(t)
+		evt := newUUID(t)
+		if err := f.store.PersistHealthyDelta(t.Context(), f.healthyDelta(evt, 3*NanoUSD)); err != nil {
+			t.Fatalf("persist healthy delta: %v", err)
+		}
+		nano, outage, _ := f.state(t)
+		if nano != 3*NanoUSD || outage {
+			t.Fatalf("nano=%d outage=%v, want %d and a healthy row", nano, outage, 3*NanoUSD)
+		}
+		if n := f.ledgerRows(t, evt); n != 1 {
+			t.Fatalf("ledger rows = %d, want 1", n)
+		}
+	})
+
+	t.Run("a healthy row gets the delta added and stays healthy", func(t *testing.T) {
+		f := newPGFixture(t)
+		if !f.writeBack(t, 2*NanoUSD) {
+			t.Fatal("seed write-back did not apply")
+		}
+		if err := f.store.PersistHealthyDelta(t.Context(), f.healthyDelta(newUUID(t), 3*NanoUSD)); err != nil {
+			t.Fatalf("persist healthy delta: %v", err)
+		}
+		nano, outage, _ := f.state(t)
+		if nano != 5*NanoUSD || outage {
+			t.Fatalf("nano=%d outage=%v, want %d and a healthy row", nano, outage, 5*NanoUSD)
+		}
+		// The consumer is not barred from the row afterwards.
+		if !f.writeBack(t, NanoUSD) {
+			t.Fatal("the healthy write left the row barred to the consumer")
+		}
+	})
+
+	t.Run("an outage-owned row takes the outage fallback and stays outage-owned", func(t *testing.T) {
+		f := newPGFixture(t)
+		if err := f.store.PersistOutageDelta(t.Context(), f.outageDelta(newUUID(t), 4*NanoUSD)); err != nil {
+			t.Fatalf("seed outage delta: %v", err)
+		}
+		evt := newUUID(t)
+		if err := f.store.PersistHealthyDelta(t.Context(), f.healthyDelta(evt, 3*NanoUSD)); err != nil {
+			t.Fatalf("persist healthy delta: %v", err)
+		}
+		nano, outage, reconciled := f.state(t)
+		if nano != 7*NanoUSD || !outage || reconciled {
+			t.Fatalf("nano=%d outage=%v reconciled=%v, want %d and still outage-owned", nano, outage, reconciled, 7*NanoUSD)
+		}
+		if n := f.ledgerRows(t, evt); n != 1 {
+			t.Fatalf("ledger rows = %d, want 1", n)
+		}
+	})
+
+	t.Run("an event the consumer already applied adds nothing", func(t *testing.T) {
+		f := newPGFixture(t)
+		evt := newUUID(t)
+		if !f.consumerApply(t, evt, 3*NanoUSD) {
+			t.Fatal("the consumer could not apply a fresh event")
+		}
+		if err := f.store.PersistHealthyDelta(t.Context(), f.healthyDelta(evt, 3*NanoUSD)); err != nil {
+			t.Fatalf("persist healthy delta: %v", err)
+		}
+		if nano, _, _ := f.state(t); nano != 3*NanoUSD {
+			t.Fatalf("nano=%d, want %d: an already-applied event was billed again", nano, 3*NanoUSD)
+		}
+		if n := f.ledgerRows(t, evt); n != 0 {
+			t.Fatalf("ledger rows = %d, want 0 (the consumer's delta carried no usage)", n)
+		}
+	})
+
+	t.Run("a consumer redelivery after the healthy write lands once", func(t *testing.T) {
+		f := newPGFixture(t)
+		evt := newUUID(t)
+		if err := f.store.PersistHealthyDelta(t.Context(), f.healthyDelta(evt, 3*NanoUSD)); err != nil {
+			t.Fatalf("persist healthy delta: %v", err)
+		}
+		if f.consumerApply(t, evt, 3*NanoUSD) {
+			t.Fatal("the consumer applied an event the healthy write had already claimed")
+		}
+		if nano, _, _ := f.state(t); nano != 3*NanoUSD {
+			t.Fatalf("nano=%d, want %d: the money landed twice", nano, 3*NanoUSD)
+		}
+		if n := f.ledgerRows(t, evt); n != 1 {
+			t.Fatalf("ledger rows = %d, want 1", n)
+		}
+	})
 }

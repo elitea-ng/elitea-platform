@@ -79,6 +79,10 @@ func main() {
 	// tell "draining" from "silently not draining".
 	writeBackStatus := budgetwriteback.NewStatus()
 	mux.Handle("/readyz/budget-writeback", writeBackStatus)
+	// The write-back operator metrics: deltas dropped as permanently failing
+	// ([human decision] 2026-10-16) and the consumer's ack-pending and
+	// redelivered counts. Only these; nothing else is published.
+	mux.Handle("/metrics", budgetwriteback.MetricsHandler())
 
 	srv := &http.Server{
 		Addr:        cfg.HTTPAddr,

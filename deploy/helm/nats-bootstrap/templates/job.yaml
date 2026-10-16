@@ -64,6 +64,8 @@ spec:
               value: {{ .Values.deltas.writeback.ackWait | quote }}
             - name: NATS_WRITEBACK_MAX_DELIVER
               value: {{ .Values.deltas.writeback.maxDeliver | quote }}
+            - name: NATS_WRITEBACK_MAX_PENDING
+              value: {{ .Values.deltas.writeback.maxAckPending | quote }}
             - name: NATS_PRESENCE_TTL
               value: {{ .Values.presence.ttl | quote }}
             - name: NATS_RT_VALIDATE_MAX_MSGS

@@ -20,13 +20,14 @@ func quietLogger() *slog.Logger {
 
 // fakeMessage is a Message seam impl with ack/nak/term counters.
 type fakeMessage struct {
-	data      string
-	settleErr error // returned by Ack/Nak/Term to exercise the settle-failure log path
-	acks      atomic.Int32
-	naks      atomic.Int32
-	term      atomic.Int32
-	delivered uint64 // NumDelivered metadata; 0 reads as 1
-	delays    []time.Duration
+	data        string
+	settleErr   error // returned by Ack/Nak/Term to exercise the settle-failure log path
+	acks        atomic.Int32
+	naks        atomic.Int32
+	term        atomic.Int32
+	delivered   uint64 // NumDelivered metadata; 0 reads as 1
+	metadataErr error  // returned by Metadata, to exercise its failure path
+	delays      []time.Duration
 }
 
 func (m *fakeMessage) NakWithDelay(delay time.Duration) error {
@@ -36,6 +37,9 @@ func (m *fakeMessage) NakWithDelay(delay time.Duration) error {
 }
 
 func (m *fakeMessage) Metadata() (*jetstream.MsgMetadata, error) {
+	if m.metadataErr != nil {
+		return nil, m.metadataErr
+	}
 	return &jetstream.MsgMetadata{NumDelivered: m.delivered}, nil
 }
 

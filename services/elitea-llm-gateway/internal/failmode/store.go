@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
 // snapshotSQL point-reads the applicable budget scope from the durable tier
@@ -358,10 +360,7 @@ func (s *Store) PersistOutageDelta(ctx context.Context, d OutageDelta) error {
 	// be short, with no field saying so.
 	if d.Usage != nil {
 		if _, err := tx.ExecAffected(ctx, usageEventInsertSQL,
-			d.EventID, d.ProjectID, d.Usage.UserID, d.Usage.Provider, d.Usage.Model,
-			d.Usage.PromptTokens, d.Usage.CompletionTokens,
-			d.DeltaNanoUSD, d.PeriodStart, d.PeriodEnd, d.Usage.OccurredAtUnix,
-			nullableExecutionID(d.Usage.ExecutionID),
+			usageEventArgs(d)...,
 		); err != nil {
 			return fmt.Errorf("failmode: persist outage usage event: %w", err)
 		}
@@ -441,10 +440,7 @@ func (s *Store) PersistHealthyDelta(ctx context.Context, d OutageDelta) error {
 	}
 	if d.Usage != nil {
 		if _, err := tx.ExecAffected(ctx, usageEventInsertSQL,
-			d.EventID, d.ProjectID, d.Usage.UserID, d.Usage.Provider, d.Usage.Model,
-			d.Usage.PromptTokens, d.Usage.CompletionTokens,
-			d.DeltaNanoUSD, d.PeriodStart, d.PeriodEnd, d.Usage.OccurredAtUnix,
-			nullableExecutionID(d.Usage.ExecutionID),
+			usageEventArgs(d)...,
 		); err != nil {
 			return fmt.Errorf("failmode: persist healthy usage event: %w", err)
 		}
@@ -482,7 +478,32 @@ func nullableExecutionID(value string) any {
 	if value == "" {
 		return nil
 	}
-	return value
+	return requestlog.Truncate(value, usageExecutionIDBytes)
+}
+
+// The usage-ledger column widths (shared migrations 0084 and 0101). The ledger
+// row rides in the SAME transaction as the money, and Postgres refuses an
+// over-long VARCHAR rather than trimming it, so an odd provider or model name
+// would fail the accumulator write with it ([human decision] 2026-10-16,
+// "Isolate, then drop": remove the known trigger). The values are trimmed to
+// fit instead; the ledger is a report, the accumulator is the money.
+const (
+	usageProviderBytes    = 64
+	usageModelBytes       = 128
+	usageExecutionIDBytes = 128
+)
+
+// usageEventArgs is usageEventInsertSQL's argument list for d, with every
+// bounded text column trimmed to its width.
+func usageEventArgs(d OutageDelta) []any {
+	return []any{
+		d.EventID, d.ProjectID, d.Usage.UserID,
+		requestlog.Truncate(d.Usage.Provider, usageProviderBytes),
+		requestlog.Truncate(d.Usage.Model, usageModelBytes),
+		d.Usage.PromptTokens, d.Usage.CompletionTokens,
+		d.DeltaNanoUSD, d.PeriodStart, d.PeriodEnd, d.Usage.OccurredAtUnix,
+		nullableExecutionID(d.Usage.ExecutionID),
+	}
 }
 
 // UsageDimensions are the reporting dimensions of one billed request: who made

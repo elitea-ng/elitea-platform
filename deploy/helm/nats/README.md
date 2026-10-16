@@ -239,7 +239,8 @@ a consumer-create grant is also the right to aim a push consumer's deliveries
 anywhere in the account. The one exception is elitea-main's presence watcher
 (an ordered consumer on its own bucket, inside MAIN). So the scheduler binds
 to the `budget-writeback` pull consumer the GATEWAY bootstrap creates (with
-the AckWait and MaxDeliver in `deploy/helm/nats-bootstrap` `deltas.writeback`)
+the AckWait, MaxDeliver and MaxAckPending in `deploy/helm/nats-bootstrap`
+`deltas.writeback`)
 and cannot redefine it (SCHEDULER is not even exported a consumer-create
 subject), and the gateway holds no consumer grant at all.
 
@@ -319,7 +320,7 @@ subject to NetworkPolicy.
 | `GATEWAY_BUDGET_DELTAS` | GATEWAY | stream (72h / 1 GiB / 5M, 12m dedup) | write-behind deltas, drained by `budget-writeback` |
 | `GATEWAY_ALERT_COOLDOWN` | GATEWAY | KV (TTL 4h) | 80% soft-alert cooldown (`kv.Create` = SETNX-with-TTL) |
 | `ELITEA_CANVAS_PRESENCE` | MAIN | KV (TTL 2m, history 1) | canvas presence rosters |
-| `GATEWAY_BUDGET_DELTAS` / `budget-writeback` | GATEWAY | durable pull consumer (explicit ack, AckWait 30s, MaxDeliver -1; the scheduler defers with a 5s-to-60s backoff) | the scheduler's write-back drain; it binds only |
+| `GATEWAY_BUDGET_DELTAS` / `budget-writeback` | GATEWAY | durable pull consumer (explicit ack, AckWait 30s, MaxDeliver -1 and MaxAckPending 20000; the scheduler defers with a 5s-to-60s backoff, and a delayed redelivery keeps its pending slot for the delay) | the scheduler's write-back drain; it binds only |
 | `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}` | RUNTIME | WorkQueue streams (discard new + per subject, 1 msg/subject, ≤1024 msgs, 64 MiB, 64 KiB msgs, MaxAge 3h/26h/26h, 2m dedup, allow_direct, deny delete/purge) | the runtime command bus, one stream per route |
 | `elitea-{configuration,agent,index}-worker-v1` | RUNTIME | durable pull consumers (AckWait 60s, MaxDeliver -1, MaxWaiting 512) | the workers' shared consumer, one per stream; they bind only |
 | `ELITEA_RT_V1_DEADLETTER` | WORKER | KV (TTL 7d, history 1) | poison commands the workers recorded |

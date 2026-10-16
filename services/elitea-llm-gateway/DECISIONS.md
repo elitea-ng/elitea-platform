@@ -413,7 +413,44 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   capped modelled consumer, replica B's delta, the usage-ledger row). The test
   fails with the outage-path write. Also guarded by
   `TestOutageWedge_PublishFailureOntoAnOutageOwnedRowStaysOutageOwned` and the
-  scheduler's `TestProcessBatch_DeferralBacksOffByDeliveryCount`.
+  scheduler's `TestProcessBatch_DeferralBacksOffByDeliveryCount`. The
+  `budget-writeback` consumer also gets an explicit `MaxAckPending` of 20000
+  (`deltas.writeback.maxAckPending`, `NATS_WRITEBACK_MAX_PENDING`; the
+  `--defaults` value was 1000). A delayed redelivery keeps its pending slot
+  for the whole delay (up to 60s). So the slots needed are deferred deltas/s ×
+  60s, which is about 3000 at the 5k-user peak of about 50 billed requests/s.
+  20000 is about 6× that. A full window only delays delivery: nothing is
+  lost. The scheduler serves `budget_writeback_num_ack_pending` and
+  `budget_writeback_num_redelivered` on `GET /metrics`. Both PersistHealthyDelta's
+  statement and the consumer's must equal
+  `libs/proto/contracts/budget-writeback-guarded-upsert-v1.sql`, and one
+  parity test in each module checks that.
+- **2026-10-16 — a delta that fails to apply PERMANENTLY is isolated, then
+  dropped. [human decision] (owner, 2026-10-16: "Isolate, then drop").**
+  *Finding:* with `MaxDeliver` -1, a delta that fails `Apply` the same way on
+  every delivery retries every 60s for the stream's 72h `MaxAge`. It holds an
+  ack-pending slot for all of that time. Re-coalescing then blocks every
+  neighbour in its key group. The known trigger was the usage-ledger row: it
+  rides the money transaction, and Postgres refuses an over-long VARCHAR.
+  *Decision:* (1) remove the trigger. Every ledger writer trims provider to 64
+  bytes, model to 128 and execution_id to 128, on a UTF-8 boundary: the
+  gateway's `failmode.usageEventArgs` (both callers) and the scheduler's
+  `usageEventSQL` arguments. (2) When a coalesced group's `Apply` fails, the
+  consumer applies each member alone. (3) A member that still fails with a
+  PERMANENT SQLSTATE is `Term`ed. Permanent means class 22 (data), class 23
+  (constraint) except the `processed_event_ids` dedup conflict, or class 42
+  (syntax). It is logged at ERROR with its event id and amount, and counted in
+  `budget_writeback_dropped_total{reason,sqlstate_class}` on the scheduler's
+  `/metrics`. A drop is real spend missing from the accumulator, so alarm on
+  any increase. Every other error stays a delayed `Nak`: connection 08,
+  serialization or deadlock 40, resources 53, operator 57, and an error with
+  no SQLSTATE. Guarded by
+  `TestApplyGroup_APermanentFailureIsTermedAndItsNeighboursApply` (it fails
+  without the isolation),
+  `TestApplyGroup_ATransientFailureIsDeferredNotDropped`,
+  `TestPermanentApplyFailure_Classes`,
+  `TestApply_AnOverLongModelNameIsTrimmedAndTheMoneyLands` and the gateway's
+  `TestUsageEventArgs_TrimToTheColumnWidths`.
 
 ## Authored governance (issue #218, 2026-08-23)
 

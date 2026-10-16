@@ -245,6 +245,32 @@ func TestBudgetPending_EveryInferenceRouteIsRefused(t *testing.T) {
 	if n := dialer.dials.Load(); n != 0 {
 		t.Fatalf("%d realtime sessions dialled the provider while enforcement was pending", n)
 	}
+
+	// The negative half: a route that calls no provider is NOT refused, so a
+	// router-wide 503 cannot pass this test. /llm/v1/models is served from the
+	// catalogue alone.
+	models := httptest.NewRequest(http.MethodGet, "/llm/v1/models", nil)
+	models.Header.Set(headerProjectID, "42")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, models)
+	if rec.Code == http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "nats_unavailable") {
+		t.Errorf("GET /llm/v1/models answered %d %s; only provider-calling routes are refused", rec.Code, rec.Body.String())
+	}
+
+	// count_tokens is classed "other" for the analytics pages (it is not a
+	// model call), but it IS a provider call and it IS budget-gated
+	// (DECISIONS.md: "/llm/v1/messages/count_tokens now budget-gated, was the
+	// 4th unmetered path"). With no gate it would be ungoverned provider
+	// traffic, so the boot window refuses it too.
+	countTokens := jsonRequest(http.MethodPost, "/llm/v1/messages/count_tokens",
+		`{"model":"anthropic/claude-3-5-sonnet","messages":[{"role":"user","content":"hi"}]}`)
+	countTokens.Header.Set(headerProjectID, "42")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, countTokens)
+	assertNATSUnavailable(t, "POST /llm/v1/messages/count_tokens", rec.Code, rec.Body.Bytes())
+	if n := router.calls.Load(); n != 0 {
+		t.Fatalf("count_tokens reached the provider while enforcement was pending")
+	}
 }
 
 // TestBudgetPending_RealtimeWebSocketHandshakeIsRefused is the same refusal

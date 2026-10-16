@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -205,11 +206,22 @@ func nullableID(raw string) any {
 // than trimming it, so a single long model name would fail the whole batch —
 // taking every other record in it. Trimming here keeps one odd value from
 // costing the log a second of traffic.
-func truncate(value string, limit int) string {
+func truncate(value string, limit int) string { return Truncate(value, limit) }
+
+// Truncate bounds value to at most limit BYTES, cut on a UTF-8 boundary. A
+// VARCHAR(n) bound is in characters, so a byte-bounded value always fits, and
+// the rune boundary keeps the result valid UTF-8 (Postgres refuses a broken
+// sequence as surely as an over-long one). The usage ledger writers in
+// internal/failmode reuse it for the same columns.
+func Truncate(value string, limit int) string {
 	if len(value) <= limit {
 		return value
 	}
-	return value[:limit]
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
 }
 
 // nullableExecutionID renders an absent execution id as SQL NULL.

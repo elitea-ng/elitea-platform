@@ -106,7 +106,7 @@ func TestBootstrapOwnsAndReconcilesTheAssets(t *testing.T) {
 
 	// The scheduler's consumer is the bootstrap's too, and a drift is put
 	// back the same way.
-	if out, err := cli("consumer", "edit", "GATEWAY_BUDGET_DELTAS", "budget-writeback", "--max-deliver", "3", "--force").CombinedOutput(); err != nil {
+	if out, err := cli("consumer", "edit", "GATEWAY_BUDGET_DELTAS", "budget-writeback", "--max-deliver", "3", "--max-pending", "7", "--force").CombinedOutput(); err != nil {
 		t.Fatalf("drift the consumer: %v\n%s", err, out)
 	}
 	s.Bootstrap(t, nil)
@@ -117,6 +117,7 @@ func TestBootstrapOwnsAndReconcilesTheAssets(t *testing.T) {
 	var ci struct {
 		Config struct {
 			MaxDeliver     int    `json:"max_deliver"`
+			MaxAckPending  int    `json:"max_ack_pending"`
 			AckPolicy      string `json:"ack_policy"`
 			DeliverSubject string `json:"deliver_subject"`
 			FilterSubject  string `json:"filter_subject"`
@@ -125,8 +126,13 @@ func TestBootstrapOwnsAndReconcilesTheAssets(t *testing.T) {
 	if err := json.Unmarshal(raw, &ci); err != nil {
 		t.Fatal(err)
 	}
-	if ci.Config.MaxDeliver != 10 || ci.Config.AckPolicy != "explicit" || ci.Config.DeliverSubject != "" || ci.Config.FilterSubject != "gateway.budget.delta" {
-		t.Errorf("budget-writeback after the bootstrap = %+v; want a pull consumer on gateway.budget.delta, explicit acks, max_deliver 10", ci.Config)
+	// [human decision] 2026-10-16: no delivery cap (the scheduler defers with
+	// a growing delay, and the stream's MaxAge is the bound), and an explicit
+	// ack-pending window sized for 60s deferrals. The drift above sets both to
+	// finite values; the bootstrap must put both back.
+	if ci.Config.MaxDeliver != -1 || ci.Config.MaxAckPending != 20000 || ci.Config.AckPolicy != "explicit" ||
+		ci.Config.DeliverSubject != "" || ci.Config.FilterSubject != "gateway.budget.delta" {
+		t.Errorf("budget-writeback after the bootstrap = %+v; want a pull consumer on gateway.budget.delta, explicit acks, max_deliver -1, max_ack_pending 20000", ci.Config)
 	}
 
 	// Counter streams really are counters.

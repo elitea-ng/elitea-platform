@@ -99,6 +99,15 @@ deltas:
     # Naks were spent in about a second. The bound is the stream's maxAge
     # (72h). Undecodable or invalid deltas are terminated, never redelivered.
     maxDeliver: -1
+    # How many deltas may be delivered and not yet acked (MaxAckPending).
+    # Set explicitly: --defaults gives 1000. A delayed redelivery keeps its
+    # slot for the whole delay (up to 60s), so a deferral burst used to fill
+    # 1000 slots and stall write-back for EVERY scope. Size: pending slots =
+    # deferred deltas/s x 60s. One delta per billed /llm request; at the 5k-user
+    # scale target the peak is about 50 requests/s, so a full outage of every
+    # scope holds about 3000 slots. 20000 is about 6x that. A full window only
+    # delays delivery: the deltas wait in the stream, and none is lost.
+    maxAckPending: 20000
 
 # ELITEA_CANVAS_PRESENCE KV TTL. At least elitea-main's 120s roster TTL, or a
 # heartbeat's entry is collected before its own deadline.

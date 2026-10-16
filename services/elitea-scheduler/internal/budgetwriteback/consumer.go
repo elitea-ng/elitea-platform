@@ -97,6 +97,10 @@ type Consumer struct {
 	// lastPrune is when the usage-ledger retention prune last ran. It is only
 	// ever touched from Run's single goroutine, so it needs no lock.
 	lastPrune time.Time
+	// info reads the bound consumer's server-side figures for the
+	// num_ack_pending / num_redelivered gauges; nil leaves them unset.
+	info     consumerInfoSource
+	lastInfo time.Time
 }
 
 // NewConsumer builds a write-back Consumer over a message Fetcher and a Store.
@@ -121,6 +125,7 @@ func (c *Consumer) Run(ctx context.Context) {
 			return
 		}
 		c.pruneUsageEventsIfDue(ctx)
+		c.refreshConsumerInfoIfDue(ctx)
 		msgs, err := c.fetch.Fetch(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -146,6 +151,27 @@ func (c *Consumer) Run(ctx context.Context) {
 		}
 		c.processBatch(ctx, msgs)
 	}
+}
+
+// refreshConsumerInfoIfDue updates the consumer gauges at most every
+// consumerInfoInterval. Best-effort: a failed read keeps the last value.
+func (c *Consumer) refreshConsumerInfoIfDue(ctx context.Context) {
+	if c.info == nil {
+		return
+	}
+	now := time.Now()
+	if !c.lastInfo.IsZero() && now.Sub(c.lastInfo) < consumerInfoInterval {
+		return
+	}
+	c.lastInfo = now
+	info, err := c.info.Info(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			c.logger.Debug("budgetwriteback: consumer info read failed", "err", err)
+		}
+		return
+	}
+	metrics.setConsumerInfo(info)
 }
 
 // pruneInterval is how often the drain loop prunes the usage ledger. The prune
@@ -260,7 +286,31 @@ func (c *Consumer) applyGroup(ctx context.Context, items []decoded) {
 
 	outcome, err := c.store.Apply(ctx, deltas)
 	switch {
+	case err != nil && len(items) > 1:
+		// Isolate ([human decision] 2026-10-16, "Isolate, then drop"): the
+		// coalesced transaction rolled back as a whole, so apply each member
+		// alone. One bad delta then cannot hold its neighbours, which a
+		// redelivery would re-coalesce with it for ever.
+		c.logger.Warn("budgetwriteback: group apply failed; applying each delta alone",
+			"scope", items[0].delta.Scope, "scope_id", items[0].delta.ScopeID,
+			"deltas", len(items), "err", err)
+		for _, it := range items {
+			c.applyGroup(ctx, []decoded{it})
+		}
 	case err != nil:
+		if class, permanent := permanentApplyFailure(err); permanent {
+			// Drop: this delta fails the same way on every delivery, and with
+			// MaxDeliver -1 it would retry for the stream's whole MaxAge while
+			// holding an ack-pending slot. Its money is lost from the
+			// accumulator; the ERROR line and the counter make that visible.
+			c.logger.Error("budgetwriteback: delta fails permanently; terminating it (its spend is NOT in the accumulator)",
+				"event_id", items[0].delta.EventID, "scope", items[0].delta.Scope,
+				"scope_id", items[0].delta.ScopeID, "delta_nano_usd", items[0].delta.DeltaNanoUSD,
+				"sqlstate_class", class, "err", err)
+			metrics.addDropped("permanent_apply_error", class)
+			c.term(items[0].msg)
+			return
+		}
 		// Transient DB failure: NAK for redelivery (§8.6 at-least-once). The
 		// same-transaction dedup guarantees the retry does not double-apply.
 		c.logger.Warn("budgetwriteback: apply failed; will redeliver",
@@ -381,6 +431,9 @@ func Bind(ctx context.Context, js jetstream.JetStream, db DB, cfg Config, logger
 	if err := verifyConsumer(cons.CachedInfo().Config); err != nil {
 		return nil, fmt.Errorf("consumer %s/%s: %w; it is configured by the nats-bootstrap Job — re-run it", DeltasStream, DurableName, err)
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	if maxDeliver := cons.CachedInfo().Config.MaxDeliver; maxDeliver > 0 {
 		// Not a refusal: an older bootstrap left the finite cap, and the next
 		// bootstrap run reconciles it. Until then a delta deferred longer than
@@ -390,5 +443,8 @@ func Bind(ctx context.Context, js jetstream.JetStream, db DB, cfg Config, logger
 			"max_deliver", maxDeliver)
 	}
 	fetcher := &jsFetcher{cons: cons, batch: cfg.BatchSize, wait: cfg.FetchWait}
-	return NewConsumer(fetcher, NewStore(db), logger), nil
+	consumer := NewConsumer(fetcher, NewStore(db), logger)
+	consumer.info = cons
+	metrics.setConsumerInfo(cons.CachedInfo())
+	return consumer, nil
 }
