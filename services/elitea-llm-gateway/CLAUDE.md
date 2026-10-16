@@ -42,9 +42,14 @@ because each was a real bug found across 3 review rounds.
   `LLM_BUDGET_REQUIRE_ENFORCEMENT` selects the posture: `auto` (default) refuses
   when `GATEWAY_NATS_URL` is empty AND the database holds an enforcing budget
   row, `on` refuses whenever the gate is not wired, `off` is the documented
-  opt-out. Do NOT make `auto` refuse a CONFIGURED-but-unreachable NATS: that
-  state drains through `/readyz` and recovers by itself (issue #315). Do NOT let
-  a probe that FAILED to read the budget tables be read as "no budgets".
+  opt-out. Do NOT make `auto` refuse to START on a CONFIGURED-but-unreachable
+  NATS: that state recovers by itself (issue #315). But until it recovers, the
+  gateway REFUSES every spend route with 503 `nats_unavailable` (human
+  decision, DECISIONS.md 2026-10-16): `/readyz` does not keep traffic out,
+  because the mTLS chart probes with `tcpSocket` and direct callers ignore
+  readiness. So a boot during a NATS outage must not serve unmetered. Do not
+  revert this to serving without a human. Do NOT let a probe that FAILED to
+  read the budget tables be read as "no budgets".
 - Budget gate runs **before** the provider on EVERY /llm endpoint (chat,
   responses, text, embeddings, images, messages). Adding a new endpoint? It MUST
   call checkBudget before dispatch and updateUsage after.

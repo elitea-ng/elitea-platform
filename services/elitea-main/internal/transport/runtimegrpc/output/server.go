@@ -1220,7 +1220,7 @@ func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailureP
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_CANCELLED:
 		return runtimeFailurePolicy{Code: "CANCELLED", SafeMessage: "Execution was cancelled."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED:
-		return runtimeFailurePolicy{Code: "OUTPUT_CONTINUATION_EXHAUSTED", SafeMessage: "Automatic continuation could not finish. The model response is incomplete."}, true
+		return runtimeFailurePolicy{Code: "OUTPUT_CONTINUATION_EXHAUSTED", SafeMessage: "Continuation could not finish. The model response is incomplete."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_TIMEOUT:
 		return runtimeFailurePolicy{Code: "MODEL_TIMEOUT", SafeMessage: "The model did not respond in time. Try again; if this continues, ask an administrator to check the model connection.", Retryable: true}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_RATE_LIMITED:
