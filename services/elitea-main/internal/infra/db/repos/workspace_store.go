@@ -286,15 +286,17 @@ WHERE h.project_id = $1 AND h.conversation_uuid = $2::uuid`, thread.ProjectID, t
 const pgLockNotAvailable = "55P03"
 
 // publishLockTimeout bounds the wait for the thread row lock in a publish.
-// 200 ms waits out the short transitions that lock the row (a take back, a
-// cloud turn start or end, the sweeper, each a few milliseconds). Only the
-// rare publish that meets one of them waits at all.
-const publishLockTimeout = "200ms"
+// Publishes of one thread in one process never meet here (the service lets
+// one through at a time, before a connection is taken), so the waiter is a
+// publish from another replica, or a publish that meets a short transition
+// (a take back, a cloud turn start or end, the sweeper; a few milliseconds
+// each). 50 ms waits those out and cannot pin a pooled connection for long.
+const publishLockTimeout = "50ms"
 
 // Publish is the store's one short transaction (decisions 2 and 15), in
 // three round trips after BEGIN:
 //
-//  1. lock the thread row FOR UPDATE with a 200 ms lock timeout, then read
+//  1. lock the thread row FOR UPDATE with a 50 ms lock timeout, then read
 //     its refs and the replay lookup (one batch; the reads take their
 //     snapshot after the lock);
 //  2. supersede, insert the segment, move the refs (one multi-row upsert),
@@ -324,11 +326,10 @@ func (r *WorkspaceStoreRepository) Publish(ctx context.Context, record workspace
 		replaySeq   *int64
 	)
 	read := &pgx.Batch{}
-	// A bounded wait, not NOWAIT: a take back, a cloud turn start or end and
-	// the sweeper hold this row for a few milliseconds, and the publish
-	// waits them out. Past the bound the thread is busy (ErrThreadBusy,
-	// retryable), never a ref conflict. Publishes of one thread in one
-	// process never meet here: the service lets one through at a time.
+	// A bounded wait (publishLockTimeout), not NOWAIT: a take back, a cloud
+	// turn start or end and the sweeper hold this row for a few
+	// milliseconds, and the publish waits them out. Past the bound the
+	// thread is busy (ErrThreadBusy, retryable), never a ref conflict.
 	read.Queue(`SELECT set_config('lock_timeout', $1, true)`, publishLockTimeout)
 	read.Queue(`
 SELECT state, epoch, owner_user_id, running_execution_id, running_response_message_id::text, has_upstream, last_seq
