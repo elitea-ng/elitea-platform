@@ -89,6 +89,8 @@ type fakeThreads struct {
 	execution Execution
 	found     bool
 	finished  []workspacehandoff.Handoff
+	// pendingFor is the execution whose thread is being taken back.
+	pendingFor string
 }
 
 func (f *fakeThreads) Read(context.Context, workspacehandoff.Thread) (workspacehandoff.Handoff, bool, error) {
@@ -101,6 +103,10 @@ func (f *fakeThreads) Execution(context.Context, string, uint64) (Execution, boo
 
 func (f *fakeThreads) FinishedCloudTurns(context.Context, int) ([]workspacehandoff.Handoff, error) {
 	return f.finished, nil
+}
+
+func (f *fakeThreads) ReclaimPending(_ context.Context, executionID string) (bool, error) {
+	return executionID == f.pendingFor, nil
 }
 
 func newAdapter(t *testing.T, handoffs *fakeHandoffs, objects Objects, threads *fakeThreads) *Adapter {

@@ -2116,6 +2116,10 @@ pub enum DesiredExecutionState {
 pub struct LeaseObservation {
     pub lease_expires_at_unix_millis: i64,
     pub desired_state: DesiredExecutionState,
+    /// ADR-0034: the execution is a cloud turn whose thread the desktop is
+    /// taking back; the turn wraps up gracefully (desired state stays
+    /// RUNNING).
+    pub workspace_wrap_up: bool,
 }
 
 /// Opaque, outcome-bound settlement receipt.
@@ -3284,6 +3288,7 @@ fn parse_renew_lease_response(
     Ok(LeaseObservation {
         lease_expires_at_unix_millis: response.lease_expires_at_unix_millis,
         desired_state: desired_state(response.desired_state)?,
+        workspace_wrap_up: response.workspace_wrap_up,
     })
 }
 

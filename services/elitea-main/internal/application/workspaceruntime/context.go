@@ -91,9 +91,14 @@ type TurnResolver interface {
 // turn is a no-op. ReconcileFinished does the same for every running cloud
 // turn whose execution is already terminal (a hook that never ran, e.g. a
 // crash between the commit and the hook).
+//
+// WrapUpRequested answers whether executionID is a running cloud turn whose
+// thread the desktop is taking back (reclaim_pending): the lease poll tells
+// the worker to wrap the turn up gracefully.
 type TurnLifecycle interface {
 	FinishExecution(ctx context.Context, executionID string) error
 	ReconcileFinished(ctx context.Context) (int, error)
+	WrapUpRequested(ctx context.Context, executionID string) (bool, error)
 }
 
 // Policy is the effective cloud-executor policy (decision 11): the platform

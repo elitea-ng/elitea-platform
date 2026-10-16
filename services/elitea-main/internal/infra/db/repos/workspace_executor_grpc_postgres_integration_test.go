@@ -79,6 +79,10 @@ func (t executorThreads) FinishedCloudTurns(ctx context.Context, limit int) ([]w
 	return t.repo.FinishedCloudTurns(ctx, limit)
 }
 
+func (t executorThreads) ReclaimPending(ctx context.Context, executionID string) (bool, error) {
+	return t.repo.ReclaimPending(ctx, executionID)
+}
+
 func dialExecutorStore(t *testing.T, store workspaceruntime.Store) runtimev1.WorkspaceStoreServiceClient {
 	t.Helper()
 	server, err := workspacegrpc.NewServer(executorWorkload{}, executorFence{}, store, nil)
@@ -545,4 +549,88 @@ func envSecretNameOf(t *testing.T, pool *pgxpool.Pool) string {
 		t.Fatal(err)
 	}
 	return name
+}
+
+// A take back during a cloud turn (ADR-0034 decision 7, scope A): Reclaim
+// sets reclaim_pending, and the lease poll's signal (WrapUpRequested, which
+// the control server sends as workspace_wrap_up) says so for that execution
+// only. The graceful path: the worker wraps up and the turn's finish moves
+// the thread to RECLAIMING. The fallback, with no worker answering: after
+// the 60 s grace the sweeper forces RECLAIMING and cancels the turn, and the
+// signal is gone.
+func TestPostgresTakeBackDuringACloudTurnSignalsTheWorkerAndFallsBack(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	ctx := context.Background()
+	const owner int64 = 11
+	ensureWorkspaceTestUser(t, pool, owner)
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_conversations SET source = 'local_work' WHERE uuid = $1::uuid`, executorConversation); err != nil {
+		t.Fatal(err)
+	}
+	h := newHandoffHarness(t, pool)
+	thread := workspacestore.Thread{ProjectID: 1, ConversationUUID: executorConversation}
+	repo, err := NewWorkspaceHandoffsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := workspaceexecutor.New(h.service, h.objects, executorThreads{repo: repo}, workspaceexecutor.Resources{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	began, err := h.service.Begin(ctx, beginRequest(thread, owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := h.publishSnapshot(t, thread, owner, 1, "take back")
+	if _, err := h.service.Complete(ctx, workspacehandoff.CompleteRequest{ProjectID: 1, HandoffID: began.Handoff.HandoffID,
+		ActorUserID: owner, Epoch: 1, HandoffRef: workspacestore.RefHandoff1, SHA: snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	const response = "40000000-0000-4000-8000-0000000000f1"
+	withTenantTx(t, pool, func(tx pgx.Tx) {
+		insertPostgresCurrentApplicationTurn(t, sqlcgen.New(tx), mustCurrentPGUUID(t, executorConversation),
+			"20000000-0000-4000-8000-0000000000f1", "30000000-0000-4000-8000-0000000000f1", response, "long task", "exec-take-back")
+	})
+	seedCloudTurnExecution(t, pool, "exec-take-back", response)
+	if _, ok, err := adapter.ResolveCloudTurn(ctx, workspaceruntime.TurnClaim{ExecutionID: "exec-take-back", Generation: 1,
+		ProjectID: 1, ConversationUUID: executorConversation}); err != nil || !ok {
+		t.Fatalf("claim = %v %v", ok, err)
+	}
+	if signalled, err := adapter.WrapUpRequested(ctx, "exec-take-back"); err != nil || signalled {
+		t.Fatalf("signal before the take back = %v %v", signalled, err)
+	}
+	pending, err := h.service.Reclaim(ctx, workspacehandoff.ReclaimRequest{Thread: thread, ActorUserID: owner, Epoch: 2, DeviceID: "device-1"})
+	if err != nil || pending.State != workspacestore.StateCloudRunning || !pending.ReclaimPending || pending.Epoch != 2 {
+		t.Fatalf("reclaim during a turn = %+v %v", pending, err)
+	}
+	if signalled, err := adapter.WrapUpRequested(ctx, "exec-take-back"); err != nil || !signalled {
+		t.Fatalf("signal after the take back = %v %v", signalled, err)
+	}
+	if signalled, _ := adapter.WrapUpRequested(ctx, "exec-other"); signalled {
+		t.Fatal("another execution was signalled")
+	}
+
+	// Fallback: no worker wrapped up. Past the grace the sweeper forces the
+	// take back and cancels the turn.
+	h.service.WithClock(func() time.Time { return time.Now().Add(2 * workspacehandoff.ReclaimGrace) })
+	if _, err := h.service.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	view, err := h.service.State(ctx, thread)
+	if err != nil || view.Handoff.State != workspacestore.StateReclaiming || view.Handoff.Epoch != 3 {
+		t.Fatalf("after the grace = %+v %v", view.Handoff, err)
+	}
+	if len(h.canceller.cancelled) != 1 || h.canceller.cancelled[0] != response {
+		t.Fatalf("cancelled = %v", h.canceller.cancelled)
+	}
+	if signalled, _ := adapter.WrapUpRequested(ctx, "exec-take-back"); signalled {
+		t.Fatal("the signal outlived the forced take back")
+	}
+	// The worker's late finish is stale and changes nothing.
+	if err := adapter.FinishExecution(ctx, "exec-take-back"); err != nil {
+		t.Fatal(err)
+	}
+	if view, _ := h.service.State(ctx, thread); view.Handoff.State != workspacestore.StateReclaiming || view.Handoff.Epoch != 3 {
+		t.Fatalf("a late finish moved the thread: %+v", view.Handoff)
+	}
 }

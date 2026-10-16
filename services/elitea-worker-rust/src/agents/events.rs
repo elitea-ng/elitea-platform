@@ -3390,6 +3390,32 @@ impl AgentEventProjector {
         Ok(batch)
     }
 
+    /// Close a turn stopped by a take-back wrap-up (ADR-0034 decision 7) so
+    /// it can complete: the model output so far is kept as an incomplete
+    /// step, interrupted tool calls are dropped, and the projector stands
+    /// where a completed model turn would, ready for [`Self::finish_after_eos`].
+    /// A turn already complete is left as it is.
+    pub(crate) fn close_for_wrap_up(
+        &mut self,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        if matches!(
+            self.state,
+            ProjectionState::Complete(_)
+                | ProjectionState::PrinterComplete
+                | ProjectionState::StaticComplete
+        ) && self.active_tools.is_empty()
+        {
+            return Ok(ProjectedAgentEventBatch::new());
+        }
+        let batch = self.preserve_incomplete_output(occurred_at)?;
+        self.active_tools.clear();
+        self.state = ProjectionState::Complete(CompletedModelTurn {
+            output_limited: false,
+        });
+        Ok(batch)
+    }
+
     /// Emit the selected completed result only after ADK reaches EOS.
     #[allow(clippy::too_many_lines)] // Keep event validation, original lineage, and browser projection in one ordered path.
     pub(crate) fn finish_after_eos(

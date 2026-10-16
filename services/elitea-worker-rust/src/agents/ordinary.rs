@@ -377,7 +377,7 @@ impl OrdinaryNativeAgentAssembler {
                         plan.session_identity()?,
                     ));
                 let runtime = runtime.with_workspace_toolset(
-                    crate::workspace_run::tools::provider(turn.sandbox(), field.shell)
+                    crate::workspace_run::tools::turn_provider(turn, field.shell)
                         .with_approved_calls(approved_calls)
                         .toolset(),
                 );

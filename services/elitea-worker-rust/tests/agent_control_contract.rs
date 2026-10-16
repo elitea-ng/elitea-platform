@@ -488,6 +488,7 @@ async fn supervised_lease_key_state_and_monotonicity_match_python_semantics() {
     );
 
     *state.renew.lock().expect("renew") = RenewLeaseResponseV1 {
+        workspace_wrap_up: false,
         lease_expires_at_unix_millis: NOW + 19_999,
         desired_state: DesiredExecutionStateV1::Cancelled as i32,
         rejection: None,
@@ -696,6 +697,7 @@ async fn mixed_control_response_shapes_fail_closed() {
 
     let (control, state) = client();
     *state.renew.lock().expect("renew") = RenewLeaseResponseV1 {
+        workspace_wrap_up: false,
         lease_expires_at_unix_millis: NOW + 60_000,
         desired_state: DesiredExecutionStateV1::Running as i32,
         rejection: Some(RuntimeErrorV1 {

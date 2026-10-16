@@ -397,6 +397,7 @@ impl WorkspaceRunFactory {
             max_segment_bytes: limits.max_segment_bytes,
             file_redactor,
             outcome: Mutex::new(None),
+            wrap_up: Arc::default(),
         }))
     }
 }
@@ -489,6 +490,8 @@ pub(crate) struct WorkspaceTurn {
     /// The harvested values, for the end-of-turn file scan.
     file_redactor: Arc<super::file_redact::FileRedactor>,
     outcome: Mutex<Option<Result<Option<WorkspaceStamp>, WorkspaceRunError>>>,
+    /// The take-back wrap-up (ADR-0034 decision 7).
+    wrap_up: Arc<super::wrap_up::WrapUp>,
 }
 
 impl WorkspaceTurn {
@@ -496,6 +499,12 @@ impl WorkspaceTurn {
     #[must_use]
     pub(crate) fn sandbox(&self) -> Arc<dyn WorkspaceSandbox> {
         Arc::clone(&self.sandbox)
+    }
+
+    /// The turn's take-back wrap-up, shared by its tools and its lifecycle.
+    #[must_use]
+    pub(crate) fn wrap_up(&self) -> Arc<super::wrap_up::WrapUp> {
+        Arc::clone(&self.wrap_up)
     }
 
     /// The pull-request diff (ADR-0034 decision 10), computed here from the

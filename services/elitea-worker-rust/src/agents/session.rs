@@ -1696,8 +1696,16 @@ where
     M: BoundOrdinaryAgentModel,
 {
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        // A turn wrapped up for a take back was stopped cooperatively: it may
+        // have no final text of its own, and it still completes (its work is
+        // published) with the take-back note.
+        let wrapped_up = self
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.wrap_up().requested());
         let mut content = match self.model.take_completed_text() {
             Ok(content) => content,
+            Err(_) if wrapped_up => String::new(),
             Err(error) => {
                 if let Some(workspace) = &self.workspace {
                     let _ = workspace
@@ -1723,6 +1731,12 @@ where
                 }
                 content.push_str(&notice);
             }
+            if wrapped_up {
+                if !content.is_empty() {
+                    content.push_str("\n\n");
+                }
+                content.push_str(crate::workspace_run::wrap_up::NOTE);
+            }
         }
         CompletedAgentBrowserOutput::ordinary(content, self.thread_id)
             .map_err(|error| completed_output_error(&error))
@@ -1736,6 +1750,10 @@ where
                 .map_err(|error| super::workspace::publish_error(&error))?;
         }
         Ok(())
+    }
+
+    fn wrap_up(&self) -> Option<Arc<crate::workspace_run::wrap_up::WrapUp>> {
+        self.workspace.as_ref().map(|workspace| workspace.wrap_up())
     }
 }
 
