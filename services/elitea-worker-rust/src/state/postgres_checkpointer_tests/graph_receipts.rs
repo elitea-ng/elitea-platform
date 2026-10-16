@@ -46,7 +46,7 @@ async fn required_database() -> Option<IsolatedPostgres> {
         Some("postgres"),
         "required fixture administrator must target postgres, never a product database"
     );
-    let admin = PgPoolOptions::new()
+    let admin = crate::test_pg::pool_options()
         .max_connections(1)
         .connect_with(options.disable_statement_logging())
         .await

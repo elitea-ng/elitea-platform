@@ -15,6 +15,7 @@ package repos
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -26,7 +27,10 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 )
 
@@ -126,6 +130,13 @@ type naiveWriterCase struct {
 // probe (dbtest.NaiveClockProbeSQL) is switched off for these writes so the
 // assertion is about the value itself, not about the probe.
 //
+// The other fixed writers are driven the same way elsewhere:
+// TestPostgresRuntimeOutputWritersStoreTheUTCWallClock below (node recovery,
+// runtime terminal: they need an admitted, claimed execution), and, because
+// those packages import this one, auth's
+// TestPostgresLoginStoresLastLoginAsTheUTCWallClock and moderation's
+// TestDecisionNotificationIsStampedWithTheUTCWallClock.
+//
 // This list is not exhaustive: the probe is the behavioural guard over every
 // writer the suite drives. A writer that no test drives is the remaining gap.
 func TestPostgresNamedNaiveWritersStoreTheUTCWallClock(t *testing.T) {
@@ -201,6 +212,128 @@ RETURNING id`, conversation.ID).Scan(&groupID); err != nil {
 			}
 		})
 	}
+}
+
+// The two runtime-output writers of chat_message_group.updated_at, each on a
+// real admitted agent execution: the node-recovery pause projection
+// (node_recovery_projection.go) and the runtime terminal
+// (configuration_validation_results.go). Like the cases above, the probe is
+// off for the write so the assertion is about the stored value.
+func TestPostgresRuntimeOutputWritersStoreTheUTCWallClock(t *testing.T) {
+	cases := []struct {
+		name  string
+		write func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, execution naiveRuntimeExecution)
+	}{
+		{
+			name: "node_recovery_projection.go projectNodeRecovery -> chat_message_group.updated_at",
+			write: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, execution naiveRuntimeExecution) {
+				claimID := execution.claimRunning(t, ctx, pool)
+				_, receipt, _ := recoveryFixture(t)
+				browser, err := json.Marshal(map[string]any{
+					"type": "agent_node_recovery_required", "stream_id": execution.conversationID,
+					"message_id": execution.responseID, "execution_generation": execution.clientGeneration,
+					"sio_event":         "chat_predict",
+					"response_metadata": map[string]any{"node_recovery_required_v1": json.RawMessage(receipt)},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				frame := outputapp.NodeEventFrame{
+					EventID:     "naive-utc-node-recovery-event",
+					Fence:       runtimedomain.Fence{ExecutionID: execution.executionID, Generation: 1, CommandID: execution.commandID},
+					BrowserData: browser,
+				}
+				withoutNaiveClockProbe(t, ctx, pool, func(tx pgx.Tx) error {
+					return projectNodeRecovery(ctx, pgxExecutor{queryer: tx}, 1, frame, claimID)
+				})
+			},
+		},
+		{
+			name: "configuration_validation_results.go persistCurrentAgentRuntimeTerminal -> chat_message_group.updated_at",
+			write: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, execution naiveRuntimeExecution) {
+				withoutNaiveClockProbe(t, ctx, pool, func(tx pgx.Tx) error {
+					return persistCurrentAgentRuntimeTerminal(ctx, pgxExecutor{queryer: tx}, 1,
+						executiondomain.AgentApplicationCapability,
+						outputRecord{ExecutionID: execution.executionID, Generation: 1},
+						"RUNTIME_FAILED", "The run failed.")
+				})
+			},
+		},
+	}
+	for index, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			pool := newMigratedPostgresIntegrationPool(t)
+			seedCurrentActivitySchemas(t, pool)
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			execution := naiveRuntimeExecution{
+				conversationID:   fmt.Sprintf("10000000-0000-4000-8000-0000000009%02d", index),
+				responseID:       fmt.Sprintf("20000000-0000-4000-8000-0000000009%02d", index),
+				clientGeneration: fmt.Sprintf("30000000-0000-4000-8000-0000000009%02d", index),
+			}
+			admitted := admitPostgresAgentExecution(t, pool, execution.conversationID, execution.responseID, execution.clientGeneration)
+			execution.executionID, execution.commandID = admitted.ExecutionID, admitted.CommandID
+			seedCurrentAgentResponseGroup(t, pool, execution.conversationID, execution.responseID,
+				execution.clientGeneration, execution.executionID)
+			// Back-date the seeded stamp so a writer that left it alone fails too.
+			if _, err := pool.Exec(ctx, `
+UPDATE p_1.chat_message_group SET updated_at = (now() AT TIME ZONE 'UTC') - interval '2 days'
+WHERE uuid::text = $1`, execution.responseID); err != nil {
+				t.Fatal(err)
+			}
+
+			before := time.Now().UTC()
+			testCase.write(t, ctx, pool, execution)
+			after := time.Now().UTC()
+			var stored *time.Time
+			if err := pool.QueryRow(ctx, `SELECT updated_at FROM p_1.chat_message_group WHERE uuid::text = $1`,
+				execution.responseID).Scan(&stored); err != nil {
+				t.Fatalf("read back: %v", err)
+			}
+			if stored == nil {
+				t.Fatal("the writer stored NULL")
+			}
+			if stored.Before(before.Add(-naiveUTCSkew)) || stored.After(after.Add(naiveUTCSkew)) {
+				t.Errorf("stored %v, want the UTC wall clock between %v and %v (session %s)",
+					*stored, before, after, testpg.TimeZone())
+			}
+		})
+	}
+}
+
+// naiveRuntimeExecution is one admitted agent execution with its response
+// message group.
+type naiveRuntimeExecution struct {
+	conversationID, responseID, clientGeneration string
+	executionID, commandID                       string
+}
+
+// claimRunning gives the execution a live claim and the RUNNING state the
+// node-recovery pause requires, and returns the claim id.
+func (e naiveRuntimeExecution) claimRunning(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
+	t.Helper()
+	claimID := "claim-" + e.executionID
+	for _, statement := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO elitea_runtime.workload_sessions (workload_session_id, workload_identity, producer_id, issued_at, expires_at)
+VALUES ($1, 'spiffe://elitea.test/worker', 'rust-worker-1', clock_timestamp() - interval '1 minute', clock_timestamp() + interval '1 hour')`,
+			[]any{"session-" + e.executionID}},
+		{`INSERT INTO elitea_runtime.execution_claims (
+    claim_id, execution_id, generation, workload_session_id, workload_identity, producer_id,
+    claim_attempt, lease_epoch, fence_token, claimed_at, lease_expires_at
+) VALUES ($1, $2, 1, $3, 'spiffe://elitea.test/worker', 'rust-worker-1', 1, 1, $4, clock_timestamp(), clock_timestamp() + interval '10 minutes')`,
+			[]any{claimID, e.executionID, "session-" + e.executionID, make([]byte, 32)}},
+		{`UPDATE elitea_runtime.execution_jobs
+SET state = 'RUNNING', desired_state = 'RUNNING', invocation_state = 'MAY_HAVE_STARTED'
+WHERE execution_id = $1 AND generation = 1`, []any{e.executionID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatalf("claim the execution: %v", err)
+		}
+	}
+	return claimID
 }
 
 // The probe refuses the bug it exists for, a bare now() into a naive column

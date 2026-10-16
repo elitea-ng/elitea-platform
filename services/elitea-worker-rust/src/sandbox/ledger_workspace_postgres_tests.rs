@@ -1,10 +1,7 @@
 //! Required-mode disposable PG18 fixture; authored source, never runtime acceptance.
 use super::*;
 use crate::state::postgres_session_tests::IsolatedPostgres;
-use sqlx::{
-    ConnectOptions as _,
-    postgres::{PgConnectOptions, PgPoolOptions},
-};
+use sqlx::{ConnectOptions as _, postgres::PgConnectOptions};
 use std::{str::FromStr as _, time::Duration};
 
 async fn database(install_workspace: bool) -> IsolatedPostgres {
@@ -24,7 +21,7 @@ async fn database(install_workspace: bool) -> IsolatedPostgres {
     ));
     assert_eq!(options.get_database(), Some("postgres"));
     assert_eq!(options.get_username(), "postgres");
-    let admin = PgPoolOptions::new()
+    let admin = crate::test_pg::pool_options()
         .max_connections(1)
         .acquire_timeout(Duration::from_secs(5))
         .connect_with(options)

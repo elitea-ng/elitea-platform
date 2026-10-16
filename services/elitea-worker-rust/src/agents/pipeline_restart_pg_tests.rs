@@ -111,7 +111,7 @@ async fn connect(database: &str) -> sqlx::PgPool {
     )
     .expect("parse database URL")
     .database(database);
-    sqlx::postgres::PgPoolOptions::new()
+    crate::test_pg::pool_options()
         .max_connections(4)
         .connect_with(options)
         .await

@@ -859,7 +859,7 @@ async fn fanout_load_meets_the_postgres_budgets() {
     let database = IsolatedPostgres::create(&database_url).await;
     install_test_schema(&database.pool).await;
     // The production agentstate pool: 32 connections, 5 s acquire timeout.
-    let pool = PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .max_connections(32)
         .acquire_timeout(Duration::from_secs(5))
         .connect_with(

@@ -854,7 +854,7 @@ mod preparation_recovery {
 
     #[tokio::test]
     async fn dispatch_proof_is_conservative_without_a_ledger_answer() {
-        let lazy = sqlx::postgres::PgPoolOptions::new()
+        let lazy = crate::test_pg::pool_options()
             .acquire_timeout(std::time::Duration::from_millis(200))
             .connect_lazy("postgres://nobody@127.0.0.1:1/none")
             .unwrap();

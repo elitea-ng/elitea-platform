@@ -5,7 +5,7 @@ use adk_sandbox::{
     SandboxError,
     workspace::{Manifest, docker::CodeJobIdentity},
 };
-use sqlx::{Row as _, postgres::PgPoolOptions};
+use sqlx::Row as _;
 use std::sync::{Arc, Mutex};
 
 const OWNER: &str = "code-no-effect-cleanup-owner";
@@ -91,7 +91,7 @@ async fn ledger() -> JobLedger {
     let url = crate::test_pg::database_url_var("ELITEA_CODE_OWNER_TEST_DATABASE_URL")
         .expect("explicit isolated agentstate database including owner columns required");
     JobLedger::new(
-        PgPoolOptions::new()
+        crate::test_pg::pool_options()
             .max_connections(2)
             .acquire_timeout(Duration::from_secs(5))
             .connect(&url)

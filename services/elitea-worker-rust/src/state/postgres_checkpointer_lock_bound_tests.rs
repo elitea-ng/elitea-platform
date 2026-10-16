@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use adk_rust::graph::Checkpoint;
 use chrono::Utc;
 use sqlx::ConnectOptions as _;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::postgres::PgConnectOptions;
 
 use super::{
     APPLICATION_CAPABILITY_ID, CheckpointLimits, CheckpointWriterAuthority,
@@ -71,7 +71,7 @@ async fn checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bo
         .expect("apply checkpoint migration");
     // Its own pool with a generous acquire bound: under a loaded suite a pool
     // timeout must not stand in for the lock timeout this test is about.
-    let pool = PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .max_connections(2)
         .acquire_timeout(Duration::from_mins(1))
         .connect_with(

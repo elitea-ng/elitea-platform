@@ -9,7 +9,7 @@ use adk_rust::session::{
 use adk_rust::{Content, Event};
 use chrono::{TimeZone as _, Utc};
 use serde_json::json;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::postgres::PgConnectOptions;
 use sqlx::{ConnectOptions as _, PgPool};
 
 use super::TestStateWriterLease;
@@ -34,7 +34,7 @@ impl IsolatedPostgres {
         let admin_options = PgConnectOptions::from_str(database_url)
             .expect("parse PostgreSQL session component-test URL")
             .disable_statement_logging();
-        let admin_pool = PgPoolOptions::new()
+        let admin_pool = crate::test_pg::pool_options()
             .max_connections(2)
             .acquire_timeout(Duration::from_secs(5))
             .connect_with(admin_options.clone())
@@ -54,7 +54,7 @@ impl IsolatedPostgres {
             .await
             .expect("create isolated session database");
         admin_pool.close().await;
-        let pool = PgPoolOptions::new()
+        let pool = crate::test_pg::pool_options()
             .min_connections(1)
             .max_connections(4)
             .acquire_timeout(Duration::from_secs(2))
@@ -81,7 +81,7 @@ impl Drop for IsolatedPostgres {
                 .expect("build session cleanup runtime")
                 .block_on(async move {
                     let _ = tokio::time::timeout(Duration::from_secs(10), async move {
-                        if let Ok(admin_pool) = PgPoolOptions::new()
+                        if let Ok(admin_pool) = crate::test_pg::pool_options()
                             .max_connections(1)
                             .acquire_timeout(Duration::from_secs(5))
                             .connect_with(admin_options)
@@ -932,7 +932,7 @@ fn bounded_limits(writer_lock: Duration, idle: Duration) -> SessionLimits {
 
 #[tokio::test]
 async fn session_timeouts_are_bounded_at_activation() {
-    let pool = PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .acquire_timeout(Duration::from_millis(300))
         .connect_lazy("postgres://unused@127.0.0.1:1/unused")
         .expect("lazy pool");
@@ -985,7 +985,7 @@ async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
     let lock_timeout = Duration::from_millis(250);
     // Its own pool with a generous acquire bound: under a loaded suite a pool
     // timeout must not stand in for the lock timeout this test is about.
-    let pool = PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .max_connections(2)
         .acquire_timeout(Duration::from_mins(1))
         .connect_with(

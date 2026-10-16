@@ -877,7 +877,7 @@ async fn postgres_summary_child() {
     )
     .unwrap()
     .database(&database);
-    let pool = sqlx::postgres::PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .max_connections(2)
         .connect_with(options)
         .await

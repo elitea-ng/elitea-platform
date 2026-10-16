@@ -14,7 +14,7 @@ use adk_rust::futures::StreamExt as _;
 use adk_rust::session::{AppendEventRequest, CreateRequest, GetRequest, SessionService};
 use adk_rust::{AdkIdentity, Agent, Content, Event, EventStream, InvocationContext};
 use async_trait::async_trait;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::postgres::PgConnectOptions;
 use sqlx::{ConnectOptions as _, PgPool};
 
 use super::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel};
@@ -92,7 +92,7 @@ impl LockFixture {
     pub(crate) async fn create(url: &str) -> Self {
         let database = IsolatedPostgres::create(url).await;
         install_schema(&database.pool).await;
-        let side = PgPoolOptions::new()
+        let side = crate::test_pg::pool_options()
             .max_connections(2)
             .acquire_timeout(STEP_DEADLINE)
             .connect_with(

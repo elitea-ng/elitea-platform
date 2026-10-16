@@ -32,7 +32,7 @@ async fn database() -> IsolatedPostgres {
 
 /// A fresh pool is a replaced process: none of the previous connections or state survive.
 async fn fresh_pool(database: &IsolatedPostgres) -> PgPool {
-    PgPoolOptions::new()
+    crate::test_pg::pool_options()
         .max_connections(4)
         .acquire_timeout(Duration::from_secs(2))
         .connect_with(

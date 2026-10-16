@@ -11,7 +11,7 @@ use adk_rust::graph::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::json;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::postgres::PgConnectOptions;
 use sqlx::{ConnectOptions, PgPool};
 
 use super::TestStateWriterLease;
@@ -39,7 +39,7 @@ impl IsolatedPostgres {
         let admin_options = PgConnectOptions::from_str(database_url)
             .expect("parse PostgreSQL component-test URL")
             .disable_statement_logging();
-        let admin_pool = PgPoolOptions::new()
+        let admin_pool = crate::test_pg::pool_options()
             .max_connections(2)
             .acquire_timeout(Duration::from_secs(5))
             .connect_with(admin_options.clone())
@@ -61,7 +61,7 @@ impl IsolatedPostgres {
             .expect("create isolated checkpoint database");
         admin_pool.close().await;
 
-        let pool = PgPoolOptions::new()
+        let pool = crate::test_pg::pool_options()
             .min_connections(1)
             .max_connections(4)
             .acquire_timeout(Duration::from_secs(2))
@@ -88,7 +88,7 @@ impl Drop for IsolatedPostgres {
                 .expect("build PostgreSQL cleanup runtime")
                 .block_on(async move {
                     let _ = tokio::time::timeout(Duration::from_secs(10), async move {
-                        if let Ok(admin_pool) = PgPoolOptions::new()
+                        if let Ok(admin_pool) = crate::test_pg::pool_options()
                             .max_connections(1)
                             .acquire_timeout(Duration::from_secs(5))
                             .connect_with(admin_options)

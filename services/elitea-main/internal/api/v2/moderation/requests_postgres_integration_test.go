@@ -491,6 +491,47 @@ SELECT event_type, user_id, meta::text FROM centry.notifications ORDER BY id DES
 	}
 }
 
+// The decision notification's created_at/updated_at are `timestamp` WITHOUT
+// time zone holding the UTC wall clock. The pool runs in the testpg zone
+// (America/Toronto by default), so a bare now() would store local time.
+func TestDecisionNotificationIsStampedWithTheUTCWallClock(t *testing.T) {
+	pool := newModerationPool(t)
+	prepareFixture(t, pool)
+	router := moderationRouter(moderation.NewHandler(pool), grace)
+	pending := rowByDescription(t, readQueue(t, router, "status=pending"), "onboarding docs")
+
+	before := time.Now().UTC()
+	recorder := moderationDo(t, router, http.MethodPut, decisionURL,
+		map[string]any{"id": pending.ID, "status": "approved"})
+	after := time.Now().UTC()
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("approve status = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
+	}
+
+	var zone string
+	var created, updated *time.Time
+	if err := pool.QueryRow(context.Background(), `
+SELECT current_setting('TimeZone'), created_at, updated_at
+FROM centry.notifications WHERE event_type = 'moderation_approved' ORDER BY id DESC LIMIT 1`).
+		Scan(&zone, &created, &updated); err != nil {
+		t.Fatalf("read the decision notification: %v", err)
+	}
+	if zone != testpg.TimeZone() {
+		t.Fatalf("session TimeZone = %q, want %q", zone, testpg.TimeZone())
+	}
+	const skew = 5 * time.Minute
+	for name, stored := range map[string]*time.Time{"created_at": created, "updated_at": updated} {
+		if stored == nil {
+			t.Errorf("%s is NULL", name)
+			continue
+		}
+		if stored.Before(before.Add(-skew)) || stored.After(after.Add(skew)) {
+			t.Errorf("%s = %v, want the UTC wall clock between %v and %v (session %s)",
+				name, *stored, before, after, zone)
+		}
+	}
+}
+
 // TestRejectionRequiresAReason. pylon declares a pydantic validator for this and
 // it does not fire when the key is ABSENT, so `{"id":n,"status":"rejected"}`
 // rejects with a null reason there — and a bare refusal is what the requester

@@ -4,15 +4,25 @@
 //! WITHOUT time zone holding the UTC wall clock, beside timestamptz columns.
 //! Postgres converts between the two through the SESSION time zone, so a
 //! defect that mixes them is visible only off UTC; CI's `PostgreSQL` runs in
-//! UTC. This is the Rust twin of elitea-main's `internal/testpg`: every test
-//! that reads a database URL from the environment calls [`database_url_var`]
-//! instead of `std::env::var`, which adds the libpq `options` startup
-//! parameter `-c TimeZone=<zone>` (America/Toronto, or
-//! `ELITEA_TEST_SESSION_TIMEZONE`). sqlx, libpq and pgx all accept it.
-//! `test_pg_guard_every_database_url_read_goes_through_test_pg` fails a test
-//! file that reads one directly.
+//! UTC. This is the Rust twin of elitea-main's `internal/testpg`.
+//!
+//! The zone cannot travel in the URL. sqlx 0.8 always sends its own
+//! `TimeZone=UTC` startup parameter, and the server ranks that above
+//! `-c TimeZone` inside `options` and above `ALTER DATABASE … SET`. So every
+//! test pool is built from [`pool_options`], whose `after_connect` runs
+//! `SET TimeZone` on each new connection; a test that needs a bare
+//! connection uses [`connect`]. The zone is America/Toronto, or
+//! `ELITEA_TEST_SESSION_TIMEZONE`. Production pools never pass through here
+//! and keep sqlx's UTC session.
+//!
+//! `test_pg_guard_every_test_pool_comes_from_test_pg` fails test code that
+//! builds a Postgres pool or connection itself, or that reads a database URL
+//! with `std::env::var` instead of [`database_url_var`].
 
 use std::env::VarError;
+
+use sqlx::Executor as _;
+use sqlx::postgres::{PgConnectOptions, PgConnection, PgPoolOptions};
 
 /// Overrides the session time zone every test connection uses.
 pub(crate) const TIME_ZONE_ENV: &str = "ELITEA_TEST_SESSION_TIMEZONE";
@@ -29,107 +39,132 @@ pub(crate) fn time_zone() -> String {
     }
 }
 
-/// `std::env::var(name)` for a database URL, with the test session time zone
-/// applied. An unset or empty variable is returned as it is, so a test's
-/// "skip when unset" check is unchanged.
+/// `std::env::var(name)` for a test database URL, returned unchanged. It is
+/// the one sanctioned read, so the guard can tell a database URL from any
+/// other variable; the zone itself is applied by [`pool_options`].
 pub(crate) fn database_url_var(name: &str) -> Result<String, VarError> {
-    let raw = std::env::var(name)?;
-    Ok(with_session_time_zone(&raw, &time_zone()))
+    std::env::var(name)
 }
 
-/// Adds `options=-c TimeZone=<zone>` to a postgres:// URL, or to a
-/// keyword/value DSN, unless it already names a time zone. A space travels
-/// as `%20`: libpq does not decode `+` in a URI query.
-pub(crate) fn with_session_time_zone(dsn: &str, zone: &str) -> String {
-    if dsn.trim().is_empty() || dsn.to_ascii_lowercase().contains("timezone") {
-        return dsn.to_owned();
-    }
-    let setting = format!("-c TimeZone={zone}");
-    if dsn.starts_with("postgres://") || dsn.starts_with("postgresql://") {
-        let encoded: String =
-            percent_encoding::utf8_percent_encode(&setting, percent_encoding::NON_ALPHANUMERIC)
-                .to_string();
-        let (base, fragment) = match dsn.split_once('#') {
-            Some((base, fragment)) => (base, Some(fragment)),
-            None => (dsn, None),
-        };
-        let mut url = if let Some((path, query)) = base.split_once('?') {
-            let mut merged = Vec::new();
-            let mut extended = false;
-            for pair in query.split('&').filter(|pair| !pair.is_empty()) {
-                if let Some(existing) = pair.strip_prefix("options=") {
-                    merged.push(format!("options={existing}%20{encoded}"));
-                    extended = true;
-                } else {
-                    merged.push(pair.to_owned());
-                }
-            }
-            if !extended {
-                merged.push(format!("options={encoded}"));
-            }
-            format!("{path}?{}", merged.join("&"))
-        } else {
-            format!("{base}?options={encoded}")
-        };
-        if let Some(fragment) = fragment {
-            url.push('#');
-            url.push_str(fragment);
-        }
-        return url;
-    }
-    format!("{dsn} options='{setting}'")
+/// `PgPoolOptions::new()` for tests: every connection the pool opens runs
+/// `SET TimeZone = '<zone>'` before it is handed out. Chain the usual
+/// settings onto it.
+pub(crate) fn pool_options() -> PgPoolOptions {
+    let statement = set_time_zone_statement(&time_zone());
+    PgPoolOptions::new().after_connect(move |connection, _| {
+        let statement = statement.clone();
+        Box::pin(async move {
+            connection.execute(statement.as_str()).await?;
+            Ok(())
+        })
+    })
+}
+
+/// One test connection in the test session time zone, for a test that needs
+/// a bare `PgConnection` rather than a pool.
+pub(crate) async fn connect(options: &PgConnectOptions) -> Result<PgConnection, sqlx::Error> {
+    use sqlx::ConnectOptions as _;
+    let mut connection = options.connect().await?;
+    connection
+        .execute(set_time_zone_statement(&time_zone()).as_str())
+        .await?;
+    Ok(connection)
+}
+
+fn set_time_zone_statement(zone: &str) -> String {
+    format!("SET TimeZone = '{}'", zone.replace('\'', "''"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr as _;
 
     #[test]
-    fn test_pg_adds_the_session_time_zone() {
-        let zone = "America/Toronto";
-        let cases = [
-            ("", ""),
-            (
-                "postgres://u:p@h:5432/db?sslmode=disable",
-                "postgres://u:p@h:5432/db?sslmode=disable&options=%2Dc%20TimeZone%3DAmerica%2FToronto",
-            ),
-            (
-                "postgres://u@h/db",
-                "postgres://u@h/db?options=%2Dc%20TimeZone%3DAmerica%2FToronto",
-            ),
-            (
-                "postgres://u@h/db?options=-c%20TimeZone%3DUTC",
-                "postgres://u@h/db?options=-c%20TimeZone%3DUTC",
-            ),
-            (
-                "postgres://u@h/db?options=-c%20work_mem%3D64MB",
-                "postgres://u@h/db?options=-c%20work_mem%3D64MB%20%2Dc%20TimeZone%3DAmerica%2FToronto",
-            ),
-            (
-                "host=h dbname=db",
-                "host=h dbname=db options='-c TimeZone=America/Toronto'",
-            ),
-        ];
-        for (input, want) in cases {
-            assert_eq!(with_session_time_zone(input, zone), want, "input {input:?}");
-        }
+    fn test_pg_quotes_the_zone() {
+        assert_eq!(
+            set_time_zone_statement("America/Toronto"),
+            "SET TimeZone = 'America/Toronto'"
+        );
+        assert_eq!(set_time_zone_statement("a'b"), "SET TimeZone = 'a''b'");
     }
 
-    /// The guard is guarded: a test that reads a database URL with
-    /// `std::env::var` would run in the server's time zone (UTC on CI).
+    /// The point of the module: sqlx sends `TimeZone=UTC` at startup, so only
+    /// a session from [`pool_options`] or [`connect`] runs off UTC. Skipped
+    /// when `ELITEA_TEST_DATABASE_URL` is unset.
+    #[tokio::test]
+    async fn test_pg_sessions_run_in_the_test_time_zone() {
+        let Ok(url) = database_url_var("ELITEA_TEST_DATABASE_URL") else {
+            eprintln!("skipping test_pg session test: set ELITEA_TEST_DATABASE_URL");
+            return;
+        };
+        let options = PgConnectOptions::from_str(&url).expect("parse database URL");
+        let pool = pool_options()
+            .max_connections(2)
+            .connect_with(options.clone())
+            .await
+            .expect("connect test pool");
+        // Two live connections: the setting is per connection, not per pool.
+        let mut first = pool.acquire().await.expect("first connection");
+        let mut second = pool.acquire().await.expect("second connection");
+        for connection in [&mut first, &mut second] {
+            let zone: String = sqlx::query_scalar("SHOW TimeZone")
+                .fetch_one(&mut **connection)
+                .await
+                .expect("show time zone");
+            assert_eq!(zone, time_zone());
+            assert_ne!(zone, "UTC", "a test pool session must not run in UTC");
+        }
+        drop((first, second));
+        pool.close().await;
+
+        let mut single = connect(&options).await.expect("single connection");
+        let zone: String = sqlx::query_scalar("SHOW TimeZone")
+            .fetch_one(&mut single)
+            .await
+            .expect("show time zone");
+        assert_eq!(zone, time_zone());
+        assert_ne!(zone, "UTC", "a test connection must not run in UTC");
+
+        // The control: sqlx's own session stays UTC even with the zone in
+        // `options`, which is why a URL-only wrapper has no effect.
+        let plain = PgPoolOptions::new() // test_pg:control
+            .max_connections(1)
+            .connect_with(options.options([("TimeZone", time_zone())]))
+            .await
+            .expect("connect plain pool");
+        let zone: String = sqlx::query_scalar("SHOW TimeZone")
+            .fetch_one(&plain)
+            .await
+            .expect("show time zone");
+        assert_eq!(
+            zone, "UTC",
+            "sqlx's startup TimeZone=UTC no longer wins over options; revisit test_pg"
+        );
+        plain.close().await;
+    }
+
+    /// The guard is guarded: test code that builds its own pool or reads a
+    /// database URL directly runs in UTC, whatever its URL says.
     #[test]
-    fn test_pg_guard_every_database_url_read_goes_through_test_pg() {
+    fn test_pg_guard_every_test_pool_comes_from_test_pg() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut offenders = Vec::new();
         walk(&root, &mut |path, text| {
             if path.ends_with("test_pg.rs") {
                 return;
             }
-            offenders.extend(offending_reads(&path.display().to_string(), text));
+            let relative = path
+                .strip_prefix(&root)
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            offenders.extend(offending_reads(&relative, text));
+            offenders.extend(offending_pools(&relative, text));
         });
         assert!(
             offenders.is_empty(),
-            "these reads of a database URL bypass test_pg::database_url_var, so their sessions run in the server's time zone (UTC on CI):\n  {}",
+            "these bypass test_pg (use test_pg::database_url_var and test_pg::pool_options or test_pg::connect), so their sessions run in UTC:\n  {}",
             offenders.join("\n  ")
         );
     }
@@ -164,6 +199,137 @@ mod tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn test_pg_guard_refuses_a_hand_built_test_pool() {
+        for (name, source, refuse) in [
+            (
+                "a_tests.rs",
+                "let p = PgPoolOptions::new().connect_with(o);",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let p = sqlx::postgres::PgPoolOptions::new();",
+                true,
+            ),
+            ("a_tests.rs", "let p = PgPool::connect(&url).await;", true),
+            ("a_tests.rs", "let p = PgPool::connect_with(o).await;", true),
+            ("a_tests.rs", "let p = PgPool::connect_lazy(&url);", true),
+            (
+                "a_tests.rs",
+                "let c = PgConnection::connect(&url).await;",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let p = Pool::<Postgres>::connect(&url).await;",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let p = PoolOptions::<Postgres>::new();",
+                true,
+            ),
+            ("x/fanout_tests/a.rs", "let p = PgPoolOptions::new();", true),
+            ("x/a_test_support.rs", "let p = PgPoolOptions::new();", true),
+            (
+                "a_tests.rs",
+                "let c = PgConnectOptions::from_str(&u)?.connect().await;",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let p = crate::test_pg::pool_options().connect_with(o);",
+                false,
+            ),
+            (
+                "a_tests.rs",
+                "let c = crate::test_pg::connect(&o).await;",
+                false,
+            ),
+            (
+                "a_tests.rs",
+                "let p = PgPoolOptions::new(); // test_pg:control",
+                false,
+            ),
+            // A tonic channel is not a Postgres session.
+            (
+                "a_tests.rs",
+                "let c = Endpoint::from_static(\"https://x\").connect().await;",
+                false,
+            ),
+            // Production code before any #[cfg(test)] is not test code.
+            ("bootstrap.rs", "let p = PgPoolOptions::new();", false),
+            (
+                "bootstrap.rs",
+                "fn f() {}\n#[cfg(test)]\nmod tests { fn g() { let p = PgPoolOptions::new(); } }",
+                true,
+            ),
+        ] {
+            assert_eq!(
+                !offending_pools(name, source).is_empty(),
+                refuse,
+                "{name}: {source}"
+            );
+        }
+    }
+
+    /// Test code: a whole `*_tests.rs`, `*_test_support.rs` or `tests.rs`
+    /// file or any file under a `*_tests/` directory; otherwise the text
+    /// from the first `#[cfg(test)]` on.
+    fn test_region<'a>(name: &str, text: &'a str) -> (usize, &'a str) {
+        let file = name.rsplit('/').next().unwrap_or(name);
+        let whole = file.ends_with("_tests.rs")
+            || file.ends_with("_test_support.rs")
+            || file == "tests.rs"
+            || name.contains("_tests/");
+        if whole {
+            return (0, text);
+        }
+        match text.find("#[cfg(test)]") {
+            Some(index) => (text[..index].lines().count(), &text[index..]),
+            None => (0, ""),
+        }
+    }
+
+    /// A Postgres pool or connection built outside `test_pg`. A line marked
+    /// `test_pg:control` is a deliberate UTC control.
+    fn offending_pools(name: &str, text: &str) -> Vec<String> {
+        const MARKERS: [&str; 9] = [
+            "PgPoolOptions::new(",
+            "PoolOptions::<Postgres>::new(",
+            "PgPool::connect(",
+            "PgPool::connect_with(",
+            "PgPool::connect_lazy",
+            "PgConnection::connect",
+            "Pool::<Postgres>::connect",
+            ".after_connect(",
+            "PgConnectOptions::from_str(",
+        ];
+        let (offset, region) = test_region(name, text);
+        let mut offenders = Vec::new();
+        for (number, line) in region.lines().enumerate() {
+            if line.contains("test_pg:control") {
+                continue;
+            }
+            for marker in MARKERS {
+                // A parsed PgConnectOptions is fine; connecting it directly is not.
+                if marker == "PgConnectOptions::from_str("
+                    && !(line.contains(marker) && line.contains(".connect()"))
+                {
+                    continue;
+                }
+                if line.contains(marker) {
+                    offenders.push(format!(
+                        "{name}:{} builds a Postgres session with {marker}",
+                        offset + number + 1
+                    ));
+                }
+            }
+        }
+        offenders
     }
 
     fn offending_reads(name: &str, text: &str) -> Vec<String> {
@@ -201,7 +367,7 @@ mod tests {
 
     /// A variable that holds a connection string (`*DATABASE_URL`, `*_DSN`,
     /// libpq's `PGHOST`/`PGDATABASE`). A bare `*_DATABASE` holds a database
-    /// NAME that a test combines with the wrapped URL, so it stays raw.
+    /// NAME that a test combines with the URL, so it stays raw.
     fn is_database_location(name: &str) -> bool {
         name.ends_with("DATABASE_URL")
             || name.ends_with("_DSN")
