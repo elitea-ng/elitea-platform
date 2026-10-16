@@ -41,6 +41,8 @@ pub(crate) mod workspace;
 #[cfg(test)]
 mod application_pipeline_tests;
 #[cfg(test)]
+mod approved_calls_pg_tests;
+#[cfg(test)]
 mod assembly_tests;
 #[cfg(test)]
 mod client_frames_tests;

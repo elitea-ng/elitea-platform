@@ -1277,8 +1277,8 @@ fn a_denial_comment_survives_into_the_next_resume_of_the_same_message() {
 /// command is classified as asked; every call is recorded with whether it
 /// arrived approved.
 #[derive(Default)]
-struct GateSandbox {
-    calls: Mutex<Vec<(String, Value, bool)>>,
+pub(super) struct GateSandbox {
+    pub(super) calls: Mutex<Vec<(String, Value, bool)>>,
 }
 
 #[async_trait::async_trait]
@@ -1334,9 +1334,9 @@ impl crate::workspace_run::sandbox::WorkspaceSandbox for GateSandbox {
 }
 
 /// The model's one call, then a final text once results are back.
-struct CommandLlm {
-    command: String,
-    turns: Mutex<u32>,
+pub(super) struct CommandLlm {
+    pub(super) command: String,
+    pub(super) turns: Mutex<u32>,
 }
 
 #[async_trait::async_trait]
@@ -1562,13 +1562,13 @@ async fn a_destructive_workspace_command_pauses_for_approval_and_replays_approve
 /// A session store that loses the persist of the `call-1` tool result once
 /// when armed: the approved command ran, then the turn failed before ADK
 /// stored the result (a crash, a lost lease, a database error).
-struct ResultLossSessions {
-    inner: Arc<InMemorySessionService>,
-    armed: std::sync::atomic::AtomicBool,
+pub(super) struct ResultLossSessions {
+    pub(super) inner: Arc<dyn SessionService>,
+    pub(super) armed: std::sync::atomic::AtomicBool,
 }
 
 impl ResultLossSessions {
-    fn drops(&self, event: &Event) -> bool {
+    pub(super) fn drops(&self, event: &Event) -> bool {
         event
             .tool_results()
             .iter()
@@ -1619,7 +1619,7 @@ impl SessionService for ResultLossSessions {
     }
 }
 
-fn workspace_identity() -> adk_rust::AdkIdentity {
+pub(super) fn workspace_identity() -> adk_rust::AdkIdentity {
     adk_rust::AdkIdentity::new(
         adk_rust::AppName::new("elitea-agent-v1").expect("app"),
         adk_rust::UserId::new("user-1").expect("user"),
@@ -1629,7 +1629,7 @@ fn workspace_identity() -> adk_rust::AdkIdentity {
 
 /// As [`workspace_turn`], with the worker's approval ledger bound and a turn
 /// failure returned instead of a panic.
-async fn ledger_workspace_turn(
+pub(super) async fn ledger_workspace_turn(
     sessions: Arc<dyn SessionService>,
     model: Arc<dyn adk_rust::Llm>,
     sandbox: Arc<GateSandbox>,
@@ -1679,7 +1679,7 @@ async fn ledger_workspace_turn(
     (events, None)
 }
 
-async fn stored_workspace_session(
+pub(super) async fn stored_workspace_session(
     sessions: &dyn SessionService,
 ) -> Box<dyn adk_rust::session::Session> {
     sessions
@@ -1696,7 +1696,7 @@ async fn stored_workspace_session(
 
 /// The approval of the paused `git push`, resolved against the stored session
 /// and bound for a resume, exactly as the worker does on every attempt.
-async fn approved_push_resume(
+pub(super) async fn approved_push_resume(
     sessions: &dyn SessionService,
 ) -> (Arc<dyn adk_rust::Llm>, adk_rust::RunConfig, Content) {
     let stored = stored_workspace_session(sessions).await;
@@ -1743,7 +1743,7 @@ async fn approved_push_resume(
 }
 
 /// Pause on a destructive `git push`; nothing has run yet.
-async fn paused_push(sessions: &Arc<ResultLossSessions>, sandbox: &Arc<GateSandbox>) {
+pub(super) async fn paused_push(sessions: &Arc<ResultLossSessions>, sandbox: &Arc<GateSandbox>) {
     let (events, error) = ledger_workspace_turn(
         Arc::clone(sessions) as Arc<dyn SessionService>,
         Arc::new(CommandLlm {
