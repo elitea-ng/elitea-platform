@@ -17,7 +17,8 @@ const RULES_JSON: &str = include_str!("secret_rules.json");
 
 /// Bytes of a file that are scanned (the per-file cap is lower).
 const MAX_SCANNED: usize = 32 * 1024 * 1024;
-/// A file with a NUL in its first bytes is binary and not scanned.
+/// A file with a NUL in its first bytes is binary (scanned by the
+/// high-confidence rules only, unless a UTF-16 BOM marks it as text).
 const BINARY_SNIFF: usize = 8 * 1024;
 /// Findings reported per file.
 const MAX_FINDINGS_PER_FILE: usize = 20;
@@ -106,19 +107,68 @@ pub fn is_binary(bytes: &[u8]) -> bool {
     bytes[..bytes.len().min(BINARY_SNIFF)].contains(&0)
 }
 
-/// The findings in one file's contents.
+/// The rules that also run over the raw bytes of a binary file: the
+/// high-confidence, fixed-shape credentials.
+const BINARY_RULES: &[&str] = &[
+    "private-key",
+    "aws-access-key-id",
+    "github-token",
+    "github-fine-grained-token",
+    "slack-token",
+    "gitlab-token",
+];
+
+/// A UTF-16 text (a byte-order mark first), decoded; `None` for anything
+/// else. Windows tools write configs this way, and their NULs would
+/// otherwise mark them binary.
+fn utf16_text(bytes: &[u8]) -> Option<String> {
+    let (little, body) = match bytes {
+        [0xFF, 0xFE, rest @ ..] => (true, rest),
+        [0xFE, 0xFF, rest @ ..] => (false, rest),
+        _ => return None,
+    };
+    let units = body.chunks_exact(2).map(|pair| {
+        if little {
+            u16::from_le_bytes([pair[0], pair[1]])
+        } else {
+            u16::from_be_bytes([pair[0], pair[1]])
+        }
+    });
+    Some(
+        char::decode_utf16(units)
+            .map(|c| c.unwrap_or('\u{FFFD}'))
+            .collect(),
+    )
+}
+
+/// The findings in one file's contents. A UTF-16 text (a BOM) is decoded
+/// and scanned as text. Another binary file is scanned over its raw bytes
+/// by the high-confidence rules only (private-key headers, AWS, GitHub,
+/// Slack and GitLab tokens). At most the first 32 MiB are read.
 ///
 /// # Errors
 ///
 /// The shipped rules do not compile.
 pub fn scan(path: &str, bytes: &[u8]) -> ToolResult<Vec<Finding>> {
-    if is_binary(bytes) {
-        return Ok(Vec::new());
+    let bytes = &bytes[..bytes.len().min(MAX_SCANNED)];
+    if let Some(text) = utf16_text(bytes) {
+        return scan_text(path, &text, None);
     }
-    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_SCANNED)]);
+    if is_binary(bytes) {
+        // One char per byte, so every ASCII-shaped secret in the blob matches.
+        let text: String = bytes.iter().map(|&byte| char::from(byte)).collect();
+        return scan_text(path, &text, Some(BINARY_RULES));
+    }
+    scan_text(path, &String::from_utf8_lossy(bytes), None)
+}
+
+fn scan_text(path: &str, text: &str, only: Option<&[&str]>) -> ToolResult<Vec<Finding>> {
     let mut out: Vec<Finding> = Vec::new();
     for (index, line) in text.lines().enumerate() {
         for rule in rules()? {
+            if only.is_some_and(|ids| !ids.contains(&rule.id.as_str())) {
+                continue;
+            }
             let hit = rule.regex.captures_iter(line).any(|captures| {
                 captures.get(rule.group).is_some_and(|secret| {
                     !rule
@@ -271,15 +321,68 @@ mod tests {
     }
 
     #[test]
-    fn findings_name_the_line_and_never_the_secret_and_binaries_are_skipped() {
+    fn findings_name_the_line_and_never_the_secret() {
         let text = join(&["line one\nline two\nkey=AKIA", "Z7QWERTYUIOPASDF\n"]);
         let findings = scan("cfg/app.ini", text.as_bytes()).expect("scan");
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].path, "cfg/app.ini");
         assert_eq!(findings[0].line, 3);
         assert!(!format!("{findings:?}").contains("QWERTY"));
-        let mut binary = text.into_bytes();
-        binary.insert(0, 0);
-        assert!(scan("b.bin", &binary).expect("scan").is_empty());
+    }
+
+    fn utf16(text: &str, little: bool) -> Vec<u8> {
+        let mut out = if little {
+            vec![0xFF, 0xFE]
+        } else {
+            vec![0xFE, 0xFF]
+        };
+        for unit in text.encode_utf16() {
+            out.extend_from_slice(&if little {
+                unit.to_le_bytes()
+            } else {
+                unit.to_be_bytes()
+            });
+        }
+        out
+    }
+
+    #[test]
+    fn a_utf16_config_is_scanned_as_text() {
+        let text = join(&[
+            "[db]\r\nServer=db;User Id=sa;Password=",
+            "Hunter2Hunter2;\r\n",
+        ]);
+        for little in [true, false] {
+            let findings = scan("app.config", &utf16(&text, little)).expect("scan");
+            assert_eq!(
+                findings
+                    .iter()
+                    .map(|f| (f.line, f.rule.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![(2, "password-assignment")],
+                "little endian: {little}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_binary_blob_is_scanned_for_high_confidence_keys_only() {
+        let mut blob = vec![0_u8, 1, 2, 0, 0, 7, b'\n'];
+        blob.extend_from_slice(join(&["\0 id=AKIA", "Z7QWERTYUIOPASDF \0"]).as_bytes());
+        let findings = scan("lib/blob.dat", &blob).expect("scan");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule, "aws-access-key-id");
+        assert_eq!(findings[0].path, "lib/blob.dat");
+        // A rule outside the high-confidence set stays quiet in a binary.
+        let mut weak = vec![0_u8, 0];
+        weak.extend_from_slice(join(&["\0Password=", "Hunter2Hunter2;"]).as_bytes());
+        assert!(scan("w.bin", &weak).expect("scan").is_empty());
+    }
+
+    #[test]
+    fn a_plain_binary_has_no_finding() {
+        let blob: Vec<u8> = (0..=255_u8).cycle().take(4096).collect();
+        assert!(scan("plain.bin", &blob).expect("scan").is_empty());
+        assert!(scan("p.bin", &[0, 0, 0, 0]).expect("scan").is_empty());
     }
 }
