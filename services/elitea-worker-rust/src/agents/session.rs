@@ -1839,6 +1839,14 @@ async fn resolve_pipeline_start(
             Some(super::graph::resume::PipelineResume::empty())
         }
         PipelineNativeStart::Hitl(decision) => {
+            // An approved call an earlier continuation started may have run: refuse
+            // before any decision is resolved, with the "may have started" reason.
+            if let Some(checkpoint) = state.application_checkpoint(plan).await?
+                && super::pipeline::scope_receipts::has_unfinished_approved_resume(&checkpoint)
+                    .map_err(|_| invalid_configuration())?
+            {
+                return Err(super::pipeline::approved_call_may_have_started());
+            }
             let session = restore_pipeline_session(state, plan).await?;
             let resolved = decision
                 .resolve(
@@ -2739,7 +2747,9 @@ fn direct_hitl_error(error: &DirectHitlError) -> NativeAgentAssemblyError {
         DirectHitlErrorCode::InvalidInput
         | DirectHitlErrorCode::StaleDecision
         | DirectHitlErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        DirectHitlErrorCode::UnsupportedCapability => {
+        // A root Agent has no registered "may have started" reason yet (G-ADV-01);
+        // the refusal stays typed and the effect is never repeated.
+        DirectHitlErrorCode::UnsupportedCapability | DirectHitlErrorCode::MayHaveStarted => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
         DirectHitlErrorCode::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,

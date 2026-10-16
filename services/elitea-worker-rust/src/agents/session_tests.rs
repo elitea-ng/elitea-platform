@@ -3114,3 +3114,61 @@ async fn an_approved_sensitive_call_continuation_streams_its_answer_exactly_once
     assert_eq!(steps.last().map(String::as_str), Some(STREAMED_ANSWER));
     assert_eq!(full, STREAMED_ANSWER);
 }
+
+/// FU-226 at the conversation root: an approved sensitive call that changes data
+/// runs exactly once, and the same decision sent again runs nothing.
+#[tokio::test]
+async fn an_approved_effectful_sensitive_call_runs_once_at_the_root() {
+    let fixture = pause_sensitive_call(false).await;
+    let profile = OrdinaryNoToolProfile::validate(&fixture.request).expect("agent profile");
+    let resume = |words: &'static [&'static str], completed: &'static str| {
+        let plan = OrdinaryNativeAgentPlan::from_authorized(
+            &fixture.request,
+            &profile,
+            &AuthorizedNativeCommandBinding::fixture(),
+            &fixture.request.payload.input_attachments,
+        )
+        .expect("resume native plan");
+        let tool: Arc<dyn Tool> = Arc::new(CountingTool {
+            calls: Arc::clone(&fixture.tool_calls),
+            read_only: false,
+        });
+        let toolset: Arc<dyn Toolset> = Arc::new(BasicToolset::new("fixture-tools", vec![tool]));
+        let decision =
+            DirectHitlDecision::from_payload(&approved_resume_payload(&fixture.interrupt_id))
+                .expect("approved decision");
+        assemble_direct_hitl_resume_with_sessions(
+            StreamingBoundModel {
+                model: Arc::new(WordStreamLlm { words }),
+                completed: completed.to_owned(),
+                durable: Arc::new(FixtureDurableCompletion {
+                    value: completed.to_owned(),
+                }),
+            },
+            plan,
+            vec![toolset],
+            sensitive_catalog_with_read_only(false),
+            decision,
+            fixture.sessions.clone() as Arc<dyn SessionService>,
+        )
+    };
+    let resumed = resume(STREAMED_WORDS, STREAMED_ANSWER)
+        .await
+        .expect("an approved, never-dispatched effectful call is assembled");
+    let (_, _, full) = project_streamed_run(resumed).await;
+    assert_eq!(full, STREAMED_ANSWER);
+    assert_eq!(fixture.tool_calls.load(Ordering::SeqCst), 1, "runs once");
+    // The same decision again: the call already has its outcome, so nothing reruns it.
+    if let Ok(again) = resume(STREAMED_WORDS, STREAMED_ANSWER).await {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            project_streamed_run(again),
+        )
+        .await;
+    }
+    assert_eq!(
+        fixture.tool_calls.load(Ordering::SeqCst),
+        1,
+        "a repeated approval never runs the effect again"
+    );
+}

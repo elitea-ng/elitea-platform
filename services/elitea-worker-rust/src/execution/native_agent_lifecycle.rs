@@ -1460,6 +1460,14 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
         {
             RuntimeFailureKind::PipelineNodeTypeNotAvailable
         }
+        NativeAgentAssemblyErrorCode::UnsupportedCapability
+            if error.cause().is_some_and(|cause| {
+                // An approved call that may have run: its registered reason says so.
+                cause.code() == crate::agents::pipeline::APPROVED_CALL_MAY_HAVE_STARTED_CODE
+            }) =>
+        {
+            RuntimeFailureKind::PipelineToolFailed
+        }
         NativeAgentAssemblyErrorCode::UnsupportedCapability => {
             RuntimeFailureKind::UnsupportedCapability
         }
@@ -1694,6 +1702,14 @@ mod taxonomy_tests {
             error.cause().map(NativeAgentAssemblyCause::code),
             Some("graph.pipeline.invalid_identifier")
         );
+    }
+
+    #[test]
+    fn an_approved_call_that_may_have_started_fails_with_its_registered_reason() {
+        let error = crate::agents::pipeline::approved_call_may_have_started();
+        let kind = assembly_failure(&error);
+        assert_eq!(kind, RuntimeFailureKind::PipelineToolFailed);
+        assert!(kind.safe_message().contains("may have started"));
     }
 
     #[test]

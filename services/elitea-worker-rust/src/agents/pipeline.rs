@@ -2440,6 +2440,19 @@ const fn invalid_direct_tool_scope() -> NativeAgentAssemblyError {
 /// routes it to the registered "not available on this deployment" message.
 pub(crate) const UNSERVED_DIRECT_TOOLKIT_CODE: &str = "pipeline.direct_tool.toolkit_not_served";
 
+/// An approved sensitive-tool call of an `agent` node was started by an earlier continuation
+/// and left no outcome. It may have run, so it is never run again.
+pub(crate) const APPROVED_CALL_MAY_HAVE_STARTED_CODE: &str =
+    "pipeline.agent_node.approved_call_may_have_started";
+
+pub(crate) fn approved_call_may_have_started() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::UnsupportedCapability,
+        "the approved tool call may already have started; it is not repeated",
+    )
+    .with_cause(APPROVED_CALL_MAY_HAVE_STARTED_CODE, None)
+}
+
 pub(crate) const fn unserved_direct_toolkit() -> NativeAgentAssemblyError {
     NativeAgentAssemblyError::new(
         NativeAgentAssemblyErrorCode::UnsupportedCapability,

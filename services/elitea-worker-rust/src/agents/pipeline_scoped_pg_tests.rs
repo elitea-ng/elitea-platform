@@ -13,10 +13,12 @@
 //! * `older`: a conversation an older worker paused inside an `agent` node (the one resolver
 //!   this branch keeps for that case) is answered by the current Worker and finishes without ever
 //!   writing a graph-call receipt.
-//! * `effectful` / `effectful_deny`: the sensitive-tool card of an `agent` node whose tool changes
-//!   data (FU-226). Approve must fail readably and never call the tool: an approved effectful call
-//!   has no durable effect receipt yet (G-WORKER-10). Block must resume the Agent once with the
-//!   tool's blocked result.
+//! * `effectful` / `effectful_deny` / `effectful_crash`: the sensitive-tool card of an `agent`
+//!   node whose tool changes data (FU-226). Approve runs the tool exactly once in a replacement
+//!   Worker, and a repeated decision runs nothing. Block resumes the Agent once with the tool's
+//!   blocked result. A Worker that dies after dispatching the approved call leaves a durable
+//!   resume marker, so the next Worker refuses with the "may have started" reason and never
+//!   calls the tool again.
 
 use super::restart_pg_tests::{
     CHECKPOINT_MIGRATION, PHASE_DEADLINE, authorized_turn, connect, model_requests, pending_card,
@@ -61,13 +63,16 @@ fn sensitive_agent() -> Value {
 fn is_card(scenario: &str) -> bool {
     matches!(
         scenario,
-        "sensitive" | "batch" | "effectful" | "effectful_deny"
+        "sensitive" | "batch" | "effectful" | "effectful_deny" | "effectful_crash"
     )
 }
 
 /// Scenarios whose card belongs to the one-call sensitive MCP Agent.
 fn is_sensitive_mcp(scenario: &str) -> bool {
-    matches!(scenario, "sensitive" | "effectful" | "effectful_deny")
+    matches!(
+        scenario,
+        "sensitive" | "effectful" | "effectful_deny" | "effectful_crash"
+    )
 }
 
 fn versions(scenario: &str) -> BTreeMap<Saved, Value> {
@@ -136,6 +141,16 @@ async fn run_scenario(url: &str, scenario: &str, phases: &[&str]) -> IsolatedPos
             .env(PENDING_ENV, &pending);
         let output = run_phase(phase, command);
         let stdout = String::from_utf8_lossy(&output.stdout);
+        if *phase == "crash" {
+            // The Worker dies inside the approved tool, after its dispatch.
+            assert_eq!(
+                output.status.code(),
+                Some(CRASH_EXIT_CODE),
+                "{scenario}/{phase} process did not die inside the tool: {stdout} {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            continue;
+        }
         assert!(
             output.status.success(),
             "{scenario}/{phase} process failed (deadline {PHASE_DEADLINE:?}): {stdout} {}",
@@ -188,6 +203,53 @@ async fn postgres_sensitive_tool_card_of_a_graph_agent_node_resumes_once_after_p
     db.pool.close().await;
 }
 
+const CRASH_EXIT_CODE: i32 = 87;
+
+/// The sensitive MCP tool of the fixture, whose execution kills the Worker process: the
+/// approved call was dispatched and its outcome is unknown.
+struct CrashingMcpConnector;
+
+#[async_trait]
+impl McpConnector for CrashingMcpConnector {
+    async fn connect(
+        &self,
+        _config: &RemoteMcpConfig,
+    ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        Ok(Arc::new(BasicToolset::new(
+            "fixture_mcp",
+            vec![Arc::new(CrashingMcpTool(PipelineMcpTool {
+                calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                read_only: false,
+            }))],
+        )))
+    }
+}
+
+struct CrashingMcpTool(PipelineMcpTool);
+
+#[async_trait]
+impl Tool for CrashingMcpTool {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+    fn description(&self) -> &str {
+        self.0.description()
+    }
+    fn parameters_schema(&self) -> Option<Value> {
+        self.0.parameters_schema()
+    }
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        _arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        std::process::exit(CRASH_EXIT_CODE)
+    }
+}
+
 /// Run a resumed pipeline to its end and return the upstream code of its failure.
 async fn collect_pipeline_failure(
     mut invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
@@ -206,7 +268,7 @@ async fn collect_pipeline_failure(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn postgres_effectful_sensitive_tool_approval_in_a_graph_agent_node_fails_readably_without_the_effect()
+async fn postgres_effectful_sensitive_tool_approval_in_a_graph_agent_node_runs_once_and_never_again()
  {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
@@ -215,6 +277,18 @@ async fn postgres_effectful_sensitive_tool_approval_in_a_graph_agent_node_fails_
         return;
     };
     let db = run_scenario(&url, "effectful", &["start", "answer", "repeat"]).await;
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_effectful_approval_dispatched_before_a_crash_is_refused_not_repeated() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
+        );
+        return;
+    };
+    let db = run_scenario(&url, "effectful_crash", &["start", "crash", "recover"]).await;
     db.pool.close().await;
 }
 
@@ -291,6 +365,8 @@ fn assembler(
     );
     let assembler = if scenario == "batch" {
         assembler.with_mcp_connector(Arc::new(super::scoped_tests::BatchConnector))
+    } else if scenario == "effectful_crash" && phase == "crash" {
+        assembler.with_mcp_connector(Arc::new(CrashingMcpConnector))
     } else if is_sensitive_mcp(scenario) {
         assembler.with_mcp_connector(Arc::new(PipelineMcpConnector {
             connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -356,7 +432,7 @@ async fn postgres_scoped_child() {
                 &scenario,
                 &phase,
                 vec![TestModelGatewayOutcome::Response(pipeline_text_response(
-                    "unexpected approved effect",
+                    "child ran the approved change",
                 ))],
             );
             let request = pipeline_application_resume_request(
@@ -369,18 +445,79 @@ async fn postgres_scoped_child() {
                 .assemble(authorized_turn(&request, "execution-answer", 2))
                 .await
                 .expect("answer: the replacement Worker assembles");
-            let upstream = collect_pipeline_failure(invocation).await;
+            let browser = collect_pipeline_completion(invocation).await;
+            assert!(
+                browser
+                    .iter()
+                    .any(|event| event["content"] == "child ran the approved change"),
+                "answer: the approved call runs and the Agent finishes: {browser:?}"
+            );
             assert_eq!(
-                crate::protocol::output::model_failure(upstream.as_deref()),
-                crate::protocol::output::RuntimeFailureKind::PipelineToolUnavailable,
-                "answer: an approved effectful call fails with a readable reason, got {upstream:?}"
+                tool_calls.load(std::sync::atomic::Ordering::Acquire),
+                1,
+                "answer: the approved effectful tool runs exactly once"
+            );
+            assert_eq!(
+                model_requests(&captured),
+                1,
+                "answer: only the resumed Agent runs"
+            );
+            println!("{PENDING_MARKER}{card}");
+        }
+        "crash" => {
+            let card: Value = serde_json::from_str(&pending).expect("pending card");
+            let (assembler, _, _) = assembler(&pool, &scenario, &phase, Vec::new());
+            let request = pipeline_application_resume_request(
+                vec![card["interrupt_id"].as_str().expect("card id").to_owned()],
+                "approve",
+                "",
+                [44; 32],
+            );
+            let invocation = assembler
+                .assemble(authorized_turn(&request, "execution-crash", 2))
+                .await
+                .expect("crash: the Worker assembles the approval");
+            // The crashing tool exits this process; reaching the end is the failure.
+            let _ = collect_pipeline_failure(invocation).await;
+            panic!("crash: the approved tool was never dispatched");
+        }
+        "recover" => {
+            let card: Value = serde_json::from_str(&pending).expect("pending card");
+            let (assembler, captured, tool_calls) = assembler(
+                &pool,
+                &scenario,
+                &phase,
+                vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                    "unexpected second effect",
+                ))],
+            );
+            let request = pipeline_application_resume_request(
+                vec![card["interrupt_id"].as_str().expect("card id").to_owned()],
+                "approve",
+                "",
+                [44; 32],
+            );
+            // The root frontier still holds the approved resume the dead Worker started, so
+            // the replacement refuses before it resolves the decision or binds any tool.
+            let Err(error) = assembler
+                .assemble(authorized_turn(&request, "execution-recover", 3))
+                .await
+            else {
+                panic!("recover: a dispatched approval was assembled again");
+            };
+            assert_eq!(
+                error
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code),
+                Some(super::super::pipeline::APPROVED_CALL_MAY_HAVE_STARTED_CODE),
+                "recover: the refusal names the may-have-started cause: {error}"
             );
             assert_eq!(
                 tool_calls.load(std::sync::atomic::Ordering::Acquire),
                 0,
-                "answer: the approved effectful tool never runs without an effect receipt"
+                "recover: the approved effect is never repeated"
             );
-            assert_eq!(model_requests(&captured), 0, "answer: no model call");
+            assert_eq!(model_requests(&captured), 0, "recover: no model call");
         }
         "deny" => {
             let card: Value = serde_json::from_str(&pending).expect("pending card");

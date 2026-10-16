@@ -500,6 +500,24 @@ pub(super) enum ChildApplicationResumeAction {
     PipelineDescendants(Box<PreparedPipelineToolResume>),
 }
 
+impl ChildApplicationResumeAction {
+    fn approves_sensitive_call(&self) -> bool {
+        match self {
+            Self::Direct(decision) => decision.approves_sensitive_call(),
+            Self::Nested(children) => children
+                .values()
+                .any(|child| child.action.approves_sensitive_call()),
+            // Graph re-entry and retained results continue no tool replay here;
+            // their own nodes own their effects.
+            Self::Retained(_)
+            | Self::RetainedPipeline(_)
+            | Self::Pipeline(_)
+            | Self::PipelineStatic(_)
+            | Self::PipelineDescendants(_) => false,
+        }
+    }
+}
+
 impl ApplicationResumeCoordinator {
     pub(super) async fn observe_call_lineage(
         &self,
@@ -585,6 +603,24 @@ impl ApplicationResumeCoordinator {
             .root
             .as_ref()
             .is_some_and(|calls| calls.contains_key(call_id))
+    }
+
+    /// Whether the pending resume of this call approves a sensitive-tool call at
+    /// any depth: the one continuation that may dispatch an effect, and so the one
+    /// a graph node marks durably before it runs the child.
+    pub(crate) async fn approves_sensitive_call(
+        &self,
+        parent_invocation_id: &str,
+        call_id: &str,
+    ) -> bool {
+        let stored = self.inner.lock().await;
+        let calls = stored
+            .by_parent_invocation
+            .get(parent_invocation_id)
+            .or(stored.root.as_ref());
+        calls
+            .and_then(|calls| calls.get(call_id))
+            .is_some_and(|resume| resume.action.approves_sensitive_call())
     }
 
     pub(super) async fn take(
@@ -5128,21 +5164,32 @@ pub(super) fn child_execution_error() -> AdkError {
 }
 
 /// A nested Agent's sensitive-tool card was decided, but the decided call cannot
-/// run on this deployment: an approved call that changes data has no durable
-/// effect receipt yet (G-WORKER-10), or the call's tool is no longer offered.
-/// Nothing ran. The pipeline node reports it as an unavailable tool, not a fault.
+/// run here (its tool is no longer offered, or an approved sibling that changes
+/// data cannot be proven unexecuted). Nothing ran. The pipeline node reports it
+/// as an unavailable tool, not a fault.
 pub(crate) const NESTED_REPLAY_UNSUPPORTED_CODE: &str = "elitea_nested_agent.replay_unsupported";
 
+/// A nested Agent's approved call that changes data was already dispatched by an
+/// earlier continuation and left no result. It may have run; it is not repeated.
+pub(crate) const NESTED_REPLAY_MAY_HAVE_STARTED_CODE: &str =
+    "elitea_nested_agent.replay_may_have_started";
+
 fn direct_replay_execution_error(error: &super::direct_hitl::DirectHitlError) -> AdkError {
-    if error.code() == super::direct_hitl::DirectHitlErrorCode::UnsupportedCapability {
-        return AdkError::new(
+    match error.code() {
+        super::direct_hitl::DirectHitlErrorCode::UnsupportedCapability => AdkError::new(
             ErrorComponent::Agent,
             ErrorCategory::Unsupported,
             NESTED_REPLAY_UNSUPPORTED_CODE,
             "the decided nested agent tool call cannot run on this deployment",
-        );
+        ),
+        super::direct_hitl::DirectHitlErrorCode::MayHaveStarted => AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::Unsupported,
+            NESTED_REPLAY_MAY_HAVE_STARTED_CODE,
+            "the approved nested agent tool call may already have started",
+        ),
+        _ => direct_hitl_execution_error(),
     }
-    direct_hitl_execution_error()
 }
 
 fn direct_hitl_execution_error() -> AdkError {

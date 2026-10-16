@@ -364,19 +364,64 @@ fn delegated_authorization_decision_is_bound_to_interrupt_action_and_server_auth
 }
 
 #[test]
-fn direct_replay_rejects_effectful_tools_before_model_or_tool_execution() {
+fn an_approved_effectful_call_runs_once_and_is_refused_after_its_dispatch() {
     let arguments = json!({"value": 21});
-    let events = pending_events(arguments.clone());
+    let mut events = pending_events(arguments.clone());
     let (interrupt_id, _) = sensitive_call_identity("invocation-1", "call-1", "double", &arguments)
         .expect("call identity");
-    let resolved = DirectHitlDecision::from_payload(&direct_payload("approve", "", &interrupt_id))
-        .expect("decision admission")
-        .resolve(&session(events))
-        .expect("exact session call");
-    let Err(error) = resolved.into_direct_replay(&sensitive_catalog(false)) else {
-        panic!("effectful direct tool was admitted for replay");
+    let approve = || {
+        DirectHitlDecision::from_payload(&direct_payload("approve", "", &interrupt_id))
+            .expect("decision admission")
     };
-    assert_eq!(error.code(), DirectHitlErrorCode::UnsupportedCapability);
+    // Never dispatched: the approved effect is admitted for its one run.
+    let replay = approve()
+        .resolve(&session(events.clone()))
+        .expect("exact session call")
+        .into_direct_replay(&sensitive_catalog(false))
+        .expect("an approved, never-dispatched effectful call runs");
+    assert_eq!(replay.approved_call_ids(), vec!["call-1"]);
+
+    // A continuation that persisted only its replay marker never dispatched it.
+    let marker_text = format!(
+        "[Elitea direct HITL {interrupt_id}] The pending tool call was approved. Continue the original request."
+    );
+    let mut marker = Event::with_id("resume-user", "invocation-2");
+    marker.author = "user".to_owned();
+    marker.llm_response.content = Some(Content::new("user").with_text(marker_text));
+    events.push(marker);
+    approve()
+        .resolve(&session(events.clone()))
+        .expect("marker-only suffix")
+        .into_direct_replay(&sensitive_catalog(false))
+        .expect("a marker without the replayed call is not a dispatch");
+
+    // The replayed call is persisted before ADK runs the tool: it may have run.
+    let mut call = Event::with_id("resume-call", "invocation-2");
+    call.author = "elitea-agent".to_owned();
+    call.llm_response.content = Some(Content {
+        role: "model".to_owned(),
+        parts: vec![Part::FunctionCall {
+            name: "double".to_owned(),
+            args: arguments.clone(),
+            id: Some("call-1".to_owned()),
+            thought_signature: None,
+        }],
+    });
+    events.push(call);
+    let Err(error) = approve()
+        .resolve(&session(events.clone()))
+        .expect("exact call suffix")
+        .into_direct_replay(&sensitive_catalog(false))
+    else {
+        panic!("a dispatched effectful call was admitted again");
+    };
+    assert_eq!(error.code(), DirectHitlErrorCode::MayHaveStarted);
+    // A read-only call with the same suffix still re-runs.
+    approve()
+        .resolve(&session(events))
+        .expect("exact call suffix")
+        .into_direct_replay(&sensitive_catalog(true))
+        .expect("a read-only call is re-run");
 }
 
 #[test]

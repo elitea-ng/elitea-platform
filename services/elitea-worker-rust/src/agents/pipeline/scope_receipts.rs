@@ -38,8 +38,29 @@ const MAX_RECEIPTS: usize = 128;
 #[allow(clippy::large_enum_variant)] // Durable outcomes are bounded by the receipt codec, with at most one terminal event.
 pub(crate) enum GraphCallOutcome {
     Started,
-    Paused { result: Value },
-    Completed { result: Value, terminal: Event },
+    Paused {
+        result: Value,
+    },
+    /// A continuation that approves a sensitive-tool call started the paused child.
+    /// Written durably before the child runs, so it is the dispatch marker of an
+    /// approved effect: a later visit that finds it refuses instead of repeating.
+    Resuming {
+        result: Value,
+    },
+    Completed {
+        result: Value,
+        terminal: Event,
+    },
+}
+
+impl GraphCallOutcome {
+    /// The paused child's interrupt result, while it is paused or being resumed.
+    pub(crate) fn paused_result(&self) -> Option<&Value> {
+        match self {
+            Self::Paused { result } | Self::Resuming { result } => Some(result),
+            Self::Started | Self::Completed { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -88,7 +109,7 @@ impl PipelineGraphCallReceipt {
         }
         match &self.outcome {
             GraphCallOutcome::Started => {},
-            GraphCallOutcome::Paused { result } => {
+            GraphCallOutcome::Paused { result } | GraphCallOutcome::Resuming { result } => {
                 if crate::agents::application_tools::nested_application_interrupt_ids(result).is_none() { return Err(receipt_error()); }
             },
             GraphCallOutcome::Completed { result, terminal } => {
@@ -186,6 +207,11 @@ pub(crate) fn validate_graph_call_revision(
                     GraphCallOutcome::Paused { .. } | GraphCallOutcome::Completed { .. }
                 ) | (
                     GraphCallOutcome::Paused { .. },
+                    GraphCallOutcome::Paused { .. }
+                        | GraphCallOutcome::Resuming { .. }
+                        | GraphCallOutcome::Completed { .. }
+                ) | (
+                    GraphCallOutcome::Resuming { .. },
                     GraphCallOutcome::Paused { .. } | GraphCallOutcome::Completed { .. }
                 )
             )
@@ -268,6 +294,18 @@ fn read_receipts(checkpoint: &Checkpoint) -> Result<GraphCallReceipts, GraphErro
         }
     }
     Ok(value)
+}
+
+/// Whether a frontier call of this checkpoint is an approved resume that started and left no
+/// outcome: the approved call may have run, so no continuation may run it again.
+pub(crate) fn has_unfinished_approved_resume(checkpoint: &Checkpoint) -> Result<bool, GraphError> {
+    Ok(read_receipts(checkpoint)?
+        .calls
+        .iter()
+        .any(|(node, receipt)| {
+            checkpoint.pending_nodes.contains(node)
+                && matches!(receipt.outcome, GraphCallOutcome::Resuming { .. })
+        }))
 }
 
 pub(crate) fn receipt_for_node(
@@ -469,6 +507,16 @@ impl Checkpointer for PipelineGraphReceiptCheckpointer {
                         // ADK may omit metadata; it cannot replace a completed receipt.
                         if matches!(receipt.outcome, GraphCallOutcome::Paused { .. })
                             && matches!(current.outcome, GraphCallOutcome::Started)
+                        {
+                            return Err(receipt_error());
+                        }
+                        // A dispatch marker is never dropped by a stale copy.
+                        if matches!(receipt.outcome, GraphCallOutcome::Resuming { .. })
+                            && !matches!(
+                                current.outcome,
+                                GraphCallOutcome::Resuming { .. }
+                                    | GraphCallOutcome::Completed { .. }
+                            )
                         {
                             return Err(receipt_error());
                         }

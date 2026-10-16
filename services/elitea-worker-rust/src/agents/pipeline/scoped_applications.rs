@@ -1325,7 +1325,7 @@ impl PipelineApplicationScopeRegistry {
         let receipt = super::scope_receipts::receipt_for_node(checkpoint, &route.leaf_node_name)
             .map_err(|_| invalid_scope())?
             .ok_or_else(invalid_scope)?;
-        let super::scope_receipts::GraphCallOutcome::Paused { result } = receipt.outcome() else {
+        let Some(result) = receipt.outcome().paused_result() else {
             return Err(invalid_scope());
         };
         let ids = crate::agents::application_tools::nested_application_interrupt_ids(result)
@@ -1466,7 +1466,7 @@ impl PipelineApplicationScopeRegistry {
         let receipt = super::scope_receipts::receipt_for_node(checkpoint, &route.leaf_node_name)
             .map_err(|_| invalid_scope())?
             .ok_or_else(invalid_scope)?;
-        let super::scope_receipts::GraphCallOutcome::Paused { result } = receipt.outcome() else {
+        let Some(result) = receipt.outcome().paused_result() else {
             return Err(invalid_scope());
         };
         let expected = crate::agents::application_tools::nested_application_interrupt_ids(result)

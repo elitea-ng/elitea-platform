@@ -183,7 +183,7 @@ impl PipelineApplicationNodeRuntime {
         .map_err(|_| failure())?;
         let (invocation, author, branch) =
             graph_invocation_identity_with_events(context, Some(&self.events))?;
-        let (receipt, fresh) = prepare_graph_call(
+        let (mut receipt, fresh) = prepare_graph_call(
             checkpointer,
             &self.prepare_gate,
             context,
@@ -195,7 +195,7 @@ impl PipelineApplicationNodeRuntime {
             &branch,
         )
         .await?;
-        match receipt.outcome() {
+        match receipt.outcome().clone() {
             GraphCallOutcome::Completed { result, terminal } => {
                 self.forward(
                     receipt.original_start().clone(),
@@ -214,15 +214,36 @@ impl PipelineApplicationNodeRuntime {
                 return Ok((result.clone(), receipt.activation().call_id().to_owned()));
             }
             GraphCallOutcome::Paused { result } => {
-                if !self
-                    .applications
-                    .resume_coordinator()
-                    .ok_or_else(failure)?
+                let coordinator = self.applications.resume_coordinator().ok_or_else(failure)?;
+                if !coordinator
                     .has_resume(receipt.invocation_id(), receipt.activation().call_id())
                     .await
                 {
-                    return Ok((result.clone(), receipt.activation().call_id().to_owned()));
+                    return Ok((result, receipt.activation().call_id().to_owned()));
                 }
+                // An approval may dispatch an effect: mark the resume durably first,
+                // so a crash after it can never run the approved call a second time.
+                if coordinator
+                    .approves_sensitive_call(
+                        receipt.invocation_id(),
+                        receipt.activation().call_id(),
+                    )
+                    .await
+                {
+                    receipt = finish_graph_call(
+                        checkpointer,
+                        &self.prepare_gate,
+                        context,
+                        &receipt,
+                        GraphCallOutcome::Resuming { result },
+                    )
+                    .await?;
+                }
+            }
+            GraphCallOutcome::Resuming { .. } => {
+                // An earlier continuation started this approved child and left no
+                // outcome: the approved call may have run. Never run it again.
+                return Err(self.child_failure(ChildFailure::MayHaveStarted).await);
             }
             GraphCallOutcome::Started if !fresh => {
                 // An interrupted unpaused provider/tool has no graph-level replay authority.
@@ -258,16 +279,7 @@ impl PipelineApplicationNodeRuntime {
             .map_err(|_| failure())?;
         let result = match result {
             Ok(result) => result,
-            Err(ChildFailure::Scope(error)) => return Err(error),
-            Err(ChildFailure::ReplayUnsupported) => {
-                // The decided call never ran. Say so with the registered
-                // unavailable-tool reason instead of an internal fault (FU-226).
-                self.events
-                    .send_execution_failure(REPLAY_UNSUPPORTED_PUBLIC_CODE)
-                    .await
-                    .map_err(|_| failure())?;
-                return Err(replay_unsupported(&self.node_name));
-            }
+            Err(refusal) => return Err(self.child_failure(refusal).await),
         };
         let outcome = if crate::agents::application_tools::nested_application_interrupt_ids(&result)
             .is_some()
@@ -298,6 +310,27 @@ impl PipelineApplicationNodeRuntime {
         Ok((result, receipt.activation().call_id().to_owned()))
     }
 
+    /// Report a typed child refusal with its registered public reason.
+    async fn child_failure(&self, refusal: ChildFailure) -> GraphError {
+        let (code, error) = match refusal {
+            ChildFailure::Scope(error) => return error,
+            // The decided call never ran (FU-226).
+            ChildFailure::ReplayUnsupported => (
+                REPLAY_UNSUPPORTED_PUBLIC_CODE,
+                replay_unsupported(&self.node_name),
+            ),
+            // The approved call may have run; it is not repeated.
+            ChildFailure::MayHaveStarted => (
+                MAY_HAVE_STARTED_PUBLIC_CODE,
+                may_have_started(&self.node_name),
+            ),
+        };
+        match self.events.send_execution_failure(code).await {
+            Ok(()) => error,
+            Err(_) => failure(),
+        }
+    }
+
     /// Run the child tool while forwarding its events, then drain what it
     /// queued. The tool is driven (`DrivenTask`): forwarding a child event is a
     /// bounded send the Runner drains by persisting it, so it must never leave
@@ -317,6 +350,7 @@ impl PipelineApplicationNodeRuntime {
                 value = &mut future => break match value {
                     Ok(Ok(value)) => Ok(value),
                     Ok(Err(error)) if error.code == crate::agents::application_tools::NESTED_REPLAY_UNSUPPORTED_CODE => Err(ChildFailure::ReplayUnsupported),
+                    Ok(Err(error)) if error.code == crate::agents::application_tools::NESTED_REPLAY_MAY_HAVE_STARTED_CODE => Err(ChildFailure::MayHaveStarted),
                     _ => Err(ChildFailure::Scope(failure())),
                 },
                 signal = receiver.recv() => match signal {
@@ -495,10 +529,22 @@ enum ChildFailure {
     Scope(GraphError),
     /// The nested Agent refused its decided call before running it.
     ReplayUnsupported,
+    /// An earlier continuation already dispatched the approved call.
+    MayHaveStarted,
 }
 
 /// Registered public code for a decided call that cannot run (no effect ran).
 const REPLAY_UNSUPPORTED_PUBLIC_CODE: &str = "pipeline.tool_unavailable";
+
+/// Registered public code whose text says the tool may have started work.
+const MAY_HAVE_STARTED_PUBLIC_CODE: &str = "pipeline.tool_failed";
+
+fn may_have_started(node: &str) -> GraphError {
+    GraphError::NodeExecutionFailed {
+        node: node.to_owned(),
+        message: "the approved tool call may already have started; it was not repeated".to_owned(),
+    }
+}
 
 fn replay_unsupported(node: &str) -> GraphError {
     GraphError::NodeExecutionFailed {

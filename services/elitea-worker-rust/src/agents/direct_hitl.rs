@@ -79,6 +79,9 @@ pub(crate) enum DirectHitlErrorCode {
     StaleDecision,
     CorruptSession,
     ResourceExhausted,
+    /// An approved call that changes data was already dispatched by an earlier
+    /// continuation and left no result: it may have run. It is never repeated.
+    MayHaveStarted,
 }
 
 impl DirectHitlErrorCode {
@@ -90,6 +93,7 @@ impl DirectHitlErrorCode {
             Self::StaleDecision => "direct_hitl.stale_decision",
             Self::CorruptSession => "direct_hitl.corrupt_session",
             Self::ResourceExhausted => "direct_hitl.resource_exhausted",
+            Self::MayHaveStarted => "direct_hitl.may_have_started",
         }
     }
 }
@@ -363,6 +367,7 @@ impl DirectDelegatedAuthorizationContinuation {
             user_content,
             resume_mode: persisted.mode,
             persisted_result: persisted.result,
+            dispatched: persisted.dispatched,
             replay_calls,
             application_route: None,
             delegated_authorization: Some(requirement),
@@ -775,6 +780,7 @@ impl DirectHitlDecision {
             user_content,
             resume_mode: persisted.mode,
             persisted_result: persisted.result,
+            dispatched: persisted.dispatched,
             replay_calls,
             application_route,
             delegated_authorization,
@@ -860,6 +866,7 @@ impl DirectHitlDecision {
             user_content: Content::new("user"),
             resume_mode: ReplayResumeMode::ExecuteCall,
             persisted_result: None,
+            dispatched: false,
             replay_calls: Vec::new(),
             application_route: Some(route),
             delegated_authorization: None,
@@ -903,6 +910,7 @@ fn resume_state(
         return Ok(PersistedReplayState {
             mode: ReplayResumeMode::ExecuteCall,
             result: None,
+            dispatched: false,
         });
     }
     persisted_replay_state_with_confirmation(
@@ -1120,6 +1128,8 @@ pub(crate) struct ResolvedDirectHitlDecision {
     user_content: Content,
     resume_mode: ReplayResumeMode,
     persisted_result: Option<Value>,
+    /// See [`PersistedReplayState::dispatched`].
+    dispatched: bool,
     /// Every call of the paused assistant message, in the order the model
     /// emitted them — see [`ReplayCall`].
     replay_calls: Vec<ReplayCall>,
@@ -1175,6 +1185,10 @@ enum ReplayResumeMode {
 struct PersistedReplayState {
     mode: ReplayResumeMode,
     result: Option<Value>,
+    /// An earlier continuation already persisted the replayed call and no
+    /// result followed. ADK persists a model's call before it runs the tool,
+    /// so this is the durable dispatch marker of that call.
+    dispatched: bool,
 }
 
 impl ResolvedDirectHitlDecision {
@@ -1203,6 +1217,12 @@ impl ResolvedDirectHitlDecision {
     /// Whether this decision belongs to a guardrail the sensitive-tool replay
     /// does not serve — authorization, a clarifying question, or a child
     /// pipeline's graph pause, each of which has its own continuation.
+    /// Whether this decision approves a sensitive-tool call, the one decision
+    /// whose continuation may dispatch an effect.
+    pub(crate) fn approves_sensitive_call(&self) -> bool {
+        self.decision == ToolConfirmationDecision::Approve && !self.is_other_guardrail()
+    }
+
     const fn is_other_guardrail(&self) -> bool {
         self.delegated_authorization.is_some()
             || self.clarifying_question.is_some()
@@ -1240,14 +1260,19 @@ impl ResolvedDirectHitlDecision {
         } else {
             None
         };
-        if blocked_result.is_none() && sensitive_tools.is_read_only(&self.tool_name) != Some(true) {
+        // An approved call that changes data runs once: only while no earlier
+        // continuation dispatched it. Its replayed call event is persisted before
+        // ADK runs the tool, so a second continuation sees the dispatch and refuses
+        // rather than repeating an effect that may already have happened.
+        if blocked_result.is_none()
+            && self.dispatched
+            && sensitive_tools.is_read_only(&self.tool_name) != Some(true)
+        {
             tracing::debug!(
                 tool.name = %self.tool_name,
-                "approved direct HITL replay remains closed for an effectful tool"
+                "approved effectful call was already dispatched; it is not repeated"
             );
-            return Err(DirectHitlError::new(
-                DirectHitlErrorCode::UnsupportedCapability,
-            ));
+            return Err(DirectHitlError::new(DirectHitlErrorCode::MayHaveStarted));
         }
         if matches!(self.resume_mode, ReplayResumeMode::ContinueAfterResult)
             && blocked_result
@@ -2337,6 +2362,7 @@ fn persisted_replay_state_with_confirmation(
         } else {
             ReplayResumeMode::ExecuteCall
         },
+        dispatched: call_pending && result_persisted.is_none(),
         result: result_persisted,
     })
 }
