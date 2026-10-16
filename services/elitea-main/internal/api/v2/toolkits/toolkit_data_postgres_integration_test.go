@@ -70,8 +70,8 @@ func seedOneToolkit(ctx context.Context, t *testing.T, repo *pgRepo) string {
 	t.Helper()
 	var id string
 	if err := repo.pool.QueryRow(ctx, `
-INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id)
-VALUES ('graph', 'inventory_inventory', '', 1, 1) RETURNING id::text`).Scan(&id); err != nil {
+INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id, created_at)
+VALUES ('graph', 'inventory_inventory', '', 1, 1, now() AT TIME ZONE 'UTC') RETURNING id::text`).Scan(&id); err != nil {
 		t.Fatalf("seed toolkit: %v", err)
 	}
 	return id
@@ -193,8 +193,8 @@ func TestDeleteToolkitRowFirstTombstonesTheToolkitsRegistryIndexes(t *testing.T)
 	id := seedOneToolkit(ctx, t, repo)
 	var otherID string
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id)
-VALUES ('other', 'github', '', 1, 1) RETURNING id::text`).Scan(&otherID); err != nil {
+INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id, created_at)
+VALUES ('other', 'github', '', 1, 1, now() AT TIME ZONE 'UTC') RETURNING id::text`).Scan(&otherID); err != nil {
 		t.Fatal(err)
 	}
 	toolkit, _ := strconv.ParseInt(id, 10, 32)
@@ -312,8 +312,8 @@ func TestAMemoryToolkitDeleteRecordsItsIdInTheSameTransaction(t *testing.T) {
 	} {
 		var id string
 		if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.elitea_tools (name, type, description, settings, owner_id, author_id)
-VALUES ('notes', 'memory', '', $1::jsonb, 1, 1) RETURNING id::text`, settings).Scan(&id); err != nil {
+INSERT INTO p_1.elitea_tools (name, type, description, settings, owner_id, author_id, created_at)
+VALUES ('notes', 'memory', '', $1::jsonb, 1, 1, now() AT TIME ZONE 'UTC') RETURNING id::text`, settings).Scan(&id); err != nil {
 			t.Fatalf("seed memory toolkit: %v", err)
 		}
 		journal := &memoryJournal{}

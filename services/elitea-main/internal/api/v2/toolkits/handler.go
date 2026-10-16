@@ -1543,9 +1543,9 @@ func selectedToolsPayload(body map[string]any) ([]byte, bool, error) {
 // `DO NOTHING` and never named `selected_tools` at all.
 func selectedToolsRelationInsertSQL(schema string, withSelectedTools bool) string {
 	if !withSelectedTools {
-		return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id) VALUES ($1, $2, $3, $4) ON CONFLICT (entity_version_id, tool_id, entity_type) DO NOTHING`, schema)
+		return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, created_at) VALUES ($1, $2, $3, $4, now() AT TIME ZONE 'UTC') ON CONFLICT (entity_version_id, tool_id, entity_type) DO NOTHING`, schema)
 	}
-	return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools) VALUES ($1, $2, $3, $4, $5::jsonb) ON CONFLICT (entity_version_id, tool_id, entity_type) DO UPDATE SET selected_tools = EXCLUDED.selected_tools, updated_at = now()`, schema)
+	return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at) VALUES ($1, $2, $3, $4, $5::jsonb, now() AT TIME ZONE 'UTC') ON CONFLICT (entity_version_id, tool_id, entity_type) DO UPDATE SET selected_tools = EXCLUDED.selected_tools, updated_at = (now() AT TIME ZONE 'UTC')`, schema)
 }
 
 // Delete removes a toolkit instance. With a cleanup journal wired the delete is
@@ -1743,8 +1743,8 @@ func (r *pgRepo) ForkToolkit(ctx context.Context, projectID string, body map[str
 	// forked it needs the principal to reach this seam, which is a change to
 	// the handler's contract rather than to this statement.
 	q := fmt.Sprintf(`
-		INSERT INTO %s.elitea_tools (name, type, description, owner_id, author_id, settings, env_vars, meta)
-		SELECT name || ' (copy)', type, description, owner_id, author_id, settings, env_vars, meta
+		INSERT INTO %s.elitea_tools (name, type, description, owner_id, author_id, settings, env_vars, meta, created_at)
+		SELECT name || ' (copy)', type, description, owner_id, author_id, settings, env_vars, meta, now() AT TIME ZONE 'UTC'
 		FROM %s.elitea_tools WHERE id = $1
 		RETURNING id, name, type, COALESCE(description, '')`, s, s)
 	var t Tool
@@ -1932,15 +1932,15 @@ func createToolkitInsertSQL(schema string, includeOwnerID bool) string {
 		// own quoting — %q here would wrap the quotes in quotes and every
 		// create against a current pylon table would name no such schema.
 		return fmt.Sprintf(`
-		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, author_id)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, author_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now() AT TIME ZONE 'UTC')
 		RETURNING id, type, name, COALESCE(description,''),
 		          COALESCE(settings::text,'{}'), COALESCE(meta::text,'{}'),
 		       created_at, author_id`, schema)
 	}
 	return fmt.Sprintf(`
-		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, owner_id, author_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now() AT TIME ZONE 'UTC')
 		RETURNING id, type, name, COALESCE(description,''),
 		          COALESCE(settings::text,'{}'), COALESCE(meta::text,'{}'),
 		       created_at, author_id`, schema)

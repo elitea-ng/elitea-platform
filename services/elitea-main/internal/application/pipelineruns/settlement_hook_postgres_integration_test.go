@@ -26,6 +26,7 @@ package pipelineruns_test
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -54,7 +55,7 @@ const pipelineRunsBootstrapSchema = "../../infra/db/migrations/001_initial.sql"
 var pipelineRunsTemplate string
 
 func TestMain(m *testing.M) {
-	databaseURL := os.Getenv(pipelineRunsDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(pipelineRunsDatabaseURLEnv))
 	if databaseURL == "" {
 		os.Exit(m.Run())
 	}
@@ -88,7 +89,7 @@ func TestMain(m *testing.M) {
 
 func newPipelineRunsPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(pipelineRunsDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(pipelineRunsDatabaseURLEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", pipelineRunsDatabaseURLEnv)
 	}

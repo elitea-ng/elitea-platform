@@ -26,7 +26,7 @@ func TestApplicationsRepoPostgres_DeletePreservesImportedNonCascadingSchema(t *t
 	app := createTestApplication(t, repo, "doomed", 1, &applications.Version{Name: "base"})
 	versionID := app.Versions[0].ID
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO p_1.application_variables (application_version_id, name, value) VALUES ($1, 'k', 'v')`,
+		`INSERT INTO p_1.application_variables (application_version_id, name, value, created_at) VALUES ($1, 'k', 'v', now() AT TIME ZONE 'UTC')`,
 		versionID); err != nil {
 		t.Fatalf("seed variable: %v", err)
 	}

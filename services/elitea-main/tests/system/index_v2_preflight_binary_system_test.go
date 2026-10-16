@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,10 +64,12 @@ func TestIndexV2PreflightShippedBinary(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	databaseURL := fmt.Sprintf(
+	// The child binaries get the same non-UTC session time zone as this
+	// test's own pool (internal/testpg).
+	databaseURL := testpg.DSN(fmt.Sprintf(
 		"postgres://elitea:elitea@127.0.0.1:%d/elitea?sslmode=disable",
 		postgresPort,
-	)
+	))
 	pool := waitForPostgres(t, ctx, databaseURL, containers, postgresName)
 	defer pool.Close()
 	bootstrapDatabase(t, ctx, repositoryRoot, pool)

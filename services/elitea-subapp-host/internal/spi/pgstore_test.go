@@ -9,6 +9,7 @@ package spi_test
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/testpg"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ const migration = "../../../elitea-deepwiki-engine/migrations/0002_invocations.s
 // assertions. The schema is dropped at cleanup.
 func testStore(t *testing.T, owner string) (*spi.PostgresStore, *pgxpool.Pool) {
 	t.Helper()
-	dsn := os.Getenv("ELITEA_SUBAPP_HOST_TEST_DSN")
+	dsn := testpg.DSN(os.Getenv("ELITEA_SUBAPP_HOST_TEST_DSN"))
 	if dsn == "" {
 		t.Skip("ELITEA_SUBAPP_HOST_TEST_DSN is not set — the PostgreSQL store did NOT run against a database")
 	}

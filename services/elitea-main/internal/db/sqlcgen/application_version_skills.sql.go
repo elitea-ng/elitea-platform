@@ -11,8 +11,8 @@ import (
 
 const copyApplicationVersionSkills = `-- name: CopyApplicationVersionSkills :execrows
 
-INSERT INTO entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-SELECT target.id, mapping.entity_type, mapping.skill_id, mapping.skill_version_id
+INSERT INTO entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+SELECT target.id, mapping.entity_type, mapping.skill_id, mapping.skill_version_id, now() AT TIME ZONE 'UTC'
 FROM application_versions AS source
 JOIN application_versions AS target ON target.application_id = source.application_id
 JOIN entity_skill_mapping AS mapping ON mapping.entity_version_id = source.id
@@ -47,7 +47,7 @@ WITH deleted AS (
     DELETE FROM entity_skill_mapping
     WHERE entity_version_id IN (SELECT id FROM deleted)
 ), touched AS (
-    UPDATE applications SET updated_at = now()
+    UPDATE applications SET updated_at = (now() AT TIME ZONE 'UTC')
     WHERE id IN (SELECT application_id FROM deleted)
 )
 SELECT count(*)::bigint FROM deleted

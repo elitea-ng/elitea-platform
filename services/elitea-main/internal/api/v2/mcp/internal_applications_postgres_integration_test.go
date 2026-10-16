@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"strings"
 	"testing"
@@ -173,8 +174,8 @@ func TestInternalGetApplicationResolvesDefaultThenBaseVersion(t *testing.T) {
 	var defaultVersionID int64
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO p_1.application_versions
-			(application_id, name, status, author_id, agent_type, instructions)
-		VALUES ($1, 'selected', 'draft', 7, 'react', 'Selected instructions.')
+			(application_id, name, status, author_id, agent_type, instructions, created_at)
+		VALUES ($1, 'selected', 'draft', 7, 'react', 'Selected instructions.', now() AT TIME ZONE 'UTC')
 		RETURNING id`, applicationID).Scan(&defaultVersionID); err != nil {
 		t.Fatalf("seed selected version: %v", err)
 	}
@@ -225,21 +226,21 @@ func seedInternalApplicationVersion(t *testing.T, pool *pgxpool.Pool) (int64, in
 	ctx := context.Background()
 	var applicationID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.applications (name, description, owner_id, meta)
-		VALUES ('Internal builder fixture', 'fixture', 1, '{}'::jsonb) RETURNING id`).Scan(&applicationID); err != nil {
+		INSERT INTO p_1.applications (name, description, owner_id, meta, created_at, updated_at)
+		VALUES ('Internal builder fixture', 'fixture', 1, '{}'::jsonb, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`).Scan(&applicationID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
 	var versionID int64
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO p_1.application_versions
-			(application_id, name, status, author_id, agent_type, instructions, pipeline_settings)
-		VALUES ($1, 'base', 'draft', 7, 'pipeline', $2, '{"trigger":"manual"}'::jsonb)
+			(application_id, name, status, author_id, agent_type, instructions, pipeline_settings, created_at)
+		VALUES ($1, 'base', 'draft', 7, 'pipeline', $2, '{"trigger":"manual"}'::jsonb, now() AT TIME ZONE 'UTC')
 		RETURNING id`, applicationID, "First rule.\nSecond rule.").Scan(&versionID); err != nil {
 		t.Fatalf("seed version: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_1.application_variables (application_version_id, name, value)
-		VALUES ($1, 'old', 'value')`, versionID); err != nil {
+		INSERT INTO p_1.application_variables (application_version_id, name, value, created_at)
+		VALUES ($1, 'old', 'value', now() AT TIME ZONE 'UTC')`, versionID); err != nil {
 		t.Fatalf("seed variable: %v", err)
 	}
 	var tagID int64
@@ -252,31 +253,31 @@ func seedInternalApplicationVersion(t *testing.T, pool *pgxpool.Pool) (int64, in
 	}
 	var toolID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.elitea_tools (name, type, owner_id, author_id, settings)
-		VALUES ('fixture-tool', 'openapi', 1, 7, '{}'::jsonb) RETURNING id`).Scan(&toolID); err != nil {
+		INSERT INTO p_1.elitea_tools (name, type, owner_id, author_id, settings, created_at)
+		VALUES ('fixture-tool', 'openapi', 1, 7, '{}'::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`).Scan(&toolID); err != nil {
 		t.Fatalf("seed toolkit: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO p_1.entity_tool_mapping
-			(entity_version_id, entity_id, entity_type, tool_id, selected_tools)
-		VALUES ($1, $2, 'agent', $3, '["one"]'::jsonb)`, versionID, applicationID, toolID); err != nil {
+			(entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
+		VALUES ($1, $2, 'agent', $3, '["one"]'::jsonb, now() AT TIME ZONE 'UTC')`, versionID, applicationID, toolID); err != nil {
 		t.Fatalf("seed tool mapping: %v", err)
 	}
 	var skillID, skillVersionID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.skills (name, description, owner_id, author_id)
-		VALUES ('fixture-skill', 'fixture', 1, 7) RETURNING id`).Scan(&skillID); err != nil {
+		INSERT INTO p_1.skills (name, description, owner_id, author_id, created_at)
+		VALUES ('fixture-skill', 'fixture', 1, 7, now() AT TIME ZONE 'UTC') RETURNING id`).Scan(&skillID); err != nil {
 		t.Fatalf("seed skill: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id)
-		VALUES ($1, 'base', 'Use skill.', 7) RETURNING id`, skillID).Scan(&skillVersionID); err != nil {
+		INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id, created_at)
+		VALUES ($1, 'base', 'Use skill.', 7, now() AT TIME ZONE 'UTC') RETURNING id`, skillID).Scan(&skillVersionID); err != nil {
 		t.Fatalf("seed skill version: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO p_1.entity_skill_mapping
-			(entity_version_id, entity_type, skill_id, skill_version_id)
-		VALUES ($1, 'agent', $2, $3)`, versionID, skillID, skillVersionID); err != nil {
+			(entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+		VALUES ($1, 'agent', $2, $3, now() AT TIME ZONE 'UTC')`, versionID, skillID, skillVersionID); err != nil {
 		t.Fatalf("seed skill mapping: %v", err)
 	}
 	return applicationID, versionID
@@ -285,7 +286,7 @@ func seedInternalApplicationVersion(t *testing.T, pool *pgxpool.Pool) (int64, in
 func newInternalApplicationsPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", environment)
 	}

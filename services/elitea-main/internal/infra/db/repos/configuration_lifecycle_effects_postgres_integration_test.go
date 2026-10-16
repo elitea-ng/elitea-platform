@@ -270,10 +270,10 @@ CREATE TABLE p_1.configuration (
 INSERT INTO p_1.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES (
+, created_at) VALUES (
     11, '11111111-1111-4111-8111-111111111111', 1, 'preserved-label',
     'configuration-one', 'openai', 'credentials', '{}', '{}', false, true, 'user'
-);
+, now() AT TIME ZONE 'UTC');
 
 CREATE TABLE p_1.elitea_tools (
     id SERIAL PRIMARY KEY,
@@ -288,9 +288,9 @@ CREATE TABLE p_1.elitea_tools (
     shared_id INTEGER,
     meta JSONB NOT NULL
 );
-INSERT INTO p_1.elitea_tools (id, type, name, settings, author_id, meta) VALUES
-    (5, 'jira', 'later-id', '{"configuration":{"elitea_title":"before","private":true}}', 1, '{}'),
-    (2, 'github', 'earlier-id', '{"configuration":{"elitea_title":"before","private":true}}', 1, '{}');
+INSERT INTO p_1.elitea_tools (id, type, name, settings, author_id, meta, created_at) VALUES
+    (5, 'jira', 'later-id', '{"configuration":{"elitea_title":"before","private":true}}', 1, '{}', now() AT TIME ZONE 'UTC'),
+    (2, 'github', 'earlier-id', '{"configuration":{"elitea_title":"before","private":true}}', 1, '{}', now() AT TIME ZONE 'UTC');
 
 CREATE TABLE p_1.application_versions (
     id SERIAL PRIMARY KEY,
@@ -315,10 +315,10 @@ CREATE TABLE p_1.application_versions (
 INSERT INTO p_1.application_versions (
     id, application_id, name, status, author_id, uuid, llm_settings,
     conversation_starters, welcome_message, agent_type, meta, pipeline_settings
-) VALUES
-    (1, 1, 'v1', 'active', 1, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', '{"model_name":"old-model","model_project_id":1,"temperature":1}', '[]', '', 'agent', '{}', '{}'),
-    (2, 1, 'v2', 'draft', 1, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', '{"model_name":"old-model","model_project_id":1,"temperature":2}', '[]', '', 'agent', '{}', '{}'),
-    (3, 2, 'v1', 'active', 1, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3', '{"model_name":"old-model-extra","model_project_id":1,"temperature":3}', '[]', '', 'agent', '{}', '{}');
+, created_at) VALUES
+    (1, 1, 'v1', 'active', 1, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', '{"model_name":"old-model","model_project_id":1,"temperature":1}', '[]', '', 'agent', '{}', '{}', now() AT TIME ZONE 'UTC'),
+    (2, 1, 'v2', 'draft', 1, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', '{"model_name":"old-model","model_project_id":1,"temperature":2}', '[]', '', 'agent', '{}', '{}', now() AT TIME ZONE 'UTC'),
+    (3, 2, 'v1', 'active', 1, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3', '{"model_name":"old-model-extra","model_project_id":1,"temperature":3}', '[]', '', 'agent', '{}', '{}', now() AT TIME ZONE 'UTC');
 `); err != nil {
 		t.Fatalf("prepare configuration lifecycle effects PostgreSQL: %v", err)
 	}

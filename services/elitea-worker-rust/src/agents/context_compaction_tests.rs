@@ -829,7 +829,7 @@ async fn failed_summary_persistence_prevents_model_dispatch() {
 
 #[tokio::test]
 async fn postgres_summary_checkpoint_survives_process_replacement() {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
             "SKIP: set ELITEA_TEST_DATABASE_URL for durable summary process replacement proof"
         );
@@ -873,11 +873,11 @@ async fn postgres_summary_child() {
     );
     let phase = std::env::var("ELITEA_COMPACTION_TEST_PHASE").unwrap();
     let options = sqlx::postgres::PgConnectOptions::from_str(
-        &std::env::var("ELITEA_TEST_DATABASE_URL").unwrap(),
+        &crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL").unwrap(),
     )
     .unwrap()
     .database(&database);
-    let pool = sqlx::postgres::PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .max_connections(2)
         .connect_with(options)
         .await

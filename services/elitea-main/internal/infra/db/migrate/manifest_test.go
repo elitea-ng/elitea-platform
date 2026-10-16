@@ -900,7 +900,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 149: tenant/0149_chat_conversation_memory_taint_cleanup.sql, an AFTER
 	// DELETE trigger on chat_conversations that removes the conversation's
 	// personal-memory taint (shared/0166, worker unit M9) on every delete path.
-	require.EqualValues(t, 149, Head(tenant))
+	// 150: tenant/0150_chat_conversation_activity_utc.sql, 0145's activity
+	// bump writes chat_conversations.updated_at as the UTC wall clock (now()
+	// AT TIME ZONE 'UTC'), like every Go writer of the naive chat columns. A
+	// function body and no permission, so no shared sibling.
+	require.EqualValues(t, 150, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

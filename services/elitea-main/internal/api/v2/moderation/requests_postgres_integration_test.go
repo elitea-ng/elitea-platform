@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -190,10 +191,10 @@ var (
 // pass on the strength of the other's setup.
 const requestsFixture = `
 INSERT INTO centry.moderation_state
-    (user_id, project_id, issue_type, entity_id, description, status, rejection_comment, created_at) VALUES
-    (4001, 1, 'Wikis',     'wikis_Wikis', 'We need the wiki toolkit for onboarding docs.', 'pending',  NULL, '2026-08-01 09:00:00'),
-    (4001, 1, 'Inventory', 'inventory',   'Asset tracking for the hardware lab.',          'approved', NULL, '2026-08-02 09:00:00'),
-    (4002, 2, 'Wikis',     'wikis_Wikis', 'Second team wants the same toolkit.',           'rejected', 'Not licensed for this tenant.', '2026-08-03 09:00:00');
+    (user_id, project_id, issue_type, entity_id, description, status, rejection_comment, created_at, updated_at) VALUES
+    (4001, 1, 'Wikis',     'wikis_Wikis', 'We need the wiki toolkit for onboarding docs.', 'pending',  NULL, '2026-08-01 09:00:00', now() AT TIME ZONE 'UTC'),
+    (4001, 1, 'Inventory', 'inventory',   'Asset tracking for the hardware lab.',          'approved', NULL, '2026-08-02 09:00:00', now() AT TIME ZONE 'UTC'),
+    (4002, 2, 'Wikis',     'wikis_Wikis', 'Second team wants the same toolkit.',           'rejected', 'Not licensed for this tenant.', '2026-08-03 09:00:00', now() AT TIME ZONE 'UTC');
 `
 
 func prepareFixture(t *testing.T, pool *pgxpool.Pool) {
@@ -366,8 +367,8 @@ func TestQueuePagesWithoutRepeatingOrDroppingRows(t *testing.T) {
 	pool := newModerationPool(t)
 	prepareUsers(t, pool)
 	if _, err := pool.Exec(context.Background(), `
-INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status, created_at)
-SELECT 4001, 1, 'Wikis', 'wikis_Wikis', 'burst ' || n, 'pending', '2026-08-04 12:00:00'
+INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status, created_at, updated_at)
+SELECT 4001, 1, 'Wikis', 'wikis_Wikis', 'burst ' || n, 'pending', '2026-08-04 12:00:00', now() AT TIME ZONE 'UTC'
 FROM generate_series(1, 10) AS n;`); err != nil {
 		t.Fatalf("seed burst: %v", err)
 	}
@@ -487,6 +488,47 @@ SELECT event_type, user_id, meta::text FROM centry.notifications ORDER BY id DES
 	// sentence has to travel with the row.
 	if !strings.Contains(meta, "has been approved") {
 		t.Errorf("notification meta = %s, want a rendered message", meta)
+	}
+}
+
+// The decision notification's created_at/updated_at are `timestamp` WITHOUT
+// time zone holding the UTC wall clock. The pool runs in the testpg zone
+// (America/Toronto by default), so a bare now() would store local time.
+func TestDecisionNotificationIsStampedWithTheUTCWallClock(t *testing.T) {
+	pool := newModerationPool(t)
+	prepareFixture(t, pool)
+	router := moderationRouter(moderation.NewHandler(pool), grace)
+	pending := rowByDescription(t, readQueue(t, router, "status=pending"), "onboarding docs")
+
+	before := time.Now().UTC()
+	recorder := moderationDo(t, router, http.MethodPut, decisionURL,
+		map[string]any{"id": pending.ID, "status": "approved"})
+	after := time.Now().UTC()
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("approve status = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
+	}
+
+	var zone string
+	var created, updated *time.Time
+	if err := pool.QueryRow(context.Background(), `
+SELECT current_setting('TimeZone'), created_at, updated_at
+FROM centry.notifications WHERE event_type = 'moderation_approved' ORDER BY id DESC LIMIT 1`).
+		Scan(&zone, &created, &updated); err != nil {
+		t.Fatalf("read the decision notification: %v", err)
+	}
+	if zone != testpg.TimeZone() {
+		t.Fatalf("session TimeZone = %q, want %q", zone, testpg.TimeZone())
+	}
+	const skew = 5 * time.Minute
+	for name, stored := range map[string]*time.Time{"created_at": created, "updated_at": updated} {
+		if stored == nil {
+			t.Errorf("%s is NULL", name)
+			continue
+		}
+		if stored.Before(before.Add(-skew)) || stored.After(after.Add(skew)) {
+			t.Errorf("%s = %v, want the UTC wall clock between %v and %v (session %s)",
+				name, *stored, before, after, zone)
+		}
 	}
 }
 
@@ -763,9 +805,9 @@ const (
 // reads, and it is the one a provisioning side effect would most plausibly
 // touch without adding a row.
 const configurationsFixture = `
-INSERT INTO p_1.configuration (project_id, elitea_title, label, type, section, data, status_ok) VALUES
-    (1, 'OpenAI GPT-4o',     'openai', 'openai', 'llm',       '{"name":"gpt-4o"}',           true),
-    (1, 'OpenAI Embeddings', 'openai', 'openai', 'embedding', '{"name":"text-embedding-3"}', false);
+INSERT INTO p_1.configuration (project_id, elitea_title, label, type, section, data, status_ok, created_at) VALUES
+    (1, 'OpenAI GPT-4o',     'openai', 'openai', 'llm',       '{"name":"gpt-4o"}',           true, now() AT TIME ZONE 'UTC'),
+    (1, 'OpenAI Embeddings', 'openai', 'openai', 'embedding', '{"name":"text-embedding-3"}', false, now() AT TIME ZONE 'UTC');
 `
 
 func prepareConfigurations(t *testing.T, pool *pgxpool.Pool) {
@@ -1204,7 +1246,7 @@ func TestQueueIsRefusedWithoutTheViewPermission(t *testing.T) {
 func newModerationPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", environment)
 	}

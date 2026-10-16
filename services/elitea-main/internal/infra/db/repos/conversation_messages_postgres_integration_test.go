@@ -34,8 +34,8 @@ func seedTranscript(t *testing.T, repo *ConversationsRepo) (numericID, conversat
 	ctx := context.Background()
 
 	if err := repo.pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'transcript', 7, 'agent')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'transcript', 7, 'agent', now() AT TIME ZONE 'UTC')
 RETURNING id::text, uuid::text`).Scan(&numericID, &conversationUUID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
@@ -47,12 +47,12 @@ WITH participant AS (
     VALUES (gen_random_uuid(), $1, '{"id": 42, "project_id": 1}'::jsonb)
     RETURNING id
 ), grp AS (
-    INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
-    SELECT gen_random_uuid(), participant.id, $2::int FROM participant
+    INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
+    SELECT gen_random_uuid(), participant.id, $2::int, now() AT TIME ZONE 'UTC' FROM participant
     RETURNING id
 ), item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    SELECT gen_random_uuid(), 'text_message', 0, grp.id FROM grp
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, grp.id, now() AT TIME ZONE 'UTC' FROM grp
     RETURNING id
 )
 INSERT INTO p_1.chat_messages_text (id, content)
@@ -228,7 +228,7 @@ func TestListMessagesServesTheUpdateTimeOfARewrittenGroup(t *testing.T) {
 	// Exactly what a regeneration's finalize does to the answer row.
 	if _, err := repo.pool.Exec(ctx, `
 UPDATE p_1.chat_message_group
-SET updated_at = clock_timestamp()
+SET updated_at = clock_timestamp() AT TIME ZONE 'UTC'
 WHERE conversation_id = $1::int
   AND author_participant_id IN (
       SELECT id FROM p_1.chat_participants WHERE entity_name <> 'user'

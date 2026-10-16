@@ -31,6 +31,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -457,7 +458,7 @@ func signInProvisioningTemplateName(databaseURL string) (string, error) {
 
 func newSignInProvisioningPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(signInProvisioningURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(signInProvisioningURLEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the concurrent sign-in provisioning test", signInProvisioningURLEnv)
 	}

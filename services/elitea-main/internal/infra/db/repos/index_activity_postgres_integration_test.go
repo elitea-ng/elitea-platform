@@ -591,8 +591,8 @@ func seedCurrentActivityConversation(
 	schema := pgx.Identifier{fmt.Sprintf("p_%d", projectID)}.Sanitize()
 	if _, err := pool.Exec(t.Context(), fmt.Sprintf(`
 WITH conversation AS (
-    INSERT INTO %s.chat_conversations (uuid, name, author_id, source)
-    VALUES ($1, 'activity', $2, 'toolkit')
+    INSERT INTO %s.chat_conversations (uuid, name, author_id, source, created_at)
+    VALUES ($1, 'activity', $2, 'toolkit', now() AT TIME ZONE 'UTC')
     RETURNING id
 ),
 participant AS (
@@ -601,8 +601,8 @@ participant AS (
             jsonb_build_object('id', $3::integer, 'project_id', $4::integer))
     RETURNING id
 )
-INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id)
-SELECT conversation.id, participant.id
+INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, created_at)
+SELECT conversation.id, participant.id, now() AT TIME ZONE 'UTC'
 FROM conversation, participant`, schema, schema, schema),
 		conversationUUID, actorID, toolkitID, projectID,
 	); err != nil {

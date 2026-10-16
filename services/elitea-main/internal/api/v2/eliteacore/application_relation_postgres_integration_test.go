@@ -207,8 +207,8 @@ VALUES ($1, 'v-one', 'published', 1, 'delegate', 'agent') RETURNING id`, fixture
 		t.Fatalf("seed published version: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools)
-SELECT $2, entity_id, entity_type, tool_id, selected_tools
+INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
+SELECT $2, entity_id, entity_type, tool_id, selected_tools, now() AT TIME ZONE 'UTC'
 FROM p_1.entity_tool_mapping WHERE entity_version_id = $1`,
 		fixture.parentVersionID, publishedVersionID); err != nil {
 		t.Fatalf("clone mapping onto the published version: %v", err)

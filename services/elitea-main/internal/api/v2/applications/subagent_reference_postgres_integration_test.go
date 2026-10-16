@@ -53,14 +53,14 @@ func attachSubAgent(
 		`,"application_version_id":` + strconv.FormatInt(childVersionID, 10) + `}`
 	var toolID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id)
-		VALUES ($1, 'application', '', $2::jsonb, '{}'::jsonb, 1, 7)
+		INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
+		VALUES ($1, 'application', '', $2::jsonb, '{}'::jsonb, 1, 7, now() AT TIME ZONE 'UTC')
 		RETURNING id`, name, settings).Scan(&toolID); err != nil {
 		t.Fatalf("seed the sub-agent tool row: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id, entity_id)
-		VALUES ($1, 'agent', $2, $3)`, parentVersionID, toolID, parentApplicationID); err != nil {
+		INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id, entity_id, created_at)
+		VALUES ($1, 'agent', $2, $3, now() AT TIME ZONE 'UTC')`, parentVersionID, toolID, parentApplicationID); err != nil {
 		t.Fatalf("seed the sub-agent mapping: %v", err)
 	}
 	return toolID
@@ -74,14 +74,14 @@ func seedChildAgent(t *testing.T, pool *pgxpool.Pool, name string) (int64, int64
 
 	var applicationID, versionID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.applications (name, description, owner_id)
-		VALUES ($1, 'the sub-agent', 1) RETURNING id`, name).Scan(&applicationID); err != nil {
+		INSERT INTO p_1.applications (name, description, owner_id, created_at, updated_at)
+		VALUES ($1, 'the sub-agent', 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`, name).Scan(&applicationID); err != nil {
 		t.Fatalf("seed the child application: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO p_1.application_versions
-			(application_id, name, status, author_id, agent_type, instructions)
-		VALUES ($1, 'base', 'draft', 7, 'openai', 'Answer the caller.')
+			(application_id, name, status, author_id, agent_type, instructions, created_at)
+		VALUES ($1, 'base', 'draft', 7, 'openai', 'Answer the caller.', now() AT TIME ZONE 'UTC')
 		RETURNING id`, applicationID).Scan(&versionID); err != nil {
 		t.Fatalf("seed the child version: %v", err)
 	}
@@ -152,14 +152,14 @@ func TestDeletingAnAgentDetachesItFromEveryParentThatUsedIt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := fixture.pool.QueryRow(ctx, `
-		INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id)
-		VALUES ('a github toolkit', 'github', '', '{}'::jsonb, '{}'::jsonb, 1, 7)
+		INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
+		VALUES ('a github toolkit', 'github', '', '{}'::jsonb, '{}'::jsonb, 1, 7, now() AT TIME ZONE 'UTC')
 		RETURNING id`).Scan(&otherToolID); err != nil {
 		t.Fatalf("seed the unrelated toolkit: %v", err)
 	}
 	if _, err := fixture.pool.Exec(ctx, `
-		INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id, entity_id)
-		VALUES ($1, 'agent', $2, $3)`,
+		INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id, entity_id, created_at)
+		VALUES ($1, 'agent', $2, $3, now() AT TIME ZONE 'UTC')`,
 		fixture.versionID, otherToolID, fixture.applicationID); err != nil {
 		t.Fatalf("seed the unrelated attachment: %v", err)
 	}

@@ -469,7 +469,7 @@ SET is_streaming = FALSE,
             'error_code', $5::text
         )
     END,
-    updated_at = clock_timestamp()
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 FROM elitea_runtime.agent_execution_jobs AS agent,
      %s AS conversation
 WHERE agent.execution_id = $1

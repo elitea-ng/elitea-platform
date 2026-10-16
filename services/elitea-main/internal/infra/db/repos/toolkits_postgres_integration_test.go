@@ -141,11 +141,11 @@ CREATE TABLE p_2.elitea_tools (
 );
 INSERT INTO p_2.elitea_tools (
     id, type, name, description, settings, author_id, shared_owner_id, shared_id, meta
-) VALUES (
+, created_at) VALUES (
     1, 'jira', 'project-two', NULL,
     '{"large_id":9007199254740993,"nested":{"enabled":true}}'::jsonb,
     12, NULL, NULL, '{"source":"current"}'::jsonb
-);`); err != nil {
+, now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatalf("prepare current toolkit projects: %v", err)
 	}
 

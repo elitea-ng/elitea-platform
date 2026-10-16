@@ -32,9 +32,10 @@ var insertCurrentSocialFeedbackSQL = `
 		description,
 		rating,
 		user_agent,
-		project_id
+		project_id,
+		created_at
 	)
-	SELECT $1::int, $2::varchar, $3::text, $4::int, $5::varchar, $6::int
+	SELECT $1::int, $2::varchar, $3::text, $4::int, $5::varchar, $6::int, now() AT TIME ZONE 'UTC'
 	WHERE ` + projectaccess.Membership(6, 1) + `
 		AND ` + projectaccess.ProjectExists(6) + `
 	RETURNING id`

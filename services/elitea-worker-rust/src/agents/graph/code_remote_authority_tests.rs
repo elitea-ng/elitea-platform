@@ -42,7 +42,7 @@ impl CodeRuntimeFactory {
             )
             .unwrap(),
         );
-        let state = sqlx::postgres::PgPoolOptions::new()
+        let state = crate::test_pg::pool_options()
             .max_connections(1)
             .acquire_timeout(Duration::from_millis(50))
             .connect_lazy("postgres://fixture:fixture@127.0.0.1:1/never_connect")

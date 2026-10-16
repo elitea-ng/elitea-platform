@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ import (
 // extension. It does not exercise configuration lookup, the encrypted vault,
 // lifecycle outbox delivery, HTTP/gRPC, the command bus, or a Python worker.
 func TestPGXProvisionerRealPgVector(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the real PgVector provisioning test")
 	}

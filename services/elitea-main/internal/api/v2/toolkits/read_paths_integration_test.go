@@ -42,18 +42,18 @@ func TestToolkitReadPathsServeTheStoredRows(t *testing.T) {
 
 	var toolkitID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id)
+		INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
 		VALUES ('read-paths-fixture', 'github', 'a description',
 			'{"repository":"acme/widgets","access_token":"ghp_supersecret"}'::jsonb,
-			'{}'::jsonb, 1, 7)
+			'{}'::jsonb, 1, 7, now() AT TIME ZONE 'UTC')
 		RETURNING id`).Scan(&toolkitID); err != nil {
 		t.Fatalf("insert fixture toolkit: %v", err)
 	}
 	const indexName = "read-paths-collection"
 	var indexID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.index_meta (toolkit_id, name, status, progress, meta)
-		VALUES ($1, $2, 'completed', 100, '{"task_id":"task-read"}'::jsonb)
+		INSERT INTO p_1.index_meta (toolkit_id, name, status, progress, meta, created_at)
+		VALUES ($1, $2, 'completed', 100, '{"task_id":"task-read"}'::jsonb, now() AT TIME ZONE 'UTC')
 		RETURNING id`, toolkitID, indexName).Scan(&indexID); err != nil {
 		t.Fatalf("insert fixture index_meta: %v", err)
 	}
@@ -151,8 +151,8 @@ func TestToolkitReadPathsServeTheStoredRows(t *testing.T) {
 	t.Run("the index list is empty for a toolkit with no index", func(t *testing.T) {
 		var otherID int64
 		if err := pool.QueryRow(ctx, `
-			INSERT INTO p_1.elitea_tools (name, type, settings, meta, owner_id, author_id)
-			VALUES ('read-paths-empty', 'custom', '{}'::jsonb, '{}'::jsonb, 1, 7)
+			INSERT INTO p_1.elitea_tools (name, type, settings, meta, owner_id, author_id, created_at)
+			VALUES ('read-paths-empty', 'custom', '{}'::jsonb, '{}'::jsonb, 1, 7, now() AT TIME ZONE 'UTC')
 			RETURNING id`).Scan(&otherID); err != nil {
 			t.Fatalf("insert second toolkit: %v", err)
 		}

@@ -33,7 +33,8 @@ async fn migrate_current_phase_schema(pool: &PgPool) {
 
 async fn database(with_phase_clocks: bool) -> IsolatedPostgres {
     let database = IsolatedPostgres::create(
-        &std::env::var(DATABASE_URL).expect("ELITEA_TEST_DATABASE_URL is required"),
+        &crate::test_pg::database_url_var(DATABASE_URL)
+            .expect("ELITEA_TEST_DATABASE_URL is required"),
     )
     .await;
     sqlx::raw_sql("CREATE SCHEMA elitea_runtime")

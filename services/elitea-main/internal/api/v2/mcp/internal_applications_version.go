@@ -478,10 +478,10 @@ func cloneInternalVersion(
 		INSERT INTO %s.application_versions
 			(application_id, name, status, author_id, llm_settings, instructions,
 			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings,
-			 shared_owner_id, shared_id)
+			 shared_owner_id, shared_id, created_at)
 		SELECT application_id, $2, 'draft', $3, llm_settings, instructions,
 		       conversation_starters, welcome_message, agent_type, meta, pipeline_settings,
-		       NULL, NULL
+		       NULL, NULL, now() AT TIME ZONE 'UTC'
 		FROM %s.application_versions
 		WHERE application_id = $1 AND id = $4
 		RETURNING id`, schema, schema), source.applicationID, backup.name, actorID, source.id).Scan(&backup.id)
@@ -489,13 +489,13 @@ func cloneInternalVersion(
 		return internalVersionBackup{}, err
 	}
 	statements := []string{
-		fmt.Sprintf(`INSERT INTO %s.application_variables (application_version_id, name, value)
-			SELECT $2, name, value FROM %s.application_variables WHERE application_version_id = $1`, schema, schema),
+		fmt.Sprintf(`INSERT INTO %s.application_variables (application_version_id, name, value, created_at)
+			SELECT $2, name, value, now() AT TIME ZONE 'UTC' FROM %s.application_variables WHERE application_version_id = $1`, schema, schema),
 		fmt.Sprintf(`INSERT INTO %s.application_version_tag_association (version_id, tag_id)
 			SELECT $2, tag_id FROM %s.application_version_tag_association WHERE version_id = $1`, schema, schema),
 		fmt.Sprintf(`INSERT INTO %s.entity_skill_mapping
-			(entity_version_id, entity_type, skill_id, skill_version_id)
-			SELECT $2, entity_type, skill_id, skill_version_id
+			(entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+			SELECT $2, entity_type, skill_id, skill_version_id, now() AT TIME ZONE 'UTC'
 			FROM %s.entity_skill_mapping WHERE entity_version_id = $1`, schema, schema),
 	}
 	for _, statement := range statements {
@@ -513,13 +513,13 @@ func cloneInternalVersion(
 		return internalVersionBackup{}, err
 	}
 	toolCopy := fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping
-		(entity_version_id, entity_type, tool_id, selected_tools)
-		SELECT $2, entity_type, tool_id, selected_tools
+		(entity_version_id, entity_type, tool_id, selected_tools, created_at)
+		SELECT $2, entity_type, tool_id, selected_tools, now() AT TIME ZONE 'UTC'
 		FROM %s.entity_tool_mapping WHERE entity_version_id = $1`, schema, schema)
 	if toolMappingHasEntityID {
 		toolCopy = fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping
-			(entity_version_id, entity_id, entity_type, tool_id, selected_tools)
-			SELECT $2, entity_id, entity_type, tool_id, selected_tools
+			(entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
+			SELECT $2, entity_id, entity_type, tool_id, selected_tools, now() AT TIME ZONE 'UTC'
 			FROM %s.entity_tool_mapping WHERE entity_version_id = $1`, schema, schema)
 	}
 	if _, err := tx.Exec(ctx, toolCopy, source.id, backup.id); err != nil {
@@ -559,8 +559,8 @@ func replaceInternalVariables(
 		name := strings.TrimSpace(entry["name"].(string))
 		value, _ := entry["value"].(string)
 		if _, err := tx.Exec(ctx, fmt.Sprintf(`
-			INSERT INTO %s.application_variables (application_version_id, name, value)
-			VALUES ($1, $2, $3)`, schema), versionID, name, value); err != nil {
+			INSERT INTO %s.application_variables (application_version_id, name, value, created_at)
+			VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC')`, schema), versionID, name, value); err != nil {
 			return err
 		}
 	}

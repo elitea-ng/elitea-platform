@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -56,7 +57,7 @@ const projectRequestBootstrapSchema = "../../../infra/db/migrations/001_initial.
 var projectRequestTemplate string
 
 func TestMain(m *testing.M) {
-	databaseURL := os.Getenv(projectRequestDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(projectRequestDatabaseURLEnv))
 	if databaseURL == "" {
 		os.Exit(m.Run())
 	}
@@ -93,7 +94,7 @@ func TestMain(m *testing.M) {
 // one template built once, copied per test.
 func newProjectRequestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(projectRequestDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(projectRequestDatabaseURLEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", projectRequestDatabaseURLEnv)
 	}

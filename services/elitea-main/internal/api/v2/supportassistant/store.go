@@ -275,9 +275,9 @@ func (s *store) recordProjectID(ctx context.Context, projectID int64) error {
 	}
 	if _, err := s.pool.Exec(ctx, `
 INSERT INTO centry.platform_config (section, key, value, updated_at, updated_by)
-VALUES ($1, $2, $3::jsonb, now(), $4)
+VALUES ($1, $2, $3::jsonb, (now() AT TIME ZONE 'UTC'), $4)
 ON CONFLICT (section, key)
-DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+DO UPDATE SET value = EXCLUDED.value, updated_at = (now() AT TIME ZONE 'UTC'), updated_by = EXCLUDED.updated_by`,
 		platformconfig.SectionSupportAssistant,
 		platformconfig.KeySupportProjectID,
 		string(encoded),
@@ -448,8 +448,8 @@ func (s *store) createConversation(
 	}
 
 	statement := fmt.Sprintf(`
-INSERT INTO %s.chat_conversations (uuid, name, is_private, author_id, meta, source)
-VALUES (gen_random_uuid(), $1, TRUE, $2, $3::jsonb, $4)
+INSERT INTO %s.chat_conversations (uuid, name, is_private, author_id, meta, source, created_at)
+VALUES (gen_random_uuid(), $1, TRUE, $2, $3::jsonb, $4, now() AT TIME ZONE 'UTC')
 RETURNING id, uuid::text, name, is_private, author_id, source, meta,
           created_at, COALESCE(updated_at, created_at), 0`, schema)
 

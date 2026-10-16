@@ -304,8 +304,8 @@ func (r *SkillsRepo) AttachSkill(
 	}
 
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`
-		INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-		VALUES ($1, $2, $3, $4)`, s),
+		INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+		VALUES ($1, $2, $3, $4, now() AT TIME ZONE 'UTC')`, s),
 		relation.EntityVersionID, relation.EntityType, skillID, relation.SkillVersionID); err != nil {
 		return skills.SkillAttachment{}, fmt.Errorf("skills: attach: %w", err)
 	}
@@ -663,8 +663,8 @@ func upsertBaseSkillVersion(ctx context.Context, tx pgx.Tx, schema, skillID, ins
 
 	var versionID int
 	err := tx.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, uuid, meta)
-		VALUES ($1, 'base', $2, $3, gen_random_uuid(), '{}'::jsonb)
+		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, uuid, meta, created_at)
+		VALUES ($1, 'base', $2, $3, gen_random_uuid(), '{}'::jsonb, now() AT TIME ZONE 'UTC')
 		ON CONFLICT (skill_id, name) DO UPDATE SET instructions = EXCLUDED.instructions
 		RETURNING id`, schema), skillID, instructions, authorID).Scan(&versionID)
 	if err != nil {
@@ -809,8 +809,8 @@ func (r *SkillsRepo) CreateVersion(ctx context.Context, projectID, skillID strin
 
 	var newID int
 	insertErr := tx.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, parent_version_id, uuid, meta)
-		VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), '{}'::jsonb)
+		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, parent_version_id, uuid, meta, created_at)
+		VALUES ($1, $2, $3, $4, $5, gen_random_uuid(), '{}'::jsonb, now() AT TIME ZONE 'UTC')
 		RETURNING id`, s), skillID, input.Name, instructions, input.AuthorID, parentID).Scan(&newID)
 	if insertErr != nil {
 		var pgErr *pgconn.PgError

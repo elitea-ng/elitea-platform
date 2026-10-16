@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,7 +39,7 @@ const listFiltersDatabaseURL = "ELITEA_TEST_DATABASE_URL"
 
 func newListFiltersPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(listFiltersDatabaseURL)
+	databaseURL := testpg.DSN(os.Getenv(listFiltersDatabaseURL))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the conversation-listing integration test", listFiltersDatabaseURL)
 	}
@@ -118,7 +119,7 @@ func seedConversation(t *testing.T, pool *pgxpool.Pool, name, source string, aut
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO p_1.chat_conversations (name, author_id, meta, source) VALUES ($1, $2, $3::jsonb, $4)`,
+		`INSERT INTO p_1.chat_conversations (name, author_id, meta, source, created_at) VALUES ($1, $2, $3::jsonb, $4, now() AT TIME ZONE 'UTC')`,
 		name, author, string(encoded), source); err != nil {
 		t.Fatalf("seed %q: %v", name, err)
 	}
