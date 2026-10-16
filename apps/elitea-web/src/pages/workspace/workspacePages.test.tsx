@@ -5,10 +5,10 @@
  * `routes/__tests__/workspacesRoute.test.tsx`.
  */
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, configure, getConfig, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
@@ -54,6 +54,26 @@ function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc): (w
   );
   return (workspaceId) => router.navigate({ to: '/workspaces/$workspaceId', params: { workspaceId } });
 }
+
+/*
+ * Deadlines sized for a busy machine. These tests drive whole pages with
+ * real timers (MUI selects, typing, dialogs): "runs a whole turn" takes
+ * 0.6 s alone, with a cold or a warm transform cache alike (no lazy import
+ * is loaded mid-test, and the page's only intervals are 15 s and longer), but
+ * 5.4 s while `vitest run src/features` runs beside it: CPU contention,
+ * which broke both the 5 s test timeout and testing-library's 1 s
+ * `waitFor`/`findBy` deadline. Measured 2026-10-15; see DEVIATIONS
+ * "desktop-followup".
+ */
+vi.setConfig({ testTimeout: 30_000 });
+let asyncUtilTimeout = 1000;
+beforeAll(() => {
+  asyncUtilTimeout = getConfig().asyncUtilTimeout;
+  configure({ asyncUtilTimeout: 10_000 });
+});
+afterAll(() => {
+  configure({ asyncUtilTimeout });
+});
 
 beforeEach(() => {
   resetConfigForTests();
