@@ -21,10 +21,6 @@ class WorkspaceRefusalCodeV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT: _ClassVar[WorkspaceRefusalCodeV1]
     WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE: _ClassVar[WorkspaceRefusalCodeV1]
     WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED: _ClassVar[WorkspaceRefusalCodeV1]
-    WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM: _ClassVar[WorkspaceRefusalCodeV1]
-    WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE: _ClassVar[WorkspaceRefusalCodeV1]
-    WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY: _ClassVar[WorkspaceRefusalCodeV1]
-    WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY: _ClassVar[WorkspaceRefusalCodeV1]
 WORKSPACE_REFUSAL_CODE_V1_UNSPECIFIED: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_NOT_A_WORKSPACE_TURN: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_STALE_EPOCH: WorkspaceRefusalCodeV1
@@ -35,10 +31,6 @@ WORKSPACE_REFUSAL_CODE_V1_CHECKSUM_MISMATCH: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED: WorkspaceRefusalCodeV1
-WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM: WorkspaceRefusalCodeV1
-WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE: WorkspaceRefusalCodeV1
-WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY: WorkspaceRefusalCodeV1
-WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY: WorkspaceRefusalCodeV1
 
 class WorkspaceClaimV1(_message.Message):
     __slots__ = ("identity", "fence", "claim_id", "thread_uuid", "epoch")
@@ -193,42 +185,6 @@ class WorkspacePublishResponseV1(_message.Message):
     refusal: WorkspaceRefusalV1
     rejection: _errors_pb2.RuntimeErrorV1
     def __init__(self, seq: _Optional[int] = ..., refs: _Optional[_Iterable[_Union[WorkspaceRefV1, _Mapping]]] = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
-
-class WorkspacePullRequestDiffRequestV1(_message.Message):
-    __slots__ = ("claim",)
-    CLAIM_FIELD_NUMBER: _ClassVar[int]
-    claim: WorkspaceClaimV1
-    def __init__(self, claim: _Optional[_Union[WorkspaceClaimV1, _Mapping]] = ...) -> None: ...
-
-class WorkspacePullRequestDiffHeaderV1(_message.Message):
-    __slots__ = ("upstream_sha", "upstream_branch", "remote_url", "cloud_sha", "files", "bytes", "diff_sha256")
-    UPSTREAM_SHA_FIELD_NUMBER: _ClassVar[int]
-    UPSTREAM_BRANCH_FIELD_NUMBER: _ClassVar[int]
-    REMOTE_URL_FIELD_NUMBER: _ClassVar[int]
-    CLOUD_SHA_FIELD_NUMBER: _ClassVar[int]
-    FILES_FIELD_NUMBER: _ClassVar[int]
-    BYTES_FIELD_NUMBER: _ClassVar[int]
-    DIFF_SHA256_FIELD_NUMBER: _ClassVar[int]
-    upstream_sha: str
-    upstream_branch: str
-    remote_url: str
-    cloud_sha: str
-    files: int
-    bytes: int
-    diff_sha256: str
-    def __init__(self, upstream_sha: _Optional[str] = ..., upstream_branch: _Optional[str] = ..., remote_url: _Optional[str] = ..., cloud_sha: _Optional[str] = ..., files: _Optional[int] = ..., bytes: _Optional[int] = ..., diff_sha256: _Optional[str] = ...) -> None: ...
-
-class WorkspacePullRequestDiffFrameV1(_message.Message):
-    __slots__ = ("header", "chunk", "refusal", "rejection")
-    HEADER_FIELD_NUMBER: _ClassVar[int]
-    CHUNK_FIELD_NUMBER: _ClassVar[int]
-    REFUSAL_FIELD_NUMBER: _ClassVar[int]
-    REJECTION_FIELD_NUMBER: _ClassVar[int]
-    header: WorkspacePullRequestDiffHeaderV1
-    chunk: bytes
-    refusal: WorkspaceRefusalV1
-    rejection: _errors_pb2.RuntimeErrorV1
-    def __init__(self, header: _Optional[_Union[WorkspacePullRequestDiffHeaderV1, _Mapping]] = ..., chunk: _Optional[bytes] = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
 
 class WorkspaceEnvSecretRequestV1(_message.Message):
     __slots__ = ("claim",)
