@@ -14,6 +14,7 @@ import (
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	interruptdomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/jackc/pgx/v5"
@@ -611,6 +612,14 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			*admission.CurrentRegenerateTurn,
 		); err != nil {
 			return executionapp.AdmissionOutcome{}, err
+		}
+		// Regenerate and edit-and-resend supersede every open per-interrupt
+		// card of the response in the same transaction that resets it
+		// (fanout-interrupt-decisions §5), so a late ACK meets a closed card.
+		regenerate := admission.CurrentRegenerateTurn
+		if _, err := closeOpenExecutionInterrupts(ctx, pgxExecutor{queryer: tx}, regenerate.ResponseMessageID,
+			interruptdomain.StateSuperseded, interruptdomain.Closer{ActorUserID: regenerate.ActorUserID}); err != nil {
+			return executionapp.AdmissionOutcome{}, fmt.Errorf("supersede open interrupt cards: %w", err)
 		}
 	} else if admission.CurrentContinueTurn != nil {
 		turn := *admission.CurrentContinueTurn

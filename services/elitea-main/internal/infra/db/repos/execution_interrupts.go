@@ -144,8 +144,14 @@ func raiseExecutionInterrupt(ctx context.Context, tx sqlExecutor, input domain.R
 	if err != nil {
 		return domain.RaiseResult{}, err
 	}
+	// Schema-qualified: the frame-accepting transaction has no project
+	// search_path (contract v1.1 §4.1).
+	schema, err := currentProjectSchema(input.ProjectID)
+	if err != nil {
+		return domain.RaiseResult{}, domain.ErrInvalidRaise
+	}
 	var conversationID int64
-	err = tx.QueryRow(ctx, `SELECT conversation_id FROM chat_message_group WHERE uuid = $1::uuid FOR UPDATE`, input.RootResponseID).Scan(&conversationID)
+	err = tx.QueryRow(ctx, `SELECT conversation_id FROM `+schema+`.chat_message_group WHERE uuid = $1::uuid FOR UPDATE`, input.RootResponseID).Scan(&conversationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RaiseResult{}, domain.ErrInvalidRaise
 	}
@@ -362,6 +368,8 @@ FOR UPDATE`, selector.ResponseMessageID, input.InterruptKey, selector.ProjectID)
 			result.State, result.Revision, result.Replay, result.DecisionRevision = row.state, row.revision, true, decisionRevision
 			return nil
 		}
+		var parkedExecution *string
+		var parkedGeneration *int64
 		if !slices.Contains(row.actions, string(decision.Action)) {
 			return domain.ErrInvalidDecision
 		}
@@ -379,14 +387,14 @@ WITH decided AS (
   UPDATE elitea_runtime.execution_interrupt_responses response
   SET decision_revision = response.decision_revision + 1, updated_at = clock_timestamp()
   FROM decided WHERE response.root_response_id = decided.root_response_id
-  RETURNING response.decision_revision
+  RETURNING response.decision_revision, response.parked_execution_id, response.parked_generation
 ), audited AS (
   INSERT INTO elitea_runtime.execution_interrupt_audit (root_response_id, interrupt_key, transition, revision, actor_id)
   SELECT root_response_id, interrupt_key, 'DECIDED', revision, $6 FROM decided
 )
-SELECT decided.revision, bumped.decision_revision FROM decided, bumped`,
+SELECT decided.revision, bumped.decision_revision, bumped.parked_execution_id, bumped.parked_generation FROM decided, bumped`,
 			selector.ResponseMessageID, input.InterruptKey, row.revision, decision.RequestID, canonical,
-			selector.ActorUserID).Scan(&result.Revision, &result.DecisionRevision)
+			selector.ActorUserID).Scan(&result.Revision, &result.DecisionRevision, &parkedExecution, &parkedGeneration)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.ErrAlreadyResolved
 		}
@@ -394,39 +402,26 @@ SELECT decided.revision, bumped.decision_revision FROM decided, bumped`,
 			return err
 		}
 		result.State = domain.StateDecided
-		return nil
+		// Same transaction (contract §6, §8): other tabs drop the card, and a
+		// parked response gets exactly one wake.
+		action := decision.Action
+		if err := emitInterruptResolved(ctx, tx, selector.ProjectID, selector.ResponseMessageID, []domain.Resolved{{
+			InterruptKey: input.InterruptKey, InterruptID: row.interruptID, State: domain.StateDecided,
+			Revision: result.Revision, Action: &action,
+		}}); err != nil {
+			return err
+		}
+		if parkedExecution == nil || parkedGeneration == nil {
+			return nil // running or queued: the live tick or restore fetch delivers it
+		}
+		// Parked (contract §8): this decision admits the one wake.
+		return insertWake(ctx, tx, selector.ProjectID, selector.ResponseMessageID, result.DecisionRevision, *parkedExecution, *parkedGeneration)
 	})
 	if err != nil {
 		return domain.DecideResult{}, fmt.Errorf("execution interrupt decide: %w", err)
 	}
 	return result, nil
 }
-
-// interruptClaimAuthoritySQL locks the caller's live claim: an ordinary
-// RUNNING claim (never NODE_RECOVERY) of a RUNNING agent job whose desired
-// state is RUNNING, with a current workload session, a granted command inside
-// its deadline, an immutable input manifest and no terminal result. It is the
-// node recovery authority (node_recovery_control.go) with recovery_mode NONE.
-const interruptClaimAuthoritySQL = `
-SELECT j.resource_project_id, j.actor_id::bigint, binding.client_message_id, bundle.manifest_digest
-FROM elitea_runtime.execution_jobs j
-JOIN elitea_runtime.execution_claims c USING (execution_id, generation)
-JOIN elitea_runtime.workload_sessions ws ON ws.workload_session_id = c.workload_session_id
- AND ws.workload_identity = c.workload_identity AND ws.producer_id = c.producer_id
-JOIN elitea_runtime.command_outbox command USING (execution_id, generation)
-JOIN elitea_runtime.agent_execution_jobs binding USING (execution_id, generation)
-JOIN elitea_runtime.input_bundles bundle ON bundle.input_bundle_id = j.input_bundle_id
-WHERE c.claim_id = $1 AND c.execution_id = $2 AND c.generation = $3 AND c.workload_identity = $4 AND c.fence_token = $5
- AND c.released_at IS NULL AND c.lease_expires_at > clock_timestamp() AND c.recovery_mode = 'NONE'
- AND ws.issued_at <= clock_timestamp() AND ws.expires_at > clock_timestamp() AND ws.revoked_at IS NULL
- AND j.state = 'RUNNING' AND j.desired_state = 'RUNNING'
- AND j.tenant_id = j.resource_project_id::text AND j.projection_project_id = j.resource_project_id
- AND j.actor_id ~ '^[1-9][0-9]{0,17}$'
- AND j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1') AND binding.capability_id = j.capability_id
- AND command.retired_at IS NULL AND command.authority_granted_at IS NOT NULL AND command.deadline > clock_timestamp()
- AND NOT EXISTS (SELECT 1 FROM elitea_runtime.output_inbox terminal
-                 WHERE terminal.execution_id = j.execution_id AND terminal.generation = j.generation)
-FOR UPDATE OF j, c, ws, command`
 
 type interruptClaimScope struct {
 	projectID  int64
@@ -438,23 +433,17 @@ func (r *ExecutionInterruptRepository) lockInterruptClaim(ctx context.Context, t
 	if !fence.Valid() {
 		return interruptClaimScope{}, domain.ErrStaleFence
 	}
-	var scope interruptClaimScope
-	var manifest []byte
-	// The first lookup takes the locks; a READ COMMITTED statement that waited
-	// does not re-read its joined rows, so the second lookup re-evaluates the
-	// lease, session, deadline and terminal checks with the database clock
-	// while the locks are held (contract §7; node_recovery_control.go).
-	for range 2 {
-		err := tx.QueryRow(ctx, interruptClaimAuthoritySQL, fence.ClaimID, fence.ExecutionID, fence.Generation, fence.WorkloadIdentity, fence.FenceToken).
-			Scan(&scope.projectID, &scope.actorID, &scope.responseID, &manifest)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return interruptClaimScope{}, domain.ErrStaleFence
-		}
-		if err != nil {
-			return interruptClaimScope{}, err
-		}
+	// The shared live-claim authority (agent_claim_authority.go, FU-063) in
+	// the ordinary RUNNING mode: a NODE_RECOVERY claim never matches.
+	claim, err := lockAgentClaim(ctx, tx, interruptClaimMode, fence.ClaimID, fence.ExecutionID, fence.Generation, fence.WorkloadIdentity, fence.FenceToken)
+	if errors.Is(err, errAgentClaimRefused) {
+		return interruptClaimScope{}, domain.ErrStaleFence
 	}
-	if len(manifest) != 32 || !domain.ValidResponseMessageID(scope.responseID) {
+	if err != nil {
+		return interruptClaimScope{}, err
+	}
+	scope := interruptClaimScope{projectID: claim.projectID, actorID: claim.actorID, responseID: claim.responseID}
+	if !domain.ValidResponseMessageID(scope.responseID) {
 		return interruptClaimScope{}, domain.ErrStaleFence
 	}
 	// The original actor must still hold the decision permission.
@@ -521,7 +510,7 @@ ORDER BY card.decided_at, card.interrupt_key`, scope.responseID, scope.projectID
 				return domain.ErrLedgerFault
 			}
 			entry.DecisionSHA256 = digest
-			if size, err := entry.CanonicalSize(); err != nil || size > domain.MaxFetchEntryBytes {
+			if !entry.WithinFetchLimit() {
 				return domain.ErrLedgerFault
 			}
 			fetch.Decisions = append(fetch.Decisions, entry)
@@ -652,8 +641,8 @@ func closeOpenExecutionInterrupts(ctx context.Context, tx sqlExecutor, rootRespo
 	}
 	// Take the per-response lock that Raise takes, so a raise in flight
 	// commits first and its card is closed by the UPDATE below.
-	var locked int
-	err := tx.QueryRow(ctx, `SELECT 1 FROM elitea_runtime.execution_interrupt_responses WHERE root_response_id = $1::uuid FOR UPDATE`, rootResponseID).Scan(&locked)
+	var projectID int64
+	err := tx.QueryRow(ctx, `SELECT project_id FROM elitea_runtime.execution_interrupt_responses WHERE root_response_id = $1::uuid FOR UPDATE`, rootResponseID).Scan(&projectID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return []domain.Resolved{}, nil
 	}
@@ -691,6 +680,25 @@ SELECT interrupt_key, interrupt_id, revision FROM closed ORDER BY interrupt_key`
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("execution interrupt close: %w", err)
+	}
+	rows.Close()
+	// A stopped or regenerated response is no longer parked, and a queued wake
+	// must not start a continuation.
+	if _, err := tx.Exec(ctx, `
+WITH unparked AS (
+  UPDATE elitea_runtime.execution_interrupt_responses
+  SET parked_execution_id = NULL, parked_generation = NULL, parked_revision_seen = NULL, parked_at = NULL,
+      updated_at = clock_timestamp()
+  WHERE root_response_id = $1::uuid AND parked_execution_id IS NOT NULL
+  RETURNING 1
+)
+UPDATE elitea_runtime.execution_interrupt_wakes
+SET state = 'FAILED', failure_code = $2, updated_at = clock_timestamp()
+WHERE root_response_id = $1::uuid AND state = 'QUEUED'`, rootResponseID, wakeClosedFailureCode(state)); err != nil {
+		return nil, fmt.Errorf("execution interrupt close: %w", err)
+	}
+	if err := emitInterruptResolved(ctx, tx, projectID, rootResponseID, closed); err != nil {
+		return nil, err
 	}
 	return closed, nil
 }

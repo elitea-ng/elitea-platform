@@ -1022,11 +1022,13 @@ func (c *interruptStatementCounter) take() []string {
 }
 
 // TestDecideSingleTransaction pins the per-decision budget: one transaction
-// and at most 11 statements: 3 tenant binding, 1 response row lock, 1
+// and at most 13 statements: 3 tenant binding, 1 response row lock, 1
 // ownership and membership check (re-read after the lock), 3 RBAC, 1
-// per-response row lock, 1 card lock, 1 CAS+revision+audit. It writes 3 rows
-// (card, response revision, audit). A replay is the same reads without the
-// CAS.
+// per-response row lock, 1 card lock, 1 CAS+revision+audit (which also reads
+// the park), and 2 for the agent_hitl_resolved frame (binding read, replay
+// insert; Wave 2a-2). It writes 4 rows (card, response revision, audit,
+// frame). A parked response adds 1 statement (the wake row). A replay is the
+// same reads without the CAS and emits nothing.
 func TestDecideSingleTransaction(t *testing.T) {
 	h := newInterruptHarness(t)
 	response := h.newResponse()
@@ -1064,8 +1066,8 @@ func TestDecideSingleTransaction(t *testing.T) {
 		t.Fatalf("decision used begins=%d commits=%d: %v", begins, commits, statements)
 	}
 	work := len(statements) - begins - commits
-	if work > 11 {
-		t.Fatalf("decision used %d statements, budget 11: %v", work, statements)
+	if work > 13 {
+		t.Fatalf("decision used %d statements, budget 13: %v", work, statements)
 	}
 	t.Logf("decision statements: %d work + BEGIN/COMMIT: %v", work, statements)
 	var writes int

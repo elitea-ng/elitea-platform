@@ -36,6 +36,8 @@ const (
 	CurrentContinuationAuthorization CurrentContinuationKind = "authorization"
 	CurrentContinuationOutputLimit   CurrentContinuationKind = "output_limit"
 	CurrentContinuationStatic        CurrentContinuationKind = "static"
+	// CurrentContinuationFanoutWake (continue_fanout_wake.go) is Main-admitted
+	// only; Validate below never accepts it from a browser request.
 )
 
 type CurrentContinuationResolveRequest struct {
