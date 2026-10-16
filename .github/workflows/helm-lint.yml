@@ -256,6 +256,15 @@ jobs:
       - name: The elitea-vector component renders, and its guards refuse
         run: bash deploy/helm/tests/render-vector.sh
 
+      # ADR-0034 decision 9: elitea-egress-proxy. Off by default; on, the
+      # Deployment, its key Secret and its NetworkPolicy must agree, and the
+      # half-configured shapes are refused.
+      - name: The egress proxy renders, and its guards refuse
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-egress-proxy.sh
+
       - name: The agent worker renders for both implementations
         run: |
           python3 -c 'import yaml' 2>/dev/null \
@@ -590,6 +599,8 @@ jobs:
       # vector.enabled adds elitea-vector's introspection pool (8 connections
       # per Main replica), so the profile's own guidance applies: 3 replicas
       # fit postgresql.maxConnections 200, 4 do not (values-standalone.yaml).
+      # The egress-proxy fixture renders the proxy objects (ADR-0034), which
+      # no other pass renders, because egressProxy is off by default.
       - name: helm template + kubeconform (standalone capability values)
         if: matrix.chart == 'elitea'
         run: |
@@ -600,6 +611,7 @@ jobs:
             --set vector.enabled=true \
             --set-string vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key \
             --set main.autoscaling.maxReplicas=3 \
+            -f deploy/helm/tests/fixtures/egress-proxy-values.yaml \
             > /tmp/elitea-main-standalone.yaml
           kubeconform -strict -summary -verbose \
             -kubernetes-version 1.30.0 \

@@ -1,0 +1,20 @@
+{{- if .Values.egressProxy.enabled }}
+# The proxy port only. The admin port (/healthz, /readyz, /metrics) is not on
+# the Service: the probes reach the pod directly, and a scraper reaches it
+# through egressProxy.networkPolicy.adminFrom.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "elitea-egress-proxy.fullname" . }}
+  labels:
+    {{- include "elitea-egress-proxy.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "elitea-egress-proxy.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: proxy
+      port: {{ .Values.egressProxy.service.port }}
+      targetPort: proxy
+      protocol: TCP
+{{- end }}
