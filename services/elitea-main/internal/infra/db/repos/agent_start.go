@@ -26,6 +26,19 @@ type CurrentAgentStartRepository struct {
 	// than an environment read inside the resolve so that the admission rule is
 	// exercisable without setting a process-wide variable.
 	catalogueProjectID int32
+	// cloudExecutor is set only when the cloud executor adapter is
+	// registered (WithCloudExecutor). Until then a handed-off Local work
+	// thread stays fenced: a web turn would run without the workspace.
+	cloudExecutor bool
+}
+
+// WithCloudExecutor opens the Local work fence for threads the cloud
+// executor owns (ADR-0034 decision 7). The composition root calls it only
+// when the executor adapter that runs the turn in the workspace is
+// registered.
+func (repository *CurrentAgentStartRepository) WithCloudExecutor(enabled bool) *CurrentAgentStartRepository {
+	repository.cloudExecutor = enabled
+	return repository
 }
 
 func NewCurrentAgentStartRepository(
@@ -98,13 +111,13 @@ type currentContinuationQuerier interface {
 
 // localWorkThreadQuerier answers the Local work fence of a conversation:
 // whether it is a desktop Local work thread (conversations.LocalWorkSource),
-// and whether the cloud executor owns it now (a workspace handoff row in
-// CLOUD_IDLE or CLOUD_RUNNING with no take back pending, ADR-0034 decision
-// 7). pgxExecutor implements it (see the assertion at the end of this file);
-// a test executor that does not is treated as "not Local work", which keeps
-// the resolver tests that predate the guard unchanged.
+// and the handoff state when the cloud executor owns it (CLOUD_IDLE or
+// CLOUD_RUNNING with no take back pending, ADR-0034 decision 7; "" else).
+// pgxExecutor implements it (see the assertion at the end of this file); a
+// test executor that does not is treated as "not Local work", which keeps the
+// resolver tests that predate the guard unchanged.
 type localWorkThreadQuerier interface {
-	LocalWorkThreadFence(context.Context, int64, pgtype.UUID) (localWork bool, cloud bool, err error)
+	LocalWorkThreadFence(context.Context, int64, pgtype.UUID) (localWork bool, cloudState string, err error)
 }
 
 // cloudRegenerationQuerier answers, for a response of a handed-off thread,
@@ -117,24 +130,36 @@ type cloudRegenerationQuerier interface {
 // Local work thread": every resolve this repository serves — start (agent and
 // ad-hoc), regenerate and each continuation — runs it inside its own
 // transaction before reading the turn. The desktop's local turn route has its
-// own repository and never comes through here. While the thread is handed off
-// to the cloud executor the fence is open: the cloud owns the thread then.
+// own repository and never comes through here.
+//
+// The fence opens only when the cloud executor is wired (cloudExecutor) and
+// the thread is CLOUD_IDLE: the cloud owns it and no turn runs. In
+// CLOUD_RUNNING a cloud turn already runs, and a second one is refused with
+// ErrCloudTurnRunning (409 cloud_turn_running) before it is admitted.
 //
 // It answers whether the conversation is a handed-off Local work thread, for
 // the regenerate path's per-response rule.
-func refuseLocalWorkThread(ctx context.Context, tx sqlExecutor, projectID int64, conversationUUID pgtype.UUID) (bool, error) {
+func refuseLocalWorkThread(
+	ctx context.Context, tx sqlExecutor, projectID int64, conversationUUID pgtype.UUID, cloudExecutor bool,
+) (bool, error) {
 	querier, ok := tx.(localWorkThreadQuerier)
 	if !ok {
 		return false, nil
 	}
-	localWork, cloud, err := querier.LocalWorkThreadFence(ctx, projectID, conversationUUID)
+	localWork, state, err := querier.LocalWorkThreadFence(ctx, projectID, conversationUUID)
 	if err != nil {
 		return false, fmt.Errorf("read conversation source: %w", err)
 	}
-	if localWork && !cloud {
+	switch {
+	case !localWork:
+		return false, nil
+	case !cloudExecutor || state == "":
 		return false, agentexecutionapp.ErrLocalWorkThread
+	case state == "CLOUD_RUNNING":
+		return false, agentexecutionapp.ErrCloudTurnRunning
+	default:
+		return true, nil
 	}
-	return localWork && cloud, nil
 }
 
 // localTurnExecutedByDesktop is localturn.ExecutedByDesktop.
@@ -310,7 +335,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 			request.ProjectID,
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 			func(tx sqlExecutor) error {
-				if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID); err != nil {
+				if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor); err != nil {
 					return err
 				}
 				queries, ok := tx.(currentApplicationStartQuerier)
@@ -722,7 +747,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 			request.ProjectID,
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 			func(tx sqlExecutor) error {
-				if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID); err != nil {
+				if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor); err != nil {
 					return err
 				}
 				queries, ok := tx.(currentAdhocStartQuerier)
@@ -823,7 +848,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentRegeneration(
 			}
 			// The conversation is known only from the response row: the
 			// regenerate route names a message, not a conversation.
-			handedOff, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, row.ConversationUuid)
+			handedOff, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, row.ConversationUuid, repository.cloudExecutor)
 			if err != nil {
 				return err
 			}
@@ -890,7 +915,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentContinuation(
 		request.ProjectID,
 		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 		func(tx sqlExecutor) error {
-			if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID); err != nil {
+			if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor); err != nil {
 				return err
 			}
 			if request.Kind == agentexecutionapp.CurrentContinuationStatic {

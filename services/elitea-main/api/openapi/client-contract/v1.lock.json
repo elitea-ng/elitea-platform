@@ -8233,6 +8233,11 @@
                         "type": "string"
                       }
                     },
+                    "excluded_count": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    },
                     "files": {
                       "type": "integer",
                       "format": "int64",
@@ -15196,6 +15201,11 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "excluded_count": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
                   },
                   "files": {
                     "type": "integer",

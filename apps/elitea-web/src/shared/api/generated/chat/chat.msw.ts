@@ -985,6 +985,10 @@ export const getGetWorkspaceHandoffResponseMock = (
         ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
         undefined,
       ]),
+      excluded_count: faker.helpers.arrayElement([
+        faker.number.int({ min: 0 }),
+        undefined,
+      ]),
       scan_findings: faker.helpers.arrayElement([
         faker.number.int({ min: 0 }),
         undefined,

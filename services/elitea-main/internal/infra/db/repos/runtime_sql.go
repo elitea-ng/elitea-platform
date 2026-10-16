@@ -191,25 +191,28 @@ func (e pgxExecutor) CurrentConversationResponseSettling(
 }
 
 // LocalWorkThreadFence answers whether the conversation (in the project
-// schema the transaction runs in) is a desktop Local work thread, and whether
-// the cloud executor owns it now: a workspace handoff row of this project in
-// CLOUD_IDLE or CLOUD_RUNNING with no take back pending (ADR-0034 decision 7).
-// A conversation that does not exist is neither; the resolve that follows
-// refuses it on its own terms.
-func (e pgxExecutor) LocalWorkThreadFence(ctx context.Context, projectID int64, conversationUUID pgtype.UUID) (bool, bool, error) {
-	var localWork, cloud bool
+// schema the transaction runs in) is a desktop Local work thread, and the
+// state of its workspace handoff row of this project when the cloud executor
+// owns it: CLOUD_IDLE or CLOUD_RUNNING with no take back pending (ADR-0034
+// decision 7); "" otherwise. A conversation that does not exist is neither;
+// the resolve that follows refuses it on its own terms.
+func (e pgxExecutor) LocalWorkThreadFence(ctx context.Context, projectID int64, conversationUUID pgtype.UUID) (bool, string, error) {
+	var (
+		localWork bool
+		state     string
+	)
 	err := e.queryer.QueryRow(ctx, `
 SELECT c.source = 'local_work',
-       EXISTS (SELECT 1 FROM elitea_runtime.workspace_handoffs AS h
-               WHERE h.project_id = $2 AND h.conversation_uuid = c.uuid
-                 AND h.state IN ('CLOUD_IDLE', 'CLOUD_RUNNING') AND NOT h.reclaim_pending)
+       COALESCE((SELECT h.state FROM elitea_runtime.workspace_handoffs AS h
+                 WHERE h.project_id = $2 AND h.conversation_uuid = c.uuid
+                   AND h.state IN ('CLOUD_IDLE', 'CLOUD_RUNNING') AND NOT h.reclaim_pending), '')
 FROM chat_conversations AS c WHERE c.uuid = $1`,
 		conversationUUID, projectID,
-	).Scan(&localWork, &cloud)
+	).Scan(&localWork, &state)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, false, nil
+		return false, "", nil
 	}
-	return localWork, cloud, err
+	return localWork, state, err
 }
 
 // CloudRegenerationCheck answers who executed a response (`executed_by` in its

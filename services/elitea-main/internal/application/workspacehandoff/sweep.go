@@ -172,7 +172,9 @@ func (s *Service) sweepIdle(ctx context.Context, now time.Time, report *SweepRep
 			project, seen := projects[handoff.ProjectID]
 			if !seen {
 				policy, err := s.policy.Effective(ctx, handoff.ProjectID)
-				project = idleProject{retention: policy.IdleRetention, ok: err == nil && policy.IdleRetention > 0}
+				// A retention of 0 is never "forever": the minimum applies.
+				retention := max(policy.IdleRetention, MinIdleRetention)
+				project = idleProject{retention: retention, ok: err == nil}
 				projects[handoff.ProjectID] = project
 			}
 			if !project.ok {

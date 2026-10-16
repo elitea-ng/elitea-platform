@@ -87,6 +87,20 @@ func TestMatchPathPattern(t *testing.T) {
 		{"~/.ssh/**", "./.ssh/id_rsa", false},
 		{"/etc/**", "./etc/passwd", false},
 		{"**/.env", "./.env.local", false},
+		// A directory pattern covers everything under it (gitignore).
+		{"secrets/", "./secrets/a.json", true},
+		{"secrets/", "./secrets/deep/x/key.pem", true},
+		{"secrets/", "./src/secrets/key.pem", true},
+		{"secrets/", "./secrets", false}, // a FILE named secrets
+		{"secrets/", "./secretsfile", false},
+		{".ssh", "./.ssh/id_rsa", true},
+		{"config/secrets/", "./config/secrets/a", true},
+		{"config/secrets/", "./other/config/secrets/a", false},
+		// Case folds on both sides (case-insensitive desktop file systems).
+		{".ssh/**", "./.SSH/id_rsa", true},
+		{"**/.ENV", "./api/.env", true},
+		{"*.PEM", "./certs/Server.Pem", true},
+		{"Secrets/", "./SECRETS/a.json", true},
 	} {
 		if got := MatchPathPattern(tc.pattern, tc.path); got != tc.want {
 			t.Fatalf("MatchPathPattern(%q, %q) = %t, want %t", tc.pattern, tc.path, got, tc.want)
@@ -152,5 +166,17 @@ func TestEnvHarvestRules(t *testing.T) {
 	}
 	if _, err := checkEnv(map[string]string{"bad-name": "x"}, policy); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("an invalid name = %v", err)
+	}
+}
+
+// An include is checked against path_deny case-insensitively and by
+// directory: `./.SSH/id_rsa` is denied by `.ssh/**`, and anything under a
+// `secrets/` deny entry is denied.
+func TestIncludesDeniedByCaseAndDirectory(t *testing.T) {
+	policy := Policy{AllowUserInclude: true, PathDeny: []string{".ssh/**", "secrets/"}}
+	err := checkIncludes([]string{"./.SSH/id_rsa", "./secrets/prod/key.pem", "./src/main.go"}, policy)
+	var denied *PathDeniedError
+	if !errors.As(err, &denied) || !reflect.DeepEqual(denied.Paths, []string{"./.SSH/id_rsa", "./secrets/prod/key.pem"}) {
+		t.Fatalf("err = %v, want the two paths denied", err)
 	}
 }

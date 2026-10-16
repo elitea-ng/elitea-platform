@@ -56,7 +56,9 @@ import (
 
 const (
 	loadGateThreads  = 1000
-	loadGateProjects = 50
+	// loadGateQuotaProjects is the project count of the same-project case:
+	// 20 threads per project share its quota lock.
+	loadGateQuotaProjects = 50
 	loadGateP99      = 50 * time.Millisecond
 )
 
@@ -71,6 +73,9 @@ type loadGateSample struct {
 	// relation extension waits.
 	lockWaiters   int
 	extendWaiters int
+	// quotaWaiters counts waits on a project's quota lock (an advisory
+	// lock): publishes of the SAME project serialise their quota check.
+	quotaWaiters int
 	backends      int
 	// waits names the lock waits seen, as wait_event: left(query, 60).
 	waits []string
@@ -111,7 +116,7 @@ func loadGatePool(t *testing.T, setup *pgxpool.Pool, maxConns int32) (*pgxpool.P
 
 // seedLoadGateThreads creates the handoff rows in HANDING_OFF at epoch 1 and
 // stores each thread's segment (checksum-verified, as on S3 and RustFS).
-func seedLoadGateThreads(t *testing.T, pool *pgxpool.Pool, store *workspacestoretest.Store, count int) []loadGateThread {
+func seedLoadGateThreads(t *testing.T, pool *pgxpool.Pool, store *workspacestoretest.Store, count, projects int) []loadGateThread {
 	t.Helper()
 	ctx := context.Background()
 	rows, err := pool.Query(ctx, `
@@ -119,7 +124,7 @@ INSERT INTO elitea_runtime.workspace_handoffs
     (project_id, conversation_uuid, handoff_id, state, epoch, owner_user_id, has_upstream)
 SELECT 1 + (n % $2), gen_random_uuid(), gen_random_uuid(), 'HANDING_OFF', 1, 100000 + n, false
 FROM generate_series(0, $1 - 1) AS n
-RETURNING project_id, conversation_uuid::text, owner_user_id`, count, loadGateProjects)
+RETURNING project_id, conversation_uuid::text, owner_user_id`, count, projects)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,13 +173,14 @@ func sampleDatabase(t *testing.T, sampler *pgx.Conn, pool *pgxpool.Pool, stop <-
 		}
 		var sample loadGateSample
 		if err := sampler.QueryRow(ctx, `
-SELECT count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event <> 'extend'),
-       count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event = 'extend'), count(*),
+SELECT count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event NOT IN ('extend', 'advisory')),
+       count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event = 'extend'),
+       count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event = 'advisory'), count(*),
        COALESCE(array_agg(DISTINCT wait_event || ': ' || left(regexp_replace(query, '\s+', ' ', 'g'), 60))
                 FILTER (WHERE wait_event_type = 'Lock'), '{}')
 FROM pg_stat_activity
 WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'`).
-			Scan(&sample.lockWaiters, &sample.extendWaiters, &sample.backends, &sample.waits); err != nil {
+			Scan(&sample.lockWaiters, &sample.extendWaiters, &sample.quotaWaiters, &sample.backends, &sample.waits); err != nil {
 			t.Errorf("sample: %v", err)
 			return samples, maxPoolConns
 		}
@@ -290,7 +296,8 @@ type loadGateFixture struct {
 	maxConns int32
 }
 
-func newLoadGateFixture(t *testing.T) loadGateFixture {
+// newLoadGateFixture seeds 1,000 threads over `projects` projects.
+func newLoadGateFixture(t *testing.T, projects int) loadGateFixture {
 	t.Helper()
 	setup := newMigratedPostgresIntegrationPool(t)
 	maxConns := loadGateMaxConns(t)
@@ -298,14 +305,14 @@ func newLoadGateFixture(t *testing.T) loadGateFixture {
 	store := workspacestoretest.New(true)
 	store.Checksum = true
 	service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
-	threads := seedLoadGateThreads(t, setup, store, loadGateThreads)
+	threads := seedLoadGateThreads(t, setup, store, loadGateThreads, projects)
 	// Each project's bucket exists, as it does after the upload grant that
 	// comes before every publish.
 	repo, err := NewWorkspaceStoreRepository(setup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for project := int64(1); project <= loadGateProjects; project++ {
+	for project := int64(1); project <= int64(projects); project++ {
 		if _, err := repo.EnsureWorkspaceBucket(context.Background(), project); err != nil {
 			t.Fatalf("bucket of project %d: %v", project, err)
 		}
@@ -332,11 +339,19 @@ func sustained(n int) []time.Duration {
 }
 
 // checkLocksAndConnections fails on a row or transaction lock wait beyond
-// allowedWaiters, and on any connection growth.
-func (f loadGateFixture) checkLocksAndConnections(t *testing.T, run loadGateRun, allowedWaiters int) {
+// allowedWaiters, on a quota lock wait when quotaWaits is false, and on any
+// connection growth.
+func (f loadGateFixture) checkLocksAndConnections(t *testing.T, run loadGateRun, allowedWaiters int, quotaWaits bool) {
 	t.Helper()
 	if len(run.samples) < 10 {
 		t.Errorf("only %d samples were taken; the lock-wait check proves nothing", len(run.samples))
+	}
+	for _, sample := range run.samples {
+		if !quotaWaits && sample.quotaWaiters > 0 {
+			t.Errorf("%d backends waited on a quota lock while every thread is in its own project: %v",
+				sample.quotaWaiters, sample.waits)
+			break
+		}
 	}
 	for _, sample := range run.samples {
 		if sample.lockWaiters > allowedWaiters {
@@ -374,7 +389,9 @@ func TestLoadGatePublishesAcrossThreads(t *testing.T) {
 		{"burst", func(int) []time.Duration { return nil }, false},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
-			f := newLoadGateFixture(t)
+			// One thread per project, as with personal projects: no two
+			// publishes share a project's quota lock.
+			f := newLoadGateFixture(t, loadGateThreads)
 			publishes := make([]func() error, 0, len(f.threads))
 			for index, thread := range f.threads {
 				publishes = append(publishes, f.publish(thread, mode.name+"-"+strconv.Itoa(index)))
@@ -390,7 +407,7 @@ func TestLoadGatePublishesAcrossThreads(t *testing.T) {
 				t.Errorf("p99 publish = %s, gate is under %s", p99, loadGateP99)
 			}
 			// 1,000 DIFFERENT threads: no backend may wait on another's row.
-			f.checkLocksAndConnections(t, run, 0)
+			f.checkLocksAndConnections(t, run, 0, false)
 			var segments int
 			if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM elitea_runtime.workspace_segments`).Scan(&segments); err != nil || segments != loadGateThreads {
 				t.Fatalf("segments = %d, %v; want one per thread", segments, err)
@@ -400,7 +417,7 @@ func TestLoadGatePublishesAcrossThreads(t *testing.T) {
 }
 
 func TestLoadGateSameThreadContention(t *testing.T) {
-	f := newLoadGateFixture(t)
+	f := newLoadGateFixture(t, loadGateThreads)
 	const contenders = 50
 	hot := f.threads[0]
 	var wins, conflicts atomic.Int64
@@ -450,11 +467,35 @@ func TestLoadGateSameThreadContention(t *testing.T) {
 		t.Errorf("other threads' p99 = %s under same-thread contention, gate is under %s", p99, loadGateP99)
 	}
 	// Only the hot thread's other publishers may wait on its row lock.
-	f.checkLocksAndConnections(t, run, contenders-1)
+	f.checkLocksAndConnections(t, run, contenders-1, false)
 	var seq int64
 	if err := f.pool.QueryRow(context.Background(), `
 SELECT last_seq FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND conversation_uuid = $2::uuid`,
 		hot.thread.ProjectID, hot.thread.ConversationUUID).Scan(&seq); err != nil || seq != 1 {
 		t.Fatalf("hot thread last_seq = %d, %v; want 1", seq, err)
 	}
+}
+
+// TestLoadGateSameProjectQuota: 1,000 threads in 50 projects (20 each),
+// sustained. Publishes of one project serialise only on the project's quota
+// lock, held for one SUM and the commit (ADR-0034 decision 11, the
+// max_project_workspace_gb ceiling); they never wait on each other's rows,
+// and p99 stays under the gate.
+func TestLoadGateSameProjectQuota(t *testing.T) {
+	f := newLoadGateFixture(t, loadGateQuotaProjects)
+	publishes := make([]func() error, 0, len(f.threads))
+	for index, thread := range f.threads {
+		publishes = append(publishes, f.publish(thread, "quota-"+strconv.Itoa(index)))
+	}
+	run := runLoadGate(t, f.pool, f.sampler, publishes, sustained(len(publishes)))
+	for index, err := range run.errs {
+		if err != nil {
+			t.Fatalf("publish %d: %v", index, err)
+		}
+	}
+	_, p99, _ := run.report(t, "1000 threads in 50 projects, sustained", allIndexes(len(publishes)))
+	if p99 >= loadGateP99 {
+		t.Errorf("p99 publish = %s, gate is under %s", p99, loadGateP99)
+	}
+	f.checkLocksAndConnections(t, run, 0, true)
 }

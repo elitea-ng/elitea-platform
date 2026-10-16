@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -610,4 +611,192 @@ func TestPostgresWorkspaceStoreChecksumBoundPublish(t *testing.T) {
 			t.Fatalf("gets = %d, want 1", gets)
 		}
 	})
+}
+
+// The project ceiling holds under concurrent publishes of two threads: both
+// passed the check before the transaction (it is a fast path only), and the
+// re-check inside the transaction, under the project's lock, lets exactly
+// one through.
+func TestPostgresWorkspaceStoreQuotaHoldsAcrossConcurrentThreads(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	repo, err := NewWorkspaceStoreRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const owner int64 = 5171
+	threads := []workspacestore.Thread{}
+	for range 2 {
+		fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+		seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateHandingOff, 1, false, "")
+		threads = append(threads, fixture.thread)
+	}
+	for round := 0; round < 20; round++ {
+		if _, err := pool.Exec(ctx, `DELETE FROM elitea_runtime.workspace_segments; DELETE FROM elitea_runtime.workspace_refs;
+UPDATE elitea_runtime.workspace_handoffs SET last_seq = 0`); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		errs := make([]error, len(threads))
+		var wg sync.WaitGroup
+		for index, thread := range threads {
+			wg.Add(1)
+			go func(index int, thread workspacestore.Thread) {
+				defer wg.Done()
+				sha := digestOf([]byte(fmt.Sprintf("quota %d %d", round, index)))
+				<-start
+				_, errs[index] = repo.Publish(ctx, workspacestore.PublishRecord{
+					Thread: thread, Caller: workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner},
+					Epoch: 1, Kind: workspacestore.KindCompact, SHA256: sha, Bytes: 60, Prerequisites: []string{},
+					Refs:      []workspacestore.RefUpdate{{Name: workspacestore.RefBase, New: sha1Of(sha)}, {Name: workspacestore.RefHandoff1, New: sha1Of(sha + "h")}},
+					ObjectKey: workspacestore.ObjectKey(thread.ConversationUUID, sha), PhysicalBucket: "elitea-test",
+					MaxProjectBytes: 100,
+				})
+			}(index, thread)
+		}
+		close(start)
+		wg.Wait()
+		ok, refused := 0, 0
+		for _, err := range errs {
+			switch {
+			case err == nil:
+				ok++
+			case errors.Is(err, workspacestore.ErrQuotaExceeded):
+				refused++
+			default:
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
+		if ok != 1 || refused != 1 {
+			t.Fatalf("round %d: %d published, %d refused; want exactly one of each (60+60 > 100)", round, ok, refused)
+		}
+		var used int64
+		if err := pool.QueryRow(ctx, `SELECT COALESCE(sum(byte_length),0) FROM elitea_runtime.workspace_segments WHERE superseded_at IS NULL`).Scan(&used); err != nil || used != 60 {
+			t.Fatalf("round %d: usage %d, %v", round, used, err)
+		}
+	}
+}
+
+// The streaming facade (no presign) writes to a temporary key and promotes
+// only verified bytes. A retry after a lost acknowledgement, even a short
+// one, never overwrites or deletes the segment that is in place.
+func TestPostgresWorkspaceStoreFacadeKeepsAValidSegment(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5181
+	fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+	seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateHandingOff, 1, false, "")
+	store := workspacestoretest.New(false)
+	service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+	desktop := workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner}
+	content := []byte("a facade segment of some length")
+	sha := digestOf(content)
+	if _, err := service.RequestUpload(ctx, workspacestore.UploadRequest{
+		Thread: fixture.thread, Caller: desktop, Epoch: 1, SHA256: sha, Bytes: int64(len(content)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	final, _ := storage.NewObjectRef("1", storage.WorkspaceBucketName, workspacestore.ObjectKey(fixture.thread.ConversationUUID, sha))
+	stored := func() []byte {
+		t.Helper()
+		body, _, err := store.Get(ctx, final, nil)
+		if err != nil {
+			return nil
+		}
+		defer func() { _ = body.Close() }()
+		raw, _ := io.ReadAll(body)
+		return raw
+	}
+
+	// A short first upload: refused, nothing at the segment key, no
+	// temporary object left.
+	if err := service.PutObject(ctx, fixture.thread, desktop, sha, bytes.NewReader(content[:5])); !errors.Is(err, workspacestore.ErrChecksumMismatch) {
+		t.Fatalf("short upload = %v", err)
+	}
+	if store.Has(final) || store.Count() != 0 {
+		t.Fatalf("a refused upload left objects: has=%t count=%d", store.Has(final), store.Count())
+	}
+	// The real upload; its acknowledgement is lost.
+	if err := service.PutObject(ctx, fixture.thread, desktop, sha, bytes.NewReader(content)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stored(), content) || store.Count() != 1 {
+		t.Fatalf("after upload: %q, count %d", stored(), store.Count())
+	}
+	deletes := store.Deletes
+	// The retry is cut short (a client that gave up mid-body): the segment
+	// in place is neither overwritten nor deleted.
+	if err := service.PutObject(ctx, fixture.thread, desktop, sha, bytes.NewReader(content[:3])); err != nil {
+		t.Fatalf("short retry over a valid segment = %v, want success (the segment is in place)", err)
+	}
+	// A full retry and a retry with other bytes of the same length: the same.
+	if err := service.PutObject(ctx, fixture.thread, desktop, sha, bytes.NewReader(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.PutObject(ctx, fixture.thread, desktop, sha, bytes.NewReader(bytes.Repeat([]byte("x"), len(content)))); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stored(), content) || store.Count() != 1 || store.Deletes != deletes {
+		t.Fatalf("retries changed the segment: %q, count %d, deletes %d->%d", stored(), store.Count(), deletes, store.Deletes)
+	}
+	// Wrong bytes already at the key (size differs): a verified upload
+	// replaces them; the temporary object is removed.
+	store.Seed(final, []byte("bad"), time.Now())
+	if err := service.PutObject(ctx, fixture.thread, desktop, sha, bytes.NewReader(content)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stored(), content) || store.Count() != 1 {
+		t.Fatalf("a verified upload did not replace bad bytes: %q, count %d", stored(), store.Count())
+	}
+	if _, err := service.Publish(ctx, desktopPublish(fixture.thread, owner, 1, sha, int64(len(content)),
+		workspacestore.RefUpdate{Name: workspacestore.RefBase, New: sha1Of("f-base")},
+		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, New: sha1Of("f")})); err != nil {
+		t.Fatalf("publish after the facade upload: %v", err)
+	}
+}
+
+// The fetch plan reads the head, the refs and the newest segment in one
+// snapshot: a publish that commits between the reads changes none of them.
+func TestPostgresWorkspaceStoreFetchRowsIsOneSnapshot(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5191
+	fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+	seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateHandingOff, 1, false, "")
+	store := workspacestoretest.New(true)
+	service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+	repo, err := NewWorkspaceStoreRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := []byte("first snapshot")
+	firstSHA := uploadSegment(t, store, fixture.thread, first, time.Now())
+	if _, err := service.Publish(ctx, desktopPublish(fixture.thread, owner, 1, firstSHA, int64(len(first)),
+		workspacestore.RefUpdate{Name: workspacestore.RefBase, New: sha1Of("base")},
+		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, New: sha1Of("one")})); err != nil {
+		t.Fatal(err)
+	}
+	second := []byte("second snapshot")
+	secondSHA := uploadSegment(t, store, fixture.thread, second, time.Now())
+	fetchRowsBetweenReads = func() {
+		fetchRowsBetweenReads = nil
+		if _, err := service.Publish(ctx, desktopPublish(fixture.thread, owner, 1, secondSHA, int64(len(second)),
+			workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, Old: ptr(sha1Of("one")), New: sha1Of("two")})); err != nil {
+			t.Errorf("interleaved publish: %v", err)
+		}
+	}
+	t.Cleanup(func() { fetchRowsBetweenReads = nil })
+	rows, err := repo.FetchRows(ctx, fixture.thread, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows.HeadSeq != 1 || rows.Refs[workspacestore.RefHandoff1] != sha1Of("one") || rows.Newest == nil ||
+		rows.Newest.Seq != 1 || rows.Newest.SHA256 != firstSHA {
+		t.Fatalf("fetch rows mixed two publishes: head %d, handoff/1 %s, newest %+v", rows.HeadSeq,
+			rows.Refs[workspacestore.RefHandoff1], rows.Newest)
+	}
+	after, err := repo.FetchRows(ctx, fixture.thread, 0)
+	if err != nil || after.HeadSeq != 2 || after.Refs[workspacestore.RefHandoff1] != sha1Of("two") || after.Newest.SHA256 != secondSHA {
+		t.Fatalf("the next fetch = %+v, %v", after, err)
+	}
 }

@@ -98,7 +98,12 @@ VALUES ($1::uuid, $2, $3, '{"is_streaming_marker": true}'::jsonb)`, response, du
 
 	// The executor's audit events: allowlisted attributes only, no path.
 	if err := h.service.RecordExecutorEvent(ctx, thread, 2, "exec-x", workspacehandoff.EventScanBlocked,
-		map[string]string{"findings": "2", "rules": "aws-access-key", "path": "./secrets.txt"}); err != nil {
+		map[string]string{"findings": "2", "rules": "aws-access-key", "path": "./secrets.txt", "files": "./deploy/prod.env"}); err != nil {
+		t.Fatal(err)
+	}
+	// A path smuggled into an allowed attribute is dropped by its shape.
+	if err := h.service.RecordExecutorEvent(ctx, thread, 2, "exec-x", workspacehandoff.EventScanBlocked,
+		map[string]string{"findings": "./leak/one.txt", "rules": "rule-a,./leak/two.txt"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.service.RecordExecutorEvent(ctx, thread, 2, "exec-x", workspacehandoff.EventPullRequestOpened,
@@ -113,7 +118,8 @@ VALUES ($1::uuid, $2, $3, '{"is_streaming_marker": true}'::jsonb)`, response, du
 	}
 	actions := strings.Join(h.recorder.actions(), "\n")
 	if !strings.Contains(actions, "handoff.scan_blocked: epoch 2, findings 2, rules aws-access-key") ||
-		strings.Contains(actions, "secrets.txt") || !strings.Contains(actions, "pull_request.opened: epoch 2, branch elitea/cloud-1, number 42") {
+		strings.Contains(actions, "secrets.txt") || strings.Contains(actions, "prod.env") || strings.Contains(actions, "leak") ||
+		!strings.Contains(actions, "pull_request.opened: epoch 2, branch elitea/cloud-1, number 42") {
 		t.Fatalf("audit = %s", actions)
 	}
 }

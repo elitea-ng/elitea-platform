@@ -84,17 +84,18 @@ func TestCurrentAgentRegenerationResolverDistinguishesFinalizingResponse(t *test
 type localWorkRegenerationExecutorStub struct {
 	*currentRegenerationExecutorStub
 	localWork bool
-	// cloud: the thread is handed off to the cloud executor (ADR-0034).
-	cloud      bool
+	// cloudState: the handoff state when the cloud executor owns the thread
+	// (ADR-0034): "CLOUD_IDLE", "CLOUD_RUNNING" or "".
+	cloudState string
 	executedBy string
 	notNewest  bool
 	asked      pgtype.UUID
 	project    int64
 }
 
-func (stub *localWorkRegenerationExecutorStub) LocalWorkThreadFence(_ context.Context, projectID int64, conversation pgtype.UUID) (bool, bool, error) {
+func (stub *localWorkRegenerationExecutorStub) LocalWorkThreadFence(_ context.Context, projectID int64, conversation pgtype.UUID) (bool, string, error) {
 	stub.asked, stub.project = conversation, projectID
-	return stub.localWork, stub.cloud, nil
+	return stub.localWork, stub.cloudState, nil
 }
 
 func (stub *localWorkRegenerationExecutorStub) CloudRegenerationCheck(context.Context, pgtype.UUID) (string, bool, error) {
@@ -202,12 +203,13 @@ func TestCurrentAgentRegenerationInAHandedOffThread(t *testing.T) {
 					RegenerationKind: "application", UserInput: "regenerate this",
 				},
 			},
-			localWork: true, cloud: true, executedBy: tc.executedBy, notNewest: tc.notNewest,
+			localWork: true, cloudState: "CLOUD_IDLE", executedBy: tc.executedBy, notNewest: tc.notNewest,
 		}
 		repository, err := newCurrentAgentStartRepository(localWorkProjectStoreStub{executor: executor}, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
+		repository.WithCloudExecutor(true)
 		_, err = repository.ResolveCurrentRegeneration(t.Context(), agentexecutionapp.CurrentRegenerationResolveRequest{
 			ProjectID: 7, ActorUserID: 11, ResponseMessageID: "40000000-0000-4000-8000-000000000034",
 		})
@@ -224,12 +226,13 @@ func TestCurrentAgentRegenerationInAHandedOffThread(t *testing.T) {
 func TestCurrentAgentContinuationInAHandedOffThreadPassesTheFence(t *testing.T) {
 	executor := &localWorkRegenerationExecutorStub{
 		currentRegenerationExecutorStub: &currentRegenerationExecutorStub{scriptedExecutor: &scriptedExecutor{}},
-		localWork:                       true, cloud: true,
+		localWork:                       true, cloudState: "CLOUD_IDLE",
 	}
 	repository, err := newCurrentAgentStartRepository(localWorkProjectStoreStub{executor: executor}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
+	repository.WithCloudExecutor(true)
 	_, err = repository.ResolveCurrentContinuation(t.Context(), agentexecutionapp.CurrentContinuationResolveRequest{
 		ProjectID: 1, ActorUserID: 11,
 		ConversationUUID:  "10000000-0000-4000-8000-000000000035",
@@ -285,8 +288,23 @@ func TestEveryStartPathOpensTheLocalWorkFenceOnlyForTheCloud(t *testing.T) {
 			return err
 		},
 	}
+	// The fence opens only with the executor wired AND the thread CLOUD_IDLE.
+	// CLOUD_RUNNING is a clean 409 cloud_turn_running; without the executor
+	// every handed-off thread stays fenced (no turn may run without its
+	// workspace).
 	for name, run := range paths {
-		for _, cloud := range []bool{false, true} {
+		for _, tc := range []struct {
+			executor bool
+			state    string
+			want     error // nil: the fence let the request through
+		}{
+			{false, "", agentexecutionapp.ErrLocalWorkThread},
+			{false, "CLOUD_IDLE", agentexecutionapp.ErrLocalWorkThread},
+			{false, "CLOUD_RUNNING", agentexecutionapp.ErrLocalWorkThread},
+			{true, "", agentexecutionapp.ErrLocalWorkThread},
+			{true, "CLOUD_RUNNING", agentexecutionapp.ErrCloudTurnRunning},
+			{true, "CLOUD_IDLE", nil},
+		} {
 			executor := &localWorkRegenerationExecutorStub{
 				currentRegenerationExecutorStub: &currentRegenerationExecutorStub{
 					scriptedExecutor: &scriptedExecutor{},
@@ -295,18 +313,19 @@ func TestEveryStartPathOpensTheLocalWorkFenceOnlyForTheCloud(t *testing.T) {
 						RegenerationKind: "application", UserInput: "regenerate this",
 					},
 				},
-				localWork: true, cloud: cloud, executedBy: "cloud_executor",
+				localWork: true, cloudState: tc.state, executedBy: "cloud_executor",
 			}
 			repository, err := newCurrentAgentStartRepository(localWorkProjectStoreStub{executor: executor}, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
+			repository.WithCloudExecutor(tc.executor)
 			err = run(repository)
-			if !cloud && !errors.Is(err, agentexecutionapp.ErrLocalWorkThread) {
-				t.Fatalf("%s with the desktop owning the thread: err=%v, want ErrLocalWorkThread", name, err)
+			if tc.want != nil && !errors.Is(err, tc.want) {
+				t.Fatalf("%s executor=%t state=%q: err=%v, want %v", name, tc.executor, tc.state, err, tc.want)
 			}
-			if cloud && errors.Is(err, agentexecutionapp.ErrLocalWorkThread) {
-				t.Fatalf("%s with the cloud owning the thread was refused by the fence", name)
+			if tc.want == nil && (errors.Is(err, agentexecutionapp.ErrLocalWorkThread) || errors.Is(err, agentexecutionapp.ErrCloudTurnRunning)) {
+				t.Fatalf("%s executor=%t state=%q was refused by the fence: %v", name, tc.executor, tc.state, err)
 			}
 			if executor.asked != conversationUUID {
 				t.Fatalf("%s: the fence probed %v", name, executor.asked)

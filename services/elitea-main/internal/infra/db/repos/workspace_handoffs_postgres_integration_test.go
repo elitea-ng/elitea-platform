@@ -725,3 +725,43 @@ SET running_response_message_id = '7e5a8c0e-3f4b-4a2b-9c1d-0e2f3a4b5c6d' WHERE c
 		t.Fatalf("cancelled = %v, want the suspended owner's running turn", h.canceller.cancelled)
 	}
 }
+
+// A release that loses the race to an erase is not reported as a release:
+// the row came to LOCAL by the erase (released = FALSE), so the release and
+// its retries answer ErrErased (409 handoff_erased). A real release's retry
+// still succeeds.
+func TestPostgresWorkspaceHandoffReleaseAfterEraseIsRefused(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	h := newHandoffHarness(t, pool)
+	const owner int64 = 5295
+	erasedFirst := seedLocalWorkThread(t, pool, owner, "local_work")
+	seedHandoffRow(t, pool, erasedFirst.thread, owner, workspacestore.StateReclaiming, 3, false, "")
+	if _, err := h.service.Erase(ctx, workspacehandoff.EraseRequest{Thread: erasedFirst.thread, ActorUserID: owner}); err != nil {
+		t.Fatal(err)
+	}
+	for _, epoch := range []int64{3, 2} {
+		if _, err := h.service.Release(ctx, workspacehandoff.ReleaseRequest{
+			Thread: erasedFirst.thread, ActorUserID: owner, Epoch: epoch, Outcome: "applied",
+		}); !errors.Is(err, workspacehandoff.ErrErased) {
+			t.Fatalf("release at epoch %d after an erase = %v, want ErrErased", epoch, err)
+		}
+	}
+
+	releasedFirst := seedLocalWorkThread(t, pool, owner, "local_work")
+	seedHandoffRow(t, pool, releasedFirst.thread, owner, workspacestore.StateReclaiming, 3, false, "")
+	request := workspacehandoff.ReleaseRequest{Thread: releasedFirst.thread, ActorUserID: owner, Epoch: 3, Outcome: "applied"}
+	if _, err := h.service.Release(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := h.service.Release(ctx, request); err != nil || again.State != workspacestore.StateLocal {
+		t.Fatalf("a retried release = %+v, %v", again, err)
+	}
+	// Erasing the released copy within its grace keeps it a release.
+	if _, err := h.service.Erase(ctx, workspacehandoff.EraseRequest{Thread: releasedFirst.thread, ActorUserID: owner}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.service.Release(ctx, request); err != nil {
+		t.Fatalf("a retried release after erasing the released copy = %v", err)
+	}
+}

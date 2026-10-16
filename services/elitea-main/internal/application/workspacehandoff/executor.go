@@ -3,6 +3,7 @@ package workspacehandoff
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -39,13 +40,42 @@ const (
 	maxExecutorEventValueRn = 200
 )
 
-// executorEventKeys is the attribute allowlist per event. A scan finding's
-// PATH is never recorded (decision 12), so the scan event names counts and
-// rules only.
-var executorEventKeys = map[string]map[string]bool{
-	EventScanBlocked:       {"findings": true, "rules": true, "files": true},
-	EventPullRequestOpened: {"toolkit": true, "branch": true, "base": true, "number": true, "url": true, "files": true},
+// executorEventKeys is the attribute allowlist per event, with the shape each
+// value must have. A scan finding's PATH is never recorded (decision 12): the
+// scan event carries a count and rule ids only, and a value of the wrong
+// shape (a path in `rules`, text in a count) is dropped, not recorded.
+var executorEventKeys = map[string]map[string]func(string) bool{
+	EventScanBlocked: {"findings": isCount, "rules": isRuleList},
+	EventPullRequestOpened: {
+		"toolkit": isPrintable, "branch": isPrintable, "base": isPrintable, "number": isCount,
+		"url": isPrintable, "files": isCount,
+	},
 }
+
+var (
+	countValue = regexp.MustCompile(`^[0-9]{1,9}$`)
+	// A rule id has no dot, slash or space, so a file name cannot pass.
+	ruleIDValue = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+)
+
+func isCount(value string) bool  { return countValue.MatchString(value) }
+func isRuleID(value string) bool { return ruleIDValue.MatchString(value) }
+
+// isRuleList: comma-separated rule ids, at most 32.
+func isRuleList(value string) bool {
+	ids := strings.Split(value, ",")
+	if len(ids) > 32 {
+		return false
+	}
+	for _, id := range ids {
+		if !isRuleID(id) {
+			return false
+		}
+	}
+	return true
+}
+
+func isPrintable(value string) bool { return value != "" && utf8.ValidString(value) }
 
 // RecordExecutorEvent writes an audit event the worker observed in the
 // running turn: handoff.scan_blocked or pull_request.opened. Only allowlisted
@@ -68,8 +98,8 @@ func (s *Service) RecordExecutorEvent(
 		return ErrStaleEpoch
 	}
 	names := make([]string, 0, len(attrs))
-	for name := range attrs {
-		if keys[name] {
+	for name, value := range attrs {
+		if valid, allowed := keys[name]; allowed && valid(value) {
 			names = append(names, name)
 		}
 	}

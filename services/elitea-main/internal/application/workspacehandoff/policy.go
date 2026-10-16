@@ -3,6 +3,8 @@ package workspacehandoff
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
@@ -110,6 +112,9 @@ func (p *PolicyService) Limits(ctx context.Context, projectID int64) (workspaces
 	return policy.Limits, nil
 }
 
+// MinIdleRetention is the shortest idle retention: a 0 setting means this.
+const MinIdleRetention = 24 * time.Hour
+
 // Narrow is the effective policy: a project can turn a switch off but never on
 // when the platform has it off, can only shrink the allowlist and lower the
 // caps, and the device switch and the encryption check can only turn the
@@ -137,6 +142,15 @@ func Narrow(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting
 		IdleRetention: time.Duration(lower(ceiling.IdleRetentionDays, project.IdleRetentionDays)) * 24 * time.Hour,
 		ReturnGrace:   time.Duration(lower(ceiling.ReturnGraceDays, project.ReturnGraceDays)) * 24 * time.Hour,
 	}
+	// Idle retention 0 (from the platform or a project) is the minimum, one
+	// day, never "keep forever". Return grace 0 means the copy is erased at
+	// release (delete_after = now), which is already bounded.
+	if policy.IdleRetention < MinIdleRetention {
+		policy.IdleRetention = MinIdleRetention
+	}
+	if policy.ReturnGrace < 0 {
+		policy.ReturnGrace = 0
+	}
 	// The exclusion set and the environment deny list only grow: a project
 	// adds patterns and can never remove a platform one.
 	policy.Exclusions = mergePatterns(ceiling.Exclusions, project.ExclusionsAdd)
@@ -154,14 +168,13 @@ func Narrow(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting
 		if len(ceiling.NetworkAllowlist) == 0 {
 			policy.NetworkAllowlist = requested
 		} else {
-			allowed := map[string]bool{}
-			for _, host := range ceiling.NetworkAllowlist {
-				allowed[host] = true
-			}
 			narrowed := []string{}
 			for _, host := range requested {
-				if allowed[host] {
-					narrowed = append(narrowed, host)
+				for _, ceilingHost := range ceiling.NetworkAllowlist {
+					if HostCovered(ceilingHost, host) {
+						narrowed = append(narrowed, host)
+						break
+					}
 				}
 			}
 			policy.NetworkAllowlist = narrowed
@@ -226,4 +239,61 @@ func narrowNames(platform, project *[]string) *[]string {
 		}
 	}
 	return &names
+}
+
+// HostCovered reports whether a project allowlist entry is inside a ceiling
+// entry: the same entry, or a host (or a narrower wildcard) under a ceiling
+// wildcard. `*.github.com` covers `api.github.com`, `a.b.github.com` and
+// `*.api.github.com`, never `github.com` itself. Ports follow the egress
+// proxy's grammar: an entry without a port means 443 and 80, so it is
+// covered only by a ceiling entry without a port; an entry with a port is
+// covered by the same port, or by no port when it is 443 or 80.
+//
+// TODO(egress-proxy): use runtoken.Rule's matcher from
+// libs/go/egresslib/runtoken once feat/egress-proxy is merged, so the policy
+// and the proxy cannot disagree.
+func HostCovered(ceiling, entry string) bool {
+	ceilingHost, ceilingPort, ok := splitAllowlistEntry(ceiling)
+	if !ok {
+		return false
+	}
+	host, port, ok := splitAllowlistEntry(entry)
+	if !ok {
+		return false
+	}
+	switch {
+	case ceilingPort == port:
+	case ceilingPort == 0 && (port == 443 || port == 80):
+	default:
+		return false
+	}
+	if host == ceilingHost {
+		return true
+	}
+	suffix, wildcard := strings.CutPrefix(ceilingHost, "*")
+	if !wildcard {
+		return false
+	}
+	// suffix is ".github.com": the entry must be strictly under it.
+	name := strings.TrimPrefix(host, "*")
+	return strings.HasSuffix(name, suffix) && len(strings.TrimSuffix(name, suffix)) > 0 &&
+		!strings.HasSuffix(strings.TrimSuffix(name, suffix), ".") && name != suffix
+}
+
+// splitAllowlistEntry answers the lower-cased host and the port (0 when
+// none) of `host`, `host:port`, `*.domain` or `*.domain:port`.
+func splitAllowlistEntry(entry string) (string, int, bool) {
+	entry = strings.ToLower(strings.TrimSpace(entry))
+	if entry == "" {
+		return "", 0, false
+	}
+	host, rawPort, hasPort := strings.Cut(entry, ":")
+	if !hasPort {
+		return host, 0, true
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil || port < 1 || port > 65535 || strconv.Itoa(port) != rawPort {
+		return "", 0, false
+	}
+	return host, port, true
 }

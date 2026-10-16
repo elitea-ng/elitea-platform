@@ -83,14 +83,14 @@ func TestPostgresLocalWorkFenceAndRegenerationCheckSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	executor := pgxExecutor{queryer: tx}
-	fence := func(thread workspacestore.Thread, project int64) (bool, bool) {
+	fence := func(thread workspacestore.Thread, project int64) (bool, string) {
 		t.Helper()
 		id, _ := currentPGUUID(thread.ConversationUUID)
-		localWork, cloud, err := executor.LocalWorkThreadFence(ctx, project, id)
+		localWork, state, err := executor.LocalWorkThreadFence(ctx, project, id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return localWork, cloud
+		return localWork, state
 	}
 	setRow := func(state workspacestore.State, running string, pending bool) {
 		t.Helper()
@@ -108,33 +108,33 @@ SET state = EXCLUDED.state, running_execution_id = EXCLUDED.running_execution_id
 			t.Fatal(err)
 		}
 	}
-	if localWork, cloud := fence(web.thread, 1); localWork || cloud {
-		t.Fatalf("a web conversation = %t/%t", localWork, cloud)
+	if localWork, state := fence(web.thread, 1); localWork || state != "" {
+		t.Fatalf("a web conversation = %t/%q", localWork, state)
 	}
-	if localWork, cloud := fence(local.thread, 1); !localWork || cloud {
-		t.Fatalf("a Local work thread with no handoff = %t/%t, want shut", localWork, cloud)
+	if localWork, state := fence(local.thread, 1); !localWork || state != "" {
+		t.Fatalf("a Local work thread with no handoff = %t/%q, want shut", localWork, state)
 	}
 	for _, tc := range []struct {
 		state   workspacestore.State
 		running string
 		pending bool
-		open    bool
+		want    string
 	}{
-		{workspacestore.StateHandingOff, "", false, false},
-		{workspacestore.StateCloudIdle, "", false, true},
-		{workspacestore.StateCloudRunning, "exec", false, true},
-		{workspacestore.StateCloudRunning, "exec", true, false},
-		{workspacestore.StateReclaiming, "", false, false},
-		{workspacestore.StateLocal, "", false, false},
+		{workspacestore.StateHandingOff, "", false, ""},
+		{workspacestore.StateCloudIdle, "", false, "CLOUD_IDLE"},
+		{workspacestore.StateCloudRunning, "exec", false, "CLOUD_RUNNING"},
+		{workspacestore.StateCloudRunning, "exec", true, ""},
+		{workspacestore.StateReclaiming, "", false, ""},
+		{workspacestore.StateLocal, "", false, ""},
 	} {
 		setRow(tc.state, tc.running, tc.pending)
-		if localWork, cloud := fence(local.thread, 1); !localWork || cloud != tc.open {
-			t.Fatalf("%s (pending %t): fence open = %t, want %t", tc.state, tc.pending, cloud, tc.open)
+		if localWork, state := fence(local.thread, 1); !localWork || state != tc.want {
+			t.Fatalf("%s (pending %t): fence state = %q, want %q", tc.state, tc.pending, state, tc.want)
 		}
 	}
 	// Another project's row with the same conversation id opens nothing.
 	setRow(workspacestore.StateCloudIdle, "", false)
-	if _, cloud := fence(local.thread, 2); cloud {
+	if _, state := fence(local.thread, 2); state != "" {
 		t.Fatalf("the fence read a handoff row of another project")
 	}
 

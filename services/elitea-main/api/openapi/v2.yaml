@@ -3448,6 +3448,14 @@ components:
         excluded:
           type: array
           items: { type: string }
+          description: >-
+            Paths on the owner's computer. The state route returns them to
+            the thread's owner only.
+        excluded_count:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The number of excluded paths. Set by the state route for every reader; ignored on send.
         scan_findings: { type: integer, format: int64, minimum: 0 }
     WorkspaceHandoffBeginRequest:
       type: object
@@ -18324,7 +18332,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffError'
         '409':
-          description: '`stale_epoch`.'
+          description: '`stale_epoch`, or `handoff_erased`: the thread came back to LOCAL by an erase, not a release.'
           content:
             application/json:
               schema:

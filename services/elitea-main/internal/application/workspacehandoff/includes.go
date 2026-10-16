@@ -142,19 +142,41 @@ func EnvNameDenied(name string, policy Policy) bool {
 // MatchPathPattern matches a workspace path ("./a/b", "a/b") against a
 // gitignore-like pattern: `**` spans any number of directories, `*` and `?`
 // stay within one segment, and a pattern without a slash matches the base name
-// at any depth. A pattern anchored at the home directory (`~/…`) or absolute
-// names nothing inside a workspace and matches no path.
+// at any depth. As in gitignore, a pattern that matches a directory matches
+// everything under it (`.ssh` and `secrets/` cover `secrets/a/key.pem`), and a
+// pattern with a trailing slash matches directories only. Matching folds case
+// on both sides: desktops are mostly on case-insensitive file systems, where
+// `./.SSH/id_rsa` IS `.ssh/id_rsa`. A pattern anchored at the home directory
+// (`~/…`) or absolute names nothing inside a workspace and matches no path.
 func MatchPathPattern(pattern, name string) bool {
-	pattern = strings.TrimSpace(pattern)
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
 	if pattern == "" || strings.HasPrefix(pattern, "~") || strings.HasPrefix(pattern, "/") {
 		return false
 	}
-	name = strings.TrimPrefix(strings.TrimPrefix(name, "./"), "/")
+	name = strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(name, "./"), "/"))
 	pattern = strings.TrimPrefix(pattern, "./")
-	if !strings.Contains(strings.TrimSuffix(pattern, "/"), "/") {
+	dirOnly := strings.HasSuffix(pattern, "/")
+	pattern = strings.TrimRight(pattern, "/")
+	if pattern == "" {
+		return false
+	}
+	if !strings.Contains(pattern, "/") {
 		pattern = "**/" + pattern
 	}
-	return matchSegments(strings.Split(pattern, "/"), strings.Split(name, "/"))
+	patternSegments := strings.Split(pattern, "/")
+	nameSegments := strings.Split(strings.TrimRight(name, "/"), "/")
+	// The path itself (unless the pattern names directories only), then each
+	// directory that contains it.
+	last := len(nameSegments)
+	if dirOnly {
+		last--
+	}
+	for end := last; end >= 1; end-- {
+		if matchSegments(patternSegments, nameSegments[:end]) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchSegments(pattern, name []string) bool {

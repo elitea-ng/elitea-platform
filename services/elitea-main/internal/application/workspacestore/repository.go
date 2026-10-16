@@ -71,6 +71,10 @@ type PublishRecord struct {
 	Refs           []RefUpdate
 	ObjectKey      string
 	PhysicalBucket string
+	// MaxProjectBytes is the project's workspace ceiling. The transaction
+	// re-checks it under a per-project lock (the check before the
+	// transaction is only a fast path); 0 skips the re-check.
+	MaxProjectBytes int64
 }
 
 // PublishResult answers a publish.

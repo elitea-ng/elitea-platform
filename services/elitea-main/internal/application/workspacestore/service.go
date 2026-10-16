@@ -317,9 +317,14 @@ func (s *Service) checkQuota(ctx context.Context, thread Thread, bytes int64, li
 	return nil
 }
 
-// PutObject is the streaming facade's write (backends without presign): it
-// streams body to the grant's key, measuring and hashing as it goes, and
-// deletes what it wrote when the bytes are not the declared ones.
+// PutObject is the streaming facade's write (backends without presign). The
+// bytes go to a temporary key of the grant (`<segment key>.upload-<grant>`),
+// measured and hashed as they arrive. Only bytes that match the declared size
+// and digest are promoted to the content-addressed key, and only when that
+// key does not already hold them. A mismatch deletes the temporary object
+// only: the content-addressed key is never overwritten by, or deleted for, a
+// bad upload. A retry after a lost acknowledgement therefore finds the
+// segment in place, whatever the retry sends.
 func (s *Service) PutObject(ctx context.Context, thread Thread, caller Caller, sha string, body io.Reader) error {
 	if !validThread(thread) || !validCaller(caller) || !ValidSHA256(sha) || body == nil {
 		return ErrInvalid
@@ -342,22 +347,70 @@ func (s *Service) PutObject(ctx context.Context, thread Thread, caller Caller, s
 	if !ok || grant.UploadID != nil || !grant.ExpiresAt.After(s.now()) {
 		return ErrNotFound
 	}
-	ref, err := s.objectRef(ctx, thread.ProjectID, key)
+	final, err := s.objectRef(ctx, thread.ProjectID, key)
 	if err != nil {
 		return ErrInvalid
 	}
 	target := s.buckets.write()
+	if s.holdsSegment(ctx, target.Store, final, grant.MaxBytes, sha) {
+		// A retry after a lost acknowledgement: the segment is in place.
+		return nil
+	}
+	temp, err := s.objectRef(ctx, thread.ProjectID, key+".upload-"+grant.ID)
+	if err != nil {
+		return ErrInvalid
+	}
 	hasher := sha256.New()
 	limited := &countingReader{reader: io.LimitReader(body, grant.MaxBytes+1), hasher: hasher}
-	if _, err := target.Store.Put(ctx, ref, limited, storage.PutOptions{ContentType: MediaType, ContentLength: -1}); err != nil {
+	if _, err := target.Store.Put(ctx, temp, limited, storage.PutOptions{ContentType: MediaType, ContentLength: -1}); err != nil {
+		_ = target.Store.Delete(ctx, temp)
 		return fmt.Errorf("workspace store: facade put: %w", err)
 	}
 	if limited.n > grant.MaxBytes {
-		_ = target.Store.Delete(ctx, ref)
+		_ = target.Store.Delete(ctx, temp)
 		return ErrSegmentTooLarge
 	}
 	if limited.n != grant.MaxBytes || hex.EncodeToString(hasher.Sum(nil)) != sha {
-		_ = target.Store.Delete(ctx, ref)
+		_ = target.Store.Delete(ctx, temp)
+		return ErrChecksumMismatch
+	}
+	defer func() { _ = target.Store.Delete(ctx, temp) }()
+	if s.holdsSegment(ctx, target.Store, final, grant.MaxBytes, sha) {
+		return nil
+	}
+	return s.promote(ctx, target.Store, temp, final, grant.MaxBytes, sha)
+}
+
+// holdsSegment reports whether ref already holds the segment: its size, and
+// its digest when the backend reports one.
+func (s *Service) holdsSegment(ctx context.Context, store storage.ObjectStore, ref storage.ObjectRef, size int64, sha string) bool {
+	info, err := store.Stat(ctx, ref)
+	if err != nil || info.Size != size {
+		return false
+	}
+	return len(info.DigestSHA256) != sha256.Size || hex.EncodeToString(info.DigestSHA256) == sha
+}
+
+// promote copies the verified temporary object to the content-addressed key.
+// The object store has no server-side copy in its interface, so the bytes
+// are read back and written once more, hashed again on the way.
+func (s *Service) promote(ctx context.Context, store storage.ObjectStore, temp, final storage.ObjectRef, size int64, sha string) error {
+	reader, _, err := store.Get(ctx, temp, nil)
+	if err != nil {
+		return fmt.Errorf("workspace store: read upload: %w", err)
+	}
+	defer func() { _ = reader.Close() }()
+	digest, _ := hex.DecodeString(sha)
+	hasher := sha256.New()
+	counted := &countingReader{reader: io.LimitReader(reader, size+1), hasher: hasher}
+	if _, err := store.Put(ctx, final, counted, storage.PutOptions{
+		ContentType: MediaType, ContentLength: -1, ChecksumSHA256: digest,
+	}); err != nil {
+		return fmt.Errorf("workspace store: promote upload: %w", err)
+	}
+	if counted.n != size || hex.EncodeToString(hasher.Sum(nil)) != sha {
+		// The temporary object changed under us; the final key was written
+		// with other bytes. Publish verifies the object and refuses it.
 		return ErrChecksumMismatch
 	}
 	return nil
@@ -534,6 +587,7 @@ func (s *Service) publish(ctx context.Context, request PublishRequest) (PublishR
 		Thread: request.Thread, Caller: request.Caller, Epoch: request.Epoch, Kind: request.Kind,
 		SHA256: request.SHA256, Bytes: request.Bytes, Prerequisites: []string{},
 		Refs: request.Refs, ObjectKey: key, PhysicalBucket: physical,
+		MaxProjectBytes: limits.MaxProjectWorkspaceBytes,
 	})
 }
 

@@ -290,7 +290,8 @@ func (h *handler) state(writer http.ResponseWriter, request *http.Request) {
 	if !ok {
 		return
 	}
-	if _, _, ok := caller(writer, request, false); !ok {
+	_, actor, ok := caller(writer, request, false)
+	if !ok {
 		return
 	}
 	// The banner is for whoever may read the conversation.
@@ -313,10 +314,7 @@ func (h *handler) state(writer http.ResponseWriter, request *http.Request) {
 		writeError(request.Context(), writer, "state", err)
 		return
 	}
-	stats := json.RawMessage(view.Handoff.Stats)
-	if len(stats) == 0 {
-		stats = json.RawMessage(`{}`)
-	}
+	stats := statsFor(view.Handoff.Stats, actor == view.Handoff.OwnerUserID)
 	desktopwire.WriteJSON(writer, http.StatusOK, map[string]any{
 		"state":           string(view.Handoff.State),
 		"epoch":           view.Handoff.Epoch,
@@ -331,6 +329,30 @@ func (h *handler) state(writer http.ResponseWriter, request *http.Request) {
 		"delete_after":    optionalTimestamp(view.DeleteAfter),
 		"workspace_bytes": bytes,
 	})
+}
+
+// statsFor answers the send's stats for the state route. `excluded` lists
+// paths on the owner's computer, so only the owner reads them; anyone else
+// who may read the conversation gets `excluded_count` and no `excluded`.
+// Everyone gets `excluded_count`.
+func statsFor(raw []byte, owner bool) json.RawMessage {
+	if len(raw) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	var stats map[string]any
+	if err := json.Unmarshal(raw, &stats); err != nil {
+		return json.RawMessage(`{}`)
+	}
+	excluded, _ := stats["excluded"].([]any)
+	stats["excluded_count"] = len(excluded)
+	if !owner {
+		delete(stats, "excluded")
+	}
+	out, err := json.Marshal(stats)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return out
 }
 
 func (h *handler) erase(writer http.ResponseWriter, request *http.Request) {
@@ -786,6 +808,9 @@ func writeError(ctx context.Context, writer http.ResponseWriter, operation strin
 			"A local turn of this thread is not committed yet.")
 	case errors.Is(err, handoffapp.ErrNotInCloud):
 		desktopwire.WriteError(writer, http.StatusConflict, "handoff_not_in_cloud", "This thread is not with the cloud executor.")
+	case errors.Is(err, handoffapp.ErrErased):
+		desktopwire.WriteError(writer, http.StatusConflict, "handoff_erased",
+			"The cloud copy of this thread was erased, so nothing was handed back.")
 	case errors.Is(err, handoffapp.ErrStaleEpoch), errors.Is(err, workspacestore.ErrStaleEpoch):
 		desktopwire.WriteError(writer, http.StatusConflict, "stale_epoch",
 			"The thread's state changed. Read the state and retry with its epoch.")

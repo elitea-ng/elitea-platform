@@ -30,10 +30,14 @@ var (
 	// turns run against a folder on the person's computer, which a cloud run
 	// cannot see. The route answers 409 `local_work_thread`.
 	//
-	// The fence is relaxed while the thread is handed off to the cloud
-	// executor (ADR-0034 decision 7): a handoff row in CLOUD_IDLE or
-	// CLOUD_RUNNING with no take back pending.
+	// The fence opens only when the cloud executor is wired and the thread
+	// is handed off to it and idle (ADR-0034 decision 7): a handoff row in
+	// CLOUD_IDLE with no take back pending.
 	ErrLocalWorkThread = errors.New("conversation is a desktop Local work thread")
+	// ErrCloudTurnRunning refuses a send in a handed-off thread while a
+	// cloud turn runs in it (CLOUD_RUNNING): one turn at a time owns the
+	// workspace. The route answers 409 `cloud_turn_running` (retryable).
+	ErrCloudTurnRunning = errors.New("a cloud turn is running in this thread")
 	// ErrLocalWorkTurn refuses regenerating a turn the desktop ran in a
 	// thread the cloud executor now owns (ADR-0034 decision 7). The route
 	// answers 409 `local_work_turn`.

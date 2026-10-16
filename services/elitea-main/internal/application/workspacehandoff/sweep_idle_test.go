@@ -150,3 +150,56 @@ func TestSweepIdleReachesEveryRowAndWarnsOnce(t *testing.T) {
 		t.Fatalf("third sweep = %+v, warned %d", third, len(repo.warned))
 	}
 }
+
+// Idle retention 0 is the minimum (one day), never "keep forever": Narrow
+// clamps it, and the sweeper erases at the minimum even if a policy source
+// answers 0.
+func TestIdleRetentionZeroIsTheMinimum(t *testing.T) {
+	zero := int64(0)
+	got := Narrow(amendedCeiling(), ProjectSetting{IdleRetentionDays: &zero, ReturnGraceDays: &zero}, true, true)
+	if got.IdleRetention != MinIdleRetention || got.ReturnGrace != 0 {
+		t.Fatalf("project 0 = idle %s, grace %s; want %s and 0 (erase at release)", got.IdleRetention, got.ReturnGrace, MinIdleRetention)
+	}
+	ceiling := amendedCeiling()
+	ceiling.IdleRetentionDays = 0
+	if got := Narrow(ceiling, ProjectSetting{}, true, true); got.IdleRetention != MinIdleRetention {
+		t.Fatalf("ceiling 0 = %s", got.IdleRetention)
+	}
+
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	repo := &idleRepo{warned: map[string]time.Time{}, erased: map[string]bool{}, rows: []Handoff{
+		{ProjectID: 1, ConversationUUID: "00000000-0000-4000-8000-000000000001", State: "CLOUD_IDLE", Epoch: 2, StateChangedAt: now.Add(-25 * time.Hour)},
+		{ProjectID: 1, ConversationUUID: "00000000-0000-4000-8000-000000000002", State: "CLOUD_IDLE", Epoch: 2, StateChangedAt: now.Add(-2 * time.Hour)},
+	}}
+	service, err := NewService(repo, retentionPolicy{1: 0}, noEraser{}, noCanceller{}, noAudit{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := SweepReport{}
+	if err := service.sweepIdle(context.Background(), now, &report); err != nil {
+		t.Fatal(err)
+	}
+	if !repo.erased["00000000-0000-4000-8000-000000000001"] || repo.erased["00000000-0000-4000-8000-000000000002"] || report.IdleErased != 1 {
+		t.Fatalf("retention 0: erased %v, report %+v; want the thread idle over a day erased", repo.erased, report)
+	}
+}
+
+// The scan event records counts and rule ids only: no attribute, allowed or
+// not, can carry a path.
+func TestScanBlockedRecordsNoPath(t *testing.T) {
+	keys := executorEventKeys[EventScanBlocked]
+	if _, ok := keys["files"]; ok {
+		t.Fatal("scan_blocked allows a files attribute")
+	}
+	for _, value := range []string{"./a.txt", "a/b", "secrets.txt", "secrets.txt ", "1 2", "~/x", "id_rsa.pub"} {
+		for name, valid := range keys {
+			if valid(value) {
+				t.Fatalf("scan_blocked %s accepts %q", name, value)
+			}
+		}
+	}
+	if !keys["findings"]("3") || !keys["rules"]("aws-access-key,generic-api-key") || keys["rules"]("rule,./p") {
+		t.Fatal("the scan attributes refuse their own shapes")
+	}
+}

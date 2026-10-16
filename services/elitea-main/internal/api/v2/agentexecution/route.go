@@ -619,6 +619,13 @@ func writeStartError(writer http.ResponseWriter, err error) {
 			"message":   "Only the newest answer of the cloud executor can be regenerated.",
 			"retryable": false,
 		})
+	case errors.Is(err, agentexecutionapp.ErrCloudTurnRunning):
+		writer.Header().Set("Retry-After", "5")
+		writeJSON(writer, http.StatusConflict, map[string]any{
+			"error":     "cloud_turn_running",
+			"message":   "The cloud executor is still working in this thread. Wait for its answer, then send again.",
+			"retryable": true,
+		})
 	case errors.Is(err, agentexecutionapp.ErrLocalWorkThread):
 		writeJSON(writer, http.StatusConflict, map[string]any{
 			"error":     "local_work_thread",

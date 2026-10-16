@@ -47,6 +47,8 @@ export const workspaceHandoffStatsBytesMin = 0;
 
 export const workspaceHandoffStatsUnpackedBytesMin = 0;
 
+export const workspaceHandoffStatsExcludedCountMin = 0;
+
 export const workspaceHandoffStatsScanFindingsMin = 0;
 
 export const WorkspaceHandoffStats = zod
@@ -57,7 +59,19 @@ export const WorkspaceHandoffStats = zod
       .int()
       .min(workspaceHandoffStatsUnpackedBytesMin)
       .optional(),
-    excluded: zod.array(zod.string()).optional(),
+    excluded: zod
+      .array(zod.string())
+      .optional()
+      .describe(
+        "Paths on the owner's computer. The state route returns them to the thread's owner only.",
+      ),
+    excluded_count: zod
+      .int()
+      .min(workspaceHandoffStatsExcludedCountMin)
+      .optional()
+      .describe(
+        "The number of excluded paths. Set by the state route for every reader; ignored on send.",
+      ),
     scan_findings: zod
       .int()
       .min(workspaceHandoffStatsScanFindingsMin)

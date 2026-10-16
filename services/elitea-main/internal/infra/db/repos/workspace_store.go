@@ -141,7 +141,13 @@ func scanSegment(row pgx.Row) (workspacestore.SegmentRow, error) {
 }
 
 func (r *WorkspaceStoreRepository) oneSegment(ctx context.Context, query string, args ...any) (workspacestore.SegmentRow, bool, error) {
-	segment, err := scanSegment(r.pool.QueryRow(ctx, query, args...))
+	return oneSegmentFrom(ctx, r.pool, query, args...)
+}
+
+func oneSegmentFrom(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, query string, args ...any) (workspacestore.SegmentRow, bool, error) {
+	segment, err := scanSegment(q.QueryRow(ctx, query, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspacestore.SegmentRow{}, false, nil
 	}
@@ -415,6 +421,28 @@ WHERE project_id = $1 AND conversation_uuid = $2::uuid`,
 			return workspacestore.PublishResult{}, err
 		}
 	}
+	// The project ceiling, re-checked under a per-project lock. The check
+	// before the transaction is a fast path only: two threads of one project
+	// publishing at once could each pass it. The lock is taken LAST, so it is
+	// held only for this sum and the commit; publishes of different projects
+	// never share it. The thread's earlier segments are already superseded
+	// above, and the new one is inserted, so the sum is the usage after this
+	// publish.
+	if record.MaxProjectBytes > 0 {
+		key := "elitea.workspace_quota:" + strconv.FormatInt(record.Thread.ProjectID, 10)
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, key); err != nil {
+			return workspacestore.PublishResult{}, fmt.Errorf("workspace store: lock project quota: %w", err)
+		}
+		var used int64
+		if err := tx.QueryRow(ctx, `
+SELECT COALESCE(sum(byte_length), 0)::bigint FROM elitea_runtime.workspace_segments
+WHERE project_id = $1 AND superseded_at IS NULL`, record.Thread.ProjectID).Scan(&used); err != nil {
+			return workspacestore.PublishResult{}, fmt.Errorf("workspace store: project usage: %w", err)
+		}
+		if used > record.MaxProjectBytes {
+			return workspacestore.PublishResult{}, workspacestore.ErrQuotaExceeded
+		}
+	}
 	// The grant that carried the bytes is spent.
 	if _, err := tx.Exec(ctx, `
 UPDATE elitea_storage.transfer_grants AS g SET consumed_at = clock_timestamp()
@@ -440,43 +468,60 @@ func refValue(refs []workspacestore.RefUpdate, name string) *string {
 	return nil
 }
 
+// fetchRowsBetweenReads runs inside the FetchRows snapshot after the head is
+// read. Nil outside tests, which use it to commit a publish in between.
+var fetchRowsBetweenReads func()
+
 func (r *WorkspaceStoreRepository) FetchRows(ctx context.Context, thread workspacestore.Thread, sinceSeq int64) (workspacestore.FetchRows, error) {
-	result := workspacestore.FetchRows{Refs: map[string]string{}}
-	if err := r.pool.QueryRow(ctx, `
+	// One REPEATABLE READ, read-only snapshot: the head, the refs and the
+	// newest segment come from the same moment, so a publish that commits
+	// in between cannot pair one publish's refs with another's segment.
+	var result workspacestore.FetchRows
+	err := pgx.BeginTxFunc(ctx, r.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		result = workspacestore.FetchRows{Refs: map[string]string{}}
+		if err := tx.QueryRow(ctx, `
 SELECT last_seq FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND conversation_uuid = $2::uuid`,
-		thread.ProjectID, thread.ConversationUUID).Scan(&result.HeadSeq); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return workspacestore.FetchRows{}, workspacestore.ErrNotFound
+			thread.ProjectID, thread.ConversationUUID).Scan(&result.HeadSeq); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return workspacestore.ErrNotFound
+			}
+			return fmt.Errorf("workspace store: read head: %w", err)
 		}
-		return workspacestore.FetchRows{}, fmt.Errorf("workspace store: read head: %w", err)
-	}
-	rows, err := r.pool.Query(ctx, `
+		if fetchRowsBetweenReads != nil {
+			fetchRowsBetweenReads()
+		}
+		rows, err := tx.Query(ctx, `
 SELECT name, sha FROM elitea_runtime.workspace_refs WHERE project_id = $1 AND conversation_uuid = $2::uuid`,
-		thread.ProjectID, thread.ConversationUUID)
-	if err != nil {
-		return workspacestore.FetchRows{}, fmt.Errorf("workspace store: read refs: %w", err)
-	}
-	for rows.Next() {
-		var name, sha string
-		if err := rows.Scan(&name, &sha); err != nil {
-			rows.Close()
-			return workspacestore.FetchRows{}, err
+			thread.ProjectID, thread.ConversationUUID)
+		if err != nil {
+			return fmt.Errorf("workspace store: read refs: %w", err)
 		}
-		result.Refs[name] = sha
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return workspacestore.FetchRows{}, err
-	}
-	segment, ok, err := r.oneSegment(ctx, `SELECT `+segmentColumns+`
+		for rows.Next() {
+			var name, sha string
+			if err := rows.Scan(&name, &sha); err != nil {
+				rows.Close()
+				return err
+			}
+			result.Refs[name] = sha
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		segment, ok, err := oneSegmentFrom(ctx, tx, `SELECT `+segmentColumns+`
 FROM elitea_runtime.workspace_segments
 WHERE conversation_uuid = $2::uuid AND project_id = $1 AND kind = 'COMPACT' AND superseded_at IS NULL AND seq >= $3
 ORDER BY seq DESC LIMIT 1`, thread.ProjectID, thread.ConversationUUID, sinceSeq)
+		if err != nil {
+			return err
+		}
+		if ok {
+			result.Newest = &segment
+		}
+		return nil
+	})
 	if err != nil {
 		return workspacestore.FetchRows{}, err
-	}
-	if ok {
-		result.Newest = &segment
 	}
 	return result, nil
 }

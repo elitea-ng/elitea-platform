@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -182,8 +183,14 @@ func transition(
 	if bump > 0 {
 		stateChanged = "state_changed_at = clock_timestamp()"
 	}
+	// Every transition clears the release marker except a release, which
+	// sets it in its own `set`.
+	released := ", released = FALSE"
+	if strings.Contains(set, "released = TRUE") {
+		released = ""
+	}
 	query := `UPDATE elitea_runtime.workspace_handoffs
-SET ` + stateChanged + `, state = $3, epoch = epoch + $4, updated_at = clock_timestamp()` + set + `
+SET ` + stateChanged + `, state = $3, epoch = epoch + $4, updated_at = clock_timestamp()` + released + set + `
 WHERE project_id = $1 AND conversation_uuid = $2::uuid AND state = ANY($5::text[]) AND epoch = $6
 RETURNING ` + handoffColumns
 	all := append([]any{thread.ProjectID, thread.ConversationUUID, string(to), bump, states, epoch}, args...)
@@ -539,15 +546,38 @@ func (r *WorkspaceHandoffsRepository) Release(ctx context.Context, record worksp
 		if !found || current.OwnerUserID != record.ActorUserID {
 			return workspacehandoff.ErrNotFound
 		}
-		if current.State == workspacestore.StateLocal && current.Epoch == record.Epoch+1 && current.DeletedAt == nil {
+		if current.State == workspacestore.StateLocal && current.Epoch == record.Epoch+1 {
+			// LOCAL one epoch on: a retried release only if a release put it
+			// there. An erase (or expiry, or offboarding) that won the race
+			// is reported as such, never as a successful release.
+			var released bool
+			if err := tx.QueryRow(ctx, `
+SELECT released FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND conversation_uuid = $2::uuid`,
+				record.Thread.ProjectID, record.Thread.ConversationUUID).Scan(&released); err != nil {
+				return fmt.Errorf("workspace handoff: read release marker: %w", err)
+			}
+			if !released {
+				return workspacehandoff.ErrErased
+			}
 			out = current.Handoff // a retried release
 			return nil
+		}
+		if current.State == workspacestore.StateLocal {
+			var released bool
+			if err := tx.QueryRow(ctx, `
+SELECT released FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND conversation_uuid = $2::uuid`,
+				record.Thread.ProjectID, record.Thread.ConversationUUID).Scan(&released); err != nil {
+				return fmt.Errorf("workspace handoff: read release marker: %w", err)
+			}
+			if !released && current.Epoch > record.Epoch {
+				return workspacehandoff.ErrErased
+			}
 		}
 		if current.State != workspacestore.StateReclaiming || current.Epoch != record.Epoch {
 			return workspacehandoff.ErrStaleEpoch
 		}
 		row, err := transition(ctx, tx, record.Thread, []workspacestore.State{workspacestore.StateReclaiming}, record.Epoch,
-			workspacestore.StateLocal, 1, `, delete_after = clock_timestamp() + make_interval(secs => $7)`,
+			workspacestore.StateLocal, 1, `, released = TRUE, delete_after = clock_timestamp() + make_interval(secs => $7)`,
 			record.Grace.Seconds())
 		if err != nil {
 			return err

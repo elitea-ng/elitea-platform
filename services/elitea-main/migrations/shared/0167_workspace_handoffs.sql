@@ -72,6 +72,11 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.workspace_handoffs (
     updated_at                  timestamptz NOT NULL DEFAULT clock_timestamp(),
     delete_after                timestamptz,
     deleted_at                  timestamptz,
+    -- TRUE when the row came to LOCAL by a release (the desktop took the
+    -- thread back), FALSE for any other way (erase, expiry, offboarding). A
+    -- retried release succeeds only on a released row; a thread that was
+    -- erased answers 409 handoff_erased instead.
+    released                    boolean     NOT NULL DEFAULT FALSE,
     PRIMARY KEY (project_id, conversation_uuid),
     CONSTRAINT workspace_handoffs_handoff_id_uniq UNIQUE (handoff_id),
     CONSTRAINT workspace_handoffs_state_valid

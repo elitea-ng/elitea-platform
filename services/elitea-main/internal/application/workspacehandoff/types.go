@@ -182,6 +182,10 @@ var (
 	ErrOverLimits = errors.New("handoff over limits")
 	// ErrStaleEpoch: the state or the epoch no longer matches the request.
 	ErrStaleEpoch = errors.New("stale handoff epoch")
+	// ErrErased: a release (or its retry) for a thread that came back to
+	// LOCAL by an erase, not a release. The route answers 409
+	// handoff_erased: the cloud copy is gone, so nothing was handed back.
+	ErrErased = errors.New("handoff was erased")
 	// ErrRefsMissing: complete names a snapshot the store does not hold.
 	ErrRefsMissing = errors.New("handoff refs are not published")
 	// ErrNotInCloud: a take-back request for a thread the cloud does not own.

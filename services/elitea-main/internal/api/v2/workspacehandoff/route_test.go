@@ -105,8 +105,12 @@ func (f fakeConversations) AuthorizeChatResource(context.Context, string, string
 
 type grantResolver []string
 
-func (g grantResolver) ResolvePermissions(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
-	return auth.PermissionResolution{UserID: 7, Permissions: g}, nil
+func (g grantResolver) ResolvePermissions(_ context.Context, user auth.User, _, _ string) (auth.PermissionResolution, error) {
+	id, ok := user.OwningUserID()
+	if !ok {
+		id = 7
+	}
+	return auth.PermissionResolution{UserID: id, Permissions: g}, nil
 }
 
 func nativeUser() *auth.User {
@@ -219,6 +223,7 @@ func TestErrorsMapToTheContractCodes(t *testing.T) {
 		{handoffapp.ErrStaleEpoch, http.StatusConflict, "stale_epoch"},
 		{handoffapp.ErrNotFound, http.StatusNotFound, "handoff_not_found"},
 		{handoffapp.ErrNotInCloud, http.StatusConflict, "handoff_not_in_cloud"},
+		{handoffapp.ErrErased, http.StatusConflict, "handoff_erased"},
 		{handoffapp.ErrUnavailable, http.StatusServiceUnavailable, "handoff_unavailable"},
 		{workspacestore.ErrStaleEpoch, http.StatusConflict, "stale_epoch"},
 		{workspacestore.ErrSegmentTooLarge, http.StatusRequestEntityTooLarge, "segment_too_large"},
@@ -257,6 +262,37 @@ func TestStateAnswersLocalForAThreadNeverSentAndHidesAnUnreadableConversation(t 
 	response = serve(t, present.state, session, []string{ReadPermission}, http.MethodGet, HandoffPath, handoffURL, "")
 	if answer := decode(t, response); answer["state"] != "CLOUD_IDLE" || answer["workspace_bytes"] != float64(42) || answer["cloud_sha"] != nil {
 		t.Fatalf("state = %v", answer)
+	}
+}
+
+// stats.excluded lists paths on the owner's computer: only the owner reads
+// them. Anyone else who may read the conversation gets the count.
+func TestStateShowsExcludedPathsToTheOwnerOnly(t *testing.T) {
+	h := &handler{handoff: &fakeHandoff{view: handoffapp.View{Present: true, Handoff: handoffapp.Handoff{
+		State: workspacestore.StateCloudIdle, Epoch: 2, OwnerUserID: 7, UpdatedAt: time.Unix(0, 0),
+		Stats: json.RawMessage(`{"files":3,"excluded":["./.env","./secrets/key.pem"],"scan_findings":0}`),
+	}}}, store: &fakeStore{}, conversations: fakeConversations{}}
+	statsOf := func(user *auth.User) map[string]any {
+		t.Helper()
+		response := serve(t, h.state, user, []string{ReadPermission}, http.MethodGet, HandoffPath, handoffURL, "")
+		answer := decode(t, response)
+		stats, _ := answer["stats"].(map[string]any)
+		if response.Code != http.StatusOK || stats == nil {
+			t.Fatalf("state = %d %v", response.Code, answer)
+		}
+		return stats
+	}
+	owner := statsOf(&auth.User{ID: "7", UserID: "7", AuthType: "session"})
+	if paths, _ := owner["excluded"].([]any); len(paths) != 2 || paths[0] != "./.env" || owner["excluded_count"] != float64(2) {
+		t.Fatalf("owner stats = %v, want the paths", owner)
+	}
+	other := statsOf(&auth.User{ID: "8", UserID: "8", AuthType: "session"})
+	if _, present := other["excluded"]; present || other["excluded_count"] != float64(2) || other["files"] != float64(3) {
+		t.Fatalf("another reader's stats = %v, want the count only", other)
+	}
+	raw, _ := json.Marshal(other)
+	if strings.Contains(string(raw), ".env") || strings.Contains(string(raw), "secrets") {
+		t.Fatalf("a path reached another reader: %s", raw)
 	}
 }
 
