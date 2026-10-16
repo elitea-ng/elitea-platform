@@ -86,7 +86,7 @@ ports = {p["name"]: p["containerPort"] for p in c["ports"]}
 assert ports == {"proxy": 3128, "admin": 9090}, ports
 assert c["livenessProbe"]["httpGet"] == {"path": "/healthz", "port": "admin"}
 assert c["readinessProbe"]["httpGet"] == {"path": "/readyz", "port": "admin"}
-env = {e["name"]: e["value"] for e in c["env"]}
+env = {e["name"]: e.get("value") for e in c["env"]}
 assert env["ELITEA_EGRESS_PROXY_LISTEN_ADDR"] == ":3128"
 assert env["ELITEA_EGRESS_PROXY_ADMIN_ADDR"] == ":9090"
 keydir = env["ELITEA_EGRESS_PROXY_PUBLIC_KEYS"]
@@ -132,7 +132,10 @@ assert proxy_in["from"] == [{
 }], proxy_in["from"]
 assert admin_in["ports"] == [{"port": 9090, "protocol": "TCP"}]
 assert admin_in["from"] == [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}}]
-dns, internet = nps["egress"]
+main_rule, dns, internet = nps["egress"]
+# The run summaries: elitea-main's pods, on the control port only.
+assert main_rule["ports"] == [{"port": 9443, "protocol": "TCP"}], main_rule
+assert main_rule["to"][0]["podSelector"]["matchLabels"]["app.kubernetes.io/name"] == "elitea-main", main_rule
 assert dns["to"] == [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}},
                       "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}}}]
 assert sorted((p["protocol"], p["port"]) for p in dns["ports"]) == [("TCP", 53), ("UDP", 53)]
@@ -199,6 +202,60 @@ else
   fail "elitea-main's egress wiring is wrong (assertion above)"
 fi
 
+echo "== the proxy reports run summaries to elitea-main over mTLS"
+helm template t "$chart" "${base[@]}" -f "$fixture" --set egressProxy.audit.enabled=false > "$work/noaudit.yaml"
+if python3 - "$work/on.yaml" "$work/noaudit.yaml" <<'PY'
+import json
+import sys
+import yaml
+
+def docs(path):
+    return [d for d in yaml.safe_load_all(open(path)) if d]
+
+def by(ds, kind, name):
+    found = [d for d in ds if d["kind"] == kind and d["metadata"]["name"] == name]
+    assert len(found) == 1, f"want one {kind}/{name}, found {len(found)}"
+    return found[0]
+
+on, off = docs(sys.argv[1]), docs(sys.argv[2])
+cert = by(on, "Certificate", "elitea-egress-proxy-audit-client")["spec"]
+assert cert["dnsNames"] == ["elitea-egress-proxy"] and cert["usages"] == ["client auth"]
+assert cert["secretName"] == "elitea-egress-proxy-audit-client-tls"
+assert cert["issuerRef"]["name"] == "elitea-runtime-ca"
+
+pod = by(on, "Deployment", "elitea-egress-proxy")["spec"]["template"]["spec"]
+c = pod["containers"][0]
+env = {e["name"]: e for e in c["env"]}
+assert env["ELITEA_EGRESS_PROXY_AUDIT_TARGET"]["value"] == "elitea-main:9443", env["ELITEA_EGRESS_PROXY_AUDIT_TARGET"]
+assert env["ELITEA_EGRESS_PROXY_AUDIT_SERVER_NAME"]["value"] == "elitea-main"
+assert env["ELITEA_EGRESS_PROXY_AUDIT_CERT_FILE"]["value"] == "/etc/elitea-egress-proxy/audit-tls/tls.crt"
+assert env["ELITEA_EGRESS_PROXY_REPLICA_ID"]["valueFrom"]["fieldRef"]["fieldPath"] == "metadata.name"
+vols = {v["name"]: v for v in pod["volumes"]}
+assert vols["audit-client-tls"]["secret"]["secretName"] == "elitea-egress-proxy-audit-client-tls"
+assert pod["terminationGracePeriodSeconds"] >= 5 + 60 + 5 + 10
+
+cm = [d for d in on if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("elitea-main-config")][0]
+assert cm["data"]["ELITEA_EGRESS_AUDIT_CLIENTS"] == "dns:elitea-egress-proxy", cm["data"].get("ELITEA_EGRESS_AUDIT_CLIENTS")
+
+main_np = [d for d in on if d["kind"] == "NetworkPolicy" and d["metadata"]["name"] == "elitea-main-netpol"]
+assert main_np, [d["metadata"]["name"] for d in on if d["kind"] == "NetworkPolicy"]
+rules = [r for r in main_np[0]["spec"]["ingress"] if any(
+    p.get("podSelector", {}).get("matchLabels", {}).get("app.kubernetes.io/name") == "elitea-egress-proxy" for p in r.get("from", []))]
+assert len(rules) == 1 and rules[0]["ports"] == [{"port": 9443, "protocol": "TCP"}], rules
+
+# Off: no certificate, no env, no admitted identity, no peer.
+assert not [d for d in off if d["kind"] == "Certificate" and d["metadata"]["name"] == "elitea-egress-proxy-audit-client"]
+c_off = by(off, "Deployment", "elitea-egress-proxy")["spec"]["template"]["spec"]["containers"][0]
+assert not [e for e in c_off["env"] if "AUDIT" in e["name"]]
+cm_off = [d for d in off if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("elitea-main-config")][0]
+assert "ELITEA_EGRESS_AUDIT_CLIENTS" not in cm_off["data"]
+PY
+then
+  note "the proxy's client certificate, env and egress rule, and elitea-main's admitted identity and ingress, render together"
+else
+  fail "the egress audit wiring is wrong (assertion above)"
+fi
+
 expect_refusal() {
   local description="$1" fragment="$2"
   shift 2
@@ -231,6 +288,22 @@ expect_refusal "a malformed deny CIDR" "is not an explicit CIDR block" \
 expect_refusal "one replica" "replicaCount must be at least 2" --set egressProxy.replicaCount=1
 expect_refusal "a grace period shorter than the drain" "terminationGracePeriodSeconds must be at least" \
   --set egressProxy.terminationGracePeriodSeconds=30
+
+expect_refusal "a grace period without the audit's last reports" "plus 10 for the last audit reports" \
+  --set egressProxy.terminationGracePeriodSeconds=75
+expect_refusal "the audit identity is elitea-vector's" "must differ from vector.mtls.clientDnsName" \
+  --set vector.enabled=true --set vector.qdrant.apiKeySecret.name=q --set postgresql.maxConnections=1000 \
+  --set egressProxy.audit.clientDnsName=elitea-vector
+# The default values keep elitea-main's runtime plane off.
+if out="$(helm template t "$chart" --namespace platform -f "$fixture" \
+    --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1 \
+    --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true 2>&1)"; then
+  fail "the audit without elitea-main's runtime rendered"
+elif printf '%s' "$out" | grep -qF "egressProxy.audit.enabled needs main.runtime.enabled"; then
+  note "refused: the audit without elitea-main's runtime"
+else
+  fail "the audit without the runtime was refused for the wrong reason: $(printf '%s' "$out" | tail -1)"
+fi
 
 expect_refusal "no signing key for elitea-main" "needs elitea-main's run-token signing key" \
   --set egressProxy.signingKey.existingSecret=

@@ -208,6 +208,11 @@ parse stops the start. The proxy never falls back to a default for it.
 | `SUMMARY_INTERVAL` | `1m` | How often an active run's summary is logged |
 | `DRAIN_DELAY`, `SHUTDOWN_TIMEOUT` | `5s`, `60s` | The SIGTERM drain |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+| `AUDIT_TARGET` | empty | elitea-main's control listener, `host:port`. Empty: summaries stay in the log |
+| `AUDIT_SERVER_NAME` | the target host | The SAN of elitea-main's control-server certificate |
+| `AUDIT_CA_FILE`, `AUDIT_CERT_FILE`, `AUDIT_KEY_FILE` | required with `AUDIT_TARGET` | The runtime CA, and this proxy's client certificate and key |
+| `REPLICA_ID` | the hostname | This replica's name in its reports (the chart sets the pod name) |
+| `AUDIT_TIMEOUT` | `5s` | One report call |
 
 In the Helm chart, set `egressProxy.*` in `deploy/helm/elitea/values.yaml`.
 It is off by default.
@@ -224,8 +229,39 @@ Logs are JSON on stdout. Two messages are stable names:
   `SUMMARY_INTERVAL` while the run is active, and with `final: true` after the
   run's token expires. At shutdown it logs one with `replica_shutdown: true`
   for each run that changed since its last summary.
-  Each replica logs its own summary; a consumer merges them by
-  `execution_id`. Phase B forwards these lines to Main's audit log.
+  Each replica logs its own summary.
+
+### The per-turn audit in elitea-main
+
+Every summary the proxy logs also goes to elitea-main's
+`elitea.runtime.v1.EgressAuditService` (`libs/proto/elitea/runtime/v1/egress_audit.proto`),
+over gRPC on elitea-main's private mTLS control listener. There is no log
+scraping and no internal REST.
+
+- **Identity.** The proxy presents its own client certificate, with one DNS
+  SAN (`egressProxy.audit.clientDnsName`, issued from the runtime CA by
+  `egressProxy.audit.issuerRef`). elitea-main admits only that identity
+  (`ELITEA_EGRESS_AUDIT_CLIENTS=dns:elitea-egress-proxy`, rendered by the
+  chart). The certificate is read again on every connection, so a renewal
+  needs no restart.
+- **Merge.** A report is a cumulative snapshot of one replica's view of one
+  run, keyed by the pod name (`ELITEA_EGRESS_PROXY_REPLICA_ID`). elitea-main
+  keeps the latest snapshot per replica, so a retried report never counts
+  twice, and writes ONE audit event per turn (`event_type` `tool`,
+  `entity_type` `execution`, the execution id as the entity name, the hosts
+  reached and refused in the action) when every replica it heard from has
+  sent `final` or `replica_shutdown` and 30 seconds passed, or 10 minutes
+  after the token expired (a crashed replica's last snapshot is used, and the
+  event says `partial`), or when elitea-main stops. The whole merged summary
+  is also logged as `egress_audit.turn_summary`.
+- **Several elitea-main replicas.** The merge is in memory, so proxy replicas
+  whose connections landed on different elitea-main replicas produce one
+  event each, over disjoint proxy replicas; the counts never double.
+- **Never in the way.** Reporting is a non-blocking queue (1024 summaries)
+  with three tries per summary. A summary that cannot be delivered is
+  counted (`egress_proxy_audit_reports_dropped`) and stays in this log. At
+  shutdown the proxy delivers its `replica_shutdown` summaries for up to
+  10 seconds.
 
 `/metrics` on the admin port serves Prometheus text:
 `egress_proxy_connections_total{outcome}`, `egress_proxy_refusals_total{reason}`,
@@ -304,12 +340,14 @@ A key reload that fails keeps the last good set and increments
 On SIGTERM, `/readyz` fails at once, and the proxy keeps accepting for
 `DRAIN_DELAY`. Then it stops accepting and waits up to `SHUTDOWN_TIMEOUT` for
 open tunnels. It closes the rest and logs their outcome as `shutdown`. The
-chart refuses a `terminationGracePeriodSeconds` shorter than the drain.
+chart refuses a `terminationGracePeriodSeconds` shorter than the drain plus
+the 10 seconds of last audit reports.
 
 ### Network shape
 
 - The sandbox in allowlist mode reaches only the proxy port. It has no direct
   egress and no DNS (phase B ships that sandbox policy).
+- The proxy reaches elitea-main's control port, for the audit reports.
 - The proxy accepts on its proxy port only from the workspace-run pods in the
   execution namespace. It accepts on the admin port only from
   `egressProxy.networkPolicy.adminFrom`.

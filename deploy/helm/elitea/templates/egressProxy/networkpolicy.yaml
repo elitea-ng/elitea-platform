@@ -53,6 +53,15 @@ spec:
         {{- toYaml $adminPeers | nindent 8 }}
     {{- end }}
   egress:
+    {{- if include "elitea-egress-proxy.auditEnabled" . }}
+    # elitea-main's control listener, for the run summaries (the cluster
+    # ranges are excepted below, so this is the one in-cluster destination).
+    - to:
+        {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-main.selectorLabels" .)) | nindent 8 }}
+      ports:
+        - port: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.controlAddress }}
+          protocol: TCP
+    {{- end }}
     - to:
         - namespaceSelector:
             matchLabels:

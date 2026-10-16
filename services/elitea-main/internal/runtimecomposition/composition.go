@@ -27,6 +27,7 @@ import (
 	toolkitcallapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -167,6 +168,10 @@ type Dependencies struct {
 	// answer UNSUPPORTED_CAPABILITY and the runtime context serves no
 	// `workspace` field.
 	Workspace WorkspaceDependencies
+	// AuditRecorder writes centry.audit_events (the same recorder the API
+	// uses). Required when Config.EgressAuditClients is set: the egress
+	// proxy's per-turn summaries are written through it.
+	AuditRecorder audit.Recorder
 }
 
 func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtime, error) {
@@ -2133,6 +2138,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	egressAuditServer, egressAuditMerger, err := newEgressAudit(config, dependencies)
+	if err != nil {
+		return nil, err
+	}
 	privateServers, err := runtimegrpc.NewPrivateServerSet(runtimegrpc.PrivateServerConfig{
 		ControlAddress:                  config.ControlAddress,
 		OutputAddress:                   config.OutputAddress,
@@ -2160,6 +2169,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		Content:             contentServer.Routes(),
 		VectorIntrospection: vectorIntrospection,
 		Workspace:           workspaceServer,
+		EgressAudit:         egressAuditServerOrNil(egressAuditServer),
 	})
 	if err != nil {
 		return nil, err
@@ -2235,6 +2245,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		codeOwnerClient:        codeOwnerClient,
 		publicRoutes:           publicRoutes,
 		configurationValidator: currentSDKConfigurationValidator,
+		egressAudit:            egressAuditMerger,
 	}, nil
 }
 

@@ -1842,6 +1842,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// ADR-0034 decision 9: how a project host allowlist is enforced
 			// (the egress proxy and its run-token signing key).
 			Workspace: runtimecomposition.WorkspaceDependencies{Egress: workspaceEgress},
+			// The egress proxy's per-turn summaries (ELITEA_EGRESS_AUDIT_CLIENTS)
+			// go to the same audit trail as the API's.
+			AuditRecorder: auditRecorder,
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)

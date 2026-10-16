@@ -36,6 +36,24 @@ it in the runtime context and the worker adds run:<token>@.
 http://{{ include "elitea-egress-proxy.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.egressProxy.service.port }}
 {{- end }}
 
+{{/* The audit target: elitea-main's control listener, host:port. */}}
+{{- define "elitea-egress-proxy.auditTarget" -}}
+{{- if .Values.egressProxy.audit.target -}}
+{{- .Values.egressProxy.audit.target -}}
+{{- else -}}
+{{- printf "%s:%s" (include "elitea-main.fullname" .) (include "elitea-main.runtimePort" .Values.main.runtime.listeners.controlAddress) -}}
+{{- end -}}
+{{- end }}
+
+{{- define "elitea-egress-proxy.auditServerName" -}}
+{{- default (include "elitea-egress-proxy.auditTarget" . | splitList ":" | first) .Values.egressProxy.audit.serverName -}}
+{{- end }}
+
+{{/* "true" when the proxy reports to elitea-main's audit service. */}}
+{{- define "elitea-egress-proxy.auditEnabled" -}}
+{{- if and .Values.egressProxy.enabled .Values.egressProxy.audit.enabled -}}true{{- end -}}
+{{- end }}
+
 {{/* The namespace of the sandbox pods the proxy serves. */}}
 {{- define "elitea-egress-proxy.clientNamespace" -}}
 {{- default .Values.sandboxKubernetes.executionNamespace .Values.egressProxy.networkPolicy.clientNamespace }}
@@ -104,8 +122,19 @@ proxy cannot run safely without. Rendered from deployment.yaml.
 {{- if lt (int $e.replicaCount) 2 -}}
 {{- fail "egressProxy.replicaCount must be at least 2: one replica makes every rollout an egress outage" -}}
 {{- end -}}
-{{- $grace := add (int $e.drainDelaySeconds) (int $e.shutdownTimeoutSeconds) 5 -}}
+{{- $grace := add (int $e.drainDelaySeconds) (int $e.shutdownTimeoutSeconds) 5 (ternary 10 0 (eq (include "elitea-egress-proxy.auditEnabled" .) "true")) -}}
 {{- if lt (int $e.terminationGracePeriodSeconds) (int $grace) -}}
-{{- fail (printf "egressProxy.terminationGracePeriodSeconds must be at least drainDelaySeconds + shutdownTimeoutSeconds + 5 (%d)" $grace) -}}
+{{- fail (printf "egressProxy.terminationGracePeriodSeconds must be at least drainDelaySeconds + shutdownTimeoutSeconds + 5, plus 10 for the last audit reports with egressProxy.audit.enabled (%d)" $grace) -}}
+{{- end -}}
+{{- if $e.audit.enabled -}}
+{{- if not .Values.main.runtime.enabled -}}
+{{- fail "egressProxy.audit.enabled needs main.runtime.enabled: elitea-main serves EgressAuditService on its runtime control listener (or set egressProxy.audit.enabled=false)" -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$" ($e.audit.clientDnsName | toString)) -}}
+{{- fail "egressProxy.audit.clientDnsName must be one lower-case DNS name: it is the proxy's client certificate's only SAN" -}}
+{{- end -}}
+{{- if and .Values.vector.enabled (eq (lower ($e.audit.clientDnsName | toString)) (lower (.Values.vector.mtls.clientDnsName | toString))) -}}
+{{- fail "egressProxy.audit.clientDnsName must differ from vector.mtls.clientDnsName: each workload's identity is admitted to its own service only" -}}
+{{- end -}}
 {{- end -}}
 {{- end }}

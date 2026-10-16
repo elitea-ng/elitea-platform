@@ -3658,10 +3658,38 @@ egressProxy:
 
   # Drain on SIGTERM: readiness fails, the proxy keeps accepting for
   # drainDelaySeconds, then waits up to shutdownTimeoutSeconds for open
-  # tunnels. terminationGracePeriodSeconds must cover both, plus 5.
+  # tunnels, then delivers its last run summaries to elitea-main (up to 10 s).
+  # terminationGracePeriodSeconds must cover all three, plus 5.
   drainDelaySeconds: 5
   shutdownTimeoutSeconds: 60
-  terminationGracePeriodSeconds: 75
+  terminationGracePeriodSeconds: 80
+
+  # The per-turn audit (ADR-0034 decision 9): every run summary goes to
+  # elitea-main's EgressAuditService over gRPC on its private mTLS control
+  # listener, and elitea-main writes one audit event per turn (hosts reached
+  # and refused). Needs main.runtime.enabled. Off: the summaries stay in the
+  # proxy's log (egress_proxy.run_summary).
+  audit:
+    enabled: true
+    # The proxy's client certificate. EXACTLY ONE DNS SAN: elitea-main admits
+    # it as "dns:<clientDnsName>" (ELITEA_EGRESS_AUDIT_CLIENTS, rendered by
+    # this chart) and no other workload may report.
+    clientDnsName: elitea-egress-proxy
+    clientSecretName: elitea-egress-proxy-audit-client-tls
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+    issuerRef:
+      # NOT created by this chart. An issuer backed by the RUNTIME CA (the CA
+      # elitea-main's control listener verifies clients against), as for
+      # vector.mtls.issuerRef.
+      name: elitea-runtime-ca
+      kind: ClusterIssuer
+    mountPath: /etc/elitea-egress-proxy/audit-tls
+    # Empty: <elitea-main fullname>:<main.runtime control port>.
+    target: ""
+    # The SAN of elitea-main's control-server certificate. Empty: the
+    # target's host.
+    serverName: ""
 
   networkPolicy:
     enabled: true

@@ -70,6 +70,10 @@ type PrivateServices struct {
 	// VectorIntrospection. The service authenticates the workload and
 	// verifies the fence on every call.
 	Workspace runtimev1.WorkspaceStoreServiceServer
+	// EgressAudit is optional: the egress proxy's run summaries (ADR-0034
+	// decision 9), served on the control listener; the service admits only
+	// the proxy's configured client identities.
+	EgressAudit runtimev1.EgressAuditServiceServer
 }
 
 // PrivateServerSet owns the three deliberately separate authenticated data
@@ -143,6 +147,9 @@ func newPrivateServerSet(config PrivateServerConfig, services PrivateServices, l
 	}
 	if services.Workspace != nil {
 		runtimev1.RegisterWorkspaceStoreServiceServer(controlServer, services.Workspace)
+	}
+	if services.EgressAudit != nil {
+		runtimev1.RegisterEgressAuditServiceServer(controlServer, services.EgressAudit)
 	}
 	runtimev1.RegisterExecutionOutputServiceServer(outputServer, services.Output)
 	contentServer := &http.Server{

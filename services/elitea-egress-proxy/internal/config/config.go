@@ -66,6 +66,32 @@ type Config struct {
 	ShutdownTimeout time.Duration
 
 	LogLevel slog.Level
+
+	// Audit is where run summaries are reported: elitea-main's
+	// EgressAuditService on its private mTLS control listener. A zero Target
+	// leaves the summaries in this proxy's log only.
+	Audit AuditConfig
+}
+
+// AuditConfig is the gRPC client of elitea-main's EgressAuditService.
+type AuditConfig struct {
+	// Target is elitea-main's control listener, host:port.
+	Target string
+	// ServerName is the TLS name of elitea-main's control-server
+	// certificate. Empty: Target's host.
+	ServerName string
+	// CAFile verifies elitea-main (the runtime CA).
+	CAFile string
+	// CertFile and KeyFile are this proxy's client certificate (one DNS SAN,
+	// the identity elitea-main admits). They are read again on every
+	// connection, so a renewal needs no restart.
+	CertFile string
+	KeyFile  string
+	// ReplicaID names this replica in its reports. Default: the hostname
+	// (the pod name).
+	ReplicaID string
+	// Timeout bounds one report call.
+	Timeout time.Duration
 }
 
 // Defaults returns the configuration with every default set and no key path.
@@ -86,6 +112,7 @@ func Defaults() Config {
 		DrainDelay:            5 * time.Second,
 		ShutdownTimeout:       60 * time.Second,
 		LogLevel:              slog.LevelInfo,
+		Audit:                 AuditConfig{Timeout: 5 * time.Second},
 	}
 }
 
@@ -164,6 +191,24 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		if err := c.LogLevel.UnmarshalText([]byte(v)); err != nil {
 			errs = append(errs, fmt.Errorf("%sLOG_LEVEL: want debug, info, warn or error, got %q", Prefix, v))
 		}
+	}
+
+	str("AUDIT_TARGET", &c.Audit.Target)
+	str("AUDIT_SERVER_NAME", &c.Audit.ServerName)
+	str("AUDIT_CA_FILE", &c.Audit.CAFile)
+	str("AUDIT_CERT_FILE", &c.Audit.CertFile)
+	str("AUDIT_KEY_FILE", &c.Audit.KeyFile)
+	str("REPLICA_ID", &c.Audit.ReplicaID)
+	dur("AUDIT_TIMEOUT", &c.Audit.Timeout, false)
+	if c.Audit.Target != "" {
+		if _, _, err := net.SplitHostPort(c.Audit.Target); err != nil {
+			errs = append(errs, fmt.Errorf("%sAUDIT_TARGET: want host:port, got %q", Prefix, c.Audit.Target))
+		}
+		if c.Audit.CAFile == "" || c.Audit.CertFile == "" || c.Audit.KeyFile == "" {
+			errs = append(errs, fmt.Errorf("%sAUDIT_TARGET needs %sAUDIT_CA_FILE, %sAUDIT_CERT_FILE and %sAUDIT_KEY_FILE: the report goes over mTLS only", Prefix, Prefix, Prefix, Prefix))
+		}
+	} else if c.Audit.CAFile != "" || c.Audit.CertFile != "" || c.Audit.KeyFile != "" {
+		errs = append(errs, fmt.Errorf("%sAUDIT_CA_FILE, _CERT_FILE and _KEY_FILE are set without %sAUDIT_TARGET", Prefix, Prefix))
 	}
 
 	if c.PublicKeys == "" {
