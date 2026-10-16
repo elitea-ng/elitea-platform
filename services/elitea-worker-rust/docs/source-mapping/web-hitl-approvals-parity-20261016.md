@@ -135,17 +135,49 @@ Secret scan of the diff before each commit: 0 matches (token/key patterns).
 
 ## 8. Real-browser evidence
 
-See §8.1 (reference, Chrome, signed-in user session on the local current platform) and §8.2 (new Web on the
-production-profile stack). Fixtures: created through the UI unless stated.
+All UI proof in the user's Chrome through Claude in Chrome (own tabs only, user's existing sign-in; no settings changed).
 
-## 9. Visual differences against the reference (listed)
+### 8.1 Reference (current EliteaUI, `http://localhost/`, project "Private" id 2)
 
-- Theme tokens: neutral panels use `background.chatContinueBackground` (same values as the reference
-  `surface.interactive.active`); 10/12 px radii → `radiusMd` (8 px), 6 px → `radiusSm`; 13 px text → 12 px
-  `bodySmall`; Parameters header uses `background.aiProviderAccordion.*`; sub-agent label uses `bodySmall` (the
-  reference `bodySmall2` was dropped from the new Web type scale).
-- Actions inside the thinking view render through the existing new-Web `ActionView` rows, not the reference toolkit
-  chips (`renderGroupChips`). Pre-existing for coordinator actions; now also used inside sub-agent accordions. Follow-up.
+Fixtures already existed (agents created earlier through the UI): "Full Name Resolver" (agent 9) with sub-agents
+"Name Resolver" (toolkits `test`, `sharepoint`) and "Surname Resolver"; "R9 Parallel Parent" with "R9 Auto Child".
+Turns were sent from the agent page test chat (UI); nothing was created through the database.
+
+| # | Scenario | Observation | File (session scratchpad `evidence/`) |
+|---|---|---|---|
+| R1 | Same sub-agent called twice in parallel (conversation 783, persisted) | thinking view rows `R9 Auto Child (1)`, `R9 Auto Child (2)`; coordinator chip after them | `ref-01-parallel-same-child-labels.jpg` |
+| R2 | One instance expanded | instance chips inside, collapsed siblings unchanged | `ref-02-child-accordion-expanded.jpg` |
+| R3 | "Resolve the full name Ivan Petrov" (live) | the delegated-auth card for `sharepoint` appears first, inside a `Surname Resolver` approval accordion, while siblings still run | `ref-03-auth-card-first-live.jpg` |
+| R4 | Mixed pause (live) | below the thinking view: `Surname Resolver` accordion with "Toolkit Authorization Required" (Authorize / Skip), then `Name Resolver` accordion with "Sensitive Action Authorization Required" `test.delete_file` (Authorize / Block / Block with Comment). Order: auth buckets, then HITL buckets | `ref-04-mixed-auth-and-sensitive.jpg` |
+| R5 | Block on the sensitive card | that card retires at once; `Name Resolver` resumes (spinner); the auth card stays answerable | `ref-05-after-block-auth-remains.jpg` |
+| R6 | Skip on the auth card | card retires; `Surname Resolver` resumes, then raises its own sensitive card in its accordion | `ref-06-after-skip-resumed.jpg`, `ref-07-next-card-surname.jpg` |
+
+Authorize was not clicked on either card (a delete action and an OAuth flow on the user's environment). The
+agent-page test chat blocks navigation ("Leave site?"), so the reference reload check was not repeated there.
+
+**Mixed-card submission (FU-228).** The reference submits each card on its own: Block resumed `Name Resolver`
+while the auth card stayed pending. The new Web keeps the same placement and order and queues each kind separately
+(HITL set, authorization set), submitting each set when it is complete. A one-card set therefore submits at once,
+as in the reference. Whether Main accepts a HITL continuation while authorization requests are still pending on the
+same response is Main's contract (FU-228); the result on pm1084 is recorded in §8.2.
+
+### 8.2 New Web (production-profile stack `pm1084`)
+
+Pending: the stack is being rebuilt after a Docker restart (coordinator, 18:46). Image ready:
+`elitea-web:trackw-00cddc4e2`, Id `sha256:11817352d3d7…`, built from branch head `00cddc4e2`; extracted SPA assets
+contain the branch-unique strings `chat-static-pause-panel` and `pause_progress`.
+
+## 9. Visual gaps (deferred)
+
+Per the user (2026-10-16), this PR matches structure and behaviour (placement, order, hierarchy and labels, actions per
+card, independent resolution, reload, two tabs, mixed cards). Pixel styling is one later follow-up:
+- neutral panels use `background.chatContinueBackground` (same values as the reference `surface.interactive.active`);
+  10/12 px radii → `radiusMd` (8 px), 6 px → `radiusSm`; 13 px text → 12 px `bodySmall`; Parameters header uses
+  `background.aiProviderAccordion.*`; sub-agent label `bodySmall` (no `bodySmall2` in the new type scale);
+- actions inside the thinking view are the new-Web `ActionView` preview rows, not the reference toolkit/model chips
+  (`renderGroupChips`), for coordinator and sub-agent actions alike;
+- the reference answer block wraps the approval accordions on a slightly lighter surface; the new Web uses the plain
+  answer-block surface.
 
 ## 10. Follow-ups
 
@@ -154,5 +186,5 @@ production-profile stack). Fixtures: created through the UI unless stated.
 - **FU-228** (Main): one continuation for a mixed HITL + authorization set.
 - After a 409 the answer stays blank until the next reload (no handler-level refetch/reattach exists); wire
   `reattachStreamedExecution` once the attach target is known after a refusal.
-- `ActionView` chip parity in the thinking view.
+- Visual gaps of §9 as one styling follow-up.
 - Wave 2: replace `decideHitlCard` queue-then-submit with the per-interrupt decision API.
