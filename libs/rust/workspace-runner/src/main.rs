@@ -4,7 +4,9 @@
 //! `/tmp/elitea-runner`), `--policy <json>` (serve: `RunnerPolicy`),
 //! `--max-files <n>`, `--max-file-bytes <n>`, `--max-total-bytes <n>`
 //! (unpack and pack), `--env-stdin` (serve: the first stdin line is the
-//! `{"env":{...}}` handshake). Exit status 0 on success, 2 on bad arguments, 1 on a
+//! `{"env":{...}}` handshake), `--max-workspace-bytes <n>` (serve and pack:
+//! the workspace cap, checked after each tool that can grow the tree and
+//! before pack). Exit status 0 on success, 2 on bad arguments, 1 on a
 //! refused or failed operation (its code on stderr).
 
 use std::path::PathBuf;
@@ -12,7 +14,8 @@ use std::process::ExitCode;
 
 use elitea_agent_runtime::workspace_archive::ArchiveLimits;
 use elitea_workspace_runner::{
-    RunnerConfig, RunnerPolicy, open_session, pack, parse_env_line, serve, unpack,
+    RunnerConfig, RunnerPolicy, WorkspaceCap, open_session, pack_capped, parse_env_line,
+    serve_capped, unpack,
 };
 
 struct Args {
@@ -22,6 +25,7 @@ struct Args {
     policy: RunnerPolicy,
     limits: ArchiveLimits,
     env_stdin: bool,
+    max_workspace_bytes: Option<u64>,
 }
 
 fn parse() -> Option<Args> {
@@ -38,6 +42,7 @@ fn parse() -> Option<Args> {
             max_total_bytes: 8 << 30,
         },
         env_stdin: false,
+        max_workspace_bytes: None,
     };
     while let Some(flag) = words.next() {
         if flag == "--env-stdin" {
@@ -52,6 +57,7 @@ fn parse() -> Option<Args> {
             "--max-files" => args.limits.max_files = value.parse().ok()?,
             "--max-file-bytes" => args.limits.max_file_bytes = value.parse().ok()?,
             "--max-total-bytes" => args.limits.max_total_bytes = value.parse().ok()?,
+            "--max-workspace-bytes" => args.max_workspace_bytes = Some(value.parse().ok()?),
             _ => return None,
         }
     }
@@ -71,12 +77,21 @@ async fn main() -> ExitCode {
         );
         return ExitCode::from(2);
     };
+    let cap = args.max_workspace_bytes.map(|max_bytes| WorkspaceCap {
+        root: args.root.clone(),
+        max_bytes,
+    });
     match args.command.as_str() {
         "unpack" => match unpack(&mut std::io::stdin().lock(), &args.root, args.limits) {
             Ok(_) => ExitCode::SUCCESS,
             Err(code) => fail(&code),
         },
-        "pack" => match pack(&args.root, &mut std::io::stdout().lock(), args.limits) {
+        "pack" => match pack_capped(
+            &args.root,
+            &mut std::io::stdout().lock(),
+            args.limits,
+            cap.as_ref(),
+        ) {
             Ok(_) => ExitCode::SUCCESS,
             Err(code) => fail(&code),
         },
@@ -102,7 +117,7 @@ async fn main() -> ExitCode {
             }) else {
                 return fail("runner.workspace_unavailable");
             };
-            match serve(session, input, tokio::io::stdout()).await {
+            match serve_capped(session, cap, input, tokio::io::stdout()).await {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(_) => fail("runner.stream_failed"),
             }
