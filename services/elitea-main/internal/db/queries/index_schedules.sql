@@ -35,7 +35,7 @@ FOR UPDATE;
 -- name: UpdateCurrentIndexScheduleToolkitMeta :execrows
 UPDATE elitea_tools
 SET meta = sqlc.arg('meta')::jsonb,
-    updated_at = clock_timestamp()
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 WHERE id = sqlc.arg('toolkit_id')::integer;
 
 -- name: InsertCurrentIndexScheduleNotification :execrows
@@ -45,13 +45,15 @@ INSERT INTO centry.notifications (
     project_id,
     user_id,
     meta,
-    event_type
+    event_type,
+    created_at
 ) VALUES (
     sqlc.arg('notification_uuid')::text::uuid,
     FALSE,
     sqlc.arg('project_id')::integer,
     sqlc.arg('user_id')::integer,
     sqlc.arg('meta')::jsonb,
-    'index_data_changed'
+    'index_data_changed',
+    now() AT TIME ZONE 'UTC'
 )
 ON CONFLICT (uuid) DO NOTHING;

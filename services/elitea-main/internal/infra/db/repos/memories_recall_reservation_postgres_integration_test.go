@@ -64,7 +64,7 @@ RETURNING id`, mustParseInt64(t, owner)).Scan(&participantID); err != nil {
 		}
 		if _, err := pool.Exec(ctx, `
 INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
-VALUES (gen_random_uuid(), $1, $2, (now() - make_interval(mins => $3))::timestamp)`,
+VALUES (gen_random_uuid(), $1, $2, (now() AT TIME ZONE 'UTC') - make_interval(mins => $3))`,
 			participantID, conversationID, minutesAgo); err != nil {
 			t.Fatalf("seed user message: %v", err)
 		}

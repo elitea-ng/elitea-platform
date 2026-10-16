@@ -120,14 +120,21 @@ func TestCreateToolkitInsertSQLBindsOwnerID(t *testing.T) {
 		t.Errorf("author_id is not among the inserted columns %v", named)
 	}
 
-	// One placeholder per column, so owner_id is supplied by the caller.
-	placeholders := regexp.MustCompile(`VALUES \(([^)]*)\)`).FindStringSubmatch(statement)
+	// One placeholder per caller-supplied column, so owner_id is supplied by
+	// the caller. created_at is the last column and the server stamps it: the
+	// naive column holds the UTC wall clock, which DEFAULT now() would write in
+	// the session time zone instead.
+	const serverStamp = "now() AT TIME ZONE 'UTC'"
+	if named[len(named)-1] != "created_at" {
+		t.Fatalf("created_at is not the last inserted column: %v", named)
+	}
+	placeholders := regexp.MustCompile(`VALUES \(((?:\$\d+, )*\$\d+), ` + regexp.QuoteMeta(serverStamp) + `\)`).FindStringSubmatch(statement)
 	if placeholders == nil {
-		t.Fatalf("createToolkitInsertSQL has no VALUES list:\n%s", statement)
+		t.Fatalf("createToolkitInsertSQL has no VALUES list ending in %s:\n%s", serverStamp, statement)
 	}
 	bound := strings.Split(strings.ReplaceAll(placeholders[1], " ", ""), ",")
-	if len(bound) != len(named) {
-		t.Errorf("%d columns but %d bound values: %v vs %v", len(named), len(bound), named, bound)
+	if len(bound) != len(named)-1 {
+		t.Errorf("%d caller columns but %d bound values: %v vs %v", len(named)-1, len(bound), named, bound)
 	}
 	for position := range bound {
 		if want := fmt.Sprintf("$%d", position+1); bound[position] != want {

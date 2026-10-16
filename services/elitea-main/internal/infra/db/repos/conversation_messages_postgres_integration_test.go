@@ -228,7 +228,7 @@ func TestListMessagesServesTheUpdateTimeOfARewrittenGroup(t *testing.T) {
 	// Exactly what a regeneration's finalize does to the answer row.
 	if _, err := repo.pool.Exec(ctx, `
 UPDATE p_1.chat_message_group
-SET updated_at = clock_timestamp()
+SET updated_at = clock_timestamp() AT TIME ZONE 'UTC'
 WHERE conversation_id = $1::int
   AND author_participant_id IN (
       SELECT id FROM p_1.chat_participants WHERE entity_name <> 'user'

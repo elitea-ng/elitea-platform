@@ -358,7 +358,7 @@ func settlePostgresCurrentResponse(t *testing.T, pool *pgxpool.Pool, responseID 
 	if _, err := pool.Exec(t.Context(), `
 UPDATE p_1.chat_message_group
 SET is_streaming = FALSE,
-    updated_at = clock_timestamp()
+    updated_at = clock_timestamp() AT TIME ZONE 'UTC'
 WHERE uuid = $1`, responseID); err != nil {
 		t.Fatal(err)
 	}

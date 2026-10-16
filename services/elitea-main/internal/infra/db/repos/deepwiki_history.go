@@ -120,8 +120,8 @@ func (r *DeepWikiHistoryRepo) RecordQuestion(ctx context.Context, question wikic
 	}
 	for _, participantID := range []int64{userParticipant, toolkitParticipant} {
 		if _, err := transaction.Exec(ctx, fmt.Sprintf(`
-INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings)
-VALUES ($1, $2, '{}'::jsonb)
+INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+VALUES ($1, $2, '{}'::jsonb, now() AT TIME ZONE 'UTC')
 ON CONFLICT (participant_id, conversation_id) DO NOTHING`, schema),
 			conversationID, participantID); err != nil {
 			return fmt.Errorf("deepwiki history: map participant: %w", err)
@@ -142,7 +142,7 @@ ON CONFLICT (participant_id, conversation_id) DO NOTHING`, schema),
 	if err := transaction.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.chat_message_group
     (uuid, author_participant_id, conversation_id, sent_to_id, meta, is_streaming, created_at, task_id)
-VALUES (gen_random_uuid(), $1, $2, $3, $4::jsonb, FALSE, clock_timestamp(), $5)
+VALUES (gen_random_uuid(), $1, $2, $3, $4::jsonb, FALSE, (clock_timestamp() AT TIME ZONE 'UTC'), $5)
 RETURNING id`, schema),
 		userParticipant, conversationID, toolkitParticipant, string(meta), question.InvocationID,
 	).Scan(&groupID); err != nil {
@@ -155,7 +155,7 @@ RETURNING id`, schema),
 	// The conversation's own clock, so the drawer's "most recent first"
 	// listing follows the conversation rather than the row's creation.
 	if _, err := transaction.Exec(ctx, fmt.Sprintf(
-		`UPDATE %s.chat_conversations SET updated_at = clock_timestamp() WHERE id = $1`, schema),
+		`UPDATE %s.chat_conversations SET updated_at = (clock_timestamp() AT TIME ZONE 'UTC') WHERE id = $1`, schema),
 		conversationID); err != nil {
 		return fmt.Errorf("deepwiki history: touch conversation: %w", err)
 	}
@@ -241,7 +241,7 @@ LIMIT 1`, schema, schema), answer.InvocationID, DeepWikiSource, answer.UserID).
 	if err := transaction.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.chat_message_group
     (uuid, author_participant_id, conversation_id, reply_to_id, meta, is_streaming, created_at, task_id)
-VALUES (gen_random_uuid(), $1, $2, $3, $4::jsonb, FALSE, clock_timestamp(), $5)
+VALUES (gen_random_uuid(), $1, $2, $3, $4::jsonb, FALSE, (clock_timestamp() AT TIME ZONE 'UTC'), $5)
 RETURNING id`, schema),
 		toolkitParticipant, conversationID, questionGroup, string(meta), answer.InvocationID,
 	).Scan(&groupID); err != nil {
@@ -251,7 +251,7 @@ RETURNING id`, schema),
 		return false, err
 	}
 	if _, err := transaction.Exec(ctx, fmt.Sprintf(
-		`UPDATE %s.chat_conversations SET updated_at = clock_timestamp() WHERE id = $1`, schema),
+		`UPDATE %s.chat_conversations SET updated_at = (clock_timestamp() AT TIME ZONE 'UTC') WHERE id = $1`, schema),
 		conversationID); err != nil {
 		return false, fmt.Errorf("deepwiki history: touch conversation: %w", err)
 	}
@@ -303,8 +303,8 @@ LIMIT 1`, schema), DeepWikiSource, question.UserID, question.ChatKey).Scan(&conv
 		return 0, fmt.Errorf("deepwiki history: encode conversation meta: %w", err)
 	}
 	if err := transaction.QueryRow(ctx, fmt.Sprintf(`
-INSERT INTO %s.chat_conversations (uuid, name, is_private, author_id, meta, source)
-VALUES (gen_random_uuid(), $1, TRUE, $2, $3::jsonb, $4)
+INSERT INTO %s.chat_conversations (uuid, name, is_private, author_id, meta, source, created_at)
+VALUES (gen_random_uuid(), $1, TRUE, $2, $3::jsonb, $4, now() AT TIME ZONE 'UTC')
 RETURNING id`, schema),
 		conversationTitle(question.Question), question.UserID, string(meta), DeepWikiSource,
 	).Scan(&conversationID); err != nil {
@@ -368,8 +368,8 @@ func insertTextItem(
 ) error {
 	if _, err := transaction.Exec(ctx, fmt.Sprintf(`
 WITH item AS (
-    INSERT INTO %s.chat_message_items (uuid, item_type, order_index, meta, message_group_id)
-    VALUES (gen_random_uuid(), 'text_message', 0, '{}'::jsonb, $1)
+    INSERT INTO %s.chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
+    VALUES (gen_random_uuid(), 'text_message', 0, '{}'::jsonb, $1, now() AT TIME ZONE 'UTC')
     RETURNING id
 )
 INSERT INTO %s.chat_messages_text (id, content)

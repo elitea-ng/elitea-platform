@@ -337,7 +337,7 @@ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'SUSPENDED')`, claim.ExecutionID, 
 	if err != nil {
 		return err
 	}
-	tag, err = tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_message_group SET meta=jsonb_set(COALESCE(meta,'{}'::jsonb),'{node_recovery_required_v1}',$2::jsonb),updated_at=clock_timestamp()
+	tag, err = tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_message_group SET meta=jsonb_set(COALESCE(meta,'{}'::jsonb),'{node_recovery_required_v1}',$2::jsonb),updated_at=(clock_timestamp() AT TIME ZONE 'UTC')
 WHERE uuid=$1::uuid AND task_id=$3 AND is_streaming=TRUE`, schema), scope.responseID, raw, claim.ExecutionID)
 	if err != nil {
 		return err

@@ -765,6 +765,32 @@ func postgresIntegrationSpec() dbtest.Spec {
 	}
 }
 
+// postgresIntegrationTimeZoneEnv overrides the session time zone of every
+// test pool in this package.
+const postgresIntegrationTimeZoneEnv = "ELITEA_TEST_SESSION_TIMEZONE"
+
+// postgresIntegrationDefaultTimeZone is the session time zone a test pool
+// runs in unless the environment names another. It is deliberately NOT UTC.
+//
+// The tenant chat tables keep `created_at`/`updated_at` as `timestamp`
+// WITHOUT time zone holding the UTC wall clock, beside timestamptz columns
+// (personal_memory_entries, local_turn_executions, sync_at). Postgres
+// converts between the two through the SESSION time zone, so a writer that
+// stores a bare now() or a reader that compares a naive column with a
+// timestamptz is right only while the session is UTC. CI's PostgreSQL
+// images run in UTC, so before this default such a defect passed every run
+// and showed up only on a server in another zone (the memory-recall test in
+// local_turns_postgres_integration_test.go failed in America/Toronto). A zone
+// west of UTC, with daylight saving, makes every such mix visible here.
+const postgresIntegrationDefaultTimeZone = "America/Toronto"
+
+func postgresIntegrationSessionTimeZone() string {
+	if zone := os.Getenv(postgresIntegrationTimeZoneEnv); zone != "" {
+		return zone
+	}
+	return postgresIntegrationDefaultTimeZone
+}
+
 // newMigratedPostgresIntegrationPool returns a private database that already
 // holds the seed and the full ledgered migration history.
 func newMigratedPostgresIntegrationPool(t *testing.T) *pgxpool.Pool {
@@ -824,6 +850,7 @@ func newPostgresIntegrationPoolFromTemplate(t *testing.T, templateName string) *
 	testConfig := adminConfig.Copy()
 	testConfig.ConnConfig.Database = databaseName
 	testConfig.MaxConns = 12
+	testConfig.ConnConfig.RuntimeParams["timezone"] = postgresIntegrationSessionTimeZone()
 	pool, err := pgxpool.NewWithConfig(ctx, testConfig)
 	if err != nil {
 		_, _ = adminPool.Exec(context.Background(), "DROP DATABASE "+quotedDatabase+" WITH (FORCE)")

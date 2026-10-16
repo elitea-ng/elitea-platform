@@ -78,10 +78,10 @@ INSERT INTO auth_core__user (id, email, name) VALUES
 INSERT INTO centry.project (id, name, owner_id, create_success)
 VALUES (9100, 'pat expiry fixture', 9101, true);
 INSERT INTO auth_core__token (id, uuid, expires, user_id, name) VALUES
-    (9001, '00000000-0000-4000-8000-000000009001', NOW() + INTERVAL '30 days', 9101, 'ci-deploy-key'),
-    (9002, '00000000-0000-4000-8000-000000009002', NOW() + INTERVAL '12 hours', 9101, 'short-lived'),
+    (9001, '00000000-0000-4000-8000-000000009001', (NOW() AT TIME ZONE 'UTC') + INTERVAL '30 days', 9101, 'ci-deploy-key'),
+    (9002, '00000000-0000-4000-8000-000000009002', (NOW() AT TIME ZONE 'UTC') + INTERVAL '12 hours', 9101, 'short-lived'),
     (9003, '00000000-0000-4000-8000-000000009003', NULL,                       9101, 'never-expires'),
-    (9004, '00000000-0000-4000-8000-000000009004', NOW() + INTERVAL '30 days', 9102, 'bystander-key');
+    (9004, '00000000-0000-4000-8000-000000009004', (NOW() AT TIME ZONE 'UTC') + INTERVAL '30 days', 9102, 'bystander-key');
 INSERT INTO elitea_identity.token_lifecycle (token_id, issued_at) VALUES
     (9001, NOW() - INTERVAL '40 days'),
     (9002, NOW()),
@@ -289,7 +289,7 @@ func TestPATExpiryNoticeProductionWindowExcludesADistantExpiry(t *testing.T) {
 	// The same tokens, moved to within a day, ARE announced — otherwise the
 	// assertion above would pass for a pass that can never find anything.
 	if _, err := pool.Exec(context.Background(),
-		`UPDATE auth_core__token SET expires = NOW() + INTERVAL '3 hours' WHERE id = 9001`); err != nil {
+		`UPDATE auth_core__token SET expires = (NOW() AT TIME ZONE 'UTC') + INTERVAL '3 hours' WHERE id = 9001`); err != nil {
 		t.Fatalf("move the token inside the window: %v", err)
 	}
 	if result := runPATExpiryPass(t, handler, ""); result.Produced != 1 {

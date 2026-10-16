@@ -417,14 +417,14 @@ func TestChatNewMessageMovesTheConversationsUpdatedAt(t *testing.T) {
 
 	setUpdatedAt := func(id int64, ago string) {
 		t.Helper()
-		if _, err := pool.Exec(ctx, `UPDATE p_1.chat_conversations SET updated_at = now() - $2::interval WHERE id = $1`, id, ago); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE p_1.chat_conversations SET updated_at = (now() AT TIME ZONE 'UTC') - $2::interval WHERE id = $1`, id, ago); err != nil {
 			t.Fatal(err)
 		}
 	}
 	recent := func(id int64) bool {
 		t.Helper()
 		var fresh bool
-		if err := pool.QueryRow(ctx, `SELECT updated_at > now() - interval '10 seconds' FROM p_1.chat_conversations WHERE id = $1`, id).Scan(&fresh); err != nil {
+		if err := pool.QueryRow(ctx, `SELECT updated_at > (now() AT TIME ZONE 'UTC') - interval '10 seconds' FROM p_1.chat_conversations WHERE id = $1`, id).Scan(&fresh); err != nil {
 			t.Fatal(err)
 		}
 		return fresh
@@ -491,7 +491,7 @@ func TestChatNewMessageMovesTheConversationsUpdatedAt(t *testing.T) {
 
 	// A rewrite and a delete are not new activity.
 	setUpdatedAt(older, "1 hour")
-	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_message_group SET updated_at = now() WHERE id = $1`, added); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_message_group SET updated_at = now() AT TIME ZONE 'UTC' WHERE id = $1`, added); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM p_1.chat_message_group WHERE id = $1`, added); err != nil {

@@ -475,8 +475,8 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	query := fmt.Sprintf(`
-		INSERT INTO %s.applications (name, description, icon, owner_id, meta)
-		VALUES ($1, $2, $3, $4, '{}'::jsonb)
+		INSERT INTO %s.applications (name, description, icon, owner_id, meta, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, '{}'::jsonb, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
 		RETURNING `+applicationColumns, s)
 	app, err := scanApplication(
 		tx.QueryRow(ctx, query, req.Name, req.Description, req.Icon, ownerID.Int64()),
@@ -540,7 +540,7 @@ func (r *ApplicationsRepo) updateApplication(ctx context.Context, q querier, req
 	// wrong, and this one is the only answer the API has to "when did this
 	// agent last change". It is appended AFTER the early return above, so a
 	// request that changes nothing does not report a change.
-	setClauses = append(setClauses, "updated_at = now()")
+	setClauses = append(setClauses, "updated_at = (now() AT TIME ZONE 'UTC')")
 
 	args = append(args, req.ApplicationID)
 	query := fmt.Sprintf(`UPDATE %s.applications SET %s WHERE id = $%d RETURNING `+applicationColumns,
@@ -765,11 +765,11 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 		WITH v AS (
 			INSERT INTO %s.application_versions
 				(application_id, name, status, author_id, agent_type, instructions,
-				 welcome_message, llm_settings, conversation_starters, meta, pipeline_settings)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb)
+				 welcome_message, llm_settings, conversation_starters, meta, pipeline_settings, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, now() AT TIME ZONE 'UTC')
 			RETURNING *
 		), touched AS (
-			UPDATE %s.applications SET updated_at = now()
+			UPDATE %s.applications SET updated_at = (now() AT TIME ZONE 'UTC')
 			WHERE id = (SELECT application_id FROM v)
 		)
 		SELECT `+versionColumns+` FROM v JOIN %s.applications a ON a.id = v.application_id`, s, s, s)
@@ -931,7 +931,7 @@ func (r *ApplicationsRepo) updateVersion(ctx context.Context, q querier, project
 			WHERE application_id = $%d AND id = $%d
 			RETURNING *
 		), touched AS (
-			UPDATE %s.applications SET updated_at = now()
+			UPDATE %s.applications SET updated_at = (now() AT TIME ZONE 'UTC')
 			WHERE id = (SELECT application_id FROM v)
 		)
 		SELECT `+versionColumns+` FROM v JOIN %s.applications a ON a.id = v.application_id`,
@@ -1073,7 +1073,7 @@ func (r *ApplicationsRepo) SetDefaultVersion(ctx context.Context, projectID, app
 	ct, err := r.pool.Exec(ctx, fmt.Sprintf(`
 		UPDATE %s.applications
 		SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{`+defaultVersionMetaKey+`}', to_jsonb($1::text)),
-			updated_at = now()
+			updated_at = (now() AT TIME ZONE 'UTC')
 		WHERE id = $2`, s), versionID, applicationID)
 	if err != nil {
 		return fmt.Errorf("applications: set default version: %w", err)

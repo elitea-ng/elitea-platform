@@ -341,7 +341,7 @@ func (q *Queries) GetCurrentModelCatalogBounds(ctx context.Context, arg GetCurre
 const insertCurrentConfiguration = `-- name: InsertCurrentConfiguration :one
 INSERT INTO configuration (
     uuid, project_id, label, elitea_title, type, section, data, meta, shared,
-    status_ok, status_logs, source, author_id
+    status_ok, status_logs, source, author_id, created_at
 ) VALUES (
     $1::text::uuid,
     $2::integer,
@@ -355,7 +355,8 @@ INSERT INTO configuration (
     $10::boolean,
     $11::text,
     $12::text,
-    $13::integer
+    $13::integer,
+    now() AT TIME ZONE 'UTC'
 )
 RETURNING id,
           uuid::text AS configuration_uuid,
@@ -939,7 +940,7 @@ SET label = $1::text,
     shared = $5::boolean,
     status_ok = $6::boolean,
     status_logs = $7::text,
-    updated_at = now()
+    updated_at = (now() AT TIME ZONE 'UTC')
 WHERE id = $8::integer
   AND project_id = $9::integer
 RETURNING id,

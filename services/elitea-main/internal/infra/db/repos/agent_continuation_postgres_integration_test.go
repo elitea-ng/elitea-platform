@@ -1203,7 +1203,7 @@ func completePostgresCurrentApplicationTurn(
 WITH response_group AS (
     UPDATE chat_message_group
     SET is_streaming = FALSE,
-        created_at = statement_timestamp()
+        created_at = statement_timestamp() AT TIME ZONE 'UTC'
     WHERE uuid = $1
     RETURNING id
 ), response_item AS (

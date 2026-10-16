@@ -156,14 +156,14 @@ func insertApplicationToolReference(
 	var toolID int64
 	if includeOwnerID {
 		err = q.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.elitea_tools (name, type, description, settings, meta, owner_id, author_id)
-			VALUES ($1, 'application', '', $2, '{}'::jsonb, $3, $4)
+			INSERT INTO %s.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
+			VALUES ($1, 'application', '', $2, '{}'::jsonb, $3, $4, now() AT TIME ZONE 'UTC')
 			RETURNING id`, schema),
 			name, settingsJSON, ownerProjectID, authorID).Scan(&toolID)
 	} else {
 		err = q.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.elitea_tools (name, type, description, settings, meta, author_id)
-			VALUES ($1, 'application', '', $2, '{}'::jsonb, $3)
+			INSERT INTO %s.elitea_tools (name, type, description, settings, meta, author_id, created_at)
+			VALUES ($1, 'application', '', $2, '{}'::jsonb, $3, now() AT TIME ZONE 'UTC')
 			RETURNING id`, schema),
 			name, settingsJSON, authorID).Scan(&toolID)
 	}
@@ -171,8 +171,8 @@ func insertApplicationToolReference(
 		return fmt.Errorf("insert sub-agent tool row: %w", err)
 	}
 	if _, err := q.Exec(ctx, fmt.Sprintf(`
-		INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_type, tool_id, entity_id)
-		SELECT version.id, 'agent', $2, version.application_id
+		INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_type, tool_id, entity_id, created_at)
+		SELECT version.id, 'agent', $2, version.application_id, now() AT TIME ZONE 'UTC'
 		FROM %s.application_versions AS version
 		WHERE version.id = $1`, schema, schema),
 		parentVersionID, toolID); err != nil {

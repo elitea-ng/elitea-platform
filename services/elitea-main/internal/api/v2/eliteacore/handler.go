@@ -784,9 +784,9 @@ func (h *Handler) writeProjectIcon(
 	query := fmt.Sprintf(`
 		INSERT INTO %s.configuration
 			(project_id, label, elitea_title, type, section, data, status_ok, created_at)
-		VALUES ($1, 'Project Icon', $2, 'project_icon', 'project_settings', $3, true, NOW())
+		VALUES ($1, 'Project Icon', $2, 'project_icon', 'project_settings', $3, true, (NOW() AT TIME ZONE 'UTC'))
 		ON CONFLICT (elitea_title) DO UPDATE
-			SET data = EXCLUDED.data, updated_at = NOW()`, schema)
+			SET data = EXCLUDED.data, updated_at = (NOW() AT TIME ZONE 'UTC')`, schema)
 	if _, err := h.pool.Exec(ctx, query, numericProjectID, title, data); err != nil {
 		slog.ErrorContext(ctx, "update project info: icon write failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
@@ -1277,11 +1277,12 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	cloneQ := fmt.Sprintf(`
 		INSERT INTO %s.application_versions
 			(application_id, name, status, author_id, llm_settings, instructions,
-			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings)
+			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at)
 		SELECT application_id, $2, 'published', author_id, llm_settings, instructions,
 			   conversation_starters, welcome_message, agent_type,
 			   COALESCE(meta, '{}'::jsonb) || $3::jsonb,
-			   pipeline_settings
+			   pipeline_settings,
+			   now() AT TIME ZONE 'UTC'
 		FROM %s.application_versions WHERE id = $1
 		RETURNING id`, s, s)
 
@@ -1322,8 +1323,8 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	// same agent, and the chat read joins `entity_id` to that application
 	// (internal/db/queries/agent_chat.sql:107).
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`
-		INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools)
-		SELECT $2, entity_id, entity_type, tool_id, selected_tools
+		INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
+		SELECT $2, entity_id, entity_type, tool_id, selected_tools, now() AT TIME ZONE 'UTC'
 		FROM %s.entity_tool_mapping WHERE entity_version_id = $1`, s, s), versionID, cloneID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent tool attachments"})
 		return
@@ -1342,8 +1343,8 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	// because the same read LEFT JOINs it for the skill instructions — dropping it
 	// publishes a named skill with an empty body.
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`
-		INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-		SELECT $2, entity_type, skill_id, skill_version_id
+		INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+		SELECT $2, entity_type, skill_id, skill_version_id, now() AT TIME ZONE 'UTC'
 		FROM %s.entity_skill_mapping WHERE entity_version_id = $1`, s, s), versionID, cloneID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to publish agent skill attachments"})
 		return
@@ -1546,8 +1547,8 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, schema, projectID
 		// Clone the sub-agent application
 		var embeddedAppID int
 		err = h.pool.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.applications (name, description, owner_id)
-			SELECT name, description, owner_id
+			INSERT INTO %s.applications (name, description, owner_id, created_at, updated_at)
+			SELECT name, description, owner_id, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'
 			FROM %s.applications WHERE id = $1
 			RETURNING id`, schema, schema), ref.ApplicationID).Scan(&embeddedAppID)
 		if err != nil {
@@ -1565,7 +1566,7 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, schema, projectID
 		err = h.pool.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.application_versions
 				(application_id, name, status, author_id, llm_settings, instructions,
-				 conversation_starters, welcome_message, agent_type, meta, pipeline_settings)
+				 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at)
 			SELECT $1, name, 'embedded', author_id, llm_settings, instructions,
 				   conversation_starters, welcome_message, agent_type,
 				   COALESCE(meta, '{}'::jsonb) || jsonb_build_object(
@@ -1575,7 +1576,8 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, schema, projectID
 					   'parent_published_app_id', $6::text,
 					   'parent_published_version_id', $7::text
 				   ),
-				   pipeline_settings
+				   pipeline_settings,
+				   now() AT TIME ZONE 'UTC'
 			FROM %s.application_versions WHERE id = $2
 			RETURNING id`, schema, schema),
 			embeddedAppID, ref.VersionID, ref.VersionID, ref.ApplicationID, projectID,
@@ -1595,8 +1597,8 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, schema, projectID
 		// and the log is the only channel that can report the loss. See the
 		// pull request for issue #406 for the full reasoning.
 		if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
-			INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools)
-			SELECT $2, $3, entity_type, tool_id, selected_tools
+			INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
+			SELECT $2, $3, entity_type, tool_id, selected_tools, now() AT TIME ZONE 'UTC'
 			FROM %s.entity_tool_mapping WHERE entity_version_id = $1`, schema, schema),
 			ref.VersionID, embeddedVerID, embeddedAppID); err != nil {
 			slog.ErrorContext(ctx, "embed_sub_agents: tool attachment copy failed",
@@ -1618,8 +1620,8 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, schema, projectID
 		// because the same read LEFT JOINs it for the skill instructions — dropping
 		// it embeds a named skill with an empty body.
 		if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
-			INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-			SELECT $2, entity_type, skill_id, skill_version_id
+			INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+			SELECT $2, entity_type, skill_id, skill_version_id, now() AT TIME ZONE 'UTC'
 			FROM %s.entity_skill_mapping WHERE entity_version_id = $1`, schema, schema),
 			ref.VersionID, embeddedVerID); err != nil {
 			slog.ErrorContext(ctx, "embed_sub_agents: skill attachment copy failed",
@@ -3460,8 +3462,8 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 		// project_id`. The caller is the version author, one statement below.
 		var appID int
 		err := h.pool.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.applications (name, description, owner_id)
-			VALUES ($1, $2, $3) RETURNING id`, s),
+			INSERT INTO %s.applications (name, description, owner_id, created_at, updated_at)
+			VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`, s),
 			name, desc, destinationOwnerID.Int64()).Scan(&appID)
 		if err != nil {
 			errorAgents = append(errorAgents, map[string]any{"index": ae.entityIdx, "name": name, "msg": "Import function has been failed: " + err.Error()})
@@ -3519,8 +3521,8 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 
 			var vID int
 			err = h.pool.QueryRow(ctx, fmt.Sprintf(`
-				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings)
-				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb) RETURNING id`, s),
+				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings, created_at)
+				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, s),
 				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON).Scan(&vID)
 			if err != nil {
 				// Sibling of the tool-link defect below (#420). The bare
@@ -3579,7 +3581,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 					varName, _ := varMap["name"].(string)
 					varValue, _ := varMap["value"].(string)
 					if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
-						INSERT INTO %s.application_variables (application_version_id, name, value) VALUES ($1, $2, $3)`, s),
+						INSERT INTO %s.application_variables (application_version_id, name, value, created_at) VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC')`, s),
 						vID, varName, varValue); err != nil {
 						slog.ErrorContext(ctx, "import: application variable insert failed",
 							"schema", s, "version_id", vID, "variable", varName, "error", err)
@@ -3866,8 +3868,8 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 					if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
-						INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools)
-						VALUES ($1, $2, 'application', $3, $4::jsonb)`, s),
+						INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
+						VALUES ($1, $2, 'application', $3, $4::jsonb, now() AT TIME ZONE 'UTC')`, s),
 						vID, info.appID, toolID, selToolsJSON); err != nil {
 						slog.ErrorContext(ctx, "import: tool link insert failed",
 							"schema", s, "application_id", info.appID, "version_id", vID, "tool_id", toolID, "error", err)
@@ -4297,8 +4299,8 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		// held both kinds of number in one request.
 		var appID int
 		err := h.pool.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.applications (name, description, owner_id)
-			VALUES ($1, $2, $3) RETURNING id`, s),
+			INSERT INTO %s.applications (name, description, owner_id, created_at, updated_at)
+			VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`, s),
 			name, desc, destinationOwnerID.Int64()).Scan(&appID)
 		if err != nil {
 			slog.ErrorContext(ctx, "fork: application insert failed", "schema", s, "name", name, "error", err)
@@ -4408,8 +4410,8 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 			// every version failed answered 201 and produced an agent with no
 			// version at all.
 			if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
-				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings)
-				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb) RETURNING id`, s),
+				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings, created_at)
+				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, s),
 				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON).Scan(&vID); err != nil {
 				slog.ErrorContext(ctx, "fork: application version insert failed",
 					"schema", s, "application_id", appID, "version_name", vName, "error", err)
@@ -4434,7 +4436,7 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 					varName, _ := varMap["name"].(string)
 					varValue, _ := varMap["value"].(string)
 					if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
-						INSERT INTO %s.application_variables (application_version_id, name, value) VALUES ($1, $2, $3)`, s),
+						INSERT INTO %s.application_variables (application_version_id, name, value, created_at) VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC')`, s),
 						vID, varName, varValue); err != nil {
 						slog.ErrorContext(ctx, "fork: application variable insert failed",
 							"schema", s, "version_id", vID, "variable", varName, "error", err)
@@ -4534,8 +4536,8 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
-					INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools)
-					VALUES ($1, $2, 'application', $3, $4::jsonb)`, s),
+					INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
+					VALUES ($1, $2, 'application', $3, $4::jsonb, now() AT TIME ZONE 'UTC')`, s),
 					vID, appID, toolID, selectedJSON); err != nil {
 					slog.ErrorContext(ctx, "fork: tool link insert failed",
 						"schema", s, "version_id", vID, "tool_id", toolID, "error", err)

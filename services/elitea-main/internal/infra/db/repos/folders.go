@@ -82,10 +82,10 @@ func (r *FoldersRepo) Create(ctx context.Context, projectID string, folder folde
 	// current maximum — the legacy runtime's own rule (folder.py:583-590).
 	// An explicit `position` in the create body still wins.
 	q := fmt.Sprintf(`
-		INSERT INTO %s.chat_conversation_folders (name, owner_id, position, uuid, meta)
+		INSERT INTO %s.chat_conversation_folders (name, owner_id, position, uuid, meta, created_at)
 		VALUES ($1, $3,
 			COALESCE($2::int, (SELECT COALESCE(MAX(position), 0) + %d FROM %s.chat_conversation_folders WHERE owner_id=$3)),
-			gen_random_uuid(), '{}'::jsonb)
+			gen_random_uuid(), '{}'::jsonb, now() AT TIME ZONE 'UTC')
 		RETURNING id::text, name, position, created_at, COALESCE(updated_at, created_at)`,
 		s, folders.PositionGap, s)
 
@@ -116,7 +116,7 @@ func (r *FoldersRepo) Update(ctx context.Context, projectID, folderID string, fo
 		UPDATE %s.chat_conversation_folders
 		SET name = COALESCE(NULLIF($1, ''), name),
 		    position = COALESCE($2::int, position),
-		    updated_at = now()
+		    updated_at = (now() AT TIME ZONE 'UTC')
 		WHERE id = $3 AND owner_id=$4
 		RETURNING id::text, name, position, created_at, COALESCE(updated_at, created_at)`, s)
 

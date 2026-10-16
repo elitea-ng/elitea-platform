@@ -446,7 +446,7 @@ WHERE m.conversation_id = $1 AND p.entity_name = 'dummy'`, conversationID).Scan(
 	var during time.Time
 	if err := pool.QueryRow(ctx, `
 INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta, is_streaming, created_at)
-VALUES (gen_random_uuid(), $1, $2, '{}'::jsonb, FALSE, clock_timestamp() + interval '2 seconds')
+VALUES (gen_random_uuid(), $1, $2, '{}'::jsonb, FALSE, (clock_timestamp() AT TIME ZONE 'UTC') + interval '2 seconds')
 RETURNING created_at`, dummyID, conversationID).Scan(&during); err != nil {
 		t.Fatal(err)
 	}

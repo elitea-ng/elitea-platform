@@ -1623,7 +1623,7 @@ func (h *Handler) replaceVersionVariables(ctx context.Context, projectID, versio
 		}
 		value, _ := entry["value"].(string)
 		if _, err := tx.Exec(ctx, fmt.Sprintf(
-			`INSERT INTO %s.application_variables (application_version_id, name, value) VALUES ($1, $2, $3)
+			`INSERT INTO %s.application_variables (application_version_id, name, value, created_at) VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC')
 			 ON CONFLICT (application_version_id, name) DO UPDATE SET value = EXCLUDED.value`, s),
 			versionID, name, value); err != nil {
 			return apierr.Internal("could not save variables")
