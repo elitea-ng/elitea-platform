@@ -1,0 +1,81 @@
+{{- if and .Values.egressProxy.enabled .Values.egressProxy.networkPolicy.enabled }}
+{{- include "elitea-egress-proxy.validateGuards" . -}}
+{{- $e := .Values.egressProxy }}
+{{- $n := $e.networkPolicy }}
+{{- $v4 := list }}
+{{- $v6 := list }}
+{{- range concat ($n.denyCidrs | default list) ($n.podCidrs | default list) ($n.serviceCidrs | default list) }}
+{{- if contains ":" . }}{{ $v6 = append $v6 . }}{{ else }}{{ $v4 = append $v4 . }}{{ end }}
+{{- end }}
+# The egress proxy's own boundary (ADR-0034 decision 9).
+#
+# Ingress
+#   {{ $e.service.port }} (proxy)  only the workspace-run sandbox pods, in the
+#                 execution namespace, that carry egressProxy.networkPolicy.clientPodLabels.
+#   {{ $e.adminPort }} (admin)  only egressProxy.networkPolicy.adminFrom (a metrics
+#                 scraper) and networkPolicies.probeFrom.
+#
+# Egress
+#   The public internet: 0.0.0.0/0 (and ::/0) minus RFC 1918, carrier-grade
+#   NAT, link-local (cloud metadata), loopback, unique-local, the other
+#   reserved ranges and the cluster's pod and service ranges. DNS to the
+#   cluster resolver only. The proxy also refuses these ranges itself, so a
+#   CNI that does not enforce this policy still leaves one wall.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "elitea-egress-proxy.fullname" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-egress-proxy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "elitea-egress-proxy.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - port: {{ $e.service.port }}
+          protocol: TCP
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "elitea-egress-proxy.clientNamespace" . }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $n.clientPodLabels | nindent 14 }}
+    {{- $adminPeers := concat ($n.adminFrom | default list) (.Values.networkPolicies.probeFrom | default list) }}
+    {{- if $adminPeers }}
+    - ports:
+        - port: {{ $e.adminPort }}
+          protocol: TCP
+      from:
+        {{- toYaml $adminPeers | nindent 8 }}
+    {{- end }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $n.dnsNamespaceLabels | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $n.dnsPodLabels | nindent 14 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- range uniq $v4 }}
+              - {{ . | quote }}
+              {{- end }}
+        {{- if $n.ipv6 }}
+        - ipBlock:
+            cidr: ::/0
+            except:
+              {{- range uniq $v6 }}
+              - {{ . | quote }}
+              {{- end }}
+        {{- end }}
+{{- end }}
