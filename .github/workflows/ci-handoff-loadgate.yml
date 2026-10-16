@@ -18,11 +18,14 @@ on:
       - "services/elitea-main/migrations/shared/**"
       - ".github/workflows/ci-handoff-loadgate.yml"
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "services/elitea-main/internal/application/workspacestore/**"
+      - "services/elitea-main/internal/application/workspacehandoff/**"
       - "services/elitea-main/internal/infra/db/repos/workspace_*"
       - "services/elitea-main/migrations/shared/**"
+      - ".github/workflows/ci-handoff-loadgate.yml"
   workflow_dispatch:
 
 permissions:
@@ -73,14 +76,16 @@ jobs:
           GOFLAGS: -count=1
         run: |
           set -uo pipefail
-          go test -tags loadgate -run 'TestLoadGate' -v -timeout 15m ./internal/infra/db/repos/ > loadgate.log 2>&1
-          status=$?
+          # The step shell runs with -e: capture the status explicitly, or a
+          # failing test exits the step before its output is printed.
+          status=0
+          go test -tags loadgate -run 'TestLoadGate' -v -timeout 15m ./internal/infra/db/repos/ > loadgate.log 2>&1 || status=$?
           cat loadgate.log
           if [ "$status" -ne 0 ]; then
             exit "$status"
           fi
           # Every case must have RUN and passed; a skip is a failure here.
-          for name in 'TestLoadGatePublishesAcrossThreads/sustained' 'TestLoadGatePublishesAcrossThreads/burst' 'TestLoadGateSameThreadContention'; do
+          for name in 'TestLoadGatePublishesAcrossThreads/sustained' 'TestLoadGatePublishesAcrossThreads/burst' 'TestLoadGateSameThreadContention' 'TestLoadGateSameProjectQuota'; do
             if ! grep -q -- "--- PASS: ${name} " loadgate.log; then
               echo "::error::${name} did not run and pass"
               exit 1
