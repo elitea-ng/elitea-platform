@@ -2,6 +2,7 @@
 
 pub(crate) mod application_pipeline;
 pub(crate) mod application_tools;
+pub(crate) mod approved_calls;
 pub(crate) mod assembly;
 pub(crate) mod attachment_context;
 pub(crate) mod attachment_tools;

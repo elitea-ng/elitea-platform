@@ -367,8 +367,18 @@ impl OrdinaryNativeAgentAssembler {
         // The workspace's tools: the local tool names, run in the sandbox.
         let runtime = match (&workspace, context.workspace()) {
             (Some(turn), Some(field)) => {
+                // An approved call (a person's yes to a destructive command)
+                // runs at most once: a retried resume reads its recorded
+                // result from the turn's session instead of running it again.
+                let approved_calls =
+                    Arc::new(super::approved_calls::SessionApprovedCallLedger::new(
+                        Arc::clone(&sessions),
+                        plan.session_identity()?,
+                    ));
                 let runtime = runtime.with_workspace_toolset(
-                    crate::workspace_run::tools::provider(turn.sandbox(), field.shell).toolset(),
+                    crate::workspace_run::tools::provider(turn.sandbox(), field.shell)
+                        .with_approved_calls(approved_calls)
+                        .toolset(),
                 );
                 // A destructive or escaping command is a server HITL
                 // interrupt before it runs (ADR-0034 decision 9).

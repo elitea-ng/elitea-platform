@@ -233,6 +233,61 @@ pub trait WorkspaceRunner: Send + Sync {
     }
 }
 
+/// One approved call, as the ledger sees it.
+pub struct ApprovedCall<'a> {
+    pub tool: &'a str,
+    pub call_id: &'a str,
+    pub args: &'a Value,
+    /// The invocation the call runs in (for the ledger's records).
+    pub invocation_id: &'a str,
+}
+
+/// What the ledger knows about one approval.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ApprovedCallClaim {
+    /// First use: the approval is now consumed. Run the call, then
+    /// [`ApprovedCallLedger::complete`] with this key.
+    Run { key: String },
+    /// An earlier attempt ran the call; this is its result.
+    Completed(Value),
+    /// An earlier attempt consumed the approval and recorded no result (it
+    /// stopped while the call ran). The call is not run again.
+    Started,
+}
+
+/// Makes an approved call one-shot (ADR-0034 decision 9): the approval of a
+/// call is consumed durably before the call runs, and its result is
+/// recorded durably as soon as it returns. A retried resume with the same
+/// approval then reads the earlier result instead of running the call (a
+/// `git push`, a deploy) a second time.
+#[async_trait]
+pub trait ApprovedCallLedger: Send + Sync {
+    /// Consume the approval of `call`. Only an `Ok(Run)` lets the call run;
+    /// the claim is durable before it returns.
+    async fn claim(&self, call: ApprovedCall<'_>) -> Result<ApprovedCallClaim, HostError>;
+
+    /// Record the result of a claimed call.
+    async fn complete(&self, key: &str, result: &Value) -> Result<(), HostError>;
+}
+
+/// The result the model reads when an earlier attempt consumed the approval
+/// and its outcome is unknown.
+fn approved_call_started_result() -> Value {
+    json!({
+        "status": "error",
+        "code": "workspace.approved_call_already_started",
+        "message": "An earlier attempt of this turn already started this approved call, and its result was not recorded. The call was not run again. Check its effect (for example with git status or git log) before you ask to run it again.",
+    })
+}
+
+fn host_error_result(error: &HostError) -> Value {
+    json!({
+        "status": "error",
+        "code": error.reason_code(),
+        "message": error.to_string(),
+    })
+}
+
 /// Whether the run this call belongs to carries an APPROVE decision for
 /// exactly this call id (the direct HITL resume of an interrupted call). The
 /// decision is the run's, set by the host from the person's answer, never a
@@ -251,6 +306,7 @@ fn approved_call(ctx: &dyn ToolContext) -> bool {
 pub struct WorkspaceTool {
     spec: &'static WorkspaceToolSpec,
     runner: Arc<dyn WorkspaceRunner>,
+    approved_calls: Option<Arc<dyn ApprovedCallLedger>>,
 }
 
 #[async_trait]
@@ -277,26 +333,50 @@ impl Tool for WorkspaceTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
-        // Failures are results the model reads, not run failures.
-        Ok(
-            match self
-                .runner
-                .call_approved(
-                    self.spec.name,
-                    ctx.function_call_id(),
-                    args,
-                    approved_call(ctx.as_ref()),
-                )
+        let approved = approved_call(ctx.as_ref());
+        // With a ledger, an approved call is one-shot: its approval is
+        // consumed before it runs, and its result is recorded before anything
+        // else of the turn can fail.
+        let ledger = self.approved_calls.as_ref().filter(|_| approved);
+        let key = match ledger {
+            None => None,
+            Some(ledger) => match ledger
+                .claim(ApprovedCall {
+                    tool: self.spec.name,
+                    call_id: ctx.function_call_id(),
+                    args: &args,
+                    invocation_id: ctx.invocation_id(),
+                })
                 .await
             {
-                Ok(value) => value,
-                Err(error) => json!({
-                    "status": "error",
-                    "code": error.reason_code(),
-                    "message": error.to_string(),
-                }),
+                Ok(ApprovedCallClaim::Run { key }) => Some(key),
+                Ok(ApprovedCallClaim::Completed(result)) => return Ok(result),
+                Ok(ApprovedCallClaim::Started) => return Ok(approved_call_started_result()),
+                // Not consumed, so not run.
+                Err(error) => return Ok(host_error_result(&error)),
             },
-        )
+        };
+        // Failures are results the model reads, not run failures.
+        let result = match self
+            .runner
+            .call_approved(self.spec.name, ctx.function_call_id(), args, approved)
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => host_error_result(&error),
+        };
+        if let (Some(ledger), Some(key)) = (ledger, key)
+            && let Err(error) = ledger.complete(&key, &result).await
+        {
+            // The claim stays: a retry reports the call as started and does
+            // not run it again. This attempt still returns what it ran.
+            tracing::warn!(
+                tool.name = self.spec.name,
+                error.code = error.reason_code(),
+                "the approved workspace call ran, but its result was not recorded"
+            );
+        }
+        Ok(result)
     }
 }
 
@@ -321,6 +401,7 @@ impl Toolset for WorkspaceToolset {
 pub struct WorkspaceToolProvider {
     runner: Arc<dyn WorkspaceRunner>,
     shell: bool,
+    approved_calls: Option<Arc<dyn ApprovedCallLedger>>,
 }
 
 impl WorkspaceToolProvider {
@@ -328,7 +409,19 @@ impl WorkspaceToolProvider {
     /// `run_command` is not offered.
     #[must_use]
     pub fn new(runner: Arc<dyn WorkspaceRunner>, shell: bool) -> Self {
-        Self { runner, shell }
+        Self {
+            runner,
+            shell,
+            approved_calls: None,
+        }
+    }
+
+    /// Make every approved call one-shot through `ledger`
+    /// ([`ApprovedCallLedger`]).
+    #[must_use]
+    pub fn with_approved_calls(mut self, ledger: Arc<dyn ApprovedCallLedger>) -> Self {
+        self.approved_calls = Some(ledger);
+        self
     }
 
     /// The tools offered, in model order.
@@ -351,6 +444,7 @@ impl WorkspaceToolProvider {
                     Arc::new(WorkspaceTool {
                         spec,
                         runner: Arc::clone(&self.runner),
+                        approved_calls: self.approved_calls.clone(),
                     }) as Arc<dyn Tool>
                 })
                 .collect(),
@@ -426,6 +520,7 @@ mod tests {
                     Arc::new(WorkspaceTool {
                         spec,
                         runner: runner.clone(),
+                        approved_calls: None,
                     }) as Arc<dyn Tool>
                 })
                 .collect(),

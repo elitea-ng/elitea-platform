@@ -852,6 +852,17 @@ impl OrdinaryNativeAgentPlan {
         self.session_id.as_ref()
     }
 
+    /// The root session's identity, the one the Runner and the direct HITL
+    /// resume read and write.
+    pub(super) fn session_identity(&self) -> Result<AdkIdentity, NativeAgentAssemblyError> {
+        let app_name = adk_rust::AppName::new(APP_NAME).map_err(|_| invalid_configuration())?;
+        Ok(AdkIdentity::new(
+            app_name,
+            self.user_id.clone(),
+            self.session_id.clone(),
+        ))
+    }
+
     pub(super) fn resource_project_id(&self) -> &str {
         &self.resource_project_id
     }
