@@ -19,6 +19,8 @@
 #     169.254.169.254 included), loopback or "this network" destination, and
 #     the operator's extra ranges (the hosts' own subnets, the compose
 #     networks the platform runs on: pass them as arguments);
+#   * nothing reaches the host itself (an INPUT rule on the bridge: only
+#     replies enter), so a service listening on the host is unreachable;
 #   * everything else (the public internet) is allowed.
 # IPv6 is disabled on the network, so fd00:ec2::254 and the other IPv6
 # private ranges are unreachable by construction.
@@ -60,4 +62,14 @@ done
 iptables -A "$chain" -j RETURN
 iptables -C DOCKER-USER -i "$bridge" -j "$chain" 2>/dev/null \
   || iptables -I DOCKER-USER -i "$bridge" -j "$chain"
+# The host itself: DOCKER-USER sees forwarded packets only, so a run could
+# still open a connection to a service listening on the host (Main, the
+# supervisor, a database) through the bridge's gateway address. Only replies
+# enter the host from the bridge.
+input_chain=ELITEA-WORKSPACE-HOST
+iptables -N "$input_chain" 2>/dev/null || iptables -F "$input_chain"
+iptables -A "$input_chain" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+iptables -A "$input_chain" -j DROP
+iptables -C INPUT -i "$bridge" -j "$input_chain" 2>/dev/null \
+  || iptables -I INPUT -i "$bridge" -j "$input_chain"
 echo "workspace egress network $network ($subnet) is ready; set it as the supervisor's workspace egress network"
