@@ -25,7 +25,9 @@ func TestSecuredGatewayRunsOnTheChartsPermissions(t *testing.T) {
 	m := s.Material(natsconn.IdentityGateway)
 	ctx := context.Background()
 
-	c, err := Connect(ctx, Config{URL: s.URL(), TLSCAFile: m.CAFile, TLSCertFile: m.CertFile, TLSKeyFile: m.KeyFile})
+	// The breaker threshold is raised above the PublishDelta attempts below, so
+	// a slow first write is retried rather than tripping the breaker after 3.
+	c, err := Connect(ctx, Config{URL: s.URL(), TLSCAFile: m.CAFile, TLSCertFile: m.CertFile, TLSKeyFile: m.KeyFile, CBFailureThreshold: 10})
 	if err != nil {
 		t.Fatalf("Connect as the gateway: %v\nserver log:\n%s", err, s.Log())
 	}
@@ -60,17 +62,20 @@ func TestSecuredGatewayRunsOnTheChartsPermissions(t *testing.T) {
 	// The first JetStream publish to GATEWAY_BUDGET_DELTAS on a fresh server
 	// creates its file store (a 1 GiB reservation), which can exceed the
 	// production OpTimeout (150ms, pinned on purpose) on a slow runner: seen
-	// in CI as "context deadline exceeded" with no permission violation. A
-	// deadline is not a permission failure, so ONLY a deadline is retried,
-	// a bounded number of times; anything else fails at once. A denied publish
-	// still fails the test: s.RequireNoViolations below reads the server's own
-	// permissions-violation log.
+	// in CI as "context deadline exceeded" with no permission violation. Only
+	// a deadline is retried, a bounded number of times (below the breaker
+	// threshold set above); any other error fails at once.
+	//
+	// A publish the chart's permissions DENY also surfaces as a deadline (the
+	// server drops it and the JetStream ack never comes), so a denial IS
+	// retried here. It still fails the test: every attempt times out, so the
+	// Fatalf below fires, and s.RequireNoViolations reads the server's own
+	// permissions-violation log. Proven with the gateway's
+	// gateway.budget.delta grant removed from the rendered nats.conf.
 	var publishErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		publishErr = c.PublishDelta(ctx, "evt-1", []byte(`{"event_id":"evt-1"}`))
 		// mapErr wraps the cause with %v, so the deadline is only in the text.
-		// ErrUnavailable alone is NOT retried: it also covers "no responders",
-		// which is what a publish the chart's permissions deny looks like.
 		if publishErr == nil || !strings.Contains(publishErr.Error(), context.DeadlineExceeded.Error()) {
 			break
 		}
