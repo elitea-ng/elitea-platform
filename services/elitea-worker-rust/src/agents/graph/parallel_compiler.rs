@@ -364,11 +364,20 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             }
             None => Arc::clone(&self.resolver),
         };
+        // A continued authored `after` pause re-arms only its proven checkpoint.
+        let checkpointer = if execution.static_after_checkpoints().is_empty() {
+            execution.checkpointer()
+        } else {
+            Arc::new(super::super::static_pause::StaticResumeCheckpointer::new(
+                execution.checkpointer(),
+                execution.static_after_checkpoints().clone(),
+            ))
+        };
         let node = ApplicationNode::new(
             definition.clone(),
             self.state_types.clone(),
             resolver.as_ref(),
-            execution.checkpointer(),
+            checkpointer,
         )
         .map_err(|_| {
             GraphError::InvalidGraph(
@@ -458,33 +467,44 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
     fn pause_cards(
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,
-        _pause: &ParallelBranchPause,
+        pause: &ParallelBranchPause,
     ) -> Result<Vec<ParallelPauseCard>, GraphError> {
         self.definition(branch)?;
-        Err(branch_pause_unproved())
+        Ok(vec![super::super::parallel_cards::child_card(pause)?.card])
     }
 
     async fn resume_input(
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,
-        _pause: &ParallelBranchPause,
-        _decisions: &[ParallelDecision],
+        pause: &ParallelBranchPause,
+        decisions: &[ParallelDecision],
     ) -> Result<State, GraphError> {
-        self.definition(branch)?;
-        Err(branch_pause_unproved())
-    }
-}
-
-/// A branch pause is accepted only with a per-interrupt proof from the child
-/// checkpoint; until a card kind has one, its pause fails typed.
-fn branch_pause_unproved() -> GraphError {
-    GraphError::NodeExecutionFailed {
-        node: "parallel".to_owned(),
-        message: "graph.parallel.pause_unproved: the branch pause has no child checkpoint proof"
-            .to_owned(),
+        let definition = self.definition(branch)?;
+        // The child participant's own authored pause catalog proves a static
+        // pause; it is resolved from frozen saved versions, not from state.
+        let participant = self
+            .resolver
+            .resolve(definition.selection(), Arc::clone(&pause.checkpointer))
+            .map_err(|_| {
+                GraphError::InvalidGraph(
+                    "the fixed Parallel Agent participant is unavailable".to_owned(),
+                )
+            })?;
+        let catalog = match &participant {
+            crate::agents::graph::application::ResolvedApplicationParticipant::Pipeline {
+                static_pauses,
+                ..
+            } => Some(static_pauses),
+            _ => None,
+        };
+        super::super::parallel_cards::child_resume(pause, catalog, decisions).await
     }
 }
 
 #[cfg(test)]
 #[path = "parallel_compiler_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "parallel_cards_tests.rs"]
+mod card_tests;

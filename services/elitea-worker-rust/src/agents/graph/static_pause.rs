@@ -377,6 +377,87 @@ impl PipelineTextContinuation {
     }
 }
 
+/// The pause id a fan-out child's authored pause publishes on its card.
+pub(crate) fn fanout_static_pause_id(
+    interrupt: &adk_rust::Event,
+    root_agent_name: &str,
+    child_thread: &str,
+) -> Option<String> {
+    let binding = pipeline_static_event_binding(interrupt, root_agent_name, child_thread).ok()?;
+    binding
+        .public_proof(interrupt)
+        .ok()?
+        .get("pause_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+/// Continue a fan-out child's authored pause with typed text (the card's
+/// `continue` action). The proof binds `(child thread, the child's paused
+/// checkpoint, pause id)` and checks the pause metadata against the child's
+/// own leaf checkpoint and its participant's catalog, never the root
+/// thread's naming or the session tail.
+#[allow(clippy::too_many_arguments)] // Each argument binds one exact authority.
+pub(crate) async fn fanout_static_resume(
+    interrupt: &adk_rust::Event,
+    checkpointer: &dyn Checkpointer,
+    root_agent_name: &str,
+    child_thread: &str,
+    catalog: &StaticPauseCatalog,
+    pause_id: &str,
+    user_input: &str,
+) -> Result<PipelineResume, PipelineResumeError> {
+    if user_input.trim().is_empty() || user_input.len() > 8 * 1024 || user_input.contains('\0') {
+        return Err(PipelineResumeError::invalid());
+    }
+    let binding = pipeline_static_event_binding(interrupt, root_agent_name, child_thread)
+        .map_err(|_| PipelineResumeError::corrupt())?;
+    let proof = binding
+        .public_proof(interrupt)
+        .map_err(|_| PipelineResumeError::corrupt())?;
+    if proof.get("pause_id").and_then(serde_json::Value::as_str) != Some(pause_id) {
+        return Err(PipelineResumeError::stale());
+    }
+    // The branch owns exactly one saved pipeline: its pause is one level down.
+    let [leaf_ref] = binding.nested_checkpoints.as_slice() else {
+        return Err(PipelineResumeError::stale());
+    };
+    let child = checkpointer
+        .load(child_thread)
+        .await
+        .map_err(|_| PipelineResumeError::dependency())?
+        .ok_or_else(PipelineResumeError::stale)?;
+    if child.thread_id != child_thread
+        || child.checkpoint_id != binding.checkpoint_id
+        || child.pending_nodes.as_slice() != [leaf_ref.node_name()]
+    {
+        return Err(PipelineResumeError::stale());
+    }
+    let leaf = checkpointer
+        .load(leaf_ref.thread_id())
+        .await
+        .map_err(|_| PipelineResumeError::dependency())?
+        .ok_or_else(PipelineResumeError::stale)?;
+    if leaf.thread_id != leaf_ref.thread_id()
+        || leaf.checkpoint_id != leaf_ref.checkpoint_id()
+        || !catalog.contains_exact(&binding.metadata)
+        || !binding.metadata.checkpoint_matches(&leaf)
+    {
+        return Err(PipelineResumeError::stale());
+    }
+    let mut state = State::from([(
+        STATIC_TEXT_RESUME_STATE_KEY.to_owned(),
+        json!(BTreeMap::from([(leaf.thread_id.clone(), user_input)])),
+    )]);
+    if binding.metadata.kind == "after" {
+        state.insert(
+            STATIC_AFTER_CHECKPOINTS_STATE_KEY.to_owned(),
+            json!(BTreeMap::from([(leaf.thread_id, leaf.checkpoint_id)])),
+        );
+    }
+    Ok(PipelineResume::from_text_state(state))
+}
+
 async fn validate_static_frontier(
     checkpointer: &dyn Checkpointer,
     thread_id: &str,

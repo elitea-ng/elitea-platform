@@ -202,17 +202,48 @@ impl PipelineMcpAuthorizationContinuation {
         root_agent_name: &str,
         thread_id: &str,
     ) -> Result<PipelineResume, PipelineResumeError> {
-        let events = session.events().all();
-        let interrupt_index = events
-            .iter()
-            .rposition(|event| event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY))
-            .ok_or_else(PipelineResumeError::stale)?;
-        if interrupt_index + 1 != events.len() {
-            return Err(PipelineResumeError::stale());
+        let interrupt = tail_interrupt(session)?;
+        self.resolve_event(&interrupt, checkpointer, root_agent_name, thread_id)
+            .await
+    }
+
+    /// One fan-out card's authorization decision. The credential travels by
+    /// reference on the decision, never here, so no server collection binds.
+    pub(crate) fn fanout(
+        interrupt_id: &str,
+        tool_call_id: &str,
+        action: &str,
+    ) -> Result<Self, PipelineResumeError> {
+        let action = match action {
+            "authorize" => PipelineMcpAuthorizationAction::Authorize,
+            "skip" => PipelineMcpAuthorizationAction::Skip,
+            _ => return Err(PipelineResumeError::invalid()),
+        };
+        if !valid_identity(interrupt_id) || !valid_identity(tool_call_id) {
+            return Err(PipelineResumeError::invalid());
         }
-        let binding =
-            pipeline_mcp_auth_event_binding(&events[interrupt_index], root_agent_name, thread_id)
-                .map_err(|_| PipelineResumeError::corrupt())?;
+        Ok(Self {
+            action,
+            server_urls: BTreeSet::new(),
+            card: Some(PipelineMcpAuthorizationCard {
+                interrupt_id: interrupt_id.to_owned(),
+                tool_call_id: tool_call_id.to_owned(),
+                action,
+            }),
+        })
+    }
+
+    /// Resolve against one exact interrupt event: the session tail for a
+    /// root pause, or a fan-out child's own pause.
+    pub(crate) async fn resolve_event(
+        self,
+        interrupt: &adk_rust::Event,
+        checkpointer: &dyn Checkpointer,
+        root_agent_name: &str,
+        thread_id: &str,
+    ) -> Result<PipelineResume, PipelineResumeError> {
+        let binding = pipeline_mcp_auth_event_binding(interrupt, root_agent_name, thread_id)
+            .map_err(|_| PipelineResumeError::corrupt())?;
         if self.card.as_ref().is_some_and(|card| {
             card.interrupt_id != binding.interrupt_id()
                 || card.tool_call_id != binding.tool_call_id()
@@ -796,7 +827,6 @@ impl PipelineToolDecision {
         })
     }
 
-    #[allow(clippy::too_many_lines)] // One linear validation chain binds one persisted interrupt.
     async fn resolve(
         self,
         session: &dyn Session,
@@ -804,21 +834,59 @@ impl PipelineToolDecision {
         root_agent_name: &str,
         thread_id: &str,
     ) -> Result<PipelineResume, PipelineResumeError> {
-        let events = session.events().all();
-        let interrupt_index = events
-            .iter()
-            .rposition(|event| event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY))
-            .ok_or_else(PipelineResumeError::stale)?;
-        if interrupt_index + 1 != events.len() {
-            return Err(PipelineResumeError::stale());
+        let interrupt = tail_interrupt(session)?;
+        self.resolve_event(&interrupt, checkpointer, root_agent_name, thread_id)
+            .await
+    }
+
+    /// One fan-out card's tool decision (`tool_guard` or `ask_user`), with
+    /// the same bounds as the root wire.
+    pub(crate) fn fanout(
+        interrupt_id: &str,
+        tool_call_id: &str,
+        action: &str,
+        value: &str,
+    ) -> Result<Self, PipelineResumeError> {
+        let action = match action {
+            "approve" => PipelineHitlAction::Approve,
+            "reject" => PipelineHitlAction::Reject,
+            "block_with_comment" => PipelineHitlAction::BlockWithComment,
+            "answer" => PipelineHitlAction::Answer,
+            _ => return Err(PipelineResumeError::invalid()),
+        };
+        let bounded =
+            |maximum: usize| !value.is_empty() && value.len() <= maximum && !value.contains('\0');
+        if !valid_identity(interrupt_id)
+            || !valid_identity(tool_call_id)
+            || match action {
+                PipelineHitlAction::Approve | PipelineHitlAction::Reject => !value.is_empty(),
+                PipelineHitlAction::BlockWithComment => !bounded(MAX_COMMENT_BYTES),
+                PipelineHitlAction::Answer => !bounded(MAX_ANSWER_BYTES),
+                PipelineHitlAction::Edit => true,
+            }
+        {
+            return Err(PipelineResumeError::invalid());
         }
+        Ok(Self {
+            interrupt_id: interrupt_id.to_owned(),
+            tool_call_id: tool_call_id.to_owned(),
+            action,
+            value: value.to_owned(),
+        })
+    }
+
+    /// Resolve against one exact interrupt event (see the MCP variant).
+    #[allow(clippy::too_many_lines)] // One linear validation chain binds one persisted interrupt.
+    pub(crate) async fn resolve_event(
+        self,
+        interrupt: &adk_rust::Event,
+        checkpointer: &dyn Checkpointer,
+        root_agent_name: &str,
+        thread_id: &str,
+    ) -> Result<PipelineResume, PipelineResumeError> {
         if self.action == PipelineHitlAction::Answer {
-            let binding = pipeline_clarifying_event_binding(
-                &events[interrupt_index],
-                root_agent_name,
-                thread_id,
-            )
-            .map_err(|_| PipelineResumeError::corrupt())?;
+            let binding = pipeline_clarifying_event_binding(interrupt, root_agent_name, thread_id)
+                .map_err(|_| PipelineResumeError::corrupt())?;
             if binding.interrupt_id() != self.interrupt_id
                 || binding.tool_call_id() != self.tool_call_id
             {
@@ -865,9 +933,8 @@ impl PipelineToolDecision {
                 .collect(),
             });
         }
-        let binding =
-            pipeline_tool_event_binding(&events[interrupt_index], root_agent_name, thread_id)
-                .map_err(|_| PipelineResumeError::corrupt())?;
+        let binding = pipeline_tool_event_binding(interrupt, root_agent_name, thread_id)
+            .map_err(|_| PipelineResumeError::corrupt())?;
         if binding.interrupt_id() != self.interrupt_id
             || binding.tool_call_id() != self.tool_call_id
         {
@@ -1058,17 +1125,53 @@ impl PipelineHitlDecision {
         root_agent_name: &str,
         thread_id: &str,
     ) -> Result<PipelineResume, PipelineResumeError> {
-        let events = session.events().all();
-        let interrupt_index = events
-            .iter()
-            .rposition(|event| event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY))
-            .ok_or_else(PipelineResumeError::stale)?;
-        if interrupt_index + 1 != events.len() {
-            return Err(PipelineResumeError::stale());
+        let interrupt = tail_interrupt(session)?;
+        self.resolve_event(&interrupt, checkpointer, root_agent_name, thread_id)
+            .await
+    }
+
+    /// One fan-out card's HITL-node decision, with the root wire's bounds.
+    pub(crate) fn fanout(
+        interrupt_id: &str,
+        action: &str,
+        value: &str,
+    ) -> Result<Self, PipelineResumeError> {
+        let action = match action {
+            "approve" => PipelineHitlAction::Approve,
+            "reject" => PipelineHitlAction::Reject,
+            "edit" => PipelineHitlAction::Edit,
+            "block_with_comment" => PipelineHitlAction::BlockWithComment,
+            _ => return Err(PipelineResumeError::invalid()),
+        };
+        let bounded =
+            |maximum: usize| !value.is_empty() && value.len() <= maximum && !value.contains('\0');
+        if !valid_identity(interrupt_id)
+            || match action {
+                PipelineHitlAction::Approve | PipelineHitlAction::Reject => !value.is_empty(),
+                PipelineHitlAction::Edit => !bounded(MAX_EDIT_BYTES),
+                PipelineHitlAction::BlockWithComment => !bounded(MAX_COMMENT_BYTES),
+                PipelineHitlAction::Answer => true,
+            }
+        {
+            return Err(PipelineResumeError::invalid());
         }
-        let binding =
-            pipeline_hitl_event_binding(&events[interrupt_index], root_agent_name, thread_id)
-                .map_err(|_| PipelineResumeError::corrupt())?;
+        Ok(Self {
+            interrupt_id: interrupt_id.to_owned(),
+            action,
+            value: value.to_owned(),
+        })
+    }
+
+    /// Resolve against one exact interrupt event (see the MCP variant).
+    pub(crate) async fn resolve_event(
+        self,
+        interrupt: &adk_rust::Event,
+        checkpointer: &dyn Checkpointer,
+        root_agent_name: &str,
+        thread_id: &str,
+    ) -> Result<PipelineResume, PipelineResumeError> {
+        let binding = pipeline_hitl_event_binding(interrupt, root_agent_name, thread_id)
+            .map_err(|_| PipelineResumeError::corrupt())?;
         if binding.interrupt_id() != self.interrupt_id
             || !binding.allows(self.action.graph_action())
         {
@@ -1303,6 +1406,19 @@ fn resume_state_is_clear(value: Option<&Value>, consumed: Option<(&str, &Value)>
         }
         Some(_) => false,
     }
+}
+
+/// The latest session event, when it is the graph interrupt a decision answers.
+fn tail_interrupt(session: &dyn Session) -> Result<adk_rust::Event, PipelineResumeError> {
+    let mut events = session.events().all();
+    let interrupt_index = events
+        .iter()
+        .rposition(|event| event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY))
+        .ok_or_else(PipelineResumeError::stale)?;
+    if interrupt_index + 1 != events.len() {
+        return Err(PipelineResumeError::stale());
+    }
+    Ok(events.swap_remove(interrupt_index))
 }
 
 fn valid_identity(value: &str) -> bool {

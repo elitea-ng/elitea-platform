@@ -114,8 +114,8 @@ fn toolkit_node_rejects_ambiguous_or_unbounded_configuration() {
 }
 
 #[derive(Default)]
-struct InvocationCapture {
-    calls: usize,
+pub(super) struct InvocationCapture {
+    pub(super) calls: usize,
     arguments: Value,
     function_call_id: String,
     session_id: String,
@@ -156,15 +156,15 @@ impl Tool for FixtureTool {
     }
 }
 
-struct FixtureResolver {
-    alias: String,
-    tool: Arc<dyn Tool>,
-    sensitive: Option<SensitiveToolPolicy>,
+pub(super) struct FixtureResolver {
+    pub(super) alias: String,
+    pub(super) tool: Arc<dyn Tool>,
+    pub(super) sensitive: Option<SensitiveToolPolicy>,
 }
 
-struct AuthorizationFixtureTool {
-    authorized: Arc<AtomicBool>,
-    toolkit_type: &'static str,
+pub(super) struct AuthorizationFixtureTool {
+    pub(super) authorized: Arc<AtomicBool>,
+    pub(super) toolkit_type: &'static str,
 }
 
 #[async_trait]
@@ -256,7 +256,7 @@ fn sensitive_fixture_runtime_for(
     sensitive_runtime(response, toolkit_type, true)
 }
 
-fn sensitive_runtime(
+pub(super) fn sensitive_runtime(
     response: Value,
     toolkit_type: &str,
     read_only: bool,
@@ -1043,7 +1043,7 @@ fn sensitive_pipeline_definition() -> PipelineDefinition {
         .expect("sensitive Toolkit pipeline")
 }
 
-fn sensitive_pipeline_definition_yaml() -> String {
+pub(super) fn sensitive_pipeline_definition_yaml() -> String {
     r#"
 state:
   ticket_id: {type: int, value: 9}

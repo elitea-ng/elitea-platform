@@ -497,6 +497,8 @@ pub(crate) struct ParallelBranchExecution {
     thread_id: String,
     admitted_threads: BTreeSet<String>,
     parent_event_scope: Option<serde_json::Value>,
+    /// Authored `after` pauses this run continues (thread → checkpoint).
+    static_after_checkpoints: std::collections::BTreeMap<String, String>,
 }
 
 impl ParallelBranchExecution {
@@ -518,7 +520,21 @@ impl ParallelBranchExecution {
             thread_id,
             admitted_threads,
             parent_event_scope,
+            static_after_checkpoints: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// The authored `after` pauses the resumed input continues.
+    pub(super) fn with_static_after_checkpoints(
+        mut self,
+        checkpoints: std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        self.static_after_checkpoints = checkpoints;
+        self
+    }
+
+    pub(crate) fn static_after_checkpoints(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.static_after_checkpoints
     }
 
     pub(crate) fn activation_root_thread_id(&self) -> &str {

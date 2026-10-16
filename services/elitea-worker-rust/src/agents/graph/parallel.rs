@@ -839,6 +839,13 @@ impl AdkParallelBranchRuntime {
                     .state
                     .get(super::node_events::PIPELINE_NODE_EVENT_SCOPE_STATE_KEY)
                     .cloned(),
+            )
+            .with_static_after_checkpoints(
+                branch
+                    .input
+                    .get(super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY)
+                    .and_then(|value| serde_json::from_value(value.clone()).ok())
+                    .unwrap_or_default(),
             ),
         )?;
         let mut config = ExecutionConfig::new(&branch.thread_id)

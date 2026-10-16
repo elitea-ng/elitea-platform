@@ -105,7 +105,13 @@ const MAX_NESTED_PIPELINE_CHECKPOINTS: usize = 3;
 const MAX_PIPELINE_INTERRUPT_MESSAGE_BYTES: usize = MAX_PIPELINE_HITL_MESSAGE_BYTES
     + MAX_NESTED_PIPELINE_CHECKPOINTS * (MAX_PIPELINE_NODE_IDENTITY_BYTES + 2);
 const MAX_PIPELINE_NODE_IDENTITY_BYTES: usize = 128;
-const MAX_AGENT_PATH_TIERS: usize = 3;
+/// Agent path tiers, the fan-out member tier included (contract §3.3).
+const MAX_AGENT_PATH_TIERS: usize =
+    elitea_agent_runtime::graph::fanout_budget::MAX_AGENT_PATH_TIERS;
+/// A fan-out member tier's ordinal (Map items reach 64); every other tier
+/// keeps the per-model-turn bound.
+const MAX_FANOUT_MEMBER_ORDINAL: usize =
+    elitea_agent_runtime::graph::fanout_budget::MAX_FANOUT_ORDINAL;
 pub(crate) const APPLICATION_BRANCH_ROOT: &str = "elitea.saved_applications";
 pub(crate) const DESCENDANT_CONTAINER_INVOCATION_KEY: &str =
     "elitea.descendant.container_invocation_id";
@@ -5866,7 +5872,7 @@ fn parse_agent_path_tier(value: &Value) -> Result<AgentPathTier, AgentEventProje
             value
                 .as_u64()
                 .and_then(|value| usize::try_from(value).ok())
-                .filter(|value| *value > 0 && *value <= MAX_TOOL_CALLS_PER_MODEL_TURN)
+                .filter(|value| *value > 0 && *value <= sibling_ordinal_bound(call_id))
                 .ok_or_else(AgentEventProjectionError::invalid_state)
         })
         .transpose()?;
@@ -5875,6 +5881,22 @@ fn parse_agent_path_tier(value: &Value) -> Result<AgentPathTier, AgentEventProje
         call_id: call_id.to_owned(),
         sibling_ordinal,
     })
+}
+
+/// A fan-out member tier is named by its `fo1_` member call id (contract
+/// §3.3: `"fo1_" + lowercase_hex(SHA-256(…))`); only it reaches ordinal 64.
+fn sibling_ordinal_bound(call_id: &str) -> usize {
+    let member = call_id.strip_prefix("fo1_").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    });
+    if member {
+        MAX_FANOUT_MEMBER_ORDINAL
+    } else {
+        MAX_TOOL_CALLS_PER_MODEL_TURN
+    }
 }
 
 fn agent_path_tier_value(tier: &AgentPathTier) -> Value {
@@ -6421,3 +6443,70 @@ mod scoped_static_inventory_tests {
 
 #[path = "events_code_debug.rs"]
 mod code_debug;
+
+#[cfg(test)]
+mod fanout_member_tier_tests {
+    use serde_json::{Map, Value, json};
+
+    use super::{AgentPathTier, overlay_hierarchy_object, parse_agent_path_tier};
+
+    fn member_call_id(child_thread: &str) -> String {
+        elitea_agent_runtime::graph::fanout::identity::member_call_id(child_thread)
+    }
+
+    fn tier(call_id: &str, ordinal: u64) -> Value {
+        json!({"name": "Researcher", "call_id": call_id, "sibling_ordinal": ordinal})
+    }
+
+    #[test]
+    fn a_fanout_member_tier_takes_ordinals_up_to_64_and_others_up_to_16() {
+        let member = member_call_id("p1:child");
+        assert!(parse_agent_path_tier(&tier(&member, 1)).is_ok());
+        assert!(parse_agent_path_tier(&tier(&member, 64)).is_ok());
+        assert!(parse_agent_path_tier(&tier(&member, 65)).is_err());
+        assert!(parse_agent_path_tier(&tier(&member, 0)).is_err());
+        for ordinary in ["call_1", "fo1_short", &member.to_uppercase()] {
+            assert!(
+                parse_agent_path_tier(&tier(ordinary, 16)).is_ok(),
+                "{ordinary}"
+            );
+            assert!(
+                parse_agent_path_tier(&tier(ordinary, 17)).is_err(),
+                "{ordinary}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_member_tier_counts_toward_three_agent_path_tiers() {
+        let prefix = vec![AgentPathTier {
+            name: "Coordinator".to_owned(),
+            call_id: "call_coordinator".to_owned(),
+            sibling_ordinal: None,
+        }];
+        let member = member_call_id("p1:child");
+        let with = |tiers: Vec<Value>| {
+            let mut object = Map::new();
+            object.insert("parent_agent_path".to_owned(), Value::Array(tiers));
+            overlay_hierarchy_object(&mut object, &prefix).map(|()| object)
+        };
+        // Coordinator, member (ordinal 64) and one nested agent: three tiers.
+        let three = with(vec![
+            tier(&member, 64),
+            json!({"name": "Sub", "call_id": "call_sub"}),
+        ])
+        .expect("three tiers fit");
+        assert_eq!(three["parent_agent_path"].as_array().map(Vec::len), Some(3));
+        assert_eq!(three["parent_agent_path"][1]["sibling_ordinal"], 64);
+        assert_eq!(three["parent_agent_call_id"], "call_sub");
+        assert!(
+            with(vec![
+                tier(&member, 2),
+                json!({"name": "Sub", "call_id": "call_sub"}),
+                json!({"name": "Leaf", "call_id": "call_leaf"}),
+            ])
+            .is_err(),
+            "a fourth tier is refused"
+        );
+    }
+}
