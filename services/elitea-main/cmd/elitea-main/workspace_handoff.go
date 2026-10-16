@@ -35,7 +35,28 @@ type workspaceHandoffComposition struct {
 	Route   http.Handler
 	Handoff *workspacehandoff.Service
 	Store   *workspacestore.Service
+	// Encryption is the startup answer for storage encryption at rest
+	// (workspaceEncryption*), which the admin form shows.
+	Encryption string
 }
+
+// The startup answers for the storage encryption at rest of the buckets the
+// cloud executor writes (ADR-0034 decision 4).
+const (
+	// workspaceEncryptionConfirmed: the backend reports a default rule.
+	workspaceEncryptionConfirmed = "confirmed"
+	// workspaceEncryptionAttested: the backend cannot report it, and the
+	// operator attests it (ELITEA_CLOUD_EXECUTOR_STORAGE_ENCRYPTION_ATTESTED).
+	workspaceEncryptionAttested = "attested"
+	// workspaceEncryptionRefused: no rule, an error, or not attested. Send
+	// to cloud stays off.
+	workspaceEncryptionRefused = "refused"
+)
+
+// workspaceEncryptionAttestedEnv is the operator's attestation (chart
+// main.env). It applies ONLY when the backend cannot report its encryption;
+// a backend that reports "no default rule" is refused whatever it says.
+const workspaceEncryptionAttestedEnv = "ELITEA_CLOUD_EXECUTOR_STORAGE_ENCRYPTION_ATTESTED"
 
 // workspaceHandoffInputs are the deployment values of the handoff.
 type workspaceHandoffInputs struct {
@@ -46,6 +67,8 @@ type workspaceHandoffInputs struct {
 	DefaultBucketName   string
 	DedicatedBucketName string
 	Resources           platformconfig.CloudExecutorResources
+	// EncryptionAttested is workspaceEncryptionAttestedEnv.
+	EncryptionAttested bool
 }
 
 // composeWorkspaceHandoff builds the desktop ⇄ cloud handoff (ADR-0034). It
@@ -69,11 +92,33 @@ func composeWorkspaceHandoff(
 	if pool == nil || objectStore == nil || groupAuth.PrincipalValidator == nil || device == nil {
 		return workspaceHandoffComposition{}, nil
 	}
-	encrypted := confirmWorkspaceEncryption(ctx, objectStore, logger, "default")
+	encryption := checkWorkspaceEncryption(ctx, objectStore, inputs.EncryptionAttested, logger, "default")
+	attestedBuckets := []string{}
+	if encryption == workspaceEncryptionAttested {
+		attestedBuckets = append(attestedBuckets, inputs.DefaultBucketName)
+	}
 	buckets := workspacestore.Buckets{Default: workspacestore.PhysicalStore{Name: inputs.DefaultBucketName, Store: objectStore}}
 	if inputs.DedicatedStore != nil {
-		encrypted = encrypted && confirmWorkspaceEncryption(ctx, inputs.DedicatedStore, logger, "dedicated")
+		dedicated := checkWorkspaceEncryption(ctx, inputs.DedicatedStore, inputs.EncryptionAttested, logger, "dedicated")
+		if dedicated == workspaceEncryptionAttested {
+			attestedBuckets = append(attestedBuckets, inputs.DedicatedBucketName)
+		}
+		encryption = combineWorkspaceEncryption(encryption, dedicated)
 		buckets.Dedicated = &workspacestore.PhysicalStore{Name: inputs.DedicatedBucketName, Store: inputs.DedicatedStore}
+	}
+	encrypted := encryption != workspaceEncryptionRefused
+	if encryption == workspaceEncryptionAttested {
+		logger.Warn("cloud executor: storage encryption at rest is ATTESTED BY THE OPERATOR, not reported by the "+
+			"backend (ADR-0034 decision 4)", "env", workspaceEncryptionAttestedEnv, "buckets", attestedBuckets)
+		recorded, err := dbrepos.RecordCloudExecutorEncryptionAttestation(ctx, pool, attestedBuckets)
+		if err != nil {
+			// The audit row is required evidence: without it the
+			// attestation does not apply.
+			logger.Error("cloud executor: the attestation could not be audited; Send to cloud stays off", "err", err)
+			encryption, encrypted = workspaceEncryptionRefused, false
+		} else if recorded {
+			logger.Info("cloud executor: the attestation is recorded in the audit trail")
+		}
 	}
 	settings, err := dbrepos.NewCloudExecutorSettingsRepository(pool)
 	if err != nil {
@@ -124,17 +169,41 @@ func composeWorkspaceHandoff(
 	if err != nil {
 		return workspaceHandoffComposition{}, err
 	}
-	return workspaceHandoffComposition{Route: route, Handoff: handoff, Store: store}, nil
+	return workspaceHandoffComposition{Route: route, Handoff: handoff, Store: store, Encryption: encryption}, nil
 }
 
-func confirmWorkspaceEncryption(ctx context.Context, store storage.ObjectStore, logger *slog.Logger, which string) bool {
+// checkWorkspaceEncryption asks the backend first. Only a backend that cannot
+// report its encryption may be attested by the operator; the default is a
+// refusal.
+func checkWorkspaceEncryption(ctx context.Context, store storage.ObjectStore, attested bool, logger *slog.Logger, which string) string {
 	confirmed, err := storage.DefaultEncryptionConfirmed(ctx, store)
-	if err != nil || !confirmed {
+	switch {
+	case err == nil && confirmed:
+		return workspaceEncryptionConfirmed
+	case errors.Is(err, storage.ErrEncryptionUnreportable) && attested:
+		return workspaceEncryptionAttested
+	case errors.Is(err, storage.ErrEncryptionUnreportable):
+		logger.Warn("cloud executor: the "+which+" bucket's backend cannot report default encryption at rest; "+
+			"Send to cloud stays off until the operator sets "+workspaceEncryptionAttestedEnv+"=true "+
+			"(ADR-0034 decision 4)", "err", err)
+	default:
 		logger.Warn("cloud executor: default encryption at rest of the "+which+" bucket is not confirmed; "+
 			"Send to cloud stays off (ADR-0034 decision 4)", "err", err)
-		return false
 	}
-	return true
+	return workspaceEncryptionRefused
+}
+
+// combineWorkspaceEncryption: a refusal of either bucket refuses; an
+// attestation of either makes the whole answer attested.
+func combineWorkspaceEncryption(a, b string) string {
+	switch {
+	case a == workspaceEncryptionRefused || b == workspaceEncryptionRefused:
+		return workspaceEncryptionRefused
+	case a == workspaceEncryptionAttested || b == workspaceEncryptionAttested:
+		return workspaceEncryptionAttested
+	default:
+		return workspaceEncryptionConfirmed
+	}
 }
 
 // runWorkspaceHandoffSweeper runs the handoff's timed transitions and erasures
@@ -210,6 +279,13 @@ func workspaceStorageFromEnv(ctx context.Context, cfg storage.Config, lookup fun
 		return inputs, err
 	}
 	inputs.Resources = resources
+	if raw, ok := lookup(workspaceEncryptionAttestedEnv); ok && raw != "" {
+		attested, err := strconv.ParseBool(raw)
+		if err != nil {
+			return inputs, fmt.Errorf("%s must be true or false", workspaceEncryptionAttestedEnv)
+		}
+		inputs.EncryptionAttested = attested
+	}
 	dedicated, _ := lookup("STORAGE_WORKSPACE_BUCKET")
 	if dedicated == "" || dedicated == cfg.Container {
 		return inputs, nil

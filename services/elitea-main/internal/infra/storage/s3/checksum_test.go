@@ -192,6 +192,11 @@ func TestLiveChecksumBoundPresignedPut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// RustFS implements GetBucketEncryption: a bucket without a default
+	// rule is a refusal, not "cannot report", so no attestation applies.
+	if confirmed, err := backend.DefaultEncryptionConfirmed(ctx); confirmed || err != nil {
+		t.Fatalf("DefaultEncryptionConfirmed on a bucket without a rule = %t, %v; want false, nil", confirmed, err)
+	}
 	ref, err := storage.NewObjectRef("7", "elitea-workspaces", "t/seg/"+time.Now().Format("150405.000000")+".seg")
 	if err != nil {
 		t.Fatalf("ref: %v", err)

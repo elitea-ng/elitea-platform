@@ -546,13 +546,15 @@ func mapS3Error(err error, op string) error {
 }
 
 // DefaultEncryptionConfirmed reads the bucket's default encryption
-// (GetBucketEncryption). Any server-side rule (SSE-S3, SSE-KMS) confirms it;
-// no configuration, or a backend that does not answer, does not (ADR-0034
-// decision 4).
+// (GetBucketEncryption; AWS S3 and RustFS implement it). Any server-side rule
+// (SSE-S3, SSE-KMS) confirms it. No configuration
+// (ServerSideEncryptionConfigurationNotFoundError) is a refusal. A backend
+// that does not implement the call answers storage.ErrEncryptionUnreportable,
+// which the operator may attest (ADR-0034 decision 4).
 func (b *Backend) DefaultEncryptionConfirmed(ctx context.Context) (bool, error) {
 	output, err := b.client.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{Bucket: aws.String(b.bucket)})
 	if err != nil {
-		return false, fmt.Errorf("storage/s3: read bucket default encryption: %w", err)
+		return encryptionAnswer(err)
 	}
 	if output.ServerSideEncryptionConfiguration == nil {
 		return false, nil
@@ -577,4 +579,24 @@ func fullObjectSHA256(value *string, kind types.ChecksumType) []byte {
 		return nil
 	}
 	return raw
+}
+
+// encryptionAnswer maps a GetBucketEncryption error: no configuration is "not
+// encrypted", an unimplemented call is "cannot report", and anything else is
+// an error (the check runs again at the next start).
+func encryptionAnswer(err error) (bool, error) {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "ServerSideEncryptionConfigurationNotFoundError":
+			return false, nil
+		case "NotImplemented", "MethodNotAllowed", "NotSupported", "UnsupportedOperation":
+			return false, fmt.Errorf("storage/s3: read bucket default encryption: %w: %w", storage.ErrEncryptionUnreportable, err)
+		}
+	}
+	var status interface{ HTTPStatusCode() int }
+	if errors.As(err, &status) && (status.HTTPStatusCode() == 501 || status.HTTPStatusCode() == 405) {
+		return false, fmt.Errorf("storage/s3: read bucket default encryption: %w: %w", storage.ErrEncryptionUnreportable, err)
+	}
+	return false, fmt.Errorf("storage/s3: read bucket default encryption: %w", err)
 }

@@ -1382,6 +1382,13 @@ main:
     ELITEA_CLOUD_EXECUTOR_CPU: ""
     ELITEA_CLOUD_EXECUTOR_MEMORY: ""
     ELITEA_CLOUD_EXECUTOR_DISK: ""
+    # "true" attests that the workspace buckets encrypt at rest when the
+    # storage backend CANNOT report it (GetBucketEncryption not implemented).
+    # Main asks the backend first; a backend that reports no default rule is
+    # refused whatever this says. Main logs the attestation at startup, writes
+    # it to the audit trail once, and the admin form shows "attested by
+    # operator". Empty or "false" keeps the default: refuse.
+    ELITEA_CLOUD_EXECUTOR_STORAGE_ENCRYPTION_ATTESTED: ""
     # S3-only. Leave S3_ENDPOINT_URL empty for real AWS S3; set it for an
     # S3-compatible endpoint (RustFS, MinIO, etc.). S3_ACCESS_KEY/S3_SECRET_KEY
     # are NOT here — see the secrets: block below.

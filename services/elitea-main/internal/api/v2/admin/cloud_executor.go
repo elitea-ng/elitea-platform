@@ -93,6 +93,30 @@ func cloudExecutorSection() map[string]any {
 	}
 }
 
+// WithCloudExecutorEncryption supplies the startup answer for the cloud
+// executor's storage encryption at rest, which the section shows as its
+// notice: "attested by operator" is not the same evidence as a backend that
+// reports its rule (ADR-0034 decision 4).
+func WithCloudExecutorEncryption(status string) Option {
+	return func(h *Handler) { h.cloudExecutorEncryption = status }
+}
+
+// cloudExecutorEncryptionNotice is the section's notice for a startup answer.
+func cloudExecutorEncryptionNotice(status string) string {
+	switch status {
+	case "confirmed":
+		return "Storage encryption at rest: reported by the storage backend."
+	case "attested":
+		return "Storage encryption at rest: attested by operator. The storage backend cannot report it, and the " +
+			"deployment sets ELITEA_CLOUD_EXECUTOR_STORAGE_ENCRYPTION_ATTESTED=true."
+	case "refused":
+		return "Storage encryption at rest: not confirmed. The cloud executor stays off until the storage " +
+			"bucket has default encryption, or, on a backend that cannot report it, until the operator attests it."
+	default:
+		return ""
+	}
+}
+
 func toAny(values []string) []any {
 	out := make([]any, 0, len(values))
 	for _, value := range values {

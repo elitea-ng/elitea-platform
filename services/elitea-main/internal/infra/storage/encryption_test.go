@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -23,8 +24,8 @@ func TestDefaultEncryptionConfirmedThroughTheInstrumentedWrapper(t *testing.T) {
 		}
 	}
 	type plain struct{ ObjectStore }
-	if got, err := DefaultEncryptionConfirmed(ctx, Instrument(plain{}, "s3")); err != nil || got {
-		t.Fatalf("a backend that cannot answer = %t, %v; want not confirmed", got, err)
+	if got, err := DefaultEncryptionConfirmed(ctx, Instrument(plain{}, "s3")); !errors.Is(err, ErrEncryptionUnreportable) || got {
+		t.Fatalf("a backend that cannot answer = %t, %v; want not confirmed and unreportable", got, err)
 	}
 }
 

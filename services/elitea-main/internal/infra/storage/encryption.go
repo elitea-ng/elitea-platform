@@ -1,6 +1,17 @@
 package storage
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrEncryptionUnreportable: the backend cannot say whether its bucket
+// encrypts at rest (the API is not implemented, or the store has no such
+// check). It is not a refusal: the operator may attest the encryption
+// (ELITEA_CLOUD_EXECUTOR_STORAGE_ENCRYPTION_ATTESTED). A backend that answers
+// "no default encryption" answers (false, nil), and no attestation overrides
+// that.
+var ErrEncryptionUnreportable = errors.New("storage: the backend cannot report default encryption at rest")
 
 // DefaultEncryptionVerifier is implemented by a backend that can say whether
 // its physical bucket encrypts objects at rest by default. The cloud executor
@@ -11,12 +22,12 @@ type DefaultEncryptionVerifier interface {
 	DefaultEncryptionConfirmed(ctx context.Context) (bool, error)
 }
 
-// DefaultEncryptionConfirmed asks store; a backend that cannot answer is not
-// confirmed.
+// DefaultEncryptionConfirmed asks store. A store without the check answers
+// ErrEncryptionUnreportable.
 func DefaultEncryptionConfirmed(ctx context.Context, store ObjectStore) (bool, error) {
 	verifier, ok := store.(DefaultEncryptionVerifier)
 	if !ok {
-		return false, nil
+		return false, ErrEncryptionUnreportable
 	}
 	return verifier.DefaultEncryptionConfirmed(ctx)
 }
