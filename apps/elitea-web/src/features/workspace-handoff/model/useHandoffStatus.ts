@@ -12,8 +12,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import type { HandoffIpc, HandoffStatus } from '@/shared/desktop/handoffIpc';
 
-/** How often a thread that is not local is re-read. */
-const HANDOFF_POLL_MS = 5000;
+/**
+ * How often a thread that is not local is re-read: a slow fallback, the
+ * project SSE stream's `workspace.handoff` frames refresh it as it moves
+ * (useHandoffLiveEvents).
+ */
+const HANDOFF_POLL_MS = 60_000;
 
 /** Prefix of every status read of one thread (invalidate by it). */
 export const handoffStatusKey = (conversationUuid: string | undefined) => ['workspace', 'handoff', 'status', conversationUuid ?? ''] as const;
@@ -48,7 +52,8 @@ export const handoffStatusManyKey = () => ['workspace', 'handoff', 'status-many'
 
 /** How long a batch is fresh, and how often the sidebar reads it again. */
 const STATUS_MANY_STALE_MS = 15_000;
-const STATUS_MANY_POLL_MS = 20_000;
+// The fallback poll; the live stream invalidates the batch as threads move.
+const STATUS_MANY_POLL_MS = 60_000;
 const EMPTY_STATUSES: Readonly<Record<string, HandoffStatus>> = Object.freeze({});
 
 /** The statuses of many threads in one host call, by UUID; empty while pending or when it failed. */
