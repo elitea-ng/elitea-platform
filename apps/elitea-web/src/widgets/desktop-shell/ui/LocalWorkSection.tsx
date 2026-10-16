@@ -28,7 +28,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Tooltip from '@mui/material/Tooltip';
 
 import type { Project } from '@/entities/project';
-import { readThreadUuids, useHandoffIpc, useHandoffStatusMany } from '@/features/workspace-handoff';
+import { readThreadUuids, useHandoffIpc, useHandoffLiveEvents, useHandoffStatusMany } from '@/features/workspace-handoff';
 import { readThreads, threadsQueryKey, useWorkspaceIpc, type WorkspaceThread } from '@/features/workspace';
 import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
@@ -168,6 +168,12 @@ function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omi
   );
 }
 
+/** One project's live handoff changes, for the sidebar's badges (renders nothing). */
+function HandoffLiveEvents({ projectId }: { readonly projectId: number }): null {
+  useHandoffLiveEvents(projectId);
+  return null;
+}
+
 export function LocalWorkSection({ location, run, projects }: SectionProps): React.JSX.Element {
   const ipc = useWorkspaceIpc();
   const list = useQuery({ queryKey: WORKSPACE_LIST_KEY, queryFn: () => ipc?.list() ?? Promise.resolve([]), enabled: ipc !== undefined });
@@ -190,13 +196,19 @@ export function LocalWorkSection({ location, run, projects }: SectionProps): Rea
       .map((thread) => uuids[thread.id])
       .filter((uuid): uuid is string => uuid !== undefined);
   });
-  const statuses = useHandoffStatusMany(useHandoffIpc(), visibleUuids);
+  const handoffIpc = useHandoffIpc();
+  const statuses = useHandoffStatusMany(handoffIpc, visibleUuids);
+  // The badges follow each bound project's live handoff changes; the batch poll is the fallback.
+  const liveProjects = handoffIpc === undefined ? [] : [...new Set(workspaces.map((workspace) => workspace.project_id).filter((id): id is number => id !== null))];
   const projectName = (id: number | null): string =>
     id === null ? t('desktop.shell.noProject', 'No project') : (projects.find((p) => p.id === id)?.name ?? '');
   const openFolder = (): void => run({ type: 'open_folder' });
 
   return (
     <Box component="nav" aria-label={t('desktop.shell.localWork', 'Local work')}>
+      {liveProjects.map((projectId) => (
+        <HandoffLiveEvents key={projectId} projectId={projectId} />
+      ))}
       <SectionCaption
         action={
           <Tooltip title={`${t('desktop.shell.openFolder', 'Open folder')} (${modKey()}O)`}>

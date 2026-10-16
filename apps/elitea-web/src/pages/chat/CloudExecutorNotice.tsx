@@ -28,6 +28,7 @@ import DialogTitle from '@mui/material/DialogTitle';
 import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 
+import { HANDOFF_FALLBACK_POLL_MS, handoffInfoKey, useHandoffLiveEvents } from '@/features/workspace-handoff';
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
 import { eraseWorkspaceHandoff, getWorkspaceHandoff, requestWorkspaceReclaim } from '@/shared/api/workspaceHandoffApi';
@@ -55,7 +56,8 @@ function useCanEditProjectSettings(projectId: string): boolean {
   return list?.some((entry) => entry.enabled && entry.name === PERMISSIONS.projectSettings.edit) === true;
 }
 
-const INFO_POLL_MS = 10_000;
+// A slow fallback: the project stream's `workspace.handoff` frames update the read as the thread moves.
+const INFO_POLL_MS = HANDOFF_FALLBACK_POLL_MS;
 
 type Toast = { readonly severity: 'success' | 'error'; readonly message: string };
 
@@ -112,9 +114,10 @@ function Actions({ returning, isOwner, canErase, requesting, onTakeBack, onErase
 
 function useHandoffInfo(projectId: string, conversationUuid: string): { readonly requested: boolean } {
   const queryClient = useQueryClient();
-  // Read every few seconds: the desktop taking the thread back (or an erase elsewhere) moves it without this page doing anything.
+  // The desktop taking the thread back (or an erase elsewhere) moves it without this page doing anything: the live stream says so at once, the poll is the fallback.
+  useHandoffLiveEvents(projectId);
   const info = useQuery({
-    queryKey: ['workspace-handoff', projectId, conversationUuid],
+    queryKey: handoffInfoKey(projectId, conversationUuid.toLowerCase()),
     queryFn: () => getWorkspaceHandoff(projectId, conversationUuid),
     retry: false,
     refetchInterval: INFO_POLL_MS,
@@ -146,7 +149,7 @@ export default function CloudExecutorNotice({ projectId, conversationUuid, execu
       setToast({ severity: 'success', message: t('pages.chat.cloud.erased', 'The cloud copy was erased') });
       // The conversation's `workspace_executor` is local again: read it, and the thread, afresh.
       void queryClient.invalidateQueries({ queryKey: ['conversation'] });
-      void queryClient.invalidateQueries({ queryKey: ['workspace-handoff', projectId, conversationUuid] });
+      void queryClient.invalidateQueries({ queryKey: handoffInfoKey(projectId, conversationUuid.toLowerCase()) });
     },
     onError: () => {
       setConfirming(false);

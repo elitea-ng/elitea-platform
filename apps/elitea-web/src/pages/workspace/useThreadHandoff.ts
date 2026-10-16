@@ -12,7 +12,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { conversationApi } from '@/entities/conversation';
 import { threadsQueryKey } from '@/features/workspace';
-import { handoffStatusManyKey, isOffLaptop, rememberThreadUuid, useHandoffIpc, useHandoffStatus, useTakeBackRequests } from '@/features/workspace-handoff';
+import {
+  handoffStatusManyKey,
+  isOffLaptop,
+  rememberThreadUuid,
+  useHandoffIpc,
+  useHandoffLiveEvents,
+  useHandoffStatus,
+  useTakeBackRequests,
+} from '@/features/workspace-handoff';
 import type { HandoffIpc, HandoffStatus } from '@/shared/desktop/handoffIpc';
 
 type HandoffDialog = 'send' | 'takeBack' | 'erase' | 'settings';
@@ -40,6 +48,8 @@ export function useThreadHandoff(workspaceId: string, projectId: number, convers
   const details = conversationApi.useDetails({ projectId, id: conversationId }, { enabled: conversationId !== '' && ipc !== undefined });
   const uuid = details.data?.uuid === undefined || details.data.uuid === '' ? undefined : details.data.uuid;
   const { status, refresh } = useHandoffStatus(ipc, uuid, projectId);
+  // The thread's moves (a cloud turn, a take back, an erase elsewhere) arrive live.
+  useHandoffLiveEvents(ipc === undefined ? null : projectId);
   const allowed = useQuery({ queryKey: ['workspace', 'handoff', 'allowed'], queryFn: () => (ipc as HandoffIpc).allowed(), enabled: ipc !== undefined, retry: false });
   const [dialog, setDialog] = useState<HandoffDialog | null>(null);
 

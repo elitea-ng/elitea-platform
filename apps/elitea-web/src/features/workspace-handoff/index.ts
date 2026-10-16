@@ -14,5 +14,6 @@ export { TakeBackDialog } from './ui/TakeBackDialog';
 export { HandoffIpcProvider, useHandoffIpc } from './model/ipcContext';
 export { handoffStatusKey, handoffStatusManyKey, isOffLaptop, useHandoffStatus, useHandoffStatusMany } from './model/useHandoffStatus';
 export { useTakeBackRequests } from './model/takeBackRequests';
+export { HANDOFF_FALLBACK_POLL_MS, handoffInfoKey, useHandoffLiveEvents } from './model/useHandoffLiveEvents';
 export { describeHandoffError } from './model/describeHandoffError';
 export { readThreadUuids, rememberThreadUuid } from './model/threadUuids';
