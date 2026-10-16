@@ -17,6 +17,10 @@ SET consumed_at = now()
 WHERE id IN (
     SELECT id FROM elitea_storage.transfer_grants
     WHERE consumed_at IS NULL AND expires_at < $1::timestamptz
+      -- Workspace-store grants are reclaimed by the workspace sweeper, which
+      -- knows which objects a published segment still needs (ADR-0034).
+      AND NOT EXISTS (SELECT 1 FROM elitea_storage.buckets b
+                      WHERE b.id = transfer_grants.bucket_id AND b.bucket_type = 'workspace')
     ORDER BY expires_at
     LIMIT $2::int
     FOR UPDATE SKIP LOCKED
@@ -178,6 +182,10 @@ SELECT id::text AS id, project_id, bucket_id, key, method, content_type, max_byt
     digest_alg, digest, upload_id, expires_at, consumed_at, created_at
 FROM elitea_storage.transfer_grants
 WHERE id = $1::text::uuid AND project_id = $2::bigint
+  -- A workspace-store grant (ADR-0034) is not an artifact grant: the artifact
+  -- routes answer it as absent.
+  AND NOT EXISTS (SELECT 1 FROM elitea_storage.buckets b
+                  WHERE b.id = transfer_grants.bucket_id AND b.bucket_type = 'workspace')
 `
 
 type GetArtifactTransferGrantParams struct {
@@ -231,6 +239,8 @@ SELECT id::text AS id, project_id, bucket_id, key, method, content_type, max_byt
     digest_alg, digest, upload_id, expires_at, consumed_at, created_at
 FROM elitea_storage.transfer_grants
 WHERE id = $1::text::uuid
+  AND NOT EXISTS (SELECT 1 FROM elitea_storage.buckets b
+                  WHERE b.id = transfer_grants.bucket_id AND b.bucket_type = 'workspace')
 `
 
 type GetArtifactTransferGrantByIDRow struct {

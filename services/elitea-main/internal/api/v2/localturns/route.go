@@ -257,6 +257,9 @@ func writeUseCaseError(ctx context.Context, writer http.ResponseWriter, operatio
 	case errors.Is(err, localturn.ErrAlreadyCommitted):
 		desktopwire.WriteError(writer, http.StatusConflict, "local_turn_already_committed",
 			"This local turn is already committed.")
+	case errors.Is(err, localturn.ErrThreadExecutorIsCloud):
+		desktopwire.WriteError(writer, http.StatusConflict, "thread_executor_is_cloud",
+			"This thread is with the cloud executor. Take it back before you run a local turn.")
 	case errors.Is(err, localturn.ErrExpired):
 		desktopwire.WriteError(writer, http.StatusGone, "local_turn_expired",
 			"This local turn passed its deadline. Start a new turn with a new question id.")

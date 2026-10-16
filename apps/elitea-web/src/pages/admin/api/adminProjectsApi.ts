@@ -81,6 +81,12 @@ export interface AdminProjectRow {
   readonly create_success: boolean;
   /** True when the name matches pylon's `project_user_%` personal-project rule. */
   readonly is_personal: boolean;
+  /**
+   * Bytes the project's cloud copies of desktop Local work threads use (the
+   * live workspace segments, ADR-0034 decision 3). Apart from artifact usage.
+   * Optional only for a server older than this field; the column shows `—`.
+   */
+  readonly workspace_bytes?: number;
 }
 
 export interface AdminProjectsPage {

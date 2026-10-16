@@ -25,7 +25,11 @@ RETURNING id::text AS id, project_id, bucket_id, key, method, content_type, max_
 SELECT id::text AS id, project_id, bucket_id, key, method, content_type, max_bytes,
     digest_alg, digest, upload_id, expires_at, consumed_at, created_at
 FROM elitea_storage.transfer_grants
-WHERE id = sqlc.arg('id')::text::uuid AND project_id = sqlc.arg('project_id')::bigint;
+WHERE id = sqlc.arg('id')::text::uuid AND project_id = sqlc.arg('project_id')::bigint
+  -- A workspace-store grant (ADR-0034) is not an artifact grant: the artifact
+  -- routes answer it as absent.
+  AND NOT EXISTS (SELECT 1 FROM elitea_storage.buckets b
+                  WHERE b.id = transfer_grants.bucket_id AND b.bucket_type = 'workspace');
 
 -- name: GetArtifactTransferGrantByID :one
 -- Unscoped by project_id, unlike GetArtifactTransferGrant above — used only
@@ -40,7 +44,9 @@ WHERE id = sqlc.arg('id')::text::uuid AND project_id = sqlc.arg('project_id')::b
 SELECT id::text AS id, project_id, bucket_id, key, method, content_type, max_bytes,
     digest_alg, digest, upload_id, expires_at, consumed_at, created_at
 FROM elitea_storage.transfer_grants
-WHERE id = sqlc.arg('id')::text::uuid;
+WHERE id = sqlc.arg('id')::text::uuid
+  AND NOT EXISTS (SELECT 1 FROM elitea_storage.buckets b
+                  WHERE b.id = transfer_grants.bucket_id AND b.bucket_type = 'workspace');
 
 -- name: MarkArtifactTransferGrantConsumed :execrows
 -- consumed_at IS NULL in the WHERE clause, not just the SET, is the actual
@@ -83,6 +89,10 @@ SET consumed_at = now()
 WHERE id IN (
     SELECT id FROM elitea_storage.transfer_grants
     WHERE consumed_at IS NULL AND expires_at < sqlc.arg('older_than')::timestamptz
+      -- Workspace-store grants are reclaimed by the workspace sweeper, which
+      -- knows which objects a published segment still needs (ADR-0034).
+      AND NOT EXISTS (SELECT 1 FROM elitea_storage.buckets b
+                      WHERE b.id = transfer_grants.bucket_id AND b.bucket_type = 'workspace')
     ORDER BY expires_at
     LIMIT sqlc.arg('row_limit')::int
     FOR UPDATE SKIP LOCKED

@@ -64,6 +64,8 @@ type adminProjectRow struct {
 	Suspended     bool     `json:"suspended"`
 	CreateSuccess bool     `json:"create_success"`
 	IsPersonal    bool     `json:"is_personal"`
+	// A pointer, so a listing that omits the field fails the test.
+	WorkspaceBytes *int64 `json:"workspace_bytes"`
 }
 
 type adminProjectListing struct {
@@ -843,5 +845,47 @@ func newProjectsPool(t *testing.T) *pgxpool.Pool {
 	if _, err := pool.Exec(ctx, `DELETE FROM centry.project`); err != nil {
 		t.Fatalf("clear bootstrap projects: %v", err)
 	}
+	// The listing reads the workspace store's segments (shared 0168), which a
+	// deployment always has. This database carries only 001_initial.sql, so
+	// the columns the listing reads are created here.
+	if _, err := pool.Exec(ctx, `
+CREATE SCHEMA IF NOT EXISTS elitea_runtime;
+CREATE TABLE IF NOT EXISTS elitea_runtime.workspace_segments (
+    project_id integer NOT NULL, conversation_uuid uuid NOT NULL, byte_length bigint NOT NULL,
+    superseded_at timestamptz)`); err != nil {
+		t.Fatalf("create the workspace segments: %v", err)
+	}
 	return pool
+}
+
+// The listing reports each project's cloud copy storage (ADR-0034 decision
+// 3): the live workspace segments only, not superseded ones, and not another
+// project's. It sorts by it.
+func TestProjectsReportWorkspaceBytes(t *testing.T) {
+	pool := newProjectsPool(t)
+	prepareProjectsFixture(t, pool)
+	router := adminProjectsRouter(admin.NewHandler(pool))
+	ctx := context.Background()
+	alpha := projectID(t, pool, "a14-team-alpha")
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.workspace_segments (project_id, conversation_uuid, byte_length, superseded_at) VALUES
+    ($1, gen_random_uuid(), 3000, NULL),
+    ($1, gen_random_uuid(), 500, NULL),
+    ($1, gen_random_uuid(), 9999, clock_timestamp()),
+    ($2, gen_random_uuid(), 7, NULL)`, alpha, alpha+100000); err != nil {
+		t.Fatal(err)
+	}
+	listing := readProjects(t, router, "sort_by=workspace_bytes&sort_order=desc")
+	row := requireProject(t, listing, "a14-team-alpha")
+	if row.WorkspaceBytes == nil || *row.WorkspaceBytes != 3500 {
+		t.Fatalf("workspace_bytes = %v, want 3500 (live segments of this project only)", row.WorkspaceBytes)
+	}
+	if listing.Rows[0].Name != "a14-team-alpha" {
+		t.Fatalf("sorted by workspace_bytes desc, first = %q", listing.Rows[0].Name)
+	}
+	for _, other := range listing.Rows[1:] {
+		if other.WorkspaceBytes == nil || *other.WorkspaceBytes != 0 {
+			t.Fatalf("%s workspace_bytes = %v, want 0", other.Name, other.WorkspaceBytes)
+		}
+	}
 }
