@@ -95,6 +95,10 @@ struct Platform {
     /// The begin answer's `limits` instead of the defaults.
     begin_limits: Option<Value>,
     fail_upload: bool,
+    /// Publishes answered `409 thread_busy` (HTTP `Retry-After: 1`, no
+    /// details) before one is taken.
+    busy_publishes: u32,
+    publish_calls: u32,
     /// An erase (from the web) lands between the take-back's preflight and
     /// its release: the release answers 409 `handoff_erased`.
     erase_before_release: bool,
@@ -224,6 +228,17 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
                 .unwrap_or_default(),
         ),
         ("POST", x) if x == format!("{PREFIX}/workspace_store_publish/{conv}") => {
+            p.publish_calls += 1;
+            if p.busy_publishes > 0 {
+                p.busy_publishes -= 1;
+                let mut res = Res::json(
+                    409,
+                    &json!({"error": "thread_busy",
+                            "message": "Another change to this thread is being saved. Retry the same request shortly."}),
+                );
+                res.headers.push(("Retry-After", "1".into()));
+                return res;
+            }
             let sha = body["segment_sha256"].as_str().unwrap().to_owned();
             let Some(object) = p.objects.get(&sha) else {
                 return Res::json(
@@ -1348,3 +1363,20 @@ async fn a_take_back_asked_during_a_cloud_turn_releases_with_the_later_epoch() {
 
 #[path = "handoff_live_tests.rs"]
 mod live;
+
+/// A thread another writer is saving answers the publish `409 thread_busy`;
+/// the host sends the same publish again and the send still lands, once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_busy_thread_does_not_fail_the_send() {
+    let h = harness().await;
+    h.platform.lock().unwrap().busy_publishes = 1;
+    let sent = h
+        .host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    assert_eq!(sent.state, "CLOUD_IDLE");
+    let p = h.platform.lock().unwrap();
+    assert_eq!(p.publish_calls, 2, "one busy answer, then the publish");
+    assert_eq!(p.seq, 1);
+}

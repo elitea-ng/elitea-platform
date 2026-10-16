@@ -14,11 +14,12 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use elitea_workspace_store::StoreError;
 use elitea_workspace_store::digest::sha256_hex;
-use elitea_workspace_store::rest::{RestStore, TokenSource};
+use elitea_workspace_store::rest::{BusyRetry, RestStore, TokenSource};
 use elitea_workspace_store::sync::{self, Backoff};
 use elitea_workspace_store::transport::{PublishRequest, RefUpdate, StoreTransport as _};
 use serde_json::{Value, json};
@@ -57,6 +58,10 @@ struct Mock {
     refs: BTreeMap<String, String>,
     seq: u64,
     unauthorized_once: bool,
+    /// Publishes answered `409 thread_busy` before one is taken.
+    busy_publishes: u32,
+    /// Publishes that reached the store (busy ones included).
+    publish_calls: u32,
     upload: Upload,
     base: String,
     other: String,
@@ -109,6 +114,14 @@ fn bytes_response(bytes: &[u8], etag: Option<&str>) -> Vec<u8> {
 }
 
 type Shared = Arc<Mutex<Mock>>;
+
+/// The server's busy-thread answer: 409, `Retry-After: 1`, no details.
+fn thread_busy() -> Vec<u8> {
+    let text = json!({"error": "thread_busy",
+        "message": "Another change to this thread is being saved. Retry the same request shortly."})
+    .to_string();
+    format!("HTTP/1.1 409 X\r\nContent-Type: application/json\r\nRetry-After: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}", text.len()).into_bytes()
+}
 
 fn respond(status: u16, body: &Value) -> Vec<u8> {
     let text = body.to_string();
@@ -235,6 +248,11 @@ fn handle(
             "/api/v2/elitea_core/workspace_store_publish/prompt_lib/7/c0ffee00-0000-4000-8000-000000000001",
         ) => {
             let request: PublishRequest = serde_json::from_value(body_json).unwrap();
+            m.publish_calls += 1;
+            if m.busy_publishes > 0 {
+                m.busy_publishes -= 1;
+                return thread_busy();
+            }
             if !m.objects.contains_key(&request.segment_sha256) {
                 return respond(
                     422,
@@ -543,4 +561,76 @@ async fn a_url_with_a_foreign_scheme_is_refused() {
         store.get("file:///etc/passwd").await.unwrap_err().code(),
         "invalid"
     );
+}
+
+fn quick_busy_retry(deadline_ms: u64) -> BusyRetry {
+    BusyRetry {
+        deadline: Duration::from_millis(deadline_ms),
+        max_wait: Duration::from_millis(20),
+    }
+}
+
+/// `thread_busy` is not a conflict: the SAME publish is sent again after the
+/// wait, and one publish lands.
+#[tokio::test]
+async fn a_busy_thread_is_retried_with_the_same_request_until_it_publishes() {
+    let (mock, store) = start().await;
+    let store = store.with_busy_retry(quick_busy_retry(5_000));
+    let bytes = b"# v2 git bundle\nbusy".to_vec();
+    let request = request_for(&bytes);
+    sync::upload(&store, 1, &bytes, Backoff::immediate(1))
+        .await
+        .unwrap();
+    mock.lock().unwrap().busy_publishes = 2;
+    // The REST layer retries, so even a single-attempt backoff gets through.
+    let published = sync::publish(&store, &request, Backoff::immediate(1))
+        .await
+        .unwrap();
+    assert_eq!(published.seq, 1);
+    let m = mock.lock().unwrap();
+    assert_eq!(m.publish_calls, 3, "two busy answers, then the publish");
+    assert_eq!(m.seq, 1, "one publish committed");
+    assert_eq!(m.refs["refs/elitea/base"], request.refs[0].new);
+}
+
+/// A thread busy until the deadline surfaces the `thread_busy` code, not a
+/// conflict and not a generic failure.
+#[tokio::test]
+async fn a_thread_busy_until_the_deadline_is_a_thread_busy_error() {
+    let (mock, store) = start().await;
+    let store = store.with_busy_retry(quick_busy_retry(150));
+    let bytes = b"# v2 git bundle\nstuck".to_vec();
+    sync::upload(&store, 1, &bytes, Backoff::immediate(1))
+        .await
+        .unwrap();
+    mock.lock().unwrap().busy_publishes = u32::MAX;
+    let started = std::time::Instant::now();
+    let error = sync::publish(&store, &request_for(&bytes), Backoff::immediate(3))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), "thread_busy");
+    assert!(error.to_string().contains("Try again"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let m = mock.lock().unwrap();
+    assert!(m.publish_calls >= 2, "retried before giving up");
+    assert_eq!(m.seq, 0, "nothing committed");
+}
+
+/// A real `ref_conflict` is answered at once: one request, no waiting.
+#[tokio::test]
+async fn a_ref_conflict_is_not_retried_as_busy() {
+    let (mock, store) = start().await;
+    let store = store.with_busy_retry(quick_busy_retry(5_000));
+    let bytes = b"# v2 git bundle\nconflict".to_vec();
+    sync::upload_and_publish(&store, &bytes, &request_for(&bytes), Backoff::immediate(3))
+        .await
+        .unwrap();
+    let before = mock.lock().unwrap().publish_calls;
+    let mut theirs = request_for(&bytes);
+    theirs.refs[0].new = "2222222222222222222222222222222222222222".into();
+    let error = sync::publish(&store, &theirs, Backoff::immediate(3))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), "ref_conflict");
+    assert_eq!(mock.lock().unwrap().publish_calls, before + 1);
 }
