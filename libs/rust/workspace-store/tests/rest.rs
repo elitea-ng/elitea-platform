@@ -2,7 +2,11 @@
 //! paths, the bearer only on the deployment's origin, the error envelope,
 //! a 401 refreshed once, and the whole flow end to end.
 #![cfg(feature = "rest")]
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::needless_pass_by_value)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::needless_pass_by_value
+)]
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
