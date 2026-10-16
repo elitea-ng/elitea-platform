@@ -67,7 +67,6 @@ import (
 
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 // The two verbs an exception can carry. They are the legacy strings and the
@@ -236,9 +235,14 @@ func (h *Handler) ListBucketPermissions(w http.ResponseWriter, r *http.Request) 
 	for _, row := range rows {
 		permissions := map[string][]string{}
 		for bucket, verbs := range row.BucketPermissions {
-			// A row written before the name was reserved never names the
-			// hidden workspace bucket on the wire (ADR-0034 decision 3).
-			if !storage.ReservedBucketName(bucket) {
+			// The hidden workspace bucket is never named on the wire
+			// (ADR-0034 decision 3).
+			hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, bucket)
+			if err != nil {
+				h.writeInternal(w, r, "list bucket permissions", err)
+				return
+			}
+			if !hidden {
 				permissions[bucket] = verbs
 			}
 		}
@@ -287,7 +291,7 @@ func (h *Handler) visibleACLRows(
 // `write`.
 func validateBucketPermissions(permissions map[string][]string) (string, bool) {
 	for bucket, verbs := range permissions {
-		if !bucketNamePattern.MatchString(bucket) || storage.ReservedBucketName(bucket) {
+		if !bucketNamePattern.MatchString(bucket) {
 			return "invalid bucket name " + bucket, false
 		}
 		for _, verb := range verbs {
@@ -328,6 +332,19 @@ func (h *Handler) SetBucketPermissions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", message)
 		return
 	}
+	// The hidden workspace bucket has no access list (ADR-0034 decision 3):
+	// naming it is an invalid bucket name, as for any name the caller may not use.
+	for bucket := range body.BucketPermissions {
+		hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, bucket)
+		if err != nil {
+			h.writeInternal(w, r, "set bucket permissions", err)
+			return
+		}
+		if hidden {
+			writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket name "+bucket)
+			return
+		}
+	}
 	if err := h.repo.ReplaceUserBucketPermissions(
 		r.Context(), projectID, *body.UserID, body.BucketPermissions,
 	); err != nil {
@@ -367,7 +384,10 @@ func (h *Handler) DeleteBucketPermission(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// The hidden workspace bucket has no access list (ADR-0034 decision 3).
-	if storage.ReservedBucketName(*body.Bucket) {
+	if hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, *body.Bucket); err != nil {
+		h.writeInternal(w, r, "delete bucket permission", err)
+		return
+	} else if hidden {
 		writeError(w, http.StatusNotFound, "NotFound", "no exception for this member and bucket")
 		return
 	}

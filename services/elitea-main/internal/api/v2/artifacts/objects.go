@@ -148,7 +148,10 @@ func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectI
 	// The hidden workspace bucket (ADR-0034 decision 3) is absent here, and
 	// the refusal comes BEFORE the access list, so no answer differs from the
 	// one a missing bucket gets.
-	if storage.ReservedBucketName(bucket) {
+	if hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, bucket); err != nil {
+		h.writeInternal(w, r, "check bucket type", err)
+		return repos.BucketRow{}, false
+	} else if hidden {
 		writeError(w, http.StatusNotFound, "NotFound", "bucket not found")
 		return repos.BucketRow{}, false
 	}
@@ -176,7 +179,10 @@ func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectI
 // requireBucketNoBody is requireBucket for HEAD responses, which must not
 // carry a body.
 func (h *Handler) requireBucketNoBody(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
-	if storage.ReservedBucketName(bucket) {
+	if hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, bucket); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return repos.BucketRow{}, false
+	} else if hidden {
 		w.WriteHeader(http.StatusNotFound)
 		return repos.BucketRow{}, false
 	}

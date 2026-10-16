@@ -10,6 +10,8 @@ package repos
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,41 +65,59 @@ WHERE project_id = $1 AND conversation_uuid = $2::uuid`, thread.ProjectID, threa
 }
 
 // EnsureWorkspaceBucket creates the project's hidden bucket on first use
-// (decision 3). Two first uses at once meet the partial unique index on
-// (project_id) WHERE bucket_type = 'workspace'; the loser reads the winner's
-// row. A user bucket that already holds the reserved name (created before the
-// name was reserved) leaves the project without a workspace bucket: that is an
-// error for an operator, never a reason to reuse the user's bucket.
-func (r *WorkspaceStoreRepository) EnsureWorkspaceBucket(ctx context.Context, projectID int64) (int64, error) {
-	read := func() (int64, bool, error) {
+// (decision 3). It is found by TYPE (the partial unique index on (project_id)
+// WHERE bucket_type = 'workspace' allows one), never by name. Its name is
+// elitea-workspaces; when a user bucket already holds that name (created
+// before the name was reserved), the hidden bucket takes
+// elitea-workspaces-<random> and the user bucket keeps working. Two first
+// uses at once meet the type index; the loser reads the winner's row.
+func (r *WorkspaceStoreRepository) EnsureWorkspaceBucket(ctx context.Context, projectID int64) (workspacestore.WorkspaceBucket, error) {
+	if bucket, ok, err := r.WorkspaceBucket(ctx, projectID); err != nil || ok {
+		return bucket, err
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		name := storage.WorkspaceBucketName
+		if attempt > 0 {
+			var suffix [4]byte
+			if _, err := rand.Read(suffix[:]); err != nil {
+				return workspacestore.WorkspaceBucket{}, err
+			}
+			name += "-" + hex.EncodeToString(suffix[:])
+		}
 		var id int64
 		err := r.pool.QueryRow(ctx, `
-SELECT id FROM elitea_storage.buckets
-WHERE project_id = $1 AND bucket_type = 'workspace' AND deleted_at IS NULL`, projectID).Scan(&id)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, false, nil
-		}
-		return id, err == nil, err
-	}
-	if id, ok, err := read(); err != nil || ok {
-		return id, err
-	}
-	var id int64
-	err := r.pool.QueryRow(ctx, `
 INSERT INTO elitea_storage.buckets (project_id, name, display_name, bucket_type)
 VALUES ($1, $2, 'Workspace store', 'workspace')
-RETURNING id`, projectID, storage.WorkspaceBucketName).Scan(&id)
-	if err == nil {
-		return id, nil
-	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		if id, ok, readErr := read(); readErr != nil || ok {
-			return id, readErr
+RETURNING id`, projectID, name).Scan(&id)
+		if err == nil {
+			return workspacestore.WorkspaceBucket{ID: id, Name: name}, nil
 		}
-		return 0, fmt.Errorf("workspace store: project %d has a user bucket named %s", projectID, storage.WorkspaceBucketName)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+			return workspacestore.WorkspaceBucket{}, fmt.Errorf("workspace store: create workspace bucket: %w", err)
+		}
+		// Another first use won the type index, or a user bucket holds the
+		// name: read by type, else retry with a suffix.
+		if bucket, ok, readErr := r.WorkspaceBucket(ctx, projectID); readErr != nil || ok {
+			return bucket, readErr
+		}
 	}
-	return 0, fmt.Errorf("workspace store: create workspace bucket: %w", err)
+	return workspacestore.WorkspaceBucket{}, fmt.Errorf("workspace store: project %d: no free workspace bucket name", projectID)
+}
+
+// WorkspaceBucket reads the project's workspace bucket by type.
+func (r *WorkspaceStoreRepository) WorkspaceBucket(ctx context.Context, projectID int64) (workspacestore.WorkspaceBucket, bool, error) {
+	var bucket workspacestore.WorkspaceBucket
+	err := r.pool.QueryRow(ctx, `
+SELECT id, name FROM elitea_storage.buckets
+WHERE project_id = $1 AND bucket_type = 'workspace' AND deleted_at IS NULL`, projectID).Scan(&bucket.ID, &bucket.Name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspacestore.WorkspaceBucket{}, false, nil
+	}
+	if err != nil {
+		return workspacestore.WorkspaceBucket{}, false, fmt.Errorf("workspace store: read workspace bucket: %w", err)
+	}
+	return bucket, true, nil
 }
 
 const segmentColumns = `id, seq, epoch, kind, sha256, byte_length, prerequisites, refs, writer,

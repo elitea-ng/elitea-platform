@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -88,6 +89,7 @@ type Service struct {
 
 	mu           sync.Mutex
 	orphanCursor int64
+	names        sync.Map
 }
 
 // NewService builds the store. Every dependency is required.
@@ -110,8 +112,41 @@ func (s *Service) WithClock(now func() time.Time) *Service {
 	return s
 }
 
-func objectRef(projectID int64, key string) (storage.ObjectRef, error) {
-	return storage.NewObjectRef(strconv.FormatInt(projectID, 10), storage.WorkspaceBucketName, key)
+// bucketName answers the project's workspace bucket name: found by TYPE
+// (repo), cached per project because a bucket's name never changes.
+// WorkspaceBucketName when the project has no workspace bucket yet (then no
+// object can exist under it).
+func (s *Service) bucketName(ctx context.Context, projectID int64) (string, error) {
+	if cached, ok := s.names.Load(projectID); ok {
+		return cached.(string), nil
+	}
+	bucket, ok, err := s.repo.WorkspaceBucket(ctx, projectID)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return storage.WorkspaceBucketName, nil
+	}
+	s.names.Store(projectID, bucket.Name)
+	return bucket.Name, nil
+}
+
+// ensureBucket creates the project's workspace bucket on first use.
+func (s *Service) ensureBucket(ctx context.Context, projectID int64) (WorkspaceBucket, error) {
+	bucket, err := s.repo.EnsureWorkspaceBucket(ctx, projectID)
+	if err != nil {
+		return WorkspaceBucket{}, err
+	}
+	s.names.Store(projectID, bucket.Name)
+	return bucket, nil
+}
+
+func (s *Service) objectRef(ctx context.Context, projectID int64, key string) (storage.ObjectRef, error) {
+	name, err := s.bucketName(ctx, projectID)
+	if err != nil {
+		return storage.ObjectRef{}, err
+	}
+	return storage.NewObjectRef(strconv.FormatInt(projectID, 10), name, key)
 }
 
 // requireWriter loads the thread and checks the caller may write in it at
@@ -186,12 +221,13 @@ func (s *Service) RequestUpload(ctx context.Context, request UploadRequest) (Upl
 	if err := s.checkQuota(ctx, request.Thread, request.Bytes, limits); err != nil {
 		return UploadGrant{}, err
 	}
-	bucketID, err := s.repo.EnsureWorkspaceBucket(ctx, request.Thread.ProjectID)
+	bucket, err := s.ensureBucket(ctx, request.Thread.ProjectID)
 	if err != nil {
 		return UploadGrant{}, err
 	}
+	bucketID := bucket.ID
 	key := ObjectKey(request.Thread.ConversationUUID, request.SHA256)
-	ref, err := objectRef(request.Thread.ProjectID, key)
+	ref, err := s.objectRef(ctx, request.Thread.ProjectID, key)
 	if err != nil {
 		return UploadGrant{}, ErrInvalid
 	}
@@ -206,7 +242,13 @@ func (s *Service) RequestUpload(ctx context.Context, request UploadRequest) (Upl
 	var uploadID *string
 	capabilities := target.Store.Capabilities()
 	switch {
-	case request.Bytes > MultipartThreshold && capabilities.NativeMultipart:
+	// A backend that verifies a SHA-256 checksum on a single PUT gets one
+	// checksum-bound PUT up to its single-PUT ceiling: the digest is bound
+	// here, and publish reads it back with HEAD instead of the bytes. A
+	// multipart upload has only a composite checksum, so it is verified by
+	// streaming at publish.
+	case request.Bytes > MultipartThreshold && capabilities.NativeMultipart &&
+		(!capabilities.ChecksumSHA256 || request.Bytes > SinglePutMaxBytes):
 		id, err := target.Store.StartMultipart(ctx, ref, storage.PutOptions{ContentType: MediaType, ContentLength: -1})
 		if err != nil {
 			return UploadGrant{}, fmt.Errorf("workspace store: start multipart: %w", err)
@@ -228,12 +270,17 @@ func (s *Service) RequestUpload(ctx context.Context, request UploadRequest) (Upl
 			CompleteURL: UploadCompleteRoutePrefix + strconv.FormatInt(request.Thread.ProjectID, 10) + "/" + grantID,
 		}
 	case capabilities.Presign:
-		url, err := target.Store.PresignPut(ctx, ref, GrantTTL, storage.PutOptions{ContentType: MediaType, ContentLength: request.Bytes})
+		options := storage.PutOptions{ContentType: MediaType, ContentLength: request.Bytes}
+		answer.Headers = map[string]string{"Content-Type": MediaType}
+		if capabilities.ChecksumSHA256 {
+			options.ChecksumSHA256 = digest
+			answer.Headers[storage.ChecksumSHA256Header] = base64.StdEncoding.EncodeToString(digest)
+		}
+		url, err := target.Store.PresignPut(ctx, ref, GrantTTL, options)
 		if err != nil {
 			return UploadGrant{}, fmt.Errorf("workspace store: presign put: %w", err)
 		}
 		answer.PutURL = url
-		answer.Headers = map[string]string{"Content-Type": MediaType}
 	default:
 		// The ADR-0016 streaming facade: the client PUTs the bytes to Main,
 		// which streams them to the store under the same grant.
@@ -295,7 +342,7 @@ func (s *Service) PutObject(ctx context.Context, thread Thread, caller Caller, s
 	if !ok || grant.UploadID != nil || !grant.ExpiresAt.After(s.now()) {
 		return ErrNotFound
 	}
-	ref, err := objectRef(thread.ProjectID, key)
+	ref, err := s.objectRef(ctx, thread.ProjectID, key)
 	if err != nil {
 		return ErrInvalid
 	}
@@ -365,7 +412,7 @@ func (s *Service) CompleteUpload(ctx context.Context, projectID int64, caller Ca
 	if row.State != WriterState(caller.Writer) {
 		return ErrStaleEpoch
 	}
-	ref, err := objectRef(projectID, grant.Key)
+	ref, err := s.objectRef(ctx, projectID, grant.Key)
 	if err != nil {
 		return ErrInvalid
 	}
@@ -491,11 +538,12 @@ func (s *Service) publish(ctx context.Context, request PublishRequest) (PublishR
 }
 
 // verifyObject checks the stored object BEFORE the transaction opens: its size
-// first (Stat), then its SHA-256 over the bytes. Only durable data is
+// first (Stat), then its SHA-256: the backend's reported full-object checksum
+// when it has one, else a hash over the bytes. Only durable data is
 // acknowledged, and no storage call runs inside the transaction. An object
 // whose bytes do not match its own address is deleted: no reader can use it.
 func (s *Service) verifyObject(ctx context.Context, request PublishRequest, key string) error {
-	ref, err := objectRef(request.Thread.ProjectID, key)
+	ref, err := s.objectRef(ctx, request.Thread.ProjectID, key)
 	if err != nil {
 		return ErrInvalid
 	}
@@ -511,6 +559,18 @@ func (s *Service) verifyObject(ctx context.Context, request PublishRequest, key 
 		s.integrityFailed(ctx, request, "size")
 		return ErrChecksumMismatch
 	}
+	if len(info.DigestSHA256) == sha256.Size {
+		// The backend verified the bytes against the checksum the grant
+		// bound and reports the digest it kept: no need to read them.
+		if hex.EncodeToString(info.DigestSHA256) != request.SHA256 {
+			_ = target.Store.Delete(ctx, ref)
+			s.integrityFailed(ctx, request, "checksum")
+			return ErrChecksumMismatch
+		}
+		return nil
+	}
+	// No full-object checksum (a backend without one, a multipart upload,
+	// the facade): hash the bytes.
 	body, _, err := target.Store.Get(ctx, ref, nil)
 	if errors.Is(err, storage.ErrNotFound) {
 		return ErrSegmentMissing
@@ -636,7 +696,7 @@ func (s *Service) readURL(ctx context.Context, thread Thread, segment SegmentRow
 		return "", time.Time{}, fmt.Errorf("workspace store: segment %d is in an unknown physical bucket", segment.Seq)
 	}
 	if store.Capabilities().Presign {
-		ref, err := objectRef(thread.ProjectID, segment.ObjectKey)
+		ref, err := s.objectRef(ctx, thread.ProjectID, segment.ObjectKey)
 		if err != nil {
 			return "", time.Time{}, ErrInvalid
 		}
@@ -673,7 +733,7 @@ func (s *Service) OpenObject(ctx context.Context, thread Thread, caller Caller, 
 	if !ok {
 		return nil, 0, ErrNotFound
 	}
-	ref, err := objectRef(thread.ProjectID, segment.ObjectKey)
+	ref, err := s.objectRef(ctx, thread.ProjectID, segment.ObjectKey)
 	if err != nil {
 		return nil, 0, ErrInvalid
 	}
@@ -699,9 +759,13 @@ func (s *Service) EraseThreadObjects(ctx context.Context, thread Thread) (bool, 
 	if err := s.repo.RetireThreadSegments(ctx, thread); err != nil {
 		return false, err
 	}
+	name, err := s.bucketName(ctx, thread.ProjectID)
+	if err != nil {
+		return false, err
+	}
 	empty := true
 	for _, physical := range s.buckets.all() {
-		done, err := deletePrefix(ctx, physical.Store, thread.ProjectID, ThreadPrefix(thread.ConversationUUID), func(storage.ObjectInfo) bool { return true })
+		done, err := deletePrefix(ctx, physical.Store, thread.ProjectID, name, ThreadPrefix(thread.ConversationUUID), func(storage.ObjectInfo) bool { return true })
 		if err != nil {
 			return false, err
 		}
@@ -716,9 +780,9 @@ const maxPrefixPages = 10
 // deletePrefix deletes the objects under prefix that keep() selects and
 // answers whether a final listing found none left.
 func deletePrefix(
-	ctx context.Context, store storage.ObjectStore, projectID int64, prefix string, keep func(storage.ObjectInfo) bool,
+	ctx context.Context, store storage.ObjectStore, projectID int64, bucketName, prefix string, keep func(storage.ObjectInfo) bool,
 ) (bool, error) {
-	bucket, err := storage.NewBucketRef(strconv.FormatInt(projectID, 10), storage.WorkspaceBucketName)
+	bucket, err := storage.NewBucketRef(strconv.FormatInt(projectID, 10), bucketName)
 	if err != nil {
 		return false, ErrInvalid
 	}
@@ -736,7 +800,7 @@ func deletePrefix(
 			if !keep(object) {
 				continue
 			}
-			ref, err := objectRef(projectID, object.Key)
+			ref, err := storage.NewObjectRef(strconv.FormatInt(projectID, 10), bucketName, object.Key)
 			if err != nil {
 				continue
 			}
@@ -792,7 +856,7 @@ func (s *Service) SweepObjects(ctx context.Context, batch int) (SweepResult, err
 			failed = append(failed, sweep.ID)
 			continue
 		}
-		ref, err := objectRef(sweep.ProjectID, sweep.ObjectKey)
+		ref, err := s.objectRef(ctx, sweep.ProjectID, sweep.ObjectKey)
 		if err != nil {
 			continue
 		}
@@ -841,9 +905,13 @@ func (s *Service) sweepOrphans(ctx context.Context, now time.Time) (int, error) 
 	s.mu.Unlock()
 	deleted := 0
 	for _, projectID := range projects {
+		name, err := s.bucketName(ctx, projectID)
+		if err != nil {
+			return deleted, err
+		}
 		for _, physical := range s.buckets.all() {
 			var keepErr error
-			_, err := deletePrefix(ctx, physical.Store, projectID, "t/", func(object storage.ObjectInfo) bool {
+			_, err := deletePrefix(ctx, physical.Store, projectID, name, "t/", func(object storage.ObjectInfo) bool {
 				if keepErr != nil || object.LastModified.IsZero() || now.Sub(object.LastModified) < OrphanGrace {
 					return false
 				}
@@ -924,10 +992,10 @@ func (s *Service) UploadSegment(
 	if err := s.checkQuota(ctx, thread, size, limits); err != nil {
 		return false, err
 	}
-	if _, err := s.repo.EnsureWorkspaceBucket(ctx, thread.ProjectID); err != nil {
+	if _, err := s.ensureBucket(ctx, thread.ProjectID); err != nil {
 		return false, err
 	}
-	ref, err := objectRef(thread.ProjectID, ObjectKey(thread.ConversationUUID, sha))
+	ref, err := s.objectRef(ctx, thread.ProjectID, ObjectKey(thread.ConversationUUID, sha))
 	if err != nil {
 		return false, ErrInvalid
 	}

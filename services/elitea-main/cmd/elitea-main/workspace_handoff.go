@@ -14,6 +14,7 @@ import (
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
+	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	workspacehandoffapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/workspacehandoff"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
@@ -113,7 +114,7 @@ func composeWorkspaceHandoff(
 	if err != nil {
 		return workspaceHandoffComposition{}, fmt.Errorf("workspace handoff env vault: %w", err)
 	}
-	envVault, err := dbrepos.NewWorkspaceEnvVault(vaultWriter, vaultReader)
+	envVault, err := dbrepos.NewWorkspaceEnvVault(vaultWriter, vaultReader, v2secrets.NewHandler(pool))
 	if err != nil {
 		return workspaceHandoffComposition{}, err
 	}

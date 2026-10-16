@@ -3,9 +3,12 @@ package repos
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore/workspacestoretest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
@@ -133,5 +136,63 @@ VALUES ($1::uuid, $2, $3, 'k', 'PUT', 10, $4)`, id, project, bucket, past); err 
 	}
 	if _, _, err := runtime.ListRuntimeArtifacts(ctx, project, 4501, "reports", "", true, 10); err != nil {
 		t.Fatalf("runtime list(ordinary) = %v", err)
+	}
+}
+
+// A user bucket called elitea-workspaces from before the name was reserved
+// keeps working; the hidden bucket takes a suffixed name and is found by
+// type, and every artifact gate refuses the hidden one by type.
+func TestPostgresWorkspaceBucketBesideAUserBucketOfTheReservedName(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5601
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_storage.buckets (project_id, name, display_name, bucket_type)
+VALUES (1, $1, $1, 'local')`, storage.WorkspaceBucketName); err != nil {
+		t.Fatal(err)
+	}
+	fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+	seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateHandingOff, 1, false, "")
+	store := workspacestoretest.New(true)
+	service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+	content := []byte("bundle beside a user bucket")
+	sha := digestOf(content)
+	grant, err := service.RequestUpload(ctx, workspacestore.UploadRequest{Thread: fixture.thread,
+		Caller: workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner}, Epoch: 1, SHA256: sha, Bytes: int64(len(content))})
+	if err != nil {
+		t.Fatalf("upload grant beside a user bucket of the reserved name = %v", err)
+	}
+	repo, _ := NewWorkspaceStoreRepository(pool)
+	hidden, ok, err := repo.WorkspaceBucket(ctx, 1)
+	if err != nil || !ok || hidden.Name == storage.WorkspaceBucketName || !strings.HasPrefix(hidden.Name, storage.WorkspaceBucketName+"-") {
+		t.Fatalf("hidden bucket = %+v %v %v, want a suffixed name", hidden, ok, err)
+	}
+	if !strings.Contains(grant.PutURL, "/"+hidden.Name+"/t/") {
+		t.Fatalf("grant URL %s does not address the hidden bucket", grant.PutURL)
+	}
+	// The publish finds the object under the hidden bucket's name.
+	ref, _ := storage.NewObjectRef("1", hidden.Name, workspacestore.ObjectKey(fixture.thread.ConversationUUID, sha))
+	store.SeedWithChecksum(ref, content)
+	if _, err := service.Publish(ctx, desktopPublish(fixture.thread, owner, 1, sha, int64(len(content)),
+		workspacestore.RefUpdate{Name: workspacestore.RefBase, New: sha1Of("b")})); err != nil {
+		t.Fatalf("publish into the suffixed bucket = %v", err)
+	}
+
+	buckets, _ := NewArtifactBucketsRepository(pool)
+	if row, err := buckets.GetBucket(ctx, 1, storage.WorkspaceBucketName); err != nil || row.BucketType != "local" {
+		t.Fatalf("the user's own elitea-workspaces bucket = %+v, %v; it must keep working", row, err)
+	}
+	if isHidden, err := buckets.IsWorkspaceBucket(ctx, 1, storage.WorkspaceBucketName); err != nil || isHidden {
+		t.Fatalf("the user bucket reads as the workspace bucket")
+	}
+	if isHidden, err := buckets.IsWorkspaceBucket(ctx, 1, hidden.Name); err != nil || !isHidden {
+		t.Fatalf("the suffixed bucket is not recognised by type")
+	}
+	runtime, _ := NewCurrentRuntimeArtifactRepository(pool, newRuntimeArtifactTestStore())
+	if _, _, err := runtime.ListRuntimeArtifacts(ctx, 1, 4501, storage.WorkspaceBucketName, "", true, 10); err != nil {
+		t.Fatalf("the runtime plane refused the user's own bucket: %v", err)
+	}
+	if _, _, err := runtime.ListRuntimeArtifacts(ctx, 1, 4501, hidden.Name, "", true, 10); !errors.Is(err, storage.ErrContentNotFound) {
+		t.Fatalf("the runtime plane served the hidden bucket: %v", err)
 	}
 }

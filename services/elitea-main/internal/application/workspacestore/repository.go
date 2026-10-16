@@ -15,6 +15,12 @@ type ThreadRow struct {
 	LastSeq            int64
 }
 
+// WorkspaceBucket is the project's hidden workspace bucket row.
+type WorkspaceBucket struct {
+	ID   int64
+	Name string
+}
+
 // SegmentRow is one segment of the log.
 type SegmentRow struct {
 	ID             int64
@@ -98,9 +104,12 @@ type ObjectSweep struct {
 // Repository is the store's persistence (repos.WorkspaceStoreRepository).
 type Repository interface {
 	ReadThread(ctx context.Context, thread Thread) (ThreadRow, error)
-	// EnsureWorkspaceBucket answers the project's workspace bucket id,
-	// creating the bucket on first use.
-	EnsureWorkspaceBucket(ctx context.Context, projectID int64) (int64, error)
+	// EnsureWorkspaceBucket answers the project's workspace bucket, creating
+	// it on first use. It is found by type; its name is WorkspaceBucketName,
+	// or a suffixed name when a user bucket already holds that one.
+	EnsureWorkspaceBucket(ctx context.Context, projectID int64) (WorkspaceBucket, error)
+	// WorkspaceBucket answers the project's workspace bucket, if any.
+	WorkspaceBucket(ctx context.Context, projectID int64) (WorkspaceBucket, bool, error)
 	// LiveSegment answers the thread's newest live (not superseded) segment
 	// with this digest.
 	LiveSegment(ctx context.Context, thread Thread, sha256 string) (SegmentRow, bool, error)

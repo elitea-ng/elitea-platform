@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
@@ -25,6 +28,11 @@ func newEnvHarness(t *testing.T) (handoffHarness, *WorkspaceEnvVault, *storage.P
 	t.Helper()
 	pool := newMigratedPostgresIntegrationPool(t)
 	prepareCurrentMutationVault(t, pool)
+	return newEnvHarnessOn(t, pool)
+}
+
+func newEnvHarnessOn(t *testing.T, pool *pgxpool.Pool) (handoffHarness, *WorkspaceEnvVault, *storage.PostgresSecretVaultLoader) {
+	t.Helper()
 	writer, err := NewCurrentSecretVaultRepository(pool, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +42,7 @@ func newEnvHarness(t *testing.T) (handoffHarness, *WorkspaceEnvVault, *storage.P
 		t.Fatal(err)
 	}
 	t.Cleanup(reader.Destroy)
-	vault, err := NewWorkspaceEnvVault(writer, reader)
+	vault, err := NewWorkspaceEnvVault(writer, reader, v2secrets.NewHandler(pool))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,5 +255,34 @@ func TestPostgresWorkspaceEnvErasedOnCancelAndEraseAndReplacedOrCleared(t *testi
 	third, err := h.service.Begin(ctx, cleared)
 	if err != nil || third.Handoff.EnvSecret() || secretPresent(t, reader, second.Handoff.EnvSecretName) {
 		t.Fatalf("env: {} did not clear the secret: %+v, %v", third.Handoff, err)
+	}
+}
+
+// A project with no vault (the default project of a fresh install) gets one
+// created on its first send with env, instead of a 503.
+func TestPostgresWorkspaceEnvCreatesAnAbsentProjectVault(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+CREATE TABLE centry.secrets_key (id TEXT PRIMARY KEY, data BYTEA);
+CREATE TABLE centry.secrets_data (id TEXT PRIMARY KEY, data BYTEA);`); err != nil {
+		t.Fatal(err)
+	}
+	h, _, reader := newEnvHarnessOn(t, pool)
+	const owner int64 = 5421
+	thread := seedLocalWorkThread(t, pool, owner, "local_work").thread
+	send := beginRequest(thread, owner)
+	send.Env = map[string]string{"DATABASE_URL": harvestedValue}
+	began, err := h.service.Begin(ctx, send)
+	if err != nil {
+		t.Fatalf("a send with env into a project with no vault = %v", err)
+	}
+	if !secretPresent(t, reader, began.Handoff.EnvSecretName) {
+		t.Fatalf("the env secret is not in the created vault")
+	}
+	var rows int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM centry.secrets_key WHERE id = 'project-1'`).Scan(&rows)
+	if rows != 1 {
+		t.Fatalf("vault key rows = %d, want the created one", rows)
 	}
 }

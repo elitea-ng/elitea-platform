@@ -194,9 +194,14 @@ func (repository *CurrentRuntimeArtifactRepository) authorizeBucket(
 		repository.permissions == nil || repository.store == nil || ctx == nil {
 		return BucketRow{}, errors.New("current runtime artifact repository is unavailable")
 	}
+	if projectID <= 0 || actorID <= 0 || bucket == "" {
+		return BucketRow{}, storage.ErrContentNotFound
+	}
 	// The hidden workspace bucket (ADR-0034 decision 3) is absent, before the
 	// access list is read.
-	if projectID <= 0 || actorID <= 0 || bucket == "" || storage.ReservedBucketName(bucket) {
+	if hidden, err := repository.buckets.IsWorkspaceBucket(ctx, projectID, bucket); err != nil {
+		return BucketRow{}, err
+	} else if hidden {
 		return BucketRow{}, storage.ErrContentNotFound
 	}
 	permissions, found, err := repository.permissions.GetBucketPermission(
@@ -523,4 +528,18 @@ func (repository *CurrentRuntimeArtifactRepository) objectRow(
 	return ObjectRow{}, false, nil
 }
 
-var _ storage.RuntimeArtifactSource = (*CurrentRuntimeArtifactRepository)(nil)
+var (
+	_ storage.RuntimeArtifactSource = (*CurrentRuntimeArtifactRepository)(nil)
+	// The runtime plane gates the hidden bucket only through this optional
+	// interface: the production source must implement it.
+	_ storage.WorkspaceBucketChecker = (*CurrentRuntimeArtifactRepository)(nil)
+)
+
+// IsWorkspaceBucket implements storage.WorkspaceBucketChecker: the runtime
+// plane's workspace gate, by bucket type.
+func (repository *CurrentRuntimeArtifactRepository) IsWorkspaceBucket(ctx context.Context, projectID int64, bucket string) (bool, error) {
+	if repository == nil || repository.buckets == nil {
+		return false, nil
+	}
+	return repository.buckets.IsWorkspaceBucket(ctx, projectID, bucket)
+}

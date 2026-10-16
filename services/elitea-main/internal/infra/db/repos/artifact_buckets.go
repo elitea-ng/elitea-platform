@@ -97,13 +97,21 @@ type artifactBucketQueries interface {
 // it. See docs/plans/storage-migration-plan.md S6.
 type ArtifactBucketsRepository struct {
 	queries artifactBucketQueries
+	// pool answers IsWorkspaceBucket; nil (a query fake) treats no bucket as
+	// the workspace bucket.
+	pool *pgxpool.Pool
 }
 
 func NewArtifactBucketsRepository(pool *pgxpool.Pool) (*ArtifactBucketsRepository, error) {
 	if pool == nil {
 		return nil, errors.New("artifact buckets database is required")
 	}
-	return newArtifactBucketsRepository(sqlcgen.New(pool))
+	repository, err := newArtifactBucketsRepository(sqlcgen.New(pool))
+	if err != nil {
+		return nil, err
+	}
+	repository.pool = pool
+	return repository, nil
 }
 
 func newArtifactBucketsRepository(queries artifactBucketQueries) (*ArtifactBucketsRepository, error) {
@@ -161,7 +169,8 @@ func (r *ArtifactBucketsRepository) CreateBucket(ctx context.Context, input NewB
 	// (WorkspaceStoreRepository.EnsureWorkspaceBucket). A reserved name is an
 	// invalid name here, never a conflict, so no caller learns that the hidden
 	// bucket exists (ADR-0034 decision 3).
-	if storage.ReservedBucketName(input.Name) || input.BucketType == storage.WorkspaceBucketType {
+	if (storage.ReservedBucketName(input.Name) && input.BucketType != storage.WorkspaceBucketType) ||
+		input.BucketType == storage.WorkspaceBucketType {
 		return BucketRow{}, fmt.Errorf("%w: reserved bucket name", storage.ErrInvalidKey)
 	}
 	row, err := r.queries.CreateArtifactBucket(ctx, sqlcgen.CreateArtifactBucketParams{
@@ -285,4 +294,21 @@ func (r *ArtifactBucketsRepository) MarkBucketNotified(ctx context.Context, buck
 		return storage.ErrNotFound
 	}
 	return nil
+}
+
+// IsWorkspaceBucket reports whether name is the project's hidden workspace
+// bucket (ADR-0034 decision 3). Every artifact gate asks it before the access
+// list, so the hidden bucket answers 404 by its type whatever it is called.
+func (r *ArtifactBucketsRepository) IsWorkspaceBucket(ctx context.Context, projectID int64, name string) (bool, error) {
+	if r.pool == nil {
+		return false, nil
+	}
+	var hidden bool
+	if err := r.pool.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM elitea_storage.buckets
+               WHERE project_id = $1 AND name = $2 AND bucket_type = 'workspace' AND deleted_at IS NULL)`,
+		projectID, name).Scan(&hidden); err != nil {
+		return false, fmt.Errorf("read workspace bucket: %w", err)
+	}
+	return hidden, nil
 }

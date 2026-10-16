@@ -72,6 +72,8 @@ const (
 	MultipartThreshold = 64 << 20
 	// PartSize is the size of each part but the last.
 	PartSize = 64 << 20
+	// SinglePutMaxBytes is the S3 single-PUT ceiling (5 GiB).
+	SinglePutMaxBytes = 5 << 30
 	// SupersededGrace is how long a superseded segment's object stays, so
 	// readers in flight can finish (decision 12).
 	SupersededGrace = 24 * time.Hour

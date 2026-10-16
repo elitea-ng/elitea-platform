@@ -2,6 +2,8 @@ package s3
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -127,7 +129,7 @@ func (b *Backend) ConfigureRetentionLifecycle(ctx context.Context) error {
 }
 
 func (b *Backend) Capabilities() storage.Capabilities {
-	return storage.Capabilities{Presign: true, NativeMultipart: true, ServerSideCopy: true}
+	return storage.Capabilities{Presign: true, NativeMultipart: true, ServerSideCopy: true, ChecksumSHA256: true}
 }
 
 func (b *Backend) Put(ctx context.Context, ref storage.ObjectRef, body io.Reader, opts storage.PutOptions) (storage.ObjectInfo, error) {
@@ -153,6 +155,9 @@ func (b *Backend) Put(ctx context.Context, ref storage.ObjectRef, body io.Reader
 		}
 		if len(opts.Metadata) > 0 {
 			input.Metadata = opts.Metadata
+		}
+		if len(opts.ChecksumSHA256) == sha256.Size {
+			input.ChecksumSHA256 = aws.String(base64.StdEncoding.EncodeToString(opts.ChecksumSHA256))
 		}
 		out, err := b.client.PutObject(ctx, input)
 		if err != nil {
@@ -288,8 +293,9 @@ func formatByteRange(r storage.ByteRange) string {
 
 func (b *Backend) Stat(ctx context.Context, ref storage.ObjectRef) (storage.ObjectInfo, error) {
 	out, err := b.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(b.bucket),
-		Key:    aws.String(ref.StorageKey(b.keyPrefix)),
+		Bucket:       aws.String(b.bucket),
+		Key:          aws.String(ref.StorageKey(b.keyPrefix)),
+		ChecksumMode: types.ChecksumModeEnabled,
 	})
 	if err != nil {
 		return storage.ObjectInfo{}, mapS3Error(err, "stat object")
@@ -300,6 +306,7 @@ func (b *Backend) Stat(ctx context.Context, ref storage.ObjectRef) (storage.Obje
 		LastModified: aws.ToTime(out.LastModified),
 		ContentType:  aws.ToString(out.ContentType),
 		ETag:         strings.Trim(aws.ToString(out.ETag), `"`),
+		DigestSHA256: fullObjectSHA256(out.ChecksumSHA256, out.ChecksumType),
 	}, nil
 }
 
@@ -424,6 +431,11 @@ func (b *Backend) PresignPut(ctx context.Context, ref storage.ObjectRef, ttl tim
 	}
 	if opts.ContentType != "" {
 		input.ContentType = aws.String(opts.ContentType)
+	}
+	if len(opts.ChecksumSHA256) == sha256.Size {
+		// X-Amz-Checksum-* is a required signed header: the client must
+		// send this exact value, and the store refuses other bytes.
+		input.ChecksumSHA256 = aws.String(base64.StdEncoding.EncodeToString(opts.ChecksumSHA256))
 	}
 	presigned, err := s3.NewPresignClient(b.client).PresignPutObject(ctx, input, s3.WithPresignExpires(ttl))
 	if err != nil {
@@ -551,4 +563,18 @@ func (b *Backend) DefaultEncryptionConfirmed(ctx context.Context) (bool, error) 
 		}
 	}
 	return false, nil
+}
+
+// fullObjectSHA256 answers the raw digest of a full-object SHA-256 checksum.
+// A multipart upload's composite value ("<b64>-<parts>") is not the digest of
+// the bytes, so it answers nil, and so does an absent or malformed value.
+func fullObjectSHA256(value *string, kind types.ChecksumType) []byte {
+	if value == nil || kind == types.ChecksumTypeComposite {
+		return nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(*value)
+	if err != nil || len(raw) != sha256.Size {
+		return nil
+	}
+	return raw
 }

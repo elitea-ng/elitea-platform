@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +23,7 @@ import (
 // pattern carries a {bucket} parameter, so a bucket route added later is
 // covered without being listed here. The repository fake answers GetBucket
 // for ANY name and the resolver grants every artifact permission, so the
-// only thing that can produce a 404 is the reserved-name gate. The walk must
+// only thing that can produce a 404 is the workspace-bucket gate. The walk must
 // find routes, or the test proves nothing.
 func TestWorkspaceBucketIsAbsentOnEveryArtifactBucketRoute(t *testing.T) {
 	router := NewRouter(RouterConfig{
@@ -40,10 +41,9 @@ func TestWorkspaceBucketIsAbsentOnEveryArtifactBucketRoute(t *testing.T) {
 	var bucketRoutes []route
 	if err := chi.Walk(routes, func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		// The support assistant's attachment read answers 503 for every
-		// request when no support project is composed (as here); its handler
-		// refuses the reserved name itself
-		// (supportassistant.TestGetAttachmentRefusesTheWorkspaceBucket), and
-		// it delegates the read to the artifact download walked below.
+		// request when no support project is composed (as here); it reads
+		// through the artifact download walked below, which refuses the
+		// hidden bucket.
 		if strings.Contains(pattern, "{bucket}") && !strings.HasPrefix(pattern, "/api/v2/support_assistant/") {
 			bucketRoutes = append(bucketRoutes, route{method, pattern})
 		}
@@ -132,5 +132,48 @@ func TestWorkspaceBucketNameCannotBeCreatedOrGivenAnAccessList(t *testing.T) {
 		"user_id": 3, "bucket": storage.WorkspaceBucketName,
 	}); rec.Code != http.StatusNotFound {
 		t.Fatalf("deleting the reserved name's access list = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// hiddenSuffixedBucketRepo is a project where a user bucket called
+// elitea-workspaces existed before ADR-0034, so the hidden bucket got a
+// suffixed name. The gate finds the hidden bucket by TYPE.
+type hiddenSuffixedBucketRepo struct{ alwaysSucceedsArtifactRepo }
+
+const suffixedWorkspaceBucket = storage.WorkspaceBucketName + "-0a1b2c3d"
+
+func (hiddenSuffixedBucketRepo) IsWorkspaceBucket(_ context.Context, _ int64, name string) (bool, error) {
+	return name == suffixedWorkspaceBucket, nil
+}
+
+// TestUserBucketOfTheReservedNameKeepsWorking: the gate is by type, never by
+// name. A user bucket called elitea-workspaces answers as before; the hidden
+// bucket under its suffixed name answers 404.
+func TestUserBucketOfTheReservedNameKeepsWorking(t *testing.T) {
+	router := NewRouter(RouterConfig{
+		AuthValidator:              testTokenValidator{user: authenticatedTestUser()},
+		PrincipalValidator:         testPrincipalValidator{},
+		AppsRepo:                   struct{ applications.Repository }{},
+		ArtifactHandler:            v2artifacts.NewHandler(hiddenSuffixedBucketRepo{}, alwaysSucceedsArtifactStore{}),
+		ArtifactPermissionResolver: fakePermissionResolver{granted: allArtifactPermissions},
+	})
+	get := func(path string) int {
+		req := testAuthHeader(httptest.NewRequest(http.MethodGet, path, nil))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, path := range []string{
+		"/api/v2/artifacts/buckets/7/" + storage.WorkspaceBucketName,
+		"/api/v2/artifacts/objects/7/" + storage.WorkspaceBucketName,
+		"/api/v2/artifacts/objects/7/" + storage.WorkspaceBucketName + "/report.txt",
+	} {
+		if code := get(path); code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200 for the user bucket", path, code)
+		}
+		hidden := strings.Replace(path, storage.WorkspaceBucketName, suffixedWorkspaceBucket, 1)
+		if code := get(hidden); code != http.StatusNotFound {
+			t.Fatalf("GET %s = %d, want 404 for the hidden bucket", hidden, code)
+		}
 	}
 }

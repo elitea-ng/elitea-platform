@@ -478,3 +478,15 @@ func (r *fakeRepo) IsProjectAdmin(_ context.Context, projectID, userID int64) (b
 }
 
 var _ artifacts.Repository = (*fakeRepo)(nil)
+
+// IsWorkspaceBucket answers from the stored rows' type, as production does.
+func (f *fakeRepo) IsWorkspaceBucket(_ context.Context, projectID int64, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, row := range f.buckets {
+		if row.ProjectID == projectID && row.Name == name && row.BucketType == "workspace" {
+			return true, nil
+		}
+	}
+	return false, nil
+}

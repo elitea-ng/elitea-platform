@@ -183,7 +183,10 @@ func (h *Handler) requireS3Bucket(w http.ResponseWriter, r *http.Request, projec
 	//
 	// The hidden workspace bucket (ADR-0034 decision 3) is absent, before the
 	// access list is read.
-	if storage.ReservedBucketName(bucket) {
+	if hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, bucket); err != nil {
+		h.writeInternalS3(w, r, "check bucket type", err)
+		return repos.BucketRow{}, false
+	} else if hidden {
 		writeError(w, http.StatusNotFound, "NoSuchBucket", "bucket not found")
 		return repos.BucketRow{}, false
 	}

@@ -7,7 +7,11 @@ package repos
 // object sweeper. The object store is in memory; the rules live in PostgreSQL.
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -461,4 +465,149 @@ WHERE conversation_uuid = $1::uuid AND object_deleted_at IS NULL`, thread.Conver
 	if live != 0 {
 		t.Fatalf("erase left %d live segment rows", live)
 	}
+}
+
+// Publish hashing (ADR-0034 decision 2): on a backend that verifies a SHA-256
+// checksum on PUT, the grant binds the digest and publish reads it back with
+// HEAD, so no bytes stream through Main. Without one, publish hashes the bytes.
+func TestPostgresWorkspaceStoreChecksumBoundPublish(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	refsFor := func(seed string) []workspacestore.RefUpdate {
+		return []workspacestore.RefUpdate{
+			{Name: workspacestore.RefBase, New: sha1Of(seed + "-base")}, {Name: workspacestore.RefHandoff1, New: sha1Of(seed)},
+		}
+	}
+	thread := func(owner int64) workspacestore.Thread {
+		fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+		seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateHandingOff, 1, false, "")
+		return fixture.thread
+	}
+	objectRef := func(thread workspacestore.Thread, sha string) storage.ObjectRef {
+		ref, err := storage.NewObjectRef(strconv.FormatInt(thread.ProjectID, 10), storage.WorkspaceBucketName,
+			workspacestore.ObjectKey(thread.ConversationUUID, sha))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ref
+	}
+
+	t.Run("the grant binds the digest", func(t *testing.T) {
+		const owner int64 = 5161
+		th := thread(owner)
+		store := workspacestoretest.New(true)
+		store.Checksum, store.Multipart = true, true
+		service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+		content := []byte("checksum-bound bundle")
+		sha := digestOf(content)
+		raw, _ := hex.DecodeString(sha)
+		grant, err := service.RequestUpload(ctx, workspacestore.UploadRequest{
+			Thread: th, Caller: workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner},
+			Epoch: 1, SHA256: sha, Bytes: int64(len(content)),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if grant.Headers[storage.ChecksumSHA256Header] != base64.StdEncoding.EncodeToString(raw) {
+			t.Fatalf("grant headers = %v, want the base64 digest in %s", grant.Headers, storage.ChecksumSHA256Header)
+		}
+		if !bytes.Equal(store.PresignedChecksum(objectRef(th, sha)), raw) {
+			t.Fatalf("the presigned PUT is not bound to the digest")
+		}
+		// Above the multipart threshold a checksum backend still gets ONE
+		// checksum-bound PUT: a multipart upload has no full-object digest.
+		big := digestOf([]byte("big"))
+		grant, err = service.RequestUpload(ctx, workspacestore.UploadRequest{
+			Thread: th, Caller: workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner},
+			Epoch: 1, SHA256: big, Bytes: 130 << 20,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if grant.Multipart != nil || grant.PutURL == "" || grant.Headers[storage.ChecksumSHA256Header] == "" {
+			t.Fatalf("grant = %+v, want one checksum-bound PUT", grant)
+		}
+	})
+
+	t.Run("publish reads the checksum, not the bytes", func(t *testing.T) {
+		const owner int64 = 5162
+		th := thread(owner)
+		store := workspacestoretest.New(true)
+		store.Checksum = true
+		service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+		content := []byte("a bundle the store verified on PUT")
+		sha := digestOf(content)
+		store.SeedWithChecksum(objectRef(th, sha), content)
+		if _, err := service.Publish(ctx, desktopPublish(th, owner, 1, sha, int64(len(content)), refsFor("a")...)); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+		if gets := store.GetCount(); gets != 0 {
+			t.Fatalf("publish read the object %d times, want 0 (HEAD only)", gets)
+		}
+	})
+
+	t.Run("a reported digest that is not the address is refused and deleted", func(t *testing.T) {
+		const owner int64 = 5163
+		th := thread(owner)
+		store := workspacestoretest.New(true)
+		store.Checksum = true
+		service, recorder := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+		content := []byte("declared bundle bytes")
+		sha := digestOf(content)
+		other := sha256.Sum256([]byte("other"))
+		ref := objectRef(th, sha)
+		store.SeedWithDigest(ref, content, other[:])
+		if _, err := service.Publish(ctx, desktopPublish(th, owner, 1, sha, int64(len(content)), refsFor("b")...)); !errors.Is(err, workspacestore.ErrChecksumMismatch) {
+			t.Fatalf("publish = %v, want ErrChecksumMismatch", err)
+		}
+		if store.Has(ref) || store.GetCount() != 0 {
+			t.Fatalf("has = %v, gets = %d; want the object deleted without a read", store.Has(ref), store.GetCount())
+		}
+		if !strings.Contains(strings.Join(recorder.actions(), ","), "integrity_failed") {
+			t.Fatalf("audit = %v, want an integrity failure", recorder.actions())
+		}
+	})
+
+	t.Run("no full-object checksum falls back to hashing the bytes", func(t *testing.T) {
+		const owner int64 = 5164
+		th := thread(owner)
+		store := workspacestoretest.New(true)
+		store.Checksum = true
+		service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+		content := []byte("a multipart bundle without a full-object digest")
+		sha := digestOf(content)
+		store.Seed(objectRef(th, sha), content, time.Now())
+		if _, err := service.Publish(ctx, desktopPublish(th, owner, 1, sha, int64(len(content)), refsFor("c")...)); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+		if gets := store.GetCount(); gets != 1 {
+			t.Fatalf("gets = %d, want 1 (streaming verify)", gets)
+		}
+	})
+
+	t.Run("a backend without checksums hashes the bytes", func(t *testing.T) {
+		const owner int64 = 5165
+		th := thread(owner)
+		store := workspacestoretest.New(true)
+		service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+		content := []byte("a bundle on a backend without checksums")
+		sha := digestOf(content)
+		grant, err := service.RequestUpload(ctx, workspacestore.UploadRequest{
+			Thread: th, Caller: workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner},
+			Epoch: 1, SHA256: sha, Bytes: int64(len(content)),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := grant.Headers[storage.ChecksumSHA256Header]; ok {
+			t.Fatalf("grant headers = %v, want no checksum header", grant.Headers)
+		}
+		uploadSegment(t, store, th, content, time.Now())
+		if _, err := service.Publish(ctx, desktopPublish(th, owner, 1, sha, int64(len(content)), refsFor("d")...)); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+		if gets := store.GetCount(); gets != 1 {
+			t.Fatalf("gets = %d, want 1", gets)
+		}
+	})
 }

@@ -344,3 +344,10 @@ type testPrincipalValidator struct{}
 func (testPrincipalValidator) ValidatePrincipal(_ context.Context, user auth.User) (auth.User, error) {
 	return user, nil
 }
+
+// IsWorkspaceBucket treats the reserved name as the project's hidden
+// workspace bucket (the production lookup is by type, see
+// repos.ArtifactBucketsRepository.IsWorkspaceBucket).
+func (alwaysSucceedsArtifactRepo) IsWorkspaceBucket(_ context.Context, _ int64, name string) (bool, error) {
+	return name == storage.WorkspaceBucketName, nil
+}

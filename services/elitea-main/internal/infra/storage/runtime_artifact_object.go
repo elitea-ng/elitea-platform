@@ -386,11 +386,6 @@ func (service *RuntimeArtifactObjectService) List(
 	request RuntimeArtifactListRequest,
 ) (RuntimeArtifactListContext, error) {
 	bucket := strings.TrimSpace(request.Bucket)
-	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
-	// plane, whatever the claim allows.
-	if ReservedBucketName(bucket) {
-		return RuntimeArtifactListContext{}, ErrContentNotFound
-	}
 	prefix := strings.TrimPrefix(strings.TrimSpace(request.Prefix), "/")
 	limit := int32(maxRuntimeArtifactListFiles)
 	if request.Limit > 0 && request.Limit < limit {
@@ -411,6 +406,11 @@ func (service *RuntimeArtifactObjectService) List(
 	}
 	principal, err := service.authorize(ctx, claim, runtimeContextStageArtifactList)
 	if err != nil {
+		return RuntimeArtifactListContext{}, err
+	}
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if err := service.refuseWorkspaceBucket(ctx, principal.projectID, bucket); err != nil {
 		return RuntimeArtifactListContext{}, err
 	}
 	records, truncated, err := service.artifacts.ListRuntimeArtifacts(
@@ -512,17 +512,17 @@ func (service *RuntimeArtifactObjectService) Read(
 	request RuntimeArtifactReadRequest,
 ) (RuntimeArtifactReadContext, error) {
 	bucket := strings.TrimSpace(request.Bucket)
-	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
-	// plane, whatever the claim allows.
-	if ReservedBucketName(bucket) {
-		return RuntimeArtifactReadContext{}, ErrContentNotFound
-	}
 	name := strings.TrimPrefix(strings.TrimSpace(request.Name), "/")
 	if !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
 		return RuntimeArtifactReadContext{}, ErrContentNotFound
 	}
 	principal, err := service.authorize(ctx, claim, runtimeContextStageArtifactRead)
 	if err != nil {
+		return RuntimeArtifactReadContext{}, err
+	}
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if err := service.refuseWorkspaceBucket(ctx, principal.projectID, bucket); err != nil {
 		return RuntimeArtifactReadContext{}, err
 	}
 	record, err := service.artifacts.ReadRuntimeArtifact(
@@ -581,11 +581,6 @@ func (service *RuntimeArtifactObjectService) Write(
 	request RuntimeArtifactWriteRequest,
 ) (RuntimeArtifactWriteContext, error) {
 	bucket := strings.TrimSpace(request.Bucket)
-	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
-	// plane, whatever the claim allows.
-	if ReservedBucketName(bucket) {
-		return RuntimeArtifactWriteContext{}, ErrContentNotFound
-	}
 	name := strings.TrimPrefix(strings.TrimSpace(request.Name), "/")
 	content := request.Content
 	if !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
@@ -598,6 +593,11 @@ func (service *RuntimeArtifactObjectService) Write(
 	}
 	principal, err := service.authorize(ctx, claim, runtimeContextStageArtifactWrite)
 	if err != nil {
+		return RuntimeArtifactWriteContext{}, err
+	}
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if err := service.refuseWorkspaceBucket(ctx, principal.projectID, bucket); err != nil {
 		return RuntimeArtifactWriteContext{}, err
 	}
 	record, err := service.artifacts.WriteRuntimeArtifact(
@@ -623,17 +623,17 @@ func (service *RuntimeArtifactObjectService) Delete(
 	request RuntimeArtifactDeleteRequest,
 ) (RuntimeArtifactDeleteContext, error) {
 	bucket := strings.TrimSpace(request.Bucket)
-	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
-	// plane, whatever the claim allows.
-	if ReservedBucketName(bucket) {
-		return RuntimeArtifactDeleteContext{}, ErrContentNotFound
-	}
 	name := strings.TrimPrefix(strings.TrimSpace(request.Name), "/")
 	if !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
 		return RuntimeArtifactDeleteContext{}, ErrContentNotFound
 	}
 	principal, err := service.authorize(ctx, claim, runtimeContextStageArtifactDelete)
 	if err != nil {
+		return RuntimeArtifactDeleteContext{}, err
+	}
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if err := service.refuseWorkspaceBucket(ctx, principal.projectID, bucket); err != nil {
 		return RuntimeArtifactDeleteContext{}, err
 	}
 	if err := service.artifacts.DeleteRuntimeArtifact(
@@ -702,4 +702,25 @@ func addressableArtifactPrefix(prefix string) bool {
 		}
 	}
 	return true
+}
+
+// WorkspaceBucketChecker is the optional half of a RuntimeArtifactSource that
+// knows the project's hidden workspace bucket (by type, whatever its name).
+type WorkspaceBucketChecker interface {
+	IsWorkspaceBucket(ctx context.Context, projectID int64, bucket string) (bool, error)
+}
+
+func (service *RuntimeArtifactObjectService) refuseWorkspaceBucket(ctx context.Context, projectID int64, bucket string) error {
+	checker, ok := service.artifacts.(WorkspaceBucketChecker)
+	if !ok {
+		return nil
+	}
+	hidden, err := checker.IsWorkspaceBucket(ctx, projectID, bucket)
+	if err != nil {
+		return runtimeContextUnavailable(runtimeContextStageArtifactList)
+	}
+	if hidden {
+		return ErrContentNotFound
+	}
+	return nil
 }
