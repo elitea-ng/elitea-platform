@@ -165,7 +165,7 @@ same response is Main's contract (FU-228); the result on pm1084 is recorded in �
 
 Pending: the stack is being rebuilt after a Docker restart (coordinator, 18:46). Image ready:
 `elitea-web:trackw-00cddc4e2`, Id `sha256:11817352d3d7…`, built from branch head `00cddc4e2`; extracted SPA assets
-contain the branch-unique strings `chat-static-pause-panel` and `pause_progress`.
+contain the branch-unique strings `chat-static-pause-panel` and `pause_progress`. Image → head: the image is valid for every later head whose `git diff --name-only 00cddc4e2 <head>` touches no Web build input (`apps/elitea-web/**`: `src/`, `public/`, `package*.json`, `index.html`, `vite.config.ts`, `tsconfig.json`, `scripts/`, `nginx/`, `Containerfile`); `00cddc4e2..c877d89a3` changes only `services/elitea-worker-rust/docs/source-mapping/{README.md,web-hitl-approvals-parity-20261016.md}`.
 
 ## 9. Visual gaps (deferred)
 
