@@ -1,5 +1,5 @@
 //! Indexed inert delivery uses fresh authority for each immutable file.
-use super::{SandboxCallError, SandboxClient, preparation::authorize, submission_code};
+use super::{SandboxCallError, SandboxClient, preparation::authorize};
 use crate::{
     protocol::elitea::runtime::v1::{
         AuthorizeSandboxJobRequestV1, HydrateSandboxDependenciesRequestV1,
@@ -7,7 +7,7 @@ use crate::{
     sandbox::{dependency_bundle::DependencyBundle, request::PreparedJob},
     transport::control_grpc::{ControlGrpcClient, ControlRpc},
 };
-use tonic::{Code, Request};
+use tonic::Request;
 
 impl SandboxClient {
     /// A successful reply acknowledges this index. Ready permits exact-job submission.
@@ -63,12 +63,8 @@ impl SandboxClient {
             self.rpc.clone().hydrate_sandbox_dependencies(request),
         )
         .await
-        .map_err(|_| SandboxCallError::Submission {
-            code: Code::DeadlineExceeded,
-        })?
-        .map_err(|status| SandboxCallError::Submission {
-            code: submission_code(&status),
-        })?
+        .map_err(|_| SandboxCallError::deadline())?
+        .map_err(|status| SandboxCallError::submission(&status))?
         .into_inner();
         if index == bundle.file_count() && !response.ready {
             return Err(SandboxCallError::InvalidReceipt);

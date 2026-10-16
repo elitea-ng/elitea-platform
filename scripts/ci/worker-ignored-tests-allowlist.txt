@@ -4,15 +4,12 @@
 # An entry that matches no ignored test fails the check, so this list cannot rot.
 # Prefer running a test in CI over adding it here. An entry is a test that
 # needs something a GitHub-hosted runner cannot give it.
-sandbox::kubernetes::live_tests::live_four_language_state_chain  # manual only: needs an isolated Kubernetes context (ELITEA_TEST_KUBE_CONTEXT/NAMESPACE) with the sandbox boundary chart; no CI cluster exists
-sandbox::kubernetes::live_tests::live_memory_exhaustion_has_terminal_receipt  # manual only: needs an isolated Kubernetes context with the sandbox boundary chart; no CI cluster exists
-sandbox::kubernetes::live_tests::live_deadline_exhaustion_has_terminal_receipt  # manual only: needs an isolated Kubernetes context with the sandbox boundary chart; no CI cluster exists
-sandbox::kubernetes::live_tests::live_output_flood_has_bounded_terminal_receipt  # manual only: needs an isolated Kubernetes context with the sandbox boundary chart; no CI cluster exists
-sandbox::kubernetes::live_tests::live_workspace_exhaustion_has_terminal_receipt  # manual only: needs an isolated Kubernetes context with the sandbox boundary chart; no CI cluster exists
-sandbox::kubernetes::live_tests::live_cpu_quota_throttles_execution  # manual only: needs an isolated Kubernetes context with cgroup v2 CPU quota; no CI cluster exists
-sandbox::kubernetes::live_tests::live_kubernetes_process_limit  # manual only: needs a Kubernetes node with podPidsLimit=128; no CI cluster exists
-sandbox::kubernetes::live_tests::live_docker_workspace_exhaustion_has_terminal_receipt  # manual only: needs ELITEA_TEST_DOCKER_DENO_IMAGE; companion of the Kubernetes live suite above, run with it
-sandbox::kubernetes::live_tests::live_docker_process_limit  # manual only: needs ELITEA_TEST_DOCKER_RUST_IMAGE (the code runner rust-runtime target, a vendored Cargo tree); companion of the Kubernetes live suite
-sandbox::dependency_content::tests::live_native_mtls_download_and_publication  # manual only: needs a private mTLS bundle server plus a natively resolved Python bundle and grant (ELITEA_TEST_BUNDLE_ORIGIN/SOURCE)
-sandbox::dependency_runtime_docker_tests::live_docker_dependency_streams_binary_content_and_fences_replacement  # manual only: recipe in services/elitea-worker-rust/docs/source-mapping/code-python-delivery-feature-20261002.md (Docker + runner image)
+sandbox::kubernetes::live_tests::live_four_language_state_chain  # manual only: recipe in deploy/runtime/sandbox-deployment.md "Run the Kubernetes language fixture"; needs a cluster with the sandbox boundary chart and elitea-code RuntimeClass; hosted runners have none
+sandbox::kubernetes::live_tests::live_memory_exhaustion_has_terminal_receipt  # manual only: recipe in deploy/runtime/sandbox-deployment.md "Run the Kubernetes resource-limit fixtures"; needs a cluster with the elitea-code RuntimeClass; hosted runners have none
+sandbox::kubernetes::live_tests::live_deadline_exhaustion_has_terminal_receipt  # manual only: recipe in deploy/runtime/sandbox-deployment.md "Run the Kubernetes resource-limit fixtures"; needs a cluster with the elitea-code RuntimeClass; hosted runners have none
+sandbox::kubernetes::live_tests::live_output_flood_has_bounded_terminal_receipt  # manual only: recipe in deploy/runtime/sandbox-deployment.md "Run the Kubernetes resource-limit fixtures"; needs a cluster with the elitea-code RuntimeClass; hosted runners have none
+sandbox::kubernetes::live_tests::live_workspace_exhaustion_has_terminal_receipt  # manual only: recipe in deploy/runtime/sandbox-deployment.md "Run the Kubernetes resource-limit fixtures"; needs a cluster with the elitea-code RuntimeClass; hosted runners have none
+sandbox::kubernetes::live_tests::live_cpu_quota_throttles_execution  # manual only: recipe in deploy/runtime/sandbox-deployment.md "Run the Kubernetes resource-limit fixtures"; needs a cluster with the elitea-code RuntimeClass on cgroup v2 nodes; hosted runners have none
+sandbox::kubernetes::live_tests::live_kubernetes_process_limit  # manual only: recipe in deploy/runtime/sandbox-deployment.md "Run the Kubernetes resource-limit fixtures"; needs a node with kubelet podPidsLimit=128; hosted runners have no cluster
+sandbox::dependency_content::tests::live_native_mtls_download_and_publication  # manual only: needs a private mTLS bundle server plus a natively resolved Python bundle and a signed grant (ELITEA_TEST_BUNDLE_ORIGIN/SOURCE); no fixture in this repo produces them
 diagnostics::failure::tests::measure_failure_capture_cost  # manual release-profile timing probe with no pass threshold; recipe in services/elitea-worker-rust/docs/source-mapping/release-diagnostics-20260923.md

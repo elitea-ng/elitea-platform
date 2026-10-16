@@ -2060,7 +2060,8 @@ async fn sandbox_submission(over_tls: bool) {
         assert!(matches!(
             transport.cancel_granted(grant.clone()).await,
             Err(crate::sandbox::client::SandboxCallError::Submission {
-                code: tonic::Code::PermissionDenied
+                code: tonic::Code::PermissionDenied,
+                ..
             })
         ));
         let mut stop_claims = claims.clone();
@@ -2089,7 +2090,8 @@ async fn sandbox_submission(over_tls: bool) {
         assert!(matches!(
             transport.submit_granted(stop_grant.clone(), &request).await,
             Err(crate::sandbox::client::SandboxCallError::Submission {
-                code: tonic::Code::PermissionDenied
+                code: tonic::Code::PermissionDenied,
+                ..
             })
         ));
         assert_eq!(
@@ -2202,19 +2204,36 @@ async fn sandbox_submission(over_tls: bool) {
             // The durable outcome is asserted above: the row is Cancelled and
             // the runtime is gone. The in-flight submission loses the race to
             // the stop. When its receipt poll meets the container the stop just
-            // removed, it reports Runtime -> Unavailable ("reconcile the same
-            // activation"), seen in 2 of 3 CI runs. The worker treats Unavailable
-            // and Aborted alike (graph/code_remote.rs, code_attempt_remote.rs:
-            // dispatch possible, reconcile), so either is the same contract.
+            // removed, the supervisor answers Runtime -> Unavailable with
+            // "Reconcile the same activation" (service.rs service_error), seen
+            // in 2 of 3 CI runs. The worker treats Unavailable and Aborted alike
+            // (graph/code_remote.rs, code_attempt_remote.rs: dispatch possible,
+            // reconcile). Unavailable is accepted ONLY with that supervisor
+            // text: a dropped connection or a handler panic also surfaces as
+            // Unavailable, but carries no such message, and must fail here.
+            let accepted = match &submission {
+                Ok(SandboxOutcome::Cancelled)
+                | Err(crate::sandbox::client::SandboxCallError::Submission {
+                    code: tonic::Code::Aborted,
+                    ..
+                }) => true,
+                Err(
+                    error @ crate::sandbox::client::SandboxCallError::Submission {
+                        code: tonic::Code::Unavailable,
+                        ..
+                    },
+                ) => error
+                    .submission_message()
+                    .contains("Reconcile the same activation"),
+                _ => false,
+            };
             assert!(
-                matches!(
-                    submission,
-                    Ok(SandboxOutcome::Cancelled)
-                        | Err(crate::sandbox::client::SandboxCallError::Submission {
-                            code: tonic::Code::Aborted | tonic::Code::Unavailable
-                        })
-                ),
-                "a submission stopped mid-dispatch returned {returned}"
+                accepted,
+                "a submission stopped mid-dispatch returned {returned}: {:?}",
+                submission
+                    .as_ref()
+                    .err()
+                    .map(crate::sandbox::client::SandboxCallError::submission_message)
             );
         }
         drop(transport);

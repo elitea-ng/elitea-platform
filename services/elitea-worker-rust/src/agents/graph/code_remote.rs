@@ -417,13 +417,11 @@ impl RemoteCodeRuntime {
                     SandboxCallError::Authorization(
                         crate::transport::control_grpc::ControlGrpcError::Unavailable(_),
                     )
-                    | SandboxCallError::Submission {
-                        code:
+                    | SandboxCallError::Submission { code:
                             tonic::Code::Unavailable
                             | tonic::Code::DeadlineExceeded
                             | tonic::Code::Aborted
-                            | tonic::Code::ResourceExhausted,
-                    },
+                            | tonic::Code::ResourceExhausted, .. },
                 ) => {}
                 Err(error) => {
                     note(match &error {

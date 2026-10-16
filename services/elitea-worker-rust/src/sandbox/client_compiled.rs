@@ -1,5 +1,5 @@
 //! Fresh separate Read/Execute grants for one immutable selected snapshot.
-use super::{SandboxCallError, SandboxClient, SandboxOutcome, submission_code};
+use super::{SandboxCallError, SandboxClient, SandboxOutcome};
 use crate::{
     protocol::elitea::runtime::v1::{
         AuthorizeRustCompiledSnapshotRequestV1, RustCompiledSnapshotPurposeV1, SandboxJobStatusV1,
@@ -248,12 +248,8 @@ impl SandboxClient {
             self.rpc.clone().submit_rust_compiled_snapshot(request),
         )
         .await
-        .map_err(|_| SandboxCallError::Submission {
-            code: tonic::Code::DeadlineExceeded,
-        })?
-        .map_err(|status| SandboxCallError::Submission {
-            code: submission_code(&status),
-        })
+        .map_err(|_| SandboxCallError::deadline())?
+        .map_err(|status| SandboxCallError::submission(&status))
         .map(tonic::Response::into_inner)
     }
 }
@@ -419,12 +415,8 @@ impl SandboxClient {
             self.rpc.clone().submit_rust_compiled_snapshot(request),
         )
         .await
-        .map_err(|_| SandboxCallError::Submission {
-            code: tonic::Code::DeadlineExceeded,
-        })?
-        .map_err(|status| SandboxCallError::Submission {
-            code: submission_code(&status),
-        })
+        .map_err(|_| SandboxCallError::deadline())?
+        .map_err(|status| SandboxCallError::submission(&status))
         .map(tonic::Response::into_inner)
     }
     #[allow(clippy::too_many_arguments)] // The publisher binds the original compile job and exact captured descriptor.
@@ -464,12 +456,8 @@ impl SandboxClient {
             self.rpc.clone().publish_rust_compiled_snapshot(request),
         )
         .await
-        .map_err(|_| SandboxCallError::Submission {
-            code: tonic::Code::DeadlineExceeded,
-        })?
-        .map_err(|status| SandboxCallError::Submission {
-            code: submission_code(&status),
-        })?
+        .map_err(|_| SandboxCallError::deadline())?
+        .map_err(|status| SandboxCallError::submission(&status))?
         .into_inner();
         super::preparation::decode_publication(
             crate::protocol::elitea::runtime::v1::PublishSandboxDependenciesResponseV1 {

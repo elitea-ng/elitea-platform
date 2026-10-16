@@ -1,5 +1,5 @@
 //! Bounded worker control for trusted preparation. Package files never enter RPC bodies.
-use super::{SandboxCallError, SandboxClient, submission_code};
+use super::{SandboxCallError, SandboxClient};
 use crate::{
     protocol::elitea::runtime::v1::{
         AuthorizeSandboxJobRequestV1, LookupSandboxDependenciesRequestV1,
@@ -10,7 +10,7 @@ use crate::{
     sandbox::{dependency_bundle::DependencyBundle, preparation::PreparationJob},
     transport::control_grpc::{ControlGrpcClient, ControlRpc},
 };
-use tonic::{Code, Request};
+use tonic::Request;
 #[cfg(all(test, feature = "sandbox-supervisor"))]
 #[path = "client_preparation_tests.rs"]
 mod transport_tests;
@@ -59,12 +59,8 @@ impl SandboxClient {
             self.rpc.clone().lookup_sandbox_dependencies(request),
         )
         .await
-        .map_err(|_| SandboxCallError::Submission {
-            code: Code::DeadlineExceeded,
-        })?
-        .map_err(|status| SandboxCallError::Submission {
-            code: submission_code(&status),
-        })?
+        .map_err(|_| SandboxCallError::deadline())?
+        .map_err(|status| SandboxCallError::submission(&status))?
         .into_inner();
         decode_lookup(&response, job, root)
     }
@@ -96,12 +92,8 @@ impl SandboxClient {
             self.rpc.clone().prepare_sandbox_dependencies(request),
         )
         .await
-        .map_err(|_| SandboxCallError::Submission {
-            code: Code::DeadlineExceeded,
-        })?
-        .map_err(|status| SandboxCallError::Submission {
-            code: submission_code(&status),
-        })?
+        .map_err(|_| SandboxCallError::deadline())?
+        .map_err(|status| SandboxCallError::submission(&status))?
         .into_inner();
         let outcome = decode_preparation(response)?;
         match &outcome {
@@ -142,12 +134,8 @@ impl SandboxClient {
             self.rpc.clone().publish_sandbox_dependencies(request),
         )
         .await
-        .map_err(|_| SandboxCallError::Submission {
-            code: Code::DeadlineExceeded,
-        })?
-        .map_err(|status| SandboxCallError::Submission {
-            code: submission_code(&status),
-        })?
+        .map_err(|_| SandboxCallError::deadline())?
+        .map_err(|status| SandboxCallError::submission(&status))?
         .into_inner();
         decode_publication(response)
     }
