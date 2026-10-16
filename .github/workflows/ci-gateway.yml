@@ -96,9 +96,13 @@ jobs:
           # (1.26.9), and the runner cache can lag behind it.
           check-latest: true
           cache-dependency-path: services/elitea-llm-gateway/go.sum
+      # PINNED, as ci-go.yml pins it: `version: latest` made this gate a moving
+      # target, and a new release redded main and every open gateway PR on
+      # code nobody had touched (errcheck on `<-done`, 2026-10-16). Raise it
+      # deliberately, together with ci-go.yml, after reading the release notes.
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.9.0
           working-directory: services/elitea-llm-gateway
 
   test:
