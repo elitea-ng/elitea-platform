@@ -6,8 +6,11 @@
 //! is on main the worker codes against [`WorkspaceCodec`]; the binding is one
 //! adapter over `bundle::verify_into`, `ObjectDb::flatten` and
 //! `bundle::write_compact`, plus loose-object writes for the turn's commit.
-//! No codec is composed in production until then, so a cloud turn fails with
-//! `workspace_run.unavailable` instead of running without its files.
+//!
+//! Segments move as FILES on the worker's disk (the turn's scratch
+//! directory), never as one buffer: a 200 MB segment is streamed to disk as
+//! it is fetched, verified and indexed from there in bounded reads, and the
+//! turn's segment is written to disk and uploaded from there in chunks.
 //!
 //! Every method runs on a blocking thread: they do file and object work.
 
@@ -48,12 +51,14 @@ pub(crate) struct TurnCommit {
     pub(crate) unix_seconds: i64,
 }
 
-/// A COMPACT segment written for the publish.
+/// A COMPACT segment written for the publish, on disk.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BuiltSegment {
     /// The turn's new commit: the new `refs/elitea/cloud`.
     pub(crate) commit: String,
-    pub(crate) bytes: Vec<u8>,
+    /// The segment file (the `out` path the codec was given).
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) bytes: u64,
     pub(crate) sha256: String,
 }
 
@@ -88,10 +93,11 @@ impl CodecError {
 
 /// The bundle and commit operations of one workspace run.
 pub(crate) trait WorkspaceCodec: Send + Sync {
-    /// Verify `segment` against `expect` into the quarantine object database
-    /// at `git_dir`, then write the tree of commit `checkout` into
-    /// `worktree` (an empty directory). Nothing is written to `worktree`
-    /// unless every check passed.
+    /// Verify the segment FILE `segment` against `expect` into the
+    /// quarantine object database at `git_dir`, then write the tree of
+    /// commit `checkout` into `worktree` (an empty directory). Nothing is
+    /// written to `worktree` unless every check passed. The file is read in
+    /// bounded chunks, never whole.
     ///
     /// # Errors
     ///
@@ -99,7 +105,7 @@ pub(crate) trait WorkspaceCodec: Send + Sync {
     /// over a cap.
     fn hydrate(
         &self,
-        segment: &[u8],
+        segment: &Path,
         expect: &SegmentExpectation,
         checkout: &str,
         git_dir: &Path,
@@ -108,7 +114,8 @@ pub(crate) trait WorkspaceCodec: Send + Sync {
 
     /// Commit `worktree` as the child of `commit.parent` into `git_dir`, and
     /// write a COMPACT segment carrying `refs` with `refs/elitea/cloud`
-    /// moved to the new commit. `.git` in `worktree` is never read.
+    /// moved to the new commit, streamed into the file `out`. `.git` in
+    /// `worktree` is never read.
     ///
     /// # Errors
     ///
@@ -121,5 +128,40 @@ pub(crate) trait WorkspaceCodec: Send + Sync {
         commit: &TurnCommit,
         refs: &BTreeMap<String, String>,
         max_segment_bytes: u64,
+        out: &Path,
     ) -> Result<BuiltSegment, CodecError>;
+
+    /// The files of commit `parent` in `git_dir`, for the end-of-turn scan
+    /// of changed files (contract 6.4).
+    ///
+    /// # Errors
+    ///
+    /// The commit is not in the quarantine.
+    fn parent_files(
+        &self,
+        git_dir: &Path,
+        parent: &str,
+    ) -> Result<Box<dyn super::file_redact::ParentTree + Send>, CodecError>;
+
+    /// Regenerate of the newest cloud turn (ADR-0034 decision 7): in the
+    /// verified quarantine at `git_dir`, take `cloud`'s first parent P,
+    /// write P's tree into `worktree` (an empty directory) and a COMPACT
+    /// segment carrying `expect.refs` with `refs/elitea/cloud` moved back to
+    /// P into the file `out`. Returns P and the segment; the caller publishes
+    /// it through the normal compare-and-set (old `cloud`, new P) before
+    /// the turn starts.
+    ///
+    /// # Errors
+    ///
+    /// `cloud` has no parent ([`CodecError::Integrity`]), or as
+    /// `hydrate`/`commit_and_bundle`.
+    fn rewind(
+        &self,
+        git_dir: &Path,
+        expect: &SegmentExpectation,
+        cloud: &str,
+        worktree: &Path,
+        max_segment_bytes: u64,
+        out: &Path,
+    ) -> Result<(String, BuiltSegment), CodecError>;
 }

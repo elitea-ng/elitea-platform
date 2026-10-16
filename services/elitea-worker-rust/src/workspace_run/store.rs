@@ -8,6 +8,7 @@
 //! same request, which Main answers with the original result.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -19,11 +20,9 @@ use tonic::transport::Channel;
 use crate::protocol::elitea::runtime::v1::{
     RuntimeErrorCodeV1, RuntimeErrorV1, WorkspaceClaimV1, WorkspaceEnvSecretFrameV1,
     WorkspaceEnvSecretRequestV1, WorkspaceFetchFrameV1, WorkspaceFetchPlanRequestV1,
-    WorkspacePublishRequestV1, WorkspacePublishResponseV1, WorkspacePullRequestDiffFrameV1,
-    WorkspacePullRequestDiffRequestV1, WorkspaceRefUpdateV1, WorkspaceRefV1,
+    WorkspacePublishRequestV1, WorkspacePublishResponseV1, WorkspaceRefUpdateV1, WorkspaceRefV1,
     WorkspaceRefusalCodeV1, WorkspaceRefusalV1, WorkspaceUploadFrameV1, WorkspaceUploadHeaderV1,
     WorkspaceUploadResponseV1, workspace_env_secret_frame_v1, workspace_fetch_frame_v1,
-    workspace_pull_request_diff_frame_v1,
     workspace_store_service_client::WorkspaceStoreServiceClient, workspace_upload_frame_v1,
 };
 
@@ -36,11 +35,11 @@ pub(crate) const CHUNK_BYTES: usize = 32 * 1_024;
 /// The control listener's message bounds.
 const MAX_REQUEST_BYTES: usize = 64 * 1_024;
 const MAX_RESPONSE_BYTES: usize = 80 * 1_024;
-/// The pull-request diff bound (decision 10).
-pub(crate) const MAX_DIFF_BYTES: u64 = 1 << 20;
 
 pub(crate) const REF_CLOUD: &str = "refs/elitea/cloud";
 pub(crate) const REF_HANDOFF_PREFIX: &str = "refs/elitea/handoff/";
+/// The desktop's upstream commit U (decision 6), a pull request's base.
+pub(crate) const REF_UPSTREAM: &str = "refs/elitea/upstream";
 pub(crate) const KIND_COMPACT: &str = "COMPACT";
 pub(crate) const OBJECT_FORMAT_SHA1: &str = "sha1";
 
@@ -56,10 +55,6 @@ pub(crate) enum RefusalCode {
     UnsupportedObjectFormat,
     SegmentTooLarge,
     QuotaExceeded,
-    NoUpstream,
-    DiffTooLarge,
-    DiffBinary,
-    DiffEmpty,
 }
 
 impl RefusalCode {
@@ -75,10 +70,6 @@ impl RefusalCode {
             Self::UnsupportedObjectFormat => "unsupported_object_format",
             Self::SegmentTooLarge => "segment_too_large",
             Self::QuotaExceeded => "workspace_quota_exceeded",
-            Self::NoUpstream => "no_upstream",
-            Self::DiffTooLarge => "diff_too_large",
-            Self::DiffBinary => "diff_binary",
-            Self::DiffEmpty => "diff_empty",
         }
     }
 
@@ -93,10 +84,6 @@ impl RefusalCode {
             WorkspaceRefusalCodeV1::UnsupportedObjectFormat => Self::UnsupportedObjectFormat,
             WorkspaceRefusalCodeV1::SegmentTooLarge => Self::SegmentTooLarge,
             WorkspaceRefusalCodeV1::QuotaExceeded => Self::QuotaExceeded,
-            WorkspaceRefusalCodeV1::NoUpstream => Self::NoUpstream,
-            WorkspaceRefusalCodeV1::DiffTooLarge => Self::DiffTooLarge,
-            WorkspaceRefusalCodeV1::DiffBinary => Self::DiffBinary,
-            WorkspaceRefusalCodeV1::DiffEmpty => Self::DiffEmpty,
             WorkspaceRefusalCodeV1::Unspecified => return None,
         })
     }
@@ -148,13 +135,13 @@ pub(crate) struct PlannedSegment {
     pub(crate) refs: BTreeMap<String, String>,
 }
 
-/// The fetched thread: its plan and its one COMPACT segment's bytes.
+/// The fetched thread: its plan; its one COMPACT segment was streamed to
+/// the file the caller named, and checked against the plan on the way.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FetchedThread {
     pub(crate) head_seq: u64,
     pub(crate) refs: BTreeMap<String, String>,
     pub(crate) segment: PlannedSegment,
-    pub(crate) bytes: Vec<u8>,
 }
 
 /// The executor's publish: one COMPACT segment, one move of the cloud ref.
@@ -173,34 +160,27 @@ pub(crate) struct PublishedSegment {
     pub(crate) refs: BTreeMap<String, String>,
 }
 
-/// The pull-request diff Main computed (U → cloud tip) and what it is
-/// opened against.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PullRequestDiff {
-    pub(crate) upstream_sha: String,
-    pub(crate) upstream_branch: String,
-    pub(crate) remote_url: String,
-    pub(crate) cloud_sha: String,
-    pub(crate) files: u32,
-    pub(crate) text: String,
-}
-
-/// The four calls, as the orchestrator and the pull-request tool use them.
+/// The store calls, as the orchestrator uses them.
 #[async_trait]
 pub(crate) trait WorkspaceStore: Send + Sync {
+    /// Fetch the plan and stream its segment into the file `into`, never
+    /// holding more than one chunk of it.
     async fn fetch(
         &self,
         claim: &WorkspaceClaimV1,
         since_seq: u64,
         max_segment_bytes: u64,
+        into: &Path,
     ) -> Result<FetchedThread, StoreCallError>;
 
-    /// Upload one segment; `true` when Main already had that digest.
+    /// Upload the segment file `segment` (`bytes` long), read in chunks;
+    /// `true` when Main already had that digest.
     async fn upload(
         &self,
         claim: &WorkspaceClaimV1,
         sha256: &str,
-        bytes: &[u8],
+        bytes: u64,
+        segment: &Path,
     ) -> Result<bool, StoreCallError>;
 
     async fn publish(
@@ -208,11 +188,6 @@ pub(crate) trait WorkspaceStore: Send + Sync {
         claim: &WorkspaceClaimV1,
         request: &PublishSegment,
     ) -> Result<PublishedSegment, StoreCallError>;
-
-    async fn pull_request_diff(
-        &self,
-        claim: &WorkspaceClaimV1,
-    ) -> Result<PullRequestDiff, StoreCallError>;
 
     /// The thread's harvested env (contract 6.4); empty when it has none.
     async fn env_secret(&self, claim: &WorkspaceClaimV1) -> Result<SecretEnv, StoreCallError>;
@@ -331,116 +306,207 @@ fn rejected(rejection: &RuntimeErrorV1) -> StoreCallError {
     }
 }
 
-/// Read a whole fetch stream: exactly one plan, then exactly one COMPACT
-/// segment's chunks and its end frame, matched against the plan.
-///
-/// # Errors
-///
-/// A refusal or rejection frame, or any frame out of order.
-pub(crate) fn read_fetch_frames(
-    frames: impl IntoIterator<Item = WorkspaceFetchFrameV1>,
+/// Reads a fetch stream frame by frame: exactly one plan, then exactly one
+/// COMPACT segment's chunks (written straight to the segment file, hashed
+/// as they pass) and its end frame, matched against the plan. At most one
+/// chunk is in memory.
+pub(crate) struct FetchSink {
+    file: std::io::BufWriter<std::fs::File>,
     max_segment_bytes: u64,
-) -> Result<FetchedThread, StoreCallError> {
-    use workspace_fetch_frame_v1::Frame;
-    let mut frames = frames.into_iter();
-    let plan = match frames.next().and_then(|frame| frame.frame) {
-        Some(Frame::Plan(plan)) => plan,
-        Some(Frame::Refusal(refusal)) => return Err(refused(&refusal)),
-        Some(Frame::Rejection(rejection)) => return Err(rejected(&rejection)),
-        _ => return Err(StoreCallError::Malformed("the fetch stream has no plan")),
-    };
-    let refs = ref_map(&plan.refs)?;
-    let [segment] = plan.segments.as_slice() else {
-        return Err(StoreCallError::Malformed(
-            "the fetch plan is not one COMPACT segment",
-        ));
-    };
-    if segment.kind != KIND_COMPACT
-        || !segment.prerequisites.is_empty()
-        || !sha256_valid(&segment.sha256)
-        || segment.bytes == 0
-        || segment.bytes > max_segment_bytes
-    {
-        return Err(StoreCallError::Malformed(
-            "the fetch plan is not one COMPACT segment",
-        ));
+    plan: Option<(u64, BTreeMap<String, String>, PlannedSegment)>,
+    hasher: Sha256,
+    written: u64,
+    done: Option<FetchedThread>,
+}
+
+impl FetchSink {
+    /// # Errors
+    ///
+    /// The segment file cannot be created.
+    pub(crate) fn create(into: &Path, max_segment_bytes: u64) -> Result<Self, StoreCallError> {
+        let file = std::fs::File::create(into)
+            .map_err(|_| StoreCallError::Malformed("the segment file cannot be written"))?;
+        Ok(Self {
+            file: std::io::BufWriter::with_capacity(CHUNK_BYTES * 2, file),
+            max_segment_bytes,
+            plan: None,
+            hasher: Sha256::new(),
+            written: 0,
+            done: None,
+        })
     }
-    let planned = PlannedSegment {
-        seq: segment.seq,
-        sha256: segment.sha256.clone(),
-        bytes: segment.bytes,
-        refs: ref_map(&segment.refs)?,
-    };
-    let mut bytes = Vec::with_capacity(usize::try_from(segment.bytes).unwrap_or(0));
-    for frame in frames.by_ref() {
+
+    /// Take one frame.
+    ///
+    /// # Errors
+    ///
+    /// A refusal or rejection frame, or any frame out of order.
+    pub(crate) fn push(&mut self, frame: WorkspaceFetchFrameV1) -> Result<(), StoreCallError> {
+        use std::io::Write as _;
+        use workspace_fetch_frame_v1::Frame;
+        if self.done.is_some() {
+            return Err(StoreCallError::Malformed(
+                "the fetch stream continues past its segment",
+            ));
+        }
+        let Some((head_seq, refs, planned)) = &self.plan else {
+            return match frame.frame {
+                Some(Frame::Plan(plan)) => {
+                    let refs = ref_map(&plan.refs)?;
+                    let [segment] = plan.segments.as_slice() else {
+                        return Err(StoreCallError::Malformed(
+                            "the fetch plan is not one COMPACT segment",
+                        ));
+                    };
+                    if segment.kind != KIND_COMPACT
+                        || !segment.prerequisites.is_empty()
+                        || !sha256_valid(&segment.sha256)
+                        || segment.bytes == 0
+                        || segment.bytes > self.max_segment_bytes
+                    {
+                        return Err(StoreCallError::Malformed(
+                            "the fetch plan is not one COMPACT segment",
+                        ));
+                    }
+                    let planned = PlannedSegment {
+                        seq: segment.seq,
+                        sha256: segment.sha256.clone(),
+                        bytes: segment.bytes,
+                        refs: ref_map(&segment.refs)?,
+                    };
+                    self.plan = Some((plan.head_seq, refs, planned));
+                    Ok(())
+                }
+                Some(Frame::Refusal(refusal)) => Err(refused(&refusal)),
+                Some(Frame::Rejection(rejection)) => Err(rejected(&rejection)),
+                _ => Err(StoreCallError::Malformed("the fetch stream has no plan")),
+            };
+        };
         match frame.frame {
             Some(Frame::SegmentChunk(chunk)) => {
                 if chunk.is_empty()
                     || chunk.len() > CHUNK_BYTES
-                    || (bytes.len() + chunk.len()) as u64 > planned.bytes
+                    || self.written + chunk.len() as u64 > planned.bytes
                 {
                     return Err(StoreCallError::Malformed("a segment chunk is malformed"));
                 }
-                bytes.extend_from_slice(&chunk);
+                self.file
+                    .write_all(&chunk)
+                    .map_err(|_| StoreCallError::Malformed("the segment file cannot be written"))?;
+                self.hasher.update(&chunk);
+                self.written += chunk.len() as u64;
+                Ok(())
             }
             Some(Frame::SegmentEnd(end)) => {
+                let digest = hex_digest(std::mem::take(&mut self.hasher));
                 if end.sha256 != planned.sha256
                     || end.bytes != planned.bytes
-                    || bytes.len() as u64 != planned.bytes
-                    || sha256_hex(&bytes) != planned.sha256
+                    || self.written != planned.bytes
+                    || digest != planned.sha256
                 {
                     return Err(StoreCallError::Refused {
                         code: RefusalCode::ChecksumMismatch,
                         current: BTreeMap::new(),
                     });
                 }
-                if frames.next().is_some() {
-                    return Err(StoreCallError::Malformed(
-                        "the fetch stream continues past its segment",
-                    ));
-                }
-                return Ok(FetchedThread {
-                    head_seq: plan.head_seq,
-                    refs,
-                    segment: planned,
-                    bytes,
+                self.file
+                    .flush()
+                    .map_err(|_| StoreCallError::Malformed("the segment file cannot be written"))?;
+                self.done = Some(FetchedThread {
+                    head_seq: *head_seq,
+                    refs: refs.clone(),
+                    segment: planned.clone(),
                 });
+                Ok(())
             }
-            Some(Frame::Refusal(refusal)) => return Err(refused(&refusal)),
-            Some(Frame::Rejection(rejection)) => return Err(rejected(&rejection)),
-            Some(Frame::Plan(_)) | None => {
-                return Err(StoreCallError::Malformed(
-                    "the fetch stream is out of order",
-                ));
-            }
+            Some(Frame::Refusal(refusal)) => Err(refused(&refusal)),
+            Some(Frame::Rejection(rejection)) => Err(rejected(&rejection)),
+            Some(Frame::Plan(_)) | None => Err(StoreCallError::Malformed(
+                "the fetch stream is out of order",
+            )),
         }
     }
-    Err(StoreCallError::Malformed("the fetch stream ended early"))
+
+    /// The stream ended.
+    ///
+    /// # Errors
+    ///
+    /// It ended before the segment's end frame.
+    pub(crate) fn finish(self) -> Result<FetchedThread, StoreCallError> {
+        self.done
+            .ok_or(StoreCallError::Malformed("the fetch stream ended early"))
+    }
 }
 
-/// The upload stream for one segment: a header, then 32 KiB chunks.
-#[must_use]
-pub(crate) fn upload_frames(
-    claim: &WorkspaceClaimV1,
-    sha256: &str,
-    bytes: &[u8],
-) -> Vec<WorkspaceUploadFrameV1> {
+fn hex_digest(hasher: Sha256) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+/// Read a whole fetch stream into the segment file `into`.
+#[cfg(test)]
+///
+/// # Errors
+///
+/// As [`FetchSink::push`].
+pub(crate) fn read_fetch_frames(
+    frames: impl IntoIterator<Item = WorkspaceFetchFrameV1>,
+    max_segment_bytes: u64,
+    into: &Path,
+) -> Result<FetchedThread, StoreCallError> {
+    let mut sink = FetchSink::create(into, max_segment_bytes)?;
+    for frame in frames {
+        sink.push(frame)?;
+    }
+    sink.finish()
+}
+
+/// The upload stream of one segment file: a header, then 32 KiB chunks read
+/// from `source` one at a time, as the stream is polled. A read error or a
+/// file that is not `bytes` long ends the stream early, which Main refuses
+/// (its byte count does not match the header).
+pub(crate) fn upload_stream<R>(
+    claim: WorkspaceClaimV1,
+    sha256: String,
+    bytes: u64,
+    mut source: R,
+) -> impl tokio_stream::Stream<Item = WorkspaceUploadFrameV1> + Send
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    use tokio::io::AsyncReadExt as _;
     use workspace_upload_frame_v1::Frame;
-    let mut frames = vec![WorkspaceUploadFrameV1 {
-        frame: Some(Frame::Header(WorkspaceUploadHeaderV1 {
-            claim: Some(claim.clone()),
-            sha256: sha256.to_owned(),
-            bytes: bytes.len() as u64,
-        })),
-    }];
-    frames.extend(
-        bytes
-            .chunks(CHUNK_BYTES)
-            .map(|chunk| WorkspaceUploadFrameV1 {
-                frame: Some(Frame::Chunk(chunk.to_vec())),
-            }),
-    );
-    frames
+    async_stream::stream! {
+        yield WorkspaceUploadFrameV1 {
+            frame: Some(Frame::Header(WorkspaceUploadHeaderV1 {
+                claim: Some(claim),
+                sha256,
+                bytes,
+            })),
+        };
+        let mut sent: u64 = 0;
+        let mut buffer = vec![0_u8; CHUNK_BYTES];
+        while sent < bytes {
+            let mut filled = 0;
+            while filled < CHUNK_BYTES {
+                match source.read(&mut buffer[filled..]).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => filled += count,
+                }
+            }
+            if filled == 0 {
+                break;
+            }
+            sent += filled as u64;
+            yield WorkspaceUploadFrameV1 {
+                frame: Some(Frame::Chunk(buffer[..filled].to_vec())),
+            };
+        }
+    }
 }
 
 fn read_upload(response: &WorkspaceUploadResponseV1) -> Result<bool, StoreCallError> {
@@ -506,64 +572,6 @@ pub(crate) fn read_publish(
     })
 }
 
-/// Read a pull-request diff stream: one header, then chunks matching it.
-///
-/// # Errors
-///
-/// A refusal or rejection frame, or a diff that does not match its header.
-pub(crate) fn read_diff_frames(
-    frames: impl IntoIterator<Item = WorkspacePullRequestDiffFrameV1>,
-) -> Result<PullRequestDiff, StoreCallError> {
-    use workspace_pull_request_diff_frame_v1::Frame;
-    let mut frames = frames.into_iter();
-    let header = match frames.next().and_then(|frame| frame.frame) {
-        Some(Frame::Header(header)) => header,
-        Some(Frame::Refusal(refusal)) => return Err(refused(&refusal)),
-        Some(Frame::Rejection(rejection)) => return Err(rejected(&rejection)),
-        _ => return Err(StoreCallError::Malformed("the diff stream has no header")),
-    };
-    if !sha1_hex(&header.upstream_sha)
-        || !sha1_hex(&header.cloud_sha)
-        || header.upstream_branch.is_empty()
-        || header.upstream_branch.len() > 255
-        || header.bytes == 0
-        || header.bytes > MAX_DIFF_BYTES
-        || header.files == 0
-        || header.files > 100
-        || !sha256_valid(&header.diff_sha256)
-    {
-        return Err(StoreCallError::Malformed("the diff header is malformed"));
-    }
-    let mut text = Vec::with_capacity(usize::try_from(header.bytes).unwrap_or(0));
-    for frame in frames {
-        match frame.frame {
-            Some(Frame::Chunk(chunk))
-                if !chunk.is_empty()
-                    && chunk.len() <= CHUNK_BYTES
-                    && (text.len() + chunk.len()) as u64 <= header.bytes =>
-            {
-                text.extend_from_slice(&chunk);
-            }
-            _ => return Err(StoreCallError::Malformed("the diff stream is malformed")),
-        }
-    }
-    if text.len() as u64 != header.bytes || sha256_hex(&text) != header.diff_sha256 {
-        return Err(StoreCallError::Malformed(
-            "the diff does not match its header",
-        ));
-    }
-    let text = String::from_utf8(text)
-        .map_err(|_| StoreCallError::Malformed("the diff is not UTF-8 text"))?;
-    Ok(PullRequestDiff {
-        upstream_sha: header.upstream_sha,
-        upstream_branch: header.upstream_branch,
-        remote_url: header.remote_url,
-        cloud_sha: header.cloud_sha,
-        files: header.files,
-        text,
-    })
-}
-
 /// The production store over the control channel.
 pub(crate) struct GrpcWorkspaceStore {
     client: WorkspaceStoreServiceClient<Channel>,
@@ -597,35 +605,26 @@ impl WorkspaceStore for GrpcWorkspaceStore {
         claim: &WorkspaceClaimV1,
         since_seq: u64,
         max_segment_bytes: u64,
+        into: &Path,
     ) -> Result<FetchedThread, StoreCallError> {
         let mut client = self.client.clone();
         let request = WorkspaceFetchPlanRequestV1 {
             claim: Some(claim.clone()),
             since_seq,
         };
+        let mut sink = FetchSink::create(into, max_segment_bytes)?;
         let operation = async move {
             let mut stream = client
                 .workspace_fetch_plan(request)
                 .await
                 .map_err(|status| status_error(&status))?
                 .into_inner();
-            // Frames are collected bounded: the plan's size cap is checked
-            // while reading, and chunks past it are refused.
-            let mut frames = Vec::new();
-            let mut received: u64 = 0;
+            // Each frame goes to disk as it arrives (the sink bounds the
+            // segment by its plan, the plan by the policy's cap).
             while let Some(frame) = stream.next().await {
-                let frame = frame.map_err(|status| status_error(&status))?;
-                if let Some(workspace_fetch_frame_v1::Frame::SegmentChunk(chunk)) = &frame.frame {
-                    received += chunk.len() as u64;
-                    if received > max_segment_bytes {
-                        return Err(StoreCallError::Malformed(
-                            "the segment exceeds the policy's size",
-                        ));
-                    }
-                }
-                frames.push(frame);
+                sink.push(frame.map_err(|status| status_error(&status))?)?;
             }
-            read_fetch_frames(frames, max_segment_bytes)
+            sink.finish()
         };
         timeout(self.deadline, operation)
             .await
@@ -636,13 +635,17 @@ impl WorkspaceStore for GrpcWorkspaceStore {
         &self,
         claim: &WorkspaceClaimV1,
         sha256: &str,
-        bytes: &[u8],
+        bytes: u64,
+        segment: &Path,
     ) -> Result<bool, StoreCallError> {
         let mut client = self.client.clone();
-        let frames = upload_frames(claim, sha256, bytes);
+        let file = tokio::fs::File::open(segment)
+            .await
+            .map_err(|_| StoreCallError::Malformed("the segment file cannot be read"))?;
+        let frames = upload_stream(claim.clone(), sha256.to_owned(), bytes, file);
         let operation = async move {
             let response = client
-                .workspace_upload(tokio_stream::iter(frames))
+                .workspace_upload(frames)
                 .await
                 .map_err(|status| status_error(&status))?
                 .into_inner();
@@ -666,41 +669,6 @@ impl WorkspaceStore for GrpcWorkspaceStore {
             .map_err(|status| status_error(&status))?
             .into_inner();
         read_publish(&response, request)
-    }
-
-    async fn pull_request_diff(
-        &self,
-        claim: &WorkspaceClaimV1,
-    ) -> Result<PullRequestDiff, StoreCallError> {
-        let mut client = self.client.clone();
-        let request = WorkspacePullRequestDiffRequestV1 {
-            claim: Some(claim.clone()),
-        };
-        let operation = async move {
-            let mut stream = client
-                .workspace_pull_request_diff(request)
-                .await
-                .map_err(|status| status_error(&status))?
-                .into_inner();
-            let mut frames = Vec::new();
-            let mut received: u64 = 0;
-            while let Some(frame) = stream.next().await {
-                let frame = frame.map_err(|status| status_error(&status))?;
-                if let Some(workspace_pull_request_diff_frame_v1::Frame::Chunk(chunk)) =
-                    &frame.frame
-                {
-                    received += chunk.len() as u64;
-                    if received > MAX_DIFF_BYTES {
-                        return Err(StoreCallError::Malformed("the diff is over 1 MiB"));
-                    }
-                }
-                frames.push(frame);
-            }
-            read_diff_frames(frames)
-        };
-        timeout(self.deadline, operation)
-            .await
-            .map_err(|_| StoreCallError::Transport { retryable: true })?
     }
 
     async fn env_secret(&self, claim: &WorkspaceClaimV1) -> Result<SecretEnv, StoreCallError> {
@@ -733,8 +701,7 @@ impl WorkspaceStore for GrpcWorkspaceStore {
 mod tests {
     use super::*;
     use crate::protocol::elitea::runtime::v1::{
-        WorkspaceFetchPlanV1, WorkspacePullRequestDiffHeaderV1, WorkspaceSegmentEndV1,
-        WorkspaceSegmentV1,
+        WorkspaceFetchPlanV1, WorkspaceSegmentEndV1, WorkspaceSegmentV1,
     };
 
     const CLOUD: &str = "1111111111111111111111111111111111111111";
@@ -778,13 +745,16 @@ mod tests {
 
     #[test]
     fn a_fetch_stream_is_read_and_checked_against_its_plan() {
+        let dir = tempfile::tempdir().expect("dir");
+        let file = dir.path().join("segment");
         let segment = vec![7_u8; 100_000];
-        let fetched = read_fetch_frames(plan_frames(&segment, false), 1 << 20).expect("fetched");
-        assert_eq!(fetched.bytes, segment);
+        let fetched =
+            read_fetch_frames(plan_frames(&segment, false), 1 << 20, &file).expect("fetched");
+        assert_eq!(std::fs::read(&file).expect("file"), segment);
         assert_eq!(fetched.refs.get(REF_CLOUD).map(String::as_str), Some(CLOUD));
 
         assert!(matches!(
-            read_fetch_frames(plan_frames(&segment, true), 1 << 20),
+            read_fetch_frames(plan_frames(&segment, true), 1 << 20, &file),
             Err(StoreCallError::Refused {
                 code: RefusalCode::ChecksumMismatch,
                 ..
@@ -792,13 +762,13 @@ mod tests {
         ));
         // Over the policy's segment cap: refused before any byte is used.
         assert!(matches!(
-            read_fetch_frames(plan_frames(&segment, false), 1_000),
+            read_fetch_frames(plan_frames(&segment, false), 1_000, &file),
             Err(StoreCallError::Malformed(_))
         ));
         // A truncated stream is never a usable segment.
         let mut truncated = plan_frames(&segment, false);
         truncated.pop();
-        assert!(read_fetch_frames(truncated, 1 << 20).is_err());
+        assert!(read_fetch_frames(truncated, 1 << 20, &file).is_err());
     }
 
     #[test]
@@ -812,7 +782,11 @@ mod tests {
             )),
         };
         assert!(matches!(
-            read_fetch_frames([frame], 1 << 20),
+            read_fetch_frames(
+                [frame],
+                1 << 20,
+                &tempfile::tempdir().expect("dir").path().join("s")
+            ),
             Err(StoreCallError::Refused {
                 code: RefusalCode::StaleEpoch,
                 ..
@@ -820,15 +794,71 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn upload_frames_fit_the_control_listener_bounds() {
-        let claim = WorkspaceClaimV1::default();
+    /// A reader that panics on a read asking for more than one chunk, and
+    /// counts how far it was read.
+    struct ChunkedReads {
+        data: Vec<u8>,
+        offset: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl tokio::io::AsyncRead for ChunkedReads {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            assert!(buf.remaining() <= CHUNK_BYTES, "a whole-file read");
+            let offset = self.offset.load(std::sync::atomic::Ordering::SeqCst);
+            let count = buf.remaining().min(self.data.len() - offset);
+            buf.put_slice(&self.data[offset..offset + count]);
+            self.offset
+                .store(offset + count, std::sync::atomic::Ordering::SeqCst);
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Item 4: the upload reads its file one chunk per frame, lazily, and
+    /// every frame fits the control listener's bound.
+    #[tokio::test]
+    async fn the_upload_streams_its_file_in_bounded_chunks() {
         let bytes = vec![1_u8; 3 * CHUNK_BYTES + 5];
-        let frames = upload_frames(&claim, &sha256_hex(&bytes), &bytes);
+        let offset = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let source = ChunkedReads {
+            data: bytes.clone(),
+            offset: std::sync::Arc::clone(&offset),
+        };
+        let stream = upload_stream(
+            WorkspaceClaimV1::default(),
+            sha256_hex(&bytes),
+            bytes.len() as u64,
+            source,
+        );
+        tokio::pin!(stream);
+        let header = stream.next().await.expect("header");
+        assert!(prost::Message::encoded_len(&header) < MAX_REQUEST_BYTES);
+        assert_eq!(
+            offset.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "nothing is read before a chunk is asked for"
+        );
+        let first = stream.next().await.expect("chunk");
+        assert_eq!(
+            offset.load(std::sync::atomic::Ordering::SeqCst),
+            CHUNK_BYTES
+        );
+        let mut frames = vec![header, first];
+        while let Some(frame) = stream.next().await {
+            frames.push(frame);
+        }
         assert_eq!(frames.len(), 5);
+        let mut sent = Vec::new();
         for frame in &frames {
             assert!(prost::Message::encoded_len(frame) < MAX_REQUEST_BYTES);
+            if let Some(workspace_upload_frame_v1::Frame::Chunk(chunk)) = &frame.frame {
+                sent.extend_from_slice(chunk);
+            }
         }
+        assert_eq!(sent, bytes);
     }
 
     #[test]
@@ -889,30 +919,5 @@ mod tests {
         assert!(read_env_frames([vars(&[("bad name", "1")]), end(1)]).is_err());
         assert!(read_env_frames([vars(&[("A", "1"), ("A", "2")]), end(2)]).is_err());
         assert!(read_env_frames([vars(&[("A", "1")])]).is_err());
-    }
-
-    #[test]
-    fn a_diff_stream_must_match_its_header() {
-        use workspace_pull_request_diff_frame_v1::Frame;
-        let text = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-a\n+b\n";
-        let header = |digest: String| WorkspacePullRequestDiffFrameV1 {
-            frame: Some(Frame::Header(WorkspacePullRequestDiffHeaderV1 {
-                upstream_sha: "3".repeat(40),
-                upstream_branch: "main".to_owned(),
-                remote_url: "https://github.com/o/r.git".to_owned(),
-                cloud_sha: "4".repeat(40),
-                files: 1,
-                bytes: text.len() as u64,
-                diff_sha256: digest,
-            })),
-        };
-        let chunk = WorkspacePullRequestDiffFrameV1 {
-            frame: Some(Frame::Chunk(text.as_bytes().to_vec())),
-        };
-        let diff =
-            read_diff_frames([header(sha256_hex(text.as_bytes())), chunk.clone()]).expect("diff");
-        assert_eq!(diff.text, text);
-        assert_eq!(diff.upstream_branch, "main");
-        assert!(read_diff_frames([header("0".repeat(64)), chunk]).is_err());
     }
 }

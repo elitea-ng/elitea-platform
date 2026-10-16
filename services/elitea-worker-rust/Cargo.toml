@@ -13,7 +13,7 @@ required-features = ["sandbox-supervisor"]
 
 [features]
 # Container access belongs to the dedicated supervisor, never the default worker.
-sandbox-supervisor = ["dep:adk-sandbox", "dep:x509-parser", "dep:kube", "dep:k8s-openapi", "dep:futures-util"]
+sandbox-supervisor = ["dep:adk-sandbox", "dep:x509-parser", "dep:kube", "dep:k8s-openapi", "dep:futures-util", "dep:bollard"]
 # Benchmark entry points only; never enabled in an image and never a gate.
 graph-shaping-bench = []
 
@@ -79,6 +79,18 @@ elitea-workspace-store = { path = "../../libs/rust/workspace-store" }
 gix-hash = { version = "=0.27.0", features = ["sha1"] }
 gix-object = { version = "=0.65.0", features = ["sha1"] }
 gix-odb = { version = "=0.85.0", features = ["sha1"] }
+# The segment is verified from a file on disk: the pack is indexed from a
+# buffered stream (never one 200 MB buffer), and the turn's segment is written
+# to a file object by object (src/workspace_run/gix_codec.rs). Same versions
+# and features as the store crate's, already in the lock.
+gix-pack = { version = "=0.75.0", default-features = false, features = ["streaming-input", "sha1"] }
+gix-features = { version = "=0.50.0", default-features = false }
+flate2 = "=1.1.10"
+# The end-of-turn scan for harvested env values in files (already locked).
+memchr = "=2.8.3"
+# ADR-0034 workspace runs on Docker (src/sandbox/workspace_run_docker.rs);
+# the version adk-sandbox already locks.
+bollard = { version = "=0.18.1", optional = true }
 futures-util = { version = "=0.3.34", optional = true, default-features = false, features = ["io"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"

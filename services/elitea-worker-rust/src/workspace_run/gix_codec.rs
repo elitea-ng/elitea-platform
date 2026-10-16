@@ -13,14 +13,15 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::Write as _;
+use std::io::{Read, Write};
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::path::{Component, Path};
 
 use elitea_workspace_store::StoreError;
-use elitea_workspace_store::bundle::{self, Expect, Limits};
+use elitea_workspace_store::bundle::{self, Limits};
 use elitea_workspace_store::objects::{ObjectDb, oid};
 use gix_object::Write as _;
+use sha2::Digest as _;
 
 use super::codec::{
     BuiltSegment, CodecError, HydratedTree, SegmentExpectation, TurnCommit, WorkspaceCodec,
@@ -62,88 +63,14 @@ fn safe_relative(path: &str) -> bool {
 impl WorkspaceCodec for StoreCodec {
     fn hydrate(
         &self,
-        segment: &[u8],
+        segment: &Path,
         expect: &SegmentExpectation,
         checkout: &str,
         git_dir: &Path,
         worktree: &Path,
     ) -> Result<HydratedTree, CodecError> {
-        bundle::init_quarantine(git_dir).map_err(|error| verify_error(&error))?;
-        let limits = Limits {
-            max_objects: usize::try_from(
-                expect
-                    .max_files
-                    .saturating_mul(OBJECTS_PER_FILE)
-                    .saturating_add(10_000),
-            )
-            .unwrap_or(usize::MAX),
-            max_unpacked_bytes: expect.max_unpacked_bytes,
-        };
-        let verified = bundle::verify_into(
-            segment,
-            git_dir,
-            &Expect {
-                sha256: Some(&expect.sha256),
-                bytes: Some(expect.bytes),
-                refs: Some(&expect.refs),
-            },
-            limits,
-        )
-        .map_err(|error| verify_error(&error))?;
-        let commit = verified
-            .db
-            .commit(&oid(checkout).map_err(|_| CodecError::Integrity)?)
-            .map_err(|error| verify_error(&error))?;
-        let files = verified
-            .db
-            .flatten(&commit.tree)
-            .map_err(|error| verify_error(&error))?;
-        if files.len() as u64 > expect.max_files {
-            return Err(CodecError::TooLarge);
-        }
-        // Every check passed: only now is anything written to the tree.
-        let mut unpacked: u64 = 0;
-        let mut written: u64 = 0;
-        for (path, entry) in &files {
-            if !safe_relative(path) {
-                return Err(CodecError::Integrity);
-            }
-            if entry.mode == MODE_GITLINK {
-                // A submodule commit has no content in the segment.
-                continue;
-            }
-            let content = verified
-                .db
-                .blob(&entry.oid)
-                .map_err(|error| verify_error(&error))?;
-            if content.len() as u64 > expect.max_file_bytes {
-                return Err(CodecError::TooLarge);
-            }
-            unpacked += content.len() as u64;
-            let target = worktree.join(path);
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent).map_err(|_| CodecError::Io)?;
-            }
-            match entry.mode {
-                MODE_SYMLINK => {
-                    let link = String::from_utf8(content).map_err(|_| CodecError::Integrity)?;
-                    symlink(link, &target).map_err(|_| CodecError::Io)?;
-                }
-                MODE_FILE | MODE_EXECUTABLE => {
-                    let mut file = File::create(&target).map_err(|_| CodecError::Io)?;
-                    file.write_all(&content).map_err(|_| CodecError::Io)?;
-                    let mode = if entry.mode == MODE_EXECUTABLE {
-                        0o755
-                    } else {
-                        0o644
-                    };
-                    fs::set_permissions(&target, fs::Permissions::from_mode(mode))
-                        .map_err(|_| CodecError::Io)?;
-                }
-                _ => return Err(CodecError::Integrity),
-            }
-            written += 1;
-        }
+        let verified = verify_segment_file(segment, git_dir, expect, plain_reader)?;
+        let (written, unpacked) = checkout_into(&verified.db, checkout, expect, worktree)?;
         // Contract 6.4: the explicit includes, from the handoff snapshot's
         // `Elitea-Included: <path>` trailers (one per path).
         let mut included_excluded = Vec::new();
@@ -170,6 +97,7 @@ impl WorkspaceCodec for StoreCodec {
         commit: &TurnCommit,
         refs: &BTreeMap<String, String>,
         max_segment_bytes: u64,
+        out: &Path,
     ) -> Result<BuiltSegment, CodecError> {
         let objects = git_dir.join("objects");
         let loose = gix_odb::loose::Store::at(&objects, gix_hash::Kind::Sha1);
@@ -200,20 +128,395 @@ impl WorkspaceCodec for StoreCodec {
         }
         tips.push((REF_CLOUD.to_owned(), new_commit));
         let db = ObjectDb::open_objects(&objects).map_err(|error| verify_error(&error))?;
-        let written =
-            bundle::write_compact(&db, &tips, Limits::default()).map_err(|error| match error {
-                StoreError::Invalid(_) => CodecError::TooLarge,
-                other => verify_error(&other),
-            })?;
-        if written.bytes.len() as u64 > max_segment_bytes {
-            return Err(CodecError::TooLarge);
-        }
+        let (sha256, bytes) =
+            write_compact_file(&db, &tips, Limits::default(), max_segment_bytes, out)?;
         Ok(BuiltSegment {
             commit: new_commit.to_string(),
-            sha256: written.sha256,
-            bytes: written.bytes,
+            path: out.to_path_buf(),
+            sha256,
+            bytes,
         })
     }
+
+    fn parent_files(
+        &self,
+        git_dir: &Path,
+        parent: &str,
+    ) -> Result<Box<dyn super::file_redact::ParentTree + Send>, CodecError> {
+        Self::quarantine_parent(git_dir, parent)
+    }
+
+    fn rewind(
+        &self,
+        git_dir: &Path,
+        expect: &SegmentExpectation,
+        cloud: &str,
+        worktree: &Path,
+        max_segment_bytes: u64,
+        out: &Path,
+    ) -> Result<(String, BuiltSegment), CodecError> {
+        let objects = git_dir.join("objects");
+        let db = ObjectDb::open_objects(&objects).map_err(|error| verify_error(&error))?;
+        let info = db
+            .commit(&oid(cloud).map_err(|_| CodecError::Integrity)?)
+            .map_err(|error| verify_error(&error))?;
+        let parent = *info.parents.first().ok_or(CodecError::Integrity)?;
+        let parent_hex = parent.to_string();
+        checkout_into(&db, &parent_hex, expect, worktree)?;
+        let mut tips = Vec::with_capacity(expect.refs.len());
+        for (name, sha) in &expect.refs {
+            let id = if name == REF_CLOUD {
+                parent
+            } else {
+                oid(sha).map_err(|_| CodecError::Integrity)?
+            };
+            tips.push((name.clone(), id));
+        }
+        let (sha256, bytes) =
+            write_compact_file(&db, &tips, Limits::default(), max_segment_bytes, out)?;
+        Ok((
+            parent_hex.clone(),
+            BuiltSegment {
+                commit: parent_hex,
+                path: out.to_path_buf(),
+                sha256,
+                bytes,
+            },
+        ))
+    }
+}
+
+impl StoreCodec {
+    fn quarantine_parent(
+        git_dir: &Path,
+        parent: &str,
+    ) -> Result<Box<dyn super::file_redact::ParentTree + Send>, CodecError> {
+        super::file_redact::QuarantineParent::open(git_dir, parent)
+            .map(|parent| Box::new(parent) as Box<dyn super::file_redact::ParentTree + Send>)
+            .map_err(|_| CodecError::Integrity)
+    }
+}
+
+/// Write commit `checkout`'s tree from `db` into `worktree` (an empty
+/// directory), within `expect`'s file caps. Returns (files, bytes).
+fn checkout_into(
+    db: &ObjectDb,
+    checkout: &str,
+    expect: &SegmentExpectation,
+    worktree: &Path,
+) -> Result<(u64, u64), CodecError> {
+    let commit = db
+        .commit(&oid(checkout).map_err(|_| CodecError::Integrity)?)
+        .map_err(|error| verify_error(&error))?;
+    let files = db
+        .flatten(&commit.tree)
+        .map_err(|error| verify_error(&error))?;
+    if files.len() as u64 > expect.max_files {
+        return Err(CodecError::TooLarge);
+    }
+    // Every check passed: only now is anything written to the tree.
+    let mut unpacked: u64 = 0;
+    let mut written: u64 = 0;
+    for (path, entry) in &files {
+        if !safe_relative(path) {
+            return Err(CodecError::Integrity);
+        }
+        if entry.mode == MODE_GITLINK {
+            // A submodule commit has no content in the segment.
+            continue;
+        }
+        let content = db.blob(&entry.oid).map_err(|error| verify_error(&error))?;
+        if content.len() as u64 > expect.max_file_bytes {
+            return Err(CodecError::TooLarge);
+        }
+        unpacked += content.len() as u64;
+        let target = worktree.join(path);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|_| CodecError::Io)?;
+        }
+        match entry.mode {
+            MODE_SYMLINK => {
+                let link = String::from_utf8(content).map_err(|_| CodecError::Integrity)?;
+                symlink(link, &target).map_err(|_| CodecError::Io)?;
+            }
+            MODE_FILE | MODE_EXECUTABLE => {
+                let mut file = File::create(&target).map_err(|_| CodecError::Io)?;
+                file.write_all(&content).map_err(|_| CodecError::Io)?;
+                let mode = if entry.mode == MODE_EXECUTABLE {
+                    0o755
+                } else {
+                    0o644
+                };
+                fs::set_permissions(&target, fs::Permissions::from_mode(mode))
+                    .map_err(|_| CodecError::Io)?;
+            }
+            _ => return Err(CodecError::Integrity),
+        }
+        written += 1;
+    }
+    Ok((written, unpacked))
+}
+
+/// Reads of a segment file go through this; tests wrap it to prove no read
+/// asks for the whole file.
+pub(crate) type SegmentReader = fn(File) -> Box<dyn Read + Send>;
+
+pub(crate) fn plain_reader(file: File) -> Box<dyn Read + Send> {
+    Box::new(file)
+}
+
+/// The largest bundle header read (the store crate's bound).
+const MAX_HEADER_BYTES: u64 = 1024 * 1024;
+/// Every read of a segment file is at most this.
+pub(crate) const READ_CHUNK_BYTES: usize = 64 * 1024;
+
+/// A verified quarantine.
+pub(crate) struct VerifiedSegment {
+    pub(crate) db: ObjectDb,
+}
+
+/// [`bundle::verify_into`] over a FILE: the same checks (size, content
+/// address, header, refs, pack checksum and objects, connectivity, the
+/// unpacked cap), with every read bounded to [`READ_CHUNK_BYTES`]; the pack
+/// is indexed from a buffered stream, so the segment is never held whole.
+pub(crate) fn verify_segment_file(
+    segment: &Path,
+    git_dir: &Path,
+    expect: &SegmentExpectation,
+    reader: SegmentReader,
+) -> Result<VerifiedSegment, CodecError> {
+    bundle::init_quarantine(git_dir).map_err(|error| verify_error(&error))?;
+    let open = || File::open(segment).map(reader).map_err(|_| CodecError::Io);
+    let length = fs::metadata(segment).map_err(|_| CodecError::Io)?.len();
+    if length != expect.bytes {
+        return Err(CodecError::Integrity);
+    }
+    // The content address, streamed.
+    let mut hasher = sha2::Sha256::new();
+    let mut input = open()?;
+    let mut buffer = vec![0_u8; READ_CHUNK_BYTES];
+    loop {
+        let count = input.read(&mut buffer).map_err(|_| CodecError::Io)?;
+        if count == 0 {
+            break;
+        }
+        sha2::Digest::update(&mut hasher, &buffer[..count]);
+    }
+    if hex(&sha2::Digest::finalize(hasher)) != expect.sha256 {
+        return Err(CodecError::Integrity);
+    }
+    // The header: at most 1 MiB plus the pack signature.
+    let mut head = Vec::new();
+    let mut input = open()?.take(MAX_HEADER_BYTES + 4);
+    loop {
+        let count = input.read(&mut buffer).map_err(|_| CodecError::Io)?;
+        if count == 0 {
+            break;
+        }
+        head.extend_from_slice(&buffer[..count]);
+    }
+    let header = bundle::parse_header(&head).map_err(|error| verify_error(&error))?;
+    drop(head);
+    if !header.prerequisites.is_empty() || header.refs.is_empty() || header.ref_map() != expect.refs
+    {
+        return Err(CodecError::Integrity);
+    }
+    // The pack, streamed into the quarantine's pack directory.
+    let mut input = open()?;
+    let offset = header.pack_offset as u64;
+    std::io::copy(&mut (&mut input).take(offset), &mut std::io::sink())
+        .map_err(|_| CodecError::Io)?;
+    let mut pack = std::io::BufReader::with_capacity(READ_CHUNK_BYTES, input.take(length - offset));
+    let interrupt = std::sync::atomic::AtomicBool::new(false);
+    let outcome = gix_pack::Bundle::write_to_directory(
+        &mut pack,
+        Some(&git_dir.join("objects/pack")),
+        &mut gix_features::progress::Discard,
+        &interrupt,
+        None::<gix_object::find::Never>,
+        gix_hash::Kind::Sha1,
+        gix_pack::bundle::write::Options {
+            thread_limit: Some(1),
+            iteration_mode: gix_pack::data::input::Mode::Verify,
+            alloc_limit_bytes: Some(512 * 1024 * 1024),
+            ..Default::default()
+        },
+    )
+    .map_err(|_| CodecError::Integrity)?;
+    if let Some(keep) = outcome.keep_path {
+        let _ = fs::remove_file(keep);
+    }
+    let db =
+        ObjectDb::open_objects(&git_dir.join("objects")).map_err(|error| verify_error(&error))?;
+    let limits = Limits {
+        max_objects: usize::try_from(
+            expect
+                .max_files
+                .saturating_mul(OBJECTS_PER_FILE)
+                .saturating_add(10_000),
+        )
+        .unwrap_or(usize::MAX),
+        max_unpacked_bytes: expect.max_unpacked_bytes,
+    };
+    let tips: Vec<gix_hash::ObjectId> = header.refs.iter().map(|(_, id)| *id).collect();
+    let walk = elitea_workspace_store::connectivity::reachable(&db, &tips, limits.max_objects)
+        .map_err(|error| verify_error(&error))?;
+    if walk.blob_bytes > limits.max_unpacked_bytes {
+        return Err(CodecError::TooLarge);
+    }
+    Ok(VerifiedSegment { db })
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(64), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+}
+
+/// Counts and hashes what passes through, and refuses past `max`.
+struct CountingWriter<W> {
+    inner: W,
+    sha256: sha2::Sha256,
+    written: u64,
+    max: u64,
+    over: bool,
+}
+
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if self.written + data.len() as u64 > self.max {
+            self.over = true;
+            return Err(std::io::Error::other("the segment is over its cap"));
+        }
+        let count = self.inner.write(data)?;
+        sha2::Digest::update(&mut self.sha256, &data[..count]);
+        self.written += count as u64;
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Feeds the pack's SHA-1 trailer.
+struct PackWriter<'a, W> {
+    inner: &'a mut W,
+    sha1: gix_hash::Hasher,
+}
+
+impl<W: Write> Write for PackWriter<'_, W> {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        let count = self.inner.write(data)?;
+        self.sha1.update(&data[..count]);
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// The pack entry header: type and size, little-endian 7-bit groups.
+fn entry_header(kind: gix_object::Kind, size: usize) -> Vec<u8> {
+    let number: u8 = match kind {
+        gix_object::Kind::Commit => 1,
+        gix_object::Kind::Tree => 2,
+        gix_object::Kind::Blob => 3,
+        gix_object::Kind::Tag => 4,
+    };
+    let mut out = Vec::with_capacity(10);
+    let mut size = size as u64;
+    let mut byte = (number << 4) | u8::try_from(size & 0x0f).unwrap_or(0);
+    size >>= 4;
+    while size > 0 {
+        out.push(byte | 0x80);
+        byte = u8::try_from(size & 0x7f).unwrap_or(0);
+        size >>= 7;
+    }
+    out.push(byte);
+    out
+}
+
+/// [`bundle::write_compact`] into a FILE: the v2 header, then a pack of
+/// whole objects written one object at a time (each object is bounded by
+/// the file cap); the bytes and their SHA-256 are counted as they are
+/// written, and a segment over `max_segment_bytes` stops the write.
+fn write_compact_file(
+    db: &ObjectDb,
+    refs: &[(String, gix_hash::ObjectId)],
+    limits: Limits,
+    max_segment_bytes: u64,
+    out: &Path,
+) -> Result<(String, u64), CodecError> {
+    let walk = elitea_workspace_store::connectivity::reachable(
+        db,
+        &refs.iter().map(|(_, id)| *id).collect::<Vec<_>>(),
+        limits.max_objects,
+    )
+    .map_err(|error| verify_error(&error))?;
+    if walk.blob_bytes > limits.max_unpacked_bytes {
+        return Err(CodecError::TooLarge);
+    }
+    let file = File::create(out).map_err(|_| CodecError::Io)?;
+    let mut writer = CountingWriter {
+        inner: std::io::BufWriter::with_capacity(READ_CHUNK_BYTES, file),
+        sha256: sha2::Sha256::new(),
+        written: 0,
+        max: max_segment_bytes,
+        over: false,
+    };
+    let fail = |writer: &CountingWriter<_>| {
+        if writer.over {
+            CodecError::TooLarge
+        } else {
+            CodecError::Io
+        }
+    };
+    let mut header = b"# v2 git bundle\n".to_vec();
+    for (name, id) in refs {
+        header.extend_from_slice(format!("{id} {name}\n").as_bytes());
+    }
+    header.push(b'\n');
+    writer.write_all(&header).map_err(|_| fail(&writer))?;
+    let count = u32::try_from(walk.objects.len()).map_err(|_| CodecError::TooLarge)?;
+    let mut pack = PackWriter {
+        inner: &mut writer,
+        sha1: gix_hash::hasher(gix_hash::Kind::Sha1),
+    };
+    let mut start = b"PACK".to_vec();
+    start.extend_from_slice(&2u32.to_be_bytes());
+    start.extend_from_slice(&count.to_be_bytes());
+    let mut result = pack.write_all(&start);
+    for id in &walk.objects {
+        if result.is_err() {
+            break;
+        }
+        let Some((kind, data)) = db.find(id).map_err(|error| verify_error(&error))? else {
+            return Err(CodecError::Integrity);
+        };
+        result = pack
+            .write_all(&entry_header(kind, data.len()))
+            .and_then(|()| {
+                let mut encoder =
+                    flate2::write::ZlibEncoder::new(&mut pack, flate2::Compression::default());
+                encoder.write_all(&data)?;
+                encoder.finish().map(|_| ())
+            });
+    }
+    let PackWriter { sha1, .. } = pack;
+    let trailer = sha1.try_finalize().map_err(|_| CodecError::Integrity)?;
+    let result = result
+        .and_then(|()| writer.write_all(trailer.as_slice()))
+        .and_then(|()| writer.flush());
+    if result.is_err() {
+        return Err(fail(&writer));
+    }
+    Ok((hex(&sha2::Digest::finalize(writer.sha256)), writer.written))
 }
 
 /// The `Elitea-Included` trailer values of a commit message, as safe
@@ -248,7 +551,7 @@ fn git_order(left: &TreeEntry, right: &TreeEntry) -> Ordering {
 
 /// Write `directory` as a tree; `None` for a directory with no files (git
 /// stores no empty directory).
-fn write_tree(
+pub(crate) fn write_tree(
     loose: &gix_odb::loose::Store,
     directory: &Path,
     depth: usize,
@@ -409,9 +712,11 @@ mod tests {
         let git_dir = scratch.path().join("q.git");
         let worktree = scratch.path().join("in");
         fs::create_dir_all(&worktree).expect("in");
+        let first_file = scratch.path().join("first.bundle");
+        fs::write(&first_file, &first.bytes).expect("segment file");
         let hydrated = StoreCodec
             .hydrate(
-                &first.bytes,
+                &first_file,
                 &expectation(&first.bytes, &refs),
                 &handoff.to_string(),
                 &git_dir,
@@ -449,9 +754,12 @@ mod tests {
                 &turn_commit(&handoff.to_string(), 3),
                 &refs,
                 1 << 30,
+                &scratch.path().join("turn.segment"),
             )
             .expect("built");
-        assert_eq!(built.sha256, sha256_hex(&built.bytes));
+        let built_bytes = fs::read(&built.path).expect("built file");
+        assert_eq!(built.sha256, sha256_hex(&built_bytes));
+        assert_eq!(built.bytes, built_bytes.len() as u64);
 
         // The published segment verifies and carries the new cloud ref.
         let mut cloud_refs = refs.clone();
@@ -459,10 +767,10 @@ mod tests {
         let check = scratch.path().join("check.git");
         let out = scratch.path().join("out");
         fs::create_dir_all(&out).expect("out");
-        let mut expect = expectation(&built.bytes, &cloud_refs);
+        let mut expect = expectation(&built_bytes, &cloud_refs);
         expect.refs = cloud_refs;
         StoreCodec
-            .hydrate(&built.bytes, &expect, &built.commit, &check, &out)
+            .hydrate(&built.path, &expect, &built.commit, &check, &out)
             .expect("the published segment verifies");
         assert_eq!(
             fs::read_to_string(out.join("README.md")).expect("r"),
@@ -476,7 +784,7 @@ mod tests {
             .expect("commit");
         assert_eq!(info.parents, vec![handoff]);
         assert!(info.message.contains("Elitea-Epoch: 2"));
-        assert_real_git_accepts(scratch.path(), &built.bytes, &built.commit);
+        assert_real_git_accepts(scratch.path(), &built_bytes, &built.commit);
     }
 
     /// The segment is a real git bundle: git clones it and `fsck --strict`
@@ -546,9 +854,11 @@ mod tests {
         let refs = BTreeMap::new();
         let mut expect = expectation(&segment, &refs);
         expect.sha256 = "0".repeat(64);
+        let file = scratch.path().join("bad.bundle");
+        fs::write(&file, &segment).expect("file");
         assert_eq!(
             StoreCodec.hydrate(
-                &segment,
+                &file,
                 &expect,
                 &"1".repeat(40),
                 &scratch.path().join("q"),
@@ -578,5 +888,95 @@ mod tests {
         ] {
             assert!(!safe_relative(bad), "{bad}");
         }
+    }
+
+    /// A reader that refuses any single read larger than the codec's chunk:
+    /// a `read_to_end` of the segment, or a buffer sized to the file, panics.
+    struct BoundedReads(File);
+
+    impl Read for BoundedReads {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            assert!(
+                buffer.len() <= READ_CHUNK_BYTES,
+                "a segment read asked for {} bytes at once",
+                buffer.len()
+            );
+            self.0.read(buffer)
+        }
+    }
+
+    fn bounded(file: File) -> Box<dyn Read + Send> {
+        Box::new(BoundedReads(file))
+    }
+
+    /// Item 4: a segment many times the read chunk is written to disk,
+    /// verified and indexed with every read bounded, and the turn's segment
+    /// is streamed to a file under the cap (and refused over it).
+    #[test]
+    fn segments_are_verified_and_written_from_disk_in_bounded_reads() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let source = scratch.path().join("src");
+        fs::create_dir_all(&source).expect("mkdir");
+        // ~3 MiB of incompressible bytes: 48 chunks of the read bound.
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        let noise: Vec<u8> = (0..3 * 1024 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state.to_be_bytes()[4]
+            })
+            .collect();
+        fs::write(source.join("blob.bin"), &noise).expect("w");
+        fs::write(source.join("a.txt"), "a\n").expect("w");
+        let desktop = scratch.path().join("desktop.git");
+        bundle::init_quarantine(&desktop).expect("init");
+        let loose = gix_odb::loose::Store::at(desktop.join("objects"), gix_hash::Kind::Sha1);
+        let tree = write_tree(&loose, &source, 0)
+            .expect("tree")
+            .expect("files");
+        let raw =
+            format!("tree {tree}\nauthor a <a@x> 1 +0000\ncommitter a <a@x> 1 +0000\n\nsnapshot\n");
+        let handoff = loose
+            .write_buf(gix_object::Kind::Commit, raw.as_bytes())
+            .expect("commit");
+        let db = ObjectDb::open_objects(&desktop.join("objects")).expect("db");
+        let segment = scratch.path().join("first.bundle");
+        let tips = [(HANDOFF_REF.to_owned(), handoff)];
+        // Over its cap the write stops and says so.
+        assert_eq!(
+            write_compact_file(&db, &tips, Limits::default(), 1024 * 1024, &segment),
+            Err(CodecError::TooLarge)
+        );
+        let (sha256, bytes) =
+            write_compact_file(&db, &tips, Limits::default(), 1 << 30, &segment).expect("written");
+        assert!(bytes > 3 * 1024 * 1024);
+        // The streamed writer produces exactly the store crate's bundle.
+        let reference = bundle::write_compact(&db, &tips, Limits::default()).expect("reference");
+        assert_eq!(reference.sha256, sha256);
+        assert_eq!(fs::read(&segment).expect("file"), reference.bytes);
+
+        let refs: BTreeMap<String, String> = [(HANDOFF_REF.to_owned(), handoff.to_string())].into();
+        let expect = SegmentExpectation {
+            sha256,
+            bytes,
+            refs,
+            max_unpacked_bytes: 1 << 30,
+            max_files: 10,
+            max_file_bytes: 8 << 20,
+        };
+        let verified =
+            verify_segment_file(&segment, &scratch.path().join("q.git"), &expect, bounded)
+                .expect("verified in bounded reads");
+        let commit = verified.db.commit(&handoff).expect("commit");
+        assert_eq!(verified.db.flatten(&commit.tree).expect("tree").len(), 2);
+
+        // A size the plan does not name is refused before any read.
+        let mut wrong = expect.clone();
+        wrong.bytes += 1;
+        assert!(matches!(
+            verify_segment_file(&segment, &scratch.path().join("q2.git"), &wrong, bounded),
+            Err(CodecError::Integrity)
+        ));
     }
 }
