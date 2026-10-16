@@ -36,7 +36,11 @@ struct Sent {
 }
 
 fn send(fixture: &Fixture) -> Sent {
-    let config = fixture.config(&[]);
+    send_leaving(fixture, &[])
+}
+
+fn send_leaving(fixture: &Fixture, leave: &[&str]) -> Sent {
+    let config = fixture.config(leave);
     let source = open_source(
         &fixture.top,
         &fixture.data,
@@ -587,4 +591,33 @@ fn cloud_created_excluded_files_never_overwrite_local_ones() {
         git(&path, &["status", "--porcelain", "-uall"]),
         "?? config/.env.cloud"
     );
+}
+
+/// A path both left on the laptop and in `path_deny` is a hard deny: a file
+/// the cloud creates there is never written (the leave-on-laptop reason
+/// would let a created file in where none exists).
+#[test]
+fn a_path_in_both_leave_and_path_deny_is_never_written_by_take_back() {
+    let fixture = Fixture::repo();
+    let top = &fixture.top;
+    write(top, "deploy/a.tf", "local\n");
+    git(top, &["add", "deploy"]);
+    git(top, &["commit", "-q", "-m", "deploy"]);
+    let sent = send_leaving(&fixture, &["deploy"]);
+    let created = |dir: &Path| {
+        write(dir, "deploy/x.tf", "from the cloud\n");
+        write(dir, "src/ok.rs", "pub fn ok() {}\n");
+    };
+    let (bytes, refs) = cloud(&fixture, &sent, &[&created]);
+    let deny = vec!["deploy/**".to_owned()];
+    let preflight = apply::preflight(&sent.source, &sent.record, &bytes, &refs, &deny).unwrap();
+    assert!(preflight.skipped_paths.contains(&"deploy/x.tf".to_owned()));
+    let applied = apply::apply(&sent.source, &preflight, Mode::Apply, &deny, None).unwrap();
+    assert!(!applied.written.contains(&"deploy/x.tf".to_owned()));
+    assert!(!top.join("deploy/x.tf").exists(), "never written");
+    assert_eq!(
+        std::fs::read_to_string(top.join("deploy/a.tf")).unwrap(),
+        "local\n"
+    );
+    assert!(top.join("src/ok.rs").exists());
 }

@@ -42,6 +42,8 @@ pub const MANDATORY: &[&str] = &[
     "*.p12",
     "*.pfx",
     "*.kdbx",
+    "*.jks",
+    "*.keystore",
     "credentials*.json",
 ];
 
@@ -304,13 +306,6 @@ impl Exclusions {
     /// Why the exclusions match `path`, ignoring the includes.
     #[must_use]
     pub fn matched(&self, path: &str) -> Option<Reason> {
-        if self
-            .leave
-            .iter()
-            .any(|leave| path == leave || path.starts_with(&format!("{leave}/")))
-        {
-            return Some(Reason::LeaveOnLaptop);
-        }
         let normalised = crate::workspace::nfc(path);
         let components: Vec<&str> = normalised.split('/').collect();
         for end in 1..=components.len() {
@@ -318,6 +313,14 @@ impl Exclusions {
             if self.deny.is_match(&prefix) {
                 return Some(Reason::PathDeny);
             }
+        }
+        // After `path_deny`: a path in both lists is a hard deny.
+        if self
+            .leave
+            .iter()
+            .any(|leave| path == leave || path.starts_with(&format!("{leave}/")))
+        {
+            return Some(Reason::LeaveOnLaptop);
         }
         for end in 1..=components.len() {
             let prefix = components[..end].join("/");
@@ -439,6 +442,21 @@ mod tests {
             ..Rules::default()
         };
         assert!(Exclusions::new(&workspace, &leave("../x")).is_err());
+    }
+
+    #[test]
+    fn path_deny_wins_over_leave_on_laptop() {
+        let (_dir, rules) = rules(&["deploy/**"], &["deploy", "notes"], None);
+        assert_eq!(rules.reason("deploy/x.tf"), Some(Reason::PathDeny));
+        assert_eq!(rules.reason("notes/a.md"), Some(Reason::LeaveOnLaptop));
+    }
+
+    #[test]
+    fn keystores_are_in_the_default_list() {
+        let (_dir, rules) = rules(&[], &[], None);
+        for path in ["app.jks", "android/release.keystore"] {
+            assert_eq!(rules.reason(path), Some(Reason::Platform), "{path}");
+        }
     }
 
     #[test]
