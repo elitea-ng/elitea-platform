@@ -26,6 +26,16 @@ func TestNarrowMergesExclusionsAndNeverDropsAPlatformPattern(t *testing.T) {
 	if !reflect.DeepEqual(got.Exclusions, platformconfig.DefaultCloudExecutorExclusions()) {
 		t.Fatalf("exclusions = %v", got.Exclusions)
 	}
+	// The split: a project addition shows up only in ExclusionsProject, and
+	// one the platform already lists shows up in neither twice.
+	got = Narrow(amendedCeiling(), ProjectSetting{ExclusionsAdd: &[]string{"secrets/**", ".env", "secrets/**"}}, true, true)
+	if !reflect.DeepEqual(got.ExclusionsProject, []string{"secrets/**"}) ||
+		!reflect.DeepEqual(got.ExclusionsPlatform, platformconfig.DefaultCloudExecutorExclusions()) {
+		t.Fatalf("split = platform %v, project %v", got.ExclusionsPlatform, got.ExclusionsProject)
+	}
+	if got = Narrow(amendedCeiling(), ProjectSetting{}, true, true); got.ExclusionsProject == nil || len(got.ExclusionsProject) != 0 {
+		t.Fatalf("no project additions = %#v, want an empty list", got.ExclusionsProject)
+	}
 	denied := Narrow(amendedCeiling(), ProjectSetting{EnvDenyAdd: &[]string{"AWS_*"}}, true, true).EnvDeny
 	if denied[0] != "PATH" || denied[len(denied)-1] != "AWS_*" {
 		t.Fatalf("env deny = %v", denied)

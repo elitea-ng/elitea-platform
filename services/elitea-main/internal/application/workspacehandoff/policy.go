@@ -140,6 +140,8 @@ func Narrow(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting
 	// The exclusion set and the environment deny list only grow: a project
 	// adds patterns and can never remove a platform one.
 	policy.Exclusions = mergePatterns(ceiling.Exclusions, project.ExclusionsAdd)
+	policy.ExclusionsPlatform = platformconfig.CloudExecutorPatterns(ceiling.Exclusions)
+	policy.ExclusionsProject = projectAdditions(policy.ExclusionsPlatform, project.ExclusionsAdd)
 	policy.EnvDeny = mergePatterns(ceiling.EnvDeny, project.EnvDenyAdd)
 	policy.AllowUserInclude = and(ceiling.AllowUserInclude, project.AllowUserInclude)
 	policy.EnvHarvest = and(ceiling.EnvHarvest, project.EnvHarvest)
@@ -177,6 +179,26 @@ func mergePatterns(platform []string, added *[]string) []string {
 		merged = append(merged, *added...)
 	}
 	return platformconfig.CloudExecutorPatterns(merged)
+}
+
+// projectAdditions answers the project's patterns that the platform does not
+// already list, in the project's order.
+func projectAdditions(platform []string, added *[]string) []string {
+	if added == nil {
+		return []string{}
+	}
+	listed := map[string]bool{}
+	for _, pattern := range platform {
+		listed[pattern] = true
+	}
+	out := []string{}
+	for _, pattern := range platformconfig.CloudExecutorPatterns(*added) {
+		if !listed[pattern] {
+			listed[pattern] = true
+			out = append(out, pattern)
+		}
+	}
+	return out
 }
 
 // narrowNames intersects two optional allow lists: unset (nil) allows

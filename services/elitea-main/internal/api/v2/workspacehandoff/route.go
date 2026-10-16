@@ -716,13 +716,15 @@ func (h *handler) policy(writer http.ResponseWriter, request *http.Request) {
 	}
 	desktopwire.WriteJSON(writer, http.StatusOK, map[string]any{
 		"enabled": policy.Enabled, "shell": policy.Shell, "network": policy.Network,
-		"history_modes":      modes,
-		"exclusions":         nonNil(policy.Exclusions),
-		"path_deny":          nonNil(policy.PathDeny),
-		"allow_user_include": policy.AllowUserInclude,
-		"env_harvest":        policy.EnvHarvest,
-		"env_deny":           nonNil(policy.EnvDeny),
-		"env_allow":          envAllow,
+		"history_modes":       modes,
+		"exclusions":          nonNil(policy.Exclusions),
+		"exclusions_platform": nonNil(policy.ExclusionsPlatform),
+		"exclusions_project":  nonNil(policy.ExclusionsProject),
+		"path_deny":           nonNil(policy.PathDeny),
+		"allow_user_include":  policy.AllowUserInclude,
+		"env_harvest":         policy.EnvHarvest,
+		"env_deny":            nonNil(policy.EnvDeny),
+		"env_allow":           envAllow,
 		"limits": map[string]any{
 			"max_segment_bytes":            policy.Limits.MaxSegmentBytes,
 			"max_file_bytes":               policy.Limits.MaxFileBytes,

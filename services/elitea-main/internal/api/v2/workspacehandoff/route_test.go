@@ -361,7 +361,8 @@ func TestPolicyAnswersTheEffectivePolicy(t *testing.T) {
 	allow := []string{"DATABASE_URL"}
 	h := &handler{handoff: &fakeHandoff{policy: handoffapp.Policy{
 		Enabled: true, Shell: true, Network: true, HistoryFullAllowed: true,
-		Exclusions: []string{".env", "secrets/**"}, PathDeny: []string{"**/.env.production"},
+		Exclusions: []string{".env", "secrets/**"}, ExclusionsPlatform: []string{".env"},
+		ExclusionsProject: []string{"secrets/**"}, PathDeny: []string{"**/.env.production"},
 		AllowUserInclude: true, EnvHarvest: true, EnvDeny: []string{"PATH"}, EnvAllow: &allow,
 		Limits: workspacestore.Limits{MaxSegmentBytes: 10, MaxProjectWorkspaceBytes: 5000},
 	}}, store: &fakeStore{}, conversations: fakeConversations{}}
@@ -377,10 +378,15 @@ func TestPolicyAnswersTheEffectivePolicy(t *testing.T) {
 		envLimits["max_vars"] != float64(200) || envLimits["max_bytes"] != float64(65536) {
 		t.Fatalf("policy = %d %v", response.Code, answer)
 	}
+	if platform, project := answer["exclusions_platform"].([]any), answer["exclusions_project"].([]any); len(platform) != 1 ||
+		platform[0] != ".env" || len(project) != 1 || project[0] != "secrets/**" {
+		t.Fatalf("exclusions split = %v / %v", answer["exclusions_platform"], answer["exclusions_project"])
+	}
 	unset := &handler{handoff: &fakeHandoff{}, store: &fakeStore{}, conversations: fakeConversations{}}
 	response = serve(t, unset.policy, nativeUser(), []string{SendPermission}, http.MethodGet, PolicyPath,
 		"/api/v2/elitea_core/workspace_handoff_policy/prompt_lib/1", "")
-	if answer := decode(t, response); answer["env_allow"] != nil || answer["enabled"] != false {
+	if answer := decode(t, response); answer["env_allow"] != nil || answer["enabled"] != false ||
+		len(answer["exclusions_platform"].([]any)) != 0 || len(answer["exclusions_project"].([]any)) != 0 {
 		t.Fatalf("an empty policy = %v", answer)
 	}
 }

@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
@@ -74,6 +75,13 @@ VALUES (gen_random_uuid(), 1, 'Cloud executor', 'cloud_executor', 'cloud_executo
 		got.AllowUserInclude || got.EnvHarvest || got.EnvDeny[len(got.EnvDeny)-1] != "AWS_*" ||
 		len(got.PathDeny) != 1 || got.PathDeny[0] != "**/.env.production" {
 		t.Fatalf("amendment layers = %+v", got)
+	}
+	// The project's addition shows up only in exclusions_project; the
+	// platform list is unchanged by it.
+	if len(got.ExclusionsProject) != 1 || got.ExclusionsProject[0] != "secrets/**" ||
+		slices.Contains(got.ExclusionsPlatform, "secrets/**") ||
+		!slices.Equal(got.ExclusionsPlatform, platformconfig.DefaultCloudExecutorExclusions()) {
+		t.Fatalf("exclusions split = platform %v, project %v", got.ExclusionsPlatform, got.ExclusionsProject)
 	}
 	off, _ := workspacehandoff.NewPolicyService(repo, repo, devicePolicy{cloudHandoff: false}, true, platformconfig.CloudExecutorResources{})
 	if got, _ := off.Effective(ctx, 1); got.Enabled {

@@ -138,11 +138,17 @@ type Policy struct {
 	// Amendment 2026-10-15 (decision 5). Exclusions are the platform
 	// patterns then the project additions; PathDeny is the effective
 	// local_work_path_deny, which nothing can include.
-	Exclusions       []string
-	PathDeny         []string
-	AllowUserInclude bool
-	EnvHarvest       bool
-	EnvDeny          []string
+	Exclusions []string
+	// ExclusionsPlatform and ExclusionsProject split Exclusions by origin:
+	// the platform ceiling's patterns, and the project's additions that the
+	// platform does not already list. The desktop shows the second as
+	// "added by this project".
+	ExclusionsPlatform []string
+	ExclusionsProject  []string
+	PathDeny           []string
+	AllowUserInclude   bool
+	EnvHarvest         bool
+	EnvDeny            []string
 	// EnvAllow, when not nil, is the only list of names that can be harvested.
 	EnvAllow *[]string
 }

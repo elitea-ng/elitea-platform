@@ -8529,6 +8529,8 @@
                 "env_harvest",
                 "env_limits",
                 "exclusions",
+                "exclusions_platform",
+                "exclusions_project",
                 "history_modes",
                 "limits",
                 "network",
@@ -8574,6 +8576,18 @@
                   }
                 },
                 "exclusions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "exclusions_platform": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "exclusions_project": {
                   "type": "array",
                   "items": {
                     "type": "string"

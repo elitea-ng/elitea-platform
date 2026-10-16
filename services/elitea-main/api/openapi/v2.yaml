@@ -3480,8 +3480,8 @@ components:
     WorkspaceHandoffPolicy:
       type: object
       description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:680 (`policy`).'
-      required: [enabled, shell, network, history_modes, exclusions, path_deny, allow_user_include, env_harvest,
-                 env_deny, env_allow, limits, env_limits]
+      required: [enabled, shell, network, history_modes, exclusions, exclusions_platform, exclusions_project,
+                 path_deny, allow_user_include, env_harvest, env_deny, env_allow, limits, env_limits]
       properties:
         enabled: { type: boolean }
         shell: { type: boolean }
@@ -3493,6 +3493,14 @@ components:
           type: array
           items: { type: string }
           description: The platform patterns, then the project additions.
+        exclusions_platform:
+          type: array
+          items: { type: string }
+          description: The platform ceiling's patterns.
+        exclusions_project:
+          type: array
+          items: { type: string }
+          description: The project's additions that the platform does not already list.
         path_deny:
           type: array
           items: { type: string }

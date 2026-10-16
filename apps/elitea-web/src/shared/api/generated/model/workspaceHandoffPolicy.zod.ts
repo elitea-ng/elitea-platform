@@ -52,6 +52,14 @@ export const WorkspaceHandoffPolicy = zod
     exclusions: zod
       .array(zod.string())
       .describe("The platform patterns, then the project additions."),
+    exclusions_platform: zod
+      .array(zod.string())
+      .describe("The platform ceiling's patterns."),
+    exclusions_project: zod
+      .array(zod.string())
+      .describe(
+        "The project's additions that the platform does not already list.",
+      ),
     path_deny: zod
       .array(zod.string())
       .describe("The effective local_work_path_deny; never includable."),
