@@ -19,10 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WorkspaceStoreService_WorkspaceFetchPlan_FullMethodName = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceFetchPlan"
-	WorkspaceStoreService_WorkspaceUpload_FullMethodName    = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceUpload"
-	WorkspaceStoreService_WorkspacePublish_FullMethodName   = "/elitea.runtime.v1.WorkspaceStoreService/WorkspacePublish"
-	WorkspaceStoreService_WorkspaceEnvSecret_FullMethodName = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceEnvSecret"
+	WorkspaceStoreService_WorkspaceFetchPlan_FullMethodName   = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceFetchPlan"
+	WorkspaceStoreService_WorkspaceUpload_FullMethodName      = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceUpload"
+	WorkspaceStoreService_WorkspacePublish_FullMethodName     = "/elitea.runtime.v1.WorkspaceStoreService/WorkspacePublish"
+	WorkspaceStoreService_WorkspaceEnvSecret_FullMethodName   = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceEnvSecret"
+	WorkspaceStoreService_WorkspaceRecordEvent_FullMethodName = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceRecordEvent"
 )
 
 // WorkspaceStoreServiceClient is the client API for WorkspaceStoreService service.
@@ -35,6 +36,9 @@ type WorkspaceStoreServiceClient interface {
 	// The thread's harvested env, as a claim-bound runtime secret: only when the
 	// runtime context's `workspace.env_secret` is true.
 	WorkspaceEnvSecret(ctx context.Context, in *WorkspaceEnvSecretRequestV1, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WorkspaceEnvSecretFrameV1], error)
+	// An executor audit event of the running turn, bound to its claim and
+	// fence like every call here.
+	WorkspaceRecordEvent(ctx context.Context, in *WorkspaceRecordEventRequestV1, opts ...grpc.CallOption) (*WorkspaceRecordEventResponseV1, error)
 }
 
 type workspaceStoreServiceClient struct {
@@ -106,6 +110,16 @@ func (c *workspaceStoreServiceClient) WorkspaceEnvSecret(ctx context.Context, in
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkspaceStoreService_WorkspaceEnvSecretClient = grpc.ServerStreamingClient[WorkspaceEnvSecretFrameV1]
 
+func (c *workspaceStoreServiceClient) WorkspaceRecordEvent(ctx context.Context, in *WorkspaceRecordEventRequestV1, opts ...grpc.CallOption) (*WorkspaceRecordEventResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WorkspaceRecordEventResponseV1)
+	err := c.cc.Invoke(ctx, WorkspaceStoreService_WorkspaceRecordEvent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkspaceStoreServiceServer is the server API for WorkspaceStoreService service.
 // All implementations must embed UnimplementedWorkspaceStoreServiceServer
 // for forward compatibility.
@@ -116,6 +130,9 @@ type WorkspaceStoreServiceServer interface {
 	// The thread's harvested env, as a claim-bound runtime secret: only when the
 	// runtime context's `workspace.env_secret` is true.
 	WorkspaceEnvSecret(*WorkspaceEnvSecretRequestV1, grpc.ServerStreamingServer[WorkspaceEnvSecretFrameV1]) error
+	// An executor audit event of the running turn, bound to its claim and
+	// fence like every call here.
+	WorkspaceRecordEvent(context.Context, *WorkspaceRecordEventRequestV1) (*WorkspaceRecordEventResponseV1, error)
 	mustEmbedUnimplementedWorkspaceStoreServiceServer()
 }
 
@@ -137,6 +154,9 @@ func (UnimplementedWorkspaceStoreServiceServer) WorkspacePublish(context.Context
 }
 func (UnimplementedWorkspaceStoreServiceServer) WorkspaceEnvSecret(*WorkspaceEnvSecretRequestV1, grpc.ServerStreamingServer[WorkspaceEnvSecretFrameV1]) error {
 	return status.Errorf(codes.Unimplemented, "method WorkspaceEnvSecret not implemented")
+}
+func (UnimplementedWorkspaceStoreServiceServer) WorkspaceRecordEvent(context.Context, *WorkspaceRecordEventRequestV1) (*WorkspaceRecordEventResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WorkspaceRecordEvent not implemented")
 }
 func (UnimplementedWorkspaceStoreServiceServer) mustEmbedUnimplementedWorkspaceStoreServiceServer() {}
 func (UnimplementedWorkspaceStoreServiceServer) testEmbeddedByValue()                               {}
@@ -206,6 +226,24 @@ func _WorkspaceStoreService_WorkspaceEnvSecret_Handler(srv interface{}, stream g
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkspaceStoreService_WorkspaceEnvSecretServer = grpc.ServerStreamingServer[WorkspaceEnvSecretFrameV1]
 
+func _WorkspaceStoreService_WorkspaceRecordEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WorkspaceRecordEventRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkspaceStoreServiceServer).WorkspaceRecordEvent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkspaceStoreService_WorkspaceRecordEvent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkspaceStoreServiceServer).WorkspaceRecordEvent(ctx, req.(*WorkspaceRecordEventRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkspaceStoreService_ServiceDesc is the grpc.ServiceDesc for WorkspaceStoreService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -216,6 +254,10 @@ var WorkspaceStoreService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "WorkspacePublish",
 			Handler:    _WorkspaceStoreService_WorkspacePublish_Handler,
+		},
+		{
+			MethodName: "WorkspaceRecordEvent",
+			Handler:    _WorkspaceStoreService_WorkspaceRecordEvent_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

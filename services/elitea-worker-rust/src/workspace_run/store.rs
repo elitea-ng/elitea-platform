@@ -22,11 +22,13 @@ use tonic::transport::Channel;
 
 use crate::protocol::elitea::runtime::v1::{
     RuntimeErrorCodeV1, RuntimeErrorV1, WorkspaceClaimV1, WorkspaceEnvSecretFrameV1,
-    WorkspaceEnvSecretRequestV1, WorkspaceFetchFrameV1, WorkspaceFetchPlanRequestV1,
-    WorkspacePublishRequestV1, WorkspacePublishResponseV1, WorkspaceRefUpdateV1, WorkspaceRefV1,
-    WorkspaceRefusalCodeV1, WorkspaceRefusalV1, WorkspaceUploadFrameV1, WorkspaceUploadHeaderV1,
-    WorkspaceUploadResponseV1, workspace_env_secret_frame_v1, workspace_fetch_frame_v1,
-    workspace_store_service_client::WorkspaceStoreServiceClient, workspace_upload_frame_v1,
+    WorkspaceEnvSecretRequestV1, WorkspaceExecutorEventKindV1, WorkspaceFetchFrameV1,
+    WorkspaceFetchPlanRequestV1, WorkspacePublishRequestV1, WorkspacePublishResponseV1,
+    WorkspaceRecordEventRequestV1, WorkspaceRecordEventResponseV1, WorkspaceRefUpdateV1,
+    WorkspaceRefV1, WorkspaceRefusalCodeV1, WorkspaceRefusalV1, WorkspaceUploadFrameV1,
+    WorkspaceUploadHeaderV1, WorkspaceUploadResponseV1, workspace_env_secret_frame_v1,
+    workspace_fetch_frame_v1, workspace_store_service_client::WorkspaceStoreServiceClient,
+    workspace_upload_frame_v1,
 };
 
 use super::context::sha1_hex;
@@ -199,6 +201,69 @@ pub(crate) trait WorkspaceStore: Send + Sync {
 
     /// The thread's harvested env (contract 6.4); empty when it has none.
     async fn env_secret(&self, claim: &WorkspaceClaimV1) -> Result<SecretEnv, StoreCallError>;
+
+    /// Record one executor audit event of the running turn (decision 12).
+    async fn record_event(
+        &self,
+        claim: &WorkspaceClaimV1,
+        event: &super::audit::ExecutorEvent,
+    ) -> Result<(), StoreCallError>;
+}
+
+/// The wire request of an executor audit event: counts, rule ids, the file
+/// count; no path field exists.
+#[must_use]
+pub(crate) fn record_event_request(
+    claim: &WorkspaceClaimV1,
+    event: &super::audit::ExecutorEvent,
+) -> WorkspaceRecordEventRequestV1 {
+    use super::audit::ExecutorEvent;
+    let mut request = WorkspaceRecordEventRequestV1 {
+        claim: Some(claim.clone()),
+        ..WorkspaceRecordEventRequestV1::default()
+    };
+    match event {
+        ExecutorEvent::ScanBlocked { findings, rules } => {
+            request.kind = WorkspaceExecutorEventKindV1::ScanBlocked as i32;
+            request.findings = *findings;
+            request.rules.clone_from(rules);
+        }
+        ExecutorEvent::PullRequestOpened {
+            toolkit,
+            branch,
+            base,
+            number,
+            url,
+            files,
+        } => {
+            request.kind = WorkspaceExecutorEventKindV1::PullRequestOpened as i32;
+            request.toolkit.clone_from(toolkit);
+            request.branch.clone_from(branch);
+            request.base.clone_from(base);
+            request.number = *number;
+            request.url = url.clone().unwrap_or_default();
+            request.files = *files;
+        }
+    }
+    request
+}
+
+/// Read a record-event response.
+///
+/// # Errors
+///
+/// A refusal or rejection, or a response that records nothing.
+pub(crate) fn read_record_event(
+    response: &WorkspaceRecordEventResponseV1,
+) -> Result<(), StoreCallError> {
+    match (&response.refusal, &response.rejection, response.recorded) {
+        (Some(refusal), None, false) => Err(refused(refusal)),
+        (None, Some(rejection), false) => Err(rejected(rejection)),
+        (None, None, true) => Ok(()),
+        _ => Err(StoreCallError::Malformed(
+            "the record-event response is ambiguous",
+        )),
+    }
 }
 
 /// The contract's env limits.
@@ -772,6 +837,23 @@ impl WorkspaceStore for GrpcWorkspaceStore {
         timeout(self.deadline, operation)
             .await
             .map_err(|_| StoreCallError::Transport { retryable: true })?
+    }
+
+    async fn record_event(
+        &self,
+        claim: &WorkspaceClaimV1,
+        event: &super::audit::ExecutorEvent,
+    ) -> Result<(), StoreCallError> {
+        let mut client = self.client.clone();
+        let response = timeout(
+            self.deadline,
+            client.workspace_record_event(record_event_request(claim, event)),
+        )
+        .await
+        .map_err(|_| StoreCallError::Transport { retryable: true })?
+        .map_err(|status| status_error(&status))?
+        .into_inner();
+        read_record_event(&response)
     }
 }
 

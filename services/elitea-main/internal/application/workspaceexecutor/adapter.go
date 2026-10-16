@@ -31,6 +31,7 @@ type Handoffs interface {
 	FinishCloudTurn(ctx context.Context, thread workspacehandoff.Thread, epoch int64, executionID string) (workspacehandoff.Handoff, error)
 	CloudTurnEnv(ctx context.Context, thread workspacehandoff.Thread, epoch int64, executionID string) (map[string]string, error)
 	EffectiveCloudPolicy(ctx context.Context, projectID int64) (workspacehandoff.Policy, error)
+	RecordExecutorEvent(ctx context.Context, thread workspacehandoff.Thread, epoch int64, executionID, kind string, attrs map[string]string) error
 }
 
 // Objects is the part of *workspacestore.Service the executor uses.
@@ -337,6 +338,18 @@ func (a *Adapter) EnvSecret(ctx context.Context, claim workspaceruntime.ClaimRef
 		env = map[string]string{}
 	}
 	return env, nil
+}
+
+// RecordEvent writes the running turn's executor audit event.
+func (a *Adapter) RecordEvent(ctx context.Context, claim workspaceruntime.ClaimRef, event workspaceruntime.ExecutorEvent) error {
+	if event.Kind != workspaceruntime.EventScanBlocked && event.Kind != workspaceruntime.EventPullRequestOpened {
+		return workspaceruntime.ErrInvalidRequest
+	}
+	handoff, _, err := a.running(ctx, claim)
+	if err != nil {
+		return err
+	}
+	return storeError(a.handoffs.RecordExecutorEvent(ctx, threadOf(handoff), handoff.Epoch, claim.ExecutionID, event.Kind, event.Attrs))
 }
 
 // ---- TurnLifecycle ----

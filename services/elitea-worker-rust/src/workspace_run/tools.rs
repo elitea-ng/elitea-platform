@@ -171,6 +171,8 @@ impl elitea_agent_runtime::toolkits::workspace_pull_request::WorkspaceDiffSource
 /// contents. Main records the audit row from this event.
 pub(crate) struct LogPullRequestAudit {
     execution_id: String,
+    /// The turn's audit queue: Main records the row (decision 12).
+    audit: Option<Arc<super::audit::ExecutorAudit>>,
 }
 
 impl LogPullRequestAudit {
@@ -178,7 +180,15 @@ impl LogPullRequestAudit {
     pub(crate) fn new(execution_id: &str) -> Self {
         Self {
             execution_id: execution_id.to_owned(),
+            audit: None,
         }
+    }
+
+    /// Also send the event to Main's audit trail.
+    #[must_use]
+    pub(crate) fn with_audit(mut self, audit: Arc<super::audit::ExecutorAudit>) -> Self {
+        self.audit = Some(audit);
+        self
     }
 }
 
@@ -200,6 +210,16 @@ impl elitea_agent_runtime::toolkits::workspace_pull_request::PullRequestAudit
             files = event.files,
             upstream_sha = event.upstream_sha.as_str(),
         );
+        if let Some(audit) = &self.audit {
+            audit.record(super::audit::ExecutorEvent::PullRequestOpened {
+                toolkit: event.toolkit.clone(),
+                branch: event.branch.clone(),
+                base: event.base.clone(),
+                number: event.number,
+                url: None,
+                files: u32::try_from(event.files).unwrap_or(u32::MAX),
+            });
+        }
     }
 }
 

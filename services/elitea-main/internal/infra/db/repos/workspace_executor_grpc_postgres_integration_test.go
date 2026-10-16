@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -43,6 +44,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
@@ -734,5 +736,251 @@ func TestPostgresEveryHandoffTransitionPublishesOneLiveEvent(t *testing.T) {
 			(step{got.event.State, got.event.Epoch, got.event.ReclaimPending}) != want[i] {
 			t.Fatalf("event %d = %+v, want %+v", i, got, want[i])
 		}
+	}
+}
+
+// Executor audit events (decision 12) from the worker's RPC through the real
+// gRPC server, the adapter and RecordExecutorEvent into centry.audit_events:
+// counts, rule ids and the file count, never a path; a finished (stale)
+// claim is refused.
+func TestPostgresExecutorAuditEventsReachTheAuditTable(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS centry.audit_events (
+    id SERIAL PRIMARY KEY, timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(), user_id INTEGER,
+    user_email VARCHAR(256), project_id INTEGER, event_type VARCHAR(32) NOT NULL, action VARCHAR(512) NOT NULL,
+    http_method VARCHAR(10), http_route VARCHAR(512), status_code SMALLINT, duration_ms DOUBLE PRECISION,
+    is_error BOOLEAN NOT NULL DEFAULT FALSE, entity_type VARCHAR(32), entity_id INTEGER, entity_name VARCHAR(256),
+    trace_id VARCHAR(32), span_id VARCHAR(16), parent_span_id VARCHAR(16))`); err != nil {
+		t.Fatal(err)
+	}
+	const owner int64 = 11
+	ensureWorkspaceTestUser(t, pool, owner)
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_conversations SET source = 'local_work' WHERE uuid = $1::uuid`, executorConversation); err != nil {
+		t.Fatal(err)
+	}
+	h := newHandoffHarness(t, pool)
+	recorder := audit.NewPostgresRecorder(pool, nil)
+	t.Cleanup(func() { _ = recorder.Close(context.Background()) })
+	repo, err := NewWorkspaceHandoffsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := workspacehandoff.NewService(repo, h.policy, h.objects, h.canceller, recorder, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := workspaceexecutor.New(service, h.objects, executorThreads{repo: repo}, workspaceexecutor.Resources{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := dialExecutorStore(t, adapter)
+	thread := workspacestore.Thread{ProjectID: 1, ConversationUUID: executorConversation}
+	began, err := service.Begin(ctx, beginRequest(thread, owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := h.publishSnapshot(t, thread, owner, 1, "audit")
+	if _, err := service.Complete(ctx, workspacehandoff.CompleteRequest{ProjectID: 1, HandoffID: began.Handoff.HandoffID,
+		ActorUserID: owner, Epoch: 1, HandoffRef: workspacestore.RefHandoff1, SHA: snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	const response = "40000000-0000-4000-8000-0000000000b1"
+	withTenantTx(t, pool, func(tx pgx.Tx) {
+		insertPostgresCurrentApplicationTurn(t, sqlcgen.New(tx), mustCurrentPGUUID(t, executorConversation),
+			"20000000-0000-4000-8000-0000000000b1", "30000000-0000-4000-8000-0000000000b1", response, "go", "exec-audit")
+	})
+	seedCloudTurnExecution(t, pool, "exec-audit", response)
+	if _, ok, err := adapter.ResolveCloudTurn(ctx, workspaceruntime.TurnClaim{ExecutionID: "exec-audit", Generation: 1,
+		ProjectID: 1, ConversationUUID: executorConversation}); err != nil || !ok {
+		t.Fatalf("claim = %v %v", ok, err)
+	}
+	wire := executorClaim("exec-audit", 2)
+	record := func(request *runtimev1.WorkspaceRecordEventRequestV1) *runtimev1.WorkspaceRecordEventResponseV1 {
+		t.Helper()
+		request.Claim = wire
+		got, err := client.WorkspaceRecordEvent(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := record(&runtimev1.WorkspaceRecordEventRequestV1{Kind: runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED,
+		Findings: 3, Rules: []string{"aws-access-key", "private-key"}}); !got.GetRecorded() {
+		t.Fatalf("scan_blocked = %v", got)
+	}
+	if got := record(&runtimev1.WorkspaceRecordEventRequestV1{Kind: runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED,
+		Toolkit: "github", Branch: "elitea/cloud-1", Base: "main", Number: 42, Files: 7, Url: "https://github.com/o/r/pull/42"}); !got.GetRecorded() {
+		t.Fatalf("pull_request.opened = %v", got)
+	}
+	if err := adapter.FinishExecution(ctx, "exec-audit"); err != nil {
+		t.Fatal(err)
+	}
+	if got := record(&runtimev1.WorkspaceRecordEventRequestV1{Kind: runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED,
+		Findings: 1, Rules: []string{"late-rule"}}); got.GetRefusal().GetCode() != runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_NOT_A_WORKSPACE_TURN {
+		t.Fatalf("a finished turn's event = %v", got)
+	}
+	if err := recorder.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := pool.Query(ctx, `SELECT action, entity_name, project_id FROM centry.audit_events
+WHERE action LIKE 'handoff.scan_blocked%' OR action LIKE 'pull_request.opened%' ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	actions := []string{}
+	for rows.Next() {
+		var action, entity string
+		var project int64
+		if err := rows.Scan(&action, &entity, &project); err != nil {
+			t.Fatal(err)
+		}
+		if entity != executorConversation || project != 1 {
+			t.Fatalf("audit row of %s/%d", entity, project)
+		}
+		actions = append(actions, action)
+	}
+	if len(actions) != 2 ||
+		actions[0] != "handoff.scan_blocked: epoch 2, findings 3, rules aws-access-key,private-key" ||
+		!strings.HasPrefix(actions[1], "pull_request.opened: epoch 2, base main, branch elitea/cloud-1, files 7, number 42") ||
+		strings.Contains(strings.Join(actions, " "), "late-rule") {
+		t.Fatalf("audit rows = %q", actions)
+	}
+}
+
+// seedCloudTurnClaim is the execution's claim, its lease ending `leaseEnd`
+// from now (negative: expired).
+func seedCloudTurnClaim(t *testing.T, pool *pgxpool.Pool, executionID string, leaseEnd time.Duration) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO elitea_runtime.execution_claims (
+    claim_id, execution_id, generation, workload_session_id, workload_identity, producer_id,
+    claim_attempt, lease_epoch, fence_token, claimed_at, lease_expires_at)
+VALUES ($1, $2, 1, 'session-1', 'spiffe://elitea/worker', 'producer-1', 1, 1, decode(repeat('ab', 32), 'hex'),
+    clock_timestamp() - interval '1 hour', clock_timestamp() + make_interval(secs => $3))`,
+		"claim-"+executionID, executionID, leaseEnd.Seconds()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A worker that dies mid-turn leaves a claim whose lease runs out and is
+// never renewed: past DeadTurnGrace the sweeper ends the turn (CLOUD_IDLE,
+// nothing published, the chat answer stopped), or moves a thread with a
+// pending take back to RECLAIMING. A slow worker that keeps renewing its
+// lease is never reaped.
+func TestPostgresTheSweeperReapsACloudTurnWhoseWorkerDied(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	ctx := context.Background()
+	const owner int64 = 11
+	ensureWorkspaceTestUser(t, pool, owner)
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_conversations SET source = 'local_work' WHERE uuid = $1::uuid`, executorConversation); err != nil {
+		t.Fatal(err)
+	}
+	h := newHandoffHarness(t, pool)
+	thread := workspacestore.Thread{ProjectID: 1, ConversationUUID: executorConversation}
+	repo, err := NewWorkspaceHandoffsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := workspaceexecutor.New(h.service, h.objects, executorThreads{repo: repo}, workspaceexecutor.Resources{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	began, err := h.service.Begin(ctx, beginRequest(thread, owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := h.publishSnapshot(t, thread, owner, 1, "reaper")
+	if _, err := h.service.Complete(ctx, workspacehandoff.CompleteRequest{ProjectID: 1, HandoffID: began.Handoff.HandoffID,
+		ActorUserID: owner, Epoch: 1, HandoffRef: workspacestore.RefHandoff1, SHA: snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	state := func() workspacehandoff.Handoff {
+		t.Helper()
+		view, err := h.service.State(ctx, thread)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return view.Handoff
+	}
+	turn := func(n int, leaseEnd time.Duration) string {
+		t.Helper()
+		execution := fmt.Sprintf("exec-reap-%d", n)
+		response := fmt.Sprintf("40000000-0000-4000-8000-0000000000c%d", n)
+		withTenantTx(t, pool, func(tx pgx.Tx) {
+			insertPostgresCurrentApplicationTurn(t, sqlcgen.New(tx), mustCurrentPGUUID(t, executorConversation),
+				fmt.Sprintf("20000000-0000-4000-8000-0000000000c%d", n), fmt.Sprintf("30000000-0000-4000-8000-0000000000c%d", n),
+				response, "work", execution)
+		})
+		seedCloudTurnExecution(t, pool, execution, response)
+		seedCloudTurnClaim(t, pool, execution, leaseEnd)
+		if _, ok, err := adapter.ResolveCloudTurn(ctx, workspaceruntime.TurnClaim{ExecutionID: execution, Generation: 1,
+			ProjectID: 1, ConversationUUID: executorConversation}); err != nil || !ok {
+			t.Fatalf("claim %d = %v %v", n, ok, err)
+		}
+		// The turn has been running for a while.
+		if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.workspace_handoffs SET state_changed_at = clock_timestamp() - interval '5 minutes'
+WHERE conversation_uuid = $1::uuid`, executorConversation); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	sweep := func() workspacehandoff.SweepReport {
+		t.Helper()
+		report, err := h.service.Sweep(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return report
+	}
+
+	// A slow but alive worker: its lease was just renewed.
+	alive := turn(1, 25*time.Second)
+	if report := sweep(); report.DeadTurnsReaped != 0 || state().State != workspacestore.StateCloudRunning {
+		t.Fatalf("a renewing worker was reaped: %+v %s", report, state().State)
+	}
+	// A lease that ran out moments ago is still within the grace.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_claims SET lease_expires_at = clock_timestamp() - interval '5 seconds'
+WHERE execution_id = 'exec-reap-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if report := sweep(); report.DeadTurnsReaped != 0 {
+		t.Fatalf("reaped within the grace: %+v", report)
+	}
+	// The worker died: the lease ended longer ago than the grace.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_claims SET lease_expires_at = clock_timestamp() - make_interval(secs => $1)
+WHERE execution_id = 'exec-reap-1'`, (workspacehandoff.DeadTurnGrace + time.Second).Seconds()); err != nil {
+		t.Fatal(err)
+	}
+	if report := sweep(); report.DeadTurnsReaped != 1 {
+		t.Fatalf("the dead turn was not reaped: %+v", report)
+	}
+	if got := state(); got.State != workspacestore.StateCloudIdle || got.Epoch != 2 || got.RunningExecutionID != "" || got.CloudSHA != nil {
+		t.Fatalf("after the reap = %+v", got)
+	}
+	if len(h.canceller.cancelled) != 1 || h.canceller.cancelled[0] != alive {
+		t.Fatalf("the dead turn's answer was not stopped: %v", h.canceller.cancelled)
+	}
+	if !strings.Contains(strings.Join(h.recorder.actions(), "\n"), "handoff.turn_reaped: execution exec-reap-1") {
+		t.Fatalf("no audit of the reap: %v", h.recorder.actions())
+	}
+
+	// (The real stop control ends the answer; the fake canceller does not.)
+	withTenantTx(t, pool, func(tx pgx.Tx) { completePostgresCurrentApplicationTurn(t, tx, mustCurrentPGUUID(t, alive), "stopped") })
+
+	// A dead turn with a take back pending goes to RECLAIMING.
+	turn(2, -10*time.Minute)
+	if _, err := h.service.Reclaim(ctx, workspacehandoff.ReclaimRequest{Thread: thread, ActorUserID: owner, Epoch: 2, DeviceID: "device-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if report := sweep(); report.DeadTurnsReaped != 1 {
+		t.Fatalf("the dead turn with a take back was not reaped: %+v", report)
+	}
+	if got := state(); got.State != workspacestore.StateReclaiming || got.Epoch != 3 {
+		t.Fatalf("after reaping a taken-back turn = %+v", got)
 	}
 }

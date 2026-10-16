@@ -76,6 +76,15 @@ async fn the_grpc_store_resends_a_busy_publish_and_it_applies_once() {
                 ..Default::default()
             }))
         }
+        async fn workspace_record_event(
+            &self,
+            _: tonic::Request<crate::protocol::elitea::runtime::v1::WorkspaceRecordEventRequestV1>,
+        ) -> Result<
+            tonic::Response<crate::protocol::elitea::runtime::v1::WorkspaceRecordEventResponseV1>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::unimplemented("record event"))
+        }
         async fn workspace_env_secret(
             &self,
             _: tonic::Request<WorkspaceEnvSecretRequestV1>,

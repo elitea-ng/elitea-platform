@@ -28,6 +28,8 @@ type fakeHandoffs struct {
 	finishes  []string
 	finishErr error
 	env       map[string]string
+	events    []string
+	eventErr  error
 }
 
 func (f *fakeHandoffs) ResolveRunningTurn(_ context.Context, executionID string) (workspacehandoff.Handoff, bool, error) {
@@ -59,6 +61,11 @@ func (f *fakeHandoffs) FinishCloudTurn(_ context.Context, _ workspacehandoff.Thr
 
 func (f *fakeHandoffs) CloudTurnEnv(context.Context, workspacehandoff.Thread, int64, string) (map[string]string, error) {
 	return f.env, nil
+}
+
+func (f *fakeHandoffs) RecordExecutorEvent(_ context.Context, _ workspacehandoff.Thread, _ int64, executionID, kind string, _ map[string]string) error {
+	f.events = append(f.events, executionID+"|"+kind)
+	return f.eventErr
 }
 
 func (f *fakeHandoffs) EffectiveCloudPolicy(context.Context, int64) (workspacehandoff.Policy, error) {
