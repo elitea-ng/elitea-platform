@@ -1,8 +1,11 @@
 name: CI — Handoff load gate
 
 # ADR-0034 decision 15: 1,000 cloud turns publishing to the workspace store
-# at the same time show a p99 publish time under 50 ms, no growth in Main's
-# database connections and no lock waits between threads. The test is behind
+# show a p99 publish time under 50 ms, no growth in Main's database
+# connections and no lock waits between threads. GATED at 300 publishes per
+# second (owner decision 2026-10-15): one thread per project, same-thread
+# contention, and 20 threads per project. Run and logged to the job summary,
+# not gated: 1,000 per second and the all-at-once burst. The test is behind
 # the `loadgate` build tag (a measurement, not a unit test), so ci-go.yml
 # never runs it; this job does, against a real PostgreSQL.
 #
@@ -81,11 +84,21 @@ jobs:
           status=0
           go test -tags loadgate -run 'TestLoadGate' -v -timeout 15m ./internal/infra/db/repos/ > loadgate.log 2>&1 || status=$?
           cat loadgate.log
+          # The numbers of every case, gated or not, go to the job summary,
+          # pass or fail.
+          {
+            echo '### Handoff publish load gate'
+            echo 'Gated at 300/s: p99 < 50 ms, no row lock waits between threads, no pool growth.'
+            echo 'Logged, not gated: 1,000/s and the all-at-once burst.'
+            echo '```'
+            grep -E 'n=[0-9]+ wall=' loadgate.log | sed -E 's/^.*_test\.go:[0-9]+: //'  || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           if [ "$status" -ne 0 ]; then
             exit "$status"
           fi
           # Every case must have RUN and passed; a skip is a failure here.
-          for name in 'TestLoadGatePublishesAcrossThreads/sustained' 'TestLoadGatePublishesAcrossThreads/burst' 'TestLoadGateSameThreadContention' 'TestLoadGateSameProjectQuota'; do
+          for name in 'TestLoadGatePublishesAcrossThreads/sustained_300' 'TestLoadGatePublishesAcrossThreads/sustained_1000' 'TestLoadGatePublishesAcrossThreads/burst' 'TestLoadGateSameThreadContention' 'TestLoadGateSameProjectQuota'; do
             if ! grep -q -- "--- PASS: ${name} " loadgate.log; then
               echo "::error::${name} did not run and pass"
               exit 1
@@ -95,9 +108,3 @@ jobs:
             echo "::error::a load gate case was skipped"
             exit 1
           fi
-          {
-            echo '### Handoff publish load gate'
-            echo '```'
-            grep -E 'n=[0-9]+ wall=' loadgate.log | sed -E 's/^.*_test\.go:[0-9]+: //'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"

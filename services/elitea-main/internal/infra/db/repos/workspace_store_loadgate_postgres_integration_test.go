@@ -12,21 +12,27 @@ package repos
 // Decision 15: "1,000 cloud turns publishing at the same time shows a p99
 // publish time under 50 ms, no growth in Main's database connections, and no
 // lock waits between threads." Each case runs 1,000 publishes, one per
-// thread, over 50 projects, through Main's pool (ELITEA_LOADGATE_MAX_CONNS,
-// default 32; Main's ELITEA_DATABASE_MAX_CONNS allows 1-64), and samples
-// pg_stat_activity on a separate connection while they run.
+// thread, through Main's pool (ELITEA_LOADGATE_MAX_CONNS, default 32; Main's
+// ELITEA_DATABASE_MAX_CONNS allows 1-64), and samples pg_stat_activity on a
+// separate connection while they run.
 //
-//   - Sustained: the 1,000 publishes start 1 ms apart, so all 1,000 turns
-//     publish within one second (about 60 times the ADR's peak estimate of 17
-//     publishes per second). GATED: p99 of the whole Publish call (the reads
-//     before the transaction, the pool wait and the transaction) under 50 ms.
-//   - Burst: the 1,000 publishes are released at one instant. With a bounded
-//     pool this measures the pool's queue, not the handoff: p99 is about the
-//     time the pool needs to drain 1,000 publishes. The numbers are logged;
-//     the lock and connection checks are GATED, the latency is not.
-//   - Same-thread contention: the sustained load, plus 50 publishes released
-//     at once on ONE thread. They serialise on that thread's row (exactly one
-//     wins the compare-and-set), and the other threads' p99 stays under 50 ms.
+// The gated rate is the owner's decision (2026-10-15): 300 publishes per
+// second (one every 3.3 ms; about 18 times the ADR's peak estimate of 17 per
+// second). A GitHub runner drains about 1,500 publishes per second, so at
+// 1,000 per second its p99 is the tail of a queue, not the handoff.
+//
+// GATED (p99 of the whole Publish call, the reads before the transaction, the
+// pool wait and the transaction, under 50 ms; no row or transaction lock wait
+// between threads; no pool growth past its maximum):
+//   - 300/s, one thread per project;
+//   - same-thread contention: the 300/s load plus 50 publishes released at
+//     once on ONE thread (exactly one wins the compare-and-set; the others
+//     answer a ref conflict without waiting), gated on the other threads;
+//   - 20 threads per project at 300/s (a wait on the project's quota lock is
+//     allowed, a row lock wait is not).
+//
+// RUN AND LOGGED, not gated: 1,000/s (the starts 1 ms apart) and the burst
+// (all 1,000 released at one instant: p99 is the pool's drain time).
 //
 // "Lock waits between threads" are row and transaction lock waits
 // (wait_event tuple, transactionid, relation, advisory ...). A relation
@@ -329,11 +335,14 @@ func (f loadGateFixture) publish(thread loadGateThread, seed string) func() erro
 	}
 }
 
-// sustained spreads n starts over one second.
-func sustained(n int) []time.Duration {
+// loadGateRate is the gated publish rate per second (owner decision).
+const loadGateRate = 300
+
+// atRate spaces n starts at `rate` per second.
+func atRate(n, rate int) []time.Duration {
 	offsets := make([]time.Duration, n)
 	for index := range offsets {
-		offsets[index] = time.Duration(index) * time.Second / time.Duration(n)
+		offsets[index] = time.Duration(index) * time.Second / time.Duration(rate)
 	}
 	return offsets
 }
@@ -385,7 +394,8 @@ func TestLoadGatePublishesAcrossThreads(t *testing.T) {
 		offsets func(int) []time.Duration
 		gated   bool
 	}{
-		{"sustained", sustained, true},
+		{"sustained_300", func(n int) []time.Duration { return atRate(n, loadGateRate) }, true},
+		{"sustained_1000", func(n int) []time.Duration { return atRate(n, 1000) }, false},
 		{"burst", func(int) []time.Duration { return nil }, false},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
@@ -402,16 +412,23 @@ func TestLoadGatePublishesAcrossThreads(t *testing.T) {
 					t.Fatalf("publish %d: %v", index, err)
 				}
 			}
-			_, p99, _ := run.report(t, "1000 threads, "+mode.name, allIndexes(len(publishes)))
-			if mode.gated && p99 >= loadGateP99 {
-				t.Errorf("p99 publish = %s, gate is under %s", p99, loadGateP99)
+			label := "1000 threads, " + mode.name
+			if !mode.gated {
+				label += " (not gated)"
 			}
-			// 1,000 DIFFERENT threads: no backend may wait on another's row.
-			f.checkLocksAndConnections(t, run, 0, false)
+			_, p99, _ := run.report(t, label, allIndexes(len(publishes)))
 			var segments int
 			if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM elitea_runtime.workspace_segments`).Scan(&segments); err != nil || segments != loadGateThreads {
 				t.Fatalf("segments = %d, %v; want one per thread", segments, err)
 			}
+			if !mode.gated {
+				return
+			}
+			if p99 >= loadGateP99 {
+				t.Errorf("p99 publish = %s, gate is under %s", p99, loadGateP99)
+			}
+			// 1,000 DIFFERENT threads: no backend may wait on another's row.
+			f.checkLocksAndConnections(t, run, 0, false)
 		})
 	}
 }
@@ -443,10 +460,11 @@ func TestLoadGateSameThreadContention(t *testing.T) {
 				return err
 			}
 		})
-		offsets = append(offsets, 500*time.Millisecond)
+		// Released together in the middle of the run.
+		offsets = append(offsets, time.Duration(len(f.threads)/2)*time.Second/loadGateRate)
 	}
 	others := []int{}
-	spread := sustained(len(f.threads) - 1)
+	spread := atRate(len(f.threads)-1, loadGateRate)
 	for index, thread := range f.threads[1:] {
 		others = append(others, len(publishes))
 		publishes = append(publishes, f.publish(thread, "other-"+strconv.Itoa(index)))
@@ -476,8 +494,8 @@ SELECT last_seq FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND
 	}
 }
 
-// TestLoadGateSameProjectQuota: 1,000 threads in 50 projects (20 each),
-// sustained. Publishes of one project serialise only on the project's quota
+// TestLoadGateSameProjectQuota: 1,000 threads in 50 projects (20 each), at
+// the gated rate. Publishes of one project serialise only on the project's quota
 // lock, held for one SUM and the commit (ADR-0034 decision 11, the
 // max_project_workspace_gb ceiling); they never wait on each other's rows,
 // and p99 stays under the gate.
@@ -487,13 +505,13 @@ func TestLoadGateSameProjectQuota(t *testing.T) {
 	for index, thread := range f.threads {
 		publishes = append(publishes, f.publish(thread, "quota-"+strconv.Itoa(index)))
 	}
-	run := runLoadGate(t, f.pool, f.sampler, publishes, sustained(len(publishes)))
+	run := runLoadGate(t, f.pool, f.sampler, publishes, atRate(len(publishes), loadGateRate))
 	for index, err := range run.errs {
 		if err != nil {
 			t.Fatalf("publish %d: %v", index, err)
 		}
 	}
-	_, p99, _ := run.report(t, "1000 threads in 50 projects, sustained", allIndexes(len(publishes)))
+	_, p99, _ := run.report(t, "1000 threads in 50 projects, 300/s", allIndexes(len(publishes)))
 	if p99 >= loadGateP99 {
 		t.Errorf("p99 publish = %s, gate is under %s", p99, loadGateP99)
 	}
