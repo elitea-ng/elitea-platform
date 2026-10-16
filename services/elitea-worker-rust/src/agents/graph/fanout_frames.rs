@@ -407,27 +407,24 @@ pub(crate) fn progress_events(
         }
         previous = *ordinal;
     }
-    let mut frames: Vec<Vec<ProgressMember<'_>>> = vec![Vec::new()];
+    let mut frames: Vec<Vec<ProgressMember<'_>>> = Vec::new();
+    let mut current: Vec<ProgressMember<'_>> = Vec::new();
     let mut budget = MAX_PROGRESS_TEXT_BYTES;
     for (ordinal, call_id, text) in deltas {
         let mut rest = text.as_str();
         while !rest.is_empty() {
-            if budget == 0 {
-                frames.push(Vec::new());
-                budget = MAX_PROGRESS_TEXT_BYTES;
-            }
             let mut take = rest.len().min(budget);
             while !rest.is_char_boundary(take) {
                 take -= 1;
             }
             if take == 0 {
-                // The next character does not fit this frame.
-                frames.push(Vec::new());
+                // The frame is full, or the next character does not fit it.
+                frames.push(std::mem::take(&mut current));
                 budget = MAX_PROGRESS_TEXT_BYTES;
                 continue;
             }
             let (head, tail) = rest.split_at(take);
-            frames.last_mut().expect("a frame").push(ProgressMember {
+            current.push(ProgressMember {
                 call_id,
                 ordinal: *ordinal,
                 text: head,
@@ -436,6 +433,7 @@ pub(crate) fn progress_events(
             rest = tail;
         }
     }
+    frames.push(current);
     frames
         .into_iter()
         .filter(|members| !members.is_empty())
