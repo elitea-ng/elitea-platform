@@ -1227,6 +1227,8 @@ impl PipelineNativeAgentAssembler {
                     | super::runtime::PipelineNativeStart::Regenerate
             ) {
                 fresh_start
+            } else if !continues_a_decided_pause(&start) {
+                ApplicationContinuation::Scoped
             } else {
                 let checkpoint = state
                     .application_checkpoint(&plan)
@@ -1826,6 +1828,19 @@ pub(super) async fn materialize_saved_pipeline_tool(
         ));
     }
     Ok((definition, bound.runtimes, bound.presentations))
+}
+
+/// Whether this start continues a pause the user decided, the only start an older worker's
+/// unscoped call can be waiting on. A recovery re-runs an unfinished node and continues no
+/// decided pause: a missing receipt there means no call was proven yet (a crash between the
+/// frontier save and the first receipt revision), so it prepares scoped and stays scoped.
+pub(super) fn continues_a_decided_pause(start: &super::runtime::PipelineNativeStart) -> bool {
+    !matches!(
+        start,
+        super::runtime::PipelineNativeStart::Checkpoint
+            | super::runtime::PipelineNativeStart::Fresh
+            | super::runtime::PipelineNativeStart::Regenerate
+    )
 }
 
 /// Which application resolver a resumed conversation continues on.

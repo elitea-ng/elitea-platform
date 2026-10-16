@@ -1103,3 +1103,21 @@ async fn a_three_call_batch_with_one_sensitive_call_resumes_after_approval() {
     );
     assert_eq!(model_calls(&resumed_calls), 1);
 }
+
+#[test]
+fn a_recovery_start_never_takes_the_older_conversation_resolver() {
+    use crate::agents::pipeline::continues_a_decided_pause;
+    use crate::agents::runtime::PipelineNativeStart;
+    // A recovery re-runs an unfinished node: a missing receipt there is a crash before the
+    // first receipt revision, never an older worker's in-flight call, so it stays scoped.
+    for start in [
+        PipelineNativeStart::Checkpoint,
+        PipelineNativeStart::Fresh,
+        PipelineNativeStart::Regenerate,
+    ] {
+        assert!(!continues_a_decided_pause(&start));
+    }
+    assert!(continues_a_decided_pause(
+        &PipelineNativeStart::StaticTools(Vec::new())
+    ));
+}

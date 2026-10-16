@@ -214,7 +214,7 @@ async fn postgres_effectful_sensitive_tool_approval_in_a_graph_agent_node_fails_
         );
         return;
     };
-    let db = run_scenario(&url, "effectful", &["start", "answer"]).await;
+    let db = run_scenario(&url, "effectful", &["start", "answer", "repeat"]).await;
     db.pool.close().await;
 }
 
@@ -467,7 +467,7 @@ async fn postgres_scoped_child() {
         }
         "repeat" => {
             let card: Value = serde_json::from_str(&pending).expect("pending card");
-            let (assembler, captured, _) = assembler(
+            let (assembler, captured, tool_calls) = assembler(
                 &pool,
                 &scenario,
                 &phase,
@@ -499,6 +499,11 @@ async fn postgres_scoped_child() {
                 model_requests(&captured),
                 0,
                 "repeat: an answered card resumes nothing"
+            );
+            assert_eq!(
+                tool_calls.load(std::sync::atomic::Ordering::Acquire),
+                0,
+                "repeat: a repeated decision never runs the tool"
             );
         }
         other => panic!("unknown phase {other}"),
