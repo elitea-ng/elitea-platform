@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -226,8 +227,8 @@ VALUES ('fixture toolkit', 'github', '', 1, 1) RETURNING id`).Scan(&fixture.tool
 		t.Fatalf("seed toolkit: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools)
-VALUES ($1, $2, 'agent', $3, $4::jsonb)`, fixture.versionID, fixture.appID, fixture.toolID, fixture.selectedTools); err != nil {
+INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
+VALUES ($1, $2, 'agent', $3, $4::jsonb, now() AT TIME ZONE 'UTC')`, fixture.versionID, fixture.appID, fixture.toolID, fixture.selectedTools); err != nil {
 		t.Fatalf("seed tool attachment: %v", err)
 	}
 	// Read selected_tools back in the database's own normalization so the
@@ -245,7 +246,7 @@ SELECT selected_tools::text FROM p_1.entity_tool_mapping WHERE entity_version_id
 func newPublishCopyPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL publish tool-copy integration test", environment)
 	}

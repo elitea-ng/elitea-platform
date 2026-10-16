@@ -106,8 +106,8 @@ func mirrorPublishedVersion(
 
 	var twinAppID int
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %s.applications (name, description, icon, owner_id, shared_owner_id, shared_id, meta)
-		VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb)
+		INSERT INTO %s.applications (name, description, icon, owner_id, shared_owner_id, shared_id, meta, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
 		ON CONFLICT ON CONSTRAINT application_shared_origin
 		DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, icon = EXCLUDED.icon
 		RETURNING id`, publicSchema),
@@ -133,11 +133,11 @@ func mirrorPublishedVersion(
 		INSERT INTO %s.application_versions
 			(application_id, name, status, author_id, llm_settings, instructions,
 			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings,
-			 shared_owner_id, shared_id)
+			 shared_owner_id, shared_id, created_at)
 		SELECT $2, $3, 'published', author_id, llm_settings, instructions,
 			   conversation_starters, welcome_message, agent_type,
 			   COALESCE(meta, '{}'::jsonb) || $4::jsonb,
-			   pipeline_settings, $5, id
+			   pipeline_settings, $5, id, now() AT TIME ZONE 'UTC'
 		FROM %s.application_versions WHERE id = $1
 		RETURNING id`, publicSchema, sourceSchema),
 		publishedVersionID, twinAppID, versionName, metaOverlay, sourceProjectNumeric,

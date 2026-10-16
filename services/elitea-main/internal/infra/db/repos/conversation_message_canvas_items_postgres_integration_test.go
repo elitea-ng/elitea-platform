@@ -33,16 +33,16 @@ func seedTranscriptCanvasItem(t *testing.T, repo *ConversationsRepo, groupID, or
 	t.Helper()
 	if err := repo.pool.QueryRow(context.Background(), `
 WITH item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    VALUES (gen_random_uuid(), 'canvas_message', $1, $2)
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    VALUES (gen_random_uuid(), 'canvas_message', $1, $2, now() AT TIME ZONE 'UTC')
     RETURNING id, uuid::text
 ), canvas AS (
     INSERT INTO p_1.chat_messages_canvas (id, name, canvas_type)
     SELECT item.id, $3, $4 FROM item
     RETURNING id
 )
-INSERT INTO p_1.chat_canvas_versions (canvas_content, code_language, canvas_item_id)
-SELECT $5, $6, canvas.id FROM canvas
+INSERT INTO p_1.chat_canvas_versions (canvas_content, code_language, canvas_item_id, created_at)
+SELECT $5, $6, canvas.id, now() AT TIME ZONE 'UTC' FROM canvas
 RETURNING (SELECT id FROM item), (SELECT uuid FROM item)`,
 		orderIndex, groupID, name, canvasType, content, language).Scan(&itemID, &itemUUID); err != nil {
 		t.Fatalf("seed canvas item: %v", err)

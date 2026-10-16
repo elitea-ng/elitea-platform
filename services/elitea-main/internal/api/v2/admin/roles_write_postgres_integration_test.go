@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"os"
 	"sort"
@@ -222,7 +223,7 @@ const (
 func newRolesPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", environment)
 	}
@@ -603,8 +604,8 @@ func TestSupportScopeUsesTheEnvironmentWithNoPlatformConfigTable(t *testing.T) {
 func storeSupportProjectID(t *testing.T, pool *pgxpool.Pool, projectID int) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `
-INSERT INTO centry.platform_config (section, key, value)
-VALUES ($1, $2, $3::text::jsonb)
+INSERT INTO centry.platform_config (section, key, value, updated_at)
+VALUES ($1, $2, $3::text::jsonb, now() AT TIME ZONE 'UTC')
 ON CONFLICT (section, key) DO UPDATE SET value = EXCLUDED.value`,
 		platformconfig.SectionSupportAssistant,
 		platformconfig.KeySupportProjectID,

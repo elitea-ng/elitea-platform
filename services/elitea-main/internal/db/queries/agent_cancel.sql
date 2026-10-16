@@ -148,7 +148,7 @@ WITH target AS MATERIALIZED (
             - 'hitl_interrupts'
             - 'authorization_requests'
             - 'node_recovery_required_v1'),
-        updated_at = clock_timestamp()
+        updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
     FROM target
     WHERE response.id = target.response_message_group_id
       AND (
@@ -159,13 +159,14 @@ WITH target AS MATERIALIZED (
     RETURNING response.id
 ), salvaged_item AS (
     INSERT INTO chat_message_items (
-        uuid, item_type, order_index, meta, message_group_id
+        uuid, item_type, order_index, meta, message_group_id, created_at
     )
     SELECT gen_random_uuid(),
            'text_message',
            0,
            '{}'::jsonb,
-           target.response_message_group_id
+           target.response_message_group_id,
+           now() AT TIME ZONE 'UTC'
     FROM target
     WHERE target.item_count = 0
       AND COALESCE(target.latest_trace_text, '') <> ''

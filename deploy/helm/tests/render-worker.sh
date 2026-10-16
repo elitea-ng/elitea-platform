@@ -259,6 +259,41 @@ assert runtime["public_base_url"] == "https://elitea.example.com", runtime
 assert runtime["platform_origin"] == "https://elitea-platform-edge", runtime
 PY
 
+echo "== the worker rolls after elitea-main (Argo CD sync waves) =="
+python3 - "$TMP/rust.yaml" <<'PY' && ok "worker Deployment in a later wave than elitea-main; what it mounts is not later" || bad "worker rollout wave"
+import sys, yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+def wave(d):
+    return int(((d.get("metadata") or {}).get("annotations") or {}).get("argocd.argoproj.io/sync-wave", "0"))
+def find(kind, name):
+    return next(d for d in docs if d["kind"] == kind and d["metadata"]["name"] == name)
+
+worker = find("Deployment", "elitea-worker")
+main = find("Deployment", "elitea-main")
+# elitea-main verifies the claim a new worker names on the artifact object API;
+# a new worker must not run against an older elitea-main (PR #1293).
+assert wave(worker) > wave(main), (wave(worker), wave(main))
+
+# A Deployment ahead of what it mounts would never become ready: every
+# ConfigMap and Secret the worker mounts must be in its wave or earlier.
+spec = worker["spec"]["template"]["spec"]
+mounted = set()
+for v in spec.get("volumes", []):
+    if "configMap" in v:
+        mounted.add(("ConfigMap", v["configMap"]["name"]))
+    if "secret" in v:
+        mounted.add(("Secret", v["secret"]["secretName"]))
+    for src in (v.get("projected") or {}).get("sources", []):
+        if "configMap" in src:
+            mounted.add(("ConfigMap", src["configMap"]["name"]))
+        if "secret" in src:
+            mounted.add(("Secret", src["secret"]["name"]))
+later = sorted(f"{k}/{n}" for k, n in mounted
+               for d in docs if d["kind"] == k and d["metadata"]["name"] == n and wave(d) > wave(worker))
+assert not later, later
+PY
+
 echo
 RAN=$((PASS+FAIL))
 echo "worker render assertions: ${RAN} ran, ${PASS} passed, ${FAIL} failed"

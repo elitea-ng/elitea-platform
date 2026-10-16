@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/url"
 	"os"
 	"strings"
@@ -151,7 +152,7 @@ func TestPostgresRuntimeContextHidesInactiveOrMismatchedClaims(t *testing.T) {
 // intentionally leaves mTLS termination and PAT validation to their focused
 // component tests.
 func TestPostgresRuntimeContextAuthorizationIntegration(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the PostgreSQL runtime-context authorization test")
 	}
@@ -166,6 +167,7 @@ func TestPostgresRuntimeContextAuthorizationIntegration(t *testing.T) {
     resource_project_id INTEGER NOT NULL,
     actor_id TEXT NOT NULL,
     principal_ref TEXT NOT NULL DEFAULT '',
+    input_bundle_id TEXT NOT NULL DEFAULT '',
     desired_state TEXT NOT NULL,
     capability_id TEXT NOT NULL,
     PRIMARY KEY (execution_id, generation)
@@ -255,15 +257,40 @@ VALUES ('claim-agent', 'execution-agent', 1, 'session-1', $1, 'producer-1', $2, 
 	// Tool runs: one in the shape toolkitcalltool.Service writes (actor and
 	// principal the requesting user's id), and three that are not a user's
 	// run — a system actor, a principal that is not the actor, a zero id.
-	for _, job := range []struct{ id, actor, principal string }{
-		{"execution-tool", "17", "17"},
-		{"execution-tool-system", "system", "system"},
-		{"execution-tool-mismatch", "17", "18"},
-		{"execution-tool-zero", "0", "0"},
+	// The tool run's frozen toolkit (its settings entry) and the project's
+	// live toolkits, which the artifact read authorization resolves.
+	for _, statement := range []string{
+		`CREATE TABLE elitea_runtime.input_bundle_entries (
+    input_bundle_id TEXT NOT NULL,
+    semantic_role TEXT NOT NULL,
+    content_bytes BYTEA NOT NULL
+)`,
+		`CREATE SCHEMA p_42`,
+		`CREATE TABLE p_42.elitea_tools (id BIGINT PRIMARY KEY, type TEXT NOT NULL)`,
+		`INSERT INTO p_42.elitea_tools VALUES (5, 'artifact'), (6, 'github')`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, job := range []struct{ id, actor, principal, frozen string }{
+		{"execution-tool", "17", "17", `{"id": 5, "type": "artifact"}`},
+		{"execution-tool-system", "system", "system", `{"id": 5, "type": "artifact"}`},
+		{"execution-tool-mismatch", "17", "18", `{"id": 5, "type": "artifact"}`},
+		{"execution-tool-zero", "0", "0", `{"id": 5, "type": "artifact"}`},
+		// A tool run of a non-artifact toolkit, and one whose frozen entry
+		// claims artifact for a toolkit the project holds as github.
+		{"execution-tool-github", "17", "17", `{"id": 6, "type": "github"}`},
+		{"execution-tool-forged", "17", "17", `{"id": 6, "type": "artifact"}`},
 	} {
 		if _, err := pool.Exec(ctx, `INSERT INTO elitea_runtime.execution_jobs
-    (execution_id, generation, resource_project_id, actor_id, principal_ref, desired_state, capability_id)
-VALUES ($1, 1, 42, $2, $3, 'RUNNING', 'toolkit.call_tool.v1')`, job.id, job.actor, job.principal); err != nil {
+    (execution_id, generation, resource_project_id, actor_id, principal_ref, desired_state, capability_id, input_bundle_id)
+VALUES ($1, 1, 42, $2, $3, 'RUNNING', 'toolkit.call_tool.v1', 'bundle-' || $1)`, job.id, job.actor, job.principal); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO elitea_runtime.input_bundle_entries
+    (input_bundle_id, semantic_role, content_bytes)
+VALUES ('bundle-' || $1, 'toolkit.call_tool.settings', convert_to($2, 'UTF8'))`, job.id, job.frozen); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `INSERT INTO elitea_runtime.execution_claims
@@ -288,6 +315,54 @@ VALUES ($1, $1, 1, 'session-1', $2, 'producer-1', $3, clock_timestamp() + interv
 	}
 	_, err = repository.AuthorizeAgentRuntimeContext(ctx, toolClaim("execution-tool"))
 	require.ErrorIs(t, err, ErrContentUnauthorized, "a tool run is not an agent turn")
+	// The artifact READ routes admit the user's tool run (an artifact
+	// toolkit's read_file / list_files test call), as that user, and nothing
+	// the agent routes refuse besides it.
+	readAuthorization, err := repository.AuthorizeArtifactReadRuntimeContext(ctx, toolClaim("execution-tool"))
+	require.NoError(t, err)
+	require.EqualValues(t, 42, readAuthorization.ResourceProjectID)
+	require.Equal(t, "17", readAuthorization.ActorID)
+	for _, id := range []string{"execution-tool-system", "execution-tool-mismatch", "execution-tool-zero"} {
+		_, err := repository.AuthorizeArtifactReadRuntimeContext(ctx, toolClaim(id))
+		require.ErrorIs(t, err, ErrContentUnauthorized, "%s is not a user's tool run", id)
+	}
+	// Only an artifact toolkit's run reads a bucket (review C5).
+	for _, id := range []string{"execution-tool-github", "execution-tool-forged"} {
+		_, err := repository.AuthorizeRuntimeContext(ctx, toolClaim(id))
+		require.NoError(t, err, "%s is a user's tool run", id)
+		_, err = repository.AuthorizeArtifactReadRuntimeContext(ctx, toolClaim(id))
+		require.ErrorIs(t, err, ErrContentUnauthorized, "%s is not an artifact toolkit's run", id)
+	}
+	_, err = repository.AuthorizeArtifactReadRuntimeContext(ctx, ContentClaim{
+		PeerCertificate: certificateWithURI(identity), ExecutionID: "execution-1",
+		Generation: 1, ClaimID: "claim-1", FenceToken: fence,
+	})
+	require.ErrorIs(t, err, ErrContentUnauthorized, "an index run reads no user's bucket")
+	_, err = repository.AuthorizeArtifactReadRuntimeContext(ctx, ContentClaim{
+		PeerCertificate: certificateWithURI(identity), ExecutionID: "execution-agent",
+		Generation: 1, ClaimID: "claim-agent", FenceToken: fence,
+	})
+	require.NoError(t, err, "an agent turn still reads")
+
+	// Review round 2: the claim a turn's Office host names on the PUBLIC
+	// object API resolves to its project, actor and own conversation; a tool
+	// run, an index run and a wrong fence resolve to nothing.
+	scope, err := repository.ResolvePublicRuntimeClaim(ctx, "execution-agent", 1, "claim-agent", fence)
+	require.NoError(t, err)
+	require.Equal(t, PublicRuntimeClaimScope{
+		ProjectID: 42, ActorID: 17, ConversationID: "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1",
+	}, scope)
+	for _, refused := range []struct {
+		execution, claim string
+		fence            []byte
+	}{
+		{"execution-agent", "claim-agent", bytes.Repeat([]byte{9}, sha256.Size)},
+		{"execution-tool", "execution-tool", fence},
+		{"execution-1", "claim-1", fence},
+	} {
+		_, err := repository.ResolvePublicRuntimeClaim(ctx, refused.execution, 1, refused.claim, refused.fence)
+		require.ErrorIs(t, err, ErrContentUnauthorized, "%+v", refused)
+	}
 
 	claim := ContentClaim{
 		PeerCertificate: certificateWithURI(identity),

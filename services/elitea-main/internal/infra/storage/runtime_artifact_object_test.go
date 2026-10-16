@@ -30,6 +30,17 @@ type artifactSourceStub struct {
 	readRecord  RuntimeArtifactContentRecord
 	writeRecord RuntimeArtifactRecord
 	err         error
+	// systemBuckets are the project's system buckets (bucket_type 'system').
+	systemBuckets []string
+}
+
+func (stub *artifactSourceStub) RuntimeBucketIsSystem(_ context.Context, _ int64, bucket string) (bool, error) {
+	for _, system := range stub.systemBuckets {
+		if system == bucket {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (stub *artifactSourceStub) ListRuntimeArtifacts(
@@ -373,4 +384,139 @@ func TestArtifactListBucketOnlyResolvesTheBucketWithoutListing(t *testing.T) {
 		t, server, "list", `{"bucket":"reports","prefix":"","recursive":false,"limit":5,"bucket_only":true}`,
 	)
 	require.Equal(t, "reports", named.bucket)
+}
+
+// splitArtifactAuthorizer answers the agent check and the read check from
+// different stubs, so a test can tell which one each route consulted.
+type splitArtifactAuthorizer struct {
+	agent func(context.Context, ContentClaim) (RuntimeContextAuthorization, error)
+	read  func(context.Context, ContentClaim) (RuntimeContextAuthorization, error)
+}
+
+func (a splitArtifactAuthorizer) AuthorizeAgentRuntimeContext(
+	ctx context.Context, claim ContentClaim,
+) (RuntimeContextAuthorization, error) {
+	return a.agent(ctx, claim)
+}
+
+func (a splitArtifactAuthorizer) AuthorizeArtifactReadRuntimeContext(
+	ctx context.Context, claim ContentClaim,
+) (RuntimeContextAuthorization, error) {
+	return a.read(ctx, claim)
+}
+
+// Live 4.45.0 (D4): an artifact toolkit's `read_file` / `list_files` test
+// call is a `toolkit.call_tool.v1` claim, which the agent-scoped authorizer
+// refuses. The two READ routes now ask the read authorizer (which admits a
+// user's tool run); write and delete still ask the agent one, so the direct
+// path can never reach an artifact write through them.
+func TestArtifactReadsAdmitAToolRunAndWritesStayAgentOnly(t *testing.T) {
+	t.Parallel()
+
+	toolRun := func(context.Context, ContentClaim) (RuntimeContextAuthorization, error) {
+		return RuntimeContextAuthorization{ResourceProjectID: 7, ActorID: "11"}, nil
+	}
+	refused := func(context.Context, ContentClaim) (RuntimeContextAuthorization, error) {
+		return RuntimeContextAuthorization{}, ErrContentUnauthorized
+	}
+	source := &artifactSourceStub{
+		listRecords: []RuntimeArtifactRecord{{Name: "one.txt", MediaType: "text/plain", ByteLength: 4}},
+		readRecord: RuntimeArtifactContentRecord{
+			Name: "one.txt", MediaType: "text/plain", ByteLength: 4, Content: []byte("data"),
+		},
+	}
+	server := newArtifactTestServer(t, splitArtifactAuthorizer{agent: refused, read: toolRun}, source)
+
+	listed := artifactCall[RuntimeArtifactListContext](t, server, "list", `{"bucket":"agent-artifacts"}`)
+	require.Len(t, listed.Files, 1)
+	read := artifactCall[RuntimeArtifactReadContext](t, server, "read", `{"bucket":"agent-artifacts","name":"one.txt"}`)
+	require.Equal(t, "data", read.Content)
+	require.Equal(t, int64(7), source.projectID)
+	require.Equal(t, int64(11), source.actorID, "the run's own user, through the bucket access list")
+
+	for operation, body := range map[string]string{
+		"write":  `{"bucket":"agent-artifacts","name":"one.txt","content":"x"}`,
+		"delete": `{"bucket":"agent-artifacts","name":"one.txt"}`,
+	} {
+		response := httptest.NewRecorder()
+		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+operation, body))
+		require.Equal(t, http.StatusForbidden, response.Code, operation)
+	}
+}
+
+// Review S1: a system bucket (the chat attachment bucket, the index result
+// bucket) is not reachable BY NAME. The one exception is a read of the
+// claim's own conversation's attachment, by the path the model is shown;
+// listing attachments goes through the bucketless conversation route, which
+// still works.
+func TestArtifactRoutesRefuseSystemBucketsByName(t *testing.T) {
+	t.Parallel()
+
+	const conversation = "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1"
+	source := &attachmentArtifactSourceStub{
+		artifactSourceStub: artifactSourceStub{
+			systemBuckets: []string{DefaultAttachmentBucket, "index-artifacts", "reports"},
+			readRecord: RuntimeArtifactContentRecord{
+				Name: conversation + "/notes.txt", MediaType: "text/plain", ByteLength: 4, Content: []byte("data"),
+			},
+		},
+		records: []RuntimeArtifactRecord{{Name: conversation + "/notes.txt", ByteLength: 4}},
+	}
+	agent := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+	status := func(server *ContentServer, operation, body string) int {
+		response := httptest.NewRecorder()
+		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+operation, body))
+		return response.Code
+	}
+
+	// The turn's own attachment, by its path: served.
+	read := artifactCall[RuntimeArtifactReadContext](t, agent, "read",
+		`{"bucket":"`+DefaultAttachmentBucket+`","name":"`+conversation+`/notes.txt"}`)
+	require.Equal(t, "data", read.Content)
+	// The conversation route still lists the turn's attachments.
+	listed := artifactCall[RuntimeArtifactListContext](t, agent, "list", `{"bucket":""}`)
+	require.Len(t, listed.Files, 1)
+	// Review round 2: a named listing scoped to the turn's own conversation
+	// (get_file_metadata on an attachment filepath) is served, as a file
+	// under it or the conversation prefix itself.
+	for _, prefix := range []string{conversation + "/notes.txt", conversation + "/"} {
+		artifactCall[RuntimeArtifactListContext](t, agent, "list",
+			`{"bucket":"`+DefaultAttachmentBucket+`","prefix":"`+prefix+`"}`)
+	}
+
+	for _, refused := range []struct{ operation, body string }{
+		{"list", `{"bucket":"` + DefaultAttachmentBucket + `"}`},
+		{"list", `{"bucket":"` + DefaultAttachmentBucket + `","prefix":"0f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/"}`},
+		{"list", `{"bucket":"` + DefaultAttachmentBucket + `","prefix":"` + conversation + `"}`},
+		{"read", `{"bucket":"` + DefaultAttachmentBucket + `","name":"0f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/notes.txt"}`},
+		{"read", `{"bucket":"index-artifacts","name":"` + conversation + `/notes.txt"}`},
+		{"write", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/x.txt","content":"x"}`},
+		{"delete", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/notes.txt"}`},
+	} {
+		require.Equal(t, http.StatusForbidden, status(agent, refused.operation, refused.body), refused)
+	}
+
+	// A test-tool claim carries no conversation: no system bucket at all.
+	toolRun := func(context.Context, ContentClaim) (RuntimeContextAuthorization, error) {
+		return RuntimeContextAuthorization{ResourceProjectID: 7, ActorID: "11"}, nil
+	}
+	refused := func(context.Context, ContentClaim) (RuntimeContextAuthorization, error) {
+		return RuntimeContextAuthorization{}, ErrContentUnauthorized
+	}
+	tool := newArtifactTestServer(t, splitArtifactAuthorizer{agent: refused, read: toolRun}, source)
+	for _, body := range []struct{ operation, body string }{
+		{"read", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/notes.txt"}`},
+		{"list", `{"bucket":"` + DefaultAttachmentBucket + `"}`},
+		{"read", `{"bucket":"index-artifacts","name":"x.json"}`},
+	} {
+		require.Equal(t, http.StatusForbidden, status(tool, body.operation, body.body), body)
+	}
+
+	// Review round 3 (owner decision): a provisioned `reports` system bucket
+	// is the per-bucket access list's, for an agent turn and a tool run alike.
+	for _, server := range []*ContentServer{agent, tool} {
+		require.Equal(t, http.StatusOK, status(server, "read", `{"bucket":"reports","name":"`+conversation+`/notes.txt"}`))
+		require.Equal(t, http.StatusOK, status(server, "list", `{"bucket":"reports"}`))
+	}
+	require.Equal(t, http.StatusOK, status(agent, "write", `{"bucket":"reports","name":"q3.txt","content":"x"}`))
 }

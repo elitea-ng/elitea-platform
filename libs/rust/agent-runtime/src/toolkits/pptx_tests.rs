@@ -221,19 +221,36 @@ async fn the_selected_tools_rule_follows_the_artifact_family() {
 
 #[test]
 fn the_configuration_is_strict() {
-    for bad in [
-        json!({}),
-        json!({"bucket_name": ""}),
-        json!({"bucket_name": "Bad Bucket"}),
-        json!({"bucket_name": "9start"}),
-        json!({"bucket_name": "ok", "selected_tools": "fill_template"}),
-        json!({"bucket_name": "ok", "selected_tools": [1]}),
-        json!({"bucket_name": "ok", "selected_tools": [""]}),
+    // A missing or unusable bucket is its own code (live 4.45.0): the run
+    // skips the toolkit with a visible reason rather than failing.
+    for (bad, code) in [
+        (json!({}), PptxConfigErrorCode::BucketName),
+        (json!({"bucket_name": ""}), PptxConfigErrorCode::BucketName),
+        (
+            json!({"bucket_name": "Bad Bucket"}),
+            PptxConfigErrorCode::BucketName,
+        ),
+        (
+            json!({"bucket_name": "9start"}),
+            PptxConfigErrorCode::BucketName,
+        ),
+        (
+            json!({"bucket_name": "ok", "selected_tools": "fill_template"}),
+            PptxConfigErrorCode::InvalidConfiguration,
+        ),
+        (
+            json!({"bucket_name": "ok", "selected_tools": [1]}),
+            PptxConfigErrorCode::InvalidConfiguration,
+        ),
+        (
+            json!({"bucket_name": "ok", "selected_tools": [""]}),
+            PptxConfigErrorCode::InvalidConfiguration,
+        ),
     ] {
         let err = PptxToolkitConfig::parse(bad.as_object().expect("object"))
             .err()
             .unwrap_or_else(|| panic!("{bad} must be refused"));
-        assert_eq!(err.code(), PptxConfigErrorCode::InvalidConfiguration);
+        assert_eq!(err.code(), code, "{bad}");
     }
     let long = "a".repeat(64);
     let err = PptxToolkitConfig::parse(json!({"bucket_name": long}).as_object().expect("object"))

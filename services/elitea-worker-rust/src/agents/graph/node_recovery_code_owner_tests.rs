@@ -675,7 +675,7 @@ mod preparation_recovery {
     }
 
     async fn fixture(register_execute_dispatch: bool) -> Fixture {
-        let url = std::env::var("ELITEA_TEST_DATABASE_URL")
+        let url = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL")
             .expect("ELITEA_TEST_DATABASE_URL is required");
         let database = IsolatedPostgres::create(&url).await;
         sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
@@ -854,7 +854,7 @@ mod preparation_recovery {
 
     #[tokio::test]
     async fn dispatch_proof_is_conservative_without_a_ledger_answer() {
-        let lazy = sqlx::postgres::PgPoolOptions::new()
+        let lazy = crate::test_pg::pool_options()
             .acquire_timeout(std::time::Duration::from_millis(200))
             .connect_lazy("postgres://nobody@127.0.0.1:1/none")
             .unwrap();

@@ -128,6 +128,11 @@ impl Kind {
     }
 }
 
+/// Every tool name this module serves.
+pub(super) fn tool_names() -> impl Iterator<Item = &'static str> {
+    Kind::ALL.into_iter().map(Kind::name)
+}
+
 /// The tools of this module that `include` selects.
 pub(super) fn build(
     include: &dyn Fn(&str) -> bool,

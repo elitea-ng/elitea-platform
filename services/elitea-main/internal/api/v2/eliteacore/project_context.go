@@ -196,14 +196,14 @@ func (h *Handler) writeProjectContext(
 				(project_id, label, elitea_title, type, section, data, meta, shared,
 				 status_ok, source, created_at, updated_at)
 			VALUES ($1::integer, 'Project Context', 'project_context_' || $1::text, 'project_context',
-				'project_settings', $2, '{}'::jsonb, false, true, 'system', NOW(), NOW())
+				'project_settings', $2, '{}'::jsonb, false, true, 'system', (NOW() AT TIME ZONE 'UTC'), (NOW() AT TIME ZONE 'UTC'))
 			RETURNING id, data, updated_at`, schema)
 		err = tx.QueryRow(r.Context(), insertQuery, projectID, encoded).
 			Scan(&storedID, &storedData, &storedUpdatedAt)
 	} else {
 		updateQuery := fmt.Sprintf(`
 			UPDATE %s.configuration
-			SET data = $1, updated_at = NOW()
+			SET data = $1, updated_at = (NOW() AT TIME ZONE 'UTC')
 			WHERE id = $2 AND project_id = $3 AND type = 'project_context'
 			RETURNING id, data, updated_at`, schema)
 		err = tx.QueryRow(r.Context(), updateQuery, encoded, id, projectID).

@@ -79,7 +79,8 @@ INSERT INTO configuration (
     status_ok,
     status_logs,
     source,
-    author_id
+    author_id,
+    created_at
 ) VALUES (
     $1::text::uuid,
     $2::integer,
@@ -96,11 +97,12 @@ INSERT INTO configuration (
     true,
     NULL,
     'system',
-    NULL
+    NULL,
+    now() AT TIME ZONE 'UTC'
 )
 ON CONFLICT (elitea_title) DO UPDATE
 SET data = EXCLUDED.data,
-    updated_at = now()
+    updated_at = (now() AT TIME ZONE 'UTC')
 WHERE configuration.project_id = EXCLUDED.project_id
   AND configuration.type = EXCLUDED.type
   AND configuration.section = EXCLUDED.section

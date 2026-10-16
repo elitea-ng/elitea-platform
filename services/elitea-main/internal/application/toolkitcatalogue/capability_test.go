@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -75,7 +76,7 @@ func TestRustNativeToolTypesMatchTheMaterialiser(t *testing.T) {
 	require.NoError(t, err,
 		"the Rust materialiser must be readable: capability.go transcribes its dispatch")
 
-	source := string(raw)
+	source := materializeDispatchBodies(string(raw))
 	dispatched := map[string]bool{}
 	for _, match := range regexp.MustCompile(`"([a-z0-9_]+)" =>`).FindAllStringSubmatch(source, -1) {
 		dispatched[match[1]] = true
@@ -190,4 +191,18 @@ func TestCapabilityTypesIsSortedAndDeduplicated(t *testing.T) {
 	}
 	require.Contains(t, types, "kubernetes")
 	require.Contains(t, types, "github")
+}
+
+// materializeDispatchBodies is the text of the dispatch functions of
+// materialize.rs only: every `fn materialize*` body, from its signature to
+// the closing brace at column 0. Matching the whole file read the arms of
+// `family_tool_catalog` (the per-family tool lists, review C1) and any test
+// table as dispatch, so a family whose arm was removed still passed.
+func materializeDispatchBodies(source string) string {
+	var bodies strings.Builder
+	for _, match := range regexp.MustCompile(`(?m)^(?:pub )?(?:async )?fn materialize\w*[\s\S]*?\n\}\n`).
+		FindAllString(source, -1) {
+		bodies.WriteString(match)
+	}
+	return bodies.String()
 }

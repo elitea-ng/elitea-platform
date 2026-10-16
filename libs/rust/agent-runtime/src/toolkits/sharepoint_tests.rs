@@ -192,8 +192,10 @@ async fn mixed_selection_exposes_served_tools_and_leaves_the_index_tools_to_thei
         &Map::new(),
     )
     .expect("mixed SharePoint configuration");
-    let materialized = build_sharepoint_toolset("Project SharePoint", config, &policy(&[]), None)
-        .expect("supported SharePoint subset");
+    let host = super::sharepoint_content_tests::FakeHost::new().shared();
+    let materialized =
+        build_sharepoint_toolset("Project SharePoint", config, &policy(&[]), Some(&host))
+            .expect("supported SharePoint subset");
     assert_eq!(
         materialized
             .delegated_authorization
@@ -782,5 +784,35 @@ async fn an_app_only_credential_is_refused_with_the_reason_not_silently_skipped(
     assert_eq!(
         error.refusal_reason(),
         Some(UnsupportedSetting::SharePointAppOnly.reason())
+    );
+}
+
+/// Review C2: the catalogue says the document readers and `upload_file` need
+/// the file store, so without an Office host they are not built at all (the
+/// run's notice names them), and a selection of only them is no toolkit.
+#[tokio::test]
+async fn host_tools_are_left_out_without_an_office_host() {
+    let config = SharePointToolkitConfig::parse(
+        "Project SharePoint",
+        &settings(&["get_lists", "read_document", "upload_file"]),
+        &Map::new(),
+    )
+    .expect("configuration");
+    let materialized = build_sharepoint_toolset("Project SharePoint", config, &policy(&[]), None)
+        .expect("the host-free tools build");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = materialized.toolset.tools(readonly).await.expect("tools");
+    assert_eq!(
+        tools.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
+        ["get_lists"]
+    );
+    let only_hosted = SharePointToolkitConfig::parse(
+        "Project SharePoint",
+        &settings(&["read_document"]),
+        &Map::new(),
+    )
+    .expect("configuration");
+    assert!(
+        build_sharepoint_toolset("Project SharePoint", only_hosted, &policy(&[]), None).is_err()
     );
 }

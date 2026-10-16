@@ -1,4 +1,3 @@
-use std::env;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,7 +9,7 @@ use adk_rust::session::{
 use adk_rust::{Content, Event};
 use chrono::{TimeZone as _, Utc};
 use serde_json::json;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::postgres::PgConnectOptions;
 use sqlx::{ConnectOptions as _, PgPool};
 
 use super::TestStateWriterLease;
@@ -35,7 +34,7 @@ impl IsolatedPostgres {
         let admin_options = PgConnectOptions::from_str(database_url)
             .expect("parse PostgreSQL session component-test URL")
             .disable_statement_logging();
-        let admin_pool = PgPoolOptions::new()
+        let admin_pool = crate::test_pg::pool_options()
             .max_connections(2)
             .acquire_timeout(Duration::from_secs(5))
             .connect_with(admin_options.clone())
@@ -55,7 +54,7 @@ impl IsolatedPostgres {
             .await
             .expect("create isolated session database");
         admin_pool.close().await;
-        let pool = PgPoolOptions::new()
+        let pool = crate::test_pg::pool_options()
             .min_connections(1)
             .max_connections(4)
             .acquire_timeout(Duration::from_secs(2))
@@ -82,7 +81,7 @@ impl Drop for IsolatedPostgres {
                 .expect("build session cleanup runtime")
                 .block_on(async move {
                     let _ = tokio::time::timeout(Duration::from_secs(10), async move {
-                        if let Ok(admin_pool) = PgPoolOptions::new()
+                        if let Ok(admin_pool) = crate::test_pg::pool_options()
                             .max_connections(1)
                             .acquire_timeout(Duration::from_secs(5))
                             .connect_with(admin_options)
@@ -264,7 +263,7 @@ fn postgres_timestamp_retains_payload_nanoseconds_at_relational_precision() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One ordered component story proves the durable authority handoff.
 async fn postgres_session_component_story() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL session component test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -492,7 +491,7 @@ async fn postgres_session_component_story() {
 
 #[tokio::test]
 async fn postgres_session_full_context_survives_writer_replacement() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL full context test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -579,7 +578,7 @@ async fn postgres_session_full_context_survives_writer_replacement() {
 
 #[tokio::test]
 async fn superseded_recovery_markers_do_not_exhaust_active_view_or_erase_replay_evidence() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL session component test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -732,7 +731,7 @@ async fn assert_retained_recovery_view(service: &PostgresSessionService, pool: &
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One ordered story verifies repeated retirement, quota, and immutable replay.
 async fn model_history_snapshots_release_capacity_without_losing_controls_or_replay() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL session component test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -933,7 +932,7 @@ fn bounded_limits(writer_lock: Duration, idle: Duration) -> SessionLimits {
 
 #[tokio::test]
 async fn session_timeouts_are_bounded_at_activation() {
-    let pool = PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .acquire_timeout(Duration::from_millis(300))
         .connect_lazy("postgres://unused@127.0.0.1:1/unused")
         .expect("lazy pool");
@@ -977,7 +976,7 @@ async fn session_timeouts_are_bounded_at_activation() {
 
 #[tokio::test]
 async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL session lock-bound test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -986,7 +985,7 @@ async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
     let lock_timeout = Duration::from_millis(250);
     // Its own pool with a generous acquire bound: under a loaded suite a pool
     // timeout must not stand in for the lock timeout this test is about.
-    let pool = PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .max_connections(2)
         .acquire_timeout(Duration::from_mins(1))
         .connect_with(
@@ -1073,7 +1072,7 @@ async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
 
 #[tokio::test]
 async fn an_idle_session_transaction_releases_its_writer_locks() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL session idle-bound test: set {TEST_DATABASE_URL}");
         return;
     };

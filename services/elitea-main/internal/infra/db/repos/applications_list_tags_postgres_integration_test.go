@@ -104,8 +104,8 @@ func TestApplicationsRepoPostgres_ListUnionsTheTagsOfEveryVersion(t *testing.T) 
 
 	var secondVersionID int
 	if err := pool.QueryRow(testContext(t), `
-INSERT INTO p_1.application_versions (application_id, name, status, author_id, agent_type)
-VALUES ($1, 'v1', 'draft', 1, 'openai') RETURNING id`, app.ID).Scan(&secondVersionID); err != nil {
+INSERT INTO p_1.application_versions (application_id, name, status, author_id, agent_type, created_at)
+VALUES ($1, 'v1', 'draft', 1, 'openai', now() AT TIME ZONE 'UTC') RETURNING id`, app.ID).Scan(&secondVersionID); err != nil {
 		t.Fatalf("seed the second version: %v", err)
 	}
 	for _, tag := range []string{"shared", "only-on-v1"} {

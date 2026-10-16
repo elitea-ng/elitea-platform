@@ -86,7 +86,8 @@ impl From<ArtifactConfigError> for ArtifactToolsetError {
     fn from(source: ArtifactConfigError) -> Self {
         Self {
             code: match source.code() {
-                ArtifactConfigErrorCode::InvalidConfiguration => {
+                ArtifactConfigErrorCode::InvalidConfiguration
+                | ArtifactConfigErrorCode::BucketName => {
                     ArtifactToolsetErrorCode::InvalidConfiguration
                 }
                 ArtifactConfigErrorCode::ResourceExhausted => {
@@ -858,6 +859,21 @@ impl Tool for DeleteFileTool {
             }
         }
     }
+}
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    [
+        LIST_FILES_TOOL,
+        READ_FILE_TOOL,
+        CREATE_FILE_TOOL,
+        DELETE_FILE_TOOL,
+    ]
+    .into_iter()
+    .chain(super::extra_tools::tool_names())
+    .map(|name| (name, false))
+    .collect()
 }
 
 #[cfg(test)]

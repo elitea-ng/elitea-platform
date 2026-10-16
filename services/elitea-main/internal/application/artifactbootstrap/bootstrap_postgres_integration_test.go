@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"os"
 	"sort"
@@ -36,7 +37,7 @@ type bootstrapRepoAdapter struct {
 
 func newPostgresIntegrationPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(postgresIntegrationDatabaseURL)
+	databaseURL := testpg.DSN(os.Getenv(postgresIntegrationDatabaseURL))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the artifact bootstrap PostgreSQL integration tests", postgresIntegrationDatabaseURL)
 	}

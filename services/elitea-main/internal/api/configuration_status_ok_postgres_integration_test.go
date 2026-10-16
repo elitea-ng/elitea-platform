@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -480,7 +481,7 @@ WHERE table_schema = 'p_1' AND table_name = 'configuration' AND column_name = 's
 
 func newStatusOKIntegrationPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(statusOKIntegrationDatabaseURL)
+	databaseURL := testpg.DSN(os.Getenv(statusOKIntegrationDatabaseURL))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the configuration status_ok integration test", statusOKIntegrationDatabaseURL)
 	}

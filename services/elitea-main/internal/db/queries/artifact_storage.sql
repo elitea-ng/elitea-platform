@@ -2,14 +2,17 @@
 SELECT id, project_id, name, display_name, bucket_type, is_pinned, tags,
        retention_days, expires_at, notified_at, created_at, updated_at, deleted_at
 FROM elitea_storage.buckets
-WHERE project_id = $1 AND deleted_at IS NULL
+-- The hidden workspace bucket (ADR-0034 decision 3, shared/0168) is never
+-- listed, read or resolved by an artifact query: every artifact path answers
+-- it as absent.
+WHERE project_id = $1 AND deleted_at IS NULL AND bucket_type <> 'workspace'
 ORDER BY name;
 
 -- name: GetArtifactBucket :one
 SELECT id, project_id, name, display_name, bucket_type, is_pinned, tags,
        retention_days, expires_at, notified_at, created_at, updated_at, deleted_at
 FROM elitea_storage.buckets
-WHERE project_id = $1 AND name = $2 AND deleted_at IS NULL;
+WHERE project_id = $1 AND name = $2 AND deleted_at IS NULL AND bucket_type <> 'workspace';
 
 -- name: GetArtifactBucketByID :one
 -- ListExpiredArtifactObjects (below) has no request-bound project scope — it
@@ -20,7 +23,7 @@ WHERE project_id = $1 AND name = $2 AND deleted_at IS NULL;
 SELECT id, project_id, name, display_name, bucket_type, is_pinned, tags,
        retention_days, expires_at, notified_at, created_at, updated_at, deleted_at
 FROM elitea_storage.buckets
-WHERE id = $1 AND deleted_at IS NULL;
+WHERE id = $1 AND deleted_at IS NULL AND bucket_type <> 'workspace';
 
 -- name: CreateArtifactBucket :one
 INSERT INTO elitea_storage.buckets (
@@ -67,6 +70,7 @@ SELECT id, project_id, name, display_name, bucket_type, is_pinned, tags,
        retention_days, expires_at, notified_at, created_at, updated_at, deleted_at
 FROM elitea_storage.buckets
 WHERE deleted_at IS NULL
+  AND bucket_type <> 'workspace'
   AND expires_at IS NOT NULL
   AND expires_at <= $1
   AND notified_at IS NULL
@@ -87,7 +91,7 @@ WHERE id = $1;
 -- known projects is defined operationally as "has at least one bucket."
 SELECT DISTINCT project_id
 FROM elitea_storage.buckets
-WHERE deleted_at IS NULL
+WHERE deleted_at IS NULL AND bucket_type <> 'workspace'
 ORDER BY project_id;
 
 -- name: UpsertArtifactObject :one
@@ -134,10 +138,12 @@ JOIN elitea_storage.buckets b ON b.id = o.bucket_id
 WHERE o.bucket_id = $1 AND b.deleted_at IS NULL;
 
 -- name: SumArtifactProjectBytes :one
+-- The workspace bucket does not count against the artifact quota (ADR-0034
+-- decision 3): its size is bounded by max_project_workspace_gb instead.
 SELECT COALESCE(SUM(o.byte_length), 0)::bigint
 FROM elitea_storage.objects o
 JOIN elitea_storage.buckets b ON b.id = o.bucket_id
-WHERE b.project_id = $1 AND b.deleted_at IS NULL;
+WHERE b.project_id = $1 AND b.deleted_at IS NULL AND b.bucket_type <> 'workspace';
 
 -- name: GetArtifactProjectStoragePolicy :one
 SELECT project_id, max_object_bytes, max_total_bytes, retention_default_days,
@@ -166,9 +172,9 @@ SELECT owner_id FROM centry.project WHERE id = $1;
 
 -- name: InsertArtifactBucketExpiryNotification :execrows
 INSERT INTO centry.notifications (
-    uuid, is_seen, project_id, user_id, meta, event_type
+    uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at
 ) VALUES (
     sqlc.arg('notification_uuid')::text::uuid, FALSE,
     sqlc.arg('project_id')::integer, sqlc.arg('user_id')::integer,
-    sqlc.arg('meta')::jsonb, 'artifact_bucket_expiring'
+    sqlc.arg('meta')::jsonb, 'artifact_bucket_expiring', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'
 ) ON CONFLICT (uuid) DO NOTHING;

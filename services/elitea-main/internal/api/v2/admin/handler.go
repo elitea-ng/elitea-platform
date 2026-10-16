@@ -30,6 +30,10 @@ type Handler struct {
 	// nativePolicy is the cached native client policy a save of the
 	// native_client_policy section invalidates (native_client_policy.go).
 	nativePolicy PolicyInvalidator
+	// cloudExecutorEncryption is the startup answer for the cloud executor's
+	// storage encryption at rest ("confirmed", "attested", "refused"; empty
+	// when the handoff is not composed). See WithCloudExecutorEncryption.
+	cloudExecutorEncryption string
 	// The brand asset store the upload route writes (branding.go). Nil unless
 	// WithBrandingAssets is applied with an available store.
 	brandingAssets *v2branding.AssetStore
@@ -241,8 +245,16 @@ func (h *Handler) migrationHead(ctx context.Context) (int64, bool) {
 // Projects and ProjectSuspend live in projects.go (unit A14).
 
 func (h *Handler) PluginConfigSchemas(w http.ResponseWriter, _ *http.Request) {
+	sections := configSections()
+	for _, section := range sections {
+		if section["id"] == platformconfig.SectionCloudExecutor {
+			if notice := cloudExecutorEncryptionNotice(h.cloudExecutorEncryption); notice != "" {
+				section["notice"] = notice
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"sections": configSections(),
+		"sections": sections,
 		// Whether the caller may VIEW the descriptors page, which is a different
 		// question from whether this section can edit them (it cannot — see
 		// serviceDescriptorsSection).

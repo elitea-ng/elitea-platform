@@ -84,24 +84,24 @@ func newToolReadFixture(t *testing.T) (*pgRepo, string) {
 
 	var applicationID, versionID, toolkitID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.applications (name, description, owner_id)
-		VALUES ('tool-read-fixture', '', 1) RETURNING id`).Scan(&applicationID); err != nil {
+		INSERT INTO p_1.applications (name, description, owner_id, created_at, updated_at)
+		VALUES ('tool-read-fixture', '', 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`).Scan(&applicationID); err != nil {
 		t.Fatalf("insert fixture application: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.application_versions (application_id, name, status, author_id)
-		VALUES ($1, 'base', 'draft', 7) RETURNING id`, applicationID).Scan(&versionID); err != nil {
+		INSERT INTO p_1.application_versions (application_id, name, status, author_id, created_at)
+		VALUES ($1, 'base', 'draft', 7, now() AT TIME ZONE 'UTC') RETURNING id`, applicationID).Scan(&versionID); err != nil {
 		t.Fatalf("insert fixture version: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id)
-		VALUES ('tool-read-fixture', 'github', 'fixture toolkit', '{}'::jsonb, '{}'::jsonb, 1, 7)
+		INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
+		VALUES ('tool-read-fixture', 'github', 'fixture toolkit', '{}'::jsonb, '{}'::jsonb, 1, 7, now() AT TIME ZONE 'UTC')
 		RETURNING id`).Scan(&toolkitID); err != nil {
 		t.Fatalf("insert fixture toolkit: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id)
-		VALUES ($1, $2, 'agent', $3)`, versionID, applicationID, toolkitID); err != nil {
+		INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, created_at)
+		VALUES ($1, $2, 'agent', $3, now() AT TIME ZONE 'UTC')`, versionID, applicationID, toolkitID); err != nil {
 		t.Fatalf("insert fixture mapping: %v", err)
 	}
 

@@ -266,7 +266,7 @@ WITH next_order AS MATERIALIZED (
     WHERE message_group_id = $1
 ), inserted_item AS (
     INSERT INTO %s (
-        uuid, item_type, order_index, meta, message_group_id
+        uuid, item_type, order_index, meta, message_group_id, created_at
     )
     SELECT gen_random_uuid(),
            'text_message',
@@ -276,7 +276,8 @@ WITH next_order AS MATERIALIZED (
                'runtime_stream_generation', $3::text,
                'runtime_stream_provisional', TRUE
            ),
-           $1
+           $1,
+           now() AT TIME ZONE 'UTC'
     FROM next_order
     RETURNING id
 )

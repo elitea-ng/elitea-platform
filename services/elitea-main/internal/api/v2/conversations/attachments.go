@@ -61,6 +61,7 @@ package conversations
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -493,6 +494,11 @@ func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context,
 		retentionDays = *policyRetentionDays
 	}
 	bucketID, err := h.attachments.RequireAttachmentBucket(ctx, projectID, bucketName, retentionDays)
+	if errors.Is(err, storage.ErrSystemBucketNameTaken) {
+		apierr.Write(w, apierr.Conflict(fmt.Sprintf(
+			"the attachment bucket %q of this project is a bucket a person created, not the platform's attachment bucket; rename or delete it (Artifacts page) and upload again", bucketName)))
+		return
+	}
 	if err != nil {
 		apierr.Write(w, apierr.Internal("get or create attachment bucket: "+err.Error()))
 		return

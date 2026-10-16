@@ -901,3 +901,12 @@ fn invalid_jql() -> AdkError {
         "Unable to get tests. The JQL query may be invalid or malformed. Please verify the JQL syntax and try again.",
     )
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    XrayToolKind::ALL
+        .iter()
+        .map(|kind| (kind.name(), false))
+        .collect()
+}

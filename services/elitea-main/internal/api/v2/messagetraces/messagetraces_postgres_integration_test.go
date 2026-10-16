@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -91,7 +92,7 @@ func stepIDs(t *testing.T, payload map[string]any) []string {
 func newTracesPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", environment)
 	}
@@ -185,13 +186,13 @@ CREATE TABLE %[1]s.chat_message_trace_step (
 );
 INSERT INTO %[1]s.chat_participants (id, uuid, entity_name)
 VALUES (1, '30000000-0000-4000-8000-000000000001', 'agent');
-INSERT INTO %[1]s.chat_conversations (id, uuid, author_id)
-VALUES (1, '10000000-0000-4000-8000-000000000001', 7),
-       (2, '10000000-0000-4000-8000-000000000002', 7);
-INSERT INTO %[1]s.chat_message_group (id, uuid, author_participant_id, conversation_id)
-VALUES (11, '20000000-0000-4000-8000-000000000011', 1, 1),
-       (12, '20000000-0000-4000-8000-000000000012', 1, 1),
-       (21, '20000000-0000-4000-8000-000000000021', 1, 2);`, schema))
+INSERT INTO %[1]s.chat_conversations (id, uuid, author_id, created_at)
+VALUES (1, '10000000-0000-4000-8000-000000000001', 7, now() AT TIME ZONE 'UTC'),
+       (2, '10000000-0000-4000-8000-000000000002', 7, now() AT TIME ZONE 'UTC');
+INSERT INTO %[1]s.chat_message_group (id, uuid, author_participant_id, conversation_id, created_at)
+VALUES (11, '20000000-0000-4000-8000-000000000011', 1, 1, now() AT TIME ZONE 'UTC'),
+       (12, '20000000-0000-4000-8000-000000000012', 1, 1, now() AT TIME ZONE 'UTC'),
+       (21, '20000000-0000-4000-8000-000000000021', 1, 2, now() AT TIME ZONE 'UTC');`, schema))
 	if err != nil {
 		t.Fatalf("seed tenant schema: %v", err)
 	}

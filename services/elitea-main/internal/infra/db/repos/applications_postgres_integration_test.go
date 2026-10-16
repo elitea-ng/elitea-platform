@@ -582,7 +582,7 @@ func TestApplicationsRepoPostgres_DeleteRemovesTheApplicationAndItsVersions(t *t
 	app := createTestApplication(t, repo, "doomed", 1, &applications.Version{Name: "base"})
 	versionID := app.Versions[0].ID
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO p_1.application_variables (application_version_id, name, value) VALUES ($1, 'k', 'v')`,
+		`INSERT INTO p_1.application_variables (application_version_id, name, value, created_at) VALUES ($1, 'k', 'v', now() AT TIME ZONE 'UTC')`,
 		versionID); err != nil {
 		t.Fatalf("seed variable: %v", err)
 	}
@@ -1030,7 +1030,7 @@ func TestApplicationsRepoPostgres_BatchReplaceVersionRemapsToolsAndOptionallyDel
 
 	var toolID int
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.elitea_tools (name, type, owner_id, author_id) VALUES ('t', 'github', 1, 1)
+		INSERT INTO p_1.elitea_tools (name, type, owner_id, author_id, created_at) VALUES ('t', 'github', 1, 1, now() AT TIME ZONE 'UTC')
 		RETURNING id`).Scan(&toolID); err != nil {
 		t.Fatalf("seed tool: %v", err)
 	}

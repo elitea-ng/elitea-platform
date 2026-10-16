@@ -19,7 +19,6 @@ use adk_sandbox::{
 use prost::Message as _;
 use ring::signature::{Ed25519KeyPair, KeyPair as _};
 use serde_json::{Value, json};
-use sqlx::postgres::PgPoolOptions;
 use std::sync::{Arc, Mutex};
 
 const DATABASE_URL: &str = "ELITEA_TEST_DATABASE_URL";
@@ -373,7 +372,7 @@ fn supervisor(pool: sqlx::PgPool, runtime: Runtime) -> DockerSupervisor {
 }
 async fn database() -> IsolatedPostgres {
     let database = IsolatedPostgres::create(
-        &std::env::var(DATABASE_URL)
+        &crate::test_pg::database_url_var(DATABASE_URL)
             .expect("Set ELITEA_TEST_DATABASE_URL for preparation lifecycle tests"),
     )
     .await;
@@ -533,7 +532,7 @@ fn trusted_manifest_carries_source_only_as_data_and_matches_the_selected_runtime
 
 #[tokio::test]
 async fn preparation_and_execution_admission_are_mutually_exclusive() {
-    let pool = PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .connect_lazy("postgres://fixture@127.0.0.1:1/fixture")
         .unwrap();
     let request = job();
@@ -579,7 +578,7 @@ async fn preparation_and_execution_admission_are_mutually_exclusive() {
     wrong["policy_revision"] = json!("wrong");
     let wrong = PreparationJob::from_transport(&serde_json::to_vec(&wrong).unwrap()).unwrap();
     let preparer = supervisor(
-        PgPoolOptions::new()
+        crate::test_pg::pool_options()
             .connect_lazy("postgres://fixture@127.0.0.1:1/fixture")
             .unwrap(),
         Runtime::new(&wrong, true),
@@ -615,7 +614,7 @@ async fn root_bound_execution_requires_content_authority_before_ledger_admission
             chrono::Utc::now().timestamp_millis(),
         )
         .unwrap();
-    let pool = PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .connect_lazy("postgres://fixture@127.0.0.1:1/fixture")
         .unwrap();
     let executor = DockerSupervisor::new(
@@ -1705,7 +1704,7 @@ async fn preparation_bundle_persistence_error_retains_original_runtime_for_recon
 
 #[tokio::test]
 async fn frozen_lookup_succeeds_while_execution_capacity_is_exhausted() {
-    let pool = PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .connect_lazy("postgres://fixture@127.0.0.1:1/fixture")
         .unwrap();
     let request = job();

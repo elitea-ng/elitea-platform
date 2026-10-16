@@ -14,7 +14,7 @@ use adk_rust::futures::StreamExt as _;
 use adk_rust::session::{AppendEventRequest, CreateRequest, GetRequest, SessionService};
 use adk_rust::{AdkIdentity, Agent, Content, Event, EventStream, InvocationContext};
 use async_trait::async_trait;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::postgres::PgConnectOptions;
 use sqlx::{ConnectOptions as _, PgPool};
 
 use super::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel};
@@ -92,7 +92,7 @@ impl LockFixture {
     pub(crate) async fn create(url: &str) -> Self {
         let database = IsolatedPostgres::create(url).await;
         install_schema(&database.pool).await;
-        let side = PgPoolOptions::new()
+        let side = crate::test_pg::pool_options()
             .max_connections(2)
             .acquire_timeout(STEP_DEADLINE)
             .connect_with(
@@ -287,7 +287,7 @@ pub(crate) async fn assert_no_self_deadlock<F, Fut>(
 
 #[tokio::test]
 async fn node_event_yield_never_strands_a_child_append_holding_the_root_writer() {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("skipping node-event session lock test: set ELITEA_TEST_DATABASE_URL");
         return;
     };

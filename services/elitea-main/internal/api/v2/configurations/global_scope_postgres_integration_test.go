@@ -32,6 +32,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,7 +62,7 @@ const globalScopeProject = 1
 func newGlobalScopePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", environment)
 	}
@@ -156,7 +157,7 @@ func seedRow(t *testing.T, pool *pgxpool.Pool, section, configType, title string
 			(uuid, project_id, elitea_title, type, section, data, meta, shared,
 			 status_ok, source, created_at, updated_at)
 		VALUES (gen_random_uuid(), $1, $2, $3, $4, '{}'::jsonb, '{}'::jsonb, true,
-			 true, 'user', now(), now())
+			 true, 'user', (now() AT TIME ZONE 'UTC'), (now() AT TIME ZONE 'UTC'))
 		RETURNING id, uuid::text`, fmt.Sprintf("p_%d", globalScopeProject)),
 		globalScopeProject, title, configType, section).Scan(&id, &rowUUID)
 	if err != nil {
@@ -179,7 +180,7 @@ func seedNeverUpdatedRow(t *testing.T, pool *pgxpool.Pool, section, configType, 
 			(uuid, project_id, elitea_title, type, section, data, meta, shared,
 			 status_ok, source, created_at)
 		VALUES (gen_random_uuid(), $1, $2, $3, $4, '{}'::jsonb, '{}'::jsonb, true,
-			 true, 'user', now())
+			 true, 'user', (now() AT TIME ZONE 'UTC'))
 		RETURNING id`, schema),
 		globalScopeProject, title, configType, section).Scan(&id)
 	if err != nil {

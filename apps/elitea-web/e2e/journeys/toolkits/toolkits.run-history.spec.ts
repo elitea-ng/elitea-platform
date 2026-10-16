@@ -28,7 +28,11 @@ interface ConversationSummary {
 
 async function createArtifactToolkit(request: APIRequestContext, name: string): Promise<string> {
   const created = await request.post(`${API_BASE}/elitea_core/tools/prompt_lib/${DEFAULT_PROJECT_ID}`, {
-    data: { name, type: 'artifact', settings: { selected_tools: ['list_files'] } },
+    // `bucket` is REQUIRED for the artifact type (the SDK's schema declares it
+    // `str` with no default and ArtifactWrapper refuses a toolkit without one);
+    // Main refuses the save with 400 missing_bucket. This journey never reads
+    // the bucket, so a name is enough.
+    data: { name, type: 'artifact', settings: { bucket: 'autotest-toolkit-files', selected_tools: ['list_files'] } },
   });
   expect(created.status(), `creating the toolkit answered ${created.status()}: ${(await created.text()).slice(0, 300)}`).toBe(201);
   const toolkitId = String(((await created.json()) as { id?: string | number }).id ?? '');

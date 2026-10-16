@@ -21,25 +21,25 @@ func TestInternalDiscoveryPostgresCountsVisibilityFiltersAndEnvelopes(t *testing
 	pool := newInternalApplicationsPool(t)
 	ctx := auth.ContextWithUser(context.Background(), auth.User{ID: "41", UserID: "41"})
 	_, err := pool.Exec(ctx, `
- INSERT INTO p_1.applications(id,name,description,owner_id) VALUES
- (10,'Visible agent','agent text',1),(20,'Mixed pipeline','pipeline text',1),(30,'Hidden agent','hidden text',1);
- INSERT INTO p_1.application_versions(id,application_id,name,author_id,agent_type,status) VALUES
- (101,10,'base',41,'openai','draft'),(102,10,'published',42,'openai','published'),
- (201,20,'base',41,'openai','draft'),(202,20,'pipeline',42,'pipeline','published'),(301,30,'base',41,'openai','draft');
- INSERT INTO p_1.skills(id,name,description,owner_id,author_id) VALUES (40,'Skill option','find skill description',1,41);
- INSERT INTO p_1.skill_versions(id,skill_id,name,instructions,author_id) VALUES (401,40,'base','instructions',41);
+ INSERT INTO p_1.applications(id,name,description,owner_id, created_at, updated_at) VALUES
+ (10,'Visible agent','agent text',1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'),(20,'Mixed pipeline','pipeline text',1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'),(30,'Hidden agent','hidden text',1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC');
+ INSERT INTO p_1.application_versions(id,application_id,name,author_id,agent_type,status, created_at) VALUES
+ (101,10,'base',41,'openai','draft', now() AT TIME ZONE 'UTC'),(102,10,'published',42,'openai','published', now() AT TIME ZONE 'UTC'),
+ (201,20,'base',41,'openai','draft', now() AT TIME ZONE 'UTC'),(202,20,'pipeline',42,'pipeline','published', now() AT TIME ZONE 'UTC'),(301,30,'base',41,'openai','draft', now() AT TIME ZONE 'UTC');
+ INSERT INTO p_1.skills(id,name,description,owner_id,author_id, created_at) VALUES (40,'Skill option','find skill description',1,41, now() AT TIME ZONE 'UTC');
+ INSERT INTO p_1.skill_versions(id,skill_id,name,instructions,author_id, created_at) VALUES (401,40,'base','instructions',41, now() AT TIME ZONE 'UTC');
  ALTER TABLE p_1.tags ALTER COLUMN data TYPE json USING data::json;
  INSERT INTO p_1.tags(id,name,data) VALUES (1,'common','{"color":"blue"}'),(2,'pipeline-only',NULL),(3,'skill-only',NULL),(4,'hidden-only',NULL),(5,'unattached',NULL);
  INSERT INTO p_1.application_version_tag_association(version_id,tag_id) VALUES (101,1),(102,1),(201,1),(201,2),(301,4);
  INSERT INTO p_1.skill_version_tag_association(version_id,tag_id) VALUES (401,1),(401,3);
- INSERT INTO p_1.elitea_tools(id,name,type,owner_id,author_id,settings) VALUES (50,'','github',1,41,'{"elitea_title":"Readable toolkit","token":"secret-canary"}');
- INSERT INTO p_1.configuration(id,project_id,label,elitea_title,type,section,data) VALUES (60,1,'Credential option','credential_option','github','credentials','{"token":"secret-canary"}');
+ INSERT INTO p_1.elitea_tools(id,name,type,owner_id,author_id,settings, created_at) VALUES (50,'','github',1,41,'{"elitea_title":"Readable toolkit","token":"secret-canary"}', now() AT TIME ZONE 'UTC');
+ INSERT INTO p_1.configuration(id,project_id,label,elitea_title,type,section,data, created_at) VALUES (60,1,'Credential option','credential_option','github','credentials','{"token":"secret-canary"}', now() AT TIME ZONE 'UTC');
  CREATE TABLE IF NOT EXISTS p_1.entity_folders(id integer PRIMARY KEY);
  CREATE TABLE IF NOT EXISTS p_1.social_folder_items(folder_id integer,entity text,entity_id integer);
  CREATE TABLE IF NOT EXISTS p_1.folder_access_overrides(folder_id integer,user_id integer,access_level text);
  INSERT INTO p_1.social_folder_items(folder_id,entity,entity_id) VALUES (1,'agent',30);
  INSERT INTO p_1.folder_access_overrides(folder_id,user_id,access_level) VALUES (1,41,'no_access');
- INSERT INTO p_1.social_likes(entity_name,entity_id,user_id) VALUES ('application',10,41);
+ INSERT INTO p_1.social_likes(entity_name,entity_id,user_id, created_at) VALUES ('application',10,41, now() AT TIME ZONE 'UTC');
  `)
 	if err != nil {
 		t.Fatal(err)
@@ -129,8 +129,8 @@ func TestInternalDiscoveryPostgresCountsVisibilityFiltersAndEnvelopes(t *testing
 	}
 	// Shared credential options never include private public-project credentials.
 	if _, err := pool.Exec(ctx, `SELECT create_tenant_schema('p_2');
- INSERT INTO p_2.configuration(id,project_id,label,elitea_title,type,section) VALUES (70,2,'Private project credential','project_credential','github','credentials');
- INSERT INTO p_1.configuration(id,project_id,label,elitea_title,type,section,shared) VALUES (61,1,'Shared credential','shared_credential','github','credentials',true);`); err != nil {
+ INSERT INTO p_2.configuration(id,project_id,label,elitea_title,type,section, created_at) VALUES (70,2,'Private project credential','project_credential','github','credentials', now() AT TIME ZONE 'UTC');
+ INSERT INTO p_1.configuration(id,project_id,label,elitea_title,type,section,shared, created_at) VALUES (61,1,'Shared credential','shared_credential','github','credentials',true, now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatal(err)
 	}
 	shared, err := svc.SearchOptions(ctx, "2", url.Values{"entities[]": {"credential"}, "include_shared": {"true"}})

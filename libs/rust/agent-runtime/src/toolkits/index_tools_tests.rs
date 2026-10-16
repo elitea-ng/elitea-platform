@@ -1025,3 +1025,57 @@ fn the_served_families_match_the_shared_fixture() {
         assert!(is_index_family(family), "{family}");
     }
 }
+
+/// Review C4: index tools plus a name the family does not serve (jira
+/// `["search_index", "made_up"]`) is index-only once `made_up` is pruned. The
+/// index tools are served, `made_up` is reported as a tool left out, and no
+/// "family not ported" line appears: the family IS ported.
+#[tokio::test]
+async fn index_tools_with_an_unknown_name_stand_alone_and_report_the_name() {
+    use super::materialize::LeftOutReason;
+    let (authority, _) = lend(false);
+    let version = json!({"tools": [{
+        "id": 51,
+        "type": "jira",
+        "toolkit_name": "tracker",
+        "indexes": catalog_value(),
+        "settings": {
+            "jira_configuration": {
+                "base_url": "https://tenant.atlassian.net/",
+                "hosting": "Auto",
+                "username": "",
+                "api_key": null,
+                "token": "jira-private-token"
+            },
+            "api_version": "Auto",
+            "limit": 5,
+            "verify_ssl": true,
+            "selected_tools": ["search_index", "made_up"]
+        }
+    }]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy().as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy(),
+        &Map::new(),
+        None,
+        IndexToolSupport::Lent(&authority),
+    )
+    .await
+    .expect("materialized");
+    assert_eq!(materialized.toolsets.len(), 1);
+    assert_eq!(tool_names(&materialized.toolsets).await, ["search_index"]);
+    assert_eq!(
+        materialized.left_out.len(),
+        1,
+        "{:?}",
+        materialized.left_out
+    );
+    assert_eq!(materialized.left_out[0].tool_name(), Some("made_up"));
+    assert_eq!(
+        materialized.left_out[0].cause(),
+        LeftOutReason::ToolNotServed
+    );
+}

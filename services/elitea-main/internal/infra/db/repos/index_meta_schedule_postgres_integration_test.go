@@ -34,7 +34,7 @@ CREATE TABLE p_1.elitea_tools (
 );
 INSERT INTO p_1.elitea_tools (
     id, type, name, settings, author_id, meta
-) VALUES (
+, created_at) VALUES (
     19,
     'github',
     'Project one source',
@@ -47,7 +47,7 @@ INSERT INTO p_1.elitea_tools (
        },
        "unrelated":{"preserve":true}
      }'::jsonb
-);
+, now() AT TIME ZONE 'UTC');
 
 INSERT INTO centry.project (id, create_success, suspended)
 VALUES (2, TRUE, FALSE);
@@ -67,14 +67,14 @@ CREATE TABLE p_2.elitea_tools (
 );
 INSERT INTO p_2.elitea_tools (
     id, type, name, settings, author_id, meta
-) VALUES (
+, created_at) VALUES (
     19,
     'github',
     'Project two source',
     '{}'::jsonb,
     12,
     '{"indexes_meta":{"Docs":{"schedules":{"12":{"enabled":true}}}}}'::jsonb
-)`); err != nil {
+, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 

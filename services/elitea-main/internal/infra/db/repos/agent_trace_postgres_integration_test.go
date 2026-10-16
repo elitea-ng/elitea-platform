@@ -281,8 +281,8 @@ func seedCurrentAgentResponseGroup(
 	t.Helper()
 	if _, err := pool.Exec(t.Context(), `
 WITH conversation AS (
-    INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-    VALUES ($1, 'trace', 7, 'agent')
+    INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+    VALUES ($1, 'trace', 7, 'agent', now() AT TIME ZONE 'UTC')
     RETURNING id
 ),
 participant AS (
@@ -293,9 +293,9 @@ participant AS (
 )
 INSERT INTO p_1.chat_message_group (
     uuid, author_participant_id, conversation_id, meta, is_streaming, task_id
-)
+, created_at)
 SELECT $2, participant.id, conversation.id,
-       jsonb_build_object('execution_generation', $3::text), TRUE, $4
+       jsonb_build_object('execution_generation', $3::text), TRUE, $4, now() AT TIME ZONE 'UTC'
 FROM conversation, participant`,
 		conversationID,
 		responseID,

@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/localturn"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
 )
 
 // LocalTurnsRepo implements localturn.Store.
@@ -102,6 +103,11 @@ func (r *LocalTurnsRepo) StartLocalTurn(ctx context.Context, record localturn.St
 
 	target, err := resolveLocalTurnTarget(ctx, tx, schema, record.ConversationUUID, record.ActorUserID, record.ParticipantID)
 	if err != nil {
+		return localturn.StartedTurn{}, err
+	}
+	// The handoff fence (ADR-0034 decision 7), under the thread's shared
+	// lock, so a send cannot begin between this check and the new turn.
+	if err := refuseLocalTurnWhileHandedOff(ctx, tx, record.ProjectID, record.ConversationUUID); err != nil {
 		return localturn.StartedTurn{}, err
 	}
 	applicationID, versionID, err := readLocalTurnAgent(ctx, tx, schema, target.conversationID, target.targetID, record.ProjectID)
@@ -245,6 +251,9 @@ FOR UPDATE`, record.ExecutionID, record.ProjectID, strconv.FormatInt(record.Acto
 	if expired {
 		return localturn.CommittedTurn{}, localturn.ErrExpired
 	}
+	if err := refuseLocalTurnWhileHandedOff(ctx, tx, record.ProjectID, turn.ConversationUUID); err != nil {
+		return localturn.CommittedTurn{}, err
+	}
 	target, err := resolveLocalTurnTarget(ctx, tx, schema, turn.ConversationUUID, record.ActorUserID, participant)
 	if err != nil {
 		return localturn.CommittedTurn{}, err
@@ -257,6 +266,13 @@ FOR UPDATE`, record.ExecutionID, record.ProjectID, strconv.FormatInt(record.Acto
 	// the old backdating: its "previous turn" boundary reads a local turn's
 	// started_at instead of its question's created_at
 	// (MemoriesRepo.ResolveCurrentMemoryRecall).
+	//
+	// created_at is a `timestamp` WITHOUT time zone holding the UTC wall
+	// clock (legacy and the web client read it as UTC). The clock is taken
+	// AT TIME ZONE 'UTC', and the question's naive value goes back as a
+	// `timestamp`, never as a timestamptz: a naive value cast to timestamptz
+	// is read in the SESSION time zone, which dated the answer hours before
+	// its question on a non-UTC server.
 	var (
 		questionGroup int64
 		questionAt    time.Time
@@ -265,7 +281,7 @@ FOR UPDATE`, record.ExecutionID, record.ProjectID, strconv.FormatInt(record.Acto
 INSERT INTO %[1]s.chat_message_group
     (uuid, author_participant_id, conversation_id, sent_to_id, meta, is_streaming, created_at)
 VALUES ($1::uuid, $2, $3, $4, $5::jsonb, FALSE, GREATEST(
-    clock_timestamp(),
+    clock_timestamp() AT TIME ZONE 'UTC',
     (SELECT max(created_at) + interval '1 millisecond'
      FROM %[1]s.chat_message_group WHERE conversation_id = $3)))
 RETURNING id, created_at`, schema),
@@ -282,7 +298,7 @@ RETURNING id, created_at`, schema),
 	err = tx.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.chat_message_group
     (uuid, author_participant_id, conversation_id, reply_to_id, meta, is_streaming, created_at, task_id)
-VALUES ($1::uuid, $2, $3, $4, $5::jsonb, FALSE, $7::timestamptz + interval '1 millisecond', $6)
+VALUES ($1::uuid, $2, $3, $4, $5::jsonb, FALSE, $7::timestamp + interval '1 millisecond', $6)
 RETURNING id`, schema),
 		turn.ResponseMessageID, target.targetID, target.conversationID, questionGroup,
 		string(record.ResponseMeta), record.ExecutionID, questionAt,
@@ -328,8 +344,8 @@ RETURNING committed_at`, record.ExecutionID, record.Digest[:]).Scan(&turn.Commit
 func insertLocalTurnText(ctx context.Context, tx pgx.Tx, schema string, groupID int64, content string) error {
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`
 WITH item AS (
-    INSERT INTO %[1]s.chat_message_items (uuid, item_type, order_index, meta, message_group_id)
-    VALUES (gen_random_uuid(), 'text_message', 0, '{}'::jsonb, $1)
+    INSERT INTO %[1]s.chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
+    VALUES (gen_random_uuid(), 'text_message', 0, '{}'::jsonb, $1, now() AT TIME ZONE 'UTC')
     RETURNING id
 )
 INSERT INTO %[1]s.chat_messages_text (id, content)
@@ -494,4 +510,17 @@ VALUES ($1, $2, $3, $4, $5)`,
 		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: commit confirmation: %w", err)
 	}
 	return localturn.ConfirmationOutcome{Accepted: true}, nil
+}
+
+// refuseLocalTurnWhileHandedOff answers ErrThreadExecutorIsCloud unless the
+// desktop owns the thread (state LOCAL, or no handoff row).
+func refuseLocalTurnWhileHandedOff(ctx context.Context, tx pgx.Tx, projectID int64, conversationUUID string) error {
+	state, err := workspaceThreadState(ctx, tx, projectID, conversationUUID)
+	if err != nil {
+		return err
+	}
+	if state != workspacestore.StateLocal {
+		return localturn.ErrThreadExecutorIsCloud
+	}
+	return nil
 }
