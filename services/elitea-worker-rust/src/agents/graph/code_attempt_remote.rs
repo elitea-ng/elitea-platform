@@ -609,7 +609,7 @@ impl RemoteCodeRuntime {
                             true,
                         ))
                     }
-                    SandboxOutcome::Failed { .. } => {
+                    SandboxOutcome::Failed { code } => {
                         let _resolved = self
                             .journal
                             .resolve(
@@ -643,7 +643,7 @@ impl RemoteCodeRuntime {
                                 });
                         Err(classify(
                             CodeAttemptPhase::Observation,
-                            NodeFailureClass::InvalidResult,
+                            terminal_failure_class(&code, invocation.platform_client || effect_possible),
                             invocation.activation,
                             effect_possible,
                         ))
@@ -832,6 +832,25 @@ where
         retry_transient_main(deadline, &mut proof).await,
         Ok(CodePlatformEffects::None)
     )
+}
+
+/// The class of a definite `failed` runtime phase. A runtime the supervisor
+/// proved lost (node loss, eviction, a platform kill) is re-run by the platform
+/// allowance only when it had no way to leave an effect: a runtime without the
+/// platform client has no network. A platform-client runtime is never re-run,
+/// because Main's journal answers "nothing unresolved" also for calls that
+/// already committed, and a re-run would repeat them under new identities.
+/// Everything else, including the user's own error, is never re-run.
+fn terminal_failure_class(code: &str, may_have_effects: bool) -> NodeFailureClass {
+    if code == crate::sandbox::runtime_loss::FAILURE_CODE && !may_have_effects {
+        tracing::warn!(
+            event = "code_runtime_lost",
+            "the sandbox runtime was lost before it reported a result"
+        );
+        NodeFailureClass::RuntimeLost
+    } else {
+        NodeFailureClass::InvalidResult
+    }
 }
 
 pub(super) fn workspace_attempt_failure(

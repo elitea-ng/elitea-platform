@@ -30,6 +30,7 @@ pub mod process;
 pub mod request;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod runtime;
+pub mod runtime_loss;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod runtime_workspace;
 #[cfg(feature = "sandbox-supervisor")]
