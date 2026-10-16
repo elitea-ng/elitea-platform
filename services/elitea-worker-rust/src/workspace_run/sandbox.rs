@@ -56,6 +56,10 @@ pub(crate) struct WorkspaceRunSpec {
     pub(crate) memory_bytes: u64,
     pub(crate) pids_limit: i64,
     pub(crate) turn_wall: Duration,
+    /// The runner's archive limits (the policy's file caps).
+    pub(crate) max_files: u64,
+    pub(crate) max_file_bytes: u64,
+    pub(crate) max_total_bytes: u64,
 }
 
 /// Why a workspace run cannot be specified or driven. Data-free.
@@ -71,6 +75,8 @@ pub(crate) enum SandboxRunError {
     Protocol,
     /// The run hit its wall time.
     Timeout,
+    /// The workspace grew past its cap (the runner refused to pack it).
+    WorkspaceOverCap,
 }
 
 impl SandboxRunError {
@@ -82,6 +88,7 @@ impl SandboxRunError {
             Self::Unavailable => "workspace_run.sandbox_unavailable",
             Self::Protocol => "workspace_run.sandbox_protocol",
             Self::Timeout => "workspace_run.timeout",
+            Self::WorkspaceOverCap => "workspace_run.workspace_over_cap",
         }
     }
 }
@@ -145,12 +152,32 @@ impl WorkspaceRunSpec {
             } else {
                 Duration::from_secs(limits.turn_wall_seconds).min(defaults.turn_wall)
             },
+            max_files: limits.max_files,
+            max_file_bytes: limits.max_file_bytes,
+            max_total_bytes: limits.max_unpacked_bytes.min(workspace_bytes),
         })
     }
 }
 
 impl WorkspaceRunSpec {
-    /// The backend-independent container of this run, in `image`.
+    /// The wire spec the supervisor renders (its own image).
+    #[must_use]
+    pub(crate) fn to_wire(&self) -> crate::protocol::elitea::runtime::v1::WorkspaceRunSpecV1 {
+        crate::protocol::elitea::runtime::v1::WorkspaceRunSpecV1 {
+            revision: 1,
+            name: self.run_id.clone(),
+            workspace_bytes: self.workspace_bytes,
+            egress: self.network == WorkspaceNetwork::PublicEgress,
+            cpu_millis: self.cpu_millis,
+            memory_bytes: self.memory_bytes,
+            pids_limit: self.pids_limit,
+            wall_seconds: self.turn_wall.as_secs().max(1),
+        }
+    }
+
+    /// The backend-independent container of this run, in `image` (the
+    /// supervisor renders it; tests check the rendering here).
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn container(
         &self,
@@ -184,6 +211,31 @@ pub(crate) trait WorkspaceSandbox: Send + Sync {
         args: Value,
     ) -> Result<Value, SandboxRunError>;
 
+    /// As [`Self::call_tool`] for a call a person approved through the
+    /// server's HITL interrupt: the runner runs it although its rules ask.
+    async fn call_tool_approved(
+        &self,
+        tool: &str,
+        call_id: &str,
+        args: Value,
+        approved: bool,
+    ) -> Result<Value, SandboxRunError> {
+        let _ = approved;
+        self.call_tool(tool, call_id, args).await
+    }
+
+    /// Whether `command` must be approved by a person before it runs (the
+    /// runner's classification, ADR-0029 addendum item 3). The default
+    /// asks: a sandbox that cannot classify never runs a command unasked.
+    async fn classify_command(
+        &self,
+        command: &str,
+        cwd: Option<&str>,
+    ) -> Result<bool, SandboxRunError> {
+        let _ = (command, cwd);
+        Ok(true)
+    }
+
     /// Move the container's tree out into `worktree` (an empty directory).
     async fn pull_tree(&self, worktree: &Path) -> Result<(), SandboxRunError>;
 
@@ -201,7 +253,35 @@ pub(crate) trait WorkspaceSandboxLauncher: Send + Sync {
         &self,
         spec: &WorkspaceRunSpec,
         env: &super::redact::SecretEnv,
+        grants: Arc<dyn WorkspaceRunGrants>,
     ) -> Result<Arc<dyn WorkspaceSandbox>, SandboxRunError>;
+}
+
+/// Main's sandbox grants for one turn's workspace run, bound to the claim.
+#[async_trait]
+pub(crate) trait WorkspaceRunGrants: Send + Sync {
+    /// A grant for `digest` (`sandbox::workspace_run::spec_digest`) with
+    /// the run's name as its activation.
+    async fn grant(
+        &self,
+        activation_id: &str,
+        digest: [u8; 32],
+    ) -> Result<crate::protocol::elitea::runtime::v1::SignedSandboxJobGrantV1, SandboxRunError>;
+}
+
+/// No claim authority: every grant is refused.
+pub(crate) struct NoGrants;
+
+#[async_trait]
+impl WorkspaceRunGrants for NoGrants {
+    async fn grant(
+        &self,
+        _activation_id: &str,
+        _digest: [u8; 32],
+    ) -> Result<crate::protocol::elitea::runtime::v1::SignedSandboxJobGrantV1, SandboxRunError>
+    {
+        Err(SandboxRunError::Unavailable)
+    }
 }
 
 #[cfg(test)]

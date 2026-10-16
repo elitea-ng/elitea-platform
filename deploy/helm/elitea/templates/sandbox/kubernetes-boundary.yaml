@@ -69,7 +69,9 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [pods]
-    verbs: [create, get, patch, delete]
+    # list: the workspace-run sweep (ADR-0034) finds runs past their wall by
+    # label after a supervisor restart.
+    verbs: [create, get, list, patch, delete]
   - apiGroups: [""]
     resources: [pods/exec]
     verbs: [create, get]

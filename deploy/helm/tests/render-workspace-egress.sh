@@ -62,4 +62,60 @@ if helm template sandbox "$chart" "${base[@]}" --set sandboxKubernetes.workspace
   echo "workspace egress without the cluster ranges was accepted" >&2; exit 1
 fi
 grep -Fq 'podCidrs and serviceCidrs' "$work/invalid"
+# The worker's workspace runs (ADR-0034): written to runtime.json for the Rust
+# worker, with the audience Main signs grants for; refused otherwise.
+cat > "$work/runs.yaml" <<'YAML'
+main:
+  runtime:
+    sandboxAudiences: [dns:elitea-sandbox-workspace]
+worker:
+  enabled: true
+  implementation: rust
+  runtime:
+    workspaceRuns:
+      target: elitea-sandbox-workspace:9470
+      audience: dns:elitea-sandbox-workspace
+      scratch_root: /var/lib/elitea-worker/workspaces
+      cpu_millis: 4000
+      memory_bytes: 8589934592
+      max_disk_bytes: 10737418240
+      turn_wall_seconds: 3600
+YAML
+worker=(-f "$chart/values-standalone.yaml" -f "$work/runs.yaml"
+  --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
+  --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
+  --set worker.indexingRuntime=python)
+helm template test "$chart" "${worker[@]}" --show-only templates/worker/configmap-runtime.yaml > "$work/runs-config.yaml"
+python3 - "$work/runs-config.yaml" <<'PY'
+import json, sys, yaml
+config = json.loads(yaml.safe_load(open(sys.argv[1]))['data']['runtime.json'])
+runs = config['workspace_runs']
+assert runs == {'target': 'elitea-sandbox-workspace:9470', 'audience': 'dns:elitea-sandbox-workspace',
+                'scratch_root': '/var/lib/elitea-worker/workspaces', 'cpu_millis': 4000,
+                'memory_bytes': 8589934592, 'max_disk_bytes': 10737418240,
+                'turn_wall_seconds': 3600}, runs
+PY
+# Absent by default.
+helm template test "$chart" -f "$chart/values-standalone.yaml" \
+  --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1 \
+  --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
+  --set worker.enabled=true --set worker.implementation=rust --set worker.indexingRuntime=python \
+  --show-only templates/worker/configmap-runtime.yaml > "$work/default-config.yaml"
+! grep -q workspace_runs "$work/default-config.yaml"
+# An audience Main does not sign for is refused.
+if helm template test "$chart" "${worker[@]}" --set 'main.runtime.sandboxAudiences[0]=dns:other' \
+    --show-only templates/worker/configmap-runtime.yaml > "$work/bad" 2>&1; then
+  echo "a workspace-run audience Main does not sign for was accepted" >&2; exit 1
+fi
+grep -Fq 'must be in main.runtime.sandboxAudiences' "$work/bad"
+# The supervisor may list Pods (the workspace-run sweep).
+helm template sandbox "$chart" "${base[@]}" "${on[@]}" > "$work/rbac.yaml"
+python3 - "$work/rbac.yaml" <<'PY'
+import sys, yaml
+roles = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d and d['kind'] == 'Role'
+         and d['metadata']['name'] == 'elitea-code-supervisor']
+assert roles, 'the supervisor role renders'
+pods = [r for r in roles[0]['rules'] if r['resources'] == ['pods']][0]
+assert 'list' in pods['verbs'], pods
+PY
 echo "workspace egress render: ok"

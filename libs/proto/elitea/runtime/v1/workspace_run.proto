@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package elitea.runtime.v1;
+
+import "elitea/runtime/v1/sandbox.proto";
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+
+// The cloud executor's workspace runs on the sandbox supervisor (ADR-0034
+// decision 9).
+//
+// A workspace run is one long-lived container (Docker) or Pod (Kubernetes)
+// per cloud turn, running the workspace runner image. The worker never
+// reaches Docker or Kubernetes: it asks the supervisor's dedicated
+// `workspace` profile (its own listener, audience and image) to start the
+// run, to exec the runner's three operations in it (`unpack`, `serve`,
+// `pack`) with stdin and stdout streamed over this service, and to destroy
+// it. Nothing a model chose is a selector here: the supervisor composes the
+// runner's argv itself from the operation and the validated spec, and
+// renders the container from its own configuration plus the spec.
+//
+// Authority is Main's existing sandbox grant (SignedSandboxJobGrantV1,
+// revision 1, from RuntimeControlService.AuthorizeSandboxJob) whose
+// request_digest is SHA-256 over the domain
+// "elitea.sandbox.workspace-run.v1\x00" followed by the canonical spec
+// encoding (see the supervisor's `workspace_run_service.rs`), whose
+// activation_id is the spec's name, and whose audience is the workspace
+// profile's. The run carries the digest and the grant's activation scope as
+// labels; exec and destroy are refused for a run whose labels are not the
+// grant's. A grant lives at most 30 seconds; an exec stream that started
+// under a valid grant runs to its end.
+
+// WorkspaceRunSpecV1 is the backend-independent container of one run.
+message WorkspaceRunSpecV1 {
+  // Exactly 1.
+  uint32 revision = 1;
+  // A DNS label `elitea-ws-<24 hex>`, stable for one claim and epoch.
+  string name = 2;
+  // The disk-backed workspace volume's size: the declared unpacked tree plus
+  // build headroom. Also the runner's workspace cap.
+  uint64 workspace_bytes = 3;
+  // The project's network switch: true is the public internet minus the
+  // deny ranges (the egress network or label), false is no network.
+  bool egress = 4;
+  uint64 cpu_millis = 5;
+  uint64 memory_bytes = 6;
+  int64 pids_limit = 7;
+  // The turn's wall time; the supervisor removes the run after it (plus a
+  // grace) even when the worker never destroys it.
+  uint64 wall_seconds = 8;
+  reserved 9 to 15;
+}
+
+message StartWorkspaceRunRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  WorkspaceRunSpecV1 spec = 2;
+  reserved 3 to 15;
+}
+
+// A repeated start of the same run (a retry after a lost acknowledgement)
+// observes the existing run and answers `created` false.
+message StartWorkspaceRunResponseV1 {
+  bool created = 1;
+  reserved 2 to 15;
+}
+
+enum WorkspaceRunOperationV1 {
+  WORKSPACE_RUN_OPERATION_V1_UNSPECIFIED = 0;
+  // stdin: a workspace archive. stdout: nothing.
+  WORKSPACE_RUN_OPERATION_V1_UNPACK = 1;
+  // stdin: the env handshake line, then one tool call per line. stdout: one
+  // JSON result per line. Lives for the turn.
+  WORKSPACE_RUN_OPERATION_V1_SERVE = 2;
+  // stdin: nothing. stdout: a workspace archive.
+  WORKSPACE_RUN_OPERATION_V1_PACK = 3;
+}
+
+// The runner's own limits for one exec, bounded by the supervisor.
+message WorkspaceRunLimitsV1 {
+  uint64 max_files = 1;
+  uint64 max_file_bytes = 2;
+  uint64 max_total_bytes = 3;
+  reserved 4 to 15;
+}
+
+// The first frame of an exec stream.
+message WorkspaceRunExecOpenV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  WorkspaceRunSpecV1 spec = 2;
+  WorkspaceRunOperationV1 operation = 3;
+  WorkspaceRunLimitsV1 limits = 4;
+  // SERVE only: the runner policy JSON (shell, network, command allow and
+  // deny lists). No secret: the env rides stdin.
+  string policy_json = 5;
+  reserved 6 to 15;
+}
+
+// Worker to supervisor: the open frame, then stdin chunks (at most 32 KiB),
+// then stdin_end. Closing the stream without stdin_end aborts the exec.
+message WorkspaceRunExecInputV1 {
+  oneof frame {
+    WorkspaceRunExecOpenV1 open = 1;
+    bytes stdin = 2;
+    bool stdin_end = 3;
+  }
+  reserved 4 to 15;
+}
+
+// The exec's end. failure_code is the runner's stable code (its stderr
+// `elitea-workspace-runner: <code>` line), or a supervisor code; never
+// output.
+message WorkspaceRunExecExitV1 {
+  int32 exit_code = 1;
+  string failure_code = 2;
+  reserved 3 to 15;
+}
+
+// Supervisor to worker: stdout chunks (at most 32 KiB), then exactly one
+// exit frame.
+message WorkspaceRunExecOutputV1 {
+  oneof frame {
+    bytes stdout = 1;
+    WorkspaceRunExecExitV1 exit = 2;
+  }
+  reserved 3 to 15;
+}
+
+message DestroyWorkspaceRunRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  WorkspaceRunSpecV1 spec = 2;
+  reserved 3 to 15;
+}
+
+// Idempotent: destroying a run that is gone answers `destroyed` false.
+message DestroyWorkspaceRunResponseV1 {
+  bool destroyed = 1;
+  reserved 2 to 15;
+}
+
+service WorkspaceRunService {
+  rpc StartWorkspaceRun(StartWorkspaceRunRequestV1) returns (StartWorkspaceRunResponseV1);
+  rpc ExecWorkspaceRun(stream WorkspaceRunExecInputV1) returns (stream WorkspaceRunExecOutputV1);
+  rpc DestroyWorkspaceRun(DestroyWorkspaceRunRequestV1) returns (DestroyWorkspaceRunResponseV1);
+}

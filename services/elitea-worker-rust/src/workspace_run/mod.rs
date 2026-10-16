@@ -6,23 +6,24 @@
 //! it for secrets, and at the end of the turn commits, bundles, uploads and
 //! publishes. The sandbox only runs the tools.
 //!
-//! Composition: `agents::ordinary` takes a [`turn::WorkspaceRunFactory`]
-//! (`with_workspace_runs`). Production builds none until the sandbox
-//! supervisor serves workspace runs (a [`sandbox::WorkspaceSandboxLauncher`]
-//! over its helper protocol); until then a cloud turn fails with
-//! `workspace_run.unavailable` instead of running without its files.
-#![allow(
-    dead_code,
-    reason = "composed once the sandbox supervisor serves workspace runs (ADR-0034 executor deviations)"
-)]
+//! Composition: `bootstrap.rs` builds a [`turn::WorkspaceRunFactory`] when
+//! the deployment names the sandbox supervisor's `workspace` profile
+//! (`workspace_runs` in the runtime config): the gRPC store, the gix codec,
+//! the [`supervisor::SupervisorWorkspaceLauncher`] and claim-bound grants.
+//! `agents::ordinary` takes it (`with_workspace_runs`). Without it a cloud
+//! turn fails with `workspace_run.unavailable` instead of running without
+//! its files.
 
 pub(crate) mod codec;
 pub(crate) mod context;
+pub(crate) mod file_redact;
 pub(crate) mod gix_codec;
+pub(crate) mod pr_diff;
 pub(crate) mod redact;
 pub(crate) mod sandbox;
 pub(crate) mod scan;
 pub(crate) mod store;
+pub(crate) mod supervisor;
 pub(crate) mod tools;
 pub(crate) mod turn;
 #[cfg(test)]

@@ -139,6 +139,17 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
         self
     }
 
+    /// Lend the cloud executor's workspace runs to direct agents (ADR-0034);
+    /// a pipeline refuses a workspace turn.
+    #[must_use]
+    pub(crate) fn with_workspace_runs(
+        mut self,
+        workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
+    ) -> Self {
+        self.direct = self.direct.with_workspace_runs(workspace_runs);
+        self
+    }
+
     /// Compose both native modes over the same authorized `agentstate` pool.
     ///
     /// Direct agents consume only the session writer. Pipelines consume a

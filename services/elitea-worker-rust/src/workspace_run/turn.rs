@@ -56,6 +56,9 @@ pub(crate) struct WorkspaceStamp {
     pub(crate) workspace_epoch: u64,
     pub(crate) workspace_commit: String,
     pub(crate) seq: u64,
+    /// The files whose harvested-env values were redacted (or whose change
+    /// was dropped) before the commit: paths and names, never values.
+    pub(crate) redactions: Vec<super::file_redact::FileRedaction>,
 }
 
 /// Why a workspace turn failed. Data-free.
@@ -73,6 +76,9 @@ pub(crate) enum WorkspaceRunError {
     },
     /// The secret scan could not complete.
     ScanFailed,
+    /// The changed files could not be scanned for harvested values; nothing
+    /// is published unscanned.
+    RedactionFailed,
     /// Blocking work did not complete.
     Internal,
 }
@@ -97,6 +103,7 @@ impl WorkspaceRunError {
             Self::StaleState => "workspace_run.stale_state",
             Self::SecretFound { .. } => "workspace_run.secret_found",
             Self::ScanFailed => "workspace_run.scan_failed",
+            Self::RedactionFailed => "workspace_run.redaction_failed",
             Self::Internal => "workspace_run.internal",
         }
     }
@@ -109,7 +116,17 @@ pub(crate) struct WorkspaceRunFactory {
     launcher: Arc<dyn WorkspaceSandboxLauncher>,
     defaults: WorkspaceRunDefaults,
     scratch_root: PathBuf,
+    grant_binder: Option<GrantBinder>,
 }
+
+/// Turns a claim's sandbox authority into a grant source.
+pub(crate) type GrantBinder = Arc<
+    dyn Fn(
+            Arc<crate::protocol::control::ClaimBoundSandboxAuthority>,
+        ) -> Arc<dyn super::sandbox::WorkspaceRunGrants>
+        + Send
+        + Sync,
+>;
 
 impl WorkspaceRunFactory {
     #[must_use]
@@ -126,13 +143,28 @@ impl WorkspaceRunFactory {
             launcher,
             defaults,
             scratch_root,
+            grant_binder: None,
         }
     }
 
-    /// The store, for the `open_pull_request` tool's diff.
+    /// The claim-bound grant source of one turn (`None`: no authority, the
+    /// launch is refused).
     #[must_use]
-    pub(crate) fn store(&self) -> Arc<dyn WorkspaceStore> {
-        Arc::clone(&self.store)
+    pub(crate) fn grants(
+        &self,
+        authority: Option<Arc<crate::protocol::control::ClaimBoundSandboxAuthority>>,
+    ) -> Arc<dyn super::sandbox::WorkspaceRunGrants> {
+        match (&self.grant_binder, authority) {
+            (Some(binder), Some(authority)) => binder(authority),
+            _ => Arc::new(super::sandbox::NoGrants),
+        }
+    }
+
+    /// Bind grants to claims through Main's control plane (production).
+    #[must_use]
+    pub(crate) fn with_grant_binder(mut self, binder: GrantBinder) -> Self {
+        self.grant_binder = Some(binder);
+        self
     }
 
     /// Hydrate the thread and start the turn's sandbox.
@@ -150,18 +182,22 @@ impl WorkspaceRunFactory {
         context: &WorkspaceRuntimeContext,
         claim: WorkspaceClaimV1,
         execution_id: &str,
+        grants: Arc<dyn super::sandbox::WorkspaceRunGrants>,
     ) -> Result<Arc<WorkspaceTurn>, WorkspaceRunError> {
         let limits = &context.limits;
-        let fetched = self
-            .store
-            .fetch(&claim, 0, limits.max_segment_bytes)
-            .await
-            .map_err(WorkspaceRunError::Store)?;
-        let checkout = checkout_commit(context, &fetched.segment.refs)?;
+        // The segment goes to the worker's disk (the turn's scratch), never
+        // into one buffer (item 4 of the executor follow-up).
         let scratch = tempfile::Builder::new()
             .prefix("elitea-workspace-")
             .tempdir_in(&self.scratch_root)
             .map_err(|_| WorkspaceRunError::Internal)?;
+        let segment_file = scratch.path().join("fetched.bundle");
+        let fetched = self
+            .store
+            .fetch(&claim, 0, limits.max_segment_bytes, &segment_file)
+            .await
+            .map_err(WorkspaceRunError::Store)?;
+        let checkout = checkout_commit(context, &fetched.segment.refs)?;
         let git_dir = scratch.path().join("store.git");
         let worktree = scratch.path().join("in");
         for directory in [&git_dir, &worktree] {
@@ -178,11 +214,12 @@ impl WorkspaceRunFactory {
         let codec = Arc::clone(&self.codec);
         let (hydrate_git, hydrate_tree, hydrate_checkout) =
             (git_dir.clone(), worktree.clone(), checkout.clone());
-        let segment = fetched.bytes;
+        let segment = segment_file.clone();
+        let hydrate_expect = expect.clone();
         let hydrated = tokio::task::spawn_blocking(move || {
             codec.hydrate(
                 &segment,
-                &expect,
+                &hydrate_expect,
                 &hydrate_checkout,
                 &hydrate_git,
                 &hydrate_tree,
@@ -191,6 +228,62 @@ impl WorkspaceRunFactory {
         .await
         .map_err(|_| WorkspaceRunError::Internal)?
         .map_err(WorkspaceRunError::Codec)?;
+        // Verified and indexed into the quarantine: the file is not needed.
+        let _ = std::fs::remove_file(&segment_file);
+        let mut refs = fetched.segment.refs;
+        let mut expected_old = context.expected_old_cloud.clone();
+        let (checkout, worktree) = if context.rewind {
+            // Regenerate of the newest cloud turn (decision 7): the cloud
+            // ref moves back to that turn's parent through the normal
+            // publish compare-and-set, before anything runs, and this turn
+            // starts from the parent.
+            let cloud = expected_old.clone().ok_or(WorkspaceRunError::StaleState)?;
+            let rewound = scratch.path().join("rewound");
+            std::fs::create_dir_all(&rewound).map_err(|_| WorkspaceRunError::Internal)?;
+            let out = scratch.path().join("rewind.bundle");
+            let (codec, git, tree, file, rewind_expect, from) = (
+                Arc::clone(&self.codec),
+                git_dir.clone(),
+                rewound.clone(),
+                out.clone(),
+                expect.clone(),
+                cloud.clone(),
+            );
+            let max = limits.max_segment_bytes;
+            let (parent, built) = tokio::task::spawn_blocking(move || {
+                codec.rewind(&git, &rewind_expect, &from, &tree, max, &file)
+            })
+            .await
+            .map_err(|_| WorkspaceRunError::Internal)?
+            .map_err(WorkspaceRunError::Codec)?;
+            retry_once(|| {
+                self.store
+                    .upload(&claim, &built.sha256, built.bytes, &built.path)
+            })
+            .await
+            .map_err(WorkspaceRunError::Store)?;
+            let request = PublishSegment {
+                segment_sha256: built.sha256.clone(),
+                bytes: built.bytes,
+                old_cloud: Some(cloud),
+                new_cloud: parent.clone(),
+            };
+            retry_once(|| self.store.publish(&claim, &request))
+                .await
+                .map_err(WorkspaceRunError::Store)?;
+            let _ = std::fs::remove_file(&out);
+            tracing::info!(
+                event = "workspace.rewound",
+                execution_id,
+                epoch = context.epoch,
+                "regenerate: the cloud ref moved back to the regenerated turn's parent"
+            );
+            refs.insert(REF_CLOUD.to_owned(), parent.clone());
+            expected_old = Some(parent.clone());
+            (parent, rewound)
+        } else {
+            (checkout, worktree)
+        };
 
         // Defence in depth (decision 5): the desktop scanned before upload.
         let scan_root = worktree.clone();
@@ -246,9 +339,10 @@ impl WorkspaceRunFactory {
             SecretEnv::default()
         };
         let redactor = env.redactor();
+        let file_redactor = Arc::new(super::file_redact::FileRedactor::new(&env));
         let raw = self
             .launcher
-            .launch(&spec, &env)
+            .launch(&spec, &env, grants)
             .await
             .map_err(WorkspaceRunError::Sandbox)?;
         drop(env);
@@ -265,11 +359,12 @@ impl WorkspaceRunFactory {
             scratch,
             git_dir,
             parent: checkout,
-            expected_old: context.expected_old_cloud.clone(),
-            refs: fetched.segment.refs,
+            expected_old,
+            refs,
             epoch: context.epoch,
             execution_id: execution_id.to_owned(),
             max_segment_bytes: limits.max_segment_bytes,
+            file_redactor,
             outcome: Mutex::new(None),
         }))
     }
@@ -316,6 +411,8 @@ pub(crate) struct WorkspaceTurn {
     epoch: u64,
     execution_id: String,
     max_segment_bytes: u64,
+    /// The harvested values, for the end-of-turn file scan.
+    file_redactor: Arc<super::file_redact::FileRedactor>,
     outcome: Mutex<Option<Result<Option<WorkspaceStamp>, WorkspaceRunError>>>,
 }
 
@@ -326,10 +423,62 @@ impl WorkspaceTurn {
         Arc::clone(&self.sandbox)
     }
 
-    /// The claim binding the turn's store calls carry.
-    #[must_use]
-    pub(crate) const fn claim(&self) -> &WorkspaceClaimV1 {
-        &self.claim
+    /// The pull-request diff (ADR-0034 decision 10), computed here from the
+    /// turn's own repository: U from the verified quarantine, the workspace
+    /// as it is now, moved out of the sandbox and redacted exactly as the
+    /// end-of-turn commit would be, so no harvested value reaches a pull
+    /// request either.
+    ///
+    /// # Errors
+    ///
+    /// No upstream, a diff over its limits, binary, or empty; or the
+    /// workspace could not be read.
+    pub(crate) async fn pull_request_diff(
+        &self,
+    ) -> Result<
+        elitea_agent_runtime::toolkits::workspace_pull_request::WorkspaceDiff,
+        elitea_agent_runtime::toolkits::workspace_pull_request::DiffUnavailable,
+    > {
+        use elitea_agent_runtime::toolkits::workspace_pull_request::DiffUnavailable;
+        let failed = || {
+            DiffUnavailable::Failed("The workspace could not be read; no pull request was opened.")
+        };
+        let upstream = self
+            .refs
+            .get(super::store::REF_UPSTREAM)
+            .cloned()
+            .ok_or(DiffUnavailable::NoUpstream)?;
+        let view = tempfile::Builder::new()
+            .prefix("pull-request-")
+            .tempdir_in(self.scratch.path())
+            .map_err(|_| failed())?;
+        self.sandbox
+            .pull_tree(view.path())
+            .await
+            .map_err(|_| failed())?;
+        let (redactor, codec, git_dir, parent, tree) = (
+            Arc::clone(&self.file_redactor),
+            Arc::clone(&self.codec),
+            self.git_dir.clone(),
+            self.parent.clone(),
+            view.path().to_path_buf(),
+        );
+        tokio::task::spawn_blocking(move || {
+            if !redactor.is_empty() {
+                let parent = codec
+                    .parent_files(&git_dir, &parent)
+                    .map_err(|_| failed())?;
+                redactor
+                    .redact_tree(&tree, parent.as_ref())
+                    .map_err(|_| failed())?;
+            }
+            let db =
+                elitea_workspace_store::objects::ObjectDb::open_objects(&git_dir.join("objects"))
+                    .map_err(|_| failed())?;
+            super::pr_diff::pull_request_diff(&db, &upstream, &tree)
+        })
+        .await
+        .map_err(|_| failed())?
     }
 
     /// End the turn. Returns the stamp of the published commit, or `None`
@@ -352,6 +501,10 @@ impl WorkspaceTurn {
         result
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the publish path in order: pull, destroy, redact, commit, upload, publish"
+    )]
     async fn finish_once(&self, end: TurnEnd) -> Result<Option<WorkspaceStamp>, WorkspaceRunError> {
         if end == TurnEnd::Failed {
             let _ = self.sandbox.destroy().await;
@@ -364,10 +517,53 @@ impl WorkspaceTurn {
         let _ = self.sandbox.destroy().await;
         pulled.map_err(WorkspaceRunError::Sandbox)?;
 
+        // Contract 6.4: no harvested value leaves in a file. Every changed
+        // or added file is scanned and redacted (binaries holding one are
+        // dropped) before anything is committed.
+        let redactions = {
+            let (redactor, codec, git_dir, parent, tree) = (
+                Arc::clone(&self.file_redactor),
+                Arc::clone(&self.codec),
+                self.git_dir.clone(),
+                self.parent.clone(),
+                out.clone(),
+            );
+            tokio::task::spawn_blocking(move || {
+                if redactor.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let parent = codec
+                    .parent_files(&git_dir, &parent)
+                    .map_err(|_| super::file_redact::FileRedactError::Io)?;
+                redactor.redact_tree(&tree, parent.as_ref())
+            })
+            .await
+            .map_err(|_| WorkspaceRunError::Internal)?
+            .map_err(|_| WorkspaceRunError::RedactionFailed)?
+        };
+        if !redactions.is_empty() {
+            tracing::warn!(
+                event = "workspace.env_redacted_in_files",
+                execution_id = self.execution_id.as_str(),
+                files = redactions.len(),
+                dropped = redactions
+                    .iter()
+                    .filter(|redaction| redaction.dropped)
+                    .count(),
+                "harvested env values were found in files the turn wrote and were redacted"
+            );
+        }
+        let mut trailers = String::new();
+        for redaction in &redactions {
+            trailers.push_str("Elitea-Redacted: ");
+            trailers.push_str(&redaction.path);
+            trailers.push('\n');
+        }
+
         let commit = TurnCommit {
             parent: self.parent.clone(),
             message: format!(
-                "Elitea cloud turn\n\nElitea-Execution-Id: {}\nElitea-Epoch: {}\n",
+                "Elitea cloud turn\n\nElitea-Execution-Id: {}\nElitea-Epoch: {}\n{trailers}",
                 self.execution_id, self.epoch
             ),
             author_name: COMMIT_AUTHOR_NAME.to_owned(),
@@ -380,19 +576,23 @@ impl WorkspaceTurn {
             self.refs.clone(),
             self.max_segment_bytes,
         );
+        let segment_out = self.scratch.path().join("turn.bundle");
         let built = tokio::task::spawn_blocking(move || {
-            codec.commit_and_bundle(&git_dir, &out, &commit, &refs, max)
+            codec.commit_and_bundle(&git_dir, &out, &commit, &refs, max, &segment_out)
         })
         .await
         .map_err(|_| WorkspaceRunError::Internal)?
         .map_err(WorkspaceRunError::Codec)?;
 
-        retry_once(|| self.store.upload(&self.claim, &built.sha256, &built.bytes))
-            .await
-            .map_err(WorkspaceRunError::Store)?;
+        retry_once(|| {
+            self.store
+                .upload(&self.claim, &built.sha256, built.bytes, &built.path)
+        })
+        .await
+        .map_err(WorkspaceRunError::Store)?;
         let request = PublishSegment {
             segment_sha256: built.sha256.clone(),
-            bytes: built.bytes.len() as u64,
+            bytes: built.bytes,
             old_cloud: self.expected_old.clone(),
             new_cloud: built.commit.clone(),
         };
@@ -413,6 +613,7 @@ impl WorkspaceTurn {
             workspace_epoch: self.epoch,
             workspace_commit: built.commit,
             seq: published.seq,
+            redactions,
         }))
     }
 }

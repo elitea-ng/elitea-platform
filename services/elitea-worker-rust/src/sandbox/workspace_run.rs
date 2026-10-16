@@ -28,10 +28,139 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
+use crate::protocol::elitea::runtime::v1::{
+    WorkspaceRunLimitsV1, WorkspaceRunOperationV1, WorkspaceRunSpecV1,
+};
+
 pub const KIND_LABEL: &str = "sandbox.elitea.ai/kind";
 pub const KIND_WORKSPACE_RUN: &str = "workspace-run";
 pub const EGRESS_LABEL: &str = "sandbox.elitea.ai/egress";
 pub const EGRESS_PUBLIC: &str = "public";
+/// The grant binding of a run (Kubernetes annotations, Docker labels): the
+/// grant's request digest and activation scope, 64 lowercase hex each.
+pub const REQUEST_BINDING: &str = "sandbox.elitea.ai/run-request";
+pub const ACTIVATION_BINDING: &str = "sandbox.elitea.ai/run-activation";
+/// Unix seconds after which the supervisor's sweep removes the run.
+pub const EXPIRES_BINDING: &str = "sandbox.elitea.ai/expires-at";
+/// The grace after the turn's wall before a run is swept.
+pub const SWEEP_GRACE_SECONDS: u64 = 120;
+/// The request digest domain of a workspace-run grant.
+pub const DIGEST_DOMAIN: &[u8] = b"elitea.sandbox.workspace-run.v1\0";
+/// The runner's scratch inside the container (on the `/tmp` tmpfs).
+pub const RUNNER_DATA_DIR: &str = "/tmp/elitea-runner";
+const MAX_POLICY_BYTES: usize = 64 * 1024;
+const MAX_RUNNER_FILES: u64 = 200_000;
+const MAX_RUNNER_FILE_BYTES: u64 = 1 << 30;
+
+/// The SHA-256 a workspace-run grant's `request_digest` must equal: the
+/// domain, then every spec field in order, fixed-width big-endian, the name
+/// length-prefixed.
+#[must_use]
+pub fn spec_digest(spec: &WorkspaceRunSpecV1) -> [u8; 32] {
+    use sha2::Digest as _;
+    let mut hash = sha2::Sha256::new();
+    hash.update(DIGEST_DOMAIN);
+    hash.update(spec.revision.to_be_bytes());
+    hash.update((spec.name.len() as u64).to_be_bytes());
+    hash.update(spec.name.as_bytes());
+    hash.update(spec.workspace_bytes.to_be_bytes());
+    hash.update([u8::from(spec.egress)]);
+    hash.update(spec.cpu_millis.to_be_bytes());
+    hash.update(spec.memory_bytes.to_be_bytes());
+    hash.update(spec.pids_limit.to_be_bytes());
+    hash.update(spec.wall_seconds.to_be_bytes());
+    hash.finalize().into()
+}
+
+/// Lowercase hex.
+#[must_use]
+pub fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+}
+
+/// The runner's argv for one operation. The supervisor composes it; nothing
+/// in it comes from a model.
+///
+/// # Errors
+///
+/// Unbounded limits, a policy that is not the runner's policy object, or a
+/// policy on an operation other than `serve`.
+pub fn runner_argv(
+    operation: WorkspaceRunOperationV1,
+    spec: &WorkspaceRunSpecV1,
+    limits: &WorkspaceRunLimitsV1,
+    policy_json: &str,
+) -> Result<Vec<String>, InvalidWorkspaceRun> {
+    let command = match operation {
+        WorkspaceRunOperationV1::Unpack => "unpack",
+        WorkspaceRunOperationV1::Serve => "serve",
+        WorkspaceRunOperationV1::Pack => "pack",
+        WorkspaceRunOperationV1::Unspecified => return Err(InvalidWorkspaceRun::Invalid),
+    };
+    if limits.max_files == 0
+        || limits.max_files > MAX_RUNNER_FILES
+        || limits.max_file_bytes == 0
+        || limits.max_file_bytes > MAX_RUNNER_FILE_BYTES
+        || limits.max_total_bytes == 0
+        || limits.max_total_bytes > MAX_WORKSPACE_BYTES
+    {
+        return Err(InvalidWorkspaceRun::Invalid);
+    }
+    let mut argv = vec![
+        RUNNER_PATH.to_owned(),
+        command.to_owned(),
+        "--root".to_owned(),
+        WORKSPACE_MOUNT.to_owned(),
+        "--data-dir".to_owned(),
+        RUNNER_DATA_DIR.to_owned(),
+        "--max-files".to_owned(),
+        limits.max_files.to_string(),
+        "--max-file-bytes".to_owned(),
+        limits.max_file_bytes.to_string(),
+        "--max-total-bytes".to_owned(),
+        limits.max_total_bytes.to_string(),
+        "--max-workspace-bytes".to_owned(),
+        spec.workspace_bytes.to_string(),
+    ];
+    if operation == WorkspaceRunOperationV1::Serve {
+        // The runner's RunnerPolicy: these keys only, re-serialised so the
+        // argv never carries the caller's bytes.
+        if policy_json.len() > MAX_POLICY_BYTES {
+            return Err(InvalidWorkspaceRun::Invalid);
+        }
+        let Ok(Value::Object(policy)) = serde_json::from_str::<Value>(policy_json) else {
+            return Err(InvalidWorkspaceRun::Invalid);
+        };
+        let allowed = ["shell", "network", "command_allow", "command_deny"];
+        if policy.keys().any(|key| !allowed.contains(&key.as_str()))
+            || ["shell", "network"]
+                .iter()
+                .any(|key| policy.get(*key).is_some_and(|value| !value.is_boolean()))
+            || ["command_allow", "command_deny"].iter().any(|key| {
+                policy.get(*key).is_some_and(|value| {
+                    !value
+                        .as_array()
+                        .is_some_and(|items| items.iter().all(Value::is_string))
+                })
+            })
+        {
+            return Err(InvalidWorkspaceRun::Invalid);
+        }
+        argv.push("--policy".to_owned());
+        argv.push(Value::Object(policy).to_string());
+        argv.push("--env-stdin".to_owned());
+    } else if !policy_json.is_empty() {
+        return Err(InvalidWorkspaceRun::Invalid);
+    }
+    Ok(argv)
+}
+
 /// The pod's single container.
 pub const CONTAINER_NAME: &str = "workspace";
 /// The runner binary inside the workspace image.
@@ -90,6 +219,55 @@ fn dns_label(value: &str) -> bool {
 }
 
 impl WorkspaceRunContainer {
+    /// The wire spec of this run (the image is the supervisor's, not the
+    /// worker's).
+    #[must_use]
+    pub fn to_wire(&self) -> WorkspaceRunSpecV1 {
+        WorkspaceRunSpecV1 {
+            revision: 1,
+            name: self.name.clone(),
+            workspace_bytes: self.workspace_bytes,
+            egress: self.egress,
+            cpu_millis: self.cpu_millis,
+            memory_bytes: self.memory_bytes,
+            pids_limit: self.pids_limit,
+            wall_seconds: self.wall_seconds,
+        }
+    }
+
+    /// The run a supervisor renders from a wire spec in its own `image`.
+    ///
+    /// # Errors
+    ///
+    /// Another revision, a name that is not a workspace-run name, or as
+    /// [`Self::validate`].
+    pub fn from_wire(spec: &WorkspaceRunSpecV1, image: &str) -> Result<Self, InvalidWorkspaceRun> {
+        let suffix = spec
+            .name
+            .strip_prefix("elitea-ws-")
+            .ok_or(InvalidWorkspaceRun::Invalid)?;
+        if spec.revision != 1
+            || suffix.len() != 24
+            || !suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(InvalidWorkspaceRun::Invalid);
+        }
+        let container = Self {
+            name: spec.name.clone(),
+            image: image.to_owned(),
+            workspace_bytes: spec.workspace_bytes,
+            egress: spec.egress,
+            cpu_millis: spec.cpu_millis,
+            memory_bytes: spec.memory_bytes,
+            pids_limit: spec.pids_limit,
+            wall_seconds: spec.wall_seconds,
+        };
+        container.validate()?;
+        Ok(container)
+    }
+
     /// # Errors
     ///
     /// A mutable image, a bad name, or an unbounded resource.
@@ -242,7 +420,9 @@ impl WorkspaceRunContainer {
             },
             name: self.name.clone(),
             image: self.image.clone(),
-            command: vec!["sleep".to_owned(), "infinity".to_owned()],
+            // The image's entrypoint is the runner; the container itself only
+            // idles, and the supervisor execs the runner's operations.
+            entrypoint: vec!["/bin/sleep".to_owned(), "infinity".to_owned()],
             user: "10001:10001".to_owned(),
             readonly_rootfs: true,
             cap_drop: vec!["ALL".to_owned()],
@@ -272,7 +452,7 @@ impl WorkspaceRunContainer {
 pub struct DockerRunPlan {
     pub name: String,
     pub image: String,
-    pub command: Vec<String>,
+    pub entrypoint: Vec<String>,
     pub user: String,
     pub readonly_rootfs: bool,
     pub cap_drop: Vec<String>,

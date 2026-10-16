@@ -30,6 +30,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "elitea/runtime/v1/toolkit.proto",
         "elitea/runtime/v1/validation.proto",
         "elitea/runtime/v1/workspace.proto",
+        "elitea/runtime/v1/workspace_run.proto",
     ]
     .map(|relative| proto_root.join(relative));
 

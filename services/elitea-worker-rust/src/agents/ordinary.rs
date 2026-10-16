@@ -135,10 +135,6 @@ impl OrdinaryNativeAgentAssembler {
 
     /// Lend the cloud executor's workspace runs (ADR-0034).
     #[must_use]
-    #[allow(
-        dead_code,
-        reason = "composed once the sandbox supervisor serves workspace runs (ADR-0034 executor deviations)"
-    )]
     pub(crate) fn with_workspace_runs(
         mut self,
         workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
@@ -317,9 +313,14 @@ impl OrdinaryNativeAgentAssembler {
                     .ok_or_else(super::workspace::workspace_run_unavailable)?;
                 let claim = runtime_context.workspace_claim(&field.thread, field.epoch);
                 Some(
-                    runs.begin(field, claim, context.execution_id())
-                        .await
-                        .map_err(|error| super::workspace::hydrate_error(&error))?,
+                    runs.begin(
+                        field,
+                        claim,
+                        context.execution_id(),
+                        runs.grants(sandbox_authority.clone()),
+                    )
+                    .await
+                    .map_err(|error| super::workspace::hydrate_error(&error))?,
                 )
             }
         };
@@ -369,22 +370,28 @@ impl OrdinaryNativeAgentAssembler {
                 let runtime = runtime.with_workspace_toolset(
                     crate::workspace_run::tools::provider(turn.sandbox(), field.shell).toolset(),
                 );
+                // A destructive or escaping command is a server HITL
+                // interrupt before it runs (ADR-0034 decision 9).
+                let runtime = if field.shell {
+                    runtime.with_workspace_gate(Arc::new(
+                        crate::workspace_run::tools::WorkspaceCommandGate::new(turn.sandbox()),
+                    ))?
+                } else {
+                    runtime
+                };
                 // ADR-0034 decision 10: open_pull_request, only with an
                 // upstream and a bound GitHub toolkit.
                 let pull_request = if field.has_upstream {
-                    self.workspace_runs.as_ref().and_then(|runs| {
-                        use elitea_agent_runtime::toolkits::workspace_pull_request as pr;
-                        pr::open_pull_request_toolset(
-                            pr::github_pull_request_targets(&tool_snapshot),
-                            Arc::new(crate::workspace_run::tools::StoreDiffSource::new(
-                                runs.store(),
-                                turn.claim().clone(),
-                            )),
-                            Arc::new(crate::workspace_run::tools::LogPullRequestAudit::new(
-                                context.execution_id(),
-                            )),
-                        )
-                    })
+                    use elitea_agent_runtime::toolkits::workspace_pull_request as pr;
+                    pr::open_pull_request_toolset(
+                        pr::github_pull_request_targets(&tool_snapshot),
+                        Arc::new(crate::workspace_run::tools::TurnDiffSource::new(
+                            Arc::clone(turn),
+                        )),
+                        Arc::new(crate::workspace_run::tools::LogPullRequestAudit::new(
+                            context.execution_id(),
+                        )),
+                    )
                 } else {
                     None
                 };
