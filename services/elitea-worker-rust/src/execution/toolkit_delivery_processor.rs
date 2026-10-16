@@ -276,6 +276,44 @@ mod direct_lending_tests {
         );
     }
 
+    /// The same agreement on a worker WITHOUT an Office runtime (final
+    /// review): no path lends the host for a file-store tool of a family whose
+    /// tools are not the file store itself, so discovery does not list what a
+    /// call could not run. The agent path reports those tools left out
+    /// (agent-runtime `every_name_is_either_built_or_reported_never_both`).
+    #[test]
+    fn without_an_office_runtime_no_path_lends_the_host_for_a_file_store_tool() {
+        let document: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
+        ))
+        .expect("capability");
+        let mut checked = 0;
+        for family in document["supported_tool_types"].as_array().expect("types") {
+            let family = family.as_str().expect("type");
+            // These families' tools ARE the file store: listed on every worker.
+            if super::is_office_family(family) || matches!(family, "imagegen" | "artifact") {
+                continue;
+            }
+            for tool in elitea_agent_runtime::toolkits::file_store_tools(family) {
+                assert_eq!(
+                    direct_lending(family, "", false, true),
+                    DirectLending::None,
+                    "{family}: discovery lists file-store tools no call could run"
+                );
+                assert_eq!(
+                    direct_lending(family, tool, false, false),
+                    DirectLending::None,
+                    "{family}.{tool}: a call is lent a host this worker does not have"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 15,
+            "only {checked} file-store tools were checked"
+        );
+    }
+
     /// Review round 3: a file-store tool that discovery lists is lent the
     /// claim's host on a call, for every family that has one.
     #[test]
