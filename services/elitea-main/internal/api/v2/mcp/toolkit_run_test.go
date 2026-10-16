@@ -180,6 +180,36 @@ func TestToolkitCallMapsEveryOutcomeOntoAnMCPResult(t *testing.T) {
 			isError: true, contains: "no tool by that name",
 		},
 		{
+			// #1292 round 2: a refused tool is not "no tool by that name".
+			name: "a tool the worker refuses as an effect",
+			outcome: toolkitcalltoolapp.RunOutcome{
+				ExecutionID: "e4b", Status: toolkitcalltoolapp.RunStatusEffectRefused,
+			},
+			isError: true, contains: "only read-only tools",
+		},
+		{
+			name: "a tool the policy refuses",
+			outcome: toolkitcalltoolapp.RunOutcome{
+				ExecutionID: "e4c", Status: toolkitcalltoolapp.RunStatusPolicyRefused,
+			},
+			isError: true, contains: "tool policy blocks this tool",
+		},
+		{
+			name: "a worker that cannot run the tool",
+			outcome: toolkitcalltoolapp.RunOutcome{
+				ExecutionID: "e4d", Status: toolkitcalltoolapp.RunStatusRuntimeFailure,
+				FailureCode: "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY", ErrorMessage: "Configuration type is not supported.",
+			},
+			isError: true, contains: "agent worker cannot run this tool",
+		},
+		{
+			name: "a sensitive tool",
+			outcome: toolkitcalltoolapp.RunOutcome{
+				ExecutionID: "e4e", Status: toolkitcalltoolapp.RunStatusSensitiveRefused,
+			},
+			isError: true, contains: "marks this tool sensitive",
+		},
+		{
 			// A truncated result is NOT reported as an empty success: an agent
 			// host would read that as "the tool produced nothing".
 			name: "a truncated result",

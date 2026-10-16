@@ -189,7 +189,7 @@ func TestToolkitTypeListJoinsRegistryPolicyAndCapability(t *testing.T) {
 	}
 	handler := NewHandler(nil,
 		WithToolkitTypePolicy(store),
-		WithToolkitRegistry(fakeRegistry{types: []string{"github", "sql", "pptx"}}),
+		WithToolkitRegistry(fakeRegistry{types: []string{"github", "sql", "unlisted_demo"}}),
 	)
 
 	recorder := httptest.NewRecorder()
@@ -232,7 +232,7 @@ func TestToolkitTypeListJoinsRegistryPolicyAndCapability(t *testing.T) {
 	require.EqualValues(t, 7, grants[0].(map[string]any)["project_id"])
 
 	// The capability verdict travels with the row, with the sentence behind it.
-	capability := byType["pptx"]["capability"].(map[string]any)
+	capability := byType["unlisted_demo"]["capability"].(map[string]any)
 	require.Equal(t, "unverified", capability["verdict"])
 	require.NotEmpty(t, capability["reason"])
 	require.Equal(t, false, capability["python"])

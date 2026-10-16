@@ -97,7 +97,7 @@ impl ModelGatewayClient {
             || token.is_empty()
             || !valid_execution_id(&execution_id)
         {
-            return Err(ModelFacadeError::InvalidInvocation);
+            return Err(ModelFacadeError::InvalidClaimContext);
         }
         let completion = Arc::new(Mutex::new(AnthropicCompletionState::default()));
         let model = Arc::new(EliteaAnthropicModel {
@@ -124,6 +124,11 @@ pub(crate) struct BoundAnthropicFacade {
 }
 
 impl BoundAnthropicFacade {
+    /// The generation config this model's requests must carry.
+    pub(super) fn admitted_config(&self) -> adk_rust::GenerateContentConfig {
+        super::openai_compatible_facade::admitted_generation_config(&self.model.invocation)
+    }
+
     pub(super) fn summary_model_with_output(&self, output_cap: Option<u32>) -> Arc<dyn Llm> {
         let source = self.model.clone();
         Arc::new(super::summary_model::SummaryModel::new(
@@ -249,7 +254,9 @@ fn anthropic_completion_error(error: ModelFacadeError) -> NativeAgentAssemblyErr
         ModelFacadeError::InvalidConfiguration => {
             NativeAgentAssemblyErrorCode::InvalidConfiguration
         }
-        ModelFacadeError::InvalidInvocation => NativeAgentAssemblyErrorCode::InvalidResult,
+        ModelFacadeError::InvalidInvocation | ModelFacadeError::InvalidClaimContext => {
+            NativeAgentAssemblyErrorCode::InvalidResult
+        }
         ModelFacadeError::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
         ModelFacadeError::DependencyUnavailable => {
             NativeAgentAssemblyErrorCode::DependencyUnavailable
@@ -306,11 +313,11 @@ impl Llm for EliteaAnthropicModel {
             })
             .map(|current| current + 1)
             .map_err(|_| {
-                anthropic_error(
+                super::model_text::not_sent(anthropic_error(
                     ErrorCategory::InvalidInput,
                     "turn_limit",
                     "the claim-scoped native Anthropic invocation exceeded its approved turn limit",
-                )
+                ))
             })?;
         let span = tracing::info_span!(
             "agent.model.request",
@@ -404,7 +411,18 @@ impl Llm for EliteaAnthropicModel {
     }
 }
 
+/// The request body, or the refusal marked as raised before sending.
 fn build_anthropic_body(
+    request: &LlmRequest,
+    stream: bool,
+    invocation: &ModelFacadeInvocation,
+    config: &super::openai_compatible_facade::ModelGatewayConfig,
+) -> Result<Bytes, AdkError> {
+    encode_checked_anthropic_body(request, stream, invocation, config)
+        .map_err(super::model_text::not_sent)
+}
+
+fn encode_checked_anthropic_body(
     request: &LlmRequest,
     stream: bool,
     invocation: &ModelFacadeInvocation,
@@ -793,7 +811,18 @@ fn rejects_explicit_sampling(model_name: &str) -> bool {
     .any(|pattern| name.contains(pattern))
 }
 
+/// The HTTP request, or the refusal marked as raised before sending.
 fn build_anthropic_request(
+    body: Bytes,
+    billing_project_id: u64,
+    token: &str,
+    execution_id: &str,
+) -> Result<Request<Body>, AdkError> {
+    build_unmarked_anthropic_request(body, billing_project_id, token, execution_id)
+        .map_err(super::model_text::not_sent)
+}
+
+fn build_unmarked_anthropic_request(
     body: Bytes,
     billing_project_id: u64,
     token: &str,

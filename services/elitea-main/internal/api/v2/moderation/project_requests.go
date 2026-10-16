@@ -199,8 +199,8 @@ func (h *Handler) CreateProjectRequest(w http.ResponseWriter, r *http.Request) {
 
 	var row requestRow
 	if err := h.pool.QueryRow(r.Context(), `
-INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
 RETURNING id, user_id, project_id, issue_type, COALESCE(entity_id, ''), description,
           status, rejection_comment, created_at, updated_at`,
 		userID, projectID, ProjectRequestIssueType, name, description, statusPending,
@@ -322,7 +322,7 @@ FOR UPDATE OF m`, id,
 
 	if err := tx.QueryRow(ctx, `
 UPDATE centry.moderation_state
-SET status = $1, rejection_comment = $2, meta = COALESCE($3::jsonb, meta), updated_at = NOW()
+SET status = $1, rejection_comment = $2, meta = COALESCE($3::jsonb, meta), updated_at = (NOW() AT TIME ZONE 'UTC')
 WHERE id = $4
 RETURNING id, user_id, project_id, issue_type, COALESCE(entity_id, ''), description,
           status, rejection_comment, created_at, updated_at`,

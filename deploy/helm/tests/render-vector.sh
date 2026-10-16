@@ -18,7 +18,15 @@
 #     (callback-token callers) exactly when each component is enabled, and
 #     never when it is not;
 #   * vector.allowedSpaces reaches ELITEA_VECTOR_ALLOWED_SPACES (empty by
-#     default: no allowlist).
+#     default: no allowlist);
+#   * elitea-main's administrator client (ADR-0031 decision 4): the chart
+#     issues it ONE client certificate (one DNS SAN, client auth, the runtime
+#     CA issuer), mounts it, points ELITEA_VECTOR_GRPC_* at it, and
+#     elitea-vector admits exactly that identity; mainClient off renders none
+#     of it, an external elitea-vector is named explicitly with
+#     fileConfig.vectorClientMaterial, and the half-configured shapes (a target
+#     without material, material without a target, two volume sources, rust
+#     indexing without the client) are refused.
 #
 # Usage: deploy/helm/tests/render-vector.sh
 # Needs: helm, yq. No cluster, no network.
@@ -95,6 +103,19 @@ control_from="$(select_one "$on" NetworkPolicy elitea-main-netpol \
   && note "elitea-main's NetworkPolicy admits elitea-vector on the control port only" \
   || fail "no control-port-only ingress from elitea-vector on elitea-main (got '$control_from')"
 
+# Rollout order (worker unit M9): the whole vector stack is in Argo CD
+# sync-wave -5, so elitea-vector is healthy before elitea-main (wave 0) starts
+# minting memory sources it introspects for. Every vector manifest shares the
+# wave (a Deployment ahead of its own certificates would never become ready).
+off_wave="$(printf '%s' "$on" | yq eval 'select((.metadata.labels."app.kubernetes.io/component" == "vector" or .metadata.name == "elitea-qdrant" or .metadata.name == "elitea-qdrant-headless" or .metadata.name == "elitea-qdrant-netpol") and .metadata.annotations."argocd.argoproj.io/sync-wave" != "-5") | .kind + "/" + .metadata.name' - | grep -v '^---$' || true)"
+main_wave="$(select_one "$on" Deployment elitea-main '.metadata.annotations."argocd.argoproj.io/sync-wave" // "0"')"
+vector_wave="$(select_one "$on" Deployment elitea-vector '.metadata.annotations."argocd.argoproj.io/sync-wave"')"
+if [ -z "$off_wave" ] && [ "$vector_wave" = "-5" ] && [ "$main_wave" -gt "$vector_wave" ]; then
+  note "the vector stack is in sync-wave -5, before elitea-main (wave $main_wave)"
+else
+  fail "rollout order: vector wave '$vector_wave', main wave '$main_wave', vector manifests outside wave -5: $off_wave"
+fi
+
 dep_key="$(select_one "$on" Deployment elitea-vector '.spec.template.spec.volumes[] | select(.name == "qdrant-api-key") | .secret.secretName')"
 sts_key="$(select_one "$on" StatefulSet elitea-qdrant '.spec.template.spec.containers[0].env[] | select(.name == "QDRANT__SERVICE__API_KEY") | .valueFrom.secretKeyRef.name')"
 [ "$dep_key" = "elitea-qdrant-api-key" ] && [ "$sts_key" = "elitea-qdrant-api-key" ] \
@@ -114,6 +135,76 @@ qdrant_from="$(select_one "$on" NetworkPolicy elitea-qdrant-netpol \
 
 min="$(select_one "$on" HorizontalPodAutoscaler elitea-vector '.spec.minReplicas')"
 [ "$min" -ge 2 ] && note "the HPA keeps at least 2 replicas" || fail "HPA minReplicas is $min"
+
+echo "== elitea-main's administrator client (ADR-0031 decision 4)"
+# The chart issues elitea-main ONE client certificate from the runtime-CA
+# issuer (one DNS SAN, client auth), mounts it, points the four
+# ELITEA_VECTOR_GRPC_* entries at it, and elitea-vector admits that identity.
+main_sans="$(select_one "$on" Certificate elitea-main-vector-client '.spec.dnsNames | length')"
+main_san="$(select_one "$on" Certificate elitea-main-vector-client '.spec.dnsNames[0]')"
+main_usage="$(select_one "$on" Certificate elitea-main-vector-client '.spec.usages | join(",")')"
+main_issuer="$(select_one "$on" Certificate elitea-main-vector-client '.spec.issuerRef.name')"
+[ "$main_sans" = "1" ] && [ "$main_san" = "elitea-main" ] && [ "$main_usage" = "client auth" ] && [ "$main_issuer" = "elitea-runtime-ca" ] \
+  && note "elitea-main's vector client certificate has one DNS SAN (elitea-main), client auth, the runtime-CA issuer" \
+  || fail "elitea-main vector client certificate SANs=$main_sans first=$main_san usages=$main_usage issuer=$main_issuer"
+
+admins="$(select_one "$on" Deployment elitea-vector '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_VECTOR_ADMIN_IDENTITIES") | .value')"
+[ "$admins" = "dns:elitea-main" ] \
+  && note "elitea-vector admits dns:elitea-main as administrator" \
+  || fail "ELITEA_VECTOR_ADMIN_IDENTITIES is '$admins', want dns:elitea-main"
+admins_extra="$(select_one "$(render $COMPLETE --set 'vector.adminIdentities[0]=dns:ops-tool')" Deployment elitea-vector '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_VECTOR_ADMIN_IDENTITIES") | .value')"
+[ "$admins_extra" = "dns:elitea-main,dns:ops-tool" ] \
+  && note "vector.adminIdentities are admitted beside elitea-main" \
+  || fail "ELITEA_VECTOR_ADMIN_IDENTITIES with an extra identity is '$admins_extra'"
+
+main_target="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_TARGET')"
+main_cert="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE')"
+main_key="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE')"
+main_ca="$(select_one "$on" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CA_FILE')"
+[ "$main_target" = "elitea-vector:9470" ] && [ "$main_cert" = "/run/elitea-vector-client/tls.crt" ] \
+  && [ "$main_key" = "/run/elitea-vector-client/tls.key" ] && [ "$main_ca" = "/run/elitea-vector-client/ca.crt" ] \
+  && note "elitea-main dials elitea-vector:9470 with the mounted certificate" \
+  || fail "elitea-main vector client env: target='$main_target' cert='$main_cert' key='$main_key' ca='$main_ca'"
+
+main_mount="$(select_one "$on" Deployment elitea-main '.spec.template.spec.containers[] | select(.name == "elitea-main") | .volumeMounts[] | select(.name == "vector-client-material") | .mountPath')"
+main_secret="$(select_one "$on" Deployment elitea-main '.spec.template.spec.volumes[] | select(.name == "vector-client-material") | .secret.secretName')"
+[ "$main_mount" = "/run/elitea-vector-client" ] && [ "$main_secret" = "elitea-main-vector-client-tls" ] \
+  && note "the issued Secret is mounted where the env paths point" \
+  || fail "elitea-main vector client mount='$main_mount' secret='$main_secret'"
+
+# The client is on elitea-vector's gRPC ingress: the main pods are admitted.
+case ",$(select_one "$on" NetworkPolicy elitea-vector-netpol \
+    '.spec.ingress[] | select(.ports[0].port == 9470) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' | sort | paste -sd, -)," in
+  *,elitea-main,*) note "elitea-vector's gRPC port admits the elitea-main pods" ;;
+  *) fail "elitea-vector's gRPC port does not admit elitea-main" ;;
+esac
+
+# mainClient off: no certificate, no mount, no env, no admin identity.
+noclient="$(render $COMPLETE --set vector.mainClient.enabled=false)"
+if [ -n "$(select_one "$noclient" Certificate elitea-main-vector-client '.metadata.name')" ] \
+  || [ -n "$(select_one "$noclient" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_TARGET // ""')" ] \
+  || [ -n "$(select_one "$noclient" Deployment elitea-main '.spec.template.spec.volumes[] | select(.name == "vector-client-material") | .name')" ] \
+  || [ "$(select_one "$noclient" Deployment elitea-vector '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_VECTOR_ADMIN_IDENTITIES") | .value')" != "" ]; then
+  fail "vector.mainClient.enabled=false still renders part of elitea-main's client"
+else
+  note "mainClient off renders no certificate, env, mount or administrator identity"
+fi
+
+# An elitea-vector elsewhere: explicit env plus fileConfig.vectorClientMaterial.
+EXTERNAL_CLIENT="\
+--set vector.mainClient.enabled=false \
+--set main.env.ELITEA_VECTOR_GRPC_TARGET=vector.platform.example:9470 \
+--set main.env.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE=/run/elitea-vector-client/tls.crt \
+--set main.env.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE=/run/elitea-vector-client/tls.key \
+--set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/elitea-vector-client/ca.crt \
+--set main.fileConfig.vectorClientMaterial.enabled=true \
+--set main.fileConfig.vectorClientMaterial.secretName=my-main-vector-client"
+external="$(render $COMPLETE $EXTERNAL_CLIENT)"
+ext_target="$(select_one "$external" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_TARGET')"
+ext_secret="$(select_one "$external" Deployment elitea-main '.spec.template.spec.volumes[] | select(.name == "vector-client-material") | .secret.secretName')"
+[ "$ext_target" = "vector.platform.example:9470" ] && [ "$ext_secret" = "my-main-vector-client" ] \
+  && note "an external elitea-vector is named explicitly and its material mounted from the operator's Secret" \
+  || fail "external vector client: target='$ext_target' secret='$ext_secret'"
 
 echo "== vector on, external Qdrant"
 ext="$(render $COMPLETE --set vector.qdrant.mode=external \
@@ -226,6 +317,51 @@ expect_refusal "the introspection pool is in the connection budget" "50 per elit
   --set main.autoscaling.maxReplicas=4
 expect_refusal "malformed admin identity" "is not a canonical identity" \
   --set 'vector.adminIdentities[0]=elitea-main'
+expect_refusal "elitea-main's identity equal to elitea-vector's own" "must differ" \
+  --set vector.mainClient.dnsName=elitea-vector
+expect_refusal "a vector target without its material" "env.ELITEA_VECTOR_GRPC_CA_FILE must be set too" \
+  --set vector.mainClient.enabled=false --set main.env.ELITEA_VECTOR_GRPC_TARGET=vector.platform.example:9470 \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE=/run/x/tls.crt --set main.env.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE=/run/x/tls.key
+expect_refusal "vector material beside no target" "env.ELITEA_VECTOR_GRPC_TARGET is empty" \
+  --set vector.mainClient.enabled=false --set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/x/ca.crt
+expect_refusal "the abandon switch beside the chart's client" "a vector store that is dialled is not abandoned" \
+  --set main.env.ELITEA_VECTOR_CLEANUP_ABANDON=true
+expect_refusal "the abandon switch beside an explicit target" "a vector store that is dialled is not abandoned" \
+  $EXTERNAL_CLIENT --set main.env.ELITEA_VECTOR_CLEANUP_ABANDON=True
+# Without any client the switch renders into elitea-main's ConfigMap; empty it is omitted.
+abandoned="$(render $COMPLETE --set vector.mainClient.enabled=false --set main.env.ELITEA_VECTOR_CLEANUP_ABANDON=true)" || fail "abandon without a client refused: $abandoned"
+[ "$(select_one "$abandoned" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_CLEANUP_ABANDON')" = "true" ] \
+  && note "ELITEA_VECTOR_CLEANUP_ABANDON=true renders without a client" \
+  || fail "ELITEA_VECTOR_CLEANUP_ABANDON=true did not reach elitea-main's ConfigMap"
+[ -z "$(select_one "$noclient" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_CLEANUP_ABANDON // ""')" ] \
+  && note "an empty ELITEA_VECTOR_CLEANUP_ABANDON is omitted" \
+  || fail "an empty ELITEA_VECTOR_CLEANUP_ABANDON rendered into the ConfigMap"
+expect_refusal "both the chart's client and fileConfig.vectorClientMaterial" "One Deployment volume cannot have two sources" \
+  --set main.fileConfig.vectorClientMaterial.enabled=true --set main.fileConfig.vectorClientMaterial.secretName=x
+expect_refusal "explicit vector material path outside the chart's mount while mainClient is on" "nothing else is mounted for it" \
+  --set main.env.ELITEA_VECTOR_GRPC_TARGET=elitea-vector:9470 \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE=/etc/other/tls.crt \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE=/run/elitea-vector-client/tls.key \
+  --set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/elitea-vector-client/ca.crt
+# A sibling directory that merely starts with the mount path's text is outside it.
+expect_refusal "a sibling directory of the chart's mount" "nothing else is mounted for it" \
+  --set main.env.ELITEA_VECTOR_GRPC_TARGET=elitea-vector:9470 \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE=/run/elitea-vector-client-other/tls.crt \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE=/run/elitea-vector-client/tls.key \
+  --set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/elitea-vector-client/ca.crt
+expect_refusal "a sibling directory of fileConfig.vectorClientMaterial's mount" "does not serve" \
+  $EXTERNAL_CLIENT --set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/elitea-vector-client-other/ca.crt
+# Explicit paths INSIDE the chart's mount are accepted beside mainClient.
+inside="$(render $COMPLETE \
+  --set main.env.ELITEA_VECTOR_GRPC_TARGET=elitea-vector:9470 \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE=/run/elitea-vector-client/tls.crt \
+  --set main.env.ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE=/run/elitea-vector-client/tls.key \
+  --set main.env.ELITEA_VECTOR_GRPC_CA_FILE=/run/elitea-vector-client/ca.crt)"
+[ "$(select_one "$inside" ConfigMap elitea-main-config '.data.ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE')" = "/run/elitea-vector-client/tls.crt" ] \
+  && note "explicit material paths inside the chart's mount render beside mainClient" \
+  || fail "explicit in-mount material paths were not rendered"
+expect_refusal "rust indexing without elitea-main's vector client" "elitea-main's elitea-vector client" \
+  --set worker.enabled=true --set worker.implementation=rust --set worker.indexingRuntime=rust --set vector.mainClient.enabled=false
 
 if [ "$failures" -ne 0 ]; then
   echo "render-vector: $failures failure(s)" >&2

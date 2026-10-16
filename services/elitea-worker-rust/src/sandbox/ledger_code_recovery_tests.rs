@@ -3,14 +3,13 @@
 //! schema amendment. No fixture provisions a schema or starts a runtime.
 use super::*;
 use crate::protocol::sandbox_grant::code_owner_fixture;
-use sqlx::postgres::PgPoolOptions;
 use std::{sync::Arc, time::Duration};
 
 async fn ledger() -> Arc<JobLedger> {
-    let url = std::env::var("ELITEA_CODE_OWNER_TEST_DATABASE_URL")
+    let url = crate::test_pg::database_url_var("ELITEA_CODE_OWNER_TEST_DATABASE_URL")
         .expect("explicit isolated agentstate fixture database is required");
     Arc::new(JobLedger::new(
-        PgPoolOptions::new()
+        crate::test_pg::pool_options()
             .max_connections(4)
             .acquire_timeout(Duration::from_secs(5))
             .connect(&url)

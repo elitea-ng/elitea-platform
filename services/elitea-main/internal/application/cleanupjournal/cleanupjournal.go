@@ -16,6 +16,8 @@ import (
 	"context"
 	"reflect"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // BookkeepingTimeout bounds each journal write a run makes, on a context of its
@@ -36,6 +38,27 @@ func BookkeepingContext(runCtx context.Context) (context.Context, context.Cancel
 func IsNilPointer(value any) bool {
 	reflected := reflect.ValueOf(value)
 	return reflected.Kind() == reflect.Pointer && reflected.IsNil()
+}
+
+// MemoryUserJournal records, in the transaction that removes users from a
+// project (projectID > 0) or deletes them outright (projectID 0: every
+// project), that their PERSONAL memories owe the vector store a deletion
+// (worker unit M9). *toolkitcleanup.Journal satisfies it. It is the one
+// interface every hook (the project members route, the administrators' user
+// delete, SCIM group sync) is wired with, through UsableMemoryUserJournal.
+type MemoryUserJournal interface {
+	EnqueueMemoryUsers(ctx context.Context, tx pgx.Tx, projectID int64, userIDs ...int64) (string, error)
+}
+
+// UsableMemoryUserJournal is the guard every MemoryUserJournal setter applies:
+// it answers nil for a nil journal and for a typed nil (a nil pointer in the
+// interface, which would pass a plain nil check and panic inside the delete's
+// transaction), and the journal otherwise.
+func UsableMemoryUserJournal(journal MemoryUserJournal) MemoryUserJournal {
+	if journal == nil || IsNilPointer(journal) {
+		return nil
+	}
+	return journal
 }
 
 // The notes a step or row is closed with when the engine's answer cannot be

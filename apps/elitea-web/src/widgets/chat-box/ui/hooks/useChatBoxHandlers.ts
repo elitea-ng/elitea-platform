@@ -46,6 +46,7 @@ import { createResumeMcpFlow } from "./useChatBoxHandlers.mcpAuth";
 import type {
   ChatBoxHandlerDeps,
   HitlInterruptAction,
+  StreamStartOutcome,
   UseChatBoxHandlersResult,
 } from "./useChatBoxHandlers.helpers";
 import {
@@ -178,14 +179,19 @@ export function useChatBoxHandlers(
   /**
    * Resumes the pause over REST when the route can express it.
    *
-   * Returns `true` when the run is live again — the socket must then stay
-   * quiet, because a second resume runs the agent twice.
+   * Returns the route's outcome, or `undefined` when the route cannot express
+   * this resume. `started` means the run is live again, and `rejected` means
+   * the route refused it with a reason of its own; in both the socket must stay
+   * quiet, because a second resume runs the agent twice and the socket client
+   * is a stub on a deployment that serves only the route.
    */
   const resumeHitlOverRest = async (
     message: ChatMessage,
     action: HitlInterruptAction,
-  ): Promise<boolean> => {
-    if (!deps.continueStreamedExecution || !deps.conversationUuid) return false;
+  ): Promise<StreamStartOutcome | undefined> => {
+    if (!deps.continueStreamedExecution || !deps.conversationUuid) {
+      return undefined;
+    }
     const body = buildHitlContinueBody({
       projectId: deps.projectId,
       conversationUuid: deps.conversationUuid,
@@ -194,13 +200,12 @@ export function useChatBoxHandlers(
       action,
       interruptId: findHitlInterruptId(message, action.toolCallId),
     });
-    if (body === undefined) return false;
-    const outcome = await deps.continueStreamedExecution({
+    if (body === undefined) return undefined;
+    return deps.continueStreamedExecution({
       conversationUuid: deps.conversationUuid,
       contract: conversationApi.contracts.continueHitl,
       body,
     });
-    return outcome.started;
   };
   const continueHitl = async (action: HitlInterruptAction): Promise<void> => {
     const message = [...deps.chatHistory]
@@ -216,7 +221,14 @@ export function useChatBoxHandlers(
     // REST first, socket second — the same order the START path takes. The
     // Go continuation route is the only one a shipped deployment serves: the
     // socket client is a no-op stub whenever `vite_socket_server` is empty.
-    if (await resumeHitlOverRest(message, action)) return;
+    const resumed = await resumeHitlOverRest(message, action);
+    if (resumed?.started) return;
+    // A refusal is the route's answer, not a missing transport: show it and
+    // put the card back instead of reporting an absent chat connection.
+    if (resumed && !resumed.started && resumed.reason === "rejected") {
+      revertContinuation(setChatHistory, message, resumed.message);
+      return;
+    }
     // The optimistic patch above is irreversible unless the emit is checked:
     // the approval card is already gone and the bubble already spinning. So a
     // continuation that reached no transport left the run paused server-side,

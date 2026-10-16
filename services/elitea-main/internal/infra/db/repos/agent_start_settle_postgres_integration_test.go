@@ -208,8 +208,8 @@ WITH response_group AS (
     WHERE uuid = $1
     RETURNING id
 ), response_item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, meta, message_group_id)
-    SELECT gen_random_uuid(), 'text_message', 0, '{}'::jsonb, response_group.id
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, '{}'::jsonb, response_group.id, now() AT TIME ZONE 'UTC'
     FROM response_group
     RETURNING id
 )
@@ -253,8 +253,8 @@ WITH response_group AS (
     WHERE uuid = $1
     RETURNING id
 ), response_item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, meta, message_group_id)
-    SELECT gen_random_uuid(), 'text_message', 0, '{}'::jsonb, response_group.id
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, '{}'::jsonb, response_group.id, now() AT TIME ZONE 'UTC'
     FROM response_group
     RETURNING id
 )
@@ -358,7 +358,7 @@ func settlePostgresCurrentResponse(t *testing.T, pool *pgxpool.Pool, responseID 
 	if _, err := pool.Exec(t.Context(), `
 UPDATE p_1.chat_message_group
 SET is_streaming = FALSE,
-    updated_at = clock_timestamp()
+    updated_at = clock_timestamp() AT TIME ZONE 'UTC'
 WHERE uuid = $1`, responseID); err != nil {
 		t.Fatal(err)
 	}

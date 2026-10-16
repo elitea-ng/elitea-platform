@@ -181,7 +181,7 @@ func pinEntity(ctx context.Context, tx pgx.Tx, schema, table, entity string, pro
 	 found AS (SELECT 1 FROM %s.%s WHERE id=$3 FOR SHARE),
 	 written AS (
 	  INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at)
-	  SELECT $1, $2, $3, $4, NOW(), NOW()
+	  SELECT $1, $2, $3, $4, (NOW() AT TIME ZONE 'UTC'), (NOW() AT TIME ZONE 'UTC')
 	  WHERE (SELECT ok FROM access) AND EXISTS (SELECT 1 FROM found)`+pinUpsert+`
 	  RETURNING 1)
 	 SELECT (SELECT ok FROM access), EXISTS (SELECT 1 FROM found)`,
@@ -220,7 +220,7 @@ func pinConversation(ctx context.Context, tx pgx.Tx, schema string, access chata
 	 visible AS (SELECT c.id FROM %s.chat_conversations c WHERE c.id=$3 AND %s FOR NO KEY UPDATE OF c),
 	 written AS (
 	  INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at)
-	  SELECT $1, $2, $3, $4, NOW(), NOW()
+	  SELECT $1, $2, $3, $4, (NOW() AT TIME ZONE 'UTC'), (NOW() AT TIME ZONE 'UTC')
 	  WHERE (SELECT ok FROM access) AND EXISTS (SELECT 1 FROM visible)`+pinUpsert+`
 	  RETURNING (xmax = 0) AS inserted)
 	 SELECT (SELECT ok FROM access), EXISTS (SELECT 1 FROM visible), COALESCE((SELECT inserted FROM written), false)`,

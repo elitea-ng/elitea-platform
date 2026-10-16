@@ -21,15 +21,15 @@ func TestPlatformModelDefaultRowsPostgres(t *testing.T) {
 INSERT INTO p_1.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES
+, created_at) VALUES
     (21, '21212121-2121-4121-8121-212121212121', 1, 'GPT Azure', 'gpt-azure', 'llm_model', 'llm',
-     '{"name":"gpt-4o"}', '{}', true, true, 'user'),
+     '{"name":"gpt-4o"}', '{}', true, true, 'user', now() AT TIME ZONE 'UTC'),
     (22, '22222222-2222-4222-8222-222222222223', 1, 'GPT OpenAI', 'gpt-openai', 'llm_model', 'llm',
-     '{"name":"gpt-4o"}', '{}', true, false, 'user'),
+     '{"name":"gpt-4o"}', '{}', true, false, 'user', now() AT TIME ZONE 'UTC'),
     (23, '23232323-2323-4323-8323-232323232323', 1, 'Scratch', 'scratch', 'llm_model', 'llm',
-     '{"name":"scratch"}', '{}', false, true, 'user'),
+     '{"name":"scratch"}', '{}', false, true, 'user', now() AT TIME ZONE 'UTC'),
     (24, '24242424-2424-4424-8424-242424242424', 1, 'Vectors', 'pgvector', 'pgvector', 'vectorstorage',
-     '{}', '{}', true, true, 'user');`); err != nil {
+     '{}', '{}', true, true, 'user', now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatalf("seed model rows: %v", err)
 	}
 

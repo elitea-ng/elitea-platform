@@ -19,7 +19,11 @@
 //!   cached tokens), finish reason, reasoning text, and the strict chunk
 //!   reader;
 //! * [`tool_calls`] — streamed tool-call delta assembly with count, name,
-//!   id and argument limits.
+//!   id and argument limits;
+//! * [`reasoning`] — the worker's rule for reasoning a model wrote into an
+//!   answer's text (`<think>` blocks, Qwen's bare `</think>`); the model
+//!   client and the proposal chunker keep their own rules, for the reasons
+//!   given there.
 //!
 //! Nothing here performs I/O, holds a credential, or formats provider text
 //! into an error. Each client maps these results onto its own error
@@ -56,6 +60,7 @@
 
 pub mod headers;
 pub mod openai;
+pub mod reasoning;
 pub mod refusal;
 pub mod route;
 pub mod sse;

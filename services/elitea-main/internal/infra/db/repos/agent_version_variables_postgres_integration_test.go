@@ -157,9 +157,9 @@ UPDATE application_versions
 	// rows alone must fill the key. This is the shape a FORK produces and the
 	// shape every legacy agent has, and it used to project nothing at all.
 	if _, err := tx.Exec(t.Context(), `
-INSERT INTO application_variables (application_version_id, name, value) VALUES
-    (41, 'topic', 'release notes'),
-    (41, 'blank', NULL);`); err != nil {
+INSERT INTO application_variables (application_version_id, name, value, created_at) VALUES
+    (41, 'topic', 'release notes', now() AT TIME ZONE 'UTC'),
+    (41, 'blank', NULL, now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatal(err)
 	}
 	fromRows, err := queries.ResolveCurrentApplicationVersionDetails(

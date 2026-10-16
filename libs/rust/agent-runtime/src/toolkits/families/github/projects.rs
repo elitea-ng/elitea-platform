@@ -87,6 +87,52 @@ query EliteaProjectItems(
 }
 ";
 
+/// The same projection with GitHub's native item filter. The pinned SDK
+/// passes `search_query` to a query that never declares it, so it returns
+/// the first items unfiltered; this applies the query (`status:Todo`,
+/// `label:bug`, free text), which is what the tool's argument says.
+pub(super) fn project_search_payload(
+    owner: &str,
+    repository: &str,
+    project_number: u32,
+    items_count: usize,
+    search_query: &str,
+) -> Value {
+    let query = LIST_PROJECT_ITEMS_QUERY
+        .replace(
+            "  $itemsCount: Int!\n",
+            "  $itemsCount: Int!\n  $searchQuery: String!\n",
+        )
+        .replace(
+            "items(first: $itemsCount)",
+            "items(first: $itemsCount, query: $searchQuery)",
+        )
+        .replace("query EliteaProjectItems(", "query EliteaProjectSearch(")
+        // The SDK's search also reads each item's body.
+        .replace(
+            "id number title state url\n",
+            "id number title state url body\n",
+        )
+        .replace(
+            "... on PullRequest { id number title state url }",
+            "... on PullRequest { id number title state url body }",
+        )
+        .replace(
+            "... on DraftIssue { id title }",
+            "... on DraftIssue { id title body }",
+        );
+    json!({
+        "query": query,
+        "variables": {
+            "owner": owner,
+            "repository": repository,
+            "projectNumber": project_number,
+            "itemsCount": items_count,
+            "searchQuery": search_query
+        }
+    })
+}
+
 pub(super) fn project_query_payload(
     owner: &str,
     repository: &str,
@@ -297,6 +343,12 @@ fn project_content(content: &Value) -> Result<Value, GitHubClientError> {
             optional_text(content.get("state"), MAX_IDENTIFIER_BYTES)?,
         ),
     ]);
+    if content.contains_key("body") {
+        output.insert(
+            "body".to_owned(),
+            optional_text(content.get("body"), MAX_FIELD_TEXT_BYTES)?,
+        );
+    }
     if content.contains_key("labels") {
         let labels = project_connection_nodes(content, "labels", MAX_LABELS)?;
         output.insert("labels".to_owned(), project_named_nodes(labels, true)?);
@@ -405,6 +457,17 @@ pub(in crate::toolkits) fn test_project_project_issues(
     requested_items: usize,
 ) -> Result<Value, GitHubClientError> {
     project_project_issues(response, requested_items)
+}
+
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_search_payload(
+    owner: &str,
+    repository: &str,
+    project_number: u32,
+    items_count: usize,
+    search_query: &str,
+) -> Value {
+    project_search_payload(owner, repository, project_number, items_count, search_query)
 }
 
 #[cfg(test)]

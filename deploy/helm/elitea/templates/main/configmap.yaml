@@ -66,8 +66,27 @@
   index routes read: the per-project pgvector index_meta rows (python) or the
   elitea_runtime.index_registry table (rust). An explicit env entry still wins.
 */ -}}
+{{- /*
+  The runtime comes from the "elitea.indexingRuntime" helper (the explicit
+  worker.indexingRuntime, python otherwise: the chart never switches to rust by
+  itself). guards.yaml refuses a main.env.ELITEA_INDEXING_RUNTIME override that
+  disagrees with it, and refuses an explicit rust whose prerequisites are
+  missing, because elitea-main refuses ELITEA_INDEXING_RUNTIME=rust with its
+  runtime plane off.
+*/ -}}
 {{- if not (get $env "ELITEA_INDEXING_RUNTIME") }}
-{{- $env = merge (deepCopy $env) (dict "ELITEA_INDEXING_RUNTIME" $.Values.worker.indexingRuntime) }}
+{{- $indexingRuntime := include "elitea.indexingRuntime" $ }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_INDEXING_RUNTIME" $indexingRuntime) }}
+{{- end }}
+{{- /*
+  ELITEA_MEMORY_EMBEDDING_MODEL (worker unit M9): the SAME value as the worker's
+  runtime.json memory_embedding_model, so elitea-main knows whether the memory
+  toolkit is actually served and withholds it from the catalogue with a reason
+  when no model is configured. Written only under the Rust indexing runtime when
+  set; an explicit env entry still wins.
+*/ -}}
+{{- if and (eq (include "elitea.indexingRuntime" $) "rust") (($.Values.worker.runtime | default dict).memoryEmbeddingModel) (not (get $env "ELITEA_MEMORY_EMBEDDING_MODEL")) }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_MEMORY_EMBEDDING_MODEL" (($.Values.worker.runtime).memoryEmbeddingModel | toString)) }}
 {{- end }}
 {{- /*
   The application engines' platform gRPC targets (#1243, #1244): where
@@ -87,6 +106,31 @@
 {{- $inventoryTarget := include "elitea-inventory.platformGrpcTarget" . }}
 {{- if and $inventoryTarget (not (get $env "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET")) (has (lower (get $env "ELITEA_INVENTORY_ENABLED" | toString)) (list "1" "true" "yes" "on")) }}
 {{- $env = merge (deepCopy $env) (dict "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET" $inventoryTarget) }}
+{{- end }}
+{{- /*
+  elitea-main's elitea-vector client (ADR-0031 decision 4): the target and the
+  three file paths of the administrator certificate vector.mainClient issues
+  and mounts, DERIVED whenever this chart's elitea-vector is on with
+  mainClient enabled. An explicit env entry wins (an elitea-vector elsewhere,
+  with fileConfig.vectorClientMaterial), and the mix of the two is refused by
+  elitea-main.validateVectorClient.
+*/ -}}
+{{- if and (include "elitea-vector.mainClientEnabled" .) (not (get $env "ELITEA_VECTOR_GRPC_TARGET")) }}
+{{- $mount := .Values.vector.mainClient.mountPath }}
+{{- $env = merge (deepCopy $env) (dict
+      "ELITEA_VECTOR_GRPC_TARGET" (include "elitea-vector.grpcTarget" .)
+      "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE" (printf "%s/tls.crt" $mount)
+      "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE" (printf "%s/tls.key" $mount)
+      "ELITEA_VECTOR_GRPC_CA_FILE" (printf "%s/ca.crt" $mount)) }}
+{{- end }}
+{{- /*
+  values.yaml ships the five entries (and the ELITEA_VECTOR_CLEANUP_ABANDON
+  switch) empty so an operator sees them; an empty one is "unset" to
+  elitea-main (vector_client_config.go) and is not rendered, so a deployment
+  without a vector store carries no ELITEA_VECTOR_* at all.
+*/ -}}
+{{- range $key := list "ELITEA_VECTOR_GRPC_TARGET" "ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE" "ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE" "ELITEA_VECTOR_GRPC_CA_FILE" "ELITEA_VECTOR_GRPC_SERVER_NAME" "ELITEA_VECTOR_CLEANUP_ABANDON" }}
+{{- if and (hasKey $env $key) (eq (get $env $key | toString) "") }}{{- $env = omit $env $key }}{{- end }}
 {{- end }}
 {{- /*
   ELITEA_INDEX_TYPES_ENABLED and ELITEA_APPLICATION_SKILLS_ENABLED are DERIVED

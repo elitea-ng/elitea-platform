@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -75,7 +76,7 @@ func TestRustNativeToolTypesMatchTheMaterialiser(t *testing.T) {
 	require.NoError(t, err,
 		"the Rust materialiser must be readable: capability.go transcribes its dispatch")
 
-	source := string(raw)
+	source := materializeDispatchBodies(string(raw))
 	dispatched := map[string]bool{}
 	for _, match := range regexp.MustCompile(`"([a-z0-9_]+)" =>`).FindAllStringSubmatch(source, -1) {
 		dispatched[match[1]] = true
@@ -136,9 +137,8 @@ func TestCapabilityVerdicts(t *testing.T) {
 
 	// No pinned catalogue type is Python-only today, so the Python-only row
 	// is exercised on the verdict table with a type the Rust worker genuinely
-	// does not dispatch (pptx): it must still read as supported, by Python.
-	require.False(t, rustNativeTypes()["pptx"], "pptx must stay unsupported on Rust for this case")
-	pythonOnly := capabilityVerdict("pptx", true, rustNativeTypes()["pptx"])
+	// does not dispatch: it must still read as supported, by Python.
+	pythonOnly := capabilityVerdict("python_only_demo", true, false)
 	require.True(t, pythonOnly.Python)
 	require.False(t, pythonOnly.Rust)
 	require.Equal(t, VerdictSupported, pythonOnly.Verdict)
@@ -155,7 +155,12 @@ func TestCapabilityVerdicts(t *testing.T) {
 	require.True(t, rustOnly.Rust)
 	require.Equal(t, VerdictSupported, rustOnly.Verdict)
 
-	neither := source.ToolkitCapability("pptx")
+	// imagegen (#864) is carried by the Rust worker's native family.
+	imagegen := source.ToolkitCapability("imagegen")
+	require.True(t, imagegen.Rust)
+	require.Equal(t, VerdictSupported, imagegen.Verdict)
+
+	neither := source.ToolkitCapability("unlisted_demo")
 	require.False(t, neither.Python)
 	require.False(t, neither.Rust)
 	require.Equal(t, VerdictUnverified, neither.Verdict)
@@ -186,4 +191,18 @@ func TestCapabilityTypesIsSortedAndDeduplicated(t *testing.T) {
 	}
 	require.Contains(t, types, "kubernetes")
 	require.Contains(t, types, "github")
+}
+
+// materializeDispatchBodies is the text of the dispatch functions of
+// materialize.rs only: every `fn materialize*` body, from its signature to
+// the closing brace at column 0. Matching the whole file read the arms of
+// `family_tool_catalog` (the per-family tool lists, review C1) and any test
+// table as dispatch, so a family whose arm was removed still passed.
+func materializeDispatchBodies(source string) string {
+	var bodies strings.Builder
+	for _, match := range regexp.MustCompile(`(?m)^(?:pub )?(?:async )?fn materialize\w*[\s\S]*?\n\}\n`).
+		FindAllString(source, -1) {
+		bodies.WriteString(match)
+	}
+	return bodies.String()
 }

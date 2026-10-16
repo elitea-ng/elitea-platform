@@ -84,6 +84,9 @@ impl NodeRecoveryInspection {
     pub(crate) fn output_watermark(&self) -> u64 {
         self.claim.claim_handoff_watermark()
     }
+    pub(crate) fn supersedes_output_fence(&self, frame: &super::ExecutionOutputFrameV1) -> bool {
+        self.claim.supersedes_output_fence(frame)
+    }
     fn parse(
         verified: &VerifiedAgentCommand,
         response: ClaimCommandResponseV1,
@@ -249,6 +252,7 @@ impl NodeRecoveryControlAuthority {
                 .vector_token
                 .as_ref()
                 .map(super::super::vector_token::VectorClaimToken::duplicate),
+            toolkit_typed_refusals: claim.toolkit_typed_refusals,
         }
     }
     /// The ACK reply can only be produced by the authenticated content client.

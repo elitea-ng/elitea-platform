@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ func TestEditorLifecycleFixtureGuard(t *testing.T) {
 
 func editorLifecyclePostgresPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	raw := os.Getenv(editorLifecycleFixtureURL)
+	raw := testpg.DSN(os.Getenv(editorLifecycleFixtureURL))
 	if raw == "" {
 		if required := os.Getenv(editorLifecycleFixtureRequired); required == "true" || required == "1" {
 			t.Fatal("ELITEA_EDITOR_TEST_DATABASE_URL is required for editor PostgreSQL acceptance")
@@ -67,7 +68,7 @@ func editorLifecyclePostgresPool(t *testing.T) *pgxpool.Pool {
 		t.Skip("set ELITEA_EDITOR_TEST_DATABASE_URL to run the disposable editor PostgreSQL fixture")
 	}
 	for _, key := range []string{"ELITEA_TEST_DATABASE_URL", "ELITEA_TEST_USE_SERVICE_DATABASE_URL", "DATABASE_URL"} {
-		if os.Getenv(key) != "" {
+		if os.Getenv(key) != "" { // testpg:not-a-database: a presence check that refuses to connect
 			t.Fatalf("refuse existing TestMain/service database configuration: %s", key)
 		}
 	}

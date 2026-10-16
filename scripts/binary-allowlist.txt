@@ -99,3 +99,10 @@ services/elitea-main/api/openapi/v2.yaml
 # Desktop client icons (ADR-0029): the brand mark rasterised by `tauri icon`
 # (apps/elitea-desktop/README.md). Small, regenerable, required by tauri-build.
 apps/elitea-desktop/src-tauri/icons/*
+
+# Vendored zavora-slide crates (ADR-0032; libs/rust/vendor/README.md): the
+# bundled Liberation Sans faces the renderers use instead of host fonts, and
+# the crate's own sample decks, kept byte for byte as the archive ships them.
+libs/rust/vendor/zavora-slide-render/fonts/*.ttf
+libs/rust/vendor/zavora-slide-pdf/fonts/*.ttf
+libs/rust/vendor/zavora-slide/tests/corpus/*.pptx

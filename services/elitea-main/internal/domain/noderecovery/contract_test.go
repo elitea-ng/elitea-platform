@@ -5,9 +5,45 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// The shared receipt vectors live next to the JSON schema. The Worker reads the
+// same files (node_recovery_receipt.rs), so a receipt one side builds and the
+// other refuses fails a test on both sides. A name containing ".invalid." must
+// be refused; every other node-recovery-required-v1*.json must be accepted.
+func TestNodeRecoveryReceiptSharedGoldenVectors(t *testing.T) {
+	paths, err := filepath.Glob("../../../../../libs/jsonschema/runtime/v1/fixtures/node-recovery-required-v1*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, invalid := 0, 0
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, decodeErr := DecodeReceipt(raw)
+		if strings.Contains(filepath.Base(path), ".invalid.") {
+			invalid++
+			if decodeErr == nil {
+				t.Errorf("%s: invalid vector accepted", filepath.Base(path))
+			}
+			continue
+		}
+		valid++
+		if decodeErr != nil {
+			t.Errorf("%s: valid vector rejected: %v", filepath.Base(path), decodeErr)
+		}
+	}
+	// The unknown failure class with an unknown effect is a legitimate reconcile
+	// receipt: Main must accept exactly what the Worker emits for it.
+	if valid < 6 || invalid < 8 {
+		t.Fatalf("shared vectors missing: %d valid, %d invalid", valid, invalid)
+	}
+}
 
 func TestNodeRecoveryStrictReceiptCanonicalVector(t *testing.T) {
 	raw, err := os.ReadFile("../../../../../libs/jsonschema/runtime/v1/fixtures/node-recovery-required-v1.json")

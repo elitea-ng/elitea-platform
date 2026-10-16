@@ -1,0 +1,23 @@
+[package]
+name = "zavora-slide-pdf"
+description = "PDF export (one page per slide) for PresentationML presentations"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["bundled-fonts"]
+bundled-fonts = []
+
+[dependencies]
+zavora-slide-layout = { workspace = true }
+zavora-slide-render = { workspace = true }
+thiserror = { workspace = true }
+svg2pdf = "0.13"
+pdf-writer = "0.12"

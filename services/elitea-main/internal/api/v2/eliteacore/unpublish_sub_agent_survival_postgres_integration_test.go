@@ -101,8 +101,8 @@ VALUES ('survival sub-agent', 'application', '', $1, '{}'::jsonb, 1, 1) RETURNIN
 		t.Fatalf("seed sub-agent tool row: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id)
-VALUES ($1, $2, 'agent', $3)`, fixture.parentVersionID, fixture.parentAppID, toolID); err != nil {
+INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, created_at)
+VALUES ($1, $2, 'agent', $3, now() AT TIME ZONE 'UTC')`, fixture.parentVersionID, fixture.parentAppID, toolID); err != nil {
 		t.Fatalf("seed sub-agent mapping: %v", err)
 	}
 	return fixture

@@ -12,6 +12,8 @@ metadata:
   name: {{ include "elitea-vector.fullname" . }}-server
   labels:
     {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
   secretName: {{ .Values.vector.mtls.serverSecretName }}
   duration: {{ .Values.vector.mtls.duration }}
@@ -39,6 +41,8 @@ metadata:
   name: {{ include "elitea-vector.fullname" . }}-client
   labels:
     {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
   # Presented to elitea-main's control listener for token introspection.
   # elitea-main admits it as dns:{{ lower .Values.vector.mtls.clientDnsName }}
@@ -59,4 +63,39 @@ spec:
     name: {{ .Values.vector.mtls.issuerRef.name }}
     kind: {{ .Values.vector.mtls.issuerRef.kind }}
     group: cert-manager.io
+{{- if include "elitea-vector.mainClientEnabled" . }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "elitea-main.fullname" . }}-vector-client
+  labels:
+    {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
+spec:
+  # elitea-main's ADMINISTRATOR identity on elitea-vector's listener (ADR-0031
+  # decision 4): presented with no token to delete a toolkit index's namespace
+  # and a deprovisioned project's vectors. Admitted as
+  # {{ include "elitea-vector.mainClientIdentity" . }} (ELITEA_VECTOR_ADMIN_IDENTITIES).
+  # From the same runtime-CA issuer as the two above, because that CA is what
+  # the listener trusts; elitea-main's runtime listener certificates carry
+  # server auth only, so they cannot serve as this client.
+  secretName: {{ .Values.vector.mainClient.secretName }}
+  duration: {{ .Values.vector.mtls.duration }}
+  renewBefore: {{ .Values.vector.mtls.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  dnsNames:
+    - {{ .Values.vector.mainClient.dnsName }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ .Values.vector.mtls.issuerRef.name }}
+    kind: {{ .Values.vector.mtls.issuerRef.kind }}
+    group: cert-manager.io
+{{- end }}
 {{- end }}

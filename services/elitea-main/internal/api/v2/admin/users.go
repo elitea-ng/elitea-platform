@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -299,13 +300,37 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		ids = append(ids, user.ID)
 	}
 
-	// One statement, one transaction boundary: a partial delete would leave the
-	// operator unable to tell which half of a bulk selection went through.
+	// One transaction: a partial delete would leave the operator unable to tell
+	// which half of a bulk selection went through, and the journal row for the
+	// users' personal memories (every project: no membership lookup, it would
+	// be gone with the cascade) commits or rolls back with the delete itself.
 	// auth_core__user's dependents all cascade (user_role, token, user_group,
 	// project_user_role, …), so the row delete is sufficient.
-	tag, err := h.pool.Exec(r.Context(),
+	ctx := r.Context()
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx,
 		`DELETE FROM public.auth_core__user WHERE id = ANY($1::int[])`, ids)
 	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	}
+	if h.memoryUsers != nil {
+		memoryIDs := make([]int64, len(ids))
+		for i, id := range ids {
+			memoryIDs[i] = int64(id)
+		}
+		if _, err := h.memoryUsers.EnqueueMemoryUsers(ctx, tx, 0, memoryIDs...); err != nil {
+			slog.ErrorContext(ctx, "could not journal the deleted users' personal-memory cleanup", "err", err)
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
 		return
 	}

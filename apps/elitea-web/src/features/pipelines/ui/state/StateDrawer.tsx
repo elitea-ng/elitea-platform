@@ -15,7 +15,7 @@
  * this file has neither.
  */
 import type { ReactNode } from 'react';
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import CloseIcon from '@mui/icons-material/Close';
 import Box from '@mui/material/Box';
@@ -26,38 +26,35 @@ import Typography from '@mui/material/Typography';
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
 import { getDefaultValueForType } from '../../lib/flow-editor/helpers/state.helpers';
 import { useResizableDrawer } from '../../lib/flow-editor/hooks/useResizableDrawer';
+import { patchStateVariableMap, stateVariableSpecsForDisplay } from '../../lib/stateVariableSpec.helpers';
+import type { SetYamlJsonObject } from '../../lib/flow-editor/reactFlowTypes';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { ClipboardIcon } from '@/shared/ui/icons/clipboard-icon';
 import { t } from '@/shared/i18n';
 
-import { StateVariableList, type StateVariableConfig } from './StateVariableList';
+import { StateVariableList } from './StateVariableList';
 
 /** @public */
 export interface StateDrawerProps {
   readonly isOpen: boolean;
   readonly onClose: () => void;
-  readonly setYamlJsonObject: (document: YamlPipelineDocument) => void;
+  readonly setYamlJsonObject: SetYamlJsonObject;
   readonly yamlJsonObject: YamlPipelineDocument;
   readonly disabled?: boolean | undefined;
 }
 
-type StateMap = Readonly<Record<string, StateVariableConfig>>;
+type StateMap = Readonly<Record<string, unknown>>;
 
-/**
- * `YamlPipelineDocument['state']`'s declared type additionally allows a
- * legacy bare-string spec (`YamlStateVariableSpec | string`, see that
- * file's own doc comment) for old, pre-migration YAML. The baseline (an
- * untyped `.jsx` file) always read `state[name].type`/`.value` directly,
- * i.e. always assumed the `{ type, value }` object shape at this call site
- * too — matched here with a narrowing cast, not a runtime normalization
- * this component was never responsible for in the baseline either.
- */
 function stateOf(document: YamlPipelineDocument): StateMap {
-  return (document.state as StateMap | undefined) ?? {};
+  return document.state ?? {};
 }
 
 export function StateDrawer(props: StateDrawerProps): ReactNode {
   const { isOpen, onClose, setYamlJsonObject, yamlJsonObject, disabled } = props;
+  const displayStates = useMemo(
+    () => (yamlJsonObject.state === undefined ? undefined : stateVariableSpecsForDisplay(stateOf(yamlJsonObject))),
+    [yamlJsonObject],
+  );
 
   const { containerRef, drawerWidth, isResizing, isHoveringHandle, setIsHoveringHandle, handleResizeStart } =
     useResizableDrawer();
@@ -65,7 +62,7 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
   const handleToggleState = useCallback(
     (name: string, enabled: boolean) => {
       const oldState = yamlJsonObject.state ? stateOf(yamlJsonObject) : { ...FlowEditorConstants.DefaultState };
-      let newState: Record<string, StateVariableConfig>;
+      let newState: Record<string, unknown>;
       if (enabled) {
         newState = {
           ...oldState,
@@ -80,22 +77,16 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
         newState = { ...oldState };
         delete newState[name];
       }
-      setYamlJsonObject({ ...yamlJsonObject, state: newState });
+      setYamlJsonObject({ ...yamlJsonObject, state: newState } as YamlPipelineDocument);
     },
     [setYamlJsonObject, yamlJsonObject],
   );
 
   const handleUpdateState = useCallback(
     (name: string, changes: Readonly<Record<string, unknown>>) => {
-      const updated: Record<string, StateVariableConfig> = { ...stateOf(yamlJsonObject) };
-      const newName = changes['newName'];
-      if (typeof newName === 'string' && newName !== name) {
-        updated[newName] = { ...updated[name] };
-        delete updated[name];
-      } else {
-        updated[name] = { ...updated[name], ...changes };
-      }
-      setYamlJsonObject({ ...yamlJsonObject, state: updated });
+      const updated = patchStateVariableMap(stateOf(yamlJsonObject), name, changes);
+      const document = { ...yamlJsonObject, state: updated.state } as YamlPipelineDocument;
+      setYamlJsonObject(document, updated.stateRename ? { stateRename: updated.stateRename } : undefined);
     },
     [setYamlJsonObject, yamlJsonObject],
   );
@@ -104,7 +95,7 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
     (name: string) => {
       const newState = { ...stateOf(yamlJsonObject) };
       delete newState[name];
-      setYamlJsonObject({ ...yamlJsonObject, state: newState });
+      setYamlJsonObject({ ...yamlJsonObject, state: newState } as YamlPipelineDocument);
     },
     [setYamlJsonObject, yamlJsonObject],
   );
@@ -113,13 +104,13 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
     (name: string, type = 'str'): boolean => {
       if (!name) return false;
       const currentState = yamlJsonObject.state ? stateOf(yamlJsonObject) : undefined;
-      if (currentState?.[name]) return false;
+      if (currentState && Object.hasOwn(currentState, name)) return false;
       if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name)) return false;
-      const updated: Record<string, StateVariableConfig> = {
+      const updated: Record<string, unknown> = {
         ...(currentState ?? FlowEditorConstants.DefaultState),
       };
       updated[name] = { type, value: getDefaultValueForType(type) };
-      setYamlJsonObject({ ...yamlJsonObject, state: updated });
+      setYamlJsonObject({ ...yamlJsonObject, state: updated } as YamlPipelineDocument);
       return true;
     },
     [setYamlJsonObject, yamlJsonObject],
@@ -128,10 +119,7 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
   if (!isOpen) return null;
 
   return (
-    <Box
-      ref={containerRef}
-      sx={containerSx(drawerWidth, isResizing, isHoveringHandle)}
-    >
+    <Box ref={containerRef} sx={containerSx(drawerWidth, isResizing, isHoveringHandle)}>
       <Box
         sx={resizeHandleSx}
         onMouseDown={handleResizeStart}
@@ -143,10 +131,7 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
           <Box sx={headerIconSx}>
             <ClipboardIcon />
           </Box>
-          <Typography
-            variant="labelSmall"
-            sx={headerTitleSx}
-          >
+          <Typography variant="labelSmall" sx={headerTitleSx}>
             {t('pipelines.flowEditor.state.drawerTitle', 'STATE')}
           </Typography>
         </Box>
@@ -160,7 +145,7 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
       </Box>
       <Box sx={contentSx}>
         <StateVariableList
-          states={yamlJsonObject.state as StateMap | undefined}
+          states={displayStates}
           drawerWidth={drawerWidth}
           onUpdateState={handleUpdateState}
           onDeleteState={handleDeleteState}

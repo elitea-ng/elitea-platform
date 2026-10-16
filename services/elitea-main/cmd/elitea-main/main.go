@@ -61,6 +61,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
+	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	schedulingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/scheduling"
@@ -1634,6 +1635,42 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose application platform operations: %w", err)
 	}
 	defer closePlatformOperations()
+	// elitea-vector's gRPC client (ADR-0031 decision 4): the two platform
+	// deletions in the vector store — a toolkit index's namespace (the index
+	// delete route and the registry's tombstone sweeper, through the runtime
+	// composition's IndexVectorDeleter) and a deleted project's every
+	// namespace (one cleanup-journal step, RouterConfig.ProjectVectorData).
+	// Presents its own runtime-CA client certificate, not a facade's. nil
+	// without ELITEA_VECTOR_GRPC_TARGET; see vector_client_config.go.
+	vectorClient, closeVectorClient, err := composeVectorClient(
+		logger, os.LookupEnv, runtimeConfig.RustIndexing())
+	if err != nil {
+		return fmt.Errorf("compose elitea-vector client: %w", err)
+	}
+	defer closeVectorClient()
+	// Through nil INTERFACES, never a typed nil: both consumers decide on
+	// `!= nil`, and a typed-nil *Client would pass and then dereference.
+	var indexVectorDeleter indexingapp.IndexVectorDeleter
+	var projectVectorData projectprovisioning.ApplicationDataRemover
+	// The memory toolkit's cleanup (a toolkit's namespace, a user's personal
+	// memories) rides the same client; a nil INTERFACE without one.
+	var memoryData api.MemoryData
+	if vectorClient != nil {
+		indexVectorDeleter = vectorClient
+		projectVectorData = vectorClient
+		memoryData = vectorClient
+	}
+	// The vector step is recorded on a project delete by every replica that
+	// indexes into the store (Rust indexing), with or without a client; a
+	// Python-indexing replica with a client only drains. No replica closes a
+	// recorded step on its own configuration: only the operator's abandon
+	// switch does (RouterConfig.ProjectVectorCleanupAbandoned), which is
+	// refused beside a client.
+	vectorStepRecorded := runtimeConfig.RustIndexing()
+	vectorCleanupAbandoned, err := vectorCleanupAbandonSwitch(logger, os.LookupEnv, vectorClient != nil)
+	if err != nil {
+		return err
+	}
 	// The same endpoint serves every SDK toolkit type's settings schema and its
 	// metadata — the label, categories and icon the create page groups it by.
 	// This is a second pinned file rather than a larger first one: the argument
@@ -1785,7 +1822,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ProjectSystemTokenSource:         formGraph,
 			// elitea-vector's token introspection (ADR-0031) reads callback
 			// grants over the main pool, where the minting facades write them.
-			CallbackTokenFacts:      dbrepos.NewCallbackTokenGrants(pool),
+			CallbackTokenFacts: dbrepos.NewCallbackTokenGrants(pool),
+			// elitea-vector's Delete for the registry (ADR-0031 decision 4);
+			// nil keeps the deferred hook and an idle sweeper.
+			IndexVectorDeleter:      indexVectorDeleter,
 			PermissionResolver:      legacyrbac.NewPostgresResolver(pool),
 			Logger:                  logger,
 			ObjectStore:             objectStore,
@@ -2427,32 +2467,38 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	r := api.NewRouter(api.RouterConfig{
-		OnProjectProvisioner:         startDeletionReconciler,
-		OnToolkitCleanupJournal:      startToolkitReconciler,
-		ProjectCleanupContext:        ctx,
-		ProjectDeleteBudget:          projectDeleteBudget,
-		ApplicationData:              applicationData,
-		AdminUI:                      adminUICfg,
-		Pool:                         pool,
-		Branding:                     brandingResolver,
-		DeploymentKind:               deploymentKind,
-		PublicOrigin:                 publicOrigin,
-		NativeClients:                native.registry,
-		NativeStore:                  native.store,
-		NativePolicy:                 nativePolicy,
-		NativeAccess:                 native.validator,
-		NativeSecureCookies:          os.Getenv("COOKIE_SECURE") != "false",
-		Mailer:                       mailComposer,
-		EmailSettings:                emailResolver,
-		BrandingPackages:             brandingPackages,
-		ToolkitArgumentSchemas:       toolkitArgumentSchemas,
-		ToolkitCatalogue:             toolkitCatalogue,
-		ToolkitWorkerCapability:      workerToolkitCapability,
-		ToolkitSettingsDefinitions:   toolkitSettingsDefinitions,
-		ToolkitSettingsValidator:     toolkitSettingsValidator,
-		ToolkitRegistry:              toolkitArgumentSchemas,
-		DelegatedAuthToolkitSettings: delegatedAuthToolkitSettings,
-		WorkerImplementation:         workerImplementation,
+		OnProjectProvisioner:          startDeletionReconciler,
+		OnToolkitCleanupJournal:       startToolkitReconciler,
+		ProjectCleanupContext:         ctx,
+		ProjectDeleteBudget:           projectDeleteBudget,
+		ApplicationData:               applicationData,
+		ProjectVectorData:             projectVectorData,
+		MemoryData:                    memoryData,
+		MemoryDataRecorded:            runtimeConfig.RustIndexing(),
+		ProjectVectorDataRecorded:     vectorStepRecorded,
+		ProjectVectorCleanupAbandoned: vectorCleanupAbandoned,
+		AdminUI:                       adminUICfg,
+		Pool:                          pool,
+		Branding:                      brandingResolver,
+		DeploymentKind:                deploymentKind,
+		PublicOrigin:                  publicOrigin,
+		NativeClients:                 native.registry,
+		NativeStore:                   native.store,
+		NativePolicy:                  nativePolicy,
+		NativeAccess:                  native.validator,
+		NativeSecureCookies:           os.Getenv("COOKIE_SECURE") != "false",
+		Mailer:                        mailComposer,
+		EmailSettings:                 emailResolver,
+		BrandingPackages:              brandingPackages,
+		ToolkitArgumentSchemas:        toolkitArgumentSchemas,
+		ToolkitCatalogue:              toolkitCatalogue,
+		ToolkitWorkerCapability:       workerToolkitCapability,
+		MemoryOnVectorStore:           runtimeConfig.RustIndexing(),
+		ToolkitSettingsDefinitions:    toolkitSettingsDefinitions,
+		ToolkitSettingsValidator:      toolkitSettingsValidator,
+		ToolkitRegistry:               toolkitArgumentSchemas,
+		DelegatedAuthToolkitSettings:  delegatedAuthToolkitSettings,
+		WorkerImplementation:          workerImplementation,
 		// Readiness is the database alone. The Form graph's sign-in state is
 		// in this same database (shared migration 0153), so it adds no
 		// dependency of its own; the auth Redis it once pinged is gone.

@@ -118,10 +118,23 @@ updates:
       - /libs/rust
       - /services/elitea-inventory-engine
       - /services/elitea-vector
+      - /services/elitea-doc-extractor
       - /apps/elitea-desktop/src-tauri
     multi-ecosystem-group: weekly
     patterns: ["*"]
     ignore:
+      # xberg 1.3.6 (the document extractor, pinned exactly) declares
+      # `zip >= 7.0.0` and does not compile against zip 9 (`ZipFile::name`
+      # became a Result). services/elitea-doc-extractor pins zip =8.6.0 so its
+      # fresh lock resolves what the engines' locks already hold; a bump of
+      # zip alone is a red build there until xberg moves.
+      - dependency-name: zip
+        update-types: ["version-update:semver-major"]
+      # libs/rust/office-core pins zavora-slide, zavora-docx and zavora-xlsx
+      # exactly, and its sub-crates move only with them (ADR-0032 decision 5):
+      # a bump is a reviewed PR that reruns the hostile corpus, never a scanner
+      # PR. tests/isolation.rs asserts the locked version of every zavora-*.
+      - dependency-name: "zavora-*"
       # sqlx 0.x minors change the query/executor associated types the SQL
       # client and the checkpointer are written against (0.9 broke both, #661).
       - dependency-name: sqlx

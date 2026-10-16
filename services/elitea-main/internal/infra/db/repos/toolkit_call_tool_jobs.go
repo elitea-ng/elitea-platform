@@ -198,6 +198,10 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 	); err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}
+	memoryToolkits, err := callToolChildMemoryToolkits(ctx, tx, admission)
+	if err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
 	createdID, err := txQueries.InsertToolkitCallToolJob(ctx, sqlcgen.InsertToolkitCallToolJobParams{
 		ExecutionID:         admission.Record.Job.ID,
 		Generation:          int64(admission.Record.Job.Generation),
@@ -214,6 +218,9 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 		IdempotencyKey:      admission.Record.IdempotencyKey,
 		State:               string(admission.Record.Job.State),
 		AdmittedAt:          timestamp(timing.AdmittedAt),
+		// The resolved toolkit (type and id from the project's elitea_tools
+		// row, never from the call's arguments) when it is a memory toolkit.
+		MemoryToolkitIds: memoryToolkits,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A concurrent admission won the unique idempotency index. Its outcome
@@ -353,3 +360,39 @@ func boundedToolRunAdmissionStrings(admission toolkitcalltoolapp.Admission) bool
 }
 
 var _ toolkitcalltoolapp.AtomicAdmissionStore = (*ToolkitCallToolJobsRepository)(nil)
+
+// callToolChildMemoryToolkits is the memory toolkit a tool call is given. A
+// direct call (the UI's tool test, an API call) gets its resolved toolkit when
+// it is a memory toolkit. A call spawned FROM a run (a Code node's
+// toolkit_call, whose toolkit id the code chose) gets it only if the PARENT
+// execution was given it: a child never reaches a memory store its parent's
+// run was not given. Read in the admission's transaction, after the parent is
+// locked.
+func callToolChildMemoryToolkits(ctx context.Context, tx pgx.Tx, admission toolkitcalltoolapp.Admission) ([]int64, error) {
+	own := callToolMemoryToolkits(admission.Binding)
+	if admission.CodeParent == nil || len(own) == 0 {
+		return own, nil
+	}
+	parent := admission.CodeParent.Admission.Job
+	var allowed bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM elitea_runtime.execution_jobs
+    WHERE execution_id = $1 AND generation = $2 AND $3 = ANY (memory_toolkit_ids))`,
+		parent.ExecutionID, int64(parent.OriginalGeneration), own[0]).Scan(&allowed); err != nil {
+		return nil, fmt.Errorf("read the parent run's memory toolkits: %w", err)
+	}
+	if !allowed {
+		return []int64{}, nil
+	}
+	return own, nil
+}
+
+// callToolMemoryToolkits is the memory toolkit a tool call's resolved
+// toolkit names: itself when its type is `memory`, else none.
+func callToolMemoryToolkits(binding executiondomain.ToolkitCallToolBinding) []int64 {
+	if binding.ToolkitType == "memory" && binding.ToolkitID > 0 {
+		return []int64{binding.ToolkitID}
+	}
+	return []int64{}
+}

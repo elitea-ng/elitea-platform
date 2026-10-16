@@ -306,11 +306,14 @@ runs:
           n_from=$(( n_from + this ))
           # One `target "<name>" { cache-to = [...] }` block per cache-from line,
           # named after the target block the line sits in.
+          # ignore-error=true: the image is already built when the export runs, and the
+          # 10 GB Actions cache evicts entries mid-write ("cache entry no longer
+          # exists"); a lost cache write must cost the next run time, not fail this one.
           awk -v mode="$MODE" '
             /^target "/ { name = $2 }
             /cache-from = \["type=gha,scope=/ {
               sub(/.*scope=/, ""); sub(/".*/, "")
-              printf "target %s {\n  cache-to = [\"type=gha,mode=%s,scope=%s\"]\n}\n", name, mode, $0
+              printf "target %s {\n  cache-to = [\"type=gha,mode=%s,scope=%s,ignore-error=true\"]\n}\n", name, mode, $0
             }' "$f" >> "$out"
         done <<< "$CACHE_HCL"
         n_to=$(grep -c 'cache-to = ' "$out" || true)

@@ -70,6 +70,10 @@ export interface AdminMcpServer {
   readonly url: string;
   readonly base_url: string;
   readonly client_id: string;
+  /** The operator-pinned OAuth token endpoint the client secret may be sent to. */
+  readonly token_url?: string;
+  /** True when the URL is a template that carries a client secret but no pinned token_url: the secret cannot be used until one is set. */
+  readonly token_url_required?: boolean;
   /** The mask when a secret is set; absent when none is. Never the value. */
   readonly client_secret?: string;
   readonly timeout: number;
@@ -128,6 +132,8 @@ export interface AdminMcpServerDraft {
   readonly url: string;
   readonly baseUrl: string;
   readonly clientId: string;
+  /** Always sent: the form shows the current pin, so saving an unrelated edit keeps it. */
+  readonly tokenUrl: string;
   /** `undefined` ⇒ unchanged. `''` ⇒ clear it. A value ⇒ re-seal it. */
   readonly clientSecret: string | undefined;
   readonly timeout: number;
@@ -146,6 +152,7 @@ export function useSaveAdminMcpServer(): UseMutationResult<void, Error, AdminMcp
         url: draft.url,
         base_url: draft.baseUrl,
         client_id: draft.clientId,
+        token_url: draft.tokenUrl,
         timeout: draft.timeout,
         headers: draft.headers,
         config_schema: draft.configSchema,

@@ -6,6 +6,8 @@ metadata:
   name: {{ .Values.vector.service.name }}
   labels:
     {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
   # ClusterIP only: the facade trusts its client certificates, so it must not
   # sit on a network where anyone can attempt the handshake. The health port
@@ -27,10 +29,11 @@ metadata:
   name: {{ include "elitea-vector.serviceAccountName" . }}
   labels:
     {{- include "elitea-vector.labels" . | nindent 4 }}
-  {{- with .Values.vector.serviceAccount.annotations }}
   annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
+    {{- with .Values.vector.serviceAccount.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 automountServiceAccountToken: false
 {{- end }}
 {{- if .Values.vector.autoscaling.enabled }}
@@ -41,6 +44,8 @@ metadata:
   name: {{ include "elitea-vector.fullname" . }}
   labels:
     {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -64,6 +69,8 @@ metadata:
   name: {{ include "elitea-vector.fullname" . }}
   labels:
     {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
   minAvailable: {{ .Values.vector.podDisruptionBudget.minAvailable }}
   selector:

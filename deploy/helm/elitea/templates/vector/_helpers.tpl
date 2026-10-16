@@ -6,6 +6,25 @@ certificate's one DNS SAN is the identity elitea-main admits.
 {{- define "elitea-vector.fullname" -}}elitea-vector{{- end }}
 {{- define "elitea-vector.qdrantName" -}}elitea-qdrant{{- end }}
 
+{{/*
+elitea-vector rolls BEFORE elitea-main (worker unit M9 rollout safety). Every
+manifest of the vector stack (its Qdrant, Services, certificates, network
+policies, Deployment) is in Argo CD sync-wave -5, ahead of elitea-main and
+everything else at the default wave 0, so a new elitea-main never introspects
+for an older elitea-vector: Argo applies a wave and waits for it to be healthy
+before the next. The whole stack shares the wave, never only the Deployment: a
+Deployment ahead of its own certificates would wait for Secrets a later wave
+creates, and the sync would never finish. elitea-vector's readiness does not
+need elitea-main (only a REFUSAL by elitea-main fails it), so the earlier wave
+cannot wait on a later one. The migration Job is a PreSync hook and runs
+before every wave. A plain `helm upgrade` has no waves: there elitea-vector
+tolerates sources it cannot name (it ignores them), which is what makes either
+order safe.
+*/}}
+{{- define "elitea-vector.syncWave" -}}
+argocd.argoproj.io/sync-wave: "-5"
+{{- end }}
+
 {{- define "elitea-vector.selectorLabels" -}}
 app.kubernetes.io/name: elitea-vector
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -43,6 +62,41 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{/* The identity elitea-main admits on its control listener. */}}
 {{- define "elitea-vector.clientIdentity" -}}
 {{- printf "dns:%s" (lower .Values.vector.mtls.clientDnsName) -}}
+{{- end }}
+
+{{/*
+elitea-vector.mainClientEnabled — "true" when this chart issues elitea-main
+its administrator client certificate (ADR-0031 decision 4): vector.enabled
+and vector.mainClient.enabled.
+*/}}
+{{- define "elitea-vector.mainClientEnabled" -}}
+{{- if and .Values.vector.enabled ((.Values.vector.mainClient | default dict).enabled) -}}true{{- end -}}
+{{- end }}
+
+{{/* The identity elitea-vector admits elitea-main as: dns:<mainClient.dnsName>. */}}
+{{- define "elitea-vector.mainClientIdentity" -}}
+{{- printf "dns:%s" (lower (.Values.vector.mainClient.dnsName | toString)) -}}
+{{- end }}
+
+{{/*
+elitea-vector.adminIdentities — the comma-separated ELITEA_VECTOR_ADMIN_IDENTITIES:
+this chart's elitea-main (when mainClient is on) and then vector.adminIdentities,
+each once.
+*/}}
+{{- define "elitea-vector.adminIdentities" -}}
+{{- $identities := list -}}
+{{- if include "elitea-vector.mainClientEnabled" . -}}
+{{- $identities = append $identities (include "elitea-vector.mainClientIdentity" .) -}}
+{{- end -}}
+{{- range .Values.vector.adminIdentities -}}
+{{- $identities = append $identities . -}}
+{{- end -}}
+{{- join "," ($identities | uniq) -}}
+{{- end }}
+
+{{/* elitea-vector's gRPC target as elitea-main dials it: <service>:<port>. */}}
+{{- define "elitea-vector.grpcTarget" -}}
+{{- printf "%s:%v" .Values.vector.service.name .Values.vector.service.port -}}
 {{- end }}
 
 {{/* Qdrant's gRPC URL, as elitea-vector dials it. */}}
@@ -93,6 +147,14 @@ then refuses every request, which looks like a healthy service.
 {{- range .Values.vector.adminIdentities -}}
 {{- if not (or (hasPrefix "dns:" .) (hasPrefix "spiffe://" .)) -}}
 {{- fail (printf "vector.adminIdentities entry %q is not a canonical identity: write dns:<lower-case DNS SAN> or a spiffe:// URI." .) -}}
+{{- end -}}
+{{- end -}}
+{{- if include "elitea-vector.mainClientEnabled" . -}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$" (.Values.vector.mainClient.dnsName | toString)) -}}
+{{- fail (printf "vector.mainClient.dnsName must be one lower-case DNS name, got %q: it is elitea-main's client certificate's only SAN and elitea-vector admits it as dns:<name>." .Values.vector.mainClient.dnsName) -}}
+{{- end -}}
+{{- if eq (lower (.Values.vector.mainClient.dnsName | toString)) (lower (.Values.vector.mtls.clientDnsName | toString)) -}}
+{{- fail (printf "vector.mainClient.dnsName and vector.mtls.clientDnsName are both %q: elitea-main's administrator identity and elitea-vector's own client identity must differ, or elitea-vector would admit itself as an administrator." .Values.vector.mainClient.dnsName) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

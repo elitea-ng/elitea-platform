@@ -264,6 +264,10 @@ pub struct AcceptedAgentClaim {
     arguments_entry: Option<ExecutionInputEntryV1>,
     /// The elitea-vector bearer Main minted for this claim, if any.
     vector_token: Option<VectorClaimToken>,
+    /// Main reads the typed tool-run refusals (`ClaimReceiptV1`
+    /// `toolkit_typed_refusals`); without it the terminal is downgraded to
+    /// the shapes an older Main accepts.
+    toolkit_typed_refusals: bool,
 }
 
 impl AcceptedAgentClaim {
@@ -347,6 +351,47 @@ impl AcceptedAgentClaim {
         identity == Some(&self.identity)
             && fence == Some(&self.fence)
             && handoff_watermark == self.claim_handoff_watermark
+    }
+
+    /// Whether a spooled frame was bound by an earlier claim that this claim
+    /// replaced: strictly older attempt and lease epoch. Main refuses such a
+    /// frame under the old fence, so it can never be replayed.
+    #[must_use]
+    pub(crate) fn supersedes_output_fence(&self, frame: &ExecutionOutputFrameV1) -> bool {
+        frame.fence.as_ref().is_some_and(|fence| {
+            fence.claim_attempt < self.fence.claim_attempt
+                && fence.lease_epoch < self.fence.lease_epoch
+        })
+    }
+
+    /// The canonical failure terminal for `sequence` under this claim's fence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded [`ProtocolError`] unless the sequence is the one Main's
+    /// handoff watermark makes next, or the frame cannot be built.
+    pub(crate) fn failure_terminal_at(
+        &self,
+        verified: &VerifiedAgentCommand,
+        failure: RuntimeFailureKind,
+        sequence: u64,
+        occurred_at_unix_millis: i64,
+    ) -> Result<ExecutionOutputFrameV1, ProtocolError> {
+        if !self.matches_verified_command(verified)
+            || self.claim_handoff_watermark.checked_add(1) != Some(sequence)
+        {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the recovery failure terminal does not match its claim",
+            ));
+        }
+        build_agent_terminal_output_frame(
+            verified,
+            &self.fence,
+            AgentTerminalOutput::Failure(failure),
+            sequence,
+            occurred_at_unix_millis,
+            self.claim_handoff_watermark,
+        )
     }
 
     /// Compare the non-secret structural command identity independently from
@@ -577,6 +622,7 @@ impl AcceptedAgentClaim {
             arguments_entry: _,
             // Output replay needs no vector access; the bearer is erased here.
             vector_token: _,
+            toolkit_typed_refusals: _,
         } = self;
         AcceptedTerminalClaimRecovery {
             binding: RecoveryClaimBinding {
@@ -1355,6 +1401,8 @@ impl AgentExecutionOutputAuthority {
                 "the toolkit result does not match its admitted inputs",
             ));
         }
+        let terminal =
+            super::output::terminal_for_main(terminal, self.claim.toolkit_typed_refusals);
         build_toolkit_execute_read_terminal_output_frame(
             verified,
             &self.claim.fence,
@@ -1582,6 +1630,7 @@ impl AgentExecutionOutputCursor {
         let failure = match winner {
             ProgressRejectionWinner::Cancelled => RuntimeFailureKind::Cancelled,
             ProgressRejectionWinner::DeadlineExceeded => RuntimeFailureKind::DeadlineExceeded,
+            ProgressRejectionWinner::FrameRefused => RuntimeFailureKind::Internal,
         };
         let frame = build_agent_terminal_output_frame(
             verified,
@@ -1704,6 +1753,7 @@ pub(crate) fn test_lease_monitored_input_execution(
             input_bundle: ExecutionInputBundleV1::default(),
             arguments_entry: None,
             vector_token: None,
+            toolkit_typed_refusals: false,
             request_entry: ExecutionInputEntryV1 {
                 entry_id: "agent-request".to_owned(),
                 immutable_version: "v/1".to_owned(),
@@ -3042,6 +3092,7 @@ fn parse_input_claim_binding(
         request_entry,
         arguments_entry,
         vector_token: VectorClaimToken::from_receipt(receipt.vector_token),
+        toolkit_typed_refusals: receipt.toolkit_typed_refusals,
     })
 }
 
@@ -3099,6 +3150,9 @@ pub(crate) enum IndexRemovalOutcome {
     Forbidden,
     /// The index's run is still active.
     ActiveRun,
+    /// The run's conversation read personal memory: a shared index is not
+    /// changed from it (worker unit M9).
+    SharedWriteRefused,
 }
 
 /// The control-plane half of the `remove_index` tool: one `RemoveIndex`
@@ -3144,6 +3198,9 @@ fn parse_remove_index_response(
         Some(RemoveIndexDispositionV1::NotFound) => Ok(IndexRemovalOutcome::NotFound),
         Some(RemoveIndexDispositionV1::Forbidden) => Ok(IndexRemovalOutcome::Forbidden),
         Some(RemoveIndexDispositionV1::ActiveRun) => Ok(IndexRemovalOutcome::ActiveRun),
+        Some(RemoveIndexDispositionV1::SharedWriteRefused) => {
+            Ok(IndexRemovalOutcome::SharedWriteRefused)
+        }
         _ => Err(ControlSemanticError::InvalidInput(
             "the index removal disposition is malformed",
         )),
@@ -3766,3 +3823,25 @@ fn hex_lower(value: &[u8]) -> String {
 #[cfg(test)]
 #[path = "shared_toolkit_tests.rs"]
 mod shared_toolkit_tests;
+
+#[cfg(test)]
+mod remove_index_disposition_tests {
+    use super::*;
+
+    #[test]
+    fn a_shared_write_refusal_is_its_own_outcome() {
+        let response = RemoveIndexResponseV1 {
+            disposition: RemoveIndexDispositionV1::SharedWriteRefused as i32,
+            ..RemoveIndexResponseV1::default()
+        };
+        assert_eq!(
+            parse_remove_index_response(&response).expect("outcome"),
+            IndexRemovalOutcome::SharedWriteRefused
+        );
+        let unknown = RemoveIndexResponseV1 {
+            disposition: 99,
+            ..RemoveIndexResponseV1::default()
+        };
+        assert!(parse_remove_index_response(&unknown).is_err());
+    }
+}

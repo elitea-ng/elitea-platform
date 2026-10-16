@@ -132,7 +132,7 @@ func attachCodeConsumers(server *storage.ContentServer, config Config, deps Depe
 		if err != nil {
 			return err
 		}
-		server.WithCodePlatformPump(pump)
+		server.WithCodePlatformPump(pump.WithEffectJournal(journal))
 	}
 	visits.WithPreparedExtensions(workspaceVerifier, brokerVerifier)
 	if deps.CodeDebugStatePool != nil {

@@ -229,6 +229,23 @@
       "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the delta_lake toolkit."
     }
   },
+  "docx": {
+    "metadata": {
+      "categories": [
+        "office"
+      ],
+      "extra_categories": [
+        "document",
+        "word",
+        "office automation"
+      ],
+      "hidden": true,
+      "icon_url": null,
+      "label": "DOCX",
+      "unavailable": true,
+      "unavailable_reason": "This deployment's agent worker does not support the docx toolkit; only the Rust worker serves it."
+    }
+  },
   "elastic": {
     "metadata": {
       "hidden": true,
@@ -632,6 +649,23 @@
       "hidden": true,
       "icon_url": null,
       "label": "VectorStore"
+    }
+  },
+  "xlsx": {
+    "metadata": {
+      "categories": [
+        "office"
+      ],
+      "extra_categories": [
+        "spreadsheet",
+        "excel",
+        "office automation"
+      ],
+      "hidden": true,
+      "icon_url": null,
+      "label": "XLSX",
+      "unavailable": true,
+      "unavailable_reason": "This deployment's agent worker does not support the xlsx toolkit; only the Rust worker serves it."
     }
   },
   "xray_cloud": {

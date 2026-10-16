@@ -72,7 +72,7 @@ WHERE id = sqlc.arg(notification_id)
 WITH changed AS (
     UPDATE centry.notifications AS notification
     SET is_seen = TRUE,
-        updated_at = NOW()
+        updated_at = (NOW() AT TIME ZONE 'UTC')
     WHERE notification.id = sqlc.arg(notification_id)
       AND notification.user_id = sqlc.arg(user_id)
       AND NOT notification.is_seen
@@ -111,7 +111,7 @@ WHERE id = sqlc.arg(notification_id)
 -- name: BulkSetCurrentNotificationsSeen :execrows
 UPDATE centry.notifications
 SET is_seen = sqlc.arg(is_seen),
-    updated_at = NOW()
+    updated_at = (NOW() AT TIME ZONE 'UTC')
 WHERE user_id = sqlc.arg(user_id)
   AND is_seen <> sqlc.arg(is_seen)
   AND (

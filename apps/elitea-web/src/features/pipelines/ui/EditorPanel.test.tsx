@@ -2,8 +2,9 @@ import type { ComponentProps } from 'react';
 import { createRef } from 'react';
 
 import { ThemeProvider } from '@mui/material/styles';
+import { EditorView } from '@codemirror/view';
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from '@tanstack/react-router';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -84,6 +85,8 @@ beforeEach(() => {
     initYamlJsonObject: { nodes: [] },
     resetFlag: false,
     layoutVersion: undefined,
+    stateKeyOrder: [],
+    initStateKeyOrder: [],
   });
 });
 
@@ -203,28 +206,7 @@ describe('EditorPanel', () => {
     await waitFor(() => expect(setYamlDirty).toHaveBeenCalledWith(false));
   });
 
-  /**
-   * A PLAIN LOAD CAN ARM THE UNSAVED-CHANGES GUARD, with no user edit — and
-   * this is the only mechanism in this file that can do it.
-   *
-   * `usePipelineVersionSync` seeds `yamlCode` and `initYamlCode` to the same
-   * stored string, so a loaded pipeline starts clean. The effect below
-   * (`if (nodes?.find((node) => node.decision)) onParseCodeToJson(...)`) then
-   * runs `migerateLegacyNodes`, which REWRITES a legacy `decision:` node into
-   * the current shape and hands the result to `setYamlJsonObject` — which
-   * re-dumps it into `yamlCode`. `useIsPipelineYamlCodeDirty` compares that
-   * against `initYamlCode` (and against a re-dump of it) and both differ, so
-   * the page arms `useUnsavedChangesNavBlocker` and every subsequent
-   * navigation is met with "You have unsaved changes in the editor."
-   *
-   * It is pinned rather than changed here because both readings are
-   * defensible — the document really has changed, and re-baselining it would
-   * make the migration silently unsaveable — and because deciding that is a
-   * change to the migration's contract, not to this panel. What matters for
-   * anything downstream is that it is REACHABLE and STICKY: it depends on the
-   * stored document alone, so it either happens for a whole session or never.
-   */
-  it('arms the dirty flag on a plain load of a pipeline holding a legacy decision node', async () => {
+  it('keeps a plain load of a legacy decision pipeline clean and preserves stored YAML', async () => {
     const legacy = {
       entry_point: 'Decision_1',
       nodes: [{ id: 'Decision_1', decision: { nodes: ['LLM_1'] } }, { id: 'LLM_1', type: 'llm', transition: 'END' }],
@@ -240,7 +222,9 @@ describe('EditorPanel', () => {
 
     renderEditorPanel({ setYamlDirty });
 
-    await waitFor(() => expect(setYamlDirty).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(setYamlDirty).toHaveBeenCalledWith(false));
+    expect(setYamlDirty).not.toHaveBeenCalledWith(true);
+    expect(usePipelineYamlStore.getState().yamlCode).toBe(stored);
   });
 
   it('shows the error-boundary fallback for the flow pane, reflecting the real current state of the sibling FlowEditor dependency chain', async () => {
@@ -302,7 +286,7 @@ describe('EditorPanel', () => {
     await waitFor(() => expect(usePipelineYamlStore.getState().yamlCode).toContain('x'));
   });
 
-  it('switching Flow -> Yaml -> Flow round-trips through dumpYaml/onParseCodeToJson without throwing, updating yamlJsonObject from the (possibly edited) yamlCode', async () => {
+  it('switching Flow -> Yaml -> Flow parses without rewriting source, updating yamlJsonObject from the (possibly edited) yamlCode', async () => {
     const user = userEvent.setup();
     usePipelineYamlStore.setState({
       yamlCode: 'nodes:\n  - id: entry_point\n    type: entry_point\n',
@@ -321,6 +305,48 @@ describe('EditorPanel', () => {
     expect(usePipelineYamlStore.getState().yamlJsonObject).toEqual({
       nodes: [{ id: 'entry_point', type: 'entry_point' }],
     });
+  });
+
+  it.each([
+    {
+      kind: 'valid',
+      source: '# retain draft\nname: revised\nstate:\n  first: {type: string, value: null}\nx_future: null\nnodes: []\n',
+      parsed: { name: 'revised', state: { first: { type: 'string', value: null } }, x_future: null, nodes: [] },
+    },
+    { kind: 'invalid', source: 'state: [\nnodes: []\n', parsed: { nodes: [] } },
+  ])('retains a $kind draft when switching to Flow before the editor debounce fires', async ({ source, parsed }) => {
+    const user = userEvent.setup();
+    const { unmount } = renderEditorPanel();
+    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    const editor = await screen.findByRole('textbox');
+    const view = EditorView.findFromDOM(editor);
+    if (!view) throw new Error('Live YAML CodeMirror view not found');
+    const flowButton = screen.getByRole('button', { name: 'Flow' });
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      act(() => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } }));
+      act(() => {
+        vi.advanceTimersByTime(29);
+      });
+      expect(view.state.doc.toString()).toBe(source);
+      expect(usePipelineYamlStore.getState().yamlCode).toBe('nodes: []');
+
+      fireEvent.click(flowButton);
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+      expect(usePipelineYamlStore.getState().yamlCode).toBe(source);
+      expect(usePipelineYamlStore.getState().yamlJsonObject).toEqual(parsed);
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(usePipelineYamlStore.getState().yamlCode).toBe(source);
+      fireEvent.click(screen.getByRole('button', { name: 'Yaml' }));
+      expect(EditorView.findFromDOM(screen.getByRole('textbox'))?.state.doc.toString()).toBe(source);
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('clicking the already-active mode tab is a no-op (mode === newMode early return)', async () => {
@@ -357,7 +383,7 @@ describe('EditorPanel', () => {
     }
   });
 
-  it('re-parses the YAML when yamlJsonObject already contains a decision node (the reparse-on-decision-node effect)', async () => {
+  it('leaves legacy decision source and parsed view intact on mount', async () => {
     usePipelineYamlStore.setState({
       yamlCode: 'nodes:\n  - id: entry_point\n    type: entry_point\n    decision:\n      x: "1"\n',
       yamlJsonObject: { nodes: [{ id: 'entry_point', type: 'entry_point', decision: { x: '1' } }] },
@@ -368,10 +394,25 @@ describe('EditorPanel', () => {
     });
     renderEditorPanel();
 
-    // The effect runs on mount without throwing; the document round-trips back to an
-    // equivalent shape (still has the decision node) rather than being wiped out.
+    // Viewing a legacy decision keeps the source shape intact.
     await waitFor(() => expect(usePipelineYamlStore.getState().yamlJsonObject).toMatchObject({
       nodes: [expect.objectContaining({ id: 'entry_point', decision: { x: '1' } })],
     }));
+  });
+  it('preserves exact commented CRLF YAML through Flow/Yaml tabs and a layout-only save', async () => {
+    const source =
+      '# keep bytes\r\nstate:\r\n  "2": list\r\n  "10": {type: dict, value: null, future: true}\r\nnodes: []\r\n';
+    usePipelineYamlStore
+      .getState()
+      .initPipelineYaml({ yamlCode: source, yamlJsonObject: load(source) as Record<string, unknown> });
+    const user = userEvent.setup();
+    renderEditorPanel();
+    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    await user.click(await screen.findByRole('button', { name: 'Flow' }));
+    usePipelineYamlStore.getState().setLayoutVersion('new-layout');
+    usePipelineYamlStore.getState().markYamlCodeSaved();
+    expect(usePipelineYamlStore.getState().yamlCode).toBe(source);
+    expect(usePipelineYamlStore.getState().initYamlCode).toBe(source);
+    expect(usePipelineYamlStore.getState().stateKeyOrder).toEqual(['2', '10']);
   });
 });

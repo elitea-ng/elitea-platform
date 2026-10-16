@@ -117,6 +117,13 @@ type Dependencies struct {
 	// Config.VectorIntrospectionClients is set; ProjectTokenValidator then
 	// checks the signature.
 	CallbackTokenFacts vectorintrospection.CallbackFacts
+	// IndexVectorDeleter deletes a toolkit index's vectors in elitea-vector
+	// (ADR-0031 decision 4): infra/vectorclient.Client, composed from
+	// ELITEA_VECTOR_GRPC_TARGET. Optional; nil installs
+	// indexingapp.DeferredIndexVectorDeleter, which keeps every deletion
+	// pending (the tombstone stays, the sweeper idles). Read only under the
+	// Rust indexing runtime, where the registry exists.
+	IndexVectorDeleter indexingapp.IndexVectorDeleter
 	PermissionResolver auth.PermissionResolver
 	Logger             *slog.Logger
 
@@ -379,10 +386,14 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// (ELITEA_INDEXING_RUNTIME=rust). The python writer is then never built, so
 	// a rust deployment holds no pgvector connection code path at all.
 	rustIndexing := config.RustIndexing()
-	// Until elitea-main has an elitea-vector client, deleting an index's
-	// vectors is a deferred hook (ADR-0031 decision 4): the registry keeps the
+	// Deleting an index's vectors is elitea-vector's Delete over mTLS
+	// (ADR-0031 decision 4, infra/vectorclient) when the deployment names a
+	// target; without one it is a deferred hook: the registry keeps the
 	// tombstone, and nothing is reported as deleted that was not.
 	var indexVectors indexingapp.IndexVectorDeleter = indexingapp.DeferredIndexVectorDeleter{}
+	if dependencies.IndexVectorDeleter != nil {
+		indexVectors = dependencies.IndexVectorDeleter
+	}
 	var indexRegistry *indexRegistryComposition
 	// indexCatalog freezes each I1 indexing toolkit's indexes into the frozen
 	// toolkit for the Rust worker's index tools (ADR-0030 I1). nil on the
@@ -675,6 +686,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if admissionErr != nil {
 			return nil, fmt.Errorf("construct agent execution admission: %w", admissionErr)
 		}
+		// A sub-agent's memory toolkits are the run's too (worker unit M9):
+		// read from the same tenant-schema projection the nested-agent route
+		// freezes the child from.
+		admissionNestedVersions, nestedErr := repos.NewCurrentNestedApplicationVersionRepository(
+			dependencies.AdmissionPool,
+		)
+		if nestedErr != nil {
+			return nil, fmt.Errorf("construct nested application version reader: %w", nestedErr)
+		}
+		agentAdmissions.WithNestedMemoryToolkits(admissionNestedVersions)
 		agentTargets, targetErr := repos.NewCurrentAgentStartRepository(
 			dependencies.AdmissionPool,
 			catalogueProjectID,
@@ -2210,7 +2231,6 @@ func phaseOneGRPCPolicy(maxConcurrentStreams uint32) runtimegrpc.GRPCServerPolic
 	return runtimegrpc.GRPCServerPolicy{
 		MaxConcurrentStreams:  maxConcurrentStreams,
 		MaxConnections:        64,
-		MinClientPingInterval: 30 * time.Second,
 		KeepaliveTime:         time.Minute,
 		KeepaliveTimeout:      10 * time.Second,
 		MaxConnectionIdle:     5 * time.Minute,

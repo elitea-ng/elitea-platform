@@ -21,6 +21,7 @@ package eliteacore_test
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,7 +44,7 @@ import (
 func newSkillIconPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL skill icon integration test", environment)
 	}
@@ -114,13 +115,13 @@ func seedSkillIconSkill(t *testing.T, pool *pgxpool.Pool, name string) (skillID,
 
 	var skill, version int
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO p_1.skills (name, description, owner_id, author_id) VALUES ($1, 'seed', 1, 1) RETURNING id`,
+		`INSERT INTO p_1.skills (name, description, owner_id, author_id, created_at) VALUES ($1, 'seed', 1, 1, now() AT TIME ZONE 'UTC') RETURNING id`,
 		name).Scan(&skill); err != nil {
 		t.Fatalf("seed skill: %v", err)
 	}
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id, status)
-		 VALUES ($1, 'base', 'do the thing', 1, 'draft') RETURNING id`,
+		`INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id, status, created_at)
+		 VALUES ($1, 'base', 'do the thing', 1, 'draft', now() AT TIME ZONE 'UTC') RETURNING id`,
 		skill).Scan(&version); err != nil {
 		t.Fatalf("seed skill version: %v", err)
 	}

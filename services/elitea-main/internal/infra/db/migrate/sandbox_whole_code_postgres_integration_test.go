@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"testing/fstest"
@@ -19,7 +20,8 @@ import (
 func TestSandboxWholeCodeOwnerMigrationBootstrapAndUpgrade(t *testing.T) {
 	manifest, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.Equal(t, int64(13), Head(manifest))
+	// 0013 is the upgrade under test; later heads must not change what it adds.
+	require.GreaterOrEqual(t, Head(manifest), int64(13))
 	prefix := fstest.MapFS{}
 	for _, entry := range manifest {
 		if entry.Version <= 12 {
@@ -133,7 +135,7 @@ func TestSandboxWholeCodeOwnerMigrationBootstrapAndUpgrade(t *testing.T) {
 
 func sandboxWholeCodeIsolatedDatabase(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	url := os.Getenv("ELITEA_AGENTSTATE_TEST_DATABASE_URL")
+	url := testpg.DSN(os.Getenv("ELITEA_AGENTSTATE_TEST_DATABASE_URL"))
 	if url == "" {
 		t.Skip("set ELITEA_AGENTSTATE_TEST_DATABASE_URL for the isolated Code owner migration test")
 	}

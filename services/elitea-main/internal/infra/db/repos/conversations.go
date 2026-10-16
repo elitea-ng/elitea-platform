@@ -623,8 +623,8 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 	}
 	var c conversations.Conversation
 	var metaBytes []byte
-	err = tx.QueryRow(ctx, fmt.Sprintf(`INSERT INTO %s.chat_conversations (name,author_id,is_private,meta,source,instructions)
- VALUES ($1,$2,$3,$4::jsonb,$5,$6)
+	err = tx.QueryRow(ctx, fmt.Sprintf(`INSERT INTO %s.chat_conversations (name,author_id,is_private,meta,source,instructions, created_at)
+ VALUES ($1,$2,$3,$4::jsonb,$5,$6, now() AT TIME ZONE 'UTC')
  RETURNING id::text,name,uuid::text,created_at,COALESCE(updated_at,created_at),meta`, s), conv.Name, access.ActorID, private, encodedMeta, source, conv.Instructions).Scan(&c.ID, &c.Name, &c.UUID, &c.CreatedAt, &c.UpdatedAt, &metaBytes)
 	if err != nil {
 		return conversations.Conversation{}, fmt.Errorf("conversations: create: %w", err)
@@ -724,7 +724,7 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 			return conversations.Conversation{}, apierr.BadRequest("Only the conversation creator can restrict access")
 		}
 	}
-	setClauses := "updated_at = now()"
+	setClauses := "updated_at = (now() AT TIME ZONE 'UTC')"
 	args := []any{}
 	argIdx := 1
 
@@ -957,6 +957,8 @@ func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationI
 		return nil, fmt.Errorf("conversations: delete selected conversations: %w", err)
 	}
 
+	// The conversation's personal-memory taint (shared/0166) goes with the
+	// row: tenant/0149's AFTER DELETE trigger, which every delete path fires.
 	q := fmt.Sprintf(`DELETE FROM %s.chat_conversations WHERE id = $1`, s)
 	ct, err := transaction.Exec(ctx, q, id)
 	if err != nil {
@@ -1383,8 +1385,8 @@ func (r *ConversationsRepo) CreateCanvas(ctx context.Context, projectID string, 
 
 	// 4. Insert new items with proper ordering
 	newOrder := orderIndex
-	insertItemQ := fmt.Sprintf(`INSERT INTO %s.chat_message_items (uuid, item_type, order_index, meta, message_group_id)
-		VALUES (gen_random_uuid(), $1, $2, '{}'::jsonb, $3) RETURNING id, uuid::text`, s)
+	insertItemQ := fmt.Sprintf(`INSERT INTO %s.chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
+		VALUES (gen_random_uuid(), $1, $2, '{}'::jsonb, $3, now() AT TIME ZONE 'UTC') RETURNING id, uuid::text`, s)
 	insertTextQ := fmt.Sprintf(`INSERT INTO %s.chat_messages_text (id, content) VALUES ($1, $2)`, s)
 
 	if preContent != "" {
@@ -1418,8 +1420,8 @@ func (r *ConversationsRepo) CreateCanvas(ctx context.Context, projectID string, 
 	}
 
 	// Insert canvas version
-	insertVersionQ := fmt.Sprintf(`INSERT INTO %s.chat_canvas_versions (canvas_content, code_language, canvas_item_id)
-		VALUES ($1, $2, $3) RETURNING id, created_at`, s)
+	insertVersionQ := fmt.Sprintf(`INSERT INTO %s.chat_canvas_versions (canvas_content, code_language, canvas_item_id, created_at)
+		VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC') RETURNING id, created_at`, s)
 	var versionID int
 	var versionCreatedAt time.Time
 	err = r.pool.QueryRow(ctx, insertVersionQ, canvasContent, nilIfEmpty(codeLang), canvasItemID).Scan(&versionID, &versionCreatedAt)
@@ -1525,7 +1527,7 @@ func (r *ConversationsRepo) readCanvas(ctx context.Context, s, canvasID string) 
 	q := fmt.Sprintf(`
 		SELECT mi.id, COALESCE(mi.uuid::text, ''), cv.name, cv.canvas_type,
 			COALESCE(ver.id, 0), COALESCE(ver.canvas_content, ''), COALESCE(ver.code_language, ''),
-			COALESCE(ver.created_at, now()), COALESCE(mg.uuid::text, '')
+			COALESCE(ver.created_at, now() AT TIME ZONE 'UTC'), COALESCE(mg.uuid::text, '')
 		FROM %s.chat_message_items mi
 		JOIN %s.chat_messages_canvas cv ON cv.id = mi.id
 		LEFT JOIN %s.chat_message_group mg ON mg.id = mi.message_group_id
@@ -1713,8 +1715,8 @@ func (r *ConversationsRepo) UpdateCanvas(ctx context.Context, projectID, canvasI
 		language = row.language
 	}
 	if _, err := r.pool.Exec(ctx, fmt.Sprintf(`
-		INSERT INTO %s.chat_canvas_versions (canvas_content, code_language, canvas_item_id)
-		VALUES ($1, $2, $3)`, s), content, nilIfEmpty(language), row.itemID); err != nil {
+		INSERT INTO %s.chat_canvas_versions (canvas_content, code_language, canvas_item_id, created_at)
+		VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC')`, s), content, nilIfEmpty(language), row.itemID); err != nil {
 		return fmt.Errorf("conversations: write canvas version: %w", err)
 	}
 	return nil
@@ -1897,9 +1899,9 @@ func (r *ConversationsRepo) SetMessageFeedback(ctx context.Context, projectID, m
 
 	upsert := fmt.Sprintf(`
 		INSERT INTO %s.chat_message_feedback (message_group_uuid, user_id, rating, comment, created_at, updated_at)
-		VALUES ($1::uuid, $2, $3, NULLIF($4, ''), now(), now())
+		VALUES ($1::uuid, $2, $3, NULLIF($4, ''), (now() AT TIME ZONE 'UTC'), (now() AT TIME ZONE 'UTC'))
 		ON CONFLICT (message_group_uuid, user_id)
-		DO UPDATE SET rating = EXCLUDED.rating, comment = EXCLUDED.comment, updated_at = now()`, s)
+		DO UPDATE SET rating = EXCLUDED.rating, comment = EXCLUDED.comment, updated_at = (now() AT TIME ZONE 'UTC')`, s)
 	if _, err := r.pool.Exec(ctx, upsert, messageUUID, userID, rating, comment); err != nil {
 		return conversations.MessageFeedbackSummary{}, fmt.Errorf("conversations: set message feedback: %w", err)
 	}
@@ -2998,8 +3000,8 @@ func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s strin
 	// generated name is different. On such a database the statement failed with
 	// SQLSTATE 42704 (undefined_object), so adding a participant answered 500.
 	// Column inference matches the unique key under either name.
-	mapping := fmt.Sprintf(`INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings)
-		VALUES ($1, $2, $3::jsonb) ON CONFLICT (participant_id, conversation_id) DO NOTHING`, s)
+	mapping := fmt.Sprintf(`INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+		VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC') ON CONFLICT (participant_id, conversation_id) DO NOTHING`, s)
 	if _, err := transaction.Exec(ctx, mapping, id, participantID, entitySettings); err != nil {
 		return 0, fmt.Errorf("conversations: add participant mapping: %w", err)
 	}

@@ -570,6 +570,12 @@ fn reasoning_of(part: &Value) -> Result<Option<&str>, String> {
 /// consumed the opening tag). Everything up to the last `</think>` is the
 /// reasoning, the rest the answer. A content with a matching `<think>` is
 /// treated the same way. Content without the tag is unchanged.
+///
+/// This is deliberately NOT the worker's answer rule
+/// (`elitea_llm_wire::reasoning`, first bare `</think>`): an engine answer is
+/// a whole monologue followed by the answer, so the LAST closing tag ends it,
+/// and an unclosed leading `<think>` cut at `max_tokens` keeps the full
+/// content rather than being emptied (owner decision, #1292 round 4).
 fn split_leaked_reasoning(content: String) -> (String, String) {
     const CLOSE: &str = "</think>";
     match content.rfind(CLOSE) {
@@ -799,6 +805,21 @@ mod tests {
         assert_eq!(
             split_leaked_reasoning("no tags here".to_owned()),
             ("no tags here".to_owned(), String::new())
+        );
+        // #1292 round 4: the Qwen bare closing tag still splits with the
+        // last-`</think>` rule, a later tag ends the reasoning, and an
+        // unclosed leading `<think>` (cut at max_tokens) keeps its content.
+        assert_eq!(
+            split_leaked_reasoning("Let me look…</think>\n\nA red square.".to_owned()),
+            ("A red square.".to_owned(), "Let me look…".to_owned())
+        );
+        assert_eq!(
+            split_leaked_reasoning("a</think>b</think>c".to_owned()),
+            ("c".to_owned(), "a</think>b".to_owned())
+        );
+        assert_eq!(
+            split_leaked_reasoning("<think>still thinking, cut off".to_owned()),
+            ("<think>still thinking, cut off".to_owned(), String::new())
         );
         let parsed = parse_completion(&json!({"choices": [{"message": {
             "content": "x</think>answer", "reasoning_content": "from the parser"}}]}));

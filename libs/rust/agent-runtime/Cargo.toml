@@ -25,6 +25,16 @@ test-preserve-order = ["serde_json/preserve_order", "serde_json/float_roundtrip"
 # ADR-0029 decision 3), and without it a `sql` toolkit is skipped as
 # unsupported.
 toolkit-sql = ["dep:sqlx"]
+# The `pptx`, `docx` and `xlsx` toolkit families (ADR-0032 P3, P4): Office
+# authoring on `elitea-office-core`. The cloud worker enables them; the
+# desktop host does not until P6 (the zavora libraries and their bundled fonts
+# are about 18 MiB of binary), and without it these toolkits are skipped as
+# unsupported.
+toolkit-office = ["dep:elitea-office-core"]
+# The `data_analysis` internal tool (ADR-0033): tables, charts and Excel I/O
+# over `elitea-office-core`. The cloud worker enables it; the desktop host does
+# not, and without it the internal tool is recognized and skipped.
+toolkit-data-analysis = ["dep:elitea-office-core"]
 
 [dependencies]
 # Tilde, not caret: adk breaks its API between minors. adk-agent and
@@ -42,6 +52,9 @@ adk-session = { version = "~2.2.0", default-features = false }
 # reqwest 0.13, whose default rustls provider is aws-lc-rs (EXTRACTION.md,
 # finding 3).
 adk-tool = { version = "~2.2.0", default-features = false, features = ["http-transport"] }
+# Leftmost-longest multi-pattern matching for `replace_placeholders` (one pass
+# over the original text). Already locked through regex.
+aho-corasick = { version = "1.1.5", default-features = false, features = ["std"] }
 async-stream = "0.3.6"
 async-trait = "0.1.92"
 base64 = "0.23.1"
@@ -51,6 +64,9 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 # connectors (ADR-0030 decision 3), over this crate's reqwest 0.12 (rustls on
 # ring): the connectors crate names no TLS stack of its own.
 elitea-connectors = { path = "../connectors", default-features = false, features = ["providers", "reqwest-012"] }
+# The one crate that names a zavora type (ADR-0032 decision 2). Optional:
+# only the `toolkit-office` build links the authoring libraries.
+elitea-office-core = { path = "../office-core", optional = true }
 # The Figma family applies a caller-supplied output `regexp` the way the SDK's
 # Python `re` does, lookaround included (its documented example uses one).
 fancy-regex = "0.18.0"
@@ -64,6 +80,10 @@ html-to-markdown-rs = { version = "3.17.2", default-features = false }
 # CPython escapes a character by its Unicode general category. Already locked
 # in this workspace.
 unicode-general-category = "1.1.0"
+# The SharePoint OneNote readers decode the page markup's character
+# references as Python's `html.parser` does. Already locked in this workspace
+# (html-to-markdown-rs).
+html-escape = "0.2.15"
 http = "1.5.0"
 http-body-util = "0.1.5"
 hyper = { version = "1.11.1", default-features = false, features = ["client", "http1", "http2"] }
@@ -96,6 +116,10 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring
 tokio-stream = { version = "0.1.19", features = ["net"] }
 tracing = "0.1.44"
 zeroize = "1.9.0"
+# `get_report_by_id` and `create_excel_report` read Carrier's zip result
+# archives and `get_report_by_id` writes the errors-log zip. The same
+# version and features `elitea-office-core` pins, already in the lock.
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 elitea-connectors = { path = "../connectors", default-features = false, features = ["providers", "reqwest-012", "test-support"] }

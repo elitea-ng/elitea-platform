@@ -31,6 +31,17 @@ const AAD_DOMAIN: &[u8] = b"elitea.runtime.output-spool-aad.v1\0";
 const FILE_MAGIC: &[u8] = b"ELITEASPOOL1\0";
 const NONCE_BYTES: usize = 12;
 const TAG_BYTES: usize = 16;
+/// Retired frames one execution spool keeps as records. At the cap the oldest
+/// record is pruned (and logged) before the next frame is set aside: a record
+/// is audit evidence, and the digest of every retired frame is already in the
+/// durable log, so record capacity never fails or wedges an execution.
+pub const MAX_RETIRED_FRAMES: usize = 16;
+/// How long a retired record outlives the retirement when its execution never
+/// reaches an acknowledged terminal frame through this spool. Swept at `open`.
+pub const RETIRED_RETENTION: std::time::Duration = std::time::Duration::from_hours(7 * 24);
+/// `{sequence:020}.retired` (legacy) or `{sequence:020}-{attempt:020}-{epoch:020}.retired`.
+const LEGACY_RETIRED_NAME_BYTES: usize = 28;
+const RETIRED_NAME_BYTES: usize = 70;
 const FILE_OVERHEAD_BYTES: usize = FILE_MAGIC.len() + NONCE_BYTES + TAG_BYTES;
 const MAX_IDENTITY_BYTES: usize = 256;
 const TEMP_CREATE_ATTEMPTS: usize = 8;
@@ -154,6 +165,15 @@ impl ExecutionSpoolBinding {
     }
 }
 
+/// The claim under which a pending frame was set aside. It is part of the
+/// retired record's name, so a sequence number reused by a later claim never
+/// replaces an earlier record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RetiredFrameTag {
+    pub claim_attempt: u64,
+    pub lease_epoch: u64,
+}
+
 /// Ciphertext capacity limits for one execution spool.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SpoolLimits {
@@ -275,6 +295,16 @@ impl EncryptedOutputSpool {
             random: SystemRandom::new(),
         };
         spool.clean_incomplete_temps()?;
+        // Best effort: a record that cannot be swept never blocks the spool.
+        if let Err(error) =
+            spool.sweep_expired_retired(RETIRED_RETENTION, std::time::SystemTime::now())
+        {
+            tracing::warn!(
+                event = "output_spool_retired_sweep_failed",
+                reason = %error,
+                "expired retired output records could not be swept"
+            );
+        }
         Ok(spool)
     }
 
@@ -420,6 +450,191 @@ impl EncryptedOutputSpool {
         result.and(cleanup)
     }
 
+    /// Set one exact pending frame aside, durably and still encrypted, so it is
+    /// never replayed. The frame becomes a `.retired` record beside the live
+    /// frames: it leaves `pending()` and the capacity accounting, and it blocks
+    /// removal of the directory until the execution settles
+    /// ([`Self::discard_retired_records`]) or the retention sweep removes it.
+    ///
+    /// The record's name carries the claim attempt and epoch and is created
+    /// with no-replace semantics (`link` then `unlink`), so a record is never
+    /// overwritten. At [`MAX_RETIRED_FRAMES`] the oldest records are pruned
+    /// first, so enumeration never depends on how many were retired.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded [`SpoolError`] when the frame is absent or changed,
+    /// a different record already holds the name, or a filesystem step fails.
+    pub fn retire_pending(
+        &mut self,
+        sequence: NonZeroU64,
+        expected: &[u8],
+        tag: RetiredFrameTag,
+    ) -> Result<(), SpoolError> {
+        let Some((current, _)) = self.read_entry(sequence)? else {
+            return Err(SpoolError::InvalidInput(
+                "the output spool changed before retirement",
+            ));
+        };
+        if current != expected {
+            return Err(SpoolError::InvalidInput(
+                "the output spool changed before retirement",
+            ));
+        }
+        let retired = retired_name(sequence, tag);
+        let frame = frame_name(sequence);
+        let live = statat(&self.directory, frame.as_str(), AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|error| unavailable_errno("the output spool entry is unavailable", error))?;
+        let mut records = self.retired_records()?;
+        let existing = records.iter().any(|record| record.name == retired);
+        if existing {
+            // A crash between the link and the unlink leaves both names on one
+            // inode: finish that retirement. Any other record keeps its name.
+            let held = statat(&self.directory, retired.as_str(), AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|error| {
+                    unavailable_errno("the output spool entry is unavailable", error)
+                })?;
+            if held.st_dev != live.st_dev || held.st_ino != live.st_ino {
+                return Err(SpoolError::InvalidInput(
+                    "a retired record already holds this output sequence and claim",
+                ));
+            }
+        } else {
+            if records.len() >= MAX_RETIRED_FRAMES {
+                records.sort_by_key(|record| record.key);
+                let excess = records.len() + 1 - MAX_RETIRED_FRAMES;
+                for oldest in records.iter().take(excess) {
+                    unlinkat(&self.directory, oldest.name.as_str(), AtFlags::empty()).map_err(
+                        |error| {
+                            unavailable_errno("the oldest retired record cannot be pruned", error)
+                        },
+                    )?;
+                    tracing::warn!(
+                        event = "output_spool_retired_record_pruned",
+                        claim_attempt = oldest.key.0,
+                        lease_epoch = oldest.key.1,
+                        sequence = oldest.key.2,
+                        "the oldest retired output record was pruned at the retained-record cap"
+                    );
+                }
+                sync_directory(&self.directory)?;
+            }
+            linkat(
+                &self.directory,
+                frame.as_str(),
+                &self.directory,
+                retired.as_str(),
+                AtFlags::empty(),
+            )
+            .map_err(|error| unavailable_errno("the output frame cannot be retired", error))?;
+        }
+        unlinkat(&self.directory, frame.as_str(), AtFlags::empty())
+            .map_err(|error| unavailable_errno("the output frame cannot be retired", error))?;
+        sync_directory(&self.directory)?;
+        self.entries(false).map(|_| ())
+    }
+
+    /// Delete every retired record. The execution settled: its retired frames
+    /// were logged with their digests when they were set aside.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded [`SpoolError`] for unsafe entries or a failed unlink.
+    pub fn discard_retired_records(&mut self) -> Result<usize, SpoolError> {
+        let records = self.retired_records()?;
+        for record in &records {
+            unlinkat(&self.directory, record.name.as_str(), AtFlags::empty()).map_err(|error| {
+                unavailable_errno("a retired output record cannot be removed", error)
+            })?;
+        }
+        if !records.is_empty() {
+            sync_directory(&self.directory)?;
+        }
+        Ok(records.len())
+    }
+
+    /// Delete retired records set aside more than `retention` before `now`.
+    /// Called when the spool opens; one pass over a directory the spool bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded [`SpoolError`] for unsafe entries or a failed unlink.
+    pub fn sweep_expired_retired(
+        &mut self,
+        retention: std::time::Duration,
+        now: std::time::SystemTime,
+    ) -> Result<usize, SpoolError> {
+        let mut removed = 0_usize;
+        for record in self.retired_records()? {
+            let age = now
+                .duration_since(record.retired_at)
+                .unwrap_or(std::time::Duration::ZERO);
+            if age > retention {
+                unlinkat(&self.directory, record.name.as_str(), AtFlags::empty()).map_err(
+                    |error| unavailable_errno("an expired retired record cannot be removed", error),
+                )?;
+                removed += 1;
+            }
+        }
+        if removed > 0 {
+            sync_directory(&self.directory)?;
+        }
+        Ok(removed)
+    }
+
+    fn retired_records(&mut self) -> Result<Vec<RetiredRecord>, SpoolError> {
+        let mut directory = Dir::read_from(&self.directory)
+            .map_err(|error| unavailable_errno("the output spool cannot be enumerated", error))?;
+        let mut records = Vec::new();
+        while let Some(entry) = directory.read() {
+            let entry = entry.map_err(|error| {
+                unavailable_errno("the output spool cannot be enumerated", error)
+            })?;
+            let name = entry.file_name();
+            if name.to_bytes() == b"." || name.to_bytes() == b".." {
+                continue;
+            }
+            let Some((sequence, attempt, epoch)) = parse_retired_name(name.to_bytes()) else {
+                continue;
+            };
+            let stat =
+                statat(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+                    unavailable_errno("the output spool entry is unavailable", error)
+                })?;
+            validate_private_file_stat(&stat, false)?;
+            // `link` updates the inode's change time: it is the retirement time.
+            let seconds = u64::try_from(stat.st_ctime).unwrap_or(0);
+            let name = name.to_str().map_err(|_| {
+                SpoolError::InvalidInput("the output spool contains an unexpected entry")
+            })?;
+            records.push(RetiredRecord {
+                name: name.to_owned(),
+                key: (attempt, epoch, sequence),
+                retired_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+            });
+        }
+        Ok(records)
+    }
+
+    /// Whether any retired record remains in this spool.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded [`SpoolError`] for unsafe entries or enumeration failure.
+    pub fn has_retired_frames(&mut self) -> Result<bool, SpoolError> {
+        let mut directory = Dir::read_from(&self.directory)
+            .map_err(|error| unavailable_errno("the output spool cannot be enumerated", error))?;
+        while let Some(entry) = directory.read() {
+            let entry = entry.map_err(|error| {
+                unavailable_errno("the output spool cannot be enumerated", error)
+            })?;
+            if classify_entry(entry.file_name()).is_ok_and(|kind| kind.retired) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Delete durably acknowledged frames through the inclusive sequence.
     ///
     /// # Errors
@@ -454,7 +669,7 @@ impl EncryptedOutputSpool {
     /// Returns a bounded [`SpoolError`] for unexpected entries, identity
     /// replacement, removal, or durability failures.
     pub fn remove_if_empty(mut self) -> Result<bool, SpoolError> {
-        if !self.entries(false)?.is_empty() {
+        if !self.entries(false)?.is_empty() || self.has_retired_frames()? {
             return Ok(false);
         }
         let held = fstat(&self.directory).map_err(|error| {
@@ -536,6 +751,10 @@ impl EncryptedOutputSpool {
         Ok((entries.len(), bytes))
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One bounded pass validates every directory entry."
+    )]
     fn entries(&mut self, allow_temporary: bool) -> Result<Vec<DirectoryEntry>, SpoolError> {
         let mut directory = Dir::read_from(&self.directory)
             .map_err(|error| unavailable_errno("the output spool cannot be enumerated", error))?;
@@ -563,6 +782,17 @@ impl EncryptedOutputSpool {
                 continue;
             }
             let kind = classify_entry(name)?;
+            if kind.retired {
+                // Set aside, never replayed: the record of a retired frame.
+                let stat =
+                    statat(&self.directory, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
+                        unavailable_errno("the output spool entry is unavailable", error)
+                    })?;
+                validate_private_file_stat(&stat, false)?;
+                // The number of records never fails enumeration: the retirement
+                // path keeps it at the cap, and a sweep removes the old ones.
+                continue;
+            }
             if kind.sequence.is_none() && !allow_temporary {
                 return Err(SpoolError::InvalidInput(
                     "the output spool contains an unexpected entry",
@@ -862,6 +1092,8 @@ struct DirectoryEntry {
 
 struct EntryKind {
     sequence: Option<NonZeroU64>,
+    /// An encrypted frame set aside by [`EncryptedOutputSpool::retire_pending`].
+    retired: bool,
 }
 
 fn encode_binding(components: &[&str]) -> Result<Vec<u8>, SpoolError> {
@@ -949,7 +1181,19 @@ fn derive_key_bytes(master_key: &SpoolMasterKey, binding: &[u8]) -> Result<[u8; 
 fn classify_entry(name: &CStr) -> Result<EntryKind, SpoolError> {
     let name = name.to_bytes();
     if is_temporary_name(name) {
-        return Ok(EntryKind { sequence: None });
+        return Ok(EntryKind {
+            sequence: None,
+            retired: false,
+        });
+    }
+    if let Some((sequence, _, _)) = parse_retired_name(name) {
+        let sequence = NonZeroU64::new(sequence).ok_or(SpoolError::InvalidInput(
+            "the output spool contains an unexpected entry",
+        ))?;
+        return Ok(EntryKind {
+            sequence: Some(sequence),
+            retired: true,
+        });
     }
     if name.len() != 26 || !name[..20].iter().all(u8::is_ascii_digit) || &name[20..] != b".frame" {
         return Err(SpoolError::InvalidInput(
@@ -968,7 +1212,51 @@ fn classify_entry(name: &CStr) -> Result<EntryKind, SpoolError> {
             ))?;
     Ok(EntryKind {
         sequence: Some(sequence),
+        retired: false,
     })
+}
+
+/// `(sequence, claim_attempt, lease_epoch)` of a retired record's name. The
+/// legacy `{sequence:020}.retired` form reads as attempt and epoch zero.
+fn parse_retired_name(name: &[u8]) -> Option<(u64, u64, u64)> {
+    let digits = |bytes: &[u8]| {
+        if bytes.len() == 20 && bytes.iter().all(u8::is_ascii_digit) {
+            std::str::from_utf8(bytes).ok()?.parse::<u64>().ok()
+        } else {
+            None
+        }
+    };
+    match name.len() {
+        LEGACY_RETIRED_NAME_BYTES if &name[20..] == b".retired" => {
+            Some((digits(&name[..20])?, 0, 0))
+        }
+        RETIRED_NAME_BYTES
+            if name[20] == b'-' && name[41] == b'-' && &name[62..] == b".retired" =>
+        {
+            Some((
+                digits(&name[..20])?,
+                digits(&name[21..41])?,
+                digits(&name[42..62])?,
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn retired_name(sequence: NonZeroU64, tag: RetiredFrameTag) -> String {
+    format!(
+        "{:020}-{:020}-{:020}.retired",
+        sequence.get(),
+        tag.claim_attempt,
+        tag.lease_epoch
+    )
+}
+
+struct RetiredRecord {
+    name: String,
+    /// Oldest first: claim attempt, then epoch, then sequence.
+    key: (u64, u64, u64),
+    retired_at: std::time::SystemTime,
 }
 
 fn is_temporary_name(name: &[u8]) -> bool {

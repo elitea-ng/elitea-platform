@@ -289,6 +289,7 @@ impl InputContentClient {
             .ca_certificate(private_ca)
             .identity(client_identity);
         let endpoint = Endpoint::from_shared(origin)
+            .map(crate::transport::keepalive::with_keepalive)
             .and_then(|endpoint| endpoint.tls_config(tls))
             .map_err(InputContentTransportError::Tonic)
             .map_err(InputContentError::Transport)?;

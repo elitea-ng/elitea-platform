@@ -3,6 +3,7 @@ package identityrepo
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -73,7 +74,7 @@ func TestPostgresIdentityProvisioningFreshInstallNewUser(t *testing.T) {
 // the test keeps discriminating if the schema source ever changes.
 func newFreshInstallIdentityDatabase(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
-	adminURL := os.Getenv("ELITEA_AUTH_TEST_DATABASE_URL")
+	adminURL := testpg.DSN(os.Getenv("ELITEA_AUTH_TEST_DATABASE_URL"))
 	if adminURL == "" {
 		t.Skip("set ELITEA_AUTH_TEST_DATABASE_URL to an isolated PostgreSQL admin database")
 	}

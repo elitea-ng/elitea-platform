@@ -121,6 +121,29 @@ var pythonVerifiedImportKeys = []string{
 // `materialize_zephyr_rest` and `materialize_test_management`, plus the three
 // types dispatched by direct comparison (`artifact`, `openapi`, `sharepoint`).
 //
+// `pptx`, `docx` and `xlsx` (ADR-0032 P3, P4) are claim-scoped families like
+// `artifact`: they materialise only where the Office host is lent (the ordinary
+// agent path and a pipeline's nodes of a worker built with the `toolkit-office`
+// feature, which the cloud worker enables and the desktop host does not).
+// `pptx` serves the SDK's two tools plus nineteen of its own, and `docx` and
+// `xlsx` have no SDK counterpart and serve all of theirs, so no per-tool list
+// is needed here.
+//
+// `imagegen` (#864) is a claim-scoped family like `pptx`: it materialises only
+// where the Office host that reaches the gateway's images API is lent (the
+// ordinary agent path, a pipeline's nodes and a direct toolkit call of the
+// cloud worker), and it serves the SDK's two tools, `generate_image` and
+// `edit_image`, unchanged. Both write artifacts, so a direct
+// `toolkit.call_tool.v1` (read-only tools only) lists them and refuses to run
+// them with that reason.
+//
+// `memory` (worker unit M9) is a claim-scoped family like the index tools: it
+// serves the SDK's four tools unchanged, over elitea-vector, and materialises
+// only where the claim carries a vector token (the Rust indexing runtime) and
+// the deployment names a memory embedding model. runtimecomposition drops it
+// from the Rust worker's catalogue projection when the deployment does not
+// index with the Rust runtime.
+//
 // `artifact` (#906) is the odd one: it materialises only where the live
 // execution claim is in scope (the ordinary agent path and a root pipeline's
 // direct and LLM nodes), because its authority is that claim rather than a
@@ -147,6 +170,7 @@ var rustNativeToolTypes = []string{
 	"bitbucket",
 	"carrier",
 	"confluence",
+	"docx",
 	"elastic",
 	"figma",
 	"gcp",
@@ -154,11 +178,14 @@ var rustNativeToolTypes = []string{
 	"gitlab",
 	"gitlab_org",
 	"google_places",
+	"imagegen",
 	"jira",
 	"k8s",
 	"keycloak",
+	"memory",
 	"openapi",
 	"postman",
+	"pptx",
 	"qtest",
 	"rally",
 	"report_portal",
@@ -170,6 +197,7 @@ var rustNativeToolTypes = []string{
 	"sql",
 	"testio",
 	"testrail",
+	"xlsx",
 	"xray_cloud",
 	"yagmail",
 	"zephyr",

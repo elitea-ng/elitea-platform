@@ -145,6 +145,13 @@ func mimeFromExtension(key string) string {
 // (utils/utils.py:177-238) — and it keeps a refused caller from learning
 // whether a bucket they may not touch exists.
 func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
+	return h.requireBucketChecked(w, r, projectID, bucket, need, scopePathKey)
+}
+
+// requireBucketChecked is requireBucket judging the system-bucket rule on
+// what `scope` says the route addresses; scopeCallerKeys leaves it to the
+// caller (an upload's part, a batch's body keys).
+func (h *Handler) requireBucketChecked(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string, scope bucketScope) (repos.BucketRow, bool) {
 	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
 	if err != nil {
 		h.writeInternal(w, r, "authorize bucket", err)
@@ -161,6 +168,19 @@ func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectI
 		} else {
 			h.writeInternal(w, r, "get bucket", err)
 		}
+		return repos.BucketRow{}, false
+	}
+	if scope == scopeCallerKeys {
+		// The caller checks each key it names.
+		return row, true
+	}
+	allowed, err = h.allowSystemBucket(r, projectID, row, scope)
+	if err != nil {
+		h.writeInternal(w, r, "authorize system bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "Forbidden", systemBucketRefusal)
 		return repos.BucketRow{}, false
 	}
 	return row, true
@@ -185,6 +205,15 @@ func (h *Handler) requireBucketNoBody(w http.ResponseWriter, r *http.Request, pr
 		} else {
 			w.WriteHeader(http.StatusInternalServerError)
 		}
+		return repos.BucketRow{}, false
+	}
+	allowed, err = h.allowSystemBucket(r, projectID, row, scopePathKey)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		w.WriteHeader(http.StatusForbidden)
 		return repos.BucketRow{}, false
 	}
 	return row, true
@@ -285,7 +314,7 @@ func (h *Handler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := chi.URLParam(r, "projectID")
 	bucket := chi.URLParam(r, "bucket")
-	if _, ok := h.requireBucket(w, r, projectID, bucket, accessRead); !ok {
+	if _, ok := h.requireBucketChecked(w, r, projectID, bucket, accessRead, scopeListing); !ok {
 		return
 	}
 
@@ -387,17 +416,52 @@ type storeObjectInput struct {
 //
 // The quota check runs after the write, not before, because the object's
 // exact byte length isn't known until the stream has been fully read.
-func (h *Handler) storeObject(ctx context.Context, in storeObjectInput) (storage.ObjectInfo, string, string) {
-	info, err := h.store.Put(ctx, in.ref, in.body, storage.PutOptions{
+func (h *Handler) storeObject(ctx context.Context, in storeObjectInput) (storage.ObjectInfo, repos.ObjectRow, string, string) {
+	// Quota BEFORE the bytes replace anything. The stream's length is unknown
+	// until it is read, so the projected total (current - old + new) is
+	// enforced as a running cap on the body: once the stream passes the room
+	// left for this key, the read fails, the backend's Put aborts without
+	// publishing, and the previous version (if any) is untouched. The old
+	// post-write rollback deleted the previous version too — overwrite data loss.
+	body := in.body
+	var capR *quotaCapReader
+	existed := false
+	if in.policy.MaxTotalBytes != nil {
+		total, err := h.repo.SumProjectBytes(ctx, in.projectID)
+		if err != nil {
+			h.logInternal(ctx, "sum project bytes", err)
+			return storage.ObjectInfo{}, repos.ObjectRow{}, "Internal", "sum project bytes"
+		}
+		var oldSize int64
+		old, statErr := h.store.Stat(ctx, in.ref)
+		switch {
+		case statErr == nil:
+			existed, oldSize = true, old.Size
+		case !errors.Is(statErr, storage.ErrNotFound):
+			code, message := h.classifyStorageError(ctx, "stat object", statErr)
+			return storage.ObjectInfo{}, repos.ObjectRow{}, code, message
+		}
+		room := *in.policy.MaxTotalBytes - (total - oldSize)
+		if room < 0 {
+			room = 0
+		}
+		capR = &quotaCapReader{r: in.body, room: room}
+		body = capR
+	}
+
+	info, err := h.store.Put(ctx, in.ref, body, storage.PutOptions{
 		ContentType:   in.contentType,
 		ContentLength: -1,
 	})
 	if err != nil {
+		if capR != nil && capR.exceeded {
+			return storage.ObjectInfo{}, repos.ObjectRow{}, "TooLarge", "upload would exceed the project's storage quota"
+		}
 		if isMaxBytesError(err) {
-			return storage.ObjectInfo{}, "TooLarge", "object exceeds the project's max_object_bytes limit"
+			return storage.ObjectInfo{}, repos.ObjectRow{}, "TooLarge", "object exceeds the project's max_object_bytes limit"
 		}
 		code, message := h.classifyStorageError(ctx, "put object", err)
-		return storage.ObjectInfo{}, code, message
+		return storage.ObjectInfo{}, repos.ObjectRow{}, code, message
 	}
 
 	// The object's own retention window starts now. It does not inherit the
@@ -405,31 +469,67 @@ func (h *Handler) storeObject(ctx context.Context, in storeObjectInput) (storage
 	// restarts the window, because UpsertArtifactObject's ON CONFLICT branch
 	// refreshes expires_at; that matches an S3 lifecycle rule, which also
 	// measures age from the newest version.
-	if _, err := h.repo.UpsertObject(ctx, repos.NewObjectInput{
+	row, err := h.repo.UpsertObject(ctx, repos.NewObjectInput{
 		BucketID:   in.bucketRow.ID,
 		Key:        info.Key,
 		ByteLength: info.Size,
 		MediaType:  in.contentType,
 		ExpiresAt:  computeExpiresAt(in.bucketRow.RetentionDays),
-	}); err != nil {
+	})
+	if err != nil {
 		h.logInternal(ctx, "record object metadata", err)
-		return storage.ObjectInfo{}, "Internal", "record object metadata"
+		return storage.ObjectInfo{}, repos.ObjectRow{}, "Internal", "record object metadata"
 	}
 
+	// Second check, for the race the pre-check cannot see (a concurrent upload
+	// consumed the room meanwhile). Only a key that did not exist before is
+	// rolled back; an overwrite is never deleted, because that would destroy
+	// the version the caller still believes is there. Rollback failures are
+	// logged, not swallowed.
 	if in.policy.MaxTotalBytes != nil {
 		total, err := h.repo.SumProjectBytes(ctx, in.projectID)
 		if err != nil {
 			h.logInternal(ctx, "sum project bytes", err)
-			return storage.ObjectInfo{}, "Internal", "sum project bytes"
+			return storage.ObjectInfo{}, repos.ObjectRow{}, "Internal", "sum project bytes"
 		}
 		if total > *in.policy.MaxTotalBytes {
-			_ = h.repo.DeleteObjects(ctx, in.bucketRow.ID, []string{info.Key})
-			_ = h.store.Delete(ctx, in.ref)
-			return storage.ObjectInfo{}, "TooLarge", "upload would exceed the project's storage quota"
+			if existed {
+				h.logInternal(ctx, "overwrite pushed the project past max_total_bytes by a concurrent write; previous version already replaced", errors.New("quota overshoot"))
+				return info, row, "", ""
+			}
+			if derr := h.repo.DeleteObjects(ctx, in.bucketRow.ID, []string{info.Key}); derr != nil {
+				h.logInternal(ctx, "quota rollback: delete object metadata", derr)
+			}
+			if derr := h.store.Delete(ctx, in.ref); derr != nil {
+				h.logInternal(ctx, "quota rollback: delete object bytes", derr)
+			}
+			return storage.ObjectInfo{}, repos.ObjectRow{}, "TooLarge", "upload would exceed the project's storage quota"
 		}
 	}
 
-	return info, "", ""
+	return info, row, "", ""
+}
+
+// quotaCapReader fails the read once more than room bytes have passed, so a
+// streaming Put aborts before it can replace an existing object with bytes that
+// would take the project past max_total_bytes.
+type quotaCapReader struct {
+	r        io.Reader
+	room     int64
+	read     int64
+	exceeded bool
+}
+
+var errQuotaExceeded = errors.New("upload would exceed the project's storage quota")
+
+func (q *quotaCapReader) Read(p []byte) (int, error) {
+	n, err := q.r.Read(p)
+	q.read += int64(n)
+	if q.read > q.room {
+		q.exceeded = true
+		return 0, errQuotaExceeded
+	}
+	return n, err
 }
 
 // UploadObject streams the multipart "file" part straight into
@@ -451,7 +551,7 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := chi.URLParam(r, "projectID")
 	bucket := chi.URLParam(r, "bucket")
-	bucketRow, ok := h.requireBucket(w, r, projectID, bucket, accessWrite)
+	bucketRow, ok := h.requireBucketForUpload(w, r, projectID, bucket)
 	if !ok {
 		return
 	}
@@ -519,6 +619,10 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "InvalidKey", err.Error())
 		return
 	}
+	// The system-bucket rule, on the key the part names (system_buckets.go).
+	if !h.allowUploadKey(w, r, projectID, bucketRow, filename) {
+		return
+	}
 
 	if !overwrite {
 		if _, statErr := h.store.Stat(r.Context(), ref); statErr == nil {
@@ -535,7 +639,7 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 		contentType = mimeFromExtension(filename)
 	}
 
-	info, code, message := h.storeObject(r.Context(), storeObjectInput{
+	info, row, code, message := h.storeObject(r.Context(), storeObjectInput{
 		projectID:   projectID,
 		bucketRow:   bucketRow,
 		ref:         ref,
@@ -562,7 +666,8 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 		"size_bytes": info.Size,
 		"media_type": contentType,
 		"etag":       info.ETag,
-		"created_at": info.LastModified,
+		"created_at": row.CreatedAt,
+		"updated_at": row.UpdatedAt, // this write's time (the overwrite case)
 	})
 }
 
@@ -574,7 +679,7 @@ func (h *Handler) BatchDeleteObjects(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := chi.URLParam(r, "projectID")
 	bucket := chi.URLParam(r, "bucket")
-	bucketRow, ok := h.requireBucket(w, r, projectID, bucket, accessWrite)
+	bucketRow, ok := h.requireBucketChecked(w, r, projectID, bucket, accessWrite, scopeCallerKeys)
 	if !ok {
 		return
 	}
@@ -588,6 +693,10 @@ func (h *Handler) BatchDeleteObjects(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Keys) == 0 {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "keys must not be empty")
+		return
+	}
+	// The system-bucket rule, on every key the body names.
+	if !h.allowKeys(w, r, projectID, bucketRow, req.Keys) {
 		return
 	}
 

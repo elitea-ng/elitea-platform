@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/rustonly"
 )
 
 // ToolkitCatalogueSource supplies the SETTINGS schema and the METADATA of every
@@ -55,10 +57,94 @@ func WithCatalogue(source ToolkitCatalogueSource) Option {
 }
 
 // WithWorkerCapability supplies the worker capability projection. Without it
-// every catalogued type is offered, which is the honest answer when the
-// deployment has not said which worker it runs.
+// every catalogued type is offered. The composition root always supplies one
+// (a nil *WorkerToolkitCapability is a valid projection that offers the SDK's
+// types and withholds the ones only the Rust worker serves).
 func WithWorkerCapability(source ToolkitCapabilitySource) Option {
 	return func(h *Handler) { h.workerCapability = source }
+}
+
+// WithMemoryOnVectorStore states that the deployment keeps memory toolkit data
+// in elitea-vector (the Rust indexing runtime, worker unit M9). The memory
+// type is then served without its SDK `pgvector_configuration` field: the Rust
+// worker reads nothing from it and such a deployment provisions no pgvector
+// configuration, so a form that required one could not be saved. The SDK schema
+// stays as pinned everywhere else (the Python worker uses the field).
+func WithMemoryOnVectorStore(enabled bool) Option {
+	return func(h *Handler) { h.memoryOnVectorStore = enabled }
+}
+
+// withoutPgvectorConfiguration copies a settings schema without the
+// `pgvector_configuration` property and its `required` entry. Only the nodes on
+// those paths are rebuilt, so the shared pinned schema is never written to.
+func withoutPgvectorConfiguration(settingsSchema map[string]any) map[string]any {
+	typeSchema := make(map[string]any, len(settingsSchema))
+	for key, value := range settingsSchema {
+		typeSchema[key] = value
+	}
+	if properties, ok := settingsSchema[toolkitSettingsPropertyKey].(map[string]any); ok {
+		kept := make(map[string]any, len(properties))
+		for name, property := range properties {
+			if name != "pgvector_configuration" {
+				kept[name] = property
+			}
+		}
+		typeSchema[toolkitSettingsPropertyKey] = kept
+	}
+	switch required := settingsSchema["required"].(type) {
+	case []any:
+		kept := make([]any, 0, len(required))
+		for _, name := range required {
+			if name != "pgvector_configuration" {
+				kept = append(kept, name)
+			}
+		}
+		typeSchema["required"] = kept
+	case []string:
+		kept := make([]string, 0, len(required))
+		for _, name := range required {
+			if name != "pgvector_configuration" {
+				kept = append(kept, name)
+			}
+		}
+		typeSchema["required"] = kept
+	}
+	return typeSchema
+}
+
+// memoryScopeDescription is what the create form shows under "Memory scope".
+const memoryScopeDescription = "Who can see what this toolkit remembers. " +
+	"Personal: each person has their own private memory, and nobody else can read, search or delete it (the safe default). " +
+	"Project: one memory shared by everyone in the project. " +
+	"To give an agent both, attach two memory toolkits, one of each. " +
+	"Once personal memory has been read in a conversation, that conversation can no longer write project memory or a shared index. " +
+	"Other tools attached to the agent that can send data out (for example GitHub, Slack or email) are not limited this way, so attach personal memory only to agents whose other tools you trust with what you have told it. " +
+	"A scheduled run acts as the person who owns the schedule and uses that person's personal memory. " +
+	"A conversation with more than one person has no personal memory; project memory still works there."
+
+// withMemoryScope adds the `memory_scope` setting the Rust worker's memory
+// toolkit reads (worker unit M9). A copy: the shared schema is never written to.
+func withMemoryScope(settingsSchema map[string]any) map[string]any {
+	typeSchema := make(map[string]any, len(settingsSchema))
+	for key, value := range settingsSchema {
+		typeSchema[key] = value
+	}
+	properties, _ := settingsSchema[toolkitSettingsPropertyKey].(map[string]any)
+	withScope := make(map[string]any, len(properties)+1)
+	for name, property := range properties {
+		withScope[name] = property
+	}
+	withScope["memory_scope"] = map[string]any{
+		"type":        "string",
+		"title":       "Memory scope",
+		"description": memoryScopeDescription,
+		// Two values only (owner decision 2026-10-14): the former `both` is
+		// gone; a toolkit saved with it is read as personal by the worker.
+		"enum":    []any{"personal", "project"},
+		"default": "personal",
+	}
+	typeSchema[toolkitSettingsPropertyKey] = withScope
+	return typeSchema
 }
 
 // Metadata keys this package writes. They are the reference deployment's own
@@ -99,16 +185,14 @@ var nativeToolkitTypeMetadata = map[string]map[string]any{
 
 // nativeWorkerGatedToolkitTypes names hand-written (non-catalogued) types that
 // must still report the worker-capability verdict a catalogued type gets for
-// free in toolkitTypeMetadata's other branch. imagegen is Python-worker-only
-// by construction (elitea_sdk/tools/imagegen ships no Rust family, #864) and
-// has to render hidden on a deployment running the Rust worker the same way a
-// catalogued type would — not because it is unsafe to run, but because
-// nothing there would ever build it. The value is the import key passed to
-// ToolkitCapabilitySource.SupportsToolkitType: Python's answer is a deny list
-// keyed on import key (absence = supported), Rust's is an allow list keyed on
-// the toolkit type itself (absence = unsupported), so an import key that
-// exists in neither pinned snapshot answers exactly "Python yes, Rust no"
-// without either snapshot needing an imagegen entry.
+// free in toolkitTypeMetadata's other branch. imagegen is built by both
+// workers (elitea_sdk/tools/imagegen on Python, the native imagegen family on
+// Rust, #864); a deployment whose worker cannot build it would render it
+// hidden the way a catalogued type would. The value is the import key passed
+// to ToolkitCapabilitySource.SupportsToolkitType: Python's answer is a deny
+// list keyed on import key (absence = supported), Rust's is an allow list
+// keyed on the toolkit type itself (absence = unsupported, so the type must be
+// in rustNativeToolTypes and the pinned Rust snapshot).
 var nativeWorkerGatedToolkitTypes = map[string]string{
 	"imagegen": "imagegen",
 }
@@ -214,6 +298,9 @@ func (h *Handler) toolkitTypeSchema(toolkitType string) (map[string]any, error) 
 	// list here and gets no groups — which is how the client knows to keep
 	// rendering its flat list. See tool_groups.go.
 	typeSchema = withToolGroups(typeSchema)
+	if toolkitType == "memory" && h != nil && h.memoryOnVectorStore {
+		typeSchema = withMemoryScope(withoutPgvectorConfiguration(typeSchema))
+	}
 
 	typeMetadata := h.toolkitTypeMetadata(toolkitType, metadata, catalogued)
 	if unavailable := h.unavailableTools(toolkitType, typeSchema); len(unavailable) > 0 {
@@ -234,18 +321,22 @@ type ToolCapabilitySource interface {
 // in the schema — a saved selection holding one must still validate — and
 // metadata.unavailable_tools tells the client which of them to disable.
 func (h *Handler) unavailableTools(toolkitType string, typeSchema map[string]any) []string {
-	if h == nil || h.workerCapability == nil {
+	if h == nil {
 		return nil
 	}
-	tools, ok := h.workerCapability.(ToolCapabilitySource)
-	if !ok {
-		return nil
+	supports := rustonly.AbsentToolVerdict
+	if h.workerCapability != nil {
+		tools, ok := h.workerCapability.(ToolCapabilitySource)
+		if !ok {
+			return nil
+		}
+		supports = tools.SupportsTool
 	}
 	properties, _ := typeSchema["properties"].(map[string]any)
 	selected, _ := properties["selected_tools"].(map[string]any)
 	var unavailable []string
 	for _, name := range toolNamesFromSelectedTools(selected) {
-		if served, _ := tools.SupportsTool(toolkitType, name); !served {
+		if served, _ := supports(toolkitType, name); !served {
 			unavailable = append(unavailable, name)
 		}
 	}
@@ -322,11 +413,17 @@ func (h *Handler) toolkitTypeMetadata(
 }
 
 func (h *Handler) supportsToolkitType(toolkitType string) (bool, string) {
-	if h == nil || h.workerCapability == nil || h.catalogue == nil {
-		return true, ""
+	if h == nil || h.workerCapability == nil {
+		// No statement of the worker: the SDK's types are offered, the ones only
+		// the Rust worker serves are not (the same rule a nil projection applies).
+		return rustonly.AbsentTypeVerdict(toolkitType)
 	}
-	importKey, found := h.catalogue.ToolkitImportKey(toolkitType)
-	if !found {
+	importKey := ""
+	found := false
+	if h.catalogue != nil {
+		importKey, found = h.catalogue.ToolkitImportKey(toolkitType)
+	}
+	if !found && !rustonly.IsType(toolkitType) {
 		return true, ""
 	}
 	return h.workerCapability.SupportsToolkitType(toolkitType, importKey)
@@ -338,7 +435,7 @@ func (h *Handler) supportsToolkitType(toolkitType string) (bool, string) {
 // entry to look it up from.
 func (h *Handler) supportsToolkitTypeByImportKey(toolkitType, importKey string) (bool, string) {
 	if h == nil || h.workerCapability == nil {
-		return true, ""
+		return rustonly.AbsentTypeVerdict(toolkitType)
 	}
 	return h.workerCapability.SupportsToolkitType(toolkitType, importKey)
 }

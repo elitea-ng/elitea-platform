@@ -5,6 +5,7 @@ use super::{
     validate_invocation,
 };
 use crate::agents::graph::code_runtime::{CodeAttemptFailure, CodeAttemptPhase};
+use crate::agents::graph::code_timing;
 use crate::agents::graph::code_trace::{CodePhase, observe_typed};
 use crate::agents::graph::node_recovery::{NodeFailureClass, ReplaySafety};
 use crate::agents::graph::node_recovery_runtime::NodeAttemptAuthority;
@@ -35,12 +36,21 @@ impl RemoteCodeRuntime {
         invocation: CodeInvocation<'_>,
         authority: &NodeAttemptAuthority,
     ) -> Result<Vec<u8>, CodeAttemptFailure> {
+        // Durable proof decides whether a previous attempt may have started the
+        // user's code. The error kind never does.
+        let prior_dispatch = prior_dispatch_possible(
+            &self.journal,
+            self.authority.dispatch_scope().ok().as_ref(),
+            &authority.dispatch_activation(),
+            authority.recovering_started(),
+        )
+        .await;
         let before = |phase, class| {
             classify(
                 phase,
                 class,
                 authority.dispatch_activation(),
-                authority.recovering_started(),
+                prior_dispatch,
             )
         };
         if invocation.activation != authority.dispatch_activation() {
@@ -92,23 +102,27 @@ impl RemoteCodeRuntime {
             Some(provider)=>Some(provider.for_visit(declaration.graph_thread,declaration.node_id,crate::agents::pipeline::saved_child_scope_provider::SavedChildPurpose::CodeRecovery).await.map_err(|_|before(CodeAttemptPhase::Admission,NodeFailureClass::AuthorizationDenied))?),
             None=>None,
         };
-        let original_visit = content
-            .admit_original_code_visit(
+        // Main being briefly unavailable is never a node failure: retry the same
+        // idempotent call until the attempt's own observation deadline.
+        let main_deadline = observation_deadline(profile.timeout_seconds);
+        let original_visit = retry_transient_main(main_deadline, || {
+            content.admit_original_code_visit(
                 &self.authority,
                 &declaration,
                 authority,
                 &original_job,
                 saved_child_scope.as_ref(),
             )
-            .await
-            .map_err(|error| {
-                intent_failure(
-                    &error,
-                    CodeAttemptPhase::Admission,
-                    invocation.activation,
-                    authority.recovering_started(),
-                )
-            })?;
+        })
+        .await
+        .map_err(|error| {
+            intent_failure(
+                &error,
+                CodeAttemptPhase::Admission,
+                invocation.activation,
+                prior_dispatch,
+            )
+        })?;
         let trace = invocation
             .trace
             .as_ref()
@@ -165,7 +179,7 @@ impl RemoteCodeRuntime {
                     error,
                     CodeAttemptPhase::Preparation,
                     invocation.activation,
-                    authority.recovering_started(),
+                    prior_dispatch,
                 )
             })?;
         let selected = self
@@ -193,8 +207,11 @@ impl RemoteCodeRuntime {
             job.fingerprint()
                 .map_err(|_| before(CodeAttemptPhase::Input, NodeFailureClass::InvalidInput))?
         };
+        // Reserve the activation for a stop before hydration, but do not say a
+        // submission was sent: that marker is written just before the first
+        // submission, so a claim lost during hydration proves "no submission".
         self.journal
-            .register(
+            .register_unsubmitted(
                 &scope,
                 &invocation.activation,
                 &request_digest,
@@ -230,8 +247,8 @@ impl RemoteCodeRuntime {
             .as_ref()
             .and_then(|value| value.control.descriptor_sha256.as_ref())
             .map(crate::sandbox::compiled_snapshot::ContentSha256::as_str);
-        content
-            .finalize_original_code_intent(
+        retry_transient_main(main_deadline, || {
+            content.finalize_original_code_intent(
                 &self.authority,
                 &original_visit,
                 invocation.activation,
@@ -241,17 +258,18 @@ impl RemoteCodeRuntime {
                 selected.as_ref().map(|value| &value.control.binding),
                 descriptor,
             )
-            .await
-            .map_err(|error| {
-                intent_failure(
-                    &error,
-                    CodeAttemptPhase::Admission,
-                    invocation.activation,
-                    authority.recovering_started(),
-                )
-            })?;
+        })
+        .await
+        .map_err(|error| {
+            intent_failure(
+                &error,
+                CodeAttemptPhase::Admission,
+                invocation.activation,
+                prior_dispatch,
+            )
+        })?;
         if let Some(workspace) = workspace.as_ref() {
-            observe_typed(
+            let hydrated = observe_typed(
                 trace.as_ref(),
                 CodePhase::Hydration,
                 async {
@@ -269,18 +287,28 @@ impl RemoteCodeRuntime {
                             error,
                             CodeAttemptPhase::Hydration,
                             invocation.activation,
-                            authority.recovering_started(),
+                            prior_dispatch,
                         )
                     })
                 },
                 |_| before(CodeAttemptPhase::Hydration, NodeFailureClass::Unknown),
             )
-            .await?;
+            .await;
+            if let Err(failure) = &hydrated {
+                self.release_undispatched(
+                    profile,
+                    &invocation.activation,
+                    &request_digest,
+                    failure,
+                )
+                .await;
+            }
+            hydrated?;
         }
         if selected.is_none()
             && let Some(bundle) = &bundle
         {
-            observe_typed(
+            let hydrated = observe_typed(
                 trace.as_ref(),
                 CodePhase::Hydration,
                 async {
@@ -292,258 +320,348 @@ impl RemoteCodeRuntime {
                         Some(&original_visit),
                     )
                     .await
-                    .map_err(|_| before(CodeAttemptPhase::Hydration, NodeFailureClass::Unknown))
+                    .map_err(|failure| {
+                        before(CodeAttemptPhase::Hydration, NodeFailureClass::Unknown)
+                            .with_preparation_failure(failure)
+                    })
                 },
                 |_| before(CodeAttemptPhase::Hydration, NodeFailureClass::Unknown),
             )
-            .await?;
+            .await;
+            if let Err(failure) = &hydrated {
+                self.release_undispatched(
+                    profile,
+                    &invocation.activation,
+                    &request_digest,
+                    failure,
+                )
+                .await;
+            }
+            hydrated?;
         }
         let mut platform_call_effect = None;
+        let mut platform_unknown_effect = false;
+        let step_tracker = super::platform_drive::StepTracker::default();
         let result=observe_typed(
             trace.as_ref(),
             CodePhase::Execution,
             async {
                 let deadline = observation_deadline(profile.timeout_seconds);
-                let mut dispatch_possible = authority.recovering_started();
-                loop {
-                    let descriptor = selected
-                        .as_ref()
-                        .and_then(|selected| selected.control.descriptor_sha256.as_ref())
-                        .map(crate::sandbox::compiled_snapshot::ContentSha256::as_str);
-                    let signed_intent = content
-                        .finalize_original_code_intent(
-                            &self.authority,
-                            &original_visit,
+                // Durable before the effect: from here a submission may reach the
+                // supervisor, and a recovery must read the dispatch as possible.
+                self.journal
+                    .mark_submission_started(
+                        &scope,
+                        &invocation.activation,
+                        &request_digest,
+                        profile.client.audience(),
+                    )
+                    .await
+                    .map_err(|_| {
+                        classify(
+                            CodeAttemptPhase::Dispatch,
+                            NodeFailureClass::DependencyUnavailable,
                             invocation.activation,
-                            request_digest,
-                            profile.client.audience(),
-                            &job,
-                            selected.as_ref().map(|selected| &selected.control.binding),
-                            descriptor,
+                            prior_dispatch,
                         )
-                        .await
-                        .map_err(|error| {
-                            intent_failure(
-                                &error,
-                                CodeAttemptPhase::Admission,
-                                invocation.activation,
-                                dispatch_possible,
-                            )
-                        })?;
-                    let attempt = async {
-                        if let Some(selected) = &selected {
-                            self.control
-                                .submit_compiled_whole_code(
-                                    &profile.client,
-                                    &self.authority,
-                                    &invocation.activation,
-                                    &job,
-                                    selected,
-                                    bundle.as_ref(),
-                                    &signed_intent,
-                                )
-                                .await
-                        } else {
-                            self.control
-                                .submit_whole_code(
-                                    &profile.client,
-                                    &self.authority,
-                                    &invocation.activation,
-                                    &job,
-                                    bundle.as_ref(),
-                                    &signed_intent,
-                                )
-                                .await
-                        }
+                    })?;
+                // Keep one pump alive while the exact submission reconciles and backs off.
+                // A nonterminal RPC response must not cancel a pending broker step.
+                let platform = async {
+                    if !invocation.platform_client {
+                        return std::future::pending::<CodeAttemptFailure>().await;
+                    }
+                    let prepared = match job.fingerprint() {
+                        Ok(prepared) => prepared,
+                        Err(_) => return classify(
+                            CodeAttemptPhase::Observation,
+                            NodeFailureClass::InvalidInput,
+                            invocation.activation,
+                            prior_dispatch,
+                        ),
                     };
-                    // Submit waits for the retained process. Service its platform
-                    // requests concurrently under the same attempt and deadline.
-                    let platform = async {
-                        if !invocation.platform_client {
-                            return std::future::pending::<CodeAttemptFailure>().await;
-                        }
-                        let prepared = match job.fingerprint() {
-                            Ok(prepared) => prepared,
-                            Err(_) => return classify(
+                    let mut idle = code_timing::PLATFORM_PUMP_MIN_INTERVAL;
+                    loop {
+                        // A step Main began may reach an effect. The tracker says
+                        // whether this pump was dropped inside one.
+                        let in_step = step_tracker.begin();
+                        let step = match content.step_code_platform(
+                            &self.authority,
+                            invocation.activation,
+                            prepared,
+                        ).await {
+                            Ok(step) => step,
+                            Err(error) => return intent_failure(
+                                &error,
                                 CodeAttemptPhase::Observation,
-                                NodeFailureClass::InvalidInput,
                                 invocation.activation,
-                                dispatch_possible,
+                                true,
                             ),
                         };
-                        loop {
-                            let step = match content.step_code_platform(
-                                &self.authority,
-                                invocation.activation,
-                                prepared,
-                            ).await {
-                                Ok(step) => step,
-                                Err(error) => return intent_failure(
-                                    &error,
-                                    CodeAttemptPhase::Observation,
-                                    invocation.activation,
-                                    true,
-                                ),
-                            };
-                            use crate::transport::input_content::code_platform_content::CodePlatformStep;
-                            match step {
-                                CodePlatformStep::Idle => {},
-                                CodePlatformStep::Committed { call_effect }
-                                | CodePlatformStep::Unknown { call_effect } => {
-                                    // Retain the exact call for recovery. An unknown
-                                    // result never grants another effect dispatch.
-                                    platform_call_effect = Some(call_effect);
-                                }
+                        in_step.finish();
+                        use crate::transport::input_content::code_platform_content::CodePlatformStep;
+                        match step {
+                            CodePlatformStep::Idle => idle = code_timing::next_idle_interval(idle),
+                            CodePlatformStep::Committed { call_effect } => {
+                                idle = code_timing::PLATFORM_PUMP_MIN_INTERVAL;
+                                platform_call_effect = Some(call_effect);
                             }
-                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                            CodePlatformStep::Unknown { call_effect } => {
+                                idle = code_timing::PLATFORM_PUMP_MIN_INTERVAL;
+                                // Retain the exact call for recovery. An unknown
+                                // result never grants another effect dispatch.
+                                platform_call_effect = Some(call_effect);
+                                platform_unknown_effect = true;
+                            }
                         }
-                    };
-                    let outcome = super::platform_drive::drive(attempt, platform, deadline)
-                        .await
-                        .map_err(|error| match error {
-                            super::platform_drive::ObservationFailure::Deadline => classify(
-                                CodeAttemptPhase::Observation,
-                                NodeFailureClass::AttemptTimeout,
+                        tokio::time::sleep(idle).await;
+                    }
+                };
+                let submission = async {
+                    let mut dispatch_possible = prior_dispatch;
+                    let mut backoff = code_timing::PendingBackoff::new();
+                    loop {
+                        let descriptor = selected
+                            .as_ref()
+                            .and_then(|selected| selected.control.descriptor_sha256.as_ref())
+                            .map(crate::sandbox::compiled_snapshot::ContentSha256::as_str);
+                        let signed_intent = retry_transient_main(deadline, || {
+                            content.finalize_original_code_intent(
+                                &self.authority,
+                                &original_visit,
                                 invocation.activation,
-                                true,
-                            ),
-                            super::platform_drive::ObservationFailure::Platform(failure) => failure,
-                        })?;
-                    match outcome {
-                        Ok(SandboxOutcome::Completed(receipt)) => {
-                            self.journal
-                                .resolve(
-                                    &scope,
-                                    &invocation.activation,
-                                    &request_digest,
-                                    profile.client.audience(),
+                                request_digest,
+                                profile.client.audience(),
+                                &job,
+                                selected.as_ref().map(|selected| &selected.control.binding),
+                                descriptor,
+                            )
+                        })
+                        .await
+                        .map_err(|error| {
+                                intent_failure(
+                                    &error,
+                                    CodeAttemptPhase::Admission,
+                                    invocation.activation,
+                                    dispatch_possible,
                                 )
-                                .await
-                                .map_err(|_| {
-                                    classify(
+                            })?;
+                        let attempt = async {
+                            if let Some(selected) = &selected {
+                                self.control
+                                    .submit_compiled_whole_code(
+                                        &profile.client,
+                                        &self.authority,
+                                        &invocation.activation,
+                                        &job,
+                                        selected,
+                                        bundle.as_ref(),
+                                        &signed_intent,
+                                    )
+                                    .await
+                            } else {
+                                self.control
+                                    .submit_whole_code(
+                                        &profile.client,
+                                        &self.authority,
+                                        &invocation.activation,
+                                        &job,
+                                        bundle.as_ref(),
+                                        &signed_intent,
+                                    )
+                                    .await
+                            }
+                        };
+                        let outcome = attempt.await;
+                        match outcome {
+                            Ok(outcome @ (SandboxOutcome::Completed(_)
+                                | SandboxOutcome::Cancelled
+                                | SandboxOutcome::Failed { .. }
+                                | SandboxOutcome::Uncertain { .. })) => return Ok(outcome),
+                            Ok(SandboxOutcome::Pending) => {
+                                dispatch_possible = true;
+                            },
+                            Err(SandboxCallError::Authorization(
+                                crate::transport::control_grpc::ControlGrpcError::Unavailable(_),
+                            )) => {
+                                return Err(classify(
+                                    CodeAttemptPhase::Dispatch,
+                                    NodeFailureClass::DependencyUnavailable,
+                                    invocation.activation,
+                                    dispatch_possible,
+                                ));
+                            }
+                            Err(SandboxCallError::Authorization(_) | SandboxCallError::Rejected) => {
+                                return Err(classify(
+                                    CodeAttemptPhase::Admission,
+                                    NodeFailureClass::AuthorizationDenied,
+                                    invocation.activation,
+                                    dispatch_possible,
+                                ));
+                            }
+                            Err(SandboxCallError::Submission {
+                                code:
+                                    tonic::Code::Unavailable
+                                    | tonic::Code::DeadlineExceeded
+                                    | tonic::Code::Aborted
+                                    | tonic::Code::ResourceExhausted,
+                            }) => dispatch_possible = true,
+                            Err(SandboxCallError::Submission { code })
+                                if submission_control_failure(code, invocation.activation)
+                                    .is_some() =>
+                            {
+                                return Err(submission_control_failure(code, invocation.activation)
+                                    .ok_or_else(|| classify(
                                         CodeAttemptPhase::Observation,
-                                        NodeFailureClass::DependencyUnavailable,
+                                        NodeFailureClass::Unknown,
                                         invocation.activation,
                                         true,
-                                    )
-                                })?;
-                            return Ok(receipt);
-                        }
-                        Ok(SandboxOutcome::Cancelled) => {
-                            let _resolved = self
-                                .journal
-                                .resolve(
-                                    &scope,
-                                    &invocation.activation,
-                                    &request_digest,
-                                    profile.client.audience(),
-                                )
-                                .await;
-                            return Err(classify(
-                                CodeAttemptPhase::Observation,
-                                NodeFailureClass::Cancelled,
-                                invocation.activation,
-                                true,
-                            ));
-                        }
-                        Ok(SandboxOutcome::Failed { .. }) => {
-                            let _resolved = self
-                                .journal
-                                .resolve(
-                                    &scope,
-                                    &invocation.activation,
-                                    &request_digest,
-                                    profile.client.audience(),
-                                )
-                                .await;
-                            return Err(classify(
-                                CodeAttemptPhase::Observation,
-                                NodeFailureClass::InvalidResult,
-                                invocation.activation,
-                                true,
-                            ));
-                        }
-                        Ok(SandboxOutcome::Uncertain { .. }) => {
-                            return Err(classify(
-                                CodeAttemptPhase::Observation,
-                                NodeFailureClass::Unknown,
-                                invocation.activation,
-                                true,
-                            ));
-                        }
-                        Ok(SandboxOutcome::Pending) => {
-                            dispatch_possible = true;
-                        },
-                        Err(SandboxCallError::Authorization(
-                            crate::transport::control_grpc::ControlGrpcError::Unavailable(_),
-                        )) => {
-                            return Err(classify(
-                                CodeAttemptPhase::Dispatch,
-                                NodeFailureClass::DependencyUnavailable,
-                                invocation.activation,
-                                dispatch_possible,
-                            ));
-                        }
-                        Err(SandboxCallError::Authorization(_) | SandboxCallError::Rejected) => {
-                            return Err(classify(
-                                CodeAttemptPhase::Admission,
-                                NodeFailureClass::AuthorizationDenied,
-                                invocation.activation,
-                                dispatch_possible,
-                            ));
-                        }
-                        Err(SandboxCallError::Submission {
-                            code:
-                                tonic::Code::Unavailable
-                                | tonic::Code::DeadlineExceeded
-                                | tonic::Code::Aborted
-                                | tonic::Code::ResourceExhausted,
-                        }) => dispatch_possible = true,
-                        Err(SandboxCallError::Submission { code })
-                            if submission_control_failure(code, invocation.activation)
-                                .is_some() =>
-                        {
-                            return Err(submission_control_failure(code, invocation.activation)
-                                .ok_or_else(|| classify(
+                                    ))?);
+                            }
+                            Err(
+                                SandboxCallError::Submission { .. } | SandboxCallError::InvalidReceipt,
+                            ) => {
+                                return Err(classify(
                                     CodeAttemptPhase::Observation,
                                     NodeFailureClass::Unknown,
                                     invocation.activation,
                                     true,
-                                ))?);
+                                ));
+                            }
+                            Err(SandboxCallError::Invalid) => {
+                                return Err(classify(
+                                    CodeAttemptPhase::Admission,
+                                    NodeFailureClass::InvalidInput,
+                                    invocation.activation,
+                                    dispatch_possible,
+                                ));
+                            }
                         }
-                        Err(
-                            SandboxCallError::Submission { .. } | SandboxCallError::InvalidReceipt,
-                        ) => {
+                        if tokio::time::Instant::now() >= deadline {
                             return Err(classify(
                                 CodeAttemptPhase::Observation,
-                                NodeFailureClass::Unknown,
-                                invocation.activation,
-                                true,
-                            ));
-                        }
-                        Err(SandboxCallError::Invalid) => {
-                            return Err(classify(
-                                CodeAttemptPhase::Admission,
-                                NodeFailureClass::InvalidInput,
+                                NodeFailureClass::AttemptTimeout,
                                 invocation.activation,
                                 dispatch_possible,
                             ));
                         }
+                        // This is transport reconciliation for the exact attempt identity.
+                        tokio::time::sleep_until(
+                            (tokio::time::Instant::now() + backoff.next(code_timing::jitter_sample()))
+                                .min(deadline),
+                        )
+                        .await;
                     }
-                    if tokio::time::Instant::now() >= deadline {
-                        return Err(classify(
+                };
+                let outcome = super::platform_drive::drive_tracked(
+                    submission,
+                    platform,
+                    deadline,
+                    &step_tracker,
+                    code_timing::PLATFORM_STEP_SETTLE_GRACE,
+                )
+                    .await
+                    .map_err(|error| match error {
+                        super::platform_drive::ObservationFailure::Deadline => classify(
                             CodeAttemptPhase::Observation,
                             NodeFailureClass::AttemptTimeout,
                             invocation.activation,
-                            dispatch_possible,
-                        ));
+                            true,
+                        ),
+                        super::platform_drive::ObservationFailure::Platform(failure) => failure,
+                    })??;
+                // Stop the pump as soon as the terminal RPC receipt wins. Journal
+                // persistence must not let a late owner refusal replace that receipt.
+                match outcome {
+                    SandboxOutcome::Completed(receipt) => {
+                        self.journal
+                            .resolve(
+                                &scope,
+                                &invocation.activation,
+                                &request_digest,
+                                profile.client.audience(),
+                            )
+                            .await
+                            .map_err(|_| {
+                                classify(
+                                    CodeAttemptPhase::Observation,
+                                    NodeFailureClass::DependencyUnavailable,
+                                    invocation.activation,
+                                    true,
+                                )
+                            })?;
+                        Ok(receipt)
                     }
-                    // This is transport reconciliation for the exact attempt identity.
-                    tokio::time::sleep_until(
-                        (tokio::time::Instant::now() + std::time::Duration::from_secs(1))
-                            .min(deadline),
-                    )
-                    .await;
+                    SandboxOutcome::Cancelled => {
+                        let _resolved = self
+                            .journal
+                            .resolve(
+                                &scope,
+                                &invocation.activation,
+                                &request_digest,
+                                profile.client.audience(),
+                            )
+                            .await;
+                        Err(classify(
+                            CodeAttemptPhase::Observation,
+                            NodeFailureClass::Cancelled,
+                            invocation.activation,
+                            true,
+                        ))
+                    }
+                    SandboxOutcome::Failed { .. } => {
+                        let _resolved = self
+                            .journal
+                            .resolve(
+                                &scope,
+                                &invocation.activation,
+                                &request_digest,
+                                profile.client.audience(),
+                            )
+                            .await;
+                        // The runtime reached a definite terminal phase. It has no
+                        // network, so only a platform-client call can have left an
+                        // effect, and Main's durable platform-call journal decides,
+                        // not the failure kind. A step dropped mid-flight, an
+                        // unknown call seen by this pump, or any journal answer
+                        // other than "nothing unresolved" keeps the effect possible.
+                        let effect_possible = invocation.platform_client
+                            && (platform_unknown_effect
+                                || step_tracker.interrupted()
+                                || match job.fingerprint() {
+                                    Ok(prepared) => {
+                                        platform_effects_possible(|| {
+                                            content.code_platform_effects(
+                                                &self.authority,
+                                                invocation.activation,
+                                                prepared,
+                                            )
+                                        })
+                                        .await
+                                    }
+                                    Err(_) => true,
+                                });
+                        Err(classify(
+                            CodeAttemptPhase::Observation,
+                            NodeFailureClass::InvalidResult,
+                            invocation.activation,
+                            effect_possible,
+                        ))
+                    }
+                    SandboxOutcome::Uncertain { .. } => {
+                        Err(classify(
+                            CodeAttemptPhase::Observation,
+                            NodeFailureClass::Unknown,
+                            invocation.activation,
+                            true,
+                        ))
+                    }
+                    SandboxOutcome::Pending => Err(classify(
+                        CodeAttemptPhase::Observation,
+                        NodeFailureClass::Unknown,
+                        invocation.activation,
+                        true,
+                    )),
                 }
             },
             |_| {
@@ -558,6 +676,162 @@ impl RemoteCodeRuntime {
         .await;
         result.map_err(|failure| failure.with_platform_call_effect(platform_call_effect))
     }
+}
+
+impl RemoteCodeRuntime {
+    /// A job reserved and hydrated for this attempt that failed before any
+    /// dispatch holds a live runtime nothing else will delete soon. Release it
+    /// with the claim-bound stop while this attempt still owns the claim. The
+    /// release is best effort and idempotent: a repeat finds the terminal job,
+    /// and the supervisor's retention sweep remains the backstop. A failure
+    /// after a possible dispatch is never released here (reconcile owns it).
+    async fn release_undispatched(
+        &self,
+        profile: &super::CodeRuntimeProfile,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+        failure: &CodeAttemptFailure,
+    ) {
+        if failure.failure.replay != ReplaySafety::NoExternalEffect {
+            return;
+        }
+        self.release_hydrated_job(profile, activation, digest).await;
+    }
+
+    /// The release itself, for a caller that knows no submission was sent (the
+    /// raw `execute` path never reaches a submission after a hydration failure).
+    pub(super) async fn release_hydrated_job(
+        &self,
+        profile: &super::CodeRuntimeProfile,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+    ) {
+        use crate::protocol::elitea::runtime::v1::SandboxJobStatusV1;
+        let Ok(scope) = self.authority.dispatch_scope() else {
+            return;
+        };
+        match self
+            .control
+            .release_undispatched_sandbox_job(&profile.client, &self.authority, activation, digest)
+            .await
+        {
+            Ok(
+                SandboxJobStatusV1::Completed
+                | SandboxJobStatusV1::Failed
+                | SandboxJobStatusV1::Cancelled,
+            ) => {
+                if self
+                    .journal
+                    .resolve(&scope, activation, digest, profile.client.audience())
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(
+                        event = "code_job_release_unrecorded",
+                        "released sandbox job could not be marked resolved"
+                    );
+                }
+                tracing::info!(event = "code_job_released_after_failure");
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    event = "code_job_release_pending",
+                    "sandbox job release is pending; the supervisor retention sweep remains"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    event = "code_job_release_failed",
+                    "sandbox job release could not be requested; the supervisor retention sweep remains"
+                );
+            }
+        }
+    }
+}
+
+/// Whether user code may already have been dispatched for this activation.
+///
+/// A recovered `Running` journal says only that an earlier attempt began. The
+/// Worker registers the execution's dispatch row before hydration, so the row
+/// alone proves nothing, and it durably marks the row just before the first
+/// execute submission is sent. With no row, or a row still pending its
+/// submission, no submission was ever sent and a failure before dispatch (for
+/// example a lost preparation job, or a claim lost during hydration) repeats
+/// nothing. A submitted row, a missing scope or a lookup error keep the
+/// conservative answer: the effect may have happened.
+pub(in crate::agents::graph) async fn prior_dispatch_possible(
+    journal: &crate::sandbox::dispatch::DispatchJournal,
+    scope: Option<&crate::sandbox::dispatch::DispatchScope>,
+    activation: &[u8; 32],
+    recovering_started: bool,
+) -> bool {
+    if !recovering_started {
+        return false;
+    }
+    let Some(scope) = scope else {
+        return true;
+    };
+    journal
+        .submission_started(scope, activation)
+        .await
+        .unwrap_or(true)
+}
+
+/// Retry one idempotent Main call while it reports a transient condition
+/// (unavailable, transport, timeout) until `deadline`. Any other error, and the
+/// last transient one at the deadline, is returned unchanged.
+pub(in crate::agents::graph) async fn retry_transient_main<T, F, Fut>(
+    deadline: tokio::time::Instant,
+    mut call: F,
+) -> Result<T, crate::transport::InputContentError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, crate::transport::InputContentError>>,
+{
+    loop {
+        match call().await {
+            Err(error) if error.retryable() && tokio::time::Instant::now() < deadline => {
+                tracing::warn!(
+                    event = "code_main_call_retrying",
+                    reason = error.code(),
+                    "Main was unavailable for a Code intent call; retrying"
+                );
+                tokio::time::sleep_until(
+                    (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL)
+                        .min(deadline),
+                )
+                .await;
+            }
+            other => return other,
+        }
+    }
+}
+
+/// How long the platform-journal proof retries Main after a terminal runtime
+/// phase before it gives up and keeps the effect possible.
+const PLATFORM_PROOF_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Ask Main's platform-call journal whether any call of this activation has an
+/// unknown outcome once the runtime is terminal. The answer is the read-only,
+/// fenced and authorized `code-platform/effects` query. Only an explicit
+/// `None` proves the outcome known: a refusal, an unreadable journal after
+/// the retry budget, and a `Possible` answer all keep the effect possible.
+pub(in crate::agents::graph) async fn platform_effects_possible<F, Fut>(mut proof: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<
+            Output = Result<
+                crate::transport::input_content::code_platform_content::CodePlatformEffects,
+                crate::transport::InputContentError,
+            >,
+        >,
+{
+    use crate::transport::input_content::code_platform_content::CodePlatformEffects;
+    let deadline = tokio::time::Instant::now() + PLATFORM_PROOF_RETRY_BUDGET;
+    !matches!(
+        retry_transient_main(deadline, &mut proof).await,
+        Ok(CodePlatformEffects::None)
+    )
 }
 
 pub(super) fn workspace_attempt_failure(
@@ -603,7 +877,7 @@ fn submission_control_failure(
         true,
     ))
 }
-fn classify(
+pub(in crate::agents::graph) fn classify(
     phase: CodeAttemptPhase,
     class: NodeFailureClass,
     activation: [u8; 32],
@@ -622,6 +896,48 @@ fn classify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::InputContentError;
+
+    #[tokio::test(start_paused = true)]
+    async fn transient_main_errors_retry_until_the_deadline_and_others_do_not() {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_mins(10);
+        // Main back after two transient errors: the call succeeds, it never failed the node.
+        let mut calls = 0;
+        let result = retry_transient_main(deadline, || {
+            calls += 1;
+            let attempt = calls;
+            async move {
+                if attempt < 3 {
+                    Err(InputContentError::DependencyUnavailable("main restarting"))
+                } else {
+                    Ok(attempt)
+                }
+            }
+        })
+        .await;
+        assert_eq!(result.unwrap(), 3);
+        // An authorization refusal is final at once.
+        let mut calls = 0;
+        let refused = retry_transient_main(deadline, || {
+            calls += 1;
+            async { Err::<(), _>(InputContentError::AuthorizationFailed("refused")) }
+        })
+        .await;
+        assert!(matches!(
+            refused,
+            Err(InputContentError::AuthorizationFailed(_))
+        ));
+        assert_eq!(calls, 1);
+        // A Main that never returns ends at the deadline with the last error.
+        let near = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        let down = retry_transient_main(near, || async {
+            Err::<(), _>(InputContentError::Timeout("main down"))
+        })
+        .await;
+        assert!(matches!(down, Err(InputContentError::Timeout(_))));
+        assert!(tokio::time::Instant::now() >= near);
+    }
+
     #[test]
     fn broker_call_detail_never_replaces_the_whole_code_recovery_identity() {
         let failure = classify(

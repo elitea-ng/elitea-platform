@@ -40,7 +40,8 @@ INSERT INTO elitea_runtime.execution_jobs (
     execution_id, generation, command_id, tenant_id, resource_project_id,
     projection_project_id, actor_id, principal_ref, capability_id,
     capability_version, input_bundle_id, request_digest,
-    idempotency_scope, idempotency_key, state, desired_state, admitted_at
+    idempotency_scope, idempotency_key, state, desired_state, admitted_at,
+    memory_toolkit_ids
 ) VALUES (
     sqlc.arg(execution_id)::text,
     sqlc.arg(generation)::bigint,
@@ -58,7 +59,11 @@ INSERT INTO elitea_runtime.execution_jobs (
     sqlc.arg(idempotency_key)::text,
     sqlc.arg(state)::text,
     'RUNNING',
-    sqlc.arg(admitted_at)::timestamptz
+    sqlc.arg(admitted_at)::timestamptz,
+    -- shared/0166: the resolved toolkit itself when it is a memory toolkit
+    -- (its type and id come from the project's elitea_tools row, never from
+    -- the call's arguments). Never NULL.
+    COALESCE(sqlc.arg(memory_toolkit_ids)::bigint[], '{}')
 )
 ON CONFLICT (idempotency_scope, idempotency_key) DO NOTHING
 RETURNING execution_id;

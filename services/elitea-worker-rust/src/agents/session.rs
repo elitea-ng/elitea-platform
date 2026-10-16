@@ -80,7 +80,7 @@ use crate::toolkits::{
     DELEGATED_AUTHORIZATION_METADATA_KEY, DelegatedAuthorizationCatalog,
     encode_delegated_authorization_requirement,
 };
-use crate::toolkits::{RefusedToolkit, refused_toolkits_notice_text};
+use crate::toolkits::{LeftOutToolkit, left_out_toolkits_notice_text};
 
 const APP_NAME: &str = "elitea-agent-v1";
 const ROOT_AGENT_NAME: &str = "elitea-agent";
@@ -276,11 +276,14 @@ pub(crate) struct OrdinaryRuntimeBindings {
     renamed_tools: Vec<RenamedTool>,
     /// Configured toolkits left out for a setting this runtime refuses
     /// (#1207 review round 2), named in the same opening notice.
-    refused_toolkits: Vec<RefusedToolkit>,
+    left_out_toolkits: Vec<LeftOutToolkit>,
     /// The toolkit each bound tool came from, named on its browser frames.
     toolkit_attribution: ToolkitAttributionCatalog,
     application_runtime: ApplicationRuntimeProjection,
     instruction_plan: super::instruction_authority::InstructionPlan,
+    /// The Smart Tools Selection index for the system prompt, when the mode
+    /// is on and has enough tools to be worth it.
+    lazy_tools_index: Option<String>,
 }
 
 impl OrdinaryRuntimeBindings {
@@ -299,10 +302,40 @@ impl OrdinaryRuntimeBindings {
             internal_tools: InternalToolCatalog::empty(),
             skipped_application_children: Vec::new(),
             renamed_tools: Vec::new(),
-            refused_toolkits: Vec::new(),
+            left_out_toolkits: Vec::new(),
             toolkit_attribution: ToolkitAttributionCatalog::default(),
             application_runtime,
+            lazy_tools_index: None,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_lazy_tools_index(mut self, index: Option<String>) -> Self {
+        self.lazy_tools_index = index;
+        self
+    }
+
+    /// What the system prompt gets after the agent's own instructions, in the
+    /// SDK's order and with its separators: the internal tools' guidance
+    /// joined by `\n\n---\n\n`, and then the Smart Tools Selection index
+    /// after a blank line (the SDK appends it per call, to the system message).
+    #[must_use]
+    pub(crate) fn instruction_suffix(&self, instructions: &str) -> String {
+        let text = compose_instructions(
+            instructions,
+            self.internal_tools.instruction_addendum(),
+            self.lazy_tools_index.as_deref(),
+        );
+        if text.len() > elitea_agent_runtime::request::MAX_AGENT_INSTRUCTION_BYTES {
+            // Instructions admitted at their own bound leave no room for the
+            // guidance: serve the agent's own text rather than fail the turn.
+            tracing::warn!(
+                event = "agent_internal_tool_guidance_omitted",
+                "the agent's instructions leave no room for the internal tools' guidance"
+            );
+            return instructions.to_owned();
+        }
+        text
     }
 
     #[must_use]
@@ -335,8 +368,8 @@ impl OrdinaryRuntimeBindings {
     }
 
     #[must_use]
-    pub(crate) fn with_refused_toolkits(mut self, refused: Vec<RefusedToolkit>) -> Self {
-        self.refused_toolkits = refused;
+    pub(crate) fn with_left_out_toolkits(mut self, refused: Vec<LeftOutToolkit>) -> Self {
+        self.left_out_toolkits = refused;
         self
     }
 
@@ -629,6 +662,14 @@ impl OrdinaryNativeAgentPlan {
     #[must_use]
     pub(crate) fn thread_id(&self) -> &str {
         &self.thread_id
+    }
+
+    /// The conversation (`client_stream_id`, `chat_conversations.uuid`) the
+    /// turn belongs to: its Office host is confined to that conversation's
+    /// files in the platform's system buckets.
+    #[must_use]
+    pub(crate) fn conversation_id(&self) -> &str {
+        self.projection.stream_id()
     }
 
     /// `attachments` is the RESOLVED chunk list for this turn — see
@@ -2301,6 +2342,16 @@ fn build_runtime_agent(
     parallel: bool,
     checkpoint: Option<super::model_checkpoint::ModelCheckpointWriter>,
 ) -> Result<(Arc<dyn Agent>, AgentEventProjector), NativeAgentAssemblyError> {
+    // The user-visible half of what the turn could not serve, on the turn's own
+    // node events. Done HERE, where every path (a fresh turn, a checkpoint
+    // recovery and a human-in-the-loop or authorization RESUME) builds its
+    // agent, so a resumed turn's final message carries the list too.
+    let projection =
+        projection.with_skipped_capabilities(super::skipped_capabilities::skipped_capabilities(
+            &runtime.left_out_toolkits,
+            runtime.internal_tools,
+            &runtime.skipped_application_children,
+        ));
     let OrdinaryRuntimeBindings {
         toolsets,
         sensitive_tools,
@@ -2309,10 +2360,12 @@ fn build_runtime_agent(
         // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
         renamed_tools: _,
-        refused_toolkits: _,
+        left_out_toolkits: _,
         toolkit_attribution,
         application_runtime,
         instruction_plan,
+        // Already part of the bound model's system instruction (ordinary.rs).
+        lazy_tools_index: _,
     } = runtime;
     let mut delegated_authorization = delegated_authorization;
     let (model, toolsets) = crate::toolkits::bind_authorization_model_tools(
@@ -2504,10 +2557,12 @@ async fn prepare_direct_resume(
         // Reported by the session seed, never by the agent graph (#973/#983).
         skipped_application_children: _,
         renamed_tools: _,
-        refused_toolkits: _,
+        left_out_toolkits: _,
         toolkit_attribution,
         application_runtime,
         instruction_plan,
+        // Already part of the bound model's system instruction (ordinary.rs).
+        lazy_tools_index: _,
     } = runtime;
     let resolved = match start {
         DirectResumeStart::Sensitive(decisions) => decisions
@@ -2832,7 +2887,7 @@ async fn seed_skipped_internal_tools_notice(
 struct FreshSessionNotices {
     skipped_application_children: Vec<SkippedApplicationChild>,
     renamed_tools: Vec<RenamedTool>,
-    refused_toolkits: Vec<RefusedToolkit>,
+    left_out_toolkits: Vec<LeftOutToolkit>,
 }
 
 impl FreshSessionNotices {
@@ -2840,7 +2895,7 @@ impl FreshSessionNotices {
         Self {
             skipped_application_children: runtime.skipped_application_children.clone(),
             renamed_tools: runtime.renamed_tools.clone(),
-            refused_toolkits: runtime.refused_toolkits.clone(),
+            left_out_toolkits: runtime.left_out_toolkits.clone(),
         }
     }
 }
@@ -2863,7 +2918,7 @@ async fn seed_fresh_session_notices(
     )
     .await?;
     seed_renamed_tools_notice(sessions, identity, &notices.renamed_tools).await?;
-    seed_refused_toolkits_notice(sessions, identity, &notices.refused_toolkits).await
+    seed_left_out_toolkits_notice(sessions, identity, &notices.left_out_toolkits).await
 }
 
 /// #1207 review round 2: append ONE role-`"tool"` event naming every
@@ -2875,12 +2930,12 @@ async fn seed_fresh_session_notices(
 /// it, such a toolkit was skipped with one worker log line while the
 /// capability snapshot listed it as supported: the user saw an enabled
 /// toolkit that did nothing, and the model could not say why.
-async fn seed_refused_toolkits_notice(
+async fn seed_left_out_toolkits_notice(
     sessions: &dyn SessionService,
     identity: &AdkIdentity,
-    refused: &[RefusedToolkit],
+    refused: &[LeftOutToolkit],
 ) -> Result<(), NativeAgentAssemblyError> {
-    let Some(notice) = refused_toolkits_notice_text(refused) else {
+    let Some(notice) = left_out_toolkits_notice_text(refused) else {
         return Ok(());
     };
     let mut event = Event::new("elitea-refused-toolkits");
@@ -3168,6 +3223,53 @@ fn pipeline_configuration_error(error: &PipelineConfigurationError) -> NativeAge
         error,
         "the stored pipeline could not be compiled",
     )
+}
+
+/// The system instruction: the agent's own `instructions`, then the internal
+/// tools' guidance after the SDK's separator, then the Smart Tools Selection
+/// index after a blank line. The ONE function that builds it, and the one the
+/// fit check measures, so the check and the build cannot disagree.
+#[must_use]
+pub(crate) fn compose_instructions(
+    instructions: &str,
+    guidance: Option<&str>,
+    index: Option<&str>,
+) -> String {
+    let mut text = instructions.to_owned();
+    if let Some(guidance) = guidance {
+        if text.is_empty() {
+            text.push_str(guidance.trim_start_matches('\n'));
+        } else {
+            text.push_str("\n\n---\n\n");
+            text.push_str(guidance);
+        }
+    }
+    if let Some(index) = index {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(index);
+    }
+    text
+}
+
+/// Whether the Smart Tools Selection `index` fits in the system prompt beside
+/// the agent's `instructions` and the other internal tools' guidance: the
+/// length of the string [`compose_instructions`] would build, against the cap
+/// [`OrdinaryRuntimeBindings::instruction_suffix`] enforces.
+#[must_use]
+pub(crate) fn lazy_index_fits(
+    instructions: &str,
+    internal_tools: InternalToolCatalog,
+    index: &str,
+) -> bool {
+    compose_instructions(
+        instructions,
+        internal_tools.instruction_addendum(),
+        Some(index),
+    )
+    .len()
+        <= elitea_agent_runtime::request::MAX_AGENT_INSTRUCTION_BYTES
 }
 
 #[cfg(test)]

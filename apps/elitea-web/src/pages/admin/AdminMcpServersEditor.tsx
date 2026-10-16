@@ -137,7 +137,19 @@ function McpServerTable({
                   {server.key}
                 </Typography>
               </TableCell>
-              <TableCell sx={{ wordBreak: 'break-all' }}>{server.url}</TableCell>
+              <TableCell sx={{ wordBreak: 'break-all' }}>
+                {server.url}
+                {server.token_url_required === true ? (
+                  <Chip
+                    size="small"
+                    color="warning"
+                    variant="outlined"
+                    sx={{ marginLeft: '0.5rem' }}
+                    data-testid={`admin-mcp-server-token-url-required-${server.key}`}
+                    label={t('pages.admin.mcpServers.tokenUrlRequired', 'Token URL required')}
+                  />
+                ) : null}
+              </TableCell>
               <TableCell>
                 {server.client_secret !== undefined && server.client_secret !== '' ? (
                   // The mask, exactly as the server sent it. There is no reveal

@@ -1,0 +1,15 @@
+1 title proposal title=- tokens=- | Intro
+1 summary proposal title=- tokens=- | The start.
+1 propositions proposal title=- tokens=- | a
+1 document proposal title=Intro tokens=- | word word word word word word word word 
+2 title proposal title=- tokens=- | Setup
+2 summary proposal title=- tokens=- | Getting ready.
+2 propositions proposal title=- tokens=- | c
+2 document proposal title=Setup tokens=- | word word word word word word word word 
+3 title proposal title=- tokens=- | Use
+3 summary proposal title=- tokens=- | Using it.
+3 propositions proposal title=- tokens=- | d
+3 document proposal title=Use tokens=- |  word word word word word word word word
+4 title proposal title=- tokens=- | End
+4 summary proposal title=- tokens=- | The end.
+4 document proposal title=End tokens=- |  word word word word word word word word

@@ -97,6 +97,8 @@ func removeIndexDispositionProto(disposition indexregistryapp.RemovalDisposition
 		return runtimev1.RemoveIndexDispositionV1_REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN, true
 	case indexregistryapp.RemovalActiveRun:
 		return runtimev1.RemoveIndexDispositionV1_REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN, true
+	case indexregistryapp.RemovalSharedWriteRefused:
+		return runtimev1.RemoveIndexDispositionV1_REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED, true
 	}
 	return runtimev1.RemoveIndexDispositionV1_REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED, false
 }

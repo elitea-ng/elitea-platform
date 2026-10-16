@@ -19,7 +19,7 @@
  *
  * It does NOT assert a specific worker — the e2e stack's configured worker is
  * a deployment fact this suite does not control — only that the answer is
- * INTERNALLY CONSISTENT: on a Rust deployment every one of the six tools
+ * INTERNALLY CONSISTENT: on a Rust deployment each tool the worker skips
  * answers `false` and at least one toolkit type is withheld; on a Python
  * deployment every one of the six answers `true`.
  *
@@ -38,18 +38,16 @@ import { STORAGE_STATE } from '../../../playwright.config';
 // the claim.
 test.use({ storageState: STORAGE_STATE.admin });
 
-// The six toggleable internal chat tools #866 names — `features/agents/lib/
-// internalTools.ts`'s `INTERNAL_TOOLS_LIST`, minus `attachments`/`pyodide`
-// (tracked separately, deliberately not reported by this endpoint — see
-// `internal/api/v2/toolkits/capabilities_handler.go`'s own doc comment).
-const SIX_INTERNAL_TOOLS = [
-  'image_generation',
-  'data_analysis',
-  'internal_mcp',
-  'planner',
-  'swarm',
-  'lazy_tools_mode',
-] as const;
+// The toggleable internal chat tools this endpoint reports on —
+// `features/agents/lib/internalTools.ts`'s `INTERNAL_TOOLS_LIST`, minus
+// `pyodide` (a Deno sandbox only the Python worker ships; deliberately not
+// reported — see `internal/api/v2/toolkits/capabilities_handler.go`'s own doc
+// comment). Four are still skipped by the Rust worker; `planner`,
+// `lazy_tools_mode` and `attachments` are served by both workers.
+const RUST_SKIPPED_INTERNAL_TOOLS = ['image_generation', 'internal_mcp', 'swarm'] as const;
+// data_analysis is served by Rust as structured table tools (ADR-0033).
+const BOTH_WORKERS_INTERNAL_TOOLS = ['planner', 'lazy_tools_mode', 'attachments', 'data_analysis'] as const;
+const REPORTED_INTERNAL_TOOLS = [...RUST_SKIPPED_INTERNAL_TOOLS, ...BOTH_WORKERS_INTERNAL_TOOLS] as const;
 
 interface RuntimeCapabilities {
   readonly worker: string;
@@ -69,11 +67,11 @@ test('API-RC1: the endpoint answers the shape the web app reads, for a signed-in
   expect(['python', 'rust', ''], `worker=${JSON.stringify(body.worker)}`).toContain(body.worker);
   expect(Array.isArray(body.hidden_toolkit_types), JSON.stringify(body)).toBe(true);
 
-  // Every one of the six #866 names is present with a boolean answer — not
+  // Every reported name is present with a boolean answer — not
   // merely absent-and-truthy, which the pre-#866 UI would have read as
   // "available" (`isInternalToolAvailable`'s own "unset means available"
   // rule) and hidden the gap all over again.
-  for (const name of SIX_INTERNAL_TOOLS) {
+  for (const name of REPORTED_INTERNAL_TOOLS) {
     expect(typeof body.internal_tools[name], `internal_tools.${name}=${JSON.stringify(body.internal_tools[name])}`).toBe(
       'boolean',
     );
@@ -86,15 +84,19 @@ test('API-RC2: the answer is internally consistent with the configured worker', 
   const body = (await resp.json()) as RuntimeCapabilities;
 
   if (body.worker === 'rust') {
-    // #866's core claim, machine-checked: none of the six run on Rust.
-    for (const name of SIX_INTERNAL_TOOLS) {
+    // #866's core claim, machine-checked: what the Rust worker still skips
+    // is reported false; what it serves natively is reported true.
+    for (const name of RUST_SKIPPED_INTERNAL_TOOLS) {
       expect(body.internal_tools[name], `internal_tools.${name} on rust`).toBe(false);
+    }
+    for (const name of BOTH_WORKERS_INTERNAL_TOOLS) {
+      expect(body.internal_tools[name], `internal_tools.${name} on rust`).toBe(true);
     }
     // #865's core claim: at least one catalogued type is withheld — the
     // Rust worker materializes 22 of the 52 catalogued families.
     expect(body.hidden_toolkit_types.length, JSON.stringify(body.hidden_toolkit_types)).toBeGreaterThan(0);
   } else if (body.worker === 'python') {
-    for (const name of SIX_INTERNAL_TOOLS) {
+    for (const name of REPORTED_INTERNAL_TOOLS) {
       expect(body.internal_tools[name], `internal_tools.${name} on python`).toBe(true);
     }
   }

@@ -133,6 +133,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	}
 	command, err := s.verifier.Verify(ctx, request.GetSignedCommand())
 	if err != nil {
+		logClaimRejection(ctx, "verify_command", nil, err)
 		return claimRejectionFor(err), nil
 	}
 	canonicalEnvelope, err := proto.MarshalOptions{Deterministic: true}.Marshal(request.GetSignedCommand())
@@ -154,6 +155,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		NodeRecovery:                 request.GetNodeRecovery(),
 	})
 	if err != nil {
+		logClaimRejection(ctx, "claim", command, err)
 		return claimRejectionFor(err), nil
 	}
 	lease := decision.Lease
@@ -209,6 +211,10 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The claim creation time is unavailable.", false), nil
 	}
 	receipt.ClaimStartedAtUnixMicros = claimStartedAtUnixMicros
+	// This Main reads the typed tool-run refusals; a worker only sends them
+	// when told so (an older Main would refuse them and the run would never
+	// settle).
+	receipt.ToolkitTypedRefusals = advertisesTypedToolRefusals(command)
 
 	manifest, err := s.inputs.ResolveClaimInput(ctx, lease.Fence, command.GetInputBundleRef())
 	if err != nil {
@@ -241,6 +247,12 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	receipt.InputBundleRef = proto.Clone(command.GetInputBundleRef()).(*runtimev1.ExecutionInputBundleReferenceV1)
 	receipt.InputBundle = proto.Clone(manifest).(*runtimev1.ExecutionInputBundleV1)
 	return &runtimev1.ClaimCommandResponseV1{Receipt: receipt}, nil
+}
+
+// advertisesTypedToolRefusals: a tool run's receipt tells the worker this Main
+// reads EFFECT_REFUSED / POLICY_REFUSED and the run-credentials sentence.
+func advertisesTypedToolRefusals(command *runtimev1.WorkerCommandV1) bool {
+	return command.GetCapabilityId() == executiondomain.ToolkitCallToolCapability
 }
 
 // degradeVectorToken records that a live claim's vector token could not be
@@ -652,6 +664,64 @@ func fenceProto(fence runtimedomain.Fence) *runtimev1.ExecutionFenceV1 {
 		LeaseEpoch:        fence.LeaseEpoch,
 		ProducerId:        fence.ProducerID,
 		FenceToken:        append([]byte(nil), fence.Token[:]...),
+	}
+}
+
+// logClaimRejection records why a claim was refused. The worker only sees the
+// safe code, so without this a redelivery loop ends in an unexplained
+// control_rejected. Only identifiers, the safe code and a fixed reason from a
+// closed set are logged. The error text itself is never logged: it can carry
+// driver messages, payload fragments or other sensitive detail.
+func logClaimRejection(ctx context.Context, stage string, command *runtimev1.WorkerCommandV1, err error) {
+	code, _, retryable := safeRuntimeError(err)
+	attrs := []any{"stage", stage, "error_code", code.String(), "retryable", retryable, "reason", claimRejectionReason(err)}
+	if command != nil {
+		attrs = append(attrs, "execution_id", command.GetExecutionId(), "generation", command.GetGeneration(), "command_id", command.GetCommandId())
+	}
+	slog.WarnContext(ctx, "runtime claim rejected", attrs...)
+}
+
+// The closed set of claim rejection reasons. Anything else is reasonUnclassified.
+const (
+	reasonStaleFence                 = "stale_fence"
+	reasonCommandAuthentication      = "command_authentication"
+	reasonCommandIncompatible        = "command_incompatible"
+	reasonMalformedRequest           = "malformed_request"
+	reasonSettlementConflict         = "settlement_conflict"
+	reasonTerminalOutputNotReady     = "terminal_output_not_ready"
+	reasonClaimDependencyUnavailable = "claim_dependency_unavailable"
+	reasonInvalidSettlement          = "invalid_settlement"
+	reasonCancelled                  = "cancelled"
+	reasonDeadlineExceeded           = "deadline_exceeded"
+	reasonUnclassified               = "unclassified"
+)
+
+// claimRejectionReason maps an error to its sentinel reason. It follows the
+// same sentinels as safeRuntimeError and never returns err.Error().
+func claimRejectionReason(err error) string {
+	switch {
+	case errors.Is(err, runtimedomain.ErrStaleFence), errors.Is(err, runtimedomain.ErrLeaseExpired):
+		return reasonStaleFence
+	case errors.Is(err, ErrCommandAuthentication):
+		return reasonCommandAuthentication
+	case errors.Is(err, ErrCommandIncompatible):
+		return reasonCommandIncompatible
+	case errors.Is(err, ErrMalformedWorkerCommand), errors.Is(err, executionapp.ErrInvalidClaim), errors.Is(err, runtimedomain.ErrInvalidFence):
+		return reasonMalformedRequest
+	case errors.Is(err, executionapp.ErrSettlementConflict):
+		return reasonSettlementConflict
+	case errors.Is(err, executionapp.ErrTerminalOutputNotReady):
+		return reasonTerminalOutputNotReady
+	case errors.Is(err, executionapp.ErrClaimDependencyUnavailable):
+		return reasonClaimDependencyUnavailable
+	case errors.Is(err, executionapp.ErrInvalidSettlement):
+		return reasonInvalidSettlement
+	case errors.Is(err, context.Canceled):
+		return reasonCancelled
+	case errors.Is(err, context.DeadlineExceeded):
+		return reasonDeadlineExceeded
+	default:
+		return reasonUnclassified
 	}
 }
 

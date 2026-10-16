@@ -242,6 +242,8 @@ impl AdoReposClient {
             AdoBody::Empty => Ok(String::new()),
             // A JSON file can still come back typed as JSON.
             AdoBody::Json(value) => serde_json::to_string(&value).map_err(|_| invalid_response()),
+            // Only a request that asked for raw bytes gets them.
+            AdoBody::Bytes(_) => Err(invalid_response()),
         }
     }
 

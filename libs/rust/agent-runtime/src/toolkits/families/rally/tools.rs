@@ -605,3 +605,12 @@ fn resource_exhausted_arguments() -> AdkError {
         "the Rally tool arguments exceed the approved limit",
     )
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    RallyToolKind::ALL
+        .iter()
+        .map(|kind| (kind.name(), false))
+        .collect()
+}

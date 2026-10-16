@@ -41,6 +41,12 @@ class CodePlatformStepDispositionV1(int, metaclass=_enum_type_wrapper.EnumTypeWr
     CODE_PLATFORM_STEP_DISPOSITION_V1_IDLE: _ClassVar[CodePlatformStepDispositionV1]
     CODE_PLATFORM_STEP_DISPOSITION_V1_COMMITTED: _ClassVar[CodePlatformStepDispositionV1]
     CODE_PLATFORM_STEP_DISPOSITION_V1_UNKNOWN: _ClassVar[CodePlatformStepDispositionV1]
+
+class CodePlatformEffectsDispositionV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    CODE_PLATFORM_EFFECTS_DISPOSITION_V1_UNSPECIFIED: _ClassVar[CodePlatformEffectsDispositionV1]
+    CODE_PLATFORM_EFFECTS_DISPOSITION_V1_NONE: _ClassVar[CodePlatformEffectsDispositionV1]
+    CODE_PLATFORM_EFFECTS_DISPOSITION_V1_POSSIBLE: _ClassVar[CodePlatformEffectsDispositionV1]
 CODE_PLATFORM_OPERATION_V1_UNSPECIFIED: CodePlatformOperationV1
 CODE_PLATFORM_OPERATION_V1_APPLICATION_LIST: CodePlatformOperationV1
 CODE_PLATFORM_OPERATION_V1_APPLICATION_GET: CodePlatformOperationV1
@@ -69,6 +75,9 @@ CODE_PLATFORM_STEP_DISPOSITION_V1_UNSPECIFIED: CodePlatformStepDispositionV1
 CODE_PLATFORM_STEP_DISPOSITION_V1_IDLE: CodePlatformStepDispositionV1
 CODE_PLATFORM_STEP_DISPOSITION_V1_COMMITTED: CodePlatformStepDispositionV1
 CODE_PLATFORM_STEP_DISPOSITION_V1_UNKNOWN: CodePlatformStepDispositionV1
+CODE_PLATFORM_EFFECTS_DISPOSITION_V1_UNSPECIFIED: CodePlatformEffectsDispositionV1
+CODE_PLATFORM_EFFECTS_DISPOSITION_V1_NONE: CodePlatformEffectsDispositionV1
+CODE_PLATFORM_EFFECTS_DISPOSITION_V1_POSSIBLE: CodePlatformEffectsDispositionV1
 
 class CodePlatformJobBindingV1(_message.Message):
     __slots__ = ("revision", "activation_sha256", "prepared_request_sha256", "policy_sha256", "retained_runtime_id")
@@ -141,3 +150,25 @@ class CodePlatformStepResponseV1(_message.Message):
     disposition: CodePlatformStepDispositionV1
     effect_id: str
     def __init__(self, schema: _Optional[str] = ..., revision: _Optional[int] = ..., disposition: _Optional[_Union[CodePlatformStepDispositionV1, str]] = ..., effect_id: _Optional[str] = ...) -> None: ...
+
+class CodePlatformEffectsRequestV1(_message.Message):
+    __slots__ = ("schema", "revision", "dispatch_activation", "prepared_request_fingerprint")
+    SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    DISPATCH_ACTIVATION_FIELD_NUMBER: _ClassVar[int]
+    PREPARED_REQUEST_FINGERPRINT_FIELD_NUMBER: _ClassVar[int]
+    schema: str
+    revision: int
+    dispatch_activation: str
+    prepared_request_fingerprint: str
+    def __init__(self, schema: _Optional[str] = ..., revision: _Optional[int] = ..., dispatch_activation: _Optional[str] = ..., prepared_request_fingerprint: _Optional[str] = ...) -> None: ...
+
+class CodePlatformEffectsResponseV1(_message.Message):
+    __slots__ = ("schema", "revision", "disposition")
+    SCHEMA_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    DISPOSITION_FIELD_NUMBER: _ClassVar[int]
+    schema: str
+    revision: int
+    disposition: CodePlatformEffectsDispositionV1
+    def __init__(self, schema: _Optional[str] = ..., revision: _Optional[int] = ..., disposition: _Optional[_Union[CodePlatformEffectsDispositionV1, str]] = ...) -> None: ...

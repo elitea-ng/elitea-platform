@@ -2,6 +2,7 @@
 //! every engine gets from this crate regardless of its tools. Each engine
 //! keeps its own suite for what its tools answer (`DeepWiki`:
 //! `services/elitea-deepwiki-engine/tests/sidecar.rs`).
+#![cfg(feature = "server")]
 
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::Context;

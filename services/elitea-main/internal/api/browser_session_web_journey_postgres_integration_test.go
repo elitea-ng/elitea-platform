@@ -24,6 +24,7 @@ package api
 
 import (
 	"context"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"os"
 	"sync"
@@ -180,7 +181,7 @@ func TestABrowserSessionStaysValidAcrossTheWebAppsRequestsAfterSignIn(t *testing
 // and the account the session names.
 func newBrowserSessionJourneyPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	if os.Getenv("ELITEA_TEST_DATABASE_URL") == "" {
+	if testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL")) == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the browser session journey test")
 	}
 	pool := newStatusOKIntegrationPool(t)

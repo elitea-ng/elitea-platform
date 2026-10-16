@@ -692,7 +692,18 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// is a bounded subset and cannot be summed for the list; the worker
 	// reports the whole index's totals and Main stores them. Two columns with
 	// DEFAULT 0, nothing migrated, no permission.
-	require.EqualValues(t, 164, Head(shared))
+	//
+	// 165: shared/0165_mcp_prebuilt_token_url.sql, the operator-pinned OAuth
+	// token endpoint of a pre-built MCP catalogue entry (one text column,
+	// DEFAULT ''), the only endpoint a catalogue entry's client secret may be
+	// released to when the entry's URL is a template. No permission, no data.
+	//
+	// 166: shared/0166_vector_claim_tokens_memory_source.sql, the check on
+	// elitea_runtime.vector_claim_tokens.allowed_sources admits the `memory`
+	// source; execution_jobs and vector_claim_tokens get memory_toolkit_ids,
+	// and elitea_runtime.memory_conversation_taints is created (worker unit
+	// M9). No data, no permission.
+	require.EqualValues(t, 166, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -886,12 +897,22 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// chat_message_group (author_participant_id, created_at DESC) for the
 	// "user's previous turn" lookup memory recall makes on every turn
 	// (ADR-0029 decision 8). An index and no permission, so no shared sibling.
-	require.EqualValues(t, 148, Head(tenant))
+	// 149: tenant/0149_chat_conversation_memory_taint_cleanup.sql, an AFTER
+	// DELETE trigger on chat_conversations that removes the conversation's
+	// personal-memory taint (shared/0166, worker unit M9) on every delete path.
+	// 150: tenant/0150_chat_conversation_activity_utc.sql, 0145's activity
+	// bump writes chat_conversations.updated_at as the UTC wall clock (now()
+	// AT TIME ZONE 'UTC'), like every Go writer of the naive chat columns. A
+	// function body and no permission, so no shared sibling.
+	require.EqualValues(t, 150, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
 	// database, so its ledger advances independently of the tenant one.
+	// 14: agentstate/0014_sandbox_dispatch_submission_marker.sql, the
+	// submission_pending marker that tells a hydration-phase lease loss apart
+	// from a submitted Code job (#1084).
 	agentState, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.EqualValues(t, 13, Head(agentState))
+	require.EqualValues(t, 14, Head(agentState))
 }

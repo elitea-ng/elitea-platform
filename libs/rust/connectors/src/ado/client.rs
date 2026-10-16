@@ -20,6 +20,12 @@ const MAX_IDLE_PER_HOST: usize = 4;
 const MAX_REQUEST_BYTES: usize = 2 * 1_024 * 1_024;
 /// One provider response. A repository file read is bounded by this too.
 pub const MAX_RESPONSE_BYTES: usize = 4 * 1_024 * 1_024;
+/// One binary response (an attachment read as a picture): the picture bound
+/// of the indexing connectors ([`crate::pictures::MAX_PICTURE_BYTES`]).
+pub const MAX_BINARY_RESPONSE_BYTES: usize = 5 * 1_024 * 1_024;
+/// One binary request body (an attachment upload), the Office host's cap.
+pub const MAX_UPLOAD_BYTES: usize = 50 * 1_024 * 1_024;
+const OCTET_STREAM_CONTENT_TYPE: &str = "application/octet-stream";
 const MAX_PROVIDER_MESSAGE_BYTES: usize = 1_024;
 const MAX_ETAG_BYTES: usize = 1_024;
 const USER_AGENT_VALUE: &str = "elitea-worker-rust/0.1";
@@ -154,6 +160,9 @@ pub enum AdoBody {
     Empty,
     Json(Value),
     Text(String),
+    /// The body of a request that asked for `application/octet-stream`
+    /// ([`AdoRequest::octet_stream`]), at most [`MAX_BINARY_RESPONSE_BYTES`].
+    Bytes(Vec<u8>),
 }
 
 pub struct AdoHttpResponse {
@@ -217,12 +226,21 @@ impl AdoTransport for HttpAdoTransport {
         request: Request,
         effect: bool,
     ) -> Result<AdoHttpResponse, AdoClientError> {
+        let binary = request
+            .headers()
+            .get(ACCEPT)
+            .is_some_and(|value| value.as_bytes() == OCTET_STREAM_CONTENT_TYPE.as_bytes());
+        let limit = if binary {
+            MAX_BINARY_RESPONSE_BYTES
+        } else {
+            MAX_RESPONSE_BYTES
+        };
         let mut response = self
             .inner
             .execute(request)
             .await
             .map_err(|source| map_transport_error(source, effect))?;
-        if response.declares_more_than(MAX_RESPONSE_BYTES) {
+        if response.declares_more_than(limit) {
             return Err(response_bound_failure(effect));
         }
         let json_content_type = response
@@ -238,13 +256,15 @@ impl AdoTransport for HttpAdoTransport {
             .filter(|value| value.len() <= MAX_ETAG_BYTES)
             .map(Into::into);
         let bytes = response
-            .bytes_within(MAX_RESPONSE_BYTES)
+            .bytes_within(limit)
             .await
             .map_err(|source| map_transport_error(source, effect))?
             .ok_or_else(|| response_bound_failure(effect))?;
         let status = response.status();
         let body = if bytes.is_empty() {
             AdoBody::Empty
+        } else if binary && status.is_success() && !json_content_type {
+            AdoBody::Bytes(bytes)
         } else if json_content_type {
             match serde_json::from_slice(&bytes) {
                 Ok(value) => AdoBody::Json(value),
@@ -273,6 +293,8 @@ pub enum AdoRequestBody {
     None,
     Json(Value),
     JsonPatch(Value),
+    /// A file, as `application/octet-stream`, at most [`MAX_UPLOAD_BYTES`].
+    Binary(Vec<u8>),
 }
 
 /// One Azure DevOps REST call: `{organization}[/{project}]/_apis/{segments}`
@@ -286,6 +308,7 @@ pub struct AdoRequest<'a> {
     pub api_version: &'static str,
     pub body: AdoRequestBody,
     pub accept_text: bool,
+    pub accept_binary: bool,
     pub if_match: Option<&'a str>,
 }
 
@@ -304,6 +327,7 @@ impl<'a> AdoRequest<'a> {
             api_version,
             body: AdoRequestBody::None,
             accept_text: false,
+            accept_binary: false,
             if_match: None,
         }
     }
@@ -333,6 +357,12 @@ impl<'a> AdoRequest<'a> {
     }
 
     #[must_use]
+    pub fn binary(mut self, body: Vec<u8>) -> Self {
+        self.body = AdoRequestBody::Binary(body);
+        self
+    }
+
+    #[must_use]
     pub fn json_patch(mut self, body: Value) -> Self {
         self.body = AdoRequestBody::JsonPatch(body);
         self
@@ -347,6 +377,13 @@ impl<'a> AdoRequest<'a> {
     #[must_use]
     pub const fn text(mut self) -> Self {
         self.accept_text = true;
+        self
+    }
+
+    /// Ask for the raw bytes of a file (`Accept: application/octet-stream`).
+    #[must_use]
+    pub const fn octet_stream(mut self) -> Self {
+        self.accept_binary = true;
         self
     }
 
@@ -420,15 +457,13 @@ impl AdoClient {
     pub fn build(&self, request: AdoRequest<'_>) -> Result<Request, AdoClientError> {
         let url = self.url(&request)?;
         let mut http = Request::new(request.method.clone(), url);
-        let credential =
-            Zeroizing::new(BASE64_STANDARD.encode(format!(":{}", self.connection.token())));
-        let mut authorization = HeaderValue::from_str(&format!("Basic {}", credential.as_str()))
-            .map_err(|_| invalid_configuration())?;
-        authorization.set_sensitive(true);
-        http.headers_mut().insert(AUTHORIZATION, authorization);
+        http.headers_mut()
+            .insert(AUTHORIZATION, self.credential_header()?);
         http.headers_mut().insert(
             ACCEPT,
-            HeaderValue::from_static(if request.accept_text {
+            HeaderValue::from_static(if request.accept_binary {
+                OCTET_STREAM_CONTENT_TYPE
+            } else if request.accept_text {
                 "text/plain"
             } else {
                 JSON_CONTENT_TYPE
@@ -440,8 +475,23 @@ impl AdoClient {
                 HeaderValue::from_str(version).map_err(|_| invalid_input())?,
             );
         }
+        if let AdoRequestBody::Binary(bytes) = request.body {
+            if bytes.is_empty() || bytes.len() > MAX_UPLOAD_BYTES {
+                return Err(AdoClientError {
+                    code: AdoClientErrorCode::ResourceExhausted,
+                    retryable: false,
+                    provider_message: None,
+                });
+            }
+            http.headers_mut().insert(
+                CONTENT_TYPE,
+                HeaderValue::from_static(OCTET_STREAM_CONTENT_TYPE),
+            );
+            *http.body_mut() = Some(bytes.into());
+            return Ok(http);
+        }
         let (content_type, body) = match request.body {
-            AdoRequestBody::None => (None, None),
+            AdoRequestBody::None | AdoRequestBody::Binary(_) => (None, None),
             AdoRequestBody::Json(body) => (Some(JSON_CONTENT_TYPE), Some(body)),
             AdoRequestBody::JsonPatch(body) => (Some(JSON_PATCH_CONTENT_TYPE), Some(body)),
         };
@@ -459,6 +509,73 @@ impl AdoClient {
             *http.body_mut() = Some(encoded.into());
         }
         Ok(http)
+    }
+
+    /// Whether `url` is inside the configured organization (or collection):
+    /// the same scheme, host and port, and a path that starts with the
+    /// organization's path segments. The host alone is not enough on
+    /// `dev.azure.com`, where every organization shares it. Paths compare
+    /// case-insensitively (organization names do) and on whole segments, so
+    /// `/contoso-evil/...` is not inside `/contoso`.
+    #[must_use]
+    pub fn owns(&self, url: &Url) -> bool {
+        let organization = self.connection.organization_url();
+        if url.scheme() != organization.scheme()
+            || url.host_str().map(str::to_ascii_lowercase)
+                != organization.host_str().map(str::to_ascii_lowercase)
+            || url.port_or_known_default() != organization.port_or_known_default()
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return false;
+        }
+        let prefix: Vec<&str> = organization
+            .path_segments()
+            .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
+            .unwrap_or_default();
+        let Some(path) = url.path_segments() else {
+            return false;
+        };
+        let path: Vec<&str> = path.collect();
+        path.len() >= prefix.len()
+            && prefix
+                .iter()
+                .zip(&path)
+                .all(|(wanted, got)| wanted.eq_ignore_ascii_case(got))
+            // `..` or encoded dots would walk out of the prefix.
+            && !path.iter().any(|segment| matches!(*segment, ".." | "." | "%2e%2e" | "%2E%2E"))
+    }
+
+    /// Put the connection's credential on a request the client did not
+    /// build (an attachment URL the provider handed out).
+    ///
+    /// # Errors
+    ///
+    /// The request's URL is not inside the organization ([`Self::owns`]):
+    /// the credential is never attached to it.
+    pub fn authorize(&self, request: &mut Request) -> Result<(), AdoClientError> {
+        if !self.owns(request.url()) {
+            return Err(AdoClientError {
+                code: AdoClientErrorCode::EgressRefused,
+                retryable: false,
+                provider_message: None,
+            });
+        }
+        request
+            .headers_mut()
+            .insert(AUTHORIZATION, self.credential_header()?);
+        Ok(())
+    }
+
+    /// The PAT as a sensitive Basic credential, the one way every request
+    /// of this client carries it.
+    fn credential_header(&self) -> Result<HeaderValue, AdoClientError> {
+        let credential =
+            Zeroizing::new(BASE64_STANDARD.encode(format!(":{}", self.connection.token())));
+        let mut authorization = HeaderValue::from_str(&format!("Basic {}", credential.as_str()))
+            .map_err(|_| invalid_configuration())?;
+        authorization.set_sensitive(true);
+        Ok(authorization)
     }
 
     /// Send one request and map its status. Only a 2xx response comes back.
@@ -485,7 +602,25 @@ impl AdoClient {
     ) -> Result<Value, AdoClientError> {
         match self.send(request, effect).await?.into_body() {
             AdoBody::Json(value) => Ok(value),
-            AdoBody::Empty | AdoBody::Text(_) => Err(response_shape_failure(effect)),
+            AdoBody::Empty | AdoBody::Text(_) | AdoBody::Bytes(_) => {
+                Err(response_shape_failure(effect))
+            }
+        }
+    }
+
+    /// Send one request (made with [`AdoRequest::octet_stream`]) whose
+    /// successful response must be a file, at most
+    /// [`MAX_BINARY_RESPONSE_BYTES`].
+    pub async fn bytes(
+        &self,
+        request: AdoRequest<'_>,
+        effect: bool,
+    ) -> Result<Vec<u8>, AdoClientError> {
+        match self.send(request, effect).await?.into_body() {
+            AdoBody::Bytes(bytes) => Ok(bytes),
+            AdoBody::Empty | AdoBody::Text(_) | AdoBody::Json(_) => {
+                Err(response_shape_failure(effect))
+            }
         }
     }
 
@@ -508,7 +643,7 @@ fn status_error(status: StatusCode, body: &AdoBody, effect: bool) -> AdoClientEr
             .get("message")
             .and_then(Value::as_str)
             .map(|message| truncate(message, MAX_PROVIDER_MESSAGE_BYTES).into()),
-        AdoBody::Empty | AdoBody::Text(_) => None,
+        AdoBody::Empty | AdoBody::Text(_) | AdoBody::Bytes(_) => None,
     };
     if effect
         && (status.is_server_error()

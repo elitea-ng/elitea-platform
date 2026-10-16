@@ -1453,10 +1453,9 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
     match error.code() {
         NativeAgentAssemblyErrorCode::UnsupportedCapability
             if error.cause().is_some_and(|cause| {
-                // A gated node type, or a toolkit a direct node's position
-                // cannot serve: both are fixed by editing the pipeline.
-                cause.code() == crate::agents::graph::compiler::NODE_TYPE_NOT_AVAILABLE_CODE
-                    || cause.code() == crate::agents::pipeline::UNSERVED_DIRECT_TOOLKIT_CODE
+                // A toolkit a direct node's position cannot serve is fixed by
+                // editing the pipeline.
+                cause.code() == crate::agents::pipeline::UNSERVED_DIRECT_TOOLKIT_CODE
             }) =>
         {
             RuntimeFailureKind::PipelineNodeTypeNotAvailable
@@ -1600,47 +1599,12 @@ mod taxonomy_tests {
         assert_eq!(super::model_failure(None), RuntimeFailureKind::Internal);
     }
 
-    /// The pipeline bounds are already registered as a readable message: the
-    /// agent-settings input limit. Prove the whole chain from the real compiler
-    /// error to the terminal text, and that the id-shape refusal stays generic.
-    #[cfg(not(feature = "graph-extensions-rehearsal"))]
+    /// An unknown node type keeps the generic unsupported-capability message; only
+    /// a direct node on an unserved toolkit has the registered deployment message.
     #[test]
-    fn a_gated_node_type_ends_as_the_registered_deployment_message() {
+    fn an_unknown_node_type_keeps_the_generic_unsupported_message() {
         use crate::agents::graph::compiler::PipelineDefinition;
-        use crate::protocol::output::{
-            PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE, runtime_error_policy,
-        };
 
-        let Err(configuration) = PipelineDefinition::from_yaml(
-            "state:\n  records: list\n  expanded: list\nentry_point: split\nnodes:\n  - id: split\n    type: split_out\n    source: records\n    split: {mode: list}\n    destination: item\n    output: [expanded]\n    transition: END\n",
-        ) else {
-            panic!("a production build admitted split_out");
-        };
-        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
-            &configuration,
-            "fixture",
-        );
-        assert_eq!(
-            error.code(),
-            NativeAgentAssemblyErrorCode::UnsupportedCapability
-        );
-        assert_eq!(
-            error.cause().map(NativeAgentAssemblyCause::detail),
-            Some(Some("split_out"))
-        );
-        let kind = assembly_failure(&error);
-        assert_eq!(kind, RuntimeFailureKind::PipelineNodeTypeNotAvailable);
-        let (code, message, retryable) = runtime_error_policy(kind);
-        assert_eq!(
-            code,
-            crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::UnsupportedCapability
-        );
-        assert_eq!(message, PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE);
-        assert!(message.contains("not available on this deployment"));
-        assert!(!message.contains("split"), "the message stays data-free");
-        assert!(!retryable);
-
-        // Any other unsupported capability keeps the generic message.
         let Err(configuration) =
             PipelineDefinition::from_yaml("entry_point: x\nnodes:\n  - id: x\n    type: custom\n")
         else {
@@ -1657,7 +1621,7 @@ mod taxonomy_tests {
     }
 
     /// A direct node on a toolkit its position cannot serve ends as the same
-    /// registered, data-free message as a gated node type (#1180), not as the
+    /// registered, data-free message (#1180), not as the
     /// generic "Configuration type is not supported."
     #[test]
     fn an_unserved_direct_toolkit_ends_as_the_registered_deployment_message() {

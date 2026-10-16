@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ import (
 )
 
 func TestPostgresTokenRepositoryLifecycle(t *testing.T) {
-	adminURL := os.Getenv("ELITEA_AUTH_TEST_DATABASE_URL")
+	adminURL := testpg.DSN(os.Getenv("ELITEA_AUTH_TEST_DATABASE_URL"))
 	if adminURL == "" {
 		t.Skip("set ELITEA_AUTH_TEST_DATABASE_URL to an isolated PostgreSQL admin database")
 	}
@@ -255,7 +256,7 @@ func applyTokenMigrations(ctx context.Context, t *testing.T, pool *pgxpool.Pool,
 // a refusal writes no token row, and the cascade that removes a binding with
 // its token.
 func TestPostgresTokenProjectBindingLifecycle(t *testing.T) {
-	adminURL := os.Getenv("ELITEA_AUTH_TEST_DATABASE_URL")
+	adminURL := testpg.DSN(os.Getenv("ELITEA_AUTH_TEST_DATABASE_URL"))
 	if adminURL == "" {
 		t.Skip("set ELITEA_AUTH_TEST_DATABASE_URL to an isolated PostgreSQL admin database")
 	}
@@ -515,7 +516,7 @@ func countBindings(ctx context.Context, t *testing.T, pool *pgxpool.Pool, tokenI
 // auth_core, and an unguarded REFERENCES clause would make 0070 a hard failure
 // on exactly those databases.
 func TestTokenProjectBindingMigrationAppliesWithoutAuthCore(t *testing.T) {
-	adminURL := os.Getenv("ELITEA_AUTH_TEST_DATABASE_URL")
+	adminURL := testpg.DSN(os.Getenv("ELITEA_AUTH_TEST_DATABASE_URL"))
 	if adminURL == "" {
 		t.Skip("set ELITEA_AUTH_TEST_DATABASE_URL to an isolated PostgreSQL admin database")
 	}

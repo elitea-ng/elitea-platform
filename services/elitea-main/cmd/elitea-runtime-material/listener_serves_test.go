@@ -116,7 +116,6 @@ func testGRPCPolicy() runtimegrpc.GRPCServerPolicy {
 	return runtimegrpc.GRPCServerPolicy{
 		MaxConcurrentStreams:  16,
 		MaxConnections:        16,
-		MinClientPingInterval: 10 * time.Second,
 		KeepaliveTime:         30 * time.Second,
 		KeepaliveTimeout:      10 * time.Second,
 		MaxConnectionIdle:     60 * time.Second,

@@ -25,7 +25,7 @@ CHART="deploy/helm/elitea"
 BASE=(-f "$CHART/values-standalone.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
       --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
-      --set worker.enabled=true)
+      --set worker.enabled=true --set worker.implementation=python --set worker.indexingRuntime=python)
 
 failures=0
 note() { printf '  %s\n' "$1"; }

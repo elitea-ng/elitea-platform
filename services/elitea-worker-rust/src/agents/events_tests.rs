@@ -531,6 +531,141 @@ fn ordinary_stream_matches_current_text_lifecycle_without_a_heap_event_queue() {
     );
 }
 
+/// The user-visible half of the skipped-capability record: the turn's
+/// `agent_start` and final `full_message` both carry it, and a turn that
+/// skipped nothing carries no such key at all.
+#[test]
+fn skipped_capabilities_ride_agent_start_and_the_final_message() {
+    let skipped = json!({"items": [{
+        "kind": "toolkit", "name": "wiki", "type": "confluence",
+        "reason_code": "unsupported_toolkit_family",
+        "reason": "this toolkit type is not available on this worker yet, so its tools were left out",
+    }], "more": 2});
+    let mut projector = AgentEventProjector::new(
+        AgentEventProjectionContext::fixture(json!({}))
+            .with_skipped_capabilities(Some(skipped.clone())),
+    )
+    .expect("projector");
+    let start = current(
+        &projector
+            .start(timestamp(0))
+            .expect("start")
+            .into_iter()
+            .next()
+            .unwrap(),
+    );
+    assert_eq!(
+        start["response_metadata"]["skipped_capabilities"],
+        json!(skipped)
+    );
+    projector
+        .project(&event(
+            "llm-1",
+            1,
+            false,
+            true,
+            vec![Part::Text {
+                text: "hi".to_owned(),
+            }],
+        ))
+        .expect("turn");
+    let terminal: Vec<_> = projector
+        .finish_after_eos(CompletedAgentBrowserOutput::fixture("hi"), timestamp(2))
+        .expect("terminal")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    let full = terminal
+        .iter()
+        .find(|event| event["type"] == "full_message")
+        .expect("full_message");
+    assert_eq!(
+        full["response_metadata"]["skipped_capabilities"],
+        json!(skipped)
+    );
+
+    let mut quiet =
+        AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).expect("quiet");
+    let start = current(
+        &quiet
+            .start(timestamp(0))
+            .expect("start")
+            .into_iter()
+            .next()
+            .unwrap(),
+    );
+    assert!(
+        start["response_metadata"]
+            .get("skipped_capabilities")
+            .is_none()
+    );
+}
+
+/// A turn that PAUSES (human-in-the-loop) is persisted from the pause event,
+/// so that event carries the list too, or a paused reply would lose its notice.
+#[test]
+fn skipped_capabilities_ride_a_human_in_the_loop_pause() {
+    let skipped = json!({"items": [{
+        "kind": "internal_tool", "name": "swarm",
+        "reason_code": "internal_tool_unsupported", "reason": "r",
+    }]});
+    let mut projector = AgentEventProjector::new(
+        AgentEventProjectionContext::pipeline_fixture(json!({}))
+            .with_skipped_capabilities(Some(skipped.clone())),
+    )
+    .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    let event = pipeline_hitl_event(json!({
+        "schema_revision": "elitea.graph.hitl-interrupt.v1",
+        "type": "hitl",
+        "interaction_type": "pipeline_hitl_node",
+        "history_contract_version": 1,
+        "guardrail_type": "pipeline_hitl",
+        "node_name": "review",
+        "message": "Review the generated answer.",
+        "available_actions": ["approve", "reject", "edit"],
+        "routes": {"approve": "publish", "reject": "END", "edit": "revise"},
+        "edit_state_key": "answer",
+        "definition_digest": format!("sha256:{}", "1".repeat(64)),
+    }));
+    let projected = projector.project(&event).expect("pause");
+    let pause = current(&projected.into_iter().next().expect("one event"));
+    assert_eq!(pause["type"], "agent_hitl_interrupt");
+    assert_eq!(pause["response_metadata"]["skipped_capabilities"], skipped);
+}
+
+/// Multi-byte names are bounded in bytes, so the event that carries the list
+/// still encodes under the node-event cap however long the stored names are.
+#[test]
+fn a_skipped_list_of_multi_byte_names_still_fits_the_node_event() {
+    use super::skipped_capabilities::skipped_capabilities;
+    let children: Vec<_> = (0..200)
+        .map(|index| super::application_tools::SkippedApplicationChild {
+            agent_type: "pipeline".to_owned(),
+            name: format!("{index:03}{}", "界".repeat(500)),
+        })
+        .collect();
+    let list = skipped_capabilities(
+        &[],
+        super::internal_tools::InternalToolCatalog::empty(),
+        &children,
+    );
+    let mut projector = AgentEventProjector::new(
+        AgentEventProjectionContext::fixture(json!({})).with_skipped_capabilities(list),
+    )
+    .expect("projector");
+    let start = projector
+        .start(timestamp(0))
+        .expect("an oversized list must not fail the event");
+    let start = current(&start.into_iter().next().expect("start"));
+    assert!(
+        start["response_metadata"]["skipped_capabilities"]["more"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+}
+
 #[test]
 fn completed_text_projection_is_independent_of_provider_chunk_count() {
     for fragments in [1, 255, 256, 257, 285, 2048] {
@@ -958,6 +1093,57 @@ fn top_level_max_tokens_preserves_output_and_requests_continuation() {
         terminal[2]["response_metadata"]["output_limit_reached"],
         true
     );
+}
+
+/// An empty answer completes only as a length cut that offered Continue; an
+/// empty answer from a turn that stopped normally, or whose limit is not the
+/// user's to continue (a pipeline), is still a malformed result.
+#[test]
+fn empty_answer_completes_only_as_a_user_controlled_length_cut() {
+    for (context, reason, accepted) in [
+        (
+            AgentEventProjectionContext::fixture(json!({})),
+            FinishReason::MaxTokens,
+            true,
+        ),
+        (
+            AgentEventProjectionContext::fixture(json!({})),
+            FinishReason::Stop,
+            false,
+        ),
+        (
+            AgentEventProjectionContext::pipeline_fixture(json!({})),
+            FinishReason::MaxTokens,
+            false,
+        ),
+    ] {
+        let mut projector = AgentEventProjector::new(context).expect("projector");
+        projector.start(timestamp(0)).expect("start");
+        let mut completed = event(
+            "llm-reasoning",
+            1,
+            false,
+            true,
+            vec![Part::Thinking {
+                thinking: "planning".to_owned(),
+                signature: None,
+            }],
+        );
+        completed.llm_response.finish_reason = Some(reason);
+        projector.project(&completed).expect("reasoning-only turn");
+        let empty = CompletedAgentBrowserOutput::ordinary(String::new(), "thread-1".into())
+            .expect("empty content is decided at EOS");
+        let result = projector.finish_after_eos(empty, timestamp(2));
+        assert_eq!(result.is_ok(), accepted, "{reason:?}");
+        if let Ok(batch) = result {
+            let terminal: Vec<_> = batch.into_iter().map(|event| current(&event)).collect();
+            assert_eq!(terminal[2]["content"], "");
+            assert_eq!(
+                terminal[2]["response_metadata"]["output_limit_reached"],
+                true
+            );
+        }
+    }
 }
 
 #[test]

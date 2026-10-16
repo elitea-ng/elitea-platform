@@ -9,6 +9,7 @@ package scimclient
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"strings"
 	"testing"
@@ -255,7 +256,7 @@ func newClientPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL integration test", environment)
 	}

@@ -748,6 +748,7 @@ async fn artifact_operations_use_one_claim_bound_route_each() {
                 prefix: "reports/".to_owned(),
                 recursive: true,
                 limit: 200,
+                bucket_only: false,
             },
         )
         .await

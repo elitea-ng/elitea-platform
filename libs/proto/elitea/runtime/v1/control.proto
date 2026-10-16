@@ -92,6 +92,13 @@ message ClaimReceiptV1 {
   // RECOVER_NODE_VISIT receipts of a capability that may use vectors, and
   // only where Main serves vector token introspection. Absent otherwise.
   VectorClaimTokenV1 vector_token = 17;
+  // Main reads the typed tool-run refusals of a toolkit.call_tool.v1 result
+  // (TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED / _POLICY_REFUSED, and the
+  // AUTHORIZATION_FAILED run-credentials sentence). Set only on ACCEPTED
+  // receipts of that capability. A worker that does not see it (an older Main)
+  // sends the older shapes: UNKNOWN_TOOL with the fixed refusal sentence, and
+  // the generic authorization sentence.
+  bool toolkit_typed_refusals = 18;
 }
 
 // VectorClaimTokenV1 is a short-lived bearer bound to one claim: its
@@ -243,6 +250,10 @@ enum RemoveIndexDispositionV1 {
   REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN = 3;
   // The index's run is still active; it cannot be deleted yet.
   REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN = 4;
+  // The claim's conversation read personal memory: a shared index is not
+  // changed from it (worker unit M9). An older worker reads this as a
+  // malformed disposition and removes nothing.
+  REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED = 5;
 }
 
 message RemoveIndexResponseV1 {

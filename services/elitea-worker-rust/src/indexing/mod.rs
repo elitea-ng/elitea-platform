@@ -18,6 +18,8 @@
 //! * [`source`] — the toolkit type to its connector, with the `index_data`
 //!   whitelist/blacklist.
 //! * [`pipeline`] — the run itself.
+//! * [`model_steps`] — the steps that call a model (the statistical and
+//!   proposal chunkers), their failure policy and their per-run call cap.
 //! * [`slug`] — Main's vector-space slug, so the worker writes the
 //!   collection Main's registry names.
 //!
@@ -25,16 +27,38 @@
 //! `elitea-vector` token), write a vector of another embedding space than
 //! the command expects, or write index metadata.
 
+pub(crate) mod image_fit;
 pub(crate) mod inputs;
+pub(crate) mod model_steps;
 pub(crate) mod pipeline;
 pub(crate) mod slug;
 pub(crate) mod source;
 pub(crate) mod tools;
 
 #[cfg(test)]
+mod atlassian_tests;
+#[cfg(test)]
+mod connector_picture_tests;
+#[cfg(test)]
+mod embedded_picture_tests;
+#[cfg(test)]
+mod figma_tests;
+#[cfg(test)]
+mod memory_host_tests;
+#[cfg(test)]
+mod microsoft_family_tests;
+#[cfg(test)]
+mod model_step_tests;
+#[cfg(test)]
+mod parity_tests;
+#[cfg(test)]
+mod testmgmt_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tools_tests;
+#[cfg(test)]
+mod vision_tests;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,8 +69,14 @@ use elitea_vector_index::{ClientConfig, VectorClient};
 
 use crate::protocol::control::IndexRemovalControl;
 use crate::transport::embeddings_facade::EmbeddingsClient;
+use crate::transport::extractor_client::ExtractorClient;
+use model_steps::ChatModelBinder;
 
-pub(crate) use pipeline::{IndexRun, IndexRunFailure, Interruption, interrupt_summary, run_index};
+pub(crate) use model_steps::ChatUnavailable;
+pub(crate) use pipeline::{
+    ChatEntries, ChatEntrySource, IndexRun, IndexRunFailure, Interruption, interrupt_summary,
+    run_index,
+};
 
 /// What every index run shares: the vector client, the gateway embeddings
 /// route, the platform origin for the artifact object API, the egress
@@ -63,6 +93,26 @@ pub(crate) struct IndexIngestRuntime {
     pub(crate) allowlist: HostAllowlist,
     pub(crate) transport: Arc<dyn Transport>,
     pub(crate) limits: IndexRunLimits,
+    /// The document extraction sidecar (`elitea-doc-extractor`), when the
+    /// deployment names its socket; `None` reports a PDF or Office document
+    /// skipped `unsupported_type`.
+    pub(crate) extractor: Option<Arc<ExtractorClient>>,
+    /// Binds the chat model of the steps that call one (the proposal
+    /// chunker, ADR-0030 I4); `None` skips such documents `no_model`.
+    pub(crate) chat_models: Option<Arc<dyn ChatModelBinder>>,
+    /// The deployment's memory embedding model (`memory_embedding_model`):
+    /// what the `memory` toolkit embeds its memories and queries with. `None`
+    /// leaves the toolkit unserved.
+    pub(crate) memory_model: Option<MemoryModel>,
+}
+
+/// The model the `memory` toolkit embeds with, and the vector space it names.
+#[derive(Clone, Debug)]
+pub(crate) struct MemoryModel {
+    /// The gateway model name.
+    pub(crate) name: String,
+    /// `elitea-vector`'s model slug for it.
+    pub(crate) slug: String,
 }
 
 /// Bounds of one run.
@@ -77,10 +127,23 @@ pub(crate) struct IndexRunLimits {
     pub(crate) max_documents: usize,
     /// One document's bytes.
     pub(crate) max_document_bytes: u64,
+    /// The extraction time asked of the document extraction sidecar for one
+    /// PDF or Office document (sent in the request header; the sidecar
+    /// lowers it to its own cap). The client's call deadline is derived
+    /// from this and what the sidecar advertises, never fixed.
+    pub(crate) extract_timeout: Duration,
     /// The wait before the second embeddings attempt of a batch after a
     /// retryable refusal; the third waits twice that.
     pub(crate) embedding_retry_backoff: Duration,
+    /// Model calls one run may make in its model steps (a chat call per
+    /// proposal window, an embeddings request per batch of the statistical
+    /// chunker). Reaching it stops the run. The gateway's budget applies as
+    /// well. `index_model_call_cap` in the worker's runtime config.
+    pub(crate) max_model_calls: u32,
 }
+
+/// The cap when the deployment names none.
+pub(crate) const DEFAULT_MAX_MODEL_CALLS: u32 = 2_000;
 
 impl Default for IndexRunLimits {
     fn default() -> Self {
@@ -89,7 +152,9 @@ impl Default for IndexRunLimits {
             embedding_batch: 64,
             max_documents: 50_000,
             max_document_bytes: 50 * 1024 * 1024,
+            extract_timeout: Duration::from_mins(2),
             embedding_retry_backoff: Duration::from_millis(500),
+            max_model_calls: DEFAULT_MAX_MODEL_CALLS,
         }
     }
 }
@@ -131,7 +196,28 @@ impl IndexIngestRuntime {
             allowlist,
             transport: Arc::new(transport),
             limits,
+            extractor: None,
+            chat_models: None,
+            memory_model: None,
         })
+    }
+
+    /// Serve the `memory` toolkit, embedding with `model` (a gateway model
+    /// name).
+    #[must_use]
+    pub(crate) fn with_memory_embedding_model(mut self, model: &str) -> Self {
+        self.memory_model = Some(MemoryModel {
+            name: model.to_owned(),
+            slug: slug::vector_space_slug(model),
+        });
+        self
+    }
+
+    /// Bind the chat model of the model steps through `binder`.
+    #[must_use]
+    pub(crate) fn with_chat_models(mut self, binder: Arc<dyn ChatModelBinder>) -> Self {
+        self.chat_models = Some(binder);
+        self
     }
 
     /// Lend the control plane the `remove_index` tool runs Main's index
@@ -139,6 +225,13 @@ impl IndexIngestRuntime {
     #[must_use]
     pub(crate) fn with_removal_control(mut self, control: Arc<dyn IndexRemovalControl>) -> Self {
         self.removal = Some(control);
+        self
+    }
+
+    /// Send PDF and Office documents to the extraction sidecar.
+    #[must_use]
+    pub(crate) fn with_extractor(mut self, extractor: Arc<ExtractorClient>) -> Self {
+        self.extractor = Some(extractor);
         self
     }
 }

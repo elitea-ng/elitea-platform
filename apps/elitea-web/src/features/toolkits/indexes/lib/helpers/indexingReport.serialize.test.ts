@@ -85,14 +85,14 @@ describe('normalizeIndexingReport — canonical report', () => {
     expect(report?.totals.indexed).toBe(2);
   });
 
-  it('carries the row-level counts onto an error report, which never ran far enough to have its own', () => {
+  it('takes a failed run\'s counts from its own report, not from the row, which holds the index total', () => {
     const report = normalizeIndexingReport({
       indexed: 6,
       total: 12,
       report: { status: 'error', totals: { indexed: 0, total: 0 } },
     });
-    expect(report?.totals.indexed).toBe(6);
-    expect(report?.totals.total).toBe(12);
+    expect(report?.totals.indexed).toBe(0);
+    expect(report?.totals.total).toBe(0);
   });
 });
 

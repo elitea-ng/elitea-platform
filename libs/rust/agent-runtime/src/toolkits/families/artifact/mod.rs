@@ -1,5 +1,6 @@
 //! The `artifact` toolkit family (#906): claim-scoped bucket list, read, write
-//! and delete.
+//! and delete, and (`extra_tools.rs`) read-many, grep, edit, append, metadata and
+//! bucket creation.
 //!
 //! IT IS NOT LIKE ITS NEIGHBOURS, and the difference is the whole reason it did
 //! not exist until now. Every other family in this directory talks to a third
@@ -27,11 +28,14 @@
 #![allow(dead_code)] // Production toolkit assembly remains capability-gated.
 
 pub mod config;
+mod extra_tools;
 pub mod tools;
 
 use std::sync::Arc;
 
 use crate::host::PlatformWriter;
+
+use super::office_host::SharedOfficeToolHost;
 
 /// The platform-write authority the artifact family acts under, shared for
 /// one run.
@@ -44,12 +48,31 @@ use crate::host::PlatformWriter;
 #[derive(Clone)]
 pub struct ArtifactToolAuthority {
     writer: Arc<dyn PlatformWriter>,
+    office: Option<SharedOfficeToolHost>,
 }
 
 impl ArtifactToolAuthority {
     #[must_use]
     pub fn new(writer: Arc<dyn PlatformWriter>) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            office: None,
+        }
+    }
+
+    /// This authority with the Office capability (ADR-0032): binary objects
+    /// in and out and a chat model, for the families that author documents.
+    /// Without it a `pptx` toolkit is left out as unsupported.
+    #[must_use]
+    pub fn with_office(mut self, office: SharedOfficeToolHost) -> Self {
+        self.office = Some(office);
+        self
+    }
+
+    /// The Office capability, when the host lends one.
+    #[must_use]
+    pub fn office(&self) -> Option<&SharedOfficeToolHost> {
+        self.office.as_ref()
     }
 
     pub fn writer(&self) -> &dyn PlatformWriter {

@@ -16,6 +16,7 @@ package scimdirectory
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -597,7 +598,7 @@ func newGroupPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL integration test", environment)
 	}
@@ -710,4 +711,54 @@ func TestAPatchCanReplaceAGroupsExternalIDInTheSameTransactionAsMembers(t *testi
 	})
 	require.NoError(t, err)
 	require.Equal(t, "", group.ExternalID)
+}
+
+/* ── personal-memory cleanup (worker unit M9) ──────────────────────────── */
+
+type probeMemoryJournal struct{ rows *[][2]int64 }
+
+func (p probeMemoryJournal) EnqueueMemoryUsers(_ context.Context, _ pgx.Tx, projectID int64, userIDs ...int64) (string, error) {
+	for _, id := range userIDs {
+		*p.rows = append(*p.rows, [2]int64{projectID, id})
+	}
+	return "memory_user", nil
+}
+
+// A person whose LAST role in the project a group withdraws has left it, and
+// their personal memories there are journaled (one call for all of them); a
+// person who keeps a role, or whom the group never granted, has not.
+func TestAGroupWithdrawalThatEndsAMembershipJournalsTheMemoryCleanup(t *testing.T) {
+	pool := newGroupPool(t)
+	var rows [][2]int64
+	store := NewStore(pool).WithMemoryUserJournal(probeMemoryJournal{rows: &rows})
+	ctx := context.Background()
+
+	project := seedProject(t, pool, "Platform", 0)
+	alice := seedUser(t, pool, "alice@corp.com")
+	bob := seedUser(t, pool, "bob@corp.com")
+	carol := seedUser(t, pool, "carol@corp.com")
+	grantRoleByHand(t, pool, project, carol, "editor")
+
+	binding, err := store.CreateBinding(ctx, "Platform Team", project, "editor")
+	require.NoError(t, err)
+	_, err = store.ReplaceGroupMembers(ctx, binding.ID, []int{alice, bob, carol})
+	require.NoError(t, err)
+	// Bob also holds a second role, which the group did not give.
+	grantRoleByHand(t, pool, project, bob, "admin")
+
+	_, err = store.RemoveGroupMembers(ctx, binding.ID, []int{alice, bob, carol})
+	require.NoError(t, err)
+	// Alice lost her only role; Bob keeps "admin"; Carol held "editor" before
+	// the group claimed her, so the membership is hers.
+	require.Equal(t, [][2]int64{{int64(project), int64(alice)}}, rows)
+
+	// Deleting a group withdraws what it gave: the same rule.
+	rows = nil
+	dave := seedUser(t, pool, "dave@corp.com")
+	second, err := store.CreateBinding(ctx, "Release Team", project, "editor")
+	require.NoError(t, err)
+	_, err = store.ReplaceGroupMembers(ctx, second.ID, []int{dave})
+	require.NoError(t, err)
+	require.NoError(t, store.DeleteGroup(ctx, second.ID))
+	require.Equal(t, [][2]int64{{int64(project), int64(dave)}}, rows)
 }

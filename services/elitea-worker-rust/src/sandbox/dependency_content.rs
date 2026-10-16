@@ -151,6 +151,12 @@ impl DependencyContentClient {
             )
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
+            // A force-deleted Main Pod must not leave pooled connections
+            // answering nothing until the kernel drops them.
+            .tcp_keepalive(Some(crate::transport::keepalive::TCP_KEEPALIVE_IDLE))
+            .http2_keep_alive_interval(crate::transport::keepalive::HTTP2_KEEPALIVE_INTERVAL)
+            .http2_keep_alive_timeout(crate::transport::keepalive::HTTP2_KEEPALIVE_TIMEOUT)
+            .http2_keep_alive_while_idle(crate::transport::keepalive::KEEPALIVE_WHILE_IDLE)
             .pool_max_idle_per_host(capacity)
             .build()
             .map_err(|_| DependencyContentError::Configuration)?;

@@ -11,6 +11,24 @@ use super::{
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const SECRET_PLACEHOLDER: &str = "********";
 
+/// The one `provided_settings` shape every delegated family sends: the public
+/// client id, a masked secret marker (the secret stays in Main) and the scopes,
+/// always including `offline_access` so the grant can be refreshed.
+pub(crate) fn provided_settings(
+    client_id: &str,
+    secret_present: bool,
+    mut scopes: Vec<Value>,
+) -> Value {
+    if !scopes.iter().any(|scope| scope == "offline_access") {
+        scopes.insert(0, json!("offline_access"));
+    }
+    let mut provided = json!({"mcp_client_id": client_id, "scopes": scopes});
+    if secret_present {
+        provided["mcp_client_secret"] = json!(SECRET_PLACEHOLDER);
+    }
+    provided
+}
+
 impl DelegatedAuthorizationRequirement {
     /// Retain public settings only. The client secret stays in Main.
     pub fn with_configured_oauth(
@@ -18,24 +36,19 @@ impl DelegatedAuthorizationRequirement {
         issuer: &str,
         settings: &Map<String, Value>,
     ) -> Option<Self> {
-        let mut scopes = match settings.get("scopes").or_else(|| settings.get("scope")) {
+        let scopes = match settings.get("scopes").or_else(|| settings.get("scope")) {
             None | Some(Value::Null) => Vec::new(),
             Some(Value::String(value)) => value.split_whitespace().map(|s| json!(s)).collect(),
             Some(Value::Array(values)) => values.clone(),
             _ => return None,
         };
-        if !scopes.iter().any(|scope| scope == "offline_access") {
-            scopes.insert(0, json!("offline_access"));
-        }
         let client_id = settings.get("client_id")?.as_str()?;
-        let mut provided = json!({"mcp_client_id": client_id, "scopes": scopes});
-        if settings
+        let secret_present = settings
             .get("client_secret")
             .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty())
-        {
-            provided["mcp_client_secret"] = json!(SECRET_PLACEHOLDER);
-        }
+            .is_some_and(|s| !s.is_empty());
+        let provided = provided_settings(client_id, secret_present, scopes);
+        let scopes = provided["scopes"].clone();
         let mut metadata = json!({
             "authorization_servers": [issuer.trim_end_matches('/')],
             "resource_name": self.toolkit_type(),
@@ -46,6 +59,38 @@ impl DelegatedAuthorizationRequirement {
             metadata["configuration_uuid"] = uuid.clone();
         }
         self.with_resource_metadata(metadata)
+    }
+
+    /// Attach the toolkit's OAuth app to the metadata discovery produced, so
+    /// the authorization browser flow runs against the registered app. Main
+    /// holds the secret and performs the code exchange; the worker never mints
+    /// a token from it. Without discovered metadata there is no authorization
+    /// server to name, so the requirement is returned unchanged and counts as
+    /// done. If the app would break the metadata limits the flag is false and
+    /// the requirement is as it was, so the caller can refuse rather than
+    /// silently drop the app.
+    pub fn with_oauth_client(
+        self,
+        client_id: &str,
+        secret_present: bool,
+        scopes: &[String],
+        configuration_uuid: Option<&str>,
+    ) -> (Self, bool) {
+        let Some(mut metadata) = self.resource_metadata().cloned() else {
+            return (self, true);
+        };
+        let Some(object) = metadata.as_object_mut() else {
+            return (self, true);
+        };
+        let scopes = scopes.iter().map(|scope| json!(scope)).collect();
+        object.insert(
+            "provided_settings".to_owned(),
+            provided_settings(client_id, secret_present, scopes),
+        );
+        if let Some(uuid) = configuration_uuid {
+            object.insert("configuration_uuid".to_owned(), json!(uuid));
+        }
+        self.try_with_resource_metadata(metadata)
     }
 
     /// Fetch only public endpoints. Do not fetch a token or call the toolkit.

@@ -157,24 +157,24 @@ CREATE TABLE p_7.configuration (
 INSERT INTO p_7.configuration (
     uuid, project_id, elitea_title, type, section, data, meta, shared,
     status_ok, source
-) VALUES (
+, created_at) VALUES (
     '00000000-0000-0000-0000-000000000701', 7, 'github_exact',
     'github', 'credentials', '{"large":9007199254740993}'::jsonb,
     '{}'::jsonb, false, true, 'test'
-);
+, now() AT TIME ZONE 'UTC');
 
 CREATE SCHEMA p_41;
 CREATE TABLE p_41.configuration (LIKE p_7.configuration INCLUDING ALL);
 INSERT INTO p_41.configuration (
     uuid, project_id, elitea_title, type, section, data, meta, shared,
     status_ok, source
-) VALUES
+, created_at) VALUES
     ('00000000-0000-0000-0000-000000004101', 41, 'public_shared',
      'openapi', 'credentials', '{"spec":"https://api.invalid"}'::jsonb,
-     '{}'::jsonb, true, true, 'test'),
+     '{}'::jsonb, true, true, 'test', now() AT TIME ZONE 'UTC'),
     ('00000000-0000-0000-0000-000000004102', 41, 'public_private',
      'company_custom', 'credentials', '{}'::jsonb, '{}'::jsonb,
-     false, true, 'test');
+     false, true, 'test', now() AT TIME ZONE 'UTC');
 `); err != nil {
 		t.Fatalf("prepare current expansion PostgreSQL baseline: %v", err)
 	}

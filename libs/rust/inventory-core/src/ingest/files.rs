@@ -19,88 +19,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 
-/// `MARKDOWN | JSON | CODE | CONFIG | TEXT _EXTENSIONS` of the SDK's
-/// `universal_chunker`, lowercase with the dot.
-const SUPPORTED_EXTENSIONS: &[&str] = &[
-    // markdown
-    ".md",
-    ".markdown",
-    ".mdown",
-    ".mkd",
-    ".mdx", //
-    // json
-    ".json",
-    ".jsonl",
-    ".jsonc", //
-    // config
-    ".yml",
-    ".yaml",
-    ".toml",
-    ".ini",
-    ".cfg",
-    ".conf",
-    ".env", //
-    // code
-    ".py",
-    ".js",
-    ".jsx",
-    ".mjs",
-    ".cjs",
-    ".ts",
-    ".tsx",
-    ".java",
-    ".kt",
-    ".rs",
-    ".go",
-    ".cpp",
-    ".c",
-    ".cs",
-    ".hs",
-    ".rb",
-    ".scala",
-    ".lua",
-    ".sh",
-    ".bash",
-    ".zsh",
-    ".sql",
-    ".r",
-    ".swift",
-    ".php",
-    ".pl",
-    ".pm",
-    ".h",
-    ".hpp",
-    ".m",
-    ".bat",
-    ".pas",
-    ".asm",
-    ".dart",
-    ".groovy", //
-    // text
-    ".txt",
-    ".xml",
-    ".html",
-    ".htm",
-    ".csv",
-];
-
-/// `os.path.splitext(path)[1]`: the last dot of the last component and
-/// what follows, unless only dots precede it (`.env` has no extension,
-/// `a.env` has `.env`).
-#[must_use]
-pub fn splitext_extension(path: &str) -> &str {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    match name.rfind('.') {
-        Some(dot) if name[..dot].chars().any(|c| c != '.') => &name[dot..],
-        _ => "",
-    }
-}
-
-/// Whether the SDK loader indexes a file of this path at all.
-#[must_use]
-pub fn has_supported_extension(path: &str) -> bool {
-    SUPPORTED_EXTENSIONS.contains(&splitext_extension(path).to_lowercase().as_str())
-}
+pub use elitea_content_source::supported::{has_supported_extension, splitext_extension};
 
 /// A source's whitelist and blacklist.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -256,22 +175,6 @@ pub fn file_node(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn splitext_follows_os_path() {
-        for (path, extension) in [
-            ("a/b.py", ".py"),
-            ("a/b.tar.gz", ".gz"),
-            ("a/.env", ""),
-            ("a/x.env", ".env"),
-            ("a/..b", ""),
-            ("a/b.", "."),
-            ("a.d/b", ""),
-            ("Makefile", ""),
-        ] {
-            assert_eq!(splitext_extension(path), extension, "{path}");
-        }
-    }
 
     /// `.xhtml` has a media type of its own now (`application/xhtml+xml`).
     /// Extraction without the HTML opt-in does not read it, so it is skipped

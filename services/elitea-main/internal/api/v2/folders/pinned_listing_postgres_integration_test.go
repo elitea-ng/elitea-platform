@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -47,7 +48,7 @@ const pinnedListingDatabaseURL = "ELITEA_TEST_DATABASE_URL"
 
 func newPinnedListingPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(pinnedListingDatabaseURL)
+	databaseURL := testpg.DSN(os.Getenv(pinnedListingDatabaseURL))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the pinned-listing integration test", pinnedListingDatabaseURL)
 	}
@@ -135,7 +136,7 @@ func seedPinnedListingConversation(t *testing.T, pool *pgxpool.Pool, name string
 	t.Helper()
 	var id int
 	if err := pool.QueryRow(context.Background(),
-		`INSERT INTO p_1.chat_conversations (name, author_id, is_private) VALUES ($1, 1, $2) RETURNING id`,
+		`INSERT INTO p_1.chat_conversations (name, author_id, is_private, created_at) VALUES ($1, 1, $2, now() AT TIME ZONE 'UTC') RETURNING id`,
 		name, isPrivate).Scan(&id); err != nil {
 		t.Fatalf("seed %q: %v", name, err)
 	}
@@ -199,7 +200,7 @@ func TestGroupedListingReadsThePinnedSetFromSocialPins(t *testing.T) {
 
 	// The pin, written the way the pin routes write it.
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id) VALUES ('conversation', 1, $1, 7)`,
+		`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at) VALUES ('conversation', 1, $1, 7, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`,
 		pinned); err != nil {
 		t.Fatalf("pin the conversation: %v", err)
 	}
@@ -224,7 +225,7 @@ func TestGroupedListingPinsAreSharedByVisibleReaders(t *testing.T) {
 	pool := newPinnedListingPool(t)
 	pinned := seedPinnedListingConversation(t, pool, "autotest_pinned_by_7", true)
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id) VALUES ('conversation', 1, $1, 7)`,
+		`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at) VALUES ('conversation', 1, $1, 7, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`,
 		pinned); err != nil {
 		t.Fatalf("pin the conversation: %v", err)
 	}
@@ -243,7 +244,7 @@ func TestGroupedListingIgnoresPinsOnOtherEntities(t *testing.T) {
 	pool := newPinnedListingPool(t)
 	conversation := seedPinnedListingConversation(t, pool, "autotest_not_pinned", true)
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id) VALUES ('configuration', 1, $1, 7)`,
+		`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at) VALUES ('configuration', 1, $1, 7, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`,
 		conversation); err != nil {
 		t.Fatalf("pin a configuration: %v", err)
 	}

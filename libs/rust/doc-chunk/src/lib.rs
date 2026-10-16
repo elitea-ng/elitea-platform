@@ -15,24 +15,55 @@
 //! Chunk boundaries are tested against goldens of this crate's own, not
 //! byte-compared with the SDK.
 //!
-//! The statistical and proposal chunkers call models; they are not here.
-//! A config that asks for one (or for `use_llm`) gets
-//! [`ChunkError::RequiresModel`], so the caller can report the document as
-//! skipped with a reason (they arrive with ADR-0030's I4).
+//! The statistical and proposal chunkers (ADR-0030 I4) call models, which
+//! this crate never does: [`plan`] returns them as a [`ChunkPlan`] holding
+//! the splits or windows to send, and the caller (the worker's index run)
+//! owns the calls, their retries and their budget, then hands the answers
+//! back (`ProposalPlan::chunks`, `StatisticalPlan::chunks`). [`chunk`] keeps
+//! its model-free contract: a config that asks for one of them gets
+//! [`ChunkError::RequiresModel`], so a caller without models reports the
+//! document as skipped with a reason. `use_llm` is the picture step, and
+//! never makes a document need a model to be CHUNKED: a standalone image file
+//! is planned by [`plan_image`] (ADR-0030 I4 part B), on by default as in the
+//! SDK; the pictures embedded in a PDF, DOCX or PPTX by [`plan_embedded`]
+//! (part C), OFF by default as in the SDK, whose descriptions are written
+//! into the document's text before it is chunked. On any other document
+//! `use_llm` changes nothing.
 //!
-//! The entry point is [`chunk`]; an indexer that converted an HTML page to
-//! markdown uses [`chunk_with`] and says so ([`ChunkOptions`]).
+//! The entry points are [`chunk`] and [`plan`]; an indexer that converted an
+//! HTML page to markdown uses [`chunk_with`] / [`plan_with`] and says so
+//! ([`ChunkOptions`]).
 
 mod code;
 mod config;
+mod embedded;
 mod json;
 mod markdown;
+mod proposal;
 mod route;
+mod statistical;
 mod tokens;
+mod vision;
 
-pub use config::{ChunkParams, ChunkingConfig, ConfigError};
+pub use config::{
+    ChunkParams, ChunkingConfig, ConfigError, ModelStepParams, normalize_chunker_name,
+};
+pub use embedded::{
+    Described, EMBEDDED_IMAGE_EXTENSIONS, EmbeddedVisionPlan, Inline, plan_embedded,
+    plan_embedded_for, written_order,
+};
+pub use proposal::{
+    AnalysisError, ChunkDetails, PROPOSAL_WINDOW_TOKENS, parse_chunk_analysis, proposal_chunks,
+    proposal_system_prompt, proposal_user_message, split_windows,
+};
 pub use route::{
-    ChunkOptions, Chunker, chunk, chunk_with, chunker_for, chunker_for_with, extension_of,
+    ChunkOptions, ChunkPlan, Chunker, ProposalPlan, StatisticalPlan, chunk, chunk_with,
+    chunker_for, chunker_for_with, extension_of, plan, plan_with,
+};
+pub use statistical::{StatisticalSettings, statistical_chunks};
+pub use vision::{
+    EMPTY_DESCRIPTION, IMAGE_EXTENSIONS, ImagePlan, VisionPlan, image_processing_prompt,
+    is_image_extension, plan_image,
 };
 
 use serde_json::{Map, Value};
@@ -77,7 +108,7 @@ pub enum ChunkError {
     /// The config asks for a chunker (or a step) that calls a model, which
     /// this crate does not: report the document as skipped with `reason`.
     RequiresModel {
-        /// `statistical`, `proposal` or `use_llm`.
+        /// `statistical` or `proposal`.
         chunker: &'static str,
         reason: String,
     },
@@ -85,6 +116,9 @@ pub enum ChunkError {
     UnknownChunker(String),
     /// The token encoding could not be built.
     Tokenizer(String),
+    /// A model step's answers do not fit its plan (a vector count or
+    /// dimension that does not match the splits).
+    InvalidModelStep(String),
 }
 
 impl std::fmt::Display for ChunkError {
@@ -95,6 +129,9 @@ impl std::fmt::Display for ChunkError {
             }
             Self::UnknownChunker(name) => write!(f, "unknown chunker `{name}`"),
             Self::Tokenizer(error) => write!(f, "the token encoding is unavailable: {error}"),
+            Self::InvalidModelStep(reason) => {
+                write!(f, "the model step's answer is unusable: {reason}")
+            }
         }
     }
 }

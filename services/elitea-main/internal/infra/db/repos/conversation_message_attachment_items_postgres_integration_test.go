@@ -36,16 +36,16 @@ func seedAttachmentTranscript(t *testing.T, repo *ConversationsRepo) (conversati
 
 	if err := repo.pool.QueryRow(ctx, `
 WITH conversation AS (
-    INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-    VALUES (gen_random_uuid(), 'attachment transcript', 7, 'agent')
+    INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+    VALUES (gen_random_uuid(), 'attachment transcript', 7, 'agent', now() AT TIME ZONE 'UTC')
     RETURNING id, uuid
 ), participant AS (
     INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta)
     VALUES (gen_random_uuid(), 'user', '{"id": 42, "project_id": 1}'::jsonb)
     RETURNING id
 )
-INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
-SELECT gen_random_uuid(), participant.id, conversation.id FROM conversation, participant
+INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
+SELECT gen_random_uuid(), participant.id, conversation.id, now() AT TIME ZONE 'UTC' FROM conversation, participant
 RETURNING id, (SELECT uuid::text FROM conversation)`).Scan(&groupID, &conversationUUID); err != nil {
 		t.Fatalf("seed conversation and message group: %v", err)
 	}
@@ -56,8 +56,8 @@ func seedAttachmentTextItem(t *testing.T, repo *ConversationsRepo, groupID, orde
 	t.Helper()
 	if _, err := repo.pool.Exec(context.Background(), `
 WITH item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    VALUES (gen_random_uuid(), 'text_message', $1, $2)
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    VALUES (gen_random_uuid(), 'text_message', $1, $2, now() AT TIME ZONE 'UTC')
     RETURNING id
 )
 INSERT INTO p_1.chat_messages_text (id, content) SELECT item.id, $3 FROM item`,
@@ -79,8 +79,8 @@ func seedAttachmentPayloadItem(t *testing.T, repo *ConversationsRepo, groupID, o
 	}
 	if err := repo.pool.QueryRow(context.Background(), `
 WITH item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    VALUES (gen_random_uuid(), 'attachment_message', $1, $2)
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    VALUES (gen_random_uuid(), 'attachment_message', $1, $2, now() AT TIME ZONE 'UTC')
     RETURNING id
 )
 INSERT INTO p_1.chat_messages_attachment (id, name, bucket, attachment_type, content)
@@ -413,8 +413,8 @@ func TestListMessagesKeepsEachGroupsAttachmentOnItsOwnRow(t *testing.T) {
 	// A second group in the SAME conversation, carrying no file at all.
 	var secondGroup int
 	if err := repo.pool.QueryRow(context.Background(), `
-INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
-SELECT gen_random_uuid(), mg.author_participant_id, mg.conversation_id
+INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
+SELECT gen_random_uuid(), mg.author_participant_id, mg.conversation_id, now() AT TIME ZONE 'UTC'
 FROM p_1.chat_message_group mg WHERE mg.id = $1
 RETURNING id`, firstGroup).Scan(&secondGroup); err != nil {
 		t.Fatalf("seed second group: %v", err)

@@ -261,11 +261,14 @@ type CurrentContinuationRequest struct {
 	IgnoredMCPServers  json.RawMessage
 	DeclinedMCPServers json.RawMessage
 	HITLDecisions      []CurrentHITLDecision
+	// TriggerOrigin is how the caller authenticated (shared 0140), as the
+	// start route records it: a PAT/API caller is `api`, never `manual`.
+	TriggerOrigin executiondomain.TriggerOrigin
 }
 
 func (request CurrentContinuationRequest) Validate() error {
 	kind := request.normalizedKind()
-	if request.ProjectID <= 0 || request.ActorUserID <= 0 ||
+	if request.ProjectID <= 0 || request.ActorUserID <= 0 || !request.TriggerOrigin.Valid() ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.ResponseMessageID) ||
 		len(request.Value) > maxCurrentHITLValueBytes ||
 		strings.ContainsRune(request.Value, '\x00') ||
@@ -680,6 +683,7 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 		CapabilityID:   capabilityID, ClientStreamID: request.ConversationUUID,
 		ClientMessageID: turn.ProjectionResponseID(), SIOEvent: "chat_continue_predict",
 		Input: input, CurrentContinueTurn: turn,
+		TriggerOrigin: request.TriggerOrigin,
 	})
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
@@ -750,8 +754,11 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 			return nil, nil, "", err
 		}
 		originalSource, sourceErr := service.restoreContinuationSource(ctx, RootSourceRestoreRequest{request.ProjectID, request.ActorUserID, request.ConversationUUID, request.ResponseMessageID, target.ExecutionGeneration})
-		if sourceErr != nil || originalSource != nil && originalSource.Reference.Kind != "saved_application" {
-			return nil, nil, "", ErrUnsupportedCurrentAgentStart
+		if sourceErr != nil {
+			return nil, nil, "", sourceErr
+		}
+		if originalSource != nil && originalSource.Reference.Kind != "saved_application" {
+			return nil, nil, "", unsupportedStart("original source is not a saved application")
 		}
 		resolved.OriginalSource = nil
 		if originalSource != nil {
@@ -810,8 +817,11 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 			return nil, nil, "", err
 		}
 		originalSource, sourceErr := service.restoreContinuationSource(ctx, RootSourceRestoreRequest{request.ProjectID, request.ActorUserID, request.ConversationUUID, request.ResponseMessageID, target.ExecutionGeneration})
-		if sourceErr != nil || originalSource != nil && originalSource.Reference.Kind != "ephemeral_definition" {
-			return nil, nil, "", ErrUnsupportedCurrentAgentStart
+		if sourceErr != nil {
+			return nil, nil, "", sourceErr
+		}
+		if originalSource != nil && originalSource.Reference.Kind != "ephemeral_definition" {
+			return nil, nil, "", unsupportedStart("original source is not a ephemeral definition")
 		}
 		resolved.OriginalSource = nil
 		if originalSource != nil {

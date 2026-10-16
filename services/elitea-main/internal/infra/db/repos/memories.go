@@ -246,6 +246,12 @@ const (
 // turn's question date means, so that is the boundary a local turn counts
 // with; the memory saved during it stays newer, and the next turn reserves it.
 //
+// chat_message_group.created_at is a `timestamp` WITHOUT time zone holding
+// the UTC wall clock, and the other two are timestamptz. The naive value is
+// converted explicitly (AT TIME ZONE 'UTC'): left to GREATEST and the
+// comparison, Postgres reads it in the SESSION time zone, and on a server
+// west of UTC a memory saved during the turn compared as older than it.
+//
 // The lookups are cheap: a user has few participant rows, tenant/0148 indexes
 // chat_message_group (author_participant_id, created_at DESC), and shared/0155
 // indexes local_turn_executions (project_id, actor_id, started_at DESC). They
@@ -267,7 +273,7 @@ func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 	q := fmt.Sprintf(`
 		WITH previous_turn AS (
 			SELECT GREATEST(
-				(SELECT max(message.created_at)
+				(SELECT max(message.created_at) AT TIME ZONE 'UTC'
 				 FROM %[1]s.chat_participants AS participant
 				 JOIN %[1]s.chat_message_group AS message
 				   ON message.author_participant_id = participant.id

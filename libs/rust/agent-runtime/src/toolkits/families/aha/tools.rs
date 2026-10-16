@@ -6,6 +6,7 @@ use adk_tool::BasicToolset;
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
+use crate::toolkits::families::attachment_host::AttachmentHost;
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
@@ -97,10 +98,9 @@ impl From<MaterializedToolsetError> for AhaToolsetError {
 
 /// Build the Aha family.
 ///
-/// `artifacts` is the sealed artifact-read resolver `attach_file` uploads
-/// from. No runtime host has an artifact-read grant plane yet (the platform
-/// reader returns capped text, not verified bytes), so production passes
-/// `None` and the family serves the other 32 tools: `attach_file` is omitted
+/// `attach_file` uploads a file read through the run's [`AttachmentHost`]
+/// (the artifact store the worker lends on the live claim), at most 50 MiB.
+/// A run that lends none serves the other 32 tools: `attach_file` is omitted
 /// rather than bound to a tool that refuses every call, and an explicit
 /// selection of it is logged and dropped like any other unserved tool.
 /// Empty selection means every tool this runtime serves.
@@ -109,8 +109,10 @@ pub(crate) fn build_aha_toolset(
     toolkit_name: &str,
     config: AhaToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
-    artifacts: Option<Arc<AhaArtifactResolver>>,
+    attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, AhaToolsetError> {
+    let artifacts: Option<Arc<AhaArtifactResolver>> =
+        attachments.map(|host| Arc::new(AhaArtifactResolver::from_host(host)));
     validate_selection(config.selected_tools())?;
     let attachments = artifacts.is_some();
     let kinds = served_kinds(config.selected_tools(), attachments);
@@ -124,7 +126,7 @@ pub(crate) fn build_aha_toolset(
             selected_count = config.selected_tools().len(),
             materialized_count = kinds.len(),
             omitted_count = omitted,
-            "Aha attach_file needs an artifact-read grant plane and was omitted from the native toolset"
+            "Aha attach_file needs the run's artifact store and was omitted from the native toolset"
         );
     }
     if kinds.is_empty() {
@@ -200,14 +202,15 @@ pub(in crate::toolkits) fn test_build_with_api(
     build_with_api(toolkit_name, selected, policy, client)
 }
 
-/// The production profile (no artifact-read grant plane) over a fixture API.
+/// The production profile (a run that lends its artifact store, so
+/// `attach_file` is served) over a fixture API.
 #[cfg(test)]
 pub(in crate::toolkits) fn test_build_production_with_api(
     toolkit_name: &str,
     policy: &Arc<ToolAdmissionPolicy>,
     client: &Arc<dyn AhaApi>,
 ) -> Result<BasicToolset, AhaToolsetError> {
-    admit_kinds(toolkit_name, &served_kinds(&[], false), policy, client)
+    admit_kinds(toolkit_name, &served_kinds(&[], true), policy, client)
 }
 
 #[cfg(test)]
@@ -475,7 +478,7 @@ impl AhaToolKind {
                 "List options for the numeric custom-field definition field_id with optional projection and output formatting."
             }
             Self::AttachFile => {
-                "Attach an authorized artifact at exact /{bucket}/{filename} to a resource description or to-do. Optional filename overrides the sent basename. File must be non-empty and strictly below 300 MB; the whole attachment phase is bounded to 40 seconds. This duplicate-prone remote write must be reconciled and not automatically retried after an unknown outcome."
+                "Attach an authorized artifact at exact /{bucket}/{filename} to a resource description or to-do. Optional filename overrides the sent basename. File must be non-empty and strictly below 300 MB (Aha's limit; in this runtime the artifact store hands over at most 50 MiB); the whole attachment phase is bounded to 40 seconds. This duplicate-prone remote write must be reconciled and not automatically retried after an unknown outcome."
             }
         }
     }
@@ -1293,4 +1296,13 @@ fn resource_type_schema(canonical: bool) -> Value {
     } else {
         text(description)
     }
+}
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    AhaToolKind::ALL
+        .iter()
+        .map(|kind| (kind.name(), matches!(kind, AhaToolKind::AttachFile)))
+        .collect()
 }

@@ -15,12 +15,16 @@ export interface ChatMessage {
   readonly executionGeneration?: string | undefined;
   /** Final result metadata delivered after the success progress markers. */
   readonly responseMetadata?: Readonly<Record<string, unknown>> | undefined;
+  /** Persisted `meta.skipped_capabilities`: what this turn was configured with but could not serve. Live turns carry it in `responseMetadata`. */
+  readonly skippedCapabilities?: unknown;
   readonly resultChunk?: unknown;
   readonly assembledResult?: string | undefined;
   readonly continuedResultPrefix?: string | undefined;
   readonly persistedTrace?: unknown;
   readonly id: string;
   readonly role: string;
+  /** The persisted assistant author name, independent of the composer selection. */
+  readonly authorName?: string | undefined;
   readonly name: string;
   readonly avatar?: string | undefined;
   readonly content: string;

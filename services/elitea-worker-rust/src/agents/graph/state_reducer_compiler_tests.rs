@@ -270,11 +270,6 @@ nodes:
             ),
             (clean, "notes: list", "notes: {type: list, reducer: append}"),
         ] {
-            // SplitOut is admitted only where its own shaping gate allows it;
-            // a separate PR removes that gate. Reducers themselves are ungated.
-            if base == shaping && !cfg!(feature = "graph-extensions-rehearsal") {
-                continue;
-            }
             if let Err(error) = PipelineDefinition::from_yaml(base) {
                 panic!("the overwrite control for {from} must compile: {error}");
             }

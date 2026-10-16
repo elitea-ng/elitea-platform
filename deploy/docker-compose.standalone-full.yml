@@ -260,7 +260,10 @@ services:
   # on the monitoring port from outside. Wait on `nats-health`, not on `nats`.
   nats:
     image: nats:2.12.0
-    command: ["-js", "-sd", "/data", "-m", "8222"]
+    command: ["-c", "/etc/nats-config/nats.conf"]
+    volumes:
+      - ./runtime/nats-local.conf:/etc/nats-config/nats.conf:ro
+      - standalone_nats_data:/data
 
   # The NATS readiness probe, from outside the scratch server container. It
   # idles, and its healthcheck reads http://nats:8222/healthz with JetStream
@@ -428,11 +431,11 @@ services:
         i=0
         until rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret; do
           i=$((i + 1))
-          if [ "$i" -ge 30 ]; then
+          if [ "$$i" -ge 30 ]; then
             echo "rustfs alias set still failing after 30 attempts (60s) — giving up" >&2
             exit 1
           fi
-          echo "rustfs not ready yet (attempt $i/30), retrying in 2s..." >&2
+          echo "rustfs not ready yet (attempt $$i/30), retrying in 2s..." >&2
           sleep 2
         done &&
         rc mb --ignore-existing rustfs/elitea-artifacts
@@ -1001,6 +1004,12 @@ services:
       ELITEA_DEEPWIKI_CA_FILE: /run/certs/ca.crt
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "standalone-deepwiki-identity"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+      # Which worker this stack runs, stated explicitly: elitea-main's own default
+      # is rust, so a Python-worker base must say so or its toolkit catalogue
+      # would describe a worker that is not there. The Rust overlay
+      # (docker-compose.standalone-rust-agent.yml) overrides this with "rust".
+      ELITEA_WORKER_IMPLEMENTATION: "python"
+
       # Where the provider calls BACK to upload the pages it generated: this
       # service on the compose network, plain HTTP — the minted bearer is the
       # credential; mTLS is on the hop the other way.
@@ -1251,6 +1260,25 @@ services:
       # DNS:elitea-vector, signed by the runtime CA that listener trusts
       # (deploy/scripts/gen-vector-certs.sh).
       ELITEA_VECTOR_INTROSPECTION_CLIENTS: "dns:elitea-vector"
+      # ── elitea-vector gRPC client (ADR-0031 decision 4) ────────────────
+      # The hop the OTHER way: this service deletes a toolkit index's
+      # namespace (the index delete, the registry's tombstone sweeper) and a
+      # deleted project's every namespace (the cleanup journal's vector_data
+      # step) with no token, as elitea-vector's administrator. It presents
+      # main-client.crt — DNS:elitea-main, client use, runtime CA
+      # (gen-vector-certs.sh) — which elitea-vector admits by
+      # ELITEA_VECTOR_ADMIN_IDENTITIES below. Not the provider hops' client.crt:
+      # that chains to deploy/certs/ca.crt, which elitea-vector does not trust.
+      ELITEA_VECTOR_GRPC_TARGET: "elitea-vector:9470"
+      ELITEA_VECTOR_GRPC_CLIENT_CERT_FILE: /run/elitea-vector-client/main-client.crt
+      ELITEA_VECTOR_GRPC_CLIENT_KEY_FILE: /run/elitea-vector-client/main-client.key
+      ELITEA_VECTOR_GRPC_CA_FILE: /run/elitea-vector-client/runtime-ca.crt
+      # A project delete records a vector_data cleanup step under the Rust
+      # indexing runtime whether or not this replica has the client, and no
+      # replica closes it on its own configuration. A deployment that has
+      # ABANDONED its vector store (no target above) closes those pending
+      # steps with ELITEA_VECTOR_CLEANUP_ABANDON=true ("vector cleanup
+      # abandoned by operator"); beside the target it is refused at boot.
     volumes:
       # Only the gateway-client keypair and its CA — three files, not the
       # ./certs directory. Bind-mounting the parent handed elitea-main the whole
@@ -1265,6 +1293,12 @@ services:
       # Installed by runtime-material with per-file owner/mode; NOT a bind mount
       # of deploy/certs/runtime, which securefile would reject.
       - standalone_runtime_main:/run/elitea-runtime:ro
+      # elitea-vector's administrator client material (gen-vector-certs.sh):
+      # three files, like the provider hop's above, read by tls.LoadX509KeyPair
+      # with no permission contract, so a plain read-only bind mount is right.
+      - ./certs/vector/main-client.crt:/run/elitea-vector-client/main-client.crt:ro
+      - ./certs/vector/main-client.key:/run/elitea-vector-client/main-client.key:ro
+      - ./certs/vector/runtime-ca.crt:/run/elitea-vector-client/runtime-ca.crt:ro
       # The auth config itself carries no secrets — only paths — and is read as
       # public material, so a plain read-only bind mount is correct here.
       - ./runtime/auth.form.yml:/etc/elitea/auth.form.yml:ro
@@ -1673,6 +1707,10 @@ services:
   # the project into every Qdrant filter and write. One certificate
   # (DNS:elitea-vector, runtime CA) serves both its listener and its client
   # hop to elitea-main; elitea-main admits it by ELITEA_VECTOR_INTROSPECTION_CLIENTS.
+  # elitea-main calls back WITHOUT a token, as the administrator identity
+  # dns:elitea-main (main-client.crt), to delete a toolkit index's namespace
+  # and a deleted project's vectors (ADR-0031 decision 4; the
+  # ELITEA_VECTOR_GRPC_* block on elitea-main above).
   elitea-vector:
     image: ghcr.io/elitea-ng/elitea-vector:standalone
     build:
@@ -1982,22 +2020,25 @@ services:
   # (rustls-native-certs-0.8.4/src/lib.rs:50-57), so a bundle holding only the
   # mock would silently strip every public root from the consumer.
   mcp-mock-trust:
+    # No `build:` — the mock's image is built ONCE (by mcp-mock) and reused, so
+    # the trust anchor written here can only come from the mint being served.
     image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
-    build:
-      context: ./mock-mcp
-      dockerfile: Containerfile
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - cat /etc/ssl/certs/ca-certificates.crt /opt/mock-mcp/tls/ca.crt /runtime/runtime-ca.crt
         > /trust/mcp-mock-ca-bundle.pem
         && chmod 0644 /trust/mcp-mock-ca-bundle.pem
+        && python3 /opt/mock-mcp/verify-trust.py /trust/mcp-mock-ca-bundle.pem
     volumes:
       - standalone_mcp_mock_trust:/trust
       - standalone_runtime_worker:/runtime:ro
     depends_on:
       runtime-material:
         condition: service_completed_successfully
+      # The bundle is verified against the LIVE mock after it is written.
+      mcp-mock:
+        condition: service_healthy
     restart: "no"
 
   # The trust store the PYTHON worker runs on: runtime CA + mcp-mock CA (#983).
@@ -2021,10 +2062,13 @@ services:
   # that trusts only the mock, and the worker would then fail every INTERNAL
   # dial with a certificate error that reads like a platform outage.
   worker-trust:
+    # No `build:` — the mock's image is built ONCE (by mcp-mock) and reused, so
+    # the trust anchor written here can only come from the mint being served.
+    # Deliberately NOT gated on mcp-mock health and not verified live: this
+    # bundle feeds the PYTHON worker, which must not depend on the mock being up
+    # (the single-image reuse already guarantees the same mint). The live check
+    # is in mcp-mock-trust, whose bundle the NATIVE worker consumes.
     image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
-    build:
-      context: ./mock-mcp
-      dockerfile: Containerfile
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
@@ -2064,6 +2108,7 @@ volumes:
   inventory-engine-sock:
   standalone_pg_data:
   standalone_rustfs_data:
+  standalone_nats_data:
   # Qdrant's collections (ADR-0031). The only copy of the vectors: sources
   # are the source of truth, so `down -v` costs a re-index, not data.
   standalone_qdrant_data:

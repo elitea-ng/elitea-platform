@@ -11,6 +11,8 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
@@ -51,6 +53,8 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "elitea-vector.qdrantLabels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:

@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"log/slog"
 	"os"
 	"strings"
@@ -334,9 +335,9 @@ func seedPublicPgvectorBootstrap(ctx context.Context, t *testing.T, pool *pgxpoo
 
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`
 INSERT INTO %s.configuration
-    (project_id, elitea_title, label, type, section, data, meta, shared, status_ok, source)
+    (project_id, elitea_title, label, type, section, data, meta, shared, status_ok, source, created_at)
 VALUES ($1, $2, $2, 'pgvector', 'vectorstorage', jsonb_build_object('connection_string', $3::text),
-        '{}'::jsonb, false, true, 'system')
+        '{}'::jsonb, false, true, 'system', now() AT TIME ZONE 'UTC')
 ON CONFLICT (elitea_title) DO UPDATE SET data = EXCLUDED.data`,
 		pgx.Identifier{fmt.Sprintf("p_%d", referenceProjectID)}.Sanitize()),
 		referenceProjectID, vectorstoreapp.DefaultProjectPgvectorTitle, dsn,
@@ -436,7 +437,7 @@ func assertStepCompensated(t *testing.T, steps []projectprovisioning.StepStatus,
 func dropProvisionedVectorStore(t *testing.T, projectID int64) {
 	t.Helper()
 	t.Cleanup(func() {
-		databaseURL := os.Getenv(databaseURLEnv)
+		databaseURL := testpg.DSN(os.Getenv(databaseURLEnv))
 		if databaseURL == "" {
 			return
 		}

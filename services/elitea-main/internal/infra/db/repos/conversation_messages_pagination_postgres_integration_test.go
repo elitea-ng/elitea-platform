@@ -48,8 +48,8 @@ func seedOrderedTranscript(t *testing.T, repo *ConversationsRepo, count int) (co
 
 	var numericID string
 	if err := repo.pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'ordered transcript', 7, 'agent')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'ordered transcript', 7, 'agent', now() AT TIME ZONE 'UTC')
 RETURNING id::text, uuid::text`).Scan(&numericID, &conversationUUID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
@@ -68,8 +68,8 @@ WITH participant AS (
     FROM participant
     RETURNING id
 ), item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    SELECT gen_random_uuid(), 'text_message', 0, grp.id FROM grp
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, grp.id, now() AT TIME ZONE 'UTC' FROM grp
     RETURNING id
 )
 INSERT INTO p_1.chat_messages_text (id, content)
@@ -273,8 +273,8 @@ func seedTimedTranscript(t *testing.T, repo *ConversationsRepo, contents ...stri
 	ctx := context.Background()
 
 	if err := repo.pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'searchable transcript', 7, 'agent')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'searchable transcript', 7, 'agent', now() AT TIME ZONE 'UTC')
 RETURNING id::text, uuid::text`).Scan(&numericID, &conversationUUID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
@@ -292,8 +292,8 @@ WITH participant AS (
     FROM participant
     RETURNING id
 ), item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    SELECT gen_random_uuid(), 'text_message', 0, grp.id FROM grp
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, grp.id, now() AT TIME ZONE 'UTC' FROM grp
     RETURNING id
 )
 INSERT INTO p_1.chat_messages_text (id, content)
@@ -409,8 +409,8 @@ func TestListMessagesQueryReturnsAGroupOnceWhenSeveralItemsMatch(t *testing.T) {
 	// A second text item on the same group, also matching.
 	if _, err := repo.pool.Exec(ctx, `
 WITH item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    SELECT gen_random_uuid(), 'text_message', 1, id FROM p_1.chat_message_group LIMIT 1
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 1, id, now() AT TIME ZONE 'UTC' FROM p_1.chat_message_group LIMIT 1
     RETURNING id
 )
 INSERT INTO p_1.chat_messages_text (id, content) SELECT id, 'needle two' FROM item`); err != nil {
@@ -487,8 +487,8 @@ WITH grp AS (
  WHERE conversation_id = (SELECT id FROM p_1.chat_conversations WHERE uuid = $1::uuid)
  RETURNING id
 ), item AS (
- INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
- SELECT gen_random_uuid(), 'text_message', 1, id FROM grp RETURNING id
+ INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+ SELECT gen_random_uuid(), 'text_message', 1, id, now() AT TIME ZONE 'UTC' FROM grp RETURNING id
 )
 INSERT INTO p_1.chat_messages_text (id, content) SELECT id, ' suffix' FROM item`, id, tc.meta)
 			if err != nil {

@@ -143,6 +143,15 @@ export const parseNodes = (
         goThroughNodesTree(yamlNodes, node.id, nodes, edges, realInterruptAfter, realInterruptBefore, orientation);
       }
     });
+    // Keep authored pause labels on all stored-node routes, including END.
+    // Synthetic legacy branch edges retain their existing label behavior.
+    const storedNodeIds = new Set(yamlNodes.map((node) => node.id));
+    edges.forEach((edge, index) => {
+      if (edge.target !== PipelineNodeTypes.End && !storedNodeIds.has(edge.target)) return;
+      if (realInterruptAfter.includes(edge.source) || realInterruptBefore.includes(edge.target)) {
+        edges[index] = { ...edge, data: { ...edge.data, label: 'interrupt' } };
+      }
+    });
   }
 
   return { nodes, edges };

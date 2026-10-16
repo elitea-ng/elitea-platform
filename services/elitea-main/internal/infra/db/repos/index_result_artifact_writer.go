@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"time"
 
@@ -116,14 +117,22 @@ func NewIndexResultArtifactWriter(pool *pgxpool.Pool, store storage.ObjectStore,
 // anywhere in this service (S13's own bootstrapper is deliberately
 // unwired for the same reason), so this cannot depend on one either.
 func (w *IndexResultArtifactWriter) requireBucket(ctx context.Context, projectID int64) (BucketRow, error) {
-	row, err := w.buckets.GetBucket(ctx, projectID, indexArtifactBucketName)
+	return requireIndexArtifactBucket(ctx, w.buckets, projectID)
+}
+
+// requireIndexArtifactBucket is projectID's index-artifacts SYSTEM bucket,
+// created on first use; the index result writer and the toolkit discovery
+// inventory share it (review round 3), so both refuse a leftover bucket a
+// person made under the name with the same ErrSystemBucketNameTaken.
+func requireIndexArtifactBucket(ctx context.Context, buckets *ArtifactBucketsRepository, projectID int64) (BucketRow, error) {
+	row, err := buckets.GetBucket(ctx, projectID, indexArtifactBucketName)
 	if err == nil {
-		return row, nil
+		return requireSystemBucket(ctx, row, projectID)
 	}
 	if !errors.Is(err, storage.ErrNotFound) {
 		return BucketRow{}, err
 	}
-	row, err = w.buckets.CreateBucket(ctx, NewBucketInput{
+	row, err = buckets.CreateBucket(ctx, NewBucketInput{
 		ProjectID:   projectID,
 		Name:        indexArtifactBucketName,
 		DisplayName: indexArtifactBucketName,
@@ -135,7 +144,11 @@ func (w *IndexResultArtifactWriter) requireBucket(ctx context.Context, projectID
 	if errors.Is(err, storage.ErrAlreadyExists) {
 		// Lost a create race against a concurrent first-grant request —
 		// the bucket now exists either way.
-		return w.buckets.GetBucket(ctx, projectID, indexArtifactBucketName)
+		row, err = buckets.GetBucket(ctx, projectID, indexArtifactBucketName)
+		if err != nil {
+			return BucketRow{}, err
+		}
+		return requireSystemBucket(ctx, row, projectID)
 	}
 	return BucketRow{}, err
 }
@@ -438,3 +451,16 @@ func newDurableIndexArtifact(artifactID, immutableVersion, mediaType string, byt
 }
 
 var _ outputapp.ArtifactGrantIssuer = (*IndexResultArtifactWriter)(nil)
+
+// requireSystemBucket is a platform bucket only when it is a SYSTEM bucket
+// (review round 3). A bucket a person made under a now-reserved name is not
+// used: ErrSystemBucketNameTaken (a 409 at the routes), with a WARN naming
+// the project and the bucket, since no migration frees the name.
+func requireSystemBucket(ctx context.Context, row BucketRow, projectID int64) (BucketRow, error) {
+	if row.BucketType == "system" {
+		return row, nil
+	}
+	slog.WarnContext(ctx, "a platform-reserved bucket name is held by a bucket that is not a system bucket",
+		"project_id", projectID, "bucket", row.Name, "bucket_type", row.BucketType)
+	return BucketRow{}, storage.ErrSystemBucketNameTaken
+}

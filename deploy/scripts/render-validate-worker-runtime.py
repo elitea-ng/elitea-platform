@@ -7,7 +7,8 @@ is the same image and the same runtime document as the agent worker, differing
 only in the identity it presents and the stream it consumes. Keeping a second
 hand-edited copy let the two drift (a limit changed in one and not the other
 is invisible until a worker misbehaves), so the validate document is derived:
-the agent worker's document, with exactly the keys in OVERRIDES replaced.
+the agent worker's document, with exactly the keys in OVERRIDES replaced and
+exactly the keys in DROPPED left out.
 
     python3 deploy/scripts/render-validate-worker-runtime.py          # write
     python3 deploy/scripts/render-validate-worker-runtime.py --check  # CI
@@ -39,13 +40,33 @@ OVERRIDES = {
     "nats_consumer": "elitea-configuration-worker-v1",
 }
 
+# The keys the agent worker's document has and the validate worker's must
+# NOT: what names a sidecar or a volume that the validate overlay
+# (docker-compose.standalone-rust-validate.yml) does not run. `extractor_socket`
+# is the document extraction sidecar's Unix socket; the validate stack has no
+# elitea-doc-extractor and mounts no socket directory, so the key would name
+# a path nothing ever listens on (the validate worker runs no index runs, so
+# it would never dial it either — but a runtime document should not claim
+# what its stack does not provide). Each key must exist in the source, so a
+# key that leaves the agent document is noticed here rather than kept as a
+# stale entry. `index_model_call_cap` bounds the model calls of an index run,
+# which the validate worker never runs.
+DROPPED = {"extractor_socket", "index_model_call_cap"}
+
 
 def render() -> str:
     source = json.loads(SOURCE.read_text())
     missing = sorted(set(OVERRIDES) - set(source))
     if missing:
         sys.exit(f"{SOURCE.name} lacks keys the override replaces: {missing}")
-    document = {key: OVERRIDES.get(key, value) for key, value in source.items()}
+    gone = sorted(DROPPED - set(source))
+    if gone:
+        sys.exit(f"{SOURCE.name} lacks keys the render drops (stale DROPPED entry): {gone}")
+    document = {
+        key: OVERRIDES.get(key, value)
+        for key, value in source.items()
+        if key not in DROPPED
+    }
     return json.dumps(document, indent=2) + "\n"
 
 

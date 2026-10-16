@@ -549,7 +549,8 @@ fn only_contract_execution_ids_are_bound() {
         .chain([("a".repeat(129))])
     {
         assert!(
-            matches!(bind(&invalid), Err(ModelFacadeError::InvalidInvocation)),
+            // A claim-side failure (#1292 round 4), not the model's.
+            matches!(bind(&invalid), Err(ModelFacadeError::InvalidClaimContext)),
             "{invalid}"
         );
     }
@@ -1564,7 +1565,8 @@ async fn o_series_role_and_configuration_boundaries_are_explicit() {
             0,
             test_model_facade_invocation(),
         ),
-        Err(ModelFacadeError::InvalidInvocation)
+        // #1292 round 4: a claim-side failure, not the model's.
+        Err(ModelFacadeError::InvalidClaimContext)
     ));
 
     for mutation in 0..4 {
@@ -2380,4 +2382,98 @@ async fn never_ending_budget_refusal_body_returns_the_unscoped_refusal_in_time()
         panic!("a budget refusal must fail")
     };
     assert_eq!(error.code, "model_gateway.budget_exhausted");
+}
+
+/// A toolkit-internal completion binds a single-use model with
+/// `max_model_turns = 1`: the facade itself refuses a second request on it,
+/// and a separate agent binding (25 turns) is not touched by either.
+#[tokio::test(flavor = "current_thread")]
+async fn a_single_turn_binding_serves_one_request_and_leaves_agent_turns_alone() {
+    let sse = || {
+        TestModelGatewayOutcome::Response(test_model_gateway_response(stream_body(vec![
+            Bytes::from(ordinary_sse()),
+        ])))
+    };
+    let (client, _) =
+        test_model_gateway_client(vec![sse(), sse(), sse()], test_model_gateway_config()).unwrap();
+    let context = ClaimScopedEliteaContext::fixture(17, TOKEN);
+    let mut single = test_model_facade_invocation();
+    single.max_model_turns = 1;
+    let internal = client.bind_ordinary(&context, 23, single).unwrap();
+    let agent = client
+        .bind_ordinary(&context, 23, test_model_facade_invocation())
+        .unwrap();
+    let first = internal.generate_for_test(test_model_request("hi")).await;
+    assert!(first.is_ok());
+    let second = internal.generate_for_test(test_model_request("hi")).await;
+    assert_eq!(
+        second.err().map(|error| error.code),
+        Some("model_gateway.turn_limit")
+    );
+    for _ in 0..2 {
+        assert!(
+            agent
+                .generate_for_test(test_model_request("hi"))
+                .await
+                .is_ok()
+        );
+    }
+}
+
+/// #1292 rounds 3-4 (D): the facade marks its own pre-send refusals through
+/// the neutral `model_text` helper (turn limit, request admission, request
+/// size), and a request that was sent is not marked.
+#[tokio::test(flavor = "current_thread")]
+async fn pre_send_refusals_are_marked_by_the_facade_and_sent_calls_are_not() {
+    use super::model_text::was_not_sent;
+    let bound = |config| {
+        let (client, captured) =
+            test_model_gateway_client(vec![TestModelGatewayOutcome::Unavailable], config)
+                .expect("model gateway client");
+        let mut invocation = test_model_facade_invocation();
+        invocation.max_model_turns = 1;
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                17,
+                invocation,
+            )
+            .expect("bound model");
+        (bound, captured)
+    };
+    // Outside the admitted profile: refused before a byte is sent.
+    let (model, captured) = bound(test_model_gateway_config());
+    let mut request = test_model_request("x");
+    request.model = "other-model".to_owned();
+    let Err(error) = model.generate_for_test(request).await else {
+        panic!("refused")
+    };
+    assert_eq!(error.code, "model_gateway.invalid_request");
+    assert!(was_not_sent(&error));
+    assert!(captured.lock().expect("captured").is_empty());
+    // Over the request size bound.
+    let mut config = test_model_gateway_config();
+    config.max_request_bytes = 128;
+    let (model, _) = bound(config);
+    let Err(error) = model
+        .generate_for_test(test_model_request(&"x".repeat(256)))
+        .await
+    else {
+        panic!("refused")
+    };
+    assert_eq!(error.code, "model_gateway.request_too_large");
+    assert!(was_not_sent(&error));
+    // A request that went out (the gateway is unavailable) is not marked,
+    // and a second one past the turn limit is.
+    let (model, captured) = bound(test_model_gateway_config());
+    let Err(sent) = model.generate_for_test(test_model_request("x")).await else {
+        panic!("unavailable")
+    };
+    assert!(!was_not_sent(&sent), "{}", sent.code);
+    assert_eq!(captured.lock().expect("captured").len(), 1);
+    let Err(limit) = model.generate_for_test(test_model_request("y")).await else {
+        panic!("turn limit")
+    };
+    assert_eq!(limit.code, "model_gateway.turn_limit");
+    assert!(was_not_sent(&limit));
 }

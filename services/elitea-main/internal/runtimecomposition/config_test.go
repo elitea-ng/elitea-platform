@@ -543,3 +543,22 @@ func TestRuntimeNATSTLSNamesAreNatsconns(t *testing.T) {
 		t.Fatalf("natsconn reads %v", natsconn.EnvNames(runtimeNATSPrefix))
 	}
 }
+
+func TestConfigReadsTheMemoryEmbeddingModel(t *testing.T) {
+	config, err := ConfigFromEnv(mapLookup(validEnvironment()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MemoryEmbeddingModel != "" {
+		t.Fatalf("an unset model must stay empty: %q", config.MemoryEmbeddingModel)
+	}
+	environment := validEnvironment()
+	environment[MemoryEmbeddingModelEnv] = "  text-embedding-3-small \n"
+	config, err = ConfigFromEnv(mapLookup(environment))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MemoryEmbeddingModel != "text-embedding-3-small" {
+		t.Fatalf("the model is trimmed and kept: %q", config.MemoryEmbeddingModel)
+	}
+}

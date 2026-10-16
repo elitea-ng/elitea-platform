@@ -679,7 +679,13 @@ pub fn public_active_delta(delta: &std::collections::HashMap<String, Value>) -> 
         return None;
     }
     let mut active = BTreeMap::new();
-    for value in delta.values() {
+    let mut saw_instruction_state = false;
+    for (key, value) in delta {
+        // A planner entry rides the same event but says nothing about skills.
+        if crate::planner::is_state_key(key) {
+            continue;
+        }
+        saw_instruction_state = true;
         let state: InstructionState = serde_json::from_value(value.clone()).ok()?;
         for source in state
             .catalog
@@ -689,12 +695,16 @@ pub fn public_active_delta(delta: &std::collections::HashMap<String, Value>) -> 
             active.insert(source.id.clone(), source.public());
         }
     }
-    Some(active.into_values().collect())
+    // A delta of plan entries alone must not read as "no skills are active".
+    saw_instruction_state.then(|| active.into_values().collect())
 }
 
 pub fn valid_state_delta(delta: &std::collections::HashMap<String, Value>) -> bool {
     !delta.is_empty()
         && delta.iter().all(|(key, value)| {
+            if crate::planner::is_state_key(key) {
+                return crate::planner::valid_state_entry(key, value);
+            }
             let Ok(state) = serde_json::from_value::<InstructionState>(value.clone()) else {
                 return false;
             };

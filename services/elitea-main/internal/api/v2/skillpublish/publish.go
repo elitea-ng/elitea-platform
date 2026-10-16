@@ -188,8 +188,8 @@ func insertVersion(ctx context.Context, tx queryExecer, schema string, skillID i
 	}
 	var versionID int
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, status, meta, uuid)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, gen_random_uuid())
+		INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, status, meta, uuid, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, gen_random_uuid(), now() AT TIME ZONE 'UTC')
 		RETURNING id`, schema),
 		skillID, name, instructions, authorID, status, string(encodedMeta)).Scan(&versionID); err != nil {
 		return 0, err
@@ -308,8 +308,8 @@ func (h *Handler) userPublish(ctx context.Context, w http.ResponseWriter, projec
 	sourceProjectNumeric, _ := strconv.Atoi(projectID)
 	if !twinExists {
 		err = tx.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.skills (name, description, owner_id, author_id, meta, shared_owner_id, shared_id)
-			VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $6)
+			INSERT INTO %s.skills (name, description, owner_id, author_id, meta, shared_owner_id, shared_id, created_at)
+			VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $6, now() AT TIME ZONE 'UTC')
 			ON CONFLICT (shared_owner_id, shared_id) WHERE shared_owner_id IS NOT NULL DO NOTHING
 			RETURNING id`, publicQuoted),
 			row.SkillName, row.SkillDescription, publicIDInt(publicID), userID,

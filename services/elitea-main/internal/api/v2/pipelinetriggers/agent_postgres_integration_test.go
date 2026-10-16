@@ -27,7 +27,7 @@ func seedAgent(t *testing.T, pool *pgxpool.Pool, schema, name string, owner int6
 	ctx := context.Background()
 	var applicationID int64
 	if err := pool.QueryRow(ctx, fmt.Sprintf(
-		`INSERT INTO %s.applications (name, description, owner_id) VALUES ($1, '', $2) RETURNING id`, schema),
+		`INSERT INTO %s.applications (name, description, owner_id, created_at, updated_at) VALUES ($1, '', $2, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`, schema),
 		name, owner).Scan(&applicationID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
@@ -41,8 +41,8 @@ func seedAgent(t *testing.T, pool *pgxpool.Pool, schema, name string, owner int6
 	}
 	var versionID int64
 	if err := pool.QueryRow(ctx, fmt.Sprintf(`
-INSERT INTO %s.application_versions (application_id, name, status, author_id, agent_type, llm_settings, meta)
-VALUES ($1, 'latest', 'published', $2, 'openai', '{}'::jsonb, $3::jsonb)
+INSERT INTO %s.application_versions (application_id, name, status, author_id, agent_type, llm_settings, meta, created_at)
+VALUES ($1, 'latest', 'published', $2, 'openai', '{}'::jsonb, $3::jsonb, now() AT TIME ZONE 'UTC')
 RETURNING id`, schema), applicationID, owner, string(meta)).Scan(&versionID); err != nil {
 		t.Fatalf("seed agent version: %v", err)
 	}
@@ -299,7 +299,7 @@ func seedAgentVariableRows(t *testing.T, pool *pgxpool.Pool, schema string, vers
 	t.Helper()
 	for _, name := range names {
 		if _, err := pool.Exec(context.Background(), fmt.Sprintf(
-			`INSERT INTO %s.application_variables (application_version_id, name, value) VALUES ($1, $2, 'default')`,
+			`INSERT INTO %s.application_variables (application_version_id, name, value, created_at) VALUES ($1, $2, 'default', now() AT TIME ZONE 'UTC')`,
 			schema), versionID, name); err != nil {
 			t.Fatalf("seed application variable: %v", err)
 		}

@@ -1,9 +1,10 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import { useMemo } from 'react';
 
 import Box from '@mui/material/Box';
 
 import { CodeMirrorEditor } from '@/shared/ui/CodeMirrorEditor';
+import type { CodeMirrorEditorHandle } from '@/shared/ui/CodeMirrorEditor';
 import { createYamlLanguage } from '../lib/yamlLanguage';
 import { createYamlLinter, YAML_ERROR_MARK_CLASS } from '../lib/yamlLint';
 
@@ -14,6 +15,8 @@ export interface YamlCodeEditorProps {
   /** Fires ~30ms after the last keystroke (via `CodeMirrorEditor`'s own debounce). */
   onChangeCode: (code: string) => void;
   disabled?: boolean;
+  /** Read the current document before a mode change unmounts the editor. */
+  ref?: Ref<CodeMirrorEditorHandle>;
 }
 
 /**
@@ -21,26 +24,10 @@ export interface YamlCodeEditorProps {
  * validity linter. Ported from `apps/elitea-ui/src/[fsd]/features/
  * pipelines/yaml-editor/ui/YamlCodeEditor.jsx` (baseline, 69 lines).
  *
- * DEPENDENCY-INJECTION DEVIATION (deliberate, documented): the baseline read
- * `useSelector(state => state.pipeline)` directly to imperatively reset the
- * editor's content (`editorRef.current?.setCode(yamlCode)`) whenever a
- * Redux `resetFlag` flipped, via `Field.CodeMirrorEditor`'s
- * `forwardRef`/`useImperativeHandle` API. Neither exists in this app: there
- * is no global Redux store (this app's replacement for the baseline's
- * `slices/pipeline.js`/`pipelineEditor.js` client-editing-state is a
- * Wave-2 `processes/pipeline-editor` slice — see
- * `entities/pipeline/model/types.ts`'s own doc comment — not built by this
- * sub-unit), and this app's `CodeMirrorEditor` (unit S1-E) deliberately
- * exposes no imperative ref API (`CodeMirrorEditor.tsx`'s own doc comment:
- * "No imperative ref API ... neither in-scope caller ever attaches a ref").
- * A reset is achieved declaratively instead: `CodeMirrorEditor` already
- * re-syncs its internal document whenever its `value` prop changes to
- * something other than what it last echoed back via `onChange` (see its own
- * `useEffect` on `value`) — so a caller that wants to reset this editor's
- * content simply passes a new `code` value (e.g. from whatever process-level
- * store owns the reset), the same "prop drives content" contract every
- * other controlled `CodeMirrorEditor` consumer in this app already follows.
- * No separate reset channel is needed on this component.
+ * Content resets use the `code` prop instead of a separate Redux reset channel.
+ * The optional ref forwards the existing shared editor handle.
+ * `EditorPanel` reads its current document before switching to Flow.
+ * This preserves edits while the shared 30ms change notification remains pending.
  *
  * Styling deviation forced by the same S1-E prop-surface trim:
  * `CodeMirrorEditor` accepts no `className`/`sx` passthrough (confirmed by
@@ -116,7 +103,7 @@ export interface YamlCodeEditorProps {
  *    `rgba(var(--el-palette-error-mainChannel) / 0.2)` becomes possible —
  *    needs routing to whoever owns `shared/brand/`.
  */
-export function YamlCodeEditor({ code, onChangeCode, disabled = false }: YamlCodeEditorProps): ReactNode {
+export function YamlCodeEditor({ code, onChangeCode, disabled = false, ref }: YamlCodeEditorProps): ReactNode {
   const extensions = useMemo(() => [createYamlLanguage(), createYamlLinter()], []);
 
   return (
@@ -149,6 +136,7 @@ export function YamlCodeEditor({ code, onChangeCode, disabled = false }: YamlCod
       })}
     >
       <CodeMirrorEditor
+        ref={ref ?? null}
         value={code}
         onChange={onChangeCode}
         extensions={extensions}

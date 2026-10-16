@@ -78,6 +78,13 @@ metadata:
   name: {{ include "elitea-worker-python.fullname" . }}
   labels:
     {{- include "elitea-worker-python.labels" . | nindent 4 }}
+  # The same Argo CD wave as the Deployment it scales (deployment.yaml). In an
+  # earlier wave it would reconcile against a target that does not exist yet on
+  # a fresh install, report Ready=False (Degraded to Argo CD), and the sync
+  # would stop before the wave that creates the worker. Within one wave Argo CD
+  # applies built-in kinds (the Deployment) before custom resources.
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   scaleTargetRef:
     name: {{ include "elitea-worker-python.fullname" . }}

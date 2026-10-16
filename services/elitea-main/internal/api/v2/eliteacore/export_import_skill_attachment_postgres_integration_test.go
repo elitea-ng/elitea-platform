@@ -946,13 +946,13 @@ func TestExportGivesAVersionlessSkillAnEmptyArray(t *testing.T) {
 	defer cancel()
 	var skillID int
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.skills (name, description, owner_id, author_id)
-VALUES ('a skill with no version', 'seeded', 1, $1) RETURNING id`, importLinkPrincipal).Scan(&skillID); err != nil {
+INSERT INTO p_1.skills (name, description, owner_id, author_id, created_at)
+VALUES ('a skill with no version', 'seeded', 1, $1, now() AT TIME ZONE 'UTC') RETURNING id`, importLinkPrincipal).Scan(&skillID); err != nil {
 		t.Fatalf("seed the version-less skill: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-VALUES ($1, 'agent', $2, NULL)`, seeded.versionID, skillID); err != nil {
+INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+VALUES ($1, 'agent', $2, NULL, now() AT TIME ZONE 'UTC')`, seeded.versionID, skillID); err != nil {
 		t.Fatalf("attach the version-less skill: %v", err)
 	}
 
@@ -1659,8 +1659,8 @@ func seedSkillRoundTripAgent(t *testing.T, pool *pgxpool.Pool) skillRoundTripSee
 	// seedSkillRoundTripVersion writes.
 	var seed skillRoundTripSeed
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.applications (name, description, owner_id)
-VALUES ('skill round trip agent', 'seeded', 1) RETURNING id`).Scan(&seed.applicationID); err != nil {
+INSERT INTO p_1.applications (name, description, owner_id, created_at, updated_at)
+VALUES ('skill round trip agent', 'seeded', 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`).Scan(&seed.applicationID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
 	seed.earlierVersionID = seedSkillRoundTripVersion(t, ctx, pool, seed.applicationID, "earlier", "2 minutes")
@@ -1686,8 +1686,8 @@ INSERT INTO p_1.tags (name, data) VALUES ($1, '{}'::jsonb) RETURNING id`,
 	seedSkillRoundTripAttachment(t, ctx, pool, seed.earlierVersionID, seed.pinnedSkillID, "base")
 	// `skill_version_id` is nullable, and this is the row that proves it.
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-VALUES ($1, 'agent', $2, NULL)`, seed.latestVersionID, seed.looseSkillID); err != nil {
+INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+VALUES ($1, 'agent', $2, NULL, now() AT TIME ZONE 'UTC')`, seed.latestVersionID, seed.looseSkillID); err != nil {
 		t.Fatalf("seed the unpinned skill attachment: %v", err)
 	}
 	return seed
@@ -1705,7 +1705,7 @@ INSERT INTO p_1.application_versions
 	 llm_settings, conversation_starters, author_id, meta, pipeline_settings, created_at)
 VALUES ($1, $2, 'draft', 'openai', 'do the thing', 'hello',
 	'{"model_name": "gpt-4o"}'::jsonb, '[]'::jsonb, $3, '{}'::jsonb, '{}'::jsonb,
-	now() - $4::interval)
+	(now() AT TIME ZONE 'UTC') - $4::interval)
 RETURNING id`, applicationID, name, importLinkPrincipal, age).Scan(&versionID); err != nil {
 		t.Fatalf("seed application version %q: %v", name, err)
 	}
@@ -1720,8 +1720,8 @@ func seedSkillRoundTripAttachment(
 ) {
 	t.Helper()
 	tag, err := pool.Exec(ctx, `
-INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-SELECT $1, 'agent', $2, id FROM p_1.skill_versions WHERE skill_id = $2 AND name = $3`,
+INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+SELECT $1, 'agent', $2, id, now() AT TIME ZONE 'UTC' FROM p_1.skill_versions WHERE skill_id = $2 AND name = $3`,
 		entityVersionID, skillID, versionName)
 	if err != nil {
 		t.Fatalf("seed the %q attachment of skill %d: %v", versionName, skillID, err)
@@ -1744,16 +1744,16 @@ func seedRoundTripSkill(
 	t.Helper()
 	var skillID int
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.skills (name, description, owner_id, author_id)
-VALUES ($1, 'seeded', 1, $2) RETURNING id`, name, importLinkPrincipal).Scan(&skillID); err != nil {
+INSERT INTO p_1.skills (name, description, owner_id, author_id, created_at)
+VALUES ($1, 'seeded', 1, $2, now() AT TIME ZONE 'UTC') RETURNING id`, name, importLinkPrincipal).Scan(&skillID); err != nil {
 		t.Fatalf("seed skill %q: %v", name, err)
 	}
 	// Sorted, so the ids the seed writes do not depend on map iteration order.
 	for _, versionName := range sortedKeys(versions) {
 		var versionID int
 		if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id, status)
-VALUES ($1, $2, $3, $4, 'published') RETURNING id`,
+INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id, status, created_at)
+VALUES ($1, $2, $3, $4, 'published', now() AT TIME ZONE 'UTC') RETURNING id`,
 			skillID, versionName, versions[versionName], importLinkPrincipal).Scan(&versionID); err != nil {
 			t.Fatalf("seed version %q of skill %q: %v", versionName, name, err)
 		}

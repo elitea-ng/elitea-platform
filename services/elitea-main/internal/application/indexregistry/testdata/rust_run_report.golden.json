@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "status": "partly_indexed",
+  "item_labels": {
+    "singular": "document",
+    "plural": "documents"
+  },
+  "dependent_labels": {
+    "singular": "attachment",
+    "plural": "attachments"
+  },
+  "totals": {
+    "indexed": 3,
+    "skipped": 1,
+    "not_indexed": 9,
+    "failed": 3,
+    "unchanged": 5,
+    "dependent_not_indexed": 0,
+    "total": 21
+  },
+  "categories": [
+    {
+      "kind": "indexed",
+      "count": 3,
+      "groups": []
+    },
+    {
+      "kind": "skipped",
+      "count": 1,
+      "groups": [
+        {
+          "reason": "unchanged",
+          "label": "Already indexed (unchanged)",
+          "count": 5,
+          "items": [],
+          "counted": false
+        },
+        {
+          "reason": "empty",
+          "label": "Contained no indexable content",
+          "count": 1,
+          "items": [],
+          "counted": true
+        }
+      ]
+    },
+    {
+      "kind": "not_indexed",
+      "count": 9,
+      "groups": [
+        {
+          "reason": "too_large",
+          "label": "Too large to index",
+          "count": 2,
+          "items": [],
+          "counted": true
+        },
+        {
+          "reason": "unsupported_format",
+          "label": "Unsupported format",
+          "count": 4,
+          "items": [],
+          "counted": true
+        },
+        {
+          "reason": "weird_new_reason",
+          "label": "Not indexed (other)",
+          "code": "weird_new_reason",
+          "count": 3,
+          "items": [],
+          "counted": true
+        }
+      ]
+    },
+    {
+      "kind": "failed",
+      "count": 3,
+      "groups": [
+        {
+          "reason": "read_error",
+          "label": "Could not be read",
+          "count": 3,
+          "items": [],
+          "counted": true
+        }
+      ]
+    }
+  ],
+  "errors": [
+    "1 chunk(s) could not be embedded or stored"
+  ],
+  "errors_total": 1
+}

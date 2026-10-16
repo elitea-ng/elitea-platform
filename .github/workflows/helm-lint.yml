@@ -264,6 +264,13 @@ jobs:
           bash deploy/helm/tests/render-worker-sandbox.sh
           bash deploy/helm/tests/render-sandbox-kubernetes.sh
 
+      # ADR-0030 I1: the document extraction sidecar in the worker pod. The
+      # socket path the worker dials and the directory the sidecar binds in
+      # are two templates that must agree, and a disagreement is every
+      # PDF skipped `extract_failed` with every pod Ready.
+      - name: The document extraction sidecar renders, and its guards refuse
+        run: bash deploy/helm/tests/render-worker-extractor.sh
+
       # The VALIDATE worker's runtime document is derived from the agent
       # worker's (deploy/scripts/render-validate-worker-runtime.py): same
       # limits and paths, five identity/stream keys replaced. A hand edit to

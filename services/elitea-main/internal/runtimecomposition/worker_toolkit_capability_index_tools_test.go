@@ -39,17 +39,19 @@ func TestWorkerToolkitCapabilityWithRustIndexTools(t *testing.T) {
 	if ok, _ := widened.SupportsTool("github", "read_file"); !ok {
 		t.Error("github/read_file must stay served")
 	}
-	if ok, _ := widened.SupportsTool("github", "create_pull_request"); ok {
-		t.Error("github/create_pull_request must stay refused")
+	// A tool the family does not serve (PyGithub's method dispatcher) stays
+	// refused; the widening is the five index tools and nothing else.
+	if ok, _ := widened.SupportsTool("github", "generic_github_api_call"); ok {
+		t.Error("github/generic_github_api_call must stay refused")
 	}
 	if ok, _ := pinned.SupportsTool("github", "search_index"); ok {
 		t.Error("WithRustIndexTools must not mutate the pinned capability")
 	}
-	// Confluence (I2) stays as pinned: its index tools wait for their stage.
-	before, _ := pinned.SupportsTool("confluence", "search_index")
-	after, _ := widened.SupportsTool("confluence", "search_index")
+	// Aha has no indexing toolkit: it stays as pinned.
+	before, _ := pinned.SupportsTool("aha", "search_index")
+	after, _ := widened.SupportsTool("aha", "search_index")
 	if before != after {
-		t.Errorf("confluence/search_index changed from %v to %v", before, after)
+		t.Errorf("aha/search_index changed from %v to %v", before, after)
 	}
 	python, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
 	if err != nil {

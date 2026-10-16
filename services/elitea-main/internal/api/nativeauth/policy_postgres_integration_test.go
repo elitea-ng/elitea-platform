@@ -21,7 +21,7 @@ func (s *stack) setPolicy(values map[string]string) {
 	s.t.Helper()
 	for key, raw := range values {
 		if _, err := s.pool.Exec(context.Background(), `
-			INSERT INTO centry.platform_config (section, key, value) VALUES ('native_client_policy', $1, $2::jsonb)
+			INSERT INTO centry.platform_config (section, key, value, updated_at) VALUES ('native_client_policy', $1, $2::jsonb, now() AT TIME ZONE 'UTC')
 			ON CONFLICT (section, key) DO UPDATE SET value = EXCLUDED.value`, key, raw); err != nil {
 			s.t.Fatalf("set policy %s: %v", key, err)
 		}

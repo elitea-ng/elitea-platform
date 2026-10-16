@@ -282,6 +282,20 @@ spec:
               mountPath: {{ .Values.main.fileConfig.inventoryClientMaterial.mountPath }}
               readOnly: true
             {{- end }}
+            {{- if include "elitea-vector.mainClientEnabled" . }}
+            # elitea-vector's administrator client material (ADR-0031
+            # decision 4), issued by this chart (templates/vector/
+            # certificates.yaml). A whole-directory mount, read by
+            # tls.LoadX509KeyPair with no symlink contract, like the hops above.
+            - name: vector-client-material
+              mountPath: {{ .Values.vector.mainClient.mountPath }}
+              readOnly: true
+            {{- else if .Values.main.fileConfig.vectorClientMaterial.enabled }}
+            # The same material for an elitea-vector deployed outside this chart.
+            - name: vector-client-material
+              mountPath: {{ .Values.main.fileConfig.vectorClientMaterial.mountPath }}
+              readOnly: true
+            {{- end }}
             {{- if and .Values.nats.tls.enabled (include "elitea-main.usesNats" .) }}
             # The live-update plane's NATS client certificate
             # (templates/natsClient.yaml).
@@ -411,6 +425,21 @@ spec:
           secret:
             secretName: {{ required "fileConfig.inventoryClientMaterial.enabled=true needs secretName or volume" .Values.main.fileConfig.inventoryClientMaterial.secretName }}
             defaultMode: {{ .Values.main.fileConfig.inventoryClientMaterial.defaultMode }}
+          {{- end }}
+        {{- end }}
+        {{- if include "elitea-vector.mainClientEnabled" . }}
+        - name: vector-client-material
+          secret:
+            secretName: {{ .Values.vector.mainClient.secretName }}
+            defaultMode: {{ .Values.vector.mainClient.defaultMode }}
+        {{- else if .Values.main.fileConfig.vectorClientMaterial.enabled }}
+        - name: vector-client-material
+          {{- with .Values.main.fileConfig.vectorClientMaterial.volume }}
+          {{- toYaml . | nindent 10 }}
+          {{- else }}
+          secret:
+            secretName: {{ required "fileConfig.vectorClientMaterial.enabled=true needs secretName or volume" .Values.main.fileConfig.vectorClientMaterial.secretName }}
+            defaultMode: {{ .Values.main.fileConfig.vectorClientMaterial.defaultMode }}
           {{- end }}
         {{- end }}
         {{- if and .Values.nats.tls.enabled (include "elitea-main.usesNats" .) }}

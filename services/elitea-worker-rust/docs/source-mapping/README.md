@@ -1,5 +1,11 @@
 # Source-to-Rust mapping
 
+The [Code live canvas terminal mapping](code-live-canvas-terminal-20261008.md) records the matching-run callback correction and its separate deployment requirements.
+The [pending preparation Stop mapping](code-pending-stop-owner-recovery-20261008.md) records accepted Worker-loss recovery and normal reloaded History.
+The [preparer cancellation boundary](code-preparer-cancellation-boundary-20261008.md) separates verified UI Stop from the internal diagnostic and records a pending scope decision.
+The [live owner recovery mapping](code-live-owner-recovery-20261008.md) records the original JavaScript result after Worker and Supervisor loss.
+The [compiled publication mapping](code-compiled-publication-main-recovery-20261008.md) records the original compiler receipt after Main loss and normal browser reload.
+
 These ledgers map observable Elitea behavior to concrete Rust ownership. They
 are compatibility evidence, not a byte-for-byte port plan.
 
@@ -46,6 +52,11 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Frozen Cargo lookup](code-frozen-cargo-lookup-20261007.md) records lookup before acquisition, authority boundaries, generated contracts, and pending deployed cache acceptance.
+
+- [Deployed Code on NATS](code-nats-deployed-acceptance-20261007.md) records current image boundaries, browser cases, retained failures, and open completion requirements.
+
+- [Main merge continuation](main-integration-20261007.md) records the verified handoff, complete listener reruns, and pending current-image and NATS/Code acceptance.
 - [Runtime-crate log visibility 2026-10-09](runtime-crate-log-visibility-20261009.md) makes `ELITEA_RUST_LOG`/`ELITEA_RUST_TRACE` cover `elitea_agent_runtime` as well as the Worker crate (its events were dropped since ADR-0027), names runtime spans in failure diagnostics, stops logging a profile-authored settings key, and proves with child-process capture tests that representative runtime paths log no data values; a manifest guard keeps future hosted crates visible.
 - [Helm Code owner-recovery guard 2026-10-09](helm-code-owner-recovery-guard-20261009.md) refuses to render `worker.runtime.agentNodeRecovery=true` with `sandboxRuntimes` unless `main.runtime.codeOwnerRecovery` is enabled with a supervisor for every runtime audience (otherwise every Code node fails at Main admission as `INTERNAL`); proved by `render-worker-node-recovery.sh` and `render-worker-sandbox.sh` with mutation proof; records why there is no Worker startup refusal and defers the readable failure kind to G-ADV-01.
 - [Helm Worker node-recovery key 2026-10-09](helm-worker-node-recovery-20261009.md) closes G-WORKER-01: `worker.runtime.agentNodeRecovery` refuses non-boolean values and is proved by `task helm:worker-node-recovery`; the default stays false because the key also turns on model-step resume, which D1/TG-12 keep closed on Kubernetes.
@@ -229,7 +240,7 @@ Maintained Rust runtime ownership registry:
   compatibility-named `mcp_auth` card for both node kinds; remote MCP can rebuild
   with an exact-server claim-fetched token, while Skip nulls declared data state
   and stops at `END`. The configured OpenAPI family applies the same flow to an
-  exact frozen API base URL. The delegated SharePoint read core applies it to
+  exact frozen API base URL. The delegated SharePoint family applies it to
   the exact frozen site URL and also turns a direct-node Graph 401 into the same
   typed interrupt.
   Printer uses a compiler-owned native `interrupt_after` checkpoint,
@@ -299,16 +310,19 @@ Maintained Rust runtime ownership registry:
   bodies and artifact/binary routing remain closed. Direct Toolkit nodes now
   preserve delegated 401 guards and exact-node resume; `delegated-auth-expiry.md`
   records the component proof and remaining deployed gates;
-- `src/toolkits/families/sharepoint/{config,client,tools}.rs`: delegated Azure
-  token resolution and eight explicitly selected Microsoft Graph reads for
-  lists, columns, metadata-only recursive file discovery and raw bounded
-  OneNote XHTML. The client keeps all requests and provider pagination on the
-  exact Graph v1.0 origin, preserves SharePoint site/library path resolution,
-  and exposes schema-complete guarded tools for native same-call authorization.
-  Empty selection, ACS/app-only auth, file parsing/download, indexing, OneNote
-  attachment interpretation, writes, rich discovery/DCR/refresh metadata and
+- `src/toolkits/families/sharepoint/{config,client,tools,reader,html}.rs` and
+  `client/{content,onenote_ops}.rs`: delegated Azure token resolution and 22
+  explicitly selected Microsoft Graph tools: lists, columns, list-item creation,
+  metadata-only recursive file discovery, document and sharing-link reads as
+  text, uploads, and the 14 OneNote tools. The client keeps all requests and
+  provider pagination on the exact Graph v1.0 origin (a download or upload
+  address Graph returns is followed only on an `https` `*.sharepoint.com` host),
+  preserves SharePoint site/library path resolution, sends every change once
+  without retry, and exposes schema-complete guarded tools for native same-call
+  authorization. Empty selection, ACS/app-only auth (refused by name), picture
+  description, page/sheet selection, rich discovery/DCR/refresh metadata and
   production egress remain closed. A mixed saved selection exposes only its
-  selected supported reads;
+  selected supported tools;
 - `src/transport/model_facade.rs`: provider-neutral model ownership over
   `openai_compatible_facade.rs` and `anthropic_facade.rs`, including frozen
   `model_project_id` authority;
@@ -469,6 +483,7 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [MCP/toolkit picker paging and standalone discovery default](mcp-picker-paging-discovery-default-20261009.md) records the server-side `mcp`/`query` filter on the toolkit listing, per-section picker paging, discovery on by default in the standalone compose stacks with a readable message where it is off, real-PostgreSQL and browser evidence, and follow-ups.
 - [Browser sessions refused on a standalone stack](browser-session-cookie-host-20261009.md) records why the post-merge `session_unknown` refusals on 1ab920dde were two local stacks sharing the `localhost` cookie host (not a Main regression), the opt-in `STANDALONE_HOST`, the real-PostgreSQL session journey test and browser evidence.
 - [Pipeline nodes on an attached artifact toolkit](pipeline-artifact-toolkit-nodes-20261009.md) records why a root pipeline refused direct nodes on an artifact toolkit as "outside its frozen scope" (the claim was never lent to the family), the fix, the journal and real-PostgreSQL proofs, browser evidence and the nested-position follow-ups.
+- [GitHub effects and the rest of the artifact tools](github-artifact-tools-20261013.md) records the 17 GitHub tools and 6 artifact tools added on 2026-10-13 (37 of 44 and 10 of 16 served): their answers, the failure sentence per cause, effect classification, the places the port differs from the pinned SDK on purpose, and the gaps (`generic_github_api_call`, the log archive, live proof).
 - [Post-merge verification of main c0f2e5f9b](post-merge-verification-c0f2e5f9b-20261009.md) records the local suites, including secured NATS on Go 1.26.9, and the browser pass for the third 2026-10-09 batch (#1179–#1186).
 - [Main hardening residuals](main-hardening-residuals-20261009.md) records the save-time YAML expansion budget shared with the Worker (SEC-11), the legacy edge-auth route without an identity projection (SEC-12), suspension in the shared membership predicate (SEC-14) and per-entry private egress permits (SEC-10), with tests, measurements, recovery rows and browser evidence.
 - [Toolkit connection check through the egress guard](toolkit-check-egress-20261009.md) records SEC-13: the toolkit "Test connection" probe dials through the egress guard with per-entry private permits from `ELITEA_TOOLKIT_CHECK_ALLOWLIST`, the removed `*`, the blocked-class, proxy, redirect and response-bound tests, operator notes and browser evidence.
@@ -476,3 +491,4 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Session write self-deadlock behind a forwarded event](session-write-select-deadlock-20261009.md) records why a nested pipeline turn hung forever. A forwarded event persisted under a root-writer lock that a suspended child append held. The record covers the driven-stream fix in the four wrappers, the session lock-wait and idle bounds, and the real-PostgreSQL reproduction and bound tests. It also covers the recovery rows and the real-model browser evidence.
 - [Crash-recovery acceptance suite, tier T0](crash-recovery-suite-20261009.md) records the crash-recovery harness (`scripts/crash-recovery/`, compose crash overlay, fixtures, mock journals, opt-in browser check), the pinned invariant facts, per-scenario R/I/C/F/L verdicts with execution ids for Worker, Main, Supervisor and NATS faults during Code, model and package-install phases, the proposed matrix cell changes and follow-ups.
 - [Graph typed state reducers](graph-typed-state-reducers-20261009.md) records the bounded `append`/`sum_int`/`merge` reducers on declared state (rehearsal-gated), the single node guard, the initial-checkpoint fix, the digest fold, the Web YAML-only notice and production refusal, the `agent-runtime` ownership (ADR-0027), real-PostgreSQL replacement and browser evidence, and follow-ups.
+- [Split Out and Aggregate admitted by default; node-type admission parity](graph-shaping-admitted-20261012.md) records the deletion of every switch that gated the two shaping nodes (the Worker `graph-extensions-rehearsal` feature and `WORKER_REHEARSAL_FEATURES`, Main's `graph_extensions_rehearsal` tag, the Web `VITE_GRAPH_EXTENSIONS_REHEARSAL` argument), the shared admission contract `libs/proto/contracts/pipeline-node-admission-v1.json` asserted by Worker, Main and Web tests with the pending Wave 2a drift (`parallel`, `map`) compared exactly, the tests, the §3b binary check and the browser run with a real model on `elitea-shaping`.

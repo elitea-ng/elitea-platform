@@ -32,10 +32,14 @@ type governanceStatusBody struct {
 	// database pool. Every other field is then empty, and an operator reading
 	// "enabled": false knows the answer without interpreting a zero count.
 	Enabled bool `json:"enabled"`
-	// RateLimitsEnforceable is false when the gateway has no NATS counter. An
-	// authored rate limit then loads and does nothing, and this is the only
+	// RateLimitsEnforceable is true only when the limiter is bound to the NATS
+	// counter AND the monitor's last probe succeeded — the same signal as
+	// /readyz and the gateway_rate_limits_enforced gauge. Otherwise an
+	// authored rate limit loads and does nothing (fail-open), and this is the
 	// place that says so.
 	RateLimitsEnforceable bool `json:"rate_limits_enforceable"`
+	// RateLimiterStatus is "unbound", "degraded" or "enforced".
+	RateLimiterStatus string `json:"rate_limiter_status"`
 	// SharedProjectID is the public project whose `shared = true` credentials
 	// and models this gateway reads IN ADDITION to the caller's own (issue
 	// #316). Empty means the second scope is OFF.
@@ -92,7 +96,8 @@ func makeGovernanceStatusHandler(
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := governanceStatusBody{
 			Enabled:               store != nil,
-			RateLimitsEnforceable: limiter.Enabled(),
+			RateLimitsEnforceable: limiter.Status() == policy.RateStatusEnforced,
+			RateLimiterStatus:     string(limiter.Status()),
 			SharedProjectID:       sharedProjectID,
 		}
 		if acct != nil {

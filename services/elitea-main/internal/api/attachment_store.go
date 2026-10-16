@@ -11,6 +11,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -74,7 +75,7 @@ func (a *attachmentRepoAdapter) AttachmentPolicy(ctx context.Context, projectID 
 func (a *attachmentRepoAdapter) RequireAttachmentBucket(ctx context.Context, projectID int64, bucketName string, retentionDays int32) (int64, error) {
 	row, err := a.buckets.GetBucket(ctx, projectID, bucketName)
 	if err == nil {
-		return row.ID, nil
+		return systemAttachmentBucket(row)
 	}
 	if !errors.Is(err, storage.ErrNotFound) {
 		return 0, err
@@ -99,9 +100,28 @@ func (a *attachmentRepoAdapter) RequireAttachmentBucket(ctx context.Context, pro
 		if err != nil {
 			return 0, err
 		}
-		return row.ID, nil
+		return systemAttachmentBucket(row)
 	}
 	return 0, err
+}
+
+// errAttachmentBucketNotSystem is an attachment bucket name held by a bucket
+// a person created: attachments must never land in it, because a system
+// bucket is the boundary every conversation-scoped read relies on (review
+// round 2). Bucket creation reserves the names, so this is a row created
+// before that rule or by hand.
+var errAttachmentBucketNotSystem = storage.ErrSystemBucketNameTaken
+
+// systemAttachmentBucket is the attachment bucket only when it is a system
+// bucket; otherwise a WARN names the project and the bucket, and the upload
+// answers 409 (review round 3: no migration frees the name).
+func systemAttachmentBucket(row dbrepos.BucketRow) (int64, error) {
+	if row.BucketType != "system" {
+		slog.Warn("the attachment bucket name is held by a bucket that is not a system bucket",
+			"project_id", row.ProjectID, "bucket", row.Name, "bucket_type", row.BucketType)
+		return 0, errAttachmentBucketNotSystem
+	}
+	return row.ID, nil
 }
 
 // LookupAttachmentBucket is RequireAttachmentBucket's read-only twin: it

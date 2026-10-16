@@ -17,6 +17,12 @@ pub const EMBEDDINGS_PATH: &str = "/embeddings";
 /// The native Anthropic messages surface, under [`LLM_BASE_PATH`].
 pub const MESSAGES_PATH: &str = "/messages";
 
+/// Image generation (JSON), under [`LLM_BASE_PATH`].
+pub const IMAGES_GENERATIONS_PATH: &str = "/images/generations";
+
+/// Image edits (multipart), under [`LLM_BASE_PATH`].
+pub const IMAGES_EDITS_PATH: &str = "/images/edits";
+
 /// [`LLM_BASE_PATH`] + [`CHAT_COMPLETIONS_PATH`].
 pub const CHAT_COMPLETIONS_ROUTE: &str = "/llm/v1/chat/completions";
 
@@ -25,6 +31,12 @@ pub const EMBEDDINGS_ROUTE: &str = "/llm/v1/embeddings";
 
 /// [`LLM_BASE_PATH`] + [`MESSAGES_PATH`].
 pub const MESSAGES_ROUTE: &str = "/llm/v1/messages";
+
+/// [`LLM_BASE_PATH`] + [`IMAGES_GENERATIONS_PATH`].
+pub const IMAGES_GENERATIONS_ROUTE: &str = "/llm/v1/images/generations";
+
+/// [`LLM_BASE_PATH`] + [`IMAGES_EDITS_PATH`].
+pub const IMAGES_EDITS_ROUTE: &str = "/llm/v1/images/edits";
 
 #[cfg(test)]
 mod tests {
@@ -41,5 +53,13 @@ mod tests {
             format!("{LLM_BASE_PATH}{EMBEDDINGS_PATH}")
         );
         assert_eq!(MESSAGES_ROUTE, format!("{LLM_BASE_PATH}{MESSAGES_PATH}"));
+        assert_eq!(
+            IMAGES_GENERATIONS_ROUTE,
+            format!("{LLM_BASE_PATH}{IMAGES_GENERATIONS_PATH}")
+        );
+        assert_eq!(
+            IMAGES_EDITS_ROUTE,
+            format!("{LLM_BASE_PATH}{IMAGES_EDITS_PATH}")
+        );
     }
 }

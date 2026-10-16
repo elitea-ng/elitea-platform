@@ -185,6 +185,20 @@ class CancelSandboxJobResponseV1(_message.Message):
     cleanup_pending: bool
     def __init__(self, status: _Optional[_Union[SandboxJobStatusV1, str]] = ..., cleanup_pending: bool = ...) -> None: ...
 
+class LookupSandboxDependenciesRequestV1(_message.Message):
+    __slots__ = ("content_grant", "preparation_job_json")
+    CONTENT_GRANT_FIELD_NUMBER: _ClassVar[int]
+    PREPARATION_JOB_JSON_FIELD_NUMBER: _ClassVar[int]
+    content_grant: SignedSandboxJobGrantV1
+    preparation_job_json: bytes
+    def __init__(self, content_grant: _Optional[_Union[SignedSandboxJobGrantV1, _Mapping]] = ..., preparation_job_json: _Optional[bytes] = ...) -> None: ...
+
+class LookupSandboxDependenciesResponseV1(_message.Message):
+    __slots__ = ("bundle_json",)
+    BUNDLE_JSON_FIELD_NUMBER: _ClassVar[int]
+    bundle_json: bytes
+    def __init__(self, bundle_json: _Optional[bytes] = ...) -> None: ...
+
 class PrepareSandboxDependenciesRequestV1(_message.Message):
     __slots__ = ("grant", "preparation_job_json")
     GRANT_FIELD_NUMBER: _ClassVar[int]

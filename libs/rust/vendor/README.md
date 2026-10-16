@@ -160,3 +160,47 @@ this deployment bound before ledger reservation or runtime creation.
 The Code job identity also supports an immutable persisted runtime binding.
 Docker observations reject a replacement container ID, even when its name and labels match.
 The supervisor stores this binding before dispatch in agentstate migration 0008.
+
+## `zavora-slide/`, `zavora-slide-render/`, `zavora-slide-pdf/` — zavora-slide 0.1.1 with three patches
+
+Patched copies of three published crates (ADR-0032 Risks and decision 5), applied
+through `[patch.crates-io]` in `libs/rust/Cargo.toml` and
+`services/elitea-worker-rust/Cargo.toml`. Only `elitea-office-core` names them
+(through `zavora-slide`); the exact `=0.1.1` pins and the isolation test that
+reads the lock are unchanged, because the patched crates keep their version.
+The desktop host does not link them (no `toolkit-office`).
+
+| Crate | Archive SHA-256 (crates.io) | Upstream commit |
+| --- | --- | --- |
+| zavora-slide 0.1.1 | `16dd3c2289cc7b520b53f4f7158fedf58cf242371145841686401fd6ee3fa7a8` | `82e407a9bc10f33f7e41b73b188092fa33b62973` (`crates/zavora-slide`) |
+| zavora-slide-render 0.1.1 | `897be0dd207ce289a43f3e9497a084f9bdc6f30cad1672b22fa18e25359647a6` | see its `.cargo_vcs_info.json` |
+| zavora-slide-pdf 0.1.1 | `25c5d8cd4ff4c3e74815b22dee18cbe308e081eeafe5bc045a5eb277a6b8847d` | see its `.cargo_vcs_info.json` |
+
+Licence: `MIT OR Apache-2.0` (their `Cargo.toml`). Each archive's `Cargo.lock` and
+`.cargo-ok` are removed (as for leiden-rs: cargo ignores a path dependency's
+lockfile, and GitHub's dependency graph would raise alerts for dependencies that
+do not ship); every other file is the archive's, byte for byte, except the files
+below.
+
+| File | Change | Why |
+| --- | --- | --- |
+| `zavora-slide-render/src/lib.rs`, `zavora-slide-render/src/text_shaper.rs`, `zavora-slide-pdf/src/lib.rs` | The three `load_system_fonts()` calls are removed; the bundled Liberation Sans face is the only font. | A render or PDF depended on the fonts of the host it ran on, so previews differed between machines and a deck that names a font the host has was measured with it. Decks that name fonts we do not bundle (Calibri, Arial, others) render with the bundled substitute. `office-core/tests/vendor_patches.rs` fails if any vendored crate calls `load_system_fonts` or `load_fonts_dir`. |
+| `zavora-slide/src/presentation.rs` | In `overlay_package` (the save of a deck opened from bytes): tables and chart frames from the build model are spliced into the slide DOM before `</p:spTree>` (renumbered above the file's own shape ids, as the model numbers from 2 on every slide), and pictures inserted into the DOM get their media part and relationship written, instead of re-authoring the slide. The same splice is applied to a slide added in the session. | Upstream dropped a table added to an opened slide on save, and re-authored any slide that gained a chart or a picture from the build model, which does not hold the tables, charts and pictures the file already had: they were lost silently. `tests/vendor_patches.rs` adds a table, a chart, a picture, text and a second table to one slide across four sessions and checks that nothing is lost and that shape ids stay unique. |
+| `zavora-slide/src/slide.rs` | `Table::graphic_frame_xml` is `pub(crate)`; `Slide::add_bullets` puts a text box in the file (one paragraph per item) when the slide has no body placeholder. | The first is used by the splice above. The second: a slide added to an opened deck starts blank, and upstream fell through to the build model, which an opened deck never writes, so bullets were reported as added and were not (`set_title` already did the equivalent). |
+
+**What the patches do not fix** (the pptx toolkit guards it instead, see
+`families/pptx/ops.rs::save_guarded`): adding speaker notes to a slide that has no
+notes part, and replacing the theme, make the library rewrite the whole file
+from its build model, which drops what an opened file held that the model does
+not (tables, charts, pictures) and re-authors Title-layout slides. The toolkit
+reopens the saved file, compares what it holds with what the file held before,
+and refuses the edit (nothing is written) if anything was lost. Also not
+fixed: a file with no slide list at all drops a slide added to it on save
+(`create_presentation` always creates one slide; `add_slide` verifies the
+saved file holds the slide).
+
+**Updating.** Replace the directories with the new archives, re-apply the
+changes (each is marked by an "Elitea patch" comment),
+update the table, and rerun `cargo test -p elitea-office-core` (the hostile
+corpus, the isolation test and `vendor_patches`). Drop a patch when the
+upstream release carries an equivalent, verified by the same tests.

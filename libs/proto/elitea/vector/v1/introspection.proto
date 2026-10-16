@@ -31,9 +31,35 @@ enum TokenKind {
   TOKEN_KIND_ENGINE_CALLBACK = 2;
 }
 
+// MemoryIntent says what a memory request is about to do, so elitea-main
+// decides the memory permissions at that moment and, for a personal read,
+// records it. elitea-vector sends anything but NONE only for a memory-source
+// request, and asks afresh each time (such an answer is never cached).
+enum MemoryIntent {
+  // MEMORY_INTENT_UNSPECIFIED: no memory decision is wanted (every non-memory
+  // request, and project-scope memory reads). personal_memory_allowed is then
+  // false and project_memory_write_refused is false.
+  MEMORY_INTENT_UNSPECIFIED = 0;
+  // A read (search, count, list, read) in the PERSONAL scope. When the
+  // personal scope is allowed, elitea-main taints the run's conversation:
+  // personal memory has been read in it.
+  MEMORY_INTENT_PERSONAL_READ = 1;
+  // A write (upsert, delete, metadata update) in the PERSONAL scope.
+  MEMORY_INTENT_PERSONAL_WRITE = 2;
+  // A write in the PROJECT scope. Refused (project_memory_write_refused) from
+  // any execution bound to a tainted conversation.
+  MEMORY_INTENT_PROJECT_WRITE = 3;
+  // A toolkit-index upsert or delete (an index is shared by the project).
+  // Refused (project_memory_write_refused) from any execution bound to a
+  // tainted conversation. Asked for every token, whatever its sources.
+  MEMORY_INTENT_SHARED_INDEX_WRITE = 4;
+}
+
 message IntrospectTokenRequest {
   // token is the bearer string, without the "Bearer " prefix.
   string token = 1;
+  // memory_intent is what the request is about to do with memory.
+  MemoryIntent memory_intent = 2;
 }
 
 message IntrospectTokenResponse {
@@ -52,4 +78,38 @@ message IntrospectTokenResponse {
   // SOURCE_TOOLKIT_INDEX. A callback token names the source of the provider
   // that minted it. elitea-vector refuses every other source.
   repeated Source allowed_sources = 6;
+  // personal_memory_allowed says whether this token may use the PERSONAL
+  // memory scope: a worker claim token of an agent chat turn in a PRIVATE
+  // conversation whose only user participant is the actor. False for every
+  // callback token, for a claim outside such a conversation (a direct toolkit
+  // call, an MCP or API run, a shared or public conversation) and when the
+  // lookup fails. Decided by elitea-main at THIS introspection, and only when
+  // memory_intent asks for a personal decision.
+  bool personal_memory_allowed = 7;
+  // project_memory_write_refused is true for a MEMORY_INTENT_PROJECT_WRITE or
+  // MEMORY_INTENT_SHARED_INDEX_WRITE asked by an execution bound to a
+  // conversation in which personal memory has been read (by any turn): shared
+  // memory and shared indexes must not be written from a conversation that
+  // saw personal memory. The default (false) is "not refused".
+  bool project_memory_write_refused = 8;
+  // memory_toolkit_ids are the memory toolkits this worker claim's frozen
+  // toolkits name, every one a toolkit of the token's project (Main freezes a
+  // run's toolkits from the run's own project). elitea-vector refuses a memory
+  // request whose toolkit_id is not listed, so a token cannot reach a memory
+  // store of a toolkit its run was not given. Empty for every callback token and
+  // for a token without the memory source; a memory-source token with none
+  // reaches no memory at all.
+  repeated int64 memory_toolkit_ids = 9;
+  // conversation_unbound is true when elitea-main has established that the
+  // worker claim's execution is bound to NO conversation: no agent turn at the
+  // root of its lineage (an index ingest, a direct toolkit call from the UI or
+  // an API, a toolkit discovery). A Code node's toolkit_call child of an agent
+  // turn is bound through its parent. elitea-vector skips the shared-write
+  // question (MEMORY_INTENT_SHARED_INDEX_WRITE) only when this is true; the
+  // default (false) means "ask", so an answer that omits it fails safe.
+  // Field 10 was an unreleased draft with the opposite meaning
+  // (conversation_bound); it is never reused.
+  bool conversation_unbound = 11;
+  reserved 10;
+  reserved "conversation_bound";
 }

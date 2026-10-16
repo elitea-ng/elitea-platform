@@ -69,8 +69,7 @@ pub(crate) fn pipeline_configuration_assembly_error(
         PipelineConfigurationError::LimitExceeded(_) => {
             NativeAgentAssemblyErrorCode::AgentSettingsLimit
         }
-        PipelineConfigurationError::Unsupported(_)
-        | PipelineConfigurationError::NodeTypeNotAvailable(_) => {
+        PipelineConfigurationError::Unsupported(_) => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
         PipelineConfigurationError::MalformedYaml { .. }
@@ -581,6 +580,11 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
         self,
         client: &PlatformClient,
     ) -> Result<RedeemedOrdinaryNativeAssembly<'a>, RuntimeContextError> {
+        // What the Attachments module needs to reach the conversation's stored
+        // files later, taken before the request is dropped from the struct.
+        let current_attachments =
+            attachments::pending_attachment_reads(&self.request.payload.input_attachments);
+        let attachment_read_tokens = AttachmentBudget::for_request(self.request).tool_read_tokens();
         let Self {
             attachment_library,
             sandbox_authority,
@@ -596,6 +600,8 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
         } = self;
         let context = client.redeem_elitea_context(&runtime_context).await?;
         Ok(RedeemedOrdinaryNativeAssembly {
+            current_attachments,
+            attachment_read_tokens,
             attachment_library,
             sandbox_authority,
             profile,
@@ -613,6 +619,11 @@ impl<'a> AdmittedOrdinaryNativeAssembly<'a> {
 
 /// Admitted ordinary assembly after its sole claim-scoped PAT redemption.
 pub(crate) struct RedeemedOrdinaryNativeAssembly<'a> {
+    /// The references of this turn's own
+    /// attachments: the Attachments module's way to the conversation's files.
+    pub(super) current_attachments: Vec<attachments::AttachmentReference>,
+    /// How many tokens one `read_attachment` answer may carry this turn.
+    pub(super) attachment_read_tokens: u64,
     pub(super) attachment_library: Option<Arc<AttachmentLibrary>>,
     pub(super) sandbox_authority: Option<Arc<crate::protocol::control::ClaimBoundSandboxAuthority>>,
     pub(super) profile: OrdinaryNoToolProfile,

@@ -91,8 +91,8 @@ func TestCurrentPipelineStartNamesTheNodeTheRuntimeWouldRefuse(t *testing.T) {
 		code         string
 		text         []string
 	}{
-		"split_out":      {"entry_point: split\nnodes:\n  - id: split\n    type: split_out\n", pipelinelimits.CodeNodeTypeNotAvailable, []string{`Node "split"`, `"split_out"`, "not available on this deployment"}},
-		"unattached mcp": {"entry_point: fetch\nnodes:\n  - id: fetch\n    type: mcp\n    toolkit_name: github_mcp\n    tool: list_issues\n    transition: END\n", pipelinelimits.CodeToolkitNotAttached, []string{`Node "fetch"`, `"github_mcp"`, "Attach \"github_mcp\" under Tools → MCP"}},
+		"unsupported type": {"entry_point: split\nnodes:\n  - id: split\n    type: custom\n", pipelinelimits.CodeNodeTypeUnsupported, []string{`Node "split"`, `"custom"`, "does not support"}},
+		"unattached mcp":   {"entry_point: fetch\nnodes:\n  - id: fetch\n    type: mcp\n    toolkit_name: github_mcp\n    tool: list_issues\n    transition: END\n", pipelinelimits.CodeToolkitNotAttached, []string{`Node "fetch"`, `"github_mcp"`, "Attach \"github_mcp\" under Tools → MCP"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			details, err := json.Marshal(map[string]any{"agent_type": "pipeline", "instructions": tc.instructions, "llm_settings": map[string]any{"model_name": "test", "model_project_id": 7, "openai_compatible": false}, "meta": map[string]any{}, "tools": []any{}})

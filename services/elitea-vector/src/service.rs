@@ -20,13 +20,13 @@ use qdrant_client::qdrant::value::Kind;
 use qdrant_client::qdrant::{
     Condition, CountPointsBuilder, DeletePointsBuilder, Document, FacetCountsBuilder, Filter,
     NamedVectors, PayloadIncludeSelector, PointId, PointStruct, PrefetchQueryBuilder, Query,
-    QueryPointsBuilder, Rrf, ScrollPointsBuilder, UpsertPointsBuilder, Value, Vector,
-    VectorsSelector, vector_output, with_vectors_selector,
+    QueryPointsBuilder, Rrf, ScrollPointsBuilder, SetPayloadPointsBuilder, UpsertPointsBuilder,
+    Value, Vector, VectorsSelector, vector_output, with_vectors_selector,
 };
 use tokio_stream::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::auth::{Authenticator, Caller};
+use crate::auth::{Authenticator, Caller, MemoryBinding, MemoryIntent, SHARED_INDEX_WRITE_REFUSED};
 use crate::fanout::fan_out;
 use crate::layout::{self, BM25_MODEL, BM25_VECTOR, DENSE_VECTOR, Space, key};
 use crate::pb;
@@ -117,6 +117,109 @@ pub struct VectorService {
 }
 
 impl VectorService {
+    /// For a MEMORY request that needs a memory decision (a personal-scope
+    /// request, or a project-scope write), replaces the cached caller with one
+    /// verified afresh: elitea-main then re-checks the conversation and, for a
+    /// personal read, records it. Every other request keeps `caller`, which
+    /// came from the claim cache (a toolkit-index search or upsert never asks
+    /// elitea-main again within the cache lifetime).
+    async fn memory_caller(
+        &self,
+        token: Option<&str>,
+        caller: Caller,
+        source_scope_toolkit: Option<(i32, i32, i64)>,
+        write: bool,
+    ) -> Result<Caller, Status> {
+        let Some((source, memory_scope, toolkit_id)) = source_scope_toolkit else {
+            return Ok(caller);
+        };
+        let intent = MemoryIntent::for_request(&caller, source, memory_scope, write);
+        if intent == MemoryIntent::None {
+            return Ok(caller);
+        }
+        if intent == MemoryIntent::SharedIndexWrite {
+            // A toolkit-index write by a worker claim: shared by the project,
+            // so refused in a conversation where personal memory was read.
+            let token =
+                token.ok_or_else(|| Status::unauthenticated("a project token is required"))?;
+            let fresh = self.auth.fresh_token(token, intent).await?;
+            if let Caller::Token(grant) = &fresh
+                && grant.project_memory_write_refused
+            {
+                return Err(Status::permission_denied(SHARED_INDEX_WRITE_REFUSED));
+            }
+            return Ok(fresh);
+        }
+        // Everything the cached grant can refuse is refused BEFORE elitea-main
+        // is asked afresh: a personal-read introspection records the read, and
+        // a request refused afterwards (a toolkit the run was not given, a bad
+        // scope) must not mark the run as having read personal memory. The
+        // memory toolkits and the sources are fixed at mint, so the cached
+        // grant is authoritative for them. Only the write-after-read refusal is
+        // left to the fresh answer (it is what the fresh answer decides).
+        caller.precheck_memory(source, memory_scope, toolkit_id)?;
+        let token = token.ok_or_else(|| Status::unauthenticated("a project token is required"))?;
+        self.auth.fresh_token(token, intent).await
+    }
+
+    /// Re-verifies an Upsert stream's token before a batch. The introspection
+    /// cache keeps this cheap (a memory write asks afresh); a token that went
+    /// inactive, moved project, lost the source or whose memory binding
+    /// changed (another owner, a project write refused after a personal read)
+    /// ends the stream.
+    async fn reverify_upsert(
+        &self,
+        token: &str,
+        namespace: &pb::Namespace,
+        project_id: i64,
+        binding: Option<&MemoryBinding>,
+        decide_afresh: bool,
+    ) -> Result<(), Status> {
+        // The cached verification runs before every batch (cheap: the claim
+        // cache), so a revoked token ends the stream within the claim cache
+        // lifetime; the project and the source are checked on it every time.
+        let current = self.auth.verify_token(token).await?;
+        if current.project(0)? != project_id {
+            return Err(Status::permission_denied(
+                "the token's project changed during the stream",
+            ));
+        }
+        current.require_source(namespace.source)?;
+        if !decide_afresh {
+            // Between fresh decisions the header's binding stands.
+            return Ok(());
+        }
+        // The fresh memory / shared-write decision, and the binding it gives
+        // compared with the header's.
+        let current = self
+            .memory_caller(
+                Some(token),
+                current,
+                Some((
+                    namespace.source,
+                    namespace.memory_scope,
+                    namespace.toolkit_id,
+                )),
+                true,
+            )
+            .await?;
+        if current
+            .memory_binding(
+                namespace.source,
+                namespace.memory_scope,
+                namespace.toolkit_id,
+                true,
+            )?
+            .as_ref()
+            != binding
+        {
+            return Err(Status::permission_denied(
+                "the token's memory owner changed during the stream",
+            ));
+        }
+        Ok(())
+    }
+
     /// A service over `store`, admitting callers through `auth`, with the
     /// default [`SpaceLimits`].
     #[must_use]
@@ -168,8 +271,30 @@ impl pb::vector_service_server::VectorService for VectorService {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
         caller.require_source(namespace.source)?;
+        // A memory write needs a memory decision made now, not a cached one.
+        let caller = self
+            .memory_caller(
+                Some(&token),
+                caller,
+                Some((
+                    namespace.source,
+                    namespace.memory_scope,
+                    namespace.toolkit_id,
+                )),
+                true,
+            )
+            .await?;
+        // The owner of a memory point comes from the token, here and nowhere
+        // else; a request cannot name one.
+        let binding = caller.memory_binding(
+            namespace.source,
+            namespace.memory_scope,
+            namespace.toolkit_id,
+            true,
+        )?;
         let target = UpsertTarget {
             project_id,
+            binding: binding.clone(),
             source: layout::source_keyword(namespace.source)?,
             namespace_id: namespace.namespace_id.clone(),
             namespace: layout::namespace_uuid(&namespace.namespace_id)?,
@@ -184,21 +309,30 @@ impl pb::vector_service_server::VectorService for VectorService {
         }
         let collection = self.store.ensure(&space).await?;
         let mut upserted: u64 = 0;
+        // The header was decided afresh just above. Before every batch the
+        // token is re-verified through the claim cache (a revocation ends the
+        // stream within the cache lifetime); the fresh memory / shared-write
+        // decision is made again at most every UPSERT_REVERIFY_INTERVAL, so a
+        // conversation made shared or tainted mid-stream is seen within it.
+        let mut decided_at = std::time::Instant::now();
         while let Some(message) = stream.next().await {
             let Some(pb::upsert_request::Message::Batch(batch)) = message?.message else {
                 return Err(Status::invalid_argument(
                     "only the first Upsert message is a header",
                 ));
             };
-            // The introspection cache keeps this cheap; a token that went
-            // inactive, moved project or lost the source ends the stream.
-            let current = self.auth.verify_token(&token).await?;
-            if current.project(0)? != project_id {
-                return Err(Status::permission_denied(
-                    "the token's project changed during the stream",
-                ));
+            let decide_afresh = decided_at.elapsed() >= UPSERT_REVERIFY_INTERVAL;
+            self.reverify_upsert(
+                &token,
+                namespace,
+                project_id,
+                binding.as_ref(),
+                decide_afresh,
+            )
+            .await?;
+            if decide_afresh {
+                decided_at = std::time::Instant::now();
             }
-            current.require_source(namespace.source)?;
             if batch.points.len() > MAX_BATCH_POINTS {
                 return Err(Status::invalid_argument("at most 512 points per batch"));
             }
@@ -229,6 +363,7 @@ impl pb::vector_service_server::VectorService for VectorService {
         request: Request<pb::DeleteRequest>,
     ) -> Result<Response<pb::DeleteResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
         let project_id = caller.project(request.project_id)?;
         let space = request
@@ -241,11 +376,33 @@ impl pb::vector_service_server::VectorService for VectorService {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
         caller.require_source(namespace.source)?;
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                Some((
+                    namespace.source,
+                    namespace.memory_scope,
+                    namespace.toolkit_id,
+                )),
+                true,
+            )
+            .await?;
         let source = layout::source_keyword(namespace.source)?;
         layout::namespace_uuid(&namespace.namespace_id)?;
+        let binding = caller.memory_binding(
+            namespace.source,
+            namespace.memory_scope,
+            namespace.toolkit_id,
+            true,
+        )?;
         let scope = Scope::project(project_id)
             .source(source)
             .namespaces(vec![namespace.namespace_id.clone()]);
+        let scope = match &binding {
+            Some(binding) => scope.bound_to(binding),
+            None => scope,
+        };
         let scope = match request.selector {
             Some(pb::delete_request::Selector::WholeNamespace(_)) => scope,
             Some(pb::delete_request::Selector::Documents(documents)) => {
@@ -310,7 +467,19 @@ impl pb::vector_service_server::VectorService for VectorService {
     ) -> Result<Response<pb::SearchResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
         caller.require_token()?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                request
+                    .scope
+                    .as_ref()
+                    .map(|scope| (scope.source, scope.memory_scope, scope.toolkit_id)),
+                false,
+            )
+            .await?;
         let (filter, space) = read_parts(
             &caller,
             request.scope.as_ref(),
@@ -357,7 +526,19 @@ impl pb::vector_service_server::VectorService for VectorService {
     ) -> Result<Response<pb::HybridSearchResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
         caller.require_token()?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                request
+                    .scope
+                    .as_ref()
+                    .map(|scope| (scope.source, scope.memory_scope, scope.toolkit_id)),
+                false,
+            )
+            .await?;
         let (filter, space) = read_parts(
             &caller,
             request.scope.as_ref(),
@@ -447,6 +628,7 @@ impl pb::vector_service_server::VectorService for VectorService {
         request: Request<pb::CountRequest>,
     ) -> Result<Response<pb::CountResponse>, Status> {
         let caller = self.auth.authenticate(&request).await?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
         let read = request
             .scope
@@ -454,7 +636,15 @@ impl pb::vector_service_server::VectorService for VectorService {
             .ok_or_else(|| Status::invalid_argument("scope is required"))?;
         let project_id = caller.project(read.project_id)?;
         caller.require_source(read.source)?;
-        let scope = scope::read_scope(project_id, read, false)?;
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                Some((read.source, read.memory_scope, read.toolkit_id)),
+                false,
+            )
+            .await?;
+        let scope = owned_read_scope(&caller, project_id, read, false)?;
         let narrowing = scope::translate(request.filter.as_ref())?;
         let space = request
             .space
@@ -498,6 +688,13 @@ impl pb::vector_service_server::VectorService for VectorService {
                 .map(|source| layout::source_keyword(source as i32))
                 .collect::<Result<_, _>>()?
         } else {
+            if request.source == pb::Source::Memory as i32 {
+                // Memory is not an index: its namespaces are one per toolkit
+                // and its points belong to people. There is nothing to list.
+                return Err(Status::invalid_argument(
+                    "memory is not an index and is never listed",
+                ));
+            }
             caller.require_source(request.source)?;
             vec![layout::source_keyword(request.source)?]
         };
@@ -564,6 +761,7 @@ impl pb::vector_service_server::VectorService for VectorService {
         request: Request<pb::ListDocumentsRequest>,
     ) -> Result<Response<Self::ListDocumentsStream>, Status> {
         let caller = self.auth.authenticate(&request).await?;
+        let token = Authenticator::bearer_token(&request);
         let request = request.into_inner();
         let project_id = caller.project(request.project_id)?;
         let namespace = request
@@ -571,8 +769,26 @@ impl pb::vector_service_server::VectorService for VectorService {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
         caller.require_source(namespace.source)?;
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                Some((
+                    namespace.source,
+                    namespace.memory_scope,
+                    namespace.toolkit_id,
+                )),
+                false,
+            )
+            .await?;
         let source = layout::source_keyword(namespace.source)?;
         layout::namespace_uuid(&namespace.namespace_id)?;
+        let binding = caller.memory_binding(
+            namespace.source,
+            namespace.memory_scope,
+            namespace.toolkit_id,
+            false,
+        )?;
         let generation = layout::generation(&namespace.generation)?;
         let space = request
             .space
@@ -583,6 +799,10 @@ impl pb::vector_service_server::VectorService for VectorService {
             .source(source)
             .namespaces(vec![namespace.namespace_id.clone()])
             .generation(generation);
+        let scope = match &binding {
+            Some(binding) => scope.bound_to(binding),
+            None => scope,
+        };
         let filter = scope.filter(None);
         // Every point of the namespace is read (payload only, two keys) and
         // folded per (document_key, document_version) before the first page
@@ -642,6 +862,281 @@ impl pb::vector_service_server::VectorService for VectorService {
         });
         Ok(Response::new(Box::pin(tokio_stream::iter(pages))))
     }
+
+    async fn read_memory(
+        &self,
+        request: Request<pb::ReadMemoryRequest>,
+    ) -> Result<Response<pb::ReadMemoryResponse>, Status> {
+        let caller = self.auth.authenticate(&request).await?;
+        caller.require_token()?;
+        let token = Authenticator::bearer_token(&request);
+        let request = request.into_inner();
+        let read = request
+            .scope
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("scope is required"))?;
+        require_memory_scope(read)?;
+        let project_id = caller.project(read.project_id)?;
+        caller.require_source(read.source)?;
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                Some((read.source, read.memory_scope, read.toolkit_id)),
+                false,
+            )
+            .await?;
+        let scope = owned_read_scope(&caller, project_id, read, true)?;
+        let narrowing = scope::translate(request.filter.as_ref())?;
+        let limit = check_limit(request.limit)?;
+        let space = request
+            .space
+            .as_ref()
+            .map(|space| Space::from_proto(Some(space)))
+            .transpose()?;
+        let filter = scope.filter(narrowing);
+        let matched = AtomicU64::new(0);
+        let read_points = fan_out(self.store.targets(space.as_ref()).await?, |collection| {
+            let filter = filter.clone();
+            let matched = &matched;
+            async move {
+                let mut points = Vec::new();
+                let mut offset: Option<PointId> = None;
+                loop {
+                    let mut scroll = ScrollPointsBuilder::new(&collection)
+                        .filter(filter.clone())
+                        .limit(MEMORY_SCROLL_PAGE)
+                        .with_payload(true)
+                        .with_vectors(false);
+                    if let Some(offset) = offset.take() {
+                        scroll = scroll.offset(offset);
+                    }
+                    let response = self
+                        .store
+                        .client()
+                        .scroll(scroll)
+                        .await
+                        .map_err(|error| unavailable("scroll", &error))?;
+                    let read = response.result.len() as u64;
+                    if matched.fetch_add(read, Ordering::Relaxed) + read > MAX_MEMORY_MATCHED {
+                        return Err(Status::resource_exhausted(
+                            "the read matches too many memory versions; narrow it",
+                        ));
+                    }
+                    points.extend(response.result);
+                    match response.next_page_offset {
+                        Some(next) => offset = Some(next),
+                        None => break,
+                    }
+                }
+                Ok(points)
+            }
+        })
+        .await?;
+        let mut points: Vec<pb::ScoredPoint> = read_points
+            .into_iter()
+            .flatten()
+            .map(|point| scored_from_payload(point.id, 0.0, &point.payload))
+            .collect();
+        // Newest version first, whatever collection holds it: the version's
+        // valid_from, then the larger version id (/t/id, the tie-break the
+        // client uses to pick the current version), then the point id.
+        points.sort_by_cached_key(|point| {
+            let (valid_from, version_id) = version_order_of(&point.metadata_json);
+            std::cmp::Reverse((valid_from, version_id, point.id.clone()))
+        });
+        points.truncate(limit as usize);
+        Ok(Response::new(pb::ReadMemoryResponse { points }))
+    }
+
+    async fn set_memory_metadata(
+        &self,
+        request: Request<pb::SetMemoryMetadataRequest>,
+    ) -> Result<Response<pb::SetMemoryMetadataResponse>, Status> {
+        let caller = self.auth.authenticate(&request).await?;
+        caller.require_token()?;
+        let token = Authenticator::bearer_token(&request);
+        let request = request.into_inner();
+        let project_id = caller.project(0)?;
+        let namespace = request
+            .namespace
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("namespace is required"))?;
+        if namespace.source != pb::Source::Memory as i32 {
+            return Err(Status::invalid_argument(
+                "SetMemoryMetadata applies to the memory source only",
+            ));
+        }
+        caller.require_source(namespace.source)?;
+        layout::namespace_uuid(&namespace.namespace_id)?;
+        let caller = self
+            .memory_caller(
+                token.as_deref(),
+                caller,
+                Some((
+                    namespace.source,
+                    namespace.memory_scope,
+                    namespace.toolkit_id,
+                )),
+                true,
+            )
+            .await?;
+        let binding = caller
+            .memory_binding(
+                namespace.source,
+                namespace.memory_scope,
+                namespace.toolkit_id,
+                true,
+            )?
+            .ok_or_else(|| Status::invalid_argument("memory_scope is required"))?;
+        let generation = layout::generation(&namespace.generation)?;
+        for (name, value) in [
+            ("document_key", &request.document_key),
+            ("chunk_id", &request.chunk_id),
+        ] {
+            if value.is_empty() || value.len() > MAX_KEY_BYTES {
+                return Err(Status::invalid_argument(format!(
+                    "{name} is 1 to 1024 bytes"
+                )));
+            }
+        }
+        let metadata = metadata(&request.metadata_json)?;
+        let space = request
+            .space
+            .as_ref()
+            .map(|space| Space::from_proto(Some(space)))
+            .transpose()?;
+        let scope = Scope::project(project_id)
+            .source("memory")
+            .namespaces(vec![namespace.namespace_id.clone()])
+            .generation(generation)
+            .bound_to(&binding)
+            .with(Condition::matches(key::DOCUMENT_KEY, request.document_key))
+            .with(Condition::matches(key::CHUNK_ID, request.chunk_id));
+        let filter = scope.filter(None);
+        let mut payload = Payload::new();
+        payload.insert(key::METADATA, Value::from(metadata));
+        for collection in self.store.targets(space.as_ref()).await? {
+            self.store
+                .client()
+                .set_payload(
+                    SetPayloadPointsBuilder::new(&collection, payload.clone())
+                        .points_selector(filter.clone())
+                        .wait(true),
+                )
+                .await
+                .map_err(|error| unavailable("set_payload", &error))?;
+        }
+        Ok(Response::new(pb::SetMemoryMetadataResponse {}))
+    }
+
+    async fn delete_memory_user(
+        &self,
+        request: Request<pb::DeleteMemoryUserRequest>,
+    ) -> Result<Response<pb::DeleteMemoryUserResponse>, Status> {
+        let caller = self.auth.authenticate(&request).await?;
+        let identity = caller.require_admin()?.to_owned();
+        let request = request.into_inner();
+        if request.user_id <= 0 {
+            return Err(Status::invalid_argument("user_id must be positive"));
+        }
+        if request.project_id < 0 {
+            return Err(Status::invalid_argument("project_id must not be negative"));
+        }
+        let owner = crate::auth::user_owner(request.user_id);
+        // Project 0 is every project: a deleted user's personal memories go
+        // wherever they were written, with no membership lookup.
+        let scope = if request.project_id == 0 {
+            Scope::every_project()
+        } else {
+            Scope::project(caller.project(request.project_id)?)
+        };
+        let collections = self.store.targets(None).await?;
+        self.delete_where(&collections, &scope.source("memory").owned_by(&owner))
+            .await?;
+        tracing::info!(
+            project_id = request.project_id,
+            user_id = request.user_id,
+            identity,
+            "a user's personal memories deleted"
+        );
+        Ok(Response::new(pb::DeleteMemoryUserResponse {
+            collections: count_u32(collections.len()),
+        }))
+    }
+
+    async fn delete_memory_toolkit(
+        &self,
+        request: Request<pb::DeleteMemoryToolkitRequest>,
+    ) -> Result<Response<pb::DeleteMemoryToolkitResponse>, Status> {
+        let caller = self.auth.authenticate(&request).await?;
+        let identity = caller.require_admin()?.to_owned();
+        let request = request.into_inner();
+        let project_id = caller.project(request.project_id)?;
+        if request.toolkit_id <= 0 {
+            return Err(Status::invalid_argument("toolkit_id must be positive"));
+        }
+        let collections = self.store.targets(None).await?;
+        self.delete_where(
+            &collections,
+            &Scope::project(project_id)
+                .source("memory")
+                .toolkit(request.toolkit_id),
+        )
+        .await?;
+        tracing::info!(project_id, identity, "a memory toolkit's points deleted");
+        Ok(Response::new(pb::DeleteMemoryToolkitResponse {
+            collections: count_u32(collections.len()),
+        }))
+    }
+}
+
+/// How often a long Upsert stream makes its fresh memory / shared-write
+/// decision again after the header's: a conversation made shared or tainted
+/// mid-stream is seen within this interval. (A revoked token is seen at the
+/// next batch through the claim cache.)
+pub const UPSERT_REVERIFY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Points read per Qdrant scroll call by `ReadMemory`.
+const MEMORY_SCROLL_PAGE: u32 = 512;
+/// The most points one `ReadMemory` reads in all: a read matching more is
+/// refused rather than answered from a part of what it matched.
+const MAX_MEMORY_MATCHED: u64 = 5000;
+
+/// The ordering keys of a memory point's metadata: `t.valid_from` (0 when it
+/// has none) and the version id `t.id` (empty when it has none; a number is
+/// read as its decimal text).
+fn version_order_of(metadata_json: &str) -> (i64, String) {
+    let value = serde_json::from_str::<serde_json::Value>(metadata_json).ok();
+    let valid_from = value
+        .as_ref()
+        .and_then(|value| value.pointer("/t/valid_from"))
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+    let version_id = match value.as_ref().and_then(|value| value.pointer("/t/id")) {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(serde_json::Value::Number(number)) => number.to_string(),
+        _ => String::new(),
+    };
+    (valid_from, version_id)
+}
+
+/// A memory read names the memory source, one namespace and no generation.
+fn require_memory_scope(read: &pb::Scope) -> Result<(), Status> {
+    if read.source != pb::Source::Memory as i32 {
+        return Err(Status::invalid_argument(
+            "this operation applies to the memory source only",
+        ));
+    }
+    if read.namespace_ids.len() != 1
+        || !read.generation.is_empty()
+        || !read.active_generations.is_empty()
+    {
+        return Err(Status::invalid_argument(
+            "a memory read names exactly one namespace and no generation",
+        ));
+    }
+    Ok(())
 }
 
 /// The pages of one `ListDocuments` answer.
@@ -801,6 +1296,9 @@ impl VectorService {
 /// Where one Upsert stream writes.
 struct UpsertTarget {
     project_id: i64,
+    /// The memory owner and toolkit stamped on every point (`None` for other
+    /// sources).
+    binding: Option<crate::auth::MemoryBinding>,
     source: &'static str,
     namespace_id: String,
     namespace: uuid::Uuid,
@@ -817,6 +1315,16 @@ impl UpsertTarget {
         ] {
             if value.is_empty() {
                 return Err(Status::invalid_argument(format!("{name} is required")));
+            }
+        }
+        for (name, value) in [
+            ("chunk_id", &point.chunk_id),
+            ("chunk_type", &point.chunk_type),
+        ] {
+            if layout::has_control_character(value) {
+                return Err(Status::invalid_argument(format!(
+                    "{name} must not contain control characters"
+                )));
             }
         }
         for (name, value) in [
@@ -849,6 +1357,10 @@ impl UpsertTarget {
         payload.insert(key::PROJECT_ID, self.project_id.to_string());
         payload.insert(key::SOURCE, self.source.to_owned());
         payload.insert(key::NAMESPACE_ID, self.namespace_id.clone());
+        if let Some(binding) = &self.binding {
+            payload.insert(key::OWNER, binding.owner.clone());
+            payload.insert(key::TOOLKIT_ID, binding.toolkit_id.to_string());
+        }
         if let Some(generation) = &self.generation {
             payload.insert(key::GENERATION, generation.clone());
         }
@@ -870,6 +1382,13 @@ impl UpsertTarget {
             vectors =
                 vectors.add_vector(BM25_VECTOR, Document::new(point.text.clone(), BM25_MODEL));
         }
+        // A memory point's identity includes its owner and its toolkit, so
+        // two toolkits (or owners) writing one key never share a point.
+        let identity = self
+            .binding
+            .as_ref()
+            .map(|binding| format!("{}@{}", binding.owner, binding.toolkit_id))
+            .unwrap_or_default();
         let id = layout::point_id(
             self.project_id,
             self.source,
@@ -877,6 +1396,8 @@ impl UpsertTarget {
             self.generation.as_deref(),
             &point.document_key,
             &point.chunk_id,
+            &point.chunk_type,
+            &identity,
         );
         Ok(PointStruct::new(id.to_string(), vectors, payload))
     }
@@ -918,10 +1439,26 @@ fn read_parts(
     let read = read.ok_or_else(|| Status::invalid_argument("scope is required"))?;
     let project_id = caller.project(read.project_id)?;
     caller.require_source(read.source)?;
-    let scope = scope::read_scope(project_id, read, true)?;
+    let scope = owned_read_scope(caller, project_id, read, true)?;
     let narrowing = scope::translate(filter)?;
     let space = Space::from_proto(space)?;
     Ok((scope.filter(narrowing), space))
+}
+
+/// [`scope::read_scope`], narrowed to the memory owner the token decides when
+/// the source is memory.
+fn owned_read_scope(
+    caller: &Caller,
+    project_id: i64,
+    read: &pb::Scope,
+    require_namespace: bool,
+) -> Result<Scope, Status> {
+    let binding = caller.memory_binding(read.source, read.memory_scope, read.toolkit_id, false)?;
+    let scope = scope::read_scope(project_id, read, require_namespace)?;
+    Ok(match &binding {
+        Some(binding) => scope.bound_to(binding),
+        None => scope,
+    })
 }
 
 fn check_vector(vector: &[f32], dimension: u32) -> Result<(), Status> {
@@ -1002,8 +1539,15 @@ fn point_id_text(id: Option<PointId>) -> String {
 }
 
 fn scored_point(point: qdrant_client::qdrant::ScoredPoint) -> pb::ScoredPoint {
-    let payload = &point.payload;
-    let id = point_id_text(point.id);
+    scored_from_payload(point.id, point.score, &point.payload)
+}
+
+fn scored_from_payload(
+    id: Option<PointId>,
+    score: f32,
+    payload: &HashMap<String, Value>,
+) -> pb::ScoredPoint {
+    let id = point_id_text(id);
     let acl = match payload.get(key::ACL).and_then(|value| value.kind.as_ref()) {
         Some(Kind::ListValue(list)) => list
             .values
@@ -1021,7 +1565,7 @@ fn scored_point(point: qdrant_client::qdrant::ScoredPoint) -> pb::ScoredPoint {
         .unwrap_or_else(|| "{}".to_owned());
     pb::ScoredPoint {
         id,
-        score: point.score,
+        score,
         project_id: string(payload, key::PROJECT_ID).parse().unwrap_or_default(),
         source: layout::source_from_keyword(&string(payload, key::SOURCE)) as i32,
         namespace_id: string(payload, key::NAMESPACE_ID),
@@ -1084,6 +1628,7 @@ mod tests {
     fn upsert_payload_takes_scope_from_the_header() {
         let target = UpsertTarget {
             project_id: 7,
+            binding: None,
             source: "toolkit_index",
             namespace_id: "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b".to_owned(),
             namespace: uuid::Uuid::from_u128(1),
@@ -1111,6 +1656,35 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_chunk_id_or_type_with_a_control_character_is_refused() {
+        let target = UpsertTarget {
+            project_id: 7,
+            binding: None,
+            source: "toolkit_index",
+            namespace_id: "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b".to_owned(),
+            namespace: uuid::Uuid::from_u128(1),
+            generation: None,
+            dimension: 2,
+        };
+        let point = |chunk_id: &str, chunk_type: &str| {
+            target.point(&pb::Point {
+                document_key: "d".to_owned(),
+                chunk_id: chunk_id.to_owned(),
+                chunk_type: chunk_type.to_owned(),
+                vector: vec![1.0, 0.0],
+                ..pb::Point::default()
+            })
+        };
+        assert!(point("3", "title").is_ok());
+        for bad in [point("3\u{1f}title", "document"), point("3", "ti\ntle")] {
+            assert_eq!(
+                bad.expect_err("refused").code(),
+                tonic::Code::InvalidArgument
+            );
+        }
     }
 
     #[test]

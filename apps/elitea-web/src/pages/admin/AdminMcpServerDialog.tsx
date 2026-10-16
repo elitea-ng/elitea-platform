@@ -44,6 +44,7 @@ import {
   parseMcpHeadersYaml,
   parseMcpYamlMapping,
   resolveSecretForSave,
+  validateTokenUrl,
   validateDraft,
   type McpServerForm,
 } from './adminMcpServerForm';
@@ -85,6 +86,8 @@ export function AdminMcpServerDialog({
     setForm((previous) => ({ ...previous, [key]: value }));
   };
 
+  const hasStoredSecret = editing?.client_secret !== undefined && editing.client_secret !== '';
+
   const handleSubmit = (): void => {
     const problem = validateDraft(
       form.displayName,
@@ -96,6 +99,13 @@ export function AdminMcpServerDialog({
     );
     if (problem !== undefined) {
       setLocalError(problem);
+      return;
+    }
+    const secretAfterSave = resolveSecretForSave(form.clientSecret, form.clearSecret);
+    const willHaveSecret = secretAfterSave === undefined ? hasStoredSecret : secretAfterSave !== '';
+    const tokenProblem = validateTokenUrl(form.tokenUrl, form.url, willHaveSecret);
+    if (tokenProblem !== undefined) {
+      setLocalError(tokenProblem);
       return;
     }
     const name = form.displayName.trim();
@@ -110,6 +120,7 @@ export function AdminMcpServerDialog({
       url: form.url.trim(),
       baseUrl: form.baseUrl.trim(),
       clientId: form.clientId.trim(),
+      tokenUrl: form.tokenUrl.trim(),
       clientSecret: resolveSecretForSave(form.clientSecret, form.clearSecret),
       timeout: form.timeout.trim() === '' ? 0 : Number(form.timeout),
       headers: parseMcpHeadersYaml(form.headersYaml),
@@ -119,7 +130,6 @@ export function AdminMcpServerDialog({
   };
 
   const error = localError !== '' ? localError : serverError;
-  const hasStoredSecret = editing?.client_secret !== undefined && editing.client_secret !== '';
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth data-testid="admin-mcp-server-dialog">
@@ -186,6 +196,22 @@ export function AdminMcpServerDialog({
           disabled={isSaving}
           fullWidth
           size="small"
+        />
+
+        <TextField
+          label={t('pages.admin.mcpServers.dialog.tokenUrl', 'OAuth token endpoint (optional)')}
+          value={form.tokenUrl}
+          onChange={(event) => {
+            update('tokenUrl', event.target.value);
+          }}
+          disabled={isSaving}
+          fullWidth
+          size="small"
+          data-testid="admin-mcp-server-token-url"
+          helperText={t(
+            'pages.admin.mcpServers.dialog.tokenUrlHelp',
+            'The only endpoint the client secret below may be sent to. Required when the server URL has placeholders; otherwise it is discovered from the server.',
+          )}
         />
 
         <McpSecretFields

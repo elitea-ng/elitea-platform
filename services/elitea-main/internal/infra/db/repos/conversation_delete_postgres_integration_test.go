@@ -66,8 +66,8 @@ func seedConversationWithParticipant(t *testing.T, repo *ConversationsRepo, cont
 	ctx := context.Background()
 
 	if err := repo.pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'delete-me', 7, 'agent')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'delete-me', 7, 'agent', now() AT TIME ZONE 'UTC')
 RETURNING id::text, uuid::text`).Scan(&numericID, &conversationUUID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
@@ -79,8 +79,8 @@ VALUES (gen_random_uuid(), 'user', '{"id": 7}'::jsonb) RETURNING id`).Scan(&part
 		t.Fatalf("seed participant: %v", err)
 	}
 	if _, err := repo.pool.Exec(ctx, `
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id)
-VALUES ($1::int, $2)`, numericID, participantID); err != nil {
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at)
+VALUES ($1::int, $2, now() AT TIME ZONE 'UTC')`, numericID, participantID); err != nil {
 		t.Fatalf("seed participant mapping: %v", err)
 	}
 
@@ -88,12 +88,12 @@ VALUES ($1::int, $2)`, numericID, participantID); err != nil {
 		var groupUUID string
 		if err := repo.pool.QueryRow(ctx, `
 WITH grp AS (
-    INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
-    VALUES (gen_random_uuid(), $1, $2::int)
+    INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
+    VALUES (gen_random_uuid(), $1, $2::int, now() AT TIME ZONE 'UTC')
     RETURNING id, uuid
 ), item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    SELECT gen_random_uuid(), 'text_message', 0, grp.id FROM grp
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, grp.id, now() AT TIME ZONE 'UTC' FROM grp
     RETURNING id
 ), txt AS (
     INSERT INTO p_1.chat_messages_text (id, content)
@@ -261,8 +261,8 @@ WITH participant AS (
     VALUES (gen_random_uuid(), $2, jsonb_build_object('id', $3::int))
     RETURNING id
 ), grp AS (
-    INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
-    SELECT gen_random_uuid(), participant.id, $1::int FROM participant
+    INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
+    SELECT gen_random_uuid(), participant.id, $1::int, now() AT TIME ZONE 'UTC' FROM participant
     RETURNING uuid
 )
 SELECT grp.uuid::text FROM grp`, conversationID, entityName, entityID).Scan(&groupUUID); err != nil {
@@ -570,8 +570,8 @@ func seedAttachmentItem(t *testing.T, repo *ConversationsRepo, groupUUID, bucket
 	t.Helper()
 	if _, err := repo.pool.Exec(context.Background(), `
 WITH item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    SELECT gen_random_uuid(), 'attachment_message', 1, id
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'attachment_message', 1, id, now() AT TIME ZONE 'UTC'
     FROM p_1.chat_message_group WHERE uuid = $1::uuid
     RETURNING id
 )
@@ -683,5 +683,56 @@ func TestDeleteMessageReportsNoAttachmentsWhenItRefuses(t *testing.T) {
 	}
 	if attachments != 2 {
 		t.Fatalf("%d attachment rows left after two refused deletes, want 2", attachments)
+	}
+}
+
+// A conversation's personal-memory taint (shared/0166) goes with it on every
+// delete path (tenant/0149's trigger), and another conversation's taint stays.
+func TestDeleteConversationRemovesItsMemoryTaint(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewConversationsRepo(pool)
+	ctx := context.Background()
+	_, doomed, _ := seedConversationWithParticipant(t, repo, "question")
+	_, kept, _ := seedConversationWithParticipant(t, repo, "question")
+	for _, conversation := range []string{doomed, kept} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO elitea_runtime.memory_conversation_taints (project_id, conversation_uuid) VALUES (1, $1::uuid)`,
+			conversation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := repo.Delete(ctx, "1", doomed); err != nil {
+		t.Fatalf("delete conversation: %v", err)
+	}
+	// The other delete paths (the MCP run cleanup, pipeline trigger runs,
+	// bulk deletes) issue their own DELETE on the tenant table: the trigger
+	// (tenant/0149) covers them too.
+	// No messages, like the MCP run's empty conversation it deletes.
+	_, raw, _ := seedConversationWithParticipant(t, repo)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO elitea_runtime.memory_conversation_taints (project_id, conversation_uuid) VALUES (1, $1::uuid)`, raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+DELETE FROM p_1.chat_participant_mapping WHERE conversation_id IN (SELECT id FROM p_1.chat_conversations WHERE uuid = $1::uuid)`, raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM p_1.chat_conversations AS conversation WHERE conversation.uuid = $1::uuid`, raw); err != nil {
+		t.Fatalf("raw delete: %v", err)
+	}
+	var left []string
+	rows, err := pool.Query(ctx, `SELECT conversation_uuid::text FROM elitea_runtime.memory_conversation_taints ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, value)
+	}
+	if len(left) != 1 || left[0] != kept {
+		t.Fatalf("taints after the delete = %v, want only %s", left, kept)
 	}
 }

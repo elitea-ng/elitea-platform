@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -110,9 +111,13 @@ func (repo *ExecutionChildScopesRepository) RestoreOriginalRootContinuation(ctx 
 		// the original owner. Select chat_predict only and reject ANY second
 		// original identity, even byte-identical. LIMIT 2 is a cardinality probe;
 		// a third conflicting row can never hide behind two equal rows.
-		rows, err := tx.Query(ctx, `SELECT e.content_bytes FROM elitea_runtime.agent_execution_jobs a JOIN elitea_runtime.execution_jobs j USING(execution_id,generation) JOIN elitea_runtime.input_bundle_entries e ON e.input_bundle_id=a.input_bundle_id AND e.entry_id=a.request_entry_id WHERE j.resource_project_id=$1::bigint::text AND j.actor_id=$2::bigint::text AND a.client_stream_id=$3 AND a.client_message_id=$4 AND a.client_execution_generation=$5 AND a.sio_event='chat_predict' AND j.capability_id=a.capability_id AND e.semantic_role='agent.execution_request' AND e.content_size<=8388608 ORDER BY j.admitted_at ASC LIMIT 2 FOR SHARE OF a,j,e`, request.ProjectID, request.ActorID, request.ConversationID, request.ResponseMessageID, request.ExecutionGeneration)
+		rows, err := tx.Query(ctx, `SELECT e.content_bytes FROM elitea_runtime.agent_execution_jobs a JOIN elitea_runtime.execution_jobs j USING(execution_id,generation) JOIN elitea_runtime.input_bundle_entries e ON e.input_bundle_id=a.input_bundle_id AND e.entry_id=a.request_entry_id WHERE j.resource_project_id=$1::integer AND j.actor_id=$2::bigint::text AND a.client_stream_id=$3 AND a.client_message_id=$4 AND a.client_execution_generation=$5 AND a.sio_event='chat_predict' AND j.capability_id=a.capability_id AND e.semantic_role='agent.execution_request' AND e.content_size<=8388608 ORDER BY j.admitted_at ASC LIMIT 2 FOR SHARE OF a,j,e`, request.ProjectID, request.ActorID, request.ConversationID, request.ResponseMessageID, request.ExecutionGeneration)
 		if err != nil {
-			return scope.ErrDenied
+			// A failed lookup is not a denial: naming it one hid a
+			// column-type error behind "not authorized" on every real
+			// continuation. The cause goes to the log, never to the caller.
+			slog.Error("original root input lookup failed", "err", err)
+			return scope.ErrUnavailable
 		}
 		// Finish the bounded row cursor before another query on this transaction.
 		// FOR SHARE locks remain held after Close; the source read stays atomic.
@@ -127,7 +132,11 @@ func (repo *ExecutionChildScopesRepository) RestoreOriginalRootContinuation(ctx 
 		}
 		err = rows.Err()
 		rows.Close()
-		if len(inputs) != 1 || err != nil {
+		if err != nil {
+			slog.Error("original root input lookup failed", "err", err)
+			return scope.ErrUnavailable
+		}
+		if len(inputs) != 1 {
 			return scope.ErrDenied
 		}
 		selected, err := originalRootSourceReference(inputs[0])

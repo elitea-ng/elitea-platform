@@ -23,12 +23,16 @@ pub(crate) use elitea_agent_runtime::graph::http_action;
 mod code_remote;
 mod code_result;
 mod code_runtime;
+mod code_timing;
+mod code_tool;
 pub(crate) mod code_trace;
 mod code_workspace;
 pub(crate) use code_remote::CodeRuntimeFactory;
 mod aggregate;
 #[cfg(test)]
 mod aggregate_tests;
+#[cfg(test)]
+mod code_platform_drive_tests;
 mod code_state;
 #[cfg(test)]
 mod code_state_tests;
@@ -94,6 +98,8 @@ use elitea_agent_runtime::graph::printer;
 mod printer_tests;
 pub(crate) mod resume;
 use elitea_agent_runtime::graph::router;
+#[cfg(test)]
+mod node_admission_parity_tests;
 #[cfg(test)]
 mod pipeline_pg_test_support;
 #[cfg(test)]
@@ -175,3 +181,4 @@ pub(crate) use parallel::{
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
 
 pub(super) use code_runtime::CodeSandboxRuntime;
+pub(super) use code_tool::SandboxAnalysisRunner;

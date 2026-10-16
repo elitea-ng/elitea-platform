@@ -132,8 +132,41 @@ const (
 	RunStatusToolError             RunStatus = "tool_error"
 	RunStatusUnsupportedToolkit    RunStatus = "unsupported_toolkit"
 	RunStatusUnknownTool           RunStatus = "unknown_tool"
-	RunStatusRuntimeFailure        RunStatus = "runtime_failure"
+	// RunStatusEffectRefused: the worker refused the tool because it changes
+	// data and this path runs read-only tools only.
+	RunStatusEffectRefused RunStatus = "effect_refused"
+	// RunStatusPolicyRefused: the deployment's tool policy blocks the tool.
+	RunStatusPolicyRefused RunStatus = "policy_refused"
+	// RunStatusSensitiveRefused: the policy marks the tool sensitive and this
+	// path cannot ask for the confirmation it needs.
+	RunStatusSensitiveRefused RunStatus = "sensitive_refused"
+	RunStatusRuntimeFailure   RunStatus = "runtime_failure"
 )
+
+// Runtime failure codes a caller of the tool-run path classifies.
+const (
+	FailureCodeUnsupportedCapability = "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY"
+	FailureCodeAuthorizationFailed   = "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED"
+)
+
+// RunCredentialsRefused reports a runtime failure that is the run's own
+// credentials or context being refused: AUTHORIZATION_FAILED, whatever its
+// sentence (the current Rust worker's ToolkitRunCredentialsRefusedMessage, or
+// the generic "Execution authorization failed." the Python worker and older
+// workers send). It is never read as a verdict on the tool: the typed
+// POLICY_REFUSED / SENSITIVE_REFUSED statuses are the only policy signal.
+func (o RunOutcome) RunCredentialsRefused() bool {
+	return o.Status == RunStatusRuntimeFailure && o.FailureCode == FailureCodeAuthorizationFailed
+}
+
+// WorkerCannotRunTool reports a runtime failure in which this deployment's
+// worker declared the tool (or its toolkit) beyond what it can run:
+// UNSUPPORTED_CAPABILITY. It says nothing about WHY, so it is never read as
+// "the tool changes data" — only EFFECT_REFUSED (or the fixed effect sentence
+// on an older worker's UNKNOWN_TOOL result) says that.
+func (o RunOutcome) WorkerCannotRunTool() bool {
+	return o.Status == RunStatusRuntimeFailure && o.FailureCode == FailureCodeUnsupportedCapability
+}
 
 // RunOutcome is one settled tool run. ResultJSON is the SDK return value's
 // canonical JSON encoding; it is EMPTY when Truncated is true, because half a
@@ -643,7 +676,24 @@ func decodeSettlement(admitted AdmittedRun, settlement Settlement) (RunOutcome, 
 		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_UNSUPPORTED_TOOLKIT:
 			outcome.Status = RunStatusUnsupportedToolkit
 		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_UNKNOWN_TOOL:
-			outcome.Status = RunStatusUnknownTool
+			// A worker from before the typed refusals sent them as
+			// UNKNOWN_TOOL with a fixed sentence; read that only as a
+			// fallback, so "no tool by that name" is never said of a tool
+			// the toolkit has.
+			switch summary.GetErrorMessage() {
+			case executiondomain.ToolkitEffectfulToolMessage:
+				outcome.Status = RunStatusEffectRefused
+			case executiondomain.ToolkitPolicyRefusedMessage:
+				outcome.Status = RunStatusPolicyRefused
+			default:
+				outcome.Status = RunStatusUnknownTool
+			}
+		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED:
+			outcome.Status = RunStatusEffectRefused
+		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_POLICY_REFUSED:
+			outcome.Status = RunStatusPolicyRefused
+		case runtimev1.ToolkitCallToolStatusV1_TOOLKIT_CALL_TOOL_STATUS_V1_SENSITIVE_REFUSED:
+			outcome.Status = RunStatusSensitiveRefused
 		default:
 			return RunOutcome{}, errors.New("tool-run result carries an unknown status")
 		}

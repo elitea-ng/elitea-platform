@@ -68,6 +68,10 @@ mod ado_wiki_tests;
 #[cfg(test)]
 mod aha_tests;
 #[cfg(test)]
+mod artifact_extra_tests;
+#[cfg(test)]
+mod attachment_test_support;
+#[cfg(test)]
 mod azure_search_tests;
 #[cfg(test)]
 mod azure_tests;
@@ -76,11 +80,19 @@ mod bigquery_tests;
 #[cfg(test)]
 mod bitbucket_tests;
 #[cfg(test)]
+mod carrier_reports_tests;
+#[cfg(test)]
 mod carrier_tests;
 #[cfg(test)]
+mod confluence_attachment_tests;
+#[cfg(test)]
 mod confluence_tests;
+#[cfg(all(test, feature = "toolkit-data-analysis"))]
+mod data_analysis_tests;
 #[cfg(test)]
 mod direct_execution_tests;
+#[cfg(all(test, feature = "toolkit-office"))]
+mod docx_tests;
 #[cfg(test)]
 mod elastic_tests;
 #[cfg(test)]
@@ -90,15 +102,21 @@ mod gcp_tests;
 #[cfg(test)]
 mod github_tests;
 #[cfg(test)]
+mod github_writes_tests;
+#[cfg(test)]
 mod gitlab_org_tests;
 #[cfg(test)]
 mod gitlab_tests;
 #[cfg(test)]
 mod google_places_tests;
 #[cfg(test)]
+mod imagegen_tests;
+#[cfg(test)]
 mod index_tools_tests;
 #[cfg(test)]
 mod invocation_tests;
+#[cfg(test)]
+mod jira_attachment_tests;
 #[cfg(test)]
 mod jira_tests;
 #[cfg(test)]
@@ -108,6 +126,10 @@ mod kubernetes_tests;
 #[cfg(test)]
 mod mcp_tests;
 #[cfg(test)]
+mod memory_tests;
+#[cfg(all(test, feature = "toolkit-office"))]
+mod office_test_support;
+#[cfg(test)]
 mod openapi_bounds_tests;
 #[cfg(test)]
 mod openapi_tests;
@@ -115,6 +137,8 @@ mod openapi_tests;
 mod policy_tests;
 #[cfg(test)]
 mod postman_tests;
+#[cfg(all(test, feature = "toolkit-office"))]
+mod pptx_tests;
 #[cfg(test)]
 mod qtest_tests;
 #[cfg(test)]
@@ -130,6 +154,8 @@ pub mod sdk_conformance;
 #[cfg(test)]
 mod service_now_tests;
 #[cfg(test)]
+mod sharepoint_content_tests;
+#[cfg(test)]
 mod sharepoint_tests;
 #[cfg(test)]
 mod slack_tests;
@@ -143,6 +169,8 @@ mod sql_tests;
 mod testio_tests;
 #[cfg(test)]
 mod testrail_tests;
+#[cfg(all(test, feature = "toolkit-office"))]
+mod xlsx_tests;
 #[cfg(test)]
 mod xray_cloud_tests;
 #[cfg(test)]
@@ -171,17 +199,43 @@ pub use delegated_auth::{
     encode_delegated_authorization_requirement, hide_model_tools,
 };
 pub use families::artifact::ArtifactToolAuthority;
+#[cfg(feature = "toolkit-data-analysis")]
+pub use families::data_analysis::code::{
+    AnalysisCodeError, AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner,
+    AnalysisLanguage, MAX_ANALYSIS_RESULT_BYTES,
+};
+#[cfg(feature = "toolkit-data-analysis")]
+pub use families::data_analysis::tools::{
+    AnalysisGate, AttachmentBucketError, AttachmentBucketResolver, DataAnalysisAuthority,
+    DataAnalysisToolsetError, build_data_analysis_toolset, close_analysis_gate,
+};
 pub use families::index_tools::{
     INDEXES_KEY, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
     IndexToolFailure, IndexToolHost, IndexToolName, IndexToolSupport, IndexToolsWithheld,
     SharedIndexCatalog, is_index_family, is_sdk_index_tool_name,
 };
+pub use families::memory::{
+    MAX_NAMESPACE_BYTES, MEMORY_TOOLKIT_TYPE, MemoryScope, MemoryToolCall, MemoryToolName,
+    memory_namespace,
+};
+pub use families::office_host::{
+    ImageEditInput, ImageEditRequest, ImageGenerateRequest, MAX_IMAGE_EDIT_INPUT_BYTES,
+    MAX_IMAGES_PER_REQUEST, MAX_OFFICE_OBJECT_BYTES, OfficeBucketCreated, OfficeFailure,
+    OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost, SharedOfficeToolHost,
+    TOOLKIT_BUDGET_REASON, TOOLKIT_BUDGET_SENTENCE, TextExtractionFailure, valid_upload_file_name,
+};
+pub use families::sharepoint::tools::{
+    sharepoint_tool_names, sharepoint_tool_reads_text, sharepoint_tool_uses_office_host,
+};
 pub use materialize::{
-    ConfiguredToolsets, RefusedToolkit, ToolsetMaterializationError,
-    ToolsetMaterializationErrorCode, materialize_configured_toolsets_reporting_refusals,
+    ConfiguredToolsets, LeftOutReason, LeftOutToolkit, MAX_NOTICE_LABEL_BYTES,
+    ToolsetMaterializationError, ToolsetMaterializationErrorCode, bounded_label,
+    capped_notice_lines, file_store_tools, left_out_toolkits_notice_text,
+    materialize_configured_toolsets_reporting_refusals,
     materialize_configured_toolsets_with_artifact_authority,
     materialize_configured_toolsets_with_authorities,
-    materialize_configured_toolsets_with_tokens_and_authorization, refused_toolkits_notice_text,
+    materialize_configured_toolsets_with_tokens_and_authorization, round_robin_take,
+    tool_needs_file_store, toolkit_needs_file_store,
 };
 pub use mcp::{
     AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,

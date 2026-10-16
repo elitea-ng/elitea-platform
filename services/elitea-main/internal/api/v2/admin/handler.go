@@ -11,13 +11,16 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 type Handler struct {
+	// memoryUsers journals the removal of a deleted user's personal memories;
+	// nil when the deployment keeps none in the vector store.
+	memoryUsers MemoryUserJournal
 	pool        *pgxpool.Pool
 	resolver    auth.PermissionResolver
 	suggestions ToolkitRegistrySource
@@ -39,7 +42,7 @@ type Handler struct {
 	// The pre-built MCP server catalogue and the vault its client secrets are
 	// sealed into (mcp_prebuilt.go). Both nil unless WithPrebuiltMCPCatalogue
 	// is applied, and the catalogue routes answer 503 while either is.
-	prebuiltMCP      *mcpregistry.PrebuiltStore
+	prebuiltMCP      prebuiltCatalogue
 	prebuiltMCPVault PrebuiltSecretStore
 	// The typed identity provider definitions and the vault their secrets are
 	// sealed into (identity_providers.go). Both nil unless
@@ -86,6 +89,19 @@ type Handler struct {
 
 // Option configures a Handler at construction time.
 type Option func(*Handler)
+
+// MemoryUserJournal is cleanupjournal's one interface (worker unit M9).
+type MemoryUserJournal = cleanupjournal.MemoryUserJournal
+
+// WithMemoryUserJournal wires the journal a user deletion writes to (project 0:
+// every project). Unwired, nothing is journaled.
+func WithMemoryUserJournal(journal MemoryUserJournal) Option {
+	return func(h *Handler) {
+		if usable := cleanupjournal.UsableMemoryUserJournal(journal); usable != nil {
+			h.memoryUsers = usable
+		}
+	}
+}
 
 // WithPermissionResolver supplies the resolver the WRITE handlers in users.go
 // use for their own, finer-grained checks — specifically the `super_admin`

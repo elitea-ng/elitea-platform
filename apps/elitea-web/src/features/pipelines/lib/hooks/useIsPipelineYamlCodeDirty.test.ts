@@ -105,3 +105,40 @@ describe('computeIsPipelineYamlCodeDirty', () => {
     expect(computeIsPipelineYamlCodeDirty('/pipelines/latest/1', 'a: 1', '::: not yaml [')).toBe(true);
   });
 });
+
+describe('meaningful pipeline state order', () => {
+  it('reports an ordinary state declaration reorder as dirty', () => {
+    expect(
+      computeIsPipelineYamlCodeDirty('/pipelines/latest/1', 'state: {a: str, z: list}', 'state: {z: list, a: str}'),
+    ).toBe(true);
+  });
+
+  it('reports quoted integer-like declaration order changes as dirty', () => {
+    expect(
+      computeIsPipelineYamlCodeDirty(
+        '/pipelines/latest/1',
+        'state: {"2": dict, "10": list}',
+        'state: {"10": list, "2": dict}',
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps the same declaration sequence clean across formatting changes', () => {
+    expect(
+      computeIsPipelineYamlCodeDirty(
+        '/pipelines/latest/1',
+        'state:\n  "10": list\n  "2": dict\n',
+        'state: {"10": list, "2": dict}',
+      ),
+    ).toBe(false);
+  });
+
+  it('detects unknown field and explicit-null changes', () => {
+    expect(
+      computeIsPipelineYamlCodeDirty('/chat/a', 'state: {a: {type: dict, value: null}}', 'state: {a: {type: dict}}'),
+    ).toBe(true);
+    expect(
+      computeIsPipelineYamlCodeDirty('/chat/a', 'state: {a: {type: dict, future: true}}', 'state: {a: {type: dict}}'),
+    ).toBe(true);
+  });
+});

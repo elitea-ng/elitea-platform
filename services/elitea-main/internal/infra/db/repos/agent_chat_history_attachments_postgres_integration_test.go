@@ -317,8 +317,8 @@ WITH target_group AS (
 ), item AS (
     INSERT INTO chat_message_items (
         uuid, item_type, order_index, meta, message_group_id
-    )
-    SELECT gen_random_uuid(), 'attachment_message', $2, '{}'::jsonb, target_group.id
+    , created_at)
+    SELECT gen_random_uuid(), 'attachment_message', $2, '{}'::jsonb, target_group.id, now() AT TIME ZONE 'UTC'
     FROM target_group
     RETURNING id
 )
@@ -343,8 +343,8 @@ WITH target_group AS (
 ), item AS (
     INSERT INTO chat_message_items (
         uuid, item_type, order_index, meta, message_group_id
-    )
-    SELECT gen_random_uuid(), 'text_message', $2, '{}'::jsonb, target_group.id
+    , created_at)
+    SELECT gen_random_uuid(), 'text_message', $2, '{}'::jsonb, target_group.id, now() AT TIME ZONE 'UTC'
     FROM target_group
     RETURNING id
 )

@@ -26,5 +26,9 @@ tiktoken-rs = "0.12.1"
 # The syntax tree the method walk reads; the version code-parsers pins.
 tree-sitter = "=0.27.0"
 
+[dev-dependencies]
+# Pins the SDK prompts by digest (content-source already locks it).
+sha2 = "0.10.9"
+
 [lints]
 workspace = true

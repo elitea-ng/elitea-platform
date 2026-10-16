@@ -133,8 +133,8 @@ func (h *Handler) AttachPublicSkill(w http.ResponseWriter, r *http.Request) {
 		}
 
 		tag, err := h.pool.Exec(ctx, fmt.Sprintf(`
-			INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+			VALUES ($1, $2, $3, $4, now() AT TIME ZONE 'UTC')
 			ON CONFLICT ON CONSTRAINT _entity_skill_unique DO NOTHING`, schema),
 			agentVersionID, entityType, localSkillID, localVersionID)
 		switch {
@@ -190,8 +190,8 @@ func (h *Handler) resolveOrForkLocalSkill(ctx context.Context, schema, publicQuo
 	projectID, _ := strconv.Atoi(strings.TrimPrefix(schema, "p_"))
 	var forkedSkillID int
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %s.skills (name, description, owner_id, author_id, meta)
-		VALUES ($1, $2, $3, $4, '{}'::jsonb)
+		INSERT INTO %s.skills (name, description, owner_id, author_id, meta, created_at)
+		VALUES ($1, $2, $3, $4, '{}'::jsonb, now() AT TIME ZONE 'UTC')
 		RETURNING id`, schema),
 		source.SkillName, source.SkillDescription, projectID, userID).Scan(&forkedSkillID); err != nil {
 		return 0, 0, false

@@ -60,6 +60,11 @@ impl ModelFacade {
         super::embeddings_facade::EmbeddingsClient::from_gateway(&self.gateway)
     }
 
+    /// The gateway's images routes over the same channel (#864).
+    pub(crate) fn images(&self) -> super::images_facade::ImagesClient {
+        super::images_facade::ImagesClient::from_gateway(&self.gateway)
+    }
+
     /// Consume the claim credential into the selected native ADK adapter.
     pub(crate) fn bind(
         &self,
@@ -137,6 +142,22 @@ pub(crate) struct BoundModelFacade {
 enum BoundProviderModel {
     OpenAiCompatible(BoundOpenAiCompatibleFacade),
     Anthropic(BoundAnthropicFacade),
+}
+
+impl BoundModelFacade {
+    /// The model with the generation config its facade admits: what a caller
+    /// that builds its own request (`model_text::stream_text`) sends.
+    pub(crate) fn admitted_chat(&self) -> super::model_text::AdmittedChat {
+        let config = match &self.primary {
+            BoundProviderModel::OpenAiCompatible(model) => model.admitted_config(),
+            BoundProviderModel::Anthropic(model) => model.admitted_config(),
+        };
+        super::model_text::AdmittedChat {
+            model: BoundOrdinaryAgentModel::adk_model(self),
+            config,
+            budget: None,
+        }
+    }
 }
 
 impl BoundOrdinaryAgentModel for BoundModelFacade {

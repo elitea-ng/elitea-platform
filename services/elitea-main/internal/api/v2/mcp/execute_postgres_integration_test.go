@@ -83,16 +83,16 @@ func projectAnswer(
 	}
 	var groupID int64
 	if err := pool.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %q.chat_message_group (uuid, conversation_id, meta, is_streaming)
-		VALUES ($1::uuid, $2, $3::jsonb, FALSE) RETURNING id`, schema),
+		INSERT INTO %q.chat_message_group (uuid, conversation_id, meta, is_streaming, created_at)
+		VALUES ($1::uuid, $2, $3::jsonb, FALSE, now() AT TIME ZONE 'UTC') RETURNING id`, schema),
 		responseMessageID, conversationID, meta).Scan(&groupID); err != nil {
 		t.Fatalf("seed response group: %v", err)
 	}
 	for index, chunk := range chunks {
 		var itemID int64
 		if err := pool.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %q.chat_message_items (uuid, item_type, order_index, meta, message_group_id)
-			VALUES (gen_random_uuid(), 'text_message', $1, '{}'::jsonb, $2) RETURNING id`, schema),
+			INSERT INTO %q.chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
+			VALUES (gen_random_uuid(), 'text_message', $1, '{}'::jsonb, $2, now() AT TIME ZONE 'UTC') RETURNING id`, schema),
 			index, groupID).Scan(&itemID); err != nil {
 			t.Fatalf("seed response item: %v", err)
 		}

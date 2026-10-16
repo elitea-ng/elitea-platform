@@ -6,8 +6,6 @@
 //! 2) that resumes through the production text continuation and finishes the pipeline. Sessions
 //! are PostgreSQL-backed because the static pause event that authorizes the resume lives there.
 
-#![cfg(feature = "graph-extensions-rehearsal")]
-
 use std::sync::Arc;
 
 use adk_rust::graph::interrupt::GraphInterruptPayload;
@@ -102,7 +100,7 @@ async fn reference() -> Value {
 
 #[tokio::test]
 async fn postgres_shaping_pause_replays_across_process_replacement() {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the shaping PostgreSQL replay proof");
         return;
     };

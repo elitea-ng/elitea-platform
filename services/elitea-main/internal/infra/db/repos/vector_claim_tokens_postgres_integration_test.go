@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,7 +90,7 @@ func (f vectorClaimFixture) active(t *testing.T, bearer string) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := f.store.Facts(ctx, sha256.Sum256([]byte(bearer)))
+	_, err := f.store.Facts(ctx, sha256.Sum256([]byte(bearer)), MemoryIntentNone)
 	if errors.Is(err, ErrVectorClaimTokenFactsNotFound) {
 		return false
 	}
@@ -126,7 +128,7 @@ func TestPostgresVectorClaimTokenIsBoundToTheLiveClaim(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	facts, err := f.store.Facts(ctx, sha256.Sum256([]byte("bearer-one")))
+	facts, err := f.store.Facts(ctx, sha256.Sum256([]byte("bearer-one")), MemoryIntentNone)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,4 +391,480 @@ VALUES ($1, $2, $3, clock_timestamp() - interval '1 minute', clock_timestamp() +
 			t.Fatal("an expired token is active")
 		}
 	})
+}
+
+// memoryFixture is a claim of user 42 with a tenant schema holding the tables
+// the personal-memory check reads, and helpers to shape the execution as an
+// agent chat turn.
+type memoryFixture struct {
+	vectorClaimFixture
+	schema string
+}
+
+func newMemoryFixture(t *testing.T, name string) memoryFixture {
+	t.Helper()
+	f := newVectorClaimFixture(t, name)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var projection int64
+	if err := f.pool.QueryRow(ctx, `SELECT projection_project_id FROM elitea_runtime.execution_jobs WHERE execution_id = $1`, f.fence.ExecutionID).Scan(&projection); err != nil {
+		t.Fatal(err)
+	}
+	m := memoryFixture{vectorClaimFixture: f, schema: fmt.Sprintf("p_%d", projection)}
+	// The fixture database is private: its tenant schema is replaced by the
+	// four tables the check reads. Actor is user 42.
+	//  1: private chat, the actor alone (and an agent) -- the turn's response
+	//     group is here when respond(1) is called.
+	//  2: private, the actor and someone else.  3: the actor alone, PUBLIC.
+	//  4: another person alone.  5: the actor alone, private, but an MCP one.
+	for _, statement := range []string{
+		`DROP SCHEMA IF EXISTS @S@ CASCADE`,
+		`CREATE SCHEMA @S@`,
+		`CREATE TABLE @S@.chat_conversations (id serial PRIMARY KEY, uuid uuid NOT NULL, is_private boolean NOT NULL DEFAULT false, source varchar(64) NOT NULL DEFAULT 'elitea')`,
+		`CREATE TABLE @S@.chat_participants (id serial PRIMARY KEY, entity_name text NOT NULL, entity_meta jsonb NOT NULL)`,
+		`CREATE TABLE @S@.chat_participant_mapping (conversation_id int NOT NULL, participant_id int NOT NULL)`,
+		`CREATE TABLE @S@.chat_message_group (id serial PRIMARY KEY, conversation_id int NOT NULL, task_id varchar(64))`,
+		`INSERT INTO @S@.chat_participants (id, entity_name, entity_meta) VALUES
+		    (1, 'user', '{"id": 42}'), (2, 'user', '{"id": 43}'), (3, 'application', '{"id": 7}'), (4, 'dummy', '{}')`,
+		`INSERT INTO @S@.chat_conversations (id, uuid, is_private, source) VALUES
+		    (1, '11111111-1111-4111-8111-111111111111', true, 'elitea'),
+		    (2, '22222222-2222-4222-8222-222222222222', true, 'elitea'),
+		    (3, '33333333-3333-4333-8333-333333333333', false, 'elitea'),
+		    (4, '44444444-4444-4444-8444-444444444444', true, 'elitea'),
+		    (5, '55555555-5555-4555-8555-555555555555', true, 'mcp')`,
+		`INSERT INTO @S@.chat_participant_mapping VALUES (1, 1), (1, 3), (1, 4), (2, 1), (2, 2), (2, 3), (3, 1), (4, 2), (5, 1), (5, 3)`,
+	} {
+		m.exec(t, m.tenant(statement))
+	}
+	return m
+}
+
+func (m memoryFixture) tenant(statement string) string {
+	return strings.ReplaceAll(statement, "@S@", m.schema)
+}
+
+func (m memoryFixture) conversationUUID(id int) string {
+	return fmt.Sprintf("%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d-%[1]d%[1]d%[1]d%[1]d-4%[1]d%[1]d%[1]d-8%[1]d%[1]d%[1]d-%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d%[1]d", id)
+}
+
+// turn makes the execution an agent turn whose admission-written stream is
+// `stream` ("" removes the row), started by `origin`, with its response group
+// in conversation `respondIn` (0: none).
+func (m memoryFixture) turn(t *testing.T, stream, origin string, respondIn int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := m.pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	// A bare agent_execution_jobs row (its foreign keys need the whole
+	// admission kernel; the check reads two columns).
+	if _, err := conn.Exec(ctx, `SET session_replication_role = replica`); err != nil {
+		t.Skipf("cannot relax foreign keys for the fixture: %v", err)
+	}
+	defer func() { _, _ = conn.Exec(ctx, `SET session_replication_role = DEFAULT`) }()
+	for _, statement := range []string{
+		`DELETE FROM elitea_runtime.agent_execution_jobs WHERE execution_id = $1`,
+	} {
+		if _, err := conn.Exec(ctx, statement, m.fence.ExecutionID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.Exec(ctx, m.tenant(`DELETE FROM @S@.chat_message_group`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET trigger_origin = $2 WHERE execution_id = $1`, m.fence.ExecutionID, origin); err != nil {
+		t.Fatal(err)
+	}
+	if respondIn > 0 {
+		if _, err := conn.Exec(ctx, m.tenant(`INSERT INTO @S@.chat_message_group (conversation_id, task_id) VALUES ($1, $2)`), respondIn, m.fence.ExecutionID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stream == "" {
+		return
+	}
+	if _, err := conn.Exec(ctx, `
+INSERT INTO elitea_runtime.agent_execution_jobs
+    (execution_id, generation, capability_id, input_bundle_id, request_entry_id,
+     client_stream_id, client_message_id, client_execution_generation, sio_event)
+VALUES ($1, $2, 'agent.execute.application.v1', 'bundle', 'entry', $3, 'm', 'g', 'chat_predict')`,
+		m.fence.ExecutionID, int64(m.fence.Generation), stream); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (m memoryFixture) mintMemory(t *testing.T, bearer string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	minted, err := m.store.Mint(ctx, VectorClaimTokenMint{
+		Fence:        m.fence,
+		TokenSHA256:  sha256.Sum256([]byte(bearer)),
+		Capabilities: vectorClaimCapabilities,
+		Sources:      []string{"toolkit_index", "memory"},
+		MaxLifetime:  6 * time.Hour,
+	})
+	if err != nil || !minted.Minted {
+		t.Fatalf("mint: %+v %v", minted, err)
+	}
+}
+
+func (m memoryFixture) facts(t *testing.T, bearer string, intent MemoryIntent) VectorClaimTokenFacts {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := m.store.Facts(ctx, sha256.Sum256([]byte(bearer)), intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// Personal memory is allowed only for a person's own chat turn (an agent job
+// started from the product, trigger_origin manual) in a PRIVATE chat
+// conversation whose only user participant is the actor -- the conversation
+// bound server-side (the admission's stream compared as a uuid AND the
+// response group whose task_id is the execution) -- and that is re-checked at
+// EVERY introspection (nothing is stored at mint). Everything else, and any
+// doubt, is refused.
+func TestPostgresVectorClaimTokenPersonalMemoryIsRecheckedAtEveryIntrospection(t *testing.T) {
+	m := newMemoryFixture(t, "vector-claim-personal-memory")
+	allowed := func(bearer string) bool {
+		t.Helper()
+		return m.facts(t, bearer, MemoryIntentPersonalRead).PersonalMemoryAllowed
+	}
+
+	// A direct toolkit call has no agent_execution_jobs row: not allowed.
+	m.mintMemory(t, "bearer-call")
+	if allowed("bearer-call") {
+		t.Fatal("a call without a conversation was allowed personal memory")
+	}
+
+	m.mintMemory(t, "bearer")
+	for name, tc := range map[string]struct {
+		stream    string
+		origin    string
+		respondIn int
+		allowed   bool
+	}{
+		"private, the actor alone and an agent": {m.conversationUUID(1), "manual", 1, true},
+		"private, two people":                   {m.conversationUUID(2), "manual", 2, false},
+		"public conversation":                   {m.conversationUUID(3), "manual", 3, false},
+		"private, another single participant":   {m.conversationUUID(4), "manual", 4, false},
+		"an MCP conversation":                   {m.conversationUUID(5), "manual", 5, false},
+		"no such conversation":                  {"66666666-6666-4666-8666-666666666666", "manual", 1, false},
+		"not a uuid":                            {"not-a-uuid", "manual", 1, false},
+		"missing agent_execution_jobs row":      {"", "manual", 1, false},
+		// The server-side binding: a stream naming the actor's private chat
+		// while the turn's response is in another conversation is refused.
+		"the stream names a conversation the turn did not answer in": {m.conversationUUID(1), "manual", 2, false},
+		"no response group for the execution":                        {m.conversationUUID(1), "manual", 0, false},
+		// Non-chat admission paths: an MCP tools/call or a PAT start (api), a
+		// schedule, a webhook. Not allowed, whatever conversation they name.
+		"an API or MCP start": {m.conversationUUID(1), "api", 1, false},
+		"a schedule":          {m.conversationUUID(1), "schedule", 1, false},
+		"a webhook":           {m.conversationUUID(1), "webhook", 1, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m.turn(t, tc.stream, tc.origin, tc.respondIn)
+			if got := allowed("bearer"); got != tc.allowed {
+				t.Fatalf("allowed = %v, want %v", got, tc.allowed)
+			}
+		})
+	}
+
+	t.Run("a participant added mid-run withdraws it at the next introspection", func(t *testing.T) {
+		m.turn(t, m.conversationUUID(1), "manual", 1)
+		if !allowed("bearer") {
+			t.Fatal("precondition: allowed")
+		}
+		m.exec(t, m.tenant(`INSERT INTO @S@.chat_participant_mapping VALUES (1, 2)`))
+		if allowed("bearer") {
+			t.Fatal("still allowed after a second person joined")
+		}
+	})
+
+	t.Run("a conversation made public mid-run withdraws it", func(t *testing.T) {
+		m.turn(t, m.conversationUUID(1), "manual", 1)
+		m.exec(t, m.tenant(`DELETE FROM @S@.chat_participant_mapping WHERE conversation_id = 1 AND participant_id = 2`))
+		if !allowed("bearer") {
+			t.Fatal("precondition: allowed again")
+		}
+		m.exec(t, m.tenant(`UPDATE @S@.chat_conversations SET is_private = false WHERE id = 1`))
+		if allowed("bearer") {
+			t.Fatal("still allowed after the conversation became public")
+		}
+		m.exec(t, m.tenant(`UPDATE @S@.chat_conversations SET is_private = true WHERE id = 1`))
+	})
+
+	t.Run("no intent, or a project intent, decides nothing personal", func(t *testing.T) {
+		m.turn(t, m.conversationUUID(1), "manual", 1)
+		for _, intent := range []MemoryIntent{MemoryIntentNone, MemoryIntentProjectWrite} {
+			if m.facts(t, "bearer", intent).PersonalMemoryAllowed {
+				t.Fatalf("intent %d answered a personal permission", intent)
+			}
+		}
+	})
+
+	t.Run("a failed lookup is a refusal", func(t *testing.T) {
+		m.turn(t, m.conversationUUID(1), "manual", 1)
+		m.exec(t, m.tenant(`DROP TABLE @S@.chat_participant_mapping`))
+		if allowed("bearer") {
+			t.Fatal("allowed although the lookup failed")
+		}
+	})
+
+	t.Run("a token without the memory source is never asked", func(t *testing.T) {
+		if _, err := m.mint(t, m.fence, "bearer-index-only"); err != nil {
+			t.Fatal(err)
+		}
+		if allowed("bearer-index-only") {
+			t.Fatal("an index-only token carries personal memory")
+		}
+	})
+}
+
+// The cross-scope rule (owner decision 2026-10-14, round 4): once personal
+// memory has been READ in a conversation, every execution bound to that
+// conversation (this turn and every later one) is refused shared writes:
+// project memory and toolkit indexes. A personal write is not a read; a
+// shared write before any personal read is allowed; another conversation and
+// an execution without a conversation are unaffected; deleting the token rows
+// does not clear the taint.
+func TestPostgresVectorClaimTokenSharedWritesAreRefusedInATaintedConversation(t *testing.T) {
+	m := newMemoryFixture(t, "vector-claim-cross-scope")
+	m.turn(t, m.conversationUUID(1), "manual", 1)
+	m.mintMemory(t, "bearer")
+	refused := func(bearer string, intent MemoryIntent) bool {
+		t.Helper()
+		return m.facts(t, bearer, intent).ProjectMemoryWriteRefused
+	}
+	for _, intent := range []MemoryIntent{MemoryIntentProjectWrite, MemoryIntentSharedIndexWrite} {
+		if refused("bearer", intent) {
+			t.Fatalf("intent %d refused before any personal read", intent)
+		}
+	}
+	if !m.facts(t, "bearer", MemoryIntentPersonalWrite).PersonalMemoryAllowed {
+		t.Fatal("precondition: the personal write is allowed")
+	}
+	if refused("bearer", MemoryIntentProjectWrite) {
+		t.Fatal("a personal WRITE tainted the conversation")
+	}
+	// A refused personal read (the conversation is shared) reads nothing.
+	m.exec(t, m.tenant(`INSERT INTO @S@.chat_participant_mapping VALUES (1, 2)`))
+	if m.facts(t, "bearer", MemoryIntentPersonalRead).PersonalMemoryAllowed {
+		t.Fatal("precondition: refused in a shared conversation")
+	}
+	if refused("bearer", MemoryIntentProjectWrite) {
+		t.Fatal("a refused personal read tainted the conversation")
+	}
+	m.exec(t, m.tenant(`DELETE FROM @S@.chat_participant_mapping WHERE conversation_id = 1 AND participant_id = 2`))
+
+	// Turn 1 reads personal memory: the conversation is tainted.
+	if !m.facts(t, "bearer", MemoryIntentPersonalRead).PersonalMemoryAllowed {
+		t.Fatal("precondition: the personal read is allowed")
+	}
+	for _, intent := range []MemoryIntent{MemoryIntentProjectWrite, MemoryIntentSharedIndexWrite} {
+		if !refused("bearer", intent) {
+			t.Fatalf("intent %d allowed after a personal read", intent)
+		}
+	}
+	var taints int
+	if err := m.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM elitea_runtime.memory_conversation_taints WHERE conversation_uuid = $1::uuid`,
+		m.conversationUUID(1)).Scan(&taints); err != nil || taints != 1 {
+		t.Fatalf("taint rows = %d, %v", taints, err)
+	}
+
+	// The claim remover (remove_index) asks the same question.
+	if tainted, err := m.store.ExecutionConversationTainted(context.Background(), m.fence.ExecutionID, int64(m.fence.Generation)); err != nil || !tainted {
+		t.Fatalf("ExecutionConversationTainted = %v, %v", tainted, err)
+	}
+
+	// Turn 2: the token rows go (the claim settled) and a new token is minted
+	// for the same conversation: still refused, the taint is the
+	// conversation's, not the token's.
+	m.exec(t, `DELETE FROM elitea_runtime.vector_claim_tokens WHERE execution_id = $1`, m.fence.ExecutionID)
+	m.mintMemory(t, "bearer-turn-2")
+	if !refused("bearer-turn-2", MemoryIntentProjectWrite) || !refused("bearer-turn-2", MemoryIntentSharedIndexWrite) {
+		t.Fatal("a later turn of the tainted conversation was allowed a shared write")
+	}
+	// A shared-index write is refused even for a token WITHOUT the memory
+	// source (an index-only run in that conversation).
+	if _, err := m.mint(t, m.fence, "bearer-index-only"); err != nil {
+		t.Fatal(err)
+	}
+	if !refused("bearer-index-only", MemoryIntentSharedIndexWrite) {
+		t.Fatal("an index-only token wrote a shared index in a tainted conversation")
+	}
+
+	// The same execution re-bound to ANOTHER conversation is unaffected.
+	m.turn(t, m.conversationUUID(5), "manual", 5)
+	if refused("bearer-index-only", MemoryIntentSharedIndexWrite) {
+		t.Fatal("another conversation was refused")
+	}
+	// An execution with no conversation (a direct tool call) is unaffected.
+	m.turn(t, "", "manual", 0)
+	if refused("bearer-index-only", MemoryIntentSharedIndexWrite) {
+		t.Fatal("an execution without a conversation was refused")
+	}
+}
+
+// A personal read and a shared write in ONE conversation asked at the same
+// time are decided one after the other (both serialise on the conversation's
+// advisory lock): a write decided after the taint is refused.
+func TestPostgresVectorClaimTokenParallelReadAndWriteAreSerialised(t *testing.T) {
+	m := newMemoryFixture(t, "vector-claim-cross-scope-parallel")
+	m.turn(t, m.conversationUUID(1), "manual", 1)
+	m.mintMemory(t, "bearer")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tx, err := m.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, conversationLock, int64(1), m.conversationUUID(1)); err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		facts VectorClaimTokenFacts
+		err   error
+	}
+	read := make(chan answer, 1)
+	write := make(chan answer, 1)
+	hash := sha256.Sum256([]byte("bearer"))
+	go func() {
+		got, err := m.store.Facts(ctx, hash, MemoryIntentPersonalRead)
+		read <- answer{got, err}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	go func() {
+		got, err := m.store.Facts(ctx, hash, MemoryIntentProjectWrite)
+		write <- answer{got, err}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-read:
+		t.Fatal("the read was decided while the conversation was locked")
+	case <-write:
+		t.Fatal("the write was decided while the conversation was locked")
+	default:
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r, w := <-read, <-write
+	if r.err != nil || w.err != nil {
+		t.Fatalf("read %v, write %v", r.err, w.err)
+	}
+	if !r.facts.PersonalMemoryAllowed || !w.facts.ProjectMemoryWriteRefused {
+		t.Fatalf("read %+v, write %+v: the write decided after the taint was allowed", r.facts, w.facts)
+	}
+}
+
+// The memory source and the memory toolkits of a claim token come from the
+// EXECUTION (execution_jobs.memory_toolkit_ids, computed at admission), never
+// from the input bundle: a re-mint decodes nothing, and bundle content that
+// names a memory toolkit adds nothing.
+func TestPostgresVectorClaimTokenMemorySourceComesFromTheExecution(t *testing.T) {
+	f := newVectorClaimFixture(t, "vector-claim-memory-source")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mint := func(bearer string) []string {
+		t.Helper()
+		minted, err := f.store.Mint(ctx, VectorClaimTokenMint{
+			Fence:        f.fence,
+			TokenSHA256:  sha256.Sum256([]byte(bearer)),
+			Capabilities: vectorClaimCapabilities,
+			Sources:      []string{"toolkit_index"},
+			MemorySource: "memory",
+			MaxLifetime:  6 * time.Hour,
+		})
+		if err != nil || !minted.Minted {
+			t.Fatalf("mint: %+v %v", minted, err)
+		}
+		return minted.Sources
+	}
+	if got := mint("bearer-none"); !slices.Equal(got, []string{"toolkit_index"}) {
+		t.Fatalf("no memory toolkit: sources %v", got)
+	}
+	// Bundle content that NAMES a memory toolkit (what a call_tool's
+	// arguments could carry) is never read.
+	content := []byte(`{"arguments": {"type": "memory", "id": 42, "settings": {}}}`)
+	digest := sha256.Sum256(content)
+	f.exec(t, `
+INSERT INTO elitea_runtime.input_bundle_entries (
+    input_bundle_id, entry_id, entry_version, semantic_role, media_type,
+    content_digest, content_size, content_reference, classification,
+    required_grant_audience, content_bytes)
+SELECT input_bundle_id, 'crafted-arguments', 'v1', 'toolkit.arguments', 'application/json',
+       $2, $3, 'content://memory-test', 'internal', 'elitea-main', $4
+FROM elitea_runtime.execution_jobs WHERE execution_id = $1`,
+		f.fence.ExecutionID, digest[:], int64(len(content)), content)
+	if got := mint("bearer-crafted"); !slices.Equal(got, []string{"toolkit_index"}) {
+		t.Fatalf("bundle content added the memory source: %v", got)
+	}
+	// The execution's admitted memory toolkits are copied.
+	f.exec(t, `UPDATE elitea_runtime.execution_jobs SET memory_toolkit_ids = '{9}' WHERE execution_id = $1`, f.fence.ExecutionID)
+	if got := mint("bearer-memory"); !slices.Equal(got, []string{"toolkit_index", "memory"}) {
+		t.Fatalf("an admitted memory toolkit: sources %v", got)
+	}
+	facts, err := f.store.Facts(ctx, sha256.Sum256([]byte("bearer-memory")), MemoryIntentNone)
+	if err != nil || !slices.Equal(facts.MemoryToolkits, []int64{9}) {
+		t.Fatalf("memory toolkits = %v, %v; want [9]", facts.MemoryToolkits, err)
+	}
+	// A re-mint decodes nothing: an unreadable bundle entry does not matter.
+	f.exec(t, `UPDATE elitea_runtime.input_bundle_entries SET content_bytes = '\xff'::bytea, content_size = 1
+WHERE entry_id = 'crafted-arguments'`)
+	if got := mint("bearer-remint"); !slices.Equal(got, []string{"toolkit_index", "memory"}) {
+		t.Fatalf("re-mint: sources %v", got)
+	}
+}
+
+// Only an execution bound to a conversation is asked the shared-write
+// question; Main tells elitea-vector when an execution is bound to none
+// (conversation_unbound; the zero value asks).
+func TestPostgresVectorClaimTokenIsUnboundOnlyWithoutAConversation(t *testing.T) {
+	m := newMemoryFixture(t, "vector-claim-conversation-unbound")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := m.mint(t, m.fence, "bearer"); err != nil {
+		t.Fatal(err)
+	}
+	// A toolkit call with no agent job: unbound.
+	facts, err := m.store.Facts(ctx, sha256.Sum256([]byte("bearer")), MemoryIntentNone)
+	if err != nil || !facts.ConversationUnbound {
+		t.Fatalf("a direct toolkit call is not unbound: %+v %v", facts, err)
+	}
+	// An agent turn bound to a conversation: asked.
+	m.turn(t, m.conversationUUID(1), "manual", 1)
+	facts, err = m.store.Facts(ctx, sha256.Sum256([]byte("bearer")), MemoryIntentNone)
+	if err != nil || facts.ConversationUnbound {
+		t.Fatalf("an agent turn is unbound: %+v %v", facts, err)
+	}
+}
+
+// A conversation deleted mid-run fails closed: the run's shared writes are
+// refused (its taint row went with it, so what it read cannot be ruled out).
+func TestPostgresVectorClaimTokenADeletedConversationRefusesSharedWrites(t *testing.T) {
+	m := newMemoryFixture(t, "vector-claim-deleted-conversation")
+	m.turn(t, m.conversationUUID(1), "manual", 1)
+	m.mintMemory(t, "bearer")
+	if m.facts(t, "bearer", MemoryIntentSharedIndexWrite).ProjectMemoryWriteRefused {
+		t.Fatal("precondition: allowed while the conversation exists")
+	}
+	m.exec(t, m.tenant(`DELETE FROM @S@.chat_participant_mapping WHERE conversation_id = 1`))
+	m.exec(t, m.tenant(`DELETE FROM @S@.chat_message_group WHERE conversation_id = 1`))
+	m.exec(t, m.tenant(`DELETE FROM @S@.chat_conversations WHERE id = 1`))
+	for _, intent := range []MemoryIntent{MemoryIntentProjectWrite, MemoryIntentSharedIndexWrite} {
+		if !m.facts(t, "bearer", intent).ProjectMemoryWriteRefused {
+			t.Fatalf("intent %d allowed after the conversation was deleted", intent)
+		}
+	}
+	if tainted, err := m.store.ExecutionConversationTainted(context.Background(), m.fence.ExecutionID, int64(m.fence.Generation)); err != nil || !tainted {
+		t.Fatalf("remove_index allowed after the conversation was deleted: %v %v", tainted, err)
+	}
 }

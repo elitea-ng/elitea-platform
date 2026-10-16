@@ -165,7 +165,7 @@ func (h *Handler) CreateTransferGrant(w http.ResponseWriter, r *http.Request) {
 	bucket := chi.URLParam(r, "bucket")
 	// accessWrite: every grant this route issues is a PUT (see methodPut), so
 	// issuing one is authorising a write to the bucket.
-	bucketRow, ok := h.requireBucket(w, r, projectID, bucket, accessWrite)
+	bucketRow, ok := h.requireBucketChecked(w, r, projectID, bucket, accessWrite, scopeCallerKeys)
 	if !ok {
 		return
 	}
@@ -201,6 +201,10 @@ func (h *Handler) CreateTransferGrant(w http.ResponseWriter, r *http.Request) {
 	ref, err := storage.NewObjectRef(projectIDStr, bucket, grantID)
 	if err != nil {
 		h.writeInternal(w, r, "build object ref", err)
+		return
+	}
+	// The system-bucket rule, on the key the grant reserves.
+	if !h.allowKeys(w, r, projectID, bucketRow, []string{grantID}) {
 		return
 	}
 	expiresAt := time.Now().Add(defaultGrantTTL)
@@ -419,6 +423,9 @@ func (h *Handler) CommitTransferGrant(w http.ResponseWriter, r *http.Request) {
 		h.writeInternal(w, r, "build object ref", err)
 		return
 	}
+	if !h.allowKeys(w, r, projectID, bucketRow, []string{grant.Key}) {
+		return
+	}
 
 	h.finalizeGrantCommit(r.Context(), w, projectID, grant, bucketRow, ref, false)
 }
@@ -488,13 +495,14 @@ func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter
 
 	// Same rule as storeObject: the retention window starts at the write,
 	// not at the bucket's frozen expires_at. See computeExpiresAt.
-	if _, err := h.repo.UpsertObject(ctx, repos.NewObjectInput{
+	row, err := h.repo.UpsertObject(ctx, repos.NewObjectInput{
 		BucketID:   grant.BucketID,
 		Key:        grant.Key,
 		ByteLength: n,
 		MediaType:  grant.ContentType,
 		ExpiresAt:  computeExpiresAt(bucketRow.RetentionDays),
-	}); err != nil {
+	})
+	if err != nil {
 		h.writeInternalCtx(ctx, w, "record object metadata", err)
 		return
 	}
@@ -540,6 +548,7 @@ func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter
 		"size_bytes": n,
 		"media_type": grant.ContentType,
 		"etag":       info.ETag,
-		"created_at": info.LastModified,
+		"created_at": row.CreatedAt,
+		"updated_at": row.UpdatedAt,
 	})
 }

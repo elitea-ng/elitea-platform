@@ -16,14 +16,18 @@ INSERT INTO centry.notifications (
     project_id,
     user_id,
     meta,
-    event_type
+    event_type,
+    created_at,
+    updated_at
 ) VALUES (
     $1::text::uuid,
     FALSE,
     $2::integer,
     $3::integer,
     $4::jsonb,
-    'index_data_changed'
+    'index_data_changed',
+    now() AT TIME ZONE 'UTC',
+    now() AT TIME ZONE 'UTC'
 )
 ON CONFLICT (uuid) DO NOTHING
 `
@@ -164,7 +168,7 @@ func (q *Queries) LockCurrentIndexScheduleToolkitMeta(ctx context.Context, toolk
 const updateCurrentIndexScheduleToolkitMeta = `-- name: UpdateCurrentIndexScheduleToolkitMeta :execrows
 UPDATE elitea_tools
 SET meta = $1::jsonb,
-    updated_at = clock_timestamp()
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 WHERE id = $2::integer
 `
 

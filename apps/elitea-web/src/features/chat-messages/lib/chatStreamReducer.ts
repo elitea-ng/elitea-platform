@@ -1,5 +1,6 @@
 import { applyNodeRecoveryFrame } from './chatStreamNodeRecovery';
 import { applyStaticPauseFrame } from './chatStreamStaticPause';
+import { applySkippedCapabilitiesFrame } from './chatStreamSkipped';
 /**
  * lib/chatStreamReducer.ts — the chat streaming reducer (issue #93, Surface B).
  *
@@ -115,7 +116,10 @@ export function applyChatStreamFrame(
     // point: an unported frame must be inert, never a partial write.
     history
   );
-  const next = applyNodeRecoveryFrame(applyStaticPauseFrame(reduced, frame, context), frame, context);
+  const next = applySkippedCapabilitiesFrame(
+    applyNodeRecoveryFrame(applyStaticPauseFrame(reduced, frame, context), frame, context),
+    frame,
+  );
   if (!isTurnTerminalFrame(frame)) return next;
   const target = findTarget(next, frame);
   const message = next[target];

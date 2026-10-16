@@ -281,15 +281,15 @@ VALUES ($1, 'latest', 'draft', 1, 'do the sub thing', 'agent') RETURNING id`, fi
 	} {
 		attachment := embedSkillAttachment{name: seed.name}
 		if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.skills (name, description, owner_id, author_id) VALUES ($1, 'seeded', 1, 1) RETURNING id`, seed.name).
+INSERT INTO p_1.skills (name, description, owner_id, author_id, created_at) VALUES ($1, 'seeded', 1, 1, now() AT TIME ZONE 'UTC') RETURNING id`, seed.name).
 			Scan(&attachment.skillID); err != nil {
 			t.Fatalf("seed skill %q: %v", seed.name, err)
 		}
 		if seed.instructions != "" {
 			var skillVersionID int
 			if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id, status)
-VALUES ($1, 'base', $2, 1, 'published') RETURNING id`, attachment.skillID, seed.instructions).
+INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id, status, created_at)
+VALUES ($1, 'base', $2, 1, 'published', now() AT TIME ZONE 'UTC') RETURNING id`, attachment.skillID, seed.instructions).
 				Scan(&skillVersionID); err != nil {
 				t.Fatalf("seed skill version for %q: %v", seed.name, err)
 			}
@@ -297,8 +297,8 @@ VALUES ($1, 'base', $2, 1, 'published') RETURNING id`, attachment.skillID, seed.
 			attachment.instructions = seed.instructions
 		}
 		if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-VALUES ($1, 'agent', $2, $3)`, fixture.subVersionID, attachment.skillID, attachment.skillVersionID); err != nil {
+INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+VALUES ($1, 'agent', $2, $3, now() AT TIME ZONE 'UTC')`, fixture.subVersionID, attachment.skillID, attachment.skillVersionID); err != nil {
 			t.Fatalf("seed skill attachment for %q: %v", seed.name, err)
 		}
 		fixture.attachments = append(fixture.attachments, attachment)

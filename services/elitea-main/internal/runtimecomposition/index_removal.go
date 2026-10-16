@@ -40,12 +40,18 @@ func newClaimIndexRemover(
 	if err != nil {
 		return nil, fmt.Errorf("construct index removal claim authorizer: %w", err)
 	}
-	return indexregistryapp.NewClaimRemover(
+	remover, err := indexregistryapp.NewClaimRemover(
 		claimAuthorizerAdapter{repository: content},
 		permissionCheckerAdapter{resolver: permissions},
 		service,
 		func(err error) { logger.Error("index removal cleanup failed", "err", err) },
 	)
+	if err != nil {
+		return nil, err
+	}
+	// The same conversation taint elitea-vector's shared writes are refused
+	// on (worker unit M9): remove_index is a shared-index write too.
+	return remover.WithConversationTaint(repos.NewVectorClaimTokens(contentPool)), nil
 }
 
 // newIndexRegistryService builds the one registry Service of a rust-mode

@@ -59,13 +59,35 @@ const MAX_DIMENSION: u64 = 65_536;
 const MAX_SELECTED_TOOLS: usize = 256;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
-/// The toolkit types whose families carry the index tools in stage I1.
-pub const I1_INDEX_FAMILIES: [&str; 5] = ["ado_repos", "artifact", "bitbucket", "github", "gitlab"];
+/// The toolkit types whose families carry the index tools: stages I1, I2 and
+/// I3 (ADR-0030; I3 so far: the test-management families). Elitea-main's `indexcatalog.Families` and the worker's
+/// `SERVED_TOOLKIT_TYPES` list the same types; all three are tested against
+/// `index_served_families.json`.
+pub const INDEX_FAMILIES: [&str; 18] = [
+    "ado_boards",
+    "ado_plans",
+    "ado_repos",
+    "ado_wiki",
+    "artifact",
+    "bitbucket",
+    "confluence",
+    "figma",
+    "github",
+    "gitlab",
+    "jira",
+    "qtest",
+    "sharepoint",
+    "testrail",
+    "xray_cloud",
+    "zephyr_enterprise",
+    "zephyr_essential",
+    "zephyr_scale",
+];
 
-/// Whether `toolkit_type` is an I1 indexing family.
+/// Whether `toolkit_type` is a Rust-indexed family (I1 and I2).
 #[must_use]
 pub fn is_index_family(toolkit_type: &str) -> bool {
-    I1_INDEX_FAMILIES.contains(&toolkit_type)
+    INDEX_FAMILIES.contains(&toolkit_type)
 }
 
 /// Whether `name` is one of the SDK's six index tool names (`index_data`
@@ -563,6 +585,22 @@ pub trait IndexToolHost: Send + Sync {
     /// `{page_content, metadata, score}` dicts or a message string for
     /// `search_index`, a string for the others.
     async fn call(&self, call: IndexToolCall<'_>) -> Result<Value, IndexToolFailure>;
+
+    /// Whether this host runs the `memory` toolkit's tools (worker unit M9):
+    /// it needs the same vector token plus a deployment memory embedding
+    /// model. A host without them leaves the toolkit unserved.
+    fn serves_memory(&self) -> bool {
+        false
+    }
+
+    /// Runs one `memory` tool and returns its SDK-shaped result, a string.
+    /// Only called where [`Self::serves_memory`] is true.
+    async fn memory(
+        &self,
+        _call: super::memory::MemoryToolCall<'_>,
+    ) -> Result<Value, IndexToolFailure> {
+        Err(super::memory::memory_not_served())
+    }
 }
 
 /// The authority the index tools act under, shared for one run.
@@ -814,6 +852,13 @@ fn tool_description(toolkit_name: &str, sentence: &str) -> Box<str> {
 /// every tool. An unknown name selects nothing, as in the artifact family: a
 /// stored selection must not turn a partial port into a dead toolkit.
 fn selected_tools(settings: &Map<String, Value>) -> Result<Vec<String>, IndexToolsetError> {
+    selected_tool_names(settings)
+}
+
+/// [`selected_tools`] for the other families that lend this authority.
+pub(crate) fn selected_tool_names(
+    settings: &Map<String, Value>,
+) -> Result<Vec<String>, IndexToolsetError> {
     let Some(value) = settings.get("selected_tools") else {
         return Ok(Vec::new());
     };

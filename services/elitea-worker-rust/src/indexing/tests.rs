@@ -18,8 +18,9 @@ use http_body_util::{BodyExt as _, Full};
 use serde_json::{Map, Value, json};
 use tonic::body::Body;
 
+use super::inputs::IndexParameters;
 use super::pipeline::{RunLiveness, failure_for_test, record_for_test};
-use super::source::IndexSource;
+use super::source::{IndexSource, PathFilter};
 use super::{
     IndexIngestRuntime, IndexRun, IndexRunFailure, IndexRunLimits, Interruption, interrupt_summary,
     run_index,
@@ -36,16 +37,16 @@ use crate::transport::openai_compatible_facade::{
 };
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
-const NS: &str = "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b";
+pub(super) const NS: &str = "0b0f8c1e-6c1a-4d8e-9b1a-2f6d1c3e4a5b";
 const TOKEN: &str = "elvc_0123456789abcdef0123456789abcdef0123456789a";
-const MODEL: &str = "text-embedding-3-small";
+pub(super) const MODEL: &str = "text-embedding-3-small";
 
 /// A gateway that answers every embeddings request with a deterministic
 /// vector per input (its byte sum), and counts the calls. `fail_with` makes
 /// it answer with that status instead: for every request, or only for a
 /// request whose inputs contain `fail_marker`.
-struct ScriptedEmbeddings {
-    calls: AtomicUsize,
+pub(super) struct ScriptedEmbeddings {
+    pub(super) calls: AtomicUsize,
     dimension: usize,
     fail_with: Option<StatusCode>,
     fail_marker: Option<&'static str>,
@@ -108,7 +109,7 @@ impl ModelGatewayTransport for ScriptedEmbeddings {
     }
 }
 
-struct Always;
+pub(super) struct Always;
 
 impl RunLiveness for Always {
     fn ensure_running(&self) -> Result<(), ClaimLeaseError> {
@@ -168,16 +169,16 @@ fn deadline_after(calls: usize) -> (i64, impl Fn() -> i64) {
     })
 }
 
-struct Harness {
-    runtime: IndexIngestRuntime,
-    fake: FakeVector,
-    embeddings: Arc<ScriptedEmbeddings>,
-    token: VectorClaimToken,
-    context: ClaimScopedEliteaContext,
-    _server: tokio::task::JoinHandle<()>,
+pub(super) struct Harness {
+    pub(super) runtime: IndexIngestRuntime,
+    pub(super) fake: FakeVector,
+    pub(super) embeddings: Arc<ScriptedEmbeddings>,
+    pub(super) token: VectorClaimToken,
+    pub(super) context: ClaimScopedEliteaContext,
+    pub(super) _server: tokio::task::JoinHandle<()>,
 }
 
-async fn harness(dimension: usize, fail_with: Option<StatusCode>) -> Harness {
+pub(super) async fn harness(dimension: usize, fail_with: Option<StatusCode>) -> Harness {
     harness_failing(dimension, fail_with, None).await
 }
 
@@ -198,6 +199,8 @@ async fn harness_failing(
         fail_marker,
     });
     let runtime = IndexIngestRuntime {
+        chat_models: None,
+        memory_model: None,
         vector,
         embeddings: EmbeddingsClient::with_transport(
             Arc::clone(&embeddings) as Arc<dyn ModelGatewayTransport>,
@@ -218,6 +221,7 @@ async fn harness_failing(
             embedding_retry_backoff: Duration::from_millis(1),
             ..IndexRunLimits::default()
         },
+        extractor: None,
     };
     let token = VectorClaimToken::from_receipt(Some(VectorClaimTokenV1 {
         bearer: TOKEN.to_owned(),
@@ -245,7 +249,16 @@ fn unfetchable(key: &str, version: &str, text: &str) -> Document {
     document
 }
 
-fn document(key: &str, version: &str, text: &str) -> Document {
+/// A listed document whose fetch stays rate limited past the backoff bound.
+fn rate_limited(key: &str, version: &str, text: &str) -> Document {
+    let mut document = document(key, version, text);
+    document
+        .metadata
+        .insert("fixture_rate_limited".to_owned(), Value::Bool(true));
+    document
+}
+
+pub(super) fn document(key: &str, version: &str, text: &str) -> Document {
     Document {
         reference: DocumentRef {
             key: key.to_owned(),
@@ -261,7 +274,15 @@ fn document(key: &str, version: &str, text: &str) -> Document {
     }
 }
 
-fn command(index_id: &str, expected: Option<(&str, u32)>) -> IndexIngestCommandV1 {
+/// A PNG-signature file (a picture the vision step would describe).
+pub(super) fn png_document(key: &str) -> Document {
+    let mut document = document(key, "v1", "");
+    document.bytes = b"\x89PNG\r\n\x1a\npixels".to_vec();
+    document.reference.size = document.bytes.len() as u64;
+    document
+}
+
+pub(super) fn command(index_id: &str, expected: Option<(&str, u32)>) -> IndexIngestCommandV1 {
     let (model, dimension) = expected.unwrap_or(("", 0));
     IndexIngestCommandV1 {
         toolkit_configuration_entry_id: "c".into(),
@@ -274,13 +295,13 @@ fn command(index_id: &str, expected: Option<(&str, u32)>) -> IndexIngestCommandV
     }
 }
 
-fn configuration() -> Vec<u8> {
+pub(super) fn configuration() -> Vec<u8> {
     json!({"id": 7, "type": "fixture", "toolkit_name": "repo", "settings": {}})
         .to_string()
         .into_bytes()
 }
 
-fn parameters(clean: bool, extra: Value) -> Vec<u8> {
+pub(super) fn parameters(clean: bool, extra: Value) -> Vec<u8> {
     let mut map = json!({"index_name": "docs", "clean_index": clean});
     if let Value::Object(extra) = extra {
         for (key, value) in extra {
@@ -290,7 +311,7 @@ fn parameters(clean: bool, extra: Value) -> Vec<u8> {
     map.to_string().into_bytes()
 }
 
-fn binding() -> Vec<u8> {
+pub(super) fn binding() -> Vec<u8> {
     json!({"schema_version": "v2", "model_name": MODEL, "resolved_model_group": MODEL, "route": "raw"})
         .to_string()
         .into_bytes()
@@ -298,7 +319,7 @@ fn binding() -> Vec<u8> {
 
 /// Runs the pipeline against `documents` with the fixture source swapped in
 /// for the toolkit's connector.
-async fn run(
+pub(super) async fn run(
     harness: &Harness,
     documents: Vec<Document>,
     command: &IndexIngestCommandV1,
@@ -336,7 +357,11 @@ async fn run_timed(
             command,
             toolkit_configuration: &configuration(),
             tool_parameters: parameters,
+            parsed: None,
             embedding_binding: Some(&binding()),
+            llm_model: None,
+            llm_configuration: None,
+            chat_entries: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: liveness,
@@ -353,11 +378,28 @@ thread_local! {
     pub(super) static FIXTURE_SOURCE: Mutex<Option<Vec<Document>>> = const { Mutex::new(None) };
 }
 
-pub(super) fn take_fixture_source() -> Option<IndexSource> {
-    FIXTURE_SOURCE.with(|slot| slot.lock().expect("lock").take().map(IndexSource::Fixture))
+/// The staged documents as the `fixture` toolkit, with the scope its
+/// arguments ask for: `fixture_skip_unsupported` (the code families'
+/// file-type allowlist) and `fixture_attests_empty` (the artifact bucket's
+/// attested empty listing).
+pub(super) fn take_fixture_source(parameters: &IndexParameters) -> Option<IndexSource> {
+    let flag = |name: &str| parameters.arguments.get(name) == Some(&Value::Bool(true));
+    FIXTURE_SOURCE.with(|slot| {
+        slot.lock().expect("lock").take().map(|documents| {
+            IndexSource::Fixture(
+                documents,
+                PathFilter::for_test(
+                    &parameters.whitelist,
+                    &parameters.blacklist,
+                    flag("fixture_skip_unsupported"),
+                    flag("fixture_attests_empty"),
+                ),
+            )
+        })
+    })
 }
 
-async fn stored(harness: &Harness) -> Vec<pb::IndexedDocument> {
+pub(super) async fn stored(harness: &Harness) -> Vec<pb::IndexedDocument> {
     harness
         .runtime
         .vector
@@ -378,7 +420,7 @@ async fn a_first_run_writes_every_document_and_stamps_the_space() {
                 "# Title\n\nSome words about the project.\n",
             ),
             document("src/app.py", "v1", "def main():\n    return 1\n"),
-            document("logo.png", "v1", "\u{89}PNG"),
+            png_document("logo.png"),
         ],
         &command(NS, None),
         &parameters(false, json!({})),
@@ -386,14 +428,17 @@ async fn a_first_run_writes_every_document_and_stamps_the_space() {
     )
     .await
     .expect("summary");
+    // An image is described by the chat model, and this harness has none:
+    // the picture step is on by default and optional, so the skip is
+    // reported but does not degrade the run.
     assert_eq!(
         summary.status,
-        IndexIngestStatusV1::PartlyIndexed as i32,
+        IndexIngestStatusV1::Ok as i32,
         "{summary:?}"
     );
     assert_eq!(summary.indexed_documents, 2);
     assert_eq!(summary.updated, 0);
-    assert_eq!(summary.skipped.get("unsupported_type"), Some(&1));
+    assert_eq!(summary.skipped.get("no_model"), Some(&1));
     assert_eq!(summary.embedding_model, MODEL);
     assert_eq!(summary.embedding_dimension, 4);
     assert_eq!(summary.total_documents, Some(2));
@@ -438,6 +483,7 @@ async fn an_incremental_run_skips_unchanged_rewrites_changed_and_deletes_vanishe
     .await
     .expect("first");
     assert_eq!(first.total_documents, Some(3));
+    assert_eq!(first.unchanged_documents, Some(0));
     let calls_after_first = harness.embeddings.calls.load(Ordering::SeqCst);
 
     let second = run(
@@ -457,6 +503,11 @@ async fn an_incremental_run_skips_unchanged_rewrites_changed_and_deletes_vanishe
     assert_eq!(second.updated, 1);
     assert_eq!(second.removed_document_keys, vec!["c.md"]);
     assert_eq!(second.total_documents, Some(2));
+    assert_eq!(
+        second.unchanged_documents,
+        Some(1),
+        "a.md was listed and left alone"
+    );
     assert_eq!(second.reindex, Some(true));
     assert_eq!(second.documents.len(), 1);
     assert_eq!(second.documents[0].document_key, "b.md");
@@ -967,7 +1018,8 @@ async fn a_run_that_only_removes_documents_reports_zero_totals_present() {
         &harness,
         Vec::new(),
         &command(NS, Some((MODEL, 4))),
-        &parameters(false, json!({})),
+        // A source that attests it is empty (the artifact bucket).
+        &parameters(false, json!({"fixture_attests_empty": true})),
         &Always,
     )
     .await
@@ -1254,21 +1306,23 @@ async fn whitelist_blacklist_and_the_needs_model_chunker_are_honoured() {
     assert_eq!(summary.indexed_documents, 1);
     assert_eq!(summary.documents[0].document_key, "a.md");
 
-    let needs_model = run(
+    // `use_llm` is the image-file step: it never turns a text document into
+    // one that needs a model.
+    let with_use_llm = run(
         &harness,
         vec![document("d.md", "v1", "delta")],
         &command(NS, None),
-        &parameters(false, json!({"chunking_tool": "statistical"})),
+        &parameters(false, json!({"chunking_config": {"use_llm": true}})),
         &Always,
     )
     .await
     .expect("summary");
-    assert_eq!(needs_model.skipped.get("needs_model"), Some(&1));
-    assert_eq!(needs_model.indexed_documents, 0);
+    assert_eq!(with_use_llm.skipped.get("needs_model"), None);
+    assert_eq!(with_use_llm.indexed_documents, 1);
     // The earlier document is no longer listed by the source, so it is gone.
-    assert_eq!(needs_model.removed_document_keys, vec!["a.md"]);
-    assert_eq!(needs_model.total_documents, Some(0));
-    assert!(needs_model.whole_index_record);
+    assert_eq!(with_use_llm.removed_document_keys, vec!["a.md"]);
+    assert_eq!(with_use_llm.total_documents, Some(1));
+    assert!(with_use_llm.whole_index_record);
 }
 
 #[tokio::test]
@@ -1281,7 +1335,11 @@ async fn malformed_inputs_are_invalid_input_not_a_summary() {
             command: &command(NS, None),
             toolkit_configuration: b"[]",
             tool_parameters: &parameters(false, json!({})),
+            parsed: None,
             embedding_binding: Some(&binding()),
+            llm_model: None,
+            llm_configuration: None,
+            chat_entries: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: &Always,
@@ -1300,7 +1358,11 @@ async fn malformed_inputs_are_invalid_input_not_a_summary() {
             command: &command("", None),
             toolkit_configuration: &configuration(),
             tool_parameters: &parameters(false, json!({})),
+            parsed: None,
             embedding_binding: Some(&binding()),
+            llm_model: None,
+            llm_configuration: None,
+            chat_entries: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: &Always,
@@ -1322,7 +1384,11 @@ async fn without_a_vector_token_or_a_model_the_run_fails_with_a_reason() {
             command: &command(NS, None),
             toolkit_configuration: &configuration(),
             tool_parameters: &parameters(false, json!({})),
+            parsed: None,
             embedding_binding: Some(&binding()),
+            llm_model: None,
+            llm_configuration: None,
+            chat_entries: None,
             vector_token: None,
             context: &harness.context,
             lease: &Always,
@@ -1340,7 +1406,11 @@ async fn without_a_vector_token_or_a_model_the_run_fails_with_a_reason() {
             command: &command(NS, None),
             toolkit_configuration: &configuration(),
             tool_parameters: &parameters(false, json!({})),
+            parsed: None,
             embedding_binding: None,
+            llm_model: None,
+            llm_configuration: None,
+            chat_entries: None,
             vector_token: Some(&harness.token),
             context: &harness.context,
             lease: &Always,
@@ -1424,4 +1494,721 @@ fn a_failure_summary_names_the_index_and_is_bounded() {
     assert_eq!(summary.indexed_documents, 0);
     assert_eq!(summary.total_documents, None);
     assert!(!summary.whole_index_record);
+}
+
+// ── the extraction sidecar ──────────────────────────────────────────────────
+
+/// A scripted `elitea.extract.v1` server over a REAL Unix socket, standing
+/// in for elitea-doc-extractor. The document's key decides the answer:
+/// `skip-<reason>.<ext>` is that skip, `crash.<ext>` stops the server with
+/// the call in flight, `hang.<ext>` never answers (the server stays up),
+/// `fail.<ext>` answers a gRPC INTERNAL status (the server stays up; the
+/// client records `extract_failed` and asks Capabilities again), `slow.<ext>`
+/// answers text after a short while, anything else is text at once. Every
+/// header it read is recorded with the bytes that followed; the most calls
+/// it ever had in flight at once is counted.
+pub(in crate::indexing) mod fake_extractor {
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use tokio::sync::Notify;
+    use tonic::{Request, Response, Status, Streaming};
+
+    use crate::protocol::extract::document_extract_service_server::{
+        DocumentExtractService, DocumentExtractServiceServer,
+    };
+    use crate::protocol::extract::{
+        CapabilitiesRequest, CapabilitiesResponse, EmbeddedImage, ExtractImages, ExtractLimits,
+        ExtractRequest, ExtractResponse, ExtractSkip, ExtractedText, ImagesSkipped, SkipReason,
+        extract_request, extract_response,
+    };
+
+    pub(in crate::indexing) const TEXT: &str =
+        "Refunds within thirty days.\n\nExchanges within sixty days.\n";
+
+    /// (filename, content type, declared length, bytes received, input cap,
+    /// asked timeout in ms).
+    pub(in crate::indexing) type Seen = (String, String, u64, usize, u64, u32);
+
+    /// What the real sidecar advertises by default.
+    pub(in crate::indexing) fn capabilities(concurrency: u32) -> CapabilitiesResponse {
+        CapabilitiesResponse {
+            content_types: vec!["application/pdf".to_owned()],
+            limits: Some(ExtractLimits {
+                max_input_bytes: 50 << 20,
+                max_pages: 1000,
+                max_output_bytes: 20 << 20,
+                timeout_millis: 120_000,
+            }),
+            version: "fake".to_owned(),
+            concurrency,
+            slot_wait_millis: 600_000,
+            stream_idle_millis: 30_000,
+            busy: 0,
+            overruns: 0,
+            image_limits: Some(ExtractImages {
+                max_images: 24,
+                max_image_bytes: 5 << 20,
+                max_total_bytes: 12 << 20,
+            }),
+        }
+    }
+
+    /// What a scripted document answers when the header asks for pictures.
+    #[derive(Clone)]
+    pub(in crate::indexing) struct ScriptedPictures {
+        pub(in crate::indexing) text: String,
+        pub(in crate::indexing) images: Vec<EmbeddedImage>,
+        pub(in crate::indexing) skipped: Option<ImagesSkipped>,
+    }
+
+    pub(in crate::indexing) struct Fake {
+        pub(in crate::indexing) seen: Mutex<Vec<Seen>>,
+        /// The `images` of each header, in arrival order.
+        pub(in crate::indexing) asked: Mutex<Vec<Option<ExtractImages>>>,
+        /// When each document (by file name) arrived, in arrival order.
+        pub(in crate::indexing) arrived: Mutex<Vec<(String, std::time::Instant)>>,
+        /// Answered (text, pictures) to a header that asks for pictures.
+        pub(in crate::indexing) pictures: Mutex<Option<ScriptedPictures>>,
+        pub(in crate::indexing) capabilities: CapabilitiesResponse,
+        pub(in crate::indexing) capabilities_calls: AtomicUsize,
+        in_flight: AtomicUsize,
+        pub(in crate::indexing) max_in_flight: AtomicUsize,
+        crash: Notify,
+    }
+
+    /// Lowers `in_flight` when a call ends, however it ends.
+    struct InFlight<'a>(&'a Fake);
+
+    impl Drop for InFlight<'_> {
+        fn drop(&mut self) {
+            self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tonic::async_trait]
+    impl DocumentExtractService for Fake {
+        async fn extract(
+            &self,
+            request: Request<Streaming<ExtractRequest>>,
+        ) -> Result<Response<ExtractResponse>, Status> {
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_in_flight.fetch_max(now, Ordering::SeqCst);
+            let _in_flight = InFlight(self);
+            let mut stream = request.into_inner();
+            let Some(ExtractRequest {
+                message: Some(extract_request::Message::Header(header)),
+            }) = stream.message().await?
+            else {
+                return Err(Status::invalid_argument("header first"));
+            };
+            let mut received = 0usize;
+            while let Some(message) = stream.message().await? {
+                match message.message {
+                    Some(extract_request::Message::Chunk(chunk)) => received += chunk.len(),
+                    _ => return Err(Status::invalid_argument("chunks after the header")),
+                }
+            }
+            self.asked.lock().expect("lock").push(header.images);
+            self.arrived
+                .lock()
+                .expect("lock")
+                .push((header.filename.clone(), std::time::Instant::now()));
+            self.seen.lock().expect("lock").push((
+                header.filename.clone(),
+                header.content_type.clone(),
+                header.content_length,
+                received,
+                header.limits.map_or(0, |limits| limits.max_input_bytes),
+                header.limits.map_or(0, |limits| limits.timeout_millis),
+            ));
+            let stem = header
+                .filename
+                .rsplit('/')
+                .next()
+                .and_then(|name| name.split('.').next())
+                .unwrap_or_default()
+                .to_owned();
+            if stem == "crash" {
+                self.crash.notify_one();
+                std::future::pending::<()>().await;
+            }
+            if stem == "hang" {
+                std::future::pending::<()>().await;
+            }
+            if stem == "fail" {
+                return Err(Status::internal("scripted extractor failure"));
+            }
+            if stem == "slow" {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+            let outcome = if let Some(reason) = stem.strip_prefix("skip-") {
+                let reason = match reason {
+                    "too_large" => SkipReason::TooLarge,
+                    "too_many_pages" => SkipReason::TooManyPages,
+                    "encrypted" => SkipReason::Encrypted,
+                    "unsupported" => SkipReason::Unsupported,
+                    "corrupt" => SkipReason::Corrupt,
+                    "timeout" => SkipReason::Timeout,
+                    "output_too_large" => SkipReason::OutputTooLarge,
+                    "empty" => SkipReason::Empty,
+                    other => panic!("unknown scripted reason {other}"),
+                };
+                extract_response::Outcome::Skip(ExtractSkip {
+                    reason: reason as i32,
+                    detail: format!("scripted {reason:?}"),
+                })
+            } else {
+                let scripted = self.pictures.lock().expect("lock").clone();
+                let asked = header.images.is_some();
+                let (text, images, images_skipped) = match scripted {
+                    Some(scripted) if asked => (scripted.text, scripted.images, scripted.skipped),
+                    // Asked for no pictures: the same text, none read.
+                    Some(scripted) => (scripted.text, Vec::new(), None),
+                    None => (TEXT.to_owned(), Vec::new(), None),
+                };
+                extract_response::Outcome::Text(ExtractedText {
+                    text,
+                    extractor: "xberg".to_owned(),
+                    images,
+                    images_skipped,
+                })
+            };
+            Ok(Response::new(ExtractResponse {
+                outcome: Some(outcome),
+            }))
+        }
+
+        async fn capabilities(
+            &self,
+            _request: Request<CapabilitiesRequest>,
+        ) -> Result<Response<CapabilitiesResponse>, Status> {
+            self.capabilities_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Response::new(self.capabilities.clone()))
+        }
+    }
+
+    /// Serve a fake at `socket`, on a runtime of its own. That runtime is
+    /// SHUT DOWN when a `crash` document arrives, which ends the accept loop
+    /// AND every connection task (tonic spawns one per connection, so
+    /// aborting the server task alone would leave the connections alive):
+    /// the client's call fails with the connection, as a crashed sidecar's
+    /// would.
+    pub(in crate::indexing) fn serve(socket: &Path) -> Arc<Fake> {
+        serve_with(socket, capabilities(4))
+    }
+
+    /// [`serve`] advertising `capabilities`.
+    pub(in crate::indexing) fn serve_with(
+        socket: &Path,
+        capabilities: CapabilitiesResponse,
+    ) -> Arc<Fake> {
+        let fake = Arc::new(Fake {
+            seen: Mutex::new(Vec::new()),
+            asked: Mutex::new(Vec::new()),
+            arrived: Mutex::new(Vec::new()),
+            pictures: Mutex::new(None),
+            capabilities,
+            capabilities_calls: AtomicUsize::new(0),
+            in_flight: AtomicUsize::new(0),
+            max_in_flight: AtomicUsize::new(0),
+            crash: Notify::new(),
+        });
+        let listener = bind(socket);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("fake runtime");
+        let service = DocumentExtractServiceServer::from_arc(Arc::clone(&fake));
+        runtime.spawn(async move {
+            let listener = tokio::net::UnixListener::from_std(listener).expect("listener");
+            let _ = tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(tokio_stream::wrappers::UnixListenerStream::new(listener))
+                .await;
+        });
+        let crashing = Arc::clone(&fake);
+        tokio::spawn(async move {
+            crashing.crash.notified().await;
+            runtime.shutdown_background();
+        });
+        fake
+    }
+
+    /// What `elitea_engine_sidecar::bind` does; the worker does not link
+    /// that crate. A std listener, handed to the fake's own runtime.
+    fn bind(socket: &Path) -> std::os::unix::net::UnixListener {
+        if let Some(parent) = socket.parent() {
+            std::fs::create_dir_all(parent).expect("socket dir");
+        }
+        let _ = std::fs::remove_file(socket);
+        let listener = std::os::unix::net::UnixListener::bind(socket).expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        listener
+    }
+}
+
+pub(super) fn socket_path(name: &str) -> std::path::PathBuf {
+    // Short: macOS caps a socket path at 104 bytes.
+    std::env::temp_dir().join(format!("wx-{}-{name}.sock", std::process::id()))
+}
+
+pub(super) fn with_extractor(mut harness: Harness, socket: &std::path::Path) -> Harness {
+    let client = crate::transport::extractor_client::ExtractorClient::connect_lazy(socket)
+        .expect("client")
+        .with_deadline_margin(Duration::from_millis(200));
+    harness.runtime.extractor = Some(Arc::new(client));
+    harness
+}
+
+/// A document whose bytes are not text: what a connector fetched for a PDF
+/// or an Office file. The fake extractor does not read them; the pipeline
+/// must not try to either.
+pub(super) fn binary_document(key: &str, bytes: &[u8]) -> Document {
+    let mut document = document(key, "v1", "");
+    document.reference.size = bytes.len() as u64;
+    document.bytes = bytes.to_vec();
+    document
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn documents_go_to_the_extractor_and_are_indexed() {
+    let socket = socket_path("ok");
+    let fake = fake_extractor::serve(&socket);
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let pdf = vec![0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0xff, 0xfe];
+    // Larger than one streamed chunk (256 KiB): the bytes arrive whole.
+    #[allow(clippy::cast_possible_truncation, reason = "a byte pattern")]
+    let pptx: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+    let summary = run(
+        &harness,
+        vec![
+            binary_document("docs/policy.pdf", &pdf),
+            binary_document("decks/overview.pptx", &pptx),
+            document("README.md", "v1", "# Title\n\nSome words.\n"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::Ok as i32,
+        "{summary:?}"
+    );
+    assert_eq!(summary.indexed_documents, 3);
+    assert!(summary.skipped.is_empty(), "{:?}", summary.skipped);
+    let mut seen = fake.seen.lock().expect("lock").clone();
+    seen.sort();
+    assert_eq!(
+        seen,
+        vec![
+            (
+                "decks/overview.pptx".to_owned(),
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                    .to_owned(),
+                pptx.len() as u64,
+                pptx.len(),
+                IndexRunLimits::default().max_document_bytes,
+                120_000,
+            ),
+            (
+                "docs/policy.pdf".to_owned(),
+                "application/pdf".to_owned(),
+                pdf.len() as u64,
+                pdf.len(),
+                IndexRunLimits::default().max_document_bytes,
+                120_000,
+            ),
+        ],
+        "the two documents, whole, with the run's document cap and extraction timeout; README.md stays local"
+    );
+    // Capabilities were asked once, before the first document, not per call.
+    assert_eq!(fake.capabilities_calls.load(Ordering::SeqCst), 1);
+    // The sidecar's text is what was chunked and written.
+    let points = stored(&harness).await;
+    assert!(points.iter().any(|p| p.document_key == "docs/policy.pdf"));
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn extractor_skip_reasons_become_summary_labels() {
+    let socket = socket_path("skips");
+    let _fake = fake_extractor::serve(&socket);
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let summary = run(
+        &harness,
+        vec![
+            binary_document("skip-encrypted.pdf", b"x"),
+            binary_document("skip-too_many_pages.pdf", b"x"),
+            binary_document("skip-corrupt.docx", b"x"),
+            binary_document("skip-too_large.pdf", b"x"),
+            binary_document("skip-output_too_large.pdf", b"x"),
+            binary_document("skip-timeout.pdf", b"x"),
+            binary_document("skip-empty.xlsx", b"x"),
+            binary_document("skip-unsupported.pdf", b"x"),
+            document("kept.md", "v1", "# Kept\n\nIndexed as usual.\n"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1);
+    let mut skipped: Vec<(&str, u64)> = summary
+        .skipped
+        .iter()
+        .map(|(k, v)| (k.as_str(), *v))
+        .collect();
+    skipped.sort_unstable();
+    assert_eq!(
+        skipped,
+        vec![
+            ("empty", 1),
+            ("encrypted", 1),
+            ("extract_timeout", 1),
+            ("too_large", 2),
+            ("too_many_pages", 1),
+            ("unreadable", 1),
+            ("unsupported_type", 1),
+        ]
+    );
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_extractor_crash_is_one_skipped_document_and_the_run_goes_on() {
+    let socket = socket_path("crash");
+    let _crashing = fake_extractor::serve(&socket);
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let summary = run(
+        &harness,
+        vec![
+            binary_document("crash.pdf", b"x"),
+            document("kept.md", "v1", "# Kept\n\nIndexed as usual.\n"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(
+        summary.skipped.get("extract_failed"),
+        Some(&1),
+        "{summary:?}"
+    );
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reconnected_extractor_serves_the_documents_a_crash_skipped() {
+    let socket = socket_path("reconnect");
+    let _crashing = fake_extractor::serve(&socket);
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let summary = run(
+        &harness,
+        vec![binary_document("crash.pdf", b"x")],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.skipped.get("extract_failed"),
+        Some(&1),
+        "{summary:?}"
+    );
+    // The sidecar is restarted on the same socket (a new container, the
+    // same shared directory): the SAME client reaches it without any
+    // reconfiguration, and a document is indexed again.
+    let restarted = fake_extractor::serve(&socket);
+    let summary = run(
+        &harness,
+        vec![binary_document("policy.pdf", b"x")],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert!(summary.skipped.is_empty(), "{summary:?}");
+    assert_eq!(restarted.seen.lock().expect("lock").len(), 1);
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_an_extractor_a_document_is_unsupported_and_without_a_socket_extract_failed() {
+    // No sidecar configured: the pre-sidecar behaviour, byte for byte.
+    let harness = harness(4, None).await;
+    let summary = run(
+        &harness,
+        vec![binary_document("policy.pdf", b"x")],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(
+        summary.skipped.get("unsupported_type"),
+        Some(&1),
+        "{summary:?}"
+    );
+    // A sidecar configured but not running (nothing listens at the path):
+    // the document is skipped `extract_failed`, the run goes on.
+    let socket = socket_path("absent");
+    let _ = std::fs::remove_file(&socket);
+    let harness = with_extractor(harness, &socket);
+    let summary = run(
+        &harness,
+        vec![
+            binary_document("policy.pdf", b"x"),
+            document("kept.md", "v1", "# Kept\n\nIndexed as usual.\n"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(
+        summary.skipped.get("extract_failed"),
+        Some(&1),
+        "{summary:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn in_flight_extractor_calls_are_capped_at_the_advertised_concurrency() {
+    // The sidecar advertises ONE slot; the run prepares four documents at
+    // once (document_concurrency 4 in `harness`). The client queues them
+    // locally: the fake never sees two calls in flight, every document is
+    // indexed, and nothing is `extract_failed`.
+    let socket = socket_path("cap1");
+    let fake = fake_extractor::serve_with(&socket, fake_extractor::capabilities(1));
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let documents: Vec<Document> = (0..4)
+        .map(|i| binary_document(&format!("slow-{i}/slow.pdf"), b"x"))
+        .collect();
+    let summary = run(
+        &harness,
+        documents,
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 4, "{summary:?}");
+    assert!(summary.skipped.is_empty(), "{:?}", summary.skipped);
+    assert_eq!(fake.max_in_flight.load(Ordering::SeqCst), 1);
+    let sidecar = harness
+        .runtime
+        .extractor
+        .as_ref()
+        .expect("client")
+        .sidecar_for_tests()
+        .await
+        .expect("learned");
+    assert_eq!(sidecar.concurrency, 1);
+    let _ = std::fs::remove_file(&socket);
+
+    // Four slots advertised: the same four documents overlap at the fake.
+    let socket = socket_path("cap4");
+    let fake = fake_extractor::serve_with(&socket, fake_extractor::capabilities(4));
+    let wide = with_extractor(self::harness(4, None).await, &socket);
+    let documents: Vec<Document> = (0..4)
+        .map(|i| binary_document(&format!("slow-{i}/slow.pdf"), b"x"))
+        .collect();
+    let summary = run(
+        &wide,
+        documents,
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 4, "{summary:?}");
+    assert!(fake.max_in_flight.load(Ordering::SeqCst) > 1);
+    assert!(fake.max_in_flight.load(Ordering::SeqCst) <= 4);
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failure_mid_run_does_not_widen_the_in_flight_cap() {
+    // The sidecar advertises TWO slots; the run prepares three documents at
+    // once. One document fails at the sidecar (INTERNAL; the server stays
+    // up), which makes the client forget what it learned and ask again on
+    // the next document while two slow calls still hold their permits.
+    // The permits are one pool for the client's life: the re-learned size
+    // adds nothing next to the live permits, and the fake never sees three
+    // calls in flight. (A pool replaced on re-learning would have handed
+    // out two fresh permits beside the two still held: up to four.)
+    let socket = socket_path("relearn");
+    let fake = fake_extractor::serve_with(&socket, fake_extractor::capabilities(2));
+    let mut harness = with_extractor(harness(4, None).await, &socket);
+    harness.runtime.limits.document_concurrency = 3;
+    let documents: Vec<Document> = vec![
+        binary_document("slow-0/slow.pdf", b"x"),
+        binary_document("fail-0/fail.pdf", b"x"),
+        binary_document("slow-1/slow.pdf", b"x"),
+        binary_document("slow-2/slow.pdf", b"x"),
+        binary_document("fail-1/fail.pdf", b"x"),
+        binary_document("slow-3/slow.pdf", b"x"),
+        binary_document("slow-4/slow.pdf", b"x"),
+        binary_document("slow-5/slow.pdf", b"x"),
+    ];
+    let summary = run(
+        &harness,
+        documents,
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 6, "{summary:?}");
+    assert_eq!(
+        summary.skipped.get("extract_failed"),
+        Some(&2),
+        "{summary:?}"
+    );
+    assert!(
+        fake.capabilities_calls.load(Ordering::SeqCst) >= 2,
+        "the client asked again after a failure: {} call(s)",
+        fake.capabilities_calls.load(Ordering::SeqCst)
+    );
+    assert!(
+        fake.max_in_flight.load(Ordering::SeqCst) <= 2,
+        "never more in flight than advertised: {}",
+        fake.max_in_flight.load(Ordering::SeqCst)
+    );
+    let client = harness.runtime.extractor.as_ref().expect("client");
+    assert_eq!(
+        client.free_slots_for_tests(),
+        2,
+        "every permit came back to the one pool"
+    );
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_call_deadline_and_the_asked_timeout_follow_the_sidecars_capabilities() {
+    // A sidecar advertising a 200 ms extraction cap, a 100 ms slot wait and
+    // a 100 ms idle limit; the client's test margin is 200 ms. A document
+    // the fake never answers must be given up at 200+100+100+200 = 600 ms
+    // (not the old fixed five minutes) and recorded `extract_failed`; the
+    // header must have asked for 200 ms (the run's default 120 s lowered to
+    // the cap).
+    let socket = socket_path("deadline");
+    let mut caps = fake_extractor::capabilities(4);
+    caps.limits.as_mut().expect("limits").timeout_millis = 200;
+    caps.slot_wait_millis = 100;
+    caps.stream_idle_millis = 100;
+    let fake = fake_extractor::serve_with(&socket, caps);
+    let harness = with_extractor(harness(4, None).await, &socket);
+    let started = std::time::Instant::now();
+    let summary = run(
+        &harness,
+        vec![
+            binary_document("hang.pdf", b"x"),
+            document("kept.md", "v1", "# Kept\n\nIndexed as usual.\n"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    let elapsed = started.elapsed();
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(
+        summary.skipped.get("extract_failed"),
+        Some(&1),
+        "{summary:?}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(550) && elapsed < Duration::from_secs(10),
+        "gave up after {elapsed:?}, the derived deadline is 600 ms"
+    );
+    let seen = fake.seen.lock().expect("lock").clone();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(
+        seen[0].5, 200,
+        "the asked timeout is the sidecar's cap: {seen:?}"
+    );
+    // After a failure the capabilities are asked again on the next document.
+    let summary = run(
+        &harness,
+        vec![binary_document("policy.pdf", b"x")],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(fake.capabilities_calls.load(Ordering::SeqCst), 2);
+    let _ = std::fs::remove_file(&socket);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_asking_less_extraction_time_than_the_cap_sends_its_own_figure() {
+    let socket = socket_path("asked");
+    let fake = fake_extractor::serve(&socket);
+    let mut harness = with_extractor(harness(4, None).await, &socket);
+    harness.runtime.limits.extract_timeout = Duration::from_secs(5);
+    let summary = run(
+        &harness,
+        vec![binary_document("policy.pdf", b"x")],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    let seen = fake.seen.lock().expect("lock").clone();
+    assert_eq!(seen[0].5, 5_000, "{seen:?}");
+    let _ = std::fs::remove_file(&socket);
+}
+
+/// Live defect: a source that stayed rate limited (anonymous GitHub) was
+/// reported as `fetch_failed`, i.e. "could not be read". It is `rate_limited`,
+/// a lost-for-now document the next run reads again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rate_limited_fetch_is_skipped_rate_limited_not_fetch_failed() {
+    let harness = harness(4, None).await;
+    let summary = run(
+        &harness,
+        vec![
+            document("ok.md", "v1", "readable text"),
+            rate_limited("limited.md", "v1", "never read"),
+        ],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert_eq!(summary.skipped.get("rate_limited"), Some(&1), "{summary:?}");
+    assert_eq!(summary.skipped.get("fetch_failed"), None, "{summary:?}");
+    assert_eq!(
+        summary.status,
+        IndexIngestStatusV1::PartlyIndexed as i32,
+        "a rate-limited document is lost work for this run: {summary:?}"
+    );
 }

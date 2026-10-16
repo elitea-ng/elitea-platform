@@ -74,6 +74,10 @@ type CurrentRegenerationRequest struct {
 	// the stored question, and the admission transaction writes that text onto
 	// the question row so the transcript and the run agree.
 	EditedQuestion CurrentRegenerationEdit
+	// TriggerOrigin is how the caller authenticated (shared 0140), as the
+	// start route records it: a PAT/API caller is `api`, never `manual`.
+	// Personal memory is decided from it (only a `manual` chat turn).
+	TriggerOrigin executiondomain.TriggerOrigin
 }
 
 // CurrentRegenerationEdit is one rewritten question item, in the shape the
@@ -115,7 +119,8 @@ func (request CurrentRegenerationRequest) Validate() error {
 		request.RequestedParticipantID < 0 ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validUUID(request.ResponseMessageID) || !validUUID(request.RegenerationID) ||
-		!validJSONObject(request.LLMSettings) || !validCurrentMCPTokens(request.MCPTokens) {
+		!validJSONObject(request.LLMSettings) || !validCurrentMCPTokens(request.MCPTokens) ||
+		!request.TriggerOrigin.Valid() {
 		return ErrInvalidCurrentAgentStart
 	}
 	return request.EditedQuestion.Validate()
@@ -216,6 +221,7 @@ func (service *CurrentApplicationStartService) RegenerateCurrentAgent(
 		CapabilityID:   capabilityID, ClientStreamID: target.ConversationUUID,
 		ClientMessageID: request.ResponseMessageID, SIOEvent: "chat_predict",
 		Input: input, CurrentRegenerateTurn: turn,
+		TriggerOrigin: request.TriggerOrigin,
 	})
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err

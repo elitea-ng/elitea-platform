@@ -40,7 +40,7 @@ func TestPinnedCurrentToolkitSchemaSnapshotMatchesAdmittedSDKProjection(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.SDKRevision() != "b5113a129329b85d23c2d5c2bf55f18e307414ec" || snapshot.EntryCount() != 53 {
+	if snapshot.SDKRevision() != "b5113a129329b85d23c2d5c2bf55f18e307414ec" || snapshot.EntryCount() != 55 {
 		t.Fatalf("snapshot revision=%q entries=%d", snapshot.SDKRevision(), snapshot.EntryCount())
 	}
 
@@ -510,5 +510,134 @@ func TestCurrentToolkitSchemaSnapshotRetainsExactJSONNumbers(t *testing.T) {
 	limit := schema.Properties["field"].(map[string]any)["custom_limit"]
 	if limit != json.Number("9007199254740993") {
 		t.Fatalf("numeric schema value=%#v", limit)
+	}
+}
+
+// The Rust-only tools of the pptx family (ADR-0032 P3) are merged into the
+// pinned snapshot, so the toolkit editor lists them with the SDK's two.
+func TestPinnedSnapshotListsTheRustOnlyPptxTools(t *testing.T) {
+	t.Parallel()
+
+	snapshot, err := LoadPinnedCurrentToolkitSchemaSnapshot()
+	if err != nil {
+		t.Fatalf("load pinned snapshot: %v", err)
+	}
+	schemas, found, err := snapshot.ToolkitArgumentSchemas("pptx")
+	if err != nil || !found {
+		t.Fatalf("pptx schemas: found=%v err=%v", found, err)
+	}
+	if len(schemas) != 21 {
+		t.Fatalf("pptx lists %d tools, want the SDK's 2 and 19 more", len(schemas))
+	}
+	for _, name := range []string{
+		"fill_template", "translate_presentation", "list_placeholders", "replace_placeholders",
+		"create_presentation", "add_slide", "delete_slide", "move_slide", "set_title", "set_text",
+		"add_bullets", "add_table", "set_table_cell", "add_chart", "add_image", "set_notes",
+		"apply_theme", "render_preview", "design_check", "to_markdown", "export_pdf",
+	} {
+		schema, ok := schemas[name]
+		if !ok {
+			t.Errorf("tool %s is not listed", name)
+			continue
+		}
+		if schema["type"] != "object" || schema["title"] == nil {
+			t.Errorf("tool %s has no pydantic-shaped schema: %v", name, schema)
+		}
+	}
+	// The unmerged loader is the SDK alone.
+	plain, err := LoadCurrentToolkitSchemaSnapshot(pinnedCurrentToolkitSchemaSnapshotJSON)
+	if err != nil {
+		t.Fatalf("load plain: %v", err)
+	}
+	sdk, _, _ := plain.ToolkitArgumentSchemas("pptx")
+	if len(sdk) != 2 {
+		t.Errorf("the SDK declares %d pptx tools; the overlay assumes 2 (a collision must be resolved)", len(sdk))
+	}
+}
+
+func TestRustOnlyToolsAreRefusedWhenTheyShadowOrMisname(t *testing.T) {
+	t.Parallel()
+
+	for name, overlay := range map[string]string{
+		"an SDK tool":     `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{"pptx":{"fill_template":{"type":"object"}}}}`,
+		"an unknown type": `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{"nope":{"x":{"type":"object"}}}}`,
+		"a wrong version": `{"schema_version":"v0","types":{}}`,
+		"an extra field":  `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{},"x":1}`,
+		"a null schema":   `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{"pptx":{"x":null}}}`,
+	} {
+		if _, err := loadCurrentToolkitSchemaSnapshot(
+			pinnedCurrentToolkitSchemaSnapshotJSON, []byte(overlay)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+// The Rust-only types of the document (docx and xlsx, ADR-0032 P4) join the
+// pinned snapshot as entries of their own, sorted among the SDK's, and the
+// plain SDK projection does not have them.
+func TestPinnedSnapshotHoldsTheRustOnlyTypesWithTheirTools(t *testing.T) {
+	t.Parallel()
+
+	snapshot, err := LoadPinnedCurrentToolkitSchemaSnapshot()
+	if err != nil {
+		t.Fatalf("load pinned snapshot: %v", err)
+	}
+	plain, err := LoadCurrentToolkitSchemaSnapshot(pinnedCurrentToolkitSchemaSnapshotJSON)
+	if err != nil {
+		t.Fatalf("load plain: %v", err)
+	}
+	for toolkitType, want := range map[string]int{"docx": 13, "xlsx": 10} {
+		schemas, found, err := snapshot.ToolkitArgumentSchemas(toolkitType)
+		if err != nil || !found || len(schemas) != want {
+			t.Fatalf("%s: found=%v err=%v tools=%d, want %d", toolkitType, found, err, len(schemas), want)
+		}
+		for name, schema := range schemas {
+			if schema["type"] != "object" || schema["title"] == nil {
+				t.Errorf("%s/%s has no pydantic-shaped schema: %v", toolkitType, name, schema)
+			}
+		}
+		if _, found, _ := plain.ToolkitArgumentSchemas(toolkitType); found {
+			t.Errorf("the SDK projection holds %s: the SDK has grown the toolkit and the overlay must be reconciled", toolkitType)
+		}
+	}
+	types := snapshot.ToolkitTypes()
+	if !sort.StringsAreSorted(types) {
+		t.Errorf("types are not sorted: %v", types)
+	}
+}
+
+func TestRustOnlyNewTypesAreRefusedWhenTheyShadowOrAreIncomplete(t *testing.T) {
+	t.Parallel()
+
+	const head = `{"schema_version":"elitea.rust-only-toolkit-tools.v1","types":{},"new_types":`
+	good := `{"metadata":{"label":"X"},"settings":{"properties":{}},"args_schemas":{"t":{"type":"object"}}}`
+	for name, overlay := range map[string]string{
+		"a type the SDK declares": head + `{"pptx":` + good + `}}`,
+		"a type with no tools":    head + `{"zzz":{"metadata":{"label":"X"},"settings":{},"args_schemas":{}}}}`,
+		"a type with no metadata": head + `{"zzz":{"settings":{},"args_schemas":{"t":{"type":"object"}}}}}`,
+		"a null tool schema":      head + `{"zzz":{"metadata":{},"settings":{},"args_schemas":{"t":null}}}}`,
+		"an unknown field":        head + `{"zzz":{"metadata":{},"settings":{},"args_schemas":{"t":{}},"extra":1}}}`,
+	} {
+		if _, err := loadCurrentToolkitSchemaSnapshot(
+			pinnedCurrentToolkitSchemaSnapshotJSON, []byte(overlay)); err == nil {
+			t.Errorf("the schema snapshot accepted %s", name)
+		}
+		if _, err := loadCurrentToolkitCatalogueSnapshot(
+			pinnedCurrentToolkitCatalogueSnapshotJSON, []byte(overlay)); err == nil {
+			t.Errorf("the catalogue snapshot accepted %s", name)
+		}
+	}
+	// A well-formed new type is accepted by both and sorts into place.
+	overlay := head + `{"aaa":` + good + `}}`
+	snapshot, err := loadCurrentToolkitSchemaSnapshot(pinnedCurrentToolkitSchemaSnapshotJSON, []byte(overlay))
+	if err != nil {
+		t.Fatalf("a well-formed new type was refused: %v", err)
+	}
+	if types := snapshot.ToolkitTypes(); types[0] != "aaa" {
+		t.Errorf("the new type did not sort first: %v", types[:3])
+	}
+	if _, err := loadCurrentToolkitCatalogueSnapshot(
+		pinnedCurrentToolkitCatalogueSnapshotJSON, []byte(overlay)); err != nil {
+		t.Fatalf("a well-formed new type was refused by the catalogue: %v", err)
 	}
 }

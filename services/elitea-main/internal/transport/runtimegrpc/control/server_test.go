@@ -232,6 +232,22 @@ func TestClaimCommandAuthenticatesThenVerifiesThenClaimsBeforeResolvingInput(t *
 	if got := response.GetReceipt().GetFence().GetFenceToken(); string(got) != string(lease.Fence.Token[:]) {
 		t.Fatal("claim response lost unpredictable fence token")
 	}
+	if response.GetReceipt().GetToolkitTypedRefusals() {
+		t.Fatal("an agent claim advertised the tool-run refusal shapes")
+	}
+}
+
+// #1292 round 3: only a tool run's receipt advertises the typed refusals.
+func TestTypedToolRefusalsAreAdvertisedOnToolRunsOnly(t *testing.T) {
+	for capability, want := range map[string]bool{
+		executiondomain.ToolkitCallToolCapability:  true,
+		executiondomain.AgentApplicationCapability: false,
+		"toolkit.available_tools.v1":               false,
+	} {
+		if got := advertisesTypedToolRefusals(&runtimev1.WorkerCommandV1{CapabilityId: capability}); got != want {
+			t.Fatalf("%s: %v", capability, got)
+		}
+	}
 }
 
 func TestClaimCommandRejectsMalformedClaimOrderingBeforeResolvingInput(t *testing.T) {

@@ -25,12 +25,14 @@ sdk-key-order = ["serde_json/preserve_order", "serde_json/float_roundtrip"]
 # SDK's printed outputs stay byte for byte.
 elitea-engine-core = { path = "../engine-core" }
 # `try_join_all` for the concurrent sub-searches of `extended_search`.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 # Request and response messages of elitea.vector.v1.
 prost = "0.14.4"
 # Default features here; `sdk-key-order` (above) adds the SDK's key order.
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.151"
+sha2 = "0.10.9"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["net", "rt"], optional = true }
 tokio-stream = "0.1.19"
@@ -40,6 +42,7 @@ tokio-stream = "0.1.19"
 tonic = { version = "0.14.6", features = ["tls-ring"] }
 tonic-prost = "0.14.6"
 tracing = "0.1.44"
+uuid = { version = "1", default-features = false, features = ["v4"] }
 
 [build-dependencies]
 protoc-bin-vendored = "3.2.0"
