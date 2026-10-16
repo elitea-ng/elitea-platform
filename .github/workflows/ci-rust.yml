@@ -26,6 +26,15 @@ on:
       - "scripts/nats/**"
       - "libs/go/natsconn/**"
       - "docs/runtime-command-bus.md"
+      # The owner-schema fixture is migrated by the real command, and the
+      # Docker supervisor tests run through the ledger helper; the ignored-test
+      # guard reads its own script and allowlist.
+      - "services/elitea-main/cmd/elitea-migrate/**"
+      - "services/elitea-main/internal/infra/db/migrate/**"
+      - "scripts/runtime/test_sandbox_ledger.py"
+      - "scripts/ci/check_worker_ignored_tests.py"
+      - "scripts/ci/test_check_worker_ignored_tests.py"
+      - "scripts/ci/worker-ignored-tests-allowlist.txt"
       - ".github/workflows/ci-rust.yml"
   push:
     branches:
@@ -54,6 +63,15 @@ on:
       - "scripts/nats/**"
       - "libs/go/natsconn/**"
       - "docs/runtime-command-bus.md"
+      # The owner-schema fixture is migrated by the real command, and the
+      # Docker supervisor tests run through the ledger helper; the ignored-test
+      # guard reads its own script and allowlist.
+      - "services/elitea-main/cmd/elitea-migrate/**"
+      - "services/elitea-main/internal/infra/db/migrate/**"
+      - "scripts/runtime/test_sandbox_ledger.py"
+      - "scripts/ci/check_worker_ignored_tests.py"
+      - "scripts/ci/test_check_worker_ignored_tests.py"
+      - "scripts/ci/worker-ignored-tests-allowlist.txt"
       - ".github/workflows/ci-rust.yml"
   workflow_dispatch:
 
@@ -158,7 +176,8 @@ jobs:
   test:
     name: Test with PostgreSQL 18
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 45 before the code runner image builds and the Docker supervisor tests.
+    timeout-minutes: 70
     services:
       postgres:
         image: postgres:18
@@ -287,3 +306,118 @@ jobs:
           cat "$ELITEA_TEST_BUNDLE_TLS/client.pem" "$ELITEA_TEST_BUNDLE_TLS/client.key" > "$ELITEA_TEST_BUNDLE_TLS/client-combined.pem"
           cargo test --locked --lib --all-features sandbox::docker_supervisor::preparation::tests -- --ignored
           cargo test --locked --lib --all-features sandbox::docker_supervisor::hydration::deadline_tests -- --ignored
+
+      # The Code owner-recovery fixtures (ledger_code_recovery_tests.rs,
+      # docker_code_recovery_cleanup_tests.rs) create no schema of their own:
+      # they need ONE agentstate database that already carries the whole
+      # history, through 0013_sandbox_whole_code_recovery.sql. On a bare
+      # database they fail SchemaMigrationRequired(MissingTable). The real
+      # migration command provisions it, so the fixture is the schema a
+      # deployment runs (and drifts with it), not a hand-picked subset.
+      - name: Provision the pre-migrated agentstate owner-schema database
+        working-directory: .
+        env:
+          PGPASSWORD: postgres
+          AGENTSTATE_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/agentstate_code_owner?sslmode=disable"
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE agentstate_code_owner'
+          go run ./services/elitea-main/cmd/elitea-migrate -agentstate
+
+      # PostgreSQL-only #[ignore] tests that no step ran before: the Code
+      # owner-recovery ledger and cleanup, graph node recovery over the
+      # dispatch journal, workspace receipts, direct-tool journal, run-root
+      # fencing and the sandbox receipt fixtures in postgres_checkpointer_tests.
+      # `--skip sandbox_supervisor_` leaves the three Docker cases to the step
+      # below.
+      - name: Verify Code owner recovery and journals with PostgreSQL
+        env:
+          ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+          ELITEA_CODE_OWNER_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/agentstate_code_owner?sslmode=disable"
+          ELITEA_TEST_WORKSPACE_POSTGRES_REQUIRED: "1"
+        run: |
+          cargo test --locked --lib --all-features \
+            agents::graph::node_recovery_runtime::tests::code_owner_tests:: \
+            sandbox::ledger::code_recovery::tests:: \
+            sandbox::docker_supervisor::code_recovery_cleanup::tests:: \
+            sandbox::ledger::workspace::postgres_tests:: \
+            state::postgres_checkpointer_tests:: \
+            -- --ignored --skip sandbox_supervisor_
+
+      # The three sandbox_supervisor_* tests drive real containers through the
+      # Docker supervisor. They need a code runner image by ID: the
+      # `verification` target (python + the PID-1 runner) for recovery and for
+      # the test-only adapter that scripts/runtime/test_sandbox_ledger.py
+      # commits on top of it, and the default target (Deno/Pyodide adapters)
+      # for the mTLS case, which reads the real adapter's JSON envelope. One
+      # GHA layer cache scope serves both; the targets share every builder layer.
+      - uses: docker/setup-buildx-action@v4
+        with:
+          # The builder image from the org's own mirror (mirror-buildkit.yml), by
+          # digest: no anonymous Docker Hub pull per job.
+          driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Build the code runner verification image
+        uses: docker/build-push-action@v7
+        with:
+          context: services/elitea-code-runner
+          file: services/elitea-code-runner/Containerfile
+          target: verification
+          push: false
+          load: true
+          tags: elitea-code-runner:ci-verification
+          platforms: linux/amd64
+          cache-from: type=gha,scope=elitea-code-runner-linux-amd64
+          cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=elitea-code-runner-linux-amd64,ignore-error=true
+
+      - name: Build the code runner Deno/Pyodide image
+        uses: docker/build-push-action@v7
+        with:
+          context: services/elitea-code-runner
+          file: services/elitea-code-runner/Containerfile
+          target: default
+          push: false
+          load: true
+          tags: elitea-code-runner:ci-default
+          platforms: linux/amd64
+          cache-from: type=gha,scope=elitea-code-runner-linux-amd64
+          cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=elitea-code-runner-linux-amd64,ignore-error=true
+
+      # The helper starts its own disposable postgres:18 container
+      # (--pull=never; the service above already pulled the image), generates
+      # the TLS bundle for the mTLS case, and removes everything on exit. It
+      # runs the same --all-features lib build as the steps above.
+      - name: Verify sandbox supervisor recovery, submission and mTLS with Docker
+        working-directory: .
+        run: |
+          docker image inspect postgres:18 > /dev/null || docker pull -q postgres:18
+          verification="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-verification)"
+          deno="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-default)"
+          ELITEA_CODE_RUNNER_TEST_IMAGE="$verification" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_recovers
+          ELITEA_CODE_RUNNER_TEST_IMAGE="$verification" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_submits
+          ELITEA_CODE_RUNNER_TEST_IMAGE="$deno" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_mtls --adapter-image
+
+      # Every #[ignore] test is either selected by a `-- --ignored` invocation
+      # in this file or allowlisted with where it runs instead. Six sandbox
+      # tests once sat ignored with no step to run them, reading like passes.
+      # The list comes from the compiled binaries; the checker also counts the
+      # #[ignore] attributes in the sources so an empty list cannot pass.
+      - name: Every ignored worker test runs somewhere
+        # Not gated on the Docker step: an unrun test is reported either way.
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --locked --all-features --lib --bins --tests -- --list --ignored \
+            > "${RUNNER_TEMP}/worker-ignored-tests.txt"
+          python3 ../../scripts/ci/check_worker_ignored_tests.py \
+            --list "${RUNNER_TEMP}/worker-ignored-tests.txt" \
+            --workflow ../../.github/workflows/ci-rust.yml \
+            --allowlist ../../scripts/ci/worker-ignored-tests-allowlist.txt \
+            --sources .
+          expected="$(grep -c '^    def test_' ../../scripts/ci/test_check_worker_ignored_tests.py)"
+          output="$(python3 -m unittest discover -s ../../scripts/ci -p 'test_check_worker_ignored_tests.py' -v 2>&1)"
+          printf '%s\n' "${output}"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+          if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ] || [ "${expected}" -lt 10 ]; then
+            echo "::error::the guard's own suite ran ${ran:-no} of ${expected} scenario(s)"
+            exit 1
+          fi

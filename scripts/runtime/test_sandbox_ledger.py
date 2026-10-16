@@ -39,16 +39,17 @@ try:
         openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key",
                 "-out", "ca.pem", "-days", "1", "-subj", "/CN=Disposable sandbox CA",
                 "-addext", "basicConstraints=critical,CA:TRUE")
-        for name, dns, usage in [("server", "supervisor.test", "serverAuth"),
+        # `peer`, not `name`: `name` is the database container, removed in `finally`.
+        for peer, dns, usage in [("server", "supervisor.test", "serverAuth"),
                                  ("worker", "worker.test", "clientAuth"),
                                  ("other", "other.test", "clientAuth")]:
-            openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", name+".key",
-                    "-out", name+".csr", "-subj", "/CN="+dns)
-            (certs / (name+".ext")).write_text(
+            openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", peer+".key",
+                    "-out", peer+".csr", "-subj", "/CN="+dns)
+            (certs / (peer+".ext")).write_text(
                 "subjectAltName=DNS:"+dns+"\nbasicConstraints=critical,CA:FALSE\n"
                 "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage="+usage+"\n")
-            openssl("x509", "-req", "-in", name+".csr", "-CA", "ca.pem", "-CAkey", "ca.key",
-                    "-CAcreateserial", "-out", name+".pem", "-days", "1", "-extfile", name+".ext")
+            openssl("x509", "-req", "-in", peer+".csr", "-CA", "ca.pem", "-CAkey", "ca.key",
+                    "-CAcreateserial", "-out", peer+".pem", "-days", "1", "-extfile", peer+".ext")
         env["ELITEA_TEST_TLS_DIR"] = str(certs)
     if args.test_filter == "sandbox_supervisor_submits" and not args.adapter_image:
         base_image = env.get("ELITEA_CODE_RUNNER_TEST_IMAGE", "")
@@ -94,9 +95,11 @@ try:
         f"postgresql://postgres:{password}@{endpoint}/postgres"
     )
     result = subprocess.run(
+        # --all-features, the set ci-rust.yml builds, so CI reuses that build
+        # instead of compiling the worker a second time for one feature.
         ["cargo", "test", "--locked", "--offline", "--manifest-path",
-         "services/elitea-worker-rust/Cargo.toml", "--features",
-         "sandbox-supervisor", "--lib", args.test_filter, "-j", "2",
+         "services/elitea-worker-rust/Cargo.toml", "--all-features",
+         "--lib", args.test_filter, "-j", "2",
          "--", "--ignored", "--nocapture"],
         cwd=root, env=env, timeout=600,
     )
