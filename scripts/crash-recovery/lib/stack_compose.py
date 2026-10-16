@@ -178,6 +178,8 @@ class Stack:
         if not (certs / 'runtime-ca.crt').exists():
             env = dict(os.environ, PATH=f'{pathlib.Path(python_with_cryptography).parent}:{os.environ["PATH"]}')
             run(['bash', 'deploy/scripts/standalone-stack.sh', 'certs'], cwd=REPO, env=env, timeout=600)
+        # Idempotent; issues only what is missing or stale. `standalone-stack.sh up` refuses without it.
+        run(['bash', 'deploy/scripts/gen-vector-certs.sh'], cwd=REPO, timeout=180)
         self.material.mkdir(parents=True, exist_ok=True)
         os.chmod(self.material, 0o700)
         issued = self.dir / 'sandbox-certs'
