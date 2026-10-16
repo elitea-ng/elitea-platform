@@ -109,6 +109,10 @@ type Handoff struct {
 	IncludedExcluded []string
 	EnvNames         []string
 	EnvSecretName    string
+	// RewindTo is set only on the answer of StartCloudTurn: the turn is a
+	// regenerate of the newest cloud turn, and the worker moves
+	// refs/elitea/cloud from CloudSHA back to this commit before it runs.
+	RewindTo *string
 }
 
 // EnvSecret reports whether the thread has harvested variables (the runtime
@@ -202,6 +206,17 @@ const (
 	MetaExecutedBy      = "executed_by"
 	MetaWorkspaceEpoch  = "workspace_epoch"
 	MetaWorkspaceCommit = "workspace_commit"
+	// MetaWorkspaceBase is the commit the answer's turn started from (the
+	// cloud ref at its first claim, the handoff snapshot for the first cloud
+	// turn, or the rewind target of a regeneration). A continuation keeps it.
+	// workspace_commit != workspace_base_commit means the turn published.
+	MetaWorkspaceBase = "workspace_base_commit"
+	// MetaRewindFrom and MetaRewindTo are written by a regenerate of the
+	// newest cloud turn that published (decision 7): the claim rewinds
+	// refs/elitea/cloud from the first to the second while the ref still
+	// holds the first. The regenerate strips all three before it marks.
+	MetaRewindFrom = "workspace_rewind_from"
+	MetaRewindTo   = "workspace_rewind_to"
 )
 
 // CloudTurnMeta is the meta a cloud turn's answer group carries. The executor

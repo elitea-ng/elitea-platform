@@ -22,6 +22,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
@@ -33,6 +36,9 @@ const (
 	ChunkBytes = 32 << 10
 	// maxClaimTextBytes bounds the claim id.
 	maxClaimTextBytes = 256
+	// ThreadBusyMessage is the ABORTED status message of a publish that met
+	// another change of the thread (workspaceruntime.ErrThreadBusy).
+	ThreadBusyMessage = "thread_busy"
 )
 
 // WorkloadAuthorizer is control.WorkloadAuthorizer: the peer identity from
@@ -304,6 +310,13 @@ func (s *Server) WorkspacePublish(ctx context.Context, request *runtimev1.Worksp
 		return &runtimev1.WorkspacePublishResponseV1{Rejection: reject}, nil
 	}
 	result, err := s.store.Publish(ctx, claim, publish)
+	if errors.Is(err, workspaceruntime.ErrThreadBusy) {
+		// Not a refusal and not a ref conflict: another change to the thread
+		// is being saved. ABORTED is the retryable status the worker answers
+		// with a backoff and the SAME publish (an identical replay is
+		// answered with the original result).
+		return nil, status.Error(codes.Aborted, ThreadBusyMessage)
+	}
 	if err != nil {
 		if refusal, ok := refusalProto(err); ok {
 			return &runtimev1.WorkspacePublishResponseV1{Refusal: refusal}, nil
@@ -380,7 +393,8 @@ func (s *Server) storeRejection(ctx context.Context, stage string, err error) *r
 		return rejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_STALE_FENCE, "The execution fence is no longer current.", false)
 	case errors.Is(err, context.Canceled):
 		return rejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_CANCELLED, "The workspace operation was cancelled.", false)
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, workspaceruntime.ErrUnavailable):
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, workspaceruntime.ErrUnavailable),
+		errors.Is(err, workspaceruntime.ErrThreadBusy):
 		s.logger.WarnContext(ctx, "workspace store unavailable", "stage", stage)
 		return rejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, "The workspace store is temporarily unavailable.", true)
 	case errors.Is(err, errUnavailableFeature):
