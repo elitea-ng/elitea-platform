@@ -546,20 +546,29 @@ func refConflict(refs []workspacestore.RefUpdate, current map[string]string) err
 	return &workspacestore.RefConflictError{Current: values}
 }
 
-// busyThreadConflict answers a publish that met the thread's row lock held:
-// another publish of this thread is committing, so this one's expected old
-// values are about to be stale. It answers a ref conflict with the refs as
-// committed now (read without the lock), never waiting for the lock.
-func (r *WorkspaceStoreRepository) busyThreadConflict(ctx context.Context, record workspacestore.PublishRecord) error {
+// ThreadRefs answers the thread's refs as committed, without a lock.
+func (r *WorkspaceStoreRepository) ThreadRefs(ctx context.Context, thread workspacestore.Thread) (map[string]string, error) {
 	var raw []byte
 	if err := r.pool.QueryRow(ctx, `
 SELECT COALESCE(jsonb_object_agg(name, sha), '{}'::jsonb) FROM elitea_runtime.workspace_refs
-WHERE project_id = $1 AND conversation_uuid = $2::uuid`, record.Thread.ProjectID, record.Thread.ConversationUUID).Scan(&raw); err != nil {
-		return fmt.Errorf("workspace store: read refs: %w", err)
+WHERE project_id = $1 AND conversation_uuid = $2::uuid`, thread.ProjectID, thread.ConversationUUID).Scan(&raw); err != nil {
+		return nil, fmt.Errorf("workspace store: read refs: %w", err)
 	}
 	current := map[string]string{}
 	if err := json.Unmarshal(raw, &current); err != nil {
-		return fmt.Errorf("workspace store: read refs: %w", err)
+		return nil, fmt.Errorf("workspace store: read refs: %w", err)
+	}
+	return current, nil
+}
+
+// busyThreadConflict answers a publish that met the thread's row lock held:
+// another publish of this thread is committing (on another replica), so this
+// one's expected old values are about to be stale. It answers a ref conflict
+// with the refs as committed now (read without the lock), never waiting.
+func (r *WorkspaceStoreRepository) busyThreadConflict(ctx context.Context, record workspacestore.PublishRecord) error {
+	current, err := r.ThreadRefs(ctx, record.Thread)
+	if err != nil {
+		return err
 	}
 	values := map[string]*string{}
 	for _, ref := range record.Refs {

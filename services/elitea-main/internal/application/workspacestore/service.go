@@ -90,6 +90,10 @@ type Service struct {
 	mu           sync.Mutex
 	orphanCursor int64
 	names        sync.Map
+	// publishing holds the threads with a publish in flight in this process
+	// (decision 15): a second publish of the same thread answers a ref
+	// conflict before it takes a pooled connection.
+	publishing sync.Map
 }
 
 // NewService builds the store. Every dependency is required.
@@ -565,6 +569,17 @@ func (s *Service) Publish(ctx context.Context, request PublishRequest) (PublishR
 }
 
 func (s *Service) publish(ctx context.Context, request PublishRequest) (PublishResult, error) {
+	// One publish per thread at a time in this process. A second one meets a
+	// publish that is about to move the refs, so its expected old values
+	// will not hold: it answers a ref conflict (the desktop and the worker
+	// re-read and retry) at the cost of one read, and never holds a pooled
+	// connection while it waits. Across replicas the transaction's
+	// FOR UPDATE NOWAIT gives the same answer.
+	inflight := strconv.FormatInt(request.Thread.ProjectID, 10) + "/" + request.Thread.ConversationUUID
+	if _, busy := s.publishing.LoadOrStore(inflight, struct{}{}); busy {
+		return PublishResult{}, s.busyConflict(ctx, request)
+	}
+	defer s.publishing.Delete(inflight)
 	// One read before the transaction (decision 15): the writer check, the
 	// replay lookup and the quota fast path share it.
 	pre, err := s.repo.PublishPrecheck(ctx, request.Thread, request.SHA256)
@@ -601,6 +616,25 @@ func (s *Service) publish(ctx context.Context, request PublishRequest) (PublishR
 		Refs: request.Refs, ObjectKey: key, PhysicalBucket: physical,
 		MaxProjectBytes: limits.MaxProjectWorkspaceBytes,
 	})
+}
+
+// busyConflict answers a publish of a thread that another publish is moving:
+// a ref conflict with the refs as committed.
+func (s *Service) busyConflict(ctx context.Context, request PublishRequest) error {
+	current, err := s.repo.ThreadRefs(ctx, request.Thread)
+	if err != nil {
+		return err
+	}
+	values := map[string]*string{}
+	for _, ref := range request.Refs {
+		if stored, present := current[ref.Name]; present {
+			value := stored
+			values[ref.Name] = &value
+		} else {
+			values[ref.Name] = nil
+		}
+	}
+	return &RefConflictError{Current: values}
 }
 
 // verifyObject checks the stored object BEFORE the transaction opens: its size

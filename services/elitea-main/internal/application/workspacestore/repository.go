@@ -121,6 +121,8 @@ type Repository interface {
 	// transaction: the thread row (ErrNotFound when absent), the newest live
 	// segment with the digest, and the project's and the thread's live bytes.
 	PublishPrecheck(ctx context.Context, thread Thread, sha256 string) (PublishPrecheck, error)
+	// ThreadRefs answers the thread's refs as committed, without a lock.
+	ThreadRefs(ctx context.Context, thread Thread) (map[string]string, error)
 	// EnsureWorkspaceBucket answers the project's workspace bucket, creating
 	// it on first use. It is found by type; its name is WorkspaceBucketName,
 	// or a suffixed name when a user bucket already holds that one.
