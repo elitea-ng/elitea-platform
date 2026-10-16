@@ -42,11 +42,13 @@ impl SecretEnv {
         }
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
         self.vars.is_empty()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn len(&self) -> usize {
         self.vars.len()
@@ -179,6 +181,27 @@ impl WorkspaceSandbox for RedactingSandbox {
             .call_tool(tool, call_id, args)
             .await
             .map(|result| self.redactor.json(result))
+    }
+
+    async fn call_tool_approved(
+        &self,
+        tool: &str,
+        call_id: &str,
+        args: Value,
+        approved: bool,
+    ) -> Result<Value, SandboxRunError> {
+        self.inner
+            .call_tool_approved(tool, call_id, args, approved)
+            .await
+            .map(|result| self.redactor.json(result))
+    }
+
+    async fn classify_command(
+        &self,
+        command: &str,
+        cwd: Option<&str>,
+    ) -> Result<bool, SandboxRunError> {
+        self.inner.classify_command(command, cwd).await
     }
 
     async fn pull_tree(&self, worktree: &Path) -> Result<(), SandboxRunError> {

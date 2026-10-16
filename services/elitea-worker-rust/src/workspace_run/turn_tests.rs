@@ -19,8 +19,8 @@ use super::sandbox::{
     WorkspaceSandboxLauncher,
 };
 use super::store::{
-    FetchedThread, PlannedSegment, PublishSegment, PublishedSegment, PullRequestDiff, REF_CLOUD,
-    RefusalCode, StoreCallError, WorkspaceStore, sha256_hex,
+    FetchedThread, PlannedSegment, PublishSegment, PublishedSegment, REF_CLOUD, RefusalCode,
+    StoreCallError, WorkspaceStore, sha256_hex,
 };
 use super::turn::{TurnEnd, WorkspaceRunError, WorkspaceRunFactory};
 use crate::protocol::elitea::runtime::v1::WorkspaceClaimV1;
@@ -28,6 +28,7 @@ use crate::protocol::elitea::runtime::v1::WorkspaceClaimV1;
 const HANDOFF: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const BASE: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const CLOUD: &str = "cccccccccccccccccccccccccccccccccccccccc";
+const PARENT: &str = "dddddddddddddddddddddddddddddddddddddddd";
 
 /// A "segment" is the JSON of its files; the codec reads it back.
 fn segment(files: &BTreeMap<String, String>) -> Vec<u8> {
@@ -74,6 +75,7 @@ impl WorkspaceStore for FakeStore {
         claim: &WorkspaceClaimV1,
         _since: u64,
         _max: u64,
+        into: &Path,
     ) -> Result<FetchedThread, StoreCallError> {
         let state = self.state();
         if claim.epoch != state.epoch {
@@ -91,21 +93,24 @@ impl WorkspaceStore for FakeStore {
                 bytes: state.segment.len() as u64,
                 refs: state.refs.clone(),
             },
-            bytes: state.segment.clone(),
         })
+        .inspect(|_| std::fs::write(into, &state.segment).expect("segment file"))
     }
 
     async fn upload(
         &self,
         _claim: &WorkspaceClaimV1,
         sha256: &str,
-        bytes: &[u8],
+        bytes: u64,
+        segment: &Path,
     ) -> Result<bool, StoreCallError> {
         let mut state = self.state();
         if state.upload_fails {
             return Err(StoreCallError::Transport { retryable: false });
         }
-        assert_eq!(sha256_hex(bytes), sha256);
+        let content = std::fs::read(segment).expect("segment file");
+        assert_eq!(content.len() as u64, bytes);
+        assert_eq!(sha256_hex(&content), sha256);
         state.uploads.push(sha256.to_owned());
         Ok(false)
     }
@@ -149,16 +154,6 @@ impl WorkspaceStore for FakeStore {
         })
     }
 
-    async fn pull_request_diff(
-        &self,
-        _claim: &WorkspaceClaimV1,
-    ) -> Result<PullRequestDiff, StoreCallError> {
-        Err(StoreCallError::Refused {
-            code: RefusalCode::NoUpstream,
-            current: BTreeMap::new(),
-        })
-    }
-
     async fn env_secret(&self, _claim: &WorkspaceClaimV1) -> Result<SecretEnv, StoreCallError> {
         let mut state = self.state();
         state.env_reads += 1;
@@ -170,6 +165,27 @@ impl WorkspaceStore for FakeStore {
 struct FakeCodec {
     commits: Mutex<Vec<TurnCommit>>,
     included: Mutex<Vec<String>>,
+    /// The tree hydrated (the parent's files) and the last committed tree.
+    hydrated: Mutex<BTreeMap<String, String>>,
+    committed: Mutex<BTreeMap<String, String>>,
+}
+
+struct FakeParent(BTreeMap<String, String>);
+
+impl super::file_redact::ParentTree for FakeParent {
+    fn unchanged(&self, path: &str, content: &[u8]) -> bool {
+        self.0
+            .get(path)
+            .is_some_and(|seen| seen.as_bytes() == content)
+    }
+    fn unchanged_file(&self, path: &str, file: &Path, _: u64) -> bool {
+        self.unchanged(path, &std::fs::read(file).expect("read"))
+    }
+    fn content(&self, path: &str) -> Option<(Vec<u8>, bool)> {
+        self.0
+            .get(path)
+            .map(|content| (content.clone().into_bytes(), false))
+    }
 }
 
 fn read_tree(root: &Path) -> BTreeMap<String, String> {
@@ -205,18 +221,21 @@ fn write_tree(root: &Path, files: &BTreeMap<String, String>) {
 impl WorkspaceCodec for FakeCodec {
     fn hydrate(
         &self,
-        segment: &[u8],
+        segment: &Path,
         expect: &SegmentExpectation,
         _checkout: &str,
         _git_dir: &Path,
         worktree: &Path,
     ) -> Result<HydratedTree, CodecError> {
+        let segment = std::fs::read(segment).map_err(|_| CodecError::Io)?;
+        let segment = segment.as_slice();
         if sha256_hex(segment) != expect.sha256 || segment.len() as u64 != expect.bytes {
             return Err(CodecError::Integrity);
         }
         let files: BTreeMap<String, String> =
             serde_json::from_slice(segment).map_err(|_| CodecError::Integrity)?;
         write_tree(worktree, &files);
+        *self.hydrated.lock().expect("hydrated") = files.clone();
         Ok(HydratedTree {
             files: files.len() as u64,
             unpacked_bytes: 0,
@@ -231,18 +250,57 @@ impl WorkspaceCodec for FakeCodec {
         commit: &TurnCommit,
         refs: &BTreeMap<String, String>,
         _max: u64,
+        out: &Path,
     ) -> Result<BuiltSegment, CodecError> {
         self.commits.lock().expect("commits").push(commit.clone());
         let files = read_tree(worktree);
+        *self.committed.lock().expect("committed") = files.clone();
         let bytes =
             serde_json::to_vec(&json!({"files": files, "refs": refs, "parent": commit.parent}))
                 .expect("json");
         let commit_sha = sha256_hex(&bytes)[..40].to_owned();
+        std::fs::write(out, &bytes).map_err(|_| CodecError::Io)?;
         Ok(BuiltSegment {
             commit: commit_sha,
+            path: out.to_path_buf(),
             sha256: sha256_hex(&bytes),
-            bytes,
+            bytes: bytes.len() as u64,
         })
+    }
+
+    fn parent_files(
+        &self,
+        _git_dir: &Path,
+        _parent: &str,
+    ) -> Result<Box<dyn super::file_redact::ParentTree + Send>, CodecError> {
+        Ok(Box::new(FakeParent(
+            self.hydrated.lock().expect("hydrated").clone(),
+        )))
+    }
+
+    fn rewind(
+        &self,
+        _git_dir: &Path,
+        expect: &SegmentExpectation,
+        cloud: &str,
+        worktree: &Path,
+        _max: u64,
+        out: &Path,
+    ) -> Result<(String, BuiltSegment), CodecError> {
+        assert_eq!(expect.refs.get(REF_CLOUD).map(String::as_str), Some(cloud));
+        // The parent's tree: the fake keeps one tree, the hydrated one.
+        write_tree(worktree, &self.hydrated.lock().expect("hydrated"));
+        let bytes = format!("rewind {cloud}").into_bytes();
+        std::fs::write(out, &bytes).map_err(|_| CodecError::Io)?;
+        Ok((
+            PARENT.to_owned(),
+            BuiltSegment {
+                commit: PARENT.to_owned(),
+                path: out.to_path_buf(),
+                sha256: sha256_hex(&bytes),
+                bytes: bytes.len() as u64,
+            },
+        ))
     }
 }
 
@@ -310,6 +368,7 @@ impl WorkspaceSandboxLauncher for FakeLauncher {
         &self,
         spec: &WorkspaceRunSpec,
         env: &SecretEnv,
+        _grants: Arc<dyn super::sandbox::WorkspaceRunGrants>,
     ) -> Result<Arc<dyn WorkspaceSandbox>, SandboxRunError> {
         self.launched.lock().expect("launched").push(spec.clone());
         *self.sandbox.env.lock().expect("env") = env
@@ -394,7 +453,12 @@ async fn a_completed_turn_publishes_exactly_one_segment_on_the_expected_cloud_re
     let harness = harness(CLOUD_REFS, &[("src/main.rs", "fn main() {}\n")]);
     let turn = harness
         .factory
-        .begin(&later_turn(), claim(2), "execution-1")
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .expect("hydrated");
     // The sandbox got the checked-out tree; a tool writes a file.
@@ -452,7 +516,12 @@ async fn the_first_cloud_turn_starts_from_the_handoff_snapshot() {
     let harness = harness(HANDOFF_REFS, &[("a.txt", "a\n")]);
     let turn = harness
         .factory
-        .begin(&first_turn(), claim(2), "execution-1")
+        .begin(
+            &first_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .expect("hydrated");
     turn.finish(TurnEnd::Completed).await.expect("published");
@@ -465,7 +534,12 @@ async fn a_failed_turn_publishes_nothing_and_destroys_the_sandbox() {
     let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
     let turn = harness
         .factory
-        .begin(&later_turn(), claim(2), "execution-1")
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .expect("hydrated");
     assert_eq!(turn.finish(TurnEnd::Failed).await.expect("ok"), None);
@@ -480,7 +554,12 @@ async fn a_pause_for_input_publishes_the_work_so_far() {
     let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
     let turn = harness
         .factory
-        .begin(&later_turn(), claim(2), "execution-1")
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .expect("hydrated");
     let stamp = turn.finish(TurnEnd::Paused).await.expect("published");
@@ -493,7 +572,12 @@ async fn a_stale_epoch_moves_nothing() {
     let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
     let turn = harness
         .factory
-        .begin(&later_turn(), claim(2), "execution-1")
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .expect("hydrated");
     // Take back happened meanwhile: the thread's epoch moved on.
@@ -511,7 +595,12 @@ async fn a_lost_publish_acknowledgement_is_retried_as_the_same_request() {
     harness.store.state().lose_first_publish_ack = true;
     let turn = harness
         .factory
-        .begin(&later_turn(), claim(2), "execution-1")
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .expect("hydrated");
     let stamp = turn
@@ -534,7 +623,12 @@ async fn an_upload_failure_publishes_nothing() {
     harness.store.state().upload_fails = true;
     let turn = harness
         .factory
-        .begin(&later_turn(), claim(2), "execution-1")
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .expect("hydrated");
     assert!(turn.finish(TurnEnd::Completed).await.is_err());
@@ -549,7 +643,12 @@ async fn a_secret_in_the_tree_fails_the_turn_before_any_sandbox_starts() {
     );
     let error = harness
         .factory
-        .begin(&later_turn(), claim(2), "execution-1")
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .err()
         .expect("refused");
@@ -563,7 +662,12 @@ async fn a_cloud_ref_other_than_the_context_says_is_stale_state() {
     let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
     let error = harness
         .factory
-        .begin(&first_turn(), claim(2), "execution-1")
+        .begin(
+            &first_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .err()
         .expect("refused");
@@ -571,7 +675,12 @@ async fn a_cloud_ref_other_than_the_context_says_is_stale_state() {
     // A stale epoch is refused by the fetch itself.
     let error = harness
         .factory
-        .begin(&later_turn(), claim(1), "execution-1")
+        .begin(
+            &later_turn(),
+            claim(1),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .err()
         .expect("refused");
@@ -598,7 +707,12 @@ async fn the_harvested_env_reaches_run_command_and_is_redacted_from_its_output()
     };
     let turn = harness
         .factory
-        .begin(&context, claim(2), "execution-1")
+        .begin(
+            &context,
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .expect("hydrated");
     assert_eq!(harness.store.state().env_reads, 1);
@@ -662,7 +776,12 @@ async fn without_env_secret_no_env_is_redeemed_or_injected() {
     harness.store.state().env = vec![("DATABASE_URL".to_owned(), "postgres://x:y@z/w".to_owned())];
     let turn = harness
         .factory
-        .begin(&later_turn(), claim(2), "execution-1")
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .expect("hydrated");
     assert_eq!(harness.store.state().env_reads, 0);
@@ -685,8 +804,110 @@ async fn an_explicit_include_is_not_re_scanned() {
         .push("./.env".to_owned());
     let turn = harness
         .factory
-        .begin(&later_turn(), claim(2), "execution-1")
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
         .await
         .expect("the included file is the person's choice");
     turn.finish(TurnEnd::Failed).await.expect("ok");
+}
+
+/// Item 3: a file a command wrote with the harvested env in it (`env >
+/// out.txt`) is published redacted, by NAME, and the stamp carries the
+/// notice; an unchanged file is left as it was.
+#[tokio::test]
+async fn harvested_values_in_written_files_are_redacted_before_the_commit() {
+    let harness = harness(CLOUD_REFS, &[("kept.txt", "API_TOKEN=tok-9f8e7d6c5b\n")]);
+    harness.store.state().env = vec![("API_TOKEN".to_owned(), "tok-9f8e7d6c5b".to_owned())];
+    let context = WorkspaceRuntimeContext {
+        env_secret: true,
+        ..later_turn()
+    };
+    let turn = harness
+        .factory
+        .begin(
+            &context,
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("hydrated");
+    turn.sandbox()
+        .call_tool(
+            "write_file",
+            "call-1",
+            json!({"path": "out.txt", "content": "API_TOKEN=tok-9f8e7d6c5b\nPATH=/bin\n"}),
+        )
+        .await
+        .expect("tool");
+    let stamp = turn
+        .finish(TurnEnd::Completed)
+        .await
+        .expect("published")
+        .expect("stamp");
+    let committed = harness.codec.committed.lock().expect("committed").clone();
+    assert_eq!(
+        committed["out.txt"],
+        "API_TOKEN=[REDACTED:API_TOKEN]\nPATH=/bin\n"
+    );
+    assert_eq!(
+        committed["kept.txt"], "API_TOKEN=tok-9f8e7d6c5b\n",
+        "unchanged files stay"
+    );
+    assert_eq!(stamp.redactions.len(), 1);
+    assert_eq!(stamp.redactions[0].path, "out.txt");
+    assert_eq!(stamp.redactions[0].names, ["API_TOKEN"]);
+    let message = &harness.codec.commits.lock().expect("commits")[0].message;
+    assert!(message.contains("Elitea-Redacted: out.txt"), "{message}");
+    assert!(!message.contains("tok-9f8e7d6c5b"));
+    let notice = super::file_redact::notice(&stamp.redactions).expect("notice");
+    assert!(notice.contains("out.txt") && notice.contains("API_TOKEN"));
+    assert!(!notice.contains("tok-9f8e7d6c5b"));
+}
+
+/// Regenerate of the newest cloud turn (decision 7): before anything runs,
+/// the cloud ref moves back from the regenerated turn's commit to its parent
+/// through the normal publish compare-and-set, and the new turn publishes
+/// on top of the parent.
+#[tokio::test]
+async fn a_regenerate_rewinds_the_cloud_ref_before_the_turn_runs() {
+    let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
+    let context = WorkspaceRuntimeContext {
+        rewind: true,
+        ..later_turn()
+    };
+    let turn = harness
+        .factory
+        .begin(
+            &context,
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("rewound and hydrated");
+    {
+        let state = harness.store.state();
+        assert_eq!(state.publishes.len(), 1, "the rewind is published first");
+        assert_eq!(state.publishes[0].old_cloud.as_deref(), Some(CLOUD));
+        assert_eq!(state.publishes[0].new_cloud, PARENT);
+        assert_eq!(state.refs.get(REF_CLOUD).map(String::as_str), Some(PARENT));
+    }
+    turn.finish(TurnEnd::Completed).await.expect("published");
+    let state = harness.store.state();
+    assert_eq!(state.publishes.len(), 2);
+    assert_eq!(state.publishes[1].old_cloud.as_deref(), Some(PARENT));
+    assert_eq!(
+        harness.codec.commits.lock().expect("commits")[0].parent,
+        PARENT
+    );
+
+    // A rewind without a cloud turn to rewind is malformed.
+    let mut bad = first_turn();
+    bad.rewind = true;
+    assert!(bad.validate().is_err());
 }
