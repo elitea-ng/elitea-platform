@@ -9,17 +9,35 @@ use elitea_agent_runtime::workspace_tools::{WorkspaceRunner, WorkspaceToolProvid
 use serde_json::Value;
 
 use super::sandbox::{SandboxRunError, WorkspaceSandbox};
+use super::wrap_up::WrapUp;
 
 /// Sends each tool call to the sandbox's workspace runner.
 pub(crate) struct SandboxWorkspaceRunner {
     sandbox: Arc<dyn WorkspaceSandbox>,
+    /// The turn's take-back wrap-up (ADR-0034); `None` outside a turn.
+    wrap_up: Option<Arc<WrapUp>>,
 }
 
 impl SandboxWorkspaceRunner {
     #[must_use]
     pub(crate) fn new(sandbox: Arc<dyn WorkspaceSandbox>) -> Self {
-        Self { sandbox }
+        Self {
+            sandbox,
+            wrap_up: None,
+        }
     }
+
+    /// Refuse new calls, and stop a long one, once the thread is taken back.
+    #[must_use]
+    pub(crate) fn with_wrap_up(mut self, wrap_up: Arc<WrapUp>) -> Self {
+        self.wrap_up = Some(wrap_up);
+        self
+    }
+}
+
+fn taken_back() -> HostError {
+    HostError::new(HostErrorCode::ExecutionEnded, super::wrap_up::REFUSED)
+        .with_reason("workspace_run.taken_back")
 }
 
 #[async_trait]
@@ -35,26 +53,32 @@ impl WorkspaceRunner for SandboxWorkspaceRunner {
         args: Value,
         approved: bool,
     ) -> Result<Value, HostError> {
-        self.sandbox
-            .call_tool_approved(tool, call_id, args, approved)
-            .await
-            .map_err(|error| {
-                match error {
-                    SandboxRunError::Timeout => HostError::new(
-                        HostErrorCode::ResourceExhausted,
-                        "the workspace tool ran out of time",
-                    ),
-                    SandboxRunError::Protocol => HostError::new(
-                        HostErrorCode::InvalidResponse,
-                        "the workspace runner answered out of protocol",
-                    ),
-                    _ => HostError::new(
-                        HostErrorCode::DependencyUnavailable,
-                        "the workspace sandbox is unavailable",
-                    ),
-                }
-                .with_reason(error.code())
-            })
+        let call = self
+            .sandbox
+            .call_tool_approved(tool, call_id, args, approved);
+        let result = match &self.wrap_up {
+            Some(wrap_up) => super::wrap_up::guarded(wrap_up, super::wrap_up::COMMAND_GRACE, call)
+                .await
+                .ok_or_else(taken_back)?,
+            None => call.await,
+        };
+        result.map_err(|error| {
+            match error {
+                SandboxRunError::Timeout => HostError::new(
+                    HostErrorCode::ResourceExhausted,
+                    "the workspace tool ran out of time",
+                ),
+                SandboxRunError::Protocol => HostError::new(
+                    HostErrorCode::InvalidResponse,
+                    "the workspace runner answered out of protocol",
+                ),
+                _ => HostError::new(
+                    HostErrorCode::DependencyUnavailable,
+                    "the workspace sandbox is unavailable",
+                ),
+            }
+            .with_reason(error.code())
+        })
     }
 }
 
@@ -95,10 +119,23 @@ impl adk_rust::agent::ToolCallConfirmation for WorkspaceCommandGate {
 }
 
 /// The provider for one turn: `run_command` only when the project's shell
-/// switch is on.
+/// switch is on. Production turns use [`turn_provider`].
+#[cfg(test)]
 #[must_use]
 pub(crate) fn provider(sandbox: Arc<dyn WorkspaceSandbox>, shell: bool) -> WorkspaceToolProvider {
     WorkspaceToolProvider::new(Arc::new(SandboxWorkspaceRunner::new(sandbox)), shell)
+}
+
+/// The provider of a cloud turn, under its take-back wrap-up.
+#[must_use]
+pub(crate) fn turn_provider(
+    turn: &super::turn::WorkspaceTurn,
+    shell: bool,
+) -> WorkspaceToolProvider {
+    WorkspaceToolProvider::new(
+        Arc::new(SandboxWorkspaceRunner::new(turn.sandbox()).with_wrap_up(turn.wrap_up())),
+        shell,
+    )
 }
 
 /// `open_pull_request`'s diff (ADR-0034 decision 10): computed by the
@@ -163,5 +200,65 @@ impl elitea_agent_runtime::toolkits::workspace_pull_request::PullRequestAudit
             files = event.files,
             upstream_sha = event.upstream_sha.as_str(),
         );
+    }
+}
+
+#[cfg(test)]
+mod wrap_up_tests {
+    use super::*;
+    use crate::workspace_run::wrap_up::WrapUp;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct CountingSandbox(AtomicUsize);
+
+    impl CountingSandbox {
+        fn calls(&self) -> usize {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl WorkspaceSandbox for CountingSandbox {
+        async fn push_tree(&self, _: &Path) -> Result<(), SandboxRunError> {
+            Ok(())
+        }
+        async fn call_tool(&self, _: &str, _: &str, _: Value) -> Result<Value, SandboxRunError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::json!({"ok": true}))
+        }
+        async fn pull_tree(&self, _: &Path) -> Result<(), SandboxRunError> {
+            Ok(())
+        }
+        async fn destroy(&self) -> Result<(), SandboxRunError> {
+            Ok(())
+        }
+    }
+
+    /// After a take back, a workspace tool call does not reach the sandbox:
+    /// the model is told the work is being taken back.
+    #[tokio::test]
+    async fn a_taken_back_turn_runs_no_further_workspace_command() {
+        let sandbox = Arc::new(CountingSandbox::default());
+        let wrap_up = Arc::new(WrapUp::default());
+        let runner = SandboxWorkspaceRunner::new(Arc::clone(&sandbox) as Arc<dyn WorkspaceSandbox>)
+            .with_wrap_up(Arc::clone(&wrap_up));
+        runner
+            .call("read_file", "call-1", serde_json::json!({"path": "a.txt"}))
+            .await
+            .expect("before the take back");
+        assert_eq!(sandbox.calls(), 1);
+        wrap_up.request();
+        let refused = runner
+            .call(
+                "run_command",
+                "call-2",
+                serde_json::json!({"command": "make"}),
+            )
+            .await
+            .expect_err("refused");
+        assert_eq!(refused.code(), HostErrorCode::ExecutionEnded);
+        assert_eq!(sandbox.calls(), 1, "nothing reached the sandbox");
     }
 }

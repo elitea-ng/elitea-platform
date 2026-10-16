@@ -53,6 +53,7 @@ type Threads interface {
 	Read(ctx context.Context, thread workspacehandoff.Thread) (workspacehandoff.Handoff, bool, error)
 	Execution(ctx context.Context, executionID string, generation uint64) (Execution, bool, error)
 	FinishedCloudTurns(ctx context.Context, limit int) ([]workspacehandoff.Handoff, error)
+	ReclaimPending(ctx context.Context, executionID string) (bool, error)
 }
 
 // Resources are the chart's sandbox limits, parsed (zero: the worker's
@@ -365,6 +366,15 @@ func (a *Adapter) finish(ctx context.Context, handoff workspacehandoff.Handoff) 
 		"conversation_uuid", handoff.ConversationUUID, "execution_id", handoff.RunningExecutionID,
 		"state", string(finished.State), "epoch", finished.Epoch)
 	return nil
+}
+
+// WrapUpRequested: executionID runs a cloud turn whose thread is being taken
+// back. Read on every lease poll, so it is one indexed lookup.
+func (a *Adapter) WrapUpRequested(ctx context.Context, executionID string) (bool, error) {
+	if executionID == "" || len(executionID) > 64 {
+		return false, nil
+	}
+	return a.threads.ReclaimPending(ctx, executionID)
 }
 
 // reconcileBatch bounds one reconciliation pass.

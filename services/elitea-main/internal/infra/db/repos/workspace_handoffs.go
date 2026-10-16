@@ -1135,6 +1135,22 @@ WHERE a.execution_id = $1 AND a.generation = $2`, executionID, int64(generation)
 	return out, true, nil
 }
 
+// ReclaimPending answers whether executionID is the running cloud turn of a
+// thread with a take back pending (the partial running_execution_id index).
+func (r *WorkspaceHandoffsRepository) ReclaimPending(ctx context.Context, executionID string) (bool, error) {
+	var pending bool
+	err := r.pool.QueryRow(ctx, `
+SELECT reclaim_pending FROM elitea_runtime.workspace_handoffs
+WHERE running_execution_id = $1 AND state = 'CLOUD_RUNNING'`, executionID).Scan(&pending)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("workspace handoff: read the take-back signal: %w", err)
+	}
+	return pending, nil
+}
+
 // FinishedCloudTurns answers CLOUD_RUNNING threads whose running execution has
 // no generation left that is not terminal (SUCCEEDED, FAILED, CANCELLED or
 // QUARANTINED): the turn ended but its finish never ran.

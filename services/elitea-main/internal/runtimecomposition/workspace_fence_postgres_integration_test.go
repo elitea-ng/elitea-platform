@@ -146,8 +146,9 @@ func (fenceSeam) HandedOff(context.Context, workspaceruntime.TurnClaim) (bool, e
 func (fenceSeam) EffectiveCloudPolicy(context.Context, int64, string) (workspaceruntime.Policy, error) {
 	return workspaceruntime.Policy{}, nil
 }
-func (fenceSeam) FinishExecution(context.Context, string) error  { return nil }
-func (fenceSeam) ReconcileFinished(context.Context) (int, error) { return 0, nil }
+func (fenceSeam) FinishExecution(context.Context, string) error         { return nil }
+func (fenceSeam) ReconcileFinished(context.Context) (int, error)        { return 0, nil }
+func (fenceSeam) WrapUpRequested(context.Context, string) (bool, error) { return false, nil }
 
 func completeSeam() WorkspaceDependencies {
 	return WorkspaceDependencies{Store: fenceSeam{}, Turns: fenceSeam{}, Policies: fenceSeam{}, Lifecycle: fenceSeam{}}

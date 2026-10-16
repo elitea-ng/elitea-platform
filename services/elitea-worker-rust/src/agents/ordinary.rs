@@ -369,7 +369,7 @@ impl OrdinaryNativeAgentAssembler {
         let runtime = match (&workspace, context.workspace()) {
             (Some(turn), Some(field)) => {
                 let runtime = runtime.with_workspace_toolset(
-                    crate::workspace_run::tools::provider(turn.sandbox(), field.shell).toolset(),
+                    crate::workspace_run::tools::turn_provider(turn, field.shell).toolset(),
                 );
                 // A destructive or escaping command is a server HITL
                 // interrupt before it runs (ADR-0034 decision 9).

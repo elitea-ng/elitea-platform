@@ -1283,6 +1283,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	if dependencies.Workspace.complete() {
+		// The take-back signal rides the lease poll, as cancellation does.
+		controlServer.WithWorkspaceWrapUps(dependencies.Workspace.Lifecycle)
+	}
 	workspaceServer, err := newWorkspaceStoreServer(controlPeerAuthorizer, controlClaims, dependencies)
 	if err != nil {
 		return nil, err

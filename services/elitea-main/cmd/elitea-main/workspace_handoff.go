@@ -408,6 +408,10 @@ func (t workspaceThreads) FinishedCloudTurns(ctx context.Context, limit int) ([]
 	return t.repo.FinishedCloudTurns(ctx, limit)
 }
 
+func (t workspaceThreads) ReclaimPending(ctx context.Context, executionID string) (bool, error) {
+	return t.repo.ReclaimPending(ctx, executionID)
+}
+
 // parseCloudExecutorResources reads the chart's sandbox limits: CPU as cores
 // or millicores ("2", "1.5", "500m"), memory and disk as bytes with an
 // optional binary or decimal suffix ("4Gi", "512Mi", "1G"). Empty is zero (the

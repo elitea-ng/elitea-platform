@@ -41,11 +41,13 @@ impl Default for FakeState {
     fn default() -> Self {
         Self {
             renew: Mutex::new(RenewLeaseResponseV1 {
+                workspace_wrap_up: false,
                 lease_expires_at_unix_millis: NOW + 60_000,
                 desired_state: DesiredExecutionStateV1::Running as i32,
                 rejection: None,
             }),
             observe: Mutex::new(ObserveDesiredStateResponseV1 {
+                workspace_wrap_up: false,
                 desired_state: DesiredExecutionStateV1::Running as i32,
                 rejection: None,
             }),
@@ -332,6 +334,7 @@ async fn a_fatal_failure_after_cancellation_becomes_authoritative() {
     );
 
     *state.renew.lock().expect("renew") = RenewLeaseResponseV1 {
+        workspace_wrap_up: false,
         lease_expires_at_unix_millis: 0,
         desired_state: DesiredExecutionStateV1::Unspecified as i32,
         rejection: Some(RuntimeErrorV1 {
@@ -389,6 +392,7 @@ async fn the_lease_probe_is_the_cloud_execution_guard() {
     );
 
     *state.renew.lock().expect("renew") = RenewLeaseResponseV1 {
+        workspace_wrap_up: false,
         lease_expires_at_unix_millis: 0,
         desired_state: DesiredExecutionStateV1::Unspecified as i32,
         rejection: Some(RuntimeErrorV1 {
@@ -641,4 +645,40 @@ async fn cancelled_or_expired_checkpoint_poll_never_issues_session_access() {
             assert!(matches!(closed, Err(ClaimLeaseError::LeaseLost(_))));
         }
     }
+}
+
+/// ADR-0034 take back: a renewal that says `workspace_wrap_up` latches the
+/// probe's wrap-up signal; the lease stays RUNNING (no cancellation), and a
+/// later renewal without it does not clear the signal.
+#[tokio::test(flavor = "current_thread")]
+async fn the_take_back_signal_is_latched_and_the_lease_stays_running() {
+    let state = Arc::new(FakeState::default());
+    let monitor = ClaimLeaseMonitor::start(
+        client(Arc::clone(&state)),
+        test_lease_starting_execution(NOW + 60_000),
+        Arc::new(|| NOW),
+        config(Duration::from_secs(10)),
+    );
+    let probe = monitor.state_probe();
+    let mut signal = probe.wrap_up_signal();
+    monitor.check_now().await.expect("running");
+    assert!(!*signal.borrow(), "no take back yet");
+
+    state.renew.lock().expect("renew").workspace_wrap_up = true;
+    monitor.check_now().await.expect("still running");
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        signal.wait_for(|requested| *requested),
+    )
+    .await
+    .expect("signalled")
+    .expect("monitor alive");
+    probe
+        .ensure_running()
+        .expect("a take back is not a cancellation");
+
+    state.renew.lock().expect("renew").workspace_wrap_up = false;
+    monitor.check_now().await.expect("running");
+    assert!(*probe.wrap_up_signal().borrow(), "the signal stays latched");
+    monitor.close().await.expect("close");
 }
