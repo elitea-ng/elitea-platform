@@ -368,5 +368,6 @@
   "workspace.handoff.settings.removeNamed": "Remove {{entry}}",
   "workspace.handoff.settings.save": "Save",
   "workspace.handoff.settings.title": "Handoff settings",
-  "workspace.handoff.showFewer": "Show fewer"
+  "workspace.handoff.showFewer": "Show fewer",
+  "workspace.handoff.env.notice": "Your login shell’s variables could not be read ({{notice}}), so none are offered."
 }

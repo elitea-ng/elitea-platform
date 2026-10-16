@@ -11,13 +11,21 @@
 //!   includes and selected env variable names, per workspace in the app
 //!   data (`handoff/settings/<workspace id>.json`, owner-only), never in
 //!   the folder. Env values are never stored: they are read again at send.
-//! * **Env harvest.** The variables the desktop's own `run_command` passes
-//!   to commands ([`elitea_local_tools::shell::passthrough_environment`]),
-//!   filtered by `env_deny` and `env_allow`, bounded by `env_limits`.
+//! * **Env harvest.** The person's login-shell environment (where
+//!   variables like `DATABASE_URL` live), read once per preview, settings
+//!   read or send the way editors read it
+//!   ([`elitea_local_tools::shell::login_environment`]) and merged over the
+//!   desktop process's own; filtered by `env_deny` and `env_allow`, bounded
+//!   by `env_limits`. Values are never written anywhere. What local
+//!   `run_command` passes to commands is not changed by any of this.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use elitea_local_tools::shell::LoginEnvironment;
 
 use elitea_local_tools::handoff::caps::Caps;
 use elitea_local_tools::handoff::exclude::{self, MANDATORY, Patterns};
@@ -31,6 +39,60 @@ pub const ENV_DENY_DEFAULT: &[&str] = &[
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "PWD", "OLDPWD", "TMPDIR", "TERM*", "LANG", "LC_*",
     "SSH_*", "GPG_*", "XPC_*", "__CF*", "DISPLAY", "ELITEA_*",
 ];
+
+/// How long the login shell may take to print its environment.
+pub const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Where the env harvest reads variables from.
+#[async_trait]
+pub trait EnvSource: Send + Sync {
+    /// The variables now (and a notice when some source could not be read).
+    async fn environment(&self) -> LoginEnvironment;
+}
+
+/// The person's login shell (`$SHELL -l -i -c`, or `shell` in tests),
+/// merged over this process's environment. A shell that fails or times out
+/// gives no variables and a notice, never an error.
+pub struct LoginShellEnv {
+    /// `None`: `$SHELL`, else `/bin/zsh` (macOS) or `/bin/bash`.
+    pub shell: Option<PathBuf>,
+    pub timeout: Duration,
+}
+
+#[async_trait]
+impl EnvSource for LoginShellEnv {
+    async fn environment(&self) -> LoginEnvironment {
+        let shell = self
+            .shell
+            .clone()
+            .unwrap_or_else(elitea_local_tools::shell::login_shell);
+        let login = elitea_local_tools::shell::login_environment(&shell, self.timeout).await;
+        if login.notice.is_some() {
+            return login;
+        }
+        let mut merged: BTreeMap<String, String> = std::env::vars().collect();
+        merged.extend(login.vars);
+        LoginEnvironment {
+            vars: merged.into_iter().collect(),
+            notice: None,
+        }
+    }
+}
+
+/// A fixed environment (tests).
+#[cfg(test)]
+pub struct FixedEnv(pub Vec<(String, String)>);
+
+#[cfg(test)]
+#[async_trait]
+impl EnvSource for FixedEnv {
+    async fn environment(&self) -> LoginEnvironment {
+        LoginEnvironment {
+            vars: self.0.clone(),
+            notice: None,
+        }
+    }
+}
 
 /// The most entries of one settings list.
 const MAX_ENTRIES: usize = 500;

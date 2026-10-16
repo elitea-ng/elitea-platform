@@ -273,6 +273,10 @@ async fn harness() -> Harness {
 }
 
 async fn harness_with(environment: Vec<(String, String)>) -> Harness {
+    harness_env(Arc::new(crate::handoff_settings::FixedEnv(environment))).await
+}
+
+async fn harness_env(env_source: Arc<dyn crate::handoff_settings::EnvSource>) -> Harness {
     let platform = Arc::new(Mutex::new(Platform {
         state: "LOCAL".into(),
         ..Platform::default()
@@ -340,7 +344,7 @@ async fn harness_with(environment: Vec<(String, String)>) -> Harness {
             device_id: Arc::new(|| Some("dev-1".to_owned())),
             backoff: Backoff::immediate(3),
             git_global_config: Some(global),
-            env_source: Arc::new(move || environment.clone()),
+            env_source,
         })
         .unwrap(),
     );
@@ -983,11 +987,17 @@ async fn includes_and_env_harvest_and_the_value_never_lands_anywhere() {
         "the log is captured"
     );
     let planted = "pl4nted-Secret-Value-7c1e";
-    let h = harness_with(vec![
-        ("PATH".into(), "/usr/bin".into()),
-        ("DATABASE_URL".into(), planted.into()),
-        ("SSH_AUTH_SOCK".into(), "/tmp/agent".into()),
-    ])
+    // The value comes from a login shell's rc file, as in real life (the
+    // script lives outside the app data the test searches).
+    let shells = tempfile::tempdir().unwrap();
+    let shell = fake_shell(
+        shells.path(),
+        &format!("export DATABASE_URL='{planted}'\nexport SSH_AUTH_SOCK=/tmp/agent"),
+    );
+    let h = harness_env(Arc::new(crate::handoff_settings::LoginShellEnv {
+        shell: Some(shell),
+        timeout: Duration::from_secs(10),
+    }))
     .await;
     h.platform.lock().unwrap().policy = Some(server_policy(json!({"env_harvest": true})));
     let key = ["AKIA", "Z7QWERTYUIOPASDF"].concat();
@@ -1000,8 +1010,17 @@ async fn includes_and_env_harvest_and_the_value_never_lands_anywhere() {
         .iter()
         .map(|v| v["name"].as_str().unwrap())
         .collect();
-    assert_eq!(offered, ["DATABASE_URL"], "deny-filtered");
-    assert_eq!(got["env_offered"][0]["length"], planted.len());
+    assert!(offered.contains(&"DATABASE_URL"), "{offered:?}");
+    for denied in ["PATH", "HOME", "SSH_AUTH_SOCK"] {
+        assert!(!offered.contains(&denied), "{denied} is denied");
+    }
+    let database = got["env_offered"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["name"] == "DATABASE_URL")
+        .unwrap();
+    assert_eq!(database["length"], planted.len());
     assert!(!got.to_string().contains(planted));
     assert_eq!(
         h.host
@@ -1087,4 +1106,67 @@ async fn includes_and_env_harvest_and_the_value_never_lands_anywhere() {
             .windows(planted.len())
             .any(|w| w == planted.as_bytes())
     );
+}
+
+/// A login shell for tests: `body` (its rc), then the `-c` script.
+fn fake_shell(dir: &Path, body: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = dir.join(format!("shell-{}", body.len()));
+    std::fs::write(
+        &path,
+        format!("#!/bin/sh\n{body}\nexec /bin/sh -c \"$4\"\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// The env harvest reads the login shell: what its rc exports is offered
+/// (deny-filtered); a shell that fails or hangs offers nothing, with a
+/// notice, and the preview still works.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_harvest_offers_the_login_shell_environment() {
+    let shells = tempfile::tempdir().unwrap();
+    let rc = "export DATABASE_URL=postgres://dev\nexport SSH_AUTH_SOCK=/tmp/agent";
+    let h = harness_env(Arc::new(crate::handoff_settings::LoginShellEnv {
+        shell: Some(fake_shell(shells.path(), rc)),
+        timeout: Duration::from_secs(10),
+    }))
+    .await;
+    h.platform.lock().unwrap().policy = Some(server_policy(json!({"env_harvest": true})));
+    let preview = h
+        .host
+        .preview(&h.workspace_id, CONVERSATION, Vec::new())
+        .await
+        .unwrap();
+    let names: Vec<&str> = preview.env["offered"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"DATABASE_URL"), "{names:?}");
+    assert!(!names.contains(&"SSH_AUTH_SOCK") && !names.contains(&"PATH"));
+    assert!(preview.env["notice"].is_null());
+    for (body, timeout) in [
+        ("exit 4", Duration::from_secs(10)),
+        ("sleep 30", Duration::from_millis(300)),
+    ] {
+        let h = harness_env(Arc::new(crate::handoff_settings::LoginShellEnv {
+            shell: Some(fake_shell(shells.path(), body)),
+            timeout,
+        }))
+        .await;
+        h.platform.lock().unwrap().policy = Some(server_policy(json!({"env_harvest": true})));
+        let preview = h
+            .host
+            .preview(&h.workspace_id, CONVERSATION, Vec::new())
+            .await
+            .unwrap();
+        assert_eq!(preview.env["offered"], json!([]), "{body}");
+        assert!(preview.env["notice"].is_string(), "{body}");
+        let got = h.host.settings_get(&h.workspace_id).await.unwrap();
+        assert_eq!(got["env_offered"], json!([]));
+        assert!(got["env_notice"].is_string());
+    }
 }

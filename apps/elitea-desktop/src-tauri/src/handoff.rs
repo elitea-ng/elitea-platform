@@ -248,7 +248,7 @@ pub struct HandoffDeps {
     /// The variables the desktop's `run_command` passes to commands: what
     /// the env harvest offers (values read again at every send, never
     /// stored).
-    pub env_source: Arc<dyn Fn() -> Vec<(String, String)> + Send + Sync>,
+    pub env_source: Arc<dyn settings::EnvSource>,
 }
 
 /// A running send's cancel switch.
@@ -724,12 +724,29 @@ impl HandoffHost {
         config
     }
 
+    /// The variables the harvest may offer now (read once), and a notice
+    /// when the login shell could not be asked.
+    async fn offered_env(
+        &self,
+        effective: &EffectivePolicy,
+    ) -> (Vec<(String, String)>, Option<String>) {
+        let environment = self.deps.env_source.environment().await;
+        (
+            settings::offered(environment.vars, effective),
+            environment.notice,
+        )
+    }
+
     /// The env variables the folder's selection would send now.
-    fn harvest(&self, effective: &EffectivePolicy, folder: &FolderSettings) -> settings::Harvest {
+    async fn harvest(
+        &self,
+        effective: &EffectivePolicy,
+        folder: &FolderSettings,
+    ) -> settings::Harvest {
         if !effective.env_harvest {
             return settings::Harvest::default();
         }
-        let offered = settings::offered((self.deps.env_source)(), effective);
+        let (offered, _) = self.offered_env(effective).await;
         settings::harvest(&folder.env_names, &offered, effective.env_limits)
     }
 
@@ -775,9 +792,10 @@ impl HandoffHost {
         let mut caps_report = snap.caps.clone();
         caps::check_segment(&mut caps_report, bytes, &limits);
         let env = if effective.env_harvest {
-            let offered = settings::offered((self.deps.env_source)(), &effective);
+            let (offered, notice) = self.offered_env(&effective).await;
             let harvest = settings::harvest(&folder.env_names, &offered, effective.env_limits);
             json!({
+                "notice": notice,
                 "offered": settings::offered_wire(&offered),
                 "selected": harvest.env.keys().collect::<Vec<_>>(),
                 "missing": harvest.missing,
@@ -982,7 +1000,7 @@ impl HandoffHost {
             });
         }
         // The env selection, before begin (values only in the begin body).
-        let harvest = self.harvest(&effective, &folder);
+        let harvest = self.harvest(&effective, &folder).await;
         if harvest.over_limit {
             return Err(HandoffError {
                 code: "env_too_large".into(),
@@ -1242,12 +1260,13 @@ impl HandoffHost {
         let (_, project_id) = self.workspace(workspace_id)?;
         let effective = self.effective_policy(project_id).await?;
         let folder = self.settings.get(workspace_id)?;
-        let offered = if effective.env_harvest {
-            settings::offered((self.deps.env_source)(), &effective)
+        let (offered, notice) = if effective.env_harvest {
+            self.offered_env(&effective).await
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
         Ok(json!({
+            "env_notice": notice,
             "settings": folder,
             "policy": effective.wire(&folder.exclude_patterns, &Self::path_deny(&device, &effective)),
             "env_offered": settings::offered_wire(&offered),

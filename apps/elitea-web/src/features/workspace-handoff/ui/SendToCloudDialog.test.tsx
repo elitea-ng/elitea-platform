@@ -351,6 +351,13 @@ describe('SendToCloudDialog environment variables', () => {
     { name: 'LOG_LEVEL', length: 4 },
   ];
 
+  it('says so, and offers nothing, when the login shell could not be read', async () => {
+    mount(createFakeHandoffIpc({ policy: { env_harvest: true }, envOffered: offered, envNotice: 'the login shell did not answer in 10s' }));
+    const env = await screen.findByTestId('handoff-env');
+    expect(screen.getByTestId('handoff-env-notice')).toHaveTextContent('Your login shell’s variables could not be read (the login shell did not answer in 10s), so none are offered.');
+    expect(within(env).queryAllByRole('checkbox')).toHaveLength(0);
+  });
+
   it('is not shown when the policy does not harvest the environment', async () => {
     mount(createFakeHandoffIpc({ envOffered: offered }));
     await screen.findByTestId('handoff-summary');

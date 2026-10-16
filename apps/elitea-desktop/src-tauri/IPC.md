@@ -481,7 +481,7 @@ noted). `conversation_uuid` is the server conversation's UUID.
 | `handoff_apply` | `{preflight_id, mode: "apply" \| "worktree" \| "discard"}` | `{applied, outcome: "applied" \| "worktree" \| "discarded", checkpoint_id, worktree_path, branch, imported_turns, released, copied: string[]}` |
 | `handoff_undo` | `{checkpoint_id}` | `{restored: string[]}` — restores the folder to before a take-back |
 | `handoff_erase` | `{conversation_uuid, project_id?}` | the server's answer; the local folder is kept |
-| `handoff_settings_get` | `{workspace_id}` | `{settings: FolderHandoffSettings, policy: HandoffPolicy, env_offered: EnvVar[]}` |
+| `handoff_settings_get` | `{workspace_id}` | `{settings: FolderHandoffSettings, policy: HandoffPolicy, env_offered: EnvVar[], env_notice: string \| null}` |
 | `handoff_settings_set` | `{workspace_id, settings: FolderHandoffSettings}` | as `handoff_settings_get`; `invalid_request` for a bad pattern, an include that escapes the folder, or an env name that is not a variable name |
 
 ```ts
@@ -501,7 +501,9 @@ type Preview = {
   shadow: boolean; // the folder is not a repository: a shadow git directory in the app data is used
   policy: HandoffPolicy;
   // null when the policy has no env harvest
-  env: { offered: EnvVar[]; selected: string[]; missing: string[]; vars: number; bytes: number; over_limit: boolean } | null;
+  // notice: the login shell could not be read (failed, timed out); nothing is offered then
+  env: { offered: EnvVar[]; selected: string[]; missing: string[]; vars: number; bytes: number; over_limit: boolean;
+         notice: string | null } | null;
 };
 type HandoffPolicy = {
   source: "server" | "defaults"; // "defaults": the server has no policy route (404, an older server); the ADR's defaults are shown
@@ -542,8 +544,13 @@ type HandoffEvent = { conversation_uuid: string;
   `confirm_includes: true`, which the UI passes only after the person
   confirmed for this send. The begin call sends `included_excluded`; the
   handoff commit carries one `Elitea-Included: ./<path>` trailer per file.
-- **Env harvest.** Only when `env_harvest`. The source is the environment
-  the desktop's own `run_command` passes through to commands; the names
+- **Env harvest.** Only when `env_harvest`. The source is the person's
+  login-shell environment, read once per preview, settings read or send the
+  way editors read it (`$SHELL -l -i -c` printing `env -0` between markers,
+  from the home directory, no stdin, 10 s timeout; `/bin/zsh` on macOS or
+  `/bin/bash` when `$SHELL` is unset) and merged over the desktop process's
+  environment. A shell that fails or times out offers nothing and sets
+  `notice`; it is not an error. Local `run_command` is unchanged. The names
   are filtered by `env_deny` (patterns, `*` wildcard) and, when set,
   `env_allow`; nothing is preselected. At most `env_limits.max_vars`
   variables and `max_bytes` (names plus values); over that the send rejects

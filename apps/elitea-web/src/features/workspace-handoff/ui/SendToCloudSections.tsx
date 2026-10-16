@@ -203,6 +203,11 @@ export function EnvSection({ env, preview, disabled, onToggle }: { env: PreviewE
       <Typography variant="bodySmall" sx={mutedSx}>
         {t('workspace.handoff.env.intro', 'Choose the variables the cloud needs. Only their names are kept; the values are read when you send.')}
       </Typography>
+      {env.notice !== null && (
+        <Alert severity="warning" data-testid="handoff-env-notice">
+          {t('workspace.handoff.env.notice', 'Your login shell’s variables could not be read ({{notice}}), so none are offered.', { notice: env.notice })}
+        </Alert>
+      )}
       <EnvChecklist offered={env.offered} selected={env.selected} onToggle={onToggle} disabled={disabled} />
       <Typography variant="bodySmall" data-testid="handoff-env-totals" sx={mutedSx}>
         {t('workspace.handoff.env.totals', '{{vars}} of at most {{maxVars}} variables · {{size}} of at most {{maxSize}}', {

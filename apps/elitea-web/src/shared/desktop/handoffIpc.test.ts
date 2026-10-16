@@ -127,7 +127,7 @@ describe('createFakeHandoffIpc', () => {
     const ipc = createFakeHandoffIpc({ envOffered: [{ name: 'API_URL', length: 23 }] });
     expect((await ipc.preview('w1', 'u1')).env).toBeNull();
     ipc.setPolicy({ env_harvest: true });
-    expect((await ipc.preview('w1', 'u1')).env).toEqual({ offered: [{ name: 'API_URL', length: 23 }], selected: [], missing: [], vars: 0, bytes: 0, over_limit: false });
+    expect((await ipc.preview('w1', 'u1')).env).toEqual({ offered: [{ name: 'API_URL', length: 23 }], selected: [], missing: [], vars: 0, bytes: 0, over_limit: false, notice: null });
     await ipc.settingsSet('w1', { exclude_patterns: [], include: [], env_names: ['API_URL', 'GONE'] });
     expect((await ipc.preview('w1', 'u1')).env).toMatchObject({ selected: ['API_URL', 'GONE'], missing: ['GONE'], vars: 1, bytes: 30 });
   });

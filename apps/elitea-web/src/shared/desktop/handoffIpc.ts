@@ -63,6 +63,8 @@ export interface HandoffSettingsAnswer {
   settings: FolderHandoffSettings;
   policy: HandoffPolicy;
   env_offered: EnvVar[];
+  /** The login shell could not be read (failed or timed out): nothing is offered. */
+  env_notice: string | null;
 }
 
 /** The env harvest part of a preview; `null` on the preview when the policy has no env harvest. */
@@ -75,6 +77,8 @@ export interface PreviewEnv {
   vars: number;
   bytes: number;
   over_limit: boolean;
+  /** The login shell could not be read (failed or timed out): nothing is offered. */
+  notice: string | null;
 }
 
 /** A credential-shaped line. Never the matched text. */

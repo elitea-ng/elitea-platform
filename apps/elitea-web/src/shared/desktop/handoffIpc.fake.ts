@@ -38,6 +38,7 @@ import type {
   TakeBackMode,
 } from './handoffIpc';
 import { HandoffIpcError } from './handoffIpc';
+import { previewEnv } from './handoffIpc.fakeEnv';
 
 type FailableCommand =
   | 'allowed' | 'preview' | 'send' | 'cancel' | 'status' | 'statusMany' | 'reclaim'
@@ -126,6 +127,8 @@ interface FakeInitial {
   preview?: Partial<HandoffPreview>;
   policy?: Partial<HandoffPolicy>;
   envOffered?: EnvVar[];
+  /** The host could not read the login shell: nothing offered, this notice. */
+  envNotice?: string;
   settings?: Record<string, Partial<FolderHandoffSettings>>;
 }
 
@@ -191,7 +194,8 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
   const answer = (workspaceId: string): HandoffSettingsAnswer => ({
     settings: structuredClone(settingsOf(workspaceId)),
     policy: structuredClone(policy),
-    env_offered: policy.env_harvest ? envOffered.map((env) => ({ ...env })) : [],
+    env_offered: policy.env_harvest && initial.envNotice === undefined ? envOffered.map((env) => ({ ...env })) : [],
+    env_notice: policy.env_harvest ? (initial.envNotice ?? null) : null,
   });
   const statusOf = (uuid: string): HandoffStatus => ({ ...status, ...perThread.get(uuid) });
 
@@ -218,20 +222,7 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
     const into = new Set(included.map((entry) => entry.path));
     const findings = base.findings.filter((finding) => !out.has(finding.path) && !into.has(finding.path));
     const includeFindings = [...base.include_findings, ...base.findings.filter((finding) => into.has(finding.path))];
-    let env: HandoffPreview['env'] = null;
-    if (policy.env_harvest) {
-      const offered = envOffered.map((entry) => ({ ...entry }));
-      const present = offered.filter((entry) => folder.env_names.includes(entry.name));
-      const bytes = present.reduce((sum, entry) => sum + entry.name.length + entry.length, 0);
-      env = {
-        offered,
-        selected: [...folder.env_names],
-        missing: folder.env_names.filter((name) => !offered.some((entry) => entry.name === name)),
-        vars: present.length,
-        bytes,
-        over_limit: present.length > policy.env_limits.max_vars || bytes > policy.env_limits.max_bytes,
-      };
-    }
+    const env = policy.env_harvest ? previewEnv(envOffered, initial.envNotice, policy, folder.env_names) : null;
     return { ...structuredClone(base), excluded, included, findings, include_findings: includeFindings, policy: structuredClone(policy), env };
   };
 

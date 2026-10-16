@@ -191,6 +191,11 @@ function Editor({ answer, saving, error, draft, onDraft }: { answer: HandoffSett
               maxBytes: String(policy.env_limits.max_bytes),
             })}
           </Typography>
+          {answer.env_notice !== null && (
+            <Alert severity="warning" data-testid="handoff-settings-env-notice">
+              {t('workspace.handoff.env.notice', 'Your login shell’s variables could not be read ({{notice}}), so none are offered.', { notice: answer.env_notice })}
+            </Alert>
+          )}
           <EnvChecklist
             offered={answer.env_offered}
             selected={draft.env_names}

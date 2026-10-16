@@ -272,12 +272,11 @@ pub fn run() {
                 },
                 backoff: elitea_workspace_store::sync::Backoff::default(),
                 git_global_config: None,
-                env_source: {
-                    let shell = elitea_local_tools::shell::ShellConfig::new(
-                        data_dir.join("handoff").join("tmp"),
-                    );
-                    Arc::new(move || elitea_local_tools::shell::passthrough_environment(&shell))
-                },
+                // The env harvest offers the person's login-shell environment.
+                env_source: Arc::new(handoff_settings::LoginShellEnv {
+                    shell: None,
+                    timeout: handoff_settings::LOGIN_SHELL_TIMEOUT,
+                }),
             })
             .map_err(|error| error.message)?;
             let handoff = Arc::new(handoff);
