@@ -48,6 +48,19 @@ The dependabot coverage gate also had a fix.
    - Its Postgres tests pass.
 3. **Docker CI job never run.** The `workspace-run-docker` job (Docker bridge plus egress proof) has not run yet.
 
+### Load gate is red on main (reported by another session, run 38940817138 at 987c69c8a)
+- **What failed:**
+  - `TestLoadGateSameThreadContention`: the other threads' p99 was 323 ms.
+  - `TestLoadGatePublishesAcrossThreads/sustained_300` also failed.
+- **Evidence from the run:** `with-lock-waits=0`, `empty-acquires=399`, `acquire-wait=13.9s`, `LWLock:WALWrite x19732`, `IO:WALSync x1054`.
+- **Cause:** the shared runner stalls on WAL fsync. It is the same as the earlier PR runs, and is not lock contention.
+- **Options, all test-environment only (no production tuning):**
+  - put the job's Postgres data on tmpfs, which was tried and reverted on the PR;
+  - set `synchronous_commit=off`/`fsync=off` for that service container only;
+  - make the job non-blocking and report-only on main.
+  - The first two measure our code rather than the runner's disk.
+- **Also:** session elitea-platform-f5 (#1298) fixed the `cloud_executor_settings` test seed to `now() AT TIME ZONE 'UTC'` in its merge commit.
+
 ### Merge notes
 - After #1301 merges, the executor branch's `libs/rust/workspace-store` is byte-identical to the desktop version at e9357d919. Re-sync it if #1301 changed it later.
 - `manifest_test.go` `Head(shared)`: the egress wiring adds 0169. Keep 169 when merging.
