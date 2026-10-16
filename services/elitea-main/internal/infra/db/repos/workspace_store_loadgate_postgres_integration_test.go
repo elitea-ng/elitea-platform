@@ -55,11 +55,11 @@ import (
 )
 
 const (
-	loadGateThreads  = 1000
+	loadGateThreads = 1000
 	// loadGateQuotaProjects is the project count of the same-project case:
 	// 20 threads per project share its quota lock.
 	loadGateQuotaProjects = 50
-	loadGateP99      = 50 * time.Millisecond
+	loadGateP99           = 50 * time.Millisecond
 )
 
 type loadGateThread struct {
@@ -76,7 +76,7 @@ type loadGateSample struct {
 	// quotaWaiters counts waits on a project's quota lock (an advisory
 	// lock): publishes of the SAME project serialise their quota check.
 	quotaWaiters int
-	backends      int
+	backends     int
 	// waits names the lock waits seen, as wait_event: left(query, 60).
 	waits []string
 }
