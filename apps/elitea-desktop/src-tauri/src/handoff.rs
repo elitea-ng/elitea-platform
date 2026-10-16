@@ -1085,15 +1085,31 @@ impl HandoffHost {
         }
         drop(harvest);
         let begin = self
-            .call(
+            .api
+            .send(
                 Method::POST,
                 &format!("/api/v2/elitea_core/workspace_handoff/prompt_lib/{project_id}/{uuid}"),
                 Some(&body),
+                &[],
             )
             .await;
         // The env values leave memory with the request.
         drop(body);
-        let begin = begin?;
+        let begin = match begin {
+            Ok(answer) if (200..300).contains(&answer.status) => answer.body,
+            // The server may have committed a begin whose answer was lost
+            // (a timeout, a dropped connection, a 5xx): cancel it, or the
+            // thread would stay in HANDING_OFF until the server's expiry.
+            Ok(answer) if answer.status >= 500 => {
+                self.abandon(project_id, uuid).await;
+                return Err(answer_error(&answer));
+            }
+            Ok(answer) => return Err(answer_error(&answer)),
+            Err(error) => {
+                self.abandon(project_id, uuid).await;
+                return Err(error.into());
+            }
+        };
         self.emit(uuid, "begin", 1, 1, None);
         let after_begin = self.after_begin(project_id, workspace_id, uuid, &begin, &snap, &written);
         let outcome = tokio::select! {

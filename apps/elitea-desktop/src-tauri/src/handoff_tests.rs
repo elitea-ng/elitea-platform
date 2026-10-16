@@ -30,7 +30,7 @@ use crate::d0::remote_tools::RetryPolicy;
 use crate::d0::turn::{AgentHost, HostDeps, PolicySource};
 use crate::handoff_settings::FolderSettings;
 use crate::history::{HistoryStore, Owner};
-use crate::testutil::{MockServer, Req, Res, serve};
+use crate::testutil::{MockServer, Req, Res, serve_dropping};
 use crate::workspaces::WorkspaceStore;
 
 const CONVERSATION: &str = "c0ffee00-0000-4000-8000-000000000001";
@@ -394,11 +394,20 @@ async fn harness_with(environment: Vec<(String, String)>) -> Harness {
 }
 
 async fn harness_env(env_source: Arc<dyn crate::handoff_settings::EnvSource>) -> Harness {
+    harness_lossy(env_source, None).await
+}
+
+/// `drop_first`: the first `n` requests to a path are handled (committed)
+/// and then dropped without an answer.
+async fn harness_lossy(
+    env_source: Arc<dyn crate::handoff_settings::EnvSource>,
+    drop_first: Option<(&'static str, usize)>,
+) -> Harness {
     let platform = Arc::new(Mutex::new(Platform {
         state: "LOCAL".into(),
         ..Platform::default()
     }));
-    let server = serve({
+    let server = serve_dropping(drop_first, {
         let platform = platform.clone();
         move |req| handle(&platform, req)
     })
@@ -1402,4 +1411,37 @@ async fn a_busy_thread_does_not_fail_the_send() {
     let p = h.platform.lock().unwrap();
     assert_eq!(p.publish_calls, 2, "one busy answer, then the publish");
     assert_eq!(p.seq, 1);
+}
+
+/// A begin the server committed whose answer was lost (a dropped
+/// connection) is cancelled: the thread is LOCAL again and the next send
+/// goes through.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lost_begin_answer_does_not_strand_the_thread() {
+    let h = harness_lossy(
+        Arc::new(crate::handoff_settings::FixedEnv(Vec::new())),
+        Some((
+            "/api/v2/elitea_core/workspace_handoff/prompt_lib/1/c0ffee00-0000-4000-8000-000000000001",
+            1,
+        )),
+    )
+    .await;
+    // The first request to that path is the begin POST (committed, then
+    // dropped).
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap_err();
+    {
+        let p = h.platform.lock().unwrap();
+        assert_eq!(p.deletes, 1, "the committed begin was cancelled");
+        assert_eq!(p.state, "LOCAL");
+    }
+    assert!(!h.host.is_away(CONVERSATION));
+    let sent = h
+        .host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    assert_eq!(sent.state, "CLOUD_IDLE");
 }
