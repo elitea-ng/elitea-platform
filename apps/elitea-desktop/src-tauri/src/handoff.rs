@@ -404,8 +404,26 @@ pub struct ApplyAnswer {
     pub imported_turns: usize,
     /// The release is acknowledged (`false`: kept and retried).
     pub released: bool,
+    /// The server refused the release for good (`handoff_erased`: the cloud
+    /// copy was erased meanwhile; `stale_epoch`, `handoff_not_found`): it is
+    /// not retried, and the thread follows the server's state.
+    pub release_refused: Option<String>,
     /// `worktree`: the folder's excluded files copied into it.
     pub copied: Vec<String>,
+}
+
+/// A release refused with one of these codes can never be acknowledged:
+/// the cloud copy was erased or expired (`handoff_erased`), the thread is
+/// not this owner's any more (`handoff_not_found`), or it moved on
+/// (`stale_epoch`). Retrying it would keep the thread read-only forever.
+const RELEASE_REFUSED_FOR_GOOD: [&str; 3] = ["handoff_erased", "handoff_not_found", "stale_epoch"];
+
+/// What a release came to.
+enum Released {
+    /// Acknowledged: the new epoch.
+    Acknowledged(u64),
+    /// Refused for good (the code); the record follows the server's state.
+    Refused(String),
 }
 
 /// The bearer through the pinned host credentials.
@@ -1482,13 +1500,22 @@ impl HandoffHost {
         conversation_uuid: &str,
     ) -> Result<PreflightAnswer, HandoffError> {
         let uuid = canonical_uuid(conversation_uuid)?;
-        let record = self.record(&uuid)?;
+        let mut record = self.record(&uuid)?;
         let state = self.server_state(record.project_id, &uuid).await?;
         if str_of(&state, "state").as_deref() != Some("RECLAIMING") {
             return Err(HandoffError::new(
                 "handoff_not_reclaimed",
                 "Take the thread back first; the cloud may still be working on it.",
             ));
+        }
+        // The release belongs to this epoch. A take-back asked while a cloud
+        // turn ran (202 `reclaim_pending`) became RECLAIMING one epoch later,
+        // when the turn ended; the record still holds the earlier one.
+        let epoch = u64_of(&state, "epoch");
+        if record.state != "RECLAIMING" || record.epoch != epoch {
+            record.state = "RECLAIMING".into();
+            record.epoch = epoch;
+            self.records.put(&record)?;
         }
         let policy = self.policy_or_default();
         let (root, _) = self.workspace(&record.workspace_id)?;
@@ -1616,13 +1643,25 @@ impl HandoffHost {
         let released = self.release(&record).await;
         let (workspace_id, conversation_uuid) =
             (held.workspace_id.clone(), held.conversation_uuid.clone());
-        let imported = match &released {
-            Ok(release_epoch) => self.import(&record, held, *release_epoch).await,
-            Err(_) => 0,
+        let (imported, acknowledged, refused) = match released {
+            Ok(Released::Acknowledged(release_epoch)) => {
+                let imported = self.import(&record, held, release_epoch).await;
+                self.records.remove(&conversation_uuid);
+                (imported, true, None)
+            }
+            Ok(Released::Refused(code)) => {
+                // The thread is wherever the server says; LOCAL (an erase
+                // won) keeps the folder as applied and imports the turns.
+                let local = self.settle_refused_release(&record).await;
+                let imported = if local {
+                    self.import(&record, held, record.epoch).await
+                } else {
+                    0
+                };
+                (imported, local, Some(code))
+            }
+            Err(_) => (0, false, None),
         };
-        if released.is_ok() {
-            self.records.remove(&conversation_uuid);
-        }
         Ok(ApplyAnswer {
             applied: applied.applied,
             outcome,
@@ -1634,13 +1673,15 @@ impl HandoffHost {
                 .map(|p| p.to_string_lossy().into_owned()),
             branch: applied.branch,
             imported_turns: imported,
-            released: released.is_ok(),
+            released: acknowledged,
+            release_refused: refused,
             copied: applied.copied,
         })
     }
 
-    /// Send the pending release; the new epoch.
-    async fn release(&self, record: &ThreadRecord) -> Result<u64, HandoffError> {
+    /// Send the pending release: acknowledged (the new epoch) or refused
+    /// for good; `Err` when it should be sent again.
+    async fn release(&self, record: &ThreadRecord) -> Result<Released, HandoffError> {
         let body = record
             .pending_release
             .clone()
@@ -1656,7 +1697,14 @@ impl HandoffHost {
             )
             .await;
         match answer {
-            Ok(answer) => Ok(u64_of(&answer, "epoch")),
+            Ok(answer) => Ok(Released::Acknowledged(u64_of(&answer, "epoch"))),
+            Err(error) if RELEASE_REFUSED_FOR_GOOD.contains(&error.code.as_str()) => {
+                log::warn!(
+                    "the handoff release was refused ({}); it is not sent again",
+                    error.code
+                );
+                Ok(Released::Refused(error.code))
+            }
             Err(error) => {
                 log::warn!(
                     "the handoff release was not acknowledged ({}); it is kept and sent again",
@@ -1668,9 +1716,42 @@ impl HandoffHost {
     }
 
     async fn retry_release(&self, record: ThreadRecord) {
-        if self.release(&record).await.is_ok() {
-            self.records.remove(&record.conversation_uuid);
+        match self.release(&record).await {
+            Ok(Released::Acknowledged(_)) => self.records.remove(&record.conversation_uuid),
+            Ok(Released::Refused(_)) => {
+                self.settle_refused_release(&record).await;
+            }
+            Err(_) => {}
         }
+    }
+
+    /// After a release refused for good: drop the pending release and follow
+    /// the server's state (the record goes when the thread is `LOCAL`).
+    /// Whether the thread is `LOCAL` (also when the state cannot be read:
+    /// the release will never be acknowledged, so nothing is kept away).
+    async fn settle_refused_release(&self, record: &ThreadRecord) -> bool {
+        let state = self
+            .server_state(record.project_id, &record.conversation_uuid)
+            .await
+            .ok();
+        let name = state
+            .as_ref()
+            .and_then(|state| str_of(state, "state"))
+            .unwrap_or_else(|| "LOCAL".into());
+        if name == "LOCAL" {
+            self.records.remove(&record.conversation_uuid);
+            return true;
+        }
+        let mut kept = record.clone();
+        kept.pending_release = None;
+        kept.state = name;
+        kept.epoch = state
+            .as_ref()
+            .map_or(record.epoch, |state| u64_of(state, "epoch"));
+        if let Err(error) = self.records.put(&kept) {
+            log::warn!("the handoff record was not updated: {}", error.code);
+        }
+        false
     }
 
     /// Import the cloud turns into the thread history; how many were added.

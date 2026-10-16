@@ -206,6 +206,11 @@ export interface ApplyResult {
   imported_turns: number;
   /** The release was acknowledged; `false`: kept and sent again with the next status. */
   released: boolean;
+  /**
+   * The server refused the release for good (`handoff_erased`: the cloud copy was erased meanwhile;
+   * `stale_epoch`, `handoff_not_found`). Not sent again; the thread follows the server's state.
+   */
+  release_refused?: string | null;
   /** The folder's excluded files (`.env`, keys) copied into a worktree. */
   copied: string[];
 }

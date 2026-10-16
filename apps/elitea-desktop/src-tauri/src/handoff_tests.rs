@@ -2,6 +2,14 @@
 //! (`testutil::serve`): send → status (read-only) → a cloud turn played
 //! with the git CLI → reclaim → preflight → apply → release → the cloud
 //! turn imported into the thread history → undo; and the refusals.
+//!
+//! The mock answers in the shapes the real elitea-main answers (checked
+//! against it on 2026-10-16 by `live`, which runs this host against a real
+//! server): the flat error envelope, `allowed_refs`/`expected_old` without
+//! the upstream ref when the send has none, an upload grant whose
+//! `headers` bind `x-amz-checksum-sha256` (a PUT without every header, or
+//! with other bytes, is refused as S3 refuses it), the state's
+//! `excluded_count`, and `handoff_erased` for a release an erase beat.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -87,8 +95,23 @@ struct Platform {
     /// The begin answer's `limits` instead of the defaults.
     begin_limits: Option<Value>,
     fail_upload: bool,
+    /// An erase (from the web) lands between the take-back's preflight and
+    /// its release: the release answers 409 `handoff_erased`.
+    erase_before_release: bool,
+    /// A cloud turn runs: a reclaim answers 202 `reclaim_pending`.
+    turn_running: bool,
+    releases: u64,
     deletes: u64,
     state_gets: u64,
+    /// The begin body's stats (the state route answers them back).
+    stats: Value,
+}
+
+/// The base64 of the SHA-256 of `bytes` (`x-amz-checksum-sha256`).
+fn checksum_header(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(bytes))
 }
 
 fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
@@ -96,33 +119,74 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
     let conv = format!("prompt_lib/1/{CONVERSATION}");
     let path = req.path.split('?').next().unwrap_or_default().to_owned();
     let body: Value = serde_json::from_str(&req.body).unwrap_or(Value::Null);
-    let state = |p: &Platform| json!({"state": p.state, "epoch": p.epoch, "reclaim_pending": false, "handoff_id": "h1"});
+    let state = |p: &Platform| {
+        if p.state == "LOCAL" && p.epoch == 0 {
+            return json!({"state": "LOCAL", "epoch": 0});
+        }
+        let mut stats = p.stats.clone();
+        if let Some(stats) = stats.as_object_mut() {
+            let count = stats
+                .get("excluded")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            stats.insert("excluded_count".into(), json!(count));
+        }
+        json!({"state": p.state, "epoch": p.epoch, "reclaim_pending": false, "handoff_id": "h1",
+               "device_name": "Test laptop", "history_mode": "none", "has_upstream": false, "stats": stats,
+               "cloud_sha": p.refs.get("refs/elitea/cloud"), "updated_at": "2026-10-16T04:24:12.789394Z",
+               "delete_after": null, "workspace_bytes": p.objects.values().map(Vec::len).sum::<usize>()})
+    };
     match (req.method.as_str(), path.as_str()) {
         ("POST", x) if x == format!("{PREFIX}/workspace_handoff/{conv}") => {
             p.state = "HANDING_OFF".into();
-            p.epoch = 1;
+            p.epoch += 1;
+            p.stats = body["stats"].clone();
+            let upstream = body["has_upstream"] == json!(true);
             p.begin = Some(body);
+            let mut allowed = vec!["refs/elitea/base", "refs/elitea/handoff/1"];
+            if upstream {
+                allowed.insert(1, "refs/elitea/upstream");
+            }
+            let expected: serde_json::Map<String, Value> = allowed
+                .iter()
+                .map(|name| ((*name).to_owned(), Value::Null))
+                .collect();
             let limits = p.begin_limits.clone().unwrap_or_else(|| json!({"max_segment_bytes": 209_715_200, "max_file_bytes": 26_214_400, "max_files": 20000,
                                "max_unpacked_bytes": 2_147_483_648_u64, "project_workspace_bytes_left": 53_687_091_200_u64}));
             Res::json(
                 201,
                 &json!({
-                    "handoff_id": "h1", "epoch": 1, "state": "HANDING_OFF",
-                    "allowed_refs": ["refs/elitea/base", "refs/elitea/upstream", "refs/elitea/handoff/1"],
-                    "expected_old": {"refs/elitea/base": null, "refs/elitea/upstream": null, "refs/elitea/handoff/1": null},
+                    "handoff_id": "h1", "epoch": p.epoch, "state": "HANDING_OFF",
+                    "allowed_refs": allowed,
+                    "expected_old": expected,
                     "limits": limits,
                     "expires_at": "2026-10-15T00:15:00Z"
                 }),
             )
         }
         ("POST", x) if x == format!("{PREFIX}/workspace_store_upload/{conv}") => {
+            assert_eq!(body["epoch"], json!(p.epoch));
             let sha = body["sha256"].as_str().unwrap().to_owned();
+            let expires = "2026-10-15T00:15:00Z";
             if p.objects.contains_key(&sha) {
-                return Res::json(200, &json!({"exists": true}));
+                return Res::json(
+                    200,
+                    &json!({"exists": true, "put": null, "multipart": null, "expires_at": expires}),
+                );
             }
+            let digest: Vec<u8> = (0..sha.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&sha[i..i + 2], 16).unwrap())
+                .collect();
+            let bound = {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD.encode(digest)
+            };
             Res::json(
                 200,
-                &json!({"exists": false, "put": {"url": format!("{}/obj/{sha}", p.origin), "headers": {}}}),
+                &json!({"exists": false, "multipart": null, "expires_at": expires,
+                        "put": {"url": format!("{}/obj/{sha}?X-Amz-Signature=s", p.origin),
+                                "headers": {"Content-Type": "application/x-git-bundle", "x-amz-checksum-sha256": bound}}}),
             )
         }
         ("GET", x) if x == format!("{PREFIX}/workspace_handoff_policy/prompt_lib/1") => {
@@ -136,6 +200,18 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
             &json!({"error": "unavailable", "message": "storage down"}),
         ),
         ("PUT", x) if x.starts_with("/obj/") => {
+            // As S3 answers a presigned PUT: every signed header, and the
+            // bytes the checksum names.
+            let declared = req.headers.get("x-amz-checksum-sha256").cloned();
+            if req.headers.get("content-type").map(String::as_str)
+                != Some("application/x-git-bundle")
+                || declared.is_none()
+            {
+                return Res::json(403, &json!({"Code": "SignatureDoesNotMatch"}));
+            }
+            if declared != Some(checksum_header(&req.raw)) {
+                return Res::json(400, &json!({"Code": "BadDigest"}));
+            }
             p.objects
                 .insert(x.trim_start_matches("/obj/").to_owned(), req.raw.clone());
             Res::json(200, &json!({}))
@@ -175,8 +251,8 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
                 p.refs.get("refs/elitea/handoff/1").map(String::as_str)
             );
             p.state = "CLOUD_IDLE".into();
-            p.epoch = 2;
-            Res::json(200, &json!({"state": "CLOUD_IDLE", "epoch": 2}))
+            p.epoch += 1;
+            Res::json(200, &json!({"state": "CLOUD_IDLE", "epoch": p.epoch}))
         }
         ("GET", x) if x == format!("{PREFIX}/workspace_handoff/{conv}") => {
             p.state_gets += 1;
@@ -190,6 +266,14 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
         }
         ("POST", x) if x == format!("{PREFIX}/workspace_handoff_reclaim/{conv}") => {
             assert_eq!(body["epoch"], json!(p.epoch));
+            if p.turn_running {
+                p.state = "CLOUD_RUNNING".into();
+                return Res::json(
+                    202,
+                    &json!({"state": "CLOUD_RUNNING", "reclaim_pending": true, "epoch": p.epoch,
+                            "waiting_for_execution_id": "0123456789abcdef0123456789abcdef"}),
+                );
+            }
             p.state = "RECLAIMING".into();
             p.epoch += 1;
             Res::json(
@@ -207,9 +291,27 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
             )
         }
         ("POST", x) if x == format!("{PREFIX}/workspace_handoff_release/{conv}") => {
+            p.releases += 1;
+            if p.erase_before_release {
+                p.erase_before_release = false;
+                p.state = "LOCAL".into();
+                p.epoch += 1;
+            }
+            if p.state == "LOCAL" {
+                return Res::json(
+                    409,
+                    &json!({"error": "handoff_erased", "message": "The cloud copy of this thread was erased, so nothing was handed back."}),
+                );
+            }
             if p.fail_release {
                 p.fail_release = false;
                 return Res::json(503, &json!({"error": "unavailable", "message": "later"}));
+            }
+            if p.state != "RECLAIMING" || body["epoch"] != json!(p.epoch) {
+                return Res::json(
+                    409,
+                    &json!({"error": "stale_epoch", "message": "The thread's state changed. Read the state and retry with its epoch."}),
+                );
             }
             p.release = Some(body);
             p.state = "LOCAL".into();
@@ -417,7 +519,7 @@ fn cloud_turn(h: &Harness) -> String {
         json!({"id": 10, "uuid": "q1", "meta": {}, "created_at": "2026-10-15 10:00:00.000000",
                "message_items": [{"item_type": "text_message", "item_details": {"content": "Make it greet the cloud"}}]}),
         json!({"id": 11, "uuid": "a1", "reply_to_id": 10, "created_at": "2026-10-15 10:01:00.000000",
-               "meta": {"executed_by": "cloud_executor", "workspace_epoch": 2, "workspace_commit": commit},
+               "meta": {"executed_by": "cloud_executor", "workspace_epoch": p.epoch, "workspace_commit": commit},
                "message_items": [{"item_type": "text_message", "item_details": {"content": "Done: README greets the cloud."}}]}),
     ];
     commit
@@ -738,6 +840,8 @@ fn server_policy(extra: Value) -> Value {
     let mut policy = json!({
         "enabled": true, "shell": true, "network": true, "history_modes": ["none"],
         "exclusions": [".env", ".env.*", "*.pem", "id_rsa*", "*.sqlite"],
+        "exclusions_platform": [".env", ".env.*", "*.pem", "id_rsa*"],
+        "exclusions_project": ["*.sqlite"],
         "path_deny": ["private/**"],
         "allow_user_include": true,
         "env_harvest": false, "env_deny": ["PATH", "HOME", "SSH_*"], "env_allow": null,
@@ -1170,3 +1274,75 @@ async fn the_harvest_offers_the_login_shell_environment() {
         assert!(got["env_notice"].is_string());
     }
 }
+
+/// Live run 2026-10-16: an erase (from the web) between the take-back's
+/// preflight and its release made the release answer 409 `handoff_erased`
+/// for ever; the host kept it as pending and the thread read-only. A
+/// release refused for good is not retried, and the thread follows the
+/// server.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_release_refused_for_good_is_not_retried() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turn(&h);
+    h.host.reclaim(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    h.platform.lock().unwrap().erase_before_release = true;
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply)
+        .await
+        .unwrap();
+    assert_eq!(applied.release_refused.as_deref(), Some("handoff_erased"));
+    assert!(applied.released, "nothing is kept to send again");
+    assert!(!h.host.is_away(CONVERSATION));
+    assert_eq!(
+        applied.imported_turns, 1,
+        "the cloud turn's messages remain"
+    );
+    let status = h.host.status(CONVERSATION, None).await.unwrap();
+    assert_eq!(status["state"], "LOCAL");
+    assert_eq!(h.platform.lock().unwrap().releases, 1, "not sent again");
+}
+
+/// Live run 2026-10-16: a take-back asked while a cloud turn runs is
+/// answered 202 `reclaim_pending`; the thread becomes RECLAIMING one epoch
+/// later when the turn ends. The release must carry that epoch, not the
+/// 202's (it was refused `stale_epoch`, leaving the server RECLAIMING with
+/// the folder already applied).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_take_back_asked_during_a_cloud_turn_releases_with_the_later_epoch() {
+    let h = harness().await;
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turn(&h);
+    h.platform.lock().unwrap().turn_running = true;
+    let pending = h.host.reclaim(CONVERSATION).await.unwrap();
+    assert_eq!(pending["reclaim_pending"], true);
+    assert_eq!(
+        h.host.preflight(CONVERSATION).await.unwrap_err().code,
+        "handoff_not_reclaimed"
+    );
+    {
+        // The turn ends: RECLAIMING, one epoch on.
+        let mut p = h.platform.lock().unwrap();
+        p.turn_running = false;
+        p.state = "RECLAIMING".into();
+        p.epoch += 1;
+    }
+    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply)
+        .await
+        .unwrap();
+    assert!(applied.released, "{applied:?}");
+    assert_eq!(applied.release_refused, None);
+    assert_eq!(h.platform.lock().unwrap().state, "LOCAL");
+}
+
