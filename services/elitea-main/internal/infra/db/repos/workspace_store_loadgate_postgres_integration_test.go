@@ -31,8 +31,13 @@ package repos
 //   - 20 threads per project at 300/s (a wait on the project's quota lock is
 //     allowed, a row lock wait is not).
 //
-// RUN AND LOGGED, not gated: 1,000/s (the starts 1 ms apart) and the burst
-// (all 1,000 released at one instant: p99 is the pool's drain time).
+// RUN AND LOGGED, not gated: 300/s with a cold pool (the connection setup
+// inside the window, for comparison), 1,000/s (the starts 1 ms apart) and the
+// burst (all 1,000 released at one instant: p99 is the pool's drain time).
+//
+// Every gated case starts with a warm pool (warmPool), as a running Main
+// has. Each case logs the pool's new connections, empty acquires and acquire
+// wait, and the GC pause, inside its window.
 //
 // "Lock waits between threads" are row and transaction lock waits
 // (wait_event tuple, transactionid, relation, advisory ...). A relation
@@ -45,6 +50,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"sync"
@@ -194,7 +200,9 @@ WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type 
 		if total := pool.Stat().TotalConns(); total > maxPoolConns {
 			maxPoolConns = total
 		}
-		time.Sleep(500 * time.Microsecond)
+		// 2 ms, not faster: on a two-core runner a tighter poll is itself
+		// load that competes with the publishes it measures.
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 
@@ -213,17 +221,27 @@ func percentile(durations []time.Duration, p float64) time.Duration {
 
 type loadGateRun struct {
 	durations    []time.Duration
+	starts       []time.Duration // each publish's start after the common start
 	errs         []error
 	samples      []loadGateSample
 	maxPoolConns int32
 	wall         time.Duration
+	// Pool facts inside the measured window: connections dialled, acquires
+	// that found no idle connection, and the time spent waiting to acquire.
+	newConns      int64
+	emptyAcquires int64
+	acquireWait   time.Duration
+	gcPause       time.Duration
 }
 
 // runLoadGate starts every publish at its offset after a common start (all
 // at once when offsets is nil) and samples the database while they run.
 func runLoadGate(t *testing.T, pool *pgxpool.Pool, sampler *pgx.Conn, publishes []func() error, offsets []time.Duration) loadGateRun {
 	t.Helper()
-	run := loadGateRun{durations: make([]time.Duration, len(publishes)), errs: make([]error, len(publishes))}
+	run := loadGateRun{
+		durations: make([]time.Duration, len(publishes)), starts: make([]time.Duration, len(publishes)),
+		errs: make([]error, len(publishes)),
+	}
 	stop := make(chan struct{})
 	sampled := make(chan struct{})
 	go func() {
@@ -231,6 +249,7 @@ func runLoadGate(t *testing.T, pool *pgxpool.Pool, sampler *pgx.Conn, publishes 
 		close(sampled)
 	}()
 	start := make(chan struct{})
+	var origin time.Time
 	var ready, done sync.WaitGroup
 	for index, publish := range publishes {
 		ready.Add(1)
@@ -243,15 +262,25 @@ func runLoadGate(t *testing.T, pool *pgxpool.Pool, sampler *pgx.Conn, publishes 
 				time.Sleep(offsets[index])
 			}
 			began := time.Now()
+			run.starts[index] = began.Sub(origin)
 			run.errs[index] = publish()
 			run.durations[index] = time.Since(began)
 		}(index, publish)
 	}
 	ready.Wait()
-	began := time.Now()
+	before := pool.Stat()
+	var gcBefore, gcAfter runtime.MemStats
+	runtime.ReadMemStats(&gcBefore)
+	origin = time.Now()
 	close(start)
 	done.Wait()
-	run.wall = time.Since(began)
+	run.wall = time.Since(origin)
+	after := pool.Stat()
+	runtime.ReadMemStats(&gcAfter)
+	run.newConns = after.NewConnsCount() - before.NewConnsCount()
+	run.emptyAcquires = after.EmptyAcquireCount() - before.EmptyAcquireCount()
+	run.acquireWait = after.AcquireDuration() - before.AcquireDuration()
+	run.gcPause = time.Duration(gcAfter.PauseTotalNs - gcBefore.PauseTotalNs)
 	close(stop)
 	<-sampled
 	return run
@@ -282,6 +311,22 @@ func (run loadGateRun) report(t *testing.T, name string, indexes []int) (p50, p9
 	for wait, count := range waits {
 		t.Logf("%s: lock wait seen in %d samples: %s", name, count, wait)
 	}
+	// Where the slowest 1% started, to tell a cold start (all at the
+	// beginning) from a stall in the middle.
+	slow := []time.Duration{}
+	for _, index := range indexes {
+		if run.durations[index] >= p99 {
+			slow = append(slow, run.starts[index])
+		}
+	}
+	sort.Slice(slow, func(i, j int) bool { return slow[i] < slow[j] })
+	first, last := time.Duration(0), time.Duration(0)
+	if len(slow) > 0 {
+		first, last = slow[0], slow[len(slow)-1]
+	}
+	t.Logf("%s: pool in window: new-conns=%d empty-acquires=%d acquire-wait=%s gc-pause=%s | slowest 1%% started %s..%s",
+		name, run.newConns, run.emptyAcquires, run.acquireWait.Round(time.Millisecond), run.gcPause.Round(time.Microsecond),
+		first.Round(time.Millisecond), last.Round(time.Millisecond))
 	return p50, p99, max
 }
 
@@ -327,12 +372,42 @@ func newLoadGateFixture(t *testing.T, projects int) loadGateFixture {
 	return loadGateFixture{pool: pool, sampler: sampler, service: service, threads: threads, maxConns: maxConns}
 }
 
+// warm opens the fixture's pool before the measured window (warmPool).
+func (f loadGateFixture) warm(t *testing.T) loadGateFixture {
+	warmPool(t, f.pool, f.maxConns)
+	return f
+}
+
 func (f loadGateFixture) publish(thread loadGateThread, seed string) func() error {
 	request := loadGatePublish(thread, seed)
 	return func() error {
 		_, err := f.service.Publish(context.Background(), request)
 		return err
 	}
+}
+
+// warmPool opens every connection of the pool and runs one query on each,
+// outside the measured window, then collects garbage: a running Main has a
+// warm pool, and a cold pool makes the first publishes of a window pay the
+// connection setup.
+func warmPool(t *testing.T, pool *pgxpool.Pool, maxConns int32) {
+	t.Helper()
+	ctx := context.Background()
+	held := make([]*pgxpool.Conn, 0, maxConns)
+	for range maxConns {
+		conn, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("warm the pool: %v", err)
+		}
+		if _, err := conn.Exec(ctx, `SELECT 1`); err != nil {
+			t.Fatalf("warm the pool: %v", err)
+		}
+		held = append(held, conn)
+	}
+	for _, conn := range held {
+		conn.Release()
+	}
+	runtime.GC()
 }
 
 // loadGateRate is the gated publish rate per second (owner decision).
@@ -393,15 +468,22 @@ func TestLoadGatePublishesAcrossThreads(t *testing.T) {
 		name    string
 		offsets func(int) []time.Duration
 		gated   bool
+		cold    bool
 	}{
-		{"sustained_300", func(n int) []time.Duration { return atRate(n, loadGateRate) }, true},
-		{"sustained_1000", func(n int) []time.Duration { return atRate(n, 1000) }, false},
-		{"burst", func(int) []time.Duration { return nil }, false},
+		// The same 300/s with a COLD pool, logged only: the comparison that
+		// shows what the connection setup costs inside the window.
+		{"sustained_300_cold", func(n int) []time.Duration { return atRate(n, loadGateRate) }, false, true},
+		{"sustained_300", func(n int) []time.Duration { return atRate(n, loadGateRate) }, true, false},
+		{"sustained_1000", func(n int) []time.Duration { return atRate(n, 1000) }, false, false},
+		{"burst", func(int) []time.Duration { return nil }, false, false},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
 			// One thread per project, as with personal projects: no two
 			// publishes share a project's quota lock.
 			f := newLoadGateFixture(t, loadGateThreads)
+			if !mode.cold {
+				f = f.warm(t)
+			}
 			publishes := make([]func() error, 0, len(f.threads))
 			for index, thread := range f.threads {
 				publishes = append(publishes, f.publish(thread, mode.name+"-"+strconv.Itoa(index)))
@@ -434,7 +516,7 @@ func TestLoadGatePublishesAcrossThreads(t *testing.T) {
 }
 
 func TestLoadGateSameThreadContention(t *testing.T) {
-	f := newLoadGateFixture(t, loadGateThreads)
+	f := newLoadGateFixture(t, loadGateThreads).warm(t)
 	const contenders = 50
 	hot := f.threads[0]
 	var wins, conflicts atomic.Int64
@@ -500,7 +582,7 @@ SELECT last_seq FROM elitea_runtime.workspace_handoffs WHERE project_id = $1 AND
 // max_project_workspace_gb ceiling); they never wait on each other's rows,
 // and p99 stays under the gate.
 func TestLoadGateSameProjectQuota(t *testing.T) {
-	f := newLoadGateFixture(t, loadGateQuotaProjects)
+	f := newLoadGateFixture(t, loadGateQuotaProjects).warm(t)
 	publishes := make([]func() error, 0, len(f.threads))
 	for index, thread := range f.threads {
 		publishes = append(publishes, f.publish(thread, "quota-"+strconv.Itoa(index)))

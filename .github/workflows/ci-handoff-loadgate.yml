@@ -91,14 +91,14 @@ jobs:
             echo 'Gated at 300/s: p99 < 50 ms, no row lock waits between threads, no pool growth.'
             echo 'Logged, not gated: 1,000/s and the all-at-once burst.'
             echo '```'
-            grep -E 'n=[0-9]+ wall=' loadgate.log | sed -E 's/^.*_test\.go:[0-9]+: //'  || true
+            grep -E 'n=[0-9]+ wall=|pool in window' loadgate.log | sed -E 's/^.*_test\.go:[0-9]+: //'  || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$status" -ne 0 ]; then
             exit "$status"
           fi
           # Every case must have RUN and passed; a skip is a failure here.
-          for name in 'TestLoadGatePublishesAcrossThreads/sustained_300' 'TestLoadGatePublishesAcrossThreads/sustained_1000' 'TestLoadGatePublishesAcrossThreads/burst' 'TestLoadGateSameThreadContention' 'TestLoadGateSameProjectQuota'; do
+          for name in 'TestLoadGatePublishesAcrossThreads/sustained_300_cold' 'TestLoadGatePublishesAcrossThreads/sustained_300' 'TestLoadGatePublishesAcrossThreads/sustained_1000' 'TestLoadGatePublishesAcrossThreads/burst' 'TestLoadGateSameThreadContention' 'TestLoadGateSameProjectQuota'; do
             if ! grep -q -- "--- PASS: ${name} " loadgate.log; then
               echo "::error::${name} did not run and pass"
               exit 1
