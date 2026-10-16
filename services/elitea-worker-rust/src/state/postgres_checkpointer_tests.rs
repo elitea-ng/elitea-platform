@@ -2189,7 +2189,7 @@ async fn sandbox_submission(over_tls: bool) {
                 .unwrap()
                 .unwrap()
                 .unwrap();
-            let observed = match &submission {
+            let returned = match &submission {
                 Ok(SandboxOutcome::Pending) => "Ok(Pending)".to_owned(),
                 Ok(SandboxOutcome::Completed(_)) => "Ok(Completed)".to_owned(),
                 Ok(SandboxOutcome::Failed { code }) => format!("Ok(Failed {{ code: {code} }})"),
@@ -2207,7 +2207,7 @@ async fn sandbox_submission(over_tls: bool) {
                             code: tonic::Code::Aborted
                         })
                 ),
-                "a submission stopped mid-dispatch returned {observed}"
+                "a submission stopped mid-dispatch returned {returned}"
             );
         }
         drop(transport);
