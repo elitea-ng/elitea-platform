@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"net"
 	"net/http"
@@ -402,7 +403,7 @@ func TestCurrentApplicationSkillsHTTPPostgresRBACAndTenantMatrix(t *testing.T) {
 func newCurrentApplicationSkillsPostgresPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", environment)
 	}
@@ -576,10 +577,10 @@ CREATE TABLE p_1.entity_skill_mapping (
     skill_version_id INTEGER NOT NULL REFERENCES p_1.skill_versions(id),
     UNIQUE (entity_version_id, skill_id, entity_type)
 );
-INSERT INTO p_1.skills (id, name, description) VALUES
-    (101, 'deploy', 'Deploy safely'),
-    (102, 'review', 'Review changes'),
-    (103, 'pipeline-only', 'Not an agent skill');
+INSERT INTO p_1.skills (id, name, description, created_at) VALUES
+    (101, 'deploy', 'Deploy safely', now() AT TIME ZONE 'UTC'),
+    (102, 'review', 'Review changes', now() AT TIME ZONE 'UTC'),
+    (103, 'pipeline-only', 'Not an agent skill', now() AT TIME ZONE 'UTC');
 INSERT INTO p_1.skill_versions (id, skill_id, name, meta) VALUES
     (201, 101, 'release', '{"icon_meta":{"url":"/icons/deploy.svg","type":"image/svg+xml"}}'),
     (202, 102, 'base', '{}'),
@@ -613,8 +614,8 @@ CREATE TABLE p_2.entity_skill_mapping (
     skill_version_id INTEGER NOT NULL REFERENCES p_2.skill_versions(id),
     UNIQUE (entity_version_id, skill_id, entity_type)
 );
-INSERT INTO p_2.skills (id, name, description)
-VALUES (101, 'private-project-skill', 'Tenant two only');
+INSERT INTO p_2.skills (id, name, description, created_at)
+VALUES (101, 'private-project-skill', 'Tenant two only', now() AT TIME ZONE 'UTC');
 INSERT INTO p_2.skill_versions (id, skill_id, name, meta)
 VALUES (201, 101, 'base', '{}');
 INSERT INTO p_2.entity_skill_mapping (

@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -191,7 +192,7 @@ UPDATE centry.project SET suspended = $1, create_success = $2 WHERE id = $3`,
 func newDevBootstrapPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL dev-bootstrap integration test", environment)
 	}

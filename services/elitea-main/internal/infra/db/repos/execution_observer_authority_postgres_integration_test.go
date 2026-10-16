@@ -81,8 +81,8 @@ WITH participant AS (
     INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta)
     VALUES (gen_random_uuid(), 'user', jsonb_build_object('id', $2::int)) RETURNING id
 )
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id)
-SELECT c.id, participant.id FROM p_1.chat_conversations c, participant WHERE c.uuid::text = $1`,
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at)
+SELECT c.id, participant.id, now() AT TIME ZONE 'UTC' FROM p_1.chat_conversations c, participant WHERE c.uuid::text = $1`,
 		conversationUUID, userID); err != nil {
 		t.Fatalf("add participant %d: %v", userID, err)
 	}

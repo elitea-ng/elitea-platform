@@ -104,7 +104,7 @@ WITH resolved AS MATERIALIZED (
 ), updated AS (
     UPDATE chat_message_group AS response
     SET meta = response.meta - 'pipeline_static_v1', is_streaming = TRUE,
-        task_id = sqlc.arg(execution_id)::text, updated_at = clock_timestamp()
+        task_id = sqlc.arg(execution_id)::text, updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
     FROM resolved WHERE response.id = resolved.id RETURNING response.id, response.uuid
 )
 SELECT updated.id AS response_message_group_id, updated.uuid AS response_message_id FROM updated;
@@ -224,7 +224,7 @@ WITH resolved AS MATERIALIZED (
             (SELECT jsonb_agg(pause.value ORDER BY pause.ordinality) FROM jsonb_array_elements(response.meta -> 'pipeline_static_tools_v1' -> 'pauses') WITH ORDINALITY AS pause(value, ordinality)
              WHERE NOT (sqlc.arg(static_pause_ids)::jsonb @> jsonb_build_array(pause.value -> 'proof' -> 'pause_id')))))
         ELSE '{}'::jsonb END, is_streaming = TRUE,
-        task_id = sqlc.arg(execution_id)::text, updated_at = clock_timestamp()
+        task_id = sqlc.arg(execution_id)::text, updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
     FROM resolved WHERE response.id = resolved.id RETURNING response.id, response.uuid
 )
 SELECT updated.id AS response_message_group_id, updated.uuid AS response_message_id FROM updated;

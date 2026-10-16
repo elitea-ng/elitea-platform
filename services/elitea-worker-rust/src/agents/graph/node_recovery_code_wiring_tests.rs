@@ -401,8 +401,8 @@ struct Harness {
 
 #[allow(clippy::too_many_lines)] // One harness wires every fake the code-recovery proofs share.
 async fn harness(script: MainScript, fail_after: Duration) -> Harness {
-    let url =
-        std::env::var("ELITEA_TEST_DATABASE_URL").expect("ELITEA_TEST_DATABASE_URL is required");
+    let url = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL")
+        .expect("ELITEA_TEST_DATABASE_URL is required");
     let database = IsolatedPostgres::create(&url).await;
     sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
         .execute(&database.pool)

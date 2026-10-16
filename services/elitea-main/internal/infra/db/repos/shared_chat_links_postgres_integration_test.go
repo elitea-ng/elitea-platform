@@ -212,8 +212,8 @@ func TestSharedChatTranscriptProjectsOnlyTheSharedFields(t *testing.T) {
 
 	var conversationID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.chat_conversations (name, author_id)
-		VALUES ('shared transcript', 1) RETURNING id`).Scan(&conversationID); err != nil {
+		INSERT INTO p_1.chat_conversations (name, author_id, created_at)
+		VALUES ('shared transcript', 1, now() AT TIME ZONE 'UTC') RETURNING id`).Scan(&conversationID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
 
@@ -229,15 +229,15 @@ func TestSharedChatTranscriptProjectsOnlyTheSharedFields(t *testing.T) {
 		t.Helper()
 		var groupID int64
 		if err := pool.QueryRow(ctx, `
-			INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, task_id)
-			VALUES (gen_random_uuid(), $1, $2, 'task-should-not-be-shared')
+			INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, task_id, created_at)
+			VALUES (gen_random_uuid(), $1, $2, 'task-should-not-be-shared', now() AT TIME ZONE 'UTC')
 			RETURNING id`, participantID, conversationID).Scan(&groupID); err != nil {
 			t.Fatalf("seed group: %v", err)
 		}
 		var itemID int64
 		if err := pool.QueryRow(ctx, `
-			INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-			VALUES (gen_random_uuid(), 'text_message', 0, $1) RETURNING id`, groupID).Scan(&itemID); err != nil {
+			INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+			VALUES (gen_random_uuid(), 'text_message', 0, $1, now() AT TIME ZONE 'UTC') RETURNING id`, groupID).Scan(&itemID); err != nil {
 			t.Fatalf("seed item: %v", err)
 		}
 		if _, err := pool.Exec(ctx, `

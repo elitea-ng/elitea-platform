@@ -33,7 +33,7 @@ func (q *Queries) BulkDeleteCurrentNotifications(ctx context.Context, arg BulkDe
 const bulkSetCurrentNotificationsSeen = `-- name: BulkSetCurrentNotificationsSeen :execrows
 UPDATE centry.notifications
 SET is_seen = $1,
-    updated_at = NOW()
+    updated_at = (NOW() AT TIME ZONE 'UTC')
 WHERE user_id = $2
   AND is_seen <> $1
   AND (
@@ -420,7 +420,7 @@ const markCurrentNotificationSeen = `-- name: MarkCurrentNotificationSeen :one
 WITH changed AS (
     UPDATE centry.notifications AS notification
     SET is_seen = TRUE,
-        updated_at = NOW()
+        updated_at = (NOW() AT TIME ZONE 'UTC')
     WHERE notification.id = $1
       AND notification.user_id = $2
       AND NOT notification.is_seen

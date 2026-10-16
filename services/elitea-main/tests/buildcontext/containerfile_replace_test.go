@@ -1,7 +1,7 @@
 // Package buildcontext holds one gate: every relative `replace` a Go module
 // declares must be reachable inside the image that builds that module.
 //
-// WHY THIS EXISTS
+// # WHY THIS EXISTS
 //
 // Unit G6 gave elitea-main and elitea-llm-gateway a new shared library,
 // libs/go/egresslib, and added the relative `replace` both modules need. Both

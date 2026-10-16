@@ -3,6 +3,7 @@ package promptcontextreads_test
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"net"
 	"net/http"
@@ -398,8 +399,8 @@ CREATE TABLE public.auth_core__token (
 );
 INSERT INTO public.auth_core__token (id, user_id, expires)
 VALUES
-    (501, 11, clock_timestamp() + INTERVAL '1 day'),
-    (502, 15, clock_timestamp() + INTERVAL '1 day');
+    (501, 11, (clock_timestamp() AT TIME ZONE 'UTC') + INTERVAL '1 day'),
+    (502, 15, (clock_timestamp() AT TIME ZONE 'UTC') + INTERVAL '1 day');
 
 CREATE TABLE public.auth_core__role (
     id INTEGER PRIMARY KEY,
@@ -544,7 +545,7 @@ func newPromptContextPostgresPool(t *testing.T) *pgxpool.Pool {
 		environment        = "ELITEA_TEST_DATABASE_URL"
 		requireEnvironment = "ELITEA_REQUIRE_PROMPT_CONTEXT_POSTGRES_TEST"
 	)
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		if os.Getenv(requireEnvironment) == "true" {
 			t.Fatalf("%s requires %s", requireEnvironment, environment)

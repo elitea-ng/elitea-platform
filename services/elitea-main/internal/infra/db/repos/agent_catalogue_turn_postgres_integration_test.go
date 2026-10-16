@@ -231,11 +231,11 @@ func seedCurrentAgentCatalogueSchemas(t *testing.T, pool *pgxpool.Pool) {
 INSERT INTO p_1.application_versions (
     id, application_id, name, status, author_id, uuid, llm_settings, instructions,
     conversation_starters, welcome_message, agent_type, meta, pipeline_settings
-) VALUES (
+, created_at) VALUES (
     141, 131, 'decoy', 'published', 11, '80000000-0000-4000-8000-000000000141',
     '{"model_name":"decoy","model_project_id":1}'::jsonb,
     'the conversation project''s own row', '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb
-);
+, now() AT TIME ZONE 'UTC');
 INSERT INTO p_1.chat_participants (id, uuid, entity_name, entity_meta) VALUES
     (25, 'a0000000-0000-4000-8000-000000000041', 'application', '{"id":131,"project_id":2}'::jsonb),
     (26, 'a0000000-0000-4000-8000-000000000042', 'application', '{"id":131,"project_id":2}'::jsonb),
@@ -243,11 +243,11 @@ INSERT INTO p_1.chat_participants (id, uuid, entity_name, entity_meta) VALUES
     (28, 'a0000000-0000-4000-8000-000000000044', 'application', '{"id":131,"project_id":2}'::jsonb);
 INSERT INTO p_1.chat_participant_mapping (
     conversation_id, participant_id, entity_settings
-) VALUES
-    (1, 25, '{"version_id":141,"variables":[]}'::jsonb),
-    (1, 26, '{"version_id":142,"variables":[]}'::jsonb),
-    (1, 27, '{"version_id":241,"variables":[]}'::jsonb),
-    (1, 28, '{"version_id":143,"variables":[]}'::jsonb);`); err != nil {
+, created_at) VALUES
+    (1, 25, '{"version_id":141,"variables":[]}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (1, 26, '{"version_id":142,"variables":[]}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (1, 27, '{"version_id":241,"variables":[]}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (1, 28, '{"version_id":143,"variables":[]}'::jsonb, now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -258,29 +258,29 @@ INSERT INTO p_1.chat_participant_mapping (
 INSERT INTO p_2.application_versions (
     id, application_id, name, status, author_id, uuid, llm_settings, instructions,
     conversation_starters, welcome_message, agent_type, meta, pipeline_settings
-) VALUES
+, created_at) VALUES
     (141, 131, 'rel-1', 'published', 11, '80000000-0000-4000-8000-000000000241',
      '{"model_name":"shared","model_project_id":2}'::jsonb, 'catalogue instructions',
-     '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb),
+     '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
     (142, 131, 'latest', 'draft', 11, '80000000-0000-4000-8000-000000000242',
      '{"model_name":"shared","model_project_id":2}'::jsonb, 'the moderator''s working copy',
-     '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb),
+     '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
     (143, 131, 'rel-2', 'published', 11, '80000000-0000-4000-8000-000000000243',
      '{"model_name":"shared","model_project_id":2}'::jsonb, 'published, but wired to a toolkit',
-     '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb);
-INSERT INTO p_2.elitea_tools (id, type, name, description, settings, author_id, meta)
+     '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC');
+INSERT INTO p_2.elitea_tools (id, type, name, description, settings, author_id, meta, created_at)
 VALUES (151, 'aha', 'product', 'Aha product access',
-        '{"selected_tools":["list_products"]}'::jsonb, 11, '{}'::jsonb);
+        '{"selected_tools":["list_products"]}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC');
 INSERT INTO p_2.entity_tool_mapping (id, tool_id, entity_id, entity_version_id, entity_type, selected_tools)
 VALUES (161, 151, 131, 143, 'agent', '["list_products"]'::jsonb);
 INSERT INTO p_3.application_versions (
     id, application_id, name, status, author_id, uuid, llm_settings, instructions,
     conversation_starters, welcome_message, agent_type, meta, pipeline_settings
-) VALUES (
+, created_at) VALUES (
     241, 231, 'rel-1', 'published', 11, '80000000-0000-4000-8000-000000000341',
     '{"model_name":"shared","model_project_id":3}'::jsonb, 'a stranger''s published agent',
     '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb
-);`); err != nil {
+, now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -504,7 +504,7 @@ func TestBlockedCascadeFailsTheDecisionCleanly(t *testing.T) {
 			provisioner := newReview2Provisioner(t, pool, nil, nil, nil, options)
 			projectID := provisionPlain(ctx, t, provisioner, "Cascade Blocked "+name)
 			if _, err := pool.Exec(ctx, fmt.Sprintf(
-				`INSERT INTO p_%d.skills (name, description, owner_id, author_id) VALUES ('s', 'd', $1, 1)`, projectID), projectID); err != nil {
+				`INSERT INTO p_%d.skills (name, description, owner_id, author_id, created_at) VALUES ('s', 'd', $1, 1, now() AT TIME ZONE 'UTC')`, projectID), projectID); err != nil {
 				t.Fatalf("seed a tenant row: %v", err)
 			}
 			holder, err := pool.Begin(ctx)
@@ -560,7 +560,7 @@ func TestTheRunGetsItsFullLeaseWhenItStarts(t *testing.T) {
 	provisioner := newReview2Provisioner(t, pool, nil, buckets, nil)
 	projectID := provisionPlain(ctx, t, provisioner, "Lease Restamp")
 	if _, err := pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO p_%d.skills (name, description, owner_id, author_id) VALUES ('s', 'd', $1, 1)`, projectID), projectID); err != nil {
+		`INSERT INTO p_%d.skills (name, description, owner_id, author_id, created_at) VALUES ('s', 'd', $1, 1, now() AT TIME ZONE 'UTC')`, projectID), projectID); err != nil {
 		t.Fatal(err)
 	}
 	holder, err := pool.Begin(ctx)

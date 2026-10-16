@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -731,7 +732,7 @@ func indexRBACTestSessionCookie(t *testing.T, userID string) string {
 func newIndexRBACPostgresPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL index-RBAC integration tests", environment)
 	}

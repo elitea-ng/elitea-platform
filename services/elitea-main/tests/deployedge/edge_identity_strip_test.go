@@ -15,10 +15,10 @@
 // when the DEFINITION disappears while a router still names it. Three edits it
 // cannot see:
 //
-//	1. dropping `strip-client-identity` from a router's middlewares list;
-//	2. deleting the reference and the definition together;
-//	3. removing header names from the list, which leaves a middleware that
-//	   still resolves and still strips almost everything.
+//  1. dropping `strip-client-identity` from a router's middlewares list;
+//  2. deleting the reference and the definition together;
+//  3. removing header names from the list, which leaves a middleware that
+//     still resolves and still strips almost everything.
 //
 // Each of the three restores the bypass. This gate fails on all three.
 //

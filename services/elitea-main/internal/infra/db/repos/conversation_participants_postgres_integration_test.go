@@ -62,8 +62,8 @@ func seedConversation(t *testing.T, repo *ConversationsRepo) string {
 	t.Helper()
 	var conversationID string
 	if err := repo.pool.QueryRow(context.Background(), `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'participants', 7, 'agent')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'participants', 7, 'agent', now() AT TIME ZONE 'UTC')
 RETURNING id::text`).Scan(&conversationID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}

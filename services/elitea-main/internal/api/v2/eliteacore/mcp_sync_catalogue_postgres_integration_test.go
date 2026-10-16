@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -104,7 +105,7 @@ func TestMCPSyncToolsSendsCatalogueHeadersOnlyToTheCatalogueOrigin(t *testing.T)
 
 func newMCPCataloguePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the PostgreSQL integration test")
 	}

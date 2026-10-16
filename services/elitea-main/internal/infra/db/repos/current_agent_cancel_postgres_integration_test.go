@@ -771,8 +771,8 @@ func TestPostgresCurrentAgentStopSettlesAKeptAnswerAsNotAnError(t *testing.T) {
 	// The partial answer the worker streamed before the stop.
 	if _, err := tx.Exec(t.Context(), `
 WITH item AS (
-    INSERT INTO chat_message_items (uuid, item_type, order_index, meta, message_group_id)
-    SELECT gen_random_uuid(), 'text_message', 0, '{}'::jsonb, response.id
+    INSERT INTO chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, '{}'::jsonb, response.id, now() AT TIME ZONE 'UTC'
     FROM chat_message_group AS response WHERE response.uuid = $1
     RETURNING id
 )

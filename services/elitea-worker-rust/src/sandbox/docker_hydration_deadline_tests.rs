@@ -43,7 +43,8 @@ const WAIT: Duration = Duration::from_secs(25);
 
 async fn database() -> IsolatedPostgres {
     let database = IsolatedPostgres::create(
-        &std::env::var("ELITEA_TEST_DATABASE_URL").expect("ELITEA_TEST_DATABASE_URL is required"),
+        &crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL")
+            .expect("ELITEA_TEST_DATABASE_URL is required"),
     )
     .await;
     sqlx::raw_sql("CREATE SCHEMA elitea_runtime")

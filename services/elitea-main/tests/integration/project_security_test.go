@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,7 +20,7 @@ import (
 
 func integrationPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("INTEGRATION_DATABASE_URL")
+	dsn := testpg.DSN(os.Getenv("INTEGRATION_DATABASE_URL"))
 	if dsn == "" {
 		t.Skip("INTEGRATION_DATABASE_URL is not set")
 	}
@@ -94,8 +95,8 @@ func TestProjectAuthorizationAndToolkitRedaction(t *testing.T) {
 	}
 
 	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO p_2.elitea_tools (name, type, description, owner_id, author_id, settings)
-		VALUES ('private-toolkit', 'github', '', 2, 2, '{"repository":"EliteaAI/elitea-platform","access_token":"must-not-leak"}')`); err != nil {
+		INSERT INTO p_2.elitea_tools (name, type, description, owner_id, author_id, settings, created_at)
+		VALUES ('private-toolkit', 'github', '', 2, 2, '{"repository":"EliteaAI/elitea-platform","access_token":"must-not-leak"}', now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("seed toolkit: %v", err)
 	}
 	h := v2toolkits.NewHandler(pool)

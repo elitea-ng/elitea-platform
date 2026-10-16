@@ -17,13 +17,13 @@ func TestCurrentNotificationRepositoryPostgresPreservesGenericUserContract(t *te
 	if _, err := pool.Exec(ctx, `
 INSERT INTO centry.notifications (
     uuid, is_seen, project_id, user_id, meta, event_type, created_at
-) VALUES
+, updated_at) VALUES
     ('10000000-0000-4000-8000-000000000001', FALSE, 7, 42,
-     '{"message":"Budget 100%_safe indexing completed"}', 'budget_threshold', '2026-07-31 10:00:00.123456'),
+     '{"message":"Budget 100%_safe indexing completed"}', 'budget_threshold', '2026-07-31 10:00:00.123456', now() AT TIME ZONE 'UTC'),
     ('10000000-0000-4000-8000-000000000002', FALSE, 8, 42,
-     '{"message":"Pipeline execution completed"}', 'pipeline_completed', '2026-07-31 10:00:01'),
+     '{"message":"Pipeline execution completed"}', 'pipeline_completed', '2026-07-31 10:00:01', now() AT TIME ZONE 'UTC'),
     ('10000000-0000-4000-8000-000000000003', FALSE, 7, 99,
-     '{"message":"Other member activity"}', 'index_data_changed', '2026-07-31 10:00:02')`); err != nil {
+     '{"message":"Other member activity"}', 'index_data_changed', '2026-07-31 10:00:02', now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 

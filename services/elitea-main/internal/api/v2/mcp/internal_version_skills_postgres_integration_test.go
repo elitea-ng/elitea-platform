@@ -89,18 +89,18 @@ func TestInternalCreateVersionCopiesExactSkills(t *testing.T) {
 	// already valid source is copied, not run through new-attachment validation.
 	for i := 0; i < 4; i++ {
 		var skillID int64
-		if err := pool.QueryRow(ctx, `INSERT INTO p_1.skills (name, description, owner_id, author_id)
-			VALUES ($1, 'fixture', 1, 7) RETURNING id`, fmt.Sprintf("copy-skill-%d", i)).Scan(&skillID); err != nil {
+		if err := pool.QueryRow(ctx, `INSERT INTO p_1.skills (name, description, owner_id, author_id, created_at)
+			VALUES ($1, 'fixture', 1, 7, now() AT TIME ZONE 'UTC') RETURNING id`, fmt.Sprintf("copy-skill-%d", i)).Scan(&skillID); err != nil {
 			t.Fatal(err)
 		}
 		var versionID int64
-		if err := pool.QueryRow(ctx, `INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id)
-			VALUES ($1, 'pinned', 'Exact revision.', 7) RETURNING id`, skillID).Scan(&versionID); err != nil {
+		if err := pool.QueryRow(ctx, `INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id, created_at)
+			VALUES ($1, 'pinned', 'Exact revision.', 7, now() AT TIME ZONE 'UTC') RETURNING id`, skillID).Scan(&versionID); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `INSERT INTO p_1.entity_skill_mapping
-			(entity_version_id, entity_type, skill_id, skill_version_id)
-			VALUES ($1, $2, $3, NULLIF($4::integer, 0))`, sourceID, []string{"agent", "pipeline"}[i%2], skillID, versionID*int64(i%2)); err != nil {
+			(entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+			VALUES ($1, $2, $3, NULLIF($4::integer, 0), now() AT TIME ZONE 'UTC')`, sourceID, []string{"agent", "pipeline"}[i%2], skillID, versionID*int64(i%2)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -183,17 +183,17 @@ func TestInternalCreateVersionIgnoresInvalidSkillSources(t *testing.T) {
 	pool := newInternalApplicationsPool(t)
 	appID, sourceID := seedInternalApplicationVersion(t, pool)
 	var foreignApp, foreignVersion int64
-	if err := pool.QueryRow(context.Background(), `INSERT INTO p_1.applications (name, owner_id)
-		VALUES ('foreign', 1) RETURNING id`).Scan(&foreignApp); err != nil {
+	if err := pool.QueryRow(context.Background(), `INSERT INTO p_1.applications (name, owner_id, created_at, updated_at)
+		VALUES ('foreign', 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`).Scan(&foreignApp); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(context.Background(), `INSERT INTO p_1.application_versions (application_id, name, author_id)
-		VALUES ($1, 'base', 7) RETURNING id`, foreignApp).Scan(&foreignVersion); err != nil {
+	if err := pool.QueryRow(context.Background(), `INSERT INTO p_1.application_versions (application_id, name, author_id, created_at)
+		VALUES ($1, 'base', 7, now() AT TIME ZONE 'UTC') RETURNING id`, foreignApp).Scan(&foreignVersion); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(context.Background(), `INSERT INTO p_1.entity_skill_mapping
-		(entity_version_id, entity_type, skill_id, skill_version_id)
-		SELECT $1, entity_type, skill_id, skill_version_id FROM p_1.entity_skill_mapping
+		(entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+		SELECT $1, entity_type, skill_id, skill_version_id, now() AT TIME ZONE 'UTC' FROM p_1.entity_skill_mapping
 		WHERE entity_version_id = $2`, foreignVersion, sourceID); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestInternalCreateVersionSkillsStayInTenantAndReleaseConnection(t *testing.
 	if err := migrate.New(pool, platformmigrations.Files).ApplyTenant(ctx, 2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO p_2.applications (id, name, owner_id) VALUES ($1, 'Other project', 2)`, appID); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO p_2.applications (id, name, owner_id, created_at, updated_at) VALUES ($1, 'Other project', 2, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`, appID); err != nil {
 		t.Fatal(err)
 	}
 	// A single connection proves that the next request cannot inherit p_2.

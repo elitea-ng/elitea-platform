@@ -68,8 +68,8 @@ func TestListParticipantsResolvesUserDisplayNames(t *testing.T) {
 
 	var conversationID string
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'author identity', 7, 'agent')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'author identity', 7, 'agent', now() AT TIME ZONE 'UTC')
 RETURNING id::text`).Scan(&conversationID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
@@ -102,8 +102,8 @@ WITH participant AS (
     VALUES (gen_random_uuid(), 'user', $1::jsonb, $2::jsonb)
     RETURNING id
 ), mapping AS (
-    INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id)
-    SELECT $3::int, participant.id FROM participant
+    INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at)
+    SELECT $3::int, participant.id, now() AT TIME ZONE 'UTC' FROM participant
 )
 SELECT id FROM participant`, entityMeta, meta, conversationID).Scan(&id); err != nil {
 			t.Fatalf("seed participant: %v", err)

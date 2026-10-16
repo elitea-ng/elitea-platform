@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"os"
 	"sync"
@@ -24,7 +25,7 @@ const artifactRetentionPostgresIntegrationDatabaseURL = "ELITEA_TEST_DATABASE_UR
 
 func newArtifactRetentionPostgresPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(artifactRetentionPostgresIntegrationDatabaseURL)
+	databaseURL := testpg.DSN(os.Getenv(artifactRetentionPostgresIntegrationDatabaseURL))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the artifact retention sweep PostgreSQL integration tests", artifactRetentionPostgresIntegrationDatabaseURL)
 	}

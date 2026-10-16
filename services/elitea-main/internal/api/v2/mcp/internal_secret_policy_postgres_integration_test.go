@@ -17,7 +17,7 @@ func TestInternalSecretPolicyUsesSharedVaultHandler(t *testing.T) {
 	if err != nil || created.status != http.StatusCreated {
 		t.Fatalf("seed status=%d error=%v", created.status, err)
 	}
-	_, err = pool.Exec(ctx, `INSERT INTO centry.platform_config(section,key,value) VALUES ('default_secrets','default_secret_keys','["protected"]'),('default_secrets','ignore_default_secret_api','true')`)
+	_, err = pool.Exec(ctx, `INSERT INTO centry.platform_config(section,key,value, updated_at) VALUES ('default_secrets','default_secret_keys','["protected"]', now() AT TIME ZONE 'UTC'),('default_secrets','ignore_default_secret_api','true', now() AT TIME ZONE 'UTC')`)
 	if err != nil {
 		t.Fatal(err)
 	}

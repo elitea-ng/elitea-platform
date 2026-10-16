@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ import (
 // protocol in an isolated opt-in database. The transaction rolls back every
 // current-schema fixture.
 func TestCurrentSocialAuthorsPostgresCompatibility(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_SOCIAL_AUTHORS_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_SOCIAL_AUTHORS_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_SOCIAL_AUTHORS_TEST_DATABASE_URL to an isolated PostgreSQL database")
 	}

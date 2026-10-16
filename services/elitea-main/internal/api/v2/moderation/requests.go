@@ -579,7 +579,7 @@ func (h *Handler) applyDecision(
 	var row requestRow
 	if err := tx.QueryRow(ctx, `
 UPDATE centry.moderation_state
-SET status = $1, rejection_comment = $2, updated_at = NOW()
+SET status = $1, rejection_comment = $2, updated_at = (NOW() AT TIME ZONE 'UTC')
 WHERE id = $3
 RETURNING id, user_id, project_id, issue_type, COALESCE(entity_id, ''), description,
           status, rejection_comment, created_at, updated_at`,
@@ -633,8 +633,8 @@ func insertDecisionNotification(ctx context.Context, tx pgx.Tx, row requestRow) 
 	// moderation_state row stays `pending`. Every generated notification query
 	// in internal/db/queries binds both columns for the same reason.
 	if _, err := tx.Exec(ctx, `
-INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
-VALUES ($1::text::uuid, FALSE, $2, $3, $4, $5)`,
+INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
+VALUES ($1::text::uuid, FALSE, $2, $3, $4, $5, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`,
 		uuid.NewString(), row.ProjectID, row.UserID, encoded, "moderation_"+row.Status,
 	); err != nil {
 		return fmt.Errorf("notify requester: %w", err)
@@ -741,8 +741,8 @@ func (h *Handler) RequestCreate(w http.ResponseWriter, r *http.Request) {
 
 	var row requestRow
 	if err := h.pool.QueryRow(r.Context(), `
-INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
 RETURNING id, user_id, project_id, issue_type, COALESCE(entity_id, ''), description,
           status, rejection_comment, created_at, updated_at`,
 		userID, projectID, issueType, entityID, description, statusPending,

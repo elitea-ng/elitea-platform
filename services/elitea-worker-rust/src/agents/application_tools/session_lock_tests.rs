@@ -17,7 +17,7 @@ use crate::agents::graph::session_lock_tests::{
 
 #[tokio::test]
 async fn child_event_yield_never_strands_a_child_append_holding_the_root_writer() {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("skipping application-event session lock test: set ELITEA_TEST_DATABASE_URL");
         return;
     };
