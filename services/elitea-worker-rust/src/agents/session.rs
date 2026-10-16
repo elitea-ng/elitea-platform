@@ -102,7 +102,9 @@ const MAX_PARALLEL_APPLICATION_CALLS: usize = 8;
 /// so the model would restart the same reasoning under the same output
 /// allowance and be cut again (live 4.45.1: Continue for ever). The prompt
 /// therefore asks for the answer DIRECTLY, with as little reasoning as the task
-/// allows, and the model call runs at low reasoning effort (`bind_model`). The
+/// allows. A model with a reasoning effort set runs at `low` for this call; a
+/// model with no effort gets no reasoning knob, because none is proven safe for
+/// it (`continuation_reasoning_effort` in ordinary.rs lists each family). The
 /// allowance is not raised: it is the user's own setting, and the SDK's nested
 /// continuation never raises a configured limit either
 /// (`_continuation_max_tokens`, "reduce, but never increase"). A second

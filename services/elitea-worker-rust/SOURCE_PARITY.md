@@ -295,8 +295,15 @@ user-triggered; automatic bounded continuation and its future project controls
 remain a separate policy slice, as do pipeline/nested automatic continuation
 and crash recovery between suffix persistence and graph advancement.
 A reasoning-only cut (empty `truncated_content`) continues with a direct-answer
-instruction at low reasoning effort and the SAME output allowance, matching the
-SDK's `NESTED_REASONING_ONLY_CONTINUATION_PROMPT` and its never-raise limit rule.
+instruction and the SAME output allowance, matching the SDK's
+`NESTED_REASONING_ONLY_CONTINUATION_PROMPT` and its never-raise limit rule.
+The reasoning knob depends on the model family. A model with an effort set
+(`supports_reasoning` in the catalogue) runs the continuation at `low`. An
+effort of `none` stays `none`. A model with NO effort gets no knob, because no
+safe knob exists. The catalogue does not identify vLLM/Qwen models, the
+gateway's OpenAI chat decode drops `chat_template_kwargs`, and
+`reasoning_effort` is unsupported on a model the catalogue does not mark as
+reasoning. For that family, only the prompt and the cap below apply.
 If that continuation is cut reasoning-only again, it offers no further Continue:
 it ends as `OUTPUT_CONTINUATION_EXHAUSTED`, which the chat explains as "raise the
 output limit" (live 4.45.1; the earlier Continue repeated the cut for ever).

@@ -1336,6 +1336,77 @@ async fn reasoning_only_continue_asks_for_a_direct_answer_and_completes() {
     );
 }
 
+/// Review of #1296: the reasoning knob a reasoning-only Continue sends, per
+/// family, read off the CONTINUATION's own model request body.
+/// - Effort set (`medium`, a `supports_reasoning` model): the continuation
+///   sends `reasoning_effort: low`.
+/// - No effort (the catalogue's non-reasoning family, the live Qwen3-on-vLLM
+///   case): no reasoning parameter at all. None is proven safe; see
+///   `continuation_reasoning_effort`.
+/// - Effort `none` with a temperature: it stays `none`, the pair binds, and
+///   the Continue runs. It used to become `low` beside the temperature, which
+///   `validate_invocation` refuses, so every Continue failed at binding.
+#[tokio::test(flavor = "current_thread")]
+async fn reasoning_only_continue_sends_only_the_reasoning_knob_the_profile_supports() {
+    let answer = concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Done.\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    for (effort, temperature, expected_effort) in [
+        (
+            serde_json::json!("medium"),
+            serde_json::Value::Null,
+            Some("low"),
+        ),
+        (serde_json::Value::Null, serde_json::json!(0.7), None),
+        (
+            serde_json::json!("none"),
+            serde_json::json!(0.7),
+            Some("none"),
+        ),
+    ] {
+        let mut continuation = output_continuation("");
+        let settings = continuation
+            .payload
+            .application
+            .get_mut("version_details")
+            .and_then(|details| details.get_mut("llm_settings"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("application llm_settings");
+        settings.insert("reasoning_effort".to_owned(), effort.clone());
+        settings.insert("temperature".to_owned(), temperature.clone());
+        let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+        let (_, finish, bodies) = run_one_output_turn(&sessions, &continuation, answer).await;
+        let label = format!("effort={effort} temperature={temperature}");
+        let full = finish
+            .unwrap_or_else(|code| panic!("{label}: the Continue failed: {code:?}"))
+            .into_iter()
+            .find(|event| event["type"] == "full_message")
+            .expect("full message");
+        assert_eq!(full["content"], "Done.", "{label}");
+        let body = &bodies[0];
+        assert_eq!(
+            body.get("reasoning_effort")
+                .and_then(serde_json::Value::as_str),
+            expected_effort,
+            "{label}: {body}"
+        );
+        for unsupported in ["chat_template_kwargs", "reasoning", "thinking"] {
+            assert!(
+                body.get(unsupported).is_none(),
+                "{label}: sent {unsupported}"
+            );
+        }
+        assert_eq!(
+            body.get("temperature").and_then(serde_json::Value::as_f64),
+            temperature.as_f64(),
+            "{label}"
+        );
+    }
+}
+
 /// Live 4.45.1, F1 cap: a reasoning-only Continue that is cut reasoning-only
 /// AGAIN offers no further Continue. The turn ends as
 /// `OUTPUT_CONTINUATION_EXHAUSTED`, which the chat renders as the continuation
