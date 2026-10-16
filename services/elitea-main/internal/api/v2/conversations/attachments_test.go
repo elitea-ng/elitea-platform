@@ -36,6 +36,7 @@ type fakeAttachmentStore struct {
 	buckets       map[string]int64 // "projectID/name" -> id
 	chunks        map[string][]conversations.AttachmentChunk
 	recorded      []recordedAttachmentObject
+	bucketErr     error
 }
 
 type recordedAttachmentObject struct {
@@ -60,6 +61,9 @@ func (f *fakeAttachmentStore) AttachmentPolicy(context.Context, int64) (string, 
 func (f *fakeAttachmentStore) RequireAttachmentBucket(_ context.Context, projectID int64, bucketName string, _ int32) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.bucketErr != nil {
+		return 0, f.bucketErr
+	}
 	key := fmt.Sprintf("%d/%s", projectID, bucketName)
 	if id, ok := f.buckets[key]; ok {
 		return id, nil
@@ -664,5 +668,22 @@ func TestArtifactAttachmentUploadKeysObjectByConversationUUID(t *testing.T) {
 	}
 	if _, ok := objStore.objects[conversationUUID+"/notes.txt"]; !ok {
 		t.Errorf("stored keys = %v, want the object keyed %q", objStore.objects, conversationUUID+"/notes.txt")
+	}
+}
+
+// Review round 3: a leftover bucket a person made under the attachment
+// bucket's name (no data migration frees it) answers 409 with a message that
+// says what to do, not a 500.
+func TestArtifactAttachmentUploadIntoAHeldAttachmentNameIsAConflict(t *testing.T) {
+	attStore := newFakeAttachmentStore()
+	attStore.bucketErr = fmt.Errorf("require: %w", storage.ErrSystemBucketNameTaken)
+	h := newAttachmentTestHandler(t, attStore, newFakeAttachmentObjectStore())
+
+	rec := doAttachmentUpload(t, h, nil, "notes.txt", []byte("hi"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "rename or delete it") || !strings.Contains(body, storage.DefaultAttachmentBucket) {
+		t.Fatalf("body = %s, want an actionable message naming the bucket", body)
 	}
 }

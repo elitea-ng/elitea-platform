@@ -165,7 +165,7 @@ func (h *Handler) CreateTransferGrant(w http.ResponseWriter, r *http.Request) {
 	bucket := chi.URLParam(r, "bucket")
 	// accessWrite: every grant this route issues is a PUT (see methodPut), so
 	// issuing one is authorising a write to the bucket.
-	bucketRow, ok := h.requireBucket(w, r, projectID, bucket, accessWrite)
+	bucketRow, ok := h.requireBucketChecked(w, r, projectID, bucket, accessWrite, scopeCallerKeys)
 	if !ok {
 		return
 	}
@@ -201,6 +201,10 @@ func (h *Handler) CreateTransferGrant(w http.ResponseWriter, r *http.Request) {
 	ref, err := storage.NewObjectRef(projectIDStr, bucket, grantID)
 	if err != nil {
 		h.writeInternal(w, r, "build object ref", err)
+		return
+	}
+	// The system-bucket rule, on the key the grant reserves.
+	if !h.allowKeys(w, r, projectID, bucketRow, []string{grantID}) {
 		return
 	}
 	expiresAt := time.Now().Add(defaultGrantTTL)
@@ -417,6 +421,9 @@ func (h *Handler) CommitTransferGrant(w http.ResponseWriter, r *http.Request) {
 	ref, err := storage.NewObjectRef(projectIDStr, bucketRow.Name, grant.Key)
 	if err != nil {
 		h.writeInternal(w, r, "build object ref", err)
+		return
+	}
+	if !h.allowKeys(w, r, projectID, bucketRow, []string{grant.Key}) {
 		return
 	}
 

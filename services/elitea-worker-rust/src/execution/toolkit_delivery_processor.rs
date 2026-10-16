@@ -53,7 +53,7 @@ use crate::transport::command_bus::{
 };
 use crate::transport::office_host::{ClaimOfficeHost, NoRoundTripImagesHost, OfficeRuntime};
 use crate::transport::platform_client::PlatformClient;
-use crate::transport::platform_writer::HostOnlyPlatformWriter;
+use crate::transport::platform_writer::{HostOnlyPlatformWriter, ReadOnlyClaimPlatformWriter};
 use crate::transport::runtime_context::RuntimeContextError;
 use crate::transport::{ControlRpc, InputContentError, MaterializedInput};
 use crate::validation::SettingsRefusal;
@@ -65,6 +65,9 @@ enum DirectLending {
     NoRoundTrip,
     /// The claim's PAT redeemed for the platform object API.
     Claim,
+    /// The claim's artifact list and read routes (the `artifact` family):
+    /// the agent path's authority, read-only.
+    ClaimArtifacts,
     /// Nothing: the toolkit is unsupported on this path.
     None,
 }
@@ -82,25 +85,61 @@ fn is_office_family(toolkit_type: &str) -> bool {
 /// uploads are effects and are refused here.
 ///
 /// A discovery (`toolkit.available_tools.v1`) lists tools and runs none, so
-/// it needs no claim: every family that is built on a host (Office,
-/// `imagegen`) and `artifact` are lent the do-nothing host, whatever this
-/// worker carries. That is what keeps the tool list reachable when a call
-/// would be refused (a deployment with no Office runtime still lists them).
+/// it needs no claim: EVERY family is lent the do-nothing host, whatever this
+/// worker carries. A family that builds its host tools only with a host
+/// (`SharePoint`'s readers and upload, `jira`/`confluence`/`qtest`/`testrail`/`aha`/
+/// `ado_boards`/`zephyr_essential` attachments, carrier's spreadsheets, the Office
+/// families, imagegen) then lists them in the Test Tool picker, as the agent
+/// path offers them, and a toolkit selecting only such tools still discovers
+/// (review round 2).
+///
+/// An `artifact` CALL is lent the claim's artifact list and read routes
+/// (live 4.45.0, D4: `read_file` / `list_files` answered
+/// `unsupported_toolkit`). Main authorizes those two routes for a user's tool
+/// run, as that user, under the same per-bucket access list as an agent turn;
+/// its write routes stay agent-only, the writer lent here refuses writes, and
+/// the direct runtime refuses any tool that is not read-only before it runs.
 fn direct_lending(
     toolkit_type: &str,
     tool_name: &str,
     has_office_runtime: bool,
     discovery: bool,
 ) -> DirectLending {
-    if discovery && (is_office_family(toolkit_type) || toolkit_type == "artifact") {
-        return DirectLending::NoRoundTrip;
+    // The Office families, `imagegen` and `artifact` are listed whatever this
+    // worker carries (their tools are the toolkit). Every other family lists
+    // its file-store tools only where a call of them can be lent the host
+    // (review round 3: discovery, call and agent turn agree).
+    if discovery {
+        return if has_office_runtime
+            || is_office_family(toolkit_type)
+            || matches!(toolkit_type, "imagegen" | "artifact")
+        {
+            DirectLending::NoRoundTrip
+        } else {
+            DirectLending::None
+        };
     }
     match toolkit_type {
         "imagegen" => DirectLending::NoRoundTrip,
+        "artifact" => DirectLending::ClaimArtifacts,
         office if is_office_family(office) && has_office_runtime => DirectLending::Claim,
-        "sharepoint"
+        // SharePoint's upload is an effect the direct path refuses: only its
+        // readers redeem the claim.
+        "sharepoint" => {
             if has_office_runtime
-                && elitea_agent_runtime::toolkits::sharepoint_tool_reads_text(tool_name) =>
+                && elitea_agent_runtime::toolkits::sharepoint_tool_reads_text(tool_name)
+            {
+                DirectLending::Claim
+            } else {
+                DirectLending::None
+            }
+        }
+        // A file-store tool of any other family (the tracker attachment
+        // readers, carrier's reports): the claim's host, as the agent path
+        // lends it. A write among them is still refused before it runs.
+        family
+            if has_office_runtime
+                && elitea_agent_runtime::toolkits::tool_needs_file_store(family, tool_name) =>
         {
             DirectLending::Claim
         }
@@ -176,10 +215,151 @@ mod direct_lending_tests {
                 );
             }
         }
+        // Review round 2: every family, so a family that builds its host
+        // tools only with a host (SharePoint's readers) lists them; round 3:
+        // only where a call of them can be lent the host.
+        for family in ["sharepoint", "jira", "qtest", "github", "carrier"] {
+            assert_eq!(
+                direct_lending(family, "", true, true),
+                DirectLending::NoRoundTrip,
+                "{family}"
+            );
+            assert_eq!(
+                direct_lending(family, "", false, true),
+                DirectLending::None,
+                "{family} without an Office runtime"
+            );
+        }
+    }
+
+    /// Review round 3: discovery, a direct call and an agent turn agree, for
+    /// EVERY served family. A file-store tool is built only with the host, so
+    /// where discovery is lent one (and lists the tool), a call of the tool is
+    /// lent the claim's host and an agent turn selecting it builds the host.
+    /// Tools that need no file store are built on every path.
+    #[test]
+    fn discovery_call_and_agent_turn_agree_for_every_family() {
+        let document: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
+        ))
+        .expect("capability");
+        let mut checked = 0;
+        for family in document["supported_tool_types"].as_array().expect("types") {
+            let family = family.as_str().expect("type");
+            for tool in elitea_agent_runtime::toolkits::file_store_tools(family) {
+                let discovery = direct_lending(family, "", true, true);
+                assert_eq!(discovery, DirectLending::NoRoundTrip, "{family} discovery");
+                let call = direct_lending(family, tool, true, false);
+                // imagegen and SharePoint's upload are effects, refused on the
+                // direct path before the host is used.
+                let refused_effect = family == "imagegen"
+                    || (family == "sharepoint"
+                        && !elitea_agent_runtime::toolkits::sharepoint_tool_reads_text(tool));
+                assert!(
+                    refused_effect || call == DirectLending::Claim,
+                    "{family}.{tool}: a listed file-store tool is not lent the host on a call"
+                );
+                let settings = serde_json::json!({"selected_tools": [tool]});
+                assert!(
+                    crate::agents::ordinary::toolkit_needs_office_host(
+                        family,
+                        settings.as_object()
+                    ),
+                    "{family}.{tool}: an agent turn would not build the host"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 20,
+            "only {checked} file-store tools were checked"
+        );
+    }
+
+    /// The same agreement on a worker WITHOUT an Office runtime (final
+    /// review): no path lends the host for a file-store tool of a family whose
+    /// tools are not the file store itself, so discovery does not list what a
+    /// call could not run. The agent path reports those tools left out
+    /// (agent-runtime `every_name_is_either_built_or_reported_never_both`).
+    #[test]
+    fn without_an_office_runtime_no_path_lends_the_host_for_a_file_store_tool() {
+        let document: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
+        ))
+        .expect("capability");
+        let mut checked = 0;
+        for family in document["supported_tool_types"].as_array().expect("types") {
+            let family = family.as_str().expect("type");
+            // These families' tools ARE the file store: listed on every worker.
+            if super::is_office_family(family) || matches!(family, "imagegen" | "artifact") {
+                continue;
+            }
+            for tool in elitea_agent_runtime::toolkits::file_store_tools(family) {
+                assert_eq!(
+                    direct_lending(family, "", false, true),
+                    DirectLending::None,
+                    "{family}: discovery lists file-store tools no call could run"
+                );
+                assert_eq!(
+                    direct_lending(family, tool, false, false),
+                    DirectLending::None,
+                    "{family}.{tool}: a call is lent a host this worker does not have"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 15,
+            "only {checked} file-store tools were checked"
+        );
+    }
+
+    /// Review round 3: a file-store tool that discovery lists is lent the
+    /// claim's host on a call, for every family that has one.
+    #[test]
+    fn every_listed_file_store_tool_is_lent_the_host_on_a_call() {
+        for (family, tool) in [
+            ("jira", "get_attachments_content"),
+            ("confluence", "get_page_attachments"),
+            ("qtest", "add_file_to_test_case"),
+            ("testrail", "add_file_to_case"),
+            ("aha", "attach_file"),
+            ("ado_boards", "get_image_by_url"),
+            ("carrier", "create_excel_report"),
+        ] {
+            assert!(
+                elitea_agent_runtime::toolkits::tool_needs_file_store(family, tool),
+                "{family}.{tool} is a file-store tool"
+            );
+            assert_eq!(
+                direct_lending(family, tool, true, false),
+                DirectLending::Claim,
+                "{family}.{tool}"
+            );
+            assert_eq!(
+                direct_lending(family, tool, false, false),
+                DirectLending::None
+            );
+        }
         assert_eq!(
-            direct_lending("github", "", true, true),
+            direct_lending("jira", "search_using_jql", true, false),
             DirectLending::None
         );
+    }
+
+    /// D4: an `artifact` call is lent the claim's read routes, with or
+    /// without an Office runtime.
+    #[test]
+    fn an_artifact_call_is_lent_the_claims_read_routes() {
+        for runtime in [true, false] {
+            for tool in ["read_file", "list_files", "create_file"] {
+                assert_eq!(
+                    direct_lending("artifact", tool, runtime, false),
+                    DirectLending::ClaimArtifacts,
+                    "{tool}"
+                );
+            }
+        }
     }
 }
 
@@ -1095,11 +1275,23 @@ where
                     );
                     return Ok(None);
                 };
+                // A direct call has no conversation: it reaches no system
+                // bucket (review round 2).
+                let host = host.with_claim(crate::transport::office_host::OfficeClaim::new(
+                    authorized.runtime_context(),
+                    None,
+                ));
                 Ok(Some(
                     crate::toolkits::ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter))
                         .with_office(Arc::new(host)),
                 ))
             }
+            DirectLending::ClaimArtifacts => Ok(Some(crate::toolkits::ArtifactToolAuthority::new(
+                Arc::new(ReadOnlyClaimPlatformWriter::new(
+                    Arc::clone(&self.platform),
+                    authorized.shared_runtime_context(),
+                )),
+            ))),
             DirectLending::None => Ok(None),
         }
     }

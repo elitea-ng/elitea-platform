@@ -1095,6 +1095,57 @@ fn top_level_max_tokens_preserves_output_and_requests_continuation() {
     );
 }
 
+/// An empty answer completes only as a length cut that offered Continue; an
+/// empty answer from a turn that stopped normally, or whose limit is not the
+/// user's to continue (a pipeline), is still a malformed result.
+#[test]
+fn empty_answer_completes_only_as_a_user_controlled_length_cut() {
+    for (context, reason, accepted) in [
+        (
+            AgentEventProjectionContext::fixture(json!({})),
+            FinishReason::MaxTokens,
+            true,
+        ),
+        (
+            AgentEventProjectionContext::fixture(json!({})),
+            FinishReason::Stop,
+            false,
+        ),
+        (
+            AgentEventProjectionContext::pipeline_fixture(json!({})),
+            FinishReason::MaxTokens,
+            false,
+        ),
+    ] {
+        let mut projector = AgentEventProjector::new(context).expect("projector");
+        projector.start(timestamp(0)).expect("start");
+        let mut completed = event(
+            "llm-reasoning",
+            1,
+            false,
+            true,
+            vec![Part::Thinking {
+                thinking: "planning".to_owned(),
+                signature: None,
+            }],
+        );
+        completed.llm_response.finish_reason = Some(reason);
+        projector.project(&completed).expect("reasoning-only turn");
+        let empty = CompletedAgentBrowserOutput::ordinary(String::new(), "thread-1".into())
+            .expect("empty content is decided at EOS");
+        let result = projector.finish_after_eos(empty, timestamp(2));
+        assert_eq!(result.is_ok(), accepted, "{reason:?}");
+        if let Ok(batch) = result {
+            let terminal: Vec<_> = batch.into_iter().map(|event| current(&event)).collect();
+            assert_eq!(terminal[2]["content"], "");
+            assert_eq!(
+                terminal[2]["response_metadata"]["output_limit_reached"],
+                true
+            );
+        }
+    }
+}
+
 #[test]
 fn output_continuation_trims_one_meaningful_overlap_from_stream_and_terminal() {
     let mut projector =

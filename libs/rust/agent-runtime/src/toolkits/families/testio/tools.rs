@@ -875,3 +875,12 @@ fn product_id_required() -> AdkError {
         "product_id is required: TestIO lists exploratory tests per product",
     )
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    TestIoToolKind::ALL
+        .iter()
+        .map(|kind| (kind.name(), false))
+        .collect()
+}

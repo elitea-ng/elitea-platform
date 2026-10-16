@@ -106,6 +106,9 @@ pub(crate) enum UnsupportedSetting {
     MemoryScope,
     /// A `memory` toolkit whose `selected_tools` is not a list of names.
     MemorySelection,
+    /// A toolkit that stores its files in a bucket (`artifact`, `pptx`,
+    /// `docx`, `xlsx`) saved without one, or with a name no bucket can have.
+    BucketName,
 }
 
 impl UnsupportedSetting {
@@ -131,6 +134,9 @@ impl UnsupportedSetting {
             }
             Self::MemorySelection => {
                 "the memory toolkit's selected tools must be a list of tool names; edit the toolkit and save it again"
+            }
+            Self::BucketName => {
+                "the toolkit has no usable bucket: set its bucket to a name of lowercase letters, digits and hyphens that starts with a letter, then save it again"
             }
             Self::SharePointAppOnly => {
                 "a SharePoint credential without an OAuth discovery endpoint (app-only access with a client secret) is not supported by the Rust worker: its SharePoint tools act as the signed-in person with a delegated token, so set the credential's OAuth discovery endpoint. Microsoft retired app-only access to the OneNote Graph API (MC1011142), so the OneNote tools cannot run on an app-only credential at all"

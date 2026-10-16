@@ -202,8 +202,8 @@ async fn the_selected_tools_rule_follows_the_artifact_family() {
     let err = XlsxToolkitConfig::parse(json!({"bucket_name": "x"}).as_object().unwrap())
         .err()
         .expect("a one-letter bucket");
-    assert_eq!(err.code(), OfficeConfigErrorCode::InvalidConfiguration);
-    assert_eq!(err.to_string(), "the xlsx toolkit configuration is invalid");
+    assert_eq!(err.code(), OfficeConfigErrorCode::BucketName);
+    assert_eq!(err.to_string(), "the xlsx toolkit has no usable bucket");
 }
 
 #[test]

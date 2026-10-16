@@ -654,6 +654,12 @@ pub(crate) struct PipelineProjectionInput {
 }
 
 impl AgentEventProjectionContext {
+    /// The conversation the turn's events stream to.
+    #[must_use]
+    pub(crate) fn stream_id(&self) -> &str {
+        &self.stream_id
+    }
+
     pub(crate) fn with_instruction_skills(mut self, skills: Vec<Value>) -> Self {
         self.invoked_skills.clone_from(&skills);
         self.applied_skills = skills;
@@ -862,7 +868,13 @@ impl CompletedAgentBrowserOutput {
                 ),
             ));
         }
-        if content.is_empty() || content.contains('\0') {
+        // Empty content is admitted here and decided in `finish_after_eos`:
+        // only the projector knows whether the turn stopped on its output
+        // limit. A model that spends every output token reasoning (no visible
+        // text, no tool call) ends with an empty answer AND the Continue
+        // offer; refusing it here turned that offer into a generic runtime
+        // failure.
+        if content.contains('\0') {
             return Err(AgentEventProjectionError::output(
                 ProtocolError::InvalidInput("the completed agent content is malformed"),
             ));
@@ -3378,6 +3390,22 @@ impl AgentEventProjector {
                 ProtocolError::ResourceExhausted(
                     "the completed agent content exceeds its approved limit",
                 ),
+            ));
+        }
+        // An empty answer is a result only when the turn was cut by its
+        // output limit and the user was offered Continue (a reasoning-only
+        // turn): the terminal then carries `output_limit_reached`, and the
+        // continuation asks for the whole answer. Any other empty answer is
+        // still malformed.
+        if content.is_empty()
+            && !(output_limited
+                && matches!(
+                    self.context.output_limit_behavior,
+                    OutputLimitBehavior::UserControlled
+                ))
+        {
+            return Err(AgentEventProjectionError::output(
+                ProtocolError::InvalidInput("the completed agent content is malformed"),
             ));
         }
         let mut batch = ProjectedAgentEventBatch::new();

@@ -395,6 +395,11 @@ var toolkitTypeSchemas = map[string]map[string]any{
 	},
 	"artifact": {
 		"type": "object",
+		// The SDK's own schema requires `bucket` (a `str` field with no
+		// default; ArtifactWrapper refuses a toolkit without one), and so does
+		// the save (refuseMissingToolkitBucket). Served here so the create form
+		// asks for it instead of saving into a 400.
+		"required": []any{"bucket"},
 		"properties": map[string]any{
 			"bucket":                 map[string]any{"type": "string"},
 			"pgvector_configuration": map[string]any{"type": "object"},
@@ -1244,6 +1249,13 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if h.refuseBlockedToolkitType(w, r, "create_toolkit", createdType) {
 		return
 	}
+	// A create with no settings at all has no bucket either (review S2): a
+	// file-store toolkit is judged as if it sent empty settings. An update
+	// without settings is a rename and stays unjudged.
+	if _, hasSettings := body["settings"].(map[string]any); !hasSettings &&
+		h.refuseMissingToolkitBucket(w, "create_toolkit", createdType, map[string]any{}) {
+		return
+	}
 	// The credential gate, between the type refusal and the write, so a refused
 	// save persists nothing. validateToolkitCreate above only checks that a
 	// github body NAMES a `github_configuration` key; this is the only thing on
@@ -1340,6 +1352,32 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	updatedType, _ := body["type"].(string)
 	if h.refuseBlockedToolkitType(w, r, "update_toolkit", updatedType) {
 		return
+	}
+	// An update that changes the TYPE to a file-store type and sends no
+	// settings keeps the stored settings, so it is judged against them: a
+	// toolkit must not become a bucketless pptx through a type-only PATCH
+	// (review round 2). A rename (no type, no settings) stays unjudged.
+	if _, hasSettings := body["settings"].(map[string]any); !hasSettings && updatedType != "" {
+		if _, stores := toolkitBucketSetting[updatedType]; stores {
+			// Fails CLOSED (review round 3): a stored row that cannot be
+			// read is not saved unjudged.
+			stored, err := h.repo.GetToolkit(r.Context(), projectID, toolkitID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+				return
+			}
+			if err != nil {
+				writeToolkitInternalError(w, r, "update_toolkit", "failed to read the toolkit", err)
+				return
+			}
+			storedSettings, _ := stored["settings"].(map[string]any)
+			if storedSettings == nil {
+				storedSettings = map[string]any{}
+			}
+			if h.refuseMissingToolkitBucket(w, "update_toolkit", updatedType, storedSettings) {
+				return
+			}
+		}
 	}
 	// Only a body that actually REPLACES settings is validated. UpdateToolkit
 	// builds a partial UPDATE (each of `type` and `settings` is independently

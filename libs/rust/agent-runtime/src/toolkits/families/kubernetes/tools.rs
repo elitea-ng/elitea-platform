@@ -500,3 +500,12 @@ pub(in crate::toolkits) fn test_parse_object(
 ) -> adk_core::Result<Option<Map<String, Value>>> {
     parse_object(value, max_serialized_bytes)
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    [KubernetesToolKind::Execute, KubernetesToolKind::Healthcheck]
+        .iter()
+        .map(|kind| (kind.name(), false))
+        .collect()
+}

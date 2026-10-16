@@ -37,6 +37,8 @@ const ORIGIN: &str = "https://platform.internal:9446";
 struct Store {
     objects: BTreeMap<String, Vec<u8>>,
     log: Vec<(String, String, Option<String>, Option<String>)>,
+    /// The claim id each request named (`x-elitea-claim-id`).
+    claims: Vec<Option<String>>,
 }
 
 /// A fake of `/api/v2/artifacts/objects/{project}/{bucket}[/{key}]`: HEAD and
@@ -115,6 +117,12 @@ impl Transport for ObjectApi {
                 (b.to_owned(), k.to_owned())
             });
         let mut store = self.store.lock().expect("store");
+        let claim = request
+            .headers()
+            .get("x-elitea-claim-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        store.claims.push(claim);
         store.log.push((
             request.method().to_string(),
             path.clone(),
@@ -1364,5 +1372,237 @@ fn anthropic_codes_map_like_the_openai_ones() {
             kind,
             "{code}"
         );
+    }
+}
+
+const OWN_CONVERSATION: &str = "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1";
+const OTHER_CONVERSATION: &str = "0f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1";
+
+/// Review round 2 (defence in depth for Main's rule): the Office host names
+/// its claim on every object request, and in a system bucket it reaches only
+/// the attachment bucket under the turn's own conversation, for read and
+/// write. A prompt-injected path to another conversation, or to the index
+/// result bucket, is refused before any request is sent.
+#[tokio::test]
+async fn the_office_host_names_its_claim_and_keeps_to_its_conversation() {
+    use super::office_host::OfficeClaim;
+    let api = ObjectApi::new();
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        Arc::clone(&api) as Arc<dyn Transport>,
+    ));
+    let host = ClaimOfficeHost::new(runtime, "pat-token", "42", LazyStepbackModel::unbound())
+        .expect("host")
+        .with_claim(OfficeClaim::new(
+            &crate::protocol::control::test_runtime_context_authority(),
+            Some(OWN_CONVERSATION.to_owned()),
+        ));
+    let own = format!("{OWN_CONVERSATION}/report.xlsx");
+    host.write_object(
+        "chat-attachments",
+        &own,
+        "text/plain",
+        b"data".to_vec(),
+        true,
+    )
+    .await
+    .expect("own-conversation write");
+    assert_eq!(
+        host.read_object("chat-attachments", &own, 1 << 20)
+            .await
+            .expect("own-conversation read"),
+        b"data"
+    );
+    let sent = api.store.lock().expect("store").claims.clone();
+    assert!(!sent.is_empty());
+    assert!(
+        sent.iter().all(|claim| claim.as_deref() == Some("claim-1")),
+        "{sent:?}"
+    );
+
+    let before = api.log().len();
+    let other = format!("{OTHER_CONVERSATION}/x.xlsx");
+    for (bucket, key) in [
+        ("chat-attachments", other.as_str()),
+        ("index-artifacts", own.as_str()),
+    ] {
+        let read = host
+            .read_object(bucket, key, 1 << 20)
+            .await
+            .expect_err("read refused");
+        assert_eq!(read.kind(), OfficeFailure::AccessRefused, "{bucket}/{key}");
+        let write = host
+            .write_object(bucket, key, "text/plain", b"x".to_vec(), true)
+            .await
+            .expect_err("write refused");
+        assert_eq!(write.kind(), OfficeFailure::AccessRefused, "{bucket}/{key}");
+    }
+    assert_eq!(
+        api.log().len(),
+        before,
+        "a refused path reached the platform"
+    );
+}
+
+/// The project's attachment bucket as Main's policy names it.
+struct PolicyBucket(&'static str);
+
+#[async_trait]
+impl elitea_agent_runtime::toolkits::AttachmentBucketResolver for PolicyBucket {
+    async fn attachment_bucket(
+        &self,
+    ) -> Result<String, elitea_agent_runtime::toolkits::AttachmentBucketError> {
+        Ok(self.0.to_owned())
+    }
+}
+
+/// Review round 3: an Office toolkit whose `bucket_name` is a provisioned
+/// `reports` system bucket reads and writes it in an agent turn and in a
+/// direct call; the project's policy-named attachment bucket is confined to
+/// the turn's own conversation, like the default one.
+#[tokio::test]
+async fn a_reports_bucket_works_on_every_path_and_the_policy_bucket_is_confined() {
+    use super::office_host::OfficeClaim;
+    let api = ObjectApi::new();
+    let runtime = Arc::new(OfficeRuntime::with_transport(
+        ORIGIN,
+        Arc::clone(&api) as Arc<dyn Transport>,
+    ));
+    let authority = crate::protocol::control::test_runtime_context_authority();
+    for conversation in [Some(OWN_CONVERSATION.to_owned()), None] {
+        let host = ClaimOfficeHost::new(
+            Arc::clone(&runtime),
+            "pat-token",
+            "42",
+            LazyStepbackModel::unbound(),
+        )
+        .expect("host")
+        .with_claim(
+            OfficeClaim::new(&authority, conversation.clone())
+                .with_attachment_bucket(Arc::new(PolicyBucket("team-uploads"))),
+        );
+        host.write_object(
+            "reports",
+            "q3/summary.xlsx",
+            "text/plain",
+            b"r".to_vec(),
+            true,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("reports write ({conversation:?}): {error:?}"));
+        assert_eq!(
+            host.read_object("reports", "q3/summary.xlsx", 1 << 20)
+                .await
+                .expect("reports read"),
+            b"r"
+        );
+        let other = format!("{OTHER_CONVERSATION}/x.xlsx");
+        assert_eq!(
+            host.read_object("team-uploads", &other, 1 << 20)
+                .await
+                .expect_err("another conversation in the policy bucket")
+                .kind(),
+            OfficeFailure::AccessRefused
+        );
+    }
+}
+
+/// A direct toolkit call names its claim but has no conversation: it reaches
+/// no attachment bucket, while every bucket a person made works as before.
+/// Review round 3: the confinement is the project's RESOLVED attachment
+/// bucket (a policy may name one other than the default) and the index
+/// result bucket only; a provisioned `reports`/`tasks` system bucket is the
+/// per-bucket access list's.
+#[test]
+fn the_confined_buckets_are_the_attachment_and_index_buckets_only() {
+    use super::office_host::office_object_allowed_for_test as allowed;
+    let own = format!("{OWN_CONVERSATION}/x");
+    let other = format!("{OTHER_CONVERSATION}/x");
+    // Without a conversation (a direct call).
+    assert!(allowed("decks", Some("q3/review.pptx"), None, None));
+    assert!(!allowed("chat-attachments", Some(&own), None, None));
+    assert!(!allowed("index-artifacts", Some("x"), None, None));
+    // An agent turn of OWN_CONVERSATION, the default attachment bucket.
+    let turn = Some(OWN_CONVERSATION);
+    assert!(allowed("chat-attachments", Some(&own), turn, None));
+    assert!(!allowed("chat-attachments", Some(&other), turn, None));
+    assert!(!allowed(
+        "chat-attachments",
+        Some(OWN_CONVERSATION),
+        turn,
+        None
+    ));
+    assert!(!allowed("index-artifacts", Some(&own), turn, None));
+    // A policy-named attachment bucket is confined too, and the default name
+    // stays confined whatever the policy says.
+    let policy = Some("team-uploads");
+    assert!(allowed("team-uploads", Some(&own), turn, policy));
+    assert!(!allowed("team-uploads", Some(&other), turn, policy));
+    assert!(!allowed("team-uploads", Some(&own), None, policy));
+    assert!(!allowed("chat-attachments", Some(&other), turn, policy));
+    // A provisioned `reports` system bucket: the access list's, on every path.
+    for conversation in [None, turn] {
+        assert!(allowed(
+            "reports",
+            Some("q3/summary.xlsx"),
+            conversation,
+            policy
+        ));
+        assert!(allowed("tasks", Some("t.txt"), conversation, policy));
+    }
+}
+
+/// Review round 2 (C2 regression): a `SharePoint` discovery is lent the
+/// do-nothing host, so its readers and upload are listed in the Test Tool
+/// picker and a reader-only toolkit discovers instead of answering
+/// unsupported.
+#[tokio::test]
+async fn a_sharepoint_discovery_lists_its_readers() {
+    use crate::toolkits::{DirectToolkitRequest, DirectToolkitRuntime};
+    use crate::transport::office_host::NoRoundTripImagesHost;
+    use crate::transport::platform_writer::HostOnlyPlatformWriter;
+    use elitea_agent_runtime::toolkits::ArtifactToolAuthority;
+    let idle =
+        ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter) as Arc<dyn PlatformWriter>)
+            .with_office(Arc::new(NoRoundTripImagesHost));
+    for (selected, want) in [
+        (
+            json!(["get_lists", "read_document", "upload_file"]),
+            vec!["get_lists", "read_document", "upload_file"],
+        ),
+        (json!(["read_document"]), vec!["read_document"]),
+    ] {
+        // A discovery carries the toolkit's settings alone.
+        let config = serde_json::to_vec(&json!({
+            "sharepoint_configuration": {
+                "client_id": "client-id", "client_secret": "secret",
+                "site_url": "https://tenant.sharepoint.com/sites/default",
+                "oauth_discovery_endpoint": "https://login.example.test/.well-known/openid-configuration",
+                "configuration_uuid": "00000000-0000-4000-8000-000000000123",
+                "scopes": ["Sites.Read.All"]
+            },
+            "site_path": "teams/project",
+            "selected_tools": selected
+        }))
+        .expect("config");
+        let request = DirectToolkitRequest::parse_discovery(
+            "sharepoint",
+            "9",
+            &config,
+            br#"{"toolkit_security":{}}"#,
+        )
+        .expect("request");
+        let listed = DirectToolkitRuntime::default()
+            .discover(&request, Some(&idle))
+            .await
+            .expect("a SharePoint discovery");
+        let mut names: Vec<&str> = listed["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, want);
     }
 }

@@ -74,6 +74,16 @@ func (h *Handler) requireOwnedMultipartGrant(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusConflict, "AlreadyExists", "grant has already been committed or aborted")
 		return repos.TransferGrantRow{}, false
 	}
+	// The system-bucket rule on the grant's key, BEFORE any continuation
+	// changes state (a complete or abort consumes the grant).
+	bucketRow, err := h.repo.GetBucketByID(r.Context(), grant.BucketID)
+	if err != nil {
+		h.writeInternal(w, r, "get grant bucket", err)
+		return repos.TransferGrantRow{}, false
+	}
+	if !h.allowKeys(w, r, projectID, bucketRow, []string{grant.Key}) {
+		return repos.TransferGrantRow{}, false
+	}
 	return grant, true
 }
 
@@ -89,6 +99,11 @@ func (h *Handler) multipartObjectRef(w http.ResponseWriter, r *http.Request, pro
 	ref, err := storage.NewObjectRef(strconv.FormatInt(projectID, 10), bucketRow.Name, grant.Key)
 	if err != nil {
 		h.writeInternal(w, r, "build object ref", err)
+		return storage.ObjectRef{}, repos.BucketRow{}, false
+	}
+	// The system-bucket rule, on the grant's key: every continuation (part
+	// presign, complete, abort) is judged as the create was.
+	if !h.allowKeys(w, r, projectID, bucketRow, []string{grant.Key}) {
 		return storage.ObjectRef{}, repos.BucketRow{}, false
 	}
 	return ref, bucketRow, true

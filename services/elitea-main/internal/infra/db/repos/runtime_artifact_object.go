@@ -225,6 +225,30 @@ func (repository *CurrentRuntimeArtifactRepository) authorizeBucket(
 	return row, nil
 }
 
+// RuntimeBucketIsSystem says whether the project's bucket is a SYSTEM bucket
+// (`bucket_type = 'system'`), for the runtime routes' refusal of system
+// buckets by name. An absent bucket is not a system bucket: the route's own
+// lookup then answers not-found as before.
+func (repository *CurrentRuntimeArtifactRepository) RuntimeBucketIsSystem(
+	ctx context.Context,
+	projectID int64,
+	bucket string,
+) (bool, error) {
+	if repository == nil || repository.buckets == nil {
+		return false, errors.New("current runtime artifact repository is unavailable")
+	}
+	row, err := repository.buckets.GetBucket(ctx, projectID, bucket)
+	if errors.Is(err, storage.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get runtime artifact bucket type: %w", err)
+	}
+	return row.ProjectID == projectID && row.BucketType == attachmentBucketType, nil
+}
+
+var _ storage.RuntimeSystemBucketSource = (*CurrentRuntimeArtifactRepository)(nil)
+
 // ListRuntimeArtifacts lists one bucket, from the OBJECT STORE rather than the
 // metadata table.
 //

@@ -187,6 +187,78 @@ impl PlatformWriter for HostOnlyPlatformWriter {
     }
 }
 
+/// The platform writer of a direct `artifact` tool call
+/// (`toolkit.call_tool.v1`, D4): the claim's artifact LIST and READ, exactly
+/// as the agent path makes them (same claim-bound routes, so the same project,
+/// actor and per-bucket access list on Main's side), and nothing else. The
+/// direct path runs read-only tools only; a write, a delete or a builder write
+/// is refused here as well, so no tool could reach one even if it were let
+/// through.
+pub(crate) struct ReadOnlyClaimPlatformWriter {
+    claim: ClaimPlatformWriter,
+}
+
+impl ReadOnlyClaimPlatformWriter {
+    #[must_use]
+    pub(crate) const fn new(
+        platform: Arc<PlatformClient>,
+        authority: Arc<ClaimBoundRuntimeContextAuthority>,
+    ) -> Self {
+        Self {
+            claim: ClaimPlatformWriter::new(platform, authority),
+        }
+    }
+}
+
+fn read_only_path() -> HostError {
+    HostError::new(
+        HostErrorCode::InvalidConfiguration,
+        "a direct toolkit call lends artifact reads only",
+    )
+}
+
+#[async_trait]
+impl PlatformWriter for ReadOnlyClaimPlatformWriter {
+    async fn list_artifacts(
+        &self,
+        request: &ArtifactListRequest,
+    ) -> Result<ArtifactListOutcome, HostError> {
+        self.claim.list_artifacts(request).await
+    }
+
+    async fn read_artifact(
+        &self,
+        request: &ArtifactReadRequest,
+    ) -> Result<ArtifactReadOutcome, HostError> {
+        self.claim.read_artifact(request).await
+    }
+
+    async fn write_artifact(
+        &self,
+        _: &ArtifactWriteRequest,
+    ) -> Result<ArtifactWriteOutcome, HostError> {
+        Err(read_only_path())
+    }
+
+    async fn delete_artifact(
+        &self,
+        _: &ArtifactDeleteRequest,
+    ) -> Result<ArtifactDeleteOutcome, HostError> {
+        Err(read_only_path())
+    }
+
+    async fn write_skill(&self, _: &SkillWriteRequest) -> Result<SkillWriteOutcome, HostError> {
+        Err(read_only_path())
+    }
+
+    async fn write_project_context(
+        &self,
+        _: &ProjectContextWriteRequest,
+    ) -> Result<ProjectContextWriteOutcome, HostError> {
+        Err(read_only_path())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use elitea_agent_runtime::host::HostErrorCode;

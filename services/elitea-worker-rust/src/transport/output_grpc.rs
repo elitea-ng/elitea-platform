@@ -1255,7 +1255,7 @@ impl DurablyAckedTerminal {
 
 #[cfg(test)]
 pub(crate) fn test_acknowledged_terminal(
-    verified: &VerifiedAgentCommand,
+    verified: &impl VerifiedExecutionCommand,
     frame: &ExecutionOutputFrameV1,
 ) -> Result<DurablyAckedTerminal, OutputGrpcError> {
     PendingTerminalSettlement::new(verified, frame).map(PendingTerminalSettlement::into_acked)

@@ -209,6 +209,12 @@ func (h *Handler) refuseUnresolvableToolkitSettings(
 	if h.refuseMalformedMemorySettings(w, action, toolkitType, settings) {
 		return true
 	}
+	// The bucket the file-store toolkits keep their files in, which their
+	// schema declares required and nothing else enforces on save: like the
+	// memory rules, unconditional.
+	if h.refuseMissingToolkitBucket(w, action, toolkitType, settings) {
+		return true
+	}
 	if h.settingsValidator == nil || toolkitType == "" {
 		return false
 	}
@@ -509,6 +515,55 @@ func (h *Handler) refuseMalformedMemorySettings(
 		"error":           "the memory toolkit's settings are not valid",
 		"valid":           false,
 		"settings_errors": problems,
+	})
+	return true
+}
+
+// toolkitBucketSetting names the settings key that holds the bucket of each
+// toolkit type that stores its files in one. Every one is in its schema's
+// `required` list (the SDK's for `artifact` and `pptx`, rust_only_toolkit_tools.json
+// for `docx` and `xlsx`); `imagegen` is not here because its tools answer
+// a missing bucket themselves.
+var toolkitBucketSetting = map[string]string{
+	"artifact": "bucket",
+	"pptx":     "bucket_name",
+	"docx":     "bucket_name",
+	"xlsx":     "bucket_name",
+}
+
+// refuseMissingToolkitBucket answers 400 for a file-store toolkit saved with
+// no bucket (absent, null, not a text, or blank). It reports whether it wrote
+// a response.
+//
+// Before, such a toolkit saved fine and then failed EVERY turn of every agent
+// it was attached to (live 4.45.0: `native_agent.invalid_configuration`, "the
+// native agent toolsets could not be materialized"). The worker now leaves it
+// out with a reason instead; this keeps it from being saved that way at all.
+// Only presence is checked: the name's shape is the schema's `pattern`, which
+// the form enforces, and the worker skips a toolkit whose name breaks it.
+func (h *Handler) refuseMissingToolkitBucket(
+	w http.ResponseWriter,
+	action string,
+	toolkitType string,
+	settings map[string]any,
+) bool {
+	field, stores := toolkitBucketSetting[toolkitType]
+	if !stores {
+		return false
+	}
+	if bucket, isText := settings[field].(string); isText && strings.TrimSpace(bucket) != "" {
+		return false
+	}
+	slog.Warn("a toolkit was saved without a bucket", "action", action, "toolkit_type", toolkitType)
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error": "the toolkit needs a bucket",
+		"valid": false,
+		"settings_errors": []map[string]any{{
+			"loc":  []string{"settings", field},
+			"msg":  "Choose the bucket this toolkit keeps its files in.",
+			"type": "value_error",
+			"code": "missing_bucket",
+		}},
 	})
 	return true
 }

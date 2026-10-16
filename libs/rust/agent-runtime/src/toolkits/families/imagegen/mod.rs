@@ -778,3 +778,9 @@ impl Tool for ImageGenToolImpl {
         Ok(outcome.unwrap_or_else(Value::String))
     }
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    ALL_TOOLS.iter().map(|tool| (tool.name(), true)).collect()
+}

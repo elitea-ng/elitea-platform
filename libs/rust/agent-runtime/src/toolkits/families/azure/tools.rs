@@ -489,3 +489,12 @@ pub(in crate::toolkits) fn test_validate_arm_url(
 ) -> Result<reqwest::Url, AzureClientError> {
     super::client::validate_arm_url(value, subscription_id)
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    [AzureToolKind::Execute, AzureToolKind::Healthcheck]
+        .iter()
+        .map(|kind| (kind.name(), false))
+        .collect()
+}
