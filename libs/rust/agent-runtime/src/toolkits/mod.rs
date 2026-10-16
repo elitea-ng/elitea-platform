@@ -231,11 +231,12 @@ pub use families::sharepoint::tools::{
 pub use materialize::{
     ConfiguredToolsets, LeftOutReason, LeftOutToolkit, MAX_NOTICE_LABEL_BYTES,
     ToolsetMaterializationError, ToolsetMaterializationErrorCode, bounded_label,
-    capped_notice_lines, left_out_toolkits_notice_text,
+    capped_notice_lines, file_store_tools, left_out_toolkits_notice_text,
     materialize_configured_toolsets_reporting_refusals,
     materialize_configured_toolsets_with_artifact_authority,
     materialize_configured_toolsets_with_authorities,
     materialize_configured_toolsets_with_tokens_and_authorization, round_robin_take,
+    tool_needs_file_store, toolkit_needs_file_store,
 };
 pub use mcp::{
     AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,

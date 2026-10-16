@@ -609,7 +609,7 @@ async fn append_streamed_terminal(scope: &ScopedModelCheckpoint, child: &Context
 #[allow(clippy::too_many_lines)] // One ordered story verifies parent takeover and child history recovery.
 async fn postgres_child_scope_is_fenced_by_root_takeover_and_reuses_its_own_summary() {
     use crate::state::postgres_session_tests::{IsolatedPostgres, authority_for, install_schema};
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("skipping child model PostgreSQL test: set ELITEA_TEST_DATABASE_URL");
         return;
     };
@@ -1081,7 +1081,7 @@ async fn postgres_child_without_compaction_continues_after_claim_takeover() {
 async fn postgres_output_takeover(compaction_enabled: bool) {
     use crate::state::postgres_session_tests::{IsolatedPostgres, authority_for, install_schema};
     use adk_rust::FinishReason::{MaxTokens, Stop};
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("skipping output continuation PostgreSQL test: set ELITEA_TEST_DATABASE_URL");
         return;
     };
@@ -1337,7 +1337,7 @@ async fn postgres_terminal_output_survives_claim_takeover_without_model_dispatch
     use crate::agents::model_checkpoint::output::ContinuationFailure;
     use crate::state::postgres_session_tests::{IsolatedPostgres, authority_for, install_schema};
     use adk_rust::FinishReason::MaxTokens;
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("skipping terminal output PostgreSQL test: set ELITEA_TEST_DATABASE_URL");
         return;
     };
@@ -1607,7 +1607,7 @@ async fn child_output_recovery_does_not_reset_boundary_repair_allowance() {
 async fn postgres_boundary_repair_survives_claim_takeover() {
     use crate::state::postgres_session_tests::{IsolatedPostgres, authority_for, install_schema};
     use adk_rust::FinishReason::{MaxTokens, Stop};
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("skipping output continuation PostgreSQL test: set ELITEA_TEST_DATABASE_URL");
         return;
     };

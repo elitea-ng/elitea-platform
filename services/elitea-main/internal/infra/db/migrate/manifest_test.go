@@ -703,7 +703,16 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// source; execution_jobs and vector_claim_tokens get memory_toolkit_ids,
 	// and elitea_runtime.memory_conversation_taints is created (worker unit
 	// M9). No data, no permission.
-	require.EqualValues(t, 166, Head(shared))
+	//
+	// 167: shared/0167_workspace_handoffs.sql, the ownership row of a desktop
+	// to cloud handoff (elitea_runtime.workspace_handoffs, ADR-0034 decision
+	// 7). No foreign key, no permission, no data.
+	//
+	// 168: shared/0168_workspace_store.sql, the workspace store's refs and
+	// segment log (elitea_runtime.workspace_refs, workspace_segments) and the
+	// `workspace` bucket type (ADR-0034 decisions 2 and 3). No foreign key, no
+	// permission, no data.
+	require.EqualValues(t, 168, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -900,7 +909,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 149: tenant/0149_chat_conversation_memory_taint_cleanup.sql, an AFTER
 	// DELETE trigger on chat_conversations that removes the conversation's
 	// personal-memory taint (shared/0166, worker unit M9) on every delete path.
-	require.EqualValues(t, 149, Head(tenant))
+	// 150: tenant/0150_chat_conversation_activity_utc.sql, 0145's activity
+	// bump writes chat_conversations.updated_at as the UTC wall clock (now()
+	// AT TIME ZONE 'UTC'), like every Go writer of the naive chat columns. A
+	// function body and no permission, so no shared sibling.
+	require.EqualValues(t, 150, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

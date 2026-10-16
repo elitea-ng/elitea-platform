@@ -42,8 +42,8 @@ func TestEveryAPIRouteIsClosedDuringAMaintenanceWindow(t *testing.T) {
 		t.Fatalf("apply %s: %v", source, err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO centry.platform_config (section, key, value)
-VALUES ($1, $2, 'true'::jsonb)`, platformconfig.SectionMaintenance, platformconfig.KeyMaintenanceEnabled); err != nil {
+INSERT INTO centry.platform_config (section, key, value, updated_at)
+VALUES ($1, $2, 'true'::jsonb, now() AT TIME ZONE 'UTC')`, platformconfig.SectionMaintenance, platformconfig.KeyMaintenanceEnabled); err != nil {
 		t.Fatalf("open the maintenance window: %v", err)
 	}
 

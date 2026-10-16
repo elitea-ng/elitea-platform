@@ -461,11 +461,11 @@ func seedRuntimeFixtures(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 INSERT INTO p_1.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, status_logs, source, author_id
-) VALUES (
+, created_at) VALUES (
     1, '00000000-0000-0000-0000-000000000001', 1, 'System runtime',
     'System runtime', 'openapi', 'credentials', '{}'::jsonb, '{}'::jsonb,
     false, false, NULL, 'user', 1
-)
+, now() AT TIME ZONE 'UTC')
 ON CONFLICT (id) DO NOTHING`); err != nil {
 		t.Fatal(err)
 	}

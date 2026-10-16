@@ -11,6 +11,7 @@ package authstatetest
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -35,7 +36,7 @@ var sequence atomic.Int64
 // maxConns bounds the returned pool; concurrency tests size it themselves.
 func Pool(t testing.TB, maxConns int32) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(DatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(DatabaseURLEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL integration test", DatabaseURLEnv)
 	}

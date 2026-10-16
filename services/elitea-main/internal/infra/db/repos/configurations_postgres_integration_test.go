@@ -25,12 +25,12 @@ func TestCurrentEmbeddingConfigurationPostgresResolutionIsTenantRoutedAndAmbigui
 INSERT INTO p_1.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES (
+, created_at) VALUES (
     2, '00000000-0000-0000-0000-000000000111', 1, 'Embedding', 'embedding_one',
     'embedding_model', 'embedding',
     '{"name":"text-embedding-3-small","ai_credentials":{"elitea_title":"credential-current","private":true}}'::jsonb,
     '{}'::jsonb, true, true, 'user'
-)`); err != nil {
+, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -50,12 +50,12 @@ INSERT INTO p_1.configuration (
 INSERT INTO p_1.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES (
+, created_at) VALUES (
     3, '00000000-0000-0000-0000-000000000112', 1, 'Embedding duplicate', 'embedding_two',
     'embedding_model', 'embedding',
     '{"name":"text-embedding-3-small","ai_credentials":{"elitea_title":"credential-current","private":true}}'::jsonb,
     '{}'::jsonb, true, true, 'user'
-)`); err != nil {
+, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := repository.FindCurrentEmbeddingConfiguration(
@@ -150,7 +150,7 @@ func TestCurrentConfigurationsRepositoryPostgresParity(t *testing.T) {
 	if _, err := pool.Exec(ctx, `
 INSERT INTO centry.social_pins (
     entity, user_id, project_id, entity_id, updated_at
-) VALUES ('configuration', 77, 2, $1, clock_timestamp())`, companion.ID); err != nil {
+, created_at) VALUES ('configuration', 77, 2, $1, (clock_timestamp() AT TIME ZONE 'UTC'), now() AT TIME ZONE 'UTC')`, companion.ID); err != nil {
 		t.Fatalf("pin companion configuration: %v", err)
 	}
 	pinnedCompanion, err := repository.Get(ctx, 2, companion.ID)
@@ -373,11 +373,11 @@ CREATE TABLE p_2.configuration (
 INSERT INTO p_1.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, status_logs, source, author_id
-) VALUES (
+, created_at) VALUES (
     2, '00000000-0000-0000-0000-000000000102', 1, 'Public shared GitHub',
     'public_shared_github', 'github', 'credentials', '{}'::jsonb,
     '{"scope":"public"}'::jsonb, true, true, 'validated', 'system', 1
-);
+, now() AT TIME ZONE 'UTC');
 SELECT setval(pg_get_serial_sequence('p_1.configuration', 'id'), (SELECT MAX(id) FROM p_1.configuration));`); err != nil {
 		t.Fatalf("prepare current configuration project two: %v", err)
 	}

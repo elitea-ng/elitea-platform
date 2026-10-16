@@ -704,6 +704,14 @@ impl OrdinaryNativeAgentPlan {
         &self.thread_id
     }
 
+    /// The conversation (`client_stream_id`, `chat_conversations.uuid`) the
+    /// turn belongs to: its Office host is confined to that conversation's
+    /// files in the platform's system buckets.
+    #[must_use]
+    pub(crate) fn conversation_id(&self) -> &str {
+        self.projection.stream_id()
+    }
+
     /// `attachments` is the RESOLVED chunk list for this turn — see
     /// [`ordinary_user_content`]. Callers that performed no read pass
     /// `&request.payload.input_attachments`, which renders exactly what

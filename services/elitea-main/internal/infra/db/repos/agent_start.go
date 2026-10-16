@@ -26,6 +26,19 @@ type CurrentAgentStartRepository struct {
 	// than an environment read inside the resolve so that the admission rule is
 	// exercisable without setting a process-wide variable.
 	catalogueProjectID int32
+	// cloudExecutor is set only when the cloud executor adapter is
+	// registered (WithCloudExecutor). Until then a handed-off Local work
+	// thread stays fenced: a web turn would run without the workspace.
+	cloudExecutor bool
+}
+
+// WithCloudExecutor opens the Local work fence for threads the cloud
+// executor owns (ADR-0034 decision 7). The composition root calls it only
+// when the executor adapter that runs the turn in the workspace is
+// registered.
+func (repository *CurrentAgentStartRepository) WithCloudExecutor(enabled bool) *CurrentAgentStartRepository {
+	repository.cloudExecutor = enabled
+	return repository
 }
 
 func NewCurrentAgentStartRepository(
@@ -96,13 +109,21 @@ type currentContinuationQuerier interface {
 	) (sqlcgen.ResolveCurrentAuthorizationContinuationRow, error)
 }
 
-// localWorkThreadQuerier answers whether a conversation is a desktop Local
-// work thread (conversations.LocalWorkSource). pgxExecutor implements it (see
-// the assertion at the end of this file); a test executor that does not is
-// treated as "not Local work", which keeps the resolver tests that predate
-// the guard unchanged.
+// localWorkThreadQuerier answers the Local work fence of a conversation:
+// whether it is a desktop Local work thread (conversations.LocalWorkSource),
+// and the handoff state when the cloud executor owns it (CLOUD_IDLE or
+// CLOUD_RUNNING with no take back pending, ADR-0034 decision 7; "" else).
+// pgxExecutor implements it (see the assertion at the end of this file); a
+// test executor that does not is treated as "not Local work", which keeps the
+// resolver tests that predate the guard unchanged.
 type localWorkThreadQuerier interface {
-	ConversationIsLocalWork(context.Context, pgtype.UUID) (bool, error)
+	LocalWorkThreadFence(context.Context, int64, pgtype.UUID) (localWork bool, cloudState string, err error)
+}
+
+// cloudRegenerationQuerier answers, for a response of a handed-off thread,
+// who executed it and whether it is the conversation's newest answer.
+type cloudRegenerationQuerier interface {
+	CloudRegenerationCheck(context.Context, pgtype.UUID) (executedBy string, newest bool, err error)
 }
 
 // refuseLocalWorkThread is the server-side half of "the web cannot continue a
@@ -110,20 +131,39 @@ type localWorkThreadQuerier interface {
 // ad-hoc), regenerate and each continuation — runs it inside its own
 // transaction before reading the turn. The desktop's local turn route has its
 // own repository and never comes through here.
-func refuseLocalWorkThread(ctx context.Context, tx sqlExecutor, conversationUUID pgtype.UUID) error {
+//
+// The fence opens only when the cloud executor is wired (cloudExecutor) and
+// the thread is CLOUD_IDLE: the cloud owns it and no turn runs. In
+// CLOUD_RUNNING a cloud turn already runs, and a second one is refused with
+// ErrCloudTurnRunning (409 cloud_turn_running) before it is admitted.
+//
+// It answers whether the conversation is a handed-off Local work thread, for
+// the regenerate path's per-response rule.
+func refuseLocalWorkThread(
+	ctx context.Context, tx sqlExecutor, projectID int64, conversationUUID pgtype.UUID, cloudExecutor bool,
+) (bool, error) {
 	querier, ok := tx.(localWorkThreadQuerier)
 	if !ok {
-		return nil
+		return false, nil
 	}
-	localWork, err := querier.ConversationIsLocalWork(ctx, conversationUUID)
+	localWork, state, err := querier.LocalWorkThreadFence(ctx, projectID, conversationUUID)
 	if err != nil {
-		return fmt.Errorf("read conversation source: %w", err)
+		return false, fmt.Errorf("read conversation source: %w", err)
 	}
-	if localWork {
-		return agentexecutionapp.ErrLocalWorkThread
+	switch {
+	case !localWork:
+		return false, nil
+	case !cloudExecutor || state == "":
+		return false, agentexecutionapp.ErrLocalWorkThread
+	case state == "CLOUD_RUNNING":
+		return false, agentexecutionapp.ErrCloudTurnRunning
+	default:
+		return true, nil
 	}
-	return nil
 }
+
+// localTurnExecutedByDesktop is localturn.ExecutedByDesktop.
+const localTurnExecutedByDesktop = "desktop"
 
 type currentConversationSettlingQuerier interface {
 	CurrentConversationResponseSettling(context.Context, pgtype.UUID) (bool, error)
@@ -295,7 +335,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 			request.ProjectID,
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 			func(tx sqlExecutor) error {
-				if err := refuseLocalWorkThread(ctx, tx, conversationUUID); err != nil {
+				if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor); err != nil {
 					return err
 				}
 				queries, ok := tx.(currentApplicationStartQuerier)
@@ -707,7 +747,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 			request.ProjectID,
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 			func(tx sqlExecutor) error {
-				if err := refuseLocalWorkThread(ctx, tx, conversationUUID); err != nil {
+				if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor); err != nil {
 					return err
 				}
 				queries, ok := tx.(currentAdhocStartQuerier)
@@ -808,8 +848,26 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentRegeneration(
 			}
 			// The conversation is known only from the response row: the
 			// regenerate route names a message, not a conversation.
-			if err := refuseLocalWorkThread(ctx, tx, row.ConversationUuid); err != nil {
+			handedOff, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, row.ConversationUuid, repository.cloudExecutor)
+			if err != nil {
 				return err
+			}
+			// A handed-off thread (ADR-0034 decision 7): a turn the desktop ran
+			// is not regenerated in the cloud, and only the newest cloud turn
+			// is, because only its commit can be rewound.
+			if handedOff {
+				if checker, ok := tx.(cloudRegenerationQuerier); ok {
+					executedBy, newest, err := checker.CloudRegenerationCheck(ctx, responseMessageID)
+					if err != nil {
+						return fmt.Errorf("read regenerated response: %w", err)
+					}
+					if executedBy == localTurnExecutedByDesktop {
+						return agentexecutionapp.ErrLocalWorkTurn
+					}
+					if !newest {
+						return agentexecutionapp.ErrCloudTurnNotNewest
+					}
+				}
 			}
 			if row.ResponseIsStreaming {
 				return agentexecutionapp.ErrCurrentAgentRegenerationStillFinalizing
@@ -857,7 +915,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentContinuation(
 		request.ProjectID,
 		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 		func(tx sqlExecutor) error {
-			if err := refuseLocalWorkThread(ctx, tx, conversationUUID); err != nil {
+			if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor); err != nil {
 				return err
 			}
 			if request.Kind == agentexecutionapp.CurrentContinuationStatic {
@@ -1102,4 +1160,7 @@ var _ currentApplicationStartQuerier = pgxExecutor{}
 var _ currentAdhocStartQuerier = pgxExecutor{}
 var _ currentRegenerationQuerier = pgxExecutor{}
 var _ currentContinuationQuerier = pgxExecutor{}
-var _ localWorkThreadQuerier = pgxExecutor{}
+var (
+	_ localWorkThreadQuerier   = pgxExecutor{}
+	_ cloudRegenerationQuerier = pgxExecutor{}
+)

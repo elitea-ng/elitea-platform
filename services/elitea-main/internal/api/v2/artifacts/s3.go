@@ -174,15 +174,28 @@ func s3Bucket(r *http.Request) string {
 // database ID (object metadata upsert/delete) and its expires_at, and looking
 // it up a second time could observe a different row.
 func (h *Handler) requireS3Bucket(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
+	return h.requireS3BucketScoped(w, r, projectID, bucket, need, scopePathKey)
+}
+
+// requireS3BucketScoped is requireS3Bucket judging the system-bucket rule on
+// `scope` (scopeListing for ListObjectsS3 only).
+func (h *Handler) requireS3BucketScoped(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string, scope bucketScope) (repos.BucketRow, bool) {
 	// The per-bucket access list, checked first and in the S3 vocabulary. The
 	// SDK reaches the same objects through these routes as the native ones, so
 	// an exception that refuses a verb there must refuse it here; an S3
 	// representation that is a softer way in is not a representation, it is a
 	// second policy. AccessDenied is the code legacy's own S3 routes answer
 	// with (routes/s3.py:88-90).
-	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
+	//
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent, before the
+	// access list is read.
+	hidden, allowed, err := h.gateBucket(r.Context(), projectID, bucket, need)
 	if err != nil {
 		h.writeInternalS3(w, r, "authorize bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if hidden {
+		writeError(w, http.StatusNotFound, "NoSuchBucket", "bucket not found")
 		return repos.BucketRow{}, false
 	}
 	if !allowed {
@@ -198,6 +211,15 @@ func (h *Handler) requireS3Bucket(w http.ResponseWriter, r *http.Request, projec
 		h.writeInternalS3(w, r, "get bucket", err)
 		return repos.BucketRow{}, false
 	}
+	allowed, err = h.allowSystemBucket(r, projectID, row, scope)
+	if err != nil {
+		h.writeInternalS3(w, r, "authorize system bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "AccessDenied", systemBucketRefusal)
+		return repos.BucketRow{}, false
+	}
 	return row, true
 }
 
@@ -211,7 +233,7 @@ func (h *Handler) ListObjectsS3(w http.ResponseWriter, r *http.Request) {
 
 	// Same bucket resolution as the native route. A listing can only ever
 	// fail on the bucket, never on a key.
-	if _, ok := h.requireS3Bucket(w, r, projectID, bucket, accessRead); !ok {
+	if _, ok := h.requireS3BucketScoped(w, r, projectID, bucket, accessRead, scopeListing); !ok {
 		return
 	}
 

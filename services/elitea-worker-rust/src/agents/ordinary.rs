@@ -357,6 +357,7 @@ impl OrdinaryNativeAgentAssembler {
                 &tool_policy,
                 model_scopes,
                 plan.thread_id().to_owned(),
+                plan.conversation_id().to_owned(),
                 self.sandbox
                     .as_ref()
                     .zip(sandbox_authority)
@@ -449,6 +450,7 @@ impl OrdinaryNativeAgentAssembler {
         tool_policy: &Arc<ToolAdmissionPolicy>,
         model_scopes: super::model_scope::ModelScopeSessions,
         conversation_thread_id: String,
+        conversation_id: String,
         code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
         attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
@@ -485,7 +487,21 @@ impl OrdinaryNativeAgentAssembler {
         let wants_data_analysis = profile.internal_tools().data_analysis_enabled();
         let mut data_analysis_authority: Option<DataAnalysisAuthority> = None;
         if (carries_office_family || wants_data_analysis)
-            && let Some(office) = self.office_host(&context, profile, &toolkit_model_budget)
+            && let Some(office) = self.office_host(
+                &context,
+                profile,
+                &toolkit_model_budget,
+                crate::transport::office_host::OfficeClaim::new(
+                    runtime_context,
+                    Some(conversation_id.clone()),
+                )
+                .with_attachment_bucket(Arc::new(
+                    super::attachments::ClaimAttachmentBucket::new(
+                        Arc::clone(&self.platform),
+                        Arc::clone(runtime_context),
+                    ),
+                )),
+            )
         {
             if wants_data_analysis {
                 let mut authority = DataAnalysisAuthority::new(Arc::clone(&office));
@@ -777,6 +793,7 @@ impl OrdinaryNativeAgentAssembler {
         context: &Arc<ClaimScopedEliteaContext>,
         profile: &super::assembly::OrdinaryNoToolProfile,
         budget: &ModelCallBudget,
+        claim: crate::transport::office_host::OfficeClaim,
     ) -> Option<Arc<dyn elitea_agent_runtime::toolkits::OfficeToolHost>> {
         let runtime = self.office_runtime.as_ref()?;
         let bearer = context.model_facade_token();
@@ -791,6 +808,7 @@ impl OrdinaryNativeAgentAssembler {
             // The `imagegen` toolkit's images API rides on the same host and
             // the same credential (#864).
             let host = host
+                .with_claim(claim)
                 .with_images(self.model_facade.images(), Arc::clone(context))
                 .with_budget(budget.clone());
             return Some(Arc::new(host));
@@ -1093,7 +1111,7 @@ pub(super) fn snapshot_carries_office_family(snapshot: &AdmittedToolSnapshot<'_>
 /// Office families and `imagegen` always do; `sharepoint` only when its
 /// selected tools include one that reads a document or an artifact, so a
 /// `get_lists`-only toolkit redeems nothing.
-fn toolkit_needs_office_host(
+pub(crate) fn toolkit_needs_office_host(
     tool_type: &str,
     settings: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> bool {
@@ -1108,7 +1126,10 @@ fn toolkit_needs_office_host(
                     .filter_map(serde_json::Value::as_str)
                     .any(elitea_agent_runtime::toolkits::sharepoint_tool_uses_office_host)
             }),
-        _ => false,
+        // Review round 3: every family whose build serves file-store tools
+        // only with the host (the tracker attachment tools, carrier's
+        // reports), so the agent turn builds what discovery lists.
+        family => elitea_agent_runtime::toolkits::toolkit_needs_file_store(family, settings),
     }
 }
 

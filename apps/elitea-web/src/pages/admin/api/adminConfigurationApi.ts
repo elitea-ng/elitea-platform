@@ -119,6 +119,13 @@ export interface AdminConfigSection {
   readonly fields?: readonly AdminConfigField[];
   readonly unavailable_reason?: string;
   /**
+   * A server-stated fact about this deployment that the operator should see
+   * above the form, e.g. how the cloud executor's storage encryption at rest
+   * was established ("attested by operator" vs reported by the backend).
+   * Not editable here: it reflects the deployment, not a stored value.
+   */
+  readonly notice?: string;
+  /**
    * The dedicated surface that really holds this section's data, when one
    * exists — `'mcp_prebuilt_servers'` for the MCP catalogue.
    *

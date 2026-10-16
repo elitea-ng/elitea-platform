@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,7 +101,9 @@ func TestProductionRuntimeCrossProcessSystem(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	databaseURL := fmt.Sprintf("postgres://elitea:elitea@127.0.0.1:%d/elitea?sslmode=disable", postgresPort)
+	// The child elitea-main and elitea-migrate get the same non-UTC session
+	// time zone as this test's own pool (internal/testpg).
+	databaseURL := testpg.DSN(fmt.Sprintf("postgres://elitea:elitea@127.0.0.1:%d/elitea?sslmode=disable", postgresPort))
 	pool := waitForPostgres(t, ctx, databaseURL, containers, postgresName)
 	defer pool.Close()
 	bootstrapDatabase(t, ctx, repositoryRoot, pool)

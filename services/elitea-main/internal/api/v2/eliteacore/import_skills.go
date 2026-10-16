@@ -219,8 +219,8 @@ func (h *Handler) importSkill(
 			return importedSkill{}, encodeErr
 		}
 		if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.skills (name, description, owner_id, author_id, meta)
-			VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id`, schema),
+			INSERT INTO %s.skills (name, description, owner_id, author_id, meta, created_at)
+			VALUES ($1, $2, $3, $4, $5::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, schema),
 			name, description, ownerID.Int64(), authorID.Int64(), metaJSON).Scan(&skillID); err != nil {
 			return importedSkill{}, err
 		}
@@ -257,8 +257,8 @@ func (h *Handler) importSkill(
 		// carrying two versions of one name costs the duplicate and not the
 		// whole skill, since a reference cannot tell those two apart anyway.
 		if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
-			INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, status, meta)
-			VALUES ($1, $2, $3, $4, 'draft', $5::jsonb)
+			INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, status, meta, created_at)
+			VALUES ($1, $2, $3, $4, 'draft', $5::jsonb, now() AT TIME ZONE 'UTC')
 			ON CONFLICT ON CONSTRAINT _skill_version_name_uc
 			DO UPDATE SET instructions = EXCLUDED.instructions
 			RETURNING id`, schema),
@@ -455,8 +455,8 @@ func (h *Handler) attachImportedSkills(
 			continue
 		}
 		if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
-			INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-			VALUES ($1, $2, $3, $4)`, schema),
+			INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+			VALUES ($1, $2, $3, $4, now() AT TIME ZONE 'UTC')`, schema),
 			entityVersionID, entityType, skill.id, skillVersionID); err != nil {
 			slog.ErrorContext(ctx, "import: skill attachment insert failed",
 				"schema", schema, "entity_version_id", entityVersionID,

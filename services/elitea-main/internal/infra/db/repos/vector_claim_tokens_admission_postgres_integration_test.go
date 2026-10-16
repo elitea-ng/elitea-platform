@@ -210,8 +210,8 @@ func TestPostgresAgentAdmissionIncludesSubAgentMemoryToolkits(t *testing.T) {
 	for name, kind := range map[string]string{"b-notes": "memory", "b-gh": "github"} {
 		var id int64
 		if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.elitea_tools (type, name, description, settings, author_id, meta)
-VALUES ($1, $2, '', '{}'::jsonb, 1, '{}'::jsonb) RETURNING id`, kind, name).Scan(&id); err != nil {
+INSERT INTO p_1.elitea_tools (type, name, description, settings, author_id, meta, created_at)
+VALUES ($1, $2, '', '{}'::jsonb, 1, '{}'::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, kind, name).Scan(&id); err != nil {
 			t.Fatalf("seed toolkit %s: %v", name, err)
 		}
 		if kind == "memory" {

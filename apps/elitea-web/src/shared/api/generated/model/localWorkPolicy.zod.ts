@@ -92,6 +92,11 @@ export const LocalWorkPolicy = zod
       .describe(
         "Local turns may save to the user's cloud memory. Recall is always allowed. Default true.",
       ),
+    cloud_handoff: zod
+      .boolean()
+      .describe(
+        "Client contract 1.8 (ADR-0034 decision 11). A Local work thread may be sent to the cloud executor. Default false. The server refuses a send while it is false; the platform and project settings narrow it further.",
+      ),
   })
   .describe(
     "Client contract 1.5 (ADR-0029 decision 6). What a desktop app may do on the user's machine. The desktop enforces every field. The server enforces only `allowed`: it refuses a local turn start while it is false. A local turn's audit records what the client reports, which the server cannot verify. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:110 (`LocalWorkPolicy`).",

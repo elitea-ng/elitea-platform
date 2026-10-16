@@ -9,6 +9,7 @@ package syncretention
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ import (
 
 func newSyncPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the sync retention integration tests")
 	}
@@ -108,7 +109,7 @@ func TestSweepRemovesOnlyExpiredTombstonesInEveryTenant(t *testing.T) {
 		}
 	}
 	// A notification delete writes its tombstone through 0144's trigger.
-	if _, err := pool.Exec(ctx, `INSERT INTO centry.notifications (project_id, user_id, event_type) VALUES (1, 5, 'x'), (1, 5, 'y');
+	if _, err := pool.Exec(ctx, `INSERT INTO centry.notifications (project_id, user_id, event_type, created_at, updated_at) VALUES (1, 5, 'x', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'), (1, 5, 'y', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC');
 		DELETE FROM centry.notifications`); err != nil {
 		t.Fatal(err)
 	}

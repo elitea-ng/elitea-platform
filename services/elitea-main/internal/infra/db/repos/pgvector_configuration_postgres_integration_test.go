@@ -66,10 +66,10 @@ func TestCurrentProjectPgvectorConfigurationsRepositoryPostgresIdentityGuard(t *
 INSERT INTO p_1.configuration (
     uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, status_logs, source, author_id
-) VALUES (
+, created_at) VALUES (
     $1, $2, 'existing owner', $3, $4, $5, '{"owner":"existing"}'::jsonb,
     '{}'::jsonb, false, true, NULL, $6, NULL
-)`, conflict.uuid, conflict.projectID, configuration.Title, conflict.typeName, conflict.section, conflict.source); err != nil {
+, now() AT TIME ZONE 'UTC')`, conflict.uuid, conflict.projectID, configuration.Title, conflict.typeName, conflict.section, conflict.source); err != nil {
 				t.Fatalf("insert conflicting fixture: %v", err)
 			}
 

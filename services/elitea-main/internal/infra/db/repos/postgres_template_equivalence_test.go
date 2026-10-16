@@ -302,6 +302,12 @@ func replayedEquivalencePool(t *testing.T, adminPool *pgxpool.Pool, adminConfig 
 	if err := runner.ApplyTenant(ctx, postgresIntegrationTenant); err != nil {
 		t.Fatalf("replay embedded tenant migrations: %v", err)
 	}
+	// The template build installs the naive clock probe after the corpus
+	// (dbtest.NaiveClockProbeSQL); the replay does the same, so the two
+	// still differ only where the corpus would.
+	if _, err := pool.Exec(ctx, dbtest.NaiveClockProbeSQL); err != nil {
+		t.Fatalf("install the naive clock probe on the replayed database: %v", err)
+	}
 	return pool
 }
 

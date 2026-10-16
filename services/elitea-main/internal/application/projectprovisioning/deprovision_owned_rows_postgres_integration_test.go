@@ -164,7 +164,7 @@ func seedProjectOwnedRows(ctx context.Context, t *testing.T, pool *pgxpool.Pool,
 		 VALUES ($1, 'c', 'f', 0, 1, 'f.txt', '\x00')`,
 		`INSERT INTO public.pipeline_runs (execution_id, project_id, application_id, version_id, conversation_uuid, origin)
 		 VALUES ('exec-' || ($1::bigint)::text, ($1::bigint)::text, 1, 1, gen_random_uuid()::text, 'manual')`,
-		`INSERT INTO centry.social_pins (entity, user_id, project_id, entity_id) VALUES ('application', 1, $1, 7)`,
+		`INSERT INTO centry.social_pins (entity, user_id, project_id, entity_id, created_at, updated_at) VALUES ('application', 1, $1, 7, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`,
 		`INSERT INTO gateway.llm_budget_accumulators (project_id, scope, scope_id, period_start, period_end)
 		 VALUES ($1::bigint, 'project', ($1::bigint)::text, date_trunc('month', now()), date_trunc('month', now()) + interval '1 month')`,
 		`INSERT INTO elitea_runtime.tool_call_records (project_id, source, source_ref, tool_name, started_at)

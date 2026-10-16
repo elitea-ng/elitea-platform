@@ -490,6 +490,7 @@ impl PipelineNativeAgentAssembler {
         composition: &AdmittedPipelineComposition,
         scoped_applications: bool,
         conversation_thread_id: String,
+        conversation_id: String,
     ) -> Result<PipelineRuntimeBindings, NativeAgentAssemblyError> {
         let has_llm_nodes = profile.definition().has_llm_nodes();
         let has_direct_tool_nodes = profile.definition().has_direct_tool_nodes();
@@ -564,6 +565,18 @@ impl PipelineNativeAgentAssembler {
                     );
                     match host {
                         Ok(host) => {
+                            let host = host.with_claim(
+                                crate::transport::office_host::OfficeClaim::new(
+                                    runtime_context,
+                                    Some(conversation_id.clone()),
+                                )
+                                .with_attachment_bucket(Arc::new(
+                                    super::attachments::ClaimAttachmentBucket::new(
+                                        Arc::clone(platform),
+                                        Arc::clone(runtime_context),
+                                    ),
+                                )),
+                            );
                             // The `imagegen` toolkit's images API (#864): lent
                             // wherever the worker holds a model facade.
                             let host = if let Some(facade) = self.model_facade.as_ref() {
@@ -1221,6 +1234,7 @@ impl PipelineNativeAgentAssembler {
                     &composition,
                     scoped_applications,
                     plan.session_id().to_owned(),
+                    plan.conversation_id().to_owned(),
                 )
                 .await?;
             if let (Some(factory), Some(authority)) = (&self.sandbox, sandbox_authority) {

@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -94,6 +95,14 @@ type Repository interface {
 	ReplaceUserBucketPermissions(ctx context.Context, projectID, userID int64, permissions map[string][]string) error
 	DeleteUserBucketPermission(ctx context.Context, projectID, userID int64, bucket string) (bool, error)
 	IsProjectAdmin(ctx context.Context, projectID, userID int64) (bool, error)
+	// IsWorkspaceBucket reports the project's hidden workspace bucket
+	// (ADR-0034 decision 3), found by type whatever its name: every bucket
+	// route answers it 404 before the access list is read.
+	IsWorkspaceBucket(ctx context.Context, projectID int64, name string) (bool, error)
+	// BucketGate answers, in one lookup, IsWorkspaceBucket and the caller's
+	// exception (GetBucketPermission) for a bucket route's gate. userID 0
+	// is no caller.
+	BucketGate(ctx context.Context, projectID, userID int64, bucket string) (repos.BucketGate, error)
 }
 
 type Handler struct {
@@ -101,6 +110,9 @@ type Handler struct {
 	store  storage.ObjectStore
 	logger *slog.Logger
 	events EventEmitter
+	// claims verifies the runtime claim a turn's Office host names, for the
+	// system-bucket rule (system_buckets.go).
+	claims RuntimeClaimResolver
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally to
@@ -415,6 +427,23 @@ func (h *Handler) CreateBucket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "bucket name must match ^[a-z][a-z0-9-]{1,62}$")
 		return
 	}
+	// A reserved name (elitea-workspaces and its suffixed forms) is an invalid
+	// name for a NEW bucket, never a conflict: a 409 would tell the caller
+	// that the hidden workspace bucket exists (ADR-0034 decision 3). A user
+	// bucket created under that name before it was reserved keeps working.
+	if storage.ReservedBucketName(req.Name) {
+		writeError(w, http.StatusBadRequest, "InvalidArgument", "this bucket name is reserved")
+		return
+	}
+	reserved, err := h.reservedBucketName(r.Context(), projectID, req.Name)
+	if err != nil {
+		h.writeInternal(w, r, "get project storage policy", err)
+		return
+	}
+	if reserved {
+		writeError(w, http.StatusConflict, "AlreadyExists", "this bucket name is reserved for the platform")
+		return
+	}
 
 	retentionDays, allowed, err := h.resolveCreateRetention(r.Context(), projectID, req.RetentionDays)
 	if err != nil {
@@ -634,3 +663,23 @@ func (h *Handler) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// reservedBucketName reports whether name is one the platform keeps for a
+// SYSTEM bucket (review round 2): the default and the project's policy
+// attachment bucket, and the index artifact bucket. A person-made bucket of
+// such a name would take the attachment path over (RequireAttachmentBucket
+// would land attachments in it) or shadow the platform's own results.
+func (h *Handler) reservedBucketName(ctx context.Context, projectID int64, name string) (bool, error) {
+	if name == storage.DefaultAttachmentBucket || name == indexArtifactBucketName {
+		return true, nil
+	}
+	policy, err := h.repo.GetProjectStoragePolicy(ctx, projectID)
+	if err != nil {
+		return false, err
+	}
+	return policy.AttachmentBucket != nil && strings.TrimSpace(*policy.AttachmentBucket) == name, nil
+}
+
+// indexArtifactBucketName is the system bucket index runs write their results
+// to (repos.indexArtifactBucketName).
+const indexArtifactBucketName = "index-artifacts"

@@ -66,8 +66,8 @@ func seedConversationWithParticipant(t *testing.T, repo *ConversationsRepo, cont
 	ctx := context.Background()
 
 	if err := repo.pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'delete-me', 7, 'agent')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'delete-me', 7, 'agent', now() AT TIME ZONE 'UTC')
 RETURNING id::text, uuid::text`).Scan(&numericID, &conversationUUID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
@@ -79,8 +79,8 @@ VALUES (gen_random_uuid(), 'user', '{"id": 7}'::jsonb) RETURNING id`).Scan(&part
 		t.Fatalf("seed participant: %v", err)
 	}
 	if _, err := repo.pool.Exec(ctx, `
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id)
-VALUES ($1::int, $2)`, numericID, participantID); err != nil {
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at)
+VALUES ($1::int, $2, now() AT TIME ZONE 'UTC')`, numericID, participantID); err != nil {
 		t.Fatalf("seed participant mapping: %v", err)
 	}
 
@@ -88,12 +88,12 @@ VALUES ($1::int, $2)`, numericID, participantID); err != nil {
 		var groupUUID string
 		if err := repo.pool.QueryRow(ctx, `
 WITH grp AS (
-    INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
-    VALUES (gen_random_uuid(), $1, $2::int)
+    INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
+    VALUES (gen_random_uuid(), $1, $2::int, now() AT TIME ZONE 'UTC')
     RETURNING id, uuid
 ), item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    SELECT gen_random_uuid(), 'text_message', 0, grp.id FROM grp
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, grp.id, now() AT TIME ZONE 'UTC' FROM grp
     RETURNING id
 ), txt AS (
     INSERT INTO p_1.chat_messages_text (id, content)
@@ -261,8 +261,8 @@ WITH participant AS (
     VALUES (gen_random_uuid(), $2, jsonb_build_object('id', $3::int))
     RETURNING id
 ), grp AS (
-    INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
-    SELECT gen_random_uuid(), participant.id, $1::int FROM participant
+    INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
+    SELECT gen_random_uuid(), participant.id, $1::int, now() AT TIME ZONE 'UTC' FROM participant
     RETURNING uuid
 )
 SELECT grp.uuid::text FROM grp`, conversationID, entityName, entityID).Scan(&groupUUID); err != nil {
@@ -570,8 +570,8 @@ func seedAttachmentItem(t *testing.T, repo *ConversationsRepo, groupUUID, bucket
 	t.Helper()
 	if _, err := repo.pool.Exec(context.Background(), `
 WITH item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    SELECT gen_random_uuid(), 'attachment_message', 1, id
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'attachment_message', 1, id, now() AT TIME ZONE 'UTC'
     FROM p_1.chat_message_group WHERE uuid = $1::uuid
     RETURNING id
 )

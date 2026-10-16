@@ -593,3 +593,9 @@ fn bullet_schema() -> Value {
         }, "required": ["text"], "additionalProperties": false}
     ]})
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    ALL_TOOLS.iter().map(|tool| (tool.name(), true)).collect()
+}

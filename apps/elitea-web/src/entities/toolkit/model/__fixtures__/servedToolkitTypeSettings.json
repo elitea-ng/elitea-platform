@@ -619,6 +619,9 @@
         "type": "array"
       }
     },
+    "required": [
+      "bucket"
+    ],
     "title": "artifact",
     "type": "object"
   },

@@ -33,6 +33,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,7 +53,7 @@ const suggestionsDatabaseURLEnv = "ELITEA_TEST_DATABASE_URL"
 
 func newSuggestionsPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(suggestionsDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(suggestionsDatabaseURLEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the draft-suggestions integration test", suggestionsDatabaseURLEnv)
 	}
@@ -118,14 +119,14 @@ func TestGenerateApplicationDraftSuggestsASeededToolkit(t *testing.T) {
 
 	var jiraToolkitID int
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id)
-VALUES ('Jira', 'jira', 'Track and triage Jira issues', 1, 1)
+INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id, created_at)
+VALUES ('Jira', 'jira', 'Track and triage Jira issues', 1, 1, now() AT TIME ZONE 'UTC')
 RETURNING id`).Scan(&jiraToolkitID); err != nil {
 		t.Fatalf("seed the Jira toolkit: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id)
-VALUES ('Weather', 'artifact', 'Forecasts upcoming conditions', 1, 1)`); err != nil {
+INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id, created_at)
+VALUES ('Weather', 'artifact', 'Forecasts upcoming conditions', 1, 1, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("seed the unrelated toolkit: %v", err)
 	}
 

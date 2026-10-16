@@ -238,16 +238,17 @@ func TestRustCapabilitySnapshotMatchesTheRustSource(t *testing.T) {
 	}
 
 	found := map[string]struct{}{}
+	dispatch := materializeDispatchBodies(string(source))
 	// The match arms of materialize_a_to_k and materialize_p_to_z. They are
 	// indented eight spaces inside the `match tool_type {` of each function.
 	for _, match := range regexp.MustCompile(`(?m)^ {8}"([a-z0-9_]+)" =>`).
-		FindAllStringSubmatch(string(source), -1) {
+		FindAllStringSubmatch(dispatch, -1) {
 		found[match[1]] = struct{}{}
 	}
 	// The two families materialize() handles itself, because they return a
 	// delegated authorization catalogue rather than a bare toolset.
 	for _, match := range regexp.MustCompile(`reference\.tool_type\(\) == "([a-z0-9_]+)"`).
-		FindAllStringSubmatch(string(source), -1) {
+		FindAllStringSubmatch(dispatch, -1) {
 		found[match[1]] = struct{}{}
 	}
 	// MCP uses the direct runtime branch, outside configured families.
@@ -468,4 +469,18 @@ func TestWithoutACapabilityTheRustOnlyTypesAndToolsAreWithheld(t *testing.T) {
 			t.Errorf("nil withholds the SDK type %s", toolkitType)
 		}
 	}
+}
+
+// materializeDispatchBodies is the text of the dispatch functions of
+// materialize.rs only: every `fn materialize*` body, from its signature to
+// the closing brace at column 0. Matching the whole file read the arms of
+// `family_tool_catalog` (the per-family tool lists, review C1) and any test
+// table as dispatch, so a family whose arm was removed still passed.
+func materializeDispatchBodies(source string) string {
+	var bodies strings.Builder
+	for _, match := range regexp.MustCompile(`(?m)^(?:pub )?(?:async )?fn materialize\w*[\s\S]*?\n\}\n`).
+		FindAllString(source, -1) {
+		bodies.WriteString(match)
+	}
+	return bodies.String()
 }

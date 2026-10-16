@@ -50,14 +50,14 @@ func newToolListFixture(t *testing.T) *toolListFixture {
 	} {
 		var toolID int64
 		if err := pool.QueryRow(ctx, `
-			INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id)
-			VALUES ($1, 'github', NULLIF($2, ''), 1, 7) RETURNING id`,
+			INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id, created_at)
+			VALUES ($1, 'github', NULLIF($2, ''), 1, 7, now() AT TIME ZONE 'UTC') RETURNING id`,
 			tool.name, tool.description).Scan(&toolID); err != nil {
 			t.Fatalf("insert %s: %v", tool.name, err)
 		}
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id)
-			VALUES ($1, 'application', $2)`, populatedVersionID, toolID); err != nil {
+			INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id, created_at)
+			VALUES ($1, 'application', $2, now() AT TIME ZONE 'UTC')`, populatedVersionID, toolID); err != nil {
 			t.Fatalf("attach %s: %v", tool.name, err)
 		}
 	}

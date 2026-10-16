@@ -33,6 +33,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -181,7 +182,7 @@ func TestReadIsPerSectionAndOverlaysStoredValuesOnDefaults(t *testing.T) {
 	// Now store one value and re-read: the STORED value must win over the
 	// default, and every other key must keep its default.
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO centry.platform_config (section, key, value) VALUES ($1, $2, $3::jsonb)`,
+		`INSERT INTO centry.platform_config (section, key, value, updated_at) VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`,
 		"resources", "resources_documentation_title", `"Handbook"`); err != nil {
 		t.Fatalf("seed stored value: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestReadIsPerSectionAndOverlaysStoredValuesOnDefaults(t *testing.T) {
 func TestReadDropsStoredKeysTheSchemaNoLongerDeclares(t *testing.T) {
 	pool, router := newConfigEnvironment(t)
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO centry.platform_config (section, key, value) VALUES ($1, $2, $3::jsonb)`,
+		`INSERT INTO centry.platform_config (section, key, value, updated_at) VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`,
 		"resources", "resources_retired_card_title", `"Ghost"`); err != nil {
 		t.Fatalf("seed orphan value: %v", err)
 	}
@@ -738,6 +739,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		"guardrails": true, "dedicated_banner": true,
 		"maintenance": true, "analytics": true, "default_secrets": true,
 		"native_client_policy": true,
+		// ADR-0034: every send and cloud turn claim reads it
+		// (workspacehandoff.PolicyService).
+		"cloud_executor": true,
 	}
 	for id := range want {
 		if !available[id] {
@@ -914,7 +918,7 @@ func TestPromptLibResourcesServesWhatTheAdminSaved(t *testing.T) {
 func newConfigPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", environment)
 	}

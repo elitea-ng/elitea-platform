@@ -1165,6 +1165,87 @@ async fn application_and_adhoc_share_authorized_redemption_model_session_and_pro
     }
 }
 
+/// Live 4.45.0: a model that spends every output token reasoning ends with
+/// no visible text, no tool call and `finish_reason: length`. The projector
+/// offered Continue, then completion selection refused the empty answer and
+/// the user saw "The runtime operation failed." The turn now completes with
+/// the Continue offer and an empty, output-limited terminal.
+#[tokio::test(flavor = "current_thread")]
+async fn reasoning_only_length_cut_completes_with_the_continue_offer() {
+    let raw = concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Let me think about the tools\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2048}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let request = ordinary_request(AgentExecutionKind::Application);
+    let (runtime_context, _) = runtime_context_client();
+    let (model_gateway, _) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::<Bytes>::from(raw))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway fixture client");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    );
+    let mut invocation = assembler
+        .assemble(AuthorizedNativeAssembly::new(
+            &request,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        ))
+        .await
+        .expect("authorized ordinary assembly");
+    let _start = invocation.project_start(chrono::Utc::now()).unwrap();
+    let (mut native, mut projector, completion) = invocation.start().expect("native start");
+    let mut streamed = Vec::new();
+    while let Some(event) = native.next_event().await.expect("native event") {
+        streamed.extend(projector.project(&event).expect("projected native event"));
+    }
+    let browser = |event| {
+        serde_json::from_slice::<serde_json::Value>(
+            &encode_current_node_event_json(&event).expect("canonical browser event"),
+        )
+        .expect("browser event JSON")
+    };
+    let confirmation = streamed
+        .into_iter()
+        .map(browser)
+        .find(|event| event["type"] == "agent_requires_confirmation")
+        .expect("the Continue offer");
+    assert_eq!(confirmation["content"], "Continue");
+    assert_eq!(confirmation["response_metadata"]["finish_reason"], "length");
+
+    let completed = completion
+        .select()
+        .await
+        .expect("an empty length-cut answer is a completion, not INTERNAL");
+    let finish: Vec<_> = projector
+        .finish_after_eos(completed, chrono::Utc::now())
+        .expect("finished browser output")
+        .into_iter()
+        .map(browser)
+        .collect();
+    let response = finish
+        .iter()
+        .find(|event| event["type"] == "agent_response")
+        .expect("agent response");
+    assert_eq!(response["response_metadata"]["finish_reason"], "length");
+    let full_message = finish
+        .iter()
+        .find(|event| event["type"] == "full_message")
+        .expect("full message event");
+    assert_eq!(full_message["content"], "");
+    assert_eq!(
+        full_message["response_metadata"]["output_limit_reached"],
+        true
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn application_and_adhoc_select_native_anthropic_without_changing_the_lifecycle() {
     for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {

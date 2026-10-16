@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ const langGraphCheckpointMigrationsDDL = `CREATE TABLE IF NOT EXISTS checkpoint_
 //  2. a table the administrator created while no default privilege covered it
 //     becomes read/write once the project is provisioned again (re-grant).
 func TestPGXProvisionerGrantsAdministratorCreatedCheckpointTables(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the real PgVector provisioning test")
 	}

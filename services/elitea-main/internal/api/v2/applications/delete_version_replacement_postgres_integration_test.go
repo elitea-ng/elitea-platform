@@ -34,13 +34,13 @@ func attachSubAgentReference(t *testing.T, pool *pgxpool.Pool, parentAppID, pare
 	settings := fmt.Sprintf(`{"application_id":%s,"application_version_id":%s}`, childAppID, childVersionID)
 	var toolID int64
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id)
-VALUES ('child', 'application', '', $1::jsonb, '{}'::jsonb, 1, 1) RETURNING id`, settings).Scan(&toolID); err != nil {
+INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
+VALUES ('child', 'application', '', $1::jsonb, '{}'::jsonb, 1, 1, now() AT TIME ZONE 'UTC') RETURNING id`, settings).Scan(&toolID); err != nil {
 		t.Fatalf("seed the sub-agent tool row: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id)
-VALUES ($1, 'agent', $2)`, parentVersionID, toolID); err != nil {
+INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id, created_at)
+VALUES ($1, 'agent', $2, now() AT TIME ZONE 'UTC')`, parentVersionID, toolID); err != nil {
 		t.Fatalf("seed the sub-agent mapping: %v", err)
 	}
 	_ = parentAppID

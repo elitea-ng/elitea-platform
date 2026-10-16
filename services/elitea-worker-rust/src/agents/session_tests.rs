@@ -2396,10 +2396,11 @@ fn session_definition_lineage_is_request_independent_and_application_version_sco
 
 #[test]
 fn invalid_completed_content_never_becomes_a_browser_terminal() {
-    let Err(error) =
-        super::events::CompletedAgentBrowserOutput::ordinary(String::new(), "thread-1".to_owned())
-    else {
-        panic!("empty model result was accepted");
+    let Err(error) = super::events::CompletedAgentBrowserOutput::ordinary(
+        "nul\0byte".to_owned(),
+        "thread-1".to_owned(),
+    ) else {
+        panic!("a NUL model result was accepted");
     };
     assert_eq!(error.code(), AgentEventProjectionErrorCode::InvalidOutput);
 }

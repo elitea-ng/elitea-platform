@@ -57,9 +57,9 @@ func newTTSVoicesFixture(t *testing.T, lister *fakeVoiceLister) (chi.Router, *pg
 	credentialData := `{"api_base":"https://example.invalid","api_key":"{{secret.k}}"}`
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`
 		INSERT INTO %s.configuration
-			(uuid, project_id, elitea_title, type, section, data, meta, shared, status_ok, source)
+			(uuid, project_id, elitea_title, type, section, data, meta, shared, status_ok, source, created_at)
 		VALUES (gen_random_uuid(), $1, $2, 'azure_open_ai', 'ai_credentials', $3::jsonb, '{}'::jsonb,
-			false, true, 'user')`, schema),
+			false, true, 'user', now() AT TIME ZONE 'UTC')`, schema),
 		globalScopeProject, ttsCredentialTitle, credentialData); err != nil {
 		t.Fatalf("seed credential row: %v", err)
 	}
@@ -68,9 +68,9 @@ func newTTSVoicesFixture(t *testing.T, lister *fakeVoiceLister) (chi.Router, *pg
 	modelData := fmt.Sprintf(`{"ai_credentials":{"elitea_title":%q}}`, ttsCredentialTitle)
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`
 		INSERT INTO %s.configuration
-			(uuid, project_id, elitea_title, type, section, data, meta, shared, status_ok, source)
+			(uuid, project_id, elitea_title, type, section, data, meta, shared, status_ok, source, created_at)
 		VALUES (gen_random_uuid(), $1, $2, 'tts_model', 'tts', $3::jsonb, '{"note":"kept"}'::jsonb,
-			false, true, 'user')`, schema),
+			false, true, 'user', now() AT TIME ZONE 'UTC')`, schema),
 		globalScopeProject, ttsModelTitle, modelData); err != nil {
 		t.Fatalf("seed tts model row: %v", err)
 	}

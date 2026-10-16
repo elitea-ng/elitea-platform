@@ -149,6 +149,26 @@ pub(crate) fn build_sharepoint_toolset(
     host: Option<&SharedOfficeToolHost>,
 ) -> Result<MaterializedSharePointToolset, SharePointToolsetError> {
     let selected = validate_selection(config.selected_tools())?;
+    // The document readers and `upload_file` act through the Office host; a
+    // path that lends none leaves them out (reported by the run's notice as
+    // needing the file store), as jira and qtest leave out theirs.
+    let hosted = selected.len();
+    let selected: Vec<SharePointToolKind> = selected
+        .into_iter()
+        .filter(|kind| host.is_some() || !kind.uses_office_host())
+        .collect();
+    if selected.len() < hosted {
+        tracing::warn!(
+            event = "agent_toolkit_tools_skipped",
+            reason_code = "attachment_host_unavailable",
+            toolkit_type = "sharepoint",
+            toolkit_name,
+            "SharePoint document readers and uploads were omitted: this run lends no Office host"
+        );
+    }
+    if selected.is_empty() {
+        return Err(unsupported_selection());
+    }
     let site_url = config.site_url().to_string();
     let requirement = config.authorization().clone();
     let mut delegated_authorization = DelegatedAuthorizationCatalog::default();
@@ -1601,5 +1621,14 @@ pub fn sharepoint_tool_names() -> Vec<&'static str> {
     SharePointToolKind::ALL
         .iter()
         .map(|kind| kind.name())
+        .collect()
+}
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    SharePointToolKind::ALL
+        .iter()
+        .map(|kind| (kind.name(), kind.uses_office_host()))
         .collect()
 }

@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -35,7 +36,7 @@ const (
 func newBrowserSessionPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
-	databaseURL := os.Getenv(browserSessionDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(browserSessionDatabaseURLEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL integration test", browserSessionDatabaseURLEnv)
 	}

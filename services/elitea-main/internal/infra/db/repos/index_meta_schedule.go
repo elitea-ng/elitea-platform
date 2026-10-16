@@ -91,7 +91,7 @@ SET meta = jsonb_set(
         (meta->'indexes_meta') - $2::text,
         false
     ),
-    updated_at = clock_timestamp()
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 WHERE id = $1`,
 				toolkitID,
 				indexName,

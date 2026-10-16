@@ -286,6 +286,16 @@ func localWorkFields(section string, defaults platformconfig.LocalWorkPolicy) []
 			"default":      defaults.MemoryWrite,
 			"visible_when": visible,
 		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkCloudHandoff,
+			"type":  "boolean",
+			"title": "Allow Send to Cloud",
+			"description": "Whether a Local work thread may be sent to the cloud executor, which uploads the folder's " +
+				"files to this deployment. The Cloud executor section and the project settings can narrow it.",
+			"section":      section,
+			"default":      defaults.CloudHandoff,
+			"visible_when": visible,
+		},
 	}
 }
 

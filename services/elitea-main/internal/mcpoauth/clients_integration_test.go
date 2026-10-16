@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"sync"
 	"testing"
@@ -18,7 +19,7 @@ import (
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	dsn := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if dsn == "" {
 		t.Skip("ELITEA_TEST_DATABASE_URL is required for isolated PostgreSQL proof")
 	}

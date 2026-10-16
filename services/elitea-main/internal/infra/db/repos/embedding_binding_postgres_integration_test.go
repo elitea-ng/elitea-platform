@@ -29,17 +29,17 @@ CREATE TABLE p_2.configuration (LIKE p_1.configuration INCLUDING ALL);
 INSERT INTO p_1.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES (
+, created_at) VALUES (
     3, '00000000-0000-0000-0000-000000000107', 1, 'Embedding', 'embedding_current',
     'embedding_model', 'embedding',
     '{"name":"text-embedding-current","ai_credentials":{"elitea_title":"credential-current","private":true}}'::jsonb,
     '{}'::jsonb, true, true, 'user'
-), (
+, now() AT TIME ZONE 'UTC'), (
     4, '00000000-0000-0000-0000-000000000108', 1, 'Private embedding', 'embedding_private',
     'embedding_model', 'embedding',
     '{"name":"private-embedding","ai_credentials":{"elitea_title":"credential-private","private":true}}'::jsonb,
     '{}'::jsonb, false, true, 'user'
-)`); err != nil {
+, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -76,12 +76,12 @@ INSERT INTO p_1.configuration (
 INSERT INTO p_2.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES (
+, created_at) VALUES (
     5, '00000000-0000-0000-0000-000000000207', 2, 'Embedding', 'embedding_current',
     'embedding_model', 'embedding',
     '{"name":"text-embedding-current","ai_credentials":{"elitea_title":"credential-local","private":true}}'::jsonb,
     '{}'::jsonb, false, true, 'user'
-)`); err != nil {
+, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 	local, err := resolver.Resolve(ctx, 2, "text-embedding-current", nil)
@@ -100,12 +100,12 @@ INSERT INTO p_2.configuration (
 INSERT INTO p_2.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES (
+, created_at) VALUES (
     6, '00000000-0000-0000-0000-000000000208', 2, 'Embedding copy', 'embedding_current_copy',
     'embedding_model', 'embedding',
     '{"name":"text-embedding-current","ai_credentials":{"elitea_title":"credential-local","private":true}}'::jsonb,
     '{}'::jsonb, false, true, 'user'
-)`); err != nil {
+, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := resolver.Resolve(ctx, 2, "text-embedding-current", nil); !errors.Is(
@@ -128,7 +128,7 @@ CREATE TABLE p_2.configuration (LIKE p_1.configuration INCLUDING ALL);
 INSERT INTO p_2.configuration (
     uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-)
+, created_at)
 SELECT gen_random_uuid(),
        2,
        'Embedding ' || value,
@@ -142,7 +142,7 @@ SELECT gen_random_uuid(),
        '{}'::jsonb,
        false,
        true,
-       'user'
+       'user', now() AT TIME ZONE 'UTC'
 FROM generate_series(1, 40) AS value`); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ TRUNCATE p_2.configuration RESTART IDENTITY;
 INSERT INTO p_2.configuration (
     uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-)
+, created_at)
 SELECT gen_random_uuid(),
        2,
        'Embedding ' || value,
@@ -175,7 +175,7 @@ SELECT gen_random_uuid(),
        '{}'::jsonb,
        false,
        true,
-       'user'
+       'user', now() AT TIME ZONE 'UTC'
 FROM generate_series(1, 10001) AS value`); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ TRUNCATE p_2.configuration RESTART IDENTITY;
 INSERT INTO p_2.configuration (
     uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES (
+, created_at) VALUES (
     gen_random_uuid(),
     2,
     'Large but admitted embedding',
@@ -208,7 +208,7 @@ INSERT INTO p_2.configuration (
     false,
     true,
     'user'
-)`); err != nil {
+, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 	items, err := repository.List(

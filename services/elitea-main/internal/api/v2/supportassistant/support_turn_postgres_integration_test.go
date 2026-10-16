@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -73,7 +74,7 @@ const (
 var supportTemplate string
 
 func TestMain(m *testing.M) {
-	databaseURL := os.Getenv(supportDatabaseURLVariable)
+	databaseURL := testpg.DSN(os.Getenv(supportDatabaseURLVariable))
 	if databaseURL == "" {
 		// Every PostgreSQL test here skips itself. Run the rest.
 		os.Exit(m.Run())
@@ -246,8 +247,8 @@ CREATE TABLE p_7.entity_skill_mapping (
     skill_version_id INTEGER REFERENCES p_7.skill_versions(id)
 );
 INSERT INTO p_7.applications (id, name) VALUES (31, 'Support Agent');
-INSERT INTO p_7.application_versions (id, application_id, name, agent_type, instructions)
-VALUES (41, 31, 'latest', 'openai', 'Answer support questions');
+INSERT INTO p_7.application_versions (id, application_id, name, agent_type, instructions, created_at)
+VALUES (41, 31, 'latest', 'openai', 'Answer support questions', now() AT TIME ZONE 'UTC');
 SELECT setval(pg_get_serial_sequence('p_7.applications', 'id'), 100);
 SELECT setval(pg_get_serial_sequence('p_7.application_versions', 'id'), 100);
 `
@@ -257,7 +258,7 @@ SELECT setval(pg_get_serial_sequence('p_7.application_versions', 'id'), 100);
 // newSupportPool copies the template into a private database.
 func newSupportPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(supportDatabaseURLVariable)
+	databaseURL := testpg.DSN(os.Getenv(supportDatabaseURLVariable))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the support-assistant PostgreSQL integration test", supportDatabaseURLVariable)
 	}
@@ -316,8 +317,8 @@ func enableAssistant(t *testing.T, pool *pgxpool.Pool, values map[string]any) {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(context.Background(), `
-INSERT INTO centry.platform_config (section, key, value)
-VALUES ('support_assistant', $1, $2::jsonb)
+INSERT INTO centry.platform_config (section, key, value, updated_at)
+VALUES ('support_assistant', $1, $2::jsonb, now() AT TIME ZONE 'UTC')
 ON CONFLICT (section, key) DO UPDATE SET value = EXCLUDED.value`, key, string(encoded)); err != nil {
 			t.Fatalf("write %s: %v", key, err)
 		}
@@ -1062,7 +1063,7 @@ func TestTheDefaultVersionAnswersWhenTheOperatorPinsOne(t *testing.T) {
 	// A second, newer version, and the agent pinned to the OLD one.
 	if _, err := harness.pool.Exec(context.Background(), `
 INSERT INTO p_7.application_versions (id, application_id, name, agent_type, created_at)
-VALUES (42, 31, 'v2', 'openai', now() + interval '1 hour');
+VALUES (42, 31, 'v2', 'openai', (now() AT TIME ZONE 'UTC') + interval '1 hour');
 UPDATE p_7.applications SET meta = '{"default_version_id":"41"}'::jsonb WHERE id = 31;`); err != nil {
 		t.Fatalf("seed the second version: %v", err)
 	}
@@ -1116,8 +1117,8 @@ func TestANewDefaultVersionTakesEffectOnTheNextTurn(t *testing.T) {
 	}
 
 	if _, err := harness.pool.Exec(context.Background(), `
-INSERT INTO p_7.application_versions (id, application_id, name, agent_type)
-VALUES (42, 31, 'v2', 'openai');
+INSERT INTO p_7.application_versions (id, application_id, name, agent_type, created_at)
+VALUES (42, 31, 'v2', 'openai', now() AT TIME ZONE 'UTC');
 UPDATE p_7.applications SET meta = '{"default_version_id":"42"}'::jsonb WHERE id = 31;`); err != nil {
 		t.Fatalf("publish a new version: %v", err)
 	}
@@ -1479,10 +1480,10 @@ func (h *supportHarness) seedBrokenConversationWithSettings(
 	var conversationUUID string
 	if err := h.pool.QueryRow(context.Background(), `
 WITH conversation AS (
-    INSERT INTO p_7.chat_conversations (uuid, name, is_private, author_id, meta, source)
+    INSERT INTO p_7.chat_conversations (uuid, name, is_private, author_id, meta, source, created_at)
     VALUES (gen_random_uuid(), 'broken', TRUE, $1,
             '{"is_hidden":true,"conversation_type":"support","internal_tools":["internal_mcp"]}'::jsonb,
-            'support')
+            'support', now() AT TIME ZONE 'UTC')
     RETURNING id, uuid
 ), participant AS (
     INSERT INTO p_7.chat_participants (uuid, entity_name, entity_meta, meta)
@@ -1490,8 +1491,8 @@ WITH conversation AS (
             jsonb_build_object('id', $2::int, 'project_id', $3::int), '{}'::json)
     RETURNING id
 ), mapping AS (
-    INSERT INTO p_7.chat_participant_mapping (conversation_id, participant_id, entity_settings)
-    SELECT conversation.id, participant.id, $4::jsonb FROM conversation, participant
+    INSERT INTO p_7.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+    SELECT conversation.id, participant.id, $4::jsonb, now() AT TIME ZONE 'UTC' FROM conversation, participant
     RETURNING conversation_id
 )
 SELECT conversation.uuid::text FROM conversation, mapping LIMIT 1`,

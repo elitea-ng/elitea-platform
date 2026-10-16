@@ -306,7 +306,7 @@ OFFSET sqlc.arg('offset_rows')::integer;
 -- name: InsertCurrentConfiguration :one
 INSERT INTO configuration (
     uuid, project_id, label, elitea_title, type, section, data, meta, shared,
-    status_ok, status_logs, source, author_id
+    status_ok, status_logs, source, author_id, created_at
 ) VALUES (
     sqlc.arg('configuration_uuid')::text::uuid,
     sqlc.arg('project_id')::integer,
@@ -320,7 +320,8 @@ INSERT INTO configuration (
     sqlc.arg('status_ok')::boolean,
     sqlc.narg('status_logs')::text,
     sqlc.arg('source')::text,
-    sqlc.narg('author_id')::integer
+    sqlc.narg('author_id')::integer,
+    now() AT TIME ZONE 'UTC'
 )
 RETURNING id,
           uuid::text AS configuration_uuid,
@@ -349,7 +350,7 @@ SET label = sqlc.narg('label')::text,
     shared = sqlc.arg('shared')::boolean,
     status_ok = sqlc.arg('status_ok')::boolean,
     status_logs = sqlc.narg('status_logs')::text,
-    updated_at = now()
+    updated_at = (now() AT TIME ZONE 'UTC')
 WHERE id = sqlc.arg('configuration_id')::integer
   AND project_id = sqlc.arg('project_id')::integer
 RETURNING id,

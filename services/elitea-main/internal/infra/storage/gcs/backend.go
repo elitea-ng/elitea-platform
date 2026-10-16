@@ -356,3 +356,21 @@ func mapGCSError(err error, op string) error {
 	}
 	return fmt.Errorf("storage/gcs: %s: %w", op, err)
 }
+
+// DefaultEncryptionConfirmed: Cloud Storage encrypts every object at rest by
+// default and the encryption cannot be disabled (ADR-0034 decision 4).
+func (b *Backend) DefaultEncryptionConfirmed(context.Context) (bool, error) { return true, nil }
+
+var _ storage.ObjectCopier = (*Backend)(nil)
+
+// Copy is a GCS rewrite inside the backend's bucket.
+func (b *Backend) Copy(ctx context.Context, src, dst storage.ObjectRef) (storage.ObjectInfo, error) {
+	bucket := b.client.Bucket(b.bucket)
+	attrs, err := bucket.Object(dst.StorageKey(b.keyPrefix)).CopierFrom(bucket.Object(src.StorageKey(b.keyPrefix))).Run(ctx)
+	if err != nil {
+		return storage.ObjectInfo{}, mapGCSError(err, "copy object")
+	}
+	return storage.ObjectInfo{
+		Key: dst.Key(), Size: attrs.Size, LastModified: attrs.Updated, ContentType: attrs.ContentType, ETag: attrs.Etag,
+	}, nil
+}

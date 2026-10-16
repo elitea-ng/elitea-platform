@@ -82,6 +82,6 @@ func tenantOwnerID(projectID string) (ownership.ProjectID, error) {
 // NOT NULL column with no default that the import path omitted.
 func importToolkitInsertSQL(schema string) string {
 	return fmt.Sprintf(`
-		INSERT INTO %s.elitea_tools (name, type, settings, owner_id, author_id, description, meta)
-		VALUES ($1, $2, $3::jsonb, $4, $5, $6, '{}'::jsonb) RETURNING id`, schema)
+		INSERT INTO %s.elitea_tools (name, type, settings, owner_id, author_id, description, meta, created_at)
+		VALUES ($1, $2, $3::jsonb, $4, $5, $6, '{}'::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, schema)
 }

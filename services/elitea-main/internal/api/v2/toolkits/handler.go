@@ -395,6 +395,11 @@ var toolkitTypeSchemas = map[string]map[string]any{
 	},
 	"artifact": {
 		"type": "object",
+		// The SDK's own schema requires `bucket` (a `str` field with no
+		// default; ArtifactWrapper refuses a toolkit without one), and so does
+		// the save (refuseMissingToolkitBucket). Served here so the create form
+		// asks for it instead of saving into a 400.
+		"required": []any{"bucket"},
 		"properties": map[string]any{
 			"bucket":                 map[string]any{"type": "string"},
 			"pgvector_configuration": map[string]any{"type": "object"},
@@ -1244,6 +1249,13 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if h.refuseBlockedToolkitType(w, r, "create_toolkit", createdType) {
 		return
 	}
+	// A create with no settings at all has no bucket either (review S2): a
+	// file-store toolkit is judged as if it sent empty settings. An update
+	// without settings is a rename and stays unjudged.
+	if _, hasSettings := body["settings"].(map[string]any); !hasSettings &&
+		h.refuseMissingToolkitBucket(w, "create_toolkit", createdType, map[string]any{}) {
+		return
+	}
 	// The credential gate, between the type refusal and the write, so a refused
 	// save persists nothing. validateToolkitCreate above only checks that a
 	// github body NAMES a `github_configuration` key; this is the only thing on
@@ -1340,6 +1352,32 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	updatedType, _ := body["type"].(string)
 	if h.refuseBlockedToolkitType(w, r, "update_toolkit", updatedType) {
 		return
+	}
+	// An update that changes the TYPE to a file-store type and sends no
+	// settings keeps the stored settings, so it is judged against them: a
+	// toolkit must not become a bucketless pptx through a type-only PATCH
+	// (review round 2). A rename (no type, no settings) stays unjudged.
+	if _, hasSettings := body["settings"].(map[string]any); !hasSettings && updatedType != "" {
+		if _, stores := toolkitBucketSetting[updatedType]; stores {
+			// Fails CLOSED (review round 3): a stored row that cannot be
+			// read is not saved unjudged.
+			stored, err := h.repo.GetToolkit(r.Context(), projectID, toolkitID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+				return
+			}
+			if err != nil {
+				writeToolkitInternalError(w, r, "update_toolkit", "failed to read the toolkit", err)
+				return
+			}
+			storedSettings, _ := stored["settings"].(map[string]any)
+			if storedSettings == nil {
+				storedSettings = map[string]any{}
+			}
+			if h.refuseMissingToolkitBucket(w, "update_toolkit", updatedType, storedSettings) {
+				return
+			}
+		}
 	}
 	// Only a body that actually REPLACES settings is validated. UpdateToolkit
 	// builds a partial UPDATE (each of `type` and `settings` is independently
@@ -1505,9 +1543,9 @@ func selectedToolsPayload(body map[string]any) ([]byte, bool, error) {
 // `DO NOTHING` and never named `selected_tools` at all.
 func selectedToolsRelationInsertSQL(schema string, withSelectedTools bool) string {
 	if !withSelectedTools {
-		return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id) VALUES ($1, $2, $3, $4) ON CONFLICT (entity_version_id, tool_id, entity_type) DO NOTHING`, schema)
+		return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, created_at) VALUES ($1, $2, $3, $4, now() AT TIME ZONE 'UTC') ON CONFLICT (entity_version_id, tool_id, entity_type) DO NOTHING`, schema)
 	}
-	return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools) VALUES ($1, $2, $3, $4, $5::jsonb) ON CONFLICT (entity_version_id, tool_id, entity_type) DO UPDATE SET selected_tools = EXCLUDED.selected_tools, updated_at = now()`, schema)
+	return fmt.Sprintf(`INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at) VALUES ($1, $2, $3, $4, $5::jsonb, now() AT TIME ZONE 'UTC') ON CONFLICT (entity_version_id, tool_id, entity_type) DO UPDATE SET selected_tools = EXCLUDED.selected_tools, updated_at = (now() AT TIME ZONE 'UTC')`, schema)
 }
 
 // Delete removes a toolkit instance. With a cleanup journal wired the delete is
@@ -1705,8 +1743,8 @@ func (r *pgRepo) ForkToolkit(ctx context.Context, projectID string, body map[str
 	// forked it needs the principal to reach this seam, which is a change to
 	// the handler's contract rather than to this statement.
 	q := fmt.Sprintf(`
-		INSERT INTO %s.elitea_tools (name, type, description, owner_id, author_id, settings, env_vars, meta)
-		SELECT name || ' (copy)', type, description, owner_id, author_id, settings, env_vars, meta
+		INSERT INTO %s.elitea_tools (name, type, description, owner_id, author_id, settings, env_vars, meta, created_at)
+		SELECT name || ' (copy)', type, description, owner_id, author_id, settings, env_vars, meta, now() AT TIME ZONE 'UTC'
 		FROM %s.elitea_tools WHERE id = $1
 		RETURNING id, name, type, COALESCE(description, '')`, s, s)
 	var t Tool
@@ -1894,15 +1932,15 @@ func createToolkitInsertSQL(schema string, includeOwnerID bool) string {
 		// own quoting — %q here would wrap the quotes in quotes and every
 		// create against a current pylon table would name no such schema.
 		return fmt.Sprintf(`
-		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, author_id)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, author_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now() AT TIME ZONE 'UTC')
 		RETURNING id, type, name, COALESCE(description,''),
 		          COALESCE(settings::text,'{}'), COALESCE(meta::text,'{}'),
 		       created_at, author_id`, schema)
 	}
 	return fmt.Sprintf(`
-		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, owner_id, author_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO %s.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now() AT TIME ZONE 'UTC')
 		RETURNING id, type, name, COALESCE(description,''),
 		          COALESCE(settings::text,'{}'), COALESCE(meta::text,'{}'),
 		       created_at, author_id`, schema)

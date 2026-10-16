@@ -939,3 +939,52 @@ func TestCurrentAgentRoutesRefuseALocalWorkThread(t *testing.T) {
 		t.Fatalf("calls=%d regenerationCalls=%d", useCase.calls, useCase.regenerationCalls)
 	}
 }
+
+// A send while a cloud turn runs in the handed-off thread answers 409
+// `cloud_turn_running`, retryable, before any turn is admitted.
+func TestCurrentAgentRoutesRefuseASendWhileACloudTurnRuns(t *testing.T) {
+	useCase := &currentStartUseCaseStub{err: agentexecutionapp.ErrCloudTurnRunning}
+	route := newCurrentStartRoute(t, useCase, currentStartPermissionResolverFunc(func(
+		context.Context, auth.User, string, string,
+	) (auth.PermissionResolution, error) {
+		return auth.PermissionResolution{UserID: 11, Permissions: []string{CurrentApplicationStartPermission}}, nil
+	}))
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentStartRequest(validCurrentStartBody()))
+	var body struct {
+		Error     string `json:"error"`
+		Retryable bool   `json:"retryable"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil ||
+		response.Code != http.StatusConflict || body.Error != "cloud_turn_running" || !body.Retryable ||
+		response.Header().Get("Retry-After") == "" {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+// A regenerate in a handed-off thread (ADR-0034 decision 7) answers its own
+// 409 codes: a desktop turn, and a cloud turn that is not the newest.
+func TestCurrentRegenerateMapsTheHandedOffThreadRefusals(t *testing.T) {
+	for err, code := range map[error]string{
+		agentexecutionapp.ErrLocalWorkTurn:      "local_work_turn",
+		agentexecutionapp.ErrCloudTurnNotNewest: "cloud_turn_not_newest",
+	} {
+		useCase := &currentStartUseCaseStub{err: err}
+		route := newCurrentStartRoute(t, useCase, currentStartPermissionResolverFunc(func(
+			context.Context, auth.User, string, string,
+		) (auth.PermissionResolution, error) {
+			return auth.PermissionResolution{
+				UserID: 11, Permissions: []string{CurrentApplicationStartPermission, CurrentRegenerationPermission},
+			}, nil
+		}))
+		response := httptest.NewRecorder()
+		route.ServeHTTP(response, currentRegenerationRequest(validCurrentRegenerationBody()))
+		var body struct {
+			Error string `json:"error"`
+		}
+		if decodeErr := json.Unmarshal(response.Body.Bytes(), &body); decodeErr != nil ||
+			response.Code != http.StatusConflict || body.Error != code {
+			t.Fatalf("%v: status=%d body=%s", err, response.Code, response.Body.String())
+		}
+	}
+}

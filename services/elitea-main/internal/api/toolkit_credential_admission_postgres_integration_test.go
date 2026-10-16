@@ -323,8 +323,8 @@ func seedAdmissionCredentials(t *testing.T, pool *pgxpool.Pool) {
 		{"p_1", 1, localCredentialTitle},
 	} {
 		if _, err := pool.Exec(ctx, fmt.Sprintf(`
-INSERT INTO %s.configuration (project_id, label, elitea_title, type, section, data, shared)
-VALUES ($1, $2, $2, 'github', 'credentials', '{"base_url": "https://api.github.com"}'::jsonb, false)`,
+INSERT INTO %s.configuration (project_id, label, elitea_title, type, section, data, shared, created_at)
+VALUES ($1, $2, $2, 'github', 'credentials', '{"base_url": "https://api.github.com"}'::jsonb, false, now() AT TIME ZONE 'UTC')`,
 			seed.schema), seed.projectID, seed.title); err != nil {
 			t.Fatalf("seed the %s credential: %v", seed.schema, err)
 		}

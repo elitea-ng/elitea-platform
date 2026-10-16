@@ -23,7 +23,7 @@ SET is_streaming = FALSE,
     ) || CASE WHEN jsonb_typeof($6::jsonb) = 'object'
         THEN jsonb_build_object('skipped_capabilities', $6::jsonb)
         ELSE '{}'::jsonb END,
-    updated_at = clock_timestamp()
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 WHERE id = $7::bigint
 `
 

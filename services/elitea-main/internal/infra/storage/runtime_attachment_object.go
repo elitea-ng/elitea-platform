@@ -360,6 +360,8 @@ func (service *RuntimeAttachmentObjectService) Resolve(
 	if err := ctx.Err(); err != nil {
 		return RuntimeAttachmentObjectContext{}, err
 	}
+	// The attachment repository resolves only `system` buckets, so the hidden
+	// workspace bucket (type `workspace`) is never an attachment bucket.
 	if !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
 		return RuntimeAttachmentObjectContext{}, ErrContentNotFound
 	}

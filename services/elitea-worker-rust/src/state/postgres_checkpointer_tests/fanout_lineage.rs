@@ -329,7 +329,7 @@ fn approve_all(pause: &Value) -> State {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One scenario across three executions.
 async fn parallel_children_survive_a_new_execution_and_resume_from_their_own_checkpoint() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -586,7 +586,7 @@ fn map_node(checkpointer: &Arc<PostgresCheckpointer>, workers: LineageWorkers) -
 /// while item 2 runs. A takeover by execution 2 must not run 0 or 1 again.
 #[tokio::test]
 async fn map_items_completed_before_a_takeover_by_a_new_execution_do_not_run_again() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -708,7 +708,7 @@ fn assert_lease_lost(error: &GraphError) {
 /// later claim restores the occurrence and completes it.
 #[tokio::test]
 async fn parallel_lease_loss_mid_branch_is_a_control_stop_a_later_claim_completes() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -765,7 +765,7 @@ async fn parallel_lease_loss_mid_branch_is_a_control_stop_a_later_claim_complete
 /// further item; a later claim finishes every item.
 #[tokio::test]
 async fn map_lease_loss_mid_item_records_no_stop_and_a_later_claim_completes() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -847,7 +847,7 @@ async fn map_lease_loss_mid_item_records_no_stop_and_a_later_claim_completes() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One scenario across three executions.
 async fn a_superseded_claim_cannot_overwrite_the_later_claims_completed_children() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -1002,7 +1002,7 @@ fn frozen_threads(checkpoint: &Checkpoint) -> Vec<String> {
 /// so the same origin can never address another scope's children.
 #[tokio::test]
 async fn frozen_child_identity_cannot_be_reused_across_tenant_project_or_definition() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -1091,7 +1091,7 @@ async fn fanout_restore_and_lease_loss_log_no_payload_or_identity() {
         }
     }
 
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
         return;
     };

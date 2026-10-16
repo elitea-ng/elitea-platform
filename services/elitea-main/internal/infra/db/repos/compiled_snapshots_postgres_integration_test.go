@@ -5,6 +5,7 @@ import (
 	"errors"
 	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,7 +87,7 @@ type compiledPGFixture struct {
 
 func newCompiledPGFixture(t *testing.T) *compiledPGFixture {
 	t.Helper()
-	config, skip, err := compiledPGFixtureConfig(os.Getenv(compiledPGDSNEnv), os.Getenv(compiledPGRequiredEnv), os.Getenv(compiledPGAckEnv))
+	config, skip, err := compiledPGFixtureConfig(os.Getenv(compiledPGDSNEnv), os.Getenv(compiledPGRequiredEnv), os.Getenv(compiledPGAckEnv)) // testpg:apply (the guard admits sslmode only)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +101,7 @@ func newCompiledPGFixture(t *testing.T) *compiledPGFixture {
 	if err != nil || driverConfig.ConnConfig.Host != config.Host || driverConfig.ConnConfig.Database != config.Database {
 		t.Fatal("isolated PostgreSQL fixture connection is invalid")
 	}
+	testpg.Apply(driverConfig.ConnConfig.RuntimeParams)
 	driverConfig.MaxConns = config.MaxConns
 	driverConfig.MinConns = 0
 	driverConfig.ConnConfig.ConnectTimeout = 3 * time.Second

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"strings"
 	"testing"
@@ -705,9 +706,9 @@ var postgresIntegrationTemplate string
 
 // postgresIntegrationURL resolves the PostgreSQL server for this package.
 func postgresIntegrationURL() string {
-	databaseURL := os.Getenv(postgresIntegrationDatabaseURL)
+	databaseURL := testpg.DSN(os.Getenv(postgresIntegrationDatabaseURL))
 	if databaseURL == "" && os.Getenv("ELITEA_TEST_USE_SERVICE_DATABASE_URL") == "1" {
-		databaseURL = os.Getenv("DATABASE_URL")
+		databaseURL = testpg.DSN(os.Getenv("DATABASE_URL"))
 	}
 	return databaseURL
 }
@@ -938,11 +939,11 @@ CREATE TABLE p_1.configuration (
 INSERT INTO p_1.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, status_logs, source, author_id
-) VALUES (
+, created_at) VALUES (
     1, '00000000-0000-0000-0000-000000000001', 1, 'Integration fixture',
     'integration_fixture', 'openapi', 'credentials', '{}'::jsonb, '{}'::jsonb,
     false, false, NULL, 'user', 1
-);
+, now() AT TIME ZONE 'UTC');
 SELECT setval(pg_get_serial_sequence('p_1.configuration', 'id'), (SELECT MAX(id) FROM p_1.configuration));`
 
 // verifyPostgresIntegrationSchema proves that the database this test received

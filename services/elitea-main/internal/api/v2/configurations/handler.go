@@ -1188,6 +1188,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
 		return
 	}
+	if h.projectSettingsWriteForbidden(ctx, projectID, configType) {
+		apierr.WriteStatus(w, http.StatusForbidden, "this setting needs the project settings permission")
+		return
+	}
 	// The api_key the caller sends must never reach the row. It goes to the
 	// project vault, and the row keeps the {{secret.NAME}} reference.
 	sealedData, secretMutations, failure := h.sealConfigurationSecrets(ctx, configType, dataMap)
@@ -1220,8 +1224,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	shared, _ := body["shared"].(bool)
 
 	q := fmt.Sprintf(`
-		INSERT INTO %s.configuration (project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, author_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, 'user', $9)
+		INSERT INTO %s.configuration (project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, author_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, 'user', $9, now() AT TIME ZONE 'UTC')
 		RETURNING id, uuid::text, created_at
 	`, schema)
 
@@ -1391,6 +1395,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if h.tracingWriteForbidden(ctx, int64(pID), storedType) ||
 		h.tracingWriteForbidden(ctx, int64(pID), requestedType) {
 		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
+		return
+	}
+	if h.projectSettingsWriteForbidden(ctx, projectID, storedType, requestedType) {
+		apierr.WriteStatus(w, http.StatusForbidden, "this setting needs the project settings permission")
 		return
 	}
 	effectiveType := storedType
@@ -1566,7 +1574,7 @@ func (h *Handler) buildConfigurationUpdate(
 		assignments = append(assignments, fmt.Sprintf("shared = $%d", len(args)))
 	}
 
-	assignments = append(assignments, "updated_at = now()")
+	assignments = append(assignments, "updated_at = (now() AT TIME ZONE 'UTC')")
 	args = append(args, configID)
 
 	query = fmt.Sprintf(`
@@ -1663,6 +1671,19 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	storedType, typeErr := h.storedConfigurationType(ctx, schema, configID)
+	if typeErr != nil {
+		if ctx.Err() == nil {
+			slog.ErrorContext(ctx, "configuration delete failed",
+				"project_id", projectID, "configuration_id", configID, "err", typeErr)
+			apierr.WriteStatus(w, http.StatusInternalServerError, "internal server error")
+		}
+		return
+	}
+	if h.projectSettingsWriteForbidden(ctx, projectID, storedType) {
+		apierr.WriteStatus(w, http.StatusForbidden, "this setting needs the project settings permission")
+		return
+	}
 
 	// RETURNING names the deleted row, so a model that some project stored as
 	// its default can be released below (#6826). The id column is unique, so

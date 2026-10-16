@@ -97,7 +97,7 @@ func persistCurrentAgentTraceInvokedSkills(
 		fmt.Sprintf(`
 UPDATE %s
 SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{invoked_skills}', $2::jsonb, TRUE),
-    updated_at = clock_timestamp()
+    updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 WHERE id = $1`, schema+".chat_message_group"),
 		messageGroupID,
 		[]byte(merged),
