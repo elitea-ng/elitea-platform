@@ -245,12 +245,8 @@ pub(crate) enum MapWorkerKind {
     Application,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct MapExecutionIdentity {
-    pub(crate) execution_id: String,
-    pub(crate) generation: u64,
-}
+/// The Map name for the shared fan-out origin (`parallel::FanoutChildOrigin`).
+pub(crate) type MapExecutionIdentity = super::parallel::FanoutChildOrigin;
 
 /// The implementation mints descendant authority from the original parent claim.
 /// Hashes and thread names provide identity only. They do not grant authority.

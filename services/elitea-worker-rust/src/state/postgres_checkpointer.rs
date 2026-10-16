@@ -21,6 +21,7 @@ use super::StateWriterLease;
 
 mod application_children;
 mod child_batch;
+mod fanout_children;
 mod map_children;
 mod node_attempts;
 mod parallel_append;

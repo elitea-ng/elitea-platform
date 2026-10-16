@@ -4,18 +4,14 @@ use std::sync::Arc;
 
 use adk_rust::graph::checkpoint::Checkpointer;
 use async_trait::async_trait;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ring::digest;
 
 use super::PostgresCheckpointer;
+use super::fanout_children::{FanoutChildKey, FanoutFamily, current_origin};
 use crate::agents::graph::{
     ParallelActivation, ParallelBranchDefinition, ParallelChildCheckpoint,
     ParallelChildCheckpointerFactory, ParallelChildOrigin, ParallelChildRequest,
     PreparedChildCheckpoint,
 };
-
-const CHILD_THREAD_DOMAIN: &[u8] = b"elitea.graph.parallel.child-thread.v1\0";
 
 #[async_trait]
 impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
@@ -24,15 +20,7 @@ impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
         activation: &ParallelActivation,
     ) -> Result<ParallelChildOrigin, adk_rust::graph::GraphError> {
         self.check_parallel_root(activation)?;
-        Ok(ParallelChildOrigin {
-            execution_id: self.scope.authority.execution_id.clone(),
-            generation: u64::try_from(self.scope.authority.generation).map_err(|_| {
-                adk_rust::graph::GraphError::CheckpointError(
-                    "checkpoint.invalid_scope: the parallel writer generation is invalid"
-                        .to_owned(),
-                )
-            })?,
-        })
+        current_origin(&self.scope.authority, FanoutFamily::Parallel)
     }
 
     fn branch_thread_id(
@@ -146,17 +134,7 @@ impl PostgresCheckpointer {
         self.check_parallel_root(activation)?;
         let ordinal = branch_ordinal(ordinal)?;
         let thread_id = child_thread_id(self, activation, branch, ordinal, input_digest, origin)?;
-        let authority = self.scope.authority.for_thread(thread_id.clone())?;
-        let child = PostgresCheckpointer::activate_under_root(
-            self.pool.clone(),
-            authority,
-            &self.run_root_thread_id,
-            self.limits,
-            Arc::clone(&self.state_writer_lease),
-            &self.io,
-        )
-        .await?;
-        Ok(child)
+        self.activate_fanout_child(thread_id).await
     }
 }
 
@@ -168,57 +146,23 @@ fn child_thread_id(
     input_digest: &[u8; 32],
     origin: &ParallelChildOrigin,
 ) -> Result<String, adk_rust::graph::GraphError> {
-    let generation = i64::try_from(origin.generation).map_err(|_| {
-        adk_rust::graph::GraphError::CheckpointError(
-            "checkpoint.invalid_scope: the parallel origin generation is invalid".to_owned(),
-        )
-    })?;
-    let mut context = digest::Context::new(&digest::SHA256);
-    context.update(CHILD_THREAD_DOMAIN);
-    digest_field(
-        &mut context,
-        checkpointer.scope.authority.tenant_id.as_bytes(),
-    );
-    digest_field(
-        &mut context,
-        &checkpointer
-            .scope
-            .authority
-            .resource_project_id
-            .to_be_bytes(),
-    );
-    digest_field(
-        &mut context,
-        &checkpointer
-            .scope
-            .authority
-            .projection_project_id
-            .to_be_bytes(),
-    );
-    digest_field(
-        &mut context,
-        checkpointer.scope.authority.capability_id.as_bytes(),
-    );
-    digest_field(
-        &mut context,
-        checkpointer.scope.authority.definition_digest.as_slice(),
-    );
-    digest_field(&mut context, activation.root_thread_id.as_bytes());
-    digest_field(&mut context, origin.execution_id.as_bytes());
-    digest_field(&mut context, &generation.to_be_bytes());
-    digest_field(&mut context, activation.node_id.as_bytes());
-    digest_field(&mut context, &activation.step.to_be_bytes());
-    digest_field(&mut context, activation.config_digest.as_slice());
-    digest_field(&mut context, branch.id().as_bytes());
-    digest_field(&mut context, branch.node().as_bytes());
-    digest_field(&mut context, &ordinal.to_be_bytes());
-    digest_field(&mut context, input_digest);
-    let digest = context.finish();
-    Ok(format!("p1:{}", URL_SAFE_NO_PAD.encode(digest.as_ref())))
-}
-
-fn digest_field(context: &mut digest::Context, value: &[u8]) {
-    let length = u64::try_from(value.len()).unwrap_or(u64::MAX);
-    context.update(&length.to_be_bytes());
-    context.update(value);
+    let step = activation.step.to_be_bytes();
+    let ordinal = ordinal.to_be_bytes();
+    super::fanout_children::child_thread_id(
+        &checkpointer.scope.authority,
+        &FanoutChildKey {
+            family: FanoutFamily::Parallel,
+            root_thread_id: &activation.root_thread_id,
+            origin,
+            fields: &[
+                activation.node_id.as_bytes(),
+                &step,
+                activation.config_digest.as_slice(),
+                branch.id().as_bytes(),
+                branch.node().as_bytes(),
+                &ordinal,
+                input_digest,
+            ],
+        },
+    )
 }

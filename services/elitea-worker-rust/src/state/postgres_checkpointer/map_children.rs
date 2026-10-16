@@ -5,10 +5,9 @@ use std::sync::Arc;
 
 use adk_rust::graph::GraphError;
 use async_trait::async_trait;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use ring::digest;
 
 use super::PostgresCheckpointer;
+use super::fanout_children::{FanoutChildKey, FanoutFamily, current_origin};
 use crate::agents::graph::{
     FrozenMapItem, MapActivation, MapCheckpointAuthority, MapChildCheckpoint,
     MapChildCheckpointerFactory, MapExecutionIdentity, MapWorkerKind,
@@ -22,14 +21,7 @@ impl MapChildCheckpointerFactory for PostgresCheckpointer {
                 "checkpoint.invalid_scope: the Map root is not admitted".to_owned(),
             ));
         }
-        Ok(MapExecutionIdentity {
-            execution_id: self.scope.authority.execution_id.clone(),
-            generation: u64::try_from(self.scope.authority.generation).map_err(|_| {
-                GraphError::CheckpointError(
-                    "checkpoint.invalid_scope: the Map writer generation is invalid".to_owned(),
-                )
-            })?,
-        })
+        current_origin(&self.scope.authority, FanoutFamily::Map)
     }
     fn item_thread_id(
         &self,
@@ -99,17 +91,7 @@ impl PostgresCheckpointer {
     ) -> Result<Self, GraphError> {
         self.check_map_item(activation, item, worker)?;
         let thread_id = map_child_thread_id(self, activation, item, worker, origin)?;
-        let authority = self.scope.authority.for_thread(thread_id)?;
-        Self::activate_under_root(
-            self.pool.clone(),
-            authority,
-            &self.run_root_thread_id,
-            self.limits,
-            Arc::clone(&self.state_writer_lease),
-            &self.io,
-        )
-        .await
-        .map_err(Into::into)
+        self.activate_fanout_child(thread_id).await
     }
 }
 
@@ -120,49 +102,31 @@ fn map_child_thread_id(
     worker: &str,
     origin: &MapExecutionIdentity,
 ) -> Result<String, GraphError> {
-    let generation = i64::try_from(origin.generation).map_err(|_| {
-        GraphError::CheckpointError(
-            "checkpoint.invalid_scope: the Map origin generation is invalid".to_owned(),
-        )
-    })?;
     let ordinal = u64::try_from(item.index).map_err(|_| {
         GraphError::CheckpointError(
             "checkpoint.invalid_scope: the Map item ordinal is invalid".to_owned(),
         )
     })?;
-    let authority = &parent.scope.authority;
-    let mut hash = digest::Context::new(&digest::SHA256);
-    hash.update(b"elitea.graph.map.child-thread.v1\0");
-    for field in [
-        authority.tenant_id.as_bytes(),
-        &authority.resource_project_id.to_be_bytes(),
-        &authority.projection_project_id.to_be_bytes(),
-        authority.capability_id.as_bytes(),
-        authority.definition_digest.as_slice(),
-        origin.execution_id.as_bytes(),
-        &generation.to_be_bytes(),
-        activation.root_thread_id.as_bytes(),
-        activation.node_id.as_bytes(),
-        &activation.step.to_be_bytes(),
-        activation.config_digest.as_slice(),
-        activation.worker_digest.as_slice(),
-        activation.source_digest.as_slice(),
-        worker.as_bytes(),
-        &ordinal.to_be_bytes(),
-        item.input_digest.as_slice(),
-    ] {
-        let length = u64::try_from(field.len()).map_err(|_| {
-            GraphError::CheckpointError(
-                "checkpoint.invalid_scope: the Map identity field is invalid".to_owned(),
-            )
-        })?;
-        hash.update(&length.to_be_bytes());
-        hash.update(field);
-    }
-    Ok(format!(
-        "m1:{}",
-        URL_SAFE_NO_PAD.encode(hash.finish().as_ref())
-    ))
+    let step = activation.step.to_be_bytes();
+    let ordinal = ordinal.to_be_bytes();
+    super::fanout_children::child_thread_id(
+        &parent.scope.authority,
+        &FanoutChildKey {
+            family: FanoutFamily::Map,
+            root_thread_id: &activation.root_thread_id,
+            origin,
+            fields: &[
+                activation.node_id.as_bytes(),
+                &step,
+                activation.config_digest.as_slice(),
+                activation.worker_digest.as_slice(),
+                activation.source_digest.as_slice(),
+                worker.as_bytes(),
+                &ordinal,
+                item.input_digest.as_slice(),
+            ],
+        },
+    )
 }
 
 impl crate::agents::graph::map_authority::sealed::Sealed for PostgresCheckpointer {}

@@ -91,14 +91,18 @@ impl ParallelActivation {
 
 /// The execution identity under which an occurrence first froze its children.
 /// Restores, continuations and reclaims reuse it; they never re-read their own.
+/// One type for every fan-out family (Parallel branches and Map items).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ParallelChildOrigin {
+pub(crate) struct FanoutChildOrigin {
     pub(crate) execution_id: String,
     pub(crate) generation: u64,
 }
 
-impl ParallelChildOrigin {
+/// The Parallel name for the shared fan-out origin.
+pub(crate) type ParallelChildOrigin = FanoutChildOrigin;
+
+impl FanoutChildOrigin {
     pub(super) fn validate(&self) -> Result<(), GraphError> {
         if self.execution_id.is_empty()
             || self.execution_id.len() > 256
