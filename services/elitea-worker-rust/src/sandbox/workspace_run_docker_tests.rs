@@ -14,6 +14,13 @@
 //! `deploy/docker/workspace-egress.sh` created
 //! (`ELITEA_WORKSPACE_EGRESS_NETWORK`, `ELITEA_WORKSPACE_EGRESS_DNS`) and a
 //! listener standing in for Main (`ELITEA_WORKSPACE_EGRESS_PLATFORM_URL`).
+//! * the proxy proof (host-allowlist mode): on the internal proxy network,
+//!   with the run token in the command environment, an allowed host is
+//!   reachable through the real egress proxy, and a host off the allowlist,
+//!   a direct connection, DNS and a fronted (SNI-mismatched) tunnel are not
+//!   (`ELITEA_WORKSPACE_PROXY_NETWORK`, `ELITEA_WORKSPACE_PROXY_URL`,
+//!   `ELITEA_WORKSPACE_PROXY_TOKEN_FILE`).
+//!
 //! `ELITEA_REQUIRE_WORKSPACE_DOCKER_TESTS=1` turns a missing variable into a
 //! failure, so a skipped proof never reads as a passing one.
 
@@ -86,21 +93,35 @@ async fn launch(
     egress: bool,
     run: &str,
 ) -> (Arc<dyn WorkspaceSandbox>, tokio::task::JoinHandle<()>) {
-    let backend = DockerWorkspaceRuns::connect(egress_network, egress_dns, None)
+    let network = if egress {
+        crate::workspace_run::sandbox::WorkspaceNetwork::PublicEgress
+    } else {
+        crate::workspace_run::sandbox::WorkspaceNetwork::None
+    };
+    let env = SecretEnv::new(vec![("CI_TOKEN".into(), "tok-workspace-ci".into())]);
+    launch_with(egress_network, egress_dns, None, image, network, env, run).await
+}
+
+async fn launch_with(
+    egress_network: Option<String>,
+    egress_dns: Vec<String>,
+    proxy_network: Option<String>,
+    image: String,
+    network: crate::workspace_run::sandbox::WorkspaceNetwork,
+    env: SecretEnv,
+    run: &str,
+) -> (Arc<dyn WorkspaceSandbox>, tokio::task::JoinHandle<()>) {
+    let backend = DockerWorkspaceRuns::connect(egress_network, egress_dns, proxy_network)
         .await
         .expect("Docker is reachable");
     let (_supervisor, launcher, server) = serve(Arc::new(backend), image, 4).await;
     let mut spec = spec(run);
     spec.shell = true;
-    spec.network = if egress {
-        crate::workspace_run::sandbox::WorkspaceNetwork::PublicEgress
-    } else {
-        crate::workspace_run::sandbox::WorkspaceNetwork::None
-    };
+    spec.network = network;
     let sandbox = launcher
         .launch(
             &spec,
-            &SecretEnv::new(vec![("CI_TOKEN".into(), "tok-workspace-ci".into())]),
+            &env,
             TestGrants::new("execution-docker") as Arc<dyn WorkspaceRunGrants>,
         )
         .await
@@ -212,4 +233,89 @@ async fn workspace_egress_is_the_public_internet_only_and_off_is_nothing() {
         "no platform"
     );
     off.destroy().await.expect("destroyed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires Docker, the runner image, the proxy network and a running egress proxy (ci-rust.yml workspace-run-docker)"]
+async fn proxy_mode_reaches_only_allowed_hosts_through_the_egress_proxy() {
+    let (Some(image), Some(proxy_network), Some(proxy_url), Some(token_file), Some(platform)) = (
+        required("ELITEA_WORKSPACE_RUNNER_TEST_IMAGE"),
+        required("ELITEA_WORKSPACE_PROXY_NETWORK"),
+        required("ELITEA_WORKSPACE_PROXY_URL"),
+        required("ELITEA_WORKSPACE_PROXY_TOKEN_FILE"),
+        required("ELITEA_WORKSPACE_EGRESS_PLATFORM_URL"),
+    ) else {
+        return;
+    };
+    let token = std::fs::read_to_string(token_file).expect("the token file");
+    let token = token.trim();
+    // The worker's own path: resolve the proxy, put the token in the
+    // command environment only.
+    let url = crate::workspace_run::turn::proxy_env_url(&proxy_url, token)
+        .await
+        .expect("the proxy URL");
+    let mut env = SecretEnv::new(Vec::new());
+    env.set_egress_proxy(&url, token);
+    let redactor = env.redactor();
+    let (sandbox, _server) = launch_with(
+        None,
+        Vec::new(),
+        Some(proxy_network),
+        image,
+        crate::workspace_run::sandbox::WorkspaceNetwork::Proxy,
+        env,
+        "0d0d0d0d0d0d0d0d0d0d0d0d",
+    )
+    .await;
+    let curl = |extra: &str, url: &str| {
+        format!("curl -sS -o /dev/null --connect-timeout 5 --max-time 15 {extra} {url}")
+    };
+    // The allowlist the CI token carries: example.com only.
+    assert!(
+        succeeds(&sandbox, "p-1", &curl("", "https://example.com"), true).await,
+        "an allowed host through the proxy"
+    );
+    assert!(
+        !succeeds(&sandbox, "p-2", &curl("", "https://www.iana.org"), true).await,
+        "a host off the allowlist"
+    );
+    assert!(
+        !succeeds(
+            &sandbox,
+            "p-3",
+            &curl("--noproxy '*'", "https://example.com"),
+            true
+        )
+        .await,
+        "a direct connection without the proxy"
+    );
+    assert!(
+        !succeeds(&sandbox, "p-4", "getent hosts example.com", true).await,
+        "DNS"
+    );
+    // Domain fronting: CONNECT to the allowed host, TLS server name of
+    // another. The proxy refuses the ClientHello (sni-mismatch).
+    assert!(
+        !succeeds(
+            &sandbox,
+            "p-5",
+            &curl(
+                "--connect-to www.iana.org:443:example.com:443",
+                "https://www.iana.org"
+            ),
+            true
+        )
+        .await,
+        "an SNI that is not the CONNECT host"
+    );
+    assert!(
+        !succeeds(&sandbox, "p-6", &curl("--noproxy '*'", &platform), true).await,
+        "the platform, directly"
+    );
+    // The token is in the command environment and never in a result.
+    let printed = run(&sandbox, "p-7", "env", true).await;
+    let redacted = redactor.json(printed).to_string();
+    assert!(!redacted.contains(token), "the token leaked: {redacted}");
+    assert!(redacted.contains("HTTPS_PROXY="), "{redacted}");
+    sandbox.destroy().await.expect("destroyed");
 }
