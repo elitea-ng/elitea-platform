@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -599,4 +600,30 @@ func encryptionAnswer(err error) (bool, error) {
 		return false, fmt.Errorf("storage/s3: read bucket default encryption: %w: %w", storage.ErrEncryptionUnreportable, err)
 	}
 	return false, fmt.Errorf("storage/s3: read bucket default encryption: %w", err)
+}
+
+var _ storage.ObjectCopier = (*Backend)(nil)
+
+// Copy is S3 CopyObject inside the backend's bucket. It asks for a SHA-256
+// checksum on the copy, so a copied segment still reports its full-object
+// digest at HEAD (a single CopyObject is limited to 5 GiB, the single-PUT
+// ceiling a checksum-bound segment already respects).
+func (b *Backend) Copy(ctx context.Context, src, dst storage.ObjectRef) (storage.ObjectInfo, error) {
+	source := b.bucket + "/" + src.StorageKey(b.keyPrefix)
+	out, err := b.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:            aws.String(b.bucket),
+		Key:               aws.String(dst.StorageKey(b.keyPrefix)),
+		CopySource:        aws.String((&url.URL{Path: source}).EscapedPath()),
+		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
+	})
+	if err != nil {
+		return storage.ObjectInfo{}, mapS3Error(err, "copy object")
+	}
+	info := storage.ObjectInfo{Key: dst.Key()}
+	if out.CopyObjectResult != nil {
+		info.ETag = strings.Trim(aws.ToString(out.CopyObjectResult.ETag), `"`)
+		info.LastModified = aws.ToTime(out.CopyObjectResult.LastModified)
+		info.DigestSHA256 = fullObjectSHA256(out.CopyObjectResult.ChecksumSHA256, out.CopyObjectResult.ChecksumType)
+	}
+	return info, nil
 }

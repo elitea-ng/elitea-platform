@@ -781,6 +781,12 @@ func writeError(ctx context.Context, writer http.ResponseWriter, operation strin
 	case errors.Is(err, handoffapp.ErrEnvTooLarge):
 		desktopwire.WriteError(writer, http.StatusRequestEntityTooLarge, "env_too_large",
 			"At most 200 environment variables and 64 KiB in all.")
+	case errors.Is(err, workspacestore.ErrThreadBusy):
+		// Retryable, and not a ref conflict: nothing was compared. The
+		// caller sends the SAME publish again after Retry-After.
+		writer.Header().Set("Retry-After", "1")
+		desktopwire.WriteError(writer, http.StatusConflict, "thread_busy",
+			"Another change to this thread is being saved. Retry the same request shortly.")
 	case errors.As(err, &conflict):
 		current := map[string]any{}
 		for name, value := range conflict.Current {

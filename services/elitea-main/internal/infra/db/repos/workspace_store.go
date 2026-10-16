@@ -281,24 +281,29 @@ WHERE h.project_id = $1 AND h.conversation_uuid = $2::uuid`, thread.ProjectID, t
 	return pre, nil
 }
 
-// pgLockNotAvailable is SQLSTATE 55P03, which FOR UPDATE NOWAIT raises when
-// another transaction holds the row lock.
+// pgLockNotAvailable is SQLSTATE 55P03, which a lock wait past lock_timeout
+// raises.
 const pgLockNotAvailable = "55P03"
+
+// publishLockTimeout bounds the wait for the thread row lock in a publish.
+// 200 ms waits out the short transitions that lock the row (a take back, a
+// cloud turn start or end, the sweeper, each a few milliseconds). Only the
+// rare publish that meets one of them waits at all.
+const publishLockTimeout = "200ms"
 
 // Publish is the store's one short transaction (decisions 2 and 15), in
 // three round trips after BEGIN:
 //
-//  1. lock the thread row FOR UPDATE NOWAIT, then read its refs and the
-//     replay lookup (two statements in one batch, so the reads take their
+//  1. lock the thread row FOR UPDATE with a 200 ms lock timeout, then read
+//     its refs and the replay lookup (one batch; the reads take their
 //     snapshot after the lock);
 //  2. supersede, insert the segment, move the refs (one multi-row upsert),
 //     advance the thread, spend the grant, and, last, take the project's
 //     quota lock and sum the usage (one batch);
 //  3. COMMIT.
 //
-// A thread whose row lock is held is mid-publish: this publish answers a ref
-// conflict with the refs as committed (retryable) and never waits, so a
-// contended thread cannot park pooled connections.
+// A row lock held past the timeout answers ErrThreadBusy (retryable), never
+// a ref conflict: nothing was compared.
 func (r *WorkspaceStoreRepository) Publish(ctx context.Context, record workspacestore.PublishRecord) (workspacestore.PublishResult, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -319,11 +324,17 @@ func (r *WorkspaceStoreRepository) Publish(ctx context.Context, record workspace
 		replaySeq   *int64
 	)
 	read := &pgx.Batch{}
+	// A bounded wait, not NOWAIT: a take back, a cloud turn start or end and
+	// the sweeper hold this row for a few milliseconds, and the publish
+	// waits them out. Past the bound the thread is busy (ErrThreadBusy,
+	// retryable), never a ref conflict. Publishes of one thread in one
+	// process never meet here: the service lets one through at a time.
+	read.Queue(`SELECT set_config('lock_timeout', $1, true)`, publishLockTimeout)
 	read.Queue(`
 SELECT state, epoch, owner_user_id, running_execution_id, running_response_message_id::text, has_upstream, last_seq
 FROM elitea_runtime.workspace_handoffs
 WHERE project_id = $1 AND conversation_uuid = $2::uuid
-FOR UPDATE NOWAIT`, record.Thread.ProjectID, record.Thread.ConversationUUID)
+FOR UPDATE`, record.Thread.ProjectID, record.Thread.ConversationUUID)
 	read.Queue(`
 SELECT COALESCE((SELECT jsonb_object_agg(name, sha) FROM elitea_runtime.workspace_refs
                  WHERE project_id = $1 AND conversation_uuid = $2::uuid), '{}'::jsonb),
@@ -332,7 +343,10 @@ SELECT COALESCE((SELECT jsonb_object_agg(name, sha) FROM elitea_runtime.workspac
         ORDER BY seq DESC LIMIT 1)`,
 		record.Thread.ProjectID, record.Thread.ConversationUUID, record.SHA256, record.Epoch)
 	results := tx.SendBatch(ctx, read)
-	err = results.QueryRow().Scan(&state, &epoch, &owner, &running, &response, &hasUpstream, &lastSeq)
+	_, err = results.Exec()
+	if err == nil {
+		err = results.QueryRow().Scan(&state, &epoch, &owner, &running, &response, &hasUpstream, &lastSeq)
+	}
 	if err == nil {
 		err = results.QueryRow().Scan(&refsRaw, &replaySeq)
 	}
@@ -340,8 +354,7 @@ SELECT COALESCE((SELECT jsonb_object_agg(name, sha) FROM elitea_runtime.workspac
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.As(err, &pgErr) && pgErr.Code == pgLockNotAvailable:
-		_ = tx.Rollback(ctx)
-		return workspacestore.PublishResult{}, r.busyThreadConflict(ctx, record)
+		return workspacestore.PublishResult{}, workspacestore.ErrThreadBusy
 	case errors.Is(err, pgx.ErrNoRows):
 		return workspacestore.PublishResult{}, workspacestore.ErrNotFound
 	case err != nil:
@@ -406,6 +419,9 @@ SELECT COALESCE((SELECT jsonb_object_agg(name, sha) FROM elitea_runtime.workspac
 		values = append(values, ref.New)
 	}
 	write := &pgx.Batch{}
+	// The lock bound is for the thread row only: the project quota lock
+	// below waits as long as it needs.
+	write.Queue(`SELECT set_config('lock_timeout', '0', true)`)
 	write.Queue(`
 UPDATE elitea_runtime.workspace_segments SET superseded_at = clock_timestamp()
 WHERE conversation_uuid = $2::uuid AND project_id = $1 AND superseded_at IS NULL
@@ -466,6 +482,9 @@ WHERE project_id = $1 AND superseded_at IS NULL`, record.Thread.ProjectID)
 	var used int64
 	results = tx.SendBatch(ctx, write)
 	err = func() error {
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("workspace store: reset lock timeout: %w", err)
+		}
 		rows, err := results.Query()
 		if err != nil {
 			return fmt.Errorf("workspace store: supersede: %w", err)
@@ -536,42 +555,6 @@ func refConflict(refs []workspacestore.RefUpdate, current map[string]string) err
 	}
 	values := map[string]*string{}
 	for _, ref := range refs {
-		if stored, present := current[ref.Name]; present {
-			value := stored
-			values[ref.Name] = &value
-		} else {
-			values[ref.Name] = nil
-		}
-	}
-	return &workspacestore.RefConflictError{Current: values}
-}
-
-// ThreadRefs answers the thread's refs as committed, without a lock.
-func (r *WorkspaceStoreRepository) ThreadRefs(ctx context.Context, thread workspacestore.Thread) (map[string]string, error) {
-	var raw []byte
-	if err := r.pool.QueryRow(ctx, `
-SELECT COALESCE(jsonb_object_agg(name, sha), '{}'::jsonb) FROM elitea_runtime.workspace_refs
-WHERE project_id = $1 AND conversation_uuid = $2::uuid`, thread.ProjectID, thread.ConversationUUID).Scan(&raw); err != nil {
-		return nil, fmt.Errorf("workspace store: read refs: %w", err)
-	}
-	current := map[string]string{}
-	if err := json.Unmarshal(raw, &current); err != nil {
-		return nil, fmt.Errorf("workspace store: read refs: %w", err)
-	}
-	return current, nil
-}
-
-// busyThreadConflict answers a publish that met the thread's row lock held:
-// another publish of this thread is committing (on another replica), so this
-// one's expected old values are about to be stale. It answers a ref conflict
-// with the refs as committed now (read without the lock), never waiting.
-func (r *WorkspaceStoreRepository) busyThreadConflict(ctx context.Context, record workspacestore.PublishRecord) error {
-	current, err := r.ThreadRefs(ctx, record.Thread)
-	if err != nil {
-		return err
-	}
-	values := map[string]*string{}
-	for _, ref := range record.Refs {
 		if stored, present := current[ref.Name]; present {
 			value := stored
 			values[ref.Name] = &value

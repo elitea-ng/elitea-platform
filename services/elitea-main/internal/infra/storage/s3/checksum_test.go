@@ -237,5 +237,18 @@ func TestLiveChecksumBoundPresignedPut(t *testing.T) {
 	if !bytes.Equal(info.DigestSHA256, digest[:]) || info.Size != int64(len(content)) {
 		t.Fatalf("Stat = %+v, want size %d and the digest", info, len(content))
 	}
+	// A server-side copy keeps the full-object digest (the facade's promote).
+	copied, err := storage.NewObjectRef("7", "elitea-workspaces", ref.Key()+".copy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.Copy(ctx, ref, copied); err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	copiedInfo, err := backend.Stat(ctx, copied)
+	if err != nil || !bytes.Equal(copiedInfo.DigestSHA256, digest[:]) || copiedInfo.Size != int64(len(content)) {
+		t.Fatalf("Stat of the copy = %+v, %v; want the same size and digest", copiedInfo, err)
+	}
+	_ = backend.Delete(ctx, copied)
 	_ = backend.Delete(ctx, ref)
 }

@@ -524,18 +524,21 @@ func TestLoadGateSameThreadContention(t *testing.T) {
 	offsets := []time.Duration{}
 	// 50 publishes of the SAME first snapshot on the hot thread, released at
 	// once, each with a different handoff/1 value and no expected old value:
-	// exactly one creates the refs, the others meet a ref conflict.
+	// exactly one creates the refs; the others answer thread_busy without a
+	// database round trip, or a ref conflict once the winner committed.
 	for index := 0; index < contenders; index++ {
 		request := loadGatePublish(hot, "hot-"+strconv.Itoa(index))
 		request.Refs[0].New = sha1Of("hot-base")
 		publishes = append(publishes, func() error {
 			_, err := f.service.Publish(context.Background(), request)
+			// A loser answers thread_busy (a publish of the thread is in
+			// flight) or, once the winner committed, a real ref conflict.
 			var conflict *workspacestore.RefConflictError
 			switch {
 			case err == nil:
 				wins.Add(1)
 				return nil
-			case errors.As(err, &conflict):
+			case errors.As(err, &conflict), errors.Is(err, workspacestore.ErrThreadBusy):
 				conflicts.Add(1)
 				return nil
 			default:

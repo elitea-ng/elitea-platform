@@ -477,3 +477,51 @@ func mapAzureError(err error, op string) error {
 // DefaultEncryptionConfirmed: Azure Storage encrypts every blob at rest and
 // the encryption cannot be disabled (ADR-0034 decision 4).
 func (b *Backend) DefaultEncryptionConfirmed(context.Context) (bool, error) { return true, nil }
+
+var _ storage.ObjectCopier = (*Backend)(nil)
+
+// copyPollInterval and copyWait bound the wait for an Azure copy, which the
+// service may finish asynchronously.
+const (
+	copyPollInterval = 200 * time.Millisecond
+	copyWait         = 2 * time.Minute
+)
+
+// Copy is Azure Copy Blob inside the backend's container (same account, so
+// the request's own authorization covers the source). A copy the service
+// answers as pending is polled until it succeeds, fails or times out.
+func (b *Backend) Copy(ctx context.Context, src, dst storage.ObjectRef) (storage.ObjectInfo, error) {
+	containerClient := b.containerClient()
+	source := containerClient.NewBlobClient(src.StorageKey(b.keyPrefix)).URL()
+	target := containerClient.NewBlobClient(dst.StorageKey(b.keyPrefix))
+	started, err := target.StartCopyFromURL(ctx, source, nil)
+	if err != nil {
+		return storage.ObjectInfo{}, mapAzureError(err, "copy object")
+	}
+	status := blob.CopyStatusType("")
+	if started.CopyStatus != nil {
+		status = *started.CopyStatus
+	}
+	deadline := time.Now().Add(copyWait)
+	for status == blob.CopyStatusTypePending {
+		if time.Now().After(deadline) {
+			return storage.ObjectInfo{}, fmt.Errorf("storage/azure: copy object: still pending after %s", copyWait)
+		}
+		select {
+		case <-ctx.Done():
+			return storage.ObjectInfo{}, ctx.Err()
+		case <-time.After(copyPollInterval):
+		}
+		props, err := target.GetProperties(ctx, nil)
+		if err != nil {
+			return storage.ObjectInfo{}, mapAzureError(err, "copy object status")
+		}
+		if props.CopyStatus != nil {
+			status = *props.CopyStatus
+		}
+	}
+	if status != blob.CopyStatusTypeSuccess && status != "" {
+		return storage.ObjectInfo{}, fmt.Errorf("storage/azure: copy object: status %s", status)
+	}
+	return b.Stat(ctx, dst)
+}

@@ -54,3 +54,26 @@ func (s *instrumentedStore) ConfigureRetentionLifecycle(ctx context.Context) err
 	}
 	return configurer.ConfigureRetentionLifecycle(ctx)
 }
+
+// ObjectCopier is implemented by a backend that copies an object inside its
+// own storage (S3 CopyObject, Azure Copy Blob, GCS rewrite), so the bytes do
+// not pass through Main. Capabilities.ServerSideCopy reports it. The copy
+// keeps a SHA-256 checksum on a backend with Capabilities.ChecksumSHA256.
+type ObjectCopier interface {
+	Copy(ctx context.Context, src, dst ObjectRef) (ObjectInfo, error)
+}
+
+// CopyObject copies src to dst inside the store, or answers ErrNotSupported
+// when the store has no server-side copy.
+func CopyObject(ctx context.Context, store ObjectStore, src, dst ObjectRef) (ObjectInfo, error) {
+	copier, ok := store.(ObjectCopier)
+	if !ok {
+		return ObjectInfo{}, ErrNotSupported
+	}
+	return copier.Copy(ctx, src, dst)
+}
+
+// Copy forwards to the wrapped backend.
+func (s *instrumentedStore) Copy(ctx context.Context, src, dst ObjectRef) (ObjectInfo, error) {
+	return CopyObject(ctx, s.inner, src, dst)
+}

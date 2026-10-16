@@ -30,9 +30,18 @@ type Store struct {
 	Deletes  int
 	// Gets counts full reads (Get), so a test can prove a publish did not
 	// stream the object.
-	Gets      int
-	digests   map[string][]byte
-	presigned map[string][]byte
+	Gets int
+	// Copier makes the store a server-side copier (Copy); Copies counts the
+	// copies.
+	Copier bool
+	Copies int
+	// BlockStat, when set, makes every Stat wait until it is closed (a
+	// publish held in flight). StatEntered, when set, receives one value
+	// each time a Stat starts waiting on it.
+	BlockStat   chan struct{}
+	StatEntered chan struct{}
+	digests     map[string][]byte
+	presigned   map[string][]byte
 	// FailDelete makes every Delete fail.
 	FailDelete bool
 }
@@ -133,7 +142,23 @@ func (s *Store) Get(_ context.Context, ref storage.ObjectRef, _ *storage.ByteRan
 	}, nil
 }
 
-func (s *Store) Stat(_ context.Context, ref storage.ObjectRef) (storage.ObjectInfo, error) {
+func (s *Store) Stat(ctx context.Context, ref storage.ObjectRef) (storage.ObjectInfo, error) {
+	s.mu.Lock()
+	block, entered := s.BlockStat, s.StatEntered
+	s.mu.Unlock()
+	if block != nil {
+		if entered != nil {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+		}
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return storage.ObjectInfo{}, ctx.Err()
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	content, ok := s.objects[key(ref)]
@@ -231,4 +256,37 @@ func (s *Store) Capabilities() storage.Capabilities {
 	return storage.Capabilities{Presign: s.Presign, NativeMultipart: s.Multipart, ChecksumSHA256: s.Checksum}
 }
 
-var _ storage.ObjectStore = (*Store)(nil)
+// Copy copies inside the store when Copier is set, keeping the digest; it
+// answers storage.ErrNotSupported otherwise, as a backend without a copy.
+func (s *Store) Copy(_ context.Context, src, dst storage.ObjectRef) (storage.ObjectInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.Copier {
+		return storage.ObjectInfo{}, storage.ErrNotSupported
+	}
+	content, ok := s.objects[key(src)]
+	if !ok {
+		return storage.ObjectInfo{}, storage.ErrNotFound
+	}
+	s.objects[key(dst)] = append([]byte(nil), content...)
+	s.modified[key(dst)] = time.Now()
+	if digest, ok := s.digests[key(src)]; ok {
+		s.digests[key(dst)] = append([]byte(nil), digest...)
+	} else {
+		delete(s.digests, key(dst))
+	}
+	s.Copies++
+	return storage.ObjectInfo{Key: dst.Key(), Size: int64(len(content))}, nil
+}
+
+// SetBlockStat sets BlockStat (and StatEntered) under the store's lock.
+func (s *Store) SetBlockStat(block, entered chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.BlockStat, s.StatEntered = block, entered
+}
+
+var (
+	_ storage.ObjectStore  = (*Store)(nil)
+	_ storage.ObjectCopier = (*Store)(nil)
+)

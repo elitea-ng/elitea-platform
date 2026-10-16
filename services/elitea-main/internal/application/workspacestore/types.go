@@ -151,6 +151,14 @@ func (e *RefConflictError) Error() string { return "workspace ref conflict" }
 // Is lets errors.Is(err, ErrRefConflict) match.
 func (e *RefConflictError) Is(target error) bool { return target == ErrRefConflict }
 
+// ErrThreadBusy: another change to the thread is being saved right now (a
+// publish of the thread in flight in this process, or the thread's row lock
+// held past the lock timeout by another publish, a take back, a cloud turn
+// start or end, or the sweeper). It is NOT a ref conflict: nothing was
+// compared. The route answers 409 thread_busy with Retry-After: 1, and the
+// caller retries the SAME publish.
+var ErrThreadBusy = errors.New("workspace thread busy")
+
 // ErrRefConflict is the sentinel RefConflictError matches.
 var ErrRefConflict = errors.New("workspace ref conflict")
 

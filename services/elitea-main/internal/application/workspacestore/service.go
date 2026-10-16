@@ -90,9 +90,10 @@ type Service struct {
 	mu           sync.Mutex
 	orphanCursor int64
 	names        sync.Map
-	// publishing holds the threads with a publish in flight in this process
-	// (decision 15): a second publish of the same thread answers a ref
-	// conflict before it takes a pooled connection.
+	// publishing holds the publish in flight per thread in this process
+	// (decision 15): an identical retry waits for it and shares its result;
+	// any other publish of the thread answers ErrThreadBusy before it takes
+	// a pooled connection.
 	publishing sync.Map
 }
 
@@ -366,7 +367,7 @@ func (s *Service) PutObject(ctx context.Context, thread Thread, caller Caller, s
 		return ErrInvalid
 	}
 	target := s.buckets.write()
-	if s.holdsSegment(ctx, target.Store, final, grant.MaxBytes, sha) {
+	if s.holdsSegment(ctx, target.Store, final, grant.MaxBytes, sha, true) {
 		// A retry after a lost acknowledgement: the segment is in place.
 		return nil
 	}
@@ -389,7 +390,10 @@ func (s *Service) PutObject(ctx context.Context, thread Thread, caller Caller, s
 		return ErrChecksumMismatch
 	}
 	defer func() { _ = target.Store.Delete(ctx, temp) }()
-	if s.holdsSegment(ctx, target.Store, final, grant.MaxBytes, sha) {
+	// A concurrent upload may have promoted the segment meanwhile. Only a
+	// reported digest is trusted here; without one, promoting the verified
+	// bytes over the key is always correct and cheaper than a hash.
+	if s.holdsSegment(ctx, target.Store, final, grant.MaxBytes, sha, false) {
 		return nil
 	}
 	return s.promote(ctx, target.Store, temp, final, grant.MaxBytes, sha)
@@ -397,18 +401,40 @@ func (s *Service) PutObject(ctx context.Context, thread Thread, caller Caller, s
 
 // holdsSegment reports whether ref already holds the segment: its size, and
 // its digest when the backend reports one.
-func (s *Service) holdsSegment(ctx context.Context, store storage.ObjectStore, ref storage.ObjectRef, size int64, sha string) bool {
+func (s *Service) holdsSegment(ctx context.Context, store storage.ObjectStore, ref storage.ObjectRef, size int64, sha string, hash bool) bool {
 	info, err := store.Stat(ctx, ref)
 	if err != nil || info.Size != size {
 		return false
 	}
-	return len(info.DigestSHA256) != sha256.Size || hex.EncodeToString(info.DigestSHA256) == sha
+	if len(info.DigestSHA256) == sha256.Size {
+		return hex.EncodeToString(info.DigestSHA256) == sha
+	}
+	if !hash {
+		return false
+	}
+	// No reported digest: the size alone proves nothing (a same-size object
+	// with other bytes). Hash it. This is the retry path, so it is rare.
+	reader, _, err := store.Get(ctx, ref, nil)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = reader.Close() }()
+	hasher := sha256.New()
+	n, err := io.Copy(hasher, io.LimitReader(reader, size+1))
+	return err == nil && n == size && hex.EncodeToString(hasher.Sum(nil)) == sha
 }
 
-// promote copies the verified temporary object to the content-addressed key.
-// The object store has no server-side copy in its interface, so the bytes
-// are read back and written once more, hashed again on the way.
+// promote moves the verified temporary object to the content-addressed key:
+// a server-side copy where the backend has one (S3 CopyObject keeping the
+// SHA-256 checksum, Azure Copy Blob, GCS rewrite), so the bytes do not pass
+// through Main a second time. Only a backend without a copy reads the bytes
+// back and writes them once more, hashed again on the way.
 func (s *Service) promote(ctx context.Context, store storage.ObjectStore, temp, final storage.ObjectRef, size int64, sha string) error {
+	if _, err := storage.CopyObject(ctx, store, temp, final); err == nil {
+		return nil
+	} else if !errors.Is(err, storage.ErrNotSupported) {
+		return fmt.Errorf("workspace store: promote upload: %w", err)
+	}
 	reader, _, err := store.Get(ctx, temp, nil)
 	if err != nil {
 		return fmt.Errorf("workspace store: read upload: %w", err)
@@ -569,17 +595,71 @@ func (s *Service) Publish(ctx context.Context, request PublishRequest) (PublishR
 }
 
 func (s *Service) publish(ctx context.Context, request PublishRequest) (PublishResult, error) {
-	// One publish per thread at a time in this process. A second one meets a
-	// publish that is about to move the refs, so its expected old values
-	// will not hold: it answers a ref conflict (the desktop and the worker
-	// re-read and retry) at the cost of one read, and never holds a pooled
-	// connection while it waits. Across replicas the transaction's
-	// FOR UPDATE NOWAIT gives the same answer.
-	inflight := strconv.FormatInt(request.Thread.ProjectID, 10) + "/" + request.Thread.ConversationUUID
-	if _, busy := s.publishing.LoadOrStore(inflight, struct{}{}); busy {
-		return PublishResult{}, s.busyConflict(ctx, request)
+	// One publish per thread at a time in this process. An IDENTICAL publish
+	// (a retry after a lost acknowledgement or a client timeout) waits for
+	// the one in flight and answers its result. Any other publish of the
+	// thread answers ErrThreadBusy (retryable) without taking a pooled
+	// connection, so a contended thread never parks connections. Across
+	// replicas the transaction's lock timeout gives ErrThreadBusy, and the
+	// retry converges on the replay path.
+	key := strconv.FormatInt(request.Thread.ProjectID, 10) + "/" + request.Thread.ConversationUUID
+	mine := &inflightPublish{signature: publishSignature(request), done: make(chan struct{})}
+	for {
+		existing, busy := s.publishing.LoadOrStore(key, mine)
+		if !busy {
+			break
+		}
+		other := existing.(*inflightPublish)
+		if other.signature != mine.signature {
+			return PublishResult{}, ErrThreadBusy
+		}
+		select {
+		case <-other.done:
+		case <-ctx.Done():
+			return PublishResult{}, ctx.Err()
+		}
+		if other.err == nil {
+			shared := other.result
+			shared.Replayed = true
+			return shared, nil
+		}
+		// The first attempt failed; this retry runs on its own.
 	}
-	defer s.publishing.Delete(inflight)
+	defer func() {
+		s.publishing.Delete(key)
+		close(mine.done)
+	}()
+	result, err := s.publishOnce(ctx, request)
+	mine.result, mine.err = result, err
+	return result, err
+}
+
+// inflightPublish is one publish in flight, for identical retries to share.
+type inflightPublish struct {
+	signature string
+	done      chan struct{}
+	result    PublishResult
+	err       error
+}
+
+// publishSignature identifies a publish: an identical retry has the same
+// writer, epoch, segment and ref moves.
+func publishSignature(request PublishRequest) string {
+	var b strings.Builder
+	b.WriteString(string(request.Caller.Writer))
+	b.WriteString("|" + strconv.FormatInt(request.Caller.UserID, 10) + "|" + request.Caller.ExecutionID)
+	b.WriteString("|" + strconv.FormatInt(request.Epoch, 10) + "|" + request.SHA256 + "|" + strconv.FormatInt(request.Bytes, 10))
+	for _, ref := range request.Refs {
+		old := "-"
+		if ref.Old != nil {
+			old = *ref.Old
+		}
+		b.WriteString("|" + ref.Name + ":" + old + ">" + ref.New)
+	}
+	return b.String()
+}
+
+func (s *Service) publishOnce(ctx context.Context, request PublishRequest) (PublishResult, error) {
 	// One read before the transaction (decision 15): the writer check, the
 	// replay lookup and the quota fast path share it.
 	pre, err := s.repo.PublishPrecheck(ctx, request.Thread, request.SHA256)
@@ -616,25 +696,6 @@ func (s *Service) publish(ctx context.Context, request PublishRequest) (PublishR
 		Refs: request.Refs, ObjectKey: key, PhysicalBucket: physical,
 		MaxProjectBytes: limits.MaxProjectWorkspaceBytes,
 	})
-}
-
-// busyConflict answers a publish of a thread that another publish is moving:
-// a ref conflict with the refs as committed.
-func (s *Service) busyConflict(ctx context.Context, request PublishRequest) error {
-	current, err := s.repo.ThreadRefs(ctx, request.Thread)
-	if err != nil {
-		return err
-	}
-	values := map[string]*string{}
-	for _, ref := range request.Refs {
-		if stored, present := current[ref.Name]; present {
-			value := stored
-			values[ref.Name] = &value
-		} else {
-			values[ref.Name] = nil
-		}
-	}
-	return &RefConflictError{Current: values}
 }
 
 // verifyObject checks the stored object BEFORE the transaction opens: its size

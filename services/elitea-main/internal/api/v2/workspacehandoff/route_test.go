@@ -205,6 +205,19 @@ func TestPublishConflictCarriesTheCurrentRefsInDetails(t *testing.T) {
 	}
 }
 
+// thread_busy is retryable and says when: Retry-After 1.
+func TestThreadBusyIsRetryable(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeError(context.Background(), recorder, "publish", workspacestore.ErrThreadBusy)
+	answer := decode(t, recorder)
+	if recorder.Code != http.StatusConflict || answer["error"] != "thread_busy" || recorder.Header().Get("Retry-After") != "1" {
+		t.Fatalf("thread busy = %d %v, Retry-After %q", recorder.Code, answer, recorder.Header().Get("Retry-After"))
+	}
+	if _, details := answer["details"]; details {
+		t.Fatalf("thread busy carries details: %v", answer)
+	}
+}
+
 func TestErrorsMapToTheContractCodes(t *testing.T) {
 	for _, tc := range []struct {
 		err    error
@@ -224,6 +237,7 @@ func TestErrorsMapToTheContractCodes(t *testing.T) {
 		{handoffapp.ErrNotFound, http.StatusNotFound, "handoff_not_found"},
 		{handoffapp.ErrNotInCloud, http.StatusConflict, "handoff_not_in_cloud"},
 		{handoffapp.ErrErased, http.StatusConflict, "handoff_erased"},
+		{workspacestore.ErrThreadBusy, http.StatusConflict, "thread_busy"},
 		{handoffapp.ErrUnavailable, http.StatusServiceUnavailable, "handoff_unavailable"},
 		{workspacestore.ErrStaleEpoch, http.StatusConflict, "stale_epoch"},
 		{workspacestore.ErrSegmentTooLarge, http.StatusRequestEntityTooLarge, "segment_too_large"},

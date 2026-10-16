@@ -18597,7 +18597,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffError'
         '409':
-          description: '`ref_conflict` (with `details.current`) or `stale_epoch`.'
+          description: >-
+            `ref_conflict` (with `details.current`): an expected old value
+            does not hold; re-read and decide. `stale_epoch`. `thread_busy`
+            (with a `Retry-After: 1` header): another change to the thread is
+            being saved; nothing was compared, so send the SAME publish again
+            after the delay (it then answers the original result if the first
+            one committed).
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying; set for `thread_busy`.
+              schema: { type: integer }
           content:
             application/json:
               schema:

@@ -295,7 +295,13 @@ func TestPostgresWorkspaceStoreConcurrentPublishOneWinner(t *testing.T) {
 		go func(request workspacestore.PublishRequest) {
 			defer wg.Done()
 			<-start
+			// A busy thread is retried, as the clients do: the retry then
+			// meets the winner's refs and answers a real ref conflict.
 			_, err := service.Publish(ctx, request)
+			for attempt := 0; errors.Is(err, workspacestore.ErrThreadBusy) && attempt < 50; attempt++ {
+				time.Sleep(5 * time.Millisecond)
+				_, err = service.Publish(ctx, request)
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -312,6 +318,74 @@ func TestPostgresWorkspaceStoreConcurrentPublishOneWinner(t *testing.T) {
 	wg.Wait()
 	if wins != 1 || conflicts != writers-1 || len(others) != 0 {
 		t.Fatalf("wins %d, conflicts %d, others %v; want exactly one winner", wins, conflicts, others)
+	}
+}
+
+// An identical retry of a publish still in flight (a lost acknowledgement,
+// or a client timeout during a long verify) waits for it and answers the
+// same result. A different publish of the thread meanwhile answers
+// ErrThreadBusy, never a ref conflict.
+func TestPostgresWorkspaceStoreIdenticalRetryJoinsThePublishInFlight(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5123
+	fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+	seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateHandingOff, 1, false, "")
+	store := workspacestoretest.New(true)
+	service, recorder := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+	content := []byte("a segment whose verify is slow")
+	sha := uploadSegment(t, store, fixture.thread, content, time.Now())
+	request := desktopPublish(fixture.thread, owner, 1, sha, int64(len(content)),
+		workspacestore.RefUpdate{Name: workspacestore.RefBase, New: sha1Of("base")},
+		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, New: sha1Of("one")})
+
+	release, entered := make(chan struct{}), make(chan struct{}, 1)
+	store.SetBlockStat(release, entered)
+	type outcome struct {
+		result workspacestore.PublishResult
+		err    error
+	}
+	first, retry := make(chan outcome, 1), make(chan outcome, 1)
+	go func() {
+		result, err := service.Publish(ctx, request)
+		first <- outcome{result, err}
+	}()
+	// The first publish is in flight: blocked in its verify (the HEAD).
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first publish never went in flight")
+	}
+	other := request
+	other.Refs = []workspacestore.RefUpdate{{Name: workspacestore.RefBase, New: sha1Of("other")}}
+	if _, err := service.Publish(ctx, other); !errors.Is(err, workspacestore.ErrThreadBusy) || errors.Is(err, workspacestore.ErrRefConflict) {
+		t.Fatalf("a different publish while one is in flight = %v, want thread busy", err)
+	}
+	go func() {
+		result, err := service.Publish(ctx, request)
+		retry <- outcome{result, err}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case got := <-retry:
+		t.Fatalf("the identical retry answered before the first publish finished: %+v", got)
+	default:
+	}
+	store.SetBlockStat(nil, nil)
+	close(release)
+	a, b := <-first, <-retry
+	if a.err != nil || b.err != nil || a.result.Seq != 1 || b.result.Seq != a.result.Seq ||
+		b.result.Refs[workspacestore.RefHandoff1] != sha1Of("one") {
+		t.Fatalf("first = %+v, retry = %+v; want the same seq", a, b)
+	}
+	publishes := 0
+	for _, action := range recorder.actions() {
+		if strings.HasPrefix(action, "store.publish,") {
+			publishes++
+		}
+	}
+	if publishes != 1 {
+		t.Fatalf("%d store.publish audit events, want 1 (the retry shared the result): %v", publishes, recorder.actions())
 	}
 }
 
@@ -801,10 +875,11 @@ func TestPostgresWorkspaceStoreFetchRowsIsOneSnapshot(t *testing.T) {
 	}
 }
 
-// A publish that meets the thread's row lock held (another publish of the
-// thread is committing) answers a ref conflict with the committed refs at
-// once: it never waits, so a contended thread cannot park connections.
-func TestPostgresWorkspaceStorePublishNeverWaitsOnABusyThread(t *testing.T) {
+// A publish that meets the thread row locked by a short state transition (a
+// take back, a cloud turn start or end, the sweeper) waits it out. A lock
+// held past the 200 ms bound answers ErrThreadBusy, never a ref conflict, and
+// the same publish succeeds on retry.
+func TestPostgresWorkspaceStorePublishWaitsOutAShortRowLock(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	ctx := context.Background()
 	const owner int64 = 5197
@@ -812,39 +887,121 @@ func TestPostgresWorkspaceStorePublishNeverWaitsOnABusyThread(t *testing.T) {
 	seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateHandingOff, 1, false, "")
 	store := workspacestoretest.New(true)
 	service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
-	first := []byte("committed snapshot")
+	hold := func(d time.Duration) {
+		t.Helper()
+		holder, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// What Reclaim does: lock the row and set reclaim_pending.
+		if _, err := holder.Exec(ctx, `UPDATE elitea_runtime.workspace_handoffs SET updated_at = clock_timestamp()
+WHERE project_id = 1 AND conversation_uuid = $1::uuid`, fixture.thread.ConversationUUID); err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			time.Sleep(d)
+			_ = holder.Rollback(context.Background())
+		}()
+	}
+	first := []byte("published past a short lock")
 	firstSHA := uploadSegment(t, store, fixture.thread, first, time.Now())
+	hold(80 * time.Millisecond)
+	started := time.Now()
 	if _, err := service.Publish(ctx, desktopPublish(fixture.thread, owner, 1, firstSHA, int64(len(first)),
 		workspacestore.RefUpdate{Name: workspacestore.RefBase, New: sha1Of("b")},
 		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, New: sha1Of("one")})); err != nil {
-		t.Fatal(err)
+		t.Fatalf("publish under an 80 ms lock = %v, want it waited out", err)
 	}
-	holder, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
+	if waited := time.Since(started); waited < 60*time.Millisecond {
+		t.Fatalf("the publish took %s; it did not meet the lock", waited)
 	}
-	defer func() { _ = holder.Rollback(ctx) }()
-	if _, err := holder.Exec(ctx, `SELECT 1 FROM elitea_runtime.workspace_handoffs
-WHERE project_id = 1 AND conversation_uuid = $1::uuid FOR UPDATE`, fixture.thread.ConversationUUID); err != nil {
-		t.Fatal(err)
-	}
-	second := []byte("contending snapshot")
+
+	second := []byte("published after a long lock")
 	secondSHA := uploadSegment(t, store, fixture.thread, second, time.Now())
-	started := time.Now()
-	_, err = service.Publish(ctx, desktopPublish(fixture.thread, owner, 1, secondSHA, int64(len(second)),
-		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, Old: ptr(sha1Of("one")), New: sha1Of("two")}))
-	var conflict *workspacestore.RefConflictError
-	if !errors.As(err, &conflict) || conflict.Current[workspacestore.RefHandoff1] == nil ||
-		*conflict.Current[workspacestore.RefHandoff1] != sha1Of("one") {
-		t.Fatalf("publish on a busy thread = %v, want a ref conflict with the committed refs", err)
+	request := desktopPublish(fixture.thread, owner, 1, secondSHA, int64(len(second)),
+		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, Old: ptr(sha1Of("one")), New: sha1Of("two")})
+	hold(time.Second)
+	started = time.Now()
+	_, err := service.Publish(ctx, request)
+	if !errors.Is(err, workspacestore.ErrThreadBusy) || errors.Is(err, workspacestore.ErrRefConflict) {
+		t.Fatalf("publish under a 1 s lock = %v, want thread busy", err)
 	}
-	if waited := time.Since(started); waited > time.Second {
-		t.Fatalf("the publish waited %s for the row lock", waited)
+	if waited := time.Since(started); waited > 900*time.Millisecond {
+		t.Fatalf("the publish waited %s, past its bound", waited)
 	}
-	_ = holder.Rollback(ctx)
-	// With the lock free the same publish goes through.
-	if _, err := service.Publish(ctx, desktopPublish(fixture.thread, owner, 1, secondSHA, int64(len(second)),
-		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, Old: ptr(sha1Of("one")), New: sha1Of("two")})); err != nil {
-		t.Fatalf("the retry = %v", err)
+	time.Sleep(time.Second)
+	if result, err := service.Publish(ctx, request); err != nil || result.Seq != 2 {
+		t.Fatalf("the retry = %+v, %v", result, err)
+	}
+}
+
+// The facade promotes with the backend's server-side copy, so the bytes pass
+// through Main once. A same-size object with other bytes at the segment key,
+// on a backend that reports no digest, is not taken for the segment: the
+// size alone proves nothing, so it is hashed, and the verified upload is
+// promoted over it.
+func TestPostgresWorkspaceStoreFacadePromotesByCopyAndHashesASameSizeObject(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5183
+	fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+	seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateHandingOff, 1, false, "")
+	store := workspacestoretest.New(false)
+	store.Copier = true
+	service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+	desktop := workspacestore.Caller{Writer: workspacestore.WriterDesktop, UserID: owner}
+	content := []byte("a facade segment promoted by copy")
+	sha := digestOf(content)
+	if _, err := service.RequestUpload(ctx, workspacestore.UploadRequest{
+		Thread: fixture.thread, Caller: desktop, Epoch: 1, SHA256: sha, Bytes: int64(len(content)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	final, _ := storage.NewObjectRef("1", storage.WorkspaceBucketName, workspacestore.ObjectKey(fixture.thread.ConversationUUID, sha))
+	read := func() []byte {
+		t.Helper()
+		body, _, err := store.Get(ctx, final, nil)
+		if err != nil {
+			return nil
+		}
+		defer func() { _ = body.Close() }()
+		raw, _ := io.ReadAll(body)
+		return raw
+	}
+	// A same-size object with other bytes already at the key, no digest.
+	corrupt := bytes.Repeat([]byte("z"), len(content))
+	store.Seed(final, corrupt, time.Now())
+	gets := store.GetCount()
+	if err := service.PutObject(ctx, fixture.thread, desktop, sha, bytes.NewReader(content)); err != nil {
+		t.Fatal(err)
+	}
+	// One read: the hash of the same-size object. The promote read nothing.
+	if got := store.GetCount() - gets - 1; got != 0 {
+		t.Fatalf("the promote read the upload back %d times, want 0 (server-side copy)", got)
+	}
+	if store.Copies != 1 {
+		t.Fatalf("copies = %d, want the promote to be one server-side copy", store.Copies)
+	}
+	if !bytes.Equal(read(), content) {
+		t.Fatalf("the same-size corrupt object stayed: %q", read())
+	}
+	if store.Count() != 1 {
+		t.Fatalf("%d objects, want the segment only (the temporary upload removed)", store.Count())
+	}
+	// A backend without a copy still promotes, by reading back.
+	store.Copier = false
+	other := []byte("a facade segment promoted by read-back")
+	otherSHA := digestOf(other)
+	if _, err := service.RequestUpload(ctx, workspacestore.UploadRequest{
+		Thread: fixture.thread, Caller: desktop, Epoch: 1, SHA256: otherSHA, Bytes: int64(len(other)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.PutObject(ctx, fixture.thread, desktop, otherSHA, bytes.NewReader(other)); err != nil {
+		t.Fatal(err)
+	}
+	otherRef, _ := storage.NewObjectRef("1", storage.WorkspaceBucketName, workspacestore.ObjectKey(fixture.thread.ConversationUUID, otherSHA))
+	if !store.Has(otherRef) || store.Copies != 1 {
+		t.Fatalf("read-back promote: has %t, copies %d", store.Has(otherRef), store.Copies)
 	}
 }

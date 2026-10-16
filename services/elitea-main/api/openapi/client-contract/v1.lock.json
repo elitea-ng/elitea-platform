@@ -17616,6 +17616,11 @@
                 }
               }
             }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "integer"
+            }
           }
         },
         "413": {
