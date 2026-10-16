@@ -90,6 +90,12 @@ type storeFakeTx struct {
 	dedupErr error
 	// claimRan records that the claim statement ran at all.
 	claimRan bool
+	// execSQL records every ExecAffected statement in order.
+	execSQL []string
+	// affectedBy / execErrBy script the rows-affected count and the error of
+	// the statement whose text contains the key (default: 1 row, no error).
+	affectedBy map[string]int64
+	execErrBy  map[string]error
 }
 
 func (t *storeFakeTx) QueryRow(_ context.Context, sql string, args ...any) Row {
@@ -109,11 +115,22 @@ func (t *storeFakeTx) QueryRow(_ context.Context, sql string, args ...any) Row {
 func (t *storeFakeTx) Query(context.Context, string, ...any) (Rows, error) {
 	return nil, errors.New("unused")
 }
-func (t *storeFakeTx) ExecAffected(_ context.Context, _ string, args ...any) (int64, error) {
+func (t *storeFakeTx) ExecAffected(_ context.Context, sql string, args ...any) (int64, error) {
 	t.execRan = true
 	t.execArgs = args
+	t.execSQL = append(t.execSQL, sql)
 	if t.execErr != nil {
 		return 0, t.execErr
+	}
+	for marker, err := range t.execErrBy {
+		if strings.Contains(sql, marker) {
+			return 0, err
+		}
+	}
+	for marker, n := range t.affectedBy {
+		if strings.Contains(sql, marker) {
+			return n, nil
+		}
 	}
 	return 1, nil
 }

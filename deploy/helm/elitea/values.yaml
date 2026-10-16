@@ -2412,7 +2412,7 @@ scheduler:
     # in GATEWAY_BUDGET_DELTAS meanwhile, for up to its MaxAge (72h).
     GATEWAY_NATS_URL: ""
     BUDGET_WRITEBACK_BATCH_SIZE: "500"
-    # The consumer's AckWait and MaxDeliver are the consumer's own
+    # The consumer's AckWait, MaxDeliver and MaxAckPending are the consumer's own
     # configuration, set by the nats-bootstrap Job that creates it
     # (deploy/helm/nats-bootstrap deltas.writeback); the scheduler only binds.
 
@@ -2530,6 +2530,41 @@ scheduler:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+  # The budget write-back metrics on GET /metrics of the health port:
+  # budget_writeback_dropped_total{reason,sqlstate_class} (deltas dropped
+  # because their apply fails permanently, [human decision] 2026-10-16; each is
+  # spend missing from the accumulator), budget_writeback_num_ack_pending and
+  # budget_writeback_num_redelivered. The bundled otel collector receives OTLP
+  # only, so a Prometheus must scrape them.
+  #
+  # Where the Prometheus Operator is served (monitoring.coreos.com/v1), the
+  # PodMonitor and the PrometheusRule render together by default: a rule over a
+  # metric nothing scrapes would be an alert that cannot fire. Elsewhere,
+  # nothing in this block renders except the opt-in pod annotations.
+  metrics:
+    # prometheus.io/scrape|port|path pod annotations, for an annotation-based
+    # Prometheus scrape (no Operator).
+    scrapeAnnotations: false
+    # A PodMonitor for the Prometheus Operator. ON by default, rendered only
+    # where monitoring.coreos.com/v1 exists. Set false only if something else
+    # scrapes the health port (scrapeAnnotations, or your own monitor).
+    podMonitor:
+      enabled: true
+      interval: 30s
+      # Extra labels for the Prometheus' podMonitorSelector, for example
+      # release: kube-prometheus-stack.
+      labels: {}
+    # The PrometheusRule. Rendered only where monitoring.coreos.com/v1 exists
+    # AND a scrape path is configured (podMonitor or scrapeAnnotations).
+    prometheusRule:
+      enabled: true
+      # Extra labels for the Prometheus' ruleSelector.
+      labels: {}
+      # The budget-writeback consumer's MaxAckPending, as the nats-bootstrap
+      # chart sets it (deltas.writeback.maxAckPending). The near-full alert
+      # pages at 80% of it, before write-back stalls.
+      maxAckPending: 40000
 
 llmGateway:
   # The model hop. Chat and every embedding call go through it.
@@ -2706,15 +2741,22 @@ llmGateway:
     #                   database holds an enforcing budget row. That state
     #                   cannot recover — nothing re-dials a URL that was never
     #                   given — and /readyz reports ready, so nothing else
-    #                   reports it. A CONFIGURED NATS that did not answer keeps
-    #                   the current behaviour: /readyz reports not ready and the
-    #                   background loop re-dials (issue #315).
+    #                   reports it. A CONFIGURED NATS that did not answer: the
+    #                   process starts, and every /llm spend route answers 503
+    #                   nats_unavailable until the background loop re-dials NATS
+    #                   and installs the gate (issue #315; [human decision]
+    #                   2026-10-16). No request is served unmetered. /readyz
+    #                   also reports not ready, but readiness does not keep
+    #                   traffic out: with mTLS on, the probes are tcpSocket.
+    #                   With NO database pool the loop cannot run, and the 503
+    #                   lasts until a restart with a working DATABASE_URL.
     #   on              Refuse to start whenever the budget gate is not wired.
-    #                   Choose this when the deployment must never serve one
-    #                   unmetered request, and accept a CrashLoopBackOff for as
-    #                   long as NATS is down.
-    #   off             Never refuse. It needs llmGateway.acknowledgeUnenforcedBudgets
-    #                   below, because it accepts unmetered spend.
+    #                   Choose this to get a CrashLoopBackOff, not a running pod
+    #                   that answers 503, for as long as NATS is down.
+    #   off             Never refuse, and serve /llm UNMETERED while the gate is
+    #                   not wired (no 503). It needs
+    #                   llmGateway.acknowledgeUnenforcedBudgets below, because
+    #                   it accepts unmetered spend.
     #
     # The binary reads any OTHER value as "auto"; the chart refuses to render
     # one, so a values file cannot say "false" and mean "off".
@@ -3038,7 +3080,10 @@ llmGateway:
   # probes: with mtls.enabled (the default) the paths below are NOT used — the
   # listener requires a verified client certificate, which a kubelet probe cannot
   # present, so templates/deployment.yaml probes the socket instead. The paths
-  # apply when mtls.enabled is false.
+  # apply when mtls.enabled is false. So with mTLS on, /readyz never removes a
+  # pod from rotation: the gateway itself refuses /llm spend (503
+  # nats_unavailable) while budget enforcement is unwired, and does not rely on
+  # readiness for it ([human decision] 2026-10-16).
   probes:
     liveness:
       # Process liveness only (no dependency calls) — issue #242: a NATS blip

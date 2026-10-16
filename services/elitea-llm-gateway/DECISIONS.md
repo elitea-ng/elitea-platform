@@ -346,6 +346,169 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   `budgetStartupGate(` wiring-gate entry, and six cases in
   `deploy/helm/tests/render-llm-path.sh`.
 
+- **2026-10-16 (live 4.45.1) — the boot window before the recovery install
+  REFUSES spend; it no longer serves it unmetered. [human decision] (owner,
+  2026-10-16: "Refuse with 503", chosen over fixing readiness, doing both, or
+  keeping fail-open; it touches the fail-open/closed policy).** *Finding:* a gateway that booted
+  while NATS was unreachable logged `READINESS GATED`, then `BUDGET ENFORCEMENT
+  RECOVERED` ~15 s later. In between, `admissionVerdictFor` found no gate and
+  admitted every request: no budget check, no rate limit (the limiter was
+  unbound), and no billing (`updateUsageUnits` returned `billNotBillable`).
+  Nothing charged that spend later. `/readyz` did not keep the traffic out:
+  `/llm` shares the listener, the default chart probes the mTLS gateway with
+  `tcpSocket` (the kubelet holds no client certificate), and a direct caller
+  ignores readiness. #304 already states the intent ("a pod that boots during
+  a NATS outage serves /llm unmetered" is the defect), and a NATS loss one
+  second AFTER boot already refuses through the FSM's `Block503`.
+  *Decision:* the composition root marks the handler pending
+  (`llmproxy.WithBudgetEnforcementPending`) when enforcement is configured and
+  unwired. Admission then answers 503 `service_unavailable`/`nats_unavailable`,
+  the same body as `Block503`, on every spend route, before the provider.
+  `InstallBudgetEnforcement` clears the flag in the same atomic publish that
+  installs the gate. `LLM_BUDGET_REQUIRE_ENFORCEMENT=off` keeps the documented
+  "serve unmetered on purpose" posture, and a gateway with no
+  `GATEWAY_NATS_URL` is never pending. The decision lives in
+  `budgetPendingOpts` (cmd/elitea-llm-gateway/main.go). With NATS configured
+  and NO database pool, the recovery loop cannot run, so the 503 lasts until a
+  restart with a working `DATABASE_URL`. It stays fail-closed, and the
+  `BUDGET ENFORCEMENT PENDING` log says so and names the reason.
+  Guarded by `TestBudgetPending_EveryInferenceRouteIsRefused` (every
+  `inference` route in `internal/api/testdata/llm_route_classes.txt`, through
+  `api.NewRouter`), `TestBudgetPending_RealtimeWebSocketHandshakeIsRefused`,
+  `TestBudgetPending_InstalledGateDecidesEveryLaterRequest`,
+  `TestBudgetPendingOpts_ComposesTheBootWindowDecision`,
+  `TestBudgetPendingOpts_NoPoolStaysClosedAndSaysUntilRestart`, and the
+  `budgetPendingOpts(` / `llmproxy.WithBudgetEnforcementPending(` wiring-gate
+  entries.
+- **2026-10-16 — a delta whose publish failed after a GOOD increment is written
+  as a HEALTHY row, and the write-back consumer backs off its deferrals.
+  [human decision] (owner, 2026-10-16: "Healthy write", option A, plus the
+  consumer backoff).** *Finding:* when `PublishDelta` fails after a successful
+  increment, nothing wrote the delta durably. The consumer never saw it, the
+  outage write runs only on a failed increment, and recovery replays Postgres
+  onto NATS, never the other way. The first fix wrote it as an OUTAGE row. The
+  gateway review found the cost: with NATS healthy, the row stayed
+  outage-owned until the next sweep (up to 30s). The scheduler consumer then
+  deferred every other replica's healthy delta for the scope with a bare
+  `Nak()`. With `MaxDeliver` 10 and no backoff, a busy stream spent the 10
+  deliveries in about a second and dropped them from the accumulator and the
+  usage ledger. A failed increment on `main` reaches the same storm.
+  *Decision, gateway:* `failmode.Store.PersistHealthyDelta` does what the
+  consumer would do, in one transaction. It claims `processed_event_ids`,
+  applies the consumer's guarded UPSERT (`outage_mode=false`), and inserts the
+  usage-ledger row. It falls back to the outage UPSERT only when the guard
+  blocks, which happens only when a real outage already owns the row. The event-id claim keeps it
+  exactly-once against a lost-ack redelivery of the same event.
+  *Decision, scheduler:* the consumer defers with
+  `NakWithDelay(redeliverDelay(NumDelivered))`: 5s, doubling, to a 60s
+  ceiling. So one deferral spans the 30s sweep it waits for, and ten span more
+  than seven minutes. The nats-bootstrap chart sets the `budget-writeback`
+  consumer to `MaxDeliver` -1. With a delayed retry, the only bound a deferred
+  delta needs is the stream's `MaxAge` (72h). A finite cap only decides when
+  real money is dropped during a legitimate outage. Undecodable and invalid
+  deltas are terminated, never redelivered. The runtime command consumers
+  already run at -1. The scheduler warns when it binds a consumer that still
+  has a finite cap. Guarded by
+  `TestOutageWedge_PublishFailureAfterAGoodIncrementIsNotLost` (a MaxDeliver-
+  capped modelled consumer, replica B's delta, the usage-ledger row). The test
+  fails with the outage-path write. Also guarded by
+  `TestOutageWedge_PublishFailureOntoAnOutageOwnedRowStaysOutageOwned` and the
+  scheduler's `TestProcessBatch_DeferralBacksOffByDeliveryCount`. The
+  `budget-writeback` consumer also gets an explicit `MaxAckPending` of 40000
+  (`deltas.writeback.maxAckPending`, `NATS_WRITEBACK_MAX_PENDING`; the
+  `--defaults` value was 1000).
+  - **Slot accounting.** A delayed Nak keeps its pending slot across EVERY
+    redelivery until the delta is acked or terminated.
+  - **So the slots scale with outage time.** During an outage that defers every
+    delta, slots = deferred deltas/s × outage seconds, not × the 60s delay
+    (this corrects the third review's sizing).
+  - **The rate.** A billed request publishes one delta per scope it bills: the
+    project, AND the member when it carries a member id (budget_gate.go). The
+    5k-user peak of about 50 billed requests/s is therefore about 100 deltas/s.
+  - **What 40000 covers.** At that rate 40000 slots cover about 400 seconds of
+    such an outage.
+  - **Why 40000 stays.** A full window only DELAYS delivery: the deltas wait in
+    the stream (72h MaxAge), and none is lost. The cost is a server-side
+    pending-list entry per message.
+  - **The page.** The scheduler chart's `EliteaBudgetWriteBackAckPendingNearlyFull`
+    (`max(budget_writeback_num_ack_pending) / maxAckPending > 0.8` for 5m)
+    pages before write-back stalls for every scope.
+  - **Rendering.** Every numeric bootstrap value renders through the
+    `nats-bootstrap.int` helper.
+    - It accepts an integer or a whole-number float and FAILS the render on
+      anything else ("40k", "1GiB", 1.5).
+    - Plain `int64` would turn those into 0, which natscli reads as the server
+      default: MaxAckPending 1000, MaxBytes unbounded.
+    - A 7-digit YAML integer used to render as `1.073741824e+09`, which natscli
+      refuses. So on default values the bootstrap Job could not create the
+      deltas stream (live sets those two values with Argo CD `forceString`
+      parameters, which is why it ran).
+  - **Metrics.** The scheduler serves `budget_writeback_num_ack_pending` and
+    `budget_writeback_num_redelivered` on `GET /metrics`.
+  - **Upsert parity.** Both PersistHealthyDelta's statement and the consumer's must equal
+  `libs/proto/contracts/budget-writeback-guarded-upsert-v1.sql`, and one
+  parity test in each module checks that.
+- **2026-10-16 — a delta that fails to apply PERMANENTLY is isolated, then
+  dropped. [human decision] (owner, 2026-10-16: "Isolate, then drop").**
+  *Finding:* with `MaxDeliver` -1, a delta that fails `Apply` the same way on
+  every delivery retries every 60s for the stream's 72h `MaxAge`. It holds an
+  ack-pending slot for all of that time. Re-coalescing then blocks every
+  neighbour in its key group. The known trigger was the usage-ledger row: it
+  rides the money transaction, and Postgres refuses an over-long VARCHAR.
+  *Decision:* (1) remove the trigger. Every ledger writer trims provider to 64
+  bytes, model to 128 and execution_id to 128, on a UTF-8 boundary: the
+  gateway's `failmode.usageEventArgs` (both callers) and the scheduler's
+  `usageEventSQL` arguments. (2) When a coalesced group's `Apply` fails with
+  a PERMANENT SQLSTATE, the consumer applies each member alone. A group that
+  fails transiently or environmentally is NOT isolated, because every member
+  would fail the same way, and k members would cost k+1 doomed transactions.
+  It is deferred as one. (3) A member that still fails with a PERMANENT SQLSTATE
+  is `Term`ed. Permanent means class 22 (data) and class 23 (constraint) except
+  the `processed_event_ids` dedup conflict. It is logged at ERROR with its
+  event id and amount, and counted in
+  `budget_writeback_dropped_total{reason="permanent_apply_error",sqlstate_class="22"|"23"}`
+  on the scheduler's `/metrics`. A drop is real spend missing from the
+  accumulator, so alarm on any increase.
+  - **The alert, as fixed by the fourth review.**
+    - Both drop series are pre-created at 0. A counter that first appears at 1
+      shows no `increase()`, so the first drop never paged.
+    - The rule is `increase(...[15m]) > 0 or (... unless ... offset 15m) > 0`.
+      promtool proves that it fires on 0→1 and on a series that appears late.
+    - Where the Prometheus Operator exists, the chart renders the
+      `PrometheusRule` only with a scrape path: the `PodMonitor` (on by
+      default there) or the opt-in scrape annotations.
+  - **Errors that are not dropped.** Every other error stays a delayed `Nak`:
+    connection 08, serialization or deadlock 40, lock 55P03, resources 53,
+    operator 57, and an error with no SQLSTATE.
+  - **Timeouts.**
+    - Each `Apply` runs under a 20s timeout, below the 30s AckWait.
+    - The group's messages get `InProgress` just before it, because AckWait
+      runs from the batch fetch and groups apply one after another.
+    - A redelivery that still races an apply is SAFE: the `processed_event_ids`
+      claim in the same transaction makes it add nothing.
+    - A timed-out `Commit` is a transient failure: it is deferred, never
+      dropped.
+  *Revision, [human decision] (owner, 2026-10-16: "Drop only 22/23, retry
+  42"):* class 42 (42501 permission denied, 42P01 missing table, 42703
+  missing column, 42P05, 42P10) is NOT dropped. It is the environment, not a
+  delta. A scheduler that starts before the migrations, or a revoked grant,
+  fails EVERY delta, and dropping them would empty the 72h stream. It is
+  deferred and logged at ERROR with `reason=environmental`. Compose starts the
+  scheduler only after `elitea-migrate` completes. In Helm the elitea-main
+  migrations are a pre-install/pre-upgrade hook, so they finish before the
+  scheduler Deployment is applied. Guarded by
+  `TestApplyGroup_APermanentFailureIsTermedAndItsNeighboursApply`. It uses a
+  fake with committed state: the group transaction rolls back, each neighbour
+  commits its own delta, and the money is exactly goodA+goodC, once. It fails
+  without the isolation. Also guarded by
+  `TestApplyGroup_ATransientGroupFailureIsDeferredInOneTransaction` (it fails
+  with isolation on any error),
+  `TestApplyGroup_AnEnvironmentalFailureIsNeverDropped` (it fails when class
+  42 is permanent), `TestApplyGroup_ATransientFailureIsDeferredNotDropped`,
+  `TestPermanentApplyFailure_Classes`, `TestTruncateUTF8`,
+  `TestApply_AnOverLongModelNameIsTrimmedAndTheMoneyLands`, and the gateway's
+  `TestUsageEventArgs_TrimToTheColumnWidths` and `TestTruncate`.
+
 ## Authored governance (issue #218, 2026-08-23)
 
 `gateway.governance_config` is the table elitea-main's admin surface writes and
