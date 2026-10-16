@@ -30,12 +30,16 @@ Every PR gets `/code-review` twice before merge, and CI must be green.
 
 Check the branch head: a `wip(handoff)` commit lists which of these are done.
 
-### Executor
-1. The worker RPC for `RecordExecutorEvent` (`handoff.scan_blocked`, `pull_request.opened`) is missing. Today these are only logged.
-2. A dead-worker reaper is missing. A CLOUD_RUNNING thread whose worker died must return to CLOUD_IDLE once the lease expires.
-3. The `workspace-run-docker` CI job (Docker bridge plus egress proof) has never run.
-
-Check the branch head for a `wip(executor)` commit.
+### Executor (head `69f415c22`)
+1. **Audit RPC (`WorkspaceRecordEvent`): partial.**
+   - Done: it is claim- and fence-bound and carries no path fields. The worker uses a bounded queue, and its Postgres and worker tests pass.
+   - Left:
+     - `TestWorkspaceStoreIsRegisteredOnTheControlListenerOnly` (`internal/transport/runtimegrpc`) fails. Most likely the new method needs adding to its list.
+     - Re-run the full worker `cargo test --lib`.
+2. **Dead-worker reaper: done.**
+   - The 30 s sweeper ends a CLOUD_RUNNING turn whose execution has had no live lease for 30 s. The thread goes back to CLOUD_IDLE, or RECLAIMING if a take back is pending, and a `handoff.turn_reaped` audit row is written.
+   - Its Postgres tests pass.
+3. **Docker CI job never run.** The `workspace-run-docker` job (Docker bridge plus egress proof) has not run yet.
 
 ### Merge notes
 - After #1301 merges, the executor branch's `libs/rust/workspace-store` is byte-identical to the desktop version at e9357d919. Re-sync it if #1301 changed it later.
