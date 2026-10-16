@@ -26,7 +26,7 @@ jobs:
             state::postgres_checkpointer_tests:: \\
             agents::graph::
       - name: Exact
-        run: cargo test --locked --lib --all-features -p worker one::exact -- --ignored --exact  # comment
+        run: cargo test --locked --lib --all-features -p elitea-worker-rust one::exact -- --ignored --exact  # comment
 """
 
 LIST = """\
@@ -201,6 +201,53 @@ class IgnoredTestGuard(unittest.TestCase):
             "- run: python3 scripts/runtime/test_sandbox_ledger.py --test-filter unrun || echo ok")
         code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
         self.assertEqual(code, 1, out)
+
+    def test_no_run_is_not_credited(self):
+        workflow = with_step("- run: cargo test --lib --no-run unrun::test -- --ignored")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("`--no-run` builds the tests and runs none", out)
+
+    def test_echo_of_a_cargo_command_is_not_credited(self):
+        workflow = with_step("- run: echo cargo test --lib unrun::test -- --ignored")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("`echo` is the command, not cargo", out)
+
+    def test_cargo_after_a_separator_is_its_own_command(self):
+        workflow = with_step("- run: cd services/elitea-worker-rust && cargo test --lib unrun::test -- --ignored")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 0, out)
+
+    def test_environment_assignments_before_cargo_are_allowed(self):
+        workflow = with_step("- run: FOO=1 BAR=x cargo test --lib unrun::test -- --ignored")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 0, out)
+
+    def test_another_package_is_not_credited(self):
+        workflow = with_step("- run: cargo test -p elitea-agent-runtime --lib unrun::test -- --ignored")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("`-p elitea-agent-runtime` runs another crate's tests", out)
+
+    def test_package_equals_form_is_read(self):
+        workflow = with_step("- run: cargo test --package=other --lib unrun::test -- --ignored")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("`-p other`", out)
+
+    def test_skip_equals_is_a_skip_not_a_filter(self):
+        # Read as a filter, `--skip=unrun` would credit unrun::test; it skips it.
+        workflow = with_step("- run: cargo test --lib -- --ignored --skip=unrun unrun::test")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("unrun::test is #[ignore]", out)
+
+    def test_a_matrix_expression_gets_a_clear_message(self):
+        workflow = with_step("- run: cargo test --lib ${{ matrix.filter }} -- --ignored")
+        code, out = run(workflow=workflow)
+        self.assertEqual(code, 0, out)
+        self.assertIn("a GitHub expression (e.g. `${{ matrix.* }}`) chooses its filters", out)
 
     # --- target selection --------------------------------------------------------
 

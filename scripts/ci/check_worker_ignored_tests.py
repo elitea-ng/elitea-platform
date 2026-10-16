@@ -161,52 +161,129 @@ def credited_step(step: dict, job: dict) -> str | None:
     return None
 
 
-def parse_command(line: str, source: str) -> tuple[Invocation | None, Uncredited | None]:
-    wrapper = LEDGER_WRAPPER.search(line)
-    if wrapper:
-        tolerant = re.search(r"\|\|", line[wrapper.end():])
-        invocation = Invocation(filters=[wrapper.group(1)], targets={"lib"},
-                                source=f"{source}: {line.strip()}")
-        if tolerant:
-            return None, Uncredited(line.strip(), "its failure is tolerated (`||`)")
-        return invocation, None
-    if "cargo test" not in line or "--ignored" not in line:
-        return None, None
-    command = line[line.index("cargo test"):]
-    # The shell comment, if any, is not part of the command.
-    command = re.split(r"\s#", command, maxsplit=1)[0]
+# The crate whose ignored tests this check counts. A cargo run in another
+# package runs none of them.
+WORKER_PACKAGE = "elitea-worker-rust"
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+SEPARATORS = {"&&", "||", ";", "|", "&"}
+
+
+def commands(line: str, source: str) -> list[tuple[list[str], bool]]:
+    """Split one shell line into (words, tolerated) commands, comments dropped.
+
+    `tolerated` is true when the command's failure is swallowed by a following
+    `|| ...`. Pipes keep failing (the runner's bash uses -o pipefail).
+    """
+    lexer = shlex.shlex(line, posix=True, punctuation_chars="|&;")
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
     try:
-        tokens = shlex.split(command)
+        tokens = list(lexer)
     except ValueError as error:
-        raise SystemExit(f"{source}: cannot parse {command!r}: {error}") from error
-    tokens = tokens[2:]
-    invocation = Invocation(source=f"{source}: {command.strip()}")
+        raise SystemExit(f"{source}: cannot parse {line.strip()!r}: {error}") from error
+    found: list[tuple[list[str], bool]] = []
+    words: list[str] = []
+    for token in tokens + [";"]:
+        if token in SEPARATORS or set(token) <= set("|&;"):
+            if words:
+                found.append((words, False))
+                words = []
+            if token == "||" and found:
+                found[-1] = (found[-1][0], True)
+            continue
+        words.append(token)
+    return found
+
+
+def program(words: list[str]) -> list[str]:
+    """The command's own words: leading VAR=value assignments removed."""
+    index = 0
+    while index < len(words) and ASSIGNMENT.match(words[index]):
+        index += 1
+    return words[index:]
+
+
+def parse_command(line: str, source: str) -> tuple[list[Invocation], list[Uncredited]]:
+    found: list[Invocation] = []
+    refused: list[Uncredited] = []
+    for words, tolerated in commands(line, source):
+        argv = program(words)
+        text = " ".join(words)
+        if not argv:
+            continue
+        # The ledger wrapper, run directly or by a Python interpreter.
+        script = argv[1] if len(argv) > 1 and Path(argv[0]).name.startswith("python") else argv[0]
+        if Path(script).name == "test_sandbox_ledger.py":
+            wrapper = LEDGER_WRAPPER.search(" ".join(argv))
+            if not wrapper:
+                continue
+            if tolerated:
+                refused.append(Uncredited(text, "its failure is tolerated (`||`)"))
+            else:
+                found.append(Invocation(filters=[wrapper.group(1)], targets={"lib"},
+                                        source=f"{source}: {text}"))
+            continue
+        if "cargo" in argv and "--ignored" in argv and argv[0] != "cargo":
+            refused.append(Uncredited(text, f"`{argv[0]}` is the command, not cargo"))
+            continue
+        if argv[:2] != ["cargo", "test"]:
+            continue
+        invocation, why_not = parse_cargo_test(argv[2:], f"{source}: {text}")
+        if invocation is None and why_not is None:
+            continue
+        if why_not:
+            refused.append(Uncredited(text, why_not))
+        elif tolerated:
+            refused.append(Uncredited(text, "its failure is tolerated (`||`)"))
+        else:
+            found.append(invocation)
+    return found, refused
+
+
+def parse_cargo_test(tokens: list[str], source: str) -> tuple[Invocation | None, str | None]:
+    """Parse `cargo test` arguments. (None, None): not an ignored-test run."""
+    if any("${{" in token for token in tokens):
+        return None, ("a GitHub expression (e.g. `${{ matrix.* }}`) chooses its filters at run "
+                      "time; name the tests literally so this check can see them")
+    invocation = Invocation(source=source)
     cargo_names = 0
     libtest = False
-    tolerated = False
     targets: set[str] = set()
     every_target = False
     listing = False
     ignored = False
+    packages: list[str] = []
+    no_run = False
     index = 0
     while index < len(tokens):
         token = tokens[index]
-        if token in {"&&", ";", "|"}:
-            break
-        if token == "||":
-            tolerated = True
-            break
+        value = None
+        if "=" in token and token.startswith("--"):
+            token, value = token.split("=", 1)
+
+        def operand() -> str:
+            nonlocal index
+            if value is not None:
+                return value
+            index += 1
+            if index >= len(tokens):
+                raise SystemExit(f"{source}: `{token}` takes a value")
+            return tokens[index]
+
         if not libtest and token == "--":
             libtest = True
         elif libtest and token == "--skip":
-            index += 1
-            invocation.skips.append(tokens[index])
+            invocation.skips.append(operand())
         elif libtest and token == "--exact":
             invocation.exact = True
         elif libtest and token == "--list":
             listing = True
         elif libtest and token in {"--ignored", "--include-ignored"}:
             ignored = True
+        elif not libtest and token == "--no-run":
+            no_run = True
+        elif not libtest and token in {"-p", "--package"}:
+            packages.append(operand())
         elif not libtest and token == "--lib":
             targets.add("lib")
         elif not libtest and token == "--bins":
@@ -216,10 +293,9 @@ def parse_command(line: str, source: str) -> tuple[Invocation | None, Uncredited
         elif not libtest and token == "--all-targets":
             every_target = True
         elif not libtest and token in {"--test", "--bin"}:
-            index += 1
-            targets.add(("test:" if token == "--test" else "bin:") + tokens[index])
+            targets.add(("test:" if token == "--test" else "bin:") + operand())
         elif token in (LIBTEST_VALUE_FLAGS if libtest else CARGO_VALUE_FLAGS):
-            index += 1
+            operand()
         elif token.startswith("-"):
             pass
         else:
@@ -229,13 +305,16 @@ def parse_command(line: str, source: str) -> tuple[Invocation | None, Uncredited
     if cargo_names > 1:
         # cargo refuses this ("unexpected argument"), so it selects nothing.
         raise SystemExit(f"{source}: cargo takes one test name before `--`; put the "
-                         f"other filters after it: {command.strip()}")
+                         "other filters after it")
     # `-- --list --ignored` enumerates the tests (this check's own input); it runs none.
     if listing or not ignored:
         return None, None
+    if no_run:
+        return None, "`--no-run` builds the tests and runs none"
+    others = [name for name in packages if name != WORKER_PACKAGE]
+    if others:
+        return None, f"`-p {others[0]}` runs another crate's tests, not {WORKER_PACKAGE}'s"
     invocation.targets = None if every_target or not targets else targets
-    if tolerated:
-        return None, Uncredited(command.strip(), "its failure is tolerated (`||`)")
     return invocation, None
 
 
@@ -254,16 +333,13 @@ def parse_workflow(text: str, source: str) -> tuple[list[Invocation], list[Uncre
             where = f"{source}: jobs.{job_id}.steps[{number}] ({step.get('name', 'unnamed')})"
             why_not = credited_step(step, job)
             for line in logical_lines(script):
-                invocation, uncredited = parse_command(line, where)
-                if invocation is None and uncredited is None:
-                    continue
+                invocations, uncredited = parse_command(line, where)
                 if why_not:
-                    command = invocation.source if invocation else uncredited.command
-                    refused.append(Uncredited(command, why_not))
-                elif uncredited:
-                    refused.append(Uncredited(f"{where}: {uncredited.command}", uncredited.reason))
-                else:
-                    found.append(invocation)
+                    refused += [Uncredited(i.source, why_not) for i in invocations]
+                    refused += [Uncredited(f"{where}: {u.command}", why_not) for u in uncredited]
+                    continue
+                found += invocations
+                refused += [Uncredited(f"{where}: {u.command}", u.reason) for u in uncredited]
     return found, refused
 
 

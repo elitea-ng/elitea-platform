@@ -17,7 +17,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 # The inputs the gate reads, from the real tree.
 inputs="$(cd "$REPO_ROOT" && git ls-files --cached --others --exclude-standard \
-  'rust-toolchain.toml' '*/rust-toolchain.toml' '*Containerfile*' '*Dockerfile*' '*.hcl' '*Cargo.toml')"
+  'rust-toolchain.toml' '*/rust-toolchain.toml' '*Containerfile*' '*Dockerfile*' '*.hcl' '*Cargo.toml'
+  # Assertion (e) scans the tracked tree for release literals; copy the files
+  # that carry them (and so would carry a new one in the same place).
+  git grep -lE 'rust_revision|Profile\.Rust|RUST_RELEASE|release: [0-9]|rustc [0-9]' -- ':!*.md' ':!*.lock' ':!*/vendor/*' ':!scripts/ci/*')"
 [ -n "$inputs" ] || { echo "ERROR: found no gate inputs to copy" >&2; exit 1; }
 
 passed=0
@@ -80,6 +83,22 @@ fresh; edit services/elitea-doc-extractor/Containerfile 's/@sha256:b1b3c9c0[0-9a
 expect "(b) a runtime-libraries stage with another digest" fail "services/elitea-doc-extractor/Containerfile:24"
 fresh; edit services/elitea-code-runner/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM rust:1.97.1-bookworm AS builder/'
 expect "(b) another Debian variant" fail "rust:1.97.1-bookworm"
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM docker.io\/library\/rust:1.96-trixie AS builder/'
+expect "(b) a docker.io/library/ prefixed image" fail "docker.io/library/rust:1.96-trixie, expected exactly"
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM index.docker.io\/library\/rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder/'
+expect "(b) an index.docker.io/ prefix, even with the right tag and digest" fail "index.docker.io/library/rust:1.97.1-trixie@"
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM library\/rust:1.97.1-trixie AS builder/'
+expect "(b) a library/ namespace without a registry" fail "library/rust:1.97.1-trixie, expected exactly"
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM rust AS builder/'
+expect "(b) an untagged image" fail "services/elitea-vector/Containerfile:36: rust, expected exactly"
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder/'
+expect "(b) a digest-only image" fail "services/elitea-vector/Containerfile:36: rust@sha256:b1b3c9c0"
+fresh; edit services/elitea-vector/Containerfile 's#^FROM rust:[^ ]+ AS builder#FROM --platform=linux/amd64 rust:1.96-trixie AS builder#'
+expect "(b) FROM --platform= before the image" fail "rust:1.96-trixie, expected exactly"
+fresh; edit services/elitea-code-runner/Containerfile 's#^COPY adapters/rust ./adapters/rust#COPY --from=rust:1.96-trixie /usr/local/cargo/bin/cargo /tmp/cargo\nCOPY adapters/rust ./adapters/rust#'
+expect "(b) a COPY --from= image" fail "rust:1.96-trixie, expected exactly"
+fresh; printf 'target "x" {\n  contexts = { toolchain = "docker-image://rust:1.96-trixie" }\n}\n' > "$WORK/tree/deploy/ci/extra.hcl"; git -C "$WORK/tree" add -A
+expect "(b) a bake docker-image:// context" fail "deploy/ci/extra.hcl:2: rust:1.96-trixie"
 fresh; for f in services/elitea-vector/Containerfile services/elitea-inventory-engine/Containerfile; do edit "$f" 's/^FROM rust:/FROM docker.io\/library\/rustlang:/'; done
 expect "(b)(d) image references below the floor" fail "rust image reference(s), expected at least"
 
@@ -95,6 +114,20 @@ expect "(c) a vendored crate above the pin" fail "libs/rust/vendor/leiden-rs/Car
 fresh; edit libs/rust/vendor/zavora-slide/Cargo.toml '/^rust-version/d'
 expect "(c)(d) a vendored crate with no rust-version" fail "libs/rust/vendor/zavora-slide/Cargo.toml: vendored crate with no readable"
 
+# (e) release literals
+fresh; edit services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs 's/rust_revision != "1\.97\.1"/rust_revision != "1.96.0"/'
+expect "(e) the worker validator states another release" fail "cargo_dependency_bundle.rs:97: toolchain release 1.96.0"
+fresh; edit services/elitea-main/internal/infra/storage/sandbox_native_bundle.go 's/Profile\.Rust != "1\.97\.1"/Profile.Rust != "1.98.0"/'
+expect "(e) the Main validator states another release" fail "sandbox_native_bundle.go:219: toolchain release 1.98.0"
+fresh; edit scripts/runtime/rust_compiled_release_manifest.py 's/^RUST_RELEASE = "1\.97\.1"/RUST_RELEASE = "1.96.0"/'
+expect "(e) the release audit states another release" fail "rust_compiled_release_manifest.py:22: toolchain release 1.96.0"
+fresh; edit services/elitea-code-runner/fixtures/cargo-native-v2.json 's/"rust_revision":"1\.97\.1"/"rust_revision":"1.96.0"/'
+expect "(e) a native bundle fixture records another release" fail "cargo-native-v2.json:1: toolchain release 1.96.0"
+fresh; edit services/elitea-main/internal/infra/storage/sandbox_native_bundle.go 's/Profile\.Rust != "1\.97\.1"/Profile.Rust != wantRust/'
+expect "(e) a validator whose literal moved out of sight" fail "sandbox_native_bundle.go: carries no toolchain release literal"
+fresh; for f in services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs scripts/runtime/test_rust_compiled_release_manifest.py services/elitea-code-runner/fixtures/cargo-native-v2.json services/elitea-main/internal/infra/storage/testdata/native-cargo-v2.json services/elitea-worker-rust/src/sandbox/native-cargo-v2.json; do git -C "$WORK/tree" rm -qf "$f"; done
+expect "(e)(d) release literals below the floor" fail "toolchain release literal(s), expected at least 6"
+
 # (d) nothing to read
 fresh; git -C "$WORK/tree" rm -qf -r --cached .
 expect "(d) an empty tree is refused" fail "there is nothing to check"
@@ -102,7 +135,7 @@ expect "(d) an empty tree is refused" fail "there is nothing to check"
 total=$((passed + failed))
 expected_cases="$(grep -c '^fresh; ' "$0")"
 echo "${passed}/${total} gate cases behave (${expected_cases} declared)"
-if [ "$failed" -ne 0 ] || [ "$total" -ne "$expected_cases" ] || [ "$total" -lt 15 ]; then
+if [ "$failed" -ne 0 ] || [ "$total" -ne "$expected_cases" ] || [ "$total" -lt 30 ]; then
   echo "ERROR: the Rust toolchain gate did not behave in every case" >&2
   exit 1
 fi

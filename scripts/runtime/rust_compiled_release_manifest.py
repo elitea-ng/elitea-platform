@@ -18,6 +18,8 @@ FILE_LIMIT, RAW_LIMIT, ARCHIVE_LIMIT, COUNT_LIMIT = 32*MIB, 256*MIB, 128*MIB, 16
 PROFILE = "/workspace/rust-job/profile"
 ADAPTER = "/usr/local/bin/elitea-code-rust"
 ENV = {"PATH":"/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin", "RUSTUP_HOME":"/usr/local/rustup", "CARGO_HOME":"/workspace/rust-job/cargo-home", "CARGO_INCREMENTAL":"0", "CARGO_TERM_COLOR":"never", "HOME":"/workspace", "TMPDIR":"/workspace/rust-job/tmp"}
+# The pinned toolchain release (scripts/ci/check-rust-toolchain.sh holds it to the pin).
+RUST_RELEASE = "1.97.1"
 TARGETS = {"arm64":"aarch64-unknown-linux-gnu", "amd64":"x86_64-unknown-linux-gnu"}
 MEASURED = ("cargo_manifest_sha256", "cargo_lock_sha256", "cargo_config_sha256", "vendor_sha256", "toolchain_sha256", "adapter_sha256", "wrapper_sha256", "compiler_flags_sha256")
 AUDIT_FIELDS = ("revision", "kind", "image_digest", "image_id", "platform", "target", "policy_revision", "dependency_bundle_sha256", "native_metadata_sha256", "native_record_sha256", "native_archive_sha256", "container_id", "image_inspection_sha256", "container_policy_sha256", "measured")
@@ -98,7 +100,7 @@ def native_metadata(raw, expected_image, root, policy, arch):
     profile = payload["profile"]
     fields(profile, ("arch", "execution_image", "os", "policy_revision", "preparation_image", "rust_revision", "target"), "native.runtime")
     require(payload["revision"] == 1 and type(payload["revision"]) is int and payload["declaration_sha256"] == value["source_sha256"] and payload["preparation_sha256"] == value["preparation_sha256"] and digest(value["source_sha256"]) and digest(value["preparation_sha256"]), "native.identity")
-    require(profile["execution_image"] == expected_image and image(profile["preparation_image"]) and profile["policy_revision"] == policy and profile["os"] == "linux" and profile["arch"] == arch and profile["target"] == TARGETS[arch] and profile["rust_revision"] == "1.97.1", "native.runtime")
+    require(profile["execution_image"] == expected_image and image(profile["preparation_image"]) and profile["policy_revision"] == policy and profile["os"] == "linux" and profile["arch"] == arch and profile["target"] == TARGETS[arch] and profile["rust_revision"] == RUST_RELEASE, "native.runtime")
     require(isinstance(payload["objects"], list) and len(payload["objects"]) == 2, "native.objects")
     for obj, role, bound in zip(payload["objects"], ("record", "archive"), (8*MIB, ARCHIVE_LIMIT)):
         fields(obj, ("bytes", "name", "role", "sha256"), "native.object")
@@ -318,7 +320,7 @@ def audit_native(reader, expected_image, root, policy, image_id):
     adapter = reader.regular(ADAPTER, FILE_LIMIT)
     require(adapter.startswith(b"\x7fELF"), "image.adapter")
     versions = [reader.exec("env", "-i", "PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin", "RUSTUP_HOME=/usr/local/rustup", "CARGO_HOME=/usr/local/cargo", "/usr/local/cargo/bin/"+program, "-Vv", cap=8192) for program in ("rustc", "cargo")]
-    require(b"release: 1.97.1\n" in versions[0], "image.toolchain")
+    require(f"release: {RUST_RELEASE}\n".encode() in versions[0], "image.toolchain")
     vendor = [{"path":item["path"][7:], "bytes":item["bytes"], "sha256":item["sha256"], "mode":item["mode"]} for item in record["content"]["files"] if item["path"].startswith("vendor/")]
     require(sum(item["bytes"] for item in vendor) <= RAW_LIMIT, "vendor.bound")
     measured = dict(zip(MEASURED, (record["manifest_sha256"], record["lock_sha256"], record["vendor_config_sha256"], domain(b"elitea.rust.vendor-tree.v1\0", encoded(vendor)), domain(b"elitea.rust.toolchain.v1\0", encoded([list(value) for value in versions])), sha(adapter), wrapper, flags(TARGETS[arch]))))

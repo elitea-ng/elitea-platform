@@ -39,14 +39,31 @@ if [ -z "$ACTUAL" ]; then
   exit 1
 fi
 
+# cargo ships in the same toolchain and carries the same release number. A
+# cargo from elsewhere on PATH (a system package next to rustup's rustc)
+# resolves dependencies and features differently even with the right rustc.
+CARGO_LINE="$(cargo --version 2>/dev/null | grep -E '^cargo ' || true)"
+CARGO_ACTUAL="$(printf '%s' "$CARGO_LINE" | sed -nE 's/^cargo ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+if [ -z "$CARGO_ACTUAL" ]; then
+  echo "ERROR: could not read a version from 'cargo --version' in $(pwd) (got: '${CARGO_LINE}')." >&2
+  exit 1
+fi
+
 echo "pinned toolchain: ${PIN} (${ROOT_TOOLCHAIN#"${REPO_ROOT}/"})"
 echo "${RUSTC_LINE}"
-cargo --version
+echo "${CARGO_LINE}"
 
+status=0
 if [ "$ACTUAL" != "$PIN" ]; then
   echo "::error::rustc in $(pwd) is ${ACTUAL}, the pin is ${PIN}. rustup chose another" \
     "toolchain here (no rust-toolchain.toml on this path, a RUSTUP_TOOLCHAIN override," \
     "or a rustup quirk); every build below would use the wrong compiler." >&2
-  exit 1
+  status=1
 fi
-echo "rustc matches the pin."
+if [ "$CARGO_ACTUAL" != "$PIN" ]; then
+  echo "::error::cargo in $(pwd) is ${CARGO_ACTUAL}, the pin is ${PIN}; a cargo outside the" \
+    "pinned toolchain is first on PATH." >&2
+  status=1
+fi
+[ "$status" -eq 0 ] || exit 1
+echo "rustc and cargo match the pin."

@@ -20,9 +20,14 @@
 #   (a) Every tracked rust-toolchain.toml (root included) names that exact
 #       channel. The subtree files stay: an image build copies only its
 #       subtree, so the root file is not in its context.
-#   (b) Every `FROM rust:` line in every tracked Containerfile, Dockerfile and
-#       bake file uses `rust:<pin>-trixie@sha256:<RUST_IMAGE_DIGEST>`, the one
-#       digest below, in every stage (builders and runtime-libraries alike).
+#   (b) Every reference to the official rust image in every tracked
+#       Containerfile, Dockerfile and bake file is exactly
+#       `rust:<pin>-trixie@sha256:<RUST_IMAGE_DIGEST>`, the one digest below,
+#       in every stage (builders and runtime-libraries alike). A reference is
+#       any `rust` image word, with or without a `docker.io/` or
+#       `index.docker.io/` registry and a `library/` namespace, with a tag, a
+#       digest, both or neither: `FROM rust AS b` and `FROM rust@sha256:...`
+#       are references too, and fail.
 #   (c) Every non-vendored Cargo.toml states `rust-version` equal to the MSRV
 #       below (directly or by inheriting the libs/rust workspace value), the
 #       MSRV is <= the pin, and every vendored crate's own upstream value is
@@ -31,6 +36,16 @@
 #   (d) Every read that comes back empty FAILS, and so does a file list that
 #       shrank below its floor. "Found no pin, so nothing disagreed" is the
 #       shape this repository keeps mistaking for a pass.
+#   (e) The toolchain release written into code and data equals the pin. A
+#       native Cargo bundle records the compiler release that built it
+#       (`rust_revision`), and three validators refuse any other value: the
+#       worker (cargo_dependency_bundle.rs), Main (sandbox_native_bundle.go)
+#       and the release audit (rust_compiled_release_manifest.py, which also
+#       reads `release: X.Y.Z` from the image's own `rustc -Vv`). The code
+#       runner reads its release from rustc at build time (build.rs), so it
+#       carries no literal. Every such literal in the tracked tree must equal
+#       the pin, each validator below must still carry one (a moved literal
+#       fails), and there must be at least MIN_RELEASE_LITERALS in all.
 #
 # HOW TO RAISE THE VERSION
 #
@@ -39,9 +54,14 @@
 #   2. Set `rust:<new>-trixie@sha256:<digest>` in every Containerfile it lists,
 #      and RUST_IMAGE_DIGEST below to the same digest, read from the registry:
 #        docker buildx imagetools inspect rust:<new>-trixie   # "Digest:" line
-#   3. Leave MSRV alone unless code needs a newer language or library feature;
+#   3. Set the release literal in every file assertion (e) lists (the native
+#      bundle validators, the release audit and their tests), then regenerate
+#      the digest-bound native bundle fixtures it lists
+#      (services/elitea-code-runner/fixtures/cargo-native-v2.json and its two
+#      copies): their `digest` covers the recorded `rust_revision`.
+#   4. Leave MSRV alone unless code needs a newer language or library feature;
 #      it is the floor, not the pin.
-#   4. Run this script. It names every place that still disagrees.
+#   5. Run this script. It names every place that still disagrees.
 #
 # It needs no network, no toolchain and no cluster:
 #   bash scripts/ci/check-rust-toolchain.sh
@@ -61,6 +81,17 @@ MSRV="1.95"
 MIN_TOOLCHAIN_FILES=9
 MIN_RUST_FROM_LINES=12
 MIN_CRATES=30
+MIN_RELEASE_LITERALS=6
+
+# The validators that MUST state the pinned release (assertion (e)). A literal
+# that moved out of one of these files leaves the validator comparing
+# something this check cannot see, so its absence fails.
+REQUIRED_RELEASE_SITES=$(cat <<'SITES'
+services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs
+services/elitea-main/internal/infra/storage/sandbox_native_bundle.go
+scripts/runtime/rust_compiled_release_manifest.py
+SITES
+)
 
 # Cargo.toml files no Rust toolchain of ours builds as a crate with an MSRV.
 # Path, whitespace, reason. An entry here is a decision, not a silence.
@@ -131,28 +162,53 @@ $toolchains
 EOF
 
 # ── (b) images ────────────────────────────────────────────────────────────────
+# Only three positions can name an image: the operand of FROM, a --from=
+# value (COPY/RUN --mount), and a bake `docker-image://` context. Each operand
+# is matched as a whole word against the official rust image in any spelling:
+# optional docker.io/ or index.docker.io/ registry, optional library/
+# namespace, optional :tag and/or @digest. `FROM rust AS b` and
+# `FROM rust@sha256:...` are references; `COPY libs/rust ...` and a stage
+# named `rust-runtime` are not.
+RUST_IMAGE='^((docker\.io|index\.docker\.io)/)?(library/)?rust([:@][^[:space:]"]*)?$'
+operands() { # every image operand in a file, as "line<TAB>operand"
+  awk '
+    /^[[:space:]]*(#|\/\/)/ { next }
+    {
+      line = $0
+      n = split(line, word, /[[:space:]]+/)
+      for (i = 1; i <= n; i++) {
+        w = word[i]
+        if (toupper(w) == "FROM" && i < n) {
+          j = i + 1
+          while (j <= n && word[j] ~ /^--/) j++   # FROM --platform=... <image>
+          if (j <= n) print NR "\t" word[j]
+        }
+        if (w ~ /^--from=/) print NR "\t" substr(w, 8)
+      }
+      while (match(line, /docker-image:\/\/[^"[:space:]]+/)) {
+        print NR "\t" substr(line, RSTART + 15, RLENGTH - 15)
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }' "$1"
+}
 image_files="$(tracked '*Containerfile*' '*Dockerfile*' '*.hcl' | sort -u)"
 from_count=0
+expected="rust:${PIN}-trixie@${RUST_IMAGE_DIGEST}"
 while IFS= read -r file; do
   [ -n "$file" ] || continue
-  # Every reference to the official rust image: FROM lines, and any other
-  # rust:<tag> reference (bake contexts, COPY --from=rust:...).
-  refs="$(grep -nE '(^|[^A-Za-z0-9_./-])rust:[^[:space:]"]*' "$file" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
-  [ -n "$refs" ] || continue
-  while IFS= read -r ref; do
-    [ -n "$ref" ] || continue
-    line="${ref%%:*}"
-    image="$(printf '%s' "${ref#*:}" | grep -oE '(^|[^A-Za-z0-9_./-])rust:[^[:space:]"]*' | head -1 | sed -E 's/^[^r]//')"
+  while IFS="$(printf '\t')" read -r line image; do
+    [ -n "$image" ] || continue
+    image="${image%\"}"; image="${image#\"}"
+    printf '%s' "$image" | grep -Eq "$RUST_IMAGE" || continue
     from_count=$((from_count + 1))
-    expected="rust:${PIN}-trixie@${RUST_IMAGE_DIGEST}"
     if [ "$image" != "$expected" ]; then
-      fail "${file}:${line}: ${image:-<unreadable>}, expected ${expected}"
+      fail "${file}:${line}: ${image}, expected exactly ${expected} (no registry prefix; tag and digest both)"
     else
       echo "  ${file}:${line}: ${image%@*}@…${RUST_IMAGE_DIGEST: -8}"
     fi
-  done <<REFS
-$refs
-REFS
+  done <<OPERANDS
+$(operands "$file")
+OPERANDS
 done <<EOF
 $image_files
 EOF
@@ -223,9 +279,42 @@ done <<EOF
 $EXEMPT_CRATES
 EOF
 
+# ── (e) release literals ──────────────────────────────────────────────────────
+# A quoted X.Y.Z next to rust_revision / Profile.Rust / RUST_RELEASE, and the
+# `release: X.Y.Z` / `rustc X.Y.Z` lines of rustc's own version output that
+# the audit's tests feed it. Markdown, lock files, vendored sources and this
+# gate's own files are not compared.
+RELEASE_LITERAL='rust_revision[^A-Za-z0-9_]{0,6}"[0-9]+\.[0-9]+\.[0-9]+"|Profile\.Rust[[:space:]]*[!=]=[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"|RUST_RELEASE[[:space:]]*=[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"|release: [0-9]+\.[0-9]+\.[0-9]+|rustc [0-9]+\.[0-9]+\.[0-9]+'
+literals="$(git grep -noE "$RELEASE_LITERAL" -- . ':!*.md' ':!*.lock' ':!*/vendor/*' ':!scripts/ci/check-rust-toolchain*.sh' ':!scripts/ci/assert-rust-toolchain.sh' 2>/dev/null || true)"
+literal_count=0
+while IFS= read -r hit; do
+  [ -n "$hit" ] || continue
+  literal_count=$((literal_count + 1))
+  # git grep -no prints file:line:match; the match itself may hold a colon.
+  where="$(printf '%s' "$hit" | cut -d: -f1-2)"
+  value="$(printf '%s' "$hit" | cut -d: -f3- | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  if [ "$value" != "$PIN" ]; then
+    fail "${where}: toolchain release ${value:-<unreadable>}, the pin is ${PIN} (a native bundle and its validators would disagree with the compiler)"
+  else
+    echo "  ${where}: release ${value}"
+  fi
+done <<EOF
+$literals
+EOF
+[ "$literal_count" -ge "$MIN_RELEASE_LITERALS" ] ||
+  fail "found ${literal_count} toolchain release literal(s), expected at least ${MIN_RELEASE_LITERALS}; one moved or the pattern stopped matching"
+while IFS= read -r site; do
+  [ -n "$site" ] || continue
+  if ! printf '%s\n' "$literals" | grep -q "^${site}:"; then
+    fail "${site}: carries no toolchain release literal; the validator moved, so this check cannot see what it compares"
+  fi
+done <<EOF
+$REQUIRED_RELEASE_SITES
+EOF
+
 if [ "$failures" -ne 0 ]; then
   echo "" >&2
   echo "${failures} Rust toolchain disagreement(s). See 'HOW TO RAISE THE VERSION' in $0." >&2
   exit 1
 fi
-echo "One Rust everywhere: rust ${PIN}, image digest …${RUST_IMAGE_DIGEST: -12}, MSRV ${MSRV}."
+echo "One Rust everywhere: rust ${PIN}, image digest …${RUST_IMAGE_DIGEST: -12}, MSRV ${MSRV}, ${literal_count} release literal(s)."

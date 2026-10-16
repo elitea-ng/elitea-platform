@@ -124,6 +124,14 @@ jobs:
       - name: Run all targets and features
         run: cargo test --locked --all-targets --all-features
 
+      # build.rs reads the compiler release that native bundles record
+      # (`rust_revision`); cargo never runs a build script's own tests, so
+      # compile and run them directly with the pinned rustc.
+      - name: Test the build script's compiler-release parse
+        run: |
+          rustc --edition 2024 --test build.rs -o "${RUNNER_TEMP}/code-runner-build-rs-tests"
+          "${RUNNER_TEMP}/code-runner-build-rs-tests"
+
   quality:
     name: Format, Clippy, docs, and release
     runs-on: ubuntu-latest
@@ -354,8 +362,15 @@ jobs:
       # `verification` target (python + the PID-1 runner) for recovery and for
       # the test-only adapter that scripts/runtime/test_sandbox_ledger.py
       # commits on top of it, and the default target (Deno/Pyodide adapters)
-      # for the mTLS case, which reads the real adapter's JSON envelope. One
-      # GHA layer cache scope serves both; the targets share every builder layer.
+      # for the mTLS case, which reads the real adapter's JSON envelope.
+      #
+      # CACHE: one GHA scope PER TARGET, each target reading all three. A
+      # single shared scope kept only the LAST export (each `cache-to` replaces
+      # the scope's manifest), so the Deno/Pyodide layers, whose RUN downloads
+      # Pyodide and wheels from jsdelivr and PyPI, were rebuilt from the network
+      # on every pull request. `mode=max` also exports the intermediate stages
+      # (the cargo builder, deno-runtime), which `min` drops; these three scopes
+      # are small next to the 10 GB Actions cache.
       - uses: docker/setup-buildx-action@v4
         with:
           # The builder image from the org's own mirror (mirror-buildkit.yml), by
@@ -372,8 +387,11 @@ jobs:
           load: true
           tags: elitea-code-runner:ci-verification
           platforms: linux/amd64
-          cache-from: type=gha,scope=elitea-code-runner-linux-amd64
-          cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=elitea-code-runner-linux-amd64,ignore-error=true
+          cache-from: |
+            type=gha,scope=elitea-code-runner-verification-linux-amd64
+            type=gha,scope=elitea-code-runner-default-linux-amd64
+            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
+          cache-to: type=gha,mode=max,scope=elitea-code-runner-verification-linux-amd64,ignore-error=true
 
       - name: Build the code runner Deno/Pyodide image
         uses: docker/build-push-action@v7
@@ -385,8 +403,11 @@ jobs:
           load: true
           tags: elitea-code-runner:ci-default
           platforms: linux/amd64
-          cache-from: type=gha,scope=elitea-code-runner-linux-amd64
-          cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=elitea-code-runner-linux-amd64,ignore-error=true
+          cache-from: |
+            type=gha,scope=elitea-code-runner-verification-linux-amd64
+            type=gha,scope=elitea-code-runner-default-linux-amd64
+            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
+          cache-to: type=gha,mode=max,scope=elitea-code-runner-default-linux-amd64,ignore-error=true
 
       # The Rust language image (vendored Cargo tree + the Rust adapter): the
       # Docker PID-limit test compiles and runs user Rust code in it.
@@ -400,8 +421,11 @@ jobs:
           load: true
           tags: elitea-code-runner:ci-rust
           platforms: linux/amd64
-          cache-from: type=gha,scope=elitea-code-runner-linux-amd64
-          cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=elitea-code-runner-linux-amd64,ignore-error=true
+          cache-from: |
+            type=gha,scope=elitea-code-runner-verification-linux-amd64
+            type=gha,scope=elitea-code-runner-default-linux-amd64
+            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
+          cache-to: type=gha,mode=max,scope=elitea-code-runner-rust-runtime-linux-amd64,ignore-error=true
 
       # The helper starts its own disposable postgres:18 container
       # (--pull=never; the service above already pulled the image), generates
