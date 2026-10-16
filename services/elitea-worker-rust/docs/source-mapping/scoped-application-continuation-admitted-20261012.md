@@ -1,7 +1,8 @@
 # Scoped application continuation always on (2026-10-12)
 
-Point 5 Wave 2a, PR 2a-1. Branch `feat/pipeline-scoped-continuation-admitted`, base `origin/main`
-(`c79fe73d2`). Brief: `handoffs/point5-wave1-20261008/T-2A-fanout-runtime.md` §2.5, §4 "2a-1".
+Point 5 Wave 2a, PR 2a-1. Branch `feat/pipeline-scoped-continuation-admitted`, first based on `origin/main` `c79fe73d2`, then merged with
+`origin/main` `dd0bbc170` and later (merge `0924b621f`). Line numbers below are for the branch head unless marked
+"on `main`"; those refer to `c79fe73d2`. Brief: `handoffs/point5-wave1-20261008/T-2A-fanout-runtime.md` §2.5, §4 "2a-1".
 
 User rule (PLAN §8.1, 2026-10-12): no feature flags for obvious functionality; a switch is deleted, not
 defaulted; there is no merged-but-disabled state. This PR deletes `SCOPED_APPLICATION_CONTINUATION_READY`
@@ -25,7 +26,7 @@ mid-run restart, and silently dropping an attachment the Worker cannot run.
 
 ## What was deleted
 
-| Deleted | Where (on `main`) |
+| Deleted | Where (on `main` at `c79fe73d2`) |
 |---|---|
 | The constant | `agents/pipeline.rs:75-76` |
 | `scoped_applications: bool` on `bind_node_runtimes`, replaced by the typed `ApplicationContinuation` | `agents/pipeline.rs:1140-1156,1187` |
@@ -36,15 +37,19 @@ mid-run restart, and silently dropping an attachment the Worker cannot run.
 | The "static continuation" and "ordinary child continuation" refusal keyed to the flag, and the flag-keyed call-owner insertion | `agents/pipeline.rs:1717-1740,1786,1854` |
 
 `build_application_resolver` is still used, by exactly one branch, and is renamed
-`build_legacy_unscoped_application_resolver` (`agents/pipeline.rs:693`).
+`build_legacy_unscoped_application_resolver` (`agents/pipeline.rs:754`).
 
 ### The one thing kept: older conversations (data compatibility, not a switch)
 
 `ApplicationContinuation` (`agents/application_tools/materialization.rs:23`) has two values. Everything this
 Worker starts (`Fresh`, `Regenerate`) is `Scoped`. A resume is `LegacyUnscoped` only when the checkpoint **has no
 graph-call receipt and its frontier is an application node** (`continuation_for_checkpoint`,
-`agents/pipeline.rs:1777`): that is a call an older Worker left in flight, and there is no receipt to prove it
-against. Brief §4 keeps `has_graph_call_receipts` as the discriminator; the frontier conjunct is the one addition.
+`agents/pipeline.rs:1854`): that is a call an older Worker left in flight, and there is no receipt to prove it
+against. Brief §4 keeps `has_graph_call_receipts` as the discriminator; the frontier conjunct is the one addition, and only a
+start that continues a decided pause is inspected (`continues_a_decided_pause`, `agents/pipeline.rs:1230,1837`). A recovery
+start (`Checkpoint`) is always scoped: a missing receipt there means a crash between the frontier save and the first
+receipt revision, and taking the legacy resolver would downgrade the conversation for good (found in review; test
+`a_recovery_start_never_takes_the_older_conversation_resolver`).
 Receipts alone mis-classify a new conversation that paused at a HITL gate or printer before its first Agent call:
 it has no receipt either, so every Agent call after the gate would have run unscoped. Test
 `a_new_conversation_paused_before_its_first_agent_call_continues_scoped` fails if the conjunct is removed (checked).
@@ -67,7 +72,7 @@ the production stores across a process replacement, and are fixed with targeted 
    resume of a nested Agent failed with "the durable session state is inconsistent". Fix:
    `PostgresSessionService::with_replay_equivalence` (`state/postgres_session.rs:458`) with
    `canonical_replay_form` (`agents/pipeline/scoped_applications.rs:534`), applied to the pipeline session at
-   `agents/session.rs:1201`. A re-send is the stored event only when the two agree **after removing those two
+   `agents/session.rs:1242`. A re-send is the stored event only when the two agree **after removing those two
    routing keys**; id, author, branch, invocation, content, timestamp and every other metadata key must match, and
    the stored row is never rewritten. Proofs: `a_routing_only_replay_of_a_stored_event_is_idempotent_and_any_other_change_conflicts`
    (PG; content, timestamp and a forged lineage key still conflict), `replay_canonical_form_removes_the_current_routing_and_nothing_else`.
@@ -78,25 +83,73 @@ the production stores across a process replacement, and are fixed with targeted 
    (`agents/pipeline/scope_receipts.rs:156`), like the revision id and time. Proof:
    `postgres_graph_receipt_append_ignores_the_turn_stamp_and_nothing_else` (a forged `route` key still conflicts).
 
-A third change closes a gap rather than a defect: a **partial decision set** for paused siblings was refused with
+3. **`agent_progress.invalid_state` after a static pause beneath an ordinary Agent root.** Found in browser
+   journey (c): when an Agent's saved pipeline tool paused on a static `interrupt_after`, both the paused child and
+   the root emitted a result-bearing `full_message`, and the publisher refuses a second result event after the
+   first durable acknowledgement ("the durably acknowledged result must remain the last progress event"). Fix: the
+   immediate-descendant projection drops the child's `full_message`; the root emits the one result
+   (`agents/events.rs:1568`). Proof: the assertion added to
+   `static_saved_pipeline_produces_authorized_inventory_and_resumes_after_once` (red before, green after).
+
+### FU-226: approving a sensitive tool that changes data, inside a pipeline `agent` node
+
+Symptom (browser, pipeline 158 with agent 157, chats 886-897): the card shows, Approve returns 200, and the resumed
+execution fails with the generic "The runtime operation failed." (`INTERNAL`). It happened on a main-lineage Worker
+too, so the user-visible failure is pre-existing; on this branch the internal reason was
+`elitea_nested_agent.invalid_resume` relabelled as "the scoped application call is unavailable or does not match
+its durable activation".
+
+Root cause, from the live checkpoint of thread `0323f414-49ae-4195-817b-7dde517fb5ad` (agentstate
+`agent_graph_checkpoints`, session `e1:DTtRZ4w6…`, save ordinal 4): the graph-call receipt was correct (call id
+`pipeline-v2:lookup:<digest>:0`, outcome `Paused` with the nested interrupt id, activation scope matching), so the
+receipt shape was not the problem. Agent 157's only tools are the stack's mock MCP `echo`/`reverse`, which publish
+no `readOnlyHint`; ADK therefore admits them as **effectful**. The nested Agent's direct-HITL replay
+(`direct_hitl.rs:1243-1251`) refuses an approved effectful call by design: there is no durable effect receipt for a
+replayed tool call yet (Gate 6, G-WORKER-10; the root Agent refuses the same call the same way). The refusal itself is
+correct and is **kept**. Two things around it were wrong:
+
+- the nested tool mapped every replay refusal to `elitea_nested_agent.invalid_resume` ("continuation is invalid"),
+  hiding the typed `UnsupportedCapability` cause of the sensitive-tool replay (`agents/application_tools.rs:3644-3657,5130-5156`;
+  delegated-authorization and `ask_user` replays keep `invalid_resume`);
+- the scoped node runtime turned any child error into its scope/activation-mismatch failure, which reaches the user as
+  `INTERNAL` (`agents/pipeline/scoped_runtime.rs:319`).
+
+Fix: the nested refusal of a decided call that cannot run carries `elitea_nested_agent.replay_unsupported`
+(`NESTED_REPLAY_UNSUPPORTED_CODE`), and the scoped node reports it on the node failure channel with the registered
+`pipeline.tool_unavailable` reason ("The pipeline stopped because its selected tool cannot run. …"), naming no tool,
+argument or value (`scoped_runtime.rs:259-272,491-508`). Every other child error keeps the scope failure. The tool is
+never called. Block (`block_with_comment`) is unaffected and resumes the Agent with the blocked result.
+
+Proofs, real PostgreSQL across process replacement, same harness as above:
+`postgres_effectful_sensitive_tool_approval_in_a_graph_agent_node_fails_readably_without_the_effect` (approve:
+upstream code maps to `PipelineToolUnavailable`, 0 tool calls, 0 model calls; **red before the fix with
+`agent.legacy` → `Internal`, the live symptom**; a third process repeats the decision and still runs nothing) and
+`postgres_effectful_sensitive_tool_block_in_a_graph_agent_node_resumes_once` (block: one model call, final answer, 0
+tool calls). Not changed: the root Agent's own effectful-approve refusal (reported as `UnsupportedCapability`), and the
+legacy unscoped resolver, which still reports a generic node failure for conversations an older Worker paused.
+Approving effectful calls needs effect receipts (Gate 6) and is out of scope.
+
+A further change closes a gap rather than a defect: a **partial decision set** for paused siblings was refused with
 the typed input error on the legacy resolver, but on the scoped resolver it ran the approved siblings and then failed
 mid-stream on the rest. The all-decisions rule now runs before either resolver
-(`agents/session.rs:1832`). The existing tests that assert it
+(`agents/session.rs:1862-1879`). The existing tests that assert it
 (`pipeline_agent_node_resumes_parallel_nested_*`) pass on the scoped resolver.
 
 ## Changed paths
 
 | Path | Change |
 |---|---|
-| `src/agents/pipeline.rs:75,487,612,644,693,801,1156-1178,1740-1757,1777,1830,1901` | Constant deleted; `ApplicationContinuation` threaded through `bind_node_runtimes`; resolver chosen by `match`; legacy resolver renamed; `continuation_for_checkpoint`; static pause under a graph root refused; call owners keyed to the path, not a constant. Test seam `with_fresh_start_continuation` (`#[cfg(test)]`). |
+| `src/agents/pipeline.rs:73,459-468,496,694-715,754,1220-1251,1799-1830,1837,1854,1893,1979` | Constant deleted; `ApplicationContinuation` threaded through `bind_node_runtimes`; resolver chosen by `match`; legacy resolver renamed; `continuation_for_checkpoint`; static pause under a graph root refused; call owners keyed to the path, not a constant. Test seam `with_fresh_start_continuation` (`#[cfg(test)]`). |
 | `src/agents/application_tools/materialization.rs:23-80,127-150` | `ApplicationContinuation`; `native_graph_root`; budgets unconditional. |
-| `src/agents/application_tools.rs:81-88,3087` | Re-exports; nested pipeline attachments materialized for scoped paths. |
+| `src/agents/application_tools.rs:81-88,3084-3088,5125-5149` | Re-exports; nested pipeline attachments materialized for scoped paths; typed nested replay refusal (FU-226). |
+| `src/agents/pipeline/scoped_runtime.rs:259-272,305-345,491-508` | A child's decided-call refusal reported as `pipeline.tool_unavailable` (FU-226). |
+| `src/agents/events.rs:1561-1570` | A paused descendant's `full_message` is not re-emitted; the root owns the one result event. |
 | `src/agents/pipeline/composition.rs:11-232` | Flag, parameter, refusal and `*_with_scoped` removed. |
 | `src/agents/pipeline/scope_receipts.rs:30,156` | Turn stamp ignored by the frontier comparison. |
 | `src/agents/pipeline/scoped_applications.rs:534` | `canonical_replay_form`. |
-| `src/agents/session.rs:1201,1832` | Replay equivalence on the pipeline session; all-decisions rule before both resolvers. |
-| `src/state/postgres_session.rs:326,443-510,832-890` | `with_replay_equivalence`, `is_stored_replay`, `is_already_stored` (extracted so `append` stays under the line limit). |
-| Tests | `src/agents/pipeline_scoped_tests.rs` (new, 12), `pipeline_scoped_pg_tests.rs` (new, 2 scenarios), `pipeline_tests.rs`, `pipeline_restart_pg_tests.rs`, `application_tools/materialization_tests.rs`, `state/postgres_session_tests.rs`, `state/postgres_checkpointer_tests/graph_receipts.rs`, `pipeline/scoped_applications.rs` (unit). |
+| `src/agents/session.rs:1242,1862-1879` | Replay equivalence on the pipeline session; all-decisions rule before both resolvers. |
+| `src/state/postgres_session.rs:326,446-512,830-918` | `with_replay_equivalence`, `is_stored_replay`, `is_already_stored` (extracted so `append` stays under the line limit). |
+| Tests | `src/agents/pipeline_scoped_tests.rs` (new, 12), `pipeline_scoped_pg_tests.rs` (new, 6 scenarios), `pipeline_tests.rs`, `pipeline_restart_pg_tests.rs`, `application_tools/materialization_tests.rs`, `state/postgres_session_tests.rs`, `state/postgres_checkpointer_tests/graph_receipts.rs`, `pipeline/scoped_applications.rs` (unit). |
 
 ## User-visible differences to know about
 
@@ -174,7 +227,7 @@ dependency, so it adds none.
 |---|---|---|
 | Saved-version reads per assembly ≤ `MAX_APPLICATION_HOPS` (25); one read per application node | `ApplicationMaterializationPath::enter` (`materialization.rs:127`) | the hop test asserts exactly 25 reads at the limit and no further read for node 26 |
 | Saved versions ≤ 4 MiB per assembly | `admit_version` (`materialization.rs:136`) | exactly 4 MiB (5 versions) admitted; +1 byte `resource_exhausted` |
-| One extra bounded `SELECT` per non-fresh resume | `state.application_checkpoint` (`pipeline.rs:1166`) | by construction (one `load` of the root thread) |
+| One extra bounded `SELECT` per non-fresh resume | `state.application_checkpoint` (`pipeline.rs:1232`) | by construction (one `load` of the root thread) |
 | Replay equivalence reads the stored row only on the conflict path | `is_stored_replay` | a normal append is unchanged (one lookup, as before) |
 
 The scoped resolver binds one Agent per application node, where the legacy resolver built one per alias, so an
@@ -226,9 +279,9 @@ Logs and errors: no prompt, argument, token or URL is added to any log or error;
 |---|---|---|---|
 | Worker × P12 HITL pause and decision, **nested ordinary Agent in a saved child pipeline** | **R** | `scoped_runtime.rs` call owners, `scope_receipts.rs:156` (frontier), `postgres_session.rs:832` (idempotent replay) | PG `postgres_nested_ordinary_agent_in_a_saved_child_resumes_once_after_process_replacement`; browser journey (b) below |
 | Worker × P12, graph Agent node with a sensitive-tool card | R | same | existing PG `postgres_two_nested_agent_pauses_resume_across_process_replacement` on the scoped resolver; browser journey (a) |
-| Worker × P12, conversation paused by an older Worker | R (continues on the resolver that paused it) | `pipeline.rs:1777` | PG `postgres_conversation_an_older_worker_paused_continues_unscoped_without_receipts` |
-| Worker × tool call, static pause of a tool-invoked saved pipeline | R | `pipeline.rs:1740-1757` | `an_ordinary_agent_offers_a_static_saved_pipeline_and_continues_it_once`; browser journey (c) |
-| Worker × tool call, static pause beneath a graph root | F (typed refusal before any model call; listed as a follow-up) | `pipeline.rs:1757` | `a_graph_root_refuses_a_static_saved_pipeline_tool_before_any_model_call` |
+| Worker × P12, conversation paused by an older Worker | R (continues on the resolver that paused it) | `pipeline.rs:1854` | PG `postgres_conversation_an_older_worker_paused_continues_unscoped_without_receipts` |
+| Worker × tool call, static pause of a tool-invoked saved pipeline | R | `pipeline.rs:1799-1830`, `events.rs:1568` | `an_ordinary_agent_offers_a_static_saved_pipeline_and_continues_it_once`; browser journey (c) |
+| Worker × tool call, static pause beneath a graph root | F (typed refusal before any model call; listed as a follow-up) | `pipeline.rs:1816-1829` | `a_graph_root_refuses_a_static_saved_pipeline_tool_before_any_model_call` |
 
 ## Browser evidence
 
@@ -236,13 +289,19 @@ EVIDENCE_PLACEHOLDER
 
 ## Follow-ups
 
-- `docs/remaining-gates.md:775` ("Scoped continuation admission remains disabled") and `docs/testing-gaps.md` are
-  owned by #1084 until it merges (brief: do not edit); FU-086 updates them. The historical packets
+- #1084 has merged, so the stale `docs/remaining-gates.md` sentence ("Scoped continuation admission remains
+  disabled") is updated here. `docs/testing-gaps.md` has no 2a-1 entry. The historical packets
   `scoped-parallel-authority-20261004.md` and `code-assembled-acceptance-20261002.md` carry a superseded note.
 - A named degrade (skip and say so) for a nested attachment the Worker cannot run under a graph root, instead of failing
   the run at assembly.
 - Static pause of a tool-invoked saved pipeline beneath a graph root: needs the projector to accept a second checkpoint
   owner; refused today.
+- FU-226 remainder: approving a sensitive tool that changes data needs effect receipts (Gate 6, G-WORKER-10); until
+  then Approve fails readably and Block works. The legacy unscoped resolver still reports a generic node failure.
+- Review notes accepted as limits: replay equivalence removes the two routing keys rather than requiring equal presence
+  (a presence-preserving form broke the stored-start replay, so it was reverted; the stored row is never rewritten);
+  the descendant `full_message` filter relies on the root emitting the static inventory, which a well-formed static
+  pause always does; a pre-2a-1 conversation now resumes under the hop and version-byte budgets.
 - A per-alias materialization cache if N nodes calling one alias shows up in browser timing.
 - The legacy resolver and `ApplicationContinuation::LegacyUnscoped` can be deleted when no conversation paused by a
   pre-2a-1 Worker can still be resumed (retention window); the PG `older` scenario is the test to delete with it.
