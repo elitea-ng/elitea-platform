@@ -123,6 +123,8 @@ fresh; edit scripts/runtime/rust_compiled_release_manifest.py 's/^RUST_RELEASE =
 expect "(e) the release audit states another release" fail "rust_compiled_release_manifest.py:22: toolchain release 1.96.0"
 fresh; edit services/elitea-code-runner/fixtures/cargo-native-v2.json 's/"rust_revision":"1\.97\.1"/"rust_revision":"1.96.0"/'
 expect "(e) a native bundle fixture records another release" fail "cargo-native-v2.json:1: toolchain release 1.96.0"
+fresh; printf 'fn probe() { let _ = "rustc 1.98.0 (abc 2026-09-01)"; }\n' > "$WORK/tree/services/elitea-code-runner/new_probe.rs"; git -C "$WORK/tree" add -A
+expect "(e) a NEW file with an off-pin rustc line" fail "services/elitea-code-runner/new_probe.rs:1: toolchain release 1.98.0"
 fresh; edit services/elitea-main/internal/infra/storage/sandbox_native_bundle.go 's/Profile\.Rust != "1\.97\.1"/Profile.Rust != wantRust/'
 expect "(e) a validator whose literal moved out of sight" fail "sandbox_native_bundle.go: carries no toolchain release literal"
 fresh; for f in services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs scripts/runtime/test_rust_compiled_release_manifest.py services/elitea-code-runner/fixtures/cargo-native-v2.json services/elitea-main/internal/infra/storage/testdata/native-cargo-v2.json services/elitea-worker-rust/src/sandbox/native-cargo-v2.json; do git -C "$WORK/tree" rm -qf "$f"; done

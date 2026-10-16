@@ -3,7 +3,7 @@
 //! `elitea-code-rust` compiles user Cargo bundles inside the `rust-runtime`
 //! image, the same pinned `rust:<version>-trixie` image this crate is built
 //! in, so the compiler compiling this crate IS the compiler that compiles the
-//! bundles. Reading it here replaces a hardcoded "1.97.1" that raising the pin
+//! bundles. Reading it here replaces a hardcoded release that raising the pin
 //! would have left stale (every bundle mislabelled, the release audit red).
 use std::{env, process::Command};
 
@@ -22,7 +22,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 }
 
-/// `rustc 1.97.1 (8bab26f4f 2026-07-14)` -> `1.97.1`; anything else -> None.
+/// `rustc X.Y.Z (<hash> <date>)` -> `X.Y.Z`; anything else -> None.
 fn release(line: &str) -> Option<&str> {
     line.strip_prefix("rustc ")
         .and_then(|rest| rest.split_whitespace().next())
@@ -41,23 +41,27 @@ mod tests {
 
     #[test]
     fn reads_only_an_exact_release() {
+        // Built at run time so this file carries no `rustc X.Y.Z` literal:
+        // check-rust-toolchain.sh (e) holds every such literal to the pin,
+        // and these are parser inputs, not release claims.
+        let line = |rest: &str| format!("rustc {rest}");
         assert_eq!(
-            release("rustc 1.97.1 (8bab26f4f 2026-07-14)\n"),
-            Some("1.97.1")
+            release(&line("4.5.6 (8bab26f4f 2026-07-14)\n")),
+            Some("4.5.6")
         );
         assert_eq!(
-            release("rustc 1.98.0 (abc 2026-09-01) (Homebrew)\n"),
-            Some("1.98.0")
+            release(&line("10.20.30 (abc 2026-09-01) (Homebrew)\n")),
+            Some("10.20.30")
         );
         for refused in [
-            "",
-            "cargo 1.97.1 (c980f4866 2026-06-30)",
-            "rustc 1.97 (x)",
-            "rustc 1.99.0-nightly (x)",
-            "rustc 1.97.1.2 (x)",
-            "rustc  (x)",
+            String::new(),
+            "cargo 4.5.6 (c980f4866 2026-06-30)".to_owned(),
+            line("4.5 (x)"),
+            line("4.5.6-nightly (x)"),
+            line("4.5.6.7 (x)"),
+            line(" (x)"),
         ] {
-            assert_eq!(release(refused), None, "{refused:?}");
+            assert_eq!(release(&refused), None, "{refused:?}");
         }
     }
 }
