@@ -737,7 +737,7 @@ fn direct_hitl_admission_error(error: &DirectHitlError) -> NativeAgentAssemblyEr
         DirectHitlErrorCode::InvalidInput
         | DirectHitlErrorCode::StaleDecision
         | DirectHitlErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        DirectHitlErrorCode::UnsupportedCapability => {
+        DirectHitlErrorCode::UnsupportedCapability | DirectHitlErrorCode::MayHaveStarted => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
         DirectHitlErrorCode::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,

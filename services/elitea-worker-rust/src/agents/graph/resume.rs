@@ -1247,7 +1247,7 @@ fn direct_hitl_resume_error(error: &DirectHitlError) -> PipelineResumeError {
         DirectHitlErrorCode::InvalidInput | DirectHitlErrorCode::ResourceExhausted => {
             PipelineResumeError::invalid()
         }
-        DirectHitlErrorCode::UnsupportedCapability => {
+        DirectHitlErrorCode::UnsupportedCapability | DirectHitlErrorCode::MayHaveStarted => {
             PipelineResumeError::new(PipelineResumeErrorCode::UnsupportedCapability)
         }
         DirectHitlErrorCode::StaleDecision => PipelineResumeError::stale(),

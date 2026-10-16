@@ -45,6 +45,10 @@ enum RuntimeErrorCodeV1 {
   // Rust runtime must carry. Never retryable. The worker answers with a FAILED
   // runtime-error terminal carrying this code.
   RUNTIME_ERROR_CODE_V1_RESULT_REFUSED = 33;
+  // An approved tool call was dispatched before the run stopped, and its
+  // outcome was never recorded. The call may have run; the runtime never
+  // repeats it. Never retryable.
+  RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED = 34;
 }
 
 // RuntimeErrorV1 contains only a registered safe code/message pair. Detailed

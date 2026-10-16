@@ -16,7 +16,7 @@
 
 #![allow(dead_code)] // Resume execution remains capability-gated.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -79,6 +79,9 @@ pub(crate) enum DirectHitlErrorCode {
     StaleDecision,
     CorruptSession,
     ResourceExhausted,
+    /// An approved call that changes data was already dispatched by an earlier
+    /// continuation and left no result: it may have run. It is never repeated.
+    MayHaveStarted,
 }
 
 impl DirectHitlErrorCode {
@@ -90,6 +93,7 @@ impl DirectHitlErrorCode {
             Self::StaleDecision => "direct_hitl.stale_decision",
             Self::CorruptSession => "direct_hitl.corrupt_session",
             Self::ResourceExhausted => "direct_hitl.resource_exhausted",
+            Self::MayHaveStarted => "direct_hitl.may_have_started",
         }
     }
 }
@@ -363,6 +367,8 @@ impl DirectDelegatedAuthorizationContinuation {
             user_content,
             resume_mode: persisted.mode,
             persisted_result: persisted.result,
+            dispatched: persisted.dispatched,
+            sibling_results: persisted.sibling_results,
             replay_calls,
             application_route: None,
             delegated_authorization: Some(requirement),
@@ -775,6 +781,8 @@ impl DirectHitlDecision {
             user_content,
             resume_mode: persisted.mode,
             persisted_result: persisted.result,
+            dispatched: persisted.dispatched,
+            sibling_results: persisted.sibling_results,
             replay_calls,
             application_route,
             delegated_authorization,
@@ -860,6 +868,8 @@ impl DirectHitlDecision {
             user_content: Content::new("user"),
             resume_mode: ReplayResumeMode::ExecuteCall,
             persisted_result: None,
+            dispatched: false,
+            sibling_results: BTreeMap::new(),
             replay_calls: Vec::new(),
             application_route: Some(route),
             delegated_authorization: None,
@@ -903,6 +913,8 @@ fn resume_state(
         return Ok(PersistedReplayState {
             mode: ReplayResumeMode::ExecuteCall,
             result: None,
+            dispatched: false,
+            sibling_results: BTreeMap::new(),
         });
     }
     persisted_replay_state_with_confirmation(
@@ -1120,6 +1132,10 @@ pub(crate) struct ResolvedDirectHitlDecision {
     user_content: Content,
     resume_mode: ReplayResumeMode,
     persisted_result: Option<Value>,
+    /// See [`PersistedReplayState::dispatched`].
+    dispatched: bool,
+    /// See [`PersistedReplayState::sibling_results`].
+    sibling_results: BTreeMap<String, Value>,
     /// Every call of the paused assistant message, in the order the model
     /// emitted them — see [`ReplayCall`].
     replay_calls: Vec<ReplayCall>,
@@ -1175,6 +1191,13 @@ enum ReplayResumeMode {
 struct PersistedReplayState {
     mode: ReplayResumeMode,
     result: Option<Value>,
+    /// An earlier continuation already persisted the replayed call and no
+    /// result followed. ADK persists a model's call before it runs the tool,
+    /// so this is the durable dispatch marker of that call.
+    dispatched: bool,
+    /// Results the dispatched replay already recorded for the decided call's
+    /// siblings, by call id. A recorded outcome is replayed, never re-run.
+    sibling_results: BTreeMap<String, Value>,
 }
 
 impl ResolvedDirectHitlDecision {
@@ -1203,6 +1226,12 @@ impl ResolvedDirectHitlDecision {
     /// Whether this decision belongs to a guardrail the sensitive-tool replay
     /// does not serve — authorization, a clarifying question, or a child
     /// pipeline's graph pause, each of which has its own continuation.
+    /// Whether this decision approves a sensitive-tool call, the one decision
+    /// whose continuation may dispatch an effect.
+    pub(crate) fn approves_sensitive_call(&self) -> bool {
+        self.decision == ToolConfirmationDecision::Approve && !self.is_other_guardrail()
+    }
+
     const fn is_other_guardrail(&self) -> bool {
         self.delegated_authorization.is_some()
             || self.clarifying_question.is_some()
@@ -1240,14 +1269,20 @@ impl ResolvedDirectHitlDecision {
         } else {
             None
         };
-        if blocked_result.is_none() && sensitive_tools.is_read_only(&self.tool_name) != Some(true) {
+        // An approved call runs whatever its effect class, exactly once. Its
+        // replayed call event is persisted before ADK runs the tool, so a later
+        // continuation that finds that dispatch without a result cannot know the
+        // outcome: a call that changes data is refused rather than repeated. A
+        // read-only call has no effect to repeat and runs again.
+        if blocked_result.is_none()
+            && self.dispatched
+            && sensitive_tools.is_read_only(&self.tool_name) != Some(true)
+        {
             tracing::debug!(
                 tool.name = %self.tool_name,
-                "approved direct HITL replay remains closed for an effectful tool"
+                "approved effectful call was already dispatched; it is not repeated"
             );
-            return Err(DirectHitlError::new(
-                DirectHitlErrorCode::UnsupportedCapability,
-            ));
+            return Err(DirectHitlError::new(DirectHitlErrorCode::MayHaveStarted));
         }
         if matches!(self.resume_mode, ReplayResumeMode::ContinueAfterResult)
             && blocked_result
@@ -1284,11 +1319,22 @@ impl ResolvedDirectHitlDecision {
                 tool_call_fingerprint(&call.tool_name, &call.arguments),
             ));
             match settled.decision {
+                // An earlier card's approved sibling runs with this replay unless the
+                // dispatched replay already recorded its outcome (served as stored), or
+                // dispatched it without one (it may have run; never repeated).
                 ToolConfirmationDecision::Approve => {
-                    if sensitive_tools.is_read_only(&call.tool_name) != Some(true) {
-                        return Err(DirectHitlError::new(
-                            DirectHitlErrorCode::UnsupportedCapability,
-                        ));
+                    if let Some(response) = self.sibling_results.get(&call.call_id) {
+                        blocked.push(BlockedToolReplay {
+                            call_id: call.call_id.clone(),
+                            tool_name: call.tool_name.clone(),
+                            arguments: call.arguments.clone(),
+                            response: response.clone(),
+                            confirmation_decision: ToolConfirmationDecision::Approve,
+                        });
+                    } else if self.dispatched
+                        && sensitive_tools.is_read_only(&call.tool_name) != Some(true)
+                    {
+                        return Err(DirectHitlError::new(DirectHitlErrorCode::MayHaveStarted));
                     }
                 }
                 ToolConfirmationDecision::Deny => blocked.push(BlockedToolReplay {
@@ -2288,11 +2334,13 @@ fn persisted_replay_state_with_confirmation(
     let mut replay_invocation = None;
     let mut call_pending = false;
     let mut result_persisted = None;
+    let mut sibling_results = BTreeMap::new();
     for event in events.iter().filter(|event| semantic_event(event)) {
         if exact_replay_user_event(event, user_content) {
             replay_invocation = Some(event.invocation_id.as_str());
             call_pending = false;
             result_persisted = None;
+            sibling_results.clear();
             continue;
         }
         if result_persisted.is_none()
@@ -2326,6 +2374,11 @@ fn persisted_replay_state_with_confirmation(
             // are an expected part of the suffix rather than a foreign
             // advance.
             if sibling_replay_result(event, replay_invocation, call_id, replay_calls) {
+                let result = &event.tool_results()[0];
+                sibling_results.insert(
+                    result.call_id.unwrap_or_default().to_owned(),
+                    result.response.clone(),
+                );
                 continue;
             }
         }
@@ -2337,7 +2390,9 @@ fn persisted_replay_state_with_confirmation(
         } else {
             ReplayResumeMode::ExecuteCall
         },
+        dispatched: call_pending && result_persisted.is_none(),
         result: result_persisted,
+        sibling_results,
     })
 }
 
