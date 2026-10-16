@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gix_hash::ObjectId;
+pub use gix_hash::ObjectId;
 use gix_object::{Exists as _, Find as _, Kind};
 
 use crate::error::StoreError;

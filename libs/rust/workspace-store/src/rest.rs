@@ -5,8 +5,17 @@
 //! The bearer goes to the deployment's origin only. A presigned URL (an
 //! object store on another host) never receives it; a URL on the
 //! deployment's own origin (the ADR-0016 streaming facade, for backends
-//! that cannot presign) does. A URL whose scheme is neither `https` nor
-//! the origin's own `http` (a local stack) is refused.
+//! that cannot presign) does. Main answers the facade and the multipart
+//! completion as origin-relative paths (`/api/v2/elitea_core/…`), which
+//! are resolved against the origin. A URL whose scheme is neither `https`
+//! nor the origin's own `http` (a local stack) is refused.
+//!
+//! A `409 thread_busy` (another change to the thread is being saved; the
+//! server compared nothing, so it is never a conflict) is answered by
+//! sending the SAME request again, unchanged, after the server's
+//! `Retry-After` with jittered backoff, for up to 30 s in all; an identical
+//! retry returns the original result if the first one committed. When the
+//! thread stays busy that long, the error is `thread_busy`.
 //!
 //! Errors keep the server's machine code and message: the desktop error
 //! envelope is `{"error": "<code>", "message": "…"}`; the nested form
@@ -14,7 +23,7 @@
 //! (for `ref_conflict`'s `current`) from either place.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use reqwest::{Method, StatusCode};
@@ -45,6 +54,40 @@ pub trait TokenSource: Send + Sync {
     async fn refreshed(&self) -> Result<String, StoreError>;
 }
 
+/// How long and how patiently a `thread_busy` answer is retried.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BusyRetry {
+    /// Give up (with `thread_busy`) when the next wait would pass this,
+    /// counted from the first attempt.
+    pub deadline: Duration,
+    /// No single wait is longer than this.
+    pub max_wait: Duration,
+}
+
+impl Default for BusyRetry {
+    fn default() -> Self {
+        Self {
+            deadline: Duration::from_secs(30),
+            max_wait: Duration::from_secs(8),
+        }
+    }
+}
+
+impl BusyRetry {
+    /// The wait before retry number `attempt` (from 0): the server's
+    /// `Retry-After` (1 s without one), doubling every second retry, plus
+    /// up to a quarter of it as jitter, within `max_wait`.
+    fn wait(&self, attempt: u32, retry_after: Option<Duration>) -> Duration {
+        let base = retry_after.unwrap_or(Duration::from_secs(1));
+        let grown = base.saturating_mul(1u32 << (attempt / 2).min(4));
+        let permille = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos() % 250);
+        let jitter = grown / 1000 * permille;
+        (grown + jitter).min(self.max_wait)
+    }
+}
+
 /// The store routes of one thread on one deployment.
 pub struct RestStore {
     client: reqwest::Client,
@@ -55,6 +98,7 @@ pub struct RestStore {
     headers: Vec<(String, String)>,
     timeout: Duration,
     max_get_bytes: u64,
+    busy: BusyRetry,
 }
 
 impl RestStore {
@@ -76,7 +120,15 @@ impl RestStore {
             headers: Vec::new(),
             timeout: Duration::from_mins(5),
             max_get_bytes: 512 * 1024 * 1024,
+            busy: BusyRetry::default(),
         }
+    }
+
+    /// How a `thread_busy` answer is retried (30 s by default).
+    #[must_use]
+    pub fn with_busy_retry(mut self, busy: BusyRetry) -> Self {
+        self.busy = busy;
+        self
     }
 
     /// Headers on every API call (the client version).
@@ -100,9 +152,15 @@ impl RestStore {
         )
     }
 
-    /// Whether `url` is on the deployment's origin; `Err` for a scheme this
-    /// client does not send to.
-    fn same_origin(&self, url: &str) -> Result<bool, StoreError> {
+    /// The absolute URL of a grant's or a plan's `url`, and whether it is
+    /// on the deployment's origin. An origin-relative path (`/api/…`, how
+    /// Main answers its streaming facade and the multipart completion) is
+    /// resolved against the origin; `Err` for a scheme this client does not
+    /// send to.
+    fn resolve(&self, url: &str) -> Result<(String, bool), StoreError> {
+        if url.starts_with('/') && !url.starts_with("//") {
+            return Ok((format!("{}{url}", self.origin), true));
+        }
         let origin_http = self.origin.starts_with("http://");
         let scheme_ok = url.starts_with("https://") || (origin_http && url.starts_with("http://"));
         if !scheme_ok {
@@ -110,7 +168,8 @@ impl RestStore {
                 "the store handed out a URL this client does not use".into(),
             ));
         }
-        Ok(url == self.origin || url.starts_with(&format!("{}/", self.origin)))
+        let same = url == self.origin || url.starts_with(&format!("{}/", self.origin));
+        Ok((url.to_owned(), same))
     }
 
     async fn api<B: Serialize + Sync, T: DeserializeOwned>(
@@ -119,20 +178,39 @@ impl RestStore {
         url: String,
         body: Option<&B>,
     ) -> Result<T, StoreError> {
-        let token = self.tokens.bearer().await?;
-        let (status, value) = self.api_once(&method, &url, body, &token).await?;
-        let (status, value) = if status == StatusCode::UNAUTHORIZED {
-            let token = self.tokens.refreshed().await?;
-            self.api_once(&method, &url, body, &token).await?
-        } else {
-            (status, value)
-        };
-        if !status.is_success() {
-            return Err(error_of(status.as_u16(), &value));
+        let started = Instant::now();
+        let mut busy_retries = 0u32;
+        loop {
+            let token = self.tokens.bearer().await?;
+            let mut answer = self.api_once(&method, &url, body, &token).await?;
+            if answer.status == StatusCode::UNAUTHORIZED {
+                let token = self.tokens.refreshed().await?;
+                answer = self.api_once(&method, &url, body, &token).await?;
+            }
+            if answer.is_thread_busy() {
+                let wait = self.busy.wait(busy_retries, answer.retry_after);
+                if started.elapsed() + wait > self.busy.deadline {
+                    return Err(StoreError::http(
+                        409,
+                        "thread_busy",
+                        format!(
+                            "Another change to this thread was still being saved after {} s. Try again shortly.",
+                            self.busy.deadline.as_secs()
+                        ),
+                    ));
+                }
+                tracing::debug!(busy_retries, "thread busy; the same request is sent again");
+                tokio::time::sleep(wait).await;
+                busy_retries += 1;
+                continue;
+            }
+            if !answer.status.is_success() {
+                return Err(error_of(answer.status.as_u16(), &answer.value));
+            }
+            return serde_json::from_value(answer.value).map_err(|_| {
+                StoreError::Invalid("the platform's answer did not have the expected shape".into())
+            });
         }
-        serde_json::from_value(value).map_err(|_| {
-            StoreError::Invalid("the platform's answer did not have the expected shape".into())
-        })
     }
 
     async fn api_once<B: Serialize + Sync>(
@@ -141,7 +219,7 @@ impl RestStore {
         url: &str,
         body: Option<&B>,
         token: &str,
-    ) -> Result<(StatusCode, Value), StoreError> {
+    ) -> Result<Answer, StoreError> {
         let mut request = self
             .client
             .request(method.clone(), url)
@@ -160,13 +238,23 @@ impl RestStore {
         }
         let response = request.send().await.map_err(|e| network(&e))?;
         let status = response.status();
+        let retry_after = response
+            .headers()
+            .get("Retry-After")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(Duration::from_secs);
         let bytes = response.bytes().await.map_err(|e| network(&e))?;
         let value = if bytes.is_empty() {
             Value::Null
         } else {
             serde_json::from_slice(&bytes).unwrap_or(Value::Null)
         };
-        Ok((status, value))
+        Ok(Answer {
+            status,
+            value,
+            retry_after,
+        })
     }
 
     /// A request to a grant's URL: the bearer only on our own origin.
@@ -175,11 +263,28 @@ impl RestStore {
         method: Method,
         url: &str,
     ) -> Result<reqwest::RequestBuilder, StoreError> {
+        let (url, same_origin) = self.resolve(url)?;
         let mut request = self.client.request(method, url).timeout(self.timeout);
-        if self.same_origin(url)? {
+        if same_origin {
             request = request.bearer_auth(self.tokens.bearer().await?);
         }
         Ok(request)
+    }
+}
+
+/// One API answer: the status, the JSON body (`Null` without one) and the
+/// `Retry-After` seconds when the server named them.
+struct Answer {
+    status: StatusCode,
+    value: Value,
+    retry_after: Option<Duration>,
+}
+
+impl Answer {
+    /// `409 thread_busy`: nothing was compared; not a `ref_conflict`.
+    fn is_thread_busy(&self) -> bool {
+        self.status == StatusCode::CONFLICT
+            && matches!(error_of(409, &self.value), StoreError::Http { code, .. } if code == "thread_busy")
     }
 }
 
@@ -277,15 +382,15 @@ impl StoreTransport for RestStore {
         parts: &[CompletedPart],
     ) -> Result<(), StoreError> {
         let body = json!({ "upload_id": multipart.upload_id, "parts": parts });
-        if self.same_origin(&multipart.complete_url)? {
-            let _: Value = self
-                .api(Method::POST, multipart.complete_url.clone(), Some(&body))
-                .await?;
+        let (url, same_origin) = self.resolve(&multipart.complete_url)?;
+        if same_origin {
+            // Main answers 204 with no body.
+            let _: Value = self.api(Method::POST, url, Some(&body)).await?;
             return Ok(());
         }
         let response = self
             .client
-            .post(&multipart.complete_url)
+            .post(&url)
             .timeout(self.timeout)
             .header("Content-Type", "application/json")
             .body(body.to_string())
