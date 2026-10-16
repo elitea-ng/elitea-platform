@@ -179,9 +179,10 @@ func TestConversationDeltaLegacyResponseIsUnchanged(t *testing.T) {
 	}
 	var rows []map[string]json.RawMessage
 	_ = json.Unmarshal(keys["rows"], &rows)
-	// Eight keys: the seven of the legacy row and `is_pinned` (client
-	// contract 1.4), which is additive.
-	if len(rows) != 1 || len(rows[0]) != 8 || rows[0]["sync_at"] != nil || string(rows[0]["is_pinned"]) != "false" {
+	// Nine keys: the seven of the legacy row, `is_pinned` (client contract
+	// 1.4) and `workspace_executor` (client contract 1.8), both additive.
+	if len(rows) != 1 || len(rows[0]) != 9 || rows[0]["sync_at"] != nil || string(rows[0]["is_pinned"]) != "false" ||
+		string(rows[0]["workspace_executor"]) != `"local"` {
 		t.Fatalf("legacy row shape changed: %s", body)
 	}
 }

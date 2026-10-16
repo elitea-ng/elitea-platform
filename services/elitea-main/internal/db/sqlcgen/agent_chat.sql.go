@@ -1037,6 +1037,10 @@ WITH resolved AS MATERIALIZED (
             - 'local_work'
             - 'hitl_exchanges'
             - 'memories_used'
+            -- Cloud executor markers (ADR-0034 decision 7): the regenerated
+            -- answer is a new cloud turn with its own epoch and commit.
+            - 'workspace_epoch'
+            - 'workspace_commit'
         ) || jsonb_build_object(
             'execution_generation', $10::text
         ),

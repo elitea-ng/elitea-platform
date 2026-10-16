@@ -410,6 +410,9 @@ type Querier interface {
 	LinkAuthProviderIfMissing(ctx context.Context, arg LinkAuthProviderIfMissingParams) (int64, error)
 	ListActiveCurrentProjectIDs(ctx context.Context, limitRows int32) ([]int32, error)
 	ListActiveIndexIngestTarget(ctx context.Context, arg ListActiveIndexIngestTargetParams) ([]string, error)
+	// The hidden workspace bucket (ADR-0034 decision 3, shared/0168) is never
+	// listed, read or resolved by an artifact query: every artifact path answers
+	// it as absent.
 	ListArtifactBuckets(ctx context.Context, projectID int64) ([]EliteaStorageBucket, error)
 	ListArtifactBucketsNeedingExpiryNotice(ctx context.Context, arg ListArtifactBucketsNeedingExpiryNoticeParams) ([]EliteaStorageBucket, error)
 	ListArtifactObjects(ctx context.Context, arg ListArtifactObjectsParams) ([]EliteaStorageObject, error)
@@ -753,6 +756,8 @@ type Querier interface {
 	StorePreparedToolkitCallToolEnvelope(ctx context.Context, arg StorePreparedToolkitCallToolEnvelopeParams) (int64, error)
 	StorePreparedToolkitExecuteReadEnvelope(ctx context.Context, arg StorePreparedToolkitExecuteReadEnvelopeParams) (int64, error)
 	SumArtifactBucketBytes(ctx context.Context, bucketID int64) (int64, error)
+	// The workspace bucket does not count against the artifact quota (ADR-0034
+	// decision 3): its size is bounded by max_project_workspace_gb instead.
 	SumArtifactProjectBytes(ctx context.Context, projectID int64) (int64, error)
 	SupersedeScheduledJobRevision(ctx context.Context, arg SupersedeScheduledJobRevisionParams) error
 	TouchProvisionedAuthUser(ctx context.Context, arg TouchProvisionedAuthUserParams) (AuthCoreUser, error)

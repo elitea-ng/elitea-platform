@@ -186,9 +186,16 @@ func (h *Handler) requireS3BucketScoped(w http.ResponseWriter, r *http.Request, 
 	// representation that is a softer way in is not a representation, it is a
 	// second policy. AccessDenied is the code legacy's own S3 routes answer
 	// with (routes/s3.py:88-90).
-	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
+	//
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent, before the
+	// access list is read.
+	hidden, allowed, err := h.gateBucket(r.Context(), projectID, bucket, need)
 	if err != nil {
 		h.writeInternalS3(w, r, "authorize bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if hidden {
+		writeError(w, http.StatusNotFound, "NoSuchBucket", "bucket not found")
 		return repos.BucketRow{}, false
 	}
 	if !allowed {

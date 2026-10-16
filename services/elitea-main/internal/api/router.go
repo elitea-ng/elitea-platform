@@ -584,6 +584,15 @@ type RouterConfig struct {
 	// 1.5). Composed in cmd/elitea-main wherever a database is configured;
 	// it needs no runtime, because no worker runs a local turn.
 	CurrentLocalTurns http.Handler
+	// CurrentWorkspaceHandoff serves the desktop ⇄ cloud handoff and the
+	// workspace store's desktop routes (ADR-0034 decision 14, client contract
+	// 1.8). Composed in cmd/elitea-main wherever a database and an object
+	// store are configured; nil registers none of its routes.
+	CurrentWorkspaceHandoff http.Handler
+	// CloudExecutorStorageEncryption is the handoff's startup answer for
+	// storage encryption at rest ("confirmed", "attested", "refused"), shown
+	// on the admin cloud_executor section. Empty when not composed.
+	CloudExecutorStorageEncryption string
 	// CurrentResolvedVersion serves resolveApplicationVersion (ADR-0029
 	// decision 5a, client contract 1.6). Composed in cmd/elitea-main wherever
 	// a database is configured; it answers 501 where no agent plane is.
@@ -2103,6 +2112,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					admin.WithSCIMClients(scimClientStore),
 					// The toolkit type policy the served catalogue also reads.
 					admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
+					admin.WithCloudExecutorEncryption(cfg.CloudExecutorStorageEncryption),
 				}, adminOptions...)...,
 			)
 			// Project requests (#871) reuse the SAME provisioner and personal-
