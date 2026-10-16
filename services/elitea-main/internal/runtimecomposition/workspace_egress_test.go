@@ -18,6 +18,10 @@ func (egressTestTurns) ResolveCloudTurn(context.Context, workspaceruntime.TurnCl
 	return workspaceruntime.Turn{ThreadUUID: "0b9c6f4e-9a7f-4d4e-8f0e-1d2c3b4a5f60", Epoch: 1}, true, nil
 }
 
+func (egressTestTurns) HandedOff(context.Context, workspaceruntime.TurnClaim) (bool, error) {
+	return true, nil
+}
+
 type egressTestPolicies struct{}
 
 func (egressTestPolicies) EffectiveCloudPolicy(context.Context, int64, string) (workspaceruntime.Policy, error) {
@@ -58,9 +62,14 @@ func TestComposedWorkspaceContextMintsTheEgressToken(t *testing.T) {
 		t.Fatalf("token: %v %+v", err, verified)
 	}
 
-	// A malformed proxy URL fails the start, not the first allowlist turn.
-	dependencies.Workspace.Egress.ProxyURL = "https://proxy:3128"
-	if err := dependencies.Workspace.validate(); err == nil {
+	// A malformed proxy URL fails the start, not the first allowlist turn,
+	// even without the executor seam (the egress checks on its own).
+	bad := WorkspaceDependencies{Egress: dependencies.Workspace.Egress}
+	if err := bad.validate(); err != nil {
+		t.Fatalf("a good proxy URL alone composes: %v", err)
+	}
+	bad.Egress.ProxyURL = "https://proxy:3128"
+	if err := bad.validate(); err == nil {
 		t.Fatal("a bad proxy URL must refuse the composition")
 	}
 }

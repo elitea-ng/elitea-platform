@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"google.golang.org/grpc/metadata"
 )
@@ -61,5 +62,37 @@ func TestComposedWorkspaceStoreWithoutAHandoffServiceIsFeatureUnavailable(t *tes
 	}
 	if len(stream.frames) != 1 || stream.frames[0].GetRejection().GetCode() != runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY {
 		t.Fatalf("got %v", stream.frames)
+	}
+}
+
+type recordingLifecycle struct {
+	fenceSeam
+	finished []string
+}
+
+func (r *recordingLifecycle) FinishExecution(_ context.Context, executionID string) error {
+	r.finished = append(r.finished, executionID)
+	return nil
+}
+
+type scriptedAgentIngestor struct{ err error }
+
+func (s scriptedAgentIngestor) IngestAgent(context.Context, outputapp.AgentExecutionFrame) (outputapp.ProjectionOutcome, error) {
+	return outputapp.ProjectionOutcome{Inserted: true}, s.err
+}
+
+// A projected terminal result ends the cloud turn at once; a refused one
+// does not (the settlement hook and the reconciler remain).
+func TestFinishingIngestorEndsTheCloudTurnOnlyAfterAProjectedResult(t *testing.T) {
+	lifecycle := &recordingLifecycle{}
+	frame := outputapp.AgentExecutionFrame{}
+	frame.Fence.ExecutionID = "exec-1"
+	ok := finishingAgentExecutionIngestor{next: scriptedAgentIngestor{}, lifecycle: lifecycle}
+	if _, err := ok.IngestAgent(context.Background(), frame); err != nil || len(lifecycle.finished) != 1 || lifecycle.finished[0] != "exec-1" {
+		t.Fatalf("finished = %v %v", lifecycle.finished, err)
+	}
+	refused := finishingAgentExecutionIngestor{next: scriptedAgentIngestor{err: outputapp.ErrOutputCancelled}, lifecycle: lifecycle}
+	if _, err := refused.IngestAgent(context.Background(), frame); err == nil || len(lifecycle.finished) != 1 {
+		t.Fatalf("a refused projection finished the turn: %v", lifecycle.finished)
 	}
 }
