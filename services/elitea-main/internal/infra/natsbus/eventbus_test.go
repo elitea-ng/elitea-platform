@@ -157,6 +157,8 @@ func TestSubjectFor(t *testing.T) {
 		"project:123:events": "gateway.events.project.123.events",
 		// The presence family is elitea-main's own subject space (#1076).
 		"project:123:presence": "elitea.events.project.123.presence",
+		// The workspace handoff family is too (ADR-0034).
+		"project:123:workspace": "elitea.events.project.123.workspace",
 		"project:*":            "gateway.events.project.>",
 		"elitea:*":             "gateway.events.elitea.>",
 		"*":                    "gateway.events.>",

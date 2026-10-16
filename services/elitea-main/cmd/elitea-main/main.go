@@ -75,6 +75,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
@@ -1419,8 +1420,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// dependencies. Its turn canceller is the runtime's own stop use case,
 	// bound once the runtime is composed (workspaceTurnCanceller.bind).
 	workspaceTurnCanceller := &deferredAgentCanceller{}
+	var workspaceBus events.Bus
+	if liveNATSBus != nil {
+		workspaceBus = liveNATSBus
+	}
 	workspaceHandoff, err := composeWorkspaceHandoff(ctx, pool, objectStore, workspaceInputs, nativePolicy,
-		workspaceTurnCanceller, auditRecorder, apiGroupAuth, logger)
+		workspaceTurnCanceller, auditRecorder, apiGroupAuth, newHandoffLiveEvents(workspaceBus), logger)
 	if err != nil {
 		return fmt.Errorf("compose workspace handoff routes: %w", err)
 	}

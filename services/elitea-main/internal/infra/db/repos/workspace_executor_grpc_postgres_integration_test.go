@@ -24,6 +24,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -632,5 +633,106 @@ func TestPostgresTakeBackDuringACloudTurnSignalsTheWorkerAndFallsBack(t *testing
 	}
 	if view, _ := h.service.State(ctx, thread); view.Handoff.State != workspacestore.StateReclaiming || view.Handoff.Epoch != 3 {
 		t.Fatalf("a late finish moved the thread: %+v", view.Handoff)
+	}
+}
+
+type recordedStateEvent struct {
+	project  int64
+	audience []int64
+	event    workspacehandoff.StateEvent
+}
+
+type recordingStateEvents struct {
+	mu     sync.Mutex
+	events []recordedStateEvent
+}
+
+func (r *recordingStateEvents) HandoffChanged(_ context.Context, projectID int64, audience []int64, event workspacehandoff.StateEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, recordedStateEvent{projectID, audience, event})
+}
+
+// Scope B: every committed transition, request-driven or the sweeper's, is
+// one live event to the thread's owner; a refused transition is none.
+func TestPostgresEveryHandoffTransitionPublishesOneLiveEvent(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	ctx := context.Background()
+	const owner int64 = 11
+	ensureWorkspaceTestUser(t, pool, owner)
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_conversations SET source = 'local_work' WHERE uuid = $1::uuid`, executorConversation); err != nil {
+		t.Fatal(err)
+	}
+	h := newHandoffHarness(t, pool)
+	live := &recordingStateEvents{}
+	h.service.WithStateEvents(live)
+	thread := workspacestore.Thread{ProjectID: 1, ConversationUUID: executorConversation}
+	repo, err := NewWorkspaceHandoffsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := workspaceexecutor.New(h.service, h.objects, executorThreads{repo: repo}, workspaceexecutor.Resources{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	began, err := h.service.Begin(ctx, beginRequest(thread, owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := h.publishSnapshot(t, thread, owner, 1, "live")
+	if _, err := h.service.Complete(ctx, workspacehandoff.CompleteRequest{ProjectID: 1, HandoffID: began.Handoff.HandoffID,
+		ActorUserID: owner, Epoch: 1, HandoffRef: workspacestore.RefHandoff1, SHA: snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	// A refused transition publishes nothing.
+	if _, err := h.service.Complete(ctx, workspacehandoff.CompleteRequest{ProjectID: 1, HandoffID: began.Handoff.HandoffID,
+		ActorUserID: owner, Epoch: 1, HandoffRef: workspacestore.RefHandoff1, SHA: snapshot}); err == nil {
+		t.Fatal("a stale complete succeeded")
+	}
+	const response = "40000000-0000-4000-8000-0000000000a1"
+	withTenantTx(t, pool, func(tx pgx.Tx) {
+		insertPostgresCurrentApplicationTurn(t, sqlcgen.New(tx), mustCurrentPGUUID(t, executorConversation),
+			"20000000-0000-4000-8000-0000000000a1", "30000000-0000-4000-8000-0000000000a1", response, "go", "exec-live")
+	})
+	seedCloudTurnExecution(t, pool, "exec-live", response)
+	if _, ok, err := adapter.ResolveCloudTurn(ctx, workspaceruntime.TurnClaim{ExecutionID: "exec-live", Generation: 1,
+		ProjectID: 1, ConversationUUID: executorConversation}); err != nil || !ok {
+		t.Fatalf("claim = %v %v", ok, err)
+	}
+	if _, err := h.service.Reclaim(ctx, workspacehandoff.ReclaimRequest{Thread: thread, ActorUserID: owner, Epoch: 2, DeviceID: "device-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.FinishExecution(ctx, "exec-live"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.service.Release(ctx, workspacehandoff.ReleaseRequest{Thread: thread, ActorUserID: owner, Epoch: 3,
+		Outcome: "discarded"}); err != nil {
+		t.Fatal(err)
+	}
+	type step struct {
+		state   workspacestore.State
+		epoch   int64
+		pending bool
+	}
+	want := []step{
+		{workspacestore.StateHandingOff, 1, false},
+		{workspacestore.StateCloudIdle, 2, false},
+		{workspacestore.StateCloudRunning, 2, false},
+		{workspacestore.StateCloudRunning, 2, true},
+		{workspacestore.StateReclaiming, 3, false},
+		{workspacestore.StateLocal, 4, false},
+	}
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	if len(live.events) != len(want) {
+		t.Fatalf("live events = %+v, want %d", live.events, len(want))
+	}
+	for i, got := range live.events {
+		if got.project != 1 || len(got.audience) != 1 || got.audience[0] != owner ||
+			got.event.ConversationUUID != executorConversation ||
+			(step{got.event.State, got.event.Epoch, got.event.ReclaimPending}) != want[i] {
+			t.Fatalf("event %d = %+v, want %+v", i, got, want[i])
+		}
 	}
 }

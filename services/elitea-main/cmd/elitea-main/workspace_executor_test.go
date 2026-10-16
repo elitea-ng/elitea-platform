@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -56,5 +60,39 @@ func TestNoHandoffComposesNoExecutor(t *testing.T) {
 	seam := composition.dependencies()
 	if seam.Store != nil || seam.Turns != nil || seam.Policies != nil || seam.Lifecycle != nil || composition.lifecycle(true) != nil {
 		t.Fatalf("seam = %+v", seam)
+	}
+}
+
+type capturedBus struct {
+	channel, eventType string
+	payload            []byte
+}
+
+func (b *capturedBus) Publish(_ context.Context, channel, eventType string, payload any) error {
+	b.channel, b.eventType = channel, eventType
+	b.payload, _ = json.Marshal(payload)
+	return nil
+}
+
+// The handoff's live state change goes onto the workspace family with its
+// audience for the SSE relay; nothing else of the thread is in it.
+func TestHandoffLiveEventsPublishTheStateWithItsAudience(t *testing.T) {
+	if newHandoffLiveEvents(nil) != nil {
+		t.Fatal("no bus must publish nothing")
+	}
+	bus := &capturedBus{}
+	newHandoffLiveEvents(bus).HandoffChanged(context.Background(), 7, []int64{11}, workspacehandoff.StateEvent{
+		ConversationUUID: "0b9c6f4e-9a7f-4d4e-8f0e-1d2c3b4a5f60", State: workspacestore.StateCloudRunning, Epoch: 2, ReclaimPending: true,
+	})
+	if bus.channel != "project:7:workspace" || bus.eventType != workspacehandoff.EventType {
+		t.Fatalf("published on %q as %q", bus.channel, bus.eventType)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(bus.payload, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 5 || fields["state"] != "CLOUD_RUNNING" || fields["epoch"] != float64(2) || fields["reclaim_pending"] != true ||
+		fields["conversation_uuid"] == nil || fmt.Sprint(fields["audience"]) != "[11]" {
+		t.Fatalf("payload = %s", bus.payload)
 	}
 }
