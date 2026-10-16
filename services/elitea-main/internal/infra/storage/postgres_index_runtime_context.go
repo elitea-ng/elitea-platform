@@ -119,6 +119,66 @@ WHERE j.execution_id = $1 AND j.generation = $2`,
 	return authorization, nil
 }
 
+// PublicRuntimeClaimScope is what a live agent claim, named on a public API
+// request by the worker holding it, is allowed: its project, its actor and its
+// own conversation (chat_conversations.uuid).
+type PublicRuntimeClaimScope struct {
+	ProjectID      int64
+	ActorID        int64
+	ConversationID string
+}
+
+// ResolvePublicRuntimeClaim verifies a claim a turn's Office host names on a
+// PUBLIC object API request (review round 2): a live, unreleased claim of a
+// RUNNING agent execution, with its fence token. The public API has no mTLS
+// peer, so the workload identity is not matched; the 32-byte fence, a secret
+// only the worker holding the claim has, is the proof. The caller then
+// matches the actor against the request's own principal. ErrContentUnauthorized
+// when the claim is not one.
+func (r *PostgresContentRepository) ResolvePublicRuntimeClaim(
+	ctx context.Context,
+	executionID string,
+	generation uint64,
+	claimID string,
+	fenceToken []byte,
+) (PublicRuntimeClaimScope, error) {
+	if executionID == "" || claimID == "" || generation == 0 || len(fenceToken) != 32 {
+		return PublicRuntimeClaimScope{}, ErrContentUnauthorized
+	}
+	var scope PublicRuntimeClaimScope
+	var actor string
+	err := r.store.QueryRow(ctx, `
+SELECT j.resource_project_id, j.actor_id, COALESCE(a.client_stream_id, '')
+FROM elitea_runtime.execution_claims AS c
+JOIN elitea_runtime.execution_jobs AS j
+  ON j.execution_id = c.execution_id AND j.generation = c.generation
+JOIN elitea_runtime.agent_execution_jobs AS a
+  ON a.execution_id = j.execution_id
+ AND a.generation = j.generation
+ AND a.capability_id = j.capability_id
+WHERE c.claim_id = $1
+  AND c.execution_id = $2
+  AND c.generation = $3
+  AND c.fence_token = $4
+  AND c.released_at IS NULL
+  AND c.lease_expires_at > clock_timestamp()
+  AND j.desired_state = 'RUNNING'
+  AND j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1')`,
+		claimID, executionID, generation, fenceToken,
+	).Scan(&scope.ProjectID, &actor, &scope.ConversationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PublicRuntimeClaimScope{}, ErrContentUnauthorized
+	}
+	if err != nil {
+		return PublicRuntimeClaimScope{}, fmt.Errorf("resolve public runtime claim: %w", err)
+	}
+	scope.ActorID, err = strconv.ParseInt(actor, 10, 64)
+	if err != nil || scope.ActorID <= 0 || scope.ProjectID <= 0 {
+		return PublicRuntimeClaimScope{}, ErrContentUnauthorized
+	}
+	return scope, nil
+}
+
 // artifactReadRuntimeContextCapabilityFilter is the agent filter plus the
 // interactive tool-run shape; like it, it binds no parameter. The tool run's
 // toolkit is checked after it (AuthorizeArtifactReadRuntimeContext).

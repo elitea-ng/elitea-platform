@@ -110,3 +110,26 @@ func assertMissingBucket(t *testing.T, recorder *httptest.ResponseRecorder, labe
 		t.Fatalf("%s: settings_errors = %+v", label, body.SettingsErrors)
 	}
 }
+
+// Review round 2: an update that turns a toolkit into a file-store type
+// without sending settings is judged against the STORED settings.
+func TestATypeOnlyUpdateToAFileStoreTypeIsJudgedOnTheStoredSettings(t *testing.T) {
+	t.Parallel()
+
+	put := func(repo *defaultsRecordingRepo, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPut, "/tool/prompt_lib/1/11", bytes.NewBufferString(body))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		newDefaultsRouter(t, repo).ServeHTTP(recorder, request)
+		return recorder
+	}
+	bucketless := &defaultsRecordingRepo{storedType: "github", storedSettings: map[string]any{"repository": "x"}}
+	assertMissingBucket(t, put(bucketless, `{"type": "xlsx"}`), "type-only update", "bucket_name")
+	if len(bucketless.updates) != 0 {
+		t.Fatal("a refused update was written")
+	}
+	withBucket := &defaultsRecordingRepo{storedType: "docx", storedSettings: map[string]any{"bucket_name": "reports"}}
+	if recorder := put(withBucket, `{"type": "xlsx"}`); recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+	}
+}

@@ -654,6 +654,12 @@ pub(crate) struct PipelineProjectionInput {
 }
 
 impl AgentEventProjectionContext {
+    /// The conversation the turn's events stream to.
+    #[must_use]
+    pub(crate) fn stream_id(&self) -> &str {
+        &self.stream_id
+    }
+
     pub(crate) fn with_instruction_skills(mut self, skills: Vec<Value>) -> Self {
         self.invoked_skills.clone_from(&skills);
         self.applied_skills = skills;

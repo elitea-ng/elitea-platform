@@ -343,6 +343,26 @@ VALUES ($1, $1, 1, 'session-1', $2, 'producer-1', $3, clock_timestamp() + interv
 	})
 	require.NoError(t, err, "an agent turn still reads")
 
+	// Review round 2: the claim a turn's Office host names on the PUBLIC
+	// object API resolves to its project, actor and own conversation; a tool
+	// run, an index run and a wrong fence resolve to nothing.
+	scope, err := repository.ResolvePublicRuntimeClaim(ctx, "execution-agent", 1, "claim-agent", fence)
+	require.NoError(t, err)
+	require.Equal(t, PublicRuntimeClaimScope{
+		ProjectID: 42, ActorID: 17, ConversationID: "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1",
+	}, scope)
+	for _, refused := range []struct {
+		execution, claim string
+		fence            []byte
+	}{
+		{"execution-agent", "claim-agent", bytes.Repeat([]byte{9}, sha256.Size)},
+		{"execution-tool", "execution-tool", fence},
+		{"execution-1", "claim-1", fence},
+	} {
+		_, err := repository.ResolvePublicRuntimeClaim(ctx, refused.execution, 1, refused.claim, refused.fence)
+		require.ErrorIs(t, err, ErrContentUnauthorized, "%+v", refused)
+	}
+
 	claim := ContentClaim{
 		PeerCertificate: certificateWithURI(identity),
 		ExecutionID:     "execution-1",

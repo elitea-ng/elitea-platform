@@ -131,12 +131,97 @@ impl OfficeRuntime {
     }
 }
 
+/// The claim a turn's Office host names on every object request (review
+/// round 2): Main verifies it and confines the turn, in a SYSTEM bucket, to
+/// its own conversation's files (`internal/api/v2/artifacts/system_buckets.go`).
+/// A prompt cannot make the host stop sending it.
+#[derive(Clone)]
+pub(crate) struct OfficeClaim {
+    execution_id: String,
+    generation: u64,
+    claim_id: String,
+    fence: String,
+    /// The conversation the turn belongs to; `None` on a path that has none
+    /// (a direct toolkit call), which then reaches no system bucket.
+    conversation: Option<String>,
+}
+
+impl OfficeClaim {
+    /// The claim of `authority`, for a turn of `conversation`.
+    pub(crate) fn new(
+        authority: &crate::protocol::control::ClaimBoundRuntimeContextAuthority,
+        conversation: Option<String>,
+    ) -> Self {
+        use base64::Engine as _;
+        let binding = authority.redemption_binding();
+        Self {
+            execution_id: binding.execution_id.to_owned(),
+            generation: binding.generation,
+            claim_id: binding.claim_id.to_owned(),
+            fence: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(binding.fence_token),
+            conversation: conversation.filter(|value| canonical_uuid(value)),
+        }
+    }
+}
+
+/// The platform's SYSTEM bucket names a worker knows without asking: the
+/// default chat attachment bucket and the index result bucket. Main holds the
+/// authoritative rule (`bucket_type`); this is the worker's own check.
+const SYSTEM_BUCKETS: [&str; 2] = ["chat-attachments", "index-artifacts"];
+
+/// Whether an Office object request may address `bucket`/`key`: any bucket a
+/// person made, and in a system bucket only the attachment bucket under the
+/// turn's own conversation (defence in depth for the server-side rule).
+fn office_object_allowed(bucket: &str, key: Option<&str>, claim: Option<&OfficeClaim>) -> bool {
+    if !SYSTEM_BUCKETS.contains(&bucket) {
+        return true;
+    }
+    let Some(conversation) = claim.and_then(|claim| claim.conversation.as_deref()) else {
+        return false;
+    };
+    bucket == SYSTEM_BUCKETS[0]
+        && key.is_some_and(|key| {
+            key.strip_prefix(conversation)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .is_some_and(|rest| !rest.is_empty())
+        })
+}
+
+#[cfg(test)]
+pub(crate) fn office_object_allowed_for_test(
+    bucket: &str,
+    key: Option<&str>,
+    conversation: Option<&str>,
+) -> bool {
+    let claim = OfficeClaim {
+        execution_id: String::new(),
+        generation: 1,
+        claim_id: String::new(),
+        fence: String::new(),
+        conversation: conversation.map(str::to_owned),
+    };
+    office_object_allowed(bucket, key, Some(&claim))
+}
+
+fn canonical_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.char_indices().all(|(index, character)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                character == '-'
+            } else {
+                character.is_ascii_digit() || ('a'..='f').contains(&character)
+            }
+        })
+}
+
 /// The Office host of one claimed turn.
 pub(crate) struct ClaimOfficeHost {
     runtime: Arc<OfficeRuntime>,
     platform: ArtifactPlatform,
     model: LazyStepbackModel,
     project_id: String,
+    /// The claim named on every object request.
+    claim: Option<OfficeClaim>,
     /// The gateway's images routes under the claim (the `imagegen` toolkit,
     /// #864); `None` leaves that toolkit out as unsupported.
     images: Option<(ImagesClient, Arc<ClaimScopedEliteaContext>)>,
@@ -165,9 +250,17 @@ impl ClaimOfficeHost {
             platform,
             model,
             project_id: project_id.to_owned(),
+            claim: None,
             images: None,
             budget: None,
         })
+    }
+
+    /// This host naming `claim` on every object request.
+    #[must_use]
+    pub(crate) fn with_claim(mut self, claim: OfficeClaim) -> Self {
+        self.claim = Some(claim);
+        self
     }
 
     /// The claim's toolkit completion budget, shared with the chat binding:
@@ -229,6 +322,14 @@ impl ClaimOfficeHost {
                 "office_host.invalid_name",
             ));
         }
+        // A keyless request is the upload, whose key (the part's name) its
+        // caller checks first.
+        if key.is_some() && !office_object_allowed(bucket, key, self.claim.as_ref()) {
+            return Err(OfficeHostError::new(
+                OfficeFailure::AccessRefused,
+                "office_host.system_bucket_refused",
+            ));
+        }
         let mut url = self.platform.objects_url(bucket, key);
         // The server refuses a taken name (409) unless the write asks to replace.
         if overwrite {
@@ -241,6 +342,22 @@ impl ClaimOfficeHost {
             )
         })?;
         *request.method_mut() = method;
+        if let Some(claim) = &self.claim {
+            for (name, value) in [
+                ("x-elitea-execution-id", claim.execution_id.clone()),
+                (
+                    "x-elitea-execution-generation",
+                    claim.generation.to_string(),
+                ),
+                ("x-elitea-claim-id", claim.claim_id.clone()),
+                ("x-elitea-fence", claim.fence.clone()),
+            ] {
+                let value = header::HeaderValue::from_str(&value).map_err(|_| {
+                    OfficeHostError::new(OfficeFailure::InvalidRequest, "office_host.claim_header")
+                })?;
+                request.headers_mut().insert(name, value);
+            }
+        }
         Ok(request)
     }
 }
@@ -677,6 +794,12 @@ impl OfficeToolHost for ClaimOfficeHost {
             return Err(OfficeHostError::new(
                 OfficeFailure::InvalidRequest,
                 "office_host.invalid_name",
+            ));
+        }
+        if !office_object_allowed(bucket, Some(name), self.claim.as_ref()) {
+            return Err(OfficeHostError::new(
+                OfficeFailure::AccessRefused,
+                "office_host.system_bucket_refused",
             ));
         }
         let mut request = self.object_request(Method::POST, bucket, None, overwrite)?;

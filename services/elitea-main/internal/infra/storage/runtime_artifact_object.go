@@ -363,11 +363,12 @@ func (service *RuntimeArtifactObjectService) authorizeRead(
 // S1). A system bucket is the platform's own (chat attachments, index
 // results), not a bucket a person made, and the per-bucket access list was
 // never written for it: by name, a claim reaches none of it. The ONE
-// exception is a read of the claim's own conversation's attachment, by its
-// `/{attachment bucket}/{conversation}/{file}` path, which is what the model
+// exception is a read, or a listing (get_file_metadata resolves a file
+// through one), scoped to the claim's own conversation in the attachment
+// bucket, by the `/{attachment bucket}/{conversation}/{file}` path the model
 // is shown for each attachment of the turn: exactly the scoping the
-// attachment object route applies (conversationScopedAttachmentKey). Listing
-// a conversation's attachments goes through the bucketless listing.
+// attachment object route applies (conversationScopedAttachmentKey). Writes
+// and deletes reach no system bucket on these routes.
 func (service *RuntimeArtifactObjectService) refuseSystemBucket(
 	ctx context.Context,
 	authorization RuntimeContextAuthorization,
@@ -387,8 +388,12 @@ func (service *RuntimeArtifactObjectService) refuseSystemBucket(
 	if !system {
 		return nil
 	}
+	// A read names one object under the conversation; a listing (review
+	// round 2: get_file_metadata resolves a file through one) may name the
+	// conversation's own prefix itself.
 	if readKey == "" || !canonicalConversationIdentity(authorization.ConversationID) ||
-		!conversationScopedAttachmentKey(authorization.ConversationID, readKey) {
+		(!conversationScopedAttachmentKey(authorization.ConversationID, readKey) &&
+			readKey != authorization.ConversationID+"/") {
 		return ErrContentUnauthorized
 	}
 	attachments, ok := service.artifacts.(AttachmentListingSource)
@@ -492,7 +497,7 @@ func (service *RuntimeArtifactObjectService) List(
 		return RuntimeArtifactListContext{}, err
 	}
 	if err := service.refuseSystemBucket(
-		ctx, authorization, principal, bucket, "", runtimeContextStageArtifactList,
+		ctx, authorization, principal, bucket, prefix, runtimeContextStageArtifactList,
 	); err != nil {
 		return RuntimeArtifactListContext{}, err
 	}

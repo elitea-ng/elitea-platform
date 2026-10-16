@@ -2248,6 +2248,16 @@ mod materialize_matrix_tests {
         settings: &Value,
         selected: &[&str],
     ) -> Result<(Vec<String>, Vec<(String, LeftOutReason)>, usize), String> {
+        run_with(tool_type, settings, selected, None).await
+    }
+
+    /// `run` with `artifacts` lent (the file store and Office host).
+    async fn run_with(
+        tool_type: &str,
+        settings: &Value,
+        selected: &[&str],
+        artifacts: Option<&crate::toolkits::families::artifact::ArtifactToolAuthority>,
+    ) -> Result<(Vec<String>, Vec<(String, LeftOutReason)>, usize), String> {
         let mut settings = settings.clone();
         settings["selected_tools"] = json!(selected);
         let version = json!({"tools": [{"id": 3, "type": tool_type, "toolkit_name": "kit", "settings": settings}]});
@@ -2260,7 +2270,7 @@ mod materialize_matrix_tests {
             &snapshot,
             &policy,
             &serde_json::Map::new(),
-            None,
+            artifacts,
             IndexToolSupport::Withheld(IndexToolsWithheld::NoVectorStore),
         )
         .await
@@ -2362,6 +2372,41 @@ mod materialize_matrix_tests {
                         "{tool_type}.{name}: needs_file_store={needs_file_store} but reported={}",
                         reported.contains(name)
                     ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Review round 2: the same agreement with the file store LENT. Every
+    /// catalogued tool is then built, the file-store ones included; only the
+    /// unknown name is reported. A family that flags a tool as needing the
+    /// file store but leaves it out even with one lent is caught here.
+    #[tokio::test]
+    async fn with_the_file_store_lent_every_catalogued_tool_is_built() {
+        let authority = dispatch_authority();
+        let mut failures = Vec::new();
+        for (tool_type, settings) in family_settings() {
+            let catalog = family_tool_catalog(tool_type).expect(tool_type);
+            let mut selected: Vec<&str> = catalog.iter().map(|(name, _)| *name).collect();
+            selected.push(MADE_UP);
+            match run_with(tool_type, &settings, &selected, Some(&authority)).await {
+                Err(error) => failures.push(error),
+                Ok((built, reported, whole)) => {
+                    let built: BTreeSet<&str> = built.iter().map(String::as_str).collect();
+                    let missing: Vec<&str> = catalog
+                        .iter()
+                        .map(|(name, _)| *name)
+                        .filter(|name| !built.contains(name))
+                        .collect();
+                    if whole != 0
+                        || !missing.is_empty()
+                        || reported != [(MADE_UP.to_owned(), LeftOutReason::ToolNotServed)]
+                    {
+                        failures.push(format!(
+                            "{tool_type}: missing={missing:?} reported={reported:?} whole={whole}"
+                        ));
+                    }
                 }
             }
         }

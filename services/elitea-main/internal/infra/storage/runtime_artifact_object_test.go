@@ -476,9 +476,18 @@ func TestArtifactRoutesRefuseSystemBucketsByName(t *testing.T) {
 	// The conversation route still lists the turn's attachments.
 	listed := artifactCall[RuntimeArtifactListContext](t, agent, "list", `{"bucket":""}`)
 	require.Len(t, listed.Files, 1)
+	// Review round 2: a named listing scoped to the turn's own conversation
+	// (get_file_metadata on an attachment filepath) is served, as a file
+	// under it or the conversation prefix itself.
+	for _, prefix := range []string{conversation + "/notes.txt", conversation + "/"} {
+		artifactCall[RuntimeArtifactListContext](t, agent, "list",
+			`{"bucket":"`+DefaultAttachmentBucket+`","prefix":"`+prefix+`"}`)
+	}
 
 	for _, refused := range []struct{ operation, body string }{
 		{"list", `{"bucket":"` + DefaultAttachmentBucket + `"}`},
+		{"list", `{"bucket":"` + DefaultAttachmentBucket + `","prefix":"0f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/"}`},
+		{"list", `{"bucket":"` + DefaultAttachmentBucket + `","prefix":"` + conversation + `"}`},
 		{"read", `{"bucket":"` + DefaultAttachmentBucket + `","name":"0f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/notes.txt"}`},
 		{"read", `{"bucket":"index-results","name":"` + conversation + `/notes.txt"}`},
 		{"write", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/x.txt","content":"x"}`},

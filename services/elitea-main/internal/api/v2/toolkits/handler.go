@@ -1348,6 +1348,24 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if h.refuseBlockedToolkitType(w, r, "update_toolkit", updatedType) {
 		return
 	}
+	// An update that changes the TYPE to a file-store type and sends no
+	// settings keeps the stored settings, so it is judged against them: a
+	// toolkit must not become a bucketless pptx through a type-only PATCH
+	// (review round 2). A rename (no type, no settings) stays unjudged.
+	if _, hasSettings := body["settings"].(map[string]any); !hasSettings && updatedType != "" {
+		if _, stores := toolkitBucketSetting[updatedType]; stores {
+			stored, err := h.repo.GetToolkit(r.Context(), projectID, toolkitID)
+			if err == nil {
+				storedSettings, _ := stored["settings"].(map[string]any)
+				if storedSettings == nil {
+					storedSettings = map[string]any{}
+				}
+				if h.refuseMissingToolkitBucket(w, "update_toolkit", updatedType, storedSettings) {
+					return
+				}
+			}
+		}
+	}
 	// Only a body that actually REPLACES settings is validated. UpdateToolkit
 	// builds a partial UPDATE (each of `type` and `settings` is independently
 	// optional), so a PATCH that merely renames a toolkit carries no settings —

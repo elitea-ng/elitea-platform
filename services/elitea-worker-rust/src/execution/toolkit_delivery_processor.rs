@@ -85,10 +85,13 @@ fn is_office_family(toolkit_type: &str) -> bool {
 /// uploads are effects and are refused here.
 ///
 /// A discovery (`toolkit.available_tools.v1`) lists tools and runs none, so
-/// it needs no claim: every family that is built on a host (Office,
-/// `imagegen`) and `artifact` are lent the do-nothing host, whatever this
-/// worker carries. That is what keeps the tool list reachable when a call
-/// would be refused (a deployment with no Office runtime still lists them).
+/// it needs no claim: EVERY family is lent the do-nothing host, whatever this
+/// worker carries. A family that builds its host tools only with a host
+/// (`SharePoint`'s readers and upload, `jira`/`confluence`/`qtest`/`testrail`/`aha`/
+/// `ado_boards`/`zephyr_essential` attachments, carrier's spreadsheets, the Office
+/// families, imagegen) then lists them in the Test Tool picker, as the agent
+/// path offers them, and a toolkit selecting only such tools still discovers
+/// (review round 2).
 ///
 /// An `artifact` CALL is lent the claim's artifact list and read routes
 /// (live 4.45.0, D4: `read_file` / `list_files` answered
@@ -102,7 +105,7 @@ fn direct_lending(
     has_office_runtime: bool,
     discovery: bool,
 ) -> DirectLending {
-    if discovery && (is_office_family(toolkit_type) || toolkit_type == "artifact") {
+    if discovery {
         return DirectLending::NoRoundTrip;
     }
     match toolkit_type {
@@ -187,10 +190,15 @@ mod direct_lending_tests {
                 );
             }
         }
-        assert_eq!(
-            direct_lending("github", "", true, true),
-            DirectLending::None
-        );
+        // Review round 2: every family, so a family that builds its host
+        // tools only with a host (SharePoint's readers) lists them.
+        for family in ["sharepoint", "jira", "qtest", "github", "carrier"] {
+            assert_eq!(
+                direct_lending(family, "", true, true),
+                DirectLending::NoRoundTrip,
+                "{family}"
+            );
+        }
     }
 
     /// D4: an `artifact` call is lent the claim's read routes, with or
@@ -1121,6 +1129,12 @@ where
                     );
                     return Ok(None);
                 };
+                // A direct call has no conversation: it reaches no system
+                // bucket (review round 2).
+                let host = host.with_claim(crate::transport::office_host::OfficeClaim::new(
+                    authorized.runtime_context(),
+                    None,
+                ));
                 Ok(Some(
                     crate::toolkits::ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter))
                         .with_office(Arc::new(host)),

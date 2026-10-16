@@ -145,6 +145,12 @@ func mimeFromExtension(key string) string {
 // (utils/utils.py:177-238) — and it keeps a refused caller from learning
 // whether a bucket they may not touch exists.
 func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
+	return h.requireBucketChecked(w, r, projectID, bucket, need, true)
+}
+
+// requireBucketChecked is requireBucket; checkKey false leaves the
+// system-bucket key check to the caller (the upload names its key later).
+func (h *Handler) requireBucketChecked(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string, checkKey bool) (repos.BucketRow, bool) {
 	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
 	if err != nil {
 		h.writeInternal(w, r, "authorize bucket", err)
@@ -161,6 +167,19 @@ func (h *Handler) requireBucket(w http.ResponseWriter, r *http.Request, projectI
 		} else {
 			h.writeInternal(w, r, "get bucket", err)
 		}
+		return repos.BucketRow{}, false
+	}
+	if !checkKey {
+		// The caller's key check still refuses a claim that reaches nothing.
+		return row, true
+	}
+	allowed, err = h.allowSystemBucket(r, projectID, row)
+	if err != nil {
+		h.writeInternal(w, r, "authorize system bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "Forbidden", systemBucketRefusal)
 		return repos.BucketRow{}, false
 	}
 	return row, true
@@ -185,6 +204,15 @@ func (h *Handler) requireBucketNoBody(w http.ResponseWriter, r *http.Request, pr
 		} else {
 			w.WriteHeader(http.StatusInternalServerError)
 		}
+		return repos.BucketRow{}, false
+	}
+	allowed, err = h.allowSystemBucket(r, projectID, row)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		w.WriteHeader(http.StatusForbidden)
 		return repos.BucketRow{}, false
 	}
 	return row, true
@@ -522,7 +550,7 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := chi.URLParam(r, "projectID")
 	bucket := chi.URLParam(r, "bucket")
-	bucketRow, ok := h.requireBucket(w, r, projectID, bucket, accessWrite)
+	bucketRow, ok := h.requireBucketForUpload(w, r, projectID, bucket)
 	if !ok {
 		return
 	}
@@ -588,6 +616,10 @@ func (h *Handler) UploadObject(w http.ResponseWriter, r *http.Request) {
 	ref, err := storage.NewObjectRef(projectIDStr, bucket, filename)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "InvalidKey", err.Error())
+		return
+	}
+	// The system-bucket rule, on the key the part names (system_buckets.go).
+	if !h.allowUploadKey(w, r, projectID, bucketRow, filename) {
 		return
 	}
 

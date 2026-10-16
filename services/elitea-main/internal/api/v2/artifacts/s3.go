@@ -198,6 +198,15 @@ func (h *Handler) requireS3Bucket(w http.ResponseWriter, r *http.Request, projec
 		h.writeInternalS3(w, r, "get bucket", err)
 		return repos.BucketRow{}, false
 	}
+	allowed, err = h.allowSystemBucket(r, projectID, row)
+	if err != nil {
+		h.writeInternalS3(w, r, "authorize system bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "AccessDenied", systemBucketRefusal)
+		return repos.BucketRow{}, false
+	}
 	return row, true
 }
 
