@@ -176,6 +176,23 @@ func TestEnforcementPlane_UnwiredOnlyWhenConfigured(t *testing.T) {
 	}
 }
 
+// TestPendingRefusesSpend_FollowsTheEnforcementMode pins the live 4.45.1
+// decision: an unwired gateway refuses /llm spend until the gate is installed,
+// in every mode except the documented opt-out (=off).
+func TestPendingRefusesSpend_FollowsTheEnforcementMode(t *testing.T) {
+	for mode, want := range map[string]bool{
+		config.RequireEnforcementAuto: true,
+		config.RequireEnforcementOn:   true,
+		config.RequireEnforcementOff:  false,
+	} {
+		cfg := enforcingCfg()
+		cfg.RequireBudgetEnforcement = mode
+		if got := pendingRefusesSpend(cfg); got != want {
+			t.Errorf("mode %q: pendingRefusesSpend = %v, want %v", mode, got, want)
+		}
+	}
+}
+
 // stubNATS is a server.NATSClient that does nothing. The recovery loop only
 // passes it on, so no budget method is exercised. Close IS implemented: the
 // server closes the client at shutdown, and the embedded nil interface would

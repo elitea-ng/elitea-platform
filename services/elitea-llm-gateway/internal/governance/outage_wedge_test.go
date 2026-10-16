@@ -721,3 +721,64 @@ func mustDelta(t *testing.T, eventID string, costNano int64) []byte {
 	}
 	return payload
 }
+
+// TestOutageWedge_PublishFailureAfterAGoodIncrementIsNotLost is the live 4.45.1
+// "PublishDelta failed … nats: unavailable" case. The counter increment
+// SUCCEEDS and the write-behind publish fails right after it (the breaker
+// trips between the two calls). Before the fix nothing wrote that delta
+// durably: the outage write ran only on a failed increment, the consumer never
+// saw an unpublished delta, and recovery replays Postgres onto NATS only. The
+// accumulator lost the spend for good. Now it is persisted, it is billed once
+// in Postgres, and recovery adds nothing to a counter that already has it.
+func TestOutageWedge_PublishFailureAfterAGoodIncrementIsNotLost(t *testing.T) {
+	rig := newWedgeRig(t)
+	const (
+		cost  = 8 * failmode.NanoUSD
+		later = 2 * failmode.NanoUSD
+		evt   = "99999999-9999-9999-9999-999999999999"
+		evt2  = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	)
+	subject := nats.BudgetSubject(failmode.ScopeProject, wedgeScopeID, wedgePeriodStart)
+
+	rig.nc.mu.Lock()
+	rig.nc.pubErr = nats.ErrUnavailable
+	rig.nc.mu.Unlock()
+	rig.bill(t, evt, cost)
+
+	rig.nc.mu.Lock()
+	counter, published := rig.nc.totals[subject], len(rig.nc.deltas)
+	rig.nc.pubErr = nil
+	rig.nc.mu.Unlock()
+	if counter != cost || published != 0 {
+		t.Fatalf("setup: counter = %d (want %d), published = %d (want 0)", counter, cost, published)
+	}
+	if got := rig.pg.accumulated(failmode.ScopeProject, wedgeScopeID); got != cost {
+		t.Fatalf("durable spend = %d, want %d: an unpublished delta after a good increment was lost", got, cost)
+	}
+
+	// NATS is healthy again. A later request publishes normally, the sweep
+	// releases the row, and the consumer applies the deferred delta.
+	rig.bill(t, evt2, later)
+	rig.rec.SweepOnce(context.Background())
+	if rig.pg.outageOwned(failmode.ScopeProject, wedgeScopeID) {
+		t.Fatal("the sweep did not release the row")
+	}
+	if deferred := rig.drainDeltas(t); deferred != 0 {
+		t.Fatalf("%d deltas still deferred after recovery", deferred)
+	}
+	// A lost ack: the "failed" publish did reach the stream after all. The
+	// consumer applies it, and the claimed event id makes it add nothing.
+	if !rig.pg.applyDelta(t, mustDelta(t, evt, cost)) {
+		t.Fatal("the redelivered delta was deferred after recovery")
+	}
+
+	if got, want := rig.pg.accumulated(failmode.ScopeProject, wedgeScopeID), int64(cost+later); got != want {
+		t.Fatalf("durable spend = %d, want %d (each request billed exactly once)", got, want)
+	}
+	rig.nc.mu.Lock()
+	counter = rig.nc.totals[subject]
+	rig.nc.mu.Unlock()
+	if want := int64(cost + later); counter != want {
+		t.Fatalf("authoritative counter = %d, want %d: recovery replayed spend the counter already had", counter, want)
+	}
+}

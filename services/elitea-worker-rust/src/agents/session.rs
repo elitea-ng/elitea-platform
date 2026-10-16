@@ -94,10 +94,24 @@ const APPLICATION_CAPABILITY_ID: &str = "agent.execute.application.v1";
 const ADHOC_CAPABILITY_ID: &str = "agent.execute.adhoc.v1";
 const FROZEN_HISTORY_EVENT_DOMAIN: &[u8] = b"elitea.adk.frozen-history-event.v1\0";
 const MAX_PARALLEL_APPLICATION_CALLS: usize = 8;
+/// The user turn of an output continuation.
+///
+/// A REASONING-ONLY cut (no visible output; Main sends an empty
+/// `truncated_content`) cannot be continued from where it stopped: the hidden
+/// reasoning is deliberately not carried (agent.proto, `truncated_content`),
+/// so the model would restart the same reasoning under the same output
+/// allowance and be cut again (live 4.45.1: Continue for ever). The prompt
+/// therefore asks for the answer DIRECTLY, with as little reasoning as the task
+/// allows, and the model call runs at low reasoning effort (`bind_model`). The
+/// allowance is not raised: it is the user's own setting, and the SDK's nested
+/// continuation never raises a configured limit either
+/// (`_continuation_max_tokens`, "reduce, but never increase"). A second
+/// reasoning-only cut ends the turn as `OUTPUT_CONTINUATION_EXHAUSTED` instead of
+/// another Continue (`AgentEventProjector::finish_after_eos`).
 fn output_continuation_prompt(original_request: &str, visible_content: &str) -> String {
     if visible_content.is_empty() {
         return format!(
-            "The previous attempt reached its output-token limit during internal reasoning before it produced visible output. Produce the complete answer now. Follow the original request exactly. Output only the answer and do not refer to the previous attempt.\n\nOriginal request:\n{original_request}"
+            "The previous attempt used its whole output-token limit on internal reasoning and produced no visible output. Answer now, directly. Keep internal reasoning to the minimum the task needs and start the visible answer immediately; the same output-token limit applies. Follow the original request exactly. Output only the answer and do not refer to the previous attempt.\n\nOriginal request:\n{original_request}"
         );
     }
     let visible_words = visible_content.split_whitespace().count();

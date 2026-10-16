@@ -1165,6 +1165,223 @@ async fn application_and_adhoc_share_authorized_redemption_model_session_and_pro
     }
 }
 
+/// A provider stream that spends every output token reasoning: inline
+/// `reasoning_content`, no visible text, `finish_reason: length` (Qwen3 on
+/// vLLM with a 2048-token allowance, live 4.45.1).
+const REASONING_ONLY_LENGTH_CUT: &str = concat!(
+    "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Let me think about the tools\"},\"finish_reason\":null}]}\n\n",
+    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2048}}\n\n",
+    "data: [DONE]\n\n",
+);
+
+type OutputTurn = (
+    Vec<serde_json::Value>,
+    Result<Vec<serde_json::Value>, super::events::AgentEventProjectionErrorCode>,
+    Vec<serde_json::Value>,
+);
+
+/// One turn through the real assembler, projector and completion selector:
+/// the streamed browser events, then `finish_after_eos` (its events, or the
+/// projection error code), then the captured model requests.
+async fn run_one_output_turn(
+    sessions: &Arc<dyn SessionService>,
+    request: &super::request::AgentExecutionRequest,
+    raw: &'static str,
+) -> OutputTurn {
+    let (runtime_context, _) = runtime_context_client();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::<Bytes>::from(raw))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway fixture client");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    )
+    .with_sessions(Arc::clone(sessions));
+    let mut invocation = assembler
+        .assemble(AuthorizedNativeAssembly::new(
+            request,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        ))
+        .await
+        .expect("authorized ordinary assembly");
+    let _start = invocation.project_start(chrono::Utc::now()).unwrap();
+    let (mut native, mut projector, completion) = invocation.start().expect("native start");
+    let browser = |event| {
+        serde_json::from_slice::<serde_json::Value>(
+            &encode_current_node_event_json(&event).expect("canonical browser event"),
+        )
+        .expect("browser event JSON")
+    };
+    let mut streamed = Vec::new();
+    while let Some(event) = native.next_event().await.expect("native event") {
+        streamed.extend(projector.project(&event).expect("projected native event"));
+    }
+    let streamed: Vec<_> = streamed.into_iter().map(browser).collect();
+    let completed = completion.select().await.expect("selected completion");
+    let finish = projector
+        .finish_after_eos(completed, chrono::Utc::now())
+        .map(|batch| batch.into_iter().map(browser).collect())
+        .map_err(|error| error.code());
+    let bodies = captured
+        .lock()
+        .expect("captured model requests")
+        .iter()
+        .map(|request| serde_json::from_slice(&request.body).expect("model request JSON"))
+        .collect();
+    (streamed, finish, bodies)
+}
+
+/// The Continue of the `ordinary_request` turn: Main resumes the same thread
+/// with `should_continue` and the visible output so far as
+/// `truncated_content` — EMPTY after a reasoning-only cut.
+fn output_continuation(visible: &str) -> super::request::AgentExecutionRequest {
+    let mut continuation = ordinary_request(AgentExecutionKind::Application);
+    continuation.payload.should_continue = true;
+    continuation.payload.truncated_content = Some(visible.to_owned());
+    continuation
+}
+
+fn offers_continue(events: &[serde_json::Value]) -> bool {
+    events
+        .iter()
+        .any(|event| event["type"] == "agent_requires_confirmation")
+}
+
+fn last_user_text(body: &serde_json::Value) -> String {
+    let message = body["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .expect("a user message");
+    assert_eq!(message["role"], "user");
+    match &message["content"] {
+        serde_json::Value::String(text) => text.clone(),
+        parts => parts
+            .as_array()
+            .expect("content parts")
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect(),
+    }
+}
+
+/// Live 4.45.1, F1: after a reasoning-only cut, Continue re-sent the original
+/// request under the same allowance and the model reasoned itself into the
+/// same cut, for ever. The continuation now asks for the answer directly with
+/// minimal reasoning, and an answer completes the turn normally: no second
+/// Continue offer, not output-limited. The output allowance is the user's own
+/// and is NOT raised.
+#[tokio::test(flavor = "current_thread")]
+async fn reasoning_only_continue_asks_for_a_direct_answer_and_completes() {
+    // One session store for both turns: the Continue resumes the session the
+    // cut turn wrote, exactly as the durable store does in production.
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let original = ordinary_request(AgentExecutionKind::Application);
+    let (streamed, finish, first) =
+        run_one_output_turn(&sessions, &original, REASONING_ONLY_LENGTH_CUT).await;
+    assert!(
+        offers_continue(&streamed),
+        "the first reasoning-only cut offers Continue"
+    );
+    let finish = finish.expect("the first cut completes with the Continue offer");
+    let full = finish
+        .iter()
+        .find(|event| event["type"] == "full_message")
+        .expect("full message");
+    assert_eq!(full["response_metadata"]["output_limit_reached"], true);
+
+    let answer = concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"The answer is 42.\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let continuation = output_continuation("");
+    let (streamed, finish, second) = run_one_output_turn(&sessions, &continuation, answer).await;
+    assert!(
+        !offers_continue(&streamed),
+        "an answered continuation offers no Continue"
+    );
+    let finish = finish.expect("the answered continuation completes");
+    let full = finish
+        .iter()
+        .find(|event| event["type"] == "full_message")
+        .expect("full message");
+    assert_eq!(full["content"], "The answer is 42.");
+    assert_eq!(full["response_metadata"]["output_limit_reached"], false);
+
+    let (first, second) = (&first[0], &second[0]);
+    let prompt = last_user_text(second);
+    assert!(
+        prompt.contains("Answer now, directly.")
+            && prompt.contains("Keep internal reasoning to the minimum")
+            && prompt.contains("Original request:\ncurrent"),
+        "{prompt}"
+    );
+    assert_ne!(
+        last_user_text(first),
+        prompt,
+        "the continuation is not the original turn re-sent"
+    );
+    // The user's allowance and the platform's budget rules are untouched.
+    assert_eq!(
+        second.get("max_completion_tokens"),
+        first.get("max_completion_tokens")
+    );
+}
+
+/// Live 4.45.1, F1 cap: a reasoning-only Continue that is cut reasoning-only
+/// AGAIN offers no further Continue. The turn ends as
+/// `OUTPUT_CONTINUATION_EXHAUSTED`, which the chat renders as the continuation
+/// notice ("Increase the output limit in Model settings…").
+#[tokio::test(flavor = "current_thread")]
+async fn a_second_reasoning_only_cut_ends_without_another_continue() {
+    // The original reasoning-only cut, then its Continue, cut the same way.
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let (streamed, finish, _) = run_one_output_turn(
+        &sessions,
+        &ordinary_request(AgentExecutionKind::Application),
+        REASONING_ONLY_LENGTH_CUT,
+    )
+    .await;
+    assert!(offers_continue(&streamed), "the first cut offers Continue");
+    finish.expect("the first cut completes with the Continue offer");
+    let continuation = output_continuation("");
+    let (streamed, finish, _) =
+        run_one_output_turn(&sessions, &continuation, REASONING_ONLY_LENGTH_CUT).await;
+    assert!(
+        !offers_continue(&streamed),
+        "a second reasoning-only cut must not offer Continue again"
+    );
+    assert_eq!(
+        finish.expect_err("a second reasoning-only cut is not a completion"),
+        super::events::AgentEventProjectionErrorCode::OutputContinuationExhausted
+    );
+
+    // A continuation of VISIBLE output that is cut again keeps the ordinary
+    // Continue: only the reasoning-only loop is capped.
+    let visible = output_continuation("The first half of the answer");
+    let cut_after_text = concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\" and more of it\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2048}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let (streamed, finish, _) = run_one_output_turn(&sessions, &visible, cut_after_text).await;
+    assert!(
+        offers_continue(&streamed),
+        "a visible continuation cut again still offers Continue"
+    );
+    finish.expect("a visible continuation cut again completes with the offer");
+}
+
 /// Live 4.45.0: a model that spends every output token reasoning ends with
 /// no visible text, no tool call and `finish_reason: length`. The projector
 /// offered Continue, then completion selection refused the empty answer and

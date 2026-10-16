@@ -346,6 +346,37 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   `budgetStartupGate(` wiring-gate entry, and six cases in
   `deploy/helm/tests/render-llm-path.sh`.
 
+- **2026-10-16 (live 4.45.1) — the boot window before the recovery install
+  REFUSES spend; it no longer serves it unmetered. Needs human sign-off (it
+  touches the fail-open/closed policy).** *Finding:* a gateway that booted
+  while NATS was unreachable logged `READINESS GATED`, then `BUDGET ENFORCEMENT
+  RECOVERED` ~15 s later. In between, `admissionVerdictFor` found no gate and
+  admitted every request: no budget check, no rate limit (the limiter was
+  unbound), and no billing (`updateUsageUnits` returned `billNotBillable`).
+  Nothing charged that spend later. `/readyz` did not keep the traffic out:
+  `/llm` shares the listener, the default chart probes the mTLS gateway with
+  `tcpSocket` (the kubelet holds no client certificate), and a direct caller
+  ignores readiness. #304 already states the intent ("a pod that boots during
+  a NATS outage serves /llm unmetered" is the defect), and a NATS loss one
+  second AFTER boot already refuses through the FSM's `Block503`.
+  *Decision:* the composition root marks the handler pending
+  (`llmproxy.WithBudgetEnforcementPending`) when enforcement is configured and
+  unwired. Admission then answers 503 `service_unavailable`/`nats_unavailable`,
+  the same body as `Block503`, on every spend route, before the provider.
+  `InstallBudgetEnforcement` clears the flag in the same atomic publish that
+  installs the gate. `LLM_BUDGET_REQUIRE_ENFORCEMENT=off` keeps the documented
+  "serve unmetered on purpose" posture, and a gateway with no
+  `GATEWAY_NATS_URL` is never pending. *Also:* `UpdateUsage` now persists the
+  outage delta when `PublishDelta` fails after a SUCCESSFUL increment. Before,
+  that delta reached neither the consumer nor the outage row, and recovery only
+  replays Postgres onto NATS, so the accumulator and the usage ledger lost it.
+  The event-id claim keeps it exactly-once against a lost-ack redelivery.
+  Guarded by `TestBudgetPending_RefusesEverySpendRouteBeforeTheProvider`,
+  `TestBudgetPending_InstallUnderLoadServesNothingUnenforced`,
+  `TestPendingRefusesSpend_FollowsTheEnforcementMode`, the
+  `llmproxy.WithBudgetEnforcementPending(` wiring-gate entry, and
+  `TestOutageWedge_PublishFailureAfterAGoodIncrementIsNotLost`.
+
 ## Authored governance (issue #218, 2026-08-23)
 
 `gateway.governance_config` is the table elitea-main's admin surface writes and

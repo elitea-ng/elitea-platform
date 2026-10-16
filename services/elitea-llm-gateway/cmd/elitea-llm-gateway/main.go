@@ -301,6 +301,21 @@ func main() {
 	if plane.unwired() {
 		logger.Error("READINESS GATED: budget enforcement is configured but was not wired; /readyz will report not_ready",
 			"reason", budgetDisabledReason(cfg, nc, pool))
+		// Live 4.45.1: readiness alone never kept traffic out of this window.
+		// /llm shares the listener, the default chart probes the mTLS gateway
+		// with tcpSocket and never reads /readyz, and a direct caller ignores
+		// readiness. Every request was served with no budget check, no rate
+		// limit and no billing until the recovery loop installed the gate. The
+		// handler now REFUSES spend routes with 503 nats_unavailable until
+		// then, unless the operator chose =off (serve unmetered on purpose).
+		if pendingRefusesSpend(cfg) {
+			budgetOpts = append(budgetOpts, llmproxy.WithBudgetEnforcementPending())
+			logger.Error("BUDGET ENFORCEMENT PENDING: /llm spend routes answer 503 nats_unavailable " +
+				"until NATS is reachable and the gate is installed; no request is served unmetered")
+		} else {
+			logger.Warn("BUDGET ENFORCEMENT PENDING, NOT REFUSED: LLM_BUDGET_REQUIRE_ENFORCEMENT=off, " +
+				"so /llm requests are served with no budget check and no billing until the gate is installed")
+		}
 	}
 
 	// The authored-governance plane (issue #218). It is a SEPARATE wiring from
@@ -836,6 +851,14 @@ func buildGovernance(
 // that already produced a /readyz panic once.
 func budgetEnforcementUnwired(cfg config.Config, govStore *governance.GovernanceStore) bool {
 	return cfg.NATSURL != "" && govStore == nil
+}
+
+// pendingRefusesSpend reports whether an unwired gateway refuses /llm spend
+// routes until the recovery loop installs the gate (live 4.45.1). Only the
+// documented opt-out, LLM_BUDGET_REQUIRE_ENFORCEMENT=off, serves them unmetered.
+// ("on" never gets here: the startup gate refuses to start an unwired process.)
+func pendingRefusesSpend(cfg config.Config) bool {
+	return cfg.RequireBudgetEnforcement != config.RequireEnforcementOff
 }
 
 // budgetDisabledReason returns a human-readable explanation for why enforcement

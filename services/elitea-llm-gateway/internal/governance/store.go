@@ -374,37 +374,8 @@ func (g *GovernanceStore) UpdateUsage(
 			slog.Int64("cost_nano", costNano),
 		)
 		// Persist a durable outage-window delta so spend is not lost if this
-		// replica restarts before the breaker recovers. Run off the request path
-		// (bounded goroutine) so a slow Postgres write does not stall /llm.
-		outageDelta := failmode.OutageDelta{
-			ProjectID: projectID,
-			OrgID:     nil,
-			Scope:     scope,
-			ScopeID:   scopeID,
-			// The event id and the dimensions travel with the outage write so
-			// the usage ledger keeps its row for a request billed while NATS is
-			// down (issue #320). The id makes that row idempotent against a
-			// later redelivery of the same delta through the consumer.
-			EventID:      eventID,
-			PeriodStart:  periodStartUnix,
-			PeriodEnd:    periodEndUnix,
-			DeltaNanoUSD: costNano,
-			Usage:        dims,
-		}
-		// Fix #2: use the WaitGroup so Drain() can wait for in-flight persists
-		// to complete before pool.Close() on graceful shutdown.
-		g.persistWg.Add(1)
-		go func() {
-			defer g.persistWg.Done()
-			ctx2, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			if err := g.store.PersistOutageDelta(ctx2, outageDelta); err != nil {
-				g.log.Warn("governance: PersistOutageDelta failed during NATS outage",
-					slog.String("event_id", eventID),
-					slog.Any("err", err),
-				)
-			}
-		}()
+		// replica restarts before the breaker recovers.
+		g.persistOutageDelta(projectID, scope, scopeID, eventID, costNano, periodStartUnix, periodEndUnix, dims)
 	}
 
 	// Publish a write-behind delta regardless of whether the counter increment
@@ -425,18 +396,74 @@ func (g *GovernanceStore) UpdateUsage(
 		return fmt.Errorf("governance: marshal delta payload: %w", err)
 	}
 	if pubErr := g.nc.PublishDelta(ctx, eventID, payload); pubErr != nil {
-		// A failed delta publish is logged but not fatal: the NATS counter was
-		// already incremented (or the degraded counter was updated), so the
-		// immediate enforcement decision is correct. The write-behind consumer
-		// operates on an at-least-once basis; missing deltas are reconciled via
-		// the outage-recovery path on the next breaker→CLOSED edge.
-		g.log.Warn("governance: PublishDelta failed; delta will be reconciled on recovery",
+		// A failed delta publish is not fatal to the request: the NATS counter
+		// was already incremented (or the degraded counter was updated), so the
+		// immediate enforcement decision is correct.
+		//
+		// It WAS fatal to the durable accounting when the counter increment
+		// SUCCEEDED (live 4.45.1: "PublishDelta failed … nats: unavailable"
+		// right after a good increment, for example when the breaker trips
+		// between the two calls). The outage write above runs only when the
+		// increment fails, the write-behind consumer never sees an unpublished
+		// delta, and recovery replays Postgres onto NATS, never the other way.
+		// So the accumulator and the usage ledger lost that spend for good.
+		// It is written durably here instead. The write claims the event id
+		// in gateway.processed_event_ids, so a publish whose ack was lost but
+		// that the consumer later applies still bills once, and recovery's
+		// replay (accumulated − counter) adds nothing the counter already has.
+		if incrErr == nil {
+			g.persistOutageDelta(projectID, scope, scopeID, eventID, costNano, periodStartUnix, periodEndUnix, dims)
+		}
+		g.log.Warn("governance: PublishDelta failed; the delta is persisted for reconciliation",
 			slog.String("event_id", eventID),
+			slog.Bool("counter_incremented", incrErr == nil),
 			slog.Any("err", pubErr),
 		)
 	}
 
 	return nil
+}
+
+// persistOutageDelta writes one billed delta durably to the accumulator as an
+// outage-window row (failmode.Store.PersistOutageDelta). It runs off the
+// request path, so a slow Postgres write does not stall /llm, and Drain waits
+// for it on shutdown.
+func (g *GovernanceStore) persistOutageDelta(
+	projectID int,
+	scope, scopeID, eventID string,
+	costNano int64,
+	periodStartUnix, periodEndUnix int64,
+	dims *failmode.UsageDimensions,
+) {
+	outageDelta := failmode.OutageDelta{
+		ProjectID: projectID,
+		OrgID:     nil,
+		Scope:     scope,
+		ScopeID:   scopeID,
+		// The event id and the dimensions travel with the outage write so
+		// the usage ledger keeps its row for a request billed while NATS is
+		// down (issue #320). The id makes that row idempotent against a
+		// later redelivery of the same delta through the consumer.
+		EventID:      eventID,
+		PeriodStart:  periodStartUnix,
+		PeriodEnd:    periodEndUnix,
+		DeltaNanoUSD: costNano,
+		Usage:        dims,
+	}
+	// Fix #2: use the WaitGroup so Drain() can wait for in-flight persists
+	// to complete before pool.Close() on graceful shutdown.
+	g.persistWg.Add(1)
+	go func() {
+		defer g.persistWg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := g.store.PersistOutageDelta(ctx, outageDelta); err != nil {
+			g.log.Warn("governance: PersistOutageDelta failed during NATS outage",
+				slog.String("event_id", eventID),
+				slog.Any("err", err),
+			)
+		}
+	}()
 }
 
 // Drain blocks until all in-flight PersistOutageDelta goroutines complete (Fix

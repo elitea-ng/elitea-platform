@@ -56,6 +56,38 @@ type budgetPlane struct {
 	// usage supplies the CEL `budget_used` variable to routing rules. nil
 	// resolves it to 0.
 	usage BudgetUsageReader
+	// pending marks a plane whose gate is REQUIRED but not installed yet: the
+	// gateway is configured to enforce budgets (GATEWAY_NATS_URL set) and NATS
+	// was unreachable at boot, so the recovery loop has not installed the gate
+	// yet. While it is set, admission refuses with 503 nats_unavailable instead
+	// of admitting unmetered (live 4.45.1). See WithBudgetEnforcementPending.
+	// InstallBudgetEnforcement clears it in the same atomic publish that
+	// installs the gate, so no request sees "no gate and not pending".
+	pending bool
+}
+
+// WithBudgetEnforcementPending marks budget enforcement as REQUIRED but not
+// installed yet. Every spend route then refuses with 503 nats_unavailable
+// until InstallBudgetEnforcement publishes the gate.
+//
+// Why it exists. A gateway that boots while NATS is unreachable reports not
+// ready on /readyz (issue #304), and the recovery loop installs the gate when
+// a re-dial succeeds (issue #315). Readiness alone never kept traffic out:
+// the /llm route is served by the same listener, the default chart probes the
+// mTLS gateway with tcpSocket (the kubelet holds no client certificate) and so
+// never reads /readyz, and a direct caller ignores readiness anyway. Every
+// request in that window was served with no budget check, no rate limit and
+// no billing — spend that no later reconciliation ever charged. Refusing is
+// the platform's fail-closed budget posture, and it is what the same outage
+// one second AFTER boot already produced through the FSM's Block503.
+//
+// The composition root sets it only when enforcement is configured, unwired,
+// and the operator did not choose LLM_BUDGET_REQUIRE_ENFORCEMENT=off (the
+// documented "serve unmetered on purpose" opt-out).
+func WithBudgetEnforcementPending() HandlerOption {
+	return func(h *Handler) {
+		h.mutateBudget(func(p *budgetPlane) { p.pending = p.gate == nil })
+	}
 }
 
 // noBudgetPlane is what a handler with nothing wired reads. h.budget() returns
@@ -141,6 +173,7 @@ func (h *Handler) InstallBudgetEnforcement(e BudgetEnforcement) bool {
 	next := *cur
 	next.gate = e.Gate
 	next.calc = e.Calc
+	next.pending = false
 	if e.Alerts != nil {
 		next.alerts = e.Alerts
 	}
@@ -159,4 +192,10 @@ func (h *Handler) InstallBudgetEnforcement(e BudgetEnforcement) bool {
 // probe; a test reads it to tell "installed" from "refused".
 func (h *Handler) BudgetEnforcementInstalled() bool {
 	return h.budget().gate != nil
+}
+
+// BudgetEnforcementPending reports whether spend routes are refused because
+// enforcement is required and not installed yet (WithBudgetEnforcementPending).
+func (h *Handler) BudgetEnforcementPending() bool {
+	return h.budget().pending
 }

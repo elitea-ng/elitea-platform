@@ -1489,6 +1489,12 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
         AgentEventProjectionErrorCode::ResourceExhausted => {
             RuntimeFailureKind::OutputProjectionLimit
         }
+        // Live 4.45.1: a reasoning-only Continue cut reasoning-only again.
+        // The chat renders this code as the continuation notice, which tells
+        // the user to raise the output limit, instead of a third Continue.
+        AgentEventProjectionErrorCode::OutputContinuationExhausted => {
+            RuntimeFailureKind::OutputContinuationExhausted
+        }
         AgentEventProjectionErrorCode::ProviderFailure
         | AgentEventProjectionErrorCode::InvalidState
         | AgentEventProjectionErrorCode::InvalidOutput => RuntimeFailureKind::Internal,
@@ -1502,6 +1508,18 @@ mod taxonomy_tests {
         NativeAgentAssemblyCause, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
     };
     use crate::protocol::output::{ModelBudgetScope, RuntimeFailureKind};
+
+    /// Live 4.45.1: a reasoning-only Continue cut reasoning-only again is the
+    /// typed continuation failure the chat explains, never INTERNAL.
+    #[test]
+    fn exhausted_reasoning_only_continuation_is_the_continuation_failure() {
+        assert_eq!(
+            super::projection_failure(
+                &crate::agents::events::AgentEventProjectionError::output_continuation_exhausted_for_tests()
+            ),
+            RuntimeFailureKind::OutputContinuationExhausted
+        );
+    }
 
     #[test]
     fn model_failures_preserve_actionable_reasons() {

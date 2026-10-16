@@ -49,17 +49,17 @@ func TestMemorySettingsAreValidatedOnSave(t *testing.T) {
 	// only, and does not need the configuration validator.
 	handler := &Handler{}
 	recorder := httptest.NewRecorder()
-	if !handler.refuseMalformedMemorySettings(recorder, "create_toolkit", "memory", map[string]any{"memory_scope": "x"}) {
+	if !handler.refuseMalformedMemorySettings(recorder, httptest.NewRequest(http.MethodPost, "/", nil), toolkitSave{action: "create_toolkit"}, "memory", map[string]any{"memory_scope": "x"}) {
 		t.Fatal("a malformed memory scope was not refused")
 	}
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "settings_errors") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	other := httptest.NewRecorder()
-	if handler.refuseMalformedMemorySettings(other, "create_toolkit", "github", map[string]any{"memory_scope": "x"}) {
+	if handler.refuseMalformedMemorySettings(other, httptest.NewRequest(http.MethodPost, "/", nil), toolkitSave{action: "create_toolkit"}, "github", map[string]any{"memory_scope": "x"}) {
 		t.Fatal("another toolkit type was judged by the memory rules")
 	}
-	if handler.refuseMalformedMemorySettings(httptest.NewRecorder(), "create_toolkit", "memory", map[string]any{"namespace": "ok"}) {
+	if handler.refuseMalformedMemorySettings(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", nil), toolkitSave{action: "create_toolkit"}, "memory", map[string]any{"namespace": "ok"}) {
 		t.Fatal("a valid memory toolkit was refused")
 	}
 }

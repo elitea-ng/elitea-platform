@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -167,4 +169,61 @@ func TestTheServedArtifactSchemaRequiresItsBucket(t *testing.T) {
 		}
 	}
 	t.Fatalf("artifact required = %v, want it to name bucket", schema["required"])
+}
+
+// Live 4.45.1: a REFUSED save logged "a toolkit was saved without a bucket",
+// which reads as a bucketless toolkit having been stored. The line now says
+// the save was refused and names the type, the toolkit and the project, at
+// WARN (a caller's input, not a server fault). Not parallel: it swaps the
+// process logger (top-level parallel tests wait for it), and the unique name
+// filters the records anyway.
+func TestARefusedBucketlessSaveLogsTheRefusalAndWhatItWasAbout(t *testing.T) {
+	var buffer bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buffer, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	repo := &defaultsRecordingRepo{storedType: "pptx"}
+	router := newDefaultsRouter(t, repo)
+	assertMissingBucket(t, postToolkit(t, router,
+		`{"name": "refusal-log-kit", "type": "pptx", "settings": {}}`), "create", "bucket_name")
+	request := httptest.NewRequest(http.MethodPut, "/tool/prompt_lib/1/11",
+		bytes.NewBufferString(`{"name": "refusal-log-kit", "settings": {"bucket_name": ""}}`))
+	request.Header.Set("Content-Type", "application/json")
+	updated := httptest.NewRecorder()
+	router.ServeHTTP(updated, request)
+	assertMissingBucket(t, updated, "update", "bucket_name")
+
+	var records []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) != nil || record["toolkit_name"] != "refusal-log-kit" {
+			continue
+		}
+		records = append(records, record)
+	}
+	if len(records) != 2 {
+		t.Fatalf("refusal records = %d, want 2 (one per refused save); log:\n%s", len(records), buffer.String())
+	}
+	for index, want := range []struct{ action, toolkitID string }{
+		{"create_toolkit", ""}, {"update_toolkit", "11"},
+	} {
+		record := records[index]
+		if record["level"] != "WARN" ||
+			record["msg"] != "toolkit save refused: a file-store toolkit needs a bucket" ||
+			record["action"] != want.action || record["project_id"] != "1" ||
+			record["toolkit_type"] != "pptx" || record["missing_setting"] != "bucket_name" {
+			t.Fatalf("record %d = %v", index, record)
+		}
+		if id, present := record["toolkit_id"]; (want.toolkitID == "" && present) ||
+			(want.toolkitID != "" && id != want.toolkitID) {
+			t.Fatalf("record %d toolkit_id = %v, want %q", index, id, want.toolkitID)
+		}
+		if strings.Contains(fmt.Sprint(record["msg"]), "was saved") {
+			t.Fatalf("record %d still says the toolkit was saved: %v", index, record)
+		}
+	}
+	if len(repo.creates)+len(repo.updates) != 0 {
+		t.Fatal("a refused save was written")
+	}
 }
