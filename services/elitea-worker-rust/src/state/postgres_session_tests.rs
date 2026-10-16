@@ -1141,7 +1141,7 @@ fn drop_routing(event: &mut Event) {
 
 #[tokio::test]
 async fn a_routing_only_replay_of_a_stored_event_is_idempotent_and_any_other_change_conflicts() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL session replay test: set {TEST_DATABASE_URL}");
         return;
     };

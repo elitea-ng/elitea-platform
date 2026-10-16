@@ -3649,7 +3649,7 @@ impl LazyNestedAgent {
                 } else {
                     (*decision).into_direct_replay(sensitive_tools)
                 }
-                .map_err(direct_hitl_execution_error)?;
+                .map_err(|error| direct_hitl_execution_error(&error))?;
                 let bound = self.bind_model()?;
                 let replay_pending = replay.emits_pending_call();
                 let prepared = replay.bind(bound.provider_model());
@@ -5122,7 +5122,21 @@ pub(super) fn child_execution_error() -> AdkError {
     )
 }
 
-fn direct_hitl_execution_error(_error: super::direct_hitl::DirectHitlError) -> AdkError {
+/// A nested Agent's card was decided, but the decided call cannot run on this
+/// deployment: an approved call that changes data has no durable effect
+/// receipt yet (G-WORKER-10), or the call's tool is no longer offered. Nothing
+/// ran. The pipeline node reports it as an unavailable tool, not a fault.
+pub(crate) const NESTED_REPLAY_UNSUPPORTED_CODE: &str = "elitea_nested_agent.replay_unsupported";
+
+fn direct_hitl_execution_error(error: &super::direct_hitl::DirectHitlError) -> AdkError {
+    if error.code() == super::direct_hitl::DirectHitlErrorCode::UnsupportedCapability {
+        return AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::Unsupported,
+            NESTED_REPLAY_UNSUPPORTED_CODE,
+            "the decided nested agent tool call cannot run on this deployment",
+        );
+    }
     AdkError::new(
         ErrorComponent::Agent,
         ErrorCategory::InvalidInput,

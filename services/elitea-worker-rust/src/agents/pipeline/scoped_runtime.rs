@@ -256,7 +256,19 @@ impl PipelineApplicationNodeRuntime {
             .restore(receiver)
             .await
             .map_err(|_| failure())?;
-        let result = result?;
+        let result = match result {
+            Ok(result) => result,
+            Err(ChildFailure::Scope(error)) => return Err(error),
+            Err(ChildFailure::ReplayUnsupported) => {
+                // The decided call never ran. Say so with the registered
+                // unavailable-tool reason instead of an internal fault (FU-226).
+                self.events
+                    .send_execution_failure(REPLAY_UNSUPPORTED_PUBLIC_CODE)
+                    .await
+                    .map_err(|_| failure())?;
+                return Err(replay_unsupported(&self.node_name));
+            }
+        };
         let outcome = if crate::agents::application_tools::nested_application_interrupt_ids(&result)
             .is_some()
         {
@@ -298,14 +310,18 @@ impl PipelineApplicationNodeRuntime {
         graph_scope: Option<&PipelineNodeEventScope>,
         root_container: &str,
         terminal: &mut Option<Event>,
-    ) -> Result<Value, GraphError> {
+    ) -> Result<Value, ChildFailure> {
         let mut future = DrivenTask::new(work);
         let result = loop {
             tokio::select! {
-                value = &mut future => break match value { Ok(Ok(value)) => Ok(value), _ => Err(failure()) },
+                value = &mut future => break match value {
+                    Ok(Ok(value)) => Ok(value),
+                    Ok(Err(error)) if error.code == crate::agents::application_tools::NESTED_REPLAY_UNSUPPORTED_CODE => Err(ChildFailure::ReplayUnsupported),
+                    _ => Err(ChildFailure::Scope(failure())),
+                },
                 signal = receiver.recv() => match signal {
-                    Some(signal) => if let Err(error) = self.drain(signal, receipt, graph_scope, root_container, terminal).await { break Err(error); },
-                    None => break Err(failure()),
+                    Some(signal) => if let Err(error) = self.drain(signal, receipt, graph_scope, root_container, terminal).await { break Err(ChildFailure::Scope(error)); },
+                    None => break Err(ChildFailure::Scope(failure())),
                 }
             }
         };
@@ -318,7 +334,7 @@ impl PipelineApplicationNodeRuntime {
                 .drain(signal, receipt, graph_scope, root_container, terminal)
                 .await
             {
-                result = Err(error);
+                result = Err(ChildFailure::Scope(error));
                 break;
             }
         }
@@ -472,6 +488,25 @@ fn numeric_call(call: &str) -> String {
         .map(|digit| char::from(b'0' + *digit))
         .collect()
 }
+/// Why the child call of one scoped Agent node did not produce a value.
+#[derive(Debug)]
+enum ChildFailure {
+    /// The scope, its receipt or the child stream broke an invariant.
+    Scope(GraphError),
+    /// The nested Agent refused its decided call before running it.
+    ReplayUnsupported,
+}
+
+/// Registered public code for a decided call that cannot run (no effect ran).
+const REPLAY_UNSUPPORTED_PUBLIC_CODE: &str = "pipeline.tool_unavailable";
+
+fn replay_unsupported(node: &str) -> GraphError {
+    GraphError::NodeExecutionFailed {
+        node: node.to_owned(),
+        message: "the decided tool call cannot run on this deployment; nothing ran".to_owned(),
+    }
+}
+
 fn failure() -> GraphError {
     GraphError::NodeExecutionFailed {
         node: "application_scope".to_owned(),

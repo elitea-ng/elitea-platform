@@ -13,6 +13,10 @@
 //! * `older`: a conversation an older worker paused inside an `agent` node (the one resolver
 //!   this branch keeps for that case) is answered by the current Worker and finishes without ever
 //!   writing a graph-call receipt.
+//! * `effectful` / `effectful_deny`: the sensitive-tool card of an `agent` node whose tool changes
+//!   data (FU-226). Approve must fail readably and never call the tool: an approved effectful call
+//!   has no durable effect receipt yet (G-WORKER-10). Block must resume the Agent once with the
+//!   tool's blocked result.
 
 use super::restart_pg_tests::{
     CHECKPOINT_MIGRATION, PHASE_DEADLINE, authorized_turn, connect, model_requests, pending_card,
@@ -55,11 +59,19 @@ fn sensitive_agent() -> Value {
 
 /// Scenarios whose pause is a sensitive-tool confirmation card of an `agent` node's Agent.
 fn is_card(scenario: &str) -> bool {
-    matches!(scenario, "sensitive" | "batch")
+    matches!(
+        scenario,
+        "sensitive" | "batch" | "effectful" | "effectful_deny"
+    )
+}
+
+/// Scenarios whose card belongs to the one-call sensitive MCP Agent.
+fn is_sensitive_mcp(scenario: &str) -> bool {
+    matches!(scenario, "sensitive" | "effectful" | "effectful_deny")
 }
 
 fn versions(scenario: &str) -> BTreeMap<Saved, Value> {
-    if scenario == "sensitive" {
+    if is_sensitive_mcp(scenario) {
         return BTreeMap::from([((3, 4), sensitive_agent())]);
     }
     if scenario == "batch" {
@@ -176,6 +188,48 @@ async fn postgres_sensitive_tool_card_of_a_graph_agent_node_resumes_once_after_p
     db.pool.close().await;
 }
 
+/// Run a resumed pipeline to its end and return the upstream code of its failure.
+async fn collect_pipeline_failure(
+    mut invocation: AssembledNativeAgentInvocation<PipelineAgentCompletion>,
+) -> Option<String> {
+    invocation
+        .project_start(timestamp(1))
+        .expect("pipeline resume browser start");
+    let (mut run, _projector, _completion) = invocation.start().expect("pipeline resume start");
+    loop {
+        match run.next_event().await {
+            Err(error) => break error.upstream_code().map(str::to_owned),
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("the approved effectful call must not complete"),
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_effectful_sensitive_tool_approval_in_a_graph_agent_node_fails_readably_without_the_effect()
+ {
+    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
+        );
+        return;
+    };
+    let db = run_scenario(&url, "effectful", &["start", "answer"]).await;
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_effectful_sensitive_tool_block_in_a_graph_agent_node_resumes_once() {
+    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
+        );
+        return;
+    };
+    let db = run_scenario(&url, "effectful_deny", &["start", "deny"]).await;
+    db.pool.close().await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_three_call_batch_with_one_sensitive_call_resumes_once_after_process_replacement()
 {
@@ -211,7 +265,12 @@ fn assembler(
     scenario: &str,
     phase: &str,
     outcomes: Vec<TestModelGatewayOutcome>,
-) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
+) -> (
+    PipelineNativeAgentAssembler,
+    CapturedModelRequests,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let tool_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (platform, model_facade, captured, _) = saved_runtime(&versions(scenario), outcomes);
     let assembler = PipelineNativeAgentAssembler::postgres(
         pool.clone(),
@@ -219,7 +278,7 @@ fn assembler(
         CheckpointLimits::default(),
         if scenario == "batch" {
             super::scoped_tests::batch_policy()
-        } else if scenario == "sensitive" {
+        } else if is_sensitive_mcp(scenario) {
             sensitive_pipeline_mcp_policy()
         } else {
             Arc::new(
@@ -232,11 +291,11 @@ fn assembler(
     );
     let assembler = if scenario == "batch" {
         assembler.with_mcp_connector(Arc::new(super::scoped_tests::BatchConnector))
-    } else if scenario == "sensitive" {
+    } else if is_sensitive_mcp(scenario) {
         assembler.with_mcp_connector(Arc::new(PipelineMcpConnector {
             connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            tool_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            read_only: true,
+            tool_calls: Arc::clone(&tool_calls),
+            read_only: scenario == "sensitive",
         }))
     } else {
         assembler
@@ -247,10 +306,11 @@ fn assembler(
     } else {
         assembler
     };
-    (assembler, captured)
+    (assembler, captured, tool_calls)
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One child entry point owns every scenario phase of the replaced process.
 async fn postgres_scoped_child() {
     let Ok(database) = std::env::var(DATABASE_ENV) else {
         return;
@@ -267,13 +327,13 @@ async fn postgres_scoped_child() {
     let pool = connect(&database).await;
     match phase.as_str() {
         "start" => {
-            let (assembler, captured) = assembler(
+            let (assembler, captured, _) = assembler(
                 &pool,
                 &scenario,
                 &phase,
                 vec![TestModelGatewayOutcome::Response(if scenario == "batch" {
                     super::scoped_tests::three_call_response()
-                } else if scenario == "sensitive" {
+                } else if is_sensitive_mcp(&scenario) {
                     pipeline_mcp_tool_call_response()
                 } else {
                     super::restart_pg_tests::ask_user_call_response("call_ask_user_1")
@@ -289,9 +349,80 @@ async fn postgres_scoped_child() {
             assert_eq!(model_requests(&captured), 1, "start: one Agent model call");
             println!("{PENDING_MARKER}{card}");
         }
+        "answer" if scenario == "effectful" => {
+            let card: Value = serde_json::from_str(&pending).expect("pending card");
+            let (assembler, captured, tool_calls) = assembler(
+                &pool,
+                &scenario,
+                &phase,
+                vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                    "unexpected approved effect",
+                ))],
+            );
+            let request = pipeline_application_resume_request(
+                vec![card["interrupt_id"].as_str().expect("card id").to_owned()],
+                "approve",
+                "",
+                [41; 32],
+            );
+            let invocation = assembler
+                .assemble(authorized_turn(&request, "execution-answer", 2))
+                .await
+                .expect("answer: the replacement Worker assembles");
+            let upstream = collect_pipeline_failure(invocation).await;
+            assert_eq!(
+                crate::protocol::output::model_failure(upstream.as_deref()),
+                crate::protocol::output::RuntimeFailureKind::PipelineToolUnavailable,
+                "answer: an approved effectful call fails with a readable reason, got {upstream:?}"
+            );
+            assert_eq!(
+                tool_calls.load(std::sync::atomic::Ordering::Acquire),
+                0,
+                "answer: the approved effectful tool never runs without an effect receipt"
+            );
+            assert_eq!(model_requests(&captured), 0, "answer: no model call");
+        }
+        "deny" => {
+            let card: Value = serde_json::from_str(&pending).expect("pending card");
+            let (assembler, captured, tool_calls) = assembler(
+                &pool,
+                &scenario,
+                &phase,
+                vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                    "child summarized the block",
+                ))],
+            );
+            let request = pipeline_application_resume_request(
+                vec![card["interrupt_id"].as_str().expect("card id").to_owned()],
+                "block_with_comment",
+                "not this one",
+                [43; 32],
+            );
+            let invocation = assembler
+                .assemble(authorized_turn(&request, "execution-deny", 2))
+                .await
+                .expect("deny: the replacement Worker assembles");
+            let browser = collect_pipeline_completion(invocation).await;
+            assert!(
+                browser
+                    .iter()
+                    .any(|event| event["content"] == "child summarized the block"),
+                "deny: the Agent resumes with the blocked result: {browser:?}"
+            );
+            assert_eq!(
+                tool_calls.load(std::sync::atomic::Ordering::Acquire),
+                0,
+                "deny: the blocked tool never runs"
+            );
+            assert_eq!(
+                model_requests(&captured),
+                1,
+                "deny: only the resumed Agent runs"
+            );
+        }
         "answer" => {
             let card: Value = serde_json::from_str(&pending).expect("pending card");
-            let (assembler, captured) = assembler(
+            let (assembler, captured, _) = assembler(
                 &pool,
                 &scenario,
                 &phase,
@@ -336,7 +467,7 @@ async fn postgres_scoped_child() {
         }
         "repeat" => {
             let card: Value = serde_json::from_str(&pending).expect("pending card");
-            let (assembler, captured) = assembler(
+            let (assembler, captured, _) = assembler(
                 &pool,
                 &scenario,
                 &phase,
