@@ -67,7 +67,25 @@ so a CNI without NetworkPolicy still leaves one wall.
 */}}
 {{- define "elitea-egress-proxy.denyCidrs" -}}
 {{- $n := .Values.egressProxy.networkPolicy -}}
-{{- uniq (concat ($n.denyCidrs | default list) ($n.podCidrs | default list) ($n.serviceCidrs | default list)) | join "," -}}
+{{- uniq (concat ($n.denyCidrs | default list) (include "elitea-egress-proxy.clusterCidrs" . | fromJsonArray)) | join "," -}}
+{{- end }}
+
+{{/*
+The cluster's pod and service ranges, as a JSON list: egressProxy.networkPolicy's
+own, else sandboxKubernetes.workspaceRuns.egress's (one cluster, one answer).
+*/}}
+{{- define "elitea-egress-proxy.podCidrs" -}}
+{{- $n := .Values.egressProxy.networkPolicy -}}
+{{- $w := .Values.sandboxKubernetes.workspaceRuns.egress -}}
+{{- (default ($w.podCidrs | default list) $n.podCidrs) | toJson -}}
+{{- end }}
+{{- define "elitea-egress-proxy.serviceCidrs" -}}
+{{- $n := .Values.egressProxy.networkPolicy -}}
+{{- $w := .Values.sandboxKubernetes.workspaceRuns.egress -}}
+{{- (default ($w.serviceCidrs | default list) $n.serviceCidrs) | toJson -}}
+{{- end }}
+{{- define "elitea-egress-proxy.clusterCidrs" -}}
+{{- concat (include "elitea-egress-proxy.podCidrs" . | fromJsonArray) (include "elitea-egress-proxy.serviceCidrs" . | fromJsonArray) | toJson -}}
 {{- end }}
 
 {{/*
@@ -107,14 +125,22 @@ proxy cannot run safely without. Rendered from deployment.yaml.
 {{- if not $n.clientPodLabels -}}
 {{- fail "egressProxy.networkPolicy.clientPodLabels must name the workspace-run sandbox pods" -}}
 {{- end -}}
-{{- if or (not $n.podCidrs) (not $n.serviceCidrs) -}}
-{{- fail "egressProxy.networkPolicy needs the cluster's podCidrs and serviceCidrs, so the proxy cannot reach in-cluster services" -}}
+{{- if or (not (include "elitea-egress-proxy.podCidrs" . | fromJsonArray)) (not (include "elitea-egress-proxy.serviceCidrs" . | fromJsonArray)) -}}
+{{- fail "egressProxy.networkPolicy needs the cluster's podCidrs and serviceCidrs (or sandboxKubernetes.workspaceRuns.egress's), so the proxy cannot reach in-cluster services" -}}
 {{- end -}}
 {{- if or (not $n.dnsNamespaceLabels) (not $n.dnsPodLabels) -}}
 {{- fail "egressProxy.networkPolicy needs explicit DNS namespace and Pod labels" -}}
 {{- end -}}
 {{- end -}}
-{{- range concat ($n.denyCidrs | default list) ($n.podCidrs | default list) ($n.serviceCidrs | default list) -}}
+{{- $w := .Values.sandboxKubernetes.workspaceRuns.egress -}}
+{{- range $pair := list (list $n.podCidrs $w.podCidrs "podCidrs") (list $n.serviceCidrs $w.serviceCidrs "serviceCidrs") -}}
+{{- $a := index $pair 0 | default list -}}
+{{- $b := index $pair 1 | default list -}}
+{{- if and $a $b (ne (sortAlpha (uniq $a) | toJson) (sortAlpha (uniq $b) | toJson)) -}}
+{{- fail (printf "egressProxy.networkPolicy.%s and sandboxKubernetes.workspaceRuns.egress.%s name different cluster ranges; set one of them, or the same list in both" (index $pair 2) (index $pair 2)) -}}
+{{- end -}}
+{{- end -}}
+{{- range concat ($n.denyCidrs | default list) (include "elitea-egress-proxy.clusterCidrs" . | fromJsonArray) -}}
 {{- if not (regexMatch "^[a-fA-F0-9.:]+/[0-9]+$" .) -}}
 {{- fail (printf "egressProxy.networkPolicy: %q is not an explicit CIDR block" .) -}}
 {{- end -}}

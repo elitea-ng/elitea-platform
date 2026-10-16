@@ -431,7 +431,6 @@ fn workspace_run_factory(
             memory_bytes: runs.memory_bytes,
             max_disk_bytes: runs.max_disk_bytes,
             turn_wall,
-            host_allowlist_proxy: false,
         },
         runs.scratch_root.clone(),
     )

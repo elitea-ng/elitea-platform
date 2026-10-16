@@ -55,6 +55,9 @@ pub struct DockerWorkspaceRuns {
     docker: Docker,
     egress_network: Option<String>,
     egress_dns: Vec<String>,
+    /// The internal network of host-allowlist mode, on which only the
+    /// egress proxy is reachable (`deploy/docker/workspace-egress.sh`).
+    proxy_network: Option<String>,
     storage_opt: AtomicBool,
 }
 
@@ -68,6 +71,7 @@ impl DockerWorkspaceRuns {
     pub async fn connect(
         egress_network: Option<String>,
         egress_dns: Vec<String>,
+        proxy_network: Option<String>,
     ) -> Result<Self, BackendError> {
         let docker =
             Docker::connect_with_local_defaults().map_err(|_| BackendError::Unavailable)?;
@@ -95,6 +99,7 @@ impl DockerWorkspaceRuns {
             docker,
             egress_network,
             egress_dns,
+            proxy_network,
             storage_opt: AtomicBool::new(supported),
         })
     }
@@ -123,7 +128,11 @@ impl DockerWorkspaceRuns {
     ) -> Result<String, bollard::errors::Error> {
         let plan = launch
             .container
-            .docker_plan(self.egress_network.as_deref(), &self.egress_dns)
+            .docker_plan(
+                self.egress_network.as_deref(),
+                &self.egress_dns,
+                self.proxy_network.as_deref(),
+            )
             .map_err(|_| bollard::errors::Error::DockerResponseServerError {
                 status_code: 400,
                 message: "invalid workspace run".to_owned(),
@@ -226,7 +235,11 @@ impl WorkspaceRunBackend for DockerWorkspaceRuns {
         }
         let plan = launch
             .container
-            .docker_plan(self.egress_network.as_deref(), &self.egress_dns)
+            .docker_plan(
+                self.egress_network.as_deref(),
+                &self.egress_dns,
+                self.proxy_network.as_deref(),
+            )
             .map_err(|_| BackendError::Refused)?;
         let labels = Self::labels(launch, &plan.labels);
         self.docker

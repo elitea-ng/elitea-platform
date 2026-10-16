@@ -17,12 +17,20 @@
 //! * its own image (`libs/rust/workspace-runner/Containerfile`), which idles
 //!   until the supervisor execs `elitea-workspace-runner unpack|serve|pack`;
 //! * the label `sandbox.elitea.ai/kind: workspace-run`, and
-//!   `sandbox.elitea.ai/egress: public` only when the project's network is
-//!   on. The chart's label-selected `NetworkPolicy` opens egress for exactly
-//!   those pods (minus private, link-local, loopback, metadata and cluster
-//!   ranges, DNS to the cluster resolver only); every other pod in the
-//!   execution namespace stays under the deny-all policy. Network off is
-//!   no egress label (Kubernetes) and network mode `none` (Docker).
+//!   `sandbox.elitea.ai/egress: public` when the project's network is on
+//!   without a host allowlist (direct mode). The chart's label-selected
+//!   `NetworkPolicy` opens egress for exactly those pods (minus private,
+//!   link-local, loopback, metadata and cluster ranges, DNS to the cluster
+//!   resolver only); every other pod in the execution namespace stays under
+//!   the deny-all policy. Network off is no egress label (Kubernetes) and
+//!   network mode `none` (Docker).
+//! * `sandbox.elitea.ai/egress: proxy` in host-allowlist mode: the chart's
+//!   `elitea-workspace-run-proxy-egress` policy lets the pod reach only the
+//!   egress proxy's pods on the proxy port; the pod has no resolver
+//!   (`dnsPolicy: None`, a loopback nameserver), and the worker hands the
+//!   command environment the proxy as an IP literal. On Docker the run joins
+//!   the profile's internal proxy network, on which only the proxy is
+//!   reachable (`deploy/docker/workspace-egress.sh`).
 
 use std::collections::BTreeMap;
 
@@ -36,6 +44,11 @@ pub const KIND_LABEL: &str = "sandbox.elitea.ai/kind";
 pub const KIND_WORKSPACE_RUN: &str = "workspace-run";
 pub const EGRESS_LABEL: &str = "sandbox.elitea.ai/egress";
 pub const EGRESS_PUBLIC: &str = "public";
+pub const EGRESS_PROXY: &str = "proxy";
+/// The resolver a proxy-mode run gets: nothing listens there, so no name
+/// resolves (Docker's embedded resolver forwards to it from inside the
+/// container; Kubernetes uses it as the only nameserver).
+pub const NO_RESOLVER: &str = "127.0.0.1";
 /// The grant binding of a run (Kubernetes annotations, Docker labels): the
 /// grant's request digest and activation scope, 64 lowercase hex each.
 pub const REQUEST_BINDING: &str = "sandbox.elitea.ai/run-request";
@@ -54,7 +67,10 @@ const MAX_RUNNER_FILE_BYTES: u64 = 1 << 30;
 
 /// The SHA-256 a workspace-run grant's `request_digest` must equal: the
 /// domain, then every spec field in order, fixed-width big-endian, the name
-/// length-prefixed.
+/// length-prefixed. `egress_proxy` is appended only when set, so a
+/// direct-mode run's digest is unchanged and a supervisor that predates
+/// proxy mode refuses a proxy-mode run (its digest differs) instead of
+/// rendering it as direct egress.
 #[must_use]
 pub fn spec_digest(spec: &WorkspaceRunSpecV1) -> [u8; 32] {
     use sha2::Digest as _;
@@ -69,6 +85,9 @@ pub fn spec_digest(spec: &WorkspaceRunSpecV1) -> [u8; 32] {
     hash.update(spec.memory_bytes.to_be_bytes());
     hash.update(spec.pids_limit.to_be_bytes());
     hash.update(spec.wall_seconds.to_be_bytes());
+    if spec.egress_proxy {
+        hash.update([1_u8]);
+    }
     hash.finalize().into()
 }
 
@@ -181,6 +200,8 @@ pub struct WorkspaceRunContainer {
     pub workspace_bytes: u64,
     /// The project's network switch.
     pub egress: bool,
+    /// With `egress`: host-allowlist mode, the egress proxy only.
+    pub egress_proxy: bool,
     pub cpu_millis: u64,
     pub memory_bytes: u64,
     pub pids_limit: i64,
@@ -195,6 +216,9 @@ pub enum InvalidWorkspaceRun {
     /// Egress is on and the deployment names no egress network.
     #[error("the deployment has no workspace egress network")]
     NoEgressNetwork,
+    /// Proxy mode and the deployment names no proxy network.
+    #[error("the deployment has no workspace proxy network")]
+    NoProxyNetwork,
 }
 
 fn pinned(image: &str) -> bool {
@@ -232,6 +256,7 @@ impl WorkspaceRunContainer {
             memory_bytes: self.memory_bytes,
             pids_limit: self.pids_limit,
             wall_seconds: self.wall_seconds,
+            egress_proxy: self.egress_proxy,
         }
     }
 
@@ -259,6 +284,7 @@ impl WorkspaceRunContainer {
             image: image.to_owned(),
             workspace_bytes: spec.workspace_bytes,
             egress: spec.egress,
+            egress_proxy: spec.egress_proxy,
             cpu_millis: spec.cpu_millis,
             memory_bytes: spec.memory_bytes,
             pids_limit: spec.pids_limit,
@@ -282,10 +308,16 @@ impl WorkspaceRunContainer {
             || self.pids_limit > MAX_PIDS
             || self.wall_seconds == 0
             || self.wall_seconds > 24 * 3600
+            || (self.egress_proxy && !self.egress)
         {
             return Err(InvalidWorkspaceRun::Invalid);
         }
         Ok(())
+    }
+
+    /// Direct mode: the public internet, DNS to the resolver.
+    fn direct(&self) -> bool {
+        self.egress && !self.egress_proxy
     }
 
     fn labels(&self) -> BTreeMap<&'static str, &'static str> {
@@ -293,7 +325,9 @@ impl WorkspaceRunContainer {
             ("app.kubernetes.io/component", "sandbox-execution"),
             (KIND_LABEL, KIND_WORKSPACE_RUN),
         ]);
-        if self.egress {
+        if self.egress_proxy {
+            labels.insert(EGRESS_LABEL, EGRESS_PROXY);
+        } else if self.egress {
             labels.insert(EGRESS_LABEL, EGRESS_PUBLIC);
         }
         labels
@@ -320,8 +354,8 @@ impl WorkspaceRunContainer {
             return Err(InvalidWorkspaceRun::Invalid);
         }
         let mut pod = self.pod_body(namespace, runtime_class, node_selector);
-        if !self.egress {
-            pod["spec"]["dnsConfig"] = json!({"nameservers": ["127.0.0.1"]});
+        if !self.direct() {
+            pod["spec"]["dnsConfig"] = json!({"nameservers": [NO_RESOLVER]});
         }
         Ok(pod)
     }
@@ -348,10 +382,11 @@ impl WorkspaceRunContainer {
                 "restartPolicy": "Never", "automountServiceAccountToken": false,
                 "serviceAccountName": "elitea-code",
                 "enableServiceLinks": false, "hostNetwork": false, "hostPID": false, "hostIPC": false,
-                // With egress on, names resolve through the cluster resolver
+                // In direct mode, names resolve through the cluster resolver
                 // only (the NetworkPolicy allows DNS to it and nothing else
-                // private). With it off, no resolver is configured at all.
-                "dnsPolicy": if self.egress { "ClusterFirst" } else { "None" },
+                // private). Off and in proxy mode, no resolver is configured
+                // at all (the proxy resolves for the run).
+                "dnsPolicy": if self.direct() { "ClusterFirst" } else { "None" },
                 "runtimeClassName": runtime_class, "nodeSelector": node_selector,
                 "terminationGracePeriodSeconds": 5,
                 "activeDeadlineSeconds": self.wall_seconds + 60,
@@ -377,47 +412,56 @@ impl WorkspaceRunContainer {
     }
 
     /// The Docker container: a named volume for the workspace, the dedicated
-    /// egress network when the project's network is on, network `none`
-    /// otherwise.
+    /// egress network in direct mode, the internal proxy network in proxy
+    /// mode, network `none` otherwise.
     ///
     /// # Errors
     ///
     /// As [`Self::validate`]; [`InvalidWorkspaceRun::NoEgressNetwork`] when
-    /// egress is on and the deployment names no egress network.
+    /// direct mode has no egress network or resolvers, and
+    /// [`InvalidWorkspaceRun::NoProxyNetwork`] when proxy mode has no proxy
+    /// network.
     pub fn docker_plan(
         &self,
         egress_network: Option<&str>,
         egress_dns: &[String],
+        proxy_network: Option<&str>,
     ) -> Result<DockerRunPlan, InvalidWorkspaceRun> {
         self.validate()?;
-        let network_mode = if self.egress {
-            let network = egress_network
-                .filter(|name| {
-                    !name.is_empty()
-                        && !matches!(*name, "host" | "bridge" | "none" | "default")
-                        && name.bytes().all(|byte| {
-                            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')
-                        })
-                })
-                .ok_or(InvalidWorkspaceRun::NoEgressNetwork)?;
-            network.to_owned()
-        } else {
-            "none".to_owned()
+        let usable = |name: &&str| {
+            !name.is_empty()
+                && !matches!(*name, "host" | "bridge" | "none" | "default")
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
         };
-        if self.egress
-            && (egress_dns.is_empty()
+        let (network_mode, dns) = if self.egress_proxy {
+            let network = proxy_network
+                .filter(usable)
+                .ok_or(InvalidWorkspaceRun::NoProxyNetwork)?;
+            if egress_network == Some(network) {
+                // The direct-mode network reaches the internet: never a
+                // proxy-mode run's.
+                return Err(InvalidWorkspaceRun::NoProxyNetwork);
+            }
+            (network.to_owned(), vec![NO_RESOLVER.to_owned()])
+        } else if self.egress {
+            let network = egress_network
+                .filter(usable)
+                .ok_or(InvalidWorkspaceRun::NoEgressNetwork)?;
+            if egress_dns.is_empty()
                 || egress_dns
                     .iter()
-                    .any(|server| server.parse::<std::net::IpAddr>().is_err()))
-        {
-            return Err(InvalidWorkspaceRun::NoEgressNetwork);
-        }
+                    .any(|server| server.parse::<std::net::IpAddr>().is_err())
+            {
+                return Err(InvalidWorkspaceRun::NoEgressNetwork);
+            }
+            (network.to_owned(), egress_dns.to_vec())
+        } else {
+            ("none".to_owned(), Vec::new())
+        };
         Ok(DockerRunPlan {
-            dns: if self.egress {
-                egress_dns.to_vec()
-            } else {
-                Vec::new()
-            },
+            dns,
             name: self.name.clone(),
             image: self.image.clone(),
             // The image's entrypoint is the runner; the container itself only
@@ -461,7 +505,8 @@ pub struct DockerRunPlan {
     pub memory_bytes: u64,
     pub nano_cpus: i64,
     pub network_mode: String,
-    /// The resolvers the egress network's rules admit (`deploy/docker/workspace-egress.sh`).
+    /// The resolvers the egress network's rules admit
+    /// (`deploy/docker/workspace-egress.sh`); [`NO_RESOLVER`] in proxy mode.
     pub dns: Vec<String>,
     /// A named, disk-backed volume mounted at `/workspace` (exec). Docker's
     /// local driver cannot cap its size; the runner's archive limits and the
@@ -476,6 +521,12 @@ pub struct DockerRunPlan {
 mod tests {
     use super::*;
 
+    fn proxy_run() -> WorkspaceRunContainer {
+        let mut run = run(true);
+        run.egress_proxy = true;
+        run
+    }
+
     fn run(egress: bool) -> WorkspaceRunContainer {
         WorkspaceRunContainer {
             name: "elitea-ws-0123456789abcdef01234567".into(),
@@ -485,6 +536,7 @@ mod tests {
             ),
             workspace_bytes: 6 << 30,
             egress,
+            egress_proxy: false,
             cpu_millis: 2_000,
             memory_bytes: 4 << 30,
             pids_limit: 4_096,
@@ -536,7 +588,7 @@ mod tests {
         assert!(pod["metadata"]["labels"].get(EGRESS_LABEL).is_none());
         assert_eq!(pod["spec"]["dnsPolicy"], "None");
         let docker = run(false)
-            .docker_plan(Some("elitea-workspace-egress"), &dns())
+            .docker_plan(Some("elitea-workspace-egress"), &dns(), None)
             .expect("plan");
         assert_eq!(docker.network_mode, "none");
     }
@@ -544,7 +596,7 @@ mod tests {
     #[test]
     fn docker_egress_uses_the_dedicated_network_or_refuses() {
         let plan = run(true)
-            .docker_plan(Some("elitea-workspace-egress"), &dns())
+            .docker_plan(Some("elitea-workspace-egress"), &dns(), None)
             .expect("plan");
         assert_eq!(plan.network_mode, "elitea-workspace-egress");
         assert_eq!(plan.pids_limit, 4_096);
@@ -557,16 +609,64 @@ mod tests {
         );
         assert_eq!(plan.dns, dns());
         assert_eq!(
-            run(true).docker_plan(Some("elitea-workspace-egress"), &[]),
+            run(true).docker_plan(Some("elitea-workspace-egress"), &[], None),
             Err(InvalidWorkspaceRun::NoEgressNetwork)
         );
         for bad in [None, Some("host"), Some("bridge"), Some("")] {
             assert_eq!(
-                run(true).docker_plan(bad, &dns()),
+                run(true).docker_plan(bad, &dns(), Some("elitea-workspace-proxy")),
                 Err(InvalidWorkspaceRun::NoEgressNetwork),
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn proxy_mode_reaches_only_the_proxy_network_without_a_resolver() {
+        let pod = proxy_run()
+            .kubernetes_pod("elitea-execution", "gvisor", &selector())
+            .expect("pod");
+        assert_eq!(pod["metadata"]["labels"][KIND_LABEL], KIND_WORKSPACE_RUN);
+        assert_eq!(pod["metadata"]["labels"][EGRESS_LABEL], EGRESS_PROXY);
+        assert_eq!(pod["spec"]["dnsPolicy"], "None");
+        assert_eq!(pod["spec"]["dnsConfig"]["nameservers"][0], NO_RESOLVER);
+        let plan = proxy_run()
+            .docker_plan(
+                Some("elitea-workspace-egress"),
+                &dns(),
+                Some("elitea-workspace-proxy"),
+            )
+            .expect("plan");
+        assert_eq!(plan.network_mode, "elitea-workspace-proxy");
+        assert_eq!(plan.dns, [NO_RESOLVER]);
+        assert_eq!(plan.labels[EGRESS_LABEL], EGRESS_PROXY);
+        for bad in [None, Some("bridge"), Some("elitea-workspace-egress")] {
+            assert_eq!(
+                proxy_run().docker_plan(Some("elitea-workspace-egress"), &dns(), bad),
+                Err(InvalidWorkspaceRun::NoProxyNetwork),
+                "{bad:?}"
+            );
+        }
+        // Proxy without the network switch is not a run.
+        let mut invalid = proxy_run();
+        invalid.egress = false;
+        assert_eq!(invalid.validate(), Err(InvalidWorkspaceRun::Invalid));
+    }
+
+    #[test]
+    fn the_digest_binds_proxy_mode_and_keeps_direct_mode_digests() {
+        let direct = run(true).to_wire();
+        let mut legacy = direct.clone();
+        legacy.egress_proxy = false;
+        assert_eq!(spec_digest(&direct), spec_digest(&legacy));
+        let proxy = proxy_run().to_wire();
+        assert_ne!(spec_digest(&proxy), spec_digest(&direct));
+        let image = format!(
+            "registry.example/workspace-runner@sha256:{}",
+            "b".repeat(64)
+        );
+        let back = WorkspaceRunContainer::from_wire(&proxy, &image).expect("round trip");
+        assert!(back.egress_proxy);
     }
 
     #[test]

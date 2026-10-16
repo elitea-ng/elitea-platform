@@ -48,7 +48,16 @@ message WorkspaceRunSpecV1 {
   // The turn's wall time; the supervisor removes the run after it (plus a
   // grace) even when the worker never destroys it.
   uint64 wall_seconds = 8;
-  reserved 9 to 15;
+  // Host-allowlist mode (ADR-0034 decision 9, "Host allowlist: the egress
+  // proxy"): with `egress` true, the run reaches ONLY the egress proxy (the
+  // `sandbox.elitea.ai/egress: proxy` label on Kubernetes, the profile's
+  // proxy network on Docker), with no DNS and no direct egress. False with
+  // `egress` true is direct mode; true with `egress` false is invalid. It is
+  // part of the grant's request digest only when true, so a supervisor that
+  // predates this field computes another digest and refuses the run rather
+  // than rendering it as direct egress.
+  bool egress_proxy = 9;
+  reserved 10 to 15;
 }
 
 message StartWorkspaceRunRequestV1 {

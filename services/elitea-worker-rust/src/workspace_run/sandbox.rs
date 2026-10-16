@@ -13,7 +13,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::context::WorkspaceRuntimeContext;
+use super::context::{EgressMode, WorkspaceRuntimeContext};
 
 /// Bytes added to the declared unpacked size for builds, at least.
 pub(crate) const MIN_BUILD_HEADROOM_BYTES: u64 = 1 << 30;
@@ -29,6 +29,10 @@ pub(crate) enum WorkspaceNetwork {
     /// The public internet minus the deny ranges (RFC 1918, link-local,
     /// loopback, metadata, the cluster's ranges), DNS to the resolver only.
     PublicEgress,
+    /// Host-allowlist mode: the egress proxy only (its port), no DNS, no
+    /// direct egress. The proxy enforces the allowlist in the run token,
+    /// which reaches the sandbox only in the command environment.
+    Proxy,
 }
 
 /// The deployment's defaults and ceilings for workspace runs.
@@ -38,10 +42,6 @@ pub(crate) struct WorkspaceRunDefaults {
     pub(crate) memory_bytes: u64,
     pub(crate) max_disk_bytes: u64,
     pub(crate) turn_wall: Duration,
-    /// Whether the deployment has an egress proxy that enforces a host
-    /// allowlist (ADR-0011). None exists yet, so a project allowlist is
-    /// refused rather than silently widened to the public internet.
-    pub(crate) host_allowlist_proxy: bool,
 }
 
 /// One workspace run's container, independent of the backend.
@@ -67,6 +67,9 @@ pub(crate) struct WorkspaceRunSpec {
 pub(crate) enum SandboxRunError {
     /// The policy asks for something this deployment cannot enforce.
     PolicyUnenforceable,
+    /// The project restricts the network to a host allowlist, and this
+    /// deployment has no egress proxy (or no run-token key) to enforce it.
+    EgressProxyUnavailable,
     /// The declared tree does not fit the deployment's disk ceiling.
     TooLarge,
     /// The sandbox backend is unavailable.
@@ -84,6 +87,7 @@ impl SandboxRunError {
     pub(crate) const fn code(self) -> &'static str {
         match self {
             Self::PolicyUnenforceable => "workspace_run.policy_unenforceable",
+            Self::EgressProxyUnavailable => "workspace_run.egress_proxy_unavailable",
             Self::TooLarge => "workspace_run.workspace_too_large",
             Self::Unavailable => "workspace_run.sandbox_unavailable",
             Self::Protocol => "workspace_run.sandbox_protocol",
@@ -99,20 +103,21 @@ impl WorkspaceRunSpec {
     ///
     /// # Errors
     ///
-    /// [`SandboxRunError::PolicyUnenforceable`] for a host allowlist without
-    /// an egress proxy; [`SandboxRunError::TooLarge`] when the declared tree
-    /// plus headroom exceeds the disk ceiling.
+    /// [`SandboxRunError::EgressProxyUnavailable`] for a host allowlist this
+    /// deployment cannot enforce (Main's egress mode `unavailable`, or a Main
+    /// that predates the proxy); [`SandboxRunError::TooLarge`] when the
+    /// declared tree plus headroom exceeds the disk ceiling.
     pub(crate) fn from_context(
         run_id: String,
         context: &WorkspaceRuntimeContext,
         defaults: &WorkspaceRunDefaults,
     ) -> Result<Self, SandboxRunError> {
-        if context.network
-            && !context.network_allowlist.is_empty()
-            && !defaults.host_allowlist_proxy
-        {
-            return Err(SandboxRunError::PolicyUnenforceable);
-        }
+        let network = match context.egress_mode() {
+            EgressMode::None => WorkspaceNetwork::None,
+            EgressMode::Direct => WorkspaceNetwork::PublicEgress,
+            EgressMode::Proxy => WorkspaceNetwork::Proxy,
+            EgressMode::Unavailable => return Err(SandboxRunError::EgressProxyUnavailable),
+        };
         let limits = &context.limits;
         let disk_ceiling = if limits.disk_bytes == 0 {
             defaults.max_disk_bytes
@@ -138,11 +143,7 @@ impl WorkspaceRunSpec {
         Ok(Self {
             run_id,
             workspace_bytes,
-            network: if context.network {
-                WorkspaceNetwork::PublicEgress
-            } else {
-                WorkspaceNetwork::None
-            },
+            network,
             shell: context.shell,
             cpu_millis: pick(limits.cpu_millis, defaults.cpu_millis),
             memory_bytes: pick(limits.memory_bytes, defaults.memory_bytes),
@@ -167,11 +168,12 @@ impl WorkspaceRunSpec {
             revision: 1,
             name: self.run_id.clone(),
             workspace_bytes: self.workspace_bytes,
-            egress: self.network == WorkspaceNetwork::PublicEgress,
+            egress: self.network != WorkspaceNetwork::None,
             cpu_millis: self.cpu_millis,
             memory_bytes: self.memory_bytes,
             pids_limit: self.pids_limit,
             wall_seconds: self.turn_wall.as_secs().max(1),
+            egress_proxy: self.network == WorkspaceNetwork::Proxy,
         }
     }
 
@@ -187,7 +189,8 @@ impl WorkspaceRunSpec {
             name: self.run_id.clone(),
             image: image.to_owned(),
             workspace_bytes: self.workspace_bytes,
-            egress: self.network == WorkspaceNetwork::PublicEgress,
+            egress: self.network != WorkspaceNetwork::None,
+            egress_proxy: self.network == WorkspaceNetwork::Proxy,
             cpu_millis: self.cpu_millis,
             memory_bytes: self.memory_bytes,
             pids_limit: self.pids_limit,
@@ -295,7 +298,6 @@ mod tests {
             memory_bytes: 4 << 30,
             max_disk_bytes: 8 << 30,
             turn_wall: Duration::from_mins(30),
-            host_allowlist_proxy: false,
         }
     }
 
@@ -326,19 +328,33 @@ mod tests {
     fn network_off_is_mode_none_and_an_allowlist_needs_the_proxy() {
         let mut context = fixture();
         context.network = false;
+        context.egress = None;
         let spec =
             WorkspaceRunSpec::from_context("run".into(), &context, &defaults()).expect("spec");
         assert_eq!(spec.network, WorkspaceNetwork::None);
 
+        // An allowlist without Main's proxy mode (an older Main, or mode
+        // unavailable) is refused, never widened to direct egress.
         let mut context = fixture();
+        context.egress = None;
         context.network_allowlist = vec!["pypi.org".into()];
         assert_eq!(
             WorkspaceRunSpec::from_context("run".into(), &context, &defaults()),
-            Err(SandboxRunError::PolicyUnenforceable)
+            Err(SandboxRunError::EgressProxyUnavailable)
         );
-        let mut with_proxy = defaults();
-        with_proxy.host_allowlist_proxy = true;
-        assert!(WorkspaceRunSpec::from_context("run".into(), &context, &with_proxy).is_ok());
+        assert_eq!(
+            SandboxRunError::EgressProxyUnavailable.code(),
+            "workspace_run.egress_proxy_unavailable"
+        );
+        let spec = WorkspaceRunSpec::from_context(
+            "run".into(),
+            &crate::workspace_run::context::proxy_fixture(),
+            &defaults(),
+        )
+        .expect("spec");
+        assert_eq!(spec.network, WorkspaceNetwork::Proxy);
+        let wire = spec.to_wire();
+        assert!(wire.egress && wire.egress_proxy);
     }
 
     #[test]
@@ -366,11 +382,16 @@ mod tests {
         );
         let mut off = fixture();
         off.network = false;
+        off.egress = None;
         let spec = WorkspaceRunSpec::from_context("elitea-ws-abc".into(), &off, &defaults())
             .expect("spec");
         let plan = spec
             .container(&image)
-            .docker_plan(Some("elitea-workspace-egress"), &["1.1.1.1".to_owned()])
+            .docker_plan(
+                Some("elitea-workspace-egress"),
+                &["1.1.1.1".to_owned()],
+                None,
+            )
             .expect("plan");
         assert_eq!(plan.network_mode, "none");
         assert_eq!(plan.pids_limit, WORKSPACE_RUN_PIDS_LIMIT);

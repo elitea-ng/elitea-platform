@@ -14,7 +14,8 @@
 //!  "max_cpu_millis": 4000, "max_memory_bytes": 8589934592,
 //!  "max_wall_seconds": 3600,
 //!  "backend": {"kind": "docker", "egress_network": "elitea-workspace-egress",
-//!              "egress_dns": ["1.1.1.1"]}}
+//!              "egress_dns": ["1.1.1.1"],
+//!              "proxy_network": "elitea-workspace-proxy"}}
 //! ```
 
 use std::collections::BTreeMap;
@@ -47,6 +48,11 @@ enum BackendConfig {
         /// The resolvers that network's rules admit.
         #[serde(default)]
         egress_dns: Vec<String>,
+        /// The internal network of host-allowlist mode, on which only the
+        /// egress proxy is reachable (`deploy/docker/workspace-egress.sh`);
+        /// required for a run in proxy mode.
+        #[serde(default)]
+        proxy_network: Option<String>,
     },
     Kubernetes {
         namespace: String,
@@ -136,7 +142,13 @@ impl WorkspaceProfileConfig {
             BackendConfig::Docker {
                 egress_network,
                 egress_dns,
+                proxy_network,
             } => {
+                if proxy_network.is_some() && proxy_network == egress_network {
+                    return Err(StartupError(
+                        "the proxy network must not be the egress network",
+                    ));
+                }
                 if egress_network.is_some()
                     && (egress_dns.is_empty()
                         || egress_dns
@@ -184,10 +196,12 @@ async fn backend(
         BackendConfig::Docker {
             egress_network,
             egress_dns,
+            proxy_network,
         } => Arc::new(
             super::workspace_run_docker::DockerWorkspaceRuns::connect(
                 egress_network.clone(),
                 egress_dns.clone(),
+                proxy_network.clone(),
             )
             .await
             .map_err(|_| StartupError("connect to Docker for workspace runs"))?,
@@ -328,5 +342,14 @@ mod tests {
         assert!(!is_workspace_profile(
             br#"{"revision":1,"purpose":"execution"}"#
         ));
+        // The proxy network (host-allowlist mode) is its own network.
+        let proxy = profile(
+            r#"{"kind":"docker","egress_network":"elitea-workspace-egress","egress_dns":["1.1.1.1"],"proxy_network":"elitea-workspace-proxy"}"#,
+        );
+        assert!(WorkspaceProfileConfig::parse(proxy.as_bytes()).is_ok());
+        let same = profile(
+            r#"{"kind":"docker","egress_network":"elitea-workspace-egress","egress_dns":["1.1.1.1"],"proxy_network":"elitea-workspace-egress"}"#,
+        );
+        assert!(WorkspaceProfileConfig::parse(same.as_bytes()).is_err());
     }
 }

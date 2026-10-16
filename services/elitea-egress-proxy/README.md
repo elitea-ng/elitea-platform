@@ -346,7 +346,13 @@ the 10 seconds of last audit reports.
 ### Network shape
 
 - The sandbox in allowlist mode reaches only the proxy port. It has no direct
-  egress and no DNS (phase B ships that sandbox policy).
+  egress and no DNS. On Kubernetes the run's Pod carries
+  `sandbox.elitea.ai/egress: proxy`, which only
+  `elitea-workspace-run-proxy-egress` selects (the proxy pods, the proxy
+  port); its `dnsPolicy` is `None` with a loopback nameserver, and the worker
+  hands the sandbox the proxy's address as an IP literal. On Docker the run
+  joins an internal network on which only the proxy is reachable
+  (`deploy/docker/workspace-egress.sh`, `ELITEA_WORKSPACE_PROXY_NETWORK`).
 - The proxy reaches elitea-main's control port, for the audit reports.
 - The proxy accepts on its proxy port only from the workspace-run pods in the
   execution namespace. It accepts on the admin port only from

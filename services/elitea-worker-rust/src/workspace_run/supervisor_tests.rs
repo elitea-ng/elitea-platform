@@ -188,7 +188,6 @@ pub(crate) fn spec(run: &str) -> WorkspaceRunSpec {
             memory_bytes: 4 << 30,
             max_disk_bytes: 8 << 30,
             turn_wall: Duration::from_mins(10),
-            host_allowlist_proxy: false,
         },
     )
     .expect("spec")

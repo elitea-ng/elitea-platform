@@ -86,7 +86,7 @@ async fn launch(
     egress: bool,
     run: &str,
 ) -> (Arc<dyn WorkspaceSandbox>, tokio::task::JoinHandle<()>) {
-    let backend = DockerWorkspaceRuns::connect(egress_network, egress_dns)
+    let backend = DockerWorkspaceRuns::connect(egress_network, egress_dns, None)
         .await
         .expect("Docker is reachable");
     let (_supervisor, launcher, server) = serve(Arc::new(backend), image, 4).await;

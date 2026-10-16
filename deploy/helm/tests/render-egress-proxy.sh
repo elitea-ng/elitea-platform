@@ -128,7 +128,7 @@ proxy_in, admin_in = nps["ingress"]
 assert proxy_in["ports"] == [{"port": 3128, "protocol": "TCP"}]
 assert proxy_in["from"] == [{
     "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "code-execution"}},
-    "podSelector": {"matchLabels": {"sandbox.elitea.ai/kind": "workspace-run"}},
+    "podSelector": {"matchLabels": {"sandbox.elitea.ai/kind": "workspace-run", "sandbox.elitea.ai/egress": "proxy"}},
 }], proxy_in["from"]
 assert admin_in["ports"] == [{"port": 9090, "protocol": "TCP"}]
 assert admin_in["from"] == [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}}]
@@ -288,7 +288,6 @@ expect_refusal "a malformed deny CIDR" "is not an explicit CIDR block" \
 expect_refusal "one replica" "replicaCount must be at least 2" --set egressProxy.replicaCount=1
 expect_refusal "a grace period shorter than the drain" "terminationGracePeriodSeconds must be at least" \
   --set egressProxy.terminationGracePeriodSeconds=30
-
 expect_refusal "a grace period without the audit's last reports" "plus 10 for the last audit reports" \
   --set egressProxy.terminationGracePeriodSeconds=75
 expect_refusal "the audit identity is elitea-vector's" "must differ from vector.mtls.clientDnsName" \
@@ -318,6 +317,66 @@ elif printf '%s' "$out" | grep -qF "egressProxy.enabled is false"; then
 else
   fail "refused for the wrong reason: $(printf '%s' "$out" | tail -1)"
 fi
+
+echo "== a proxy-mode workspace run reaches only the proxy port"
+runs=(--set sandboxKubernetes.enabled=true --set sandboxKubernetes.workspaceRuns.enabled=true --set sandboxKubernetes.executionNamespace=code-execution)
+helm template t "$chart" "${base[@]}" -f "$fixture" "${runs[@]}" > "$work/runs.yaml"
+helm template t "$chart" "${base[@]}" "${runs[@]}" > "$work/runs-noproxy.yaml"
+# Direct mode alongside: both policies, each selecting its own label.
+helm template t "$chart" "${base[@]}" -f "$fixture" "${runs[@]}" \
+  --set sandboxKubernetes.workspaceRuns.egress.enabled=true \
+  --set egressProxy.networkPolicy.podCidrs=null --set egressProxy.networkPolicy.serviceCidrs=null \
+  --set 'sandboxKubernetes.workspaceRuns.egress.podCidrs[0]=10.244.0.0/16' \
+  --set 'sandboxKubernetes.workspaceRuns.egress.serviceCidrs[0]=10.96.0.0/12' > "$work/both.yaml"
+if python3 - "$work/runs.yaml" "$work/runs-noproxy.yaml" "$work/both.yaml" <<'PY'
+import sys
+import yaml
+
+def docs(path):
+    return [d for d in yaml.safe_load_all(open(path)) if d]
+
+def policies(ds):
+    return {d["metadata"]["name"]: d for d in ds if d["kind"] == "NetworkPolicy"}
+
+runs, noproxy, both = (docs(p) for p in sys.argv[1:4])
+found = policies(runs)
+p = found["elitea-workspace-run-proxy-egress"]
+assert p["metadata"]["namespace"] == "code-execution"
+spec = p["spec"]
+assert spec["podSelector"] == {"matchLabels": {"sandbox.elitea.ai/kind": "workspace-run", "sandbox.elitea.ai/egress": "proxy"}}
+assert spec["policyTypes"] == ["Egress"]
+assert spec["egress"] == [{
+    "to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "platform"}},
+            "podSelector": {"matchLabels": {"app.kubernetes.io/name": "elitea-egress-proxy", "app.kubernetes.io/instance": "t"}}}],
+    "ports": [{"protocol": "TCP", "port": 3128}],
+}], spec["egress"]
+# No DNS, no ipBlock: only the proxy pods.
+assert "53" not in yaml.safe_dump(spec) and "ipBlock" not in yaml.safe_dump(spec)
+# Deny-all is unchanged; the direct-mode policy does not render without workspaceRuns.egress.
+assert found["elitea-code-deny-network"]["spec"]["egress"] == []
+assert "elitea-workspace-run-egress" not in found
+assert "elitea-workspace-run-proxy-egress" not in policies(noproxy)
+
+found = policies(both)
+direct = found["elitea-workspace-run-egress"]["spec"]["podSelector"]["matchLabels"]
+proxy = found["elitea-workspace-run-proxy-egress"]["spec"]["podSelector"]["matchLabels"]
+assert direct["sandbox.elitea.ai/egress"] == "public" and proxy["sandbox.elitea.ai/egress"] == "proxy"
+# The proxy took the cluster ranges from workspaceRuns.egress.
+dep = [d for d in both if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-egress-proxy"][0]
+env = {e["name"]: e.get("value") for e in dep["spec"]["template"]["spec"]["containers"][0]["env"]}
+deny = set(env["ELITEA_EGRESS_PROXY_DENY_CIDRS"].split(","))
+assert {"10.244.0.0/16", "10.96.0.0/12"} <= deny, deny
+np = [r for r in found["elitea-egress-proxy-netpol"]["spec"]["egress"] if "ipBlock" in r["to"][0]][0]["to"][0]["ipBlock"]["except"]
+assert "10.244.0.0/16" in np and "10.96.0.0/12" in np
+PY
+then
+  note "proxy mode: one policy, the proxy pods on 3128 only; direct mode keeps its own; the CIDRs are shared"
+else
+  fail "the workspace-run proxy-mode policy is wrong (assertion above)"
+fi
+expect_refusal "different cluster ranges in the two places" "name different cluster ranges" \
+  --set sandboxKubernetes.enabled=true --set sandboxKubernetes.workspaceRuns.enabled=true \
+  --set 'sandboxKubernetes.workspaceRuns.egress.podCidrs[0]=10.0.0.0/16'
 
 echo "== clientNamespace overrides the execution namespace"
 helm template t "$chart" "${base[@]}" -f "$fixture" --set egressProxy.networkPolicy.clientNamespace=workspaces \

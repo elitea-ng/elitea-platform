@@ -25,11 +25,29 @@
 # IPv6 is disabled on the network, so fd00:ec2::254 and the other IPv6
 # private ranges are unreachable by construction.
 #
+# It also creates the PROXY network (host allowlist mode, "Host allowlist:
+# the egress proxy"): a run whose project restricts the network to a host
+# allowlist joins it instead, and the egress proxy is attached to it at a
+# fixed address. The network is `--internal` (no route out, no gateway), and
+# a DOCKER-USER chain lets a run reach ONLY the proxy's address on the proxy
+# port: not another run, not the host, no DNS (the supervisor gives the run a
+# loopback resolver, and Docker's embedded resolver does not forward for an
+# internal network). Start the proxy on it with
+#   docker network connect --ip "$ELITEA_WORKSPACE_PROXY_ADDRESS" \
+#     "$ELITEA_WORKSPACE_PROXY_NETWORK" <proxy container>
+# (deploy/docker-compose.egress-proxy.yml does this), and give elitea-main
+# ELITEA_EGRESS_PROXY_URL=http://$ELITEA_WORKSPACE_PROXY_ADDRESS:3128.
+#
 # Usage: workspace-egress.sh [extra-deny-cidr ...]
 # Env:   ELITEA_WORKSPACE_EGRESS_NETWORK (default elitea-workspace-egress),
 #        ELITEA_WORKSPACE_EGRESS_SUBNET  (default 172.31.250.0/24),
 #        ELITEA_WORKSPACE_EGRESS_DNS     (space-separated public resolvers,
-#                                         default "1.1.1.1 9.9.9.9").
+#                                         default "1.1.1.1 9.9.9.9"),
+#        ELITEA_WORKSPACE_PROXY_NETWORK  (default elitea-workspace-proxy),
+#        ELITEA_WORKSPACE_PROXY_SUBNET   (default 172.31.251.0/24),
+#        ELITEA_WORKSPACE_PROXY_ADDRESS  (the proxy's address on it,
+#                                         default 172.31.251.2),
+#        ELITEA_WORKSPACE_PROXY_PORT     (default 3128).
 set -euo pipefail
 
 network="${ELITEA_WORKSPACE_EGRESS_NETWORK:-elitea-workspace-egress}"
@@ -73,3 +91,33 @@ iptables -A "$input_chain" -j DROP
 iptables -C INPUT -i "$bridge" -j "$input_chain" 2>/dev/null \
   || iptables -I INPUT -i "$bridge" -j "$input_chain"
 echo "workspace egress network $network ($subnet) is ready; set it as the supervisor's workspace egress network"
+
+# --- The proxy network (host allowlist mode). ---
+proxy_network="${ELITEA_WORKSPACE_PROXY_NETWORK:-elitea-workspace-proxy}"
+proxy_subnet="${ELITEA_WORKSPACE_PROXY_SUBNET:-172.31.251.0/24}"
+proxy_address="${ELITEA_WORKSPACE_PROXY_ADDRESS:-172.31.251.2}"
+proxy_port="${ELITEA_WORKSPACE_PROXY_PORT:-3128}"
+proxy_bridge="br-elitea-wsp"
+if ! docker network inspect "$proxy_network" >/dev/null 2>&1; then
+  # ICC off: Docker drops bridge-local traffic, and the chain below admits
+  # the one flow allowed (a run to the proxy). The proxy is outside the
+  # range Docker assigns to runs.
+  docker network create --driver bridge --internal --subnet "$proxy_subnet" \
+    --ip-range "$(printf '%s' "$proxy_subnet" | sed 's#\.0/24$#.128/25#')" --ipv6=false \
+    --opt com.docker.network.bridge.name="$proxy_bridge" \
+    --opt com.docker.network.bridge.enable_icc=false \
+    --label sandbox.elitea.ai/kind=workspace-run "$proxy_network" >/dev/null
+fi
+proxy_chain=ELITEA-WORKSPACE-PROXY
+iptables -N "$proxy_chain" 2>/dev/null || iptables -F "$proxy_chain"
+# Replies (the proxy answering a run).
+iptables -A "$proxy_chain" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# A run to the proxy port, and nothing else.
+iptables -A "$proxy_chain" -o "$proxy_bridge" -d "$proxy_address" -p tcp --dport "$proxy_port" -j ACCEPT
+iptables -A "$proxy_chain" -j DROP
+iptables -C DOCKER-USER -i "$proxy_bridge" -j "$proxy_chain" 2>/dev/null \
+  || iptables -I DOCKER-USER -i "$proxy_bridge" -j "$proxy_chain"
+# The host: nothing but replies.
+iptables -C INPUT -i "$proxy_bridge" -j "$input_chain" 2>/dev/null \
+  || iptables -I INPUT -i "$proxy_bridge" -j "$input_chain"
+echo "workspace proxy network $proxy_network ($proxy_subnet) is ready; attach the egress proxy at $proxy_address and set it as the supervisor's workspace proxy network"

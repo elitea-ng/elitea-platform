@@ -304,6 +304,7 @@ mod tests {
                 image: format!("registry.example/runner@sha256:{}", "c".repeat(64)),
                 workspace_bytes: 3 << 30,
                 egress: false,
+                egress_proxy: false,
                 cpu_millis: 1_000,
                 memory_bytes: 2 << 30,
                 pids_limit: 4_096,

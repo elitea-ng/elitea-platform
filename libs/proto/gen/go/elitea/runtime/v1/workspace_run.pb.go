@@ -95,7 +95,16 @@ type WorkspaceRunSpecV1 struct {
 	PidsLimit   int64  `protobuf:"varint,7,opt,name=pids_limit,json=pidsLimit,proto3" json:"pids_limit,omitempty"`
 	// The turn's wall time; the supervisor removes the run after it (plus a
 	// grace) even when the worker never destroys it.
-	WallSeconds   uint64 `protobuf:"varint,8,opt,name=wall_seconds,json=wallSeconds,proto3" json:"wall_seconds,omitempty"`
+	WallSeconds uint64 `protobuf:"varint,8,opt,name=wall_seconds,json=wallSeconds,proto3" json:"wall_seconds,omitempty"`
+	// Host-allowlist mode (ADR-0034 decision 9, "Host allowlist: the egress
+	// proxy"): with `egress` true, the run reaches ONLY the egress proxy (the
+	// `sandbox.elitea.ai/egress: proxy` label on Kubernetes, the profile's
+	// proxy network on Docker), with no DNS and no direct egress. False with
+	// `egress` true is direct mode; true with `egress` false is invalid. It is
+	// part of the grant's request digest only when true, so a supervisor that
+	// predates this field computes another digest and refuses the run rather
+	// than rendering it as direct egress.
+	EgressProxy   bool `protobuf:"varint,9,opt,name=egress_proxy,json=egressProxy,proto3" json:"egress_proxy,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -184,6 +193,13 @@ func (x *WorkspaceRunSpecV1) GetWallSeconds() uint64 {
 		return x.WallSeconds
 	}
 	return 0
+}
+
+func (x *WorkspaceRunSpecV1) GetEgressProxy() bool {
+	if x != nil {
+		return x.EgressProxy
+	}
+	return false
 }
 
 type StartWorkspaceRunRequestV1 struct {
@@ -764,7 +780,7 @@ var File_elitea_runtime_v1_workspace_run_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_workspace_run_proto_rawDesc = "" +
 	"\n" +
-	"%elitea/runtime/v1/workspace_run.proto\x12\x11elitea.runtime.v1\x1a\x1felitea/runtime/v1/sandbox.proto\"\x8f\x02\n" +
+	"%elitea/runtime/v1/workspace_run.proto\x12\x11elitea.runtime.v1\x1a\x1felitea/runtime/v1/sandbox.proto\"\xb2\x02\n" +
 	"\x12WorkspaceRunSpecV1\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\rR\brevision\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12'\n" +
@@ -775,7 +791,9 @@ const file_elitea_runtime_v1_workspace_run_proto_rawDesc = "" +
 	"\fmemory_bytes\x18\x06 \x01(\x04R\vmemoryBytes\x12\x1d\n" +
 	"\n" +
 	"pids_limit\x18\a \x01(\x03R\tpidsLimit\x12!\n" +
-	"\fwall_seconds\x18\b \x01(\x04R\vwallSecondsJ\x04\b\t\x10\x10\"\x9f\x01\n" +
+	"\fwall_seconds\x18\b \x01(\x04R\vwallSeconds\x12!\n" +
+	"\fegress_proxy\x18\t \x01(\bR\vegressProxyJ\x04\b\n" +
+	"\x10\x10\"\x9f\x01\n" +
 	"\x1aStartWorkspaceRunRequestV1\x12@\n" +
 	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grant\x129\n" +
 	"\x04spec\x18\x02 \x01(\v2%.elitea.runtime.v1.WorkspaceRunSpecV1R\x04specJ\x04\b\x03\x10\x10\"=\n" +

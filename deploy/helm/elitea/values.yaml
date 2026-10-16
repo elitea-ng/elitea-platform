@@ -3696,16 +3696,21 @@ egressProxy:
     # The namespace of the sandbox pods. Empty: sandboxKubernetes.executionNamespace.
     clientNamespace: ""
     # The labels of the workspace-run sandbox pods that may reach the proxy
-    # port (the label the supervisor sets on workspace runs).
+    # port: the supervisor sets both on a workspace run in proxy mode
+    # (services/elitea-worker-rust/src/sandbox/workspace_run.rs). A run in
+    # direct mode carries egress=public and is not admitted.
     clientPodLabels:
       sandbox.elitea.ai/kind: workspace-run
+      sandbox.elitea.ai/egress: proxy
     # NetworkPolicyPeer entries admitted on the admin port, e.g. Prometheus:
     #   - namespaceSelector:
     #       matchLabels: {kubernetes.io/metadata.name: monitoring}
     adminFrom: []
     # REQUIRED with the policy on: the cluster's pod and service ranges. The
     # policy excepts them from the proxy's egress, and the proxy refuses them
-    # itself.
+    # itself. Empty: sandboxKubernetes.workspaceRuns.egress.podCidrs and
+    # serviceCidrs (the same cluster, the same ranges). Set in both places,
+    # they must be equal; the chart refuses two different answers.
     podCidrs: []
     serviceCidrs: []
     # Always denied. RFC 1918, carrier-grade NAT (Alibaba metadata inside),

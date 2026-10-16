@@ -1,0 +1,69 @@
+# The workspace egress proxy (ADR-0034 decision 9, "Host allowlist: the
+# egress proxy") for the compose stack. Add after standalone-full and the
+# sandbox overlay:
+#
+#   docker compose -f docker-compose.standalone-full.yml \
+#     -f docker-compose.sandbox.yml -f docker-compose.egress-proxy.yml up -d
+#
+# Before starting:
+#   1. Run deploy/docker/workspace-egress.sh once on the Docker host (root).
+#      It creates the internal proxy network (elitea-workspace-proxy,
+#      172.31.251.0/24) on which a run in allowlist mode reaches ONLY the
+#      proxy's address and port, and the direct-mode egress network.
+#   2. Make the run-token key pair (services/elitea-egress-proxy/README.md,
+#      "Creating the key pair") and point ELITEA_EGRESS_TOKEN_SIGNING_KEY at
+#      the private key and ELITEA_EGRESS_PROXY_PUBLIC_KEYS at a directory
+#      holding the public key.
+#   3. Name the proxy network in the supervisor's workspace profile
+#      ("backend": {"kind": "docker", "proxy_network": "elitea-workspace-proxy", ...}).
+#
+# The proxy reports its run summaries to elitea-main only where it has a
+# runtime-CA client certificate (the chart issues one); here the summaries
+# stay in the proxy's log (egress_proxy.run_summary).
+services:
+  egress-proxy:
+    image: ${ELITEA_EGRESS_PROXY_IMAGE:-ghcr.io/elitea-ng/elitea-egress-proxy:standalone}
+    build:
+      context: ..
+      dockerfile: services/elitea-egress-proxy/Containerfile
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 80s
+    environment:
+      ELITEA_EGRESS_PROXY_PUBLIC_KEYS: /etc/elitea-egress-proxy/keys
+      # The compose networks are private ranges, which the proxy refuses
+      # anyway; named here so the deny list reads complete.
+      ELITEA_EGRESS_PROXY_DENY_CIDRS: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+    volumes:
+      - type: bind
+        source: ${ELITEA_EGRESS_PROXY_PUBLIC_KEYS:?Set the directory of run-token public keys}
+        target: /etc/elitea-egress-proxy/keys
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      # Its own egress: the public internet (the proxy refuses private and
+      # metadata ranges itself).
+      default: {}
+      # Where the allowlist-mode runs reach it.
+      workspace-proxy:
+        ipv4_address: ${ELITEA_WORKSPACE_PROXY_ADDRESS:-172.31.251.2}
+
+  elitea-main:
+    environment:
+      ELITEA_EGRESS_PROXY_URL: "http://${ELITEA_WORKSPACE_PROXY_ADDRESS:-172.31.251.2}:3128"
+      ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE: /run/elitea-egress-token/signing.pem
+    volumes:
+      - type: bind
+        source: ${ELITEA_EGRESS_TOKEN_SIGNING_KEY:?Set the run-token signing key (PKCS#8 PEM Ed25519)}
+        target: /run/elitea-egress-token/signing.pem
+        read_only: true
+        bind:
+          create_host_path: false
+
+networks:
+  workspace-proxy:
+    external: true
+    name: ${ELITEA_WORKSPACE_PROXY_NETWORK:-elitea-workspace-proxy}

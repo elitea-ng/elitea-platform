@@ -202,7 +202,8 @@ impl SupervisorSandbox {
     async fn start_serve(&self, env: &SecretEnv) -> Result<(), SandboxRunError> {
         let policy = serde_json::json!({
             "shell": self.spec.shell,
-            "network": self.spec.network == super::sandbox::WorkspaceNetwork::PublicEgress,
+            // Proxy mode is the network on, through the proxy.
+            "network": self.spec.network != super::sandbox::WorkspaceNetwork::None,
         })
         .to_string();
         let exec = self.open(WorkspaceRunOperationV1::Serve, policy).await?;

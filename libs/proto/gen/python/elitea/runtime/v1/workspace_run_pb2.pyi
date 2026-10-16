@@ -19,7 +19,7 @@ WORKSPACE_RUN_OPERATION_V1_SERVE: WorkspaceRunOperationV1
 WORKSPACE_RUN_OPERATION_V1_PACK: WorkspaceRunOperationV1
 
 class WorkspaceRunSpecV1(_message.Message):
-    __slots__ = ("revision", "name", "workspace_bytes", "egress", "cpu_millis", "memory_bytes", "pids_limit", "wall_seconds")
+    __slots__ = ("revision", "name", "workspace_bytes", "egress", "cpu_millis", "memory_bytes", "pids_limit", "wall_seconds", "egress_proxy")
     REVISION_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_BYTES_FIELD_NUMBER: _ClassVar[int]
@@ -28,6 +28,7 @@ class WorkspaceRunSpecV1(_message.Message):
     MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
     PIDS_LIMIT_FIELD_NUMBER: _ClassVar[int]
     WALL_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    EGRESS_PROXY_FIELD_NUMBER: _ClassVar[int]
     revision: int
     name: str
     workspace_bytes: int
@@ -36,7 +37,8 @@ class WorkspaceRunSpecV1(_message.Message):
     memory_bytes: int
     pids_limit: int
     wall_seconds: int
-    def __init__(self, revision: _Optional[int] = ..., name: _Optional[str] = ..., workspace_bytes: _Optional[int] = ..., egress: bool = ..., cpu_millis: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., pids_limit: _Optional[int] = ..., wall_seconds: _Optional[int] = ...) -> None: ...
+    egress_proxy: bool
+    def __init__(self, revision: _Optional[int] = ..., name: _Optional[str] = ..., workspace_bytes: _Optional[int] = ..., egress: bool = ..., cpu_millis: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., pids_limit: _Optional[int] = ..., wall_seconds: _Optional[int] = ..., egress_proxy: bool = ...) -> None: ...
 
 class StartWorkspaceRunRequestV1(_message.Message):
     __slots__ = ("grant", "spec")
