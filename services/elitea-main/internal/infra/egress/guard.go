@@ -12,9 +12,9 @@
 //     benchmarking, site-local) are refused unless an operator allowlist entry
 //     names that address: a CIDR entry permits its own block, an IP literal
 //     that address, `localhost` loopback, each only on the entry's port when it
-//     pins one (classify.go privatePermits). Unspecified, link-local, multicast, reserved,
+//     pins one (addrcheck.PrivatePermits). Unspecified, link-local, multicast, reserved,
 //     IETF-protocol, discard, Teredo and cloud-metadata addresses are refused
-//     whatever the allowlist says (classify.go).
+//     whatever the allowlist says (addrcheck.Classify).
 //   - IPv4 reached through an IPv6 form (IPv4-mapped, NAT64 64:ff9b::/96, 6to4)
 //     is classified as the IPv4 address it reaches.
 //   - The transport never uses a proxy, so the address checked is the address
@@ -48,6 +48,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
+	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/addrcheck"
 )
 
 // ErrDestinationRefused is the sentinel every refusal wraps, so a caller can
@@ -56,10 +57,9 @@ import (
 var ErrDestinationRefused = errors.New("webhook destination refused")
 
 const (
-	// dnsLookupTimeout bounds ONE resolution, at validation and at dial time.
-	dnsLookupTimeout = 5 * time.Second
-	// dialTimeout bounds ONE literal-IP TCP connect.
-	dialTimeout = 10 * time.Second
+	// dialTimeout bounds ONE literal-IP TCP connect. One resolution is bounded
+	// by addrcheck.DNSLookupTimeout, at validation and at dial time.
+	dialTimeout = addrcheck.DialTimeout
 
 	// MaxResponseHeaderBytes bounds one response's header block. net/http's
 	// default is 10 MiB, which lets a hostile destination make Main buffer
@@ -67,19 +67,17 @@ const (
 	MaxResponseHeaderBytes = 64 << 10
 	// MaxResolvedAddresses bounds one resolution. A larger answer is refused
 	// rather than truncated, so the dial loop never walks an unbounded list.
-	MaxResolvedAddresses = 32
+	MaxResolvedAddresses = addrcheck.MaxResolvedAddresses
 )
 
 // Resolver is the seam the guard resolves host names through. Tests supply a
 // fake so validation never depends on live DNS.
-type Resolver interface {
-	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
-}
+type Resolver = addrcheck.Resolver
 
 // Guard is the SSRF gate for a tenant-chosen destination. It is safe for
 // concurrent use and immutable after New.
 type Guard struct {
-	private   []privatePermit
+	private   addrcheck.PermitSet
 	resolver  Resolver
 	httpsOnly bool
 }
@@ -233,16 +231,7 @@ func (g *Guard) dialContext(ctx context.Context, network, addr string) (net.Conn
 		return nil, notPermitted(host)
 	}
 
-	dialer := &net.Dialer{Timeout: dialTimeout}
-	var lastErr error
-	for _, ip := range allowed {
-		conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		if dialErr == nil {
-			return conn, nil
-		}
-		lastErr = dialErr
-	}
-	return nil, lastErr
+	return addrcheck.DialFirst(ctx, &net.Dialer{Timeout: dialTimeout}, network, allowed, port)
 }
 
 func notPermitted(host string) error {
@@ -254,68 +243,18 @@ func notPermitted(host string) error {
 
 // permittedIPs is the ONE filter Validate and dialContext both apply. It keeps
 // public addresses, and a private one only when an allowlist entry names it
-// (on this port, when the entry pins one). Forbidden addresses are never kept.
+// (on this port, when the entry pins one). Forbidden addresses are never kept
+// (addrcheck.Filter).
 func (g *Guard) permittedIPs(ips []net.IP, port string) []net.IP {
-	allowed := make([]net.IP, 0, len(ips))
-	for _, ip := range ips {
-		switch classify(ip) {
-		case classPublic:
-			allowed = append(allowed, ip)
-		case classPrivate:
-			if g.permitsPrivate(ip, port) {
-				allowed = append(allowed, ip)
-			}
-		}
-	}
-	return allowed
-}
-
-// permitsPrivate reports whether an allowlist entry names this private
-// address on this port.
-func (g *Guard) permitsPrivate(ip net.IP, port string) bool {
-	if g == nil || len(g.private) == 0 {
-		return false
-	}
-	ip = canonicalIP(ip)
-	for _, permit := range g.private {
-		if permit.permits(ip, port) {
-			return true
-		}
-	}
-	return false
+	return addrcheck.Filter(ips, port, g.private)
 }
 
 // resolveHost resolves host to at most MaxResolvedAddresses addresses. An IP
 // literal resolves to itself. "localhost" is pinned to 127.0.0.1 so a hosts
-// file cannot make it mean something else. Zoned answers are dropped: a zone
-// only qualifies a link-local or interface-scoped address, never a
-// destination this guard could permit.
+// file cannot make it mean something else. Zoned answers are dropped
+// (addrcheck.Resolve).
 func (g *Guard) resolveHost(ctx context.Context, host string) ([]net.IP, error) {
-	if ip := net.ParseIP(host); ip != nil {
-		return []net.IP{ip}, nil
-	}
-	if strings.EqualFold(host, "localhost") {
-		return []net.IP{net.IPv4(127, 0, 0, 1)}, nil
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, dnsLookupTimeout)
-	defer cancel()
-	addrs, err := g.resolver.LookupIPAddr(lookupCtx, host)
-	if err != nil {
-		return nil, err
-	}
-	if len(addrs) == 0 {
-		return nil, errors.New("no addresses returned")
-	}
-	if len(addrs) > MaxResolvedAddresses {
-		return nil, fmt.Errorf("%d addresses returned, more than %d", len(addrs), MaxResolvedAddresses)
-	}
-	ips := make([]net.IP, 0, len(addrs))
-	for _, a := range addrs {
-		if a.Zone == "" {
-			ips = append(ips, a.IP)
-		}
-	}
-	return ips, nil
+	return addrcheck.Resolve(ctx, g.resolver, host)
 }
 
 func (g *Guard) checkScheme(scheme string) error {
