@@ -91,6 +91,8 @@ var sortableProjectColumns = map[string]string{
 	"id":             "p.id",
 	"create_success": "p.create_success",
 	"status":         projectStatusExpression,
+	// The storage the project's cloud copies use (ADR-0034 decision 3).
+	"workspace_bytes": "workspace.bytes",
 }
 
 // projectRow is one row of the listing, carrying every field
@@ -111,6 +113,11 @@ type projectRow struct {
 	Suspended    bool     `json:"suspended"`
 	CreateSucces bool     `json:"create_success"`
 	IsPersonal   bool     `json:"is_personal"`
+	// WorkspaceBytes is the storage the project's cloud copies of desktop
+	// Local work threads use: its live workspace segments (ADR-0034
+	// decision 3). It is apart from artifact usage and does not count
+	// against the artifact quota.
+	WorkspaceBytes int64 `json:"workspace_bytes"`
 }
 
 type projectListing struct {
@@ -252,7 +259,8 @@ SELECT p.id,
        p.suspended,
        ` + personalProjectPredicate + ` AS is_personal,
        COALESCE(owner.display_name, '') AS owner_name,
-       COALESCE(admins.names, '{}')     AS admin_names
+       COALESCE(admins.names, '{}')     AS admin_names,
+       workspace.bytes                  AS workspace_bytes
 FROM centry.project p
 LEFT JOIN LATERAL (
     SELECT COALESCE(u.name, u.email, '') AS display_name
@@ -274,7 +282,12 @@ LEFT JOIN LATERAL (
             project_role.name = 'admin'
          OR (project_role.name = 'editor' AND ` + personalProjectPredicate + `)
       )
-) AS admins ON TRUE`
+) AS admins ON TRUE
+LEFT JOIN LATERAL (
+    SELECT COALESCE(sum(segment.byte_length), 0)::bigint AS bytes
+    FROM elitea_runtime.workspace_segments segment
+    WHERE segment.project_id = p.id AND segment.superseded_at IS NULL
+) AS workspace ON TRUE`
 
 func (h *Handler) queryProjectPage(
 	ctx context.Context, params projectListingParams, where string, args []any,
@@ -306,7 +319,7 @@ LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, pageArgs...)
 		var adminNames []string
 		if err := rows.Scan(
 			&row.ID, &row.Name, &row.OwnerID, &row.CreateSucces, &row.Suspended,
-			&row.IsPersonal, &row.OwnerName, &adminNames,
+			&row.IsPersonal, &row.OwnerName, &adminNames, &row.WorkspaceBytes,
 		); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}

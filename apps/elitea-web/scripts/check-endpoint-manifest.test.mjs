@@ -732,7 +732,15 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // updateCurrentAuthorTheme, the per-user theme mode the web and desktop apps
 // both read and write. Their manifest entries are `handwritten` (see
 // MANIFEST_ENTRY_COUNT's 273 -> 275 note).
-const GENERATED_OPERATION_COUNT = 317;
+// 317 -> 330 (client contract 1.8, ADR-0034): the thirteen desktop-to-cloud
+// handoff and workspace store operations (begin, state, erase, complete,
+// reclaim, reclaim request, release, upload grant, upload completion,
+// publish, fetch plan, and the streaming facade's PUT and GET). The desktop
+// calls them; no web code does yet, so the manifest count is unchanged.
+// 330 -> 331 (client contract 1.8, ADR-0034 amendment of 2026-10-15):
+// getWorkspaceHandoffPolicy, the effective policy the desktop's send dialog
+// reads. The manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 331;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

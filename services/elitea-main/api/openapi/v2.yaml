@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.7"
+  x-elitea-client-contract: "1.8"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -2144,6 +2144,12 @@ components:
           type: integer
           description: Always -1 today; see the schema description.
         message_groups_count: { type: integer }
+        workspace_executor:
+          type: string
+          description: >-
+            Client contract 1.8 (ADR-0034). Who runs the thread's turns now:
+            `local`, `cloud` or `returning`. A handoff transition re-delivers
+            the row in the `changes_since` delta.
         is_pinned:
           type: boolean
           description: >
@@ -2929,6 +2935,13 @@ components:
           type: string
           nullable: true
           description: Null when the conversation sits outside every folder.
+        workspace_executor:
+          type: string
+          description: >-
+            Who runs the thread's turns now (ADR-0034): `local` (also when the
+            thread was never sent), `cloud` (the cloud executor owns a
+            handed-off Local work thread) or `returning` (a take back is under
+            way).
         is_private:
           type: boolean
           description: Always present; a row that cannot say reads as private.
@@ -3387,6 +3400,374 @@ components:
             True when this request admitted the turn; false when it replayed an
             earlier admission with the same idempotency key (the same
             `execution_id` and `events_url` come back).
+
+    WorkspaceHandoffError:
+      type: object
+      description: >-
+        A refused handoff or store call. `error` is a machine code (the
+        operations name theirs); `details` is set for `ref_conflict` only.
+        NOTE(W2): internal/api/v2/workspacehandoff/route.go:740 (`writeError`).
+      required: [error]
+      properties:
+        error: { type: string }
+        message: { type: string }
+        details:
+          $ref: '#/components/schemas/WorkspaceHandoffErrorDetails'
+    WorkspaceHandoffErrorDetails:
+      type: object
+      description: >-
+        `current` for `ref_conflict` (the stored value, null when absent, of
+        every ref the publish named), `names` for `env_name_denied`, `paths`
+        for `path_denied`.
+      properties:
+        current:
+          $ref: '#/components/schemas/WorkspaceNullableRefMap'
+        names:
+          type: array
+          items: { type: string }
+        paths:
+          type: array
+          items: { type: string }
+    WorkspaceRefMap:
+      type: object
+      description: Ref name to commit sha (40 lowercase hex characters).
+      additionalProperties: { type: string }
+    WorkspaceNullableRefMap:
+      type: object
+      description: Ref name to commit sha, null when the ref does not exist.
+      additionalProperties: { type: string, nullable: true }
+    WorkspaceHandoffStats:
+      type: object
+      description: >-
+        What the desktop declares at send. `excluded` lists `./path` strings
+        left on the laptop. NOTE(W2): internal/application/workspacehandoff/types.go:119 (`Stats`).
+      properties:
+        files: { type: integer, format: int64, minimum: 0 }
+        bytes: { type: integer, format: int64, minimum: 0 }
+        unpacked_bytes: { type: integer, format: int64, minimum: 0 }
+        excluded:
+          type: array
+          items: { type: string }
+          description: >-
+            Paths on the owner's computer. The state route returns them to
+            the thread's owner only.
+        excluded_count:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The number of excluded paths. Set by the state route for every reader; ignored on send.
+        scan_findings: { type: integer, format: int64, minimum: 0 }
+    WorkspaceHandoffBeginRequest:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:235 (`beginBody`).'
+      required: [device_id, stats]
+      properties:
+        device_id: { type: string, description: The native client device id. }
+        history_mode: { type: string, description: '`none` (the default) or `full`.' }
+        stats:
+          $ref: '#/components/schemas/WorkspaceHandoffStats'
+        has_upstream: { type: boolean }
+        note: { type: string, description: 'The handoff note, at most 8 KiB.' }
+        included_excluded:
+          type: array
+          items: { type: string }
+          description: >-
+            Contract 6.2. Excluded paths (`./path`) the user explicitly
+            includes; refused when the policy does not allow it
+            (`include_not_allowed`) or a path matches `local_work_path_deny`
+            (`path_denied`).
+        env:
+          $ref: '#/components/schemas/WorkspaceStringMap'
+    WorkspaceHandoffEnvLimits:
+      type: object
+      description: The harvest's caps.
+      required: [max_vars, max_bytes]
+      properties:
+        max_vars: { type: integer }
+        max_bytes: { type: integer }
+    WorkspaceHandoffPolicy:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:680 (`policy`).'
+      required: [enabled, shell, network, history_modes, exclusions, exclusions_platform, exclusions_project,
+                 path_deny, allow_user_include, env_harvest, env_deny, env_allow, limits, env_limits]
+      properties:
+        enabled: { type: boolean }
+        shell: { type: boolean }
+        network: { type: boolean }
+        history_modes:
+          type: array
+          items: { type: string }
+        exclusions:
+          type: array
+          items: { type: string }
+          description: The platform patterns, then the project additions.
+        exclusions_platform:
+          type: array
+          items: { type: string }
+          description: The platform ceiling's patterns.
+        exclusions_project:
+          type: array
+          items: { type: string }
+          description: The project's additions that the platform does not already list.
+        path_deny:
+          type: array
+          items: { type: string }
+          description: The effective local_work_path_deny; never includable.
+        allow_user_include: { type: boolean }
+        env_harvest: { type: boolean }
+        env_deny:
+          type: array
+          items: { type: string }
+        env_allow:
+          type: array
+          items: { type: string }
+          nullable: true
+          description: When not null, the only names that can be sent.
+        limits:
+          $ref: '#/components/schemas/WorkspaceHandoffLimits'
+        env_limits:
+          $ref: '#/components/schemas/WorkspaceHandoffEnvLimits'
+    WorkspaceHandoffLimits:
+      type: object
+      description: The effective caps of the send.
+      required: [max_segment_bytes, max_file_bytes, max_files, max_unpacked_bytes, project_workspace_bytes_left]
+      properties:
+        max_segment_bytes: { type: integer, format: int64 }
+        max_file_bytes: { type: integer, format: int64 }
+        max_files: { type: integer, format: int64 }
+        max_unpacked_bytes: { type: integer, format: int64 }
+        project_workspace_bytes_left: { type: integer, format: int64 }
+    WorkspaceHandoffBegun:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:245 (`begin`).'
+      required: [handoff_id, epoch, state, allowed_refs, expected_old, limits, expires_at]
+      properties:
+        handoff_id: { type: string, format: uuid }
+        epoch: { type: integer, format: int64 }
+        state: { type: string }
+        allowed_refs:
+          type: array
+          items: { type: string }
+        expected_old:
+          $ref: '#/components/schemas/WorkspaceNullableRefMap'
+        limits:
+          $ref: '#/components/schemas/WorkspaceHandoffLimits'
+        expires_at: { type: string, format: date-time }
+    WorkspaceHandoffState:
+      type: object
+      description: >-
+        The banner state; only `state` and `epoch` when the thread has no
+        handoff. NOTE(W2): internal/api/v2/workspacehandoff/route.go:288 (`state`).
+      required: [state, epoch]
+      properties:
+        state: { type: string, description: 'LOCAL, HANDING_OFF, CLOUD_IDLE, CLOUD_RUNNING or RECLAIMING.' }
+        epoch: { type: integer, format: int64 }
+        reclaim_pending: { type: boolean }
+        handoff_id: { type: string, format: uuid }
+        device_name: { type: string }
+        history_mode: { type: string }
+        has_upstream: { type: boolean }
+        stats:
+          $ref: '#/components/schemas/WorkspaceHandoffStats'
+        cloud_sha: { type: string, nullable: true }
+        updated_at: { type: string, format: date-time }
+        delete_after: { type: string, format: date-time, nullable: true }
+        workspace_bytes: { type: integer, format: int64 }
+    WorkspaceHandoffErased:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:336 (`erase`).'
+      required: [state, epoch]
+      properties:
+        state: { type: string }
+        epoch: { type: integer, format: int64 }
+    WorkspaceHandoffCompleteRequest:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:357 (`completeBody`).'
+      required: [epoch, handoff_ref, sha]
+      properties:
+        epoch: { type: integer, format: int64 }
+        handoff_ref: { type: string, description: '`refs/elitea/handoff/1`.' }
+        sha: { type: string }
+    WorkspaceHandoffTransition:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:363 (`complete`).'
+      required: [state, epoch]
+      properties:
+        state: { type: string }
+        epoch: { type: integer, format: int64 }
+    WorkspaceHandoffReclaimRequest:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:388 (`reclaimBody`).'
+      required: [epoch]
+      properties:
+        epoch: { type: integer, format: int64 }
+        device_id: { type: string }
+    WorkspaceHandoffReclaimed:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:393 (`reclaim`).'
+      required: [state, epoch, cloud_sha]
+      properties:
+        state: { type: string }
+        epoch: { type: integer, format: int64 }
+        cloud_sha: { type: string, nullable: true }
+    WorkspaceHandoffReclaimPending:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:393 (`reclaim`).'
+      required: [state, reclaim_pending, epoch, waiting_for_execution_id]
+      properties:
+        state: { type: string }
+        reclaim_pending: { type: boolean }
+        epoch: { type: integer, format: int64 }
+        waiting_for_execution_id: { type: string }
+    WorkspaceHandoffEmpty:
+      type: object
+      description: An empty object.
+      x-elitea-passthrough: "NOTE(W2): always the empty object (internal/api/v2/workspacehandoff/route.go:438,
+        `reclaimRequest`); the 202 carries no field."
+      properties: {}
+    WorkspaceHandoffReleaseRequest:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:441 (`releaseBody`).'
+      required: [epoch, outcome]
+      properties:
+        epoch: { type: integer, format: int64 }
+        outcome: { type: string, description: '`applied`, `worktree` or `discarded`.' }
+        applied_sha: { type: string, nullable: true }
+    WorkspaceHandoffReleased:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:447 (`release`).'
+      required: [state, epoch, cloud_copy_delete_after]
+      properties:
+        state: { type: string }
+        epoch: { type: integer, format: int64 }
+        cloud_copy_delete_after: { type: string, format: date-time, nullable: true }
+    WorkspaceSegmentUploadRequest:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:478 (`uploadBody`).'
+      required: [epoch, sha256, bytes]
+      properties:
+        epoch: { type: integer, format: int64 }
+        sha256: { type: string }
+        bytes: { type: integer, format: int64 }
+    WorkspaceStringMap:
+      type: object
+      description: Header name to value.
+      additionalProperties: { type: string }
+    WorkspaceSegmentPut:
+      type: object
+      description: One PUT of the whole segment.
+      required: [url, headers]
+      properties:
+        url: { type: string }
+        headers:
+          $ref: '#/components/schemas/WorkspaceStringMap'
+    WorkspaceSegmentMultipart:
+      type: object
+      description: Upload every part to its URL, in order, then POST the ETags to `complete_url`.
+      required: [upload_id, part_size, part_urls, complete_url]
+      properties:
+        upload_id: { type: string }
+        part_size: { type: integer, format: int64 }
+        part_urls:
+          type: array
+          items: { type: string }
+        complete_url: { type: string }
+    WorkspaceSegmentUploadGrant:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:484 (`upload`).'
+      required: [exists, put, multipart, expires_at]
+      properties:
+        exists: { type: boolean }
+        put:
+          allOf:
+            - $ref: '#/components/schemas/WorkspaceSegmentPut'
+          nullable: true
+        multipart:
+          allOf:
+            - $ref: '#/components/schemas/WorkspaceSegmentMultipart'
+          nullable: true
+        expires_at: { type: string, format: date-time }
+    WorkspaceSegmentPart:
+      type: object
+      description: One uploaded part.
+      required: [part_number, etag]
+      properties:
+        part_number: { type: integer, format: int32 }
+        etag: { type: string }
+    WorkspaceSegmentUploadComplete:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:517 (`uploadCompleteBody`).'
+      required: [upload_id, parts]
+      properties:
+        upload_id: { type: string }
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceSegmentPart'
+    WorkspaceRefUpdate:
+      type: object
+      description: One ref move; `old` null means the ref must not exist yet.
+      required: [name, new]
+      properties:
+        name: { type: string }
+        old: { type: string, nullable: true }
+        new: { type: string }
+    WorkspaceSegmentPublishRequest:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:558 (`publishBody`).'
+      required: [epoch, kind, segment_sha256, bytes, refs, object_format]
+      properties:
+        epoch: { type: integer, format: int64 }
+        kind: { type: string, description: '`COMPACT` in this version.' }
+        segment_sha256: { type: string }
+        bytes: { type: integer, format: int64 }
+        prerequisites:
+          type: array
+          items: { type: string }
+        refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceRefUpdate'
+        object_format: { type: string, description: '`sha1` in this version.' }
+    WorkspaceSegmentPublished:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:568 (`publish`).'
+      required: [seq, refs, superseded]
+      properties:
+        seq: { type: integer, format: int64 }
+        refs:
+          $ref: '#/components/schemas/WorkspaceRefMap'
+        superseded:
+          type: array
+          items: { type: integer, format: int64 }
+    WorkspaceFetchSegment:
+      type: object
+      description: One segment of a fetch plan.
+      required: [seq, kind, sha256, bytes, prerequisites, refs, url, expires_at]
+      properties:
+        seq: { type: integer, format: int64 }
+        kind: { type: string }
+        sha256: { type: string }
+        bytes: { type: integer, format: int64 }
+        prerequisites:
+          type: array
+          items: { type: string }
+        refs:
+          $ref: '#/components/schemas/WorkspaceRefMap'
+        url: { type: string }
+        expires_at: { type: string, format: date-time }
+    WorkspaceFetchPlan:
+      type: object
+      description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:605 (`fetch`).'
+      required: [head_seq, refs, segments]
+      properties:
+        head_seq: { type: integer, format: int64 }
+        refs:
+          $ref: '#/components/schemas/WorkspaceRefMap'
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceFetchSegment'
 
     LocalTurnStartRequest:
       type: object
@@ -11740,6 +12121,7 @@ components:
         - local_index
         - cloud_sync
         - memory_write
+        - cloud_handoff
       properties:
         allowed:
           type: boolean
@@ -11785,6 +12167,13 @@ components:
           description: >-
             Local turns may save to the user's cloud memory. Recall is always
             allowed. Default true.
+        cloud_handoff:
+          type: boolean
+          description: >-
+            Client contract 1.8 (ADR-0034 decision 11). A Local work thread may
+            be sent to the cloud executor. Default false. The server refuses a
+            send while it is false; the platform and project settings narrow
+            it further.
     InvalidQueryParameterError:
       type: object
       description: >-
@@ -17350,6 +17739,1102 @@ paths:
               schema:
                 $ref: '#/components/schemas/LocalTurnError'
         '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/workspace_handoff_policy/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getWorkspaceHandoffPolicy
+      summary: Read the effective handoff policy before a send
+      description: |
+        Client contract 1.8 (ADR-0034 decisions 5 and 11, contract 6.1). The
+        caller's effective policy: the platform `cloud_executor` ceiling,
+        narrowed by the project setting and the native client policy. The
+        desktop shows it in the send dialog; the begin answer's `limits`
+        stay authoritative. A native token or a browser session, with
+        `models.chat.messages.create`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The effective policy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffPolicy'
+        '400':
+          description: An `X-Client-Version` that does not parse, or a bad project id.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No project permission.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The policy could not be read (`handoff_unavailable`).
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
+  /elitea_core/workspace_handoff/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    post:
+      operationId: beginWorkspaceHandoff
+      summary: Send a Local work thread to the cloud executor
+      description: |
+        Client contract 1.8 (ADR-0034 decisions 1, 7 and 11). Moves the thread
+        from LOCAL to HANDING_OFF and answers the epoch, the refs the desktop
+        may publish, their expected old values and the effective limits. The
+        send must be completed within 15 minutes (`expires_at`), or the thread
+        falls back to LOCAL and its objects are erased.
+
+        WHO. A native app access token only (403 `handoff_requires_token`
+        otherwise), of the conversation's creator, with
+        `models.chat.messages.create`. The conversation must be a Local work
+        thread (`source: local_work`) with no uncommitted local turn.
+
+        POLICY. The effective policy (the platform `cloud_executor` section,
+        narrowed by the project setting and the native client policy's
+        `local_work.cloud_handoff`) must allow the cloud executor: 403
+        `cloud_handoff_disabled` otherwise.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceHandoffBeginRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '201':
+          description: The handoff started (HANDING_OFF).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffBegun'
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '409':
+          description: '`thread_executor_is_cloud`, `handoff_in_progress` or `local_turn_in_progress`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '413':
+          description: >-
+            The project's cloud copies would pass `max_project_workspace_gb`
+            (`workspace_quota_exceeded`), or the environment is over 200
+            variables or 64 KiB (`env_too_large`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '422':
+          description: >-
+            `invalid_handoff` (a field, a cap, or not a Local work thread),
+            `history_mode_not_allowed`, `include_not_allowed`, `path_denied`
+            (`details.paths`), `env_harvest_disabled` or `env_name_denied`
+            (`details.names`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+    get:
+      operationId: getWorkspaceHandoff
+      summary: Read a thread's handoff state
+      description: |
+        Client contract 1.8 (ADR-0034 decision 14). The banner state. A thread
+        with no handoff answers `{"state": "LOCAL", "epoch": 0}`. Any caller who
+        may read the conversation (cookie or token, with
+        `models.chat.conversation.details`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffState'
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+    delete:
+      operationId: eraseWorkspaceHandoff
+      summary: Erase a thread's cloud copy
+      description: |
+        Client contract 1.8 (ADR-0034 decision 12). Ends the handoff in any
+        state (a send in HANDING_OFF is cancelled), cancels a running cloud
+        turn, sets the state to LOCAL and erases the cloud copy's objects. The
+        owner, or a caller with `models.project_settings.edit`. Idempotent.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The thread is LOCAL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffErased'
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '409':
+          description: '`stale_epoch`: the state changed under the call; retry.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
+  /elitea_core/workspace_handoff_complete/prompt_lib/{project_id}/{handoff_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: handoff_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The `handoff_id` the send answered.
+    post:
+      operationId: completeWorkspaceHandoff
+      summary: Complete a send
+      description: |
+        Client contract 1.8 (ADR-0034 decision 7). Moves HANDING_OFF to
+        CLOUD_IDLE (a new epoch) once the store holds the snapshot ref with
+        this sha, and appends the system event message to the conversation.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceHandoffCompleteRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: CLOUD_IDLE.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffTransition'
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '409':
+          description: '`stale_epoch`: the epoch or the state changed, or the send expired.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '422':
+          description: '`invalid_handoff`: the store does not hold the named snapshot.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
+  /elitea_core/workspace_handoff_reclaim/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    post:
+      operationId: reclaimWorkspaceHandoff
+      summary: Take a thread back to the desktop
+      description: |
+        Client contract 1.8 (ADR-0034 decision 7). CLOUD_IDLE moves to
+        RECLAIMING (200, a new epoch). During a cloud turn the take back is
+        pending (202): the thread becomes RECLAIMING when the turn ends, or
+        after 60 seconds, when the turn is cancelled. A native app token of the
+        owner only.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceHandoffReclaimRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: RECLAIMING.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffReclaimed'
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '202':
+          description: The take back is pending until the running turn ends.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffReclaimPending'
+        '409':
+          description: '`stale_epoch`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '422':
+          description: '`invalid_handoff`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
+  /elitea_core/workspace_handoff_reclaim_request/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    post:
+      operationId: requestWorkspaceHandoffReclaim
+      summary: Ask the owner's desktop to take a thread back
+      description: |
+        Client contract 1.8 (ADR-0034 decision 7). The web or mobile Take
+        back: it sends the owner a notification (`workspace_reclaim_requested`)
+        and changes no state. The owner only, cookie or token.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '202':
+          description: The notification is sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffEmpty'
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '409':
+          description: '`handoff_not_in_cloud`: the cloud executor does not own the thread.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
+  /elitea_core/workspace_handoff_release/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    post:
+      operationId: releaseWorkspaceHandoff
+      summary: Finish a take back
+      description: |
+        Client contract 1.8 (ADR-0034 decisions 7 and 12). Moves RECLAIMING
+        to LOCAL (a new epoch) with the take back's outcome, appends the event
+        message, and keeps the cloud copy until `cloud_copy_delete_after` (the
+        return grace). A retried release answers the same row.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceHandoffReleaseRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: LOCAL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffReleased'
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '409':
+          description: '`stale_epoch`, or `handoff_erased`: the thread came back to LOCAL by an erase, not a release.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '422':
+          description: '`invalid_handoff`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
+  /elitea_core/workspace_store_upload/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    post:
+      operationId: requestWorkspaceSegmentUpload
+      summary: Get an upload grant for a segment
+      description: |
+        Client contract 1.8 (ADR-0034 decision 3). An upload grant for one
+        segment (a git bundle) at its exact content-addressed key, valid for at
+        most 15 minutes: a presigned PUT, a native multipart upload above 64
+        MiB, or the server's streaming facade where the store cannot presign.
+        A digest the thread already stores answers `exists: true`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceSegmentUploadRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The grant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceSegmentUploadGrant'
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '409':
+          description: '`stale_epoch`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '413':
+          description: '`segment_too_large` or `workspace_quota_exceeded`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '422':
+          description: '`invalid_handoff`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
+  /elitea_core/workspace_store_upload_complete/prompt_lib/{project_id}/{grant_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: grant_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The grant of the multipart upload (from `complete_url`).
+    post:
+      operationId: completeWorkspaceSegmentUpload
+      summary: Complete a multipart segment upload
+      description: |
+        Client contract 1.8 (ADR-0034 decision 3). Completes the native
+        multipart upload of an upload grant with the ETags of its parts, in
+        order.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceSegmentUploadComplete'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '204':
+          description: The upload is complete.
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '409':
+          description: '`stale_epoch`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '422':
+          description: '`invalid_handoff`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
+  /elitea_core/workspace_store_publish/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    post:
+      operationId: publishWorkspaceSegment
+      summary: Publish an uploaded segment and move the refs
+      description: |
+        Client contract 1.8 (ADR-0034 decision 2). The server checks the stored
+        object (its size and SHA-256) BEFORE one short transaction that checks
+        the state, the epoch and the writer's ref allowlist, compares every
+        expected old ref value (all or nothing), records the segment with the
+        next `seq` and moves the refs. An identical retry answers the original
+        result. On a conflict, `details.current` names the stored values.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceSegmentPublishRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The segment is recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceSegmentPublished'
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '409':
+          description: >-
+            `ref_conflict` (with `details.current`): an expected old value
+            does not hold; re-read and decide. `stale_epoch`. `thread_busy`
+            (with a `Retry-After: 1` header): another change to the thread is
+            being saved; nothing was compared, so send the SAME publish again
+            after the delay (it then answers the original result if the first
+            one committed).
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying; set for `thread_busy`.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '413':
+          description: '`segment_too_large` or `workspace_quota_exceeded`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '422':
+          description: '`segment_missing`, `checksum_mismatch`, `unsupported_object_format` or `invalid_handoff`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
+  /elitea_core/workspace_store_fetch/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    get:
+      operationId: getWorkspaceFetchPlan
+      summary: Read the segments a reader needs
+      description: |
+        Client contract 1.8 (ADR-0034 decision 2). The fetch plan from
+        `since_seq`: in this version the newest COMPACT segment at or after it,
+        with a URL valid until `expires_at`, and the thread's refs.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: since_seq
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 0 }
+          description: The newest `seq` the reader holds; 0 (the default) reads from the start.
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceFetchPlan'
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+
+  /elitea_core/workspace_store_object/prompt_lib/{project_id}/{conversation_uuid}/{sha256}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+      - name: sha256
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9a-f]{64}$' }
+        description: The segment's SHA-256, lowercase hex.
+    put:
+      operationId: putWorkspaceSegmentObject
+      summary: Upload a segment through the streaming facade
+      description: |
+        Client contract 1.8 (ADR-0034 decision 3, ADR-0016 streaming facade).
+        The upload URL a grant answers where the object store cannot presign:
+        the body is the bundle, streamed to the store under the open grant for
+        this key, measured and hashed on the way.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/x-git-bundle:
+            schema: { type: string, format: binary }
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '204':
+          description: Stored.
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '409':
+          description: '`stale_epoch`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '413':
+          description: '`segment_too_large`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '422':
+          description: '`checksum_mismatch`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+    get:
+      operationId: getWorkspaceSegmentObject
+      summary: Download a segment through the streaming facade
+      description: |
+        Client contract 1.8 (ADR-0034 decision 3). The fetch URL where the
+        object store cannot presign: the stored segment's bytes.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The bundle.
+          content:
+            application/x-git-bundle:
+              schema: { type: string, format: binary }
+        '400':
+          description: >-
+            A malformed body (`invalid_handoff`), or an `X-Client-Version`
+            that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/WorkspaceHandoffError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a credential the route does not serve
+            (`handoff_requires_token`), or another refusal named in `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '404':
+          description: No such thread or handoff for this caller (`handoff_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: A dependency is unavailable (`handoff_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffError'
 
   /elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}:
     parameters:

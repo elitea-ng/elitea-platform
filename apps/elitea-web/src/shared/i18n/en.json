@@ -1653,6 +1653,7 @@
   "pages.admin.projects.column.name": "Name",
   "pages.admin.projects.column.owner": "Owner",
   "pages.admin.projects.column.status": "Status",
+  "pages.admin.projects.column.workspaceBytes": "Cloud copies",
   "pages.admin.projects.create.adminEmails": "Project admin email(s)",
   "pages.admin.projects.create.adminEmailsHelp": "Press Enter to add each address. Each must already have an account — an unknown address fails the whole request. You are the owner either way.",
   "pages.admin.projects.create.cancel": "Cancel",

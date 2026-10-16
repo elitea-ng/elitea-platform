@@ -61,6 +61,12 @@ export const ConversationDetail = zod
       .string()
       .nullish()
       .describe("Null when the conversation sits outside every folder."),
+    workspace_executor: zod
+      .string()
+      .optional()
+      .describe(
+        "Who runs the thread's turns now (ADR-0034): `local` (also when the thread was never sent), `cloud` (the cloud executor owns a handed-off Local work thread) or `returning` (a take back is under way).",
+      ),
     is_private: zod
       .boolean()
       .describe("Always present; a row that cannot say reads as private."),

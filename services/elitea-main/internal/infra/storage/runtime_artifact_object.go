@@ -507,6 +507,11 @@ func (service *RuntimeArtifactObjectService) List(
 	if err != nil {
 		return RuntimeArtifactListContext{}, err
 	}
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if err := service.refuseWorkspaceBucket(ctx, principal.projectID, bucket); err != nil {
+		return RuntimeArtifactListContext{}, err
+	}
 	if err := service.refuseSystemBucket(
 		ctx, authorization, principal, bucket, prefix, runtimeContextStageArtifactList,
 	); err != nil {
@@ -619,6 +624,11 @@ func (service *RuntimeArtifactObjectService) Read(
 	if err != nil {
 		return RuntimeArtifactReadContext{}, err
 	}
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if err := service.refuseWorkspaceBucket(ctx, principal.projectID, bucket); err != nil {
+		return RuntimeArtifactReadContext{}, err
+	}
 	if err := service.refuseSystemBucket(
 		ctx, authorization, principal, bucket, name, runtimeContextStageArtifactRead,
 	); err != nil {
@@ -694,6 +704,11 @@ func (service *RuntimeArtifactObjectService) Write(
 	if err != nil {
 		return RuntimeArtifactWriteContext{}, err
 	}
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if err := service.refuseWorkspaceBucket(ctx, principal.projectID, bucket); err != nil {
+		return RuntimeArtifactWriteContext{}, err
+	}
 	if err := service.refuseSystemBucket(
 		ctx, authorization, principal, bucket, "", runtimeContextStageArtifactWrite,
 	); err != nil {
@@ -728,6 +743,11 @@ func (service *RuntimeArtifactObjectService) Delete(
 	}
 	authorization, principal, err := service.authorizeWithConversation(ctx, claim, runtimeContextStageArtifactDelete)
 	if err != nil {
+		return RuntimeArtifactDeleteContext{}, err
+	}
+	// The hidden workspace bucket (ADR-0034 decision 3) is absent on this
+	// plane, whatever the claim allows.
+	if err := service.refuseWorkspaceBucket(ctx, principal.projectID, bucket); err != nil {
 		return RuntimeArtifactDeleteContext{}, err
 	}
 	if err := service.refuseSystemBucket(
@@ -801,4 +821,25 @@ func addressableArtifactPrefix(prefix string) bool {
 		}
 	}
 	return true
+}
+
+// WorkspaceBucketChecker is the optional half of a RuntimeArtifactSource that
+// knows the project's hidden workspace bucket (by type, whatever its name).
+type WorkspaceBucketChecker interface {
+	IsWorkspaceBucket(ctx context.Context, projectID int64, bucket string) (bool, error)
+}
+
+func (service *RuntimeArtifactObjectService) refuseWorkspaceBucket(ctx context.Context, projectID int64, bucket string) error {
+	checker, ok := service.artifacts.(WorkspaceBucketChecker)
+	if !ok {
+		return nil
+	}
+	hidden, err := checker.IsWorkspaceBucket(ctx, projectID, bucket)
+	if err != nil {
+		return runtimeContextUnavailable(runtimeContextStageArtifactList)
+	}
+	if hidden {
+		return ErrContentNotFound
+	}
+	return nil
 }

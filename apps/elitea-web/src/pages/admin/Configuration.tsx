@@ -261,6 +261,11 @@ function SectionForm({ state }: { readonly state: AdminConfigurationPageState })
           {state.activeSection.description}
         </Typography>
       ) : null}
+      {state.activeSection?.notice !== undefined && state.activeSection.notice !== '' ? (
+        <Alert severity="info" data-testid="admin-configuration-notice">
+          {state.activeSection.notice}
+        </Alert>
+      ) : null}
       <ConfigurationSectionForm
         fields={state.activeSection?.fields ?? []}
         values={state.values}
