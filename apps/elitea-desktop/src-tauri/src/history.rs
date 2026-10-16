@@ -265,8 +265,14 @@ pub fn stored_changes(changes: &[FileChange]) -> Value {
 /// The refusals of the credentials file, for the database: an existing
 /// file must be ours, regular and owner-only.
 fn inspect(path: &Path) -> Result<(), HostError> {
+    inspect_private(path, "the thread history")
+}
+
+/// [`inspect`] for any of the app's owner-only databases (`what` names it
+/// in the log and the error: `sessions.sqlite` uses it too).
+pub(crate) fn inspect_private(path: &Path, what: &str) -> Result<(), HostError> {
     let refuse = |why: &str| {
-        log::warn!("refusing the thread history {}: {why}", path.display());
+        log::warn!("refusing {what} {}: {why}", path.display());
         HostError::Storage(format!("{} {why}", path.display()))
     };
     let meta = match fs::symlink_metadata(path) {

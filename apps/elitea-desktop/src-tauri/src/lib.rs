@@ -25,6 +25,8 @@ mod menu;
 mod net;
 mod pkce;
 mod platform;
+mod seed;
+mod sessions;
 mod settings;
 mod store;
 mod tokens;
