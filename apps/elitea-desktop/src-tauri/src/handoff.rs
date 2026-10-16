@@ -1182,7 +1182,7 @@ impl HandoffHost {
     /// Everything a send does after begin, up to the stored record:
     /// `(handoff id, state, epoch)`. Any failure is answered by cancelling
     /// the handoff on the server.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     async fn after_begin(
         &self,
         project_id: i64,
