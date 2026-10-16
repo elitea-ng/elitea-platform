@@ -97,6 +97,7 @@ updates:
       - /services/elitea-main
       - /services/elitea-scheduler
       - /services/elitea-subapp-host
+      - /services/elitea-egress-proxy
       - /libs/go/authlib
       - /libs/go/egresslib
       - /libs/go/eventslib
