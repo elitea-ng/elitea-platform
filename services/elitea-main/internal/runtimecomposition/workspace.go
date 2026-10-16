@@ -25,6 +25,11 @@ type WorkspaceDependencies struct {
 	Store    workspaceruntime.Store
 	Turns    workspaceruntime.TurnResolver
 	Policies workspaceruntime.PolicyEvaluator
+	// Egress is how a project host allowlist is enforced (decision 9, the
+	// egress proxy). Independent of the three above: its zero value serves
+	// every allowlist turn egress mode `unavailable`, which the worker
+	// refuses.
+	Egress workspaceruntime.Egress
 }
 
 var errWorkspaceHalfComposed = errors.New("the workspace store, turn resolver and policy evaluator must be composed together")
@@ -33,7 +38,7 @@ func (d WorkspaceDependencies) validate() error {
 	if (d.Store == nil) != (d.Turns == nil) || (d.Turns == nil) != (d.Policies == nil) {
 		return errWorkspaceHalfComposed
 	}
-	return nil
+	return d.Egress.Validate()
 }
 
 func newWorkspaceStoreServer(authorizer workspace.WorkloadAuthorizer, claims workspace.ClaimVerifier, dependencies Dependencies) (*workspace.Server, error) {
@@ -54,5 +59,5 @@ func newWorkspaceContextResolver(dependencies Dependencies) storage.WorkspaceCon
 	if resolver == nil {
 		return nil
 	}
-	return resolver
+	return resolver.WithEgress(dependencies.Workspace.Egress, dependencies.Logger)
 }

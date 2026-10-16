@@ -170,6 +170,50 @@ and `egress_proxy_key_reload_errors_total`.
 
 ## Operating notes
 
+### Creating the key pair
+
+The run tokens are signed by elitea-main with a dedicated Ed25519 key. The
+private half goes to elitea-main only; the public half goes to the proxy.
+They are two Secrets, so the proxy never holds the private key.
+
+```bash
+# OpenSSL 3 (macOS's /usr/bin/openssl is LibreSSL and has no ed25519 genpkey:
+# use Homebrew's openssl@3).
+openssl genpkey -algorithm ed25519 -out signing.pem
+openssl pkey -in signing.pem -pubout -out signing.pub.pem
+
+kubectl -n <release namespace> create secret generic elitea-egress-token-signing \
+  --from-file=signing.pem=signing.pem
+kubectl -n <release namespace> create secret generic elitea-egress-proxy-keys \
+  --from-file=2026-10.pem=signing.pub.pem
+shred -u signing.pem   # keep no copy outside the Secret
+```
+
+Then set, in the chart values:
+
+```yaml
+egressProxy:
+  enabled: true
+  signingKey:
+    existingSecret: elitea-egress-token-signing   # mounted into elitea-main only
+  publicKeys:
+    existingSecret: elitea-egress-proxy-keys       # mounted into the proxy
+```
+
+(or paste the public PEM into `egressProxy.publicKeys.keys`). The chart
+refuses `egressProxy.enabled` without a signing key Secret, a signing key
+without the proxy, and the same Secret for both. At start, elitea-main logs
+`workspace egress proxy enabled` with the `key_id`; it must be one of the
+`key_ids` the proxy logs in `egress_proxy.started`.
+
+elitea-main reads `ELITEA_EGRESS_PROXY_URL` (the chart sets
+`http://elitea-egress-proxy.<namespace>.svc.cluster.local:3128`) and
+`ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE`. With either missing, a cloud turn
+whose project has a host allowlist is refused with
+`workspace_run.egress_proxy_unavailable` (reason
+`egress_proxy_not_enabled` or `egress_token_signing_key_not_configured`);
+it is never widened to direct egress.
+
 ### Key rotation
 
 The key id is derived from the public key, so no id is configured. To rotate:
@@ -180,8 +224,9 @@ The key id is derived from the public key, so no id is configured. To rotate:
    the old public key. Each replica reads the Secret again within
    `KEYS_RELOAD_INTERVAL` and logs `egress_proxy.keys_changed`. Check that
    `egress_proxy_token_keys` is 2 on every replica.
-3. Point elitea-main's `ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE` Secret at
-   `next.pem` and roll elitea-main.
+3. Replace the `signing.pem` data of elitea-main's signing-key Secret
+   (`egressProxy.signingKey.existingSecret`) with `next.pem` and roll
+   elitea-main.
 4. Wait for the longest token that the old key signed to expire: the longest
    turn wall time, and never more than 24 hours.
 5. Remove the old public key from the set.

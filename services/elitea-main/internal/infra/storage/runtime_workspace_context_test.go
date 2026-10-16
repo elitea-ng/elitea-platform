@@ -107,7 +107,10 @@ func TestRuntimeContextServesTheWorkspaceFieldToAWorkerThatAsks(t *testing.T) {
 
 	var field map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(keys["workspace"], &field))
-	require.ElementsMatch(t, []string{"thread", "epoch", "expected_old_cloud", "limits", "network", "shell", "network_allowlist", "has_upstream", "env_secret", "rewind"}, mapKeys(field))
+	require.ElementsMatch(t, []string{"thread", "epoch", "expected_old_cloud", "limits", "network", "shell", "network_allowlist", "has_upstream", "env_secret", "rewind", "egress"}, mapKeys(field))
+	var egress map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(field["egress"], &egress))
+	require.ElementsMatch(t, []string{"mode", "proxy_url", "token", "reason"}, mapKeys(egress))
 	var decoded workspaceruntime.RuntimeContext
 	require.NoError(t, json.Unmarshal(keys["workspace"], &decoded))
 	require.Equal(t, uint64(2), decoded.Epoch)
@@ -158,6 +161,8 @@ func TestRuntimeContextNetworkOffServesNoAllowlist(t *testing.T) {
 	require.False(t, decoded.Workspace.Network)
 	require.Empty(t, decoded.Workspace.NetworkAllowlist)
 	require.Contains(t, response.Body.String(), `"network_allowlist":[]`)
+	require.Equal(t, workspaceruntime.EgressModeNone, decoded.Workspace.Egress.Mode)
+	require.Empty(t, decoded.Workspace.Egress.Token)
 }
 
 func TestRuntimeContextWithoutAComposedResolverIgnoresTheAccept(t *testing.T) {

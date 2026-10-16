@@ -243,3 +243,12 @@
   raise, not for what it returns.
 */ -}}
 {{- $_ := include "elitea.aiProjectId" . }}
+
+{{- /*
+  ADR-0034 decision 9: elitea-main's run-token signing key without the egress
+  proxy signs tokens nothing verifies, and an allowlist turn is refused anyway.
+  Refused, so the operator sees the half-configuration.
+*/ -}}
+{{- if and (not .Values.egressProxy.enabled) .Values.egressProxy.signingKey.existingSecret }}
+{{- fail "egressProxy.signingKey.existingSecret is set but egressProxy.enabled is false: enable the proxy, or remove the signing key" }}
+{{- end }}

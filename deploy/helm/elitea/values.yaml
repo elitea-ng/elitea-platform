@@ -3619,6 +3619,25 @@ egressProxy:
     keys: {}
     reloadInterval: 30s
 
+  # elitea-main's run-token SIGNING key: the private half of the pair whose
+  # public half is in publicKeys above (services/elitea-egress-proxy/README.md,
+  # "Creating the key pair"). REQUIRED with egressProxy.enabled. A Secret you
+  # create; the chart never renders private key material. It is mounted into
+  # elitea-main only (ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE), never into the
+  # proxy, so it must not be the Secret named in publicKeys.existingSecret.
+  # elitea-main logs the key id at start; compare it with the proxy's
+  # egress_proxy.started key_ids.
+  signingKey:
+    existingSecret: ""
+    # The data key that holds the PKCS#8 PEM Ed25519 private key.
+    key: signing.pem
+    mountPath: /etc/elitea/egress-token
+  # The run-token lifetime base for a project policy that leaves the turn's
+  # wall time to the worker default (a Go duration). Empty: 1h, the worker's
+  # default. Set it to worker.runtime.workspaceRuns' turn wall time when you
+  # change that. Main adds a 2-minute grace for the workspace hydration.
+  defaultTurnWall: ""
+
   limits:
     # Per replica: client connections to the proxy, and the header block of
     # one request (a token travels base64-encoded in Proxy-Authorization).

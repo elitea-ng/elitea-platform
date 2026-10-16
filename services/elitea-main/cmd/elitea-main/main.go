@@ -1801,6 +1801,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				return fmt.Errorf("compose current Configurations lifecycle: %w", err)
 			}
 		}
+		workspaceEgress, egressErr := loadWorkspaceEgress(os.Getenv, logger)
+		if egressErr != nil {
+			return fmt.Errorf("compose the workspace egress proxy: %w", egressErr)
+		}
 		runtimeRoot, err = runtimecomposition.New(ctx, runtimeConfig, runtimecomposition.Dependencies{
 			AdmissionPool:                    runtimePools.Admission,
 			ControlPool:                      runtimePools.Control,
@@ -1835,6 +1839,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// runtimecomposition.Dependencies.PipelineRuns' own doc comment.
 			PipelineRuns: pipelineRunsRepo,
 			DomainEvents: domainEvents,
+			// ADR-0034 decision 9: how a project host allowlist is enforced
+			// (the egress proxy and its run-token signing key).
+			Workspace: runtimecomposition.WorkspaceDependencies{Egress: workspaceEgress},
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)

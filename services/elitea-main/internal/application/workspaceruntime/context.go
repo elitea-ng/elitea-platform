@@ -3,6 +3,7 @@ package workspaceruntime
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"slices"
 	"strings"
@@ -115,12 +116,18 @@ type RuntimeContext struct {
 	// Rewind: regenerate the newest cloud turn: move refs/elitea/cloud from
 	// ExpectedOldCloud back to its parent first (decision 7).
 	Rewind bool `json:"rewind"`
+	// Egress is how the run reaches the network (decision 9): none, direct,
+	// proxy (with the run token) or unavailable (an allowlist this
+	// deployment cannot enforce; the worker refuses the turn).
+	Egress RuntimeContextEgress `json:"egress"`
 }
 
 // ContextResolver builds the `workspace` field for one claimed execution.
 type ContextResolver struct {
 	turns    TurnResolver
 	policies PolicyEvaluator
+	egress   Egress
+	logger   *slog.Logger
 }
 
 // NewContextResolver returns nil when either dependency is nil: the
@@ -129,7 +136,20 @@ func NewContextResolver(turns TurnResolver, policies PolicyEvaluator) *ContextRe
 	if turns == nil || policies == nil {
 		return nil
 	}
-	return &ContextResolver{turns: turns, policies: policies}
+	return &ContextResolver{turns: turns, policies: policies, logger: slog.Default()}
+}
+
+// WithEgress sets how a host allowlist is enforced. Without it every
+// allowlist turn is served egress mode unavailable.
+func (r *ContextResolver) WithEgress(egress Egress, logger *slog.Logger) *ContextResolver {
+	if r == nil {
+		return nil
+	}
+	r.egress = egress
+	if logger != nil {
+		r.logger = logger
+	}
+	return r
 }
 
 const maxAllowlistHosts = 256
@@ -180,6 +200,15 @@ func (r *ContextResolver) ResolveWorkspaceContext(ctx context.Context, claim Tur
 		value := *turn.CloudSHA
 		expected = &value
 	}
+	egress, mintErr := r.egress.egressFor(claim, policy, allowlistIf(policy.Network, allowlist))
+	switch {
+	case mintErr != nil:
+		r.logger.ErrorContext(ctx, "workspace egress: the run token could not be minted; the allowlist turn is refused",
+			"execution_id", claim.ExecutionID, "project_id", claim.ProjectID, "reason", egress.Reason, "error", mintErr.Error())
+	case egress.Mode == EgressModeUnavailable:
+		r.logger.WarnContext(ctx, "workspace egress: the project restricts the network to a host allowlist, but this deployment cannot enforce one; the turn is refused",
+			"execution_id", claim.ExecutionID, "project_id", claim.ProjectID, "reason", egress.Reason)
+	}
 	return &RuntimeContext{
 		Thread:           turn.ThreadUUID,
 		Epoch:            turn.Epoch,
@@ -203,6 +232,7 @@ func (r *ContextResolver) ResolveWorkspaceContext(ctx context.Context, claim Tur
 		HasUpstream:      turn.HasUpstream,
 		EnvSecret:        turn.EnvSecret,
 		Rewind:           turn.Rewind,
+		Egress:           egress,
 	}, nil
 }
 

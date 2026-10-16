@@ -28,6 +28,14 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{- default "elitea-egress-proxy-keys" .Values.egressProxy.publicKeys.existingSecret }}
 {{- end }}
 
+{{/*
+The proxy as the sandbox reaches it, without credentials: elitea-main serves
+it in the runtime context and the worker adds run:<token>@.
+*/}}
+{{- define "elitea-egress-proxy.url" -}}
+http://{{ include "elitea-egress-proxy.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.egressProxy.service.port }}
+{{- end }}
+
 {{/* The namespace of the sandbox pods the proxy serves. */}}
 {{- define "elitea-egress-proxy.clientNamespace" -}}
 {{- default .Values.sandboxKubernetes.executionNamespace .Values.egressProxy.networkPolicy.clientNamespace }}
@@ -53,6 +61,15 @@ proxy cannot run safely without. Rendered from deployment.yaml.
 {{- $n := $e.networkPolicy -}}
 {{- if and (not $e.publicKeys.existingSecret) (not $e.publicKeys.keys) -}}
 {{- fail "egressProxy.enabled needs the run-token public keys: set egressProxy.publicKeys.existingSecret or egressProxy.publicKeys.keys" -}}
+{{- end -}}
+{{- if not $e.signingKey.existingSecret -}}
+{{- fail "egressProxy.enabled needs elitea-main's run-token signing key: set egressProxy.signingKey.existingSecret (services/elitea-egress-proxy/README.md, \"Creating the key pair\")" -}}
+{{- end -}}
+{{- if not (regexMatch "^[A-Za-z0-9._-]+$" ($e.signingKey.key | toString)) -}}
+{{- fail "egressProxy.signingKey.key must be a Secret data key" -}}
+{{- end -}}
+{{- if and $e.publicKeys.existingSecret (eq $e.signingKey.existingSecret $e.publicKeys.existingSecret) -}}
+{{- fail "egressProxy.signingKey.existingSecret must not be egressProxy.publicKeys.existingSecret: the proxy would mount the private signing key" -}}
 {{- end -}}
 {{- if and $e.publicKeys.existingSecret $e.publicKeys.keys -}}
 {{- fail "egressProxy.publicKeys: set existingSecret or keys, not both" -}}

@@ -158,6 +158,47 @@ else
   fail "the enabled render does not hold together (assertion above)"
 fi
 
+echo "== elitea-main signs the run tokens"
+if python3 - "$work/on.yaml" "$work/off.yaml" <<'PY'
+import sys
+import yaml
+
+def docs(path):
+    return [d for d in yaml.safe_load_all(open(path)) if d]
+
+def main_container(ds):
+    deps = [d for d in ds if d["kind"] == "Deployment" and d["metadata"]["name"].endswith("elitea-main")]
+    assert len(deps) == 1, [d["metadata"]["name"] for d in deps]
+    pod = deps[0]["spec"]["template"]["spec"]
+    return pod, [c for c in pod["containers"] if c["name"] == "elitea-main"][0]
+
+on, off = docs(sys.argv[1]), docs(sys.argv[2])
+pod, c = main_container(on)
+env = {e["name"]: e.get("value") for e in c["env"]}
+assert env["ELITEA_EGRESS_PROXY_URL"] == "http://elitea-egress-proxy.platform.svc.cluster.local:3128", env
+assert env["ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE"] == "/etc/elitea/egress-token/signing.pem"
+assert "ELITEA_EGRESS_PROXY_DEFAULT_TURN_WALL" not in env
+mounts = {m["name"]: m for m in c["volumeMounts"]}
+assert mounts["egress-token-signing-key"]["mountPath"] == "/etc/elitea/egress-token"
+assert mounts["egress-token-signing-key"]["readOnly"] is True
+vol = {v["name"]: v for v in pod["volumes"]}["egress-token-signing-key"]["secret"]
+assert vol["secretName"] == "elitea-egress-token-signing" and vol["defaultMode"] == 0o400
+assert vol["items"] == [{"key": "signing.pem", "path": "signing.pem"}]
+
+# The proxy pod never references the signing key Secret.
+proxy = [d for d in on if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-egress-proxy"][0]
+assert "elitea-egress-token-signing" not in yaml.safe_dump(proxy)
+
+_, c_off = main_container(off)
+assert not [e for e in c_off.get("env", []) if e["name"].startswith("ELITEA_EGRESS")]
+assert "egress-token-signing-key" not in {m["name"] for m in c_off["volumeMounts"]}
+PY
+then
+  note "elitea-main gets the proxy URL and only the signing key; the proxy never mounts it"
+else
+  fail "elitea-main's egress wiring is wrong (assertion above)"
+fi
+
 expect_refusal() {
   local description="$1" fragment="$2"
   shift 2
@@ -190,6 +231,20 @@ expect_refusal "a malformed deny CIDR" "is not an explicit CIDR block" \
 expect_refusal "one replica" "replicaCount must be at least 2" --set egressProxy.replicaCount=1
 expect_refusal "a grace period shorter than the drain" "terminationGracePeriodSeconds must be at least" \
   --set egressProxy.terminationGracePeriodSeconds=30
+
+expect_refusal "no signing key for elitea-main" "needs elitea-main's run-token signing key" \
+  --set egressProxy.signingKey.existingSecret=
+expect_refusal "the signing key Secret is the public key Secret" "must not be egressProxy.publicKeys.existingSecret" \
+  --set egressProxy.publicKeys.keys=null --set egressProxy.publicKeys.existingSecret=elitea-egress-token-signing
+
+echo "== a signing key without the proxy is refused"
+if out="$(helm template t "$chart" "${base[@]}" --set egressProxy.signingKey.existingSecret=x 2>&1)"; then
+  fail "a signing key with egressProxy off rendered"
+elif printf '%s' "$out" | grep -qF "egressProxy.enabled is false"; then
+  note "refused: a signing key with the proxy off"
+else
+  fail "refused for the wrong reason: $(printf '%s' "$out" | tail -1)"
+fi
 
 echo "== clientNamespace overrides the execution namespace"
 helm template t "$chart" "${base[@]}" -f "$fixture" --set egressProxy.networkPolicy.clientNamespace=workspaces \
