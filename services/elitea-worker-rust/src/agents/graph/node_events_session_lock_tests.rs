@@ -6,7 +6,6 @@
 //! Runner's root append of the yielded event waits for the root writer, and the
 //! child append is never polled again to release it.
 
-use std::str::FromStr as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +13,6 @@ use adk_rust::futures::StreamExt as _;
 use adk_rust::session::{AppendEventRequest, CreateRequest, GetRequest, SessionService};
 use adk_rust::{AdkIdentity, Agent, Content, Event, EventStream, InvocationContext};
 use async_trait::async_trait;
-use sqlx::postgres::PgConnectOptions;
 use sqlx::{ConnectOptions as _, PgPool};
 
 use super::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel};
@@ -96,7 +94,7 @@ impl LockFixture {
             .max_connections(2)
             .acquire_timeout(STEP_DEADLINE)
             .connect_with(
-                PgConnectOptions::from_str(url)
+                crate::test_pg::connect_options(url)
                     .expect("parse test URL")
                     .disable_statement_logging()
                     .database(&database.database_name),

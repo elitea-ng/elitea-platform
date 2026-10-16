@@ -1,4 +1,3 @@
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -31,7 +30,7 @@ pub(crate) struct IsolatedPostgres {
 
 impl IsolatedPostgres {
     pub(crate) async fn create(database_url: &str) -> Self {
-        let admin_options = PgConnectOptions::from_str(database_url)
+        let admin_options = crate::test_pg::connect_options(database_url)
             .expect("parse PostgreSQL session component-test URL")
             .disable_statement_logging();
         let admin_pool = crate::test_pg::pool_options()
@@ -62,6 +61,7 @@ impl IsolatedPostgres {
             .connect_with(admin_options.clone().database(&database_name))
             .await
             .expect("connect isolated session database");
+        crate::test_pg::assert_test_session(&pool, "IsolatedPostgres::create").await;
         Self {
             pool,
             admin_options,
@@ -103,6 +103,9 @@ impl Drop for IsolatedPostgres {
 }
 
 pub(crate) async fn install_schema(pool: &PgPool) {
+    // Every fixture hands the pool its test will use through here, so this
+    // is where a hand-built UTC pool is caught however it was spelled.
+    crate::test_pg::assert_test_session(pool, "postgres_session_tests::install_schema").await;
     sqlx::raw_sql(SESSION_MIGRATION)
         .execute(pool)
         .await
@@ -989,7 +992,7 @@ async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
         .max_connections(2)
         .acquire_timeout(Duration::from_mins(1))
         .connect_with(
-            PgConnectOptions::from_str(&database_url)
+            crate::test_pg::connect_options(&database_url)
                 .expect("parse test URL")
                 .disable_statement_logging()
                 .database(&database.database_name),

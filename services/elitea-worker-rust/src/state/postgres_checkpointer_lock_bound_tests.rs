@@ -2,14 +2,12 @@
 //! within the shared lock bound instead of waiting forever.
 
 use std::collections::HashMap;
-use std::str::FromStr as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use adk_rust::graph::Checkpoint;
 use chrono::Utc;
 use sqlx::ConnectOptions as _;
-use sqlx::postgres::PgConnectOptions;
 
 use super::{
     APPLICATION_CAPABILITY_ID, CheckpointLimits, CheckpointWriterAuthority,
@@ -75,7 +73,7 @@ async fn checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bo
         .max_connections(2)
         .acquire_timeout(Duration::from_mins(1))
         .connect_with(
-            PgConnectOptions::from_str(&url)
+            crate::test_pg::connect_options(&url)
                 .expect("parse test URL")
                 .disable_statement_logging()
                 .database(&database.database_name),

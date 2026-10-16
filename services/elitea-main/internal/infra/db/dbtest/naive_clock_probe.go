@@ -1,5 +1,24 @@
 package dbtest
 
+import (
+	"context"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// InstallNaiveClockProbe installs NaiveClockProbeSQL on pool's database. A
+// harness that builds its schema by hand (001_initial.sql, a migration file, a
+// table copied into the test) rather than through EnsureTemplate calls this
+// after its LAST schema statement: the probe attaches to the tables that exist
+// when it runs, so a table created afterwards is not watched.
+func InstallNaiveClockProbe(ctx context.Context, pool *pgxpool.Pool) error {
+	if _, err := pool.Exec(ctx, NaiveClockProbeSQL); err != nil {
+		return fmt.Errorf("dbtest: install the naive clock probe: %w", err)
+	}
+	return nil
+}
+
 // NaiveClockProbeSQL installs, on every table that has a `timestamp` WITHOUT
 // time zone column, a row trigger that refuses a write which stored the
 // SESSION-local wall clock instead of the UTC wall clock.

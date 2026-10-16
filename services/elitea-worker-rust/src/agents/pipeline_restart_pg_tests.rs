@@ -15,8 +15,6 @@
 //! The assembler is the production `PipelineNativeAgentAssembler::postgres` path, so session and
 //! checkpoint writers are activated by `activate_pipeline_postgres` from that claim.
 
-use std::str::FromStr as _;
-
 use super::*;
 use crate::protocol::control::test_session_authority_for_claim;
 use crate::state::postgres_session_tests::{IsolatedPostgres, install_schema};
@@ -106,7 +104,7 @@ fn authorized_turn<'a>(
 }
 
 async fn connect(database: &str) -> sqlx::PgPool {
-    let options = sqlx::postgres::PgConnectOptions::from_str(
+    let options = crate::test_pg::connect_options(
         &crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL").expect("database URL"),
     )
     .expect("parse database URL")

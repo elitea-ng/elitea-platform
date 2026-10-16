@@ -112,8 +112,9 @@ func TestAProjectKindOwnerIDRefusesANumberThatNamesNoProject(t *testing.T) {
 	}
 
 	_, err := pool.Exec(ctx, `
-		INSERT INTO p_1.applications (name, description, owner_id)
-		VALUES ('wrong-kind', 'an owner_id that names no project', 987654)`)
+		INSERT INTO p_1.applications (name, description, owner_id, created_at, updated_at)
+		VALUES ('wrong-kind', 'an owner_id that names no project', 987654,
+		        now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`)
 	if err == nil {
 		t.Fatal("p_1.applications accepted an owner_id that names no project")
 	}
@@ -125,8 +126,9 @@ func TestAProjectKindOwnerIDRefusesANumberThatNamesNoProject(t *testing.T) {
 	// The same statement with the project of the schema is accepted, so the
 	// constraint refuses the wrong number and not every number.
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_1.applications (name, description, owner_id)
-		VALUES ('right-kind', 'the project of this schema', 1)`); err != nil {
+		INSERT INTO p_1.applications (name, description, owner_id, created_at, updated_at)
+		VALUES ('right-kind', 'the project of this schema', 1,
+		        now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("p_1.applications refused the project of its own schema: %v", err)
 	}
 }

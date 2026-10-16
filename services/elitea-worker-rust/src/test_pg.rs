@@ -15,9 +15,14 @@
 //! `ELITEA_TEST_SESSION_TIMEZONE`. Production pools never pass through here
 //! and keep sqlx's UTC session.
 //!
-//! `test_pg_guard_every_test_pool_comes_from_test_pg` fails test code that
-//! builds a Postgres pool or connection itself, or that reads a database URL
-//! with `std::env::var` instead of [`database_url_var`].
+//! Two guards keep it that way. `test_pg_guard_every_test_pool_comes_from_test_pg`
+//! fails test code that builds a Postgres pool or connection itself, parses
+//! `PgConnectOptions` other than through [`connect_options`], or reads a
+//! database URL with `std::env::var` instead of [`database_url_var`]. It
+//! matches spelling, so the shared fixtures (`IsolatedPostgres::create`,
+//! `install_schema`, `install_test_schema`, the pipeline fixture's `activate`)
+//! also call [`assert_test_session`] on the pool the test will use, which fails
+//! any UTC session however it was built.
 
 use std::env::VarError;
 
@@ -69,6 +74,36 @@ pub(crate) async fn connect(options: &PgConnectOptions) -> Result<PgConnection, 
         .execute(set_time_zone_statement(&time_zone()).as_str())
         .await?;
     Ok(connection)
+}
+
+/// `PgConnectOptions` parsed from a test database URL. The one sanctioned
+/// parse in test code: the guard refuses a raw `PgConnectOptions::from_str`
+/// there, because such options are one `.connect()` away from a UTC session.
+/// Hand the result to [`pool_options`]`().connect_with(…)` or [`connect`].
+pub(crate) fn connect_options(url: &str) -> Result<PgConnectOptions, sqlx::Error> {
+    url.parse()
+}
+
+/// Panics unless `pool` runs in the test session time zone.
+///
+/// The text guard matches spellings; this matches behaviour. The shared
+/// fixtures call it on the pool the test is about to use, so a pool that was
+/// built by hand — however it was spelled — still runs in sqlx's `UTC` session
+/// and fails here.
+pub(crate) async fn assert_test_session(pool: &sqlx::PgPool, fixture: &str) {
+    let zone: String = sqlx::query_scalar("SHOW TimeZone")
+        .fetch_one(pool)
+        .await
+        .unwrap_or_else(|error| panic!("{fixture}: SHOW TimeZone on the test pool: {error}"));
+    assert_eq!(
+        zone,
+        time_zone(),
+        "{fixture}: this test's PostgreSQL session runs in TimeZone {zone:?}, not the test zone \
+         {:?}. The pool was not built by crate::test_pg::pool_options (or test_pg::connect), so \
+         sqlx's startup TimeZone=UTC hides naive-timestamp defects; build it with \
+         test_pg::pool_options()",
+        time_zone()
+    );
 }
 
 fn set_time_zone_statement(zone: &str) -> String {
@@ -276,6 +311,101 @@ mod tests {
         }
     }
 
+    /// The forms the first guard missed (PR #1295 review): a parse and a
+    /// connect on different lines, an inferred database type, a listener,
+    /// an aliased import, sqlx's own test macro.
+    #[test]
+    fn test_pg_guard_refuses_the_spellings_that_hid_a_test_pool() {
+        for (name, source, refuse) in [
+            // Options parsed in one statement and connected in a later one.
+            (
+                "a_tests.rs",
+                "let o = PgConnectOptions::from_str(&u)?;\nlet c = o.connect().await;",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let o = sqlx::postgres::PgConnectOptions::from_str(\n    &u,\n)?;",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let c = url.parse::<PgConnectOptions>()?.connect().await;",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let o: PgConnectOptions = url.parse()?;",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let o = PgConnectOptions::new().host(\"h\");\nlet c = o.connect().await;",
+                true,
+            ),
+            // The database type inferred from the binding.
+            (
+                "a_tests.rs",
+                "let p: PgPool = PoolOptions::new().connect(&u).await?;",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let c: PgConnection = sqlx::Connection::connect(&u).await?;",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let l = PgListener::connect(&u).await?;",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let l = sqlx::postgres::PgListener::connect_with(&pool).await?;",
+                true,
+            ),
+            // An alias hides every other marker.
+            (
+                "a_tests.rs",
+                "use sqlx::postgres::PgPoolOptions as P;\nlet p = P::default();",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "use sqlx::postgres::{PgConnectOptions as Options, PgPool};",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "use sqlx::postgres::PgConnection as Conn;",
+                true,
+            ),
+            // sqlx's own test macro builds the pool for the test.
+            (
+                "a_tests.rs",
+                "#[sqlx::test]\nasync fn t(pool: PgPool) {}",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let o = crate::test_pg::connect_options(&u)?;",
+                false,
+            ),
+            ("a_tests.rs", "use std::str::FromStr as _;", false),
+            (
+                "a_tests.rs",
+                "use sqlx::postgres::{PgConnectOptions, PgPool};",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                !offending_pools(name, source).is_empty(),
+                refuse,
+                "{name}: {source}"
+            );
+        }
+    }
+
     /// Test code: a whole `*_tests.rs`, `*_test_support.rs` or `tests.rs`
     /// file or any file under a `*_tests/` directory; otherwise the text
     /// from the first `#[cfg(test)]` on.
@@ -296,17 +426,36 @@ mod tests {
 
     /// A Postgres pool or connection built outside `test_pg`. A line marked
     /// `test_pg:control` is a deliberate UTC control.
+    ///
+    /// This matches spelling, so it cannot be complete (a `type` alias, a
+    /// macro, a helper in another crate). `test_pg::assert_test_session` in the
+    /// shared fixtures is the behavioural half that catches what this misses.
     fn offending_pools(name: &str, text: &str) -> Vec<String> {
-        const MARKERS: [&str; 9] = [
-            "PgPoolOptions::new(",
+        // `PoolOptions::new(` also covers `PgPoolOptions::new(` and a
+        // `PoolOptions::new()` whose database type is inferred;
+        // `Connection::connect` covers `PgConnection::connect` and
+        // `sqlx::Connection::connect` with `PgConnection` inferred.
+        const MARKERS: [&str; 11] = [
+            "PoolOptions::new(",
             "PoolOptions::<Postgres>::new(",
             "PgPool::connect(",
             "PgPool::connect_with(",
             "PgPool::connect_lazy",
-            "PgConnection::connect",
+            "Connection::connect",
             "Pool::<Postgres>::connect",
             ".after_connect(",
-            "PgConnectOptions::from_str(",
+            "PgConnectOptions::new(",
+            "PgListener::",
+            "sqlx::test",
+        ];
+        // Types whose `use … as Alias` would hide every marker above.
+        const ALIASED: [&str; 6] = [
+            "PgPoolOptions as ",
+            "PgConnectOptions as ",
+            "PgConnection as ",
+            "PgPool as ",
+            "PoolOptions as ",
+            "PgListener as ",
         ];
         let (offset, region) = test_region(name, text);
         let mut offenders = Vec::new();
@@ -314,19 +463,25 @@ mod tests {
             if line.contains("test_pg:control") {
                 continue;
             }
-            for marker in MARKERS {
-                // A parsed PgConnectOptions is fine; connecting it directly is not.
-                if marker == "PgConnectOptions::from_str("
-                    && !(line.contains(marker) && line.contains(".connect()"))
-                {
-                    continue;
-                }
-                if line.contains(marker) {
-                    offenders.push(format!(
-                        "{name}:{} builds a Postgres session with {marker}",
-                        offset + number + 1
-                    ));
-                }
+            let found = MARKERS
+                .iter()
+                .chain(ALIASED.iter())
+                .find(|marker| line.contains(**marker))
+                .map(|marker| (*marker).to_owned())
+                // Options parsed outside test_pg::connect_options are one
+                // `.connect()` away from a UTC session, on this line or a later one.
+                .or_else(|| {
+                    (line.contains("PgConnectOptions")
+                        && ["from_str", "from_url", "parse::<", ".parse()"]
+                            .iter()
+                            .any(|parse| line.contains(parse)))
+                    .then(|| "a raw PgConnectOptions parse".to_owned())
+                });
+            if let Some(marker) = found {
+                offenders.push(format!(
+                    "{name}:{} builds a Postgres session with {marker}",
+                    offset + number + 1
+                ));
             }
         }
         offenders

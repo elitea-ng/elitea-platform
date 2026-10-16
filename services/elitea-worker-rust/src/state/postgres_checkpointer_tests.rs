@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::env;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -36,7 +35,7 @@ struct IsolatedPostgres {
 impl IsolatedPostgres {
     async fn create(database_url: &str) -> Self {
         static DATABASE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
-        let admin_options = PgConnectOptions::from_str(database_url)
+        let admin_options = crate::test_pg::connect_options(database_url)
             .expect("parse PostgreSQL component-test URL")
             .disable_statement_logging();
         let admin_pool = crate::test_pg::pool_options()
@@ -69,6 +68,11 @@ impl IsolatedPostgres {
             .connect_with(admin_options.clone().database(&database_name))
             .await
             .expect("connect isolated checkpoint database");
+        crate::test_pg::assert_test_session(
+            &pool,
+            "postgres_checkpointer_tests::IsolatedPostgres::create",
+        )
+        .await;
         Self {
             pool,
             admin_options,
@@ -110,6 +114,8 @@ impl Drop for IsolatedPostgres {
 }
 
 async fn install_test_schema(pool: &PgPool) {
+    crate::test_pg::assert_test_session(pool, "postgres_checkpointer_tests::install_test_schema")
+        .await;
     sqlx::raw_sql(CHECKPOINT_MIGRATION)
         .execute(pool)
         .await
