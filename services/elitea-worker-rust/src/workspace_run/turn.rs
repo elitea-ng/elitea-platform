@@ -25,7 +25,7 @@ use super::codec::{CodecError, SegmentExpectation, TurnCommit, WorkspaceCodec};
 use super::context::WorkspaceRuntimeContext;
 use super::redact::{RedactingSandbox, SecretEnv};
 use super::sandbox::{
-    SandboxRunError, WorkspaceRunDefaults, WorkspaceRunSpec, WorkspaceSandbox,
+    SandboxRunError, WorkspaceNetwork, WorkspaceRunDefaults, WorkspaceRunSpec, WorkspaceSandbox,
     WorkspaceSandboxLauncher,
 };
 use super::scan::{ScanError, ScanLimits, scan_tree};
@@ -327,10 +327,20 @@ impl WorkspaceRunFactory {
             context,
             &self.defaults,
         )
+        .inspect_err(|error| {
+            if *error == SandboxRunError::EgressProxyUnavailable {
+                tracing::warn!(
+                    event = "workspace.egress_proxy_unavailable",
+                    execution_id,
+                    reason = context.egress_unavailable_reason(),
+                    "the project restricts the network to a host allowlist this deployment cannot enforce; the cloud turn is refused"
+                );
+            }
+        })
         .map_err(WorkspaceRunError::Sandbox)?;
         // Contract 6.4: the harvested env, redeemed as a claim-bound secret,
         // goes to the sandbox's run_command environment and nowhere else.
-        let env = if context.env_secret {
+        let mut env = if context.env_secret {
             self.store
                 .env_secret(&claim)
                 .await
@@ -338,6 +348,18 @@ impl WorkspaceRunFactory {
         } else {
             SecretEnv::default()
         };
+        // Host-allowlist mode (decision 9): the run token reaches the sandbox
+        // only as the proxy credential in the command environment, and is
+        // redacted like a harvested value. Never logged.
+        if spec.network == WorkspaceNetwork::Proxy {
+            let egress = context.egress.as_ref().ok_or(WorkspaceRunError::Sandbox(
+                SandboxRunError::EgressProxyUnavailable,
+            ))?;
+            let url = proxy_env_url(&egress.proxy_url, egress.token.expose())
+                .await
+                .map_err(WorkspaceRunError::Sandbox)?;
+            env.set_egress_proxy(&url, egress.token.expose());
+        }
         let redactor = env.redactor();
         let file_redactor = Arc::new(super::file_redact::FileRedactor::new(&env));
         let raw = self
@@ -389,6 +411,50 @@ fn checkout_commit(
         }
         _ => Err(WorkspaceRunError::StaleState),
     }
+}
+
+/// The proxy URL the command environment gets: `http://run:<token>@<ip>:<port>`.
+///
+/// The sandbox has no resolver in proxy mode, so the worker resolves the
+/// proxy's name (a Service name on Kubernetes) and hands over the address
+/// literal; the `NetworkPolicy` (or the Docker proxy network's rules) admits
+/// that address's pods on that port and nothing else.
+///
+/// # Errors
+///
+/// [`SandboxRunError::EgressProxyUnavailable`] for a malformed URL,
+/// [`SandboxRunError::Unavailable`] when the name does not resolve.
+pub(crate) async fn proxy_env_url(
+    proxy_url: &str,
+    token: &str,
+) -> Result<zeroize::Zeroizing<String>, SandboxRunError> {
+    let (host, port) = super::context::proxy_host_port(proxy_url)
+        .ok_or(SandboxRunError::EgressProxyUnavailable)?;
+    let address = if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        ip
+    } else {
+        let resolved: Vec<std::net::SocketAddr> = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::net::lookup_host((host, port)),
+        )
+        .await
+        .map_err(|_| SandboxRunError::Unavailable)?
+        .map_err(|_| SandboxRunError::Unavailable)?
+        .collect();
+        resolved
+            .iter()
+            .find(|address| address.is_ipv4())
+            .or_else(|| resolved.first())
+            .ok_or(SandboxRunError::Unavailable)?
+            .ip()
+    };
+    let authority = match address {
+        std::net::IpAddr::V4(ip) => format!("{ip}:{port}"),
+        std::net::IpAddr::V6(ip) => format!("[{ip}]:{port}"),
+    };
+    Ok(zeroize::Zeroizing::new(format!(
+        "http://run:{token}@{authority}"
+    )))
 }
 
 fn run_id(execution_id: &str, epoch: u64) -> String {

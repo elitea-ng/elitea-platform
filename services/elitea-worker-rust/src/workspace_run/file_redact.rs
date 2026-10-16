@@ -110,7 +110,7 @@ impl FileRedactor {
     #[must_use]
     pub(crate) fn new(env: &SecretEnv) -> Self {
         let mut needles: Vec<Needle> = Vec::new();
-        for (name, value) in env.pairs() {
+        for (name, value) in env.redaction_pairs() {
             if value.chars().count() < MIN_REDACTED_CHARS {
                 continue;
             }

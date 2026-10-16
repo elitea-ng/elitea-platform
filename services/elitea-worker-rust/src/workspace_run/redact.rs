@@ -29,7 +29,22 @@ pub(crate) const MIN_REDACTED_CHARS: usize = 4;
 #[derive(Default)]
 pub(crate) struct SecretEnv {
     vars: Vec<(String, Zeroizing<String>)>,
+    /// Values redacted like the vars but never handed to the sandbox as
+    /// such: the egress run token (it reaches the sandbox only inside the
+    /// proxy URLs), under the name the redaction reports use.
+    redact_only: Vec<(String, Zeroizing<String>)>,
 }
+
+/// The variables that point a command at the egress proxy (host-allowlist
+/// mode). Harvested values of these names are replaced, never merged.
+pub(crate) const PROXY_VARS: [&str; 4] = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"];
+/// Cleared in proxy mode: every host goes through the proxy.
+pub(crate) const NO_PROXY_VARS: [&str; 2] = ["NO_PROXY", "no_proxy"];
+/// Dropped from a harvested env in proxy mode: a laptop's proxy for other
+/// schemes means nothing in the cloud, and the proxy speaks HTTP only.
+const DROPPED_PROXY_VARS: [&str; 2] = ["ALL_PROXY", "all_proxy"];
+/// The name the run token is reported under when it is redacted from a file.
+pub(crate) const EGRESS_TOKEN_NAME: &str = "ELITEA_EGRESS_PROXY_TOKEN";
 
 impl SecretEnv {
     #[must_use]
@@ -39,7 +54,41 @@ impl SecretEnv {
                 .into_iter()
                 .map(|(name, value)| (name, Zeroizing::new(value)))
                 .collect(),
+            redact_only: Vec::new(),
         }
+    }
+
+    /// Host-allowlist mode: the command environment reaches the egress proxy
+    /// with the run token (`HTTPS_PROXY` and the rest, `proxy_url` already
+    /// carrying `run:<token>@`), every host goes through it (empty
+    /// `NO_PROXY`), and the token is redacted wherever a value is.
+    pub(crate) fn set_egress_proxy(&mut self, proxy_url: &str, token: &str) {
+        self.vars.retain(|(name, _)| {
+            !PROXY_VARS.contains(&name.as_str())
+                && !NO_PROXY_VARS.contains(&name.as_str())
+                && !DROPPED_PROXY_VARS.contains(&name.as_str())
+        });
+        for name in PROXY_VARS {
+            self.vars
+                .push((name.to_owned(), Zeroizing::new(proxy_url.to_owned())));
+        }
+        for name in NO_PROXY_VARS {
+            self.vars
+                .push((name.to_owned(), Zeroizing::new(String::new())));
+        }
+        self.redact_only.push((
+            EGRESS_TOKEN_NAME.to_owned(),
+            Zeroizing::new(token.to_owned()),
+        ));
+    }
+
+    /// Every value to redact, with its name: the vars and the redact-only
+    /// values.
+    pub(crate) fn redaction_pairs(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.vars
+            .iter()
+            .chain(self.redact_only.iter())
+            .map(|(name, value)| (name.as_str(), value.as_str()))
     }
 
     #[cfg(test)]
@@ -65,13 +114,13 @@ impl SecretEnv {
     #[must_use]
     pub(crate) fn redactor(&self) -> Redactor {
         let mut needles: Vec<Zeroizing<String>> = Vec::new();
-        for (_, value) in &self.vars {
+        for (_, value) in self.redaction_pairs() {
             if value.chars().count() < MIN_REDACTED_CHARS {
                 continue;
             }
             let bytes = value.as_bytes();
             for form in [
-                value.to_string(),
+                value.to_owned(),
                 STANDARD.encode(bytes),
                 STANDARD_NO_PAD.encode(bytes),
                 URL_SAFE.encode(bytes),
@@ -95,6 +144,7 @@ impl fmt::Debug for SecretEnv {
         formatter
             .debug_struct("SecretEnv")
             .field("vars", &self.vars.len())
+            .field("redact_only", &self.redact_only.len())
             .finish()
     }
 }
@@ -241,7 +291,45 @@ mod tests {
             "a value under 4 characters is kept"
         );
         assert!(redacted.contains(REDACTED));
-        assert_eq!(format!("{env:?}"), "SecretEnv { vars: 3 }");
+        assert_eq!(format!("{env:?}"), "SecretEnv { vars: 3, redact_only: 0 }");
         assert!(!format!("{redactor:?}").contains("tok"));
+    }
+
+    #[test]
+    fn proxy_mode_sets_the_proxy_vars_replaces_harvested_ones_and_redacts_the_token() {
+        let token = crate::workspace_run::context::TEST_TOKEN;
+        let mut env = SecretEnv::new(vec![
+            ("HTTPS_PROXY".into(), "http://laptop-proxy:8080".into()),
+            ("no_proxy".into(), "internal.example".into()),
+            ("ALL_PROXY".into(), "socks5://laptop:1080".into()),
+            ("API_TOKEN".into(), "tok-123456".into()),
+        ]);
+        let url = format!("http://run:{token}@10.96.0.40:3128");
+        env.set_egress_proxy(&url, token);
+        let pairs: Vec<(&str, &str)> = env.pairs().collect();
+        for name in PROXY_VARS {
+            assert_eq!(
+                pairs.iter().filter(|(n, _)| *n == name).collect::<Vec<_>>(),
+                [&(name, url.as_str())],
+                "{name}"
+            );
+        }
+        for name in NO_PROXY_VARS {
+            assert!(pairs.contains(&(name, "")), "{name}");
+        }
+        assert!(!pairs.iter().any(|(name, _)| *name == "ALL_PROXY"));
+        assert!(pairs.contains(&("API_TOKEN", "tok-123456")));
+        // The token is never a variable of its own.
+        assert!(!pairs.iter().any(|(name, _)| *name == EGRESS_TOKEN_NAME));
+        let redacted = env
+            .redactor()
+            .json(json!({"stdout": format!("{url}\npassword={token}\nb64={}", URL_SAFE_NO_PAD.encode(token))}))
+            .to_string();
+        assert!(!redacted.contains(token), "{redacted}");
+        assert!(
+            !redacted.contains(&URL_SAFE_NO_PAD.encode(token)),
+            "{redacted}"
+        );
+        assert!(!format!("{env:?}").contains("ert1"));
     }
 }

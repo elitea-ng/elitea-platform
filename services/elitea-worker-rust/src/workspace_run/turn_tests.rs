@@ -910,3 +910,132 @@ async fn a_regenerate_rewinds_the_cloud_ref_before_the_turn_runs() {
     bad.rewind = true;
     assert!(bad.validate().is_err());
 }
+
+/// Host-allowlist mode (decision 9, "Host allowlist: the egress proxy"):
+/// the run token reaches `run_command` only inside the proxy URLs, with an
+/// empty `NO_PROXY`, the proxy as an address literal, and the token is
+/// redacted from tool output and from written files like a harvested value.
+#[tokio::test]
+async fn proxy_mode_points_run_command_at_the_proxy_and_redacts_the_token() {
+    use super::context::{TEST_TOKEN, proxy_fixture};
+    let harness = harness(CLOUD_REFS, &[]);
+    let context = WorkspaceRuntimeContext {
+        expected_old_cloud: Some(CLOUD.to_owned()),
+        ..proxy_fixture()
+    };
+    let turn = harness
+        .factory
+        .begin(
+            &context,
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("hydrated");
+    assert_eq!(
+        harness.launcher.launched.lock().expect("launched")[0].network,
+        super::sandbox::WorkspaceNetwork::Proxy
+    );
+    let env: BTreeMap<String, String> = harness
+        .launcher
+        .sandbox
+        .env
+        .lock()
+        .expect("env")
+        .iter()
+        .cloned()
+        .collect();
+    let url = format!("http://run:{TEST_TOKEN}@10.96.0.40:3128");
+    for name in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] {
+        assert_eq!(env[name], url, "{name}");
+    }
+    assert_eq!(env["NO_PROXY"], "");
+    assert_eq!(env["no_proxy"], "");
+    let output = turn
+        .sandbox()
+        .call_tool("run_command", "call-1", json!({"command": "env"}))
+        .await
+        .expect("tool")
+        .to_string();
+    assert!(!output.contains(TEST_TOKEN), "{output}");
+    assert!(output.contains("HTTPS_PROXY=[REDACTED]"), "{output}");
+
+    turn.sandbox()
+        .call_tool(
+            "write_file",
+            "call-2",
+            json!({"path": "leak.txt", "content": format!("token={TEST_TOKEN}\n")}),
+        )
+        .await
+        .expect("tool");
+    let stamp = turn
+        .finish(TurnEnd::Completed)
+        .await
+        .expect("published")
+        .expect("stamp");
+    let committed = harness.codec.committed.lock().expect("committed").clone();
+    assert!(!committed["leak.txt"].contains(TEST_TOKEN), "{committed:?}");
+    assert_eq!(stamp.redactions[0].names, ["ELITEA_EGRESS_PROXY_TOKEN"]);
+}
+
+/// An allowlist this deployment cannot enforce fails the turn before any
+/// sandbox starts, with its own code.
+#[tokio::test]
+async fn an_unavailable_egress_proxy_fails_the_turn_before_any_sandbox_starts() {
+    use super::context::{EgressMode, ProxyToken, proxy_fixture};
+    let harness = harness(CLOUD_REFS, &[]);
+    let mut context = WorkspaceRuntimeContext {
+        expected_old_cloud: Some(CLOUD.to_owned()),
+        ..proxy_fixture()
+    };
+    let egress = context.egress.as_mut().expect("egress");
+    egress.mode = EgressMode::Unavailable;
+    egress.proxy_url.clear();
+    egress.token = ProxyToken::empty();
+    egress.reason = "egress_proxy_not_enabled".to_owned();
+    let error = harness
+        .factory
+        .begin(
+            &context,
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .err()
+        .expect("refused");
+    assert_eq!(error.code(), "workspace_run.egress_proxy_unavailable");
+    assert!(
+        harness
+            .launcher
+            .launched
+            .lock()
+            .expect("launched")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn the_proxy_name_is_resolved_to_an_address_literal() {
+    use super::context::TEST_TOKEN;
+    let url = super::turn::proxy_env_url("http://localhost:3128", TEST_TOKEN)
+        .await
+        .expect("resolved");
+    assert!(
+        url.as_str() == format!("http://run:{TEST_TOKEN}@127.0.0.1:3128")
+            || url.as_str() == format!("http://run:{TEST_TOKEN}@[::1]:3128"),
+        "an address literal"
+    );
+    let v6 = super::turn::proxy_env_url("http://[fd00::5]:3128", TEST_TOKEN)
+        .await
+        .expect("literal");
+    assert_eq!(
+        v6.as_str(),
+        format!("http://run:{TEST_TOKEN}@[fd00::5]:3128")
+    );
+    assert_eq!(
+        super::turn::proxy_env_url("http://run:x@p:3128", TEST_TOKEN).await,
+        Err(SandboxRunError::EgressProxyUnavailable)
+    );
+}
