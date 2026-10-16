@@ -40,7 +40,10 @@ type Service struct {
 
 	mu       sync.Mutex
 	orphanAt Thread
-	vault    EnvVault
+	// idleAt is where the next sweep continues the CLOUD_IDLE walk, so a
+	// long list of idle threads is covered across sweeps.
+	idleAt IdleCursor
+	vault  EnvVault
 }
 
 // WithEnvVault supplies the vault of the harvested environment. Without it a

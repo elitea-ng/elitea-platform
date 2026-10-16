@@ -9,6 +9,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -441,6 +442,9 @@ WHERE conversation_uuid = $1::uuid`, graced.thread.ConversationUUID); err != nil
 	seedHandoffRow(t, pool, idle.thread, owner, workspacestore.StateCloudIdle, 2, false, "")
 	recent := seedLocalWorkThread(t, pool, owner, "local_work")
 	seedHandoffRow(t, pool, recent.thread, owner, workspacestore.StateCloudIdle, 2, false, "")
+	// CLOUD_IDLE for 28 days → the owner is warned (erased in 2 days).
+	expiringIdle := seedLocalWorkThread(t, pool, owner, "local_work")
+	seedHandoffRow(t, pool, expiringIdle.thread, owner, workspacestore.StateCloudIdle, 2, false, "")
 	// A thread whose conversation was deleted → erased.
 	orphan := seedLocalWorkThread(t, pool, owner, "local_work")
 	seedHandoffRow(t, pool, orphan.thread, owner, workspacestore.StateCloudIdle, 2, false, "")
@@ -451,6 +455,7 @@ WHERE conversation_uuid = $1::uuid`, graced.thread.ConversationUUID); err != nil
 		{`UPDATE elitea_runtime.workspace_handoffs SET state_changed_at = clock_timestamp() - interval '8 days' WHERE conversation_uuid = $1::uuid`, abandoned.thread.ConversationUUID},
 		{`UPDATE elitea_runtime.workspace_handoffs SET state_changed_at = clock_timestamp() - interval '31 days' WHERE conversation_uuid = $1::uuid`, idle.thread.ConversationUUID},
 		{`UPDATE elitea_runtime.workspace_handoffs SET state_changed_at = clock_timestamp() - interval '2 days' WHERE conversation_uuid = $1::uuid`, recent.thread.ConversationUUID},
+		{`UPDATE elitea_runtime.workspace_handoffs SET state_changed_at = clock_timestamp() - interval '28 days' WHERE conversation_uuid = $1::uuid`, expiringIdle.thread.ConversationUUID},
 		{`DELETE FROM p_1.chat_participant_mapping WHERE conversation_id = (SELECT id FROM p_1.chat_conversations WHERE uuid = $1::uuid)`, orphan.thread.ConversationUUID},
 		{`DELETE FROM p_1.chat_conversations WHERE uuid = $1::uuid`, orphan.thread.ConversationUUID},
 	} {
@@ -464,8 +469,22 @@ WHERE conversation_uuid = $1::uuid`, graced.thread.ConversationUUID); err != nil
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if report.Expired != 1 || report.ForcedReclaims != 1 || report.AbandonedReclaim != 1 || report.IdleErased != 1 || report.OrphansErased != 1 {
+	if report.Expired != 1 || report.ForcedReclaims != 1 || report.AbandonedReclaim != 1 || report.IdleErased != 1 || report.OrphansErased != 1 ||
+		report.IdleWarned != 1 {
 		t.Fatalf("sweep report = %+v", report)
+	}
+	// The warning: one notification for the owner, with the thread and the
+	// erasure date, and a message the notification list renders.
+	var meta map[string]any
+	if err := pool.QueryRow(ctx, `
+SELECT meta FROM centry.notifications
+WHERE event_type = 'workspace_idle_expiring' AND user_id = $1 AND meta->>'conversation_uuid' = $2`,
+		owner, expiringIdle.thread.ConversationUUID).Scan(&meta); err != nil {
+		t.Fatalf("idle warning notification: %v", err)
+	}
+	if meta["conversation_id"] != expiringIdle.thread.ConversationUUID || meta["delete_after"] == nil ||
+		!strings.Contains(fmt.Sprint(meta["message"]), "erased on") {
+		t.Fatalf("idle warning meta = %v", meta)
 	}
 	state := func(thread workspacestore.Thread) workspacehandoff.Handoff {
 		view, err := h.service.State(ctx, thread)
@@ -485,6 +504,7 @@ WHERE conversation_uuid = $1::uuid`, graced.thread.ConversationUUID); err != nil
 		{"abandoned take back", abandoned.thread, workspacestore.StateCloudIdle, 4},
 		{"idle retention", idle.thread, workspacestore.StateLocal, 3},
 		{"recent idle", recent.thread, workspacestore.StateCloudIdle, 2},
+		{"idle, warned", expiringIdle.thread, workspacestore.StateCloudIdle, 2},
 		{"deleted conversation", orphan.thread, workspacestore.StateLocal, 3},
 	} {
 		got := state(tc.thread)
@@ -504,7 +524,7 @@ WHERE conversation_uuid = $1::uuid`, graced.thread.ConversationUUID); err != nil
 	}
 	// A second sweep changes nothing more (each transition happened once).
 	again, err := h.service.Sweep(ctx)
-	if err != nil || again.Expired+again.ForcedReclaims+again.AbandonedReclaim+again.IdleErased+again.OrphansErased != 0 {
+	if err != nil || again.Expired+again.ForcedReclaims+again.AbandonedReclaim+again.IdleErased+again.OrphansErased+again.IdleWarned != 0 {
 		t.Fatalf("second sweep = %+v, %v", again, err)
 	}
 }
@@ -641,5 +661,67 @@ func TestPostgresWorkspaceHandoffCancelSend(t *testing.T) {
 	h.service.WithClock(time.Now)
 	if _, err := h.service.Begin(ctx, beginRequest(thread, owner)); err != nil {
 		t.Fatalf("a send after the sweeper finished = %v", err)
+	}
+}
+
+// User offboarding (ADR-0034 decision 12): a thread whose owner is suspended
+// (an administrator's suspension or a SCIM deactivation) or deleted is erased
+// by the sweeper, and a running cloud turn is stopped. An active owner's
+// thread is kept.
+func TestPostgresWorkspaceHandoffSweeperErasesOnUserOffboarding(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	withWorkspaceUsersTable(t, pool)
+	h := newHandoffHarness(t, pool)
+	const active, suspended, deleted int64 = 5291, 5292, 5293
+	kept := seedLocalWorkThread(t, pool, active, "local_work")
+	seedHandoffRow(t, pool, kept.thread, active, workspacestore.StateCloudIdle, 2, false, "")
+	running := seedLocalWorkThread(t, pool, suspended, "local_work")
+	seedHandoffRow(t, pool, running.thread, suspended, workspacestore.StateCloudRunning, 2, false, "exec-off")
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.workspace_handoffs
+SET running_response_message_id = '7e5a8c0e-3f4b-4a2b-9c1d-0e2f3a4b5c6d' WHERE conversation_uuid = $1::uuid`,
+		running.thread.ConversationUUID); err != nil {
+		t.Fatal(err)
+	}
+	gone := seedLocalWorkThread(t, pool, deleted, "local_work")
+	seedHandoffRow(t, pool, gone.thread, deleted, workspacestore.StateCloudIdle, 2, false, "")
+	if _, err := pool.Exec(ctx, `UPDATE public.auth_core__user SET suspended = true WHERE id = $1`, suspended); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM public.auth_core__user WHERE id = $1`, deleted); err != nil {
+		t.Fatal(err)
+	}
+	report, err := h.service.Sweep(ctx)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if report.OrphansErased != 2 {
+		t.Fatalf("sweep report = %+v, want the two offboarded owners' threads erased", report)
+	}
+	// The objects go at a later sweep (the erasure claim is a one-minute
+	// lease on updated_at).
+	h.service.WithClock(func() time.Time { return time.Now().Add(2 * time.Minute) })
+	if _, err := h.service.Sweep(ctx); err != nil {
+		t.Fatalf("second sweep: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		thread workspacestore.Thread
+		state  workspacestore.State
+	}{
+		{"active owner", kept.thread, workspacestore.StateCloudIdle},
+		{"suspended owner", running.thread, workspacestore.StateLocal},
+		{"deleted owner", gone.thread, workspacestore.StateLocal},
+	} {
+		view, err := h.service.State(ctx, tc.thread)
+		if err != nil || view.Handoff.State != tc.state {
+			t.Fatalf("%s: %+v, %v; want %s", tc.name, view.Handoff, err, tc.state)
+		}
+		if tc.state == workspacestore.StateLocal && view.Handoff.DeletedAt == nil {
+			t.Fatalf("%s: not erased: %+v", tc.name, view.Handoff)
+		}
+	}
+	if len(h.canceller.cancelled) != 1 || h.canceller.cancelled[0] != "7e5a8c0e-3f4b-4a2b-9c1d-0e2f3a4b5c6d" {
+		t.Fatalf("cancelled = %v, want the suspended owner's running turn", h.canceller.cancelled)
 	}
 }

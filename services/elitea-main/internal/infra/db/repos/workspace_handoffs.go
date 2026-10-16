@@ -774,8 +774,44 @@ func (r *WorkspaceHandoffsRepository) AbandonReclaim(ctx context.Context, t work
 	return r.timed(ctx, t, []workspacestore.State{workspacestore.StateReclaiming}, workspacestore.StateCloudIdle, "")
 }
 
-func (r *WorkspaceHandoffsRepository) DueIdle(ctx context.Context, before time.Time, limit int) ([]workspacehandoff.Handoff, error) {
-	return r.due(ctx, `state = 'CLOUD_IDLE' AND state_changed_at <= $1 ORDER BY state_changed_at LIMIT $2`, before, limit)
+func (r *WorkspaceHandoffsRepository) DueIdle(
+	ctx context.Context, after workspacehandoff.IdleCursor, limit int,
+) ([]workspacehandoff.Handoff, error) {
+	afterUUID := after.ConversationUUID
+	if afterUUID == "" {
+		afterUUID = "00000000-0000-0000-0000-000000000000"
+	}
+	return r.due(ctx, `state = 'CLOUD_IDLE'
+  AND (state_changed_at, project_id, conversation_uuid) > ($1::timestamptz, $2::integer, $3::uuid)
+ORDER BY state_changed_at, project_id, conversation_uuid LIMIT $4`, after.StateChangedAt, after.ProjectID, afterUUID, limit)
+}
+
+var idleNotificationNamespace = uuid.MustParse("0c6f3e4b-8a51-4f0d-9d2e-71a4c5b9e6f3")
+
+// NotifyIdleExpiring writes the owner's warning before the idle-retention
+// erasure. The notification uuid is derived from the thread, the epoch and
+// the start of the idle period, so each idle period warns once.
+func (r *WorkspaceHandoffsRepository) NotifyIdleExpiring(
+	ctx context.Context, handoff workspacehandoff.Handoff, deleteAt time.Time,
+) (bool, error) {
+	id := uuid.NewSHA1(idleNotificationNamespace, []byte(fmt.Sprintf("%d:%s:%d:%d",
+		handoff.ProjectID, handoff.ConversationUUID, handoff.Epoch, handoff.StateChangedAt.UnixMicro()))).String()
+	meta, _ := json.Marshal(map[string]any{
+		"project_id": handoff.ProjectID, "conversation_id": handoff.ConversationUUID,
+		"conversation_uuid": handoff.ConversationUUID, "epoch": handoff.Epoch,
+		"delete_after": deleteAt.UTC().Format(time.RFC3339),
+		// The notification list renders meta.message as is.
+		"message": "The cloud copy of a Local work thread is erased on " + deleteAt.UTC().Format("2 January 2006") +
+			" because nobody used it. Send a prompt to the thread or take it back to keep it.",
+	})
+	tag, err := r.pool.Exec(ctx, `
+INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
+VALUES ($1::uuid, FALSE, $2, $3, $4::jsonb, 'workspace_idle_expiring')
+ON CONFLICT (uuid) DO NOTHING`, id, handoff.ProjectID, handoff.OwnerUserID, string(meta))
+	if err != nil {
+		return false, fmt.Errorf("workspace handoff: notify idle expiry: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 func (r *WorkspaceHandoffsRepository) IdleErase(ctx context.Context, t workspacehandoff.TimedTransition) (workspacehandoff.Handoff, error) {
@@ -788,7 +824,13 @@ func (r *WorkspaceHandoffsRepository) OrphanErase(ctx context.Context, t workspa
 }
 
 // OrphanedThreads walks the rows not yet erased, in key order from `after`,
-// and answers those whose project schema or conversation no longer exists.
+// and answers those whose project schema or conversation no longer exists,
+// and those whose owner is offboarded: deleted, or suspended (an
+// administrator's suspension and a SCIM deactivation both set
+// auth_core__user.suspended). ADR-0034 decision 12 erases a thread on user
+// offboarding; finding it here covers every offboarding path (the admin
+// routes, SCIM, a direct change) with the same erasure the sweeper runs for
+// a deleted conversation, which also stops a running cloud turn.
 func (r *WorkspaceHandoffsRepository) OrphanedThreads(
 	ctx context.Context, after workspacehandoff.Thread, limit int,
 ) ([]workspacehandoff.Handoff, workspacehandoff.Thread, error) {
@@ -806,8 +848,27 @@ ORDER BY project_id, conversation_uuid LIMIT $3`, after.ProjectID, afterUUID, li
 		last := rows[len(rows)-1]
 		next = workspacehandoff.Thread{ProjectID: last.ProjectID, ConversationUUID: last.ConversationUUID}
 	}
+	// The users table belongs to the auth migrations, not the shared ones
+	// (the shared migrations guard it with to_regclass the same way); a
+	// database without it has no owner to offboard.
+	var usersTable bool
+	if err := r.pool.QueryRow(ctx, `SELECT to_regclass('public.auth_core__user') IS NOT NULL`).Scan(&usersTable); err != nil {
+		return nil, workspacehandoff.Thread{}, fmt.Errorf("workspace handoff: users table: %w", err)
+	}
 	orphans := []workspacehandoff.Handoff{}
 	for _, row := range rows {
+		if usersTable {
+			var ownerActive bool
+			if err := r.pool.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM public.auth_core__user WHERE id = $1 AND suspended = false)`,
+				row.OwnerUserID).Scan(&ownerActive); err != nil {
+				return nil, workspacehandoff.Thread{}, fmt.Errorf("workspace handoff: owner: %w", err)
+			}
+			if !ownerActive {
+				orphans = append(orphans, row)
+				continue
+			}
+		}
 		schema, err := tenantSchema(strconv.FormatInt(row.ProjectID, 10))
 		if err != nil {
 			continue

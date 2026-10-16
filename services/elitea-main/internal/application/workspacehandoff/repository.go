@@ -132,7 +132,14 @@ type Repository interface {
 	ForceReclaim(ctx context.Context, transition TimedTransition) (Handoff, error)
 	DueAbandonedReclaim(ctx context.Context, before time.Time, limit int) ([]Handoff, error)
 	AbandonReclaim(ctx context.Context, transition TimedTransition) (Handoff, error)
-	DueIdle(ctx context.Context, before time.Time, limit int) ([]Handoff, error)
+	// DueIdle walks the CLOUD_IDLE rows in (state_changed_at, project,
+	// conversation) order, after the cursor. A short page means the walk
+	// reached the end.
+	DueIdle(ctx context.Context, after IdleCursor, limit int) ([]Handoff, error)
+	// NotifyIdleExpiring notifies the owner that the thread's cloud copy is
+	// erased at deleteAt (ADR-0034 decision 12: a warning 3 days before).
+	// Deduplicated per thread, epoch and idle period.
+	NotifyIdleExpiring(ctx context.Context, handoff Handoff, deleteAt time.Time) (bool, error)
 	// IdleErase erases a CLOUD_IDLE thread past its idle retention.
 	IdleErase(ctx context.Context, transition TimedTransition) (Handoff, error)
 	// OrphanedThreads answers rows whose conversation or project is gone,
@@ -155,4 +162,17 @@ type EnvVault interface {
 	PutEnv(ctx context.Context, projectID int64, name string, env map[string]string) error
 	DeleteEnv(ctx context.Context, projectID int64, name string) error
 	ReadEnv(ctx context.Context, projectID int64, name string) (map[string]string, error)
+}
+
+// IdleCursor is a position in the CLOUD_IDLE walk. The zero value is the
+// start.
+type IdleCursor struct {
+	StateChangedAt   time.Time
+	ProjectID        int64
+	ConversationUUID string
+}
+
+// Next answers the cursor after handoff.
+func (IdleCursor) Next(handoff Handoff) IdleCursor {
+	return IdleCursor{StateChangedAt: handoff.StateChangedAt, ProjectID: handoff.ProjectID, ConversationUUID: handoff.ConversationUUID}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -31,6 +32,7 @@ func seedLocalWorkThread(t *testing.T, pool *pgxpool.Pool, owner int64, source s
 	ctx := context.Background()
 	var fixture workspaceThreadFixture
 	fixture.thread.ProjectID = 1
+	ensureWorkspaceTestUser(t, pool, owner)
 	if err := pool.QueryRow(ctx, `
 INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
 VALUES (gen_random_uuid(), 'local work', $1, $2) RETURNING id, uuid::text`, owner, source).
@@ -57,10 +59,43 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) VALUE
 	return fixture
 }
 
+// ensureWorkspaceTestUser creates the thread owner when the database has a
+// users table: the sweeper erases a thread whose owner is absent or suspended
+// (user offboarding). The migrated test database has no users table unless a
+// test creates one (withWorkspaceUsersTable).
+func ensureWorkspaceTestUser(t *testing.T, pool *pgxpool.Pool, owner int64) {
+	t.Helper()
+	ctx := context.Background()
+	var exists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('public.auth_core__user') IS NOT NULL`).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		return
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.auth_core__user (id, email, name) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`,
+		owner, fmt.Sprintf("owner-%d@example.com", owner), fmt.Sprintf("Owner %d", owner)); err != nil {
+		t.Fatalf("seed the owner: %v", err)
+	}
+}
+
+// withWorkspaceUsersTable creates the auth migrations' users table with the
+// columns the offboarding check reads.
+func withWorkspaceUsersTable(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `
+CREATE TABLE IF NOT EXISTS public.auth_core__user (
+    id integer PRIMARY KEY, email text NOT NULL, name text, suspended boolean NOT NULL DEFAULT false)`); err != nil {
+		t.Fatalf("create the users table: %v", err)
+	}
+}
+
 // seedHandoffRow puts a thread directly into a state, for the store tests.
 func seedHandoffRow(t *testing.T, pool *pgxpool.Pool, thread workspacestore.Thread, owner int64,
 	state workspacestore.State, epoch int64, hasUpstream bool, running string) {
 	t.Helper()
+	ensureWorkspaceTestUser(t, pool, owner)
 	var runningValue *string
 	if running != "" {
 		runningValue = &running

@@ -12,12 +12,21 @@ import (
 // SweepBatch is how many rows one sweep step handles.
 const SweepBatch = 50
 
+// IdleWarningBefore is how long before the idle-retention erasure the owner is
+// warned (ADR-0034 decision 12).
+const IdleWarningBefore = 3 * 24 * time.Hour
+
+// idleSweepPages caps the CLOUD_IDLE pages one sweep walks. The walk goes on
+// from the same place at the next sweep.
+const idleSweepPages = 20
+
 // SweepReport counts one sweep.
 type SweepReport struct {
 	Expired          int
 	ForcedReclaims   int
 	AbandonedReclaim int
 	IdleErased       int
+	IdleWarned       int
 	OrphansErased    int
 	ObjectsErased    int
 }
@@ -89,38 +98,17 @@ func (s *Service) Sweep(ctx context.Context) (SweepReport, error) {
 		}
 	}
 
-	// CLOUD_IDLE past the project's idle retention → erased. The claim reads
-	// rows idle for at least one day; each row is checked against its
-	// project's own retention.
-	if due, err := s.repo.DueIdle(ctx, now.Add(-24*time.Hour), SweepBatch); err != nil {
+	// CLOUD_IDLE: past the project's idle retention → erased; within
+	// IdleWarningBefore of it → the owner is warned once. The walk is keyset
+	// paged and continues across sweeps, so every idle row is reached
+	// whatever the other projects' retentions are.
+	if err := s.sweepIdle(ctx, now, &report); err != nil {
 		errs = append(errs, err)
-	} else {
-		projects := map[int64]idleProject{}
-		for _, handoff := range due {
-			project, seen := projects[handoff.ProjectID]
-			if !seen {
-				policy, err := s.policy.Effective(ctx, handoff.ProjectID)
-				project = idleProject{retention: policy.IdleRetention, ok: err == nil && policy.IdleRetention > 0}
-				projects[handoff.ProjectID] = project
-			}
-			if !project.ok || now.Sub(handoff.StateChangedAt) < project.retention {
-				continue
-			}
-			message := EventMessage{Event: "handoff.erase", Text: EraseMessage}
-			if _, err := s.repo.IdleErase(ctx, TimedTransition{Thread: threadOf(handoff), Epoch: handoff.Epoch, Message: &message}); err != nil {
-				if !errors.Is(err, ErrStaleEpoch) {
-					errs = append(errs, err)
-				}
-				continue
-			}
-			report.IdleErased++
-			s.record(ctx, threadOf(handoff), handoff.OwnerUserID, "", "", now,
-				fmt.Sprintf("handoff.erase: idle retention, epoch %d", handoff.Epoch+1), true)
-		}
 	}
 
-	// A thread whose conversation or project is gone is erased, whatever its
-	// state (conversation delete, project delete).
+	// A thread whose conversation or project is gone, or whose owner is
+	// offboarded (deleted or suspended), is erased, whatever its state
+	// (conversation delete, project delete, user offboarding).
 	s.mu.Lock()
 	after := s.orphanAt
 	s.mu.Unlock()
@@ -141,7 +129,7 @@ func (s *Service) Sweep(ctx context.Context) (SweepReport, error) {
 			}
 			report.OrphansErased++
 			s.record(ctx, threadOf(handoff), handoff.OwnerUserID, "", "", now,
-				fmt.Sprintf("handoff.erase: conversation deleted, epoch %d", handoff.Epoch+1), true)
+				fmt.Sprintf("handoff.erase: conversation, project or owner gone, epoch %d", handoff.Epoch+1), true)
 		}
 	}
 
@@ -165,4 +153,62 @@ func (s *Service) Sweep(ctx context.Context) (SweepReport, error) {
 
 func threadOf(handoff Handoff) Thread {
 	return workspacestore.Thread{ProjectID: handoff.ProjectID, ConversationUUID: handoff.ConversationUUID}
+}
+
+// sweepIdle walks the CLOUD_IDLE rows from the stored cursor.
+func (s *Service) sweepIdle(ctx context.Context, now time.Time, report *SweepReport) error {
+	s.mu.Lock()
+	cursor := s.idleAt
+	s.mu.Unlock()
+	projects := map[int64]idleProject{}
+	var errs []error
+	for page := 0; page < idleSweepPages; page++ {
+		due, err := s.repo.DueIdle(ctx, cursor, SweepBatch)
+		if err != nil {
+			return errors.Join(append(errs, err)...)
+		}
+		for _, handoff := range due {
+			cursor = cursor.Next(handoff)
+			project, seen := projects[handoff.ProjectID]
+			if !seen {
+				policy, err := s.policy.Effective(ctx, handoff.ProjectID)
+				project = idleProject{retention: policy.IdleRetention, ok: err == nil && policy.IdleRetention > 0}
+				projects[handoff.ProjectID] = project
+			}
+			if !project.ok {
+				continue
+			}
+			deadline := handoff.StateChangedAt.Add(project.retention)
+			if now.Before(deadline) {
+				if !now.Before(deadline.Add(-IdleWarningBefore)) {
+					warned, err := s.repo.NotifyIdleExpiring(ctx, handoff, deadline)
+					if err != nil {
+						errs = append(errs, err)
+					} else if warned {
+						report.IdleWarned++
+					}
+				}
+				continue
+			}
+			message := EventMessage{Event: "handoff.erase", Text: EraseMessage}
+			if _, err := s.repo.IdleErase(ctx, TimedTransition{Thread: threadOf(handoff), Epoch: handoff.Epoch, Message: &message}); err != nil {
+				if !errors.Is(err, ErrStaleEpoch) {
+					errs = append(errs, err)
+				}
+				continue
+			}
+			report.IdleErased++
+			s.record(ctx, threadOf(handoff), handoff.OwnerUserID, "", "", now,
+				fmt.Sprintf("handoff.erase: idle retention, epoch %d", handoff.Epoch+1), true)
+		}
+		if len(due) < SweepBatch {
+			// The end of the walk: the next sweep starts again.
+			cursor = IdleCursor{}
+			break
+		}
+	}
+	s.mu.Lock()
+	s.idleAt = cursor
+	s.mu.Unlock()
+	return errors.Join(errs...)
 }
