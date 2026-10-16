@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
@@ -15,16 +15,23 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, Semaphore, mpsc};
 
+use elitea_agent_runtime::graph::fanout::runner::AckResult;
+use elitea_agent_runtime::graph::fanout_budget::{
+    CANCEL_CLEANUP, MAX_CHILD_RESULT_BYTES, MAX_JOINED_RESULT_BYTES, MAX_OPEN_INTERRUPTS,
+};
+
 use super::fanout_control::FanoutCancellation;
+use super::fanout_test_ledger::{LedgerSeam, TestLedger};
 use super::parallel::{
-    AdkParallelBranchRuntime, DurableParallelNode, PARALLEL_INTERRUPT_SCHEMA,
-    PARALLEL_RESUME_STATE_KEY, ParallelActivation, ParallelBlocked, ParallelBranchExecution,
-    ParallelBranchGraphFactory, ParallelBranchPause, ParallelBranchTerminal,
-    ParallelCheckpointAppender, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
-    ParallelChildOrigin, ParallelDecision, ParallelNodeOutcome, ParallelOccurrenceCheckpointer,
-    ParallelPauseCard, PreparedParallelActivation, PreparedParallelBranch, projected_input_digest,
+    AdkParallelBranchRuntime, DurableParallelNode, FANOUT_PARKED_SCHEMA, ParallelActivation,
+    ParallelBranchExecution, ParallelBranchGraphFactory, ParallelBranchPause,
+    ParallelBranchTerminal, ParallelCheckpointAppender, ParallelChildCheckpoint,
+    ParallelChildCheckpointerFactory, ParallelChildOrigin, ParallelDecision,
+    ParallelOccurrenceCheckpointer, ParallelPauseCard, projected_input_digest,
 };
 use super::{ParallelBranchDefinition, ParallelNodeDefinition};
+
+const OCCURRENCE: &str = "elitea.graph.parallel.occurrence.v3";
 
 type BehaviorFuture = Pin<Box<dyn Future<Output = Result<Value, GraphError>> + Send>>;
 type Behavior = Arc<dyn Fn() -> BehaviorFuture + Send + Sync>;
@@ -384,13 +391,27 @@ impl ParallelBranchGraphFactory for TestBranchGraphs {
     }
 }
 
+/// The legacy `error_policy: fail_after_drain`, i.e. `on_error: stop`.
 fn definition(branches: &[(&str, &str)], max_concurrency: usize) -> ParallelNodeDefinition {
+    definition_with(
+        branches,
+        max_concurrency,
+        "error_policy: fail_after_drain\n",
+    )
+}
+
+/// `policy` holds the On Error and join lines (empty: the defaults).
+fn definition_with(
+    branches: &[(&str, &str)],
+    max_concurrency: usize,
+    policy: &str,
+) -> ParallelNodeDefinition {
     let branches = branches.iter().fold(String::new(), |mut yaml, (id, node)| {
         write!(yaml, "  - id: {id}\n    node: {node}\n").expect("write YAML fixture");
         yaml
     });
     ParallelNodeDefinition::from_yaml(&format!(
-        "id: gather\ntype: parallel\nbranches:\n{branches}max_concurrency: {max_concurrency}\nwait: all\nerror_policy: fail_after_drain\noutput: [gathered]\ntransition: END\n"
+        "id: gather\ntype: parallel\nbranches:\n{branches}max_concurrency: {max_concurrency}\nwait: all\n{policy}output: [gathered]\ntransition: END\n"
     ))
     .expect("valid parallel definition")
 }
@@ -417,7 +438,7 @@ fn parent_graph(
     runtime: Arc<AdkParallelBranchRuntime>,
 ) -> CompiledGraph {
     let parent = runtime.parent_checkpointer();
-    StateGraph::with_channels(&["input", "gathered", PARALLEL_RESUME_STATE_KEY])
+    StateGraph::with_channels(&["input", "gathered"])
         .add_node(DurableParallelNode::new(definition, runtime))
         .add_edge(START, "gather")
         .add_edge("gather", adk_rust::graph::END)
@@ -510,6 +531,74 @@ fn parallel_yaml_contract_is_strict_and_ui_shaped() {
     assert!(ParallelNodeDefinition::from_yaml(&oversized_yaml).is_err());
 }
 
+#[test]
+fn on_error_and_join_default_to_continue_and_append_and_accept_the_legacy_stop() {
+    use elitea_agent_runtime::graph::fanout::plan::{JoinMode, OnError};
+    let two = [("a", "x"), ("b", "y")];
+    let defaults = definition_with(&two, 2, "");
+    assert_eq!(defaults.on_error(), OnError::Continue);
+    assert_eq!(defaults.join(), JoinMode::Append);
+    let legacy = definition(&two, 2);
+    assert_eq!(legacy.on_error(), OnError::Stop);
+    let stop = definition_with(&two, 2, "on_error: stop\n");
+    assert_eq!(stop.on_error(), OnError::Stop);
+    // `stop` with `append` keeps the digest every earlier node froze under.
+    assert_eq!(stop.config_digest(), legacy.config_digest());
+    assert_ne!(defaults.config_digest(), legacy.config_digest());
+    assert_eq!(
+        definition_with(&two, 2, "error_policy: fail_after_drain\non_error: stop\n").on_error(),
+        OnError::Stop
+    );
+    for (join, mode) in [
+        ("append", JoinMode::Append),
+        ("keyed", JoinMode::Keyed),
+        ("merge", JoinMode::Merge),
+    ] {
+        let parsed = definition_with(&two, 2, &format!("on_error: stop\njoin: {join}\n"));
+        assert_eq!(parsed.join(), mode);
+    }
+    assert_ne!(
+        definition_with(&two, 2, "join: keyed\n").config_digest(),
+        defaults.config_digest()
+    );
+    for refused in [
+        "on_error: ignore\n",
+        "join: last_write_wins\n",
+        // A merged object has no place for a failed branch's entry.
+        "join: merge\n",
+        "on_error: continue\njoin: merge\n",
+        "error_policy: fail_after_drain\non_error: continue\n",
+        "error_policy: collect\n",
+    ] {
+        let yaml = format!(
+            "id: gather\ntype: parallel\nbranches: [{{id: a, node: x}}, {{id: b, node: y}}]\nmax_concurrency: 2\nwait: all\n{refused}output: [gathered]\n"
+        );
+        assert!(
+            ParallelNodeDefinition::from_yaml(&yaml).is_err(),
+            "{refused}"
+        );
+    }
+}
+
+#[test]
+fn sixteen_branches_and_concurrency_eight_are_the_limits() {
+    let branches = |count: usize| {
+        (0..count).fold(String::new(), |mut yaml, index| {
+            write!(yaml, "  - id: b{index}\n    node: n{index}\n").expect("write YAML fixture");
+            yaml
+        })
+    };
+    let yaml = |count: usize, concurrency: usize| {
+        format!(
+            "id: gather\ntype: parallel\nbranches:\n{}max_concurrency: {concurrency}\nwait: all\noutput: [gathered]\n",
+            branches(count)
+        )
+    };
+    assert!(ParallelNodeDefinition::from_yaml(&yaml(16, 8)).is_ok());
+    assert!(ParallelNodeDefinition::from_yaml(&yaml(17, 8)).is_err());
+    assert!(ParallelNodeDefinition::from_yaml(&yaml(16, 9)).is_err());
+}
+
 #[tokio::test]
 async fn declared_order_is_stable_when_branches_finish_in_reverse_order() {
     let release_first = Arc::new(Notify::new());
@@ -548,8 +637,8 @@ async fn declared_order_is_stable_when_branches_finish_in_reverse_order() {
     assert_eq!(
         result["gathered"],
         json!([
-            {"branch_id": "a", "node": "first", "outputs": {"value": "first"}},
-            {"branch_id": "b", "node": "second", "outputs": {"value": "second"}},
+            {"branch_id": "a", "node": "first", "status": "succeeded", "outputs": {"value": "first"}},
+            {"branch_id": "b", "node": "second", "status": "succeeded", "outputs": {"value": "second"}},
         ])
     );
 }
@@ -885,6 +974,14 @@ async fn loop_visits_get_distinct_child_checkpoint_threads() {
 struct PausingBranchGraphs {
     runs: Arc<HashMap<String, AtomicUsize>>,
     complete: BTreeSet<String>,
+    /// Branches that pause with this many cards at once (default one).
+    cards: BTreeMap<String, usize>,
+}
+
+impl PausingBranchGraphs {
+    fn card_count(&self, name: &str) -> usize {
+        self.cards.get(name).copied().unwrap_or(1)
+    }
 }
 
 #[async_trait]
@@ -917,15 +1014,29 @@ impl ParallelBranchGraphFactory for PausingBranchGraphs {
         let name = branch.node().to_owned();
         let node_name = name.clone();
         let complete = self.complete.contains(&name);
+        let count = self.card_count(&name);
         let node = FunctionNode::new(&name, move |context| {
             let runs = Arc::clone(&runs);
             let name = node_name.clone();
             async move {
                 runs[&name].fetch_add(1, Ordering::SeqCst);
                 if !complete && !context.state.contains_key("__elitea_hitl_resume_v1") {
+                    let cards = (0..count)
+                        .map(|card| {
+                            let suffix = if card == 0 {
+                                String::new()
+                            } else {
+                                format!("-{card}")
+                            };
+                            json!({
+                                "interrupt_id": format!("card-{name}{suffix}"),
+                                "tool_call_id": format!("call-{name}{suffix}"),
+                            })
+                        })
+                        .collect::<Vec<_>>();
                     return Ok(NodeOutput::interrupt_with_data(
                         "Child paused.",
-                        json!({"interrupt_id": format!("card-{name}"), "tool_call_id": format!("call-{name}")}),
+                        json!({ "cards": cards }),
                     ));
                 }
                 let blocked = context
@@ -989,9 +1100,8 @@ impl ParallelBranchGraphFactory for PausingBranchGraphs {
         else {
             return Err(GraphError::Other("pause missing".to_owned()));
         };
-        Ok(vec![serde_json::from_value(data.clone()).map_err(
-            |_| GraphError::Other("pause malformed".to_owned()),
-        )?])
+        serde_json::from_value(data["cards"].clone())
+            .map_err(|_| GraphError::Other("pause malformed".to_owned()))
     }
 
     async fn resume_input(
@@ -1002,8 +1112,13 @@ impl ParallelBranchGraphFactory for PausingBranchGraphs {
     ) -> Result<State, GraphError> {
         assert!(!pause.thread_id.is_empty());
         assert!(!pause.checkpoint_id.is_empty());
-        assert_eq!(decisions.len(), 1);
-        assert_eq!(decisions[0].interrupt_id, format!("card-{}", branch.node()));
+        // One resume carries exactly this child's whole decision set.
+        assert_eq!(decisions.len(), self.card_count(branch.node()));
+        assert!(decisions.iter().all(|decision| {
+            decision
+                .interrupt_id
+                .starts_with(&format!("card-{}", branch.node()))
+        }));
         Ok(HashMap::from([(
             "__elitea_hitl_resume_v1".to_owned(),
             json!({"action": decisions[0].action}),
@@ -1016,6 +1131,15 @@ fn pausing_runtime(
     runs: &Arc<HashMap<String, AtomicUsize>>,
     complete: &[&str],
 ) -> Arc<AdkParallelBranchRuntime> {
+    multi_card_runtime(checkpoints, runs, complete, &[])
+}
+
+fn multi_card_runtime(
+    checkpoints: &Arc<MemoryChildCheckpoints>,
+    runs: &Arc<HashMap<String, AtomicUsize>>,
+    complete: &[&str],
+    cards: &[(&str, usize)],
+) -> Arc<AdkParallelBranchRuntime> {
     let factory: Arc<dyn ParallelChildCheckpointerFactory> = checkpoints.clone();
     let parent: Arc<dyn ParallelCheckpointAppender> = checkpoints.parent.clone();
     Arc::new(AdkParallelBranchRuntime::new(
@@ -1023,231 +1147,443 @@ fn pausing_runtime(
         Arc::new(PausingBranchGraphs {
             runs: Arc::clone(runs),
             complete: complete.iter().map(|name| (*name).to_owned()).collect(),
+            cards: cards
+                .iter()
+                .map(|(name, count)| ((*name).to_owned(), *count))
+                .collect(),
         }),
         Arc::new(ParallelOccurrenceCheckpointer::new(parent)),
     ))
 }
 
-fn ready_branches(prepared: PreparedParallelActivation) -> Vec<PreparedParallelBranch> {
-    match prepared {
-        PreparedParallelActivation::Ready(branches) => branches,
-        PreparedParallelActivation::Blocked(_) => panic!("unexpected blocked fixture"),
-    }
+fn run_counts(names: &[&str]) -> Arc<HashMap<String, AtomicUsize>> {
+    Arc::new(
+        names
+            .iter()
+            .map(|name| ((*name).to_owned(), AtomicUsize::new(0)))
+            .collect(),
+    )
+}
+
+fn runs_of(runs: &HashMap<String, AtomicUsize>, name: &str) -> usize {
+    runs[name].load(Ordering::SeqCst)
 }
 
 fn stored_activation(checkpoint: &Checkpoint) -> ParallelActivation {
-    serde_json::from_value(
-        checkpoint.metadata["elitea.graph.parallel.occurrence.v2"]["activation"].clone(),
-    )
-    .unwrap()
+    serde_json::from_value(checkpoint.metadata[OCCURRENCE]["activation"].clone()).unwrap()
 }
 
-fn pause_data(output: NodeOutput) -> Value {
+/// The parked payload (`fanout-parked.schema.json`): `(interrupt_key,
+/// interrupt_id)` per open card. It never carries a checkpoint or thread id.
+fn parked(output: &NodeOutput) -> Vec<(String, String)> {
     let Some(adk_rust::graph::interrupt::Interrupt::Dynamic {
         data: Some(data), ..
-    }) = output.interrupt
+    }) = output.interrupt.as_ref()
     else {
-        panic!("expected aggregate pause");
+        panic!("expected the parked fan-out interrupt");
     };
-    assert_eq!(data["schema"], PARALLEL_INTERRUPT_SCHEMA);
-    assert!(
-        !serde_json::to_string(&data)
-            .unwrap()
-            .contains("checkpoint_id")
-    );
-    assert!(!serde_json::to_string(&data).unwrap().contains("thread_id"));
-    data
+    parked_data(data)
 }
 
-fn resume_state(pause: &Value, input: &str) -> State {
-    let decisions = pause["cards"].as_array().unwrap().iter().map(|card| json!({"interrupt_id": card["interrupt_id"], "tool_call_id": card["tool_call_id"], "action": "approve", "value": ""})).collect::<Vec<_>>();
-    HashMap::from([
-        ("input".to_owned(), json!(input)),
-        (
-            PARALLEL_RESUME_STATE_KEY.to_owned(),
-            json!({"schema": PARALLEL_INTERRUPT_SCHEMA, "parallel_activation": pause["parallel_activation"], "decisions": decisions}),
-        ),
-    ])
+fn parked_data(data: &Value) -> Vec<(String, String)> {
+    let object = data.as_object().expect("parked payload object");
+    assert_eq!(
+        object.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from(["decision_revision_seen", "pending", "schema"])
+    );
+    assert_eq!(data["schema"], FANOUT_PARKED_SCHEMA);
+    assert!(data["decision_revision_seen"].as_u64().is_some());
+    let text = serde_json::to_string(data).unwrap();
+    assert!(!text.contains("checkpoint") && !text.contains("thread"));
+    let pending = data["pending"].as_array().expect("pending cards");
+    assert!((1..=MAX_OPEN_INTERRUPTS).contains(&pending.len()));
+    let cards = pending
+        .iter()
+        .map(|card| {
+            assert_eq!(card.as_object().map(serde_json::Map::len), Some(2));
+            let key = card["interrupt_key"].as_str().expect("key").to_owned();
+            assert_eq!(key.len(), 64);
+            assert!(
+                key.bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            );
+            (key, card["interrupt_id"].as_str().expect("id").to_owned())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cards
+            .iter()
+            .map(|(key, _)| key)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        cards.len(),
+        "a card is listed twice"
+    );
+    cards
+}
+
+fn key_of(cards: &[(String, String)], interrupt_id: &str) -> String {
+    cards.iter().find(|(_, id)| id == interrupt_id).map_or_else(
+        || panic!("no open card {interrupt_id}"),
+        |(key, _)| key.clone(),
+    )
+}
+
+fn ledger_node(
+    definition: ParallelNodeDefinition,
+    runtime: Arc<AdkParallelBranchRuntime>,
+    ledger: &Arc<TestLedger>,
+    claim: u64,
+) -> DurableParallelNode {
+    DurableParallelNode::new(definition, runtime).with_decisions(ledger.client(claim))
+}
+
+fn input_context(thread: &str, step: usize) -> NodeContext {
+    NodeContext::new(
+        HashMap::from([("input".to_owned(), json!("original"))]),
+        ExecutionConfig::new(thread),
+        step,
+    )
+}
+
+fn applied(acks: &[(String, AckResult)], key: &str) -> usize {
+    acks.iter()
+        .filter(|(acked, result)| acked == key && matches!(result, AckResult::Applied { .. }))
+        .count()
 }
 
 #[tokio::test]
 async fn child_pause_and_completion_survive_loss_before_parent_pause_save() {
     use super::parallel::ParallelBranchRuntime;
     let checkpoints = Arc::new(MemoryChildCheckpoints::default());
-    let runs = Arc::new(HashMap::from([
-        ("done".to_owned(), AtomicUsize::new(0)),
-        ("pause".to_owned(), AtomicUsize::new(0)),
-    ]));
+    let runs = run_counts(&["done", "pause"]);
     let definition = definition(&[("done", "done"), ("pause", "pause")], 2);
     let runtime = pausing_runtime(&checkpoints, &runs, &["done"]);
-    let context = NodeContext::new(
-        HashMap::from([("input".to_owned(), json!("original"))]),
-        ExecutionConfig::new("root-cutpoint"),
-        4,
-    );
+    let context = input_context("root-cutpoint", 4);
     let mut activation = ParallelActivation {
         root_thread_id: "root-cutpoint".to_owned(),
         node_id: "gather".to_owned(),
         step: 4,
         config_digest: definition.config_digest(),
     };
-    let prepared = ready_branches(
-        runtime
-            .prepare(&mut activation, &definition, &context)
-            .await
-            .unwrap(),
-    );
-    for branch in prepared {
+    for branch in runtime
+        .prepare(&mut activation, &definition, &context)
+        .await
+        .unwrap()
+    {
         let _ = runtime.invoke(&activation, branch, &context).await;
     }
-    // The parent has no published aggregate receipt at this cutpoint.
-    let recreated = DurableParallelNode::new(
+    // The parent has no pause row at this cutpoint; the children's receipts
+    // carry everything a replacement process needs.
+    let ledger = TestLedger::new();
+    let recreated = ledger_node(
         definition.clone(),
         pausing_runtime(&checkpoints, &runs, &["done"]),
+        &ledger,
+        1,
     );
-    let pause = pause_data(recreated.execute(&context).await.unwrap());
-    assert_eq!(pause["cards"].as_array().unwrap().len(), 1);
-    assert_eq!(runs["done"].load(Ordering::SeqCst), 1);
-    assert_eq!(runs["pause"].load(Ordering::SeqCst), 1);
-    let resume = NodeContext::new(
-        resume_state(&pause, "original"),
-        ExecutionConfig::new("root-cutpoint"),
-        4,
-    );
-    let output = recreated.execute(&resume).await.unwrap();
+    let cards = parked(&recreated.execute(&context).await.unwrap());
+    assert_eq!(cards.len(), 1);
+    assert_eq!((runs_of(&runs, "done"), runs_of(&runs, "pause")), (1, 1));
+    ledger.decide(&key_of(&cards, "card-pause"), "approve", None);
+    let output = recreated.execute(&context).await.unwrap();
     assert_eq!(output.updates["gathered"][0]["outputs"]["output"], "done");
     assert_eq!(output.updates["gathered"][1]["outputs"]["output"], "pause");
-    assert_eq!(runs["done"].load(Ordering::SeqCst), 1);
-    assert_eq!(runs["pause"].load(Ordering::SeqCst), 2);
+    assert_eq!((runs_of(&runs, "done"), runs_of(&runs, "pause")), (1, 2));
+    assert_eq!(ledger.open_decisions(), 0);
+    assert_eq!(applied(&ledger.acks(), &key_of(&cards, "card-pause")), 1);
 }
 
-#[tokio::test]
-async fn full_decision_redelivery_survives_one_resumed_child_completion() {
-    use super::parallel::ParallelBranchRuntime;
+/// `before_ack`: the resumed child saved, the process died before the ACK.
+/// The replacement finds the child past its pause, ACKs `applied` with the
+/// current checkpoint and never resumes it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_decision_applied_before_a_lost_ack_is_acknowledged_without_a_second_resume() {
     let checkpoints = Arc::new(MemoryChildCheckpoints::default());
-    let runs = Arc::new(HashMap::from([
-        ("a".to_owned(), AtomicUsize::new(0)),
-        ("b".to_owned(), AtomicUsize::new(0)),
-    ]));
-    let definition = definition(&[("a", "a"), ("b", "b")], 2);
-    let context = NodeContext::new(
-        HashMap::from([("input".to_owned(), json!("original"))]),
-        ExecutionConfig::new("root-resume-cutpoint"),
+    let runs = run_counts(&["a", "b"]);
+    let definition = definition(&[("a", "a"), ("b", "b")], 1);
+    let context = input_context("root-lost-ack", 2);
+    let ledger = TestLedger::new();
+    let first = ledger_node(
+        definition.clone(),
+        pausing_runtime(&checkpoints, &runs, &[]),
+        &ledger,
+        1,
+    );
+    let cards = parked(&first.execute(&context).await.unwrap());
+    ledger.decide(&key_of(&cards, "card-a"), "approve", None);
+    ledger.crash_at(LedgerSeam::BeforeAck);
+    let crashed = tokio::spawn(async move {
+        let _ = first.execute(&input_context("root-lost-ack", 2)).await;
+    });
+    ledger.reached.notified().await;
+    crashed.abort();
+    let _ = crashed.await;
+    assert_eq!((runs_of(&runs, "a"), runs_of(&runs, "b")), (2, 1));
+    assert_eq!(ledger.open_decisions(), 1, "the ACK never reached Main");
+
+    ledger.decide(&key_of(&cards, "card-b"), "approve", None);
+    let output = ledger_node(
+        definition,
+        pausing_runtime(&checkpoints, &runs, &[]),
+        &ledger,
         2,
-    );
-    let pause = pause_data(
-        DurableParallelNode::new(
-            definition.clone(),
-            pausing_runtime(&checkpoints, &runs, &[]),
-        )
-        .execute(&context)
-        .await
-        .unwrap(),
-    );
-    let resume = NodeContext::new(
-        resume_state(&pause, "original"),
-        ExecutionConfig::new("root-resume-cutpoint"),
-        2,
-    );
-    let runtime = pausing_runtime(&checkpoints, &runs, &[]);
-    let mut activation = ParallelActivation {
-        root_thread_id: "root-resume-cutpoint".to_owned(),
-        node_id: "gather".to_owned(),
-        step: 2,
-        config_digest: definition.config_digest(),
-    };
-    let mut prepared = ready_branches(
-        runtime
-            .prepare(&mut activation, &definition, &resume)
-            .await
-            .unwrap(),
     )
-    .into_iter();
-    let _ = runtime
-        .invoke(&activation, prepared.next().unwrap(), &resume)
-        .await;
-    drop(prepared); // Process loss before the second admitted child runs.
-    let output = DurableParallelNode::new(definition, pausing_runtime(&checkpoints, &runs, &[]))
-        .execute(&resume)
-        .await
-        .unwrap();
+    .execute(&context)
+    .await
+    .unwrap();
     assert!(output.interrupt.is_none());
     assert_eq!(output.updates["gathered"].as_array().unwrap().len(), 2);
-    assert_eq!(runs["a"].load(Ordering::SeqCst), 2);
-    assert_eq!(runs["b"].load(Ordering::SeqCst), 2);
+    assert_eq!((runs_of(&runs, "a"), runs_of(&runs, "b")), (2, 2));
+    let acks = ledger.acks();
+    assert_eq!(applied(&acks, &key_of(&cards, "card-a")), 1);
+    assert_eq!(applied(&acks, &key_of(&cards, "card-b")), 1);
+    assert_eq!(ledger.open_decisions(), 0);
 }
 
+/// Per-interrupt rules (design §10): a decision for a card this activation
+/// never opened, a forged earlier pause, a duplicate in one fetch, or changed
+/// business input runs no child. Only an exact open card resumes its child.
 #[tokio::test]
-async fn partial_duplicate_stale_foreign_and_changed_input_decisions_run_no_child() {
+async fn stale_foreign_duplicate_and_changed_input_decisions_run_no_child() {
     let checkpoints = Arc::new(MemoryChildCheckpoints::default());
-    let runs = Arc::new(HashMap::from([
-        ("a".to_owned(), AtomicUsize::new(0)),
-        ("b".to_owned(), AtomicUsize::new(0)),
-    ]));
+    let runs = run_counts(&["a", "b"]);
     let definition = definition(&[("a", "a"), ("b", "b")], 2);
-    let node = DurableParallelNode::new(definition, pausing_runtime(&checkpoints, &runs, &[]));
-    let context = NodeContext::new(
-        HashMap::from([("input".to_owned(), json!("original"))]),
+    let ledger = TestLedger::new();
+    let node = ledger_node(
+        definition.clone(),
+        pausing_runtime(&checkpoints, &runs, &[]),
+        &ledger,
+        1,
+    );
+    let context = input_context("root-invalid-decisions", 0);
+    let cards = parked(&node.execute(&context).await.unwrap());
+    assert_eq!((runs_of(&runs, "a"), runs_of(&runs, "b")), (1, 1));
+
+    // Foreign: a key no child of this occurrence ever paused under.
+    let foreign = "f".repeat(64);
+    ledger.decide(&foreign, "approve", None);
+    // Stale: the right card under a pause checkpoint the child never saved.
+    let parent = checkpoints
+        .parent
+        .load("root-invalid-decisions")
+        .await
+        .unwrap()
+        .unwrap();
+    let activation = stored_activation(&parent);
+    let child_thread = checkpoints.issued_threads.lock().await[0].clone();
+    let stale = elitea_agent_runtime::graph::fanout::identity::interrupt_key(
+        &elitea_agent_runtime::graph::fanout::identity::InterruptKeyInput {
+            root_thread: "root-invalid-decisions",
+            fanout_node_id: "gather",
+            step: 0,
+            config_digest: &elitea_agent_runtime::graph::fanout::identity::lowercase_hex(
+                &activation.config_digest,
+            ),
+            ordinal: 1,
+            child_thread: &child_thread,
+            child_paused_checkpoint_id: "an-older-pause",
+            interrupt_id: "card-a",
+            tool_call_id: "call-a",
+        },
+    );
+    ledger.decide(&stale, "approve", None);
+    let again = parked(&node.execute(&context).await.unwrap());
+    assert_eq!(
+        again, cards,
+        "a stale or foreign decision changed the open cards"
+    );
+    assert_eq!((runs_of(&runs, "a"), runs_of(&runs, "b")), (1, 1));
+    let acks = ledger.acks();
+    for key in [&foreign, &stale] {
+        assert!(
+            acks.iter()
+                .any(|(acked, result)| acked == key && *result == AckResult::Stale)
+        );
+    }
+    assert_eq!(ledger.open_decisions(), 0);
+
+    // Changed business input: the occurrence refuses before any fetch or child.
+    ledger.decide(&key_of(&cards, "card-a"), "approve", None);
+    let fetches = ledger.fetches();
+    let changed = NodeContext::new(
+        HashMap::from([("input".to_owned(), json!("changed"))]),
         ExecutionConfig::new("root-invalid-decisions"),
         0,
     );
-    let pause = pause_data(node.execute(&context).await.unwrap());
-    for variation in 0..5 {
-        let mut state = resume_state(&pause, "original");
-        let decisions = state[PARALLEL_RESUME_STATE_KEY]["decisions"]
-            .as_array()
-            .unwrap()
-            .clone();
-        match variation {
-            0 => {
-                state.get_mut(PARALLEL_RESUME_STATE_KEY).unwrap()["decisions"] =
-                    json!([decisions[0]]);
-            }
-            1 => {
-                state.get_mut(PARALLEL_RESUME_STATE_KEY).unwrap()["decisions"] =
-                    json!([decisions[0], decisions[0]]);
-            }
-            2 => {
-                state.get_mut(PARALLEL_RESUME_STATE_KEY).unwrap()["parallel_activation"] =
-                    json!("p1:stale");
-            }
-            3 => {
-                state.get_mut(PARALLEL_RESUME_STATE_KEY).unwrap()["decisions"][0]["interrupt_id"] =
-                    json!("foreign-card");
-            }
-            4 => {
-                state.insert("input".to_owned(), json!("changed"));
-            }
-            _ => unreachable!(),
-        }
-        assert!(
-            node.execute(&NodeContext::new(
-                state,
-                ExecutionConfig::new("root-invalid-decisions"),
-                0
-            ))
-            .await
-            .is_err()
-        );
-        assert_eq!(runs["a"].load(Ordering::SeqCst), 1);
-        assert_eq!(runs["b"].load(Ordering::SeqCst), 1);
-    }
+    assert!(node.execute(&changed).await.is_err());
+    assert_eq!(ledger.fetches(), fetches);
+    assert_eq!((runs_of(&runs, "a"), runs_of(&runs, "b")), (1, 1));
+
+    // Duplicate: the same decision fetched twice resumes its child once.
+    ledger.redeliver(&key_of(&cards, "card-a"));
+    let duplicate_node = ledger_node(
+        definition,
+        pausing_runtime(&checkpoints, &runs, &[]),
+        &ledger,
+        2,
+    );
+    let first = parked(&duplicate_node.execute(&context).await.unwrap());
+    assert_eq!(first, vec![cards[1].clone()], "only b stays open");
+    let replay = parked(&duplicate_node.execute(&context).await.unwrap());
+    assert_eq!(replay, first);
+    assert_eq!((runs_of(&runs, "a"), runs_of(&runs, "b")), (2, 1));
+    assert_eq!(applied(&ledger.acks(), &key_of(&cards, "card-a")), 1);
+}
+
+/// Card 2 answered first resumes only child 2; child 1 keeps its card.
+#[tokio::test]
+async fn the_second_card_answered_first_resumes_only_its_own_child() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = run_counts(&["a", "b", "c"]);
+    let definition = definition_with(&[("a", "a"), ("b", "b"), ("c", "c")], 3, "");
+    let ledger = TestLedger::new();
+    let node = ledger_node(
+        definition,
+        pausing_runtime(&checkpoints, &runs, &["c"]),
+        &ledger,
+        1,
+    );
+    let context = input_context("root-reverse", 1);
+    let cards = parked(&node.execute(&context).await.unwrap());
+    assert_eq!(cards.len(), 2);
+    ledger.decide(&key_of(&cards, "card-b"), "approve", None);
+    let after_b = parked(&node.execute(&context).await.unwrap());
+    assert_eq!(after_b, vec![cards[0].clone()]);
+    assert_eq!(
+        (
+            runs_of(&runs, "a"),
+            runs_of(&runs, "b"),
+            runs_of(&runs, "c")
+        ),
+        (1, 2, 1)
+    );
+    ledger.decide(&key_of(&cards, "card-a"), "approve", None);
+    let output = node.execute(&context).await.unwrap();
+    assert_eq!(output.updates["gathered"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        (
+            runs_of(&runs, "a"),
+            runs_of(&runs, "b"),
+            runs_of(&runs, "c")
+        ),
+        (2, 2, 1)
+    );
+}
+
+/// A child paused with two cards resumes once, with both decisions.
+#[tokio::test]
+async fn a_child_with_two_cards_resumes_once_after_both_are_decided() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = run_counts(&["a", "b"]);
+    let ledger = TestLedger::new();
+    let node = ledger_node(
+        definition_with(&[("a", "a"), ("b", "b")], 2, ""),
+        multi_card_runtime(&checkpoints, &runs, &["b"], &[("a", 2)]),
+        &ledger,
+        1,
+    );
+    let context = input_context("root-two-cards", 0);
+    let cards = parked(&node.execute(&context).await.unwrap());
+    assert_eq!(cards.len(), 2);
+    ledger.decide(&key_of(&cards, "card-a"), "approve", None);
+    assert_eq!(parked(&node.execute(&context).await.unwrap()), cards);
+    assert_eq!(runs_of(&runs, "a"), 1, "resumed before its second card");
+    ledger.decide(&key_of(&cards, "card-a-1"), "approve", None);
+    let output = node.execute(&context).await.unwrap();
+    assert!(output.interrupt.is_none());
+    assert_eq!(runs_of(&runs, "a"), 2);
 }
 
 #[tokio::test]
-async fn a_blocked_branch_is_typed_and_the_adk_parent_cannot_report_success() {
+async fn the_parked_keys_are_minted_from_the_frozen_child_and_its_pause_checkpoint() {
+    use elitea_agent_runtime::graph::fanout::identity::{
+        InterruptKeyInput, interrupt_key, lowercase_hex,
+    };
     let checkpoints = Arc::new(MemoryChildCheckpoints::default());
-    let runs = Arc::new(HashMap::from([
-        ("a".to_owned(), AtomicUsize::new(0)),
-        ("b".to_owned(), AtomicUsize::new(0)),
-    ]));
+    let runs = run_counts(&["a", "b"]);
+    let node = DurableParallelNode::new(
+        definition_with(&[("a", "a"), ("b", "b")], 2, ""),
+        pausing_runtime(&checkpoints, &runs, &["a"]),
+    );
+    let cards = parked(&node.execute(&input_context("root-keys", 5)).await.unwrap());
+    let parent = checkpoints.parent.load("root-keys").await.unwrap().unwrap();
+    let activation = stored_activation(&parent);
+    let thread = checkpoints.issued_threads.lock().await[1].clone();
+    let store = Arc::clone(&checkpoints.stores.lock().await[&thread]);
+    let pause = store.load(&thread).await.unwrap().unwrap();
+    assert_eq!(
+        cards,
+        vec![(
+            interrupt_key(&InterruptKeyInput {
+                root_thread: "root-keys",
+                fanout_node_id: "gather",
+                step: 5,
+                config_digest: &lowercase_hex(&activation.config_digest),
+                ordinal: 2,
+                child_thread: &thread,
+                child_paused_checkpoint_id: &pause.checkpoint_id,
+                interrupt_id: "card-b",
+                tool_call_id: "call-b",
+            }),
+            "card-b".to_owned(),
+        )]
+    );
+}
+
+#[tokio::test]
+async fn sixteen_open_cards_park_and_a_seventeenth_fails_typed() {
+    let names = (0..16).map(|index| format!("n{index}")).collect::<Vec<_>>();
+    let refs = names.iter().map(String::as_str).collect::<Vec<_>>();
+    let branches = names
+        .iter()
+        .map(|name| (name.as_str(), name.as_str()))
+        .collect::<Vec<_>>();
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = run_counts(&refs);
+    let at_limit = DurableParallelNode::new(
+        definition_with(&branches, 8, ""),
+        pausing_runtime(&checkpoints, &runs, &[]),
+    );
+    let cards = parked(
+        &at_limit
+            .execute(&input_context("root-16", 0))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(cards.len(), MAX_OPEN_INTERRUPTS);
+
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = run_counts(&refs);
+    let over = DurableParallelNode::new(
+        definition_with(&branches, 8, ""),
+        multi_card_runtime(&checkpoints, &runs, &[], &[("n0", 2)]),
+    );
+    let error = over
+        .execute(&input_context("root-17", 0))
+        .await
+        .err()
+        .expect("seventeen open cards are refused");
+    assert!(
+        error
+            .to_string()
+            .contains("graph.parallel.pause_resource_exhausted"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_blocked_branch_is_a_typed_failure_and_the_adk_parent_cannot_report_success() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = run_counts(&["a", "b"]);
     let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let ledger = TestLedger::new();
     let runtime = pausing_runtime(&checkpoints, &runs, &[]);
     let parent = runtime.parent_checkpointer();
     let successor_runs = Arc::new(AtomicUsize::new(0));
     let successor_counter = Arc::clone(&successor_runs);
-    let graph = StateGraph::with_channels(&["input", "gathered", PARALLEL_RESUME_STATE_KEY])
-        .add_node(DurableParallelNode::new(definition.clone(), runtime))
+    let graph = StateGraph::with_channels(&["input", "gathered"])
+        .add_node(ledger_node(definition.clone(), runtime, &ledger, 1))
         .add_node(FunctionNode::new("after", move |_| {
             let counter = Arc::clone(&successor_counter);
             async move {
@@ -1262,64 +1598,102 @@ async fn a_blocked_branch_is_typed_and_the_adk_parent_cannot_report_success() {
         .unwrap()
         .with_checkpointer_arc(parent);
     let thread = "root-blocked";
-    let interrupted = graph
+    let GraphError::Interrupted(interrupted) = graph
         .invoke(
             HashMap::from([("input".to_owned(), json!("original"))]),
             ExecutionConfig::new(thread),
         )
         .await
-        .unwrap_err();
-    let GraphError::Interrupted(interrupted) = interrupted else {
+        .unwrap_err()
+    else {
         panic!("expected parent pause")
     };
     let adk_rust::graph::interrupt::Interrupt::Dynamic {
         data: Some(pause), ..
     } = interrupted.interrupt
     else {
-        panic!("expected aggregate pause")
+        panic!("expected the parked payload")
     };
-    let mut state = resume_state(&pause, "original");
-    state.get_mut(PARALLEL_RESUME_STATE_KEY).unwrap()["decisions"][0]["action"] = json!("reject");
+    let cards = parked_data(&pause);
+    ledger.decide(&key_of(&cards, "card-a"), "reject", None);
+    ledger.decide(&key_of(&cards, "card-b"), "approve", None);
     let error = graph
         .invoke(
-            state.clone(),
+            HashMap::new(),
             ExecutionConfig::new(thread).with_resume_from(&interrupted.checkpoint_id),
         )
         .await
         .unwrap_err();
     assert!(matches!(error, GraphError::NodeExecutionFailed { .. }));
-    assert!(error.to_string().contains("graph.parallel.blocked"));
+    assert!(error.to_string().contains("graph.parallel.branch_failed"));
+    assert!(error.to_string().contains("graph.parallel.branch_blocked"));
+    assert!(error.to_string().contains("branch 'a'"));
     assert_eq!(successor_runs.load(Ordering::SeqCst), 0);
     let saved = checkpoints.parent.load(thread).await.unwrap().unwrap();
     assert!(!saved.state.contains_key("gathered"));
     assert_eq!(saved.pending_nodes, ["gather"]);
-    let activation = stored_activation(&saved);
-    let runtime = pausing_runtime(&checkpoints, &runs, &[]);
-    let expected = ParallelBlocked {
-        branch_id: "a".to_owned(),
-        node: "a".to_owned(),
-        ordinal: 0,
-    };
-    assert_eq!(
-        runtime
-            .occurrence_checkpointer()
-            .blocked_at(&saved.checkpoint_id, &activation)
-            .await
-            .unwrap(),
-        Some(expected.clone())
-    );
-    let node = DurableParallelNode::new(definition, runtime);
-    let outcome = node
-        .execute_outcome(&NodeContext::new(
-            state,
+    // No parent denial row: freeze and the pause row only.
+    assert_eq!(checkpoints.parent.list(thread).await.unwrap().len(), 2);
+    // The failure is replayed from the child receipts, typed, deterministic.
+    let replay = DurableParallelNode::new(definition, pausing_runtime(&checkpoints, &runs, &[]))
+        .execute(&NodeContext::new(
+            saved.state.clone(),
             ExecutionConfig::new(thread),
             saved.step,
         ))
         .await
-        .unwrap();
-    assert!(matches!(outcome, ParallelNodeOutcome::Blocked(blocked) if blocked == expected));
-    assert_eq!(runs["a"].load(Ordering::SeqCst), 2);
-    assert_eq!(runs["b"].load(Ordering::SeqCst), 2);
+        .err()
+        .expect("the denial stays a failure");
+    assert!(replay.to_string().contains("graph.parallel.branch_blocked"));
+    assert_eq!((runs_of(&runs, "a"), runs_of(&runs, "b")), (2, 2));
+}
+
+#[tokio::test]
+async fn on_error_continue_lands_a_typed_failed_entry_and_all_failing_fails() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = run_counts(&["a", "b"]);
+    let ledger = TestLedger::new();
+    let node = ledger_node(
+        definition_with(&[("a", "a"), ("b", "b")], 2, ""),
+        pausing_runtime(&checkpoints, &runs, &[]),
+        &ledger,
+        1,
+    );
+    let context = input_context("root-continue", 0);
+    let cards = parked(&node.execute(&context).await.unwrap());
+    ledger.decide(&key_of(&cards, "card-a"), "reject", None);
+    ledger.decide(&key_of(&cards, "card-b"), "approve", None);
+    let output = node.execute(&context).await.unwrap();
+    assert_eq!(
+        output.updates["gathered"],
+        json!([
+            {"branch_id": "a", "node": "a", "status": "failed", "error": {
+                "code": "graph.parallel.branch_blocked",
+                "message_safe": "The branch was blocked.",
+            }},
+            {"branch_id": "b", "node": "b", "status": "succeeded",
+             "outputs": {"output": "b", "blocked": false}},
+        ])
+    );
+
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = run_counts(&["a", "b"]);
+    let node = ledger_node(
+        definition_with(&[("a", "a"), ("b", "b")], 2, ""),
+        pausing_runtime(&checkpoints, &runs, &[]),
+        &ledger,
+        2,
+    );
+    let cards = parked(&node.execute(&context).await.unwrap());
+    for (key, _) in &cards {
+        ledger.decide(key, "reject", None);
+    }
+    let error = node
+        .execute(&context)
+        .await
+        .err()
+        .expect("every branch failing fails the node");
+    assert!(error.to_string().contains("branch 'a'"), "{error}");
 }
 
 #[tokio::test]
@@ -1392,12 +1766,11 @@ async fn a_pause_receipt_cannot_attach_to_an_advanced_parent_frontier() {
         step: 0,
         config_digest: definition.config_digest(),
     };
-    for branch in ready_branches(
-        runtime
-            .prepare(&mut activation, &definition, &context)
-            .await
-            .unwrap(),
-    ) {
+    for branch in runtime
+        .prepare(&mut activation, &definition, &context)
+        .await
+        .unwrap()
+    {
         let _ = runtime.invoke(&activation, branch, &context).await;
     }
     let competing = Checkpoint::new(
@@ -1407,14 +1780,14 @@ async fn a_pause_receipt_cannot_attach_to_an_advanced_parent_frontier() {
         vec!["after".to_owned()],
     );
     checkpoints.parent.rows.lock().await.before_append = Some(competing.clone());
-    // The pause is computed and its cards are staged: no parent row yet.
+    // The pause is computed from the child receipts: no parent row yet.
     let paused = DurableParallelNode::new(definition, runtime.clone())
         .execute(&context)
         .await
         .expect("pause computed");
     assert!(paused.interrupt.is_some());
-    // The cards meet the parent only at the ADK pause save, which a competing
-    // committed writer refuses.
+    // The parent learns of the pause only at the ADK pause save, which a
+    // competing committed writer refuses.
     let frozen = checkpoints
         .parent
         .load(&context.config.thread_id)
@@ -1441,69 +1814,38 @@ async fn a_pause_receipt_cannot_attach_to_an_advanced_parent_frontier() {
         .unwrap()
         .unwrap();
     assert!(checkpoint_equal(&latest, &competing).unwrap());
-    assert!(
-        !latest
-            .metadata
-            .contains_key("elitea.graph.parallel.occurrence.v2")
-    );
+    assert!(!latest.metadata.contains_key(OCCURRENCE));
     assert_eq!(runs["a"].load(Ordering::SeqCst), 1);
     assert_eq!(runs["b"].load(Ordering::SeqCst), 1);
 }
 
+/// Applying a decision writes nothing to the parent: the proof is the child
+/// checkpoint. A changed business state is still refused before any child.
 #[tokio::test]
-async fn decisions_cannot_overwrite_competing_business_state_or_receipts() {
+async fn applying_decisions_writes_no_parent_row_and_changed_business_state_is_refused() {
     let checkpoints = Arc::new(MemoryChildCheckpoints::default());
-    let runs = Arc::new(HashMap::from([
-        ("a".to_owned(), AtomicUsize::new(0)),
-        ("b".to_owned(), AtomicUsize::new(0)),
-    ]));
+    let runs = run_counts(&["a", "b"]);
     let definition = definition(&[("a", "a"), ("b", "b")], 2);
-    let node = DurableParallelNode::new(definition, pausing_runtime(&checkpoints, &runs, &[]));
+    let ledger = TestLedger::new();
+    let node = ledger_node(
+        definition,
+        pausing_runtime(&checkpoints, &runs, &[]),
+        &ledger,
+        1,
+    );
     let thread = "root-decision-race";
-    let context = NodeContext::new(
-        HashMap::from([
-            ("input".to_owned(), json!("original")),
-            ("unmapped".to_owned(), json!("preserved")),
-        ]),
-        ExecutionConfig::new(thread),
-        0,
-    );
-    let pause = pause_data(node.execute(&context).await.unwrap());
+    let state = HashMap::from([
+        ("input".to_owned(), json!("original")),
+        ("unmapped".to_owned(), json!("preserved")),
+    ]);
+    let context = NodeContext::new(state.clone(), ExecutionConfig::new(thread), 0);
+    let cards = parked(&node.execute(&context).await.unwrap());
     let original = checkpoints.parent.load(thread).await.unwrap().unwrap();
-    let mut missing_business = resume_state(&pause, "original");
-    assert!(
-        node.execute(&NodeContext::new(
-            missing_business.clone(),
-            ExecutionConfig::new(thread),
-            0
-        ))
-        .await
-        .is_err()
-    );
-    assert!(
-        checkpoint_equal(
-            &checkpoints.parent.load(thread).await.unwrap().unwrap(),
-            &original
-        )
-        .unwrap()
-    );
-    missing_business.insert("unmapped".to_owned(), json!("preserved"));
-    let mut competing = original.clone();
-    let fresh = Checkpoint::new(
-        thread,
-        original.state.clone(),
-        original.step,
-        original.pending_nodes.clone(),
-    );
-    competing.checkpoint_id = fresh.checkpoint_id;
-    competing.created_at = fresh.created_at;
-    competing
-        .state
-        .insert("unmapped".to_owned(), json!("newer"));
-    competing
-        .metadata
-        .insert("unrelated_receipt".to_owned(), json!("newer"));
-    checkpoints.parent.rows.lock().await.before_append = Some(competing.clone());
+    let rows = checkpoints.parent.list(thread).await.unwrap().len();
+    ledger.decide(&key_of(&cards, "card-a"), "approve", None);
+
+    let mut missing_business = state.clone();
+    missing_business.remove("unmapped");
     assert!(
         node.execute(&NodeContext::new(
             missing_business,
@@ -1513,16 +1855,29 @@ async fn decisions_cannot_overwrite_competing_business_state_or_receipts() {
         .await
         .is_err()
     );
+    assert_eq!(runs_of(&runs, "a"), 1);
+
+    let mut competing = original.clone();
+    competing
+        .metadata
+        .insert("unrelated_receipt".to_owned(), json!("newer"));
+    checkpoints.parent.rows.lock().await.before_append = Some(competing);
+    let parked_b = parked(&node.execute(&context).await.unwrap());
+    assert_eq!(parked_b, vec![cards[1].clone()]);
+    assert_eq!(runs_of(&runs, "a"), 2);
+    assert_eq!(
+        checkpoints.parent.list(thread).await.unwrap().len(),
+        rows,
+        "a decision wrote a parent row"
+    );
     assert!(
         checkpoint_equal(
             &checkpoints.parent.load(thread).await.unwrap().unwrap(),
-            &competing
+            &original
         )
         .unwrap()
     );
-    assert!(competing.metadata["elitea.graph.parallel.occurrence.v2"]["decisions"].is_null());
-    assert_eq!(runs["a"].load(Ordering::SeqCst), 1);
-    assert_eq!(runs["b"].load(Ordering::SeqCst), 1);
+    assert!(checkpoints.parent.rows.lock().await.before_append.is_some());
 }
 
 #[tokio::test]
@@ -1552,7 +1907,7 @@ async fn immutable_pre_freeze_replay_stays_unchanged_and_does_not_replace_latest
         step: 0,
         config_digest: definition.config_digest(),
     };
-    let _ = runtime
+    runtime
         .prepare(&mut activation, &definition, &context)
         .await
         .unwrap();
@@ -1641,11 +1996,13 @@ async fn deadline_stops_admission_and_owned_future_cleanup_is_bounded() {
         ))
         .await
         .err()
-        .expect("parallel cancellation error");
+        .expect("parallel deadline error");
+    // Running children at the deadline: stop them within the bound and fail typed.
     assert!(
         error
             .to_string()
-            .contains("graph.parallel.cancellation_cleanup_failed")
+            .contains("graph.parallel.deadline_exceeded"),
+        "{error}"
     );
     assert_eq!(entered.load(Ordering::SeqCst), 2);
     assert_eq!(dropped.load(Ordering::SeqCst), 2);
@@ -1807,12 +2164,19 @@ async fn structural_parent_rejection_precedes_checkpoint_mint_and_child_effects(
 
 #[tokio::test]
 async fn a_legacy_occurrence_without_frozen_child_identity_is_refused_by_type() {
+    for format in ["v1", "v2"] {
+        legacy_occurrence_is_refused(format).await;
+    }
+}
+
+/// v1 froze no child identity; v2 kept a complete-set decision record.
+async fn legacy_occurrence_is_refused(format: &str) {
     let checkpoints = Arc::new(MemoryChildCheckpoints::default());
     let thread = "root-legacy";
     let state = HashMap::from([("input".to_owned(), json!("original"))]);
     let mut legacy = Checkpoint::new(thread, state.clone(), 3, vec!["gather".to_owned()]);
     legacy.metadata.insert(
-        "elitea.graph.parallel.occurrence.v1".to_owned(),
+        format!("elitea.graph.parallel.occurrence.{format}"),
         json!({"activation": {}, "branches": []}),
     );
     checkpoints.parent.save(&legacy).await.unwrap();
@@ -1901,8 +2265,7 @@ async fn latch_cancel_stops_inflight_branches_within_the_cleanup_bound_and_admit
         definition(&[("a", "a"), ("b", "b"), ("later", "later")], 2),
         pending_runtime(&behavior, &["a", "b", "later"]),
     )
-    .with_cancellation(Arc::clone(&latch))
-    .with_cleanup_timeout(Duration::from_millis(20));
+    .with_cancellation(Arc::clone(&latch));
     let run = tokio::spawn(async move { node.execute(&root_context("root-latch")).await });
     entries.recv().await.expect("first branch entered");
     entries.recv().await.expect("second branch entered");
@@ -1918,8 +2281,15 @@ async fn latch_cancel_stops_inflight_branches_within_the_cleanup_bound_and_admit
     let elapsed = fired.elapsed();
     eprintln!("latch_cancel_latency: {elapsed:?}");
 
-    assert!(error.to_string().contains("graph.parallel.cancel"));
-    assert!(elapsed <= Duration::from_millis(100), "{elapsed:?}");
+    // Non-cooperative children are dropped at the shared cleanup bound.
+    assert!(
+        error.to_string().contains("graph.parallel.cancel"),
+        "{error}"
+    );
+    assert!(
+        elapsed <= CANCEL_CLEANUP + Duration::from_millis(150),
+        "{elapsed:?}"
+    );
     assert_eq!(dropped.load(Ordering::SeqCst), 2);
     assert_eq!(
         entered.load(Ordering::SeqCst),
@@ -1938,8 +2308,7 @@ async fn deadline_stops_non_cooperative_branches_at_the_deadline_plus_cleanup() 
         definition(&[("a", "a"), ("b", "b"), ("later", "later")], 2),
         pending_runtime(&behavior, &["a", "b", "later"]),
     )
-    .with_deadline(tokio::time::Instant::now() + Duration::from_millis(50))
-    .with_cleanup_timeout(Duration::from_millis(20));
+    .with_deadline(tokio::time::Instant::now() + Duration::from_millis(50));
     let result = tokio::time::timeout(
         Duration::from_secs(5),
         node.execute(&root_context("root-deadline-live")),
@@ -1949,9 +2318,16 @@ async fn deadline_stops_non_cooperative_branches_at_the_deadline_plus_cleanup() 
     let elapsed = started.elapsed();
     eprintln!("deadline_honored: {elapsed:?}");
 
-    assert!(result.is_err());
+    assert!(result.err().is_some_and(|error| {
+        error
+            .to_string()
+            .contains("graph.parallel.deadline_exceeded")
+    }));
     assert!(elapsed >= Duration::from_millis(50), "{elapsed:?}");
-    assert!(elapsed <= Duration::from_millis(170), "{elapsed:?}");
+    assert!(
+        elapsed <= Duration::from_millis(50) + CANCEL_CLEANUP + Duration::from_millis(150),
+        "{elapsed:?}"
+    );
     assert_eq!(entered.load(Ordering::SeqCst), 2);
     assert_eq!(dropped.load(Ordering::SeqCst), 2);
 }
@@ -2004,9 +2380,17 @@ async fn a_lease_lost_branch_is_a_control_stop_not_a_recorded_failure() {
         .await
         .expect("load parent")
         .expect("frozen occurrence");
-    let occurrence = &parent.metadata["elitea.graph.parallel.occurrence.v2"];
-    assert!(occurrence["blocked"].is_null());
-    assert_eq!(occurrence["cards"], json!([]));
+    let occurrence = parent.metadata[OCCURRENCE]
+        .as_object()
+        .expect("frozen occurrence");
+    // The parent freezes children only: no cards, decisions or denials.
+    assert_eq!(
+        occurrence
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["activation", "branches", "child_threads", "origin"])
+    );
 }
 
 struct CancellableInvocation {
@@ -2151,10 +2535,11 @@ async fn a_branch_failing_after_cancellation_writes_no_failed_receipt() {
 fn pausing_parent_graph(
     definition: ParallelNodeDefinition,
     runtime: Arc<AdkParallelBranchRuntime>,
+    ledger: &Arc<TestLedger>,
 ) -> CompiledGraph {
     let parent = runtime.parent_checkpointer();
-    StateGraph::with_channels(&["input", "gathered", PARALLEL_RESUME_STATE_KEY])
-        .add_node(DurableParallelNode::new(definition, runtime))
+    StateGraph::with_channels(&["input", "gathered"])
+        .add_node(DurableParallelNode::new(definition, runtime).with_decisions(ledger.client(1)))
         .add_edge(START, "gather")
         .add_edge("gather", adk_rust::graph::END)
         .compile()
@@ -2194,16 +2579,15 @@ async fn each_activation_visit_appends_at_most_two_parent_rows() {
         MAX_PARENT_ROWS_PER_VISIT
     );
 
-    // Pause visit: freeze + the pause row, which carries every card.
+    // Pause visit: freeze + the ADK pause row. Cards live on the children.
     let checkpoints = Arc::new(MemoryChildCheckpoints::default());
-    let runs = Arc::new(HashMap::from([
-        ("a".to_owned(), AtomicUsize::new(0)),
-        ("b".to_owned(), AtomicUsize::new(0)),
-    ]));
+    let runs = run_counts(&["a", "b"]);
     let definition = definition(&[("a", "a"), ("b", "b")], 2);
+    let ledger = TestLedger::new();
     let graph = pausing_parent_graph(
         definition.clone(),
         pausing_runtime(&checkpoints, &runs, &[]),
+        &ledger,
     );
     let thread = "root-budget-pause";
     let GraphError::Interrupted(interrupted) = graph
@@ -2218,23 +2602,22 @@ async fn each_activation_visit_appends_at_most_two_parent_rows() {
     };
     let rows = checkpoints.parent.list(thread).await.unwrap();
     assert_eq!(rows.len(), MAX_PARENT_ROWS_PER_VISIT);
-    assert_eq!(
-        rows[1].metadata["elitea.graph.parallel.occurrence.v2"]["cards"]
-            .as_array()
-            .map(Vec::len),
-        Some(2)
-    );
+    assert_eq!(rows[1].metadata[OCCURRENCE], rows[0].metadata[OCCURRENCE]);
 
-    // Resume visit: accepted decision set + join.
+    // Resume visit: per-card decisions are applied on the children, then the
+    // join is the visit's only parent row.
     let adk_rust::graph::interrupt::Interrupt::Dynamic {
         data: Some(pause), ..
     } = interrupted.interrupt
     else {
-        panic!("expected aggregate pause data");
+        panic!("expected the parked payload");
     };
+    for (key, _) in parked_data(&pause).iter().rev() {
+        ledger.decide(key, "approve", None);
+    }
     let result = graph
         .invoke(
-            resume_state(&pause, "original"),
+            HashMap::new(),
             ExecutionConfig::new(thread).with_resume_from(&interrupted.checkpoint_id),
         )
         .await
@@ -2242,7 +2625,7 @@ async fn each_activation_visit_appends_at_most_two_parent_rows() {
     assert_eq!(result["gathered"].as_array().map(Vec::len), Some(2));
     assert_eq!(
         checkpoints.parent.list(thread).await.unwrap().len(),
-        2 * MAX_PARENT_ROWS_PER_VISIT
+        MAX_PARENT_ROWS_PER_VISIT + 1
     );
 }
 
@@ -2268,22 +2651,21 @@ async fn a_third_parent_row_in_one_visit_is_refused_with_a_typed_error() {
         step: 0,
         config_digest: definition.config_digest(),
     };
-    // Row 1: the frozen occurrence. Row 2: the typed denial.
-    ready_branches(
-        runtime
-            .prepare(&mut activation, &definition, &context)
-            .await
-            .unwrap(),
+    // Row 1: the frozen occurrence. Row 2: the ADK pause row.
+    runtime
+        .prepare(&mut activation, &definition, &context)
+        .await
+        .unwrap();
+    let latest = checkpoints.parent.load(thread).await.unwrap().unwrap();
+    let pause_row = Checkpoint::new(
+        thread,
+        latest.state.clone(),
+        latest.step,
+        latest.pending_nodes.clone(),
     );
     runtime
-        .record_blocked(
-            &activation,
-            ParallelBlocked {
-                branch_id: "a".to_owned(),
-                node: "a".to_owned(),
-                ordinal: 0,
-            },
-        )
+        .parent_checkpointer()
+        .save(&pause_row)
         .await
         .unwrap();
     let latest = checkpoints.parent.load(thread).await.unwrap().unwrap();
@@ -2331,4 +2713,236 @@ async fn a_completed_child_is_proven_by_its_fenced_save_without_a_reload() {
     // one fenced ADK start probe. ADK's second empty probe and the former
     // post-completion verify reload cost nothing.
     assert_eq!(checkpoints.child_loads.load(Ordering::SeqCst), 2 * 2);
+}
+
+/// `{"value":"<n x>"}` serializes to n + 12 bytes.
+fn branch_value(bytes: usize) -> Value {
+    json!({ "value": "x".repeat(bytes - 12) })
+}
+
+#[tokio::test]
+async fn a_branch_result_at_its_bound_lands_and_one_byte_more_fails_typed() {
+    for (bytes, fits) in [
+        (MAX_CHILD_RESULT_BYTES, true),
+        (MAX_CHILD_RESULT_BYTES + 1, false),
+    ] {
+        let node = DurableParallelNode::new(
+            definition(&[("big", "big"), ("small", "small")], 2),
+            runtime(
+                Arc::new(MemoryChildCheckpoints::default()),
+                HashMap::from([
+                    ("big".to_owned(), constant(branch_value(bytes))),
+                    ("small".to_owned(), constant(json!({"value": 1}))),
+                ]),
+            ),
+        );
+        let result = node.execute(&root_context("root-result-bound")).await;
+        if fits {
+            let output = result.expect("a result at its bound lands");
+            assert_eq!(
+                serde_json::to_vec(&output.updates["gathered"][0]["outputs"])
+                    .unwrap()
+                    .len(),
+                MAX_CHILD_RESULT_BYTES
+            );
+        } else {
+            let error = result.err().expect("one byte more fails the branch");
+            assert!(error.to_string().contains("branch 'big'"), "{error}");
+        }
+    }
+}
+
+/// Sixteen branches whose joined collection is exactly `total` bytes.
+fn exact_join(total: usize) -> (ParallelNodeDefinition, HashMap<String, Behavior>) {
+    let branches = (0..16)
+        .map(|index| (format!("b{index:02}"), format!("n{index:02}")))
+        .collect::<Vec<_>>();
+    let empty = (0..16)
+        .map(|index| {
+            json!({
+                "branch_id": format!("b{index:02}"),
+                "node": format!("n{index:02}"),
+                "status": "succeeded",
+                "outputs": {"value": ""},
+            })
+        })
+        .collect::<Vec<_>>();
+    let padding = total - serde_json::to_vec(&empty).unwrap().len();
+    let behaviors = (0..16)
+        .map(|index| {
+            let share = padding / 16 + usize::from(index < padding % 16);
+            (
+                format!("n{index:02}"),
+                constant(json!({ "value": "x".repeat(share) })),
+            )
+        })
+        .collect();
+    let refs = branches
+        .iter()
+        .map(|(branch, node)| (branch.as_str(), node.as_str()))
+        .collect::<Vec<_>>();
+    (definition(&refs, 8), behaviors)
+}
+
+#[tokio::test]
+async fn a_joined_result_at_eight_mib_lands_and_one_byte_more_fails_typed() {
+    let (definition, behaviors) = exact_join(MAX_JOINED_RESULT_BYTES);
+    let output = DurableParallelNode::new(
+        definition,
+        runtime(Arc::new(MemoryChildCheckpoints::default()), behaviors),
+    )
+    .execute(&root_context("root-join-bound"))
+    .await
+    .expect("an 8 MiB join lands");
+    assert_eq!(
+        serde_json::to_vec(&output.updates["gathered"])
+            .unwrap()
+            .len(),
+        MAX_JOINED_RESULT_BYTES
+    );
+    let (definition, behaviors) = exact_join(MAX_JOINED_RESULT_BYTES + 1);
+    let error = DurableParallelNode::new(
+        definition,
+        runtime(Arc::new(MemoryChildCheckpoints::default()), behaviors),
+    )
+    .execute(&root_context("root-join-over"))
+    .await
+    .err()
+    .expect("one byte more is refused");
+    assert!(
+        error
+            .to_string()
+            .contains("graph.fanout.joined_result_too_large"),
+        "{error}"
+    );
+}
+
+fn two_constant_branches(policy: &str, first: Value, second: Value) -> DurableParallelNode {
+    DurableParallelNode::new(
+        definition_with(&[("a", "one"), ("b", "two")], 2, policy),
+        runtime(
+            Arc::new(MemoryChildCheckpoints::default()),
+            HashMap::from([
+                ("one".to_owned(), constant(first)),
+                ("two".to_owned(), constant(second)),
+            ]),
+        ),
+    )
+}
+
+fn held_context(thread: &str, gathered: Value) -> NodeContext {
+    NodeContext::new(
+        HashMap::from([("gathered".to_owned(), gathered)]),
+        ExecutionConfig::new(thread),
+        0,
+    )
+}
+
+#[tokio::test]
+async fn join_append_keyed_and_merge_land_through_the_node() {
+    // Append without a reducer: the ordered collection after what the key held.
+    let output = two_constant_branches("", json!({"x": 1}), json!({"y": 2}))
+        .execute(&held_context("root-append", json!([{"seed": true}])))
+        .await
+        .unwrap();
+    assert_eq!(
+        output.updates["gathered"],
+        json!([
+            {"seed": true},
+            {"branch_id": "a", "node": "one", "status": "succeeded", "outputs": {"x": 1}},
+            {"branch_id": "b", "node": "two", "status": "succeeded", "outputs": {"y": 2}},
+        ])
+    );
+    // Keyed: one object by branch id.
+    let output = two_constant_branches("join: keyed\n", json!({"x": 1}), json!({"y": 2}))
+        .execute(&held_context("root-keyed", json!({})))
+        .await
+        .unwrap();
+    assert_eq!(
+        output.updates["gathered"],
+        json!({
+            "a": {"branch_id": "a", "node": "one", "status": "succeeded", "outputs": {"x": 1}},
+            "b": {"branch_id": "b", "node": "two", "status": "succeeded", "outputs": {"y": 2}},
+        })
+    );
+    // Merge (requires stop): one object of every branch's outputs.
+    let output = two_constant_branches(
+        "on_error: stop\njoin: merge\n",
+        json!({"x": 1}),
+        json!({"y": 2}),
+    )
+    .execute(&held_context("root-merge", json!({})))
+    .await
+    .unwrap();
+    assert_eq!(output.updates["gathered"], json!({"x": 1, "y": 2}));
+    // Two branches writing one key conflict: typed, never last-write-wins.
+    let error = two_constant_branches(
+        "on_error: stop\njoin: merge\n",
+        json!({"x": 1}),
+        json!({"x": 2}),
+    )
+    .execute(&held_context("root-merge-conflict", json!({})))
+    .await
+    .err()
+    .expect("a merge conflict is refused");
+    assert!(
+        error.to_string().contains("graph.fanout.join_conflict"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_declared_append_reducer_on_the_output_key_receives_only_the_new_entries() {
+    use super::state_reducers::StateReducer;
+    let node = two_constant_branches("", json!({"x": 1}), json!({"y": 2}))
+        .with_output_reducer(Some(StateReducer::Append));
+    let output = node
+        .execute(&held_context("root-reducer", json!([{"seed": true}])))
+        .await
+        .unwrap();
+    // The channel's own reducer appends; the node never repeats what it held.
+    assert_eq!(output.updates["gathered"].as_array().map(Vec::len), Some(2));
+    let mut schema = adk_rust::graph::StateSchema::new();
+    schema.channels.insert(
+        "gathered".to_owned(),
+        adk_rust::graph::Channel::new("gathered")
+            .with_default(json!([]))
+            .with_reducer(StateReducer::Append.channel_reducer("gathered")),
+    );
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runtime = runtime(
+        Arc::clone(&checkpoints),
+        HashMap::from([
+            ("one".to_owned(), constant(json!({"x": 1}))),
+            ("two".to_owned(), constant(json!({"y": 2}))),
+        ]),
+    );
+    let parent = runtime.parent_checkpointer();
+    let graph = StateGraph::new(schema)
+        .add_node(
+            DurableParallelNode::new(
+                definition_with(&[("a", "one"), ("b", "two")], 2, ""),
+                runtime,
+            )
+            .with_output_reducer(Some(StateReducer::Append)),
+        )
+        .add_edge(START, "gather")
+        .add_edge("gather", adk_rust::graph::END)
+        .compile()
+        .unwrap()
+        .with_checkpointer_arc(parent);
+    let state = graph
+        .invoke(
+            HashMap::from([("gathered".to_owned(), json!([{"seed": true}]))]),
+            ExecutionConfig::new("root-reducer-graph"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        state["gathered"].as_array().map(|entries| entries
+            .iter()
+            .map(|entry| entry.get("branch_id").cloned())
+            .collect::<Vec<_>>()),
+        Some(vec![None, Some(json!("a")), Some(json!("b"))])
+    );
 }

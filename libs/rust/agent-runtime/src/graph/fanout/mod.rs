@@ -4,6 +4,7 @@
 //! - [`plan`]: On Error policy, ordered join entries and join landing.
 //! - [`admission`]: Worker-wide child permits and per-model stream lanes.
 //! - [`apply`]: the per-interrupt apply rule against the child checkpoint.
+//! - [`identity`]: the Worker-minted `interrupt_key` and member `call_id`.
 //! - [`runner`]: the single-owner scheduling loop.
 //!
 //! Hosts (the Worker) supply the planners, the child adapters, the decision
@@ -11,5 +12,6 @@
 
 pub mod admission;
 pub mod apply;
+pub mod identity;
 pub mod plan;
 pub mod runner;

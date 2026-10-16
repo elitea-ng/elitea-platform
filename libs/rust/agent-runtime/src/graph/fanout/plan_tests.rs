@@ -198,6 +198,46 @@ fn joined_result_limit_and_limit_plus_one() {
     );
 }
 
+/// Sixteen entries whose serialized array is exactly `total` bytes.
+fn exact_children(total: usize) -> Vec<SettledChild> {
+    let base = (0..16)
+        .map(|index| ok(&format!("b{index:02}"), Value::String(String::new())))
+        .collect::<Vec<_>>();
+    let joined = joined(join(FanoutKind::Parallel, OnError::Continue, base).unwrap());
+    let empty = serde_json::to_vec(&joined).unwrap().len();
+    let padding = total - empty;
+    (0..16)
+        .map(|index| {
+            let share = padding / 16 + usize::from(index < padding % 16);
+            ok(&format!("b{index:02}"), Value::String("x".repeat(share)))
+        })
+        .collect()
+}
+
+#[test]
+fn joined_result_exact_limit_and_limit_plus_one() {
+    let at_limit = joined(
+        join(
+            FanoutKind::Parallel,
+            OnError::Continue,
+            exact_children(MAX_JOINED_RESULT_BYTES),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        serde_json::to_vec(&at_limit).unwrap().len(),
+        MAX_JOINED_RESULT_BYTES
+    );
+    assert_eq!(
+        join(
+            FanoutKind::Parallel,
+            OnError::Continue,
+            exact_children(MAX_JOINED_RESULT_BYTES + 1)
+        ),
+        Err(FanoutPlanError::JoinedResultTooLarge)
+    );
+}
+
 #[test]
 fn error_entries_never_exceed_their_bound_and_keep_the_code() {
     for message_bytes in [0, 10, 400, 512, 513, 4096] {

@@ -3,8 +3,7 @@ use crate::agents::graph::application::{
     ApplicationExecutionError, PipelineApplicationSelection, ResolvedApplicationParticipant,
 };
 use crate::agents::graph::parallel::{
-    PARALLEL_RESUME_STATE_KEY, ParallelActivation, ParallelChildCheckpoint,
-    ParallelChildCheckpointerFactory,
+    ParallelActivation, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
 };
 use adk_rust::graph::{Checkpoint, MemoryCheckpointer};
 use serde_json::json;
@@ -51,10 +50,11 @@ fn fixed_parallel_owns_distinct_declared_agents_and_excludes_parent_frontiers() 
     );
     assert!(definition.recovery_frontier_supported(&["gather".into()]));
     assert!(!definition.recovery_frontier_supported(&["workerA".into()]));
+    // Decisions arrive per interrupt from Main, never through parent state.
     assert!(
-        definition
+        !definition
             .runtime_channels()
-            .contains(PARALLEL_RESUME_STATE_KEY)
+            .contains("__elitea_parallel_resume_v1")
     );
 }
 
@@ -97,7 +97,7 @@ fn whole_pipeline_admission_enforces_fixed_bounds_and_typed_list_output() {
     assert!(PipelineDefinition::from_yaml(&YAML.replace("  joined: list\n", "")).is_err());
     assert!(PipelineDefinition::from_yaml(&YAML.replace("joined", "messages")).is_err());
     assert!(
-        PipelineDefinition::from_yaml(&YAML.replace("topic", "__elitea_parallel_resume_v1"))
+        PipelineDefinition::from_yaml(&YAML.replace("topic", "__elitea_parallel_agent_inputs_v1"))
             .is_err()
     );
     let branches = (0..17)
@@ -109,6 +109,51 @@ fn whole_pipeline_admission_enforces_fixed_bounds_and_typed_list_output() {
         &format!("[{branches}]"),
     );
     assert!(PipelineDefinition::from_yaml(&yaml).is_err());
+}
+
+/// The join lands on the output key's declared type and reducer; a mismatch
+/// is refused when the pipeline is saved, never discovered at run time.
+#[test]
+fn the_join_mode_is_checked_against_the_output_type_and_reducer_at_save_time() {
+    let with = |state: &str, policy: &str| {
+        YAML.replace("  joined: list\n", state)
+            .replace("    wait: all\n", &format!("    wait: all\n{policy}"))
+    };
+    let accepted = [
+        with("  joined: list\n", ""),
+        with("  joined: list\n", "    join: append\n"),
+        with("  joined: {type: list, reducer: append}\n", ""),
+        with("  joined: dict\n", "    join: keyed\n"),
+        with(
+            "  joined: {type: dict, reducer: merge}\n",
+            "    join: keyed\n",
+        ),
+        with("  joined: dict\n", "    on_error: stop\n    join: merge\n"),
+        with("  joined: list\n", "    error_policy: fail_after_drain\n"),
+    ];
+    for yaml in &accepted {
+        assert!(PipelineDefinition::from_yaml(yaml).is_ok(), "{yaml}");
+    }
+    let refused = [
+        // Append lands a list; keyed and merge land an object.
+        with("  joined: dict\n", ""),
+        with("  joined: list\n", "    join: keyed\n"),
+        // A declared reducer must fit the join.
+        with("  joined: {type: list, reducer: sum_int}\n", ""),
+        with(
+            "  joined: {type: dict, reducer: merge}\n",
+            "    on_error: continue\n    join: merge\n",
+        ),
+        with(
+            "  joined: {type: list, reducer: append}\n",
+            "    join: keyed\n",
+        ),
+        // Merge has no place for a failed branch's entry.
+        with("  joined: dict\n", "    join: merge\n"),
+    ];
+    for yaml in &refused {
+        assert!(PipelineDefinition::from_yaml(yaml).is_err(), "{yaml}");
+    }
 }
 
 #[test]
@@ -155,26 +200,6 @@ impl PipelineApplicationResolver for UnavailableResolver {
     }
 }
 
-struct NoContinuation;
-#[async_trait]
-impl ParallelBranchContinuation for NoContinuation {
-    fn cards(
-        &self,
-        _: &ApplicationNodeDefinition,
-        _: &ParallelBranchPause,
-    ) -> Result<Vec<ParallelPauseCard>, GraphError> {
-        Err(GraphError::InvalidGraph("unproved".into()))
-    }
-    async fn input(
-        &self,
-        _: &ApplicationNodeDefinition,
-        _: &ParallelBranchPause,
-        _: &[ParallelDecision],
-    ) -> Result<State, GraphError> {
-        Err(GraphError::InvalidGraph("unproved".into()))
-    }
-}
-
 fn factory() -> (CompilerParallelBranches, ParallelNodeDefinition) {
     let pipeline = PipelineDefinition::from_yaml(YAML).unwrap();
     let parallel = pipeline
@@ -210,7 +235,6 @@ fn factory() -> (CompilerParallelBranches, ParallelNodeDefinition) {
             owned,
             state_types: pipeline.state,
             resolver: Arc::new(UnavailableResolver),
-            continuation: Arc::new(NoContinuation),
             events: None,
         },
         parallel,
@@ -351,11 +375,7 @@ fn compiler_refuses_missing_or_different_underlying_parent_authority() {
             .bind_parallel_authority(same.clone(), &PipelineNodeRuntimes::default())
             .is_err()
     );
-    let binding = ParallelCompilerBinding::for_tests(
-        authority,
-        Arc::new(NoContinuation),
-        tokio::time::Instant::now(),
-    );
+    let binding = ParallelCompilerBinding::for_tests(authority, tokio::time::Instant::now());
     let runtimes = PipelineNodeRuntimes::default().with_parallel(binding);
     assert!(
         definition
@@ -369,14 +389,7 @@ fn compiler_refuses_missing_or_different_underlying_parent_authority() {
 #[test]
 fn production_binding_remains_gated_before_composed_restart_acceptance() {
     let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(TestAuthority::default());
-    assert!(
-        ParallelCompilerBinding::new(
-            authority,
-            Arc::new(NoContinuation),
-            tokio::time::Instant::now()
-        )
-        .is_err()
-    );
+    assert!(ParallelCompilerBinding::new(authority, tokio::time::Instant::now()).is_err());
 }
 
 #[test]

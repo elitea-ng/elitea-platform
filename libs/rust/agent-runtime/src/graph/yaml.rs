@@ -7,6 +7,7 @@ use serde::de::{Deserializer, SeqAccess, Visitor};
 use thiserror::Error;
 
 use super::PIPELINE_YAML_BUDGET;
+use super::fanout::plan::{JoinMode, OnError};
 use crate::bounded_yaml;
 
 const MAX_YAML_NODE_BYTES: usize = 64 * 1024;
@@ -28,7 +29,7 @@ pub enum ParallelWaitPolicy {
     All,
 }
 
-/// What a `wait: all` node does after one or more branches fail.
+/// The legacy spelling of `on_error: stop`, still accepted on input.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ParallelErrorPolicy {
@@ -67,7 +68,8 @@ pub struct ParallelNodeDefinition {
     branches: Vec<ParallelBranchDefinition>,
     max_concurrency: u32,
     wait: ParallelWaitPolicy,
-    error_policy: ParallelErrorPolicy,
+    on_error: OnError,
+    join: JoinMode,
     output: String,
     transition: Option<String>,
 }
@@ -89,8 +91,15 @@ struct RawParallelNodeDefinition {
     branches: Vec<RawParallelBranchDefinition>,
     max_concurrency: u32,
     wait: ParallelWaitPolicy,
+    /// Legacy: `fail_after_drain` means `on_error: stop`.
     #[serde(default)]
-    error_policy: ParallelErrorPolicy,
+    error_policy: Option<ParallelErrorPolicy>,
+    /// `continue` (default, partial results) or `stop` (fail after drain).
+    #[serde(default)]
+    on_error: Option<String>,
+    /// `append` (default), `keyed` or `merge`.
+    #[serde(default)]
+    join: Option<String>,
     #[serde(deserialize_with = "deserialize_outputs")]
     output: Vec<String>,
     #[serde(default)]
@@ -211,9 +220,16 @@ impl ParallelNodeDefinition {
         self.wait
     }
 
+    /// What a failed branch does: partial results or fail after drain.
     #[must_use]
-    pub const fn error_policy(&self) -> ParallelErrorPolicy {
-        self.error_policy
+    pub const fn on_error(&self) -> OnError {
+        self.on_error
+    }
+
+    /// How the ordered collection lands on the output key.
+    #[must_use]
+    pub const fn join(&self) -> JoinMode {
+        self.join
     }
 
     #[must_use]
@@ -240,7 +256,19 @@ impl ParallelNodeDefinition {
         digest_field(&mut context, self.output_key().as_bytes());
         digest_field(&mut context, &u64::from(self.max_concurrency).to_be_bytes());
         digest_field(&mut context, b"wait:all");
-        digest_field(&mut context, b"fail_after_drain");
+        // `stop` with `append` keeps the bytes every earlier node digested.
+        match (self.on_error, self.join) {
+            (OnError::Stop, JoinMode::Append) => digest_field(&mut context, b"fail_after_drain"),
+            (on_error, join) => digest_field(
+                &mut context,
+                format!(
+                    "on_error:{}|join:{}",
+                    on_error_label(on_error),
+                    join_label(join)
+                )
+                .as_bytes(),
+            ),
+        }
         match &self.transition {
             Some(transition) => digest_field(&mut context, transition.as_bytes()),
             None => digest_field(&mut context, &[]),
@@ -294,6 +322,10 @@ impl ParallelNodeDefinition {
             ));
         }
 
+        // The reducer half of this check runs where state types are known.
+        self.join.check(self.on_error, None).map_err(|_| {
+            ParallelConfigurationError::Invalid("parallel join merge requires on_error stop")
+        })?;
         let mut branch_ids = BTreeSet::new();
         for branch in &self.branches {
             if !valid_graph_id(&branch.id) || !valid_graph_id(&branch.node) {
@@ -325,6 +357,25 @@ impl ParallelNodeDefinition {
         let output = output.next().ok_or(ParallelConfigurationError::Invalid(
             "a parallel node must declare exactly one valid output channel",
         ))?;
+        let on_error = OnError::parse(raw.on_error.as_deref()).map_err(|_| {
+            ParallelConfigurationError::Invalid("parallel on_error must be continue or stop")
+        })?;
+        let on_error = match (raw.error_policy, raw.on_error.is_some()) {
+            (None, _) => on_error,
+            // `error_policy: fail_after_drain` is the legacy spelling of stop.
+            (Some(ParallelErrorPolicy::FailAfterDrain), false) => OnError::Stop,
+            (Some(ParallelErrorPolicy::FailAfterDrain), true) if on_error == OnError::Stop => {
+                OnError::Stop
+            }
+            (Some(ParallelErrorPolicy::FailAfterDrain), true) => {
+                return Err(ParallelConfigurationError::Invalid(
+                    "parallel error_policy and on_error disagree",
+                ));
+            }
+        };
+        let join = JoinMode::parse(raw.join.as_deref()).map_err(|_| {
+            ParallelConfigurationError::Invalid("parallel join must be append, keyed or merge")
+        })?;
         Ok(Self {
             id: raw.id,
             node_type: raw.node_type,
@@ -338,7 +389,8 @@ impl ParallelNodeDefinition {
                 .collect(),
             max_concurrency: raw.max_concurrency,
             wait: raw.wait,
-            error_policy: raw.error_policy,
+            on_error,
+            join,
             output,
             transition: raw.transition,
         })
@@ -388,6 +440,21 @@ pub fn valid_output_key(value: &str) -> bool {
             .as_bytes()
             .iter()
             .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+}
+
+const fn on_error_label(on_error: OnError) -> &'static str {
+    match on_error {
+        OnError::Continue => "continue",
+        OnError::Stop => "stop",
+    }
+}
+
+const fn join_label(join: JoinMode) -> &'static str {
+    match join {
+        JoinMode::Append => "append",
+        JoinMode::Keyed => "keyed",
+        JoinMode::Merge => "merge",
+    }
 }
 
 fn digest_bytes(value: &[u8]) -> [u8; 32] {

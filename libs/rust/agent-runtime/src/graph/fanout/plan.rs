@@ -216,13 +216,15 @@ pub fn join(
     {
         return Ok(JoinOutcome::Failed { key, failure });
     }
+    // `[`, `]` and one comma between entries: the exact serialized length.
     let mut total = 2_usize;
     let mut entries = Vec::with_capacity(settled.len());
     for child in settled {
         let entry = entry(kind, child)?;
+        let separator = usize::from(!entries.is_empty());
         total = total
             .saturating_add(serialized_len(&entry))
-            .saturating_add(1);
+            .saturating_add(separator);
         if total > MAX_JOINED_RESULT_BYTES {
             return Err(FanoutPlanError::JoinedResultTooLarge);
         }

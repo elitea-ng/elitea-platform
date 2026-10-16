@@ -18,6 +18,9 @@
 //!   never wait for each other.
 //! - The runner parks as soon as nothing can run and at least one card is
 //!   open, after one final fetch that brought nothing new.
+//! - A restore (any child already paused or settled) fetches once at once,
+//!   so a decision applied before a crash is acknowledged even when no card
+//!   is open any more. A fresh activation never fetches without a card.
 //! - Lease loss is a control stop (`LeaseLost`); the replacement claim
 //!   restores everything from checkpoints.
 //! - The deadline parks if only paused children remain, otherwise it stops the
@@ -195,6 +198,26 @@ pub trait FanoutEvents: Send + Sync {
 pub struct NoEvents;
 impl FanoutEvents for NoEvents {}
 
+/// A ledger with nothing decided: every fetch is empty and every ACK is a
+/// no-op. Hosts use it until a claim-fenced decision client is wired, so a
+/// paused child parks the activation instead of running without a decision.
+pub struct NoDecisions;
+
+#[async_trait]
+impl DecisionSource for NoDecisions {
+    async fn fetch(&self) -> Result<DecisionBatch, DecisionError> {
+        Ok(DecisionBatch::default())
+    }
+
+    async fn ack(
+        &self,
+        _decision: &FetchedDecision,
+        _result: &AckResult,
+    ) -> Result<(), DecisionError> {
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct FanoutRunnerConfig {
     pub max_concurrency: usize,
@@ -322,6 +345,12 @@ impl FanoutRunner {
         if restored.len() != self.children.members().len() {
             return Err(FanoutRunError::CorruptChild);
         }
+        // A re-entered occurrence (any child already paused or settled) may
+        // hold a decision applied before a crash whose ACK was lost; a fresh
+        // activation cannot hold one.
+        let reentered = restored
+            .iter()
+            .any(|child| !matches!(child, RestoredChild::Pending));
         let mut state = Loop {
             slots: Vec::with_capacity(restored.len()),
             delivered: BTreeSet::new(),
@@ -348,9 +377,12 @@ impl FanoutRunner {
         }
         Self::check_open_cards(&state)?;
         let mut running: Running = FuturesUnordered::new();
-        // A restore with open cards fetches once, immediately.
-        if open_cards(&state) > 0 {
+        // A restore fetches once, immediately: it applies decisions for open
+        // cards and acknowledges ones applied before a crash.
+        if reentered {
             self.fetch_and_apply(&mut state).await?;
+        }
+        if open_cards(&state) > 0 {
             state.tick = Some(Tick::reset(Instant::now()));
         }
         loop {

@@ -1,6 +1,6 @@
 //! Lifecycle metadata inside the existing claim-fenced ADK checkpoints.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use adk_rust::graph::checkpoint::RetentionPolicy;
@@ -10,13 +10,19 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    PARALLEL_RESUME_STATE_KEY, ParallelActivation, ParallelBlocked, ParallelCheckpointAppender,
-    ParallelChildOrigin, ParallelDecision, ParallelPauseCard, ParentHead, business_state,
-    is_lease_lost, parallel_error, validate_state, validate_values,
+    ParallelActivation, ParallelCheckpointAppender, ParallelChildOrigin, ParentHead,
+    business_state, is_lease_lost, parallel_error, validate_state, validate_values,
 };
 
-pub(super) const OCCURRENCE_KEY: &str = "elitea.graph.parallel.occurrence.v2";
-const LEGACY_OCCURRENCE_KEY: &str = "elitea.graph.parallel.occurrence.v1";
+/// V3 freezes children only: cards, decisions and denials live on the child
+/// checkpoints and in Main's ledger, never on the parent.
+pub(super) const OCCURRENCE_KEY: &str = "elitea.graph.parallel.occurrence.v3";
+/// Earlier formats: v1 froze no child identity; v2 kept a complete-set
+/// decision record on the parent. Both are refused by type.
+const LEGACY_OCCURRENCE_KEYS: [&str; 2] = [
+    "elitea.graph.parallel.occurrence.v1",
+    "elitea.graph.parallel.occurrence.v2",
+];
 const BRANCH_RECEIPT_KEY: &str = "elitea.graph.parallel.branch-receipt.v1";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -37,10 +43,6 @@ pub(super) struct FrozenOccurrence {
     pub(super) branches: Vec<FrozenBranchInput>,
     pub(super) origin: ParallelChildOrigin,
     pub(super) child_threads: Vec<String>,
-    pub(super) cards: Vec<(usize, ParallelPauseCard)>,
-    pub(super) decisions: Option<Vec<ParallelDecision>>,
-    pub(super) resume_inputs: BTreeMap<usize, State>,
-    pub(super) blocked: Option<ParallelBlocked>,
 }
 
 pub(crate) use elitea_agent_runtime::graph::fanout_budget::MAX_PARENT_ROWS_PER_VISIT;
@@ -49,8 +51,6 @@ pub(crate) use elitea_agent_runtime::graph::fanout_budget::MAX_PARENT_ROWS_PER_V
 struct ParentVisit {
     activation: ParallelActivation,
     rows: usize,
-    /// Pause cards waiting for the pause row, bound to the parent they extend.
-    staged: Option<(String, FrozenOccurrence)>,
 }
 
 /// Give this wrapper to both the parent graph and the branch runtime.
@@ -72,7 +72,6 @@ impl ParallelOccurrenceCheckpointer {
         *self.visit.lock().map_err(|_| occurrence_error())? = Some(ParentVisit {
             activation: activation.clone(),
             rows,
-            staged: None,
         });
         Ok(())
     }
@@ -95,27 +94,6 @@ impl ParallelOccurrenceCheckpointer {
         Ok(())
     }
 
-    /// The pause cards staged for this exact parent row, if any.
-    fn staged_for(
-        &self,
-        activation: &ParallelActivation,
-        parent_id: &str,
-    ) -> Result<Option<FrozenOccurrence>, GraphError> {
-        let visit = self.visit.lock().map_err(|_| occurrence_error())?;
-        let Some((staged_parent, staged)) = visit
-            .as_ref()
-            .filter(|open| open.activation == *activation)
-            .and_then(|open| open.staged.as_ref())
-        else {
-            return Ok(None);
-        };
-        if staged_parent != parent_id {
-            // The parent moved after the cards were staged: they are stale.
-            return Err(occurrence_error());
-        }
-        Ok(Some(staged.clone()))
-    }
-
     pub(super) async fn freeze(
         &self,
         activation: &ParallelActivation,
@@ -129,10 +107,6 @@ impl ParallelOccurrenceCheckpointer {
             branches,
             origin,
             child_threads,
-            cards: Vec::new(),
-            decisions: None,
-            resume_inputs: BTreeMap::new(),
-            blocked: None,
         };
         validate_state(&context.state)?;
         let latest = self.inner.load(&activation.root_thread_id).await?;
@@ -176,146 +150,6 @@ impl ParallelOccurrenceCheckpointer {
         Ok(expected)
     }
 
-    pub(super) async fn record_pause(
-        &self,
-        activation: &ParallelActivation,
-        cards: Vec<(usize, ParallelPauseCard)>,
-    ) -> Result<(), GraphError> {
-        let (parent, mut occurrence) = self.latest_occurrence(activation).await?;
-        if occurrence.blocked.is_some() {
-            return Err(occurrence_error());
-        }
-        if occurrence.cards == cards && occurrence.decisions.is_none() {
-            return Ok(());
-        }
-        occurrence.cards = cards;
-        occurrence.decisions = None;
-        occurrence.resume_inputs.clear();
-        // The cards ride on the ADK pause row that follows at this frontier.
-        // If the process dies first, replay derives the same cards from the
-        // child pause receipts.
-        let mut visit = self.visit.lock().map_err(|_| occurrence_error())?;
-        let open = visit
-            .as_mut()
-            .filter(|open| open.activation == *activation)
-            .ok_or_else(occurrence_error)?;
-        open.staged = Some((parent.checkpoint_id, occurrence));
-        Ok(())
-    }
-
-    pub(super) async fn record_decisions(
-        &self,
-        occurrence: &FrozenOccurrence,
-        published: &[(usize, ParallelPauseCard)],
-        decisions: Vec<ParallelDecision>,
-        resume_inputs: BTreeMap<usize, State>,
-        context: &NodeContext,
-    ) -> Result<(), GraphError> {
-        let (parent, mut current) = self.latest_occurrence(&occurrence.activation).await?;
-        if current != *occurrence || current.decisions.is_some() || current.blocked.is_some() {
-            return Err(occurrence_error());
-        }
-        // The decision row records the exact cards the decisions answered.
-        if current.cards.is_empty() {
-            current.cards = published.to_vec();
-        } else if current.cards != published {
-            return Err(occurrence_error());
-        }
-        if context.config.thread_id != parent.thread_id
-            || context.step != parent.step
-            || business_state(&context.state) != business_state(&parent.state)
-        {
-            return Err(occurrence_error());
-        }
-        current.decisions = Some(decisions);
-        current.resume_inputs = resume_inputs;
-        self.charge_row(&occurrence.activation, false)?;
-        self.save_occurrence(&parent, current, Some(&context.state))
-            .await
-    }
-
-    pub(super) async fn record_blocked(
-        &self,
-        activation: &ParallelActivation,
-        blocked: ParallelBlocked,
-    ) -> Result<(), GraphError> {
-        let (parent, mut occurrence) = self.latest_occurrence(activation).await?;
-        if let Some(existing) = occurrence.blocked.as_ref() {
-            return if existing == &blocked {
-                Ok(())
-            } else {
-                Err(occurrence_error())
-            };
-        }
-        occurrence.blocked = Some(blocked);
-        self.charge_row(activation, false)?;
-        self.save_occurrence(&parent, occurrence, None).await
-    }
-
-    /// Classify only the exact saved occurrence receipt, never error text.
-    pub(crate) async fn blocked_at(
-        &self,
-        checkpoint_id: &str,
-        activation: &ParallelActivation,
-    ) -> Result<Option<ParallelBlocked>, GraphError> {
-        let checkpoint = self
-            .inner
-            .load_by_id(checkpoint_id)
-            .await?
-            .ok_or_else(occurrence_error)?;
-        if checkpoint.checkpoint_id != checkpoint_id {
-            return Err(occurrence_error());
-        }
-        Ok(occurrence_from(&checkpoint, activation)?.blocked)
-    }
-
-    async fn latest_occurrence(
-        &self,
-        activation: &ParallelActivation,
-    ) -> Result<(Checkpoint, FrozenOccurrence), GraphError> {
-        let latest = self
-            .inner
-            .load(&activation.root_thread_id)
-            .await?
-            .ok_or_else(occurrence_error)?;
-        let occurrence = occurrence_from(&latest, activation)?;
-        Ok((latest, occurrence))
-    }
-
-    async fn save_occurrence(
-        &self,
-        parent: &Checkpoint,
-        occurrence: FrozenOccurrence,
-        resume: Option<&State>,
-    ) -> Result<(), GraphError> {
-        // Retain the checked snapshot. A second unchecked load would let a stale
-        // receipt attach to a newer frontier. The store compares this exact parent.
-        occurrence_from(parent, &occurrence.activation)?;
-        super::structure::validate_checkpoint(parent)?;
-        if let Some(resume) = resume {
-            validate_state(resume)?;
-        }
-        let mut checkpoint = parent.clone();
-        refresh_identity(&mut checkpoint);
-        if let Some(resume) = resume {
-            let value = resume
-                .get(PARALLEL_RESUME_STATE_KEY)
-                .ok_or_else(occurrence_error)?;
-            checkpoint
-                .state
-                .insert(PARALLEL_RESUME_STATE_KEY.to_owned(), value.clone());
-        }
-        checkpoint.metadata.insert(
-            OCCURRENCE_KEY.to_owned(),
-            serde_json::to_value(occurrence).map_err(|_| occurrence_error())?,
-        );
-        super::structure::validate_checkpoint(&checkpoint)?;
-        self.inner.append_after(Some(parent), &checkpoint).await?;
-        Ok(())
-    }
-}
-
-impl ParallelOccurrenceCheckpointer {
     async fn head_state(&self, head: &ParentHead) -> Result<State, GraphError> {
         if let Some(snapshot) = head.snapshot.as_deref() {
             return Ok(snapshot.state.clone());
@@ -397,15 +231,6 @@ fn occurrence_in(
         return Err(occurrence_error());
     }
     validate_lineage(&occurrence, activation)?;
-    if let Some(blocked) = occurrence.blocked.as_ref()
-        && !occurrence.branches.iter().any(|branch| {
-            branch.ordinal == blocked.ordinal
-                && branch.branch_id == blocked.branch_id
-                && branch.node == blocked.node
-        })
-    {
-        return Err(occurrence_error());
-    }
     Ok(occurrence)
 }
 
@@ -417,7 +242,10 @@ fn refuse_legacy(checkpoint: &Checkpoint) -> Result<(), GraphError> {
 fn refuse_legacy_metadata(
     metadata: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<(), GraphError> {
-    if metadata.contains_key(LEGACY_OCCURRENCE_KEY) {
+    if LEGACY_OCCURRENCE_KEYS
+        .iter()
+        .any(|key| metadata.contains_key(*key))
+    {
         return Err(parallel_error(
             "graph.parallel.unsupported_occurrence",
             "the parallel occurrence format is no longer supported",
@@ -502,19 +330,11 @@ impl Checkpointer for ParallelOccurrenceCheckpointer {
                     if business_state(&checkpoint.state) != business_state(&parent_state) {
                         return Err(occurrence_error());
                     }
-                    let envelope =
-                        match self.staged_for(&occurrence.activation, &previous.checkpoint_id)? {
-                            Some(staged) => {
-                                serde_json::to_value(staged).map_err(|_| occurrence_error())?
-                            }
-                            None => raw.clone(),
-                        };
+                    // The pause row carries the frozen occurrence unchanged.
                     self.charge_row(&occurrence.activation, false)?;
                     candidate
                         .metadata
-                        .insert(OCCURRENCE_KEY.to_owned(), envelope);
-                } else if occurrence.blocked.is_some() {
-                    return Err(occurrence_error());
+                        .insert(OCCURRENCE_KEY.to_owned(), raw.clone());
                 } else {
                     // The join row closes the visit.
                     self.charge_row(&occurrence.activation, true)?;

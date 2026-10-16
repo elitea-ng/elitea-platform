@@ -55,6 +55,8 @@ mod direct_tool_tests;
 #[cfg(test)]
 mod fan_in_tests;
 pub(crate) mod fanout_control;
+#[cfg(test)]
+pub(crate) mod fanout_test_ledger;
 use elitea_agent_runtime::graph::hitl;
 pub(crate) use elitea_agent_runtime::graph::{fanout_budget, fanout_trace};
 #[cfg(test)]
@@ -166,17 +168,15 @@ pub use yaml::{
 
 #[cfg(test)]
 pub(crate) use parallel::{
-    AdkParallelBranchRuntime, DurableParallelNode, MAX_PARENT_ROWS_PER_VISIT,
-    PARALLEL_INTERRUPT_SCHEMA, PARALLEL_RESUME_STATE_KEY, ParallelBlocked,
+    AdkParallelBranchRuntime, DurableParallelNode, FANOUT_PARKED_SCHEMA, MAX_PARENT_ROWS_PER_VISIT,
     ParallelBranchGraphFactory, ParallelBranchOutcome, ParallelBranchPause, ParallelBranchRuntime,
     ParallelBranchTerminal, ParallelDecision, ParallelOccurrenceCheckpointer, ParallelPauseCard,
-    PreparedParallelActivation, PreparedParallelBranch,
+    PreparedParallelBranch,
 };
 pub(crate) use parallel::{
-    ParallelActivation, ParallelBranchExecution, ParallelCheckpointAppender,
-    FanoutChildOrigin, ParallelCheckpointAuthority, ParallelChildCheckpoint,
-    ParallelChildCheckpointerFactory, ParallelChildOrigin, ParallelChildRequest, ParentHead,
-    ParentSaveProbe,
+    FanoutChildOrigin, ParallelActivation, ParallelBranchExecution, ParallelCheckpointAppender,
+    ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
+    ParallelChildOrigin, ParallelChildRequest, ParentHead, ParentSaveProbe,
     PreparedChildCheckpoint,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};

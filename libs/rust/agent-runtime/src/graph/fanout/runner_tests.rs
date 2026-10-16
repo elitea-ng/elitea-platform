@@ -566,6 +566,56 @@ async fn a_decision_applied_before_a_crash_acks_applied_without_a_second_resume(
     );
 }
 
+/// `after_apply` / `before_ack` with no card left open: the restore fetch
+/// still acknowledges the applied decision, and nothing runs again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restore_without_open_cards_acks_a_decision_applied_before_a_crash() {
+    let mut harness = Harness::new(vec![
+        vec![Step::Pause(vec!["ask"]), Step::Complete],
+        vec![Step::Complete],
+    ]);
+    let _ = harness
+        .runner(2, OnError::Continue)
+        .run()
+        .await
+        .expect("park");
+    harness.ledger.decide("ik-0-1-ask");
+    harness.replace_process();
+    let joined = settled(
+        harness
+            .runner(2, OnError::Continue)
+            .run()
+            .await
+            .expect("apply"),
+    );
+    assert_eq!(joined.len(), 2);
+    assert_eq!(harness.children.runs(0), 2);
+    // The ACK was lost: Main still holds the DECIDED row.
+    harness.ledger.decide("ik-0-1-ask");
+    harness.replace_process();
+    let fetches = harness.ledger.fetches();
+    let joined = settled(
+        harness
+            .runner(2, OnError::Continue)
+            .run()
+            .await
+            .expect("restore"),
+    );
+    assert_eq!(joined.len(), 2);
+    assert_eq!(harness.ledger.fetches(), fetches + 1, "one restore fetch");
+    assert_eq!(harness.children.runs(0), 2, "no second resume");
+    assert_eq!(harness.children.runs(1), 1, "a settled child ran again");
+    assert_eq!(
+        harness.ledger.acks().last(),
+        Some(&(
+            "ik-0-1-ask".to_owned(),
+            AckResult::Applied {
+                child_checkpoint_id: "2".to_owned()
+            }
+        ))
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_child_with_two_cards_resumes_only_when_both_are_decided() {
     let mut harness = Harness::new(vec![

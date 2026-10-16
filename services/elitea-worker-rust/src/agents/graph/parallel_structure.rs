@@ -89,9 +89,13 @@ mod tests {
         }
         assert!(validate_values([&value]).is_err());
         assert!(
-            super::super::terminal_outcome(super::super::ParallelBranchTerminal::Completed(
-                serde_json::Map::from_iter([("deep".into(), value),])
-            ))
+            super::super::terminal_outcome(
+                super::super::ParallelBranchTerminal::Completed(serde_json::Map::from_iter([(
+                    "deep".into(),
+                    value
+                ),])),
+                "checkpoint".to_owned()
+            )
             .is_err()
         );
         let wide = Value::Array(vec![Value::Null; MAX_JSON_VALUES]);

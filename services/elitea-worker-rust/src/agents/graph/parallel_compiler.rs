@@ -32,34 +32,15 @@ use std::sync::Arc;
 
 const FIXED_PARALLEL_INTEGRATION_READY: bool = false;
 
-/// Prove descendant cards against their exact saved checkpoints and sessions.
-#[async_trait]
-pub(crate) trait ParallelBranchContinuation: Send + Sync {
-    fn cards(
-        &self,
-        definition: &ApplicationNodeDefinition,
-        pause: &ParallelBranchPause,
-    ) -> Result<Vec<ParallelPauseCard>, GraphError>;
-
-    async fn input(
-        &self,
-        definition: &ApplicationNodeDefinition,
-        pause: &ParallelBranchPause,
-        decisions: &[ParallelDecision],
-    ) -> Result<State, GraphError>;
-}
-
 pub(crate) struct ParallelCompilerBinding {
     authority: Arc<dyn ParallelCheckpointAuthority>,
     occurrence: Arc<ParallelOccurrenceCheckpointer>,
-    continuation: Arc<dyn ParallelBranchContinuation>,
     deadline: tokio::time::Instant,
 }
 
 impl ParallelCompilerBinding {
     pub(crate) fn new(
         authority: Arc<dyn ParallelCheckpointAuthority>,
-        continuation: Arc<dyn ParallelBranchContinuation>,
         deadline: tokio::time::Instant,
     ) -> Result<Arc<Self>, PipelineConfigurationError> {
         if !FIXED_PARALLEL_INTEGRATION_READY {
@@ -67,18 +48,16 @@ impl ParallelCompilerBinding {
                 "fixed Parallel requires composed continuation and restart acceptance",
             ));
         }
-        Ok(Arc::new(Self::bound(authority, continuation, deadline)))
+        Ok(Arc::new(Self::bound(authority, deadline)))
     }
 
     fn bound(
         authority: Arc<dyn ParallelCheckpointAuthority>,
-        continuation: Arc<dyn ParallelBranchContinuation>,
         deadline: tokio::time::Instant,
     ) -> Self {
         Self {
             occurrence: Arc::new(ParallelOccurrenceCheckpointer::new(authority.clone())),
             authority,
-            continuation,
             deadline,
         }
     }
@@ -90,10 +69,9 @@ impl ParallelCompilerBinding {
     #[cfg(test)]
     pub(crate) fn for_tests(
         authority: Arc<dyn ParallelCheckpointAuthority>,
-        continuation: Arc<dyn ParallelBranchContinuation>,
         deadline: tokio::time::Instant,
     ) -> Arc<Self> {
-        Arc::new(Self::bound(authority, continuation, deadline))
+        Arc::new(Self::bound(authority, deadline))
     }
 }
 
@@ -153,11 +131,7 @@ impl PipelineDefinition {
                 })?,
             None => Arc::clone(&binding.authority),
         };
-        let bound = Arc::new(ParallelCompilerBinding::bound(
-            authority,
-            Arc::clone(&binding.continuation),
-            binding.deadline,
-        ));
+        let bound = Arc::new(ParallelCompilerBinding::bound(authority, binding.deadline));
         let parent: Arc<dyn Checkpointer> = bound.occurrence.clone();
         runtimes.parallel = Some(bound);
         runtimes.parallel_authority_bound = true;
@@ -207,7 +181,6 @@ impl PipelineDefinition {
             owned,
             state_types: self.state.clone(),
             resolver,
-            continuation: Arc::clone(&binding.continuation),
             events: runtimes.events.clone(),
         });
         let runtime = Arc::new(AdkParallelBranchRuntime::new(
@@ -216,7 +189,9 @@ impl PipelineDefinition {
             Arc::clone(&binding.occurrence),
         ));
         builder = builder.node(
-            DurableParallelNode::new(definition.clone(), runtime).with_deadline(binding.deadline),
+            DurableParallelNode::new(definition.clone(), runtime)
+                .with_deadline(binding.deadline)
+                .with_output_reducer(self.state_reducers.get(definition.output_key()).copied()),
         );
         if let Some(target) = definition.transition() {
             builder = builder.edge(definition.id(), if target == "END" { END } else { target });
@@ -295,7 +270,6 @@ struct CompilerParallelBranches {
     owned: BTreeMap<String, ApplicationNodeDefinition>,
     state_types: BTreeMap<String, String>,
     resolver: Arc<dyn PipelineApplicationResolver>,
-    continuation: Arc<dyn ParallelBranchContinuation>,
     events: Option<PipelineNodeEventSender>,
 }
 
@@ -484,20 +458,30 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
     fn pause_cards(
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,
-        pause: &ParallelBranchPause,
+        _pause: &ParallelBranchPause,
     ) -> Result<Vec<ParallelPauseCard>, GraphError> {
-        self.continuation.cards(self.definition(branch)?, pause)
+        self.definition(branch)?;
+        Err(branch_pause_unproved())
     }
 
     async fn resume_input(
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,
-        pause: &ParallelBranchPause,
-        decisions: &[ParallelDecision],
+        _pause: &ParallelBranchPause,
+        _decisions: &[ParallelDecision],
     ) -> Result<State, GraphError> {
-        self.continuation
-            .input(self.definition(branch)?, pause, decisions)
-            .await
+        self.definition(branch)?;
+        Err(branch_pause_unproved())
+    }
+}
+
+/// A branch pause is accepted only with a per-interrupt proof from the child
+/// checkpoint; until a card kind has one, its pause fails typed.
+fn branch_pause_unproved() -> GraphError {
+    GraphError::NodeExecutionFailed {
+        node: "parallel".to_owned(),
+        message: "graph.parallel.pause_unproved: the branch pause has no child checkpoint proof"
+            .to_owned(),
     }
 }
 
