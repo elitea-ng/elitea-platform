@@ -232,9 +232,9 @@ Revert checks:
 
 | Component × phase | Fault | Before | After | Mechanism | Proof |
 |---|---|---|---|---|---|
-| Supervisor × P10 (Docker) | runtime container killed (`docker kill`, daemon or host stop) or removed | F after `timeout+90` | **I** (no platform client); F typed (platform client, clean journal); C (possible effect) | `runtime.rs:699,847`, `runtime_loss.rs:67`, `code_attempt_remote.rs:844`, `node_recovery.rs:452,1062` | wiring + journal real-PG tests; deployed compose (below) |
+| Supervisor × P10 (Docker) | runtime container killed (`docker kill`, daemon or host stop) or removed | F after `timeout+90` | **I** (no platform client); F typed (platform client, clean journal); C (possible effect) | `runtime.rs:699,847`, `runtime_loss.rs:67`, `code_attempt_remote.rs:844`, `node_recovery.rs:452,1062` | wiring + journal real-PG tests; deployed compose KILL-js `54fe68de…` |
 | Supervisor × P10 (Docker) | runtime OOM-killed | F after `timeout+90` | F typed `sandbox.memory_limit`, at once | `runtime_loss.rs:67` | `synthesized_receipt_tests` |
-| Supervisor × P10 (Kubernetes) | node loss / restart, the kubelet reports `Unknown` 255 | F typed (`ddc2a1c5…`) | **I**, inside the 15 min window | `kubernetes/client.rs:415`, `runtime_loss.rs:93` | `killed_original_pod_returns_failure_without_runner_logs`; deployed kind (below) |
+| Supervisor × P10 (Kubernetes) | node loss / restart, the kubelet reports `Unknown` 255 | F typed (`ddc2a1c5…`) | **I**, inside the 15 min window | `kubernetes/client.rs:415`, `runtime_loss.rs:93` | `killed_original_pod_returns_failure_without_runner_logs`; deployed kind run pending (below) |
 | Supervisor × P10 (Kubernetes) | node never returns (the Pod stays `Terminating` without a terminated state) | F after the deadline | unchanged (G-SUP-02 residual) | — | — |
 | Supervisor × P10 | kubelet eviction (`Evicted`, `TerminationByKubelet`) | F | F typed (deliberate) | `runtime_loss.rs:93` | `a_kubelet_eviction_is_not_loss` |
 | Worker × P10 | user code throws | F typed | F typed, never re-run | `code_attempt_remote.rs:844` | `a_user_code_failure_*` (3 suites) |
@@ -243,7 +243,46 @@ Revert checks:
 
 ## Deployed evidence
 
-See "Deployed runs" below (stack, image identities with the §3b binary check, execution ids).
+### Deployed runs: compose, production profile (`elitea-fu214`, 2026-10-16)
+
+- Stack: `production-profile/stack.sh up --name fu214 --port-base 18700`, real-model dump; `verify-profile` 50 passed,
+  0 failed (agent node recovery, model-checkpoint recovery, Main Code owner recovery, five supervisor profiles).
+- Images built from commit `89521291a`, checked per rules §3b with `stack.sh binary-check`:
+
+  | Role | Image | Id | Marker |
+  |---|---|---|---|
+  | Main | `elitea-main:fu214-89521291a` | `763397a3807e` | build version `fu214-89521291a`, count 1 |
+  | Worker | `elitea-worker-rust:fu214-89521291a` | `e6bcea1e18d9` | `code_runtime_lost`, count ≥ 1; absent in the `pm1084-dd0bbc170` base build |
+  | Supervisor | `elitea-sandbox-supervisor:fu214-89521291a` | `19a3b1651bb3` | `runtime_lost`, count 2 |
+
+  The Rust sources are identical to the first build commit (`git diff 6ac37b277 89521291a` is empty under
+  `services/elitea-worker-rust/src`, `libs/rust`, `services/elitea-code-runner`). Web and subapp-host are the
+  `pm1084-dd0bbc170` builds of the same base commit; the MCP mock is `pm1084-dd0bbc170`.
+- Fixtures: pipelines and chats were created through the product API as the stack's OIDC test user (project 2), not
+  in the database.
+
+| Case | Execution | Chat | Fault | Outcome |
+|---|---|---|---|---|
+| POS-js (3 s) | `e91f015636d3de4e4a852e8cf4307668` | 880 | none | SUCCEEDED, attempt 1 |
+| KILL-js (25 s) | `54fe68def419465f6c19b7d37bcf2754` | 881 | `docker kill` of the job's own runtime container 8 s after dispatch (16:33:39.247Z) | Attempt 1 job `failed` / `sandbox.runtime_lost`; attempt 2 job `completed`; Main visits for attempts 1 and 2; one settlement SUCCEEDED (claim 1, epoch 1); answer `JS started=1792168422729` (16:33:42.7Z, after the kill: the code ran again); about 30 s from fault to settlement; no runtime container left |
+| RAISE-py | `bc01c45ca21c01d4b375b63822a73b50` | 882 | none (the code raises) | FAILED `PIPELINE_CODE_FAILED`, one visit, job `failed` / `sandbox.code_failed`; no re-run |
+
+The container to kill was identified by the runtime-job hash of this stack's own ledger rows
+(`ledger.rs` `runtime_identity`). No other stack's container was touched.
+
+Browser: the user's Chrome, in a new tab, signed in through the stack's OIDC mock test identity. Chats 881 and 882
+were loaded fresh and then reloaded. 881 shows the single answer `"JS started=1792168422729"`. 882 shows the
+`PIPELINE_CODE_FAILED` sentence with "Details for support". The tab was closed afterwards.
+
+Observed, not changed here: `execution_settlements.error_code` is empty for the FAILED run (FU-217).
+
+### Kubernetes (k8s1084): not run
+
+The images are in the kind registry as `k8s1084-registry:5000/{elitea-main,elitea-worker-rust,elitea-sandbox-supervisor}:fu214-89521291a`
+(supervisor `sha256:19a3b1651bb3feec12f22fb52cd9bcdc828faee18eebb124a9f2c52999f1ff74`). The deployment rollout and
+the node-kill faults (NODE-js, NODEDOWN-js) were not run in this session. Until they are, the Kubernetes row rests on
+the unit tests of the kubelet-reported state (`Unknown`, 255) seen in the earlier `ddc2a1c5…` run, not on a
+deployed re-run.
 
 ## Follow-ups
 
