@@ -156,6 +156,11 @@ func (s *Service) requireWriter(ctx context.Context, thread Thread, caller Calle
 	if err != nil {
 		return ThreadRow{}, err
 	}
+	return checkWriter(row, caller, epoch)
+}
+
+// checkWriter is requireWriter's rule over a row already read.
+func checkWriter(row ThreadRow, caller Caller, epoch int64) (ThreadRow, error) {
 	if caller.Writer == WriterDesktop && row.OwnerUserID != caller.UserID {
 		return ThreadRow{}, ErrNotFound
 	}
@@ -311,6 +316,11 @@ func (s *Service) checkQuota(ctx context.Context, thread Thread, bytes int64, li
 	if err != nil {
 		return err
 	}
+	return quotaAllows(project, own, bytes, limits)
+}
+
+// quotaAllows is checkQuota's rule over sums already read.
+func quotaAllows(project, own, bytes int64, limits Limits) error {
 	if project-own+bytes > limits.MaxProjectWorkspaceBytes {
 		return ErrQuotaExceeded
 	}
@@ -555,7 +565,13 @@ func (s *Service) Publish(ctx context.Context, request PublishRequest) (PublishR
 }
 
 func (s *Service) publish(ctx context.Context, request PublishRequest) (PublishResult, error) {
-	if _, err := s.requireWriter(ctx, request.Thread, request.Caller, request.Epoch); err != nil {
+	// One read before the transaction (decision 15): the writer check, the
+	// replay lookup and the quota fast path share it.
+	pre, err := s.repo.PublishPrecheck(ctx, request.Thread, request.SHA256)
+	if err != nil {
+		return PublishResult{}, err
+	}
+	if _, err := checkWriter(pre.Thread, request.Caller, request.Epoch); err != nil {
 		return PublishResult{}, err
 	}
 	limits, err := s.limits.Limits(ctx, request.Thread.ProjectID)
@@ -566,17 +582,13 @@ func (s *Service) publish(ctx context.Context, request PublishRequest) (PublishR
 		return PublishResult{}, ErrSegmentTooLarge
 	}
 	key := ObjectKey(request.Thread.ConversationUUID, request.SHA256)
-	existing, replay, err := s.repo.LiveSegment(ctx, request.Thread, request.SHA256)
-	if err != nil {
-		return PublishResult{}, err
-	}
 	physical := s.buckets.write().Name
-	if replay && existing.Epoch == request.Epoch && existing.Bytes == request.Bytes {
+	if existing := pre.Live; existing != nil && existing.Epoch == request.Epoch && existing.Bytes == request.Bytes {
 		// A retried publish: the object was checked when the segment was
 		// recorded. The transaction decides whether the refs match.
 		physical = existing.PhysicalBucket
 	} else {
-		if err := s.checkQuota(ctx, request.Thread, request.Bytes, limits); err != nil {
+		if err := quotaAllows(pre.ProjectBytes, pre.ThreadBytes, request.Bytes, limits); err != nil {
 			return PublishResult{}, err
 		}
 		if err := s.verifyObject(ctx, request, key); err != nil {

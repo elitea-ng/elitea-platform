@@ -800,3 +800,51 @@ func TestPostgresWorkspaceStoreFetchRowsIsOneSnapshot(t *testing.T) {
 		t.Fatalf("the next fetch = %+v, %v", after, err)
 	}
 }
+
+// A publish that meets the thread's row lock held (another publish of the
+// thread is committing) answers a ref conflict with the committed refs at
+// once: it never waits, so a contended thread cannot park connections.
+func TestPostgresWorkspaceStorePublishNeverWaitsOnABusyThread(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const owner int64 = 5197
+	fixture := seedLocalWorkThread(t, pool, owner, "local_work")
+	seedHandoffRow(t, pool, fixture.thread, owner, workspacestore.StateHandingOff, 1, false, "")
+	store := workspacestoretest.New(true)
+	service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+	first := []byte("committed snapshot")
+	firstSHA := uploadSegment(t, store, fixture.thread, first, time.Now())
+	if _, err := service.Publish(ctx, desktopPublish(fixture.thread, owner, 1, firstSHA, int64(len(first)),
+		workspacestore.RefUpdate{Name: workspacestore.RefBase, New: sha1Of("b")},
+		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, New: sha1Of("one")})); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM elitea_runtime.workspace_handoffs
+WHERE project_id = 1 AND conversation_uuid = $1::uuid FOR UPDATE`, fixture.thread.ConversationUUID); err != nil {
+		t.Fatal(err)
+	}
+	second := []byte("contending snapshot")
+	secondSHA := uploadSegment(t, store, fixture.thread, second, time.Now())
+	started := time.Now()
+	_, err = service.Publish(ctx, desktopPublish(fixture.thread, owner, 1, secondSHA, int64(len(second)),
+		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, Old: ptr(sha1Of("one")), New: sha1Of("two")}))
+	var conflict *workspacestore.RefConflictError
+	if !errors.As(err, &conflict) || conflict.Current[workspacestore.RefHandoff1] == nil ||
+		*conflict.Current[workspacestore.RefHandoff1] != sha1Of("one") {
+		t.Fatalf("publish on a busy thread = %v, want a ref conflict with the committed refs", err)
+	}
+	if waited := time.Since(started); waited > time.Second {
+		t.Fatalf("the publish waited %s for the row lock", waited)
+	}
+	_ = holder.Rollback(ctx)
+	// With the lock free the same publish goes through.
+	if _, err := service.Publish(ctx, desktopPublish(fixture.thread, owner, 1, secondSHA, int64(len(second)),
+		workspacestore.RefUpdate{Name: workspacestore.RefHandoff1, Old: ptr(sha1Of("one")), New: sha1Of("two")})); err != nil {
+		t.Fatalf("the retry = %v", err)
+	}
+}

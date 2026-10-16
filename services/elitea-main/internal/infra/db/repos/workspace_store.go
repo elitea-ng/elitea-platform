@@ -237,7 +237,68 @@ JOIN elitea_storage.buckets AS b ON b.id = g.bucket_id AND b.bucket_type = 'work
 WHERE g.project_id = $1 AND g.id = $2::uuid`, projectID, grantID))
 }
 
-// Publish is the store's one short transaction (decisions 2 and 15).
+// PublishPrecheck is the one read before a publish transaction.
+func (r *WorkspaceStoreRepository) PublishPrecheck(
+	ctx context.Context, thread workspacestore.Thread, sha string,
+) (workspacestore.PublishPrecheck, error) {
+	var (
+		pre          workspacestore.PublishPrecheck
+		state        string
+		running      *string
+		liveEpoch    *int64
+		liveBytes    *int64
+		livePhysical *string
+	)
+	err := r.pool.QueryRow(ctx, `
+SELECT h.state, h.epoch, h.owner_user_id, h.running_execution_id, h.has_upstream, h.last_seq,
+       live.epoch, live.byte_length, live.physical_bucket,
+       (SELECT COALESCE(sum(byte_length), 0)::bigint FROM elitea_runtime.workspace_segments
+        WHERE project_id = $1 AND superseded_at IS NULL),
+       (SELECT COALESCE(sum(byte_length), 0)::bigint FROM elitea_runtime.workspace_segments
+        WHERE conversation_uuid = $2::uuid AND project_id = $1 AND superseded_at IS NULL)
+FROM elitea_runtime.workspace_handoffs AS h
+LEFT JOIN LATERAL (
+    SELECT epoch, byte_length, physical_bucket FROM elitea_runtime.workspace_segments
+    WHERE conversation_uuid = $2::uuid AND project_id = $1 AND sha256 = $3 AND superseded_at IS NULL
+    ORDER BY seq DESC LIMIT 1
+) AS live ON TRUE
+WHERE h.project_id = $1 AND h.conversation_uuid = $2::uuid`, thread.ProjectID, thread.ConversationUUID, sha).
+		Scan(&state, &pre.Thread.Epoch, &pre.Thread.OwnerUserID, &running, &pre.Thread.HasUpstream, &pre.Thread.LastSeq,
+			&liveEpoch, &liveBytes, &livePhysical, &pre.ProjectBytes, &pre.ThreadBytes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workspacestore.PublishPrecheck{}, workspacestore.ErrNotFound
+	}
+	if err != nil {
+		return workspacestore.PublishPrecheck{}, fmt.Errorf("workspace store: publish precheck: %w", err)
+	}
+	pre.Thread.State = workspacestore.State(state)
+	if running != nil {
+		pre.Thread.RunningExecutionID = *running
+	}
+	if liveEpoch != nil {
+		pre.Live = &workspacestore.SegmentRow{Epoch: *liveEpoch, Bytes: *liveBytes, PhysicalBucket: *livePhysical}
+	}
+	return pre, nil
+}
+
+// pgLockNotAvailable is SQLSTATE 55P03, which FOR UPDATE NOWAIT raises when
+// another transaction holds the row lock.
+const pgLockNotAvailable = "55P03"
+
+// Publish is the store's one short transaction (decisions 2 and 15), in
+// three round trips after BEGIN:
+//
+//  1. lock the thread row FOR UPDATE NOWAIT, then read its refs and the
+//     replay lookup (two statements in one batch, so the reads take their
+//     snapshot after the lock);
+//  2. supersede, insert the segment, move the refs (one multi-row upsert),
+//     advance the thread, spend the grant, and, last, take the project's
+//     quota lock and sum the usage (one batch);
+//  3. COMMIT.
+//
+// A thread whose row lock is held is mid-publish: this publish answers a ref
+// conflict with the refs as committed (retryable) and never waits, so a
+// contended thread cannot park pooled connections.
 func (r *WorkspaceStoreRepository) Publish(ctx context.Context, record workspacestore.PublishRecord) (workspacestore.PublishResult, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -245,7 +306,7 @@ func (r *WorkspaceStoreRepository) Publish(ctx context.Context, record workspace
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// 1. Lock the thread's handoff row, then check the state and the epoch.
+	// Round trip 1: the row lock, then the refs and the replay lookup.
 	var (
 		state       string
 		epoch       int64
@@ -254,18 +315,39 @@ func (r *WorkspaceStoreRepository) Publish(ctx context.Context, record workspace
 		response    *string
 		hasUpstream bool
 		lastSeq     int64
+		refsRaw     []byte
+		replaySeq   *int64
 	)
-	err = tx.QueryRow(ctx, `
+	read := &pgx.Batch{}
+	read.Queue(`
 SELECT state, epoch, owner_user_id, running_execution_id, running_response_message_id::text, has_upstream, last_seq
 FROM elitea_runtime.workspace_handoffs
 WHERE project_id = $1 AND conversation_uuid = $2::uuid
-FOR UPDATE`, record.Thread.ProjectID, record.Thread.ConversationUUID).
-		Scan(&state, &epoch, &owner, &running, &response, &hasUpstream, &lastSeq)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return workspacestore.PublishResult{}, workspacestore.ErrNotFound
+FOR UPDATE NOWAIT`, record.Thread.ProjectID, record.Thread.ConversationUUID)
+	read.Queue(`
+SELECT COALESCE((SELECT jsonb_object_agg(name, sha) FROM elitea_runtime.workspace_refs
+                 WHERE project_id = $1 AND conversation_uuid = $2::uuid), '{}'::jsonb),
+       (SELECT seq FROM elitea_runtime.workspace_segments
+        WHERE conversation_uuid = $2::uuid AND project_id = $1 AND sha256 = $3 AND epoch = $4 AND superseded_at IS NULL
+        ORDER BY seq DESC LIMIT 1)`,
+		record.Thread.ProjectID, record.Thread.ConversationUUID, record.SHA256, record.Epoch)
+	results := tx.SendBatch(ctx, read)
+	err = results.QueryRow().Scan(&state, &epoch, &owner, &running, &response, &hasUpstream, &lastSeq)
+	if err == nil {
+		err = results.QueryRow().Scan(&refsRaw, &replaySeq)
 	}
-	if err != nil {
+	closeErr := results.Close()
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.As(err, &pgErr) && pgErr.Code == pgLockNotAvailable:
+		_ = tx.Rollback(ctx)
+		return workspacestore.PublishResult{}, r.busyThreadConflict(ctx, record)
+	case errors.Is(err, pgx.ErrNoRows):
+		return workspacestore.PublishResult{}, workspacestore.ErrNotFound
+	case err != nil:
 		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: lock thread: %w", err)
+	case closeErr != nil:
+		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: lock thread: %w", closeErr)
 	}
 	if record.Caller.Writer == workspacestore.WriterDesktop && owner != record.Caller.UserID {
 		return workspacestore.PublishResult{}, workspacestore.ErrNotFound
@@ -283,39 +365,15 @@ FOR UPDATE`, record.Thread.ProjectID, record.Thread.ConversationUUID).
 			return workspacestore.PublishResult{}, workspacestore.ErrRefNotAllowed
 		}
 	}
-
 	current := map[string]string{}
-	rows, err := tx.Query(ctx, `
-SELECT name, sha FROM elitea_runtime.workspace_refs
-WHERE project_id = $1 AND conversation_uuid = $2::uuid`, record.Thread.ProjectID, record.Thread.ConversationUUID)
-	if err != nil {
-		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: read refs: %w", err)
-	}
-	for rows.Next() {
-		var name, sha string
-		if err := rows.Scan(&name, &sha); err != nil {
-			rows.Close()
-			return workspacestore.PublishResult{}, fmt.Errorf("workspace store: read refs: %w", err)
-		}
-		current[name] = sha
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	if err := json.Unmarshal(refsRaw, &current); err != nil {
 		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: read refs: %w", err)
 	}
 
 	// A retried publish that was already applied answers the original
 	// result: the same segment is live in this epoch and every ref already
 	// holds the value the publish moves it to.
-	var replaySeq int64
-	err = tx.QueryRow(ctx, `
-SELECT seq FROM elitea_runtime.workspace_segments
-WHERE conversation_uuid = $2::uuid AND project_id = $1 AND sha256 = $3 AND epoch = $4 AND superseded_at IS NULL
-ORDER BY seq DESC LIMIT 1`, record.Thread.ProjectID, record.Thread.ConversationUUID, record.SHA256, record.Epoch).Scan(&replaySeq)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: read replay: %w", err)
-	}
-	if err == nil {
+	if replaySeq != nil {
 		applied := true
 		for _, ref := range record.Refs {
 			if current[ref.Name] != ref.New {
@@ -324,82 +382,50 @@ ORDER BY seq DESC LIMIT 1`, record.Thread.ProjectID, record.Thread.ConversationU
 			}
 		}
 		if applied {
-			return workspacestore.PublishResult{Seq: replaySeq, Refs: current, Superseded: []int64{}, Replayed: true}, nil
+			return workspacestore.PublishResult{Seq: *replaySeq, Refs: current, Superseded: []int64{}, Replayed: true}, nil
 		}
 	}
 
-	// 2. Every expected old value, all or nothing.
-	conflict := false
-	for _, ref := range record.Refs {
-		stored, present := current[ref.Name]
-		if (ref.Old == nil) != !present || (ref.Old != nil && *ref.Old != stored) {
-			conflict = true
-		}
-	}
-	if conflict {
-		values := map[string]*string{}
-		for _, ref := range record.Refs {
-			if stored, present := current[ref.Name]; present {
-				value := stored
-				values[ref.Name] = &value
-			} else {
-				values[ref.Name] = nil
-			}
-		}
-		return workspacestore.PublishResult{}, &workspacestore.RefConflictError{Current: values}
+	// Every expected old value, all or nothing.
+	if conflict := refConflict(record.Refs, current); conflict != nil {
+		return workspacestore.PublishResult{}, conflict
 	}
 
-	// 3. The segment, with the next per-thread seq. A COMPACT covers every
-	// live ref, so it supersedes every earlier live segment of the thread.
+	// Round trip 2: the writes. A COMPACT covers every live ref, so it
+	// supersedes every earlier live segment of the thread.
 	seq := lastSeq + 1
-	superseded := []int64{}
-	rows, err = tx.Query(ctx, `
-UPDATE elitea_runtime.workspace_segments SET superseded_at = clock_timestamp()
-WHERE conversation_uuid = $2::uuid AND project_id = $1 AND superseded_at IS NULL
-RETURNING seq`, record.Thread.ProjectID, record.Thread.ConversationUUID)
-	if err != nil {
-		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: supersede: %w", err)
-	}
-	for rows.Next() {
-		var value int64
-		if err := rows.Scan(&value); err != nil {
-			rows.Close()
-			return workspacestore.PublishResult{}, fmt.Errorf("workspace store: supersede: %w", err)
-		}
-		superseded = append(superseded, value)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: supersede: %w", err)
-	}
 	for _, ref := range record.Refs {
 		current[ref.Name] = ref.New
 	}
 	refsJSON, _ := json.Marshal(current)
 	prerequisites, _ := json.Marshal(record.Prerequisites)
-	if _, err := tx.Exec(ctx, `
+	names := make([]string, 0, len(record.Refs))
+	values := make([]string, 0, len(record.Refs))
+	for _, ref := range record.Refs {
+		names = append(names, ref.Name)
+		values = append(values, ref.New)
+	}
+	write := &pgx.Batch{}
+	write.Queue(`
+UPDATE elitea_runtime.workspace_segments SET superseded_at = clock_timestamp()
+WHERE conversation_uuid = $2::uuid AND project_id = $1 AND superseded_at IS NULL
+RETURNING seq`, record.Thread.ProjectID, record.Thread.ConversationUUID)
+	write.Queue(`
 INSERT INTO elitea_runtime.workspace_segments (
     project_id, conversation_uuid, seq, epoch, kind, sha256, byte_length, prerequisites, refs, writer,
     object_key, physical_bucket
 ) VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12)`,
 		record.Thread.ProjectID, record.Thread.ConversationUUID, seq, record.Epoch, record.Kind, record.SHA256,
 		record.Bytes, string(prerequisites), string(refsJSON), string(record.Caller.Writer),
-		record.ObjectKey, record.PhysicalBucket); err != nil {
-		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: insert segment: %w", err)
-	}
-
-	// 4. Move the refs, and the handoff row's cache of them.
-	for _, ref := range record.Refs {
-		if _, err := tx.Exec(ctx, `
+		record.ObjectKey, record.PhysicalBucket)
+	write.Queue(`
 INSERT INTO elitea_runtime.workspace_refs (project_id, conversation_uuid, name, sha, seq)
-VALUES ($1, $2::uuid, $3, $4, $5)
+SELECT $1, $2::uuid, ref.name, ref.sha, $5
+FROM unnest($3::text[], $4::text[]) AS ref(name, sha)
 ON CONFLICT (project_id, conversation_uuid, name)
 DO UPDATE SET sha = EXCLUDED.sha, seq = EXCLUDED.seq, updated_at = clock_timestamp()`,
-			record.Thread.ProjectID, record.Thread.ConversationUUID, ref.Name, ref.New, seq); err != nil {
-			return workspacestore.PublishResult{}, fmt.Errorf("workspace store: move ref: %w", err)
-		}
-	}
-	if _, err := tx.Exec(ctx, `
+		record.Thread.ProjectID, record.Thread.ConversationUUID, names, values, seq)
+	write.Queue(`
 UPDATE elitea_runtime.workspace_handoffs
 SET last_seq = $3,
     base_sha = COALESCE($4, base_sha),
@@ -410,52 +436,141 @@ SET last_seq = $3,
 WHERE project_id = $1 AND conversation_uuid = $2::uuid`,
 		record.Thread.ProjectID, record.Thread.ConversationUUID, seq,
 		refValue(record.Refs, workspacestore.RefBase), refValue(record.Refs, workspacestore.RefUpstream),
-		refValue(record.Refs, workspacestore.RefHandoff1), refValue(record.Refs, workspacestore.RefCloud)); err != nil {
-		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: advance thread: %w", err)
+		refValue(record.Refs, workspacestore.RefHandoff1), refValue(record.Refs, workspacestore.RefCloud))
+	// The grant that carried the bytes is spent.
+	write.Queue(`
+UPDATE elitea_storage.transfer_grants AS g SET consumed_at = clock_timestamp()
+FROM elitea_storage.buckets AS b
+WHERE b.id = g.bucket_id AND b.bucket_type = 'workspace'
+  AND g.project_id = $1 AND g.key = $2 AND g.consumed_at IS NULL`,
+		record.Thread.ProjectID, record.ObjectKey)
+	// The project ceiling, re-checked under the project's lock (the check
+	// before the transaction is a fast path only: two threads of one project
+	// publishing at once could each pass it). The lock is taken LAST, so it
+	// is held only for this sum and the commit; publishes of different
+	// projects never share it. The thread's earlier segments are superseded
+	// and the new one inserted above, so the sum is the usage after this
+	// publish.
+	quota := record.MaxProjectBytes > 0
+	quotaKey := "elitea.workspace_quota:" + strconv.FormatInt(record.Thread.ProjectID, 10)
+	if quota {
+		// Blocking, not pg_try_advisory_xact_lock in a retry loop: measured
+		// the same locally, and a retry loop holds the connection through
+		// its sleeps as a blocking wait does, with more round trips.
+		write.Queue(`SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, quotaKey)
+		write.Queue(`
+SELECT COALESCE(sum(byte_length), 0)::bigint FROM elitea_runtime.workspace_segments
+WHERE project_id = $1 AND superseded_at IS NULL`, record.Thread.ProjectID)
+	}
+	superseded := []int64{}
+	var used int64
+	results = tx.SendBatch(ctx, write)
+	err = func() error {
+		rows, err := results.Query()
+		if err != nil {
+			return fmt.Errorf("workspace store: supersede: %w", err)
+		}
+		for rows.Next() {
+			var value int64
+			if err := rows.Scan(&value); err != nil {
+				rows.Close()
+				return fmt.Errorf("workspace store: supersede: %w", err)
+			}
+			superseded = append(superseded, value)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("workspace store: supersede: %w", err)
+		}
+		for _, step := range []string{"insert segment", "move refs", "advance thread", "consume grant"} {
+			if _, err := results.Exec(); err != nil {
+				return fmt.Errorf("workspace store: %s: %w", step, err)
+			}
+		}
+		if quota {
+			if _, err := results.Exec(); err != nil {
+				return fmt.Errorf("workspace store: lock project quota: %w", err)
+			}
+			if err := results.QueryRow().Scan(&used); err != nil {
+				return fmt.Errorf("workspace store: project usage: %w", err)
+			}
+		}
+		return nil
+	}()
+	if closeErr := results.Close(); err == nil && closeErr != nil {
+		err = fmt.Errorf("workspace store: publish writes: %w", closeErr)
+	}
+	if err != nil {
+		return workspacestore.PublishResult{}, err
+	}
+	if quota && used > record.MaxProjectBytes {
+		return workspacestore.PublishResult{}, workspacestore.ErrQuotaExceeded
 	}
 	// A cloud turn's commit is stamped on its answer (decision 8): the
 	// desktop imports cloud turns by executed_by, workspace_epoch and
-	// workspace_commit.
+	// workspace_commit. Executor publishes only (one more round trip).
 	if record.Caller.Writer == workspacestore.WriterCloudExecutor && response != nil {
 		if err := StampCloudTurnAnswer(ctx, tx, record.Thread.ProjectID, *response, record.Epoch, current[workspacestore.RefCloud]); err != nil {
 			return workspacestore.PublishResult{}, err
 		}
 	}
-	// The project ceiling, re-checked under a per-project lock. The check
-	// before the transaction is a fast path only: two threads of one project
-	// publishing at once could each pass it. The lock is taken LAST, so it is
-	// held only for this sum and the commit; publishes of different projects
-	// never share it. The thread's earlier segments are already superseded
-	// above, and the new one is inserted, so the sum is the usage after this
-	// publish.
-	if record.MaxProjectBytes > 0 {
-		key := "elitea.workspace_quota:" + strconv.FormatInt(record.Thread.ProjectID, 10)
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, key); err != nil {
-			return workspacestore.PublishResult{}, fmt.Errorf("workspace store: lock project quota: %w", err)
-		}
-		var used int64
-		if err := tx.QueryRow(ctx, `
-SELECT COALESCE(sum(byte_length), 0)::bigint FROM elitea_runtime.workspace_segments
-WHERE project_id = $1 AND superseded_at IS NULL`, record.Thread.ProjectID).Scan(&used); err != nil {
-			return workspacestore.PublishResult{}, fmt.Errorf("workspace store: project usage: %w", err)
-		}
-		if used > record.MaxProjectBytes {
-			return workspacestore.PublishResult{}, workspacestore.ErrQuotaExceeded
-		}
-	}
-	// The grant that carried the bytes is spent.
-	if _, err := tx.Exec(ctx, `
-UPDATE elitea_storage.transfer_grants AS g SET consumed_at = clock_timestamp()
-FROM elitea_storage.buckets AS b
-WHERE b.id = g.bucket_id AND b.bucket_type = 'workspace'
-  AND g.project_id = $1 AND g.key = $2 AND g.consumed_at IS NULL`,
-		record.Thread.ProjectID, record.ObjectKey); err != nil {
-		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: consume grant: %w", err)
-	}
+	// Round trip 3.
 	if err := tx.Commit(ctx); err != nil {
 		return workspacestore.PublishResult{}, fmt.Errorf("workspace store: commit publish: %w", err)
 	}
 	return workspacestore.PublishResult{Seq: seq, Refs: current, Superseded: superseded}, nil
+}
+
+// refConflict answers the conflict of a publish's expected old values with
+// the stored refs, nil when every one holds.
+func refConflict(refs []workspacestore.RefUpdate, current map[string]string) error {
+	conflict := false
+	for _, ref := range refs {
+		stored, present := current[ref.Name]
+		if (ref.Old == nil) != !present || (ref.Old != nil && *ref.Old != stored) {
+			conflict = true
+		}
+	}
+	if !conflict {
+		return nil
+	}
+	values := map[string]*string{}
+	for _, ref := range refs {
+		if stored, present := current[ref.Name]; present {
+			value := stored
+			values[ref.Name] = &value
+		} else {
+			values[ref.Name] = nil
+		}
+	}
+	return &workspacestore.RefConflictError{Current: values}
+}
+
+// busyThreadConflict answers a publish that met the thread's row lock held:
+// another publish of this thread is committing, so this one's expected old
+// values are about to be stale. It answers a ref conflict with the refs as
+// committed now (read without the lock), never waiting for the lock.
+func (r *WorkspaceStoreRepository) busyThreadConflict(ctx context.Context, record workspacestore.PublishRecord) error {
+	var raw []byte
+	if err := r.pool.QueryRow(ctx, `
+SELECT COALESCE(jsonb_object_agg(name, sha), '{}'::jsonb) FROM elitea_runtime.workspace_refs
+WHERE project_id = $1 AND conversation_uuid = $2::uuid`, record.Thread.ProjectID, record.Thread.ConversationUUID).Scan(&raw); err != nil {
+		return fmt.Errorf("workspace store: read refs: %w", err)
+	}
+	current := map[string]string{}
+	if err := json.Unmarshal(raw, &current); err != nil {
+		return fmt.Errorf("workspace store: read refs: %w", err)
+	}
+	values := map[string]*string{}
+	for _, ref := range record.Refs {
+		if stored, present := current[ref.Name]; present {
+			value := stored
+			values[ref.Name] = &value
+		} else {
+			values[ref.Name] = nil
+		}
+	}
+	return &workspacestore.RefConflictError{Current: values}
 }
 
 func refValue(refs []workspacestore.RefUpdate, name string) *string {

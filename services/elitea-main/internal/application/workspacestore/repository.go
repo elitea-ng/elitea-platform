@@ -15,6 +15,15 @@ type ThreadRow struct {
 	LastSeq            int64
 }
 
+// PublishPrecheck is the one read before a publish transaction.
+type PublishPrecheck struct {
+	Thread ThreadRow
+	// Live is the newest live segment with the publish's digest, nil if none.
+	Live         *SegmentRow
+	ProjectBytes int64
+	ThreadBytes  int64
+}
+
 // WorkspaceBucket is the project's hidden workspace bucket row.
 type WorkspaceBucket struct {
 	ID   int64
@@ -108,6 +117,10 @@ type ObjectSweep struct {
 // Repository is the store's persistence (repos.WorkspaceStoreRepository).
 type Repository interface {
 	ReadThread(ctx context.Context, thread Thread) (ThreadRow, error)
+	// PublishPrecheck answers, in ONE read, what a publish checks before its
+	// transaction: the thread row (ErrNotFound when absent), the newest live
+	// segment with the digest, and the project's and the thread's live bytes.
+	PublishPrecheck(ctx context.Context, thread Thread, sha256 string) (PublishPrecheck, error)
 	// EnsureWorkspaceBucket answers the project's workspace bucket, creating
 	// it on first use. It is found by type; its name is WorkspaceBucketName,
 	// or a suffixed name when a user bucket already holds that one.
