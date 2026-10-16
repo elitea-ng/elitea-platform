@@ -19,11 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WorkspaceStoreService_WorkspaceFetchPlan_FullMethodName       = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceFetchPlan"
-	WorkspaceStoreService_WorkspaceUpload_FullMethodName          = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceUpload"
-	WorkspaceStoreService_WorkspacePublish_FullMethodName         = "/elitea.runtime.v1.WorkspaceStoreService/WorkspacePublish"
-	WorkspaceStoreService_WorkspacePullRequestDiff_FullMethodName = "/elitea.runtime.v1.WorkspaceStoreService/WorkspacePullRequestDiff"
-	WorkspaceStoreService_WorkspaceEnvSecret_FullMethodName       = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceEnvSecret"
+	WorkspaceStoreService_WorkspaceFetchPlan_FullMethodName = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceFetchPlan"
+	WorkspaceStoreService_WorkspaceUpload_FullMethodName    = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceUpload"
+	WorkspaceStoreService_WorkspacePublish_FullMethodName   = "/elitea.runtime.v1.WorkspaceStoreService/WorkspacePublish"
+	WorkspaceStoreService_WorkspaceEnvSecret_FullMethodName = "/elitea.runtime.v1.WorkspaceStoreService/WorkspaceEnvSecret"
 )
 
 // WorkspaceStoreServiceClient is the client API for WorkspaceStoreService service.
@@ -33,7 +32,6 @@ type WorkspaceStoreServiceClient interface {
 	WorkspaceFetchPlan(ctx context.Context, in *WorkspaceFetchPlanRequestV1, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WorkspaceFetchFrameV1], error)
 	WorkspaceUpload(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WorkspaceUploadFrameV1, WorkspaceUploadResponseV1], error)
 	WorkspacePublish(ctx context.Context, in *WorkspacePublishRequestV1, opts ...grpc.CallOption) (*WorkspacePublishResponseV1, error)
-	WorkspacePullRequestDiff(ctx context.Context, in *WorkspacePullRequestDiffRequestV1, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WorkspacePullRequestDiffFrameV1], error)
 	// The thread's harvested env, as a claim-bound runtime secret: only when the
 	// runtime context's `workspace.env_secret` is true.
 	WorkspaceEnvSecret(ctx context.Context, in *WorkspaceEnvSecretRequestV1, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WorkspaceEnvSecretFrameV1], error)
@@ -89,28 +87,9 @@ func (c *workspaceStoreServiceClient) WorkspacePublish(ctx context.Context, in *
 	return out, nil
 }
 
-func (c *workspaceStoreServiceClient) WorkspacePullRequestDiff(ctx context.Context, in *WorkspacePullRequestDiffRequestV1, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WorkspacePullRequestDiffFrameV1], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkspaceStoreService_ServiceDesc.Streams[2], WorkspaceStoreService_WorkspacePullRequestDiff_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[WorkspacePullRequestDiffRequestV1, WorkspacePullRequestDiffFrameV1]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WorkspaceStoreService_WorkspacePullRequestDiffClient = grpc.ServerStreamingClient[WorkspacePullRequestDiffFrameV1]
-
 func (c *workspaceStoreServiceClient) WorkspaceEnvSecret(ctx context.Context, in *WorkspaceEnvSecretRequestV1, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WorkspaceEnvSecretFrameV1], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkspaceStoreService_ServiceDesc.Streams[3], WorkspaceStoreService_WorkspaceEnvSecret_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkspaceStoreService_ServiceDesc.Streams[2], WorkspaceStoreService_WorkspaceEnvSecret_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +113,6 @@ type WorkspaceStoreServiceServer interface {
 	WorkspaceFetchPlan(*WorkspaceFetchPlanRequestV1, grpc.ServerStreamingServer[WorkspaceFetchFrameV1]) error
 	WorkspaceUpload(grpc.ClientStreamingServer[WorkspaceUploadFrameV1, WorkspaceUploadResponseV1]) error
 	WorkspacePublish(context.Context, *WorkspacePublishRequestV1) (*WorkspacePublishResponseV1, error)
-	WorkspacePullRequestDiff(*WorkspacePullRequestDiffRequestV1, grpc.ServerStreamingServer[WorkspacePullRequestDiffFrameV1]) error
 	// The thread's harvested env, as a claim-bound runtime secret: only when the
 	// runtime context's `workspace.env_secret` is true.
 	WorkspaceEnvSecret(*WorkspaceEnvSecretRequestV1, grpc.ServerStreamingServer[WorkspaceEnvSecretFrameV1]) error
@@ -156,9 +134,6 @@ func (UnimplementedWorkspaceStoreServiceServer) WorkspaceUpload(grpc.ClientStrea
 }
 func (UnimplementedWorkspaceStoreServiceServer) WorkspacePublish(context.Context, *WorkspacePublishRequestV1) (*WorkspacePublishResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method WorkspacePublish not implemented")
-}
-func (UnimplementedWorkspaceStoreServiceServer) WorkspacePullRequestDiff(*WorkspacePullRequestDiffRequestV1, grpc.ServerStreamingServer[WorkspacePullRequestDiffFrameV1]) error {
-	return status.Errorf(codes.Unimplemented, "method WorkspacePullRequestDiff not implemented")
 }
 func (UnimplementedWorkspaceStoreServiceServer) WorkspaceEnvSecret(*WorkspaceEnvSecretRequestV1, grpc.ServerStreamingServer[WorkspaceEnvSecretFrameV1]) error {
 	return status.Errorf(codes.Unimplemented, "method WorkspaceEnvSecret not implemented")
@@ -220,17 +195,6 @@ func _WorkspaceStoreService_WorkspacePublish_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WorkspaceStoreService_WorkspacePullRequestDiff_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(WorkspacePullRequestDiffRequestV1)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(WorkspaceStoreServiceServer).WorkspacePullRequestDiff(m, &grpc.GenericServerStream[WorkspacePullRequestDiffRequestV1, WorkspacePullRequestDiffFrameV1]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WorkspaceStoreService_WorkspacePullRequestDiffServer = grpc.ServerStreamingServer[WorkspacePullRequestDiffFrameV1]
-
 func _WorkspaceStoreService_WorkspaceEnvSecret_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WorkspaceEnvSecretRequestV1)
 	if err := stream.RecvMsg(m); err != nil {
@@ -264,11 +228,6 @@ var WorkspaceStoreService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "WorkspaceUpload",
 			Handler:       _WorkspaceStoreService_WorkspaceUpload_Handler,
 			ClientStreams: true,
-		},
-		{
-			StreamName:    "WorkspacePullRequestDiff",
-			Handler:       _WorkspaceStoreService_WorkspacePullRequestDiff_Handler,
-			ServerStreams: true,
 		},
 		{
 			StreamName:    "WorkspaceEnvSecret",

@@ -39,8 +39,8 @@ func TestWorkspaceStoreIsRegisteredOnTheControlListenerOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, ok := with.controlServer.GetServiceInfo()[name]
-	if !ok || len(info.Methods) != 5 {
-		t.Fatalf("not registered on the control listener with its five calls: %+v", info)
+	if !ok || len(info.Methods) != 4 {
+		t.Fatalf("not registered on the control listener with its four calls: %+v", info)
 	}
 	if _, ok := with.outputServer.GetServiceInfo()[name]; ok {
 		t.Fatal("registered on the output listener")

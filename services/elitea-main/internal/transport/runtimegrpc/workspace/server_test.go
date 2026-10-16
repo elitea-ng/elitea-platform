@@ -3,11 +3,9 @@ package workspace_test
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -52,7 +50,6 @@ type fakeStore struct {
 	publishes []workspaceruntime.PublishRequest
 	claims    []workspaceruntime.ClaimRef
 	cloud     string
-	source    workspaceruntime.PullRequestSource
 	env       map[string]string
 }
 
@@ -135,38 +132,11 @@ func (f *fakeStore) Publish(_ context.Context, claim workspaceruntime.ClaimRef, 
 	return workspaceruntime.PublishResult{Seq: uint64(3 + len(f.publishes)), Refs: []workspaceruntime.Ref{{Name: workspaceruntime.RefCloud, SHA: f.cloud}}}, nil
 }
 
-func (f *fakeStore) PullRequestSource(_ context.Context, claim workspaceruntime.ClaimRef) (workspaceruntime.PullRequestSource, error) {
-	if err := f.check(claim); err != nil {
-		return workspaceruntime.PullRequestSource{}, err
-	}
-	if f.source.Blobs == nil {
-		return workspaceruntime.PullRequestSource{}, workspaceruntime.Refuse(workspaceruntime.RefusalNoUpstream)
-	}
-	return f.source, nil
-}
-
 func (f *fakeStore) EnvSecret(_ context.Context, claim workspaceruntime.ClaimRef) (map[string]string, error) {
 	if err := f.check(claim); err != nil {
 		return nil, err
 	}
 	return f.env, nil
-}
-
-type blobs map[string][]byte
-
-func (b blobs) ReadBlob(_ context.Context, oid string, _ int64) ([]byte, error) {
-	content, ok := b[oid]
-	if !ok {
-		return nil, errors.New("missing")
-	}
-	return content, nil
-}
-
-func (b blobs) add(content string) string {
-	sum := sha1.Sum([]byte(fmt.Sprintf("blob %d\x00%s", len(content), content)))
-	oid := hex.EncodeToString(sum[:])
-	b[oid] = []byte(content)
-	return oid
 }
 
 func newStore() *fakeStore {
@@ -414,62 +384,6 @@ func TestPublishRefusesAnyRefButCloudWithoutAskingTheStore(t *testing.T) {
 	}
 }
 
-func diffFrames(t *testing.T, client runtimev1.WorkspaceStoreServiceClient) []*runtimev1.WorkspacePullRequestDiffFrameV1 {
-	t.Helper()
-	stream, err := client.WorkspacePullRequestDiff(context.Background(), &runtimev1.WorkspacePullRequestDiffRequestV1{Claim: claim(2)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var frames []*runtimev1.WorkspacePullRequestDiffFrameV1
-	for {
-		frame, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			return frames
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		frames = append(frames, frame)
-	}
-}
-
-func TestPullRequestDiffStreamsTheHeaderAndTheDiff(t *testing.T) {
-	store := newStore()
-	client := dial(t, store, verifier{})
-	if frames := diffFrames(t, client); frames[0].GetRefusal().GetCode() != runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM {
-		t.Fatalf("no upstream: %v", frames)
-	}
-	content := blobs{}
-	big := strings.Repeat("a line of text\n", 5_000)
-	store.source = workspaceruntime.PullRequestSource{
-		Upstream:     workspaceruntime.UpstreamInfo{SHA: upstreamC, RemoteURL: "https://user:token@github.com/org/repo.git", Branch: "main"},
-		CloudSHA:     nextSHA,
-		UpstreamTree: workspaceruntime.Tree{"a.txt": {Mode: workspaceruntime.ModeFile, OID: content.add("old\n")}},
-		CloudTree: workspaceruntime.Tree{
-			"a.txt":   {Mode: workspaceruntime.ModeFile, OID: content.add("new\n")},
-			"big.txt": {Mode: workspaceruntime.ModeFile, OID: content.add(big)},
-		},
-		Blobs: content,
-	}
-	frames := diffFrames(t, client)
-	header := frames[0].GetHeader()
-	if header == nil || header.GetUpstreamSha() != upstreamC || header.GetUpstreamBranch() != "main" || header.GetFiles() != 2 ||
-		header.GetRemoteUrl() != "https://github.com/org/repo.git" {
-		t.Fatalf("header %v", frames[0])
-	}
-	var text []byte
-	for _, frame := range frames[1:] {
-		text = append(text, frame.GetChunk()...)
-	}
-	if uint64(len(text)) != header.GetBytes() || digest(text) != header.GetDiffSha256() || !strings.Contains(string(text), "-old\n+new\n") {
-		t.Fatal("the diff did not arrive intact")
-	}
-	store.source.CloudTree["logo.png"] = workspaceruntime.TreeFile{Mode: workspaceruntime.ModeFile, OID: content.add("\x00PNG")}
-	if frames := diffFrames(t, client); frames[0].GetRefusal().GetCode() != runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY {
-		t.Fatalf("binary: %v", frames)
-	}
-}
-
 func envFrames(t *testing.T, client runtimev1.WorkspaceStoreServiceClient, epoch uint64) []*runtimev1.WorkspaceEnvSecretFrameV1 {
 	t.Helper()
 	stream, err := client.WorkspaceEnvSecret(context.Background(), &runtimev1.WorkspaceEnvSecretRequestV1{Claim: claim(epoch)})
@@ -520,18 +434,5 @@ func TestEnvSecretStreamsTheThreadEnvWithinTheResponseBound(t *testing.T) {
 	store.env = map[string]string{"bad name": "x"}
 	if frames := envFrames(t, client, 2); frames[0].GetRejection() == nil {
 		t.Fatalf("invalid: %v", frames)
-	}
-}
-
-func TestUpstreamTrailerParsing(t *testing.T) {
-	info, ok := workspaceruntime.ParseUpstreamTrailer("Elitea upstream\n\nElitea-Upstream: " + upstreamC + " https://x:y@github.com/o/r.git feature/one\n")
-	if !ok || info.SHA != upstreamC || info.Branch != "feature/one" || info.RemoteURL != "https://github.com/o/r.git" {
-		t.Fatalf("%+v %v", info, ok)
-	}
-	if _, ok := workspaceruntime.ParseUpstreamTrailer("no trailer"); ok {
-		t.Fatal("parsed nothing")
-	}
-	if got := workspaceruntime.StripURLCredentials("git@github.com:o/r.git"); got != "github.com:o/r.git" {
-		t.Fatal(got)
 	}
 }

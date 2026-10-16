@@ -69,14 +69,10 @@ enum WorkspaceRefusalCodeV1 {
   WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT = 7;
   WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE = 8;
   WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED = 9;
-  // The thread has no refs/elitea/upstream: no pull request can be opened.
-  WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM = 10;
-  // The pull-request diff is over 1 MiB or 100 files.
-  WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE = 11;
-  // The pull-request diff changes a binary file.
-  WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY = 12;
-  // There is nothing to open a pull request with: the trees are equal.
-  WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY = 13;
+  // 10-13 were the pull-request diff's refusals: the worker computes that
+  // diff from its own unpacked repository now (Main reads no git pack).
+  reserved 10 to 13;
+  reserved "WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM", "WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE", "WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY", "WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY";
 }
 
 // WorkspaceRefusalV1 is a typed business refusal; rejection (RuntimeErrorV1)
@@ -185,41 +181,6 @@ message WorkspacePublishResponseV1 {
   reserved 5 to 15;
 }
 
-message WorkspacePullRequestDiffRequestV1 {
-  WorkspaceClaimV1 claim = 1;
-  reserved 2 to 15;
-}
-
-// What the pull request is opened against, from refs/elitea/upstream's
-// Elitea-Upstream trailer, and what the diff covers.
-message WorkspacePullRequestDiffHeaderV1 {
-  // The real upstream commit the desktop recorded.
-  string upstream_sha = 1;
-  // The upstream branch name: the pull request's base.
-  string upstream_branch = 2;
-  // The remote URL the desktop recorded, without credentials.
-  string remote_url = 3;
-  // The cloud tip the diff ends at.
-  string cloud_sha = 4;
-  uint32 files = 5;
-  uint64 bytes = 6;
-  // Lowercase hex SHA-256 of the whole diff text.
-  string diff_sha256 = 7;
-  reserved 8 to 15;
-}
-
-// The diff stream: one header frame, then the unified diff's chunks (at most
-// 32 KiB each). A refusal or rejection is the only frame of a refused stream.
-message WorkspacePullRequestDiffFrameV1 {
-  oneof frame {
-    WorkspacePullRequestDiffHeaderV1 header = 1;
-    bytes chunk = 2;
-    WorkspaceRefusalV1 refusal = 3;
-    RuntimeErrorV1 rejection = 4;
-  }
-  reserved 5 to 15;
-}
-
 message WorkspaceEnvSecretRequestV1 {
   WorkspaceClaimV1 claim = 1;
   reserved 2 to 15;
@@ -258,7 +219,6 @@ service WorkspaceStoreService {
   rpc WorkspaceFetchPlan(WorkspaceFetchPlanRequestV1) returns (stream WorkspaceFetchFrameV1);
   rpc WorkspaceUpload(stream WorkspaceUploadFrameV1) returns (WorkspaceUploadResponseV1);
   rpc WorkspacePublish(WorkspacePublishRequestV1) returns (WorkspacePublishResponseV1);
-  rpc WorkspacePullRequestDiff(WorkspacePullRequestDiffRequestV1) returns (stream WorkspacePullRequestDiffFrameV1);
   // The thread's harvested env, as a claim-bound runtime secret: only when the
   // runtime context's `workspace.env_secret` is true.
   rpc WorkspaceEnvSecret(WorkspaceEnvSecretRequestV1) returns (stream WorkspaceEnvSecretFrameV1);

@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"regexp"
 	"strings"
 )
@@ -63,10 +62,6 @@ const (
 	RefusalUnsupportedObjectFormat RefusalCode = "unsupported_object_format"
 	RefusalSegmentTooLarge         RefusalCode = "segment_too_large"
 	RefusalQuotaExceeded           RefusalCode = "workspace_quota_exceeded"
-	RefusalNoUpstream              RefusalCode = "no_upstream"
-	RefusalDiffTooLarge            RefusalCode = "diff_too_large"
-	RefusalDiffBinary              RefusalCode = "diff_binary"
-	RefusalDiffEmpty               RefusalCode = "diff_empty"
 )
 
 // Refusal is the error a Store returns for a business refusal.
@@ -158,49 +153,6 @@ type UploadResult struct {
 	Exists bool
 }
 
-// UpstreamInfo is refs/elitea/upstream's Elitea-Upstream trailer.
-type UpstreamInfo struct {
-	SHA       string
-	RemoteURL string
-	Branch    string
-}
-
-// FileMode is a git tree entry mode.
-type FileMode uint32
-
-const (
-	ModeFile       FileMode = 0o100644
-	ModeExecutable FileMode = 0o100755
-	ModeSymlink    FileMode = 0o120000
-	ModeGitlink    FileMode = 0o160000
-)
-
-// TreeFile is one file of a flattened tree.
-type TreeFile struct {
-	Mode FileMode
-	// OID is the blob id (40 lowercase hex).
-	OID string
-}
-
-// Tree is a flattened tree: slash-separated path → file.
-type Tree map[string]TreeFile
-
-// BlobReader reads one blob's bytes, at most limit+1 of them, so a caller can
-// tell "over the limit" without reading a whole large file.
-type BlobReader interface {
-	ReadBlob(ctx context.Context, oid string, limit int64) ([]byte, error)
-}
-
-// PullRequestSource is what Main reads from the store for a pull request:
-// the two trees (U and the cloud tip) and the upstream trailer.
-type PullRequestSource struct {
-	Upstream     UpstreamInfo
-	CloudSHA     string
-	UpstreamTree Tree
-	CloudTree    Tree
-	Blobs        BlobReader
-}
-
 // Store is what the executor's four gRPC calls need. The server unit
 // implements it over workspacestore/workspacehandoff. Every method first
 // resolves claim to its thread (the claim's execution is a cloud turn of a
@@ -220,9 +172,6 @@ type Store interface {
 	// Publish runs the publish transaction for refs/elitea/cloud only
 	// (RefusalRefNotAllowed for any other ref).
 	Publish(ctx context.Context, claim ClaimRef, request PublishRequest) (PublishResult, error)
-	// PullRequestSource reads the trees for a pull-request diff
-	// (RefusalNoUpstream without refs/elitea/upstream).
-	PullRequestSource(ctx context.Context, claim ClaimRef) (PullRequestSource, error)
 	// EnvSecret reads the thread's harvested env (ADR-0034 decision 5
 	// amendment, contract 6.4): the one per-thread vault secret the begin
 	// stored. An empty map when the thread has none. The values are never
@@ -290,40 +239,4 @@ func ValidateExecutorPublish(request PublishRequest) error {
 		return ErrInvalidRequest
 	}
 	return nil
-}
-
-// ParseUpstreamTrailer reads U's `Elitea-Upstream: <sha> <remote-url>
-// <branch>` trailer (decision 6) from a commit message. The last such
-// trailer wins, as git trailers do.
-func ParseUpstreamTrailer(message string) (UpstreamInfo, bool) {
-	var found UpstreamInfo
-	ok := false
-	for _, line := range strings.Split(message, "\n") {
-		value, has := strings.CutPrefix(strings.TrimRight(line, "\r"), "Elitea-Upstream:")
-		if !has {
-			continue
-		}
-		fields := strings.Fields(value)
-		if len(fields) != 3 || !ValidSHA1(fields[0]) || fields[2] == "" || len(fields[2]) > 255 {
-			continue
-		}
-		found = UpstreamInfo{SHA: fields[0], RemoteURL: StripURLCredentials(fields[1]), Branch: fields[2]}
-		ok = true
-	}
-	return found, ok
-}
-
-// StripURLCredentials removes a user-info part from a remote URL, so no
-// credential the desktop's remote carried reaches a worker or a log.
-func StripURLCredentials(remote string) string {
-	parsed, err := url.Parse(remote)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		// scp-like `git@github.com:org/repo.git`: drop the user part.
-		if at := strings.Index(remote, "@"); at >= 0 && !strings.Contains(remote[:at], "/") && strings.Contains(remote[at:], ":") {
-			return remote[at+1:]
-		}
-		return remote
-	}
-	parsed.User = nil
-	return parsed.String()
 }

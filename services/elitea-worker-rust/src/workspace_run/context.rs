@@ -53,6 +53,13 @@ pub(crate) struct WorkspaceRuntimeContext {
     /// The thread has harvested env (contract 6.4): the worker redeems it
     /// over `WorkspaceEnvSecret`. The values are never in this field.
     pub(crate) env_secret: bool,
+    /// This turn regenerates the newest cloud turn (ADR-0034 decision 7):
+    /// before it runs, `refs/elitea/cloud` moves back from
+    /// `expected_old_cloud` (the regenerated turn's commit) to its parent,
+    /// through the normal publish compare-and-set. Absent from an older
+    /// Main: false.
+    #[serde(default)]
+    pub(crate) rewind: bool,
 }
 
 impl WorkspaceRuntimeContext {
@@ -80,6 +87,9 @@ impl WorkspaceRuntimeContext {
             || limits.unpacked_bytes > limits.max_unpacked_bytes
         {
             return Err("the workspace limits are malformed");
+        }
+        if self.rewind && self.expected_old_cloud.is_none() {
+            return Err("a rewind without a cloud turn to rewind is malformed");
         }
         if !self.network && !self.network_allowlist.is_empty() {
             return Err("a network allowlist without network is malformed");
@@ -138,6 +148,7 @@ pub(crate) fn fixture() -> WorkspaceRuntimeContext {
         network_allowlist: Vec::new(),
         has_upstream: true,
         env_secret: false,
+        rewind: false,
     }
 }
 

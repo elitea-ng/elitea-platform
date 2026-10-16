@@ -107,7 +107,7 @@ func TestRuntimeContextServesTheWorkspaceFieldToAWorkerThatAsks(t *testing.T) {
 
 	var field map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(keys["workspace"], &field))
-	require.ElementsMatch(t, []string{"thread", "epoch", "expected_old_cloud", "limits", "network", "shell", "network_allowlist", "has_upstream", "env_secret"}, mapKeys(field))
+	require.ElementsMatch(t, []string{"thread", "epoch", "expected_old_cloud", "limits", "network", "shell", "network_allowlist", "has_upstream", "env_secret", "rewind"}, mapKeys(field))
 	var decoded workspaceruntime.RuntimeContext
 	require.NoError(t, json.Unmarshal(keys["workspace"], &decoded))
 	require.Equal(t, uint64(2), decoded.Epoch)
@@ -168,6 +168,26 @@ func TestRuntimeContextWithoutAComposedResolverIgnoresTheAccept(t *testing.T) {
 	response := redeem(t, server, "workspace")
 	require.Equal(t, http.StatusOK, response.Code)
 	require.Len(t, responseKeys(t, response.Body.Bytes()), 3)
+}
+
+// A regenerate of the newest cloud turn tells the worker to rewind the cloud
+// ref first; a rewind with no cloud turn to rewind is refused.
+func TestRuntimeContextServesTheRegenerateRewind(t *testing.T) {
+	t.Parallel()
+	turns, policies := cloudTurn(), enabledPolicy()
+	turns.turn.Rewind = true
+	server := workspaceTokenServer(t, turns, policies)
+	response := redeem(t, server, "workspace")
+	require.Equal(t, http.StatusOK, response.Code)
+	var decoded EliteaClientTokenContext
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &decoded))
+	require.NotNil(t, decoded.Workspace)
+	require.True(t, decoded.Workspace.Rewind)
+	require.Equal(t, *turns.turn.CloudSHA, *decoded.Workspace.ExpectedOldCloud)
+
+	turns.turn.CloudSHA = nil
+	response = redeem(t, server, "workspace")
+	require.NotEqual(t, http.StatusOK, response.Code)
 }
 
 func mapKeys(object map[string]json.RawMessage) []string {

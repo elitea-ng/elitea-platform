@@ -40,33 +40,21 @@ const (
 	WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT WorkspaceRefusalCodeV1 = 7
 	WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE         WorkspaceRefusalCodeV1 = 8
 	WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED            WorkspaceRefusalCodeV1 = 9
-	// The thread has no refs/elitea/upstream: no pull request can be opened.
-	WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM WorkspaceRefusalCodeV1 = 10
-	// The pull-request diff is over 1 MiB or 100 files.
-	WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE WorkspaceRefusalCodeV1 = 11
-	// The pull-request diff changes a binary file.
-	WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY WorkspaceRefusalCodeV1 = 12
-	// There is nothing to open a pull request with: the trees are equal.
-	WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY WorkspaceRefusalCodeV1 = 13
 )
 
 // Enum value maps for WorkspaceRefusalCodeV1.
 var (
 	WorkspaceRefusalCodeV1_name = map[int32]string{
-		0:  "WORKSPACE_REFUSAL_CODE_V1_UNSPECIFIED",
-		1:  "WORKSPACE_REFUSAL_CODE_V1_NOT_A_WORKSPACE_TURN",
-		2:  "WORKSPACE_REFUSAL_CODE_V1_STALE_EPOCH",
-		3:  "WORKSPACE_REFUSAL_CODE_V1_REF_CONFLICT",
-		4:  "WORKSPACE_REFUSAL_CODE_V1_REF_NOT_ALLOWED",
-		5:  "WORKSPACE_REFUSAL_CODE_V1_SEGMENT_MISSING",
-		6:  "WORKSPACE_REFUSAL_CODE_V1_CHECKSUM_MISMATCH",
-		7:  "WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT",
-		8:  "WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE",
-		9:  "WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED",
-		10: "WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM",
-		11: "WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE",
-		12: "WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY",
-		13: "WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY",
+		0: "WORKSPACE_REFUSAL_CODE_V1_UNSPECIFIED",
+		1: "WORKSPACE_REFUSAL_CODE_V1_NOT_A_WORKSPACE_TURN",
+		2: "WORKSPACE_REFUSAL_CODE_V1_STALE_EPOCH",
+		3: "WORKSPACE_REFUSAL_CODE_V1_REF_CONFLICT",
+		4: "WORKSPACE_REFUSAL_CODE_V1_REF_NOT_ALLOWED",
+		5: "WORKSPACE_REFUSAL_CODE_V1_SEGMENT_MISSING",
+		6: "WORKSPACE_REFUSAL_CODE_V1_CHECKSUM_MISMATCH",
+		7: "WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT",
+		8: "WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE",
+		9: "WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED",
 	}
 	WorkspaceRefusalCodeV1_value = map[string]int32{
 		"WORKSPACE_REFUSAL_CODE_V1_UNSPECIFIED":               0,
@@ -79,10 +67,6 @@ var (
 		"WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT": 7,
 		"WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE":         8,
 		"WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED":            9,
-		"WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM":               10,
-		"WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE":            11,
-		"WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY":               12,
-		"WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY":                13,
 	}
 )
 
@@ -1121,265 +1105,6 @@ func (x *WorkspacePublishResponseV1) GetRejection() *RuntimeErrorV1 {
 	return nil
 }
 
-type WorkspacePullRequestDiffRequestV1 struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Claim         *WorkspaceClaimV1      `protobuf:"bytes,1,opt,name=claim,proto3" json:"claim,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *WorkspacePullRequestDiffRequestV1) Reset() {
-	*x = WorkspacePullRequestDiffRequestV1{}
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WorkspacePullRequestDiffRequestV1) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WorkspacePullRequestDiffRequestV1) ProtoMessage() {}
-
-func (x *WorkspacePullRequestDiffRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WorkspacePullRequestDiffRequestV1.ProtoReflect.Descriptor instead.
-func (*WorkspacePullRequestDiffRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{14}
-}
-
-func (x *WorkspacePullRequestDiffRequestV1) GetClaim() *WorkspaceClaimV1 {
-	if x != nil {
-		return x.Claim
-	}
-	return nil
-}
-
-// What the pull request is opened against, from refs/elitea/upstream's
-// Elitea-Upstream trailer, and what the diff covers.
-type WorkspacePullRequestDiffHeaderV1 struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// The real upstream commit the desktop recorded.
-	UpstreamSha string `protobuf:"bytes,1,opt,name=upstream_sha,json=upstreamSha,proto3" json:"upstream_sha,omitempty"`
-	// The upstream branch name: the pull request's base.
-	UpstreamBranch string `protobuf:"bytes,2,opt,name=upstream_branch,json=upstreamBranch,proto3" json:"upstream_branch,omitempty"`
-	// The remote URL the desktop recorded, without credentials.
-	RemoteUrl string `protobuf:"bytes,3,opt,name=remote_url,json=remoteUrl,proto3" json:"remote_url,omitempty"`
-	// The cloud tip the diff ends at.
-	CloudSha string `protobuf:"bytes,4,opt,name=cloud_sha,json=cloudSha,proto3" json:"cloud_sha,omitempty"`
-	Files    uint32 `protobuf:"varint,5,opt,name=files,proto3" json:"files,omitempty"`
-	Bytes    uint64 `protobuf:"varint,6,opt,name=bytes,proto3" json:"bytes,omitempty"`
-	// Lowercase hex SHA-256 of the whole diff text.
-	DiffSha256    string `protobuf:"bytes,7,opt,name=diff_sha256,json=diffSha256,proto3" json:"diff_sha256,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *WorkspacePullRequestDiffHeaderV1) Reset() {
-	*x = WorkspacePullRequestDiffHeaderV1{}
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[15]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WorkspacePullRequestDiffHeaderV1) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WorkspacePullRequestDiffHeaderV1) ProtoMessage() {}
-
-func (x *WorkspacePullRequestDiffHeaderV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[15]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WorkspacePullRequestDiffHeaderV1.ProtoReflect.Descriptor instead.
-func (*WorkspacePullRequestDiffHeaderV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{15}
-}
-
-func (x *WorkspacePullRequestDiffHeaderV1) GetUpstreamSha() string {
-	if x != nil {
-		return x.UpstreamSha
-	}
-	return ""
-}
-
-func (x *WorkspacePullRequestDiffHeaderV1) GetUpstreamBranch() string {
-	if x != nil {
-		return x.UpstreamBranch
-	}
-	return ""
-}
-
-func (x *WorkspacePullRequestDiffHeaderV1) GetRemoteUrl() string {
-	if x != nil {
-		return x.RemoteUrl
-	}
-	return ""
-}
-
-func (x *WorkspacePullRequestDiffHeaderV1) GetCloudSha() string {
-	if x != nil {
-		return x.CloudSha
-	}
-	return ""
-}
-
-func (x *WorkspacePullRequestDiffHeaderV1) GetFiles() uint32 {
-	if x != nil {
-		return x.Files
-	}
-	return 0
-}
-
-func (x *WorkspacePullRequestDiffHeaderV1) GetBytes() uint64 {
-	if x != nil {
-		return x.Bytes
-	}
-	return 0
-}
-
-func (x *WorkspacePullRequestDiffHeaderV1) GetDiffSha256() string {
-	if x != nil {
-		return x.DiffSha256
-	}
-	return ""
-}
-
-// The diff stream: one header frame, then the unified diff's chunks (at most
-// 32 KiB each). A refusal or rejection is the only frame of a refused stream.
-type WorkspacePullRequestDiffFrameV1 struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Frame:
-	//
-	//	*WorkspacePullRequestDiffFrameV1_Header
-	//	*WorkspacePullRequestDiffFrameV1_Chunk
-	//	*WorkspacePullRequestDiffFrameV1_Refusal
-	//	*WorkspacePullRequestDiffFrameV1_Rejection
-	Frame         isWorkspacePullRequestDiffFrameV1_Frame `protobuf_oneof:"frame"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *WorkspacePullRequestDiffFrameV1) Reset() {
-	*x = WorkspacePullRequestDiffFrameV1{}
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[16]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WorkspacePullRequestDiffFrameV1) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WorkspacePullRequestDiffFrameV1) ProtoMessage() {}
-
-func (x *WorkspacePullRequestDiffFrameV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[16]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WorkspacePullRequestDiffFrameV1.ProtoReflect.Descriptor instead.
-func (*WorkspacePullRequestDiffFrameV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{16}
-}
-
-func (x *WorkspacePullRequestDiffFrameV1) GetFrame() isWorkspacePullRequestDiffFrameV1_Frame {
-	if x != nil {
-		return x.Frame
-	}
-	return nil
-}
-
-func (x *WorkspacePullRequestDiffFrameV1) GetHeader() *WorkspacePullRequestDiffHeaderV1 {
-	if x != nil {
-		if x, ok := x.Frame.(*WorkspacePullRequestDiffFrameV1_Header); ok {
-			return x.Header
-		}
-	}
-	return nil
-}
-
-func (x *WorkspacePullRequestDiffFrameV1) GetChunk() []byte {
-	if x != nil {
-		if x, ok := x.Frame.(*WorkspacePullRequestDiffFrameV1_Chunk); ok {
-			return x.Chunk
-		}
-	}
-	return nil
-}
-
-func (x *WorkspacePullRequestDiffFrameV1) GetRefusal() *WorkspaceRefusalV1 {
-	if x != nil {
-		if x, ok := x.Frame.(*WorkspacePullRequestDiffFrameV1_Refusal); ok {
-			return x.Refusal
-		}
-	}
-	return nil
-}
-
-func (x *WorkspacePullRequestDiffFrameV1) GetRejection() *RuntimeErrorV1 {
-	if x != nil {
-		if x, ok := x.Frame.(*WorkspacePullRequestDiffFrameV1_Rejection); ok {
-			return x.Rejection
-		}
-	}
-	return nil
-}
-
-type isWorkspacePullRequestDiffFrameV1_Frame interface {
-	isWorkspacePullRequestDiffFrameV1_Frame()
-}
-
-type WorkspacePullRequestDiffFrameV1_Header struct {
-	Header *WorkspacePullRequestDiffHeaderV1 `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
-}
-
-type WorkspacePullRequestDiffFrameV1_Chunk struct {
-	Chunk []byte `protobuf:"bytes,2,opt,name=chunk,proto3,oneof"`
-}
-
-type WorkspacePullRequestDiffFrameV1_Refusal struct {
-	Refusal *WorkspaceRefusalV1 `protobuf:"bytes,3,opt,name=refusal,proto3,oneof"`
-}
-
-type WorkspacePullRequestDiffFrameV1_Rejection struct {
-	Rejection *RuntimeErrorV1 `protobuf:"bytes,4,opt,name=rejection,proto3,oneof"`
-}
-
-func (*WorkspacePullRequestDiffFrameV1_Header) isWorkspacePullRequestDiffFrameV1_Frame() {}
-
-func (*WorkspacePullRequestDiffFrameV1_Chunk) isWorkspacePullRequestDiffFrameV1_Frame() {}
-
-func (*WorkspacePullRequestDiffFrameV1_Refusal) isWorkspacePullRequestDiffFrameV1_Frame() {}
-
-func (*WorkspacePullRequestDiffFrameV1_Rejection) isWorkspacePullRequestDiffFrameV1_Frame() {}
-
 type WorkspaceEnvSecretRequestV1 struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Claim         *WorkspaceClaimV1      `protobuf:"bytes,1,opt,name=claim,proto3" json:"claim,omitempty"`
@@ -1389,7 +1114,7 @@ type WorkspaceEnvSecretRequestV1 struct {
 
 func (x *WorkspaceEnvSecretRequestV1) Reset() {
 	*x = WorkspaceEnvSecretRequestV1{}
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[17]
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1401,7 +1126,7 @@ func (x *WorkspaceEnvSecretRequestV1) String() string {
 func (*WorkspaceEnvSecretRequestV1) ProtoMessage() {}
 
 func (x *WorkspaceEnvSecretRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[17]
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1414,7 +1139,7 @@ func (x *WorkspaceEnvSecretRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceEnvSecretRequestV1.ProtoReflect.Descriptor instead.
 func (*WorkspaceEnvSecretRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{17}
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *WorkspaceEnvSecretRequestV1) GetClaim() *WorkspaceClaimV1 {
@@ -1438,7 +1163,7 @@ type WorkspaceEnvVarV1 struct {
 
 func (x *WorkspaceEnvVarV1) Reset() {
 	*x = WorkspaceEnvVarV1{}
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[18]
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1450,7 +1175,7 @@ func (x *WorkspaceEnvVarV1) String() string {
 func (*WorkspaceEnvVarV1) ProtoMessage() {}
 
 func (x *WorkspaceEnvVarV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[18]
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1463,7 +1188,7 @@ func (x *WorkspaceEnvVarV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceEnvVarV1.ProtoReflect.Descriptor instead.
 func (*WorkspaceEnvVarV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{18}
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *WorkspaceEnvVarV1) GetName() string {
@@ -1499,7 +1224,7 @@ type WorkspaceEnvSecretFrameV1 struct {
 
 func (x *WorkspaceEnvSecretFrameV1) Reset() {
 	*x = WorkspaceEnvSecretFrameV1{}
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[19]
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1511,7 +1236,7 @@ func (x *WorkspaceEnvSecretFrameV1) String() string {
 func (*WorkspaceEnvSecretFrameV1) ProtoMessage() {}
 
 func (x *WorkspaceEnvSecretFrameV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[19]
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1524,7 +1249,7 @@ func (x *WorkspaceEnvSecretFrameV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceEnvSecretFrameV1.ProtoReflect.Descriptor instead.
 func (*WorkspaceEnvSecretFrameV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{19}
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *WorkspaceEnvSecretFrameV1) GetFrame() isWorkspaceEnvSecretFrameV1_Frame {
@@ -1607,7 +1332,7 @@ type WorkspaceEnvVarsV1 struct {
 
 func (x *WorkspaceEnvVarsV1) Reset() {
 	*x = WorkspaceEnvVarsV1{}
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[20]
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1619,7 +1344,7 @@ func (x *WorkspaceEnvVarsV1) String() string {
 func (*WorkspaceEnvVarsV1) ProtoMessage() {}
 
 func (x *WorkspaceEnvVarsV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[20]
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1632,7 +1357,7 @@ func (x *WorkspaceEnvVarsV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceEnvVarsV1.ProtoReflect.Descriptor instead.
 func (*WorkspaceEnvVarsV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{20}
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *WorkspaceEnvVarsV1) GetVars() []*WorkspaceEnvVarV1 {
@@ -1714,25 +1439,7 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x125\n" +
 	"\x04refs\x18\x02 \x03(\v2!.elitea.runtime.v1.WorkspaceRefV1R\x04refs\x12?\n" +
 	"\arefusal\x18\x03 \x01(\v2%.elitea.runtime.v1.WorkspaceRefusalV1R\arefusal\x12?\n" +
-	"\trejection\x18\x04 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x05\x10\x10\"d\n" +
-	"!WorkspacePullRequestDiffRequestV1\x129\n" +
-	"\x05claim\x18\x01 \x01(\v2#.elitea.runtime.v1.WorkspaceClaimV1R\x05claimJ\x04\b\x02\x10\x10\"\xfd\x01\n" +
-	" WorkspacePullRequestDiffHeaderV1\x12!\n" +
-	"\fupstream_sha\x18\x01 \x01(\tR\vupstreamSha\x12'\n" +
-	"\x0fupstream_branch\x18\x02 \x01(\tR\x0eupstreamBranch\x12\x1d\n" +
-	"\n" +
-	"remote_url\x18\x03 \x01(\tR\tremoteUrl\x12\x1b\n" +
-	"\tcloud_sha\x18\x04 \x01(\tR\bcloudSha\x12\x14\n" +
-	"\x05files\x18\x05 \x01(\rR\x05files\x12\x14\n" +
-	"\x05bytes\x18\x06 \x01(\x04R\x05bytes\x12\x1f\n" +
-	"\vdiff_sha256\x18\a \x01(\tR\n" +
-	"diffSha256J\x04\b\b\x10\x10\"\x9d\x02\n" +
-	"\x1fWorkspacePullRequestDiffFrameV1\x12M\n" +
-	"\x06header\x18\x01 \x01(\v23.elitea.runtime.v1.WorkspacePullRequestDiffHeaderV1H\x00R\x06header\x12\x16\n" +
-	"\x05chunk\x18\x02 \x01(\fH\x00R\x05chunk\x12A\n" +
-	"\arefusal\x18\x03 \x01(\v2%.elitea.runtime.v1.WorkspaceRefusalV1H\x00R\arefusal\x12A\n" +
-	"\trejection\x18\x04 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1H\x00R\trejectionB\a\n" +
-	"\x05frameJ\x04\b\x05\x10\x10\"^\n" +
+	"\trejection\x18\x04 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x05\x10\x10\"^\n" +
 	"\x1bWorkspaceEnvSecretRequestV1\x129\n" +
 	"\x05claim\x18\x01 \x01(\v2#.elitea.runtime.v1.WorkspaceClaimV1R\x05claimJ\x04\b\x02\x10\x10\"C\n" +
 	"\x11WorkspaceEnvVarV1\x12\x12\n" +
@@ -1745,7 +1452,7 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"\trejection\x18\x04 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1H\x00R\trejectionB\a\n" +
 	"\x05frameJ\x04\b\x05\x10\x10\"T\n" +
 	"\x12WorkspaceEnvVarsV1\x128\n" +
-	"\x04vars\x18\x01 \x03(\v2$.elitea.runtime.v1.WorkspaceEnvVarV1R\x04varsJ\x04\b\x02\x10\x10*\xa3\x05\n" +
+	"\x04vars\x18\x01 \x03(\v2$.elitea.runtime.v1.WorkspaceEnvVarV1R\x04varsJ\x04\b\x02\x10\x10*\x99\x05\n" +
 	"\x16WorkspaceRefusalCodeV1\x12)\n" +
 	"%WORKSPACE_REFUSAL_CODE_V1_UNSPECIFIED\x10\x00\x122\n" +
 	".WORKSPACE_REFUSAL_CODE_V1_NOT_A_WORKSPACE_TURN\x10\x01\x12)\n" +
@@ -1756,17 +1463,12 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"+WORKSPACE_REFUSAL_CODE_V1_CHECKSUM_MISMATCH\x10\x06\x127\n" +
 	"3WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT\x10\a\x12/\n" +
 	"+WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE\x10\b\x12,\n" +
-	"(WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED\x10\t\x12)\n" +
-	"%WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM\x10\n" +
-	"\x12,\n" +
-	"(WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE\x10\v\x12)\n" +
-	"%WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY\x10\f\x12(\n" +
-	"$WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY\x10\r2\xe7\x04\n" +
+	"(WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED\x10\t\"\x04\b\n" +
+	"\x10\r*%WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM*(WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE*%WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY*$WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY2\xde\x03\n" +
 	"\x15WorkspaceStoreService\x12p\n" +
 	"\x12WorkspaceFetchPlan\x12..elitea.runtime.v1.WorkspaceFetchPlanRequestV1\x1a(.elitea.runtime.v1.WorkspaceFetchFrameV10\x01\x12l\n" +
 	"\x0fWorkspaceUpload\x12).elitea.runtime.v1.WorkspaceUploadFrameV1\x1a,.elitea.runtime.v1.WorkspaceUploadResponseV1(\x01\x12o\n" +
-	"\x10WorkspacePublish\x12,.elitea.runtime.v1.WorkspacePublishRequestV1\x1a-.elitea.runtime.v1.WorkspacePublishResponseV1\x12\x86\x01\n" +
-	"\x18WorkspacePullRequestDiff\x124.elitea.runtime.v1.WorkspacePullRequestDiffRequestV1\x1a2.elitea.runtime.v1.WorkspacePullRequestDiffFrameV10\x01\x12t\n" +
+	"\x10WorkspacePublish\x12,.elitea.runtime.v1.WorkspacePublishRequestV1\x1a-.elitea.runtime.v1.WorkspacePublishResponseV1\x12t\n" +
 	"\x12WorkspaceEnvSecret\x12..elitea.runtime.v1.WorkspaceEnvSecretRequestV1\x1a,.elitea.runtime.v1.WorkspaceEnvSecretFrameV10\x01BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
@@ -1782,37 +1484,34 @@ func file_elitea_runtime_v1_workspace_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_runtime_v1_workspace_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_runtime_v1_workspace_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_elitea_runtime_v1_workspace_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_elitea_runtime_v1_workspace_proto_goTypes = []any{
-	(WorkspaceRefusalCodeV1)(0),               // 0: elitea.runtime.v1.WorkspaceRefusalCodeV1
-	(*WorkspaceClaimV1)(nil),                  // 1: elitea.runtime.v1.WorkspaceClaimV1
-	(*WorkspaceRefV1)(nil),                    // 2: elitea.runtime.v1.WorkspaceRefV1
-	(*WorkspaceRefUpdateV1)(nil),              // 3: elitea.runtime.v1.WorkspaceRefUpdateV1
-	(*WorkspaceRefusalV1)(nil),                // 4: elitea.runtime.v1.WorkspaceRefusalV1
-	(*WorkspaceSegmentV1)(nil),                // 5: elitea.runtime.v1.WorkspaceSegmentV1
-	(*WorkspaceFetchPlanRequestV1)(nil),       // 6: elitea.runtime.v1.WorkspaceFetchPlanRequestV1
-	(*WorkspaceFetchPlanV1)(nil),              // 7: elitea.runtime.v1.WorkspaceFetchPlanV1
-	(*WorkspaceSegmentEndV1)(nil),             // 8: elitea.runtime.v1.WorkspaceSegmentEndV1
-	(*WorkspaceFetchFrameV1)(nil),             // 9: elitea.runtime.v1.WorkspaceFetchFrameV1
-	(*WorkspaceUploadHeaderV1)(nil),           // 10: elitea.runtime.v1.WorkspaceUploadHeaderV1
-	(*WorkspaceUploadFrameV1)(nil),            // 11: elitea.runtime.v1.WorkspaceUploadFrameV1
-	(*WorkspaceUploadResponseV1)(nil),         // 12: elitea.runtime.v1.WorkspaceUploadResponseV1
-	(*WorkspacePublishRequestV1)(nil),         // 13: elitea.runtime.v1.WorkspacePublishRequestV1
-	(*WorkspacePublishResponseV1)(nil),        // 14: elitea.runtime.v1.WorkspacePublishResponseV1
-	(*WorkspacePullRequestDiffRequestV1)(nil), // 15: elitea.runtime.v1.WorkspacePullRequestDiffRequestV1
-	(*WorkspacePullRequestDiffHeaderV1)(nil),  // 16: elitea.runtime.v1.WorkspacePullRequestDiffHeaderV1
-	(*WorkspacePullRequestDiffFrameV1)(nil),   // 17: elitea.runtime.v1.WorkspacePullRequestDiffFrameV1
-	(*WorkspaceEnvSecretRequestV1)(nil),       // 18: elitea.runtime.v1.WorkspaceEnvSecretRequestV1
-	(*WorkspaceEnvVarV1)(nil),                 // 19: elitea.runtime.v1.WorkspaceEnvVarV1
-	(*WorkspaceEnvSecretFrameV1)(nil),         // 20: elitea.runtime.v1.WorkspaceEnvSecretFrameV1
-	(*WorkspaceEnvVarsV1)(nil),                // 21: elitea.runtime.v1.WorkspaceEnvVarsV1
-	(*ExecutionIdentityV1)(nil),               // 22: elitea.runtime.v1.ExecutionIdentityV1
-	(*ExecutionFenceV1)(nil),                  // 23: elitea.runtime.v1.ExecutionFenceV1
-	(*RuntimeErrorV1)(nil),                    // 24: elitea.runtime.v1.RuntimeErrorV1
+	(WorkspaceRefusalCodeV1)(0),         // 0: elitea.runtime.v1.WorkspaceRefusalCodeV1
+	(*WorkspaceClaimV1)(nil),            // 1: elitea.runtime.v1.WorkspaceClaimV1
+	(*WorkspaceRefV1)(nil),              // 2: elitea.runtime.v1.WorkspaceRefV1
+	(*WorkspaceRefUpdateV1)(nil),        // 3: elitea.runtime.v1.WorkspaceRefUpdateV1
+	(*WorkspaceRefusalV1)(nil),          // 4: elitea.runtime.v1.WorkspaceRefusalV1
+	(*WorkspaceSegmentV1)(nil),          // 5: elitea.runtime.v1.WorkspaceSegmentV1
+	(*WorkspaceFetchPlanRequestV1)(nil), // 6: elitea.runtime.v1.WorkspaceFetchPlanRequestV1
+	(*WorkspaceFetchPlanV1)(nil),        // 7: elitea.runtime.v1.WorkspaceFetchPlanV1
+	(*WorkspaceSegmentEndV1)(nil),       // 8: elitea.runtime.v1.WorkspaceSegmentEndV1
+	(*WorkspaceFetchFrameV1)(nil),       // 9: elitea.runtime.v1.WorkspaceFetchFrameV1
+	(*WorkspaceUploadHeaderV1)(nil),     // 10: elitea.runtime.v1.WorkspaceUploadHeaderV1
+	(*WorkspaceUploadFrameV1)(nil),      // 11: elitea.runtime.v1.WorkspaceUploadFrameV1
+	(*WorkspaceUploadResponseV1)(nil),   // 12: elitea.runtime.v1.WorkspaceUploadResponseV1
+	(*WorkspacePublishRequestV1)(nil),   // 13: elitea.runtime.v1.WorkspacePublishRequestV1
+	(*WorkspacePublishResponseV1)(nil),  // 14: elitea.runtime.v1.WorkspacePublishResponseV1
+	(*WorkspaceEnvSecretRequestV1)(nil), // 15: elitea.runtime.v1.WorkspaceEnvSecretRequestV1
+	(*WorkspaceEnvVarV1)(nil),           // 16: elitea.runtime.v1.WorkspaceEnvVarV1
+	(*WorkspaceEnvSecretFrameV1)(nil),   // 17: elitea.runtime.v1.WorkspaceEnvSecretFrameV1
+	(*WorkspaceEnvVarsV1)(nil),          // 18: elitea.runtime.v1.WorkspaceEnvVarsV1
+	(*ExecutionIdentityV1)(nil),         // 19: elitea.runtime.v1.ExecutionIdentityV1
+	(*ExecutionFenceV1)(nil),            // 20: elitea.runtime.v1.ExecutionFenceV1
+	(*RuntimeErrorV1)(nil),              // 21: elitea.runtime.v1.RuntimeErrorV1
 }
 var file_elitea_runtime_v1_workspace_proto_depIdxs = []int32{
-	22, // 0: elitea.runtime.v1.WorkspaceClaimV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	23, // 1: elitea.runtime.v1.WorkspaceClaimV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	19, // 0: elitea.runtime.v1.WorkspaceClaimV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	20, // 1: elitea.runtime.v1.WorkspaceClaimV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
 	0,  // 2: elitea.runtime.v1.WorkspaceRefusalV1.code:type_name -> elitea.runtime.v1.WorkspaceRefusalCodeV1
 	2,  // 3: elitea.runtime.v1.WorkspaceRefusalV1.current:type_name -> elitea.runtime.v1.WorkspaceRefV1
 	2,  // 4: elitea.runtime.v1.WorkspaceSegmentV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
@@ -1822,40 +1521,34 @@ var file_elitea_runtime_v1_workspace_proto_depIdxs = []int32{
 	7,  // 8: elitea.runtime.v1.WorkspaceFetchFrameV1.plan:type_name -> elitea.runtime.v1.WorkspaceFetchPlanV1
 	8,  // 9: elitea.runtime.v1.WorkspaceFetchFrameV1.segment_end:type_name -> elitea.runtime.v1.WorkspaceSegmentEndV1
 	4,  // 10: elitea.runtime.v1.WorkspaceFetchFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	24, // 11: elitea.runtime.v1.WorkspaceFetchFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	21, // 11: elitea.runtime.v1.WorkspaceFetchFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
 	1,  // 12: elitea.runtime.v1.WorkspaceUploadHeaderV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
 	10, // 13: elitea.runtime.v1.WorkspaceUploadFrameV1.header:type_name -> elitea.runtime.v1.WorkspaceUploadHeaderV1
 	4,  // 14: elitea.runtime.v1.WorkspaceUploadResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	24, // 15: elitea.runtime.v1.WorkspaceUploadResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	21, // 15: elitea.runtime.v1.WorkspaceUploadResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
 	1,  // 16: elitea.runtime.v1.WorkspacePublishRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
 	3,  // 17: elitea.runtime.v1.WorkspacePublishRequestV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefUpdateV1
 	2,  // 18: elitea.runtime.v1.WorkspacePublishResponseV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
 	4,  // 19: elitea.runtime.v1.WorkspacePublishResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	24, // 20: elitea.runtime.v1.WorkspacePublishResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	1,  // 21: elitea.runtime.v1.WorkspacePullRequestDiffRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
-	16, // 22: elitea.runtime.v1.WorkspacePullRequestDiffFrameV1.header:type_name -> elitea.runtime.v1.WorkspacePullRequestDiffHeaderV1
-	4,  // 23: elitea.runtime.v1.WorkspacePullRequestDiffFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	24, // 24: elitea.runtime.v1.WorkspacePullRequestDiffFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	1,  // 25: elitea.runtime.v1.WorkspaceEnvSecretRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
-	21, // 26: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarsV1
-	4,  // 27: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	24, // 28: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	19, // 29: elitea.runtime.v1.WorkspaceEnvVarsV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarV1
-	6,  // 30: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:input_type -> elitea.runtime.v1.WorkspaceFetchPlanRequestV1
-	11, // 31: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:input_type -> elitea.runtime.v1.WorkspaceUploadFrameV1
-	13, // 32: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:input_type -> elitea.runtime.v1.WorkspacePublishRequestV1
-	15, // 33: elitea.runtime.v1.WorkspaceStoreService.WorkspacePullRequestDiff:input_type -> elitea.runtime.v1.WorkspacePullRequestDiffRequestV1
-	18, // 34: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:input_type -> elitea.runtime.v1.WorkspaceEnvSecretRequestV1
-	9,  // 35: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:output_type -> elitea.runtime.v1.WorkspaceFetchFrameV1
-	12, // 36: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:output_type -> elitea.runtime.v1.WorkspaceUploadResponseV1
-	14, // 37: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:output_type -> elitea.runtime.v1.WorkspacePublishResponseV1
-	17, // 38: elitea.runtime.v1.WorkspaceStoreService.WorkspacePullRequestDiff:output_type -> elitea.runtime.v1.WorkspacePullRequestDiffFrameV1
-	20, // 39: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:output_type -> elitea.runtime.v1.WorkspaceEnvSecretFrameV1
-	35, // [35:40] is the sub-list for method output_type
-	30, // [30:35] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	21, // 20: elitea.runtime.v1.WorkspacePublishResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	1,  // 21: elitea.runtime.v1.WorkspaceEnvSecretRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	18, // 22: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarsV1
+	4,  // 23: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	21, // 24: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	16, // 25: elitea.runtime.v1.WorkspaceEnvVarsV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarV1
+	6,  // 26: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:input_type -> elitea.runtime.v1.WorkspaceFetchPlanRequestV1
+	11, // 27: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:input_type -> elitea.runtime.v1.WorkspaceUploadFrameV1
+	13, // 28: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:input_type -> elitea.runtime.v1.WorkspacePublishRequestV1
+	15, // 29: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:input_type -> elitea.runtime.v1.WorkspaceEnvSecretRequestV1
+	9,  // 30: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:output_type -> elitea.runtime.v1.WorkspaceFetchFrameV1
+	12, // 31: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:output_type -> elitea.runtime.v1.WorkspaceUploadResponseV1
+	14, // 32: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:output_type -> elitea.runtime.v1.WorkspacePublishResponseV1
+	17, // 33: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:output_type -> elitea.runtime.v1.WorkspaceEnvSecretFrameV1
+	30, // [30:34] is the sub-list for method output_type
+	26, // [26:30] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_workspace_proto_init() }
@@ -1878,12 +1571,6 @@ func file_elitea_runtime_v1_workspace_proto_init() {
 		(*WorkspaceUploadFrameV1_Chunk)(nil),
 	}
 	file_elitea_runtime_v1_workspace_proto_msgTypes[16].OneofWrappers = []any{
-		(*WorkspacePullRequestDiffFrameV1_Header)(nil),
-		(*WorkspacePullRequestDiffFrameV1_Chunk)(nil),
-		(*WorkspacePullRequestDiffFrameV1_Refusal)(nil),
-		(*WorkspacePullRequestDiffFrameV1_Rejection)(nil),
-	}
-	file_elitea_runtime_v1_workspace_proto_msgTypes[19].OneofWrappers = []any{
 		(*WorkspaceEnvSecretFrameV1_Vars)(nil),
 		(*WorkspaceEnvSecretFrameV1_EndCount)(nil),
 		(*WorkspaceEnvSecretFrameV1_Refusal)(nil),
@@ -1895,7 +1582,7 @@ func file_elitea_runtime_v1_workspace_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_workspace_proto_rawDesc), len(file_elitea_runtime_v1_workspace_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   21,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

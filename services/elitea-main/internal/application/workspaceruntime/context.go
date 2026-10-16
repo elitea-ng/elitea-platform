@@ -47,6 +47,11 @@ type Turn struct {
 	// EnvSecret: the begin stored harvested env for this thread. The values
 	// travel only over WorkspaceEnvSecret, never in this field.
 	EnvSecret bool
+	// Rewind: this execution regenerates the newest cloud turn (ADR-0034
+	// decision 7; the server allows only the newest). CloudSHA is that
+	// turn's commit; the worker moves refs/elitea/cloud back to its parent
+	// through the normal publish compare-and-set before the turn runs.
+	Rewind bool
 }
 
 // TurnResolver reads the claimed execution's handoff state. It returns
@@ -107,6 +112,9 @@ type RuntimeContext struct {
 	// EnvSecret tells the worker to redeem the thread's env over
 	// WorkspaceEnvSecret (contract 6.4). The values are never in this field.
 	EnvSecret bool `json:"env_secret"`
+	// Rewind: regenerate the newest cloud turn: move refs/elitea/cloud from
+	// ExpectedOldCloud back to its parent first (decision 7).
+	Rewind bool `json:"rewind"`
 }
 
 // ContextResolver builds the `workspace` field for one claimed execution.
@@ -143,7 +151,7 @@ func (r *ContextResolver) ResolveWorkspaceContext(ctx context.Context, claim Tur
 		return nil, nil
 	}
 	if !ValidThreadUUID(turn.ThreadUUID) || turn.Epoch == 0 || turn.Epoch > math.MaxInt64 ||
-		(turn.CloudSHA != nil && !ValidSHA1(*turn.CloudSHA)) {
+		(turn.CloudSHA != nil && !ValidSHA1(*turn.CloudSHA)) || (turn.Rewind && turn.CloudSHA == nil) {
 		return nil, ErrInvalidRequest
 	}
 	policy, err := r.policies.EffectiveCloudPolicy(ctx, claim.ProjectID, turn.ThreadUUID)
@@ -194,6 +202,7 @@ func (r *ContextResolver) ResolveWorkspaceContext(ctx context.Context, claim Tur
 		NetworkAllowlist: allowlistIf(policy.Network, allowlist),
 		HasUpstream:      turn.HasUpstream,
 		EnvSecret:        turn.EnvSecret,
+		Rewind:           turn.Rewind,
 	}, nil
 }
 

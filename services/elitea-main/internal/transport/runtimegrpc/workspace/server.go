@@ -12,7 +12,6 @@
 package workspace
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -314,59 +313,6 @@ func (s *Server) WorkspacePublish(ctx context.Context, request *runtimev1.Worksp
 	return &runtimev1.WorkspacePublishResponseV1{Seq: result.Seq, Refs: refsProto(result.Refs)}, nil
 }
 
-// WorkspacePullRequestDiff computes the diff U → cloud tip (decision 10) and
-// streams it: header, then chunks.
-func (s *Server) WorkspacePullRequestDiff(request *runtimev1.WorkspacePullRequestDiffRequestV1, stream runtimev1.WorkspaceStoreService_WorkspacePullRequestDiffServer) error {
-	ctx := stream.Context()
-	if request == nil {
-		return stream.Send(&runtimev1.WorkspacePullRequestDiffFrameV1{Frame: &runtimev1.WorkspacePullRequestDiffFrameV1_Rejection{Rejection: malformed()}})
-	}
-	claim, reject := s.authorize(ctx, request.GetClaim())
-	if reject != nil {
-		return stream.Send(&runtimev1.WorkspacePullRequestDiffFrameV1{Frame: &runtimev1.WorkspacePullRequestDiffFrameV1_Rejection{Rejection: reject}})
-	}
-	fail := func(stage string, err error) error {
-		if refusal, ok := refusalProto(err); ok {
-			return stream.Send(&runtimev1.WorkspacePullRequestDiffFrameV1{Frame: &runtimev1.WorkspacePullRequestDiffFrameV1_Refusal{Refusal: refusal}})
-		}
-		return stream.Send(&runtimev1.WorkspacePullRequestDiffFrameV1{Frame: &runtimev1.WorkspacePullRequestDiffFrameV1_Rejection{Rejection: s.storeRejection(ctx, stage, err)}})
-	}
-	source, err := s.store.PullRequestSource(ctx, claim)
-	if err != nil {
-		return fail("pull_request_source", err)
-	}
-	upstream := source.Upstream
-	if !workspaceruntime.ValidSHA1(upstream.SHA) || !workspaceruntime.ValidSHA1(source.CloudSHA) ||
-		!boundedText(upstream.Branch, 255) || !boundedText(upstream.RemoteURL, 2048) {
-		return fail("pull_request_source", workspaceruntime.Refuse(workspaceruntime.RefusalNoUpstream))
-	}
-	diff, err := workspaceruntime.ComputePullRequestDiff(ctx, source.UpstreamTree, source.CloudTree, source.Blobs)
-	if err != nil {
-		return fail("pull_request_diff", err)
-	}
-	header := &runtimev1.WorkspacePullRequestDiffHeaderV1{
-		UpstreamSha:    upstream.SHA,
-		UpstreamBranch: upstream.Branch,
-		RemoteUrl:      workspaceruntime.StripURLCredentials(upstream.RemoteURL),
-		CloudSha:       source.CloudSHA,
-		Files:          uint32(diff.Files),
-		Bytes:          uint64(len(diff.Text)),
-		DiffSha256:     diff.SHA256,
-	}
-	if err := stream.Send(&runtimev1.WorkspacePullRequestDiffFrameV1{Frame: &runtimev1.WorkspacePullRequestDiffFrameV1_Header{Header: header}}); err != nil {
-		return err
-	}
-	for remaining := diff.Text; len(remaining) > 0; {
-		size := min(ChunkBytes, len(remaining))
-		chunk := bytes.Clone(remaining[:size])
-		remaining = remaining[size:]
-		if err := stream.Send(&runtimev1.WorkspacePullRequestDiffFrameV1{Frame: &runtimev1.WorkspacePullRequestDiffFrameV1_Chunk{Chunk: chunk}}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // maxEnvFrameBytes keeps one env frame under the control listener's 80 KiB
 // response bound; a single variable is at most MaxEnvBytes (64 KiB).
 const maxEnvFrameBytes = 70 << 10
@@ -468,10 +414,6 @@ var refusalCodes = map[workspaceruntime.RefusalCode]runtimev1.WorkspaceRefusalCo
 	workspaceruntime.RefusalUnsupportedObjectFormat: runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT,
 	workspaceruntime.RefusalSegmentTooLarge:         runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE,
 	workspaceruntime.RefusalQuotaExceeded:           runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED,
-	workspaceruntime.RefusalNoUpstream:              runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM,
-	workspaceruntime.RefusalDiffTooLarge:            runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE,
-	workspaceruntime.RefusalDiffBinary:              runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY,
-	workspaceruntime.RefusalDiffEmpty:               runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY,
 }
 
 func refusalProto(err error) (*runtimev1.WorkspaceRefusalV1, bool) {
