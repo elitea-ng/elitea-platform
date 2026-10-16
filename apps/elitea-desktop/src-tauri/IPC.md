@@ -572,6 +572,13 @@ type HandoffEvent = { conversation_uuid: string;
   override: leave the file on the laptop or edit it. A cap rejects with
   `handoff_too_large` (`details` = `caps`), checked against the defaults
   before begin and against the begin response's `limits` before upload.
+  When the project's remaining cloud storage (`project_workspace_bytes_left`)
+  is the ONLY cap over, the code is the server's `workspace_quota_exceeded`
+  instead, with the same `caps` plus `details.bytes_left` and
+  `details.bytes_needed`; any other cap, alone or with the quota, stays
+  `handoff_too_large`. A publish that meets a busy thread (`409
+  thread_busy`) is sent again unchanged by the store client for up to 30 s
+  (it is never a conflict); after that the error code is `thread_busy`.
   The workspace is held (`workspace_busy`) while a send runs. Server codes
   pass through (`local_turn_in_progress`, `handoff_in_progress`,
   `thread_executor_is_cloud`, `workspace_quota_exceeded`,

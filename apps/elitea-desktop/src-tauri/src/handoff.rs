@@ -864,7 +864,7 @@ impl HandoffHost {
     ///
     /// # Errors
     ///
-    /// `secret_found` and `handoff_too_large` (with `details`),
+    /// `secret_found`, `handoff_too_large` and `workspace_quota_exceeded` (with `details`),
     /// `include_confirm_required`, `env_too_large`, `handoff_cancelled`, the
     /// server's refusals (`cloud_handoff_disabled`,
     /// `local_turn_in_progress`, `handoff_in_progress`,
@@ -1051,11 +1051,7 @@ impl HandoffHost {
         caps::check_segment(&mut before, written.bytes.len() as u64, &effective.limits);
         if !before.ok() {
             before.largest.clone_from(&snap.caps.largest);
-            return Err(HandoffError {
-                code: "handoff_too_large".into(),
-                message: "The folder is larger than this project allows to send.".into(),
-                details: serde_json::to_value(&before).unwrap_or(Value::Null),
-            });
+            return Err(quota_or_too_large(&before));
         }
         if switch.is_cancelled() {
             return Err(cancelled());
@@ -1189,11 +1185,7 @@ impl HandoffHost {
         caps::check_segment(&mut report, written.bytes.len() as u64, &server_caps);
         if !report.ok() {
             report.largest.clone_from(&snap.caps.largest);
-            return Err(HandoffError {
-                code: "handoff_too_large".into(),
-                message: "The folder is larger than this project allows to send.".into(),
-                details: serde_json::to_value(&report).unwrap_or(Value::Null),
-            });
+            return Err(quota_or_too_large(&report));
         }
         // The refs, under both allowlists.
         let allowed: Vec<String> = begin
@@ -1896,6 +1888,32 @@ fn preflight_files(
         files.push(change);
     }
     Ok((files, truncated))
+}
+
+/// The refusal for a failed cap check. When the project's remaining cloud
+/// storage is the only cap exceeded, the server's own code for it
+/// (`workspace_quota_exceeded`, with the figures); any per-segment, file or
+/// unpacked cap keeps `handoff_too_large` with the whole breakdown.
+fn quota_or_too_large(report: &caps::CapReport) -> HandoffError {
+    if let [quota] = report.violations.as_slice()
+        && quota.cap == "project_workspace_bytes_left"
+    {
+        let mut details = serde_json::to_value(report).unwrap_or(Value::Null);
+        if let Some(map) = details.as_object_mut() {
+            map.insert("bytes_left".into(), json!(quota.limit));
+            map.insert("bytes_needed".into(), json!(quota.actual));
+        }
+        return HandoffError {
+            code: "workspace_quota_exceeded".into(),
+            message: "This project's cloud storage does not have room for this folder.".into(),
+            details,
+        };
+    }
+    HandoffError {
+        code: "handoff_too_large".into(),
+        message: "The folder is larger than this project allows to send.".into(),
+        details: serde_json::to_value(report).unwrap_or(Value::Null),
+    }
 }
 
 fn refuse_blocked(snap: &Snapshot) -> Result<(), HandoffError> {

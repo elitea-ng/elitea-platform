@@ -783,7 +783,7 @@ async fn live_stale_epoch_erased_release_and_quota() {
         ),
     );
     // The desktop refuses before begin, with the quota in the caps list.
-    assert_eq!(refused.code, "handoff_too_large", "{refused:?}");
+    assert_eq!(refused.code, "workspace_quota_exceeded", "{refused:?}");
     assert_eq!(
         refused.details["violations"][0]["cap"],
         "project_workspace_bytes_left"

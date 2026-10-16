@@ -13,7 +13,8 @@ const MESSAGES: Readonly<Record<string, () => string>> = {
   secret_found: () => t('workspace.handoff.error.secret', 'Some files look like they hold secrets, so nothing was sent. Leave them on your laptop, or edit them, and try again.'),
   handoff_too_large: () => t('workspace.handoff.error.tooLarge', 'This folder is too large to send. The limits it went over are listed below.'),
   workspace_quota_exceeded: () =>
-    t('workspace.handoff.error.quota', 'This project’s cloud workspace storage is full. Erase another thread’s cloud copy, or ask a project admin to raise the quota.'),
+    t('workspace.handoff.error.quota', 'This project’s cloud storage does not have room for this folder. Erase another thread’s cloud copy, or ask a project admin to raise the quota.'),
+  thread_busy: () => t('workspace.handoff.error.threadBusy', 'Another change to this thread is still being saved. Try again in a moment.'),
   history_mode_not_allowed: () => t('workspace.handoff.error.history', 'This project does not allow sending the git history.'),
   local_turn_in_progress: () => t('workspace.handoff.error.localTurn', 'A turn in this thread has not been committed yet. Wait for it to finish, then send.'),
   workspace_busy: () => t('workspace.error.busy', 'An agent is still working in this folder. Wait for it to finish, or stop it, and try again.'),

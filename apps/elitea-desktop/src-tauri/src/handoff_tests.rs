@@ -911,11 +911,34 @@ async fn the_policy_is_read_before_begin_and_404_falls_back_to_defaults() {
         .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
         .await
         .unwrap_err();
-    assert_eq!(error.code, "handoff_too_large");
+    // The project's quota is what is exceeded: the server's own code.
+    assert_eq!(error.code, "workspace_quota_exceeded");
+    assert_eq!(error.details["bytes_left"], json!(10));
+    assert!(error.details["bytes_needed"].as_u64().unwrap() > 10);
     assert!(
         h.platform.lock().unwrap().begin.is_none(),
         "refused before begin"
     );
+    // A per-segment cap stays handoff_too_large; with the quota also over,
+    // the breakdown names both.
+    h.platform.lock().unwrap().policy = Some(server_policy(json!({
+        "limits": {"max_segment_bytes": 5, "max_file_bytes": 26_214_400, "max_files": 20000,
+                   "max_unpacked_bytes": 2_147_483_648_u64, "project_workspace_bytes_left": 10}
+    })));
+    let error = h
+        .host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "handoff_too_large");
+    let caps: Vec<&str> = error.details["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v["cap"].as_str())
+        .collect();
+    assert_eq!(caps, ["max_segment_bytes", "project_workspace_bytes_left"]);
+    assert!(h.platform.lock().unwrap().begin.is_none());
     // A policy that is off refuses at once.
     h.platform.lock().unwrap().policy = Some(server_policy(json!({"enabled": false})));
     assert_eq!(

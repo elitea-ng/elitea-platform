@@ -185,14 +185,14 @@ describe('SendToCloudDialog send', () => {
   it('shows the quota a send was refused for', async () => {
     const user = userEvent.setup();
     const ipc = createFakeHandoffIpc();
-    ipc.failNext('send', 'workspace_quota_exceeded', 'full', { quota_bytes: 1024 * 1024 * 1024, used_bytes: 1000 * 1024 * 1024 });
+    ipc.failNext('send', 'workspace_quota_exceeded', 'full', { bytes_left: 1024 * 1024 * 1024, bytes_needed: 1000 * 1024 * 1024, violations: [], largest: [] });
     mount(ipc);
     await waitFor(() => expect(sendButton()).toBeEnabled());
     await user.click(sendButton());
     const refusal = await screen.findByTestId('handoff-send-error');
-    expect(refusal).toHaveTextContent('cloud workspace storage is full');
-    expect(refusal).toHaveTextContent('quota bytes: 1.0 GB');
-    expect(refusal).toHaveTextContent('used bytes: 1000 MB');
+    expect(refusal).toHaveTextContent('cloud storage does not have room for this folder');
+    expect(refusal).toHaveTextContent('bytes left: 1.0 GB');
+    expect(refusal).toHaveTextContent('bytes needed: 1000 MB');
   });
 
   it.each([
@@ -426,6 +426,7 @@ describe('SendToCloudDialog cancel', () => {
   it.each([
     ['include_confirm_required', 'Confirm sending them for this send'],
     ['env_too_large', 'environment variables you chose are over the limit'],
+    ['thread_busy', 'still being saved'],
     ['path_denied', 'blocked by your organisation'],
   ])('says what %s means', async (code, text) => {
     const user = userEvent.setup();
