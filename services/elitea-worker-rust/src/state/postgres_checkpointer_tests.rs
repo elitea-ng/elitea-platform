@@ -2189,13 +2189,26 @@ async fn sandbox_submission(over_tls: bool) {
                 .unwrap()
                 .unwrap()
                 .unwrap();
-            assert!(matches!(
-                submission,
-                Ok(SandboxOutcome::Cancelled)
-                    | Err(crate::sandbox::client::SandboxCallError::Submission {
-                        code: tonic::Code::Aborted
-                    })
-            ));
+            let observed = match &submission {
+                Ok(SandboxOutcome::Pending) => "Ok(Pending)".to_owned(),
+                Ok(SandboxOutcome::Completed(_)) => "Ok(Completed)".to_owned(),
+                Ok(SandboxOutcome::Failed { code }) => format!("Ok(Failed {{ code: {code} }})"),
+                Ok(SandboxOutcome::Cancelled) => "Ok(Cancelled)".to_owned(),
+                Ok(SandboxOutcome::Uncertain { code }) => {
+                    format!("Ok(Uncertain {{ code: {code} }})")
+                }
+                Err(error) => format!("Err({error:?})"),
+            };
+            assert!(
+                matches!(
+                    submission,
+                    Ok(SandboxOutcome::Cancelled)
+                        | Err(crate::sandbox::client::SandboxCallError::Submission {
+                            code: tonic::Code::Aborted
+                        })
+                ),
+                "a submission stopped mid-dispatch returned {observed}"
+            );
         }
         drop(transport);
         stop.send(()).unwrap();
