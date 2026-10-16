@@ -375,7 +375,7 @@ func (g *GovernanceStore) UpdateUsage(
 		)
 		// Persist a durable outage-window delta so spend is not lost if this
 		// replica restarts before the breaker recovers.
-		g.persistOutageDelta(projectID, scope, scopeID, eventID, costNano, periodStartUnix, periodEndUnix, dims)
+		g.persistDelta(false, projectID, scope, scopeID, eventID, costNano, periodStartUnix, periodEndUnix, dims)
 	}
 
 	// Publish a write-behind delta regardless of whether the counter increment
@@ -407,12 +407,15 @@ func (g *GovernanceStore) UpdateUsage(
 		// increment fails, the write-behind consumer never sees an unpublished
 		// delta, and recovery replays Postgres onto NATS, never the other way.
 		// So the accumulator and the usage ledger lost that spend for good.
-		// It is written durably here instead. The write claims the event id
-		// in gateway.processed_event_ids, so a publish whose ack was lost but
-		// that the consumer later applies still bills once, and recovery's
-		// replay (accumulated − counter) adds nothing the counter already has.
+		// It is written durably here instead, as a HEALTHY row ([human
+		// decision] 2026-10-16, option A): marking it outage-owned while NATS
+		// is healthy made the consumer defer every other replica's delta for
+		// the scope until the next sweep, and under load those deferrals
+		// exhausted MaxDeliver. The write claims the event id in
+		// gateway.processed_event_ids, so a publish whose ack was lost but
+		// that the consumer later applies still bills once.
 		if incrErr == nil {
-			g.persistOutageDelta(projectID, scope, scopeID, eventID, costNano, periodStartUnix, periodEndUnix, dims)
+			g.persistDelta(true, projectID, scope, scopeID, eventID, costNano, periodStartUnix, periodEndUnix, dims)
 		}
 		g.log.Warn("governance: PublishDelta failed; the delta is persisted for reconciliation",
 			slog.String("event_id", eventID),
@@ -424,11 +427,18 @@ func (g *GovernanceStore) UpdateUsage(
 	return nil
 }
 
-// persistOutageDelta writes one billed delta durably to the accumulator as an
-// outage-window row (failmode.Store.PersistOutageDelta). It runs off the
-// request path, so a slow Postgres write does not stall /llm, and Drain waits
-// for it on shutdown.
-func (g *GovernanceStore) persistOutageDelta(
+// persistDelta writes one billed delta durably to the accumulator, off the
+// request path (a slow Postgres write must not stall /llm); Drain waits for it
+// on shutdown.
+//
+// healthy=false is the NATS-outage write (failmode.Store.PersistOutageDelta):
+// the counter increment failed, the row becomes outage-owned, and recovery
+// later replays it onto NATS. healthy=true is the delta whose increment
+// SUCCEEDED but whose publish failed (failmode.Store.PersistHealthyDelta,
+// [human decision] 2026-10-16 option A): written as the consumer would, so the
+// row stays healthy and no other replica's delta is deferred.
+func (g *GovernanceStore) persistDelta(
+	healthy bool,
 	projectID int,
 	scope, scopeID, eventID string,
 	costNano int64,
@@ -457,8 +467,12 @@ func (g *GovernanceStore) persistOutageDelta(
 		defer g.persistWg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		if err := g.store.PersistOutageDelta(ctx, outageDelta); err != nil {
-			g.log.Warn("governance: PersistOutageDelta failed during NATS outage",
+		persist, what := g.store.PersistOutageDelta, "governance: PersistOutageDelta failed during NATS outage"
+		if healthy {
+			persist, what = g.store.PersistHealthyDelta, "governance: PersistHealthyDelta failed after a failed delta publish"
+		}
+		if err := persist(ctx, outageDelta); err != nil {
+			g.log.Warn(what,
 				slog.String("event_id", eventID),
 				slog.Any("err", err),
 			)

@@ -372,6 +372,89 @@ func (s *Store) PersistOutageDelta(ctx context.Context, d OutageDelta) error {
 	return nil
 }
 
+// healthyUpsertSQL is the write-back consumer's guarded accumulator UPSERT
+// (services/elitea-scheduler/internal/budgetwriteback/store.go upsertSQL),
+// byte-for-byte in effect: it writes outage_mode=false on a fresh row and adds
+// to an existing row only while that row is NOT outage-owned. Zero rows
+// affected means the guard blocked it.
+//
+// $1 project_id, $2 org_id, $3 scope, $4 scope_id, $5 period_start,
+// $6 period_end, $7 delta_nano.
+var healthyUpsertSQL = fmt.Sprintf(`INSERT INTO gateway.llm_budget_accumulators AS acc
+		(project_id, org_id, scope, scope_id, period_start, period_end,
+		 accumulated_cost, outage_mode, reconciled, last_updated)
+	VALUES ($1, $2, $3, $4, to_timestamp($5), to_timestamp($6),
+		$7::numeric / %d, false, false, now())
+	ON CONFLICT (scope, scope_id, period_start) DO UPDATE SET
+		accumulated_cost = acc.accumulated_cost + EXCLUDED.accumulated_cost,
+		last_updated = now()
+	WHERE NOT (acc.outage_mode AND NOT acc.reconciled)`, NanoUSD)
+
+// PersistHealthyDelta durably writes one billed delta that is ALREADY on the
+// authoritative NATS counter but whose write-behind publish failed
+// ([human decision] 2026-10-16, option A; DECISIONS.md "Healthy write").
+//
+// It is what the write-back consumer would have done with the delta, in one
+// transaction: claim the event id, append the usage-ledger row, and apply the
+// GUARDED healthy UPSERT, which leaves outage_mode=false. It does NOT mark the
+// row outage-owned. The outage write did, and while NATS was healthy that
+// made the consumer defer every other replica's delta for the scope until the
+// next sweep; under load those deferrals exhausted MaxDeliver and were lost.
+//
+// Only when the guard blocks (the row is ALREADY outage-owned by a real
+// outage) does it fall back to outageUpsertSQL, which adds to that row and
+// leaves it outage-owned: the recovery pass then replays it as before, and no
+// new deferral starts. The event-id claim keeps the write exactly-once against
+// a lost-ack redelivery of the same delta to the consumer, in both branches.
+func (s *Store) PersistHealthyDelta(ctx context.Context, d OutageDelta) error {
+	if err := d.validate(); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var claimed string
+	switch err := tx.QueryRow(ctx, outageDedupSQL, d.EventID).Scan(&claimed); {
+	case errors.Is(err, pgx.ErrNoRows):
+		// The consumer already applied this event: nothing to add.
+		return nil
+	case err != nil:
+		return fmt.Errorf("failmode: claim healthy event id: %w", err)
+	}
+	affected, err := tx.ExecAffected(ctx, healthyUpsertSQL,
+		d.ProjectID, d.OrgID, d.Scope, d.ScopeID,
+		d.PeriodStart, d.PeriodEnd, d.DeltaNanoUSD,
+	)
+	if err != nil {
+		return fmt.Errorf("failmode: persist healthy delta: %w", err)
+	}
+	if affected == 0 {
+		if _, err := tx.ExecAffected(ctx, outageUpsertSQL,
+			d.ProjectID, d.OrgID, d.Scope, d.ScopeID,
+			d.PeriodStart, d.PeriodEnd, d.DeltaNanoUSD,
+		); err != nil {
+			return fmt.Errorf("failmode: persist delta onto an outage-owned row: %w", err)
+		}
+	}
+	if d.Usage != nil {
+		if _, err := tx.ExecAffected(ctx, usageEventInsertSQL,
+			d.EventID, d.ProjectID, d.Usage.UserID, d.Usage.Provider, d.Usage.Model,
+			d.Usage.PromptTokens, d.Usage.CompletionTokens,
+			d.DeltaNanoUSD, d.PeriodStart, d.PeriodEnd, d.Usage.OccurredAtUnix,
+			nullableExecutionID(d.Usage.ExecutionID),
+		); err != nil {
+			return fmt.Errorf("failmode: persist healthy usage event: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failmode: commit healthy delta: %w", err)
+	}
+	return nil
+}
+
 // usageEventInsertSQL appends one billed request to the per-request usage
 // ledger (issue #320). It is written here and, on the healthy path, by the
 // scheduler's write-back consumer; both use this same shape.

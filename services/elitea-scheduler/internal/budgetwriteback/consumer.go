@@ -27,7 +27,36 @@ type Message interface {
 	Data() []byte
 	Ack() error
 	Nak() error
+	NakWithDelay(delay time.Duration) error
 	Term() error
+	Metadata() (*jetstream.MsgMetadata, error)
+}
+
+// The redelivery backoff for a delta that cannot be applied yet ([human
+// decision] 2026-10-16, "Healthy write", consumer half).
+//
+// A bare Nak redelivers at once. A delta deferred by an outage-owned row (the
+// row stays outage-owned until the gateway's recovery sweep, every 30s) was
+// therefore redelivered back-to-back, and a busy stream spent the consumer's
+// MaxDeliver (10) in about a second and dropped the delta: money lost from the
+// accumulator and the usage ledger. The delay now starts at 5s and doubles per
+// delivery, to a 60s ceiling, so one deferral spans the sweep it waits for. The
+// nats-bootstrap chart sets MaxDeliver to -1 for this consumer: with a delayed
+// retry, the only bound a deferred delta needs is the stream's own MaxAge
+// (72h), and a finite cap only decides when real money is dropped.
+const (
+	redeliverBaseDelay = 5 * time.Second
+	redeliverMaxDelay  = 60 * time.Second
+)
+
+// redeliverDelay is the wait before the next delivery of a message delivered
+// `delivered` times so far (1 on the first delivery).
+func redeliverDelay(delivered uint64) time.Duration {
+	delay := redeliverBaseDelay
+	for i := uint64(1); i < delivered && delay < redeliverMaxDelay; i++ {
+		delay *= 2
+	}
+	return min(delay, redeliverMaxDelay)
 }
 
 // Fetcher pulls the next batch of messages. The real implementation wraps a
@@ -257,9 +286,15 @@ func (c *Consumer) ackAll(items []decoded) {
 	}
 }
 
+// nakAll defers every message of a group with the delivery-count backoff
+// (redeliverDelay), never a bare Nak: see redeliverBaseDelay.
 func (c *Consumer) nakAll(items []decoded) {
 	for _, it := range items {
-		if err := it.msg.Nak(); err != nil {
+		var delivered uint64 = 1
+		if meta, err := it.msg.Metadata(); err == nil && meta != nil && meta.NumDelivered > 0 {
+			delivered = meta.NumDelivered
+		}
+		if err := it.msg.NakWithDelay(redeliverDelay(delivered)); err != nil {
 			c.logger.Warn("budgetwriteback: nak failed", "event_id", it.delta.EventID, "err", err)
 		}
 	}
@@ -345,6 +380,14 @@ func Bind(ctx context.Context, js jetstream.JetStream, db DB, cfg Config, logger
 	}
 	if err := verifyConsumer(cons.CachedInfo().Config); err != nil {
 		return nil, fmt.Errorf("consumer %s/%s: %w; it is configured by the nats-bootstrap Job — re-run it", DeltasStream, DurableName, err)
+	}
+	if maxDeliver := cons.CachedInfo().Config.MaxDeliver; maxDeliver > 0 {
+		// Not a refusal: an older bootstrap left the finite cap, and the next
+		// bootstrap run reconciles it. Until then a delta deferred longer than
+		// the backoff spans is still dropped, so say so.
+		logger.Warn("budgetwriteback: the consumer drops a delta after a finite number of deliveries; "+
+			"re-run the nats-bootstrap Job so a delta deferred by an outage is kept (MaxDeliver -1)",
+			"max_deliver", maxDeliver)
 	}
 	fetcher := &jsFetcher{cons: cons, batch: cfg.BatchSize, wait: cfg.FetchWait}
 	return NewConsumer(fetcher, NewStore(db), logger), nil

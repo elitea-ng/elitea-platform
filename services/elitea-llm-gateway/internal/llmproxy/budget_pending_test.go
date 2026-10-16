@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/maximhq/bifrost/core/schemas"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 )
 
 // assertPendingRefusal checks the 503 body: the OpenAI shape every /llm route
@@ -170,5 +172,96 @@ func TestBudgetPending_InstallUnderLoadServesNothingUnenforced(t *testing.T) {
 	}
 	if checks, served := gate.checkCalls.Load(), router.calls.Load(); checks < served {
 		t.Fatalf("%d dispatches but only %d budget checks: a request bypassed the gate", served, checks)
+	}
+}
+
+// TestBudgetPending_InstalledGateDecidesEveryLaterRequest is the version of the
+// install-under-load test that CAN fail: the installed gate refuses every
+// request (Block402). Traffic runs across the install. Every response is a 503
+// before it and a 402 after it, nothing else, and no request ever reaches the
+// provider. A request admitted by the pending window, or one that skipped the
+// gate after the install, would be a 200 and a provider call.
+func TestBudgetPending_InstalledGateDecidesEveryLaterRequest(t *testing.T) {
+	router := &concurrentRouter{}
+	h := NewHandler(router, nil, nil, WithBudgetEnforcementPending())
+	gate := &fakeBudgetChecker{
+		checkVerdict: failmode.Decision{Verdict: failmode.Block402, State: failmode.StateNATSHealthy},
+		updated:      make(chan struct{}),
+	}
+
+	var (
+		pending, refused, other atomic.Int64
+		installed               atomic.Bool
+		afterInstall            atomic.Int64
+	)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	const workers = 8
+	for range workers {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				wasInstalled := installed.Load()
+				rec := httptest.NewRecorder()
+				h.Chat(rec, chatReqWithProject(t, "42", false))
+				switch rec.Code {
+				case http.StatusServiceUnavailable:
+					pending.Add(1)
+					if wasInstalled {
+						// Started after the install yet refused as pending.
+						other.Add(1)
+					}
+				case http.StatusPaymentRequired:
+					refused.Add(1)
+					if wasInstalled {
+						afterInstall.Add(1)
+					}
+				default:
+					other.Add(1)
+				}
+			}
+		}()
+	}
+	stopAll := func() {
+		close(stop)
+		for range workers {
+			<-done
+		}
+	}
+	wait := func(what string, cond func() bool) {
+		deadline := time.Now().Add(5 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				stopAll()
+				t.Fatalf("timed out waiting for %s", what)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	wait("pending refusals", func() bool { return pending.Load() >= 32 })
+	if !h.InstallBudgetEnforcement(BudgetEnforcement{Gate: gate, Calc: &fakeCostEstimator{totalNano: 1}}) {
+		stopAll()
+		t.Fatal("InstallBudgetEnforcement refused the first install")
+	}
+	installed.Store(true)
+	wait("gate refusals after the install", func() bool { return afterInstall.Load() >= 32 })
+	stopAll()
+
+	if n := router.calls.Load(); n != 0 {
+		t.Fatalf("%d requests reached the provider; every one must be refused (503 pending, 402 gate)", n)
+	}
+	if n := other.Load(); n != 0 {
+		t.Fatalf("%d responses were neither the pending 503 nor the gate's 402", n)
+	}
+	if checks := gate.checkCalls.Load(); checks != refused.Load() {
+		t.Fatalf("the gate decided %d requests but %d were refused with 402", checks, refused.Load())
+	}
+	if n := gate.updateCalls.Load(); n != 0 {
+		t.Fatalf("%d refused requests were billed", n)
 	}
 }

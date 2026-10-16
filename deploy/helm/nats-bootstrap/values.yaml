@@ -90,8 +90,15 @@ deltas:
     # How long JetStream waits for an ack before redelivering. Must exceed the
     # scheduler's worst-case batch apply time (design §8.6 at-least-once).
     ackWait: "30s"
-    # Redelivery attempts for a delta that keeps failing to apply.
-    maxDeliver: 10
+    # Redelivery attempts for a delta that cannot be applied yet. -1 (no cap),
+    # [human decision] 2026-10-16. The scheduler defers with a growing delay
+    # (5s doubling to 60s, budgetwriteback.redeliverDelay), not a bare Nak.
+    # A delta waits while its accumulator row is outage-owned. That lasts
+    # until the gateway's recovery sweep (30s), and longer in a real NATS
+    # outage. A finite cap only decides when that money is dropped: 10 bare
+    # Naks were spent in about a second. The bound is the stream's maxAge
+    # (72h). Undecodable or invalid deltas are terminated, never redelivered.
+    maxDeliver: -1
 
 # ELITEA_CANVAS_PRESENCE KV TTL. At least elitea-main's 120s roster TTL, or a
 # heartbeat's entry is collected before its own deadline.

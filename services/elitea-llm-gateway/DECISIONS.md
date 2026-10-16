@@ -367,16 +367,53 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   `InstallBudgetEnforcement` clears the flag in the same atomic publish that
   installs the gate. `LLM_BUDGET_REQUIRE_ENFORCEMENT=off` keeps the documented
   "serve unmetered on purpose" posture, and a gateway with no
-  `GATEWAY_NATS_URL` is never pending. *Also:* `UpdateUsage` now persists the
-  outage delta when `PublishDelta` fails after a SUCCESSFUL increment. Before,
-  that delta reached neither the consumer nor the outage row, and recovery only
-  replays Postgres onto NATS, so the accumulator and the usage ledger lost it.
-  The event-id claim keeps it exactly-once against a lost-ack redelivery.
-  Guarded by `TestBudgetPending_RefusesEverySpendRouteBeforeTheProvider`,
-  `TestBudgetPending_InstallUnderLoadServesNothingUnenforced`,
-  `TestPendingRefusesSpend_FollowsTheEnforcementMode`, the
-  `llmproxy.WithBudgetEnforcementPending(` wiring-gate entry, and
-  `TestOutageWedge_PublishFailureAfterAGoodIncrementIsNotLost`.
+  `GATEWAY_NATS_URL` is never pending. The decision lives in
+  `budgetPendingOpts` (cmd/elitea-llm-gateway/main.go). With NATS configured
+  and NO database pool, the recovery loop cannot run, so the 503 lasts until a
+  restart with a working `DATABASE_URL`. It stays fail-closed, and the
+  `BUDGET ENFORCEMENT PENDING` log says so and names the reason.
+  Guarded by `TestBudgetPending_EveryInferenceRouteIsRefused` (every
+  `inference` route in `internal/api/testdata/llm_route_classes.txt`, through
+  `api.NewRouter`), `TestBudgetPending_RealtimeWebSocketHandshakeIsRefused`,
+  `TestBudgetPending_InstalledGateDecidesEveryLaterRequest`,
+  `TestBudgetPendingOpts_ComposesTheBootWindowDecision`,
+  `TestBudgetPendingOpts_NoPoolStaysClosedAndSaysUntilRestart`, and the
+  `budgetPendingOpts(` / `llmproxy.WithBudgetEnforcementPending(` wiring-gate
+  entries.
+- **2026-10-16 — a delta whose publish failed after a GOOD increment is written
+  as a HEALTHY row, and the write-back consumer backs off its deferrals.
+  [human decision] (owner, 2026-10-16: "Healthy write", option A, plus the
+  consumer backoff).** *Finding:* when `PublishDelta` fails after a successful
+  increment, nothing wrote the delta durably. The consumer never saw it, the
+  outage write runs only on a failed increment, and recovery replays Postgres
+  onto NATS, never the other way. The first fix wrote it as an OUTAGE row. The
+  gateway review found the cost: with NATS healthy, the row stayed
+  outage-owned until the next sweep (up to 30s). The scheduler consumer then
+  deferred every other replica's healthy delta for the scope with a bare
+  `Nak()`. With `MaxDeliver` 10 and no backoff, a busy stream spent the 10
+  deliveries in about a second and dropped them from the accumulator and the
+  usage ledger. A failed increment on `main` reaches the same storm.
+  *Decision, gateway:* `failmode.Store.PersistHealthyDelta` does what the
+  consumer would do, in one transaction. It claims `processed_event_ids`,
+  applies the consumer's guarded UPSERT (`outage_mode=false`), and inserts the
+  usage-ledger row. It falls back to the outage UPSERT only when the guard
+  blocks, which happens only when a real outage already owns the row. The event-id claim keeps it
+  exactly-once against a lost-ack redelivery of the same event.
+  *Decision, scheduler:* the consumer defers with
+  `NakWithDelay(redeliverDelay(NumDelivered))`: 5s, doubling, to a 60s
+  ceiling. So one deferral spans the 30s sweep it waits for, and ten span more
+  than seven minutes. The nats-bootstrap chart sets the `budget-writeback`
+  consumer to `MaxDeliver` -1. With a delayed retry, the only bound a deferred
+  delta needs is the stream's `MaxAge` (72h). A finite cap only decides when
+  real money is dropped during a legitimate outage. Undecodable and invalid
+  deltas are terminated, never redelivered. The runtime command consumers
+  already run at -1. The scheduler warns when it binds a consumer that still
+  has a finite cap. Guarded by
+  `TestOutageWedge_PublishFailureAfterAGoodIncrementIsNotLost` (a MaxDeliver-
+  capped modelled consumer, replica B's delta, the usage-ledger row). The test
+  fails with the outage-path write. Also guarded by
+  `TestOutageWedge_PublishFailureOntoAnOutageOwnedRowStaysOutageOwned` and the
+  scheduler's `TestProcessBatch_DeferralBacksOffByDeliveryCount`.
 
 ## Authored governance (issue #218, 2026-08-23)
 

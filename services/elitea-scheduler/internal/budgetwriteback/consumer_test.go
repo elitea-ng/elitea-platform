@@ -25,6 +25,18 @@ type fakeMessage struct {
 	acks      atomic.Int32
 	naks      atomic.Int32
 	term      atomic.Int32
+	delivered uint64 // NumDelivered metadata; 0 reads as 1
+	delays    []time.Duration
+}
+
+func (m *fakeMessage) NakWithDelay(delay time.Duration) error {
+	m.naks.Add(1)
+	m.delays = append(m.delays, delay)
+	return m.settleErr
+}
+
+func (m *fakeMessage) Metadata() (*jetstream.MsgMetadata, error) {
+	return &jetstream.MsgMetadata{NumDelivered: m.delivered}, nil
 }
 
 func msg(d BudgetDelta) *fakeMessage {
@@ -187,6 +199,39 @@ func TestProcessBatch_DeferredIsNakd(t *testing.T) {
 	}
 	if m.acks.Load() != 0 {
 		t.Error("deferred group must not ack")
+	}
+}
+
+// [human decision] 2026-10-16: a deferred delta is redelivered with a delay
+// that grows with its delivery count, never at once. A bare Nak spent
+// MaxDeliver in about a second while a row waited for the 30s recovery sweep,
+// and the delta was dropped.
+func TestProcessBatch_DeferralBacksOffByDeliveryCount(t *testing.T) {
+	for _, tc := range []struct {
+		delivered uint64
+		want      time.Duration
+	}{
+		{0, 5 * time.Second}, {1, 5 * time.Second}, {2, 10 * time.Second},
+		{3, 20 * time.Second}, {4, 40 * time.Second}, {5, 60 * time.Second},
+		{1000, 60 * time.Second},
+	} {
+		tx := &fakeTx{alreadyApplied: map[string]bool{}, upsertAffected: 0} // outage row
+		c, _ := newConsumerWith(tx)
+		m := msg(validDelta())
+		m.delivered = tc.delivered
+		c.processBatch(context.Background(), []Message{m})
+		if len(m.delays) != 1 || m.delays[0] != tc.want {
+			t.Errorf("delivered=%d: deferral delays = %v, want [%v]", tc.delivered, m.delays, tc.want)
+		}
+	}
+	// Ten deliveries, the old MaxDeliver, now span more than ten recovery
+	// sweeps (30s each) instead of about a second.
+	var span time.Duration
+	for delivered := uint64(1); delivered <= 10; delivered++ {
+		span += redeliverDelay(delivered)
+	}
+	if span < 10*30*time.Second {
+		t.Fatalf("ten deferrals span %v; they must outlast ten 30s recovery sweeps", span)
 	}
 }
 

@@ -221,7 +221,11 @@ func (t *modelTx) ExecAffected(_ context.Context, sql string, args ...any) (int6
 	pg := t.pg
 	switch {
 	case strings.Contains(sql, "gateway.llm_usage_events"):
+		// ON CONFLICT (event_id) DO NOTHING: a second insert adds no row.
 		id, _ := args[0].(string)
+		if pg.ledger[id] {
+			return 0, nil
+		}
 		pg.ledger[id] = true
 		t.undo = append(t.undo, func() { delete(pg.ledger, id) })
 		return 1, nil
@@ -346,6 +350,9 @@ func (m *modelPG) applyDelta(t *testing.T, payload []byte) bool {
 		PeriodStart  int64  `json:"period_start"`
 		PeriodEnd    int64  `json:"period_end"`
 		DeltaNanoUSD int64  `json:"delta_nano_usd"`
+		Usage        *struct {
+			PromptTokens int64 `json:"prompt_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(payload, &d); err != nil {
 		t.Fatalf("delta payload: %v", err)
@@ -364,6 +371,13 @@ func (m *modelPG) applyDelta(t *testing.T, payload []byte) bool {
 		return true
 	case err != nil:
 		t.Fatal(err)
+	}
+	// The usage-ledger row, inside the same dedup gate (Apply's usageEventSQL).
+	if d.Usage != nil {
+		if _, err := tx.ExecAffected(context.Background(),
+			"INSERT INTO gateway.llm_usage_events ... ON CONFLICT (event_id) DO NOTHING", d.EventID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	affected, err := tx.ExecAffected(context.Background(),
 		"INSERT INTO gateway.llm_budget_accumulators ... ON CONFLICT DO UPDATE ... WHERE NOT (acc.outage_mode AND NOT acc.reconciled)",
@@ -414,6 +428,53 @@ func (r *wedgeRig) bill(t *testing.T, eventID string, costNano int64) {
 		t.Fatalf("UpdateUsage(%s): %v", eventID, err)
 	}
 	r.gs.Drain()
+}
+
+// billWithUsage is bill with the request's reporting dimensions, so the usage
+// ledger half of each write is exercised (issue #320).
+func (r *wedgeRig) billWithUsage(t *testing.T, eventID string, costNano int64) {
+	t.Helper()
+	userID := 7
+	dims := &failmode.UsageDimensions{
+		UserID: &userID, Provider: "openai", Model: "gpt-4o",
+		PromptTokens: 10, CompletionTokens: 20, OccurredAtUnix: wedgePeriodStart + 60,
+	}
+	if err := r.gs.UpdateUsage(context.Background(), wedgeProject,
+		failmode.ScopeProject, wedgeScopeID, eventID, costNano,
+		wedgePeriodStart, wedgePeriodEnd, dims); err != nil {
+		t.Fatalf("UpdateUsage(%s): %v", eventID, err)
+	}
+	r.gs.Drain()
+}
+
+// ledgerRows reports how many usage-ledger rows exist for an event id (0 or 1:
+// the model enforces the ON CONFLICT (event_id) the real table has).
+func (m *modelPG) ledgerRows(eventID string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ledger[eventID] {
+		return 1
+	}
+	return 0
+}
+
+// modelMaxDeliver is the budget-writeback consumer's MaxDeliver from
+// deploy/helm/nats-bootstrap/values.yaml before the deferral backoff existed.
+// The modelled consumer drops a delta after that many deliveries, as JetStream
+// does, so a deferral storm shows up as lost money.
+const modelMaxDeliver = 10
+
+// deliverCapped models one JetStream consumer pass over a delta that is
+// redelivered immediately on every deferral (a bare Nak), up to MaxDeliver.
+// It reports whether the delta was applied before the cap dropped it.
+func (m *modelPG) deliverCapped(t *testing.T, payload []byte) bool {
+	t.Helper()
+	for range modelMaxDeliver {
+		if m.applyDelta(t, payload) {
+			return true
+		}
+	}
+	return false
 }
 
 // drainDeltas hands every published delta to the modelled consumer and returns
@@ -723,27 +784,30 @@ func mustDelta(t *testing.T, eventID string, costNano int64) []byte {
 }
 
 // TestOutageWedge_PublishFailureAfterAGoodIncrementIsNotLost is the live 4.45.1
-// "PublishDelta failed … nats: unavailable" case. The counter increment
-// SUCCEEDS and the write-behind publish fails right after it (the breaker
-// trips between the two calls). Before the fix nothing wrote that delta
-// durably: the outage write ran only on a failed increment, the consumer never
-// saw an unpublished delta, and recovery replays Postgres onto NATS only. The
-// accumulator lost the spend for good. Now it is persisted, it is billed once
-// in Postgres, and recovery adds nothing to a counter that already has it.
+// "PublishDelta failed … nats: unavailable" case: the counter increment
+// SUCCEEDS and the write-behind publish fails right after it.
+//
+// Before #1296 nothing wrote that delta durably. The first fix wrote it as an
+// OUTAGE row, and the gateway review found the cost of that: with NATS healthy
+// the row was outage-owned until the next sweep, so the consumer deferred every
+// other replica's healthy delta for the scope with a bare Nak, and a busy
+// stream exhausted MaxDeliver and dropped them. [human decision] 2026-10-16,
+// option A: the delta is written as a HEALTHY row. This test fails with the
+// outage-path write: replica B's delta is deferred ten times and dropped.
 func TestOutageWedge_PublishFailureAfterAGoodIncrementIsNotLost(t *testing.T) {
 	rig := newWedgeRig(t)
 	const (
-		cost  = 8 * failmode.NanoUSD
-		later = 2 * failmode.NanoUSD
-		evt   = "99999999-9999-9999-9999-999999999999"
-		evt2  = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+		cost   = 8 * failmode.NanoUSD
+		otherB = 3 * failmode.NanoUSD
+		evt    = "99999999-9999-9999-9999-999999999999"
+		evtB   = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 	)
 	subject := nats.BudgetSubject(failmode.ScopeProject, wedgeScopeID, wedgePeriodStart)
 
 	rig.nc.mu.Lock()
 	rig.nc.pubErr = nats.ErrUnavailable
 	rig.nc.mu.Unlock()
-	rig.bill(t, evt, cost)
+	rig.billWithUsage(t, evt, cost)
 
 	rig.nc.mu.Lock()
 	counter, published := rig.nc.totals[subject], len(rig.nc.deltas)
@@ -755,30 +819,94 @@ func TestOutageWedge_PublishFailureAfterAGoodIncrementIsNotLost(t *testing.T) {
 	if got := rig.pg.accumulated(failmode.ScopeProject, wedgeScopeID); got != cost {
 		t.Fatalf("durable spend = %d, want %d: an unpublished delta after a good increment was lost", got, cost)
 	}
-
-	// NATS is healthy again. A later request publishes normally, the sweep
-	// releases the row, and the consumer applies the deferred delta.
-	rig.bill(t, evt2, later)
-	rig.rec.SweepOnce(context.Background())
 	if rig.pg.outageOwned(failmode.ScopeProject, wedgeScopeID) {
-		t.Fatal("the sweep did not release the row")
+		t.Fatal("a delta billed while NATS is healthy marked the row outage-owned")
 	}
-	if deferred := rig.drainDeltas(t); deferred != 0 {
-		t.Fatalf("%d deltas still deferred after recovery", deferred)
-	}
-	// A lost ack: the "failed" publish did reach the stream after all. The
-	// consumer applies it, and the claimed event id makes it add nothing.
-	if !rig.pg.applyDelta(t, mustDelta(t, evt, cost)) {
-		t.Fatal("the redelivered delta was deferred after recovery")
+	if n := rig.pg.ledgerRows(evt); n != 1 {
+		t.Fatalf("usage-ledger rows for the unpublished delta = %d, want 1", n)
 	}
 
-	if got, want := rig.pg.accumulated(failmode.ScopeProject, wedgeScopeID), int64(cost+later); got != want {
+	// Another replica's healthy delta for the same scope, delivered with no
+	// sweep in between, as a busy stream does. It must apply, not be deferred
+	// until MaxDeliver drops it.
+	if !rig.pg.deliverCapped(t, mustDelta(t, evtB, otherB)) {
+		t.Fatal("another replica's healthy delta was deferred past MaxDeliver and lost")
+	}
+
+	// A lost ack: the "failed" publish did reach the stream after all. The
+	// consumer applies it, and the claimed event id makes it add nothing:
+	// neither money nor a second ledger row.
+	if !rig.pg.applyDelta(t, mustDeltaWithUsage(t, evt, cost)) {
+		t.Fatal("the redelivered delta was deferred")
+	}
+	if got, want := rig.pg.accumulated(failmode.ScopeProject, wedgeScopeID), int64(cost+otherB); got != want {
 		t.Fatalf("durable spend = %d, want %d (each request billed exactly once)", got, want)
+	}
+	if n := rig.pg.ledgerRows(evt); n != 1 {
+		t.Fatalf("usage-ledger rows after the redelivery = %d, want exactly 1", n)
 	}
 	rig.nc.mu.Lock()
 	counter = rig.nc.totals[subject]
 	rig.nc.mu.Unlock()
-	if want := int64(cost + later); counter != want {
-		t.Fatalf("authoritative counter = %d, want %d: recovery replayed spend the counter already had", counter, want)
+	if counter != cost {
+		t.Fatalf("authoritative counter = %d, want %d: nothing may replay spend the counter already has", counter, cost)
 	}
+}
+
+// TestOutageWedge_PublishFailureOntoAnOutageOwnedRowStaysOutageOwned covers
+// the fallback of option A: a healthy write whose guard blocks because a real
+// outage already owns the row adds its money to that row (outage UPSERT), so
+// nothing is lost and the recovery pass stays its only owner.
+func TestOutageWedge_PublishFailureOntoAnOutageOwnedRowStaysOutageOwned(t *testing.T) {
+	rig := newWedgeRig(t)
+	const (
+		outage  = 5 * failmode.NanoUSD
+		healthy = 2 * failmode.NanoUSD
+		evt1    = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+		evt2    = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+	)
+	rig.nc.mu.Lock()
+	rig.nc.incrFailuresLeft = 1
+	rig.nc.mu.Unlock()
+	rig.bill(t, evt1, outage)
+	if !rig.pg.outageOwned(failmode.ScopeProject, wedgeScopeID) {
+		t.Fatal("setup: the failed increment did not mark the row outage-owned")
+	}
+
+	rig.nc.mu.Lock()
+	rig.nc.pubErr = nats.ErrUnavailable
+	rig.nc.mu.Unlock()
+	rig.billWithUsage(t, evt2, healthy)
+
+	if got, want := rig.pg.accumulated(failmode.ScopeProject, wedgeScopeID), int64(outage+healthy); got != want {
+		t.Fatalf("durable spend = %d, want %d", got, want)
+	}
+	if !rig.pg.outageOwned(failmode.ScopeProject, wedgeScopeID) {
+		t.Fatal("the fallback released a row a real outage still owns")
+	}
+	if n := rig.pg.ledgerRows(evt2); n != 1 {
+		t.Fatalf("usage-ledger rows = %d, want 1", n)
+	}
+}
+
+func mustDeltaWithUsage(t *testing.T, eventID string, costNano int64) []byte {
+	t.Helper()
+	userID := 7
+	payload, err := json.Marshal(deltaPayload{
+		EventID:      eventID,
+		Scope:        failmode.ScopeProject,
+		ScopeID:      wedgeScopeID,
+		ProjectID:    wedgeProject,
+		PeriodStart:  wedgePeriodStart,
+		PeriodEnd:    wedgePeriodEnd,
+		DeltaNanoUSD: costNano,
+		Usage: &usageDimsPayload{
+			UserID: &userID, Provider: "openai", Model: "gpt-4o",
+			PromptTokens: 10, CompletionTokens: 20, OccurredAtUnix: wedgePeriodStart + 60,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }
