@@ -15,6 +15,11 @@ use crate::protocol::elitea::runtime::v1::NodeEventV1;
 
 pub(crate) const INTERRUPT_PENDING_EVENT: &str = "agent_interrupt_pending";
 pub(crate) const FANOUT_MEMBER_EVENT: &str = "agent_fanout_member";
+pub(crate) const FANOUT_PROGRESS_EVENT: &str = "agent_fanout_progress";
+const PROGRESS_SCHEMA: &str = "elitea.pipeline.fanout-progress.v1";
+/// Text bytes one progress frame carries across all its members (v1.1 §9.1):
+/// worst-case escaped JSON stays under the node-event bound.
+pub(crate) const MAX_PROGRESS_TEXT_BYTES: usize = 8192;
 const CARD_SCHEMA: &str = "elitea.pipeline.fanout-interrupt-card.v1";
 const MEMBER_STATUS_SCHEMA: &str = "elitea.pipeline.fanout-member-status.v1";
 const MEMBER_CALL_DOMAIN: &[u8] = b"elitea.graph.fanout-member-call.v1\0";
@@ -292,9 +297,11 @@ fn update_lp(hash: &mut digest::Context, bytes: &[u8]) {
 pub(crate) fn interrupt_pending_event(
     card: &InterruptCardV1,
 ) -> Result<NodeEventV1, FanoutFrameError> {
+    // Every per-card frame says more cards may follow (v1.1 §9.2).
     let metadata = serde_json::json!({
         "fanout_v1": card.fanout_v1,
         "interrupt_card_v1": card,
+        "pause_progress": true,
         "parent_agent_call_id": card.parent_agent_call_id,
         "parent_agent_name": card.parent_agent_name,
         "parent_agent_path": card.parent_agent_path,
@@ -347,6 +354,107 @@ pub(crate) fn member_status_event(
             .map_err(|_| FanoutFrameError::InvalidMember)?,
         ..NodeEventV1::default()
     })
+}
+
+/// The activation scope a progress frame shares (`fanout_v1` without member).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct ProgressScope {
+    pub(crate) activation: String,
+    pub(crate) kind: &'static str,
+    pub(crate) node: String,
+    pub(crate) total: usize,
+}
+
+#[derive(Serialize)]
+struct ProgressMember<'a> {
+    call_id: &'a str,
+    ordinal: usize,
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct ProgressV1<'a> {
+    fanout_v1: &'a ProgressScope,
+    members: Vec<ProgressMember<'a>>,
+    schema: &'static str,
+}
+
+/// One coalescer flush as `agent_fanout_progress` frames (v1.1 §9.1): members
+/// in ascending ordinal, each frame at most [`MAX_PROGRESS_TEXT_BYTES`] of text
+/// in total; a long member text continues, split on a character boundary, in
+/// the next frame. Lossless: concatenating a member's texts in frame order
+/// gives its input text.
+pub(crate) fn progress_events(
+    scope: &ProgressScope,
+    deltas: &[(usize, String, String)],
+) -> Result<Vec<NodeEventV1>, FanoutFrameError> {
+    let limit = match scope.kind {
+        "parallel" => elitea_agent_runtime::graph::fanout_budget::MAX_PARALLEL_BRANCHES,
+        "map" => elitea_agent_runtime::graph::fanout_budget::MAX_FANOUT_ORDINAL,
+        _ => 0,
+    };
+    if scope.total == 0 || scope.total > limit || scope.activation.len() != 16 {
+        return Err(FanoutFrameError::InvalidMember);
+    }
+    let mut previous = 0;
+    for (ordinal, call_id, _) in deltas {
+        if *ordinal <= previous
+            || *ordinal > scope.total
+            || call_id.len() != 68
+            || !call_id.starts_with("fo1_")
+        {
+            return Err(FanoutFrameError::InvalidMember);
+        }
+        previous = *ordinal;
+    }
+    let mut frames: Vec<Vec<ProgressMember<'_>>> = vec![Vec::new()];
+    let mut budget = MAX_PROGRESS_TEXT_BYTES;
+    for (ordinal, call_id, text) in deltas {
+        let mut rest = text.as_str();
+        while !rest.is_empty() {
+            if budget == 0 {
+                frames.push(Vec::new());
+                budget = MAX_PROGRESS_TEXT_BYTES;
+            }
+            let mut take = rest.len().min(budget);
+            while !rest.is_char_boundary(take) {
+                take -= 1;
+            }
+            if take == 0 {
+                // The next character does not fit this frame.
+                frames.push(Vec::new());
+                budget = MAX_PROGRESS_TEXT_BYTES;
+                continue;
+            }
+            let (head, tail) = rest.split_at(take);
+            frames.last_mut().expect("a frame").push(ProgressMember {
+                call_id,
+                ordinal: *ordinal,
+                text: head,
+            });
+            budget -= take;
+            rest = tail;
+        }
+    }
+    frames
+        .into_iter()
+        .filter(|members| !members.is_empty())
+        .map(|members| {
+            let body = ProgressV1 {
+                fanout_v1: scope,
+                members,
+                schema: PROGRESS_SCHEMA,
+            };
+            Ok(NodeEventV1 {
+                r#type: FANOUT_PROGRESS_EVENT.to_owned(),
+                response_metadata: serde_json::to_vec(
+                    &serde_json::json!({ "fanout_progress_v1": body }),
+                )
+                .map_err(|_| FanoutFrameError::InvalidMember)?,
+                ..NodeEventV1::default()
+            })
+        })
+        .collect()
 }
 
 fn nonzero_hex64(value: &str) -> bool {

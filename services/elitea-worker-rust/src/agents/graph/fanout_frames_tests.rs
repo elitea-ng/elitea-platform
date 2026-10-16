@@ -91,6 +91,7 @@ fn the_card_serializes_to_the_contract_fixture_bytes() {
         fixture_json("fanout-interrupt-card-v1.json")
     );
     assert_eq!(metadata["parent_agent_name"], "Researcher");
+    assert_eq!(metadata["pause_progress"], true);
     assert_eq!(metadata["fanout_v1"]["ordinal"], 1);
 }
 
@@ -254,4 +255,96 @@ fn the_activation_label_is_sixteen_hex_and_stable() {
     assert!(label.bytes().all(|byte| byte.is_ascii_hexdigit()));
     assert_eq!(label, activation_label(b"private-activation"));
     assert_ne!(label, activation_label(b"another-activation"));
+}
+
+fn progress_scope(kind: &'static str, total: usize) -> ProgressScope {
+    ProgressScope {
+        activation: "9f2c4e1a7b3d5f60".to_owned(),
+        kind,
+        node: "research".to_owned(),
+        total,
+    }
+}
+
+fn call(ordinal: usize) -> String {
+    format!("fo1_{}", format!("{ordinal:02x}").repeat(32))
+}
+
+fn progress_body(event: &NodeEventV1) -> Value {
+    let metadata: Value = serde_json::from_slice(&event.response_metadata).expect("metadata");
+    metadata["fanout_progress_v1"].clone()
+}
+
+#[test]
+fn the_progress_frame_matches_the_contract_fixture() {
+    let expected = fixture_json("fanout-progress-v1.json");
+    let deltas = expected["members"]
+        .as_array()
+        .expect("members")
+        .iter()
+        .map(|member| {
+            (
+                usize::try_from(member["ordinal"].as_u64().expect("ordinal")).expect("usize"),
+                member["call_id"].as_str().expect("call").to_owned(),
+                member["text"].as_str().expect("text").to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let events = progress_events(&progress_scope("parallel", 3), &deltas).expect("frames");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].r#type, "agent_fanout_progress");
+    assert_eq!(
+        serde_json::to_vec(&progress_body(&events[0])).expect("json"),
+        fixture("fanout-progress-v1.json")
+    );
+}
+
+#[test]
+fn a_64_kib_flush_splits_into_at_most_eight_lossless_frames() {
+    // 8 members x 8 KiB of mixed-width text.
+    let deltas = (1..=8)
+        .map(|ordinal| (ordinal, call(ordinal), "aé€".repeat(1363)))
+        .collect::<Vec<_>>();
+    let events = progress_events(&progress_scope("parallel", 8), &deltas).expect("frames");
+    assert!(events.len() <= 8, "{} frames", events.len());
+    let mut rebuilt = vec![String::new(); 9];
+    for event in &events {
+        let body = progress_body(event);
+        let members = body["members"].as_array().expect("members");
+        let mut bytes = 0;
+        let mut previous = 0;
+        for member in members {
+            let ordinal = usize::try_from(member["ordinal"].as_u64().expect("o")).expect("usize");
+            assert!(ordinal > previous, "ascending within a frame");
+            previous = ordinal;
+            let text = member["text"].as_str().expect("text");
+            assert!(!text.is_empty());
+            bytes += text.len();
+            rebuilt[ordinal].push_str(text);
+        }
+        assert!(bytes <= MAX_PROGRESS_TEXT_BYTES);
+    }
+    for (ordinal, _, text) in &deltas {
+        assert_eq!(&rebuilt[*ordinal], text, "member {ordinal} is lossless");
+    }
+}
+
+#[test]
+fn progress_members_limit_and_limit_plus_one() {
+    let deltas = |count: usize| {
+        (1..=count)
+            .map(|ordinal| (ordinal, call(ordinal), "x".to_owned()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        progress_events(&progress_scope("map", 64), &deltas(64))
+            .expect("64")
+            .len(),
+        1
+    );
+    assert!(progress_events(&progress_scope("map", 65), &deltas(65)).is_err());
+    assert!(progress_events(&progress_scope("parallel", 17), &deltas(17)).is_err());
+    let mut unordered = deltas(3);
+    unordered.swap(0, 1);
+    assert!(progress_events(&progress_scope("map", 3), &unordered).is_err());
 }
