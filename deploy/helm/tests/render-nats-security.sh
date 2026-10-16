@@ -214,8 +214,11 @@ monitoring_case() {
     echo "RENDER-FAILED	$name	$(echo "$out" | tail -1)" >> "$TMP/refusals"; return
   fi
   local rule=no scrape=no
-  echo "$out" | grep -q "name: elitea-scheduler-budget-writeback" && rule=yes
-  { echo "$out" | grep -q "^kind: PodMonitor" || echo "$out" | grep -q "prometheus.io/scrape: \"true\""; } && scrape=yes
+  # Here-strings, not `echo | grep -q`: under pipefail, grep -q closing the
+  # pipe early makes echo fail with SIGPIPE on a large render, and the match
+  # then reads as a miss.
+  grep -q "name: elitea-scheduler-budget-writeback" <<<"$out" && rule=yes
+  { grep -q "^kind: PodMonitor" <<<"$out" || grep -q "prometheus.io/scrape: \"true\"" <<<"$out"; } && scrape=yes
   if [ "$rule" = "$want_rule" ] && [ "$scrape" = "$want_scrape" ]; then
     echo "ok	$name" >> "$TMP/refusals"
   else
