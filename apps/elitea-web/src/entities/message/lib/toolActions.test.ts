@@ -96,4 +96,12 @@ describe('buildToolActions', () => {
     const [action] = buildToolActions([], [{ tool_run_id: 't1', tool_name: 'search', metadata: { parent_agent_path: [tier, tier, tier, tier] } }], '2026-01-01T00:00:00Z', undefined, undefined);
     expect(action).not.toHaveProperty('parent_agent_path');
   });
+
+  it('drops tiers that are not objects and a path whose strings break the live bounds', () => {
+    const run = (path: unknown) => buildToolActions([], [{ tool_run_id: 't1', tool_name: 'search', metadata: { parent_agent_path: path } }], '2026-01-01T00:00:00Z', undefined, undefined)[0];
+    expect(run(['junk', { name: 'Sub', call_id: 'call-b' }, 7])).toMatchObject({ parent_agent_path: [{ name: 'Sub', call_id: 'call-b' }] });
+    expect(run([{ name: 'Sub', call_id: 'c'.repeat(513) }])).not.toHaveProperty('parent_agent_path');
+    expect(run([{ name: 'n'.repeat(2049), call_id: 'call-b' }])).not.toHaveProperty('parent_agent_path');
+    expect(run([{ name: 'n'.repeat(2048), call_id: 'c'.repeat(512) }])).toHaveProperty('parent_agent_path');
+  });
 });

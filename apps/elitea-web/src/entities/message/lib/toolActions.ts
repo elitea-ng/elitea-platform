@@ -232,14 +232,37 @@ function buildToolCallMeta(
   };
 }
 
-/** Reload carries the same ancestry the live stream had, so both group identically. */
+/**
+ * Reload carries the same ancestry the live stream had, so both group
+ * identically — under the Worker's bounds (`MAX_AGENT_PATH_TIERS`, the
+ * 2048-byte name, the 512-byte call id), the same ones the live reader applies
+ * (`features/chat-messages/lib/hitlInterrupts.ts`). Tiers that are not objects
+ * are dropped; a path past a bound is dropped whole, never cut into a
+ * different owner.
+ */
 const MAX_PERSISTED_PATH_TIERS = 3;
+const MAX_PERSISTED_NAME_CHARS = 2048;
+const MAX_PERSISTED_CALL_ID_CHARS = 512;
+
+function boundedLength(value: unknown, max: number): boolean {
+  return value === undefined || value === null || (typeof value === 'string' && value.length <= max);
+}
+
+function persistedPath(path: unknown): readonly Record<string, unknown>[] | undefined {
+  if (!Array.isArray(path)) return undefined;
+  const tiers = path.filter((tier): tier is Record<string, unknown> => Boolean(tier) && typeof tier === 'object' && !Array.isArray(tier));
+  if (tiers.length > MAX_PERSISTED_PATH_TIERS) return undefined;
+  const bounded = tiers.every(
+    (tier) => boundedLength(tier['name'], MAX_PERSISTED_NAME_CHARS) && boundedLength(tier['call_id'], MAX_PERSISTED_CALL_ID_CHARS),
+  );
+  return bounded ? tiers : undefined;
+}
 
 function persistedHierarchy(metadata: ToolCallStepWire['metadata']): { parent_agent_path?: unknown; sibling_ordinal?: number } {
-  const path = metadata?.parent_agent_path;
+  const path = persistedPath(metadata?.parent_agent_path);
   const ordinal = metadata?.sibling_ordinal;
   return {
-    ...(Array.isArray(path) && path.length <= MAX_PERSISTED_PATH_TIERS ? { parent_agent_path: path } : {}),
+    ...(path !== undefined ? { parent_agent_path: path } : {}),
     ...(typeof ordinal === 'number' && Number.isInteger(ordinal) && ordinal > 0 ? { sibling_ordinal: ordinal } : {}),
   };
 }

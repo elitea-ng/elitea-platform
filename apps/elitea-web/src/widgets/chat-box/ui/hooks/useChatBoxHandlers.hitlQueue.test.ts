@@ -3,13 +3,15 @@
  * resumes as ONE continuation once its last card is decided (today's route
  * consumes the complete set: `decisionsMatchCurrentHITLInterrupts`).
  */
+import { renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChatMessage } from '@/features/chat-messages';
 import { getInterruptIdentity } from '@/features/chat-messages/lib/hitlInterrupts';
 import { ROLES } from '@/shared/lib/enums';
 
-import { queuedHitlDecisions } from '../../model/hitlDecisionQueue';
+import { queueHitlDecision, queuedHitlDecisions } from '../../model/hitlDecisionQueue';
+import { useSessionMcpAuthorizationRefs } from './useSessionMcpAuthorizationRefs';
 import { useChatBoxHandlers } from './useChatBoxHandlers';
 import type { ChatBoxHandlerDeps, StreamStartOutcome } from './useChatBoxHandlers.helpers';
 import { restoreQueuedAuthorizations } from './useChatBoxHandlers.authorization';
@@ -305,5 +307,68 @@ describe('delegated authorization cards', () => {
         { interrupt_id: 'auth-2', tool_call_id: 'call-2', guardrail_type: 'mcp_auth', action: 'skip' },
       ],
     });
+  });
+});
+
+describe('review findings', () => {
+  const node = (id: string) => ({ interrupt_id: id, available_actions: ['approve', 'reject'], node_name: 'review' });
+
+  it('decides cards that carry no tool_call_id (the card sends an empty one)', async () => {
+    const run = harness({ started: true }, [{ ...paused(), hitlInterrupt: node('n-1'), hitlInterrupts: [node('n-1'), node('n-2')] }]);
+    await run.handlers().continueHitl({ action: 'approve', toolCallId: '', interruptId: 'n-1' });
+    expect(run.read()[0]?.exception).toBeUndefined();
+    expect(cards(run.read()[0])[0]).toMatchObject({ queued: true });
+    await run.handlers().continueHitl({ action: 'reject', toolCallId: '', interruptId: 'n-2' });
+
+    expect(run.calls).toHaveLength(1);
+    expect(run.calls[0]?.body['hitl_decisions']).toEqual([
+      { interrupt_id: 'n-1', tool_call_id: '', action: 'approve', value: '' },
+      { interrupt_id: 'n-2', tool_call_id: '', action: 'reject', value: '' },
+    ]);
+  });
+
+  it('a legacy fan-out child submit leaves the root set’s queued decisions alone', async () => {
+    const child = { interrupt_id: 'int-child', tool_call_id: 'call-c', child_thread_id: 't-child', resume_strategy: 'aggregate_child' };
+    const run = harness({ started: true }, [{ ...paused(), hitlInterrupts: [guard, ask, child] }]);
+    await run.handlers().continueHitl({ action: 'approve', toolCallId: 'call-1', interruptId: 'int-1' });
+    await run.handlers().continueHitl({ action: 'approve', toolCallId: 'call-c', interruptId: 'int-child' });
+
+    expect(run.calls).toHaveLength(1);
+    expect(run.calls[0]?.body['thread_id']).toBe('t-child');
+    expect(queuedHitlDecisions(SCOPE).map((entry) => entry.interruptId)).toEqual(['int-1']);
+    expect(cards(run.read()[0])[0]).toMatchObject({ interrupt_id: 'int-1', queued: true });
+  });
+
+  it('a multi-card set the route cannot express is refused readably, not sent over the socket', async () => {
+    const run = harness({ started: true }, [{ ...paused(), hitlInterrupts: [guard, { ...ask, interrupt_id: '' }] }]);
+    await run.handlers().continueHitl({ action: 'approve', toolCallId: 'call-1', interruptId: 'int-1' });
+    await run.handlers().continueHitl({ action: 'answer', value: '"x"', toolCallId: 'call-2' });
+
+    expect(run.calls).toHaveLength(0);
+    expect(run.emitSocket).not.toHaveBeenCalled();
+    const message = run.read()[0];
+    expect(message?.exception).toMatch(/cannot be sent/);
+    expect(message?.isStreaming).toBe(false);
+    expect(cards(message).some((card) => card['decided'] || card['queued'] || card['hidden'])).toBe(false);
+  });
+
+  it('an authorization decision the queue refuses says so', async () => {
+    const longId = 'a'.repeat(600);
+    const pause = authorizationPause();
+    const run = harness({ started: true }, [{ ...pause, toolActions: [authorizationCard(longId, 'call-1', 'cfg-1:https://login.example.test'), ...(pause.toolActions ?? []).slice(1)] }]);
+    await run.handlers().resumeMcpFlow('answer-1', false, longId);
+
+    expect(run.calls).toHaveLength(0);
+    expect(run.read()[0]?.exception).toMatch(/could not be recorded/);
+  });
+});
+
+describe('page-life memory follows the conversation', () => {
+  it('is dropped when the conversation changes, not on mount', () => {
+    queueHitlDecision(SCOPE, { interruptId: 'int-1', action: 'edit', value: 'x'.repeat(9000) });
+    const { rerender } = renderHook(({ uuid }: { uuid: string }) => useSessionMcpAuthorizationRefs(uuid), { initialProps: { uuid: 'conv-uuid-1' } });
+    expect(queuedHitlDecisions(SCOPE)).toHaveLength(1);
+    rerender({ uuid: 'conv-uuid-2' });
+    expect(queuedHitlDecisions(SCOPE)).toEqual([]);
   });
 });

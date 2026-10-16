@@ -193,7 +193,7 @@ function decisionAction(decision: Pick<QueuedHitlDecision, 'action' | 'value' | 
   return {
     action: decision.action,
     ...(decision.value !== undefined ? { value: decision.value } : {}),
-    ...(decision.toolCallId !== undefined ? { toolCallId: decision.toolCallId } : {}),
+    ...(decision.toolCallId ? { toolCallId: decision.toolCallId } : {}),
   };
 }
 
@@ -238,7 +238,11 @@ function refusedText(): string {
   return t('widgets.chatBox.hitlDecisionRefused', 'The decision could not be sent. Try again.');
 }
 
-function notQueuedText(): string {
+function unsendableText(): string {
+  return t('widgets.chatBox.hitlSetUnsendable', 'These decisions cannot be sent. Reload the conversation and try again.');
+}
+
+export function notQueuedText(): string {
   return t('widgets.chatBox.hitlDecisionNotQueued', 'This decision could not be recorded. Reload the conversation and try again.');
 }
 
@@ -290,10 +294,37 @@ async function submitHitlSet(deps: ChatBoxHandlerDeps, submission: HitlSubmissio
   if (outcome && outcome.reason !== 'no-transport') {
     return settle({ exception: outcome.reason === 'rejected' ? outcome.message : refusedText() });
   }
+  // A set of several cards has no socket shape the backend resumes: say so
+  // and give the cards back instead of sending something it cannot apply.
+  if (!outcome && set.length > 1) return settle({ exception: unsendableText() });
   const payload = hitlSocketPayload(deps, message, submission);
   if (!tryEmit(() => deps.emitSocket('chat_continue_predict', payload), 'continueHitl')) {
     settle({ exception: undeliveredText() });
   }
+}
+
+/**
+ * The queue scope of one decision. A legacy child resumes alone on its own
+ * thread, so it claims and forgets under its own scope: sharing the root set's
+ * would wipe the root's queued decisions.
+ */
+function decisionScope(
+  deps: ChatBoxHandlerDeps,
+  message: ChatMessage,
+  target: HitlCard,
+  action: HitlInterruptAction,
+  independent: boolean,
+  cards: readonly HitlCard[],
+): { readonly scope: HitlQueueScope; readonly childThread: string } {
+  const childThread = independent ? action.childThreadId || target.child_thread_id || cardKey(target, cards) : '';
+  return {
+    childThread,
+    scope: {
+      conversation: conversationKey(deps),
+      message: independent ? `${message.id}#child:${childThread}` : message.id,
+      kind: 'hitl',
+    },
+  };
 }
 
 /**
@@ -315,7 +346,7 @@ export async function decideHitlCard(deps: ChatBoxHandlerDeps, action: HitlInter
   if (!target) return;
   const independent = Boolean(action.childThreadId) || isIndependentChild(target);
   const set = independent ? [target] : pending.filter((card) => !isIndependentChild(card));
-  const scope: HitlQueueScope = { conversation: conversationKey(deps), message: message.id, kind: 'hitl' };
+  const { scope, childThread } = decisionScope(deps, message, target, action, independent, cards);
   const decision: QueuedHitlDecision = { ...decisionAction(action), interruptId: cardKey(target, cards) };
   let decisions: readonly QueuedHitlDecision[] = [decision];
   if (set.length > 1) {
@@ -338,7 +369,7 @@ export async function decideHitlCard(deps: ChatBoxHandlerDeps, action: HitlInter
       message,
       set,
       decisions,
-      threadId: independent ? action.childThreadId || target.child_thread_id : message.threadId,
+      threadId: independent ? childThread : message.threadId,
       independent,
       scope,
     });

@@ -101,12 +101,20 @@ function hitlQuestionsField(raw: RawRecord): readonly unknown[] {
   return Array.isArray(questions) ? questions : [];
 }
 
-/** chat.helpers.js:88-105 `buildHitlInterruptFromRaw`, the display half. */
+/** The stored actions when they are a list of strings; otherwise the answerable default, as live. */
+function storedHitlActions(value: unknown): readonly string[] {
+  return Array.isArray(value) && value.every((action) => typeof action === 'string')
+    ? value
+    : ['approve', 'reject'];
+}
+
+/** chat.helpers.js:88-105 `buildHitlInterruptFromRaw`, the display half. Typed as the live `pickString` reads them. */
 function hitlDisplayFields(wire: HitlInterruptRawWire): Record<string, unknown> {
+  const message: unknown = wire.message;
   return {
-    message: wire.message || 'Please review and take action.',
+    message: typeof message === 'string' && message ? message : 'Please review and take action.',
     node_name: wire.node_name || '',
-    available_actions: wire.available_actions || ['approve', 'reject'],
+    available_actions: storedHitlActions(wire.available_actions),
     routes: wire.routes || {},
     edit_state_key: wire.edit_state_key || '',
     guardrail_type: wire.guardrail_type || '',

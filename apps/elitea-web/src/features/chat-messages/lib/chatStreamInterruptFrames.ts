@@ -126,6 +126,8 @@ export function isTerminalPauseFrame(frame: ChatStreamFrame): boolean {
 function frameInterrupts(frame: ChatStreamFrame): {
   readonly cards: readonly Record<string, unknown>[];
   readonly memberIds: readonly string[];
+  /** The cards are the frame's own `hitl_interrupts` entries, each complete. */
+  readonly listed: boolean;
 } {
   const responseMetadata = frame.response_metadata;
   const listed = Array.isArray(responseMetadata?.hitl_interrupts) ? responseMetadata.hitl_interrupts : [];
@@ -142,6 +144,7 @@ function frameInterrupts(frame: ChatStreamFrame): {
   return {
     cards: raws.filter((raw) => !isParallelAggregateInterrupt(raw)),
     memberIds: aggregates.flatMap((raw) => parallelAggregateMemberIds(raw)),
+    listed: listed.length > 0,
   };
 }
 
@@ -205,12 +208,15 @@ export function reduceInterruptFrame(
 
       const fallbackMessage =
         (typeof responseMetadata?.message === 'string' ? responseMetadata.message : '') || current.content;
+      const { cards, memberIds, listed } = frameInterrupts(frame);
+      // The event metadata overlays ONLY a card the frame synthesises from its
+      // legacy fields, or a legacy fan-out child's. A listed entry is complete:
+      // the aggregate clones the FIRST card's metadata, and overlaying it would
+      // file a coordinator card under that card's sub-agent — live only, so a
+      // reload would render it differently.
+      const overlay = !listed || isFanoutChild ? { ...hitlMeta, child_thread_id: childThreadId, thread_id: childThreadId } : {};
       const build = (raw: Record<string, unknown>): NormalizedHitlInterrupt =>
-        normalizeHitlInterrupt(
-          { ...raw, message: raw['message'] ?? fallbackMessage },
-          { ...hitlMeta, child_thread_id: childThreadId, thread_id: childThreadId },
-        );
-      const { cards, memberIds } = frameInterrupts(frame);
+        normalizeHitlInterrupt({ ...raw, message: raw['message'] ?? fallbackMessage }, overlay);
       const existing = (current.hitlInterrupts ?? []) as readonly NormalizedHitlInterrupt[];
       // Always the array, including for one card: the resume path decides the
       // body from the size of the pending set, not from the array's presence.

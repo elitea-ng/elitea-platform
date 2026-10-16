@@ -30,6 +30,7 @@ import {
   trackMcpAuthDecision,
 } from './useChatBoxHandlers.helpers';
 import type { ChatBoxHandlerDeps, ToolActionLike } from './useChatBoxHandlers.helpers';
+import { notQueuedText } from './useChatBoxHandlers.hitl';
 import { undeliveredText } from './useChatBoxHandlers.turns';
 
 import type { McpAuthorizationAction } from './useChatBoxHandlers.authorization.types';
@@ -86,6 +87,11 @@ function holdCards(scope: HitlQueueScope, cards: readonly ToolActionLike[]): voi
     if (oldest === undefined) break;
     heldCards.delete(oldest);
   }
+}
+
+/** Drop every held card — the conversation on screen changed (see `useSessionMcpAuthorizationRefs`). */
+export function clearHeldAuthorizationCards(): void {
+  heldCards.clear();
 }
 
 function heldFor(scope: HitlQueueScope): readonly ToolActionLike[] {
@@ -254,7 +260,10 @@ export async function resumeMcpAuthorization(
     return;
   }
   const queued = queueHitlDecision(scope, { interruptId, toolCallId: toolCallId(selected), action: decision });
-  if (!queued.queued) return;
+  if (!queued.queued) {
+    deps.setChatHistory((previous) => previous.map((item) => (item.id === messageId ? { ...item, exception: notQueuedText() } : item)));
+    return;
+  }
   holdCards(scope, [selected]);
   const byId = new Map(queuedHitlDecisions(scope).map((entry) => [entry.interruptId, entry]));
   const remaining = pending.filter((action) => !byId.has(exactRequestId(action) ?? ''));

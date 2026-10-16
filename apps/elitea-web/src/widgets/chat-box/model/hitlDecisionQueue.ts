@@ -246,7 +246,11 @@ function writeQueue(scope: HitlQueueScope, decisions: readonly QueuedHitlDecisio
  * Refused, with nothing written, when the decision is malformed or would take
  * the response past `decisionsPerResponse`.
  */
-export function queueHitlDecision(scope: HitlQueueScope, decision: QueuedHitlDecision): QueueHitlDecisionOutcome {
+export function queueHitlDecision(scope: HitlQueueScope, given: QueuedHitlDecision): QueueHitlDecisionOutcome {
+  // A card with no tool call (a HITL node, a fan-out member) sends `''`: that
+  // is "absent", not a malformed identity.
+  const { toolCallId, ...rest } = given;
+  const decision: QueuedHitlDecision = { ...rest, ...(toolCallId ? { toolCallId } : {}) };
   const shaped = readDecision({ ...decision, value: undefined }, scope.kind);
   const valueOk = decision.value === undefined || (scope.kind === 'hitl' && typeof decision.value === 'string');
   if (!shaped || !valueOk || !isIdentity(scope.conversation) || !isIdentity(scope.message)) {
@@ -276,6 +280,17 @@ export function retainHitlDecisions(scope: HitlQueueScope, pending: ReadonlySet<
   const kept = current.filter((decision) => pending.has(decision.interruptId));
   if (kept.length !== current.length) writeQueue(scope, kept);
   return kept;
+}
+
+/**
+ * Drop what this module holds in memory (values too large to persist, and
+ * in-flight claims). Called when the conversation on screen changes; a logout
+ * is a full navigation, which ends this memory with the document, and
+ * `clearNamespace()` sweeps the persisted half.
+ */
+export function clearHitlDecisionMemory(): void {
+  unpersisted.clear();
+  submitting.clear();
 }
 
 /** Responses whose set is being submitted right now: a second submit of the same set is refused. */

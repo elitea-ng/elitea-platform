@@ -179,7 +179,8 @@ export function useChatBoxActions({
       void handlers.continueHitl({
         action: payload.action,
         ...(payload.value !== undefined ? { value: payload.value } : {}),
-        ...(payload.toolCallId !== undefined ? { toolCallId: payload.toolCallId } : {}),
+        // `''` is a card with no tool call (a HITL node, a fan-out member): absent.
+        ...(payload.toolCallId ? { toolCallId: payload.toolCallId } : {}),
         ...(payload.interruptId !== undefined ? { interruptId: payload.interruptId } : {}),
       });
     },

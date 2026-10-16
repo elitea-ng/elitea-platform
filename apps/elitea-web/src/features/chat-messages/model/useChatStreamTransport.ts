@@ -297,7 +297,7 @@ export function useChatStreamTransport(
       const active = activeConversationRef.current;
       if (active !== undefined && active !== runConversationUuid) return true;
       ownerRef.current = runConversationUuid;
-      runEpochRef.current += 1;
+      runEpochRef.current += 1; pauseSettle.cancel(); // a new run owns a fresh pause window
       contextProjectRef.current = projectId;
       refreshContext();
       questionIdRef.current = questionId;
@@ -313,7 +313,7 @@ export function useChatStreamTransport(
       openStream(accepted.events_url);
       return true;
     },
-    [openStream, refreshContext],
+    [openStream, refreshContext, pauseSettle],
   );
 
   const attachExistingRun = useCallback<UseChatStreamTransportResult['attachExistingRun']>((target) => {

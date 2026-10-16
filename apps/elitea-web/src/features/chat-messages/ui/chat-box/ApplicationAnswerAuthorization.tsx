@@ -7,11 +7,16 @@ import { t } from '@/shared/i18n';
 import type { ApplicationAnswerContinuation } from './ApplicationAnswer.types';
 import { asDraft } from './ApplicationAnswerThinking';
 
-/** The exact authorization request a card answers. */
+/**
+ * The exact authorization request a card answers — the same fallback order as
+ * the handler's `exactRequestId` (`widgets/chat-box/ui/hooks/useChatBoxHandlers.authorization.ts`),
+ * so the id the card sends is the id the handler resolves.
+ */
 export function authorizationRequestId(action: SubAgentGroupable): string | undefined {
   const draft = asDraft(action);
   const metadata = (draft.toolMeta ?? {}) as Record<string, unknown>;
-  const value = draft.authorizationRequestId ?? metadata['authorization_request_id'] ?? metadata['interrupt_id'] ?? draft.id;
+  const value = draft.authorizationRequestId ?? metadata['authorization_request_id'] ?? metadata['interrupt_id']
+    ?? metadata['tool_run_id'] ?? metadata['tool_call_id'] ?? draft.id;
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 

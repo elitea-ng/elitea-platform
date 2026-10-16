@@ -547,3 +547,15 @@ describe('runtime failure identity', () => {
     expect(result.failureCode).toBe(failed ? 'OUTPUT_CONTINUATION_EXHAUSTED' : undefined);
   });
 });
+
+describe('normaliseAssistantMessage — a stored pause with mistyped fields', () => {
+  it('falls back to the defaults the live reader uses for a non-string message and non-string actions', () => {
+    const group = {
+      id: 3, uuid: 'a3', content: '', created_at: '2026-01-01 12:00:00',
+      meta: { hitl_interrupts: [{ interrupt_id: 'i-1', message: 42, available_actions: 'approve' }, { interrupt_id: 'i-2', available_actions: ['approve', 7] }] },
+    } as unknown as MessageGroupWire;
+    const entries = (normaliseAssistantMessage(group, [], undefined).hitlInterrupts ?? []) as readonly Record<string, unknown>[];
+    expect(entries[0]).toMatchObject({ message: 'Please review and take action.', available_actions: ['approve', 'reject'] });
+    expect(entries[1]?.['available_actions']).toEqual(['approve', 'reject']);
+  });
+});

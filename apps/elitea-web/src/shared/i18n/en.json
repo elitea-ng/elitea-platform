@@ -4893,5 +4893,6 @@
   "features.chatMessages.toolkitAuthorization.title": "⚠️ Toolkit Authorization Required",
   "features.chatMessages.toolkitAuthorization.toolkitServer": "Toolkit server",
   "widgets.chatBox.hitlDecisionNotQueued": "This decision could not be recorded. Reload the conversation and try again.",
-  "widgets.chatBox.hitlDecisionRefused": "The decision could not be sent. Try again."
+  "widgets.chatBox.hitlDecisionRefused": "The decision could not be sent. Try again.",
+  "widgets.chatBox.hitlSetUnsendable": "These decisions cannot be sent. Reload the conversation and try again."
 }

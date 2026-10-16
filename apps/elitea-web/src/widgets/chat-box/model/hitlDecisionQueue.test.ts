@@ -8,6 +8,7 @@ import { createStorage } from '@/shared/lib/storage';
 
 import {
   HITL_QUEUE_LIMITS,
+  clearHitlDecisionMemory,
   forgetHitlDecisions,
   parseStoredHitlDecisions,
   queueHitlDecision,
@@ -47,6 +48,18 @@ describe('what is stored', () => {
         },
       ],
     });
+  });
+
+  it('treats an empty toolCallId as absent (HITL node and fan-out member cards carry none)', () => {
+    expect(queueHitlDecision(scope(), { interruptId: 'int-1', toolCallId: '', action: 'approve' })).toEqual({ queued: true });
+    expect(queuedHitlDecisions(scope())).toEqual([{ interruptId: 'int-1', action: 'approve' }]);
+  });
+
+  it('forgets the values it held in memory when told the session ended', () => {
+    queueHitlDecision(scope(), { interruptId: 'int-1', action: 'edit', value: 'x'.repeat(HITL_QUEUE_LIMITS.valueBytes + 1) });
+    expect(queuedHitlDecisions(scope())).toHaveLength(1);
+    clearHitlDecisionMemory();
+    expect(queuedHitlDecisions(scope())).toEqual([]);
   });
 
   it('replaces a re-decided card instead of queueing it twice', () => {

@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, buildEliteaTheme } from '@/shared/brand';
 
+import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { ChatHitlActions } from './ChatHitlActions';
 import type { ChatHitlActionsProps, HitlInterrupt, HitlResumePayload } from './ChatHitlActions';
 
@@ -108,5 +109,15 @@ describe('ChatHitlActions — baseline parity', () => {
   it('renders nothing without an interrupt', () => {
     const { container } = renderCard({ hitlInterrupt: undefined as unknown as HitlInterrupt });
     expect(container.textContent).toBe('');
+  });
+});
+
+describe('ChatHitlActions message hardening', () => {
+  it('renders an interrupt message as Markdown without raw HTML (no beacon images from model text)', () => {
+    const { container } = renderWithTheme(
+      <ChatHitlActions hitlInterrupt={{ message: 'Check <img src="https://example.invalid/x.png"> **now**', available_actions: ['approve'] }} />,
+    );
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('strong')?.textContent).toBe('now');
   });
 });

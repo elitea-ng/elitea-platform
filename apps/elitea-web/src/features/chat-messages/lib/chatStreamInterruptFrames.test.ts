@@ -310,3 +310,23 @@ describe('streaming state: a parked run is not streaming', () => {
     expect(replay([frame])[0]?.isStreaming).toBe(true);
   });
 });
+
+describe('a mixed coordinator + sub-agent pause', () => {
+  it('does not lend the first card’s ancestry to the coordinator card, live or reloaded', () => {
+    const subAgent = sensitivePending('int-sub', 'call-sub', [RESEARCHER_1]);
+    const coordinator = askUserPending('int-root', 'call-root');
+    // The aggregate clones the FIRST card's event, ancestry overlay included.
+    const metadata = { ...pauseMetadata([subAgent, coordinator], [RESEARCHER_1]), metadata: hierarchy([RESEARCHER_1]) };
+    const live = cards(replay([hitlFrame(metadata)]));
+    const group = {
+      id: 9, uuid: MESSAGE_ID, role: 'assistant', content: '', created_at: '2026-10-16 00:00:00',
+      meta: { hitl_interrupt: subAgent, hitl_interrupts: [subAgent, coordinator] },
+    } as unknown as MessageGroupWire;
+    const reloaded = (normaliseAssistantMessage(group, [], undefined).hitlInterrupts ?? []) as unknown as readonly Record<string, unknown>[];
+    const fields = ['interrupt_id', 'parent_agent_name', 'parent_agent_call_id', 'parent_agent_path'];
+    const pick = (entry: Record<string, unknown>) => Object.fromEntries(fields.map((field) => [field, entry[field]]));
+
+    expect(live[1]).toMatchObject({ interrupt_id: 'int-root', parent_agent_name: '', parent_agent_path: [] });
+    expect(live.map(pick)).toEqual(reloaded.map(pick));
+  });
+});

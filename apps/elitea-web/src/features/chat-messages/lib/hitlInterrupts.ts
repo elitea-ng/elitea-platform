@@ -136,6 +136,13 @@ export function getInterruptIdentity(interrupt: RawInterrupt | undefined): strin
   return JSON.stringify([threadId, toolCallId]);
 }
 
+/** A list of strings, or the approve/reject default — a card with no usable action would stall the run. */
+function answerableActions(value: unknown): readonly string[] {
+  return Array.isArray(value) && value.every((action) => typeof action === 'string')
+    ? (value as readonly string[])
+    : ['approve', 'reject'];
+}
+
 /**
  * Build one UI-shaped interrupt from a raw one plus an overlay.
  *
@@ -160,7 +167,7 @@ export function normalizeHitlInterrupt(raw: RawInterrupt = {}, overlay: RawInter
   return {
     message: pickString('message') || 'Please review and take action.',
     node_name: pickString('node_name'),
-    available_actions: (pick('available_actions') as readonly string[] | undefined) ?? ['approve', 'reject'],
+    available_actions: answerableActions(pick('available_actions')),
     questions: asHitlQuestions(pick('questions')),
     routes: (pick('routes') as Record<string, unknown> | undefined) ?? {},
     edit_state_key: pickString('edit_state_key'),

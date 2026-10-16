@@ -215,7 +215,7 @@ function GenericHitlCard({
     : t('features.chatMessages.hitl.defaultMessage', 'Here are some results. Choose the action to proceed.');
   return (
     <Box data-testid="chat-hitl-actions-panel" sx={containerSx}>
-      <Markdown sx={messageSx}>{message}</Markdown>
+      <Markdown sx={messageSx} renderHtml={false}>{message}</Markdown>
       <Box sx={buttonContainerSx}>
         {actions.includes('approve') && (
           <BaseBtn
@@ -281,7 +281,7 @@ export function ChatHitlActions({
   if (actions.includes(ANSWER_ACTION) || hitlInterrupt.guardrail_type === 'clarifying_question') {
     card = (
       <Box sx={clarifyingContainerSx}>
-        {hitlInterrupt.message?.trim() && <Markdown sx={messageSx}>{hitlInterrupt.message}</Markdown>}
+        {hitlInterrupt.message?.trim() && <Markdown sx={messageSx} renderHtml={false}>{hitlInterrupt.message}</Markdown>}
         <AnswerQuestionsControl
           questions={hitlInterrupt.questions ?? []}
           disabled={disabled}
