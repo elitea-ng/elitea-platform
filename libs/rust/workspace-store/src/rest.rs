@@ -5,8 +5,10 @@
 //! The bearer goes to the deployment's origin only. A presigned URL (an
 //! object store on another host) never receives it; a URL on the
 //! deployment's own origin (the ADR-0016 streaming facade, for backends
-//! that cannot presign) does. A URL whose scheme is neither `https` nor
-//! the origin's own `http` (a local stack) is refused.
+//! that cannot presign) does. Main answers the facade and the multipart
+//! completion as origin-relative paths (`/api/v2/elitea_core/…`), which
+//! are resolved against the origin. A URL whose scheme is neither `https`
+//! nor the origin's own `http` (a local stack) is refused.
 //!
 //! Errors keep the server's machine code and message: the desktop error
 //! envelope is `{"error": "<code>", "message": "…"}`; the nested form
@@ -100,9 +102,15 @@ impl RestStore {
         )
     }
 
-    /// Whether `url` is on the deployment's origin; `Err` for a scheme this
-    /// client does not send to.
-    fn same_origin(&self, url: &str) -> Result<bool, StoreError> {
+    /// The absolute URL of a grant's or a plan's `url`, and whether it is
+    /// on the deployment's origin. An origin-relative path (`/api/…`, how
+    /// Main answers its streaming facade and the multipart completion) is
+    /// resolved against the origin; `Err` for a scheme this client does not
+    /// send to.
+    fn resolve(&self, url: &str) -> Result<(String, bool), StoreError> {
+        if url.starts_with('/') && !url.starts_with("//") {
+            return Ok((format!("{}{url}", self.origin), true));
+        }
         let origin_http = self.origin.starts_with("http://");
         let scheme_ok = url.starts_with("https://") || (origin_http && url.starts_with("http://"));
         if !scheme_ok {
@@ -110,7 +118,8 @@ impl RestStore {
                 "the store handed out a URL this client does not use".into(),
             ));
         }
-        Ok(url == self.origin || url.starts_with(&format!("{}/", self.origin)))
+        let same = url == self.origin || url.starts_with(&format!("{}/", self.origin));
+        Ok((url.to_owned(), same))
     }
 
     async fn api<B: Serialize + Sync, T: DeserializeOwned>(
@@ -175,8 +184,9 @@ impl RestStore {
         method: Method,
         url: &str,
     ) -> Result<reqwest::RequestBuilder, StoreError> {
+        let (url, same_origin) = self.resolve(url)?;
         let mut request = self.client.request(method, url).timeout(self.timeout);
-        if self.same_origin(url)? {
+        if same_origin {
             request = request.bearer_auth(self.tokens.bearer().await?);
         }
         Ok(request)
@@ -277,15 +287,15 @@ impl StoreTransport for RestStore {
         parts: &[CompletedPart],
     ) -> Result<(), StoreError> {
         let body = json!({ "upload_id": multipart.upload_id, "parts": parts });
-        if self.same_origin(&multipart.complete_url)? {
-            let _: Value = self
-                .api(Method::POST, multipart.complete_url.clone(), Some(&body))
-                .await?;
+        let (url, same_origin) = self.resolve(&multipart.complete_url)?;
+        if same_origin {
+            // Main answers 204 with no body.
+            let _: Value = self.api(Method::POST, url, Some(&body)).await?;
             return Ok(());
         }
         let response = self
             .client
-            .post(&multipart.complete_url)
+            .post(&url)
             .timeout(self.timeout)
             .header("Content-Type", "application/json")
             .body(body.to_string())
