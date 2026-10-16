@@ -130,9 +130,9 @@ func TestBootstrapOwnsAndReconcilesTheAssets(t *testing.T) {
 	// a growing delay, and the stream's MaxAge is the bound), and an explicit
 	// ack-pending window sized for 60s deferrals. The drift above sets both to
 	// finite values; the bootstrap must put both back.
-	if ci.Config.MaxDeliver != -1 || ci.Config.MaxAckPending != 20000 || ci.Config.AckPolicy != "explicit" ||
+	if ci.Config.MaxDeliver != -1 || ci.Config.MaxAckPending != 40000 || ci.Config.AckPolicy != "explicit" ||
 		ci.Config.DeliverSubject != "" || ci.Config.FilterSubject != "gateway.budget.delta" {
-		t.Errorf("budget-writeback after the bootstrap = %+v; want a pull consumer on gateway.budget.delta, explicit acks, max_deliver -1, max_ack_pending 20000", ci.Config)
+		t.Errorf("budget-writeback after the bootstrap = %+v; want a pull consumer on gateway.budget.delta, explicit acks, max_deliver -1, max_ack_pending 40000", ci.Config)
 	}
 
 	// Counter streams really are counters.

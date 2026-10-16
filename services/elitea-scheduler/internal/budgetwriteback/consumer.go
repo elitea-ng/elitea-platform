@@ -119,6 +119,9 @@ func NewConsumer(fetch Fetcher, store *Store, logger *slog.Logger) *Consumer {
 // transient JetStream blip doesn't kill the loop.
 func (c *Consumer) Run(ctx context.Context) {
 	c.logger.Info("budgetwriteback: consumer started")
+	// The gauges describe a bound consumer; withdraw them when this drain
+	// loop stops (the Supervisor re-attaches and refreshes them).
+	defer metrics.clearConsumerInfo()
 	for {
 		if ctx.Err() != nil {
 			c.logger.Info("budgetwriteback: consumer stopping")
@@ -284,33 +287,47 @@ func (c *Consumer) applyGroup(ctx context.Context, items []decoded) {
 		deltas[i] = it.delta
 	}
 
-	outcome, err := c.store.Apply(ctx, deltas)
+	// Bounded below the consumer's AckWait (30s): a stalled database must not
+	// hold a group past its redelivery, or the same deltas run twice at once.
+	applyCtx, cancel := context.WithTimeout(ctx, applyTimeout)
+	outcome, err := c.store.Apply(applyCtx, deltas)
+	cancel()
+	class, permanent := permanentApplyFailure(err)
 	switch {
-	case err != nil && len(items) > 1:
+	case err != nil && permanent && len(items) > 1:
 		// Isolate ([human decision] 2026-10-16, "Isolate, then drop"): the
-		// coalesced transaction rolled back as a whole, so apply each member
-		// alone. One bad delta then cannot hold its neighbours, which a
-		// redelivery would re-coalesce with it for ever.
-		c.logger.Warn("budgetwriteback: group apply failed; applying each delta alone",
+		// group failed on ONE delta's data, so apply each member alone and
+		// only that one is dropped. A redelivery would re-coalesce it with
+		// its neighbours for ever. A transient or environmental group error
+		// is NOT isolated: every member would fail the same way, and a
+		// k-member group would cost k+1 doomed transactions.
+		c.logger.Warn("budgetwriteback: group apply failed on a delta's data; applying each delta alone",
 			"scope", items[0].delta.Scope, "scope_id", items[0].delta.ScopeID,
-			"deltas", len(items), "err", err)
+			"deltas", len(items), "sqlstate_class", class, "err", err)
 		for _, it := range items {
 			c.applyGroup(ctx, []decoded{it})
 		}
+	case err != nil && permanent:
+		// Drop: this delta fails the same way on every delivery, and with
+		// MaxDeliver -1 it would retry for the stream's whole MaxAge while
+		// holding an ack-pending slot. Its money is lost from the
+		// accumulator; the ERROR line and the counter make that visible.
+		c.logger.Error("budgetwriteback: delta fails permanently; terminating it (its spend is NOT in the accumulator)",
+			"event_id", items[0].delta.EventID, "scope", items[0].delta.Scope,
+			"scope_id", items[0].delta.ScopeID, "delta_nano_usd", items[0].delta.DeltaNanoUSD,
+			"sqlstate_class", class, "err", err)
+		metrics.addDropped("permanent_apply_error", class)
+		c.term(items[0].msg)
+	case err != nil && environmentalApplyFailure(err):
+		// Class 42 ([human decision] 2026-10-16, "Drop only 22/23, retry
+		// 42"): the schema or the grants are wrong for every delta, for
+		// example a scheduler started before the migrations. Deferred, never
+		// dropped; ERROR so an operator fixes the environment.
+		c.logger.Error("budgetwriteback: apply fails on the database schema or grants; deferring (fix the environment)",
+			"reason", "environmental", "scope", items[0].delta.Scope, "scope_id", items[0].delta.ScopeID,
+			"deltas", len(items), "sqlstate_class", class, "err", err)
+		c.nakAll(items)
 	case err != nil:
-		if class, permanent := permanentApplyFailure(err); permanent {
-			// Drop: this delta fails the same way on every delivery, and with
-			// MaxDeliver -1 it would retry for the stream's whole MaxAge while
-			// holding an ack-pending slot. Its money is lost from the
-			// accumulator; the ERROR line and the counter make that visible.
-			c.logger.Error("budgetwriteback: delta fails permanently; terminating it (its spend is NOT in the accumulator)",
-				"event_id", items[0].delta.EventID, "scope", items[0].delta.Scope,
-				"scope_id", items[0].delta.ScopeID, "delta_nano_usd", items[0].delta.DeltaNanoUSD,
-				"sqlstate_class", class, "err", err)
-			metrics.addDropped("permanent_apply_error", class)
-			c.term(items[0].msg)
-			return
-		}
 		// Transient DB failure: NAK for redelivery (§8.6 at-least-once). The
 		// same-transaction dedup guarantees the retry does not double-apply.
 		c.logger.Warn("budgetwriteback: apply failed; will redeliver",
@@ -327,6 +344,11 @@ func (c *Consumer) applyGroup(ctx context.Context, items []decoded) {
 		c.ackAll(items)
 	}
 }
+
+// applyTimeout bounds one Apply transaction. It is below the consumer's
+// AckWait (30s, deploy/helm/nats-bootstrap deltas.writeback.ackWait) with room
+// for the acks, so a delta is never redelivered while its first apply runs.
+const applyTimeout = 20 * time.Second
 
 func (c *Consumer) ackAll(items []decoded) {
 	for _, it := range items {

@@ -468,6 +468,15 @@ for name, c in bcerts.items():
 job = kinds(bs, "Job")[0]["spec"]["template"]["spec"]
 env = {e["name"]: e.get("value") for e in job["containers"][0]["env"]}
 check("the bootstrap dials tls:// with no credential", env.get("NATS_URL", "").startswith("tls://") and "@" not in env.get("NATS_URL", ""))
+# A YAML integer of 7+ digits renders as "1.073741824e+09" through `quote`,
+# which natscli refuses: on default values the Job could not create or
+# reconcile GATEWAY_BUDGET_DELTAS or budget-writeback (review of #1296).
+# Every numeric value renders through `int64 | quote`.
+sci = {k: v for k, v in env.items() if v is not None and re.search(r"[0-9]e\+[0-9]", str(v))}
+check("no bootstrap env value renders in scientific notation", not sci, sci)
+for key, want in (("NATS_DELTAS_MAX_BYTES", "1073741824"), ("NATS_DELTAS_MAX_MSGS", "5000000"),
+                  ("NATS_WRITEBACK_MAX_DELIVER", "-1"), ("NATS_WRITEBACK_MAX_PENDING", "40000")):
+    check(f"bootstrap env {key} renders as the integer {want}", env.get(key) == want, env.get(key))
 check("the bootstrap connects to every account", env.get("NATS_BOOTSTRAP_ACCOUNTS") == "main gateway runtime worker", env.get("NATS_BOOTSTRAP_ACCOUNTS"))
 check("the bootstrap presents no single identity (NATS_TLS_*_FILE)", not any(k.startswith("NATS_TLS_") and k.endswith("_FILE") for k in env))
 check("the bootstrap Job pod is what the NetworkPolicy admits", kinds(bs, "Job")[0]["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/name") == "nats-bootstrap")

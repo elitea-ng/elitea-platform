@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // store_healthy_test.go — PersistHealthyDelta ([human decision] 2026-10-16,
@@ -106,27 +107,38 @@ func TestPersistHealthyDelta_ValidationAndBegin(t *testing.T) {
 // (PersistOutageDelta and PersistHealthyDelta) build their arguments here.
 func TestUsageEventArgs_TrimToTheColumnWidths(t *testing.T) {
 	d := healthyDeltaWithUsage()
-	d.Usage.Provider = strings.Repeat("p", 200)
-	d.Usage.Model = strings.Repeat("é", 100) // 200 bytes
-	d.Usage.ExecutionID = strings.Repeat("x", 300)
-	args := usageEventArgs(d)
-	provider, model, exec := args[3].(string), args[4].(string), args[11].(string)
-	if len(provider) != usageProviderBytes || len(exec) != usageExecutionIDBytes {
-		t.Fatalf("provider=%d exec=%d bytes", len(provider), len(exec))
-	}
-	if len(model) > usageModelBytes || !strings.HasPrefix(d.Usage.Model, model) || strings.ContainsRune(model, '�') {
-		t.Fatalf("model %q (%d bytes) is not a clean prefix within %d bytes", model, len(model), usageModelBytes)
+	// Each value straddles its limit with a multi-byte rune, so a byte cut
+	// would split it: provider (64) with 4-byte runes, model (128) with
+	// 3-byte runes, execution_id (128) with 2-byte runes.
+	d.Usage.Provider = "pp" + strings.Repeat("😀", 20)    // 82 bytes; a rune spans 62..66
+	d.Usage.Model = "m" + strings.Repeat("€", 60)        // 181 bytes; a rune spans 127..130
+	d.Usage.ExecutionID = "x" + strings.Repeat("é", 100) // 201 bytes; a rune spans 127..129
+	for name, args := range map[string][]any{"healthy/outage args": usageEventArgs(d)} {
+		for _, col := range []struct {
+			name  string
+			got   string
+			src   string
+			bytes int
+		}{
+			{"provider", args[3].(string), d.Usage.Provider, 62},
+			{"model", args[4].(string), d.Usage.Model, 127},
+			{"execution_id", args[11].(string), d.Usage.ExecutionID, 127},
+		} {
+			if len(col.got) != col.bytes || !utf8.ValidString(col.got) || !strings.HasPrefix(col.src, col.got) {
+				t.Errorf("%s %s: %d bytes (valid=%v), want a %d-byte valid prefix", name, col.name, len(col.got), utf8.ValidString(col.got), col.bytes)
+			}
+		}
 	}
 	if nullableExecutionID("") != nil {
 		t.Fatal("an absent execution id is not NULL")
 	}
 
-	// The outage writer trims too.
+	// The outage writer sends the same trimmed values.
 	tx := &storeFakeTx{}
 	if err := NewStore(&storeFakeDB{tx: tx}).PersistOutageDelta(context.Background(), d); err != nil {
 		t.Fatal(err)
 	}
-	if got := tx.execArgs[4].(string); len(got) > usageModelBytes {
-		t.Fatalf("the outage writer sent a %d-byte model", len(got))
+	if got := tx.execArgs[4].(string); len(got) != 127 || !utf8.ValidString(got) {
+		t.Fatalf("the outage writer sent a %d-byte model (valid=%v)", len(got), utf8.ValidString(got))
 	}
 }

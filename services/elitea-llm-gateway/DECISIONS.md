@@ -414,13 +414,22 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   fails with the outage-path write. Also guarded by
   `TestOutageWedge_PublishFailureOntoAnOutageOwnedRowStaysOutageOwned` and the
   scheduler's `TestProcessBatch_DeferralBacksOffByDeliveryCount`. The
-  `budget-writeback` consumer also gets an explicit `MaxAckPending` of 20000
+  `budget-writeback` consumer also gets an explicit `MaxAckPending` of 40000
   (`deltas.writeback.maxAckPending`, `NATS_WRITEBACK_MAX_PENDING`; the
   `--defaults` value was 1000). A delayed redelivery keeps its pending slot
   for the whole delay (up to 60s). So the slots needed are deferred deltas/s ×
-  60s, which is about 3000 at the 5k-user peak of about 50 billed requests/s.
-  20000 is about 6× that. A full window only delays delivery: nothing is
-  lost. The scheduler serves `budget_writeback_num_ack_pending` and
+  60s. A billed request publishes one delta per scope it bills, the project
+  AND the member when it carries a member id (budget_gate.go). The 5k-user
+  peak of about 50 billed requests/s is therefore about 100 deltas/s, or about
+  6000 slots in a full outage. 40000 is about 6.7× that (corrected in the
+  third review; the first sizing counted one scope and said 6× for 20000,
+  which was 3.3×). The cost is a server-side pending-list entry per message,
+  nothing on the money path. A full window only delays delivery: nothing is
+  lost. The chart renders every numeric bootstrap value through
+  `int64 | quote`: a 7-digit YAML integer rendered as `1.073741824e+09`, which
+  natscli refuses, so on default values the bootstrap Job could not create the
+  deltas stream (live sets those two values with Argo CD `forceString`
+  parameters, which is why it ran). The scheduler serves `budget_writeback_num_ack_pending` and
   `budget_writeback_num_redelivered` on `GET /metrics`. Both PersistHealthyDelta's
   statement and the consumer's must equal
   `libs/proto/contracts/budget-writeback-guarded-upsert-v1.sql`, and one
@@ -435,22 +444,42 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   *Decision:* (1) remove the trigger. Every ledger writer trims provider to 64
   bytes, model to 128 and execution_id to 128, on a UTF-8 boundary: the
   gateway's `failmode.usageEventArgs` (both callers) and the scheduler's
-  `usageEventSQL` arguments. (2) When a coalesced group's `Apply` fails, the
-  consumer applies each member alone. (3) A member that still fails with a
-  PERMANENT SQLSTATE is `Term`ed. Permanent means class 22 (data), class 23
-  (constraint) except the `processed_event_ids` dedup conflict, or class 42
-  (syntax). It is logged at ERROR with its event id and amount, and counted in
-  `budget_writeback_dropped_total{reason,sqlstate_class}` on the scheduler's
-  `/metrics`. A drop is real spend missing from the accumulator, so alarm on
-  any increase. Every other error stays a delayed `Nak`: connection 08,
-  serialization or deadlock 40, resources 53, operator 57, and an error with
-  no SQLSTATE. Guarded by
-  `TestApplyGroup_APermanentFailureIsTermedAndItsNeighboursApply` (it fails
-  without the isolation),
-  `TestApplyGroup_ATransientFailureIsDeferredNotDropped`,
-  `TestPermanentApplyFailure_Classes`,
-  `TestApply_AnOverLongModelNameIsTrimmedAndTheMoneyLands` and the gateway's
-  `TestUsageEventArgs_TrimToTheColumnWidths`.
+  `usageEventSQL` arguments. (2) When a coalesced group's `Apply` fails with
+  a PERMANENT SQLSTATE, the consumer applies each member alone. A group that
+  fails transiently or environmentally is NOT isolated, because every member
+  would fail the same way, and k members would cost k+1 doomed transactions.
+  It is deferred as one. (3) A member that still fails with a PERMANENT SQLSTATE
+  is `Term`ed. Permanent means class 22 (data) and class 23 (constraint) except
+  the `processed_event_ids` dedup conflict. It is logged at ERROR with its
+  event id and amount, and counted in
+  `budget_writeback_dropped_total{reason="permanent_apply_error",sqlstate_class="22"|"23"}`
+  on the scheduler's `/metrics`. A drop is real spend missing from the
+  accumulator, so alarm on any increase. The elitea chart ships a
+  `PrometheusRule` (`increase(...[15m]) > 0`) where the Prometheus Operator
+  exists, and opt-in scrape annotations or a `PodMonitor`. Every other error
+  stays a delayed `Nak`: connection 08, serialization or deadlock 40, lock
+  55P03, resources 53, operator 57, and an error with no SQLSTATE. Each
+  `Apply` runs under a 20s timeout, below the 30s AckWait.
+  *Revision, [human decision] (owner, 2026-10-16: "Drop only 22/23, retry
+  42"):* class 42 (42501 permission denied, 42P01 missing table, 42703
+  missing column, 42P05, 42P10) is NOT dropped. It is the environment, not a
+  delta. A scheduler that starts before the migrations, or a revoked grant,
+  fails EVERY delta, and dropping them would empty the 72h stream. It is
+  deferred and logged at ERROR with `reason=environmental`. Compose starts the
+  scheduler only after `elitea-migrate` completes. In Helm the elitea-main
+  migrations are a pre-install/pre-upgrade hook, so they finish before the
+  scheduler Deployment is applied. Guarded by
+  `TestApplyGroup_APermanentFailureIsTermedAndItsNeighboursApply`. It uses a
+  fake with committed state: the group transaction rolls back, each neighbour
+  commits its own delta, and the money is exactly goodA+goodC, once. It fails
+  without the isolation. Also guarded by
+  `TestApplyGroup_ATransientGroupFailureIsDeferredInOneTransaction` (it fails
+  with isolation on any error),
+  `TestApplyGroup_AnEnvironmentalFailureIsNeverDropped` (it fails when class
+  42 is permanent), `TestApplyGroup_ATransientFailureIsDeferredNotDropped`,
+  `TestPermanentApplyFailure_Classes`, `TestTruncateUTF8`,
+  `TestApply_AnOverLongModelNameIsTrimmedAndTheMoneyLands`, and the gateway's
+  `TestUsageEventArgs_TrimToTheColumnWidths` and `TestTruncate`.
 
 ## Authored governance (issue #218, 2026-08-23)
 

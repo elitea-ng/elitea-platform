@@ -86,7 +86,7 @@
 #                               exceed the scheduler's worst-case batch apply)
 #   NATS_WRITEBACK_MAX_DELIVER  budget-writeback MaxDeliver (default -1: no cap;
 #                               the scheduler defers with a growing delay)
-#   NATS_WRITEBACK_MAX_PENDING  budget-writeback MaxAckPending (default 20000)
+#   NATS_WRITEBACK_MAX_PENDING  budget-writeback MaxAckPending (default 40000)
 #   NATS_PRESENCE_TTL           ELITEA_CANVAS_PRESENCE TTL (default 2m — must
 #                               be at least elitea-main's 120s roster TTL)
 #   NATS_RT_VALIDATE_MAX_MSGS   } a command stream's capacity (MaxMsgs, 1..1024;
@@ -109,7 +109,7 @@ DELTAS_MAX_BYTES="${NATS_DELTAS_MAX_BYTES:-1073741824}"   # 1 GiB
 DELTAS_MAX_MSGS="${NATS_DELTAS_MAX_MSGS:-5000000}"
 WRITEBACK_ACK_WAIT="${NATS_WRITEBACK_ACK_WAIT:-30s}"
 WRITEBACK_MAX_DELIVER="${NATS_WRITEBACK_MAX_DELIVER:--1}"
-WRITEBACK_MAX_PENDING="${NATS_WRITEBACK_MAX_PENDING:-20000}"
+WRITEBACK_MAX_PENDING="${NATS_WRITEBACK_MAX_PENDING:-40000}"
 PRESENCE_TTL="${NATS_PRESENCE_TTL:-2m}"
 RT_VALIDATE_MAX_MSGS="${NATS_RT_VALIDATE_MAX_MSGS:-1024}"
 RT_AGENT_MAX_MSGS="${NATS_RT_AGENT_MAX_MSGS:-1024}"

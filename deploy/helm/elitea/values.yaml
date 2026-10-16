@@ -2511,6 +2511,26 @@ scheduler:
   tolerations: []
   affinity: {}
 
+  # The budget write-back metrics on GET /metrics of the health port:
+  # budget_writeback_dropped_total{reason,sqlstate_class} (deltas dropped
+  # because their apply fails permanently, [human decision] 2026-10-16; each is
+  # spend missing from the accumulator), budget_writeback_num_ack_pending and
+  # budget_writeback_num_redelivered. Nothing collects them unless one of these
+  # is on: the bundled otel collector receives OTLP only.
+  metrics:
+    # prometheus.io/scrape|port|path pod annotations, for an annotation-based
+    # Prometheus scrape.
+    scrapeAnnotations: false
+    # A PodMonitor for the Prometheus Operator. Rendered only where the
+    # monitoring.coreos.com/v1 API exists.
+    podMonitor:
+      enabled: false
+      interval: 30s
+    # The PrometheusRule alerting on any drop. Rendered only where the
+    # monitoring.coreos.com/v1 API exists; on by default there.
+    prometheusRule:
+      enabled: true
+
 llmGateway:
   # The model hop. Chat and every embedding call go through it.
   enabled: true

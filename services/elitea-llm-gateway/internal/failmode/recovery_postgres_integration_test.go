@@ -65,7 +65,7 @@ func openTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	url := os.Getenv(databaseURLEnv)
 	if url == "" {
-		t.Skipf("set %s to run the outage-recovery integration test", databaseURLEnv)
+		skipPostgresTest(t, "set %s to run the outage-recovery integration test", databaseURLEnv)
 	}
 	ctx := t.Context()
 	pool, err := pgxpool.New(ctx, url)
@@ -78,7 +78,7 @@ func openTestPool(t *testing.T) *pgxpool.Pool {
 		path := filepath.Join("..", "..", "..", "elitea-main", "migrations", "shared", name)
 		sql, err := os.ReadFile(path) //nolint:gosec // a fixed in-repo path
 		if err != nil {
-			t.Skipf("cannot read the shipped migration %s: %v", name, err)
+			skipPostgresTest(t, "cannot read the shipped migration %s: %v", name, err)
 		}
 		if _, err := pool.Exec(ctx, string(sql)); err != nil {
 			t.Fatalf("apply %s: %v", name, err)

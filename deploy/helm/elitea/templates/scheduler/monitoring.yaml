@@ -1,0 +1,44 @@
+{{- if and .Values.scheduler.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{- $metrics := .Values.scheduler.metrics | default dict }}
+{{- if (dig "podMonitor" "enabled" false $metrics) }}
+# Scrapes the scheduler's GET /metrics (budget write-back) on its health port.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "elitea-scheduler.fullname" . }}
+  labels:
+    {{- include "elitea-scheduler.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "elitea-scheduler.selectorLabels" . | nindent 6 }}
+  podMetricsEndpoints:
+    - port: health
+      path: /metrics
+      interval: {{ dig "podMonitor" "interval" "30s" $metrics }}
+---
+{{- end }}
+{{- if (dig "prometheusRule" "enabled" true $metrics) }}
+# [human decision] 2026-10-16, "Isolate, then drop": a delta whose apply
+# fails on its own data (SQLSTATE class 22 or 23) is terminated, and its spend
+# is missing from gateway.llm_budget_accumulators and the usage ledger. Any
+# drop needs an operator.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "elitea-scheduler.fullname" . }}-budget-writeback
+  labels:
+    {{- include "elitea-scheduler.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: elitea-budget-writeback
+      rules:
+        - alert: EliteaBudgetWriteBackDroppedDelta
+          expr: sum by (reason, sqlstate_class) (increase(budget_writeback_dropped_total[15m])) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "The budget write-back dropped a spend delta"
+            description: "{{ "{{" }} $value {{ "}}" }} delta(s) were terminated in 15 minutes (reason {{ "{{" }} $labels.reason {{ "}}" }}, SQLSTATE class {{ "{{" }} $labels.sqlstate_class {{ "}}" }}). Their spend is NOT in gateway.llm_budget_accumulators. The scheduler's ERROR log line \"delta fails permanently\" names each event_id and amount."
+{{- end }}
+{{- end }}

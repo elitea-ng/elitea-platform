@@ -71,18 +71,8 @@ func main() {
 	maintenanceSwitch := maintenance.New(pool)
 
 	// Health server
-	mux := http.NewServeMux()
-	mux.Handle("/healthz", health.New(pool))
-	// The budget write-back consumer's state (attached / waiting / disabled /
-	// misconfigured). Not the pod's probe: a NATS outage must not restart a
-	// scheduler whose other jobs are fine; it is what an operator reads to
-	// tell "draining" from "silently not draining".
 	writeBackStatus := budgetwriteback.NewStatus()
-	mux.Handle("/readyz/budget-writeback", writeBackStatus)
-	// The write-back operator metrics: deltas dropped as permanently failing
-	// ([human decision] 2026-10-16) and the consumer's ack-pending and
-	// redelivered counts. Only these; nothing else is published.
-	mux.Handle("/metrics", budgetwriteback.MetricsHandler())
+	mux := newHealthMux(health.New(pool), writeBackStatus)
 
 	srv := &http.Server{
 		Addr:        cfg.HTTPAddr,
@@ -247,4 +237,21 @@ func main() {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		slog.Error("health server shutdown error", "err", err)
 	}
+}
+
+// newHealthMux is the scheduler's health port.
+//   - /healthz: the pod's probe (the database answers).
+//   - /readyz/budget-writeback: the write-back consumer's state (attached /
+//     waiting / disabled / misconfigured). Not the pod's probe: a NATS outage
+//     must not restart a scheduler whose other jobs are fine; it is what an
+//     operator reads to tell "draining" from "silently not draining".
+//   - /metrics: the write-back operator metrics, the drops of [human
+//     decision] 2026-10-16 and the consumer's ack-pending and redelivered
+//     counts. Only these; nothing else is published.
+func newHealthMux(healthz, writeBackStatus http.Handler) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/healthz", healthz)
+	mux.Handle("/readyz/budget-writeback", writeBackStatus)
+	mux.Handle("/metrics", budgetwriteback.MetricsHandler())
+	return mux
 }
