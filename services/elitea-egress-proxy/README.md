@@ -28,10 +28,53 @@ also uses.
 3. Match host and port against the allowlist in the token.
 4. Resolve the host. Refuse the request when any resolved address is not
    public, or is in `ELITEA_EGRESS_PROXY_DENY_CIDRS`.
-5. Dial the checked IP literal. DNS rebinding cannot change the address
+5. For a `CONNECT`, answer 200, then read the client's TLS ClientHello and
+   check its server name (SNI) against the `CONNECT` host. See "The
+   ClientHello check" below.
+6. Dial the checked IP literal. DNS rebinding cannot change the address
    between the check and the connect.
-6. Relay the bytes: a `CONNECT` tunnel, or one absolute-form `http://`
-   request.
+7. Relay the bytes: a `CONNECT` tunnel, or one absolute-form `http://`
+   request. The bytes that the check read go to the destination first,
+   unchanged.
+
+### The ClientHello check
+
+The proxy does not decrypt a tunnel. The first TLS handshake message, the
+ClientHello, is plaintext in every TLS version, so the proxy reads it before
+it opens the upstream connection:
+
+- The `server_name` must equal the `CONNECT` host. The comparison ignores
+  ASCII case and one trailing dot on either side. Otherwise the reason is
+  `sni-mismatch`.
+- A ClientHello without `server_name` is refused (`sni-missing`) when the
+  `CONNECT` host is a name. It is allowed when the host is an IP literal. A
+  `server_name` on an IP-literal `CONNECT` must be that literal.
+- A first byte that is not a TLS handshake record (0x16) is refused on port
+  443 (`not-tls`). On every other allowed port, non-TLS bytes pass through
+  unchanged.
+- A ClientHello can span several TLS records and several TCP reads. The proxy
+  reassembles it. A ClientHello that does not parse is refused
+  (`client-hello-malformed`). The parser is strict on purpose, so that a
+  parser difference with the destination cannot hide a name.
+- The peek is bounded. The client has 10 seconds after the 200 to send the
+  whole ClientHello (`sni-timeout`). The ClientHello, record headers
+  included, can take at most 16 KiB (`client-hello-too-large`). A real
+  ClientHello is under 2 KiB. The client must speak first on every port: a
+  protocol in which the server speaks first (SMTP, for example) gets no byte
+  through and is closed after the 10 seconds (`sni-timeout`). Passing such a
+  silent tunnel through would let a client wait out the check and then send
+  a fronted ClientHello.
+- With Encrypted Client Hello (ECH), the ClientHello on the wire is the outer
+  one. Its `server_name` is the public name of the ECH configuration, and
+  that is the name the proxy checks. An ECH client whose public name is not
+  the `CONNECT` host is refused.
+
+The order is 200, then the check, then the dial. A client sends its
+ClientHello only after the 200, and a refused tunnel never opens an upstream
+connection. A refused ClientHello gets a TLS `access_denied` alert, then the
+tunnel closes. Because the 200 comes before the dial, a `CONNECT` whose dial
+fails closes after the 200 instead of answering 502. Its log line has outcome
+`upstream-error` and reason `dial-failed`.
 
 ## Protocol support
 
@@ -90,12 +133,24 @@ them, so the token never leaves the proxy.
   Kubernetes API access and no service-account token.
 
 The proxy is not a content filter. A run can send any data to a host that its
-allowlist names. Inside a `CONNECT` tunnel the proxy cannot see the TLS server
-name or the HTTP `Host`, so a shared front end (a CDN that serves many
-tenants on one address) can route a tunnel to a name that the allowlist does
-not hold. Do not allow a shared front-end name when that matters. On a
-forwarded `http://` request, the `Host` that the destination receives is the
-host that the proxy checked.
+allowlist names.
+
+The proxy checks the TLS server name (SNI) of each `CONNECT` tunnel against
+the `CONNECT` host, so classic domain fronting through the SNI is closed. Two
+gaps remain:
+
+- **The HTTP `Host` inside the tunnel.** It is encrypted, and the proxy does
+  not intercept TLS. A shared front end (a CDN that serves many tenants on one
+  address) can still route a request by its inner `Host` header to a name
+  that the allowlist does not hold.
+- **ECH.** With Encrypted Client Hello the proxy checks the outer SNI, which
+  is the public name of the ECH configuration. The real destination is in the
+  encrypted inner ClientHello. A client can reach any name behind a front end
+  whose ECH public name is the allowed host.
+
+Do not allow a shared front-end name when that matters. On a forwarded
+`http://` request, the `Host` that the destination receives is the host that
+the proxy checked.
 
 ## Limits
 
@@ -111,11 +166,14 @@ limits on each replica.
 | Token expiry | in the token | turn wall time | The connection closes (`token-expired`); later requests get 407 |
 | Client connections per replica | `ELITEA_EGRESS_PROXY_MAX_CONNECTIONS` | 4096 | 503, `proxy-connection-limit` |
 | Request header block | `ELITEA_EGRESS_PROXY_MAX_HEADER_BYTES` | 32 KiB | 431; an upstream response over it gets 502 |
+| Time to send the ClientHello after the 200 | fixed | 10s | The tunnel closes, `sni-timeout` |
+| Size of the ClientHello, record headers included | fixed | 16 KiB | The tunnel closes, `client-hello-too-large` |
 
 ## Refusals
 
-A refusal has a status and the `X-Elitea-Egress-Refused` header. The header
-value is one of a fixed set. The body is one short line of fixed text.
+A refusal before the 200 has a status and the `X-Elitea-Egress-Refused`
+header. The header value is one of a fixed set. The body is one short line of
+fixed text.
 
 | Status | Reason |
 | --- | --- |
@@ -123,8 +181,15 @@ value is one of a fixed set. The body is one short line of fixed text.
 | 403 | `host-not-allowed`, `port-not-allowed`, `ip-literal-not-allowed`, `address-not-public`, `run-byte-limit`, `protocol-not-supported` |
 | 400 | `bad-target`, `protocol-not-supported` (a request that is not a proxy request) |
 | 429 | `run-connection-limit` |
-| 502 | `resolve-failed`; a failed dial has no reason header |
+| 502 | `resolve-failed`; a failed dial of an `http://` request has no reason header (a `CONNECT` closes after the 200) |
 | 503 | `proxy-connection-limit`, `draining` |
+| none: after the 200, the tunnel closes | `sni-mismatch`, `sni-missing`, `not-tls`, `sni-timeout`, `client-hello-too-large`, `client-hello-malformed` |
+
+A ClientHello refusal comes after the 200, so it has no status and no header.
+The client gets a TLS `access_denied` alert (none for `not-tls`), then the
+tunnel closes. The reason is in the connection log line, in
+`egress_proxy_refusals_total{reason}` and in the run summary's
+`hosts_refused`.
 
 ## Configuration
 
