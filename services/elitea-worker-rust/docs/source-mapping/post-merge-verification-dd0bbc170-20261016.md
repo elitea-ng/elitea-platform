@@ -1,7 +1,7 @@
 # Post-merge verification of merged main `dd0bbc170` (#1084) — 2026-10-16 (WIP)
 
 **Status: work in progress, paused 2026-10-16.** Browser journeys Stop, Worker kill and the native JavaScript
-profile are still open; the Go `-race` coverage rerun was still running at the pause.
+profile are still open.
 
 Scope: #1084 ("Fix Point 5 consumers and retained Code recovery", merged as `89fe71f2a`) verified on current main
 `dd0bbc170`, 31 commits later (mostly toolkit, office and indexing work, #1260–#1295). No product code changed in
@@ -38,7 +38,7 @@ build (`elitea-vector:pm1084-dd0bbc170`) exists but was not deployed.
 | Go `vet` (13 modules), container `golang:1.26.9-bookworm`, `GOPROXY=off` | Pass |
 | OpenAPI generated server current (`oapi-codegen@v2.7.2`, no diff) | Pass |
 | Contract static checks | 18/18 |
-| Go `coverage --race`, CI env, pgvector PG18, NATS 2.12.0 secured profile (natscli 0.4.0), S3 emulator | First run killed by a Docker Desktop restart (VM out of memory, 18:46). One failure before that, `natstest.TestServicesCannotCreateStreams` (TLS i/o timeout under load; #1084 changed no `libs/go`); it passed in the rerun. Rerun with `-p=4` still running at the pause. Azure/GCS emulators not run (as before). |
+| Go `coverage --race`, CI env, pgvector PG18, NATS 2.12.0 secured profile (natscli 0.4.0), S3 emulator, rerun with `-p=4` | 18,310 tests executed, 32 skipped; all pass except `tests/system` `TestIndexV2PreflightShippedBinary` (needs a docker CLI in the test container, environmental, as on c0f2e5f9b). Undeclared skips: the 2 Azure/GCS conformance suites (emulators not run). The first run was killed by a Docker Desktop restart (VM out of memory); its one failure, `natstest.TestServicesCannotCreateStreams` (TLS i/o timeout under load), passed in the rerun. |
 | Worker `fmt`, `clippy -D warnings`, `cargo doc` | Clean |
 | Worker `cargo test --all-targets --all-features`, real PG18, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18` | 2,388 passed, 0 failed, 90 ignored |
 | Worker ignored CI suites (TLS fixtures generated) | deadline 6, preparation 17, hydration 16: all pass |
@@ -104,7 +104,6 @@ Agent 166, pipelines 167 and 168, chats 880–884. Pipelines 140 and 142 come fr
 
 - Browser: Stop during a Code run (CANCELLED once), Worker kill during a Code run (one result, settlement attempt 2,
   no re-run), JavaScript npm on the native profile as its own run, reload checks for chats 883/884.
-- Go `-race` coverage rerun result.
 - PR.
 
 ## Follow-ups
