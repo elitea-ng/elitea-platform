@@ -157,7 +157,7 @@ async fn run_scenario(url: &str, scenario: &str, phases: &[&str]) -> IsolatedPos
 
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_nested_ordinary_agent_in_a_saved_child_resumes_once_after_process_replacement() {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
             "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
         );
@@ -174,7 +174,7 @@ async fn postgres_nested_ordinary_agent_in_a_saved_child_resumes_once_after_proc
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_sensitive_tool_card_of_a_graph_agent_node_resumes_once_after_process_replacement()
 {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
             "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
         );
@@ -208,7 +208,7 @@ async fn collect_pipeline_failure(
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_effectful_sensitive_tool_approval_in_a_graph_agent_node_fails_readably_without_the_effect()
  {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
             "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
         );
@@ -220,7 +220,7 @@ async fn postgres_effectful_sensitive_tool_approval_in_a_graph_agent_node_fails_
 
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_effectful_sensitive_tool_block_in_a_graph_agent_node_resumes_once() {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
             "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
         );
@@ -233,7 +233,7 @@ async fn postgres_effectful_sensitive_tool_block_in_a_graph_agent_node_resumes_o
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_three_call_batch_with_one_sensitive_call_resumes_once_after_process_replacement()
 {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
             "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
         );
@@ -245,7 +245,7 @@ async fn postgres_three_call_batch_with_one_sensitive_call_resumes_once_after_pr
 
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_conversation_an_older_worker_paused_continues_unscoped_without_receipts() {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
             "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
         );
