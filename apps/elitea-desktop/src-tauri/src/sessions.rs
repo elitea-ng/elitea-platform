@@ -63,6 +63,9 @@
 //! already reads carries it): a later turn that reads a different count
 //! (another device or the cloud wrote, or a message was deleted) re-seeds.
 
+// The lifecycle and Doctor users of this store arrive with the next stage.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -264,6 +267,17 @@ impl Drop for TurnScope {
         if active.get(&self.key) == Some(&self.execution_id) {
             active.remove(&self.key);
         }
+    }
+}
+
+impl TurnScope {
+    /// The server created the turn: tag its events with the execution's id.
+    pub fn retag(&mut self, execution_id: &str) {
+        let mut active = self.active.lock();
+        if active.get(&self.key) == Some(&self.execution_id) {
+            active.insert(self.key.clone(), execution_id.to_owned());
+        }
+        self.execution_id = execution_id.to_owned();
     }
 }
 
@@ -762,11 +776,12 @@ impl SessionStore {
     }
 
     /// The session's stored events, oldest first, with what each row
-    /// records.
+    /// records (what `session_info` summarises; tests read the rows).
     ///
     /// # Errors
     ///
     /// The store could not be read.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn rows(&self, key: &str) -> Result<Vec<StoredRow>, HostError> {
         let key = key.to_owned();
         self.call("could not read the session", move |conn| {
@@ -793,7 +808,9 @@ pub fn session_files(dir: &Path) -> Vec<PathBuf> {
 
 /// One stored event with what its row records.
 #[derive(Clone, Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub struct StoredRow {
+    #[allow(dead_code)] // the row order; tests read the rows in it
     pub seq: i64,
     pub turn_execution_id: String,
     pub executed_by: String,

@@ -446,6 +446,7 @@ async fn harness_lossy(
                 delay: Duration::from_millis(5),
             },
             history: Some(history.clone()),
+            sessions: None,
             index: None,
             sandbox_deny: crate::d0::turn::app_dirs_for_sandbox([Some(app.path().to_owned())]),
             app_id: None,

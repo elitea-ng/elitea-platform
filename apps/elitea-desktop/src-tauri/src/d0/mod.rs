@@ -20,6 +20,9 @@
 //! * [`mentions`] — the "@" file picker and a turn's referenced paths;
 //! * [`skills`] — a skill picked with "/", applied to one turn;
 //! * [`framing`] — framing text the instructions carry but do not author;
+//! * [`session`] — a turn's session: reopened from `sessions.sqlite`, seeded
+//!   from the server conversation when it has nothing (the execution
+//!   request's `chat_history` stays empty: the session carries the history);
 //! * [`turn`] — the assembler and the host's turn table.
 
 pub mod api;
@@ -31,9 +34,10 @@ pub mod mentions;
 pub mod model;
 pub mod recorder;
 pub mod remote_tools;
+pub mod session;
 pub mod skills;
 pub mod tools;
 pub mod turn;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
