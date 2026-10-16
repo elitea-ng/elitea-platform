@@ -423,10 +423,12 @@ jobs:
           # `Compiling` line or another binary hash means it picked another
           # toolchain or feature set and rebuilt (PR #1297 review finding 1).
           reused() {
-            local log="$1" took="$2" ran compiled
-            ran="$(sed -nE 's/^[[:space:]]*Running unittests src\/lib\.rs \((.*)\)$/\1/p' "$log")"
+            local log="$1" took="$2" ran compiled plain
+            # CARGO_TERM_COLOR=always: strip the colour codes before reading.
+            plain="$(sed -E 's/\x1b\[[0-9;]*m//g' "$log")"
+            ran="$(printf '%s\n' "$plain" | sed -nE 's/^[[:space:]]*Running unittests src\/lib\.rs \((.*)\)$/\1/p')"
             ran="${ran##*/}"
-            compiled="$(grep -cE '^[[:space:]]*Compiling ' "$log" || true)"
+            compiled="$(printf '%s\n' "$plain" | grep -cE '^[[:space:]]*Compiling ' || true)"
             echo "helper ${log##*/}: ${took}s, ran ${ran:-nothing}, ${compiled} crate(s) compiled"
             if [ "$compiled" -ne 0 ] || [ "$ran" != "${expected##*/}" ]; then
               echo "::error::the ledger helper rebuilt the worker (${compiled} Compiling line(s), ran ${ran:-nothing}, expected ${expected##*/})"
