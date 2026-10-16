@@ -1,0 +1,98 @@
+name: CI — Handoff load gate
+
+# ADR-0034 decision 15: 1,000 cloud turns publishing to the workspace store
+# at the same time show a p99 publish time under 50 ms, no growth in Main's
+# database connections and no lock waits between threads. The test is behind
+# the `loadgate` build tag (a measurement, not a unit test), so ci-go.yml
+# never runs it; this job does, against a real PostgreSQL.
+#
+# The job fails when the tests did not RUN: a missing ELITEA_TEST_DATABASE_URL
+# makes them t.Skip, and a skip must not read as a pass.
+
+on:
+  pull_request:
+    paths:
+      - "services/elitea-main/internal/application/workspacestore/**"
+      - "services/elitea-main/internal/application/workspacehandoff/**"
+      - "services/elitea-main/internal/infra/db/repos/workspace_*"
+      - "services/elitea-main/migrations/shared/**"
+      - ".github/workflows/ci-handoff-loadgate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/elitea-main/internal/application/workspacestore/**"
+      - "services/elitea-main/internal/infra/db/repos/workspace_*"
+      - "services/elitea-main/migrations/shared/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-handoff-loadgate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  loadgate:
+    name: Handoff publish load gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        # The same image as ci-go.yml's test job: the repos package's
+        # TestMain builds its migrated template with CREATE EXTENSION vector.
+        image: pgvector/pgvector:0.8.5-pg16-trixie
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
+
+      - name: Run the load gate
+        working-directory: services/elitea-main
+        env:
+          ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+          # Main's pool size for the gate (ELITEA_DATABASE_MAX_CONNS allows
+          # 1-64).
+          ELITEA_LOADGATE_MAX_CONNS: "32"
+          GOFLAGS: -count=1
+        run: |
+          set -uo pipefail
+          go test -tags loadgate -run 'TestLoadGate' -v -timeout 15m ./internal/infra/db/repos/ > loadgate.log 2>&1
+          status=$?
+          cat loadgate.log
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          # Every case must have RUN and passed; a skip is a failure here.
+          for name in 'TestLoadGatePublishesAcrossThreads/sustained' 'TestLoadGatePublishesAcrossThreads/burst' 'TestLoadGateSameThreadContention'; do
+            if ! grep -q -- "--- PASS: ${name} " loadgate.log; then
+              echo "::error::${name} did not run and pass"
+              exit 1
+            fi
+          done
+          if grep -q -- '--- SKIP' loadgate.log; then
+            echo "::error::a load gate case was skipped"
+            exit 1
+          fi
+          {
+            echo '### Handoff publish load gate'
+            echo '```'
+            grep -E 'n=[0-9]+ wall=' loadgate.log | sed -E 's/^.*_test\.go:[0-9]+: //'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
