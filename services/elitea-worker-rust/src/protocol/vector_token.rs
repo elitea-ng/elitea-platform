@@ -61,6 +61,8 @@ pub(crate) enum VectorSource {
     Deepwiki,
     /// `inventory`, reserved (ADR-0031 decision 7).
     Inventory,
+    /// `memory` (worker unit M9): the memory toolkit's points.
+    Memory,
 }
 
 impl VectorSource {
@@ -69,6 +71,7 @@ impl VectorSource {
             "toolkit_index" => Some(Self::ToolkitIndex),
             "deepwiki" => Some(Self::Deepwiki),
             "inventory" => Some(Self::Inventory),
+            "memory" => Some(Self::Memory),
             _ => None,
         }
     }
@@ -81,6 +84,7 @@ impl VectorSource {
             Self::ToolkitIndex => "toolkit_index",
             Self::Deepwiki => "deepwiki",
             Self::Inventory => "inventory",
+            Self::Memory => "memory",
         }
     }
 }

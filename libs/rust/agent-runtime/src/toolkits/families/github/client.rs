@@ -37,6 +37,7 @@ use super::commits::{
 use super::config::GitHubToolkitConfig;
 use super::projects::{
     MAX_PROJECT_ITEMS, MAX_PROJECT_RESPONSE_BYTES, project_project_issues, project_query_payload,
+    project_search_payload,
 };
 use super::pull_requests::{
     MAX_PULL_REQUEST_FILES, MAX_PULL_REQUESTS, PULL_REQUEST_FILES_PER_PAGE,
@@ -44,7 +45,8 @@ use super::pull_requests::{
     project_pull_request_list, pull_request_file_count,
 };
 use super::workflow_runs::{
-    MAX_WORKFLOW_JOBS, MAX_WORKFLOW_JOBS_RESPONSE_BYTES, project_workflow_status,
+    MAX_WORKFLOW_JOBS, MAX_WORKFLOW_JOBS_RESPONSE_BYTES, project_workflow_logs,
+    project_workflow_status,
 };
 use crate::toolkits::families::connector_client::{IntoAdk, transport};
 
@@ -133,6 +135,16 @@ impl IntoAdk for GitHubClientError {
                 "github.egress.refused",
                 "the GitHub host is not on the egress allowlist",
             ),
+            GitHubClientErrorCode::Conflict => (
+                ErrorCategory::InvalidInput,
+                "github.conflict",
+                "GitHub reported a conflict: the target changed or already exists",
+            ),
+            GitHubClientErrorCode::UnknownOutcome => (
+                ErrorCategory::Internal,
+                "github.effect.unknown_outcome",
+                "GitHub may have applied the requested change; check the repository before retrying",
+            ),
         };
         AdkError::new(ErrorComponent::Tool, category, code, message).with_retry(RetryHint {
             should_retry: self.retryable(),
@@ -145,15 +157,41 @@ impl IntoAdk for GitHubClientError {
 /// One invocation-scoped GitHub family client over the shared REST client
 /// and the worker's transport.
 pub(crate) struct GitHubClient {
-    rest: GitHubRest,
+    pub(super) rest: GitHubRest,
+    /// The branch the tools default to. It starts at the configured active
+    /// branch and moves with `create_branch`, `set_active_branch` and
+    /// `delete_branch`, for this invocation only, as the SDK's does.
+    active_branch: std::sync::Mutex<String>,
 }
 
 impl GitHubClient {
     pub(crate) fn new(config: GitHubToolkitConfig) -> Result<Self, GitHubClientError> {
         let transport = transport(&CLIENT_POLICY).map_err(|_| invalid_configuration())?;
-        Ok(Self {
-            rest: GitHubRest::new(config, transport)?,
-        })
+        Ok(Self::over(GitHubRest::new(config, transport)?))
+    }
+
+    fn over(rest: GitHubRest) -> Self {
+        let active_branch = std::sync::Mutex::new(rest.config().active_branch().to_owned());
+        Self {
+            rest,
+            active_branch,
+        }
+    }
+
+    /// The branch tools default to now.
+    pub(in crate::toolkits) fn active_branch(&self) -> String {
+        self.active_branch.lock().map_or_else(
+            |poisoned| poisoned.into_inner().clone(),
+            |branch| branch.clone(),
+        )
+    }
+
+    pub(super) fn set_active_branch(&self, branch: &str) {
+        let mut guard = self
+            .active_branch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        branch.clone_into(&mut guard);
     }
 
     /// Perform the current SDK connection probe through this family client.
@@ -240,6 +278,20 @@ pub(crate) trait GitHubApi: Send + Sync {
         project_number: u32,
         items_count: usize,
     ) -> Result<Value, GitHubClientError>;
+
+    async fn search_project_issues(
+        &self,
+        board_repository: &str,
+        project_number: u32,
+        items_count: usize,
+        search_query: &str,
+    ) -> Result<Value, GitHubClientError>;
+
+    async fn get_workflow_logs(
+        &self,
+        run_id: u64,
+        repository: Option<&str>,
+    ) -> Result<Value, GitHubClientError>;
 }
 
 /// Selects one of the two immutable branches admitted with the toolkit.
@@ -314,7 +366,8 @@ impl GitHubApi for GitHubClient {
     ) -> Result<String, GitHubClientError> {
         let repository = repository.unwrap_or_else(|| self.rest.config().repository());
         let (owner, repository_name) = validate_repository(repository)?;
-        let branch = branch.unwrap_or_else(|| self.rest.config().active_branch());
+        let active = self.active_branch();
+        let branch = branch.unwrap_or(active.as_str());
         validate_runtime_text(branch, MAX_BRANCH_BYTES)?;
         let file_segments = validate_file_path(file_path)?;
         let mut path = Vec::with_capacity(file_segments.len().saturating_add(4));
@@ -338,9 +391,10 @@ impl GitHubApi for GitHubClient {
         directory_path: Option<&str>,
     ) -> Result<Value, GitHubClientError> {
         let (owner, repository) = validate_repository(self.rest.config().repository())?;
+        let active = self.active_branch();
         let reference = match scope {
             GitHubFileScope::BaseBranch => self.rest.config().base_branch(),
-            GitHubFileScope::ActiveBranch => self.rest.config().active_branch(),
+            GitHubFileScope::ActiveBranch => active.as_str(),
         };
         let directory = normalize_directory_path(directory_path.unwrap_or(""))?;
         let tree_sha = self
@@ -668,6 +722,66 @@ impl GitHubApi for GitHubClient {
         run_id: u64,
         repository: Option<&str>,
     ) -> Result<Value, GitHubClientError> {
+        let (run, jobs) = self.workflow_run_and_jobs(run_id, repository).await?;
+        project_workflow_status(&run, &jobs, run_id)
+    }
+
+    async fn get_workflow_logs(
+        &self,
+        run_id: u64,
+        repository: Option<&str>,
+    ) -> Result<Value, GitHubClientError> {
+        let (run, jobs) = self.workflow_run_and_jobs(run_id, repository).await?;
+        project_workflow_logs(&run, &jobs, run_id)
+    }
+
+    async fn list_project_issues(
+        &self,
+        board_repository: &str,
+        project_number: u32,
+        items_count: usize,
+    ) -> Result<Value, GitHubClientError> {
+        if items_count == 0 || items_count > MAX_PROJECT_ITEMS {
+            return Err(invalid_input());
+        }
+        let (owner, repository) = validate_repository(board_repository)?;
+        let payload = project_query_payload(owner, repository, project_number, items_count);
+        let response = self
+            .rest
+            .post_graphql_json(&payload, MAX_PROJECT_RESPONSE_BYTES)
+            .await?;
+        project_project_issues(&response, items_count)
+    }
+
+    async fn search_project_issues(
+        &self,
+        board_repository: &str,
+        project_number: u32,
+        items_count: usize,
+        search_query: &str,
+    ) -> Result<Value, GitHubClientError> {
+        if items_count == 0 || items_count > MAX_PROJECT_ITEMS {
+            return Err(invalid_input());
+        }
+        validate_runtime_text(search_query, MAX_SEARCH_QUERY_BYTES)?;
+        let (owner, repository) = validate_repository(board_repository)?;
+        let payload =
+            project_search_payload(owner, repository, project_number, items_count, search_query);
+        let response = self
+            .rest
+            .post_graphql_json(&payload, MAX_PROJECT_RESPONSE_BYTES)
+            .await?;
+        project_project_issues(&response, items_count)
+    }
+}
+
+impl GitHubClient {
+    /// A workflow run and its first page of jobs.
+    async fn workflow_run_and_jobs(
+        &self,
+        run_id: u64,
+        repository: Option<&str>,
+    ) -> Result<(Value, Value), GitHubClientError> {
         if run_id == 0 || i64::try_from(run_id).is_err() {
             return Err(invalid_input());
         }
@@ -710,25 +824,7 @@ impl GitHubApi for GitHubClient {
                 MAX_WORKFLOW_JOBS_RESPONSE_BYTES,
             )
             .await?;
-        project_workflow_status(&run, &jobs, run_id)
-    }
-
-    async fn list_project_issues(
-        &self,
-        board_repository: &str,
-        project_number: u32,
-        items_count: usize,
-    ) -> Result<Value, GitHubClientError> {
-        if items_count == 0 || items_count > MAX_PROJECT_ITEMS {
-            return Err(invalid_input());
-        }
-        let (owner, repository) = validate_repository(board_repository)?;
-        let payload = project_query_payload(owner, repository, project_number, items_count);
-        let response = self
-            .rest
-            .post_graphql_json(&payload, MAX_PROJECT_RESPONSE_BYTES)
-            .await?;
-        project_project_issues(&response, items_count)
+        Ok((run, jobs))
     }
 }
 
@@ -1181,9 +1277,7 @@ impl GitHubClient {
         config: GitHubToolkitConfig,
         transport: std::sync::Arc<dyn elitea_connectors::transport::Transport>,
     ) -> Result<Self, GitHubClientError> {
-        Ok(Self {
-            rest: GitHubRest::new(config, transport)?,
-        })
+        Ok(Self::over(GitHubRest::new(config, transport)?))
     }
 
     pub(in crate::toolkits) fn test_request(

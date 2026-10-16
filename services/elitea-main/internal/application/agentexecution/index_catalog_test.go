@@ -139,7 +139,7 @@ func TestCurrentApplicationToolSnapshotFreezesEveryIndexCatalogInOneRead(t *test
   "llm_settings":{"model_name":"model"},
   "tools":[
     {"id":19,"type":"github","name":"Repo","author_id":11,"settings":{"selected_tools":["search_index"],"repository":"a/b"},"meta":{"current":true}},
-    {"id":23,"type":"sharepoint","name":"Team Docs","author_id":11,"settings":{"selected_tools":["search"]},"meta":{"current":true}},
+    {"id":23,"type":"aha","name":"Team Docs","author_id":11,"settings":{"selected_tools":["search"]},"meta":{"current":true}},
     {"id":29,"type":"gitlab","name":"Release","author_id":11,"settings":{"selected_tools":["search_index"],"repository":"a/b"},"meta":{"current":true}}
   ]
 }`),
@@ -201,7 +201,7 @@ func TestCurrentApplicationToolSnapshotLeavesNonIndexingFamiliesAlone(t *testing
   "id":41,
   "agent_type":"agent",
   "llm_settings":{"model_name":"model"},
-  "tools":[{"id":19,"type":"sharepoint","name":"Team Docs","author_id":11,
+  "tools":[{"id":19,"type":"aha","name":"Team Docs","author_id":11,
     "settings":{"selected_tools":["search"]},"meta":{"current":true}}]
 }`),
 		},
@@ -215,7 +215,7 @@ func TestCurrentApplicationToolSnapshotLeavesNonIndexingFamiliesAlone(t *testing
 	}
 	tool := version["tools"].([]any)[0].(map[string]any)
 	if _, present := tool[indexcatalog.Key]; present || len(catalog.seen) != 0 {
-		t.Fatalf("a sharepoint toolkit (I2) must carry no catalog and ask nothing: %#v %v", tool, catalog.seen)
+		t.Fatalf("an aha toolkit (not an indexing family) must carry no catalog and ask nothing: %#v %v", tool, catalog.seen)
 	}
 }
 

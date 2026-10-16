@@ -49,8 +49,9 @@ export interface MessageAuthorWire {
  */
 export interface MessageParticipantWire {
   readonly id: string;
-  readonly meta?: { readonly tools?: readonly MessageParticipantToolWire[]; readonly user_name?: string; readonly user_avatar?: string };
-  readonly entity_meta?: { readonly email?: string; readonly id?: string | number };
+  readonly entity_name?: string;
+  readonly meta?: { readonly tools?: readonly MessageParticipantToolWire[]; readonly user_name?: string; readonly user_avatar?: string; readonly name?: string };
+  readonly entity_meta?: { readonly email?: string; readonly id?: string | number; readonly name?: string; readonly model_name?: string };
 }
 
 /** `foundParticipant.meta.tools[]` (line 205). */
@@ -150,6 +151,8 @@ export interface MessageGroupMetaWire {
   readonly execution_generation?: string;
   readonly pipeline_static_v1?: unknown;
   readonly pipeline_static_tools_v1?: unknown;
+  /** What the turn was configured with but could not serve (worker `skipped_capabilities`); see `features/chat-messages/lib/skippedCapabilities`. */
+  readonly skipped_capabilities?: unknown;
   readonly interaction_uuid?: string;
   readonly references?: unknown;
   readonly is_error?: boolean;

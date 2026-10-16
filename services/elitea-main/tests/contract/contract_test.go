@@ -238,7 +238,7 @@ func sameKeys(a, b []string) bool {
 }
 
 func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
+	if v := os.Getenv(key); v != "" { // testpg:not-a-database: only the CONTRACT_* HTTP settings reach this helper
 		return v
 	}
 	return fallback

@@ -121,6 +121,39 @@ impl Scope {
         self
     }
 
+    /// Narrows to the points one memory owner holds (`user:<id>` or
+    /// `project`), as the token decides it. The only way an `owner` condition
+    /// is ever built: no request carries one.
+    #[must_use]
+    pub fn owned_by(mut self, owner: &str) -> Self {
+        self.conditions
+            .push(Condition::matches(key::OWNER, owner.to_owned()));
+        self
+    }
+
+    /// Narrows to one memory toolkit's points.
+    #[must_use]
+    pub fn toolkit(mut self, toolkit_id: i64) -> Self {
+        self.conditions
+            .push(Condition::matches(key::TOOLKIT_ID, toolkit_id.to_string()));
+        self
+    }
+
+    /// Narrows to what a memory binding names: its owner and its toolkit.
+    #[must_use]
+    pub fn bound_to(self, binding: &crate::auth::MemoryBinding) -> Self {
+        self.owned_by(&binding.owner).toolkit(binding.toolkit_id)
+    }
+
+    /// Every project (an administrator's cross-project operation); the
+    /// callers add what they narrow by.
+    #[must_use]
+    pub fn every_project() -> Self {
+        Self {
+            conditions: Vec::new(),
+        }
+    }
+
     /// Adds one condition the service built (a delete selector).
     #[must_use]
     pub fn with(mut self, condition: Condition) -> Self {
@@ -386,6 +419,8 @@ mod tests {
             "source",
             "namespace_id",
             "generation",
+            "owner",
+            "toolkit_id",
             "text",
             "metadata",
             "metadata.",

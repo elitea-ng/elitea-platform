@@ -39,6 +39,7 @@ export interface McpServerForm {
   readonly url: string;
   readonly baseUrl: string;
   readonly clientId: string;
+  readonly tokenUrl: string;
   readonly clientSecret: string;
   readonly clearSecret: boolean;
   readonly timeout: string;
@@ -53,6 +54,7 @@ const EMPTY_FORM: McpServerForm = {
   url: '',
   baseUrl: '',
   clientId: '',
+  tokenUrl: '',
   clientSecret: '',
   clearSecret: false,
   timeout: '',
@@ -84,6 +86,7 @@ export function initialForm(editing: AdminMcpServer | undefined): McpServerForm 
     url: editing.url,
     baseUrl: editing.base_url,
     clientId: editing.client_id,
+    tokenUrl: editing.token_url ?? '',
     clientSecret: '',
     clearSecret: false,
     timeout: editing.timeout > 0 ? String(editing.timeout) : '',
@@ -185,6 +188,52 @@ export function validateDraft(
     );
   }
   return undefined;
+}
+
+/**
+ * Courtesy check of the pinned token endpoint, mirroring the server's rule
+ * (`mcpregistry.ValidatePrebuiltTokenURL`): an exact URL, https (http only to
+ * loopback), no placeholder. The server refuses the same cases independently.
+ *
+ * A templated server URL that carries a client secret needs a pin: the secret
+ * is only ever sent to the pinned endpoint (or to one discovered from an exact
+ * server URL), so without it the secret could never be used.
+ */
+export function validateTokenUrl(tokenUrl: string, serverUrl: string, willHaveSecret: boolean): string | undefined {
+  const pin = tokenUrl.trim();
+  if (pin === '') {
+    if (willHaveSecret && /[{}]/.test(serverUrl)) {
+      return t(
+        'pages.admin.mcpServers.dialog.error.tokenUrlRequired',
+        'A server URL with placeholders and a client secret needs a token endpoint. Enter the OAuth token URL the secret may be sent to.',
+      );
+    }
+    return undefined;
+  }
+  return exactEndpoint(pin)
+    ? undefined
+    : t(
+        'pages.admin.mcpServers.dialog.error.tokenUrl',
+        'The token endpoint must be an exact https URL without placeholders.',
+      );
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '127.0.0.1' || hostname === '[::1]';
+}
+
+/** One absolute URL: no placeholder, whitespace, credentials, fragment or dot segment (checked on the raw text, since `URL` resolves them away). */
+function exactEndpoint(pin: string): boolean {
+  if (/[{}\s\\]/.test(pin) || pin.length > 4096) return false;
+  if (pin.split('?')[0]?.split('/').some((segment) => segment === '.' || segment === '..')) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(pin);
+  } catch {
+    return false;
+  }
+  const schemeOk = parsed.protocol === 'https:' || (parsed.protocol === 'http:' && isLoopbackHost(parsed.hostname));
+  return schemeOk && parsed.username === '' && parsed.password === '' && parsed.hash === '';
 }
 
 /** The catalogue key the entry is, or will be, stored under. */

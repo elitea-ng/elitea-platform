@@ -91,10 +91,17 @@ func (r Receipt) Validate() error {
 		return ErrInvalid
 	}
 	transient := false
+	unclassifiedFailure := false
 	switch r.FailureClass {
 	case "dependency_unavailable", "rate_limited", "attempt_timeout", "worker_interrupted":
 		transient = true
 	case "invalid_configuration", "invalid_input", "invalid_result", "model_output_incomplete":
+	case "unknown":
+		// The Worker could not classify the failure and an external effect may
+		// have happened. Only effect reconciliation is allowed: the owning
+		// effect proof decides, and a repeat is never offered (see the action
+		// check below).
+		unclassifiedFailure = true
 	default:
 		return ErrInvalid
 	}
@@ -129,6 +136,9 @@ func (r Receipt) Validate() error {
 		return ErrInvalid
 	}
 	if r.AllowedActions[0] != action {
+		return ErrInvalid
+	}
+	if unclassifiedFailure && action != "reconcile" {
 		return ErrInvalid
 	}
 	if action == "retry" {

@@ -616,3 +616,78 @@ mod native_tests {
         assert!(PreparationJob::from_transport(&serde_json::to_vec(&v).unwrap()).is_err());
     }
 }
+
+#[cfg(test)]
+pub(crate) mod frozen_lookup_tests {
+    use super::*;
+
+    pub(crate) fn fixture() -> (PreparationJob, DependencyBundle) {
+        let request = PreparationJob::new_native(
+            Language::Rust,
+            "[dependencies]\nitoa = \"=1.0.18\"\n".into(),
+            format!("sha256:{}", "a".repeat(64)),
+            "cargo-prepare-v1".into(),
+            60,
+            NativePlatform {
+                os: "linux".into(),
+                arch: "amd64".into(),
+                abi: "gnu".into(),
+            },
+            format!("sha256:{}", "b".repeat(64)),
+            "cargo-execute-v1".into(),
+        )
+        .unwrap();
+        let mut native: serde_json::Value =
+            serde_json::from_slice(include_bytes!("native-cargo-v2.json")).unwrap();
+        let fingerprint = hex(&request.fingerprint().unwrap());
+        let declaration = hex(digest::digest(&digest::SHA256, request.source.as_bytes()).as_ref());
+        native["preparation_sha256"] = fingerprint.clone().into();
+        native["payload"]["preparation_sha256"] = fingerprint.into();
+        native["source_sha256"] = declaration.clone().into();
+        native["payload"]["declaration_sha256"] = declaration.into();
+        native.as_object_mut().unwrap().remove("digest");
+        let content = super::super::native_bundle::canonical(&native).unwrap();
+        let root = hex(digest::digest(&digest::SHA256, &content).as_ref());
+        native["digest"] = root.clone().into();
+        let bytes = super::super::native_bundle::canonical(&native).unwrap();
+        (request, DependencyBundle::parse(&bytes, &root).unwrap())
+    }
+
+    #[test]
+    fn frozen_cargo_match_binds_declaration_and_every_preparation_profile_field() {
+        let (request, bundle) = fixture();
+        assert!(request.matches_bundle(&bundle));
+        let wire: serde_json::Value =
+            serde_json::from_slice(&request.to_transport().unwrap()).unwrap();
+        for (field, value) in [
+            (
+                "source",
+                serde_json::json!("[dependencies]\nitoa = \"=1.0.17\"\n"),
+            ),
+            (
+                "preparer_image_digest",
+                serde_json::json!(format!("sha256:{}", "c".repeat(64))),
+            ),
+            ("policy_revision", serde_json::json!("cargo-prepare-v2")),
+            ("timeout_seconds", serde_json::json!(61)),
+            (
+                "platform",
+                serde_json::json!({"os":"linux","arch":"arm64","abi":"gnu"}),
+            ),
+            (
+                "execution_image_digest",
+                serde_json::json!(format!("sha256:{}", "d".repeat(64))),
+            ),
+            (
+                "execution_policy_revision",
+                serde_json::json!("cargo-execute-v2"),
+            ),
+        ] {
+            let mut changed = wire.clone();
+            changed[field] = value;
+            let changed =
+                PreparationJob::from_transport(&serde_json::to_vec(&changed).unwrap()).unwrap();
+            assert!(!changed.matches_bundle(&bundle), "{field}");
+        }
+    }
+}

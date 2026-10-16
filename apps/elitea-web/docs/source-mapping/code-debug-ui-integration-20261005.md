@@ -80,3 +80,19 @@ The browser automation download event does not expose a saved file path.
 This live check proves the card and action, not a separately inspected downloaded file.
 The earlier debug-disabled run retains zero exports and zero debug trace proofs.
 Unpushed source checks and rehearsal proof do not establish CI for the PR head.
+
+## Focused CI test correction, 2026-10-06
+
+Web shard 2 at `45b152a92` exceeds the five-second deadline for the editor live-receipt download case.
+The same four-case file passes unchanged with one local test worker. No production failure is reproduced.
+The CI log does not identify the exact stage at timeout.
+
+`PipelineTestChatCodeDebug.test.tsx` replaces three document-wide named-button queries with exact text selection and the containing native button.
+The test explicitly checks visibility and accessible names, then uses the same ordinary pointer-checked clicks.
+Every existing admission, replay, artifact-read, Blob, byte, download, and cleanup assertion remains.
+Timeouts, retries, fixtures, transport, dependencies, and product code remain unchanged.
+
+All four selected tests pass. Typechecking and strict scoped lint pass with direct zero exits.
+The recorded editor case changes from 821 to 700 milliseconds locally. This measurement does not prove the CI timeout cause.
+Local Node 24 remains below the required CI Node 26 runtime. Replacement CI must verify the unchanged deadline under shard load.
+The source and check packet is `/private/tmp/elitea-code-debug-ci-timeout-20261006/`.

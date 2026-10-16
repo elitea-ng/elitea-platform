@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/testpg"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,7 +26,7 @@ var schemaFiles = []string{
 
 func newAuthStatePool(t *testing.T, files []string) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the auth state retention integration tests")
 	}

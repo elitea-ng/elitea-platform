@@ -24,8 +24,10 @@ use super::toolkit_output::{
     ToolkitTerminalRecovery, prepare_empty_toolkit_recovery, prepare_toolkit_output,
     replay_toolkit_terminal_with_replacement,
 };
+use crate::indexing::tools::LazyStepbackModel;
 use crate::indexing::{
-    IndexIngestRuntime, IndexRun, IndexRunFailure, Interruption, interrupt_summary, run_index,
+    ChatEntries, ChatEntrySource, ChatUnavailable, IndexIngestRuntime, IndexRun, IndexRunFailure,
+    Interruption, interrupt_summary, run_index,
 };
 use crate::protocol::ProtocolError;
 use crate::protocol::command::{ToolkitCommandKind, VerifiedToolkitExecuteReadCommand};
@@ -49,10 +51,317 @@ use crate::toolkits::{
 use crate::transport::command_bus::{
     CommandBusError, CommandDelivery, CommandRetirementClient, CommandRetirer,
 };
+use crate::transport::office_host::{ClaimOfficeHost, NoRoundTripImagesHost, OfficeRuntime};
 use crate::transport::platform_client::PlatformClient;
+use crate::transport::platform_writer::{HostOnlyPlatformWriter, ReadOnlyClaimPlatformWriter};
 use crate::transport::runtime_context::RuntimeContextError;
 use crate::transport::{ControlRpc, InputContentError, MaterializedInput};
 use crate::validation::SettingsRefusal;
+
+/// What a direct toolkit call is lent for its Office host.
+#[derive(Debug, PartialEq, Eq)]
+enum DirectLending {
+    /// A host that does nothing: no claim redemption, no platform call.
+    NoRoundTrip,
+    /// The claim's PAT redeemed for the platform object API.
+    Claim,
+    /// The claim's artifact list and read routes (the `artifact` family):
+    /// the agent path's authority, read-only.
+    ClaimArtifacts,
+    /// Nothing: the toolkit is unsupported on this path.
+    None,
+}
+
+/// The families whose tools act through the Office host (ADR-0032).
+fn is_office_family(toolkit_type: &str) -> bool {
+    matches!(toolkit_type, "pptx" | "docx" | "xlsx")
+}
+
+/// What to lend a direct call of `toolkit_type`. `imagegen`'s tools are all
+/// effectful and refused on this path, so it never needs the claim; the Office
+/// families (`pptx`, `docx`, `xlsx`) read objects, so a call needs it (when
+/// this worker has the Office runtime); `sharepoint` is lent the host only
+/// for the tools that read text, whose document reader it carries. Its
+/// uploads are effects and are refused here.
+///
+/// A discovery (`toolkit.available_tools.v1`) lists tools and runs none, so
+/// it needs no claim: EVERY family is lent the do-nothing host, whatever this
+/// worker carries. A family that builds its host tools only with a host
+/// (`SharePoint`'s readers and upload, `jira`/`confluence`/`qtest`/`testrail`/`aha`/
+/// `ado_boards`/`zephyr_essential` attachments, carrier's spreadsheets, the Office
+/// families, imagegen) then lists them in the Test Tool picker, as the agent
+/// path offers them, and a toolkit selecting only such tools still discovers
+/// (review round 2).
+///
+/// An `artifact` CALL is lent the claim's artifact list and read routes
+/// (live 4.45.0, D4: `read_file` / `list_files` answered
+/// `unsupported_toolkit`). Main authorizes those two routes for a user's tool
+/// run, as that user, under the same per-bucket access list as an agent turn;
+/// its write routes stay agent-only, the writer lent here refuses writes, and
+/// the direct runtime refuses any tool that is not read-only before it runs.
+fn direct_lending(
+    toolkit_type: &str,
+    tool_name: &str,
+    has_office_runtime: bool,
+    discovery: bool,
+) -> DirectLending {
+    // The Office families, `imagegen` and `artifact` are listed whatever this
+    // worker carries (their tools are the toolkit). Every other family lists
+    // its file-store tools only where a call of them can be lent the host
+    // (review round 3: discovery, call and agent turn agree).
+    if discovery {
+        return if has_office_runtime
+            || is_office_family(toolkit_type)
+            || matches!(toolkit_type, "imagegen" | "artifact")
+        {
+            DirectLending::NoRoundTrip
+        } else {
+            DirectLending::None
+        };
+    }
+    match toolkit_type {
+        "imagegen" => DirectLending::NoRoundTrip,
+        "artifact" => DirectLending::ClaimArtifacts,
+        office if is_office_family(office) && has_office_runtime => DirectLending::Claim,
+        // SharePoint's upload is an effect the direct path refuses: only its
+        // readers redeem the claim.
+        "sharepoint" => {
+            if has_office_runtime
+                && elitea_agent_runtime::toolkits::sharepoint_tool_reads_text(tool_name)
+            {
+                DirectLending::Claim
+            } else {
+                DirectLending::None
+            }
+        }
+        // A file-store tool of any other family (the tracker attachment
+        // readers, carrier's reports): the claim's host, as the agent path
+        // lends it. A write among them is still refused before it runs.
+        family
+            if has_office_runtime
+                && elitea_agent_runtime::toolkits::tool_needs_file_store(family, tool_name) =>
+        {
+            DirectLending::Claim
+        }
+        _ => DirectLending::None,
+    }
+}
+
+#[cfg(test)]
+mod direct_lending_tests {
+    use super::{DirectLending, direct_lending};
+
+    #[test]
+    fn imagegen_is_lent_without_redeeming_the_claim() {
+        // Whether or not the worker has an Office runtime: no round trip.
+        for runtime in [true, false] {
+            assert_eq!(
+                direct_lending("imagegen", "", runtime, false),
+                DirectLending::NoRoundTrip
+            );
+        }
+        assert_eq!(github_none(), DirectLending::None);
+        // SharePoint is lent the host for its text readers only.
+        assert_eq!(
+            direct_lending("sharepoint", "read_document", true, false),
+            DirectLending::Claim
+        );
+        assert_eq!(
+            direct_lending("sharepoint", "read_document", false, false),
+            DirectLending::None
+        );
+        for tool in ["get_lists", "upload_file", "onenote_get_page_content", ""] {
+            assert_eq!(
+                direct_lending("sharepoint", tool, true, false),
+                DirectLending::None,
+                "{tool}"
+            );
+        }
+    }
+
+    fn github_none() -> DirectLending {
+        direct_lending("github", "", true, false)
+    }
+
+    /// D2: `docx` and `xlsx` were refused as an unsupported family because
+    /// only `pptx` was lent the host.
+    #[test]
+    fn every_office_family_is_lent_the_claim_for_a_call() {
+        for family in ["pptx", "docx", "xlsx"] {
+            assert_eq!(
+                direct_lending(family, "read_document", true, false),
+                DirectLending::Claim,
+                "{family}"
+            );
+            assert_eq!(
+                direct_lending(family, "read_document", false, false),
+                DirectLending::None,
+                "{family} without an Office runtime"
+            );
+        }
+    }
+
+    /// D2: a discovery lists tools and runs none, so it redeems nothing and
+    /// needs no Office runtime; `artifact` was a 500 here for want of a lent
+    /// authority.
+    #[test]
+    fn discovery_is_lent_the_do_nothing_host_without_a_claim() {
+        for family in ["pptx", "docx", "xlsx", "artifact", "imagegen"] {
+            for runtime in [true, false] {
+                assert_eq!(
+                    direct_lending(family, "", runtime, true),
+                    DirectLending::NoRoundTrip,
+                    "{family} runtime={runtime}"
+                );
+            }
+        }
+        // Review round 2: every family, so a family that builds its host
+        // tools only with a host (SharePoint's readers) lists them; round 3:
+        // only where a call of them can be lent the host.
+        for family in ["sharepoint", "jira", "qtest", "github", "carrier"] {
+            assert_eq!(
+                direct_lending(family, "", true, true),
+                DirectLending::NoRoundTrip,
+                "{family}"
+            );
+            assert_eq!(
+                direct_lending(family, "", false, true),
+                DirectLending::None,
+                "{family} without an Office runtime"
+            );
+        }
+    }
+
+    /// Review round 3: discovery, a direct call and an agent turn agree, for
+    /// EVERY served family. A file-store tool is built only with the host, so
+    /// where discovery is lent one (and lists the tool), a call of the tool is
+    /// lent the claim's host and an agent turn selecting it builds the host.
+    /// Tools that need no file store are built on every path.
+    #[test]
+    fn discovery_call_and_agent_turn_agree_for_every_family() {
+        let document: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
+        ))
+        .expect("capability");
+        let mut checked = 0;
+        for family in document["supported_tool_types"].as_array().expect("types") {
+            let family = family.as_str().expect("type");
+            for tool in elitea_agent_runtime::toolkits::file_store_tools(family) {
+                let discovery = direct_lending(family, "", true, true);
+                assert_eq!(discovery, DirectLending::NoRoundTrip, "{family} discovery");
+                let call = direct_lending(family, tool, true, false);
+                // imagegen and SharePoint's upload are effects, refused on the
+                // direct path before the host is used.
+                let refused_effect = family == "imagegen"
+                    || (family == "sharepoint"
+                        && !elitea_agent_runtime::toolkits::sharepoint_tool_reads_text(tool));
+                assert!(
+                    refused_effect || call == DirectLending::Claim,
+                    "{family}.{tool}: a listed file-store tool is not lent the host on a call"
+                );
+                let settings = serde_json::json!({"selected_tools": [tool]});
+                assert!(
+                    crate::agents::ordinary::toolkit_needs_office_host(
+                        family,
+                        settings.as_object()
+                    ),
+                    "{family}.{tool}: an agent turn would not build the host"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 20,
+            "only {checked} file-store tools were checked"
+        );
+    }
+
+    /// The same agreement on a worker WITHOUT an Office runtime (final
+    /// review): no path lends the host for a file-store tool of a family whose
+    /// tools are not the file store itself, so discovery does not list what a
+    /// call could not run. The agent path reports those tools left out
+    /// (agent-runtime `every_name_is_either_built_or_reported_never_both`).
+    #[test]
+    fn without_an_office_runtime_no_path_lends_the_host_for_a_file_store_tool() {
+        let document: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
+        ))
+        .expect("capability");
+        let mut checked = 0;
+        for family in document["supported_tool_types"].as_array().expect("types") {
+            let family = family.as_str().expect("type");
+            // These families' tools ARE the file store: listed on every worker.
+            if super::is_office_family(family) || matches!(family, "imagegen" | "artifact") {
+                continue;
+            }
+            for tool in elitea_agent_runtime::toolkits::file_store_tools(family) {
+                assert_eq!(
+                    direct_lending(family, "", false, true),
+                    DirectLending::None,
+                    "{family}: discovery lists file-store tools no call could run"
+                );
+                assert_eq!(
+                    direct_lending(family, tool, false, false),
+                    DirectLending::None,
+                    "{family}.{tool}: a call is lent a host this worker does not have"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 15,
+            "only {checked} file-store tools were checked"
+        );
+    }
+
+    /// Review round 3: a file-store tool that discovery lists is lent the
+    /// claim's host on a call, for every family that has one.
+    #[test]
+    fn every_listed_file_store_tool_is_lent_the_host_on_a_call() {
+        for (family, tool) in [
+            ("jira", "get_attachments_content"),
+            ("confluence", "get_page_attachments"),
+            ("qtest", "add_file_to_test_case"),
+            ("testrail", "add_file_to_case"),
+            ("aha", "attach_file"),
+            ("ado_boards", "get_image_by_url"),
+            ("carrier", "create_excel_report"),
+        ] {
+            assert!(
+                elitea_agent_runtime::toolkits::tool_needs_file_store(family, tool),
+                "{family}.{tool} is a file-store tool"
+            );
+            assert_eq!(
+                direct_lending(family, tool, true, false),
+                DirectLending::Claim,
+                "{family}.{tool}"
+            );
+            assert_eq!(
+                direct_lending(family, tool, false, false),
+                DirectLending::None
+            );
+        }
+        assert_eq!(
+            direct_lending("jira", "search_using_jql", true, false),
+            DirectLending::None
+        );
+    }
+
+    /// D4: an `artifact` call is lent the claim's read routes, with or
+    /// without an Office runtime.
+    #[test]
+    fn an_artifact_call_is_lent_the_claims_read_routes() {
+        for runtime in [true, false] {
+            for tool in ["read_file", "list_files", "create_file"] {
+                assert_eq!(
+                    direct_lending("artifact", tool, runtime, false),
+                    DirectLending::ClaimArtifacts,
+                    "{tool}"
+                );
+            }
+        }
+    }
+}
 
 pub(super) struct ToolkitDeliveryProcessor<R, RC, T, K, I> {
     router: ToolkitDeliveryRouter<R, RC>,
@@ -72,6 +381,10 @@ pub(super) struct ToolkitDeliveryProcessor<R, RC, T, K, I> {
     /// `index.ingest.v1` (ADR-0030 I1); `None` on a deployment without a
     /// vector target, which refuses the capability.
     index_runtime: Option<Arc<IndexIngestRuntime>>,
+    /// The platform object client, for a `toolkit.call_tool.v1` of a toolkit
+    /// that reads platform objects (`pptx`); `None` leaves it unsupported on
+    /// this path.
+    office: Option<Arc<OfficeRuntime>>,
 }
 
 impl<R, RC, T, K, I> ToolkitDeliveryProcessor<R, RC, T, K, I>
@@ -111,7 +424,15 @@ where
             runtime,
             platform,
             index_runtime,
+            office: None,
         }
+    }
+
+    /// Lend the Office runtime to direct toolkit calls.
+    #[must_use]
+    pub(super) fn with_office(mut self, runtime: Option<Arc<OfficeRuntime>>) -> Self {
+        self.office = runtime;
+        self
     }
 
     pub(super) async fn process_verified(
@@ -553,6 +874,11 @@ where
         let tool_parameters = self
             .fetch_entry(execution, lease, &index.tool_parameters_entry_id)
             .await?;
+        // Parsed once for the claim; the run reuses it. Unreadable arguments
+        // leave `None` and the run reports them. The chat model entries
+        // (ADR-0030 I4) are NOT fetched here: the run asks for them, both
+        // together, the first time a step needs the chat model.
+        let parsed = crate::indexing::inputs::ParsedArgs::parse(tool_parameters.as_bytes()).ok();
         let embedding_binding = match index.embedding_binding.as_ref() {
             Some(binding) => Some(
                 self.fetch_entry(execution, lease, &binding.entry_id)
@@ -563,6 +889,7 @@ where
         Ok(IndexInputs {
             toolkit_configuration,
             tool_parameters,
+            parsed,
             embedding_binding,
         })
     }
@@ -618,14 +945,35 @@ where
         let probe = lease.state_probe();
         let clock = Arc::clone(&self.clock);
         let now = move || clock.now_unix_millis();
+        // The chat entries are fetched lazily, together, the first time a
+        // step needs the chat model; a run that never does fetches nothing.
+        let wants_chat = inputs
+            .parsed
+            .as_ref()
+            .is_some_and(crate::indexing::inputs::ParsedArgs::needs_chat_model);
+        let chat_entries = (wants_chat
+            && !(index.llm_model_entry_id.is_empty()
+                && index.llm_configuration_entry_id.is_empty()))
+        .then(|| ClaimChatEntries {
+            input: self.input.as_ref(),
+            execution,
+            model_entry_id: &index.llm_model_entry_id,
+            configuration_entry_id: &index.llm_configuration_entry_id,
+        });
         let run = IndexRun {
             command: index,
             toolkit_configuration: inputs.toolkit_configuration.as_bytes(),
             tool_parameters: inputs.tool_parameters.as_bytes(),
+            parsed: inputs.parsed.as_ref(),
             embedding_binding: inputs
                 .embedding_binding
                 .as_ref()
                 .map(MaterializedInput::as_bytes),
+            llm_model: None,
+            llm_configuration: None,
+            chat_entries: chat_entries
+                .as_ref()
+                .map(|entries| entries as &dyn ChatEntrySource),
             vector_token: execution.vector_token(),
             context: &context,
             lease: &probe,
@@ -877,6 +1225,77 @@ where
         ))))
     }
 
+    /// The Office-host authority for a direct call of a `pptx` or `imagegen`
+    /// toolkit. `pptx` redeems the claim's PAT for the platform object API,
+    /// with no chat model (a direct call binds none, as in a pipeline node).
+    /// `imagegen` redeems nothing and calls nothing: its tools write
+    /// artifacts, this path runs read-only tools only, and the runtime
+    /// answers `EffectfulToolUnavailable` before one runs. `None` for any
+    /// other toolkit, or `pptx` on a worker with no Office runtime; the
+    /// toolkit is then unsupported here.
+    async fn office_authority(
+        &self,
+        verified: &VerifiedToolkitExecuteReadCommand,
+        authorized: &AuthorizedToolkitExecution,
+        lease: &mut ClaimLeaseMonitor,
+        request: &DirectToolkitRequest,
+    ) -> Result<Option<crate::toolkits::ArtifactToolAuthority>, RuntimeFailureKind> {
+        let discovery = verified.kind() == ToolkitCommandKind::AvailableTools;
+        match direct_lending(
+            request.toolkit_type(),
+            request.tool_name(),
+            self.office.is_some(),
+            discovery,
+        ) {
+            DirectLending::NoRoundTrip => Ok(Some(
+                crate::toolkits::ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter))
+                    .with_office(Arc::new(NoRoundTripImagesHost)),
+            )),
+            DirectLending::Claim => {
+                let Some(runtime) = self.office.as_ref() else {
+                    return Ok(None);
+                };
+                let context = lease
+                    .run_pre_invocation(
+                        self.platform
+                            .redeem_elitea_context(authorized.runtime_context()),
+                    )
+                    .await
+                    .map_err(|error| lease_failure(&error))?
+                    .map_err(|error| runtime_context_failure(&error))?;
+                let Ok(host) = ClaimOfficeHost::new(
+                    Arc::clone(runtime),
+                    &context.model_facade_token(),
+                    &context.resource_project_id().to_string(),
+                    LazyStepbackModel::unbound(),
+                ) else {
+                    tracing::warn!(
+                        event = "office_host_unavailable",
+                        "a direct toolkit call is left out: the object API client could not be built"
+                    );
+                    return Ok(None);
+                };
+                // A direct call has no conversation: it reaches no system
+                // bucket (review round 2).
+                let host = host.with_claim(crate::transport::office_host::OfficeClaim::new(
+                    authorized.runtime_context(),
+                    None,
+                ));
+                Ok(Some(
+                    crate::toolkits::ArtifactToolAuthority::new(Arc::new(HostOnlyPlatformWriter))
+                        .with_office(Arc::new(host)),
+                ))
+            }
+            DirectLending::ClaimArtifacts => Ok(Some(crate::toolkits::ArtifactToolAuthority::new(
+                Arc::new(ReadOnlyClaimPlatformWriter::new(
+                    Arc::clone(&self.platform),
+                    authorized.shared_runtime_context(),
+                )),
+            ))),
+            DirectLending::None => Ok(None),
+        }
+    }
+
     async fn execute_shared(
         &self,
         verified: &VerifiedToolkitExecuteReadCommand,
@@ -905,6 +1324,9 @@ where
             Ok(authority) => IndexToolSupport::Lent(authority),
             Err(reason) => IndexToolSupport::Withheld(*reason),
         };
+        let office = self
+            .office_authority(verified, authorized, lease, request)
+            .await?;
         let operation = async {
             if is_call {
                 self.runtime
@@ -913,10 +1335,11 @@ where
                         &command.execution_id,
                         &command.command_id,
                         index_tools,
+                        office.as_ref(),
                     )
                     .await
             } else {
-                self.runtime.discover(request).await
+                self.runtime.discover(request, office.as_ref()).await
             }
         };
         let result = lease
@@ -1046,6 +1469,7 @@ where
         lease: ClaimLeaseMonitor,
         proposed: ToolkitExecuteReadTerminalOutput,
     ) -> Result<(), ToolkitProcessError> {
+        let proposed = call_tool_terminal(verified.kind(), proposed);
         let result = async {
             let terminal = match lease.check_now().await {
                 Ok(()) if deadline_exceeded(&verified, self.clock.as_ref()) => {
@@ -1205,10 +1629,55 @@ where
     }
 }
 
+/// The claim's chat model entries, fetched on demand and together (the run
+/// asks the first time a step needs the chat model). A failure of either is
+/// recorded as a toolkit input failure and fails the whole load: the run then
+/// has no chat model, and never default settings for a configuration entry
+/// that exists but could not be read.
+struct ClaimChatEntries<'a, I> {
+    input: &'a I,
+    execution: &'a LeaseMonitoredAgentExecution,
+    model_entry_id: &'a str,
+    configuration_entry_id: &'a str,
+}
+
+#[async_trait::async_trait]
+impl<I: AgentInputMaterializer> ChatEntrySource for ClaimChatEntries<'_, I> {
+    async fn load(&self) -> Result<ChatEntries, ChatUnavailable> {
+        let fetch = |entry_id: &str| {
+            let entry_id = entry_id.to_owned();
+            async move {
+                if entry_id.is_empty() {
+                    return Ok(None);
+                }
+                match self
+                    .input
+                    .materialize_entry(self.execution, &entry_id)
+                    .await
+                {
+                    Ok(entry) => Ok(Some(entry)),
+                    Err(error) => {
+                        record_toolkit_input_failure("index_input_materialization", &error);
+                        Err(ChatUnavailable)
+                    }
+                }
+            }
+        };
+        let model = fetch(self.model_entry_id).await?;
+        let configuration = fetch(self.configuration_entry_id).await?;
+        Ok(ChatEntries {
+            model,
+            configuration,
+        })
+    }
+}
+
 /// The index bundle's materialized entries.
 struct IndexInputs {
     toolkit_configuration: MaterializedInput,
     tool_parameters: MaterializedInput,
+    /// `tool_parameters` parsed once, when they are readable.
+    parsed: Option<crate::indexing::inputs::ParsedArgs>,
     embedding_binding: Option<MaterializedInput>,
 }
 
@@ -1307,6 +1776,34 @@ fn bind_call_result(
     })
 }
 
+/// A tool run's terminal as published. On `toolkit.call_tool.v1` a refusal
+/// of the TOOL is its own typed result (`EFFECT_REFUSED` / `POLICY_REFUSED` / `SENSITIVE_REFUSED`), so
+/// an authorization failure left over is always the run's own credentials or
+/// context: it carries that sentence (#1292 round 2, item 4), which Main reads
+/// as "the credentials" while an older worker's generic one reads as a
+/// refusal of the tool.
+fn call_tool_terminal(
+    kind: ToolkitCommandKind,
+    proposed: ToolkitExecuteReadTerminalOutput,
+) -> ToolkitExecuteReadTerminalOutput {
+    match proposed {
+        ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::AuthorizationFailed)
+            if kind == ToolkitCommandKind::CallTool =>
+        {
+            ToolkitExecuteReadTerminalOutput::Failure(
+                RuntimeFailureKind::ToolkitRunAuthorizationFailed,
+            )
+        }
+        other => other,
+    }
+}
+
+/// Main's `ToolkitEffectfulToolMessage` and `ToolkitPolicyRefusedMessage`.
+pub(crate) const EFFECTFUL_TOOL_MESSAGE: &str =
+    "This tool changes data, and this path runs read-only tools only.";
+pub(crate) const POLICY_REFUSED_MESSAGE: &str =
+    "This tool is blocked or sensitive under this deployment's policy and cannot run here.";
+
 fn call_summary(
     result: Result<serde_json::Value, crate::toolkits::DirectToolkitRuntimeError>,
 ) -> Result<ToolkitCallToolSummaryV1, RuntimeFailureKind> {
@@ -1322,6 +1819,29 @@ fn call_summary(
                 ToolkitCallToolStatusV1::UnknownTool,
                 None,
                 "The toolkit operation is not selected.",
+            ),
+            // A refusal of THIS tool is a verdict on the tool, not a failure
+            // of the run: its own TYPED status (EFFECT_REFUSED /
+            // POLICY_REFUSED), never confused with the run's credentials
+            // being refused (a runtime failure, AuthorizationFailed) nor with
+            // a toolkit that has no tool by that name (UNKNOWN_TOOL). The
+            // sentence is Main's `ToolkitEffectfulToolMessage` /
+            // `ToolkitPolicyRefusedMessage`, which Main still reads as a
+            // fallback from a worker that sent UNKNOWN_TOOL (round 1).
+            DirectToolkitRuntimeErrorCode::EffectfulToolUnavailable => (
+                ToolkitCallToolStatusV1::EffectRefused,
+                None,
+                EFFECTFUL_TOOL_MESSAGE,
+            ),
+            DirectToolkitRuntimeErrorCode::ToolBlocked => (
+                ToolkitCallToolStatusV1::PolicyRefused,
+                None,
+                POLICY_REFUSED_MESSAGE,
+            ),
+            DirectToolkitRuntimeErrorCode::SensitiveToolUnavailable => (
+                ToolkitCallToolStatusV1::SensitiveRefused,
+                None,
+                POLICY_REFUSED_MESSAGE,
             ),
             DirectToolkitRuntimeErrorCode::UnsupportedToolkit => (
                 ToolkitCallToolStatusV1::UnsupportedToolkit,
@@ -1576,6 +2096,9 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::DependencyUnavailable => "runtime.dependency_unavailable",
         RuntimeFailureKind::DeadlineExceeded => "runtime.deadline_exceeded",
         RuntimeFailureKind::AuthorizationFailed => "runtime.authorization_failed",
+        RuntimeFailureKind::ToolkitRunAuthorizationFailed => {
+            "runtime.toolkit_run_authorization_failed"
+        }
         RuntimeFailureKind::Cancelled => "runtime.cancelled",
         RuntimeFailureKind::ResultRefused => "runtime.result_refused",
         RuntimeFailureKind::OutputContinuationExhausted => "runtime.output_continuation_exhausted",
@@ -1808,6 +2331,69 @@ mod shared_result_tests {
             );
             assert!(!summary.truncated);
         }
+    }
+
+    /// A policy refusal of the tool is the tool's own result with Main's
+    /// literal; the run's credentials being refused stays a runtime failure.
+    #[test]
+    fn tool_refusals_are_results_and_a_refused_run_is_a_failure() {
+        use crate::toolkits::{DirectToolkitRuntimeErrorCode as Code, test_error};
+        for (code, status, message) in [
+            (
+                Code::EffectfulToolUnavailable,
+                ToolkitCallToolStatusV1::EffectRefused,
+                EFFECTFUL_TOOL_MESSAGE,
+            ),
+            (
+                Code::ToolBlocked,
+                ToolkitCallToolStatusV1::PolicyRefused,
+                POLICY_REFUSED_MESSAGE,
+            ),
+            (
+                Code::SensitiveToolUnavailable,
+                ToolkitCallToolStatusV1::SensitiveRefused,
+                POLICY_REFUSED_MESSAGE,
+            ),
+        ] {
+            let summary = call_summary(Err(test_error(code))).expect("a result");
+            assert_eq!(summary.status, status as i32, "{code:?}");
+            assert_eq!(summary.error_message, message);
+            // The settlement the worker restores agrees: a refusal FAILS.
+        }
+        // A tool the toolkit lacks stays UNKNOWN_TOOL.
+        assert_eq!(
+            call_summary(Err(test_error(Code::ToolNotSelected)))
+                .expect("a result")
+                .status,
+            ToolkitCallToolStatusV1::UnknownTool as i32
+        );
+        assert!(matches!(
+            call_summary(Err(test_error(Code::AuthorizationRequired))),
+            Err(RuntimeFailureKind::AuthorizationFailed)
+        ));
+    }
+
+    /// Item 4: the run's own credentials refused on a tool run carry their
+    /// own sentence; other commands keep the generic one.
+    #[test]
+    fn a_tool_runs_authorization_failure_names_the_credentials() {
+        use crate::protocol::output::TOOLKIT_RUN_AUTHORIZATION_FAILED_MESSAGE;
+        let failed =
+            || ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::AuthorizationFailed);
+        assert!(matches!(
+            call_tool_terminal(ToolkitCommandKind::CallTool, failed()),
+            ToolkitExecuteReadTerminalOutput::Failure(
+                RuntimeFailureKind::ToolkitRunAuthorizationFailed
+            )
+        ));
+        assert!(matches!(
+            call_tool_terminal(ToolkitCommandKind::AvailableTools, failed()),
+            ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::AuthorizationFailed)
+        ));
+        assert_eq!(
+            TOOLKIT_RUN_AUTHORIZATION_FAILED_MESSAGE,
+            "The platform could not authorize this tool run's credentials or context."
+        );
     }
 
     #[test]

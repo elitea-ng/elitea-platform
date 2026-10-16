@@ -141,8 +141,8 @@ func (repo *ChatMentionNotificationRepo) WriteChatMentionNotifications(
 	// supplies its own for exactly this reason; the PAT-expiry sweep's omission
 	// is a latent instance of the same defect, not a pattern to copy.
 	if _, err := repo.pool.Exec(ctx, `
-INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
-SELECT gen_random_uuid(), FALSE, source.project_id, source.user_id, source.meta::jsonb, $4
+INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
+SELECT gen_random_uuid(), FALSE, source.project_id, source.user_id, source.meta::jsonb, $4, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'
 FROM unnest($1::bigint[], $2::bigint[], $3::text[]) AS source(project_id, user_id, meta)`,
 		projectIDs, userIDs, metas, agentexecutionapp.ChatMentionNotificationEventType,
 	); err != nil {

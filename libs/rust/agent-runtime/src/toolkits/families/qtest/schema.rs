@@ -25,12 +25,15 @@ pub(super) enum QtestToolKind {
     FindDefectsByTestRunId,
     SearchEntitiesByDql,
     FindEntityById,
+    AddFileToTestCase,
+    UploadAttachmentToTestRun,
 }
 
 impl QtestToolKind {
-    /// The SDK's `get_available_tools` order without the two artifact
-    /// uploads and the inherited index tools.
-    pub(super) const ALL: [Self; 17] = [
+    /// The SDK's `get_available_tools` order without the inherited index
+    /// tools. The two artifact uploads are served only when the run lends
+    /// artifact authority.
+    pub(super) const ALL: [Self; 19] = [
         Self::SearchByDql,
         Self::CreateTestCases,
         Self::UpdateTestCase,
@@ -48,6 +51,8 @@ impl QtestToolKind {
         Self::FindDefectsByTestRunId,
         Self::SearchEntitiesByDql,
         Self::FindEntityById,
+        Self::AddFileToTestCase,
+        Self::UploadAttachmentToTestRun,
     ];
 
     pub(super) const fn name(self) -> &'static str {
@@ -69,7 +74,17 @@ impl QtestToolKind {
             Self::FindDefectsByTestRunId => "find_defects_by_test_run_id",
             Self::SearchEntitiesByDql => "search_entities_by_dql",
             Self::FindEntityById => "find_entity_by_id",
+            Self::AddFileToTestCase => "add_file_to_test_case",
+            Self::UploadAttachmentToTestRun => "upload_attachment_to_test_run",
         }
+    }
+
+    /// Whether the tool reads artifacts, so it needs the host.
+    pub(super) const fn needs_host(self) -> bool {
+        matches!(
+            self,
+            Self::AddFileToTestCase | Self::UploadAttachmentToTestRun
+        )
     }
 
     pub(super) const fn is_read_only(self) -> bool {
@@ -79,6 +94,8 @@ impl QtestToolKind {
                 | Self::UpdateTestCase
                 | Self::UpdateTestRunStatus
                 | Self::DeleteTestCase
+                | Self::AddFileToTestCase
+                | Self::UploadAttachmentToTestRun
                 | Self::LinkTestsToJiraRequirement
                 | Self::LinkTestsToQtestRequirement
         )
@@ -132,6 +149,12 @@ impl QtestToolKind {
             Self::SearchEntitiesByDql => {
                 "Search any QTest entity type using Data Query Language (DQL).\n\nThis is a unified search tool for all searchable QTest entity types.\n\nSUPPORTED ENTITY TYPES (object_type parameter):\n- 'test-cases' (TC-xxx): Test case definitions with steps\n- 'test-runs' (TR-xxx): Execution instances of test cases  \n- 'defects' (DF-xxx): Bugs/issues found during testing\n- 'requirements' (RQ-xxx): Requirements to be tested\n- 'test-suites' (TS-xxx): Collections of test runs\n- 'test-cycles' (CL-xxx): Test execution cycles\n- 'test-logs': Execution logs (date queries ONLY - see notes)\n- 'releases' (RL-xxx): Software releases\n- 'builds' (BL-xxx): Builds within releases\n\nNOTES: \n- Modules (MD-xxx) are NOT searchable via DQL. Use 'get_modules' tool instead.\n- Test-logs: Only date queries work (Execution Start Date, Execution End Date).\n  For specific test log details, use find_test_runs_by_test_case_id - \n  the test run includes 'Latest Test Log' with status and execution times.\n\nCRITICAL: USE SINGLE QUOTES ONLY - DQL does not support double quotes!\n- ✓ CORRECT: Description ~ 'Forgot Password'\n- ✗ WRONG: Description ~ \"Forgot Password\"\n"
             }
+            Self::AddFileToTestCase => {
+                "Upload a file from artifact storage (filepath /{bucket}/{filename}; at most 50 MiB in this runtime) and attach it to a QTest test case, or to one of its steps when test_step_number is given. test_case_id is TC-123 or the QTest numeric id. qTest keeps every upload, so the same file name attached twice becomes two attachments."
+            }
+            Self::UploadAttachmentToTestRun => {
+                "Upload a file from artifact storage (filepath /{bucket}/{filename}; at most 50 MiB in this runtime) and attach it to a test run's underlying test case ('test-case') or to its latest test log ('test-log'; needs a status submitted first). qTest keeps every upload, so the same file name attached twice becomes two attachments."
+            }
             Self::FindEntityById => {
                 "Find any QTest entity by its ID.\n\nThis universal lookup tool works for entity types that have ID prefixes. \nThe entity type is automatically determined from the ID prefix.\n\nSUPPORTED ID FORMATS:\n- TC-123: Test Case\n- TR-39: Test Run  \n- DF-100: Defect\n- RQ-15: Requirement\n- TS-5: Test Suite\n- CL-3: Test Cycle\n- RL-1: Release\n- BL-2: Build\n\nNOT SUPPORTED (no ID prefix):\n- Test Logs: Get details from test run's 'Latest Test Log' field (contains Log Id, Status, Execution Start/End Date)\n- Modules: Use 'get_modules' tool instead\n\nParameters:\n- entity_id: Entity ID with prefix (e.g., TC-123, RQ-15, DF-100, TR-39)\n\nReturns: Full entity details including all properties.\n\nExamples:\n- Find test case: entity_id='TC-123'\n- Find requirement: entity_id='RQ-15'\n- Find defect: entity_id='DF-100'\n- Find test run: entity_id='TR-39'\n"
             }
@@ -173,6 +196,9 @@ pub(super) fn schema(kind: QtestToolKind) -> Value {
         | QtestToolKind::FindTestRunsByTestCaseId
         | QtestToolKind::FindDefectsByTestRunId
         | QtestToolKind::GetTestCaseVersions => relation_properties(kind),
+        QtestToolKind::AddFileToTestCase | QtestToolKind::UploadAttachmentToTestRun => {
+            upload_properties(kind)
+        }
         _ => effect_properties(kind),
     };
     json!({
@@ -312,5 +338,37 @@ fn effect_properties(kind: QtestToolKind) -> (Value, &'static [&'static str]) {
             }),
             &["requirement_id", "json_list_of_test_case_ids"],
         ),
+    }
+}
+
+fn upload_properties(kind: QtestToolKind) -> (Value, &'static [&'static str]) {
+    let filepath = json!({"type":"string","minLength":1,"maxLength":2048,"description":"File path in format /{bucket}/{filename} from artifact storage"});
+    let filename = json!({"type":["string","null"],"maxLength":255,"default":null,"description":"Name of the file to upload. If not provided, uses the original filename from artifact."});
+    if kind == QtestToolKind::AddFileToTestCase {
+        (
+            json!({
+                "test_case_id":id("Test case ID in format TC-123 or QTest numeric ID"),
+                "filepath":filepath,
+                "filename":filename,
+                "test_step_number":{
+                    "type":["integer","null"], "default":null,
+                    "description":"Optional: Test step number (e.g., 1, 2, 3) to attach file to specific step. If not provided, file will be attached to test case level."
+                }
+            }),
+            &["test_case_id", "filepath"],
+        )
+    } else {
+        (
+            json!({
+                "test_run_id":id("Test run ID in format TR-123 or QTest numeric ID"),
+                "attachment_type":{
+                    "type":"string", "enum":["test-case","test-log"],
+                    "description":"Where to attach the file: 'test-case' attaches to the test run's underlying test case; 'test-log' attaches to the test run's latest test log (execution record). QTest has no attachment slot on the bare test run itself."
+                },
+                "filepath":filepath,
+                "filename":filename
+            }),
+            &["test_run_id", "attachment_type", "filepath"],
+        )
     }
 }

@@ -6,6 +6,25 @@ certificate's one DNS SAN is the identity elitea-main admits.
 {{- define "elitea-vector.fullname" -}}elitea-vector{{- end }}
 {{- define "elitea-vector.qdrantName" -}}elitea-qdrant{{- end }}
 
+{{/*
+elitea-vector rolls BEFORE elitea-main (worker unit M9 rollout safety). Every
+manifest of the vector stack (its Qdrant, Services, certificates, network
+policies, Deployment) is in Argo CD sync-wave -5, ahead of elitea-main and
+everything else at the default wave 0, so a new elitea-main never introspects
+for an older elitea-vector: Argo applies a wave and waits for it to be healthy
+before the next. The whole stack shares the wave, never only the Deployment: a
+Deployment ahead of its own certificates would wait for Secrets a later wave
+creates, and the sync would never finish. elitea-vector's readiness does not
+need elitea-main (only a REFUSAL by elitea-main fails it), so the earlier wave
+cannot wait on a later one. The migration Job is a PreSync hook and runs
+before every wave. A plain `helm upgrade` has no waves: there elitea-vector
+tolerates sources it cannot name (it ignores them), which is what makes either
+order safe.
+*/}}
+{{- define "elitea-vector.syncWave" -}}
+argocd.argoproj.io/sync-wave: "-5"
+{{- end }}
+
 {{- define "elitea-vector.selectorLabels" -}}
 app.kubernetes.io/name: elitea-vector
 app.kubernetes.io/instance: {{ .Release.Name }}

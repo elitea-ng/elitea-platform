@@ -5,6 +5,9 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 
+import { createPipelineYamlStore } from '../../model/pipelineYamlStore';
+import { parsePipelineYamlDocument } from '../../lib/pipelineYamlDocument.helpers';
+import { load } from 'js-yaml';
 import { StateDrawer } from './StateDrawer';
 
 describe('StateDrawer', () => {
@@ -251,5 +254,30 @@ describe('StateDrawer', () => {
     expect(updatedDocument.state?.['fresh_var']).toMatchObject({ type: 'str' });
     expect(updatedDocument.state?.['input']).toMatchObject({ type: 'str' });
     expect(updatedDocument.state?.['messages']).toMatchObject({ type: 'list' });
+  });
+  it('renames a bare List row through the real serializer and saves its original ordinal and raw form', () => {
+    const source =
+      'state:\n  counter: list\n  "10": {type: str, value: null, opaque: {keep: true}}\n  "2": dict\nnodes: []\n';
+    const store = createPipelineYamlStore();
+    store.getState().initPipelineYaml(parsePipelineYamlDocument(source));
+    renderWithTheme(
+      <StateDrawer
+        isOpen
+        onClose={vi.fn()}
+        setYamlJsonObject={store.getState().editPipelineYamlDocument}
+        yamlJsonObject={store.getState().yamlJsonObject}
+      />,
+    );
+    fireEvent.click(screen.getByText('counter'));
+    const input = screen.getByDisplayValue('counter');
+    fireEvent.change(input, { target: { value: 'renamed_counter' } });
+    fireEvent.blur(input);
+    store.getState().markYamlCodeSaved();
+    const saved = load(store.getState().yamlCode) as { state: Record<string, unknown> };
+    expect(saved.state['renamed_counter']).toBe('list');
+    expect(saved.state['10']).toEqual({ type: 'str', value: null, opaque: { keep: true } });
+    expect(saved.state['2']).toBe('dict');
+    expect(parsePipelineYamlDocument(store.getState().yamlCode).stateKeyOrder).toEqual(['renamed_counter', '10', '2']);
+    expect(store.getState().initYamlCode).toBe(store.getState().yamlCode);
   });
 });

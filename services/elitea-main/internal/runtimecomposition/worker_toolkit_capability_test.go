@@ -21,11 +21,11 @@ func TestWorkerImplementationFromEnv(t *testing.T) {
 		want  string
 		fails bool
 	}{
-		"unset defaults to python": {value: "", want: "python"},
-		"python":                   {value: "python", want: "python"},
-		"rust":                     {value: "rust", want: "rust"},
-		"a typo is refused":        {value: "Rust", fails: true},
-		"an unknown worker":        {value: "node", fails: true},
+		"unset defaults to rust": {value: "", want: "rust"},
+		"python":                 {value: "python", want: "python"},
+		"rust":                   {value: "rust", want: "rust"},
+		"a typo is refused":      {value: "Rust", fails: true},
+		"an unknown worker":      {value: "node", fails: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			lookup := func(string) (string, bool) { return testCase.value, testCase.value != "" }
@@ -67,8 +67,8 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
 	}
-	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 44 {
-		t.Errorf("rust implementation=%q supported=%d, want rust and 44",
+	if rust.Implementation() != "rust" || len(rust.SupportedNames()) != 49 {
+		t.Errorf("rust implementation=%q supported=%d, want rust and 49",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
 	if rust.UnsupportedNames() != nil {
@@ -118,12 +118,29 @@ func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 	if supported, _ := rust.SupportsToolkitType("github", "github"); !supported {
 		t.Error("github has a native family and was refused")
 	}
+	// pptx joined with ADR-0032 P3: the Office family runs in the Rust worker.
+	if supported, reason := rust.SupportsToolkitType("pptx", "pptx"); !supported {
+		t.Errorf("pptx has a native family and was refused: %s", reason)
+	}
+	// docx and xlsx joined with ADR-0032 P4 and have no SDK counterpart: the
+	// Rust worker serves them, the Python worker cannot, whatever import key
+	// (none) the catalogue gives them.
+	for _, toolkitType := range []string{"docx", "xlsx"} {
+		if supported, reason := rust.SupportsToolkitType(toolkitType, ""); !supported {
+			t.Errorf("%s has a native family and was refused: %s", toolkitType, reason)
+		}
+		supported, reason := python.SupportsToolkitType(toolkitType, "")
+		if supported || !strings.Contains(reason, toolkitType) ||
+			!strings.Contains(reason, "only the Rust worker serves it") {
+			t.Errorf("%s on python: supported=%v reason=%q", toolkitType, supported, reason)
+		}
+	}
 	if supported, reason := rust.SupportsToolkitType("mcp", ""); !supported {
 		t.Errorf("direct MCP runtime was refused: %s", reason)
 	}
-	if supported, reason := rust.SupportsToolkitType("pptx", "pptx"); supported ||
-		!strings.Contains(reason, "pptx") {
-		t.Errorf("pptx supported=%v reason=%q", supported, reason)
+	if supported, reason := rust.SupportsToolkitType("localgit", "localgit"); supported ||
+		!strings.Contains(reason, "localgit") {
+		t.Errorf("localgit supported=%v reason=%q", supported, reason)
 	}
 	// UI-DC-1: the reason is a sentence for a person, with no internal terms.
 	if _, reason := rust.SupportsToolkitType("example_unported", "example_unported"); reason !=
@@ -221,16 +238,17 @@ func TestRustCapabilitySnapshotMatchesTheRustSource(t *testing.T) {
 	}
 
 	found := map[string]struct{}{}
+	dispatch := materializeDispatchBodies(string(source))
 	// The match arms of materialize_a_to_k and materialize_p_to_z. They are
 	// indented eight spaces inside the `match tool_type {` of each function.
 	for _, match := range regexp.MustCompile(`(?m)^ {8}"([a-z0-9_]+)" =>`).
-		FindAllStringSubmatch(string(source), -1) {
+		FindAllStringSubmatch(dispatch, -1) {
 		found[match[1]] = struct{}{}
 	}
 	// The two families materialize() handles itself, because they return a
 	// delegated authorization catalogue rather than a bare toolset.
 	for _, match := range regexp.MustCompile(`reference\.tool_type\(\) == "([a-z0-9_]+)"`).
-		FindAllStringSubmatch(string(source), -1) {
+		FindAllStringSubmatch(dispatch, -1) {
 		found[match[1]] = struct{}{}
 	}
 	// MCP uses the direct runtime branch, outside configured families.
@@ -348,4 +366,121 @@ func repositoryRoot(t *testing.T) string {
 	}
 	t.Fatal("repository root not found from the test working directory")
 	return ""
+}
+
+// Real pinned data for the two verdict shapes that matter once imagegen is
+// carried by both workers: a type only Python builds (memory: absent from the
+// Rust allow list, absent from the Python deny list), and imagegen itself,
+// which both build.
+func TestPinnedCapabilityRealPythonOnlyAndBothWorkerTypes(t *testing.T) {
+	t.Parallel()
+
+	python, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
+	if err != nil {
+		t.Fatalf("load python capability: %v", err)
+	}
+	rust, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("rust")
+	if err != nil {
+		t.Fatalf("load rust capability: %v", err)
+	}
+	if ok, reason := python.SupportsToolkitType("memory", "memory"); !ok {
+		t.Errorf("memory is built by the Python worker: %q", reason)
+	}
+	if ok, reason := rust.SupportsToolkitType("memory", "memory"); !ok {
+		t.Errorf("memory has a Rust family over elitea-vector (unit M9): %q", reason)
+	}
+	// ... but only where the deployment indexes with the Rust runtime, which
+	// is what gives the worker a vector store and the claim a vector token.
+	if ok, reason := rust.ForIndexingRuntime(runtimecomposition.Config{}).SupportsToolkitType("memory", "memory"); ok || reason == "" {
+		t.Errorf("memory must be withheld from a Rust worker without the Rust indexing runtime, with a reason: ok=%v reason=%q", ok, reason)
+	}
+	rustIndexing := runtimecomposition.Config{
+		Enabled: true, IndexingRuntime: runtimecomposition.IndexingRuntimeRust,
+		IndexIngestDispatchEnabled: true,
+	}
+	if ok, reason := rust.ForIndexingRuntime(rustIndexing).SupportsToolkitType("memory", "memory"); ok ||
+		!strings.Contains(reason, "Memory needs an embedding model configured by the operator") {
+		t.Errorf("memory needs the operator's embedding model: ok=%v reason=%q", ok, reason)
+	}
+	rustIndexing.MemoryEmbeddingModel = "text-embedding-3-small"
+	if ok, reason := rust.ForIndexingRuntime(rustIndexing).SupportsToolkitType("memory", "memory"); !ok {
+		t.Errorf("memory is served under the Rust indexing runtime with a model: %q", reason)
+	}
+	if ok, _ := python.ForIndexingRuntime(runtimecomposition.Config{}).SupportsToolkitType("memory", "memory"); !ok {
+		t.Error("the Python worker serves memory whatever the indexing runtime")
+	}
+	for name, worker := range map[string]*runtimecomposition.WorkerToolkitCapability{"python": python, "rust": rust} {
+		if ok, reason := worker.SupportsToolkitType("imagegen", "imagegen"); !ok {
+			t.Errorf("%s must build imagegen: %q", name, reason)
+		}
+	}
+}
+
+// Absence of a capability projection must not advertise what only the Rust
+// worker serves: docx and xlsx (and pptx's Rust-only tools) are offered only
+// where the deployment states a Rust worker. The SDK's own types stay.
+func TestWithoutACapabilityTheRustOnlyTypesAndToolsAreWithheld(t *testing.T) {
+	t.Parallel()
+
+	var absent *runtimecomposition.WorkerToolkitCapability
+	python, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rust, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("rust")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, toolkitType := range []string{"docx", "xlsx"} {
+		supported, reason := absent.SupportsToolkitType(toolkitType, "")
+		if supported || !strings.Contains(reason, "only the Rust worker serves") {
+			t.Errorf("nil: %s supported=%v reason=%q", toolkitType, supported, reason)
+		}
+		if supported, _ := python.SupportsToolkitType(toolkitType, ""); supported {
+			t.Errorf("python offers %s", toolkitType)
+		}
+		if supported, reason := rust.SupportsToolkitType(toolkitType, ""); !supported {
+			t.Errorf("rust withholds %s: %s", toolkitType, reason)
+		}
+	}
+	// pptx's Rust-only tools: withheld on nil and Python, offered on Rust;
+	// its SDK tools are offered everywhere.
+	for _, tool := range []string{"add_slide", "export_pdf"} {
+		if supported, reason := absent.SupportsTool("pptx", tool); supported || reason == "" {
+			t.Errorf("nil offers pptx/%s", tool)
+		}
+		if supported, _ := python.SupportsTool("pptx", tool); supported {
+			t.Errorf("python offers pptx/%s", tool)
+		}
+		if supported, reason := rust.SupportsTool("pptx", tool); !supported {
+			t.Errorf("rust withholds pptx/%s: %s", tool, reason)
+		}
+	}
+	for _, tool := range []string{"fill_template", "translate_presentation"} {
+		for name, capability := range map[string]*runtimecomposition.WorkerToolkitCapability{"nil": absent, "python": python, "rust": rust} {
+			if supported, reason := capability.SupportsTool("pptx", tool); !supported {
+				t.Errorf("%s withholds the SDK tool pptx/%s: %s", name, tool, reason)
+			}
+		}
+	}
+	// The SDK's types are unchanged on nil.
+	for _, toolkitType := range []string{"github", "pptx", "artifact"} {
+		if supported, _ := absent.SupportsToolkitType(toolkitType, toolkitType); !supported {
+			t.Errorf("nil withholds the SDK type %s", toolkitType)
+		}
+	}
+}
+
+// materializeDispatchBodies is the text of the dispatch functions of
+// materialize.rs only: every `fn materialize*` body, from its signature to
+// the closing brace at column 0. Matching the whole file read the arms of
+// `family_tool_catalog` (the per-family tool lists, review C1) and any test
+// table as dispatch, so a family whose arm was removed still passed.
+func materializeDispatchBodies(source string) string {
+	var bodies strings.Builder
+	for _, match := range regexp.MustCompile(`(?m)^(?:pub )?(?:async )?fn materialize\w*[\s\S]*?\n\}\n`).
+		FindAllString(source, -1) {
+		bodies.WriteString(match)
+	}
+	return bodies.String()
 }

@@ -79,6 +79,19 @@ function onePagePdf(lines: readonly string[]): Buffer {
   return Buffer.from(body, "latin1");
 }
 
+// RETARGETED to the native Rust leg (owner direction, PR #1293): the Python
+// worker is being removed, so this case asserts the runtime that stays.
+// elitea-main extracts the PDF in-process (internal/infra/extract), so the
+// native leg needs no extractor sidecar. The Python leg's empty attachment
+// block was elitea-main refusing the SDK's claim-less read, which carries
+// only the execution-id request-log tag; that is fixed in
+// internal/api/v2/artifacts/system_buckets.go and pinned there by
+// TestAnExecutionTagAloneIsNotAClaim.
+test.skip(
+  WORKER !== "rust",
+  "retargeted to the native Rust runtime; the Python worker is being removed",
+);
+
 test("a real PDF attached in chat reaches the model as its text", async ({
   page,
 }) => {

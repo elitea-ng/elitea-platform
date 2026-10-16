@@ -31,10 +31,17 @@ pub mod key {
     pub const ACL: &str = "acl";
     pub const TEXT: &str = "text";
     pub const METADATA: &str = "metadata";
+    /// Who owns a memory point: `user:<id>` or `project`. Stamped by the
+    /// service from the token; no request can set, filter on or read it.
+    pub const OWNER: &str = "owner";
+    /// The memory toolkit a memory point belongs to. Named by the worker
+    /// (the token binds a run, not a toolkit); stamped on every point and
+    /// narrowed by on every memory operation; never a caller's filter key.
+    pub const TOOLKIT_ID: &str = "toolkit_id";
 }
 
 /// The keyword-indexed payload keys, `project_id` (the tenant) excluded.
-pub const KEYWORD_INDEXES: [&str; 8] = [
+pub const KEYWORD_INDEXES: [&str; 10] = [
     key::SOURCE,
     key::NAMESPACE_ID,
     key::GENERATION,
@@ -43,6 +50,8 @@ pub const KEYWORD_INDEXES: [&str; 8] = [
     key::PARENT_ID,
     key::CHUNK_TYPE,
     key::ACL,
+    key::OWNER,
+    key::TOOLKIT_ID,
 ];
 
 /// One embedding space: a model slug and a dimension.
@@ -143,6 +152,7 @@ pub fn source_keyword(source: i32) -> Result<&'static str, Status> {
     match pb::Source::try_from(source) {
         Ok(pb::Source::ToolkitIndex) => Ok("toolkit_index"),
         Ok(pb::Source::Deepwiki) => Ok("deepwiki"),
+        Ok(pb::Source::Memory) => Ok("memory"),
         Ok(pb::Source::Inventory) => Err(Status::failed_precondition(
             "source inventory is reserved and not served",
         )),
@@ -157,6 +167,7 @@ pub fn source_from_keyword(keyword: &str) -> pb::Source {
         "toolkit_index" => pb::Source::ToolkitIndex,
         "deepwiki" => pb::Source::Deepwiki,
         "inventory" => pb::Source::Inventory,
+        "memory" => pb::Source::Memory,
         _ => pb::Source::Unspecified,
     }
 }
@@ -193,8 +204,15 @@ pub fn generation(value: &str) -> Result<Option<&str>, Status> {
     Ok(Some(value))
 }
 
-/// The point id: `UUIDv5` under the namespace UUID of (project, generation,
-/// document key, chunk id), each part length-prefixed.
+/// The point id: `UUIDv5` under the namespace UUID of (project, source,
+/// generation, document key, chunk id, chunk type), every part
+/// length-prefixed (`<byte length>:<bytes>`), so no choice of parts can
+/// collide with another whatever bytes they hold.
+///
+/// The chunk type is part of the identity for every chunk, with no list of
+/// "sibling" types: one passage can be stored as several chunks of one
+/// `chunk_id` (the proposal chunker's `document`, `title`, `summary` and
+/// `propositions`), and a point's identity must tell them apart.
 ///
 /// The project is part of the name although ADR-0031 lists only
 /// (`namespace_id`, `generation`, `document_key`, `chunk_id`): a namespace id is a
@@ -206,7 +224,16 @@ pub fn generation(value: &str) -> Result<Option<&str>, Status> {
 /// token is admitted for its own sources only, and without the source a
 /// `deepwiki` writer naming a toolkit index's namespace id would compute that
 /// index's point ids and overwrite its points.
+///
+/// Ids are never recomputed to find existing points: documents are replaced
+/// by deleting on the (document key, namespace) filter and upserting anew,
+/// and an unchanged document is not rewritten. Points written under an
+/// earlier id rule therefore coexist harmlessly with new ones.
 #[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each part is a separate identity input; a struct would only rename them"
+)]
 pub fn point_id(
     project_id: i64,
     source: &str,
@@ -214,20 +241,90 @@ pub fn point_id(
     generation: Option<&str>,
     document_key: &str,
     chunk_id: &str,
+    chunk_type: &str,
+    owner: &str,
 ) -> Uuid {
-    let generation = generation.unwrap_or("");
-    let name = format!(
-        "{project_id}\u{1f}{source}\u{1f}{}:{generation}{}:{document_key}{}:{chunk_id}",
-        generation.len(),
-        document_key.len(),
-        chunk_id.len(),
-    );
+    let mut name = String::new();
+    let mut parts = vec![
+        project_id.to_string(),
+        source.to_owned(),
+        generation.unwrap_or("").to_owned(),
+        document_key.to_owned(),
+        chunk_id.to_owned(),
+        chunk_type.to_owned(),
+    ];
+    // A memory point's owner is part of its identity: without it two users
+    // writing the same key into one namespace would compute one id, and the
+    // second would overwrite the first's point. Other sources pass "" and
+    // keep the ids they always had.
+    if !owner.is_empty() {
+        parts.push(owner.to_owned());
+    }
+    for part in &parts {
+        name.push_str(&part.len().to_string());
+        name.push(':');
+        name.push_str(part);
+    }
     Uuid::new_v5(&namespace, name.as_bytes())
+}
+
+/// Whether `value` holds an ASCII control character (a chunk id or type is a
+/// short label, never binary).
+#[must_use]
+pub fn has_control_character(value: &str) -> bool {
+    value.chars().any(char::is_control)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_memory_points_owner_is_part_of_its_id_and_other_sources_keep_theirs() {
+        let namespace = Uuid::from_u128(7);
+        let args = |owner: &str| {
+            point_id(
+                1,
+                "memory",
+                namespace,
+                Some("g"),
+                "k",
+                "v1",
+                "memory",
+                owner,
+            )
+        };
+        assert_ne!(
+            args("user:1"),
+            args("user:2"),
+            "two users never share an id"
+        );
+        assert_ne!(args("user:1"), args("project"));
+        assert_eq!(args("user:1"), args("user:1"));
+        // No owner: the id every other source has always had.
+        assert_eq!(
+            point_id(
+                1,
+                "toolkit_index",
+                namespace,
+                None,
+                "d",
+                "0",
+                "document",
+                ""
+            ),
+            point_id(
+                1,
+                "toolkit_index",
+                namespace,
+                None,
+                "d",
+                "0",
+                "document",
+                ""
+            )
+        );
+    }
 
     #[test]
     fn collection_names_round_trip() {
@@ -269,16 +366,88 @@ mod tests {
     fn point_ids_are_stable_and_project_bound() {
         let namespace = Uuid::from_u128(7);
         let t = "toolkit_index";
-        let a = point_id(1, t, namespace, Some("g"), "doc", "0");
-        assert_eq!(a, point_id(1, t, namespace, Some("g"), "doc", "0"));
-        assert_ne!(a, point_id(2, t, namespace, Some("g"), "doc", "0"));
-        assert_ne!(a, point_id(1, "deepwiki", namespace, Some("g"), "doc", "0"));
-        assert_ne!(a, point_id(1, t, namespace, None, "doc", "0"));
+        let a = point_id(1, t, namespace, Some("g"), "doc", "0", "document", "");
+        assert_eq!(
+            a,
+            point_id(1, t, namespace, Some("g"), "doc", "0", "document", "")
+        );
+        assert_ne!(
+            a,
+            point_id(2, t, namespace, Some("g"), "doc", "0", "document", "")
+        );
+        assert_ne!(
+            a,
+            point_id(
+                1,
+                "deepwiki",
+                namespace,
+                Some("g"),
+                "doc",
+                "0",
+                "document",
+                ""
+            )
+        );
+        assert_ne!(
+            a,
+            point_id(1, t, namespace, None, "doc", "0", "document", "")
+        );
         // Length prefixes keep the parts apart.
         assert_ne!(
-            point_id(1, t, namespace, None, "ab", "c"),
-            point_id(1, t, namespace, None, "a", "bc")
+            point_id(1, t, namespace, None, "ab", "c", "t", ""),
+            point_id(1, t, namespace, None, "a", "bc", "t", "")
         );
+        assert_ne!(
+            point_id(1, t, namespace, None, "d", "ab", "c", ""),
+            point_id(1, t, namespace, None, "d", "a", "bc", "")
+        );
+    }
+
+    #[test]
+    fn every_chunk_type_of_one_passage_has_its_own_point_id() {
+        let namespace = Uuid::from_u128(7);
+        let id = |chunk_type: &str| {
+            point_id(
+                1,
+                "toolkit_index",
+                namespace,
+                None,
+                "doc",
+                "3",
+                chunk_type,
+                "",
+            )
+        };
+        let types = [
+            "document",
+            "title",
+            "summary",
+            "propositions",
+            "keywords",
+            "code",
+            "",
+            "anything",
+        ];
+        let ids: std::collections::BTreeSet<_> = types.iter().map(|t| id(t)).collect();
+        assert_eq!(ids.len(), types.len(), "no type list, every type distinct");
+    }
+
+    #[test]
+    fn a_unit_separator_in_a_part_cannot_forge_another_identity() {
+        let namespace = Uuid::from_u128(7);
+        let t = "toolkit_index";
+        // The old separator-joined form made these equal.
+        assert_ne!(
+            point_id(1, t, namespace, None, "doc", "3\u{1f}title", "document", ""),
+            point_id(1, t, namespace, None, "doc", "3", "title", "")
+        );
+    }
+
+    #[test]
+    fn control_characters_are_detected() {
+        assert!(has_control_character("a\u{1f}b"));
+        assert!(has_control_character("a\nb"));
+        assert!(!has_control_character("chunk-3 é"));
     }
 
     #[test]

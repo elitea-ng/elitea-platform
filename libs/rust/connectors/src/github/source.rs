@@ -630,6 +630,31 @@ mod tests {
         assert_eq!(transport.seen().len(), 3);
     }
 
+    /// Live defect: an anonymous GitHub rate limit that outlasts the backoff
+    /// bound was an `Unavailable`, which the run reports as "could not be
+    /// read" (a `read_error`), as if the file were broken. It is its own,
+    /// retryable class.
+    #[tokio::test(start_paused = true)]
+    async fn a_rate_limit_past_the_bound_is_a_rate_limit_not_a_read_error() {
+        let transport = Scripted::new(|request, _| match request.url().path() {
+            "/repos/EliteaAI/demo/branches/main" => Reply::json(&branch()),
+            "/repos/EliteaAI/demo/git/trees/1111111111111111111111111111111111111111" => {
+                Reply::json(&json!({"tree": [entry("a.png", "blob", README, Some(5))]}))
+            }
+            "/repos/EliteaAI/demo/git/blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" => {
+                Reply::rate_limited(Some("1"))
+            }
+            other => panic!("unexpected request {other}"),
+        });
+        let source = GitHubSource::new(config(), allow(), transport).expect("source");
+        source.list().await.expect("listing");
+        let error = source.fetch("a.png").await.expect_err("rate limited");
+        assert!(
+            matches!(error, SourceError::RateLimited(ref text) if text.contains("rate limited")),
+            "{error:?}"
+        );
+    }
+
     #[tokio::test]
     async fn a_host_off_the_allowlist_is_refused_before_any_request() {
         let transport = Scripted::new(|_, _| panic!("no request may be sent"));

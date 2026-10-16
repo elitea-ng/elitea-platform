@@ -567,8 +567,8 @@ func (h *Handler) prepareRunConversation(
 	var conversationID int64
 	var conversationUUID string
 	if err := transaction.QueryRow(ctx, fmt.Sprintf(`
-INSERT INTO %s.chat_conversations (uuid, name, is_private, author_id, meta, source)
-VALUES (gen_random_uuid(), $1, TRUE, $2, $3::jsonb, $4)
+INSERT INTO %s.chat_conversations (uuid, name, is_private, author_id, meta, source, created_at)
+VALUES (gen_random_uuid(), $1, TRUE, $2, $3::jsonb, $4, now() AT TIME ZONE 'UTC')
 RETURNING id, uuid::text`, schema),
 		runConversationName(tool.Name), actorUserID, string(meta), mcpConversationSource,
 	).Scan(&conversationID, &conversationUUID); err != nil {
@@ -681,8 +681,8 @@ func mapParticipant(
 	ctx context.Context, transaction pgx.Tx, schema string, conversationID, participantID int64, settings []byte,
 ) error {
 	if _, err := transaction.Exec(ctx, fmt.Sprintf(`
-INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings)
-VALUES ($1, $2, $3::jsonb)
+INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')
 ON CONFLICT (participant_id, conversation_id) DO NOTHING`, schema),
 		conversationID, participantID, settings); err != nil {
 		return fmt.Errorf("mcp: map participant: %w", err)

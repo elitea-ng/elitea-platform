@@ -30,6 +30,17 @@ type artifactSourceStub struct {
 	readRecord  RuntimeArtifactContentRecord
 	writeRecord RuntimeArtifactRecord
 	err         error
+	// systemBuckets are the project's system buckets (bucket_type 'system').
+	systemBuckets []string
+}
+
+func (stub *artifactSourceStub) RuntimeBucketIsSystem(_ context.Context, _ int64, bucket string) (bool, error) {
+	for _, system := range stub.systemBuckets {
+		if system == bucket {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (stub *artifactSourceStub) ListRuntimeArtifacts(
@@ -227,4 +238,285 @@ func artifactCall[T any](t *testing.T, server *ContentServer, operation, body st
 	var decoded T
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 	return decoded
+}
+
+// attachmentArtifactSourceStub also lists a conversation's attachments.
+type attachmentArtifactSourceStub struct {
+	artifactSourceStub
+	policyBucket string
+	records      []RuntimeArtifactRecord
+	truncated    bool
+	limit        int32
+	listed       int
+}
+
+func (stub *attachmentArtifactSourceStub) AttachmentBucket(context.Context, int64) (string, error) {
+	return stub.policyBucket, nil
+}
+
+func (stub *attachmentArtifactSourceStub) ListAttachmentsNewestFirst(
+	_ context.Context, projectID, actorID int64, bucket, prefix string, limit int32,
+) ([]RuntimeArtifactRecord, bool, error) {
+	stub.projectID, stub.actorID, stub.bucket, stub.prefix, stub.limit = projectID, actorID, bucket, prefix, limit
+	stub.listed++
+	return stub.records, stub.truncated, nil
+}
+
+// An empty bucket is the conversation attachment listing: the project's
+// attachment bucket (its policy, else the one default), the CLAIM's own
+// conversation as the prefix whatever the request says (so a numeric id or a
+// malformed one cannot send the worker to an empty listing), and an answer that
+// names the bucket used.
+func TestArtifactListWithoutABucketListsTheClaimsConversationInTheProjectsBucket(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ policy, want string }{
+		{"team-files", "team-files"},
+		{"", DefaultAttachmentBucket},
+	} {
+		source := &attachmentArtifactSourceStub{policyBucket: tc.policy}
+		server := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+		listed := artifactCall[RuntimeArtifactListContext](
+			t, server, "list", `{"bucket":"","prefix":"42/","recursive":true,"limit":500}`,
+		)
+		require.Equal(t, tc.want, listed.Bucket)
+		require.Equal(t, tc.want, source.bucket)
+		require.Equal(t, "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/", source.prefix,
+			"the claim's conversation, not the request's prefix")
+		require.Equal(t, int64(7), source.projectID)
+		require.Equal(t, int64(11), source.actorID)
+		require.Equal(t, int32(500), source.limit)
+	}
+}
+
+// A project that has never had an upload has no attachment bucket yet: that is
+// an empty listing, not a refusal.
+func TestArtifactListOfAFreshProjectIsEmptyNotRefused(t *testing.T) {
+	t.Parallel()
+
+	source := &attachmentArtifactSourceStub{} // no records: the source found no bucket
+	server := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+	listed := artifactCall[RuntimeArtifactListContext](
+		t, server, "list", `{"bucket":"","prefix":"","recursive":false,"limit":500}`,
+	)
+	require.Empty(t, listed.Files)
+	require.False(t, listed.Truncated)
+	require.Equal(t, DefaultAttachmentBucket, listed.Bucket)
+}
+
+// The order the source returns (newest upload first) is the order served, and
+// the truncated flag it sets reaches the worker.
+func TestArtifactListKeepsTheSourcesNewestFirstOrderAndTruncatedFlag(t *testing.T) {
+	t.Parallel()
+
+	source := &attachmentArtifactSourceStub{
+		records: []RuntimeArtifactRecord{
+			{Name: "c/new.txt", ByteLength: 1, ModifiedAt: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)},
+			{Name: "c/old.txt", ByteLength: 1, ModifiedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)},
+		},
+		truncated: true,
+	}
+	server := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+	listed := artifactCall[RuntimeArtifactListContext](
+		t, server, "list", `{"bucket":"","prefix":"","recursive":false,"limit":500}`,
+	)
+	require.Equal(t, []string{"c/new.txt", "c/old.txt"}, []string{listed.Files[0].Name, listed.Files[1].Name})
+	require.True(t, listed.Truncated)
+}
+
+// A source that cannot list attachments refuses a bucketless listing rather
+// than guessing a name, and a bucketless READ is never resolved at all.
+func TestArtifactListWithoutABucketIsRefusedWhenTheSourceCannotResolveIt(t *testing.T) {
+	t.Parallel()
+
+	server := newArtifactTestServer(t, builderAuthorizerForProject(7), &artifactSourceStub{})
+	for _, call := range []struct{ operation, body string }{
+		{"list", `{"bucket":"","prefix":"conv/"}`},
+		{"read", `{"bucket":"","name":"conv/a.txt"}`},
+	} {
+		response := httptest.NewRecorder()
+		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+call.operation, call.body))
+		require.GreaterOrEqual(t, response.Code, 400, call.operation)
+	}
+}
+
+// bucket_only asks for the bucket name alone: resolved exactly like the
+// conversation listing (policy, else the default; the claim must carry a
+// canonical conversation), but nothing is listed, so no keys are read or
+// ordered, and a named bucket ignores it.
+func TestArtifactListBucketOnlyResolvesTheBucketWithoutListing(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ policy, want string }{
+		{"team-files", "team-files"},
+		{"", DefaultAttachmentBucket},
+	} {
+		source := &attachmentArtifactSourceStub{
+			policyBucket: tc.policy,
+			records:      []RuntimeArtifactRecord{{Name: "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/a.csv"}},
+		}
+		server := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+		listed := artifactCall[RuntimeArtifactListContext](
+			t, server, "list", `{"bucket":"","prefix":"","recursive":false,"limit":1,"bucket_only":true}`,
+		)
+		require.Equal(t, tc.want, listed.Bucket)
+		require.Equal(t, int64(7), listed.ProjectID)
+		require.Empty(t, listed.Files)
+		require.False(t, listed.Truncated)
+		require.Zero(t, source.listed, "no listing is read for a bucket-only answer")
+	}
+
+	// Without the flag the same request still lists.
+	source := &attachmentArtifactSourceStub{
+		records: []RuntimeArtifactRecord{{Name: "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/a.csv"}},
+	}
+	server := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+	listed := artifactCall[RuntimeArtifactListContext](
+		t, server, "list", `{"bucket":"","prefix":"","recursive":false,"limit":1}`,
+	)
+	require.Len(t, listed.Files, 1)
+	require.Equal(t, 1, source.listed)
+
+	// A named bucket ignores bucket_only: it is an ordinary listing there.
+	named := &artifactSourceStub{}
+	server = newArtifactTestServer(t, builderAuthorizerForProject(7), named)
+	_ = artifactCall[RuntimeArtifactListContext](
+		t, server, "list", `{"bucket":"reports","prefix":"","recursive":false,"limit":5,"bucket_only":true}`,
+	)
+	require.Equal(t, "reports", named.bucket)
+}
+
+// splitArtifactAuthorizer answers the agent check and the read check from
+// different stubs, so a test can tell which one each route consulted.
+type splitArtifactAuthorizer struct {
+	agent func(context.Context, ContentClaim) (RuntimeContextAuthorization, error)
+	read  func(context.Context, ContentClaim) (RuntimeContextAuthorization, error)
+}
+
+func (a splitArtifactAuthorizer) AuthorizeAgentRuntimeContext(
+	ctx context.Context, claim ContentClaim,
+) (RuntimeContextAuthorization, error) {
+	return a.agent(ctx, claim)
+}
+
+func (a splitArtifactAuthorizer) AuthorizeArtifactReadRuntimeContext(
+	ctx context.Context, claim ContentClaim,
+) (RuntimeContextAuthorization, error) {
+	return a.read(ctx, claim)
+}
+
+// Live 4.45.0 (D4): an artifact toolkit's `read_file` / `list_files` test
+// call is a `toolkit.call_tool.v1` claim, which the agent-scoped authorizer
+// refuses. The two READ routes now ask the read authorizer (which admits a
+// user's tool run); write and delete still ask the agent one, so the direct
+// path can never reach an artifact write through them.
+func TestArtifactReadsAdmitAToolRunAndWritesStayAgentOnly(t *testing.T) {
+	t.Parallel()
+
+	toolRun := func(context.Context, ContentClaim) (RuntimeContextAuthorization, error) {
+		return RuntimeContextAuthorization{ResourceProjectID: 7, ActorID: "11"}, nil
+	}
+	refused := func(context.Context, ContentClaim) (RuntimeContextAuthorization, error) {
+		return RuntimeContextAuthorization{}, ErrContentUnauthorized
+	}
+	source := &artifactSourceStub{
+		listRecords: []RuntimeArtifactRecord{{Name: "one.txt", MediaType: "text/plain", ByteLength: 4}},
+		readRecord: RuntimeArtifactContentRecord{
+			Name: "one.txt", MediaType: "text/plain", ByteLength: 4, Content: []byte("data"),
+		},
+	}
+	server := newArtifactTestServer(t, splitArtifactAuthorizer{agent: refused, read: toolRun}, source)
+
+	listed := artifactCall[RuntimeArtifactListContext](t, server, "list", `{"bucket":"agent-artifacts"}`)
+	require.Len(t, listed.Files, 1)
+	read := artifactCall[RuntimeArtifactReadContext](t, server, "read", `{"bucket":"agent-artifacts","name":"one.txt"}`)
+	require.Equal(t, "data", read.Content)
+	require.Equal(t, int64(7), source.projectID)
+	require.Equal(t, int64(11), source.actorID, "the run's own user, through the bucket access list")
+
+	for operation, body := range map[string]string{
+		"write":  `{"bucket":"agent-artifacts","name":"one.txt","content":"x"}`,
+		"delete": `{"bucket":"agent-artifacts","name":"one.txt"}`,
+	} {
+		response := httptest.NewRecorder()
+		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+operation, body))
+		require.Equal(t, http.StatusForbidden, response.Code, operation)
+	}
+}
+
+// Review S1: a system bucket (the chat attachment bucket, the index result
+// bucket) is not reachable BY NAME. The one exception is a read of the
+// claim's own conversation's attachment, by the path the model is shown;
+// listing attachments goes through the bucketless conversation route, which
+// still works.
+func TestArtifactRoutesRefuseSystemBucketsByName(t *testing.T) {
+	t.Parallel()
+
+	const conversation = "5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1"
+	source := &attachmentArtifactSourceStub{
+		artifactSourceStub: artifactSourceStub{
+			systemBuckets: []string{DefaultAttachmentBucket, "index-artifacts", "reports"},
+			readRecord: RuntimeArtifactContentRecord{
+				Name: conversation + "/notes.txt", MediaType: "text/plain", ByteLength: 4, Content: []byte("data"),
+			},
+		},
+		records: []RuntimeArtifactRecord{{Name: conversation + "/notes.txt", ByteLength: 4}},
+	}
+	agent := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
+	status := func(server *ContentServer, operation, body string) int {
+		response := httptest.NewRecorder()
+		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+operation, body))
+		return response.Code
+	}
+
+	// The turn's own attachment, by its path: served.
+	read := artifactCall[RuntimeArtifactReadContext](t, agent, "read",
+		`{"bucket":"`+DefaultAttachmentBucket+`","name":"`+conversation+`/notes.txt"}`)
+	require.Equal(t, "data", read.Content)
+	// The conversation route still lists the turn's attachments.
+	listed := artifactCall[RuntimeArtifactListContext](t, agent, "list", `{"bucket":""}`)
+	require.Len(t, listed.Files, 1)
+	// Review round 2: a named listing scoped to the turn's own conversation
+	// (get_file_metadata on an attachment filepath) is served, as a file
+	// under it or the conversation prefix itself.
+	for _, prefix := range []string{conversation + "/notes.txt", conversation + "/"} {
+		artifactCall[RuntimeArtifactListContext](t, agent, "list",
+			`{"bucket":"`+DefaultAttachmentBucket+`","prefix":"`+prefix+`"}`)
+	}
+
+	for _, refused := range []struct{ operation, body string }{
+		{"list", `{"bucket":"` + DefaultAttachmentBucket + `"}`},
+		{"list", `{"bucket":"` + DefaultAttachmentBucket + `","prefix":"0f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/"}`},
+		{"list", `{"bucket":"` + DefaultAttachmentBucket + `","prefix":"` + conversation + `"}`},
+		{"read", `{"bucket":"` + DefaultAttachmentBucket + `","name":"0f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1/notes.txt"}`},
+		{"read", `{"bucket":"index-artifacts","name":"` + conversation + `/notes.txt"}`},
+		{"write", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/x.txt","content":"x"}`},
+		{"delete", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/notes.txt"}`},
+	} {
+		require.Equal(t, http.StatusForbidden, status(agent, refused.operation, refused.body), refused)
+	}
+
+	// A test-tool claim carries no conversation: no system bucket at all.
+	toolRun := func(context.Context, ContentClaim) (RuntimeContextAuthorization, error) {
+		return RuntimeContextAuthorization{ResourceProjectID: 7, ActorID: "11"}, nil
+	}
+	refused := func(context.Context, ContentClaim) (RuntimeContextAuthorization, error) {
+		return RuntimeContextAuthorization{}, ErrContentUnauthorized
+	}
+	tool := newArtifactTestServer(t, splitArtifactAuthorizer{agent: refused, read: toolRun}, source)
+	for _, body := range []struct{ operation, body string }{
+		{"read", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/notes.txt"}`},
+		{"list", `{"bucket":"` + DefaultAttachmentBucket + `"}`},
+		{"read", `{"bucket":"index-artifacts","name":"x.json"}`},
+	} {
+		require.Equal(t, http.StatusForbidden, status(tool, body.operation, body.body), body)
+	}
+
+	// Review round 3 (owner decision): a provisioned `reports` system bucket
+	// is the per-bucket access list's, for an agent turn and a tool run alike.
+	for _, server := range []*ContentServer{agent, tool} {
+		require.Equal(t, http.StatusOK, status(server, "read", `{"bucket":"reports","name":"`+conversation+`/notes.txt"}`))
+		require.Equal(t, http.StatusOK, status(server, "list", `{"bucket":"reports"}`))
+	}
+	require.Equal(t, http.StatusOK, status(agent, "write", `{"bucket":"reports","name":"q3.txt","content":"x"}`))
 }

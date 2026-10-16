@@ -158,13 +158,22 @@ async fn the_sdk_catalogue_selects_what_this_runtime_serves_and_refuses_nothing(
     names.sort_unstable();
     assert_eq!(
         names,
-        ["create_file", "delete_file", "list_files", "read_file"]
+        [
+            "append_data",
+            "create_file",
+            "create_new_bucket",
+            "delete_file",
+            "get_file_metadata",
+            "list_files",
+            "read_file",
+            "read_multiple_files"
+        ]
     );
 
     // An empty selection is every tool this runtime implements — the
     // convention every other family follows.
     let (all, _rpc) = tools_of("{}", &[]).await;
-    assert_eq!(all.len(), 4);
+    assert_eq!(all.len(), 10);
 
     // And a selection that names only one binds only that one, so an author
     // who narrowed the toolkit keeps their narrowing.
@@ -199,6 +208,20 @@ async fn the_argument_names_are_the_sdks() {
             "create_file" => {
                 assert!(properties.contains_key("filename"));
                 assert!(properties.contains_key("filedata"));
+            }
+            // The tools the SDK adds through its file-operation decorator name
+            // the path `file_path`/`file_paths`, and the bucket tool takes none.
+            "grep_file" | "edit_file" => {
+                assert!(properties.contains_key("file_path"));
+            }
+            "read_multiple_files" => assert!(properties.contains_key("file_paths")),
+            "get_file_metadata" => {
+                assert!(properties.contains_key("filename"));
+                assert!(properties.contains_key("filepath"));
+            }
+            "create_new_bucket" => {
+                assert!(properties.contains_key("expiration_measure"));
+                assert!(properties.contains_key("expiration_value"));
             }
             other => assert!(
                 properties.contains_key("filename"),
@@ -340,18 +363,35 @@ fn the_configuration_is_bounded_and_the_bucket_addressable() {
     assert_eq!(parsed.bucket(), "agent-artifacts");
     assert_eq!(parsed.selected_tools().len(), 1);
 
-    for invalid in [
-        json!({"selected_tools": []}),
-        json!({"bucket": "", "selected_tools": []}),
-        json!({"bucket": "Bad-Bucket", "selected_tools": []}),
-        json!({"bucket": "a", "selected_tools": []}),
-        json!({"bucket": "agent-artifacts", "selected_tools": "read_file"}),
+    // A missing or unusable bucket is its own code: the run skips the
+    // toolkit and names the setting instead of failing every turn.
+    for (invalid, code) in [
+        (
+            json!({"selected_tools": []}),
+            ArtifactConfigErrorCode::BucketName,
+        ),
+        (
+            json!({"bucket": "", "selected_tools": []}),
+            ArtifactConfigErrorCode::BucketName,
+        ),
+        (
+            json!({"bucket": "Bad-Bucket", "selected_tools": []}),
+            ArtifactConfigErrorCode::BucketName,
+        ),
+        (
+            json!({"bucket": "a", "selected_tools": []}),
+            ArtifactConfigErrorCode::BucketName,
+        ),
+        (
+            json!({"bucket": "agent-artifacts", "selected_tools": "read_file"}),
+            ArtifactConfigErrorCode::InvalidConfiguration,
+        ),
     ] {
         let object = invalid.as_object().expect("invalid artifact fixture");
         let Err(error) = ArtifactToolkitConfig::parse(object) else {
             panic!("a malformed artifact configuration must not parse: {invalid}");
         };
-        assert_eq!(error.code(), ArtifactConfigErrorCode::InvalidConfiguration);
+        assert_eq!(error.code(), code, "{invalid}");
     }
 
     let oversized = json!({"bucket": "b".repeat(64), "selected_tools": []});

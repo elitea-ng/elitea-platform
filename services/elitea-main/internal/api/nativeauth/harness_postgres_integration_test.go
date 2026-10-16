@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -63,7 +64,7 @@ var (
 
 func adminPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(testDatabaseEnv)
+	databaseURL := testpg.DSN(os.Getenv(testDatabaseEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the native authorization PostgreSQL tests", testDatabaseEnv)
 	}
@@ -150,7 +151,7 @@ func newPool(t *testing.T) *pgxpool.Pool {
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if templateName != "" {
-		if databaseURL := os.Getenv(testDatabaseEnv); databaseURL != "" {
+		if databaseURL := testpg.DSN(os.Getenv(testDatabaseEnv)); databaseURL != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			if pool, err := pgxpool.New(ctx, databaseURL); err == nil {
 				_, _ = pool.Exec(ctx, "DROP DATABASE "+pgx.Identifier{templateName}.Sanitize()+" WITH (FORCE)")

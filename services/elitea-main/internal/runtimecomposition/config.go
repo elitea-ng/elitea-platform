@@ -52,6 +52,11 @@ const (
 	// It is not ELITEA_RUNTIME_*: that prefix belongs to the dispatch plane,
 	// which a default install leaves off, and this choice is not a plane.
 	IndexingRuntimeEnv = "ELITEA_INDEXING_RUNTIME"
+	// MemoryEmbeddingModelEnv is the gateway embedding model the Rust worker's
+	// memory toolkit embeds with (worker unit M9). The chart renders it from
+	// the same value as the worker's runtime.json memory_embedding_model, so
+	// this process knows whether memory is actually served.
+	MemoryEmbeddingModelEnv = "ELITEA_MEMORY_EMBEDDING_MODEL"
 
 	IndexingRuntimePython = "python"
 	IndexingRuntimeRust   = "rust"
@@ -98,7 +103,10 @@ type Config struct {
 	// runs the index routes and the admission initializer on the
 	// elitea_runtime.index_registry table, which only Main writes. The two are
 	// never mixed per toolkit.
-	IndexingRuntime               string
+	IndexingRuntime string
+	// MemoryEmbeddingModel is ELITEA_MEMORY_EMBEDDING_MODEL; empty means the
+	// operator configured none and the Rust worker serves no memory toolkit.
+	MemoryEmbeddingModel          string
 	IndexSchedulingEnabled        bool
 	SchedulerInstanceID           string
 	IndexIngestCommandStream      string
@@ -212,6 +220,9 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	var config Config
 	config.Enabled = true
 	config.IndexingRuntime = indexingRuntime
+	if value, ok := lookup(MemoryEmbeddingModelEnv); ok {
+		config.MemoryEmbeddingModel = strings.TrimSpace(value)
+	}
 	if config.CommandStream, err = required("ELITEA_RUNTIME_COMMAND_STREAM"); err != nil {
 		return Config{}, err
 	}

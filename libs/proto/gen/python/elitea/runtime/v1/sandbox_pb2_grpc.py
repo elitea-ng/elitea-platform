@@ -59,6 +59,11 @@ class SandboxSupervisorServiceStub(object):
                 request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobRequestV1.SerializeToString,
                 response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobResponseV1.FromString,
                 _registered_method=True)
+        self.LookupSandboxDependencies = channel.unary_unary(
+                '/elitea.runtime.v1.SandboxSupervisorService/LookupSandboxDependencies',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.LookupSandboxDependenciesRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.LookupSandboxDependenciesResponseV1.FromString,
+                _registered_method=True)
         self.PrepareSandboxDependencies = channel.unary_unary(
                 '/elitea.runtime.v1.SandboxSupervisorService/PrepareSandboxDependencies',
                 request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.PrepareSandboxDependenciesRequestV1.SerializeToString,
@@ -110,6 +115,13 @@ class SandboxSupervisorServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def LookupSandboxDependencies(self, request, context):
+        """Content-only lookup cannot reserve a job or start a preparer.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def PrepareSandboxDependencies(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -155,6 +167,11 @@ def add_SandboxSupervisorServiceServicer_to_server(servicer, server):
                     servicer.CancelSandboxJob,
                     request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobRequestV1.FromString,
                     response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobResponseV1.SerializeToString,
+            ),
+            'LookupSandboxDependencies': grpc.unary_unary_rpc_method_handler(
+                    servicer.LookupSandboxDependencies,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.LookupSandboxDependenciesRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.LookupSandboxDependenciesResponseV1.SerializeToString,
             ),
             'PrepareSandboxDependencies': grpc.unary_unary_rpc_method_handler(
                     servicer.PrepareSandboxDependencies,
@@ -307,6 +324,33 @@ class SandboxSupervisorService(object):
             '/elitea.runtime.v1.SandboxSupervisorService/CancelSandboxJob',
             elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobRequestV1.SerializeToString,
             elitea_dot_runtime_dot_v1_dot_sandbox__pb2.CancelSandboxJobResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def LookupSandboxDependencies(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.SandboxSupervisorService/LookupSandboxDependencies',
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.LookupSandboxDependenciesRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_sandbox__pb2.LookupSandboxDependenciesResponseV1.FromString,
             options,
             channel_credentials,
             insecure,

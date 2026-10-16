@@ -72,9 +72,9 @@ func seedCataloguePlatformModel(
 		modelName, grant)
 	if _, err := pool.Exec(ctx, `
 INSERT INTO p_1.configuration
-    (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source)
+    (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, created_at)
 VALUES (gen_random_uuid(), 1, 'Autotest platform model', $1, 'llm_model', 'llm',
-        $2::jsonb, '{}'::jsonb, true, true, 'test')`, title, data); err != nil {
+        $2::jsonb, '{}'::jsonb, true, true, 'test', now() AT TIME ZONE 'UTC')`, title, data); err != nil {
 		t.Fatalf("seed the catalogue platform model: %v", err)
 	}
 }

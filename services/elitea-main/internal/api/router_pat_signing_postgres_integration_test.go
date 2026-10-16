@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -147,7 +148,7 @@ func patTokenVerifies(t *testing.T, token string, key []byte) bool {
 // so a stub repository cannot reach the signing seam.
 func newPATSigningPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	if os.Getenv("ELITEA_TEST_DATABASE_URL") == "" {
+	if testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL")) == "" {
 		t.Skipf("set ELITEA_TEST_DATABASE_URL to run the personal access token signing seam test")
 	}
 	pool := newStatusOKIntegrationPool(t)

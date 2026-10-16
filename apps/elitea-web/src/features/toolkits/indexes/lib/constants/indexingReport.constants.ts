@@ -29,6 +29,8 @@ export const IndexingReportStatus = {
   ok: 'ok',
   partlyIndexed: 'partly_indexed',
   error: 'error',
+  /** Written by the Rust indexing runtime for a run that was stopped. */
+  cancelled: 'cancelled',
 } as const;
 
 export type IndexingReportStatusValue = (typeof IndexingReportStatus)[keyof typeof IndexingReportStatus];

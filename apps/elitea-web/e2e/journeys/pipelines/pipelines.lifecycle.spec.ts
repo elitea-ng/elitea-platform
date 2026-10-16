@@ -42,13 +42,15 @@ import {
 } from '../../fixtures/pipelines';
 
 /**
- * The Add-node menu labels for the ten node types the Rust pipeline
+ * The Add-node menu labels for the twelve node types the Rust pipeline
  * compiler admits (`parse_pipeline_node` in
- * `services/elitea-worker-rust/src/agents/graph/compiler.rs`).
+ * `services/elitea-worker-rust/src/agents/graph/compiler.rs`); Split Out and
+ * Aggregate are admitted by default since #1262.
  * Code requires an admitted sandbox runtime to execute; Custom remains unsupported.
  */
 const ADMITTED_NODE_LABELS = [
   'Agent',
+  'Aggregate',
   'Code',
   'Decision',
   'Human-in-the-loop',
@@ -56,6 +58,7 @@ const ADMITTED_NODE_LABELS = [
   'MCP',
   'Printer',
   'Router',
+  'SplitOut',
   'State modifier',
   'Toolkit',
 ] as const;
@@ -79,8 +82,16 @@ const ADMITTED_NODE_LABELS = [
  * them without first driving a toolkit picker. Their minted ids are checked
  * on the canvas by the test below instead.
  */
+// Split Out and Aggregate (#1262) are left out too until their seeded
+// defaults are shown to save unconfigured; the id-minting test still adds them.
 const SAVEABLE_NODE_LABELS = ADMITTED_NODE_LABELS.filter(
-  label => label !== 'Agent' && label !== 'Toolkit' && label !== 'MCP' && label !== 'Code',
+  label =>
+    label !== 'Agent' &&
+    label !== 'Toolkit' &&
+    label !== 'MCP' &&
+    label !== 'Code' &&
+    label !== 'Aggregate' &&
+    label !== 'SplitOut',
 );
 
 /** Add one node of `label` through the editor's own menu — no store pokes. */
@@ -412,7 +423,7 @@ test('J16: every node type the menu offers mints a compiler-legal id', async ({ 
    * SDK worker hid this by silently rewriting ids through `clean_string`; the
    * Rust worker never rewrites.
    *
-   * This covers all ten admitted types. The four that cannot be SAVED
+   * This covers all twelve admitted types. The four that cannot be SAVED
    * unconfigured (see SAVEABLE_NODE_LABELS) are only reachable here; the
    * stored-document gate is the test after this one.
    */

@@ -39,7 +39,11 @@ elitea-llm-wire = { path = "../../libs/rust/llm-wire" }
 # `preserve_order` from elsewhere changes them.
 # `toolkit-sql`: the worker serves the `sql` toolkit family (sqlx postgres +
 # mysql), which the desktop host never links.
-elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["toolkit-sql"] }
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["toolkit-sql", "toolkit-office", "toolkit-data-analysis"] }
+# ADR-0032: the Office families run in this process; the worker also reads
+# `elitea_office_core::health()` and drains and exits when a library call will
+# not give its thread back (production.rs, `office_core_stuck`).
+elitea-office-core = { path = "../../libs/rust/office-core" }
 # ADR-0030 I1: the index.ingest.v1 handler. The connectors over this crate's
 # reqwest 0.12 (rustls on ring), the shared extension table, extraction and
 # the SDK-default chunkers, and the elitea-vector client with the SDK search
@@ -51,11 +55,19 @@ elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["to
 # `xberg-native-pdf` 1.3.6 requires `smallvec ^1.16`, while `kube-client`
 # 4.2.0 (the `sandbox-supervisor` feature) pins `serde-saphyr ^0.0.29`, which
 # caps smallvec `< 1.16`; one lock file cannot hold both and no kube release
-# lifts the cap yet. Until it does, an index run reports a PDF or Office
-# document as skipped `unsupported_type`; text, markdown, HTML, JSON and code
-# are extracted and chunked.
+# lifts the cap yet. Those formats are read by services/elitea-doc-extractor,
+# a separate process with its own lock, which an index run reaches over a
+# Unix socket (`extractor_socket` in the runtime document,
+# src/transport/extractor_client.rs); without one such a document is
+# reported skipped `unsupported_type`. Text, markdown, HTML, JSON and code
+# are extracted and chunked here.
 elitea-connectors = { path = "../../libs/rust/connectors", default-features = false, features = ["providers", "content-source", "reqwest-012"] }
 elitea-content-source = { path = "../../libs/rust/content-source" }
+# ADR-0030 I4 part B: fit a large picture under the gateway's inline image
+# budget (decode, downscale, re-encode) and rasterise BMP. Only the formats
+# the vision step reads; pure Rust, no system library, no default features
+# (no rayon, no avif/exr/tiff codecs).
+image = { version = "=0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 elitea-doc-chunk = { path = "../../libs/rust/doc-chunk" }
 elitea-doc-extract = { path = "../../libs/rust/doc-extract", features = ["html"] }
 elitea-vector-index = { path = "../../libs/rust/vector-index" }
@@ -80,6 +92,7 @@ rmcp = { version = "=3.5.0", default-features = false, features = ["auth"] }
 rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std"] }
 rustix = { version = "=1.1.5", features = ["fs", "process"] }
 serde = { version = "1.0.228", features = ["derive"] }
+sha2 = "=0.10.9"
 serde_json = { version = "=1.0.151", features = ["arbitrary_precision", "raw_value"] }
 serde_yaml_ng = "=0.10.0"
 sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql", "chrono", "bigdecimal", "json", "uuid"] }
@@ -111,7 +124,7 @@ harness = false
 required-features = ["graph-shaping-bench"]
 
 [dev-dependencies]
-elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support", "toolkit-sql"] }
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support", "toolkit-sql", "toolkit-office", "toolkit-data-analysis"] }
 # The in-process fake of elitea-vector the index handler's tests run against.
 elitea-vector-index = { path = "../../libs/rust/vector-index", features = ["test-server"] }
 http-body = "=1.1.0"
@@ -142,3 +155,7 @@ incremental = false
 adk-agent = { path = "../../libs/rust/vendor/adk-agent" }
 adk-runner = { path = "../../libs/rust/vendor/adk-runner" }
 adk-sandbox = { path = "../../libs/rust/vendor/adk-sandbox" }
+# The zavora-slide fixes of ADR-0032 (vendor/README.md), as in the libs/rust workspace.
+zavora-slide = { path = "../../libs/rust/vendor/zavora-slide" }
+zavora-slide-render = { path = "../../libs/rust/vendor/zavora-slide-render" }
+zavora-slide-pdf = { path = "../../libs/rust/vendor/zavora-slide-pdf" }

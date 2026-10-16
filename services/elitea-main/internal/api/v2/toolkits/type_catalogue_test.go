@@ -50,6 +50,17 @@ var pythonUnsupportedTypes = []string{
 	"kubernetes", "localgit", "yagmail",
 }
 
+// rustOnlyTypes are the types the SDK does not have and only the Rust worker
+// serves (ADR-0032 P4). A Python deployment withholds them whole.
+var rustOnlyTypes = []string{"docx", "xlsx"}
+
+// pythonWithheldTypes is every type a Python deployment serves as unavailable.
+func pythonWithheldTypes() []string {
+	all := append(append([]string(nil), pythonUnsupportedTypes...), rustOnlyTypes...)
+	sort.Strings(all)
+	return all
+}
+
 func pinnedCatalogue(t *testing.T) *runtimecomposition.CurrentToolkitCatalogueSnapshot {
 	t.Helper()
 	catalogue, err := runtimecomposition.LoadPinnedCurrentToolkitCatalogueSnapshot()
@@ -146,7 +157,7 @@ func TestEveryServedTypeHasSchemaMetadataAndCapabilityVerdict(t *testing.T) {
 	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
 	catalogue := pinnedCatalogue(t)
 	unsupported := map[string]struct{}{}
-	for _, toolkitType := range pythonUnsupportedTypes {
+	for _, toolkitType := range pythonWithheldTypes() {
 		unsupported[toolkitType] = struct{}{}
 	}
 
@@ -225,6 +236,14 @@ func TestCatalogueWithoutAWorkerCapabilityOffersEveryType(t *testing.T) {
 	if len(body) < 52 {
 		t.Errorf("served %d types with no capability source", len(body))
 	}
+	// ... except the types only the Rust worker serves: absence of a statement
+	// is not a statement that a Rust worker is there.
+	for _, toolkitType := range rustOnlyTypes {
+		metadata := metadataOf(t, body, toolkitType)
+		if unavailable, _ := metadata["unavailable"].(bool); !unavailable {
+			t.Errorf("%s is offered with no capability source", toolkitType)
+		}
+	}
 }
 
 // The Python image installs a measured subset of elitea-sdk[all]. These nine
@@ -246,8 +265,8 @@ func TestPythonWorkerCapabilityWithholdsTheTypesItCannotImport(t *testing.T) {
 		}
 	}
 	sort.Strings(withheld)
-	if !equalStrings(withheld, pythonUnsupportedTypes) {
-		t.Errorf("withheld %v, want %v", withheld, pythonUnsupportedTypes)
+	if !equalStrings(withheld, pythonWithheldTypes()) {
+		t.Errorf("withheld %v, want %v", withheld, pythonWithheldTypes())
 	}
 
 	// The reason names the toolkit the operator has to act on, and names the
@@ -270,14 +289,15 @@ func TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize(t *testing.
 	// platform's own storage under the live execution claim, so the type is
 	// creatable under the rust worker instead of withheld.
 	for _, toolkitType := range []string{
-		"github", "openapi", "sharepoint", "sql", "artifact", "bitbucket", "testrail", "qtest",
+		"github", "openapi", "sharepoint", "sql", "artifact", "bitbucket", "testrail", "qtest", "pptx",
+		"docx", "xlsx",
 	} {
 		metadata := metadataOf(t, body, toolkitType)
 		if unavailable, _ := metadata["unavailable"].(bool); unavailable {
 			t.Errorf("%s is a native family and is withheld", toolkitType)
 		}
 	}
-	for _, toolkitType := range []string{"pptx", "localgit", "delta_lake"} {
+	for _, toolkitType := range []string{"localgit", "delta_lake"} {
 		metadata := metadataOf(t, body, toolkitType)
 		if unavailable, _ := metadata["unavailable"].(bool); !unavailable {
 			t.Errorf("%s has no native family and is offered as creatable", toolkitType)
@@ -294,10 +314,10 @@ func TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize(t *testing.
 
 // imagegen is hand-written (its credential is the project's own
 // image_generation model, not a pinned-snapshot settings shape) but it IS a
-// real, worker-implemented toolkit (elitea_sdk/tools/imagegen, #864) — unlike
-// the other four hand-written types, it must still carry a genuine worker
-// verdict: buildable under Python, hidden under Rust (no Rust family exists
-// for it), and offered with no verdict when no capability source is wired.
+// real, worker-implemented toolkit (elitea_sdk/tools/imagegen on Python, the
+// native imagegen family on Rust, #864) — unlike the other four hand-written
+// types, it must still carry a genuine worker verdict: buildable under both
+// workers, and offered with no verdict when no capability source is wired.
 func TestImageGenIsHandWrittenButStillWorkerGated(t *testing.T) {
 	t.Parallel()
 
@@ -309,17 +329,11 @@ func TestImageGenIsHandWrittenButStillWorkerGated(t *testing.T) {
 
 	rust := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
 	rustMetadata := metadataOf(t, rust, "imagegen")
-	hidden, _ := rustMetadata["hidden"].(bool)
-	unavailable, _ := rustMetadata["unavailable"].(bool)
-	reason, _ := rustMetadata["unavailable_reason"].(string)
-	if !hidden || !unavailable || reason == "" {
-		t.Errorf(
-			"imagegen has no Rust toolkit family and should be served hidden=true unavailable=true with a reason; got hidden=%v unavailable=%v reason=%q",
-			hidden, unavailable, reason,
-		)
+	if hidden, _ := rustMetadata["hidden"].(bool); hidden {
+		t.Errorf("imagegen has a Rust family and must not be served hidden: %#v", rustMetadata)
 	}
-	if !contains(reason, "imagegen") {
-		t.Errorf("imagegen reason=%q, want it to name the imagegen type", reason)
+	if unavailable, _ := rustMetadata["unavailable"].(bool); unavailable {
+		t.Errorf("imagegen has a Rust family and must not be served unavailable: %#v", rustMetadata)
 	}
 
 	unset := getToolkitTypeCatalogue(t, catalogueOptions(t, "")...)
@@ -609,5 +623,128 @@ func TestAPartialRustFamilyNamesItsUnservedTools(t *testing.T) {
 	}
 	if _, present := metadataOf(t, body, "slack")["unavailable_tools"]; present {
 		t.Fatal("a family without a tool list serves every tool")
+	}
+}
+
+// The editor's tool list is the keys of properties.selected_tools.args_schemas:
+// the pptx type serves the SDK's two tools and the Rust worker's nineteen.
+func TestPptxCatalogueListsTheRustOnlyTools(t *testing.T) {
+	t.Parallel()
+
+	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
+	properties, _ := typeSchemaOf(t, body, "pptx")["properties"].(map[string]any)
+	selected, _ := properties["selected_tools"].(map[string]any)
+	schemas, _ := selected["args_schemas"].(map[string]any)
+	if len(schemas) != 21 {
+		t.Fatalf("pptx lists %d tools, want 21", len(schemas))
+	}
+	for _, name := range []string{"fill_template", "translate_presentation", "add_slide", "export_pdf"} {
+		if _, ok := schemas[name]; !ok {
+			t.Errorf("%s is missing from the pptx tool list", name)
+		}
+	}
+	// Grouped for display like any other tool: add_* writes, to_markdown reads.
+	if groups, ok := selected["tool_groups"].(map[string]any); ok {
+		if groups["add_slide"] == nil || groups["to_markdown"] == nil {
+			t.Errorf("the new tools carry no group: %v", groups)
+		}
+	}
+}
+
+// The Rust-only tools are offered only where the Rust worker serves them: the
+// Python deployment marks the nineteen unavailable (the metadata mechanism a
+// partial family uses), the Rust deployment marks none.
+func TestPptxRustOnlyToolsAreWithheldOnAPythonDeployment(t *testing.T) {
+	t.Parallel()
+
+	unavailable := func(implementation string) []any {
+		body := getToolkitTypeCatalogue(t, catalogueOptions(t, implementation)...)
+		list, _ := metadataOf(t, body, "pptx")["unavailable_tools"].([]any)
+		return list
+	}
+	python := unavailable("python")
+	if len(python) != 19 {
+		t.Fatalf("python deployment withholds %d pptx tools, want the 19 Rust-only ones: %v", len(python), python)
+	}
+	for _, sdk := range []string{"fill_template", "translate_presentation"} {
+		for _, name := range python {
+			if name == sdk {
+				t.Errorf("the SDK tool %s must stay available on python", sdk)
+			}
+		}
+	}
+	if rust := unavailable("rust"); len(rust) != 0 {
+		t.Fatalf("rust deployment withholds pptx tools: %v", rust)
+	}
+}
+
+// docx and xlsx have no SDK counterpart (ADR-0032 P4): the Rust worker's tools
+// are merged into the catalogue as whole types. The editor lists every tool of
+// each; a Python deployment withholds the type, with a reason that says only
+// the Rust worker serves it; a Rust deployment offers it.
+func TestDocxAndXlsxAreRustOnlyTypes(t *testing.T) {
+	t.Parallel()
+
+	for toolkitType, want := range map[string]int{"docx": 13, "xlsx": 10} {
+		rust := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
+		properties, _ := typeSchemaOf(t, rust, toolkitType)["properties"].(map[string]any)
+		if _, ok := properties["bucket_name"]; !ok {
+			t.Errorf("%s has no bucket_name setting: %v", toolkitType, properties)
+		}
+		selected, _ := properties["selected_tools"].(map[string]any)
+		schemas, _ := selected["args_schemas"].(map[string]any)
+		if len(schemas) != want {
+			t.Errorf("%s lists %d tools, want %d", toolkitType, len(schemas), want)
+		}
+		metadata := metadataOf(t, rust, toolkitType)
+		if unavailable, _ := metadata["unavailable"].(bool); unavailable {
+			t.Errorf("%s is withheld on the Rust worker: %v", toolkitType, metadata["unavailable_reason"])
+		}
+		if withheld, _ := metadata["unavailable_tools"].([]any); len(withheld) != 0 {
+			t.Errorf("%s withholds tools on the Rust worker: %v", toolkitType, withheld)
+		}
+		if label, _ := metadata["label"].(string); label == "" {
+			t.Errorf("%s has no label", toolkitType)
+		}
+
+		python := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
+		metadata = metadataOf(t, python, toolkitType)
+		reason, _ := metadata["unavailable_reason"].(string)
+		if unavailable, _ := metadata["unavailable"].(bool); !unavailable ||
+			!contains(reason, "only the Rust worker serves it") {
+			t.Errorf("%s on python: unavailable=%v reason=%q", toolkitType, metadata["unavailable"], reason)
+		}
+		if hidden, _ := metadata["hidden"].(bool); !hidden {
+			t.Errorf("%s is offered as a tile on a Python deployment", toolkitType)
+		}
+	}
+}
+
+// A handler with NO capability source at all (an untyped nil) applies the same
+// rule as a nil projection: the SDK's types are offered, docx and xlsx and
+// pptx's Rust-only tools are withheld, with a reason.
+func TestNoCapabilitySourceWithholdsTheRustOnlyTypesAndTools(t *testing.T) {
+	t.Parallel()
+
+	for name, options := range map[string][]toolkits.Option{
+		"untyped nil": catalogueOptions(t, ""),
+		"typed nil": append(catalogueOptions(t, ""),
+			toolkits.WithWorkerCapability((*runtimecomposition.WorkerToolkitCapability)(nil))),
+	} {
+		body := getToolkitTypeCatalogue(t, options...)
+		for _, toolkitType := range rustOnlyTypes {
+			metadata := metadataOf(t, body, toolkitType)
+			reason, _ := metadata["unavailable_reason"].(string)
+			if unavailable, _ := metadata["unavailable"].(bool); !unavailable || reason == "" {
+				t.Errorf("%s: %s is offered with no capability: %v", name, toolkitType, metadata)
+			}
+		}
+		if unavailable, _ := metadataOf(t, body, "github")["unavailable"].(bool); unavailable {
+			t.Errorf("%s: github is withheld with no capability", name)
+		}
+		withheld, _ := metadataOf(t, body, "pptx")["unavailable_tools"].([]any)
+		if len(withheld) != 19 {
+			t.Errorf("%s: pptx withholds %d tools, want the 19 Rust-only ones", name, len(withheld))
+		}
 	}
 }

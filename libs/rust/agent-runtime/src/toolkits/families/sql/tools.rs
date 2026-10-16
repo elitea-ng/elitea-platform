@@ -327,3 +327,12 @@ pub(in crate::toolkits) fn test_catalog() -> Vec<(&'static str, &'static str)> {
         .map(|kind| (kind.name(), kind.group()))
         .collect()
 }
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    SqlToolKind::ALL
+        .iter()
+        .map(|kind| (kind.name(), false))
+        .collect()
+}

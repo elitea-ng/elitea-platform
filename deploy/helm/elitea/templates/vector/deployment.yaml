@@ -7,6 +7,8 @@ metadata:
   name: {{ include "elitea-vector.fullname" . }}
   labels:
     {{- include "elitea-vector.labels" . | nindent 4 }}
+  annotations:
+    {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
   {{- if not .Values.vector.autoscaling.enabled }}
   replicas: {{ .Values.vector.replicaCount }}

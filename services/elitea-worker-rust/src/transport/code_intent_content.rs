@@ -65,11 +65,20 @@ impl InputContentClient {
     pub(crate) fn with_original_code_visit_fixture_rpc(
         rpc: impl super::InputContentRpc + 'static,
     ) -> Self {
+        Self::with_original_code_visit_fixture_rpc_deadline(rpc, Duration::from_secs(1))
+    }
+    /// The same fixture with an explicit per-call deadline, for a peer that is
+    /// slow on purpose.
+    #[cfg(test)]
+    pub(crate) fn with_original_code_visit_fixture_rpc_deadline(
+        rpc: impl super::InputContentRpc + 'static,
+        deadline: Duration,
+    ) -> Self {
         Self::with_rpc(
             rpc,
             super::InputContentConfig {
                 origin: "https://main.original-code.fixture".into(),
-                deadline: Duration::from_secs(1),
+                deadline,
                 max_materialized_bytes: 1024 * 1024,
             },
         )

@@ -10,6 +10,9 @@ const MAX_TOOL_NAME_BYTES: usize = 64;
 pub enum ArtifactConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
+    /// `bucket` is absent, blank or not a bucket name: a setting the user can
+    /// fix, so the run skips this toolkit and names it.
+    BucketName,
 }
 
 /// Stable, data-free failure for claim-materialized artifact settings.
@@ -42,6 +45,7 @@ impl fmt::Display for ArtifactConfigError {
             ArtifactConfigErrorCode::ResourceExhausted => {
                 "the artifact toolkit configuration exceeds its approved limit"
             }
+            ArtifactConfigErrorCode::BucketName => "the artifact toolkit has no usable bucket",
         })
     }
 }
@@ -66,12 +70,12 @@ impl ArtifactToolkitConfig {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(invalid_configuration)?;
+            .ok_or_else(bucket_name)?;
         if bucket.len() > MAX_BUCKET_BYTES {
             return Err(resource_exhausted());
         }
         if !valid_bucket_name(bucket) {
-            return Err(invalid_configuration());
+            return Err(bucket_name());
         }
         Ok(Self {
             bucket: bucket.into(),
@@ -112,12 +116,11 @@ fn valid_bucket_name(bucket: &str) -> bool {
 /// `sonar`'s `validate_selection` refuses a name it does not implement, which
 /// is right for a family whose whole tool list it owns. The artifact type's
 /// stored catalogue is the SDK's, and it names tools this runtime does not
-/// serve yet (`read_multiple_files`, `get_file_metadata`, `append_data`,
-/// `create_new_bucket`, and the indexing pair). Refusing the configuration
-/// because it mentions one of them would fail materialization for every
-/// toolkit created through the product's own form — turning a partial port
-/// into a dead agent, which is exactly the outcome #906 is about. The unknown
-/// names simply select nothing; `tools.rs` binds what it has.
+/// serve (the six index tools, which the index toolset serves). Refusing the
+/// configuration because it mentions one of them would fail materialization
+/// for every toolkit created through the product's own form — turning a
+/// partial port into a dead agent, which is exactly the outcome #906 is about.
+/// The unknown names simply select nothing; `tools.rs` binds what it has.
 fn selected_tools(settings: &Map<String, Value>) -> Result<Vec<Box<str>>, ArtifactConfigError> {
     let Some(value) = settings.get("selected_tools") else {
         return Ok(Vec::new());
@@ -152,6 +155,12 @@ fn selected_tools(settings: &Map<String, Value>) -> Result<Vec<Box<str>>, Artifa
 const fn invalid_configuration() -> ArtifactConfigError {
     ArtifactConfigError {
         code: ArtifactConfigErrorCode::InvalidConfiguration,
+    }
+}
+
+const fn bucket_name() -> ArtifactConfigError {
+    ArtifactConfigError {
+        code: ArtifactConfigErrorCode::BucketName,
     }
 }
 

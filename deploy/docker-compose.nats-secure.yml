@@ -37,9 +37,8 @@ services:
       - ./certs/nats/server:/etc/nats-certs/nats:ro
       - ./certs/nats/ca:/etc/nats-ca-cert:ro
     tmpfs:
-      # pid_file in the chart's config, and its JetStream store_dir.
+      # Keep the PID file temporary. Preserve the base JetStream volume.
       - /var/run/nats
-      - /data
 
   nats-bootstrap:
     environment:

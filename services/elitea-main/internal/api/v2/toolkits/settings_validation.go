@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"strings"
+	"unicode"
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -199,6 +201,18 @@ func (h *Handler) refuseUnresolvableToolkitSettings(
 	// deployment with ELITEA_CONFIGURATIONS_ENABLED unset composes no validator
 	// and still writes to the same column the claim-time materializer reads.
 	if h.refuseFrozenConfigurationMarker(w, r, action, settings) {
+		return true
+	}
+	// A memory toolkit's two own settings, which no configuration graph
+	// judges: unconditional like the marker, so a deployment without the
+	// validator still refuses a namespace or scope the worker would skip.
+	if h.refuseMalformedMemorySettings(w, action, toolkitType, settings) {
+		return true
+	}
+	// The bucket the file-store toolkits keep their files in, which their
+	// schema declares required and nothing else enforces on save: like the
+	// memory rules, unconditional.
+	if h.refuseMissingToolkitBucket(w, action, toolkitType, settings) {
 		return true
 	}
 	if h.settingsValidator == nil || toolkitType == "" {
@@ -434,4 +448,122 @@ func (h *Handler) storedToolkitType(ctx context.Context, projectID, toolkitID st
 	}
 	storedType, _ := stored["type"].(string)
 	return storedType
+}
+
+// memoryNamespaceMaxBytes is the longest namespace a memory toolkit may name;
+// the Rust worker enforces the same rule (agent-runtime families/memory) and
+// skips a toolkit that breaks it.
+const memoryNamespaceMaxBytes = 256
+
+// memoryScopes are the values of a memory toolkit's `memory_scope`. A toolkit
+// is personal OR project (owner decision 2026-10-14): the former `both` is not
+// saved any more. A toolkit already stored with it is read as personal by the
+// worker (no data migration), and a save must pick one of the two.
+var memoryScopes = map[string]bool{"personal": true, "project": true}
+
+// memorySettingsProblems lists what is wrong with a memory toolkit's
+// `namespace` and `memory_scope` (an absent or null value is fine: the
+// namespace defaults to the toolkit's id and the scope to personal).
+func memorySettingsProblems(settings map[string]any) []map[string]any {
+	var problems []map[string]any
+	problem := func(field, message string) {
+		problems = append(problems, map[string]any{
+			"loc":  []string{"settings", field},
+			"msg":  message,
+			"type": "value_error",
+			"code": "invalid_memory_setting",
+		})
+	}
+	if value, present := settings["namespace"]; present && value != nil {
+		namespace, isText := value.(string)
+		switch {
+		case !isText || strings.TrimSpace(namespace) == "":
+			problem("namespace", "The namespace must be a non-blank text.")
+		case len(namespace) > memoryNamespaceMaxBytes:
+			problem("namespace", "The namespace must be at most 256 bytes.")
+		case strings.ContainsFunc(namespace, unicode.IsControl):
+			problem("namespace", "The namespace must not contain control characters.")
+		}
+	}
+	if value, present := settings["memory_scope"]; present && value != nil {
+		scope, isText := value.(string)
+		if !isText || !memoryScopes[scope] {
+			problem("memory_scope", "The memory scope must be personal or project. To use both, attach two memory toolkits.")
+		}
+	}
+	return problems
+}
+
+// refuseMalformedMemorySettings answers 400 for a memory toolkit whose
+// `namespace` or `memory_scope` is malformed. It reports whether it wrote a
+// response.
+func (h *Handler) refuseMalformedMemorySettings(
+	w http.ResponseWriter,
+	action string,
+	toolkitType string,
+	settings map[string]any,
+) bool {
+	if toolkitType != "memory" {
+		return false
+	}
+	problems := memorySettingsProblems(settings)
+	if len(problems) == 0 {
+		return false
+	}
+	slog.Warn("a memory toolkit's settings were refused", "action", action, "problems", len(problems))
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error":           "the memory toolkit's settings are not valid",
+		"valid":           false,
+		"settings_errors": problems,
+	})
+	return true
+}
+
+// toolkitBucketSetting names the settings key that holds the bucket of each
+// toolkit type that stores its files in one. Every one is in its schema's
+// `required` list (the SDK's for `artifact` and `pptx`, rust_only_toolkit_tools.json
+// for `docx` and `xlsx`); `imagegen` is not here because its tools answer
+// a missing bucket themselves.
+var toolkitBucketSetting = map[string]string{
+	"artifact": "bucket",
+	"pptx":     "bucket_name",
+	"docx":     "bucket_name",
+	"xlsx":     "bucket_name",
+}
+
+// refuseMissingToolkitBucket answers 400 for a file-store toolkit saved with
+// no bucket (absent, null, not a text, or blank). It reports whether it wrote
+// a response.
+//
+// Before, such a toolkit saved fine and then failed EVERY turn of every agent
+// it was attached to (live 4.45.0: `native_agent.invalid_configuration`, "the
+// native agent toolsets could not be materialized"). The worker now leaves it
+// out with a reason instead; this keeps it from being saved that way at all.
+// Only presence is checked: the name's shape is the schema's `pattern`, which
+// the form enforces, and the worker skips a toolkit whose name breaks it.
+func (h *Handler) refuseMissingToolkitBucket(
+	w http.ResponseWriter,
+	action string,
+	toolkitType string,
+	settings map[string]any,
+) bool {
+	field, stores := toolkitBucketSetting[toolkitType]
+	if !stores {
+		return false
+	}
+	if bucket, isText := settings[field].(string); isText && strings.TrimSpace(bucket) != "" {
+		return false
+	}
+	slog.Warn("a toolkit was saved without a bucket", "action", action, "toolkit_type", toolkitType)
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error": "the toolkit needs a bucket",
+		"valid": false,
+		"settings_errors": []map[string]any{{
+			"loc":  []string{"settings", field},
+			"msg":  "Choose the bucket this toolkit keeps its files in.",
+			"type": "value_error",
+			"code": "missing_bucket",
+		}},
+	})
+	return true
 }

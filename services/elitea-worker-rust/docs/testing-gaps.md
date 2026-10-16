@@ -1,6 +1,6 @@
 # Rust worker verification gaps
 
-Updated: 2026-10-05.
+Updated: 2026-10-07.
 
 ## Progression decision
 
@@ -46,7 +46,7 @@ The focused [discovery](source-mapping/toolkit-discovery-authorization.md) and [
 | TG-09 | Observed warning: Rust | `agent_session_terminal_completion_unavailable` during the real SharePoint resume. | Determine whether the event needs streamed text. Prove durable history remains complete across a subsequent turn and worker replacement. |
 | TG-10 | Verification: Main, Rust | External MCP saved-agent and pipeline completion, failure, mixed guards, resume, and replay. | Correlate the external result with durable terminal state. A settled authorization-pause job is not completed agent work. |
 | TG-11 | Implementation: UI | Unrelated expired grants still trigger refresh failures during token collection. | Isolate grant failure to its credential and avoid unnecessary refresh work. Preserve valid grant reuse. |
-| TG-12 | Verification: runtime and deployment | Process replacement, claim reclaim, lost acknowledgements, NATS JetStream restart/leader change (the secured single-server path is proved by `execution/nats_live_tests.rs`), load, and Kubernetes. | Prove another worker can continue durable work without the original process or local spool. Keep activation closed until these proofs pass. |
+| TG-12 | Verification: runtime and deployment | Process replacement, claim reclaim, lost acknowledgements, NATS JetStream restart/leader change, load, and Kubernetes. `execution/nats_live_tests.rs` covers the secured single-server transport path. | Prove another worker can continue durable work without the original process or local spool. Keep activation closed until these proofs pass. |
 | TG-13 | Verification and UI parity: UI, Main | Participant editing, guard placement, history rendering, and regeneration under collaborative use. | Retain toolkit and owning-agent labels. Prove correct action routing separately from visual parity. Do not attribute a runtime defect to appearance alone. |
 | TG-14 | Accepted for gate 3 progression: Rust, Main, UI | Standalone `toolkit.available_tools.v1` and saved-instance discovery have deployed evidence. Wider provider coverage remains separate. | Retain actor authority and fenced results; use the focused discovery and recovery ledgers for covered cases. |
 | TG-15 | Verification: Main, Rust, UI | Chat-driven entity building with the three newly exposed typed configuration operations. | Select a real model and verify the endpoint project's saved default. Confirm denied permissions cause no mutation. Component and MCP protocol fixtures are not deployed proof. |
@@ -91,6 +91,60 @@ The [toolkit Test contract](source-mapping/toolkit-test.md) has gate 3 progressi
 Detailed diagnostics remain tracked by [OBS-RUST-01](source-mapping/agent-runtime.md#obs-rust-01-detailed-runtime-diagnostics).
 
 ## Maintenance rules
+
+The [Main merge continuation](source-mapping/main-integration-20261007.md) records final snapshot verification and source checks.
+All six listener failures in the retained Main packet pass their complete owning selections after the sandbox boundary is removed.
+Database and live-service skips remain explicit. Native live conformance remains unexecuted.
+The [current deployed acceptance](source-mapping/code-nats-deployed-acceptance-20261007.md) records current native images and normal browser sign-in.
+Four-language execution, typed refusal, failed preparation, active Stop, and debug off/on now have separate current evidence.
+Later c53 cold, warm, and editor cache cases pass with one exact compiled descriptor.
+Supported application-list denial and outer artifact RBAC refusal pass their finite cases.
+The [failed-journal owner-loss case](source-mapping/code-failed-stop-owner-recovery-20261007.md) passes current NATS technical recovery, live/reloaded UI, isolation, and runtime removal.
+Remaining preparation, authority, service-loss, and Kubernetes acceptance stay open.
+Require complete Code acceptance before graph consolidation progresses.
+
+The [2026-10-06 consolidation](source-mapping/point5-consolidation-20261006.md) records the latest Point 5 evidence.
+Real-backend editor preservation checks pass. Main's new static consumers still require database and deployed acceptance.
+The [Supervisor ownership mapping](source-mapping/code-supervisor-task-ownership-20261006.md) preserves the failed v6 probe and the successful v7 retest.
+The deployed v7 Worker-only restart retains its execution and original runtime, then completes all four languages.
+Eight unique reads commit. Runtime cleanup, one final browser result, and browser reload all pass.
+This exact Worker-loss boundary closes. Supervisor/Main replacement and Kubernetes restart recovery retain separate acceptance requirements.
+Generic typed failure display passes in ephemeral chat 826 and persistent chat 827, including persistent reload.
+Both failures save their journals before publication, with zero sandbox dispatches and no later-node execution.
+The fresh four-language positive run passes in chat 825, including exact answer persistence after reload.
+These proofs use deployed Worker `d6568bae8`; they do not prove the later NATS replacement.
+Keep NATS complete-cohort acceptance and preparation-message display open until their proofs pass.
+The [typed failure source correction](source-mapping/code-terminal-failure-20261006.md) passes 50 Rust tests and 109 Main cases.
+Strict Clippy and vet pass. Main preparation-message deployment remains a separate proof.
+The later chat 843 case closes actual failed-journal replay on its accepted current NATS image boundary.
+State rename reference rewriting remains a separate editor gap.
+Workspaces remain outside this register in the post-worker backlog.
+
+The [Web reload correction](source-mapping/code-chat-reload-ui-20261007.md) passes source tests, image build, strict local Alpine scan, deployment, and normal author/selection browser verification.
+Its browser receipt is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b5830e43de5f`.
+
+Chat848 proves early Stop before user Code, canonical cancellation, runtime removal, and reloaded terminal History.
+The original preparation completes during Stop. Pending preparation cancellation and Worker-loss recovery remain unproved.
+The [live canvas terminal correction](source-mapping/code-live-canvas-terminal-20261008.md) passes75 focused source tests.
+Its Node26 production image and strict Alpine scan later pass. Node26 CI and deployed browser verification remain open.
+Later [chat850](source-mapping/code-pending-stop-owner-recovery-20261008.md) closes pending preparation Stop across Worker loss.
+The replacement settles the original run without user Code or downstream dispatch. Runtime removal and reloaded terminal History pass.
+
+The later [chat851 mapping](source-mapping/code-live-owner-recovery-20261008.md) closes live Worker and Supervisor loss for the same original JavaScript runtime.
+Original typed result2, checkpoint claim2/epoch2, one settlement, runtime removal, NATS drain, and live/reloaded support reference pass.
+Later [chat852](source-mapping/code-compiled-publication-main-recovery-20261008.md) closes Main loss during original compiled-result publication.
+The same compiler receipt becomes Ready. One result and settlement, physical removal, NATS drain, and exact live/reloaded answer pass.
+Distinct preparation failure messages, debug replacement, NATS restart, and Kubernetes remain open.
+
+Later preparation fixtures 839 and 844 complete normally after controller refusals before Stop or Worker loss.
+They do not close preparation cancellation or owner recovery.
+The historical checkpoint retains 59 jobs, 59 dispatches, and 125 checkpoints after the second normal run.
+Controller source corrections must cover the exact Main admission and preparation startup states before another fault release.
+
+Later chat845 observes preparation, but normal UI Stop misses that window and cancels downstream preparation after the first Code job completes.
+The original run settles as CANCELLED. All three runtimes are physically removed.
+The idle store then retains 62 terminal jobs, 62 dispatches, and 130 checkpoints.
+No Worker fault occurs. This run closes no preparation-Stop or owner-recovery row.
 
 Update this register with each relevant implementation slice.
 Keep detailed source mappings authoritative for business behavior and implementation ownership.

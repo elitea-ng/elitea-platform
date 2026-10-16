@@ -59,8 +59,8 @@ func newIndexWriteFixture(t *testing.T) *indexWriteFixture {
 
 	var toolkitID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id)
-		VALUES ('index-write-fixture', 'github', '', '{}'::jsonb, '{}'::jsonb, 1, 7)
+		INSERT INTO p_1.elitea_tools (name, type, description, settings, meta, owner_id, author_id, created_at)
+		VALUES ('index-write-fixture', 'github', '', '{}'::jsonb, '{}'::jsonb, 1, 7, now() AT TIME ZONE 'UTC')
 		RETURNING id`).Scan(&toolkitID); err != nil {
 		t.Fatalf("insert fixture toolkit: %v", err)
 	}
@@ -68,8 +68,8 @@ func newIndexWriteFixture(t *testing.T) *indexWriteFixture {
 	const indexName = "fixture-collection"
 	var indexID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.index_meta (toolkit_id, name, status, progress, meta)
-		VALUES ($1, $2, 'in_progress', 42, '{"task_id":"task-abc"}'::jsonb)
+		INSERT INTO p_1.index_meta (toolkit_id, name, status, progress, meta, created_at)
+		VALUES ($1, $2, 'in_progress', 42, '{"task_id":"task-abc"}'::jsonb, now() AT TIME ZONE 'UTC')
 		RETURNING id`, toolkitID, indexName).Scan(&indexID); err != nil {
 		t.Fatalf("insert fixture index_meta: %v", err)
 	}
@@ -214,8 +214,8 @@ func TestIndexMetaDeleteIsScopedToTheNamedToolkit(t *testing.T) {
 
 	var otherToolkitID int64
 	if err := fixture.pool.QueryRow(ctx, `
-		INSERT INTO p_1.elitea_tools (name, type, settings, meta, owner_id, author_id)
-		VALUES ('other-toolkit', 'github', '{}'::jsonb, '{}'::jsonb, 1, 7)
+		INSERT INTO p_1.elitea_tools (name, type, settings, meta, owner_id, author_id, created_at)
+		VALUES ('other-toolkit', 'github', '{}'::jsonb, '{}'::jsonb, 1, 7, now() AT TIME ZONE 'UTC')
 		RETURNING id`).Scan(&otherToolkitID); err != nil {
 		t.Fatalf("insert second toolkit: %v", err)
 	}

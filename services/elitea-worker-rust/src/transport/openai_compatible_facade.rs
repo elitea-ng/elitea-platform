@@ -164,6 +164,10 @@ impl ModelReasoningEffort {
 pub(crate) enum ModelFacadeError {
     InvalidConfiguration,
     InvalidInvocation,
+    /// The CLAIM's context cannot carry a model call (an empty credential,
+    /// an execution id the edge would drop, a project of 0): the run's
+    /// context, not the model, is at fault.
+    InvalidClaimContext,
     ResourceExhausted,
     DependencyUnavailable,
 }
@@ -174,6 +178,7 @@ impl ModelFacadeError {
         match self {
             Self::InvalidConfiguration => "model_gateway.invalid_configuration",
             Self::InvalidInvocation => "model_gateway.invalid_invocation",
+            Self::InvalidClaimContext => "model_gateway.invalid_claim_context",
             Self::ResourceExhausted => "model_gateway.resource_exhausted",
             Self::DependencyUnavailable => "model_gateway.dependency_unavailable",
         }
@@ -190,6 +195,7 @@ impl fmt::Display for ModelFacadeError {
         formatter.write_str(match self {
             Self::InvalidConfiguration => "the model facade configuration is malformed",
             Self::InvalidInvocation => "the model facade invocation is malformed",
+            Self::InvalidClaimContext => "the claim's context cannot carry a model call",
             Self::ResourceExhausted => "the model gateway request exceeds its approved limit",
             Self::DependencyUnavailable => "the model gateway is unavailable",
         })
@@ -269,6 +275,7 @@ impl ModelGatewayClient {
             .ca_certificate(private_ca)
             .identity(client_identity);
         let endpoint = Endpoint::from_shared(origin.clone())
+            .map(crate::transport::keepalive::with_keepalive)
             .and_then(|endpoint| endpoint.tls_config(tls))
             .map_err(|_| ModelFacadeError::InvalidConfiguration)?;
         let channel = timeout(config.connect_timeout, endpoint.connect())
@@ -318,7 +325,7 @@ impl ModelGatewayClient {
             || token.is_empty()
             || !valid_execution_id(&execution_id)
         {
-            return Err(ModelFacadeError::InvalidInvocation);
+            return Err(ModelFacadeError::InvalidClaimContext);
         }
         let completion = Arc::new(Mutex::new(CompletionState::default()));
         let model = Arc::new(EliteaOpenAiCompatibleModel {
@@ -345,6 +352,11 @@ pub(crate) struct BoundOpenAiCompatibleFacade {
 }
 
 impl BoundOpenAiCompatibleFacade {
+    /// The generation config this model's requests must carry.
+    pub(super) fn admitted_config(&self) -> GenerateContentConfig {
+        admitted_generation_config(&self.model.invocation)
+    }
+
     pub(super) fn summary_model_with_output(&self, output_cap: Option<u32>) -> Arc<dyn Llm> {
         let source = self.model.clone();
         Arc::new(super::summary_model::SummaryModel::new(
@@ -395,7 +407,9 @@ fn model_completion_error(error: ModelFacadeError) -> NativeAgentAssemblyError {
         ModelFacadeError::InvalidConfiguration => {
             NativeAgentAssemblyErrorCode::InvalidConfiguration
         }
-        ModelFacadeError::InvalidInvocation => NativeAgentAssemblyErrorCode::InvalidResult,
+        ModelFacadeError::InvalidInvocation | ModelFacadeError::InvalidClaimContext => {
+            NativeAgentAssemblyErrorCode::InvalidResult
+        }
         ModelFacadeError::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
         ModelFacadeError::DependencyUnavailable => {
             NativeAgentAssemblyErrorCode::DependencyUnavailable
@@ -524,11 +538,11 @@ impl Llm for EliteaOpenAiCompatibleModel {
             })
             .map(|current| current + 1)
             .map_err(|_| {
-                model_error(
+                super::model_text::not_sent(model_error(
                     ErrorCategory::InvalidInput,
                     "model_gateway.turn_limit",
                     "the claim-scoped model invocation exceeded its approved turn limit",
-                )
+                ))
             })?;
         let span = tracing::info_span!(
             "agent.model.request",
@@ -545,13 +559,15 @@ impl Llm for EliteaOpenAiCompatibleModel {
         let result: Result<LlmResponseStream, AdkError> = async {
             tracing::info!(event = "agent_model_request_started");
             let allowed_tools = request.tools.keys().cloned().collect();
-            let body = build_request_body(&request, stream, &self.invocation, &self.config)?;
+            let body = build_request_body(&request, stream, &self.invocation, &self.config)
+                .map_err(super::model_text::not_sent)?;
             let request = build_http_request(
                 body,
                 self.billing_project_id,
                 self.token.as_str(),
                 self.execution_id.as_str(),
-            )?;
+            )
+            .map_err(super::model_text::not_sent)?;
             let response = timeout(
                 self.config.response_header_timeout,
                 self.transport.post(request),
@@ -877,7 +893,7 @@ const RENDERABLE_IMAGE_MEDIA_TYPES: [&str; 4] =
 /// One attachment image's decoded ceiling, mirroring elitea-main's
 /// `maxInlineAttachmentImageBytes` and this runtime's own
 /// `MAX_RENDERED_ATTACHMENT_IMAGE_BYTES` (agents/attachments.rs).
-const MAX_INLINE_IMAGE_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_INLINE_IMAGE_BYTES: usize = 256 * 1024;
 
 fn valid_inline_image(mime_type: &str, data: &[u8]) -> bool {
     RENDERABLE_IMAGE_MEDIA_TYPES.contains(&mime_type)
@@ -1136,15 +1152,29 @@ fn instruction_role(model_name: &str) -> &'static str {
     }
 }
 
+/// The generation config the facade admits for `invocation`: the one
+/// [`generation_config_matches`] checks every request against. A caller that
+/// builds its own request takes it from the bound model, never by hand.
+pub(super) fn admitted_generation_config(
+    invocation: &ModelFacadeInvocation,
+) -> GenerateContentConfig {
+    GenerateContentConfig {
+        temperature: invocation.temperature,
+        max_output_tokens: invocation
+            .max_tokens
+            .and_then(|value| i32::try_from(value).ok()),
+        response_schema: invocation.response_schema.clone(),
+        ..GenerateContentConfig::default()
+    }
+}
+
 fn generation_config_matches(
     config: &GenerateContentConfig,
     invocation: &ModelFacadeInvocation,
 ) -> bool {
-    config.temperature == invocation.temperature
-        && config.max_output_tokens
-            == invocation
-                .max_tokens
-                .and_then(|value| i32::try_from(value).ok())
+    let admitted = admitted_generation_config(invocation);
+    config.temperature == admitted.temperature
+        && config.max_output_tokens == admitted.max_output_tokens
         && config.top_p.is_none()
         && config.top_k.is_none()
         && config.frequency_penalty.is_none()

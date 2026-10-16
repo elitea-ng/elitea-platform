@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,7 +61,7 @@ func TestNoRegistrationMeansNoAdmissionGate(t *testing.T) {
 func registrarTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the registrar composition test against PostgreSQL", environment)
 	}

@@ -86,16 +86,18 @@
  * OWN model picker would also offer.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * WHY THIS IS PYTHON-WORKER ONLY
+ * WORKER LEGS
  * ─────────────────────────────────────────────────────────────────────────────
- * `imagegen` ships no Rust family (`elitea_sdk/tools/imagegen` has no
- * counterpart under `services/elitea-worker-rust`), the exact posture
- * `TestImageGenIsHandWrittenButStillWorkerGated`
- * (`services/elitea-main/internal/api/v2/toolkits/type_catalogue_test.go`)
- * pins: buildable on Python, hidden with a reason on Rust. A marker naming
- * `generate_image` on the Rust leg would script a call the runtime never lets
- * the model make, so this journey states the skip by name rather than
- * leaving it to fail unexplained on `chat-stream-rust`.
+ * `imagegen` is served by both workers: the Python worker through the SDK's
+ * `elitea_sdk/tools/imagegen`, the Rust worker through its native family
+ * (`libs/rust/agent-runtime/src/toolkits/families/imagegen`, which calls the
+ * same gateway images routes under the turn's credential and writes the same
+ * `/{bucket}/{name_prefix}generate-0.png` artifact). Steps 1-4 below (model
+ * row, toolkit, agent, picker attach) therefore run on `chat-stream-rust`
+ * too, and a Rust deployment no longer hides the tile. The dispatch half
+ * (step 5) is skipped on BOTH legs for the gateway reason above; the Rust
+ * dispatch is proven by `services/elitea-worker-rust/src/transport/
+ * images_host_tests.rs` against a fake gateway, byte for byte.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT THE ASSERTION READS
@@ -123,9 +125,6 @@ import {
   fillComposer,
   readCallerPersonalProjectId,
 } from '../fixtures/api';
-
-/** `chat-stream-e2e.sh` sets this; the local default matches its own `STANDALONE_WORKER` default. */
-const WORKER = process.env['E2E_WORKER'] ?? 'python';
 
 /**
  * The offline-mock upstream `standalone-stack.sh`'s default `seed-llm` wiring
@@ -262,11 +261,6 @@ async function cleanUp(
 test('a generate_image call is dispatched by the model and the artifact lands in the bucket', async ({
   page,
 }) => {
-  test.skip(
-    WORKER !== 'python',
-    'imagegen ships no Rust family (#864); the Rust worker hides the tile, so a marker naming ' +
-      'generate_image would script a call the runtime never offers the model',
-  );
   test.setTimeout(300_000);
 
   const suffix = String(Date.now() % 1_000_000);

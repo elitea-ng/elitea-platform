@@ -36,7 +36,7 @@ func TestCurrentSocialFeedbacksRepositoryInsertsIntoSharedCentryTable(t *testing
 	}
 	call := executor.rowCalls[0]
 	normalizedSQL := strings.Join(strings.Fields(call.sql), " ")
-	if !strings.HasPrefix(normalizedSQL, "INSERT INTO centry.social_feedbacks ( user_id, referrer, description, rating, user_agent, project_id ) SELECT $1::int, $2::varchar, $3::text, $4::int, $5::varchar, $6::int WHERE (NOT EXISTS (") ||
+	if !strings.HasPrefix(normalizedSQL, "INSERT INTO centry.social_feedbacks ( user_id, referrer, description, rating, user_agent, project_id, created_at ) SELECT $1::int, $2::varchar, $3::text, $4::int, $5::varchar, $6::int, now() AT TIME ZONE 'UTC' WHERE (NOT EXISTS (") ||
 		!strings.Contains(normalizedSQL, "project_id = $6 AND user_id = $1") ||
 		// SEC-14: a suspended author or project refuses in the write itself.
 		!strings.Contains(normalizedSQL, "FROM auth_core__user WHERE id = $1 AND suspended IS NOT FALSE") ||

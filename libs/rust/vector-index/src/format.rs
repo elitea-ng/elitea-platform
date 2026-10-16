@@ -69,9 +69,13 @@ pub fn language_for(extension: &str) -> &'static str {
 /// block in the file's language holding the code, and a blank line.
 #[must_use]
 pub fn code_page_content(hit: &Hit) -> String {
+    // `filename` is the SDK's key; a point written without it (a connector
+    // that names the document only by `source`) falls back to `source`
+    // rather than printing `unknown`.
     let filename = hit
         .metadata
         .get("filename")
+        .or_else(|| hit.metadata.get("source"))
         .map_or_else(|| "unknown".to_owned(), pyfmt::display);
     let method = hit
         .metadata
@@ -297,6 +301,39 @@ mod tests {
         assert_eq!(
             out[0]["page_content"],
             "unknown -> text (score: 0.25)\n\n```unknown\nbody\n```\n\n"
+        );
+    }
+
+    #[test]
+    fn a_code_point_without_filename_falls_back_to_source() {
+        let out = format_hits(
+            &[hit(
+                "fn main() {}",
+                &json!({"source": "src/main.rs", "method_name": "main"}),
+                0.5,
+            )],
+            Doctype::Code,
+        );
+        let content = out[0]["page_content"].as_str().unwrap();
+        assert!(
+            content.starts_with("src/main.rs -> main (score: 0.5)"),
+            "{content}"
+        );
+        assert!(content.contains("```rust"), "{content}");
+        // `filename` still wins when both are present.
+        let both = format_hits(
+            &[hit(
+                "x",
+                &json!({"filename": "a.py", "source": "b.py"}),
+                0.5,
+            )],
+            Doctype::Code,
+        );
+        assert!(
+            both[0]["page_content"]
+                .as_str()
+                .unwrap()
+                .starts_with("a.py -> ")
         );
     }
 

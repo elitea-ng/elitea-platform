@@ -184,52 +184,52 @@ CREATE TABLE p_2.configuration (
 INSERT INTO p_2.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES
+, created_at) VALUES
     (
         9, '00000000-0000-0000-0000-000000000209', 2, 'Project GitHub',
         'project_github', 'github', 'credentials', '{}'::jsonb, '{}'::jsonb,
         false, true, 'user'
-    ),
+    , now() AT TIME ZONE 'UTC'),
     (
         5, '00000000-0000-0000-0000-000000000205', 2, 'Project Confluence',
         'project_confluence', 'confluence', 'credentials', '{}'::jsonb, '{}'::jsonb,
         false, true, 'user'
-    ),
+    , now() AT TIME ZONE 'UTC'),
     (
         3, '00000000-0000-0000-0000-000000000203', 2, NULL,
         'project_openai', 'openai', 'llm', '{}'::jsonb, '{}'::jsonb,
         true, true, 'user'
-    );
+    , now() AT TIME ZONE 'UTC');
 
 INSERT INTO p_1.configuration (
     id, uuid, project_id, label, elitea_title, type, section, data, meta,
     shared, status_ok, source
-) VALUES
+, created_at) VALUES
     (
         1, '00000000-0000-0000-0000-000000000001', 1, 'Integration fixture',
         'integration_fixture', 'openapi', 'credentials', '{}'::jsonb, '{}'::jsonb,
         false, false, 'user'
-    ),
+    , now() AT TIME ZONE 'UTC'),
     (
         2, '00000000-0000-0000-0000-000000000102', 1, 'Public shared GitHub',
         'public_shared_github', 'github', 'credentials', '{}'::jsonb, '{}'::jsonb,
         true, true, 'system'
-    ),
+    , now() AT TIME ZONE 'UTC'),
     (
         8, '00000000-0000-0000-0000-000000000108', 1, 'Public shared OpenAI',
         'public_shared_openai', 'openai', 'llm', '{}'::jsonb, '{}'::jsonb,
         true, true, 'system'
-    ),
+    , now() AT TIME ZONE 'UTC'),
     (
         6, '00000000-0000-0000-0000-000000000106', 1, 'Public Confluence',
         'public_confluence', 'confluence', 'credentials', '{}'::jsonb, '{}'::jsonb,
         true, true, 'system'
-    ),
+    , now() AT TIME ZONE 'UTC'),
     (
         4, '00000000-0000-0000-0000-000000000104', 1, 'Public private OpenAI',
         'public_private_openai', 'openai', 'llm', '{}'::jsonb, '{}'::jsonb,
         false, true, 'system'
-    );`); err != nil {
+    , now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatalf("prepare option candidates: %v", err)
 	}
 }

@@ -14,26 +14,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use elitea_llm_wire::headers::{BEARER_PREFIX, EXECUTION_HEADER, PROJECT_HEADER};
 use elitea_llm_wire::refusal::Refusal;
-use http::header::{ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
-use http::{HeaderName, HeaderValue, Method, Request, Version};
-use http_body_util::{BodyExt as _, Full};
 use serde::Deserialize;
-use tokio::time::timeout;
-use tonic::body::Body;
-use zeroize::Zeroizing;
 
+use super::gateway_call::{CallError, Timing, build_request, send};
 use super::openai_compatible_facade::{ModelGatewayClient, ModelGatewayTransport};
 use super::runtime_context::ClaimScopedEliteaContext;
 
-/// The error a bounded body (`Limited`) yields: the bound's own, or the
-/// inner body's, boxed.
-type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
-
 const EMBEDDINGS_ROUTE: &str = elitea_llm_wire::route::EMBEDDINGS_ROUTE;
-const PROJECT_SELECTOR: HeaderName = HeaderName::from_static(PROJECT_HEADER);
-const EXECUTION_ID_HEADER: HeaderName = HeaderName::from_static(EXECUTION_HEADER);
 /// The most inputs one request carries (`LangChain`'s default batch).
 pub(crate) const MAX_BATCH_INPUTS: usize = 64;
 /// The most bytes of one request body.
@@ -175,16 +163,35 @@ impl EmbeddingsClient {
         }
         let token = context.model_facade_token();
         let request = build_request(
+            EMBEDDINGS_ROUTE,
+            "application/json",
             Bytes::from(body),
             context.resource_project_id(),
             &token,
             context.execution_id(),
-        )?;
-        let response = timeout(self.response_timeout, self.transport.post(request))
-            .await
-            .map_err(|_| EmbeddingsError::Transport)?
-            .map_err(|_| EmbeddingsError::Transport)?;
-        if let Some(refusal) = Refusal::from_status(response.status().as_u16()) {
+        )
+        .map_err(|_| EmbeddingsError::InvalidResponse("the request is malformed"))?;
+        let collected = send(
+            &self.transport,
+            request,
+            // Exactly the embeddings behaviour from before the flow was
+            // shared: a window for the headers and another for the body.
+            Timing::Split {
+                headers: self.response_timeout,
+                body: self.response_timeout,
+            },
+            MAX_RESPONSE_BYTES,
+        )
+        .await
+        .map_err(embeddings_error)?;
+        parse_response(&collected, inputs.len())
+    }
+}
+
+/// A shared gateway-call failure as the embeddings caller reads it.
+fn embeddings_error(error: CallError) -> EmbeddingsError {
+    match error {
+        CallError::Refused(refusal) => {
             let retryable = matches!(
                 refusal,
                 Refusal::UpstreamTimeout
@@ -192,76 +199,15 @@ impl EmbeddingsClient {
                     | Refusal::Conflict
                     | Refusal::Unavailable
             );
-            return Err(EmbeddingsError::Refused {
+            EmbeddingsError::Refused {
                 code: refusal.code(),
                 retryable,
-            });
+            }
         }
-        if !response.status().is_success() {
-            return Err(EmbeddingsError::Refused {
-                code: "model_gateway.rejected",
-                retryable: false,
-            });
-        }
-        let body = http_body_util::Limited::new(response.into_body(), MAX_RESPONSE_BYTES);
-        let collected = match timeout(self.response_timeout, body.collect()).await {
-            Ok(Ok(collected)) => collected.to_bytes(),
-            Ok(Err(error)) => return Err(classify_body_error(&error)),
-            Err(_) => return Err(EmbeddingsError::Transport),
-        };
-        parse_response(&collected, inputs.len())
+        CallError::Transport => EmbeddingsError::Transport,
+        CallError::TooLarge => EmbeddingsError::TooLarge,
+        CallError::Malformed => EmbeddingsError::InvalidResponse("the request is malformed"),
     }
-}
-
-/// Why collecting the response body failed. Only the bound's own refusal
-/// (`Limited` stopped at `MAX_RESPONSE_BYTES`) is `TooLarge`: the request
-/// cannot be answered within the bound and the document is skipped. Every
-/// other body error (the stream reset, the connection dropped mid-body) is
-/// the transport's, and another attempt may succeed.
-fn classify_body_error(error: &BoxError) -> EmbeddingsError {
-    if error.is::<http_body_util::LengthLimitError>() {
-        EmbeddingsError::TooLarge
-    } else {
-        EmbeddingsError::Transport
-    }
-}
-
-fn build_request(
-    body: Bytes,
-    billing_project_id: u64,
-    token: &Zeroizing<String>,
-    execution_id: &str,
-) -> Result<Request<Body>, EmbeddingsError> {
-    let malformed = || EmbeddingsError::InvalidResponse("the request is malformed");
-    let body_length = body.len();
-    let mut request = Request::builder()
-        .method(Method::POST)
-        .uri(EMBEDDINGS_ROUTE)
-        .version(Version::HTTP_2)
-        .body(Body::new(Full::new(body)))
-        .map_err(|_| malformed())?;
-    let headers = request.headers_mut();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-    headers.insert(
-        CONTENT_LENGTH,
-        HeaderValue::from_str(&body_length.to_string()).map_err(|_| malformed())?,
-    );
-    headers.insert(
-        PROJECT_SELECTOR,
-        HeaderValue::from_str(&billing_project_id.to_string()).map_err(|_| malformed())?,
-    );
-    headers.insert(
-        EXECUTION_ID_HEADER,
-        HeaderValue::from_str(execution_id).map_err(|_| malformed())?,
-    );
-    let mut bearer = Zeroizing::new(String::with_capacity(BEARER_PREFIX.len() + token.len()));
-    bearer.push_str(BEARER_PREFIX);
-    bearer.push_str(token);
-    let mut authorization = HeaderValue::from_str(bearer.as_str()).map_err(|_| malformed())?;
-    authorization.set_sensitive(true);
-    headers.insert(AUTHORIZATION, authorization);
-    Ok(request)
 }
 
 /// The embeddings object, checked for count, order and one dimension.
@@ -341,36 +287,66 @@ mod tests {
         assert!(parse_response(b"not json", 1).is_err());
     }
 
-    /// Only the bound's own refusal is `TooLarge` (the document is skipped);
-    /// a body that fails for any other reason is the transport's, retryable.
-    #[tokio::test]
-    async fn only_the_length_bound_makes_a_body_error_too_large() {
-        let over = http_body_util::Limited::new(Full::new(Bytes::from(vec![0_u8; 64])), 16)
-            .collect()
-            .await
-            .expect_err("over the bound");
-        assert!(over.is::<http_body_util::LengthLimitError>());
-        assert_eq!(classify_body_error(&over), EmbeddingsError::TooLarge);
-        assert!(!EmbeddingsError::TooLarge.retryable());
-        let reset: BoxError = Box::new(std::io::Error::new(
-            std::io::ErrorKind::ConnectionReset,
-            "stream reset",
-        ));
-        assert_eq!(classify_body_error(&reset), EmbeddingsError::Transport);
-        assert!(EmbeddingsError::Transport.retryable());
+    /// Answers the headers after one delay and the body after another.
+    struct SlowEmbeddings {
+        header_delay: Duration,
+        body_delay: Duration,
     }
 
-    #[test]
-    fn the_request_carries_the_caller_contract_headers() {
-        let token = Zeroizing::new("pat".to_owned());
-        let request = build_request(Bytes::from_static(b"{}"), 7, &token, "exec-1").expect("ok");
-        assert_eq!(request.uri().path(), "/llm/v1/embeddings");
-        assert_eq!(request.version(), Version::HTTP_2);
-        let headers = request.headers();
-        assert_eq!(headers.get(PROJECT_SELECTOR).unwrap(), "7");
-        assert_eq!(headers.get(EXECUTION_ID_HEADER).unwrap(), "exec-1");
-        assert_eq!(headers.get(AUTHORIZATION).unwrap(), "Bearer pat");
-        assert!(headers.get(AUTHORIZATION).unwrap().is_sensitive());
-        assert_eq!(headers.get(ACCEPT).unwrap(), "application/json");
+    #[async_trait::async_trait]
+    impl ModelGatewayTransport for SlowEmbeddings {
+        async fn post(
+            &self,
+            _: http::Request<tonic::body::Body>,
+        ) -> Result<
+            http::Response<tonic::body::Body>,
+            super::super::openai_compatible_facade::ModelGatewayTransportError,
+        > {
+            tokio::time::sleep(self.header_delay).await;
+            let delay = self.body_delay;
+            let frames = adk_rust::futures::stream::once(async move {
+                tokio::time::sleep(delay).await;
+                Ok::<_, std::io::Error>(http_body::Frame::data(Bytes::from_static(
+                    br#"{"model":"m","data":[{"index":0,"embedding":[1.0,0.0]}]}"#,
+                )))
+            });
+            Ok(http::Response::builder()
+                .status(200)
+                .body(tonic::body::Body::new(http_body_util::StreamBody::new(
+                    frames,
+                )))
+                .expect("response"))
+        }
+    }
+
+    /// The case that passed before the flow was shared: each of the header
+    /// and body phases is inside its own window while their sum is not.
+    /// Embeddings keeps that behaviour exactly.
+    #[tokio::test]
+    async fn the_header_and_body_windows_stay_separate() {
+        let context = ClaimScopedEliteaContext::fixture(1, "pat");
+        let client = EmbeddingsClient::with_transport(
+            Arc::new(SlowEmbeddings {
+                header_delay: Duration::from_millis(100),
+                body_delay: Duration::from_millis(100),
+            }),
+            Duration::from_millis(150),
+        );
+        let embedded = client
+            .embed(&context, "m", &["a".to_owned()])
+            .await
+            .expect("served within each window");
+        assert_eq!(embedded.vectors, vec![vec![1.0, 0.0]]);
+        let stalled = EmbeddingsClient::with_transport(
+            Arc::new(SlowEmbeddings {
+                header_delay: Duration::from_millis(10),
+                body_delay: Duration::from_millis(400),
+            }),
+            Duration::from_millis(150),
+        );
+        assert_eq!(
+            stalled.embed(&context, "m", &["a".to_owned()]).await,
+            Err(EmbeddingsError::Transport)
+        );
     }
 }

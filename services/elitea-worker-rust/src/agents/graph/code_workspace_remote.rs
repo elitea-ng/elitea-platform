@@ -1,5 +1,6 @@
 //! Original-visit acquisition and exact-job hydration. No project, URL, or credentials come from Code.
 use super::{CodeRuntimeProfile, RemoteCodeRuntime, observation_deadline};
+use crate::agents::graph::code_timing;
 use crate::{
     agents::graph::code_runtime::CodeInvocation,
     sandbox::{
@@ -139,7 +140,7 @@ impl RemoteCodeRuntime {
                 Err(error) => return Err(CodeWorkspaceFailure::sandbox(&error)),
             }
             tokio::time::sleep_until(
-                (tokio::time::Instant::now() + std::time::Duration::from_secs(1)).min(deadline),
+                (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL).min(deadline),
             )
             .await;
         }
@@ -188,7 +189,7 @@ impl RemoteCodeRuntime {
                 Err(error) => return Err(CodeWorkspaceFailure::sandbox(&error)),
             }
             tokio::time::sleep_until(
-                (tokio::time::Instant::now() + std::time::Duration::from_secs(1)).min(deadline),
+                (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL).min(deadline),
             )
             .await;
         }

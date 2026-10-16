@@ -93,13 +93,18 @@ type CurrentToolkitSchemaSnapshot struct {
 // the current Python worker capability manifest. Startup composition must also
 // compare this revision with the admitted worker manifest before dispatch.
 func LoadPinnedCurrentToolkitSchemaSnapshot() (*CurrentToolkitSchemaSnapshot, error) {
-	return LoadCurrentToolkitSchemaSnapshot(pinnedCurrentToolkitSchemaSnapshotJSON)
+	return loadCurrentToolkitSchemaSnapshot(
+		pinnedCurrentToolkitSchemaSnapshotJSON, pinnedRustOnlyToolkitToolsJSON)
 }
 
 // LoadCurrentToolkitSchemaSnapshot parses one bounded, deterministic registry
 // projection. The snapshot contains only annotations consumed by current
 // settings expansion and toolkit naming; it is not a public JSON Schema API.
 func LoadCurrentToolkitSchemaSnapshot(data []byte) (*CurrentToolkitSchemaSnapshot, error) {
+	return loadCurrentToolkitSchemaSnapshot(data, nil)
+}
+
+func loadCurrentToolkitSchemaSnapshot(data, rustOnly []byte) (*CurrentToolkitSchemaSnapshot, error) {
 	if len(data) == 0 || len(data) > maxCurrentToolkitSchemaSnapshotBytes {
 		return nil, ErrCurrentToolkitSchemaSnapshotInvalid
 	}
@@ -118,6 +123,14 @@ func LoadCurrentToolkitSchemaSnapshot(data []byte) (*CurrentToolkitSchemaSnapsho
 		!validCurrentToolkitSchemaIdentifier(document.SDKRevision) ||
 		len(document.Entries) == 0 || len(document.Entries) > maxCurrentToolkitSchemaEntries {
 		return nil, ErrCurrentToolkitSchemaSnapshotInvalid
+	}
+
+	if len(rustOnly) != 0 {
+		merged, err := applyRustOnlyToolkitTools(document.Entries, rustOnly)
+		if err != nil {
+			return nil, ErrCurrentToolkitSchemaSnapshotInvalid
+		}
+		document.Entries = merged
 	}
 
 	entries := make(map[string]currentToolkitSchemaSnapshotEntry, len(document.Entries))

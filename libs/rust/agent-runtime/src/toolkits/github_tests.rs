@@ -33,7 +33,7 @@ use super::families::github::pull_requests::{
     test_project_pull_request_list,
 };
 use super::families::github::tools::{
-    GitHubToolsetErrorCode, build_github_read_only_toolset, test_build_with_api,
+    GitHubToolsetErrorCode, build_github_toolset, test_build_with_api,
 };
 use super::families::github::workflow_runs::test_project_workflow_status;
 use super::materialize::materialize_configured_toolsets_with_tokens_and_authorization;
@@ -2139,27 +2139,33 @@ async fn native_project_read_preserves_the_sdk_schema_with_a_visible_hard_bound(
     );
 }
 
-#[test]
-fn partial_profile_rejects_empty_or_wholly_unported_selection_before_network_use() {
-    let Err(empty) = build_github_read_only_toolset("github", token_config(&[]), &policy(&[]))
-    else {
-        panic!("empty selection means the full unported SDK catalog");
-    };
-    assert_eq!(empty.code(), GitHubToolsetErrorCode::UnsupportedSelection);
+#[tokio::test]
+async fn an_empty_selection_serves_every_ported_tool_and_a_wholly_unported_one_is_refused() {
+    let toolset = build_github_toolset("github", token_config(&[]), &policy(&[]), None)
+        .expect("an empty selection means every served tool");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("GitHub tools");
+    let mut names: Vec<_> = tools.iter().map(|tool| tool.name().to_owned()).collect();
+    names.sort();
+    let mut expected = super::families::github::tools::test_served_names();
+    expected.sort();
+    assert_eq!(names, expected);
+    assert_eq!(names.len(), 37);
 
-    let Err(unsupported) =
-        build_github_read_only_toolset("github", token_config(&["create_issue"]), &policy(&[]))
-    else {
-        panic!("write tool is not in the first read-only profile");
-    };
-    assert_eq!(
-        unsupported.code(),
-        GitHubToolsetErrorCode::UnsupportedSelection
-    );
+    // generic_github_api_call (a PyGithub method dispatcher) and the index
+    // tools are not served by this family.
+    for unserved in ["generic_github_api_call", "index_data", "list_indexes"] {
+        let Err(refused) =
+            build_github_toolset("github", token_config(&[unserved]), &policy(&[]), None)
+        else {
+            panic!("{unserved} is not served here");
+        };
+        assert_eq!(refused.code(), GitHubToolsetErrorCode::UnsupportedSelection);
+    }
 }
 
 #[tokio::test]
-async fn configured_materializer_keeps_supported_reads_from_mixed_sdk_selection() {
+async fn configured_materializer_keeps_served_tools_from_mixed_sdk_selection() {
     let version = json!({
         "tools":[{
             "id":1,
@@ -2171,7 +2177,7 @@ async fn configured_materializer_keeps_supported_reads_from_mixed_sdk_selection(
                     "base_url":"https://github.example.test/api/v3/",
                     "access_token":"fixture-token"
                 }),
-                &["list_branches_in_repo", "create_issue"]
+                &["list_branches_in_repo", "generic_github_api_call"]
             )
         }]
     });
@@ -2194,6 +2200,149 @@ async fn configured_materializer_keeps_supported_reads_from_mixed_sdk_selection(
     let tools = toolsets[0].tools(readonly).await.expect("GitHub tools");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name(), "list_branches_in_repo");
+}
+
+/// D4: three of five selected tools were dropped and only a log line with
+/// COUNTS said so. The reporting materializer names each one, with a reason
+/// that is a fixed sentence (no stored value), and does not call an index tool
+/// an omission when the index toolset serves it.
+#[tokio::test]
+async fn omitted_selected_tools_are_reported_by_name() {
+    use super::materialize::{LeftOutReason, materialize_configured_toolsets_reporting_refusals};
+    use super::{IndexToolSupport, IndexToolsWithheld, left_out_toolkits_notice_text};
+    let version = json!({
+        "tools":[{
+            "id":1,
+            "type":"github",
+            "toolkit_name":"repo",
+            "settings":settings(
+                &json!({
+                    "configuration_type":"github",
+                    "base_url":"https://github.example.test/api/v3/",
+                    "access_token":"fixture-token"
+                }),
+                &["get_me", "read_file", "generic_github_api_call", "index_data", "search_index"]
+            )
+        }]
+    });
+    let version = version.as_object().expect("version details");
+    let snapshot = FrozenToolSnapshot::from_version_details(version)
+        .expect("GitHub snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy(&[]),
+        &Map::new(),
+        None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NotRequested),
+    )
+    .await
+    .expect("GitHub materialization");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let served = materialized.toolsets[0]
+        .tools(readonly)
+        .await
+        .expect("tools");
+    assert_eq!(served.len(), 2, "get_me and read_file are served");
+    let mut omitted: Vec<_> = materialized
+        .left_out
+        .iter()
+        .map(|entry| {
+            assert_eq!(entry.cause(), LeftOutReason::ToolNotServed);
+            assert_eq!(entry.reason_code(), "unsupported_tool_selection");
+            (
+                entry.tool_name().expect("a tool entry").to_owned(),
+                entry.reason(),
+            )
+        })
+        .collect();
+    omitted.sort();
+    let names: Vec<&str> = omitted.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["generic_github_api_call", "index_data", "search_index"]
+    );
+    assert!(omitted[1].1.contains("index action"), "{}", omitted[1].1);
+    let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
+    assert!(notice.contains("tool 'repo.generic_github_api_call' (github) is not enabled"));
+    assert!(!notice.contains("fixture-token"));
+}
+
+/// Review round 1: a tool the deployment's policy blocks is its own cause
+/// (`tool_blocked_by_policy`), not "not ported", and the model-visible notice
+/// never names it. The notice lists whole toolkits before tools and a flood of
+/// tools cannot push a toolkit out of a capped list.
+#[tokio::test]
+async fn policy_blocked_tools_have_their_own_cause_and_stay_out_of_the_model_notice() {
+    use super::materialize::{LeftOutReason, materialize_configured_toolsets_reporting_refusals};
+    use super::{IndexToolSupport, IndexToolsWithheld, left_out_toolkits_notice_text};
+    let version = json!({
+        "tools":[{
+            "id":1, "type":"github", "toolkit_name":"repo",
+            "settings":settings(
+                &json!({
+                    "configuration_type":"github",
+                    "base_url":"https://github.example.test/api/v3/",
+                    "access_token":"fixture-token"
+                }),
+                &["get_me", "read_file", "generic_github_api_call"]
+            )
+        }]
+    });
+    let version = version.as_object().expect("version details");
+    let blocking = policy(&[("github", &["read_file"])]);
+    let snapshot = FrozenToolSnapshot::from_version_details(version)
+        .expect("GitHub snapshot")
+        .apply_policy(blocking.as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &blocking,
+        &Map::new(),
+        None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NotRequested),
+    )
+    .await
+    .expect("GitHub materialization");
+    let by_name: BTreeMap<_, _> = materialized
+        .left_out
+        .iter()
+        .map(|entry| (entry.tool_name().expect("tool").to_owned(), entry.cause()))
+        .collect();
+    assert_eq!(
+        by_name["generic_github_api_call"],
+        LeftOutReason::ToolNotServed
+    );
+    assert_eq!(by_name["read_file"], LeftOutReason::ToolBlockedByPolicy);
+    let blocked = materialized
+        .left_out
+        .iter()
+        .find(|entry| entry.tool_name() == Some("read_file"))
+        .expect("blocked entry");
+    assert_eq!(blocked.reason_code(), "tool_blocked_by_policy");
+    let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
+    assert!(notice.contains("generic_github_api_call"));
+    assert!(!notice.contains("read_file"), "{notice}");
+}
+
+#[test]
+fn the_model_notice_lists_toolkits_first_and_tools_cannot_crowd_them_out() {
+    use super::left_out_toolkits_notice_text;
+    use super::materialize::{LeftOutReason, LeftOutToolkit};
+    let mut left_out: Vec<LeftOutToolkit> = (0..60)
+        .map(|index| LeftOutToolkit::unserved_tool("a", "github", &format!("t{index:02}"), "r"))
+        .collect();
+    left_out.push(LeftOutToolkit::fixture(
+        "z-toolkit",
+        "jira",
+        LeftOutReason::UnsupportedFamily,
+        "gone",
+    ));
+    let notice = left_out_toolkits_notice_text(&left_out).expect("a notice");
+    let lines: Vec<&str> = notice.lines().collect();
+    assert!(lines[0].starts_with("toolkit 'z-toolkit'"), "{notice}");
+    assert!(lines[1].starts_with("tool 'a.t00'"), "{notice}");
+    assert_eq!(lines.len(), 33, "32 lines and the hidden count");
+    assert_eq!(lines[32], "(29 more not shown)");
 }
 
 #[tokio::test]
@@ -2448,6 +2597,34 @@ impl GitHubApi for FixtureGitHubApi {
         Ok(json!({"id": run_id, "jobs": []}))
     }
 
+    async fn search_project_issues(
+        &self,
+        board_repository: &str,
+        project_number: u32,
+        items_count: usize,
+        search_query: &str,
+    ) -> Result<Value, GitHubClientError> {
+        self.project_calls
+            .lock()
+            .expect("project calls fixture lock")
+            .push(format!(
+                "search:{board_repository}:{project_number}:{items_count}:{search_query}"
+            ));
+        Ok(json!({"id": "project-1", "items": []}))
+    }
+
+    async fn get_workflow_logs(
+        &self,
+        run_id: u64,
+        repository: Option<&str>,
+    ) -> Result<Value, GitHubClientError> {
+        self.workflow_status_calls
+            .lock()
+            .expect("workflow-status calls fixture lock")
+            .push(format!("logs:{run_id}:{}", repository.unwrap_or("default")));
+        Ok(json!({"run_id": run_id, "job_details": []}))
+    }
+
     async fn list_project_issues(
         &self,
         board_repository: &str,
@@ -2473,17 +2650,43 @@ impl GitHubApi for FixtureGitHubApi {
 #[tokio::test]
 async fn every_tool_keeps_the_sdk_contract() {
     let client = Arc::new(FixtureGitHubApi::default());
-    let toolset = test_build_with_api(
+    let names = &super::families::github::tools::test_supported_names(
+        &super::sdk_conformance::sdk_tool_names("github"),
+    );
+    // The effects are bound to a real client over a transport that must not
+    // be reached: a schema check sends nothing.
+    let writer = super::families::github::tools::WriteBinding {
+        client: Arc::new(
+            GitHubClient::test_with_transport(token_config(&[]), Arc::new(NoTransport))
+                .expect("write client"),
+        ),
+        office: None,
+    };
+    let toolset = super::families::github::tools::test_build_with_writer(
         "team-github",
         "EliteaAI/elitea-platform",
-        &super::families::github::tools::test_supported_names(
-            &super::sdk_conformance::sdk_tool_names("github"),
-        ),
+        names,
         &policy(&[]),
         &(client as Arc<dyn GitHubApi>),
+        &writer,
     )
     .expect("native GitHub toolset");
     let readonly: Arc<dyn ReadonlyContext> = context();
     let tools = toolset.tools(readonly).await.expect("native GitHub tools");
+    assert_eq!(tools.len(), 37);
     super::sdk_conformance::assert_sdk_conformance("github", &tools);
+}
+
+/// A transport that fails the test if it is used.
+struct NoTransport;
+
+#[async_trait]
+impl elitea_connectors::transport::Transport for NoTransport {
+    async fn execute(
+        &self,
+        _request: elitea_connectors::transport::Request,
+    ) -> Result<elitea_connectors::transport::Response, elitea_connectors::transport::TransportError>
+    {
+        panic!("a schema check must not send a request");
+    }
 }

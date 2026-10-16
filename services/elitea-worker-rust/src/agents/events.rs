@@ -318,6 +318,9 @@ pub(crate) struct AgentEventProjectionContext {
     parallel_reconcile: bool,
     invoked_skills: Vec<Value>,
     applied_skills: Vec<Value>,
+    /// What this turn could not serve (`skipped_capabilities`), reported on
+    /// `agent_start` and the final `full_message` so the chat can say so.
+    skipped_capabilities: Option<Value>,
     output_limit_behavior: OutputLimitBehavior,
     continuation_prefix: Option<String>,
 }
@@ -368,6 +371,14 @@ pub(crate) struct ApplicationToolPresentationCatalog {
 #[derive(Clone, Default)]
 pub(crate) struct ToolkitAttributionCatalog {
     by_tool_name: BTreeMap<String, ToolkitAttribution>,
+    /// What Smart Tools Selection's `invoke_tool` can reach, by toolkit.
+    lazy: Option<LazyAttribution>,
+}
+
+#[derive(Clone)]
+struct LazyAttribution {
+    directory: elitea_agent_runtime::lazy_tools::Directory,
+    toolkits: BTreeMap<String, ToolkitAttribution>,
 }
 
 #[derive(Clone)]
@@ -429,6 +440,50 @@ impl ToolkitAttributionCatalog {
 
     fn get(&self, provider_tool_name: &str) -> Option<&ToolkitAttribution> {
         self.by_tool_name.get(provider_tool_name)
+    }
+
+    /// Record the toolkits Smart Tools Selection hides behind `invoke_tool`:
+    /// `directory` is what the registry holds, `references` the frozen toolkit
+    /// rows (`toolkit_name`, toolkit row id, toolkit type) they came from.
+    pub(crate) fn with_lazy_tools<'a>(
+        mut self,
+        directory: elitea_agent_runtime::lazy_tools::Directory,
+        references: impl IntoIterator<Item = (&'a str, Option<u64>, &'a str)>,
+    ) -> Self {
+        let mut toolkits = BTreeMap::new();
+        for (name, id, kind) in references {
+            if directory.toolkits.iter().any(|(held, _)| held == name) {
+                let mut one = Self::default();
+                one.insert("-", id, name, kind);
+                if let Some(attribution) = one.by_tool_name.remove("-") {
+                    toolkits.insert(name.to_owned(), attribution);
+                }
+            }
+        }
+        if !directory.toolkits.is_empty() {
+            self.lazy = Some(LazyAttribution {
+                directory,
+                toolkits,
+            });
+        }
+        self
+    }
+
+    /// For an `invoke_tool` call: the toolkit and tool the call resolves to,
+    /// by the registry's own rules. `None` for any other call, or when the call
+    /// resolves to nothing (it will be refused and runs nothing).
+    fn inner_for_invoke(
+        &self,
+        provider_tool_name: &str,
+        arguments: &Value,
+    ) -> Option<(ToolkitAttribution, String)> {
+        if provider_tool_name != elitea_agent_runtime::lazy_tools::INVOKE_TOOL {
+            return None;
+        }
+        let lazy = self.lazy.as_ref()?;
+        let text = |key: &str| arguments.get(key).and_then(Value::as_str).unwrap_or("");
+        let (toolkit, tool) = lazy.directory.resolve(text("toolkit"), text("tool")).ok()?;
+        Some((lazy.toolkits.get(&toolkit)?.clone(), tool))
     }
 }
 
@@ -599,9 +654,19 @@ pub(crate) struct PipelineProjectionInput {
 }
 
 impl AgentEventProjectionContext {
+    /// The conversation the turn's events stream to.
+    #[must_use]
+    pub(crate) fn stream_id(&self) -> &str {
+        &self.stream_id
+    }
+
     pub(crate) fn with_instruction_skills(mut self, skills: Vec<Value>) -> Self {
         self.invoked_skills.clone_from(&skills);
         self.applied_skills = skills;
+        self
+    }
+    pub(crate) fn with_skipped_capabilities(mut self, skipped: Option<Value>) -> Self {
+        self.skipped_capabilities = skipped;
         self
     }
     pub(crate) fn ordinary(
@@ -624,6 +689,7 @@ impl AgentEventProjectionContext {
             parallel_reconcile: false,
             invoked_skills: Vec::new(),
             applied_skills: Vec::new(),
+            skipped_capabilities: None,
             output_limit_behavior: OutputLimitBehavior::UserControlled,
             continuation_prefix: input.continuation_prefix,
         };
@@ -666,6 +732,7 @@ impl AgentEventProjectionContext {
             parallel_reconcile: self.parallel_reconcile,
             invoked_skills: Vec::new(),
             applied_skills: Vec::new(),
+            skipped_capabilities: None,
             output_limit_behavior: OutputLimitBehavior::Suppressed,
             continuation_prefix: None,
         };
@@ -694,6 +761,7 @@ impl AgentEventProjectionContext {
             parallel_reconcile: false,
             invoked_skills: Vec::new(),
             applied_skills: Vec::new(),
+            skipped_capabilities: None,
             output_limit_behavior: OutputLimitBehavior::UserControlled,
             continuation_prefix: None,
         }
@@ -757,6 +825,9 @@ struct ActiveToolCall {
     sibling_ordinal: Option<usize>,
     pipeline_node_name: Option<String>,
     toolkit: Option<ToolkitAttribution>,
+    /// The tool a Smart Tools Selection `invoke_tool` call will actually run,
+    /// shown in the tool-call record in place of the meta-tool's own name.
+    display_name: Option<String>,
 }
 
 #[derive(Clone)]
@@ -797,7 +868,13 @@ impl CompletedAgentBrowserOutput {
                 ),
             ));
         }
-        if content.is_empty() || content.contains('\0') {
+        // Empty content is admitted here and decided in `finish_after_eos`:
+        // only the projector knows whether the turn stopped on its output
+        // limit. A model that spends every output token reasoning (no visible
+        // text, no tool call) ends with an empty answer AND the Continue
+        // offer; refusing it here turned that offer into a generic runtime
+        // failure.
+        if content.contains('\0') {
             return Err(AgentEventProjectionError::output(
                 ProtocolError::InvalidInput("the completed agent content is malformed"),
             ));
@@ -2764,6 +2841,12 @@ impl AgentEventProjector {
             };
             let replay_ordinal = super::application_tools::application_replay_ordinal(event, id)
                 .map_err(|_| AgentEventProjectionError::invalid_state())?;
+            // A call made through `invoke_tool` is recorded against the toolkit
+            // and tool it resolves to, so the Analytics Tools tab shows
+            // `github.create_issue`, not a meta-tool row.
+            let inner = self
+                .toolkit_attribution
+                .inner_for_invoke(call.name, call.args);
             let active = ActiveToolCall {
                 name: call.name.to_owned(),
                 arguments: call.args.clone(),
@@ -2779,7 +2862,11 @@ impl AgentEventProjector {
                     .get(call.name)
                     .map(|_| replay_ordinal.unwrap_or(index + 1)),
                 pipeline_node_name: pipeline_node_name.clone(),
-                toolkit: self.toolkit_attribution.get(call.name).cloned(),
+                toolkit: inner
+                    .as_ref()
+                    .map(|(toolkit, _)| toolkit.clone())
+                    .or_else(|| self.toolkit_attribution.get(call.name).cloned()),
+                display_name: inner.map(|(_, tool)| tool),
             };
             let entry = tool_entry(id, &active, None, None, None, None);
             batch.push(self.event(
@@ -3310,6 +3397,22 @@ impl AgentEventProjector {
                 ),
             ));
         }
+        // An empty answer is a result only when the turn was cut by its
+        // output limit and the user was offered Continue (a reasoning-only
+        // turn): the terminal then carries `output_limit_reached`, and the
+        // continuation asks for the whole answer. Any other empty answer is
+        // still malformed.
+        if content.is_empty()
+            && !(output_limited
+                && matches!(
+                    self.context.output_limit_behavior,
+                    OutputLimitBehavior::UserControlled
+                ))
+        {
+            return Err(AgentEventProjectionError::output(
+                ProtocolError::InvalidInput("the completed agent content is malformed"),
+            ));
+        }
         let mut batch = ProjectedAgentEventBatch::new();
         let (response, result_ref) =
             if content.len() > INLINE_TEXT_CHUNK_BYTES {
@@ -3414,6 +3517,18 @@ impl AgentEventProjector {
                 .as_object_mut()
                 .ok_or_else(AgentEventProjectionError::invalid_state)?
                 .remove("pipeline_static_v1");
+        }
+        // What the turn could not serve rides every event Main persists a turn
+        // from: its start, a pause (human-in-the-loop or authorization) and its
+        // final message. Absent when the turn served everything.
+        if let Some(skipped) = &self.context.skipped_capabilities
+            && (matches!(
+                event_type,
+                "agent_start" | "full_message" | "agent_hitl_interrupt"
+            ) || response_metadata.get("authorization_requests").is_some())
+            && let Some(object) = response_metadata.as_object_mut()
+        {
+            object.insert("skipped_capabilities".to_owned(), skipped.clone());
         }
         let event = NodeEventV1 {
             r#type: event_type.to_owned(),
@@ -5813,11 +5928,12 @@ fn tool_entry(
     output: Option<&str>,
     error: Option<&str>,
 ) -> Value {
+    let shown = active.display_name.as_deref().unwrap_or(&active.name);
     let mut entry = json!({
-        "tool_name": active.name,
+        "tool_name": shown,
         "tool_run_id": id,
         "run_id": id,
-        "tool_meta": {"name": active.name, "metadata": {}},
+        "tool_meta": {"name": shown, "metadata": {}},
         "tool_inputs": active.public_arguments,
         "metadata": {},
         "timestamp_start": active.timestamp_start,
@@ -5866,7 +5982,7 @@ fn tool_entry(
         object.insert(
             "tool_meta".to_owned(),
             json!({
-                "name": active.name,
+                "name": shown,
                 "metadata": metadata,
             }),
         );
@@ -5882,7 +5998,7 @@ fn tool_entry(
         object.insert(
             "tool_meta".to_owned(),
             json!({
-                "name": active.name,
+                "name": shown,
                 "metadata": metadata,
             }),
         );
@@ -6272,6 +6388,7 @@ mod scoped_static_inventory_tests {
                     sibling_ordinal: Some(1),
                     pipeline_node_name: None,
                     toolkit: None,
+                    display_name: None,
                 },
             );
             root.descendants.insert(

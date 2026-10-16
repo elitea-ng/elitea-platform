@@ -23,7 +23,8 @@ struct Journal {
 }
 
 async fn database() -> IsolatedPostgres {
-    let url = env::var(TEST_DATABASE_URL).expect("ELITEA_TEST_DATABASE_URL is required");
+    let url = crate::test_pg::database_url_var(TEST_DATABASE_URL)
+        .expect("ELITEA_TEST_DATABASE_URL is required");
     let database = IsolatedPostgres::create(&url).await;
     install_test_schema(&database.pool).await;
     database
@@ -31,7 +32,7 @@ async fn database() -> IsolatedPostgres {
 
 /// A fresh pool is a replaced process: none of the previous connections or state survive.
 async fn fresh_pool(database: &IsolatedPostgres) -> PgPool {
-    PgPoolOptions::new()
+    crate::test_pg::pool_options()
         .max_connections(4)
         .acquire_timeout(Duration::from_secs(2))
         .connect_with(

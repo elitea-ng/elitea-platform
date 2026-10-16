@@ -20,6 +20,7 @@ package webhook_test
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,7 +43,7 @@ const webhookBootstrapSchema = "../../infra/db/migrations/001_initial.sql"
 var webhookTemplate string
 
 func TestMain(m *testing.M) {
-	databaseURL := os.Getenv(webhookDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(webhookDatabaseURLEnv))
 	if databaseURL == "" {
 		os.Exit(m.Run())
 	}
@@ -76,7 +77,7 @@ func TestMain(m *testing.M) {
 
 func newWebhookPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(webhookDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(webhookDatabaseURLEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", webhookDatabaseURLEnv)
 	}

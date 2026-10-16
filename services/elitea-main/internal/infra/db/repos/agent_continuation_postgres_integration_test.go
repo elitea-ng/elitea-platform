@@ -284,12 +284,12 @@ WHERE id = 1`); err != nil {
 	if _, err := tx.Exec(t.Context(), `INSERT INTO configuration (
     id, uuid, project_id, elitea_title, type, section, data, meta,
     shared, status_ok, source, author_id
-) VALUES (
+, created_at) VALUES (
     2, '60000000-0000-4000-8000-000000000039', 1, 'project_context_gate',
     'project_context', 'project',
     '{"content":"Project instructions","enabled":true}'::jsonb,
     '{}'::jsonb, false, true, 'user', 11
-)`); err != nil {
+, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := queries.ResolveCurrentApplicationTurn(t.Context(), resolve); err != nil {
@@ -343,8 +343,8 @@ WHERE id = 41`,
     )
     RETURNING id
 )
-INSERT INTO chat_participant_mapping (conversation_id, participant_id, entity_settings)
-SELECT 1, toolkit.id, '{}'::jsonb FROM toolkit`,
+INSERT INTO chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+SELECT 1, toolkit.id, '{}'::jsonb, now() AT TIME ZONE 'UTC' FROM toolkit`,
 			restore: `WITH removed AS (
     DELETE FROM chat_participant_mapping WHERE conversation_id = 1 AND participant_id = 25
 )
@@ -366,16 +366,16 @@ WHERE id = 1`,
 			apply: `WITH message_group AS (
     INSERT INTO chat_message_group (
         uuid, author_participant_id, conversation_id, sent_to_id, meta, is_streaming
-    ) VALUES (
+    , created_at) VALUES (
         '80000000-0000-4000-8000-000000000039', 20, 1, 21, '{}'::jsonb, false
-    )
+    , now() AT TIME ZONE 'UTC')
     RETURNING id
 ), message_item AS (
     INSERT INTO chat_message_items (
         uuid, item_type, order_index, meta, message_group_id
-    )
+    , created_at)
     SELECT '90000000-0000-4000-8000-000000000039',
-           'context_message', 0, '{}'::jsonb, message_group.id
+           'context_message', 0, '{}'::jsonb, message_group.id, now() AT TIME ZONE 'UTC'
     FROM message_group
     RETURNING id
 )
@@ -529,22 +529,22 @@ func TestPostgresCurrentNestedApplicationTurnPreservesThreeTierContract(t *testi
 INSERT INTO application_versions (
     id, application_id, name, status, author_id, uuid, llm_settings, instructions,
     conversation_starters, welcome_message, agent_type, meta, pipeline_settings
-) VALUES
+, created_at) VALUES
     (42, 32, 'nested-orchestrator', 'draft', 11, '80000000-0000-4000-8000-000000000032',
-     '{"model_name":"test"}'::jsonb, 'Delegate once', '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb),
+     '{"model_name":"test"}'::jsonb, 'Delegate once', '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
     (43, 33, 'nested-leaf', 'draft', 11, '80000000-0000-4000-8000-000000000033',
-     '{"model_name":"test"}'::jsonb, 'Return the result', '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb),
+     '{"model_name":"test"}'::jsonb, 'Return the result', '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
     (44, 34, 'attached-orchestrator', 'draft', 11, '80000000-0000-4000-8000-000000000034',
-     '{"model_name":"test"}'::jsonb, 'Delegate once', '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb),
+     '{"model_name":"test"}'::jsonb, 'Delegate once', '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
     (45, 35, 'attached-leaf', 'draft', 11, '80000000-0000-4000-8000-000000000035',
-     '{"model_name":"test"}'::jsonb, 'Return the result', '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb);
-INSERT INTO elitea_tools (id, type, name, description, settings, author_id, meta) VALUES
+     '{"model_name":"test"}'::jsonb, 'Return the result', '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC');
+INSERT INTO elitea_tools (id, type, name, description, settings, author_id, meta, created_at) VALUES
     (52, 'application', 'nested-orchestrator', NULL,
-     '{"application_id":32,"application_version_id":42}'::jsonb, 11, '{}'::jsonb),
+     '{"application_id":32,"application_version_id":42}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
     (53, 'application', 'nested-leaf', NULL,
-     '{"application_id":33,"application_version_id":43}'::jsonb, 11, '{}'::jsonb),
+     '{"application_id":33,"application_version_id":43}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
     (54, 'application', 'attached-leaf', NULL,
-     '{"application_id":35,"application_version_id":45}'::jsonb, 11, '{}'::jsonb);
+     '{"application_id":35,"application_version_id":45}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC');
 INSERT INTO entity_tool_mapping (
     tool_id, entity_id, entity_version_id, entity_type, selected_tools
 ) VALUES
@@ -769,19 +769,19 @@ func TestPostgresCurrentAdhocTurnAdmitsSameProjectMCPToolkit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(t.Context(), `
-INSERT INTO elitea_tools (id, type, name, description, settings, author_id, meta)
+INSERT INTO elitea_tools (id, type, name, description, settings, author_id, meta, created_at)
 VALUES (
     52, 'mcp', 'documentation-mcp', 'Saved external MCP server',
     '{"url":"https://mcp.example.invalid/events","selected_tools":["search_docs"]}'::jsonb,
     11, '{"mcp":true}'::jsonb
-);
+, now() AT TIME ZONE 'UTC');
 INSERT INTO chat_participants (id, uuid, entity_name, entity_meta, meta)
 VALUES (
     25, 'd0000000-0000-4000-8000-000000000032', 'toolkit',
     '{"id":52,"project_id":1}'::jsonb, '{"name":"documentation-mcp","mcp":true}'::json
 );
-INSERT INTO chat_participant_mapping (conversation_id, participant_id, entity_settings)
-VALUES (2, 25, '{}'::jsonb);`); err != nil {
+INSERT INTO chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+VALUES (2, 25, '{}'::jsonb, now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -875,12 +875,12 @@ func TestPostgresCurrentAdhocTurnAdmitsApplicationWithMCPChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(t.Context(), `
-INSERT INTO elitea_tools (id, type, name, description, settings, author_id, meta)
+INSERT INTO elitea_tools (id, type, name, description, settings, author_id, meta, created_at)
 VALUES (
     52, 'mcp', 'child-mcp', 'MCP child owned by the attached application',
     '{"url":"https://mcp.example.invalid/events","selected_tools":["search_docs"]}'::jsonb,
     11, '{"mcp":true}'::jsonb
-);
+, now() AT TIME ZONE 'UTC');
 INSERT INTO entity_tool_mapping (
     tool_id, entity_id, entity_version_id, entity_type, selected_tools
 ) VALUES (52, 31, 41, 'agent', '["search_docs"]'::jsonb);`); err != nil {
@@ -1203,14 +1203,14 @@ func completePostgresCurrentApplicationTurn(
 WITH response_group AS (
     UPDATE chat_message_group
     SET is_streaming = FALSE,
-        created_at = statement_timestamp()
+        created_at = statement_timestamp() AT TIME ZONE 'UTC'
     WHERE uuid = $1
     RETURNING id
 ), response_item AS (
     INSERT INTO chat_message_items (
         uuid, item_type, order_index, meta, message_group_id
-    )
-    SELECT gen_random_uuid(), 'text_message', 0, '{}'::jsonb, response_group.id
+    , created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, '{}'::jsonb, response_group.id, now() AT TIME ZONE 'UTC'
     FROM response_group
     RETURNING id
 )
@@ -1270,8 +1270,8 @@ WITH response AS (
     WHERE uuid = $1
     RETURNING id
 ), item AS (
-    INSERT INTO chat_message_items (uuid, item_type, order_index, meta, message_group_id)
-    SELECT gen_random_uuid(), 'text_message', 1, '{}'::jsonb, response.id
+    INSERT INTO chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 1, '{}'::jsonb, response.id, now() AT TIME ZONE 'UTC'
     FROM response
     RETURNING id
 )
@@ -1916,8 +1916,8 @@ func insertPostgresSupportContext(
 WITH context_item AS (
     INSERT INTO chat_message_items (
         uuid, item_type, order_index, meta, message_group_id
-    )
-    SELECT gen_random_uuid(), 'context_message', -1, '{}'::jsonb, message_group.id
+    , created_at)
+    SELECT gen_random_uuid(), 'context_message', -1, '{}'::jsonb, message_group.id, now() AT TIME ZONE 'UTC'
     FROM chat_message_group AS message_group
     WHERE message_group.uuid = $1::uuid
     RETURNING id
@@ -2064,31 +2064,31 @@ INSERT INTO p_1.applications (id, name, description, owner_id) VALUES
 INSERT INTO p_1.application_versions (
     id, application_id, name, status, author_id, uuid, llm_settings, instructions,
     conversation_starters, welcome_message, agent_type, meta, pipeline_settings
-) VALUES (
+, created_at) VALUES (
     41, 31, 'base', 'draft', 11, '80000000-0000-4000-8000-000000000031',
     '{"model_name":"test"}'::jsonb, 'Be concise', '[]'::json, '', 'agent',
     '{}'::jsonb, '{}'::jsonb
-);
+, now() AT TIME ZONE 'UTC');
 INSERT INTO p_1.chat_conversations (
     id, uuid, name, author_id, source, meta
-) VALUES (
+, created_at) VALUES (
     1, '10000000-0000-4000-8000-000000000031', 'continuation', 11, 'agent',
     '{}'::jsonb
-);
+, now() AT TIME ZONE 'UTC');
 INSERT INTO p_1.chat_participants (id, uuid, entity_name, entity_meta) VALUES
     (20, '90000000-0000-4000-8000-000000000031', 'user', '{"id":11}'::jsonb),
     (21, 'a0000000-0000-4000-8000-000000000031', 'application', '{"id":31,"project_id":1}'::jsonb);
 INSERT INTO p_1.chat_participant_mapping (
     conversation_id, participant_id, entity_settings
-) VALUES
-    (1, 20, '{}'::jsonb),
-    (1, 21, '{"version_id":41,"variables":[]}'::jsonb);
+, created_at) VALUES
+    (1, 20, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (1, 21, '{"version_id":41,"variables":[]}'::jsonb, now() AT TIME ZONE 'UTC');
 INSERT INTO p_1.elitea_tools (
     id, type, name, description, settings, author_id, meta
-) VALUES (
+, created_at) VALUES (
     51, 'aha', 'product', 'Aha product access',
     '{"selected_tools":["list_products"]}'::jsonb, 11, '{}'::jsonb
-);
+, now() AT TIME ZONE 'UTC');
 INSERT INTO p_1.skills (id, name, description) VALUES
     (61, 'release-proof', 'Release proof skill');
 INSERT INTO p_1.skill_versions (id, skill_id, name, instructions, meta) VALUES
@@ -2099,11 +2099,11 @@ INSERT INTO p_1.entity_skill_mapping (
     (81, 41, 'agent', 61, 71);
 INSERT INTO p_1.chat_conversations (
     id, uuid, name, author_id, source, instructions, meta
-) VALUES (
+, created_at) VALUES (
     2, '10000000-0000-4000-8000-000000000032', 'ad-hoc continuation', 11, 'elitea',
     'Conversation instructions',
     '{"default_instructions":"User defaults","persona":"qa","steps_limit":12,"internal_tools":["internal_mcp"]}'::jsonb
-);
+, now() AT TIME ZONE 'UTC');
 INSERT INTO p_1.chat_participants (id, uuid, entity_name, entity_meta, meta) VALUES
     (23, 'a0000000-0000-4000-8000-000000000032', 'dummy', '{}'::jsonb, '{"name":"EliteA"}'::json),
     (24, 'b0000000-0000-4000-8000-000000000032', 'toolkit', '{"id":51,"project_id":1}'::jsonb, '{"name":"product"}'::json),
@@ -2111,11 +2111,11 @@ INSERT INTO p_1.chat_participants (id, uuid, entity_name, entity_meta, meta) VAL
      '{"name":"leaf-agent","description":"Read-only child agent","agent_type":"agent"}'::json);
 INSERT INTO p_1.chat_participant_mapping (
     conversation_id, participant_id, entity_settings
-) VALUES
-    (2, 20, '{}'::jsonb),
-    (2, 23, '{"llm_settings":{"model_name":"saved","model_project_id":1,"max_tokens":1024}}'::jsonb),
-    (2, 24, '{}'::jsonb),
-    (2, 30, '{"version_id":41,"variables":[],"agent_type":"agent"}'::jsonb);`); err != nil {
+, created_at) VALUES
+    (2, 20, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (2, 23, '{"llm_settings":{"model_name":"saved","model_project_id":1,"max_tokens":1024}}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (2, 24, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (2, 30, '{"version_id":41,"variables":[],"agent_type":"agent"}'::jsonb, now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatal(err)
 	}
 }

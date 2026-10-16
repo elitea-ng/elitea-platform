@@ -45,6 +45,18 @@ data:
       "agent_checkpoint_connection_path" (printf "%s/agent-checkpoint-connection" $material)
       "limits" $r.limits
     }}
+    {{- /* The deployment's PUBLIC base URL, for links the Rust worker puts in an
+    answer (a chart's Markdown image): platformOrigin is the in-cluster edge,
+    which a browser cannot open. Written only when set, and only for the Rust
+    worker (the Python worker's config refuses unknown keys), so the default
+    runtime.json stays identical for both implementations (render-worker.sh).
+    Links are root-relative without it. */}}
+    {{- if $r.publicBaseUrl }}
+    {{- if ne (include "elitea-worker.isRust" .) "true" }}
+    {{- fail "worker.runtime.publicBaseUrl requires the Rust worker" }}
+    {{- end }}
+    {{- $_ := set $config "public_base_url" $r.publicBaseUrl }}
+    {{- end }}
     {{- if .Values.nats.tls.enabled }}
     {{- $_ := set $config "nats_ca_path" (printf "%s/ca.crt" (trimSuffix "/" .Values.nats.tls.mountPath)) }}
     {{- $_ := set $config "nats_certificate_path" (printf "%s/tls.crt" (trimSuffix "/" .Values.nats.tls.mountPath)) }}
@@ -78,16 +90,68 @@ data:
     {{- if gt (len $r.sandboxRuntimes) 0 }}
     {{- $_ := set $config "sandbox_runtimes" $r.sandboxRuntimes }}
     {{- end }}
+    {{- /* The model completions one claim's toolkits may make in total (the
+    step-back index tools, the Office prompts, image generation). Written
+    only when set, and only for the Rust worker, so the default runtime.json
+    stays identical for both implementations; unset, the worker's default
+    (200) applies. Validated like indexModelCallCap: 0 is refused. */}}
+    {{- if and (hasKey $r "toolkitModelCallCap") (not (kindIs "invalid" $r.toolkitModelCallCap)) (ne (toString $r.toolkitModelCallCap) "") }}
+    {{- $cap := $r.toolkitModelCallCap }}
+    {{- if ne (include "elitea-worker.isRust" .) "true" }}
+    {{- fail "worker.runtime.toolkitModelCallCap requires the Rust worker" }}
+    {{- end }}
+    {{- if not (or (kindIs "float64" $cap) (kindIs "int64" $cap) (kindIs "int" $cap)) }}
+    {{- fail (printf "worker.runtime.toolkitModelCallCap must be an integer of at least 1, not %v (%s)" $cap (kindOf $cap)) }}
+    {{- end }}
+    {{- $f := float64 $cap }}
+    {{- if or (lt $f 1.0) (ne $f (floor $f)) (gt $f 4294967295.0) }}
+    {{- fail (printf "worker.runtime.toolkitModelCallCap must be an integer between 1 and 4294967295, not %v" $cap) }}
+    {{- end }}
+    {{- $_ := set $config "toolkit_model_call_cap" (int64 $cap) }}
+    {{- end }}
     {{- /* The vector store (ADR-0030 I1, ADR-0031): written only under
     indexingRuntime=rust, so the python-indexing runtime.json stays identical
     for both implementations (render-worker.sh). The worker reaches
     elitea-vector with its runtime mTLS identity; nothing else is mounted. The
     guard in guards.yaml has already refused rust indexing with no target. */}}
-    {{- if eq (default "python" .Values.worker.indexingRuntime) "rust" }}
+    {{- if eq (include "elitea.indexingRuntime" .) "rust" }}
     {{- $target := $r.vectorTarget | default (printf "%s:%v" .Values.vector.service.name .Values.vector.service.port) }}
     {{- $_ := set $config "vector_target" $target }}
     {{- if $r.indexEgressAllowlist }}
     {{- $_ := set $config "index_egress_allowlist" $r.indexEgressAllowlist }}
+    {{- end }}
+    {{- /* The `memory` toolkit's embedding model (worker unit M9). Written only
+    when set, and only under the Rust indexing runtime (the claim's vector token
+    and the worker's vector_target exist only there; guards.yaml refuses the
+    value elsewhere), so the other runtime.json documents are unchanged. */}}
+    {{- if $r.memoryEmbeddingModel }}
+    {{- $_ := set $config "memory_embedding_model" ($r.memoryEmbeddingModel | toString) }}
+    {{- end }}
+    {{- /* The model calls one index run may make (ADR-0030 I4). Written only
+    when set, and only under the Rust indexing runtime, so the Python
+    runtime.json stays identical; the worker's default is the chart default. */}}
+    {{- /* Validated, never defaulted by accident: 0 is falsy in a template and
+    would otherwise vanish into the worker's default. */}}
+    {{- if hasKey $r "indexModelCallCap" }}
+    {{- $cap := $r.indexModelCallCap }}
+    {{- if not (kindIs "invalid" $cap) }}
+    {{- if not (or (kindIs "float64" $cap) (kindIs "int64" $cap) (kindIs "int" $cap)) }}
+    {{- fail (printf "worker.runtime.indexModelCallCap must be an integer of at least 1, not %v (%s). It bounds the model calls one index run may make; to avoid model calls set the chunker to a non-model one." $cap (kindOf $cap)) }}
+    {{- end }}
+    {{- $f := float64 $cap }}
+    {{- if or (lt $f 1.0) (ne $f (floor $f)) (gt $f 4294967295.0) }}
+    {{- fail (printf "worker.runtime.indexModelCallCap must be an integer between 1 and 4294967295, not %v. Use 1 or more: 0 does not mean \"no model calls\"; set the chunker to a non-model one (markdown, text, ...) to avoid calls." $cap) }}
+    {{- end }}
+    {{- $_ := set $config "index_model_call_cap" (int64 $cap) }}
+    {{- end }}
+    {{- end }}
+    {{- /* The document extraction sidecar (ADR-0030 I1): the worker streams
+    PDF and Office documents to this socket, in the emptyDir the Deployment
+    shares between the two containers. Written only while the sidecar renders
+    (guards.yaml refuses it outside the Rust indexing runtime), so the
+    runtime.json of every other deployment is unchanged. */}}
+    {{- if (.Values.worker.extractor | default dict).enabled }}
+    {{- $_ := set $config "extractor_socket" (printf "%s/extractor.sock" (trimSuffix "/" .Values.worker.extractor.socketDir)) }}
     {{- end }}
     {{- end }}
     {{ toJson $config }}

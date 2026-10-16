@@ -58,7 +58,7 @@ bad() { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 # reserved by RFC 2606 and never resolves.
 RENDER=(
   -f "$CHART/values-standalone.yaml"
-  --set worker.enabled=true
+  --set worker.enabled=true --set worker.indexingRuntime=python
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )
@@ -244,6 +244,55 @@ refuses 'worker.logLevel must be one of' --set worker.implementation=rust --set 
 refuses 'worker.traceLevel must be one of' --set worker.implementation=rust --set worker.traceLevel=loud \
   && ok "an invalid worker.traceLevel is refused" \
   || bad "an invalid worker.traceLevel is not refused"
+
+refuses 'worker.runtime.publicBaseUrl requires the Rust worker' --set worker.implementation=python --set-string worker.runtime.publicBaseUrl=https://elitea.example.com \
+  && ok "worker.runtime.publicBaseUrl is refused for the Python worker" \
+  || bad "worker.runtime.publicBaseUrl is not refused for the Python worker"
+
+"$HELM" template t "$CHART" "${RENDER[@]}" --set worker.implementation=rust --set-string worker.runtime.publicBaseUrl=https://elitea.example.com >"$TMP/public.yaml" 2>/dev/null
+python3 - "$TMP/public.yaml" <<'PY' && ok "rust: worker.runtime.publicBaseUrl reaches runtime.json as public_base_url, beside the untouched platform_origin" || bad "publicBaseUrl rendering"
+import json, sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+cm = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "elitea-worker-runtime")
+runtime = json.loads(cm["data"]["runtime.json"])
+assert runtime["public_base_url"] == "https://elitea.example.com", runtime
+assert runtime["platform_origin"] == "https://elitea-platform-edge", runtime
+PY
+
+echo "== the worker rolls after elitea-main (Argo CD sync waves) =="
+python3 - "$TMP/rust.yaml" <<'PY' && ok "worker Deployment in a later wave than elitea-main; what it mounts is not later" || bad "worker rollout wave"
+import sys, yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+def wave(d):
+    return int(((d.get("metadata") or {}).get("annotations") or {}).get("argocd.argoproj.io/sync-wave", "0"))
+def find(kind, name):
+    return next(d for d in docs if d["kind"] == kind and d["metadata"]["name"] == name)
+
+worker = find("Deployment", "elitea-worker")
+main = find("Deployment", "elitea-main")
+# elitea-main verifies the claim a new worker names on the artifact object API;
+# a new worker must not run against an older elitea-main (PR #1293).
+assert wave(worker) > wave(main), (wave(worker), wave(main))
+
+# A Deployment ahead of what it mounts would never become ready: every
+# ConfigMap and Secret the worker mounts must be in its wave or earlier.
+spec = worker["spec"]["template"]["spec"]
+mounted = set()
+for v in spec.get("volumes", []):
+    if "configMap" in v:
+        mounted.add(("ConfigMap", v["configMap"]["name"]))
+    if "secret" in v:
+        mounted.add(("Secret", v["secret"]["secretName"]))
+    for src in (v.get("projected") or {}).get("sources", []):
+        if "configMap" in src:
+            mounted.add(("ConfigMap", src["configMap"]["name"]))
+        if "secret" in src:
+            mounted.add(("Secret", src["secret"]["name"]))
+later = sorted(f"{k}/{n}" for k, n in mounted
+               for d in docs if d["kind"] == k and d["metadata"]["name"] == n and wave(d) > wave(worker))
+assert not later, later
+PY
 
 echo
 RAN=$((PASS+FAIL))

@@ -65,6 +65,8 @@ CREATE TABLE elitea_runtime.execution_jobs (
     terminal_error_code text,
     -- shared/0140_execution_trigger_origin.sql
     trigger_origin text NOT NULL DEFAULT 'manual',
+    -- shared/0166_vector_claim_tokens_memory_source.sql
+    memory_toolkit_ids bigint[] NOT NULL DEFAULT '{}',
     PRIMARY KEY (execution_id, generation),
     UNIQUE (idempotency_scope, idempotency_key),
     UNIQUE (execution_id, generation, capability_id, input_bundle_id)

@@ -214,11 +214,11 @@ func TestPostgresPipelineTerminalClearsPausedProvisionalTextButKeepsCommittedHis
 			seedCurrentAgentResponseGroup(t, pool, conversationID, responseID, generationID, admitted.ExecutionID)
 			groupID := currentResponseGroupID(t, pool, responseID)
 			_, err := pool.Exec(t.Context(), `
-INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, meta, message_group_id)
+INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
 VALUES
-(gen_random_uuid(), 'text_message', 0, jsonb_build_object('runtime_stream_provisional', true, 'runtime_stream_execution_id', 'paused-execution', 'runtime_stream_generation', '1'), $1),
-(gen_random_uuid(), 'text_message', 1, jsonb_build_object('runtime_stream_provisional', true, 'runtime_stream_execution_id', $2::text, 'runtime_stream_generation', '1'), $1),
-(gen_random_uuid(), 'text_message', 2, '{}'::jsonb, $1)`, groupID, admitted.ExecutionID)
+(gen_random_uuid(), 'text_message', 0, jsonb_build_object('runtime_stream_provisional', true, 'runtime_stream_execution_id', 'paused-execution', 'runtime_stream_generation', '1'), $1, now() AT TIME ZONE 'UTC'),
+(gen_random_uuid(), 'text_message', 1, jsonb_build_object('runtime_stream_provisional', true, 'runtime_stream_execution_id', $2::text, 'runtime_stream_generation', '1'), $1, now() AT TIME ZONE 'UTC'),
+(gen_random_uuid(), 'text_message', 2, '{}'::jsonb, $1, now() AT TIME ZONE 'UTC')`, groupID, admitted.ExecutionID)
 			if err != nil {
 				t.Fatal(err)
 			}

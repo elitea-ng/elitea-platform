@@ -107,6 +107,7 @@ on:
       # by the daily run.
       - "services/elitea-deepwiki-engine/**"
       - "services/elitea-vector/**"
+      - "services/elitea-doc-extractor/**"
       - "libs/rust/**"
       - "apps/elitea-web/**"
       # The elitea-ui image builds the apps/elitea-ui submodule, so a submodule
@@ -142,6 +143,7 @@ on:
       - "services/elitea-llm-gateway/**"
       - "services/elitea-deepwiki-engine/**"
       - "services/elitea-vector/**"
+      - "services/elitea-doc-extractor/**"
       - "libs/rust/**"
       - "apps/elitea-web/**"
       - "apps/elitea-ui"
@@ -456,6 +458,17 @@ jobs:
             build_args: ""
             expect_type: rustbinary
             blocking: true
+          # elitea-doc-extractor (ADR-0030 I1): the Rust worker's document
+          # extraction sidecar. Repo ROOT context: the Containerfile COPYs
+          # services/elitea-doc-extractor, libs/proto and libs/rust from
+          # there. `rustbinary` and blocking for the engines' reasons.
+          - name: elitea-doc-extractor
+            context: .
+            dockerfile: ./services/elitea-doc-extractor/Containerfile
+            target: ""
+            build_args: ""
+            expect_type: rustbinary
+            blocking: true
 
     steps:
       - uses: actions/checkout@v7
@@ -508,7 +521,7 @@ jobs:
           # mode=max on a PUSH to main, mode=min otherwise — the daily schedule
           # also carries the main ref and must not export every layer nightly.
           # The same write policy as .github/actions/build-stack-images.
-          cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=${{ matrix.image.name }}-linux-amd64
+          cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=${{ matrix.image.name }}-linux-amd64,ignore-error=true
 
       # exit-code 0 on purpose: this step collects the report, and the step
       # below is the gate. Splitting them lets the gate print every finding.

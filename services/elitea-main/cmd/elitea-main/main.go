@@ -1652,9 +1652,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// `!= nil`, and a typed-nil *Client would pass and then dereference.
 	var indexVectorDeleter indexingapp.IndexVectorDeleter
 	var projectVectorData projectprovisioning.ApplicationDataRemover
+	// The memory toolkit's cleanup (a toolkit's namespace, a user's personal
+	// memories) rides the same client; a nil INTERFACE without one.
+	var memoryData api.MemoryData
 	if vectorClient != nil {
 		indexVectorDeleter = vectorClient
 		projectVectorData = vectorClient
+		memoryData = vectorClient
 	}
 	// The vector step is recorded on a project delete by every replica that
 	// indexes into the store (Rust indexing), with or without a client; a
@@ -2469,6 +2473,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ProjectDeleteBudget:           projectDeleteBudget,
 		ApplicationData:               applicationData,
 		ProjectVectorData:             projectVectorData,
+		MemoryData:                    memoryData,
+		MemoryDataRecorded:            runtimeConfig.RustIndexing(),
 		ProjectVectorDataRecorded:     vectorStepRecorded,
 		ProjectVectorCleanupAbandoned: vectorCleanupAbandoned,
 		AdminUI:                       adminUICfg,
@@ -2487,6 +2493,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ToolkitArgumentSchemas:        toolkitArgumentSchemas,
 		ToolkitCatalogue:              toolkitCatalogue,
 		ToolkitWorkerCapability:       workerToolkitCapability,
+		MemoryOnVectorStore:           runtimeConfig.RustIndexing(),
 		ToolkitSettingsDefinitions:    toolkitSettingsDefinitions,
 		ToolkitSettingsValidator:      toolkitSettingsValidator,
 		ToolkitRegistry:               toolkitArgumentSchemas,

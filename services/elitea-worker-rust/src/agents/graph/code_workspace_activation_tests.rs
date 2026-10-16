@@ -159,7 +159,7 @@ fn remote(content: Option<Arc<InputContentClient>>) -> RemoteCodeRuntime {
         )
         .unwrap(),
     );
-    let pool = sqlx::postgres::PgPoolOptions::new()
+    let pool = crate::test_pg::pool_options()
         .max_connections(1)
         .connect_lazy("postgres://fixture:fixture@127.0.0.1:1/never_connect")
         .unwrap();

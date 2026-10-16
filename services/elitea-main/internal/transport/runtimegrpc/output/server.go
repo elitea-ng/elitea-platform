@@ -14,6 +14,7 @@ import (
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	configurationdomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/configurations"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
 	"google.golang.org/grpc"
@@ -994,6 +995,8 @@ func indexIngestSummaryDomain(summary *runtimev1.IndexIngestSummaryV1) (outputap
 		TotalDocuments:     summary.GetTotalDocuments(),
 		TotalChunks:        summary.GetTotalChunks(),
 		WholeIndexRecord:   summary.GetWholeIndexRecord(),
+		UnchangedPresent:   summary.UnchangedDocuments != nil,
+		UnchangedDocuments: summary.GetUnchangedDocuments(),
 	}
 	if err := mapped.Validate(); err != nil {
 		return outputapp.IndexIngestSummary{}, err
@@ -1144,11 +1147,24 @@ func budgetScopePolicy(safeMessage string) (runtimeFailurePolicy, bool) {
 
 // Input sections use fixed public messages. Never accept an arbitrary worker reason.
 func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFailurePolicy, bool) {
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED {
+		switch payload.GetSafeMessage() {
+		case "Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying.",
+			"Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.",
+			"Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.":
+			return runtimeFailurePolicy{Code: "PIPELINE_CODE_FAILED", SafeMessage: payload.GetSafeMessage()}, true
+		}
+	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_INVALID && payload.GetSafeMessage() == childInputTypeSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_INPUT_INVALID", SafeMessage: childInputTypeSafeMessage}, true
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY && payload.GetSafeMessage() == nodeTypeNotAvailableSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_NODE_TYPE_NOT_AVAILABLE", SafeMessage: nodeTypeNotAvailableSafeMessage}, true
+	}
+	// The run's own credentials or context refused on the tool-run path: a
+	// fixed sentence of its own, so a caller can tell it from a refused tool.
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED && payload.GetSafeMessage() == executiondomain.ToolkitRunCredentialsRefusedMessage {
+		return runtimeFailurePolicy{Code: "AUTHORIZATION_FAILED", SafeMessage: executiondomain.ToolkitRunCredentialsRefusedMessage}, true
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_MODEL_BUDGET_EXHAUSTED {
 		if policy, ok := budgetScopePolicy(payload.GetSafeMessage()); ok {

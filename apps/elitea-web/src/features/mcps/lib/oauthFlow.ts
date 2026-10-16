@@ -185,6 +185,7 @@ interface ExchangeAuthorizationCodeParams {
   authorizationReferenceOnly?: boolean | undefined;
   clientReference: string | undefined;
   resource: string | undefined;
+  resourceMetadataUrl: string | undefined;
   projectId: string | number | undefined;
   tokenEndpoint: string | undefined;
   code: string;
@@ -228,6 +229,7 @@ async function exchangeAuthorizationCode(params: ExchangeAuthorizationCodeParams
       scope: params.normalizedScope || undefined,
       resource: params.resource,
       toolkit_id: params.toolkitId,
+      resource_metadata_url: params.resourceMetadataUrl,
       toolkit_type: params.isPrebuildMcp ? params.toolkitType : undefined,
       // Preserve DCR ownership when Main resolves stored client credentials.
       used_dcr: toWireFlag(params.usedDCR),
@@ -256,6 +258,7 @@ interface TokenPersistenceMetadataParams {
   clientSecret: string | undefined;
   projectId: string | number | undefined;
   toolkitId: string | undefined;
+  resourceMetadataUrl: string | undefined;
   providedOauthMetadata: Partial<OAuthServerMetadata> | null | undefined;
   usedDCR: boolean;
 }
@@ -270,6 +273,7 @@ function buildTokenPersistenceMetadata(params: TokenPersistenceMetadataParams) {
     client_reference: params.clientReference,
     project_id: params.projectId === undefined ? undefined : String(params.projectId),
     toolkit_id: params.toolkitId,
+    resource_metadata_url: params.resourceMetadataUrl,
     // Retain the issued client's ownership. A later refresh must not replace
     // DCR credentials with the toolkit's unrelated stored OAuth client.
     used_dcr: params.usedDCR,
@@ -291,6 +295,7 @@ export interface StartMcpAuthFlowOptions {
   serverUrl?: string | undefined;
   /** Protected MCP resource, independent of the credential-scoped storage key. */
   resourceUrl?: string | undefined;
+  resourceMetadataUrl?: string | undefined; // challenge hint, forwarded on exchange and refresh
   resourceMetadata: { authorization_servers?: readonly string[] | undefined; oauth_authorization_server?: OAuthServerMetadata | undefined };
   oauthMetadata?: Partial<OAuthServerMetadata> | null | undefined;
   clientId?: string | undefined;
@@ -356,6 +361,7 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
   const tokenJson = await exchangeAuthorizationCode({
     authorizationReferenceOnly: options.authorizationReferenceOnly,
     resource,
+    resourceMetadataUrl: options.resourceMetadataUrl,
     projectId,
     tokenEndpoint,
     code,
@@ -386,7 +392,7 @@ export async function startMcpAuthFlow(options: StartMcpAuthFlowOptions): Promis
     sessionId,
     tokenJson.id_token,
     tokenJson.refresh_token,
-    { ...buildTokenPersistenceMetadata({ resource, tokenEndpoint, clientId, clientSecret: effectiveClientSecret, clientReference, projectId, toolkitId, providedOauthMetadata, usedDCR }), authorization_reference: tokenJson.authorization_reference },
+    { ...buildTokenPersistenceMetadata({ resource, tokenEndpoint, clientId, clientSecret: effectiveClientSecret, clientReference, projectId, toolkitId, resourceMetadataUrl: options.resourceMetadataUrl, providedOauthMetadata, usedDCR }), authorization_reference: tokenJson.authorization_reference },
     toolkitType,
   );
 

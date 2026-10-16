@@ -10,22 +10,28 @@ use serde_json::{Map, Value, json};
 
 use super::DelegatedAuthorizationRequirement;
 use super::delegated_auth::delegated_authorization_requirement;
+use super::families::UnsupportedSetting;
+use super::families::index_tools::{IndexToolSupport, IndexToolsWithheld};
 use super::families::sharepoint::client::{
     SharePointApi, SharePointClient, SharePointClientError, SharePointClientErrorCode,
-    SharePointFileListOptions, SharePointHttpResponse, SharePointTransport, normalize_patterns,
+    SharePointFile, SharePointFileListOptions, SharePointHttpResponse, SharePointTransport,
+    SharePointUpload, normalize_patterns,
 };
 use super::families::sharepoint::config::{SharePointConfigErrorCode, SharePointToolkitConfig};
 use super::families::sharepoint::tools::{
     SharePointToolsetErrorCode, build_sharepoint_toolset, test_build_with_api,
 };
-use super::materialize::materialize_configured_toolsets_with_tokens_and_authorization;
+use super::materialize::{
+    left_out_toolkits_notice_text, materialize_configured_toolsets_reporting_refusals,
+    materialize_configured_toolsets_with_tokens_and_authorization,
+};
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::FrozenToolSnapshot;
 
-const SITE_URL: &str = "https://tenant.sharepoint.com/teams/project";
+pub(super) const SITE_URL: &str = "https://tenant.sharepoint.com/teams/project";
 const DISCOVERY: &str = "https://login.microsoftonline.com/tenant";
 
-fn settings(selected: &[&str]) -> Map<String, Value> {
+pub(super) fn settings(selected: &[&str]) -> Map<String, Value> {
     json!({
         "sharepoint_configuration":{
             "client_id":"client-id",
@@ -43,14 +49,14 @@ fn settings(selected: &[&str]) -> Map<String, Value> {
     .clone()
 }
 
-fn tokens(key: &str) -> Map<String, Value> {
+pub(super) fn tokens(key: &str) -> Map<String, Value> {
     Map::from_iter([(
         key.to_owned(),
         json!({"access_token":"claim-fetched-sharepoint-token"}),
     )])
 }
 
-fn policy(blocked: &[&str]) -> Arc<ToolAdmissionPolicy> {
+pub(super) fn policy(blocked: &[&str]) -> Arc<ToolAdmissionPolicy> {
     let blocked = if blocked.is_empty() {
         BTreeMap::new()
     } else {
@@ -62,7 +68,7 @@ fn policy(blocked: &[&str]) -> Arc<ToolAdmissionPolicy> {
     Arc::new(ToolAdmissionPolicy::new(&[], &blocked).expect("SharePoint policy"))
 }
 
-fn context() -> Arc<SimpleToolContext> {
+pub(super) fn context() -> Arc<SimpleToolContext> {
     Arc::new(
         SimpleToolContext::new("sharepoint-test")
             .with_session_id("session-1")
@@ -147,7 +153,7 @@ fn app_only_empty_and_content_profiles_fail_closed_without_secrets() {
 
     let empty = SharePointToolkitConfig::parse("SharePoint", &settings(&[]), &Map::new())
         .expect("guarded empty configuration");
-    let Err(error) = build_sharepoint_toolset("SharePoint", empty, &policy(&[])) else {
+    let Err(error) = build_sharepoint_toolset("SharePoint", empty, &policy(&[]), None) else {
         panic!("empty means the complete SDK catalog and cannot be partially admitted");
     };
     assert_eq!(
@@ -155,11 +161,16 @@ fn app_only_empty_and_content_profiles_fail_closed_without_secrets() {
         SharePointToolsetErrorCode::UnsupportedSelection
     );
 
-    let content =
-        SharePointToolkitConfig::parse("SharePoint", &settings(&["read_document"]), &Map::new())
-            .expect("guarded content configuration");
-    let Err(error) = build_sharepoint_toolset("SharePoint", content, &policy(&[])) else {
-        panic!("artifact-dependent reads must remain closed");
+    // The index tools are the index family's, not this family's: a
+    // selection of nothing else leaves nothing to serve.
+    let index_only = SharePointToolkitConfig::parse(
+        "SharePoint",
+        &settings(&["index_data", "search_index"]),
+        &Map::new(),
+    )
+    .expect("index-only configuration");
+    let Err(error) = build_sharepoint_toolset("SharePoint", index_only, &policy(&[]), None) else {
+        panic!("an index-only selection has no tool of this family");
     };
     assert_eq!(
         error.code(),
@@ -168,7 +179,7 @@ fn app_only_empty_and_content_profiles_fail_closed_without_secrets() {
 }
 
 #[tokio::test]
-async fn mixed_selection_exposes_supported_reads_and_keeps_deferred_tools_closed() {
+async fn mixed_selection_exposes_served_tools_and_leaves_the_index_tools_to_their_family() {
     let config = SharePointToolkitConfig::parse(
         "Project SharePoint",
         &settings(&[
@@ -181,14 +192,21 @@ async fn mixed_selection_exposes_supported_reads_and_keeps_deferred_tools_closed
         &Map::new(),
     )
     .expect("mixed SharePoint configuration");
-    let materialized = build_sharepoint_toolset("Project SharePoint", config, &policy(&[]))
-        .expect("supported SharePoint subset");
+    let host = super::sharepoint_content_tests::FakeHost::new().shared();
+    let materialized =
+        build_sharepoint_toolset("Project SharePoint", config, &policy(&[]), Some(&host))
+            .expect("supported SharePoint subset");
     assert_eq!(
         materialized
             .delegated_authorization
             .tool_names()
             .collect::<Vec<_>>(),
-        ["get_files_list", "get_lists"]
+        [
+            "get_files_list",
+            "get_lists",
+            "read_document",
+            "upload_file"
+        ]
     );
 
     let readonly: Arc<dyn ReadonlyContext> = context();
@@ -199,8 +217,21 @@ async fn mixed_selection_exposes_supported_reads_and_keeps_deferred_tools_closed
         .expect("mixed SharePoint catalog");
     assert_eq!(
         tools.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
-        ["get_files_list", "get_lists"]
+        [
+            "get_files_list",
+            "read_document",
+            "get_lists",
+            "upload_file"
+        ]
     );
+    // A change is never read-only: a direct (read-only) toolkit call cannot
+    // run it, and the runtime never runs two at once.
+    let flags = tools
+        .iter()
+        .map(|tool| (tool.name().to_owned(), tool.is_read_only()))
+        .collect::<BTreeMap<_, _>>();
+    assert!(!flags["upload_file"]);
+    assert!(flags["read_document"]);
 }
 
 #[tokio::test]
@@ -212,7 +243,7 @@ async fn missing_token_preserves_original_tools_schemas_and_policy() {
     )
     .expect("guarded SharePoint configuration");
     let materialized =
-        build_sharepoint_toolset("Project SharePoint", config, &policy(&["get_lists"]))
+        build_sharepoint_toolset("Project SharePoint", config, &policy(&["get_lists"]), None)
             .expect("guarded SharePoint tools");
     assert_eq!(
         materialized
@@ -268,7 +299,7 @@ impl SharePointTransport for FixtureTransport {
     }
 }
 
-fn response(
+pub(super) fn response(
     status: StatusCode,
     content_type: &str,
     body: impl serde::Serialize,
@@ -276,6 +307,9 @@ fn response(
     SharePointHttpResponse {
         status,
         content_type: Some(content_type.into()),
+        location: None,
+        oversize: false,
+        body_lost: None,
         body: serde_json::to_vec(&body).expect("fixture JSON"),
     }
 }
@@ -540,6 +574,78 @@ impl SharePointApi for AuthenticationApi {
     async fn onenote_get_page_content(&self, _: &str) -> Result<Value, SharePointClientError> {
         Err(Self::error())
     }
+
+    async fn create_list_item(
+        &self,
+        _: &str,
+        _: &Map<String, Value>,
+    ) -> Result<Value, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn upload_file(&self, _: SharePointUpload) -> Result<Value, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn download_document(
+        &self,
+        _: &str,
+        _: usize,
+    ) -> Result<SharePointFile, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn download_shared_file(
+        &self,
+        _: &str,
+        _: &super::families::sharepoint::client::ReadableCheck,
+    ) -> Result<SharePointFile, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn onenote_download_resource(
+        &self,
+        _: &str,
+        _: usize,
+    ) -> Result<Vec<u8>, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn onenote_resource_url(&self, _: &str) -> Result<String, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn onenote_page_markup(&self, _: &str) -> Result<String, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn onenote_resource_id(&self, _: &str) -> Result<Option<String>, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn onenote_create_notebook(&self, _: &str) -> Result<Value, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn onenote_create_section(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Value, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn onenote_create_page(&self, _: &str, _: &str) -> Result<Value, SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn onenote_update_page(&self, _: &str, _: &[Value]) -> Result<(), SharePointClientError> {
+        Err(Self::error())
+    }
+
+    async fn onenote_delete_page(&self, _: &str) -> Result<(), SharePointClientError> {
+        Err(Self::error())
+    }
 }
 
 #[tokio::test]
@@ -559,6 +665,7 @@ async fn runtime_401_becomes_the_common_typed_authorization_signal() {
         &["get_lists".to_owned()],
         &policy(&[]),
         &client,
+        None,
     )
     .expect("401 fixture toolset");
     let readonly: Arc<dyn ReadonlyContext> = context();
@@ -623,9 +730,89 @@ async fn every_tool_keeps_the_sdk_contract() {
         &super::sdk_conformance::sdk_tool_names("sharepoint"),
         &policy(&[]),
         &client,
+        None,
     )
     .expect("complete sharepoint toolset");
     let readonly: Arc<dyn ReadonlyContext> = context();
     let tools = toolset.tools(readonly).await.expect("sharepoint tools");
     super::sdk_conformance::assert_sdk_conformance("sharepoint", &tools);
+}
+
+/// An app-only credential (no OAuth discovery endpoint) cannot run these
+/// tools: they act as the signed-in person, and the `OneNote` Graph API no
+/// longer answers an application (MC1011142). The toolkit is left out and the
+/// user is told why, not silently skipped.
+#[tokio::test]
+async fn an_app_only_credential_is_refused_with_the_reason_not_silently_skipped() {
+    let mut app_only = settings(&["get_lists", "onenote_create_page", "read_document"]);
+    app_only
+        .get_mut("sharepoint_configuration")
+        .and_then(Value::as_object_mut)
+        .expect("SharePoint configuration")
+        .remove("oauth_discovery_endpoint");
+    let version = json!({"tools":[{
+        "id":81,"type":"sharepoint","toolkit_name":"App Only","settings":app_only
+    }]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("SharePoint snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy(&[]),
+        &Map::new(),
+        None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NoVectorStore),
+    )
+    .await
+    .expect("a refused toolkit does not fail the agent");
+    assert!(materialized.toolsets.is_empty());
+    let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
+    assert!(notice.starts_with("toolkit 'App Only' (sharepoint) is not enabled on this worker: "));
+    assert!(notice.contains("MC1011142"), "{notice}");
+    assert!(notice.contains("OAuth discovery endpoint"), "{notice}");
+    assert!(!notice.contains("stored-client-secret") && !notice.contains("tenant.sharepoint.com"));
+
+    let Err(error) = materialize_configured_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &policy(&[]),
+        &Map::new(),
+    )
+    .await
+    else {
+        panic!("a caller with no notice must not skip a refused toolkit silently");
+    };
+    assert_eq!(
+        error.refusal_reason(),
+        Some(UnsupportedSetting::SharePointAppOnly.reason())
+    );
+}
+
+/// Review C2: the catalogue says the document readers and `upload_file` need
+/// the file store, so without an Office host they are not built at all (the
+/// run's notice names them), and a selection of only them is no toolkit.
+#[tokio::test]
+async fn host_tools_are_left_out_without_an_office_host() {
+    let config = SharePointToolkitConfig::parse(
+        "Project SharePoint",
+        &settings(&["get_lists", "read_document", "upload_file"]),
+        &Map::new(),
+    )
+    .expect("configuration");
+    let materialized = build_sharepoint_toolset("Project SharePoint", config, &policy(&[]), None)
+        .expect("the host-free tools build");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = materialized.toolset.tools(readonly).await.expect("tools");
+    assert_eq!(
+        tools.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
+        ["get_lists"]
+    );
+    let only_hosted = SharePointToolkitConfig::parse(
+        "Project SharePoint",
+        &settings(&["read_document"]),
+        &Map::new(),
+    )
+    .expect("configuration");
+    assert!(
+        build_sharepoint_toolset("Project SharePoint", only_hosted, &policy(&[]), None).is_err()
+    );
 }

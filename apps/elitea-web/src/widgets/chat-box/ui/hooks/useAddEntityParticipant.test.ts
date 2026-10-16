@@ -183,7 +183,7 @@ describe('applyParticipantSelection', () => {
 
     expect(order).toEqual(['fetch', 'create', 'add', 'announce']);
     expect(added[0]?.conversationId).toBe('77');
-    expect(announced).toEqual([{ id: 77, uuid: 'u-77' }]);
+    expect(announced).toEqual([{ id: 77, uuid: 'u-77', activeParticipantId: '101' }]);
     expect(activated).toEqual([participantRow('101')]);
   });
 

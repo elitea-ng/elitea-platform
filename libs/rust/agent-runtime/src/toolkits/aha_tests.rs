@@ -11,6 +11,7 @@ use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
 use reqwest::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
 
+use super::attachment_test_support::{FakePlatform, PNG};
 use super::families::aha::artifact::{AhaArtifactFixture, AhaArtifactResolver};
 use super::families::aha::client::{
     AhaApi, AhaClient, AhaClientError, AhaClientErrorCode, AhaHttpResponse, AhaOperation,
@@ -21,6 +22,7 @@ use super::families::aha::format::OutputFormat;
 use super::families::aha::tools::{
     AhaToolsetErrorCode, build_aha_toolset, test_build_with_api, test_catalog,
 };
+use super::families::office_host::OfficeFailure;
 use super::policy::ToolAdmissionPolicy;
 
 const API_KEY: &str = "aha-private-api-key";
@@ -388,8 +390,7 @@ async fn catalog_metadata_selection_policy_and_schemas_match_runtime_contract() 
 
     let unknown = AhaToolkitConfig::parse(&settings(Some(json!(["unknown_tool"]))))
         .expect("unknown selection remains data until closed by catalog");
-    let Err(error) = build_aha_toolset("product", unknown, &policy(&[]), Some(empty_artifacts()))
-    else {
+    let Err(error) = build_aha_toolset("product", unknown, &policy(&[]), None) else {
         panic!("unknown selection must fail closed");
     };
     assert_eq!(error.code(), AhaToolsetErrorCode::UnsupportedSelection);
@@ -1358,9 +1359,9 @@ async fn description_attachment_route_and_post_accept_bound_are_effect_aware() {
 
 #[tokio::test]
 async fn every_tool_keeps_the_sdk_contract() {
-    // The gate checks what production materializes: without an artifact-read
-    // grant plane that is every tool but attach_file, which the capability
-    // snapshot lists as supported_tools.aha.
+    // The gate checks what production materializes when the run lends its
+    // artifact store: every tool, attach_file included (the capability
+    // snapshot lists them as supported_tools.aha).
     let api: Arc<dyn AhaApi> = Arc::new(FixtureApi::default());
     let toolset =
         super::families::aha::tools::test_build_production_with_api("gate", &policy(&[]), &api)
@@ -1368,4 +1369,167 @@ async fn every_tool_keeps_the_sdk_contract() {
     let readonly: Arc<dyn ReadonlyContext> = context();
     let tools = toolset.tools(readonly).await.expect("aha tools");
     super::sdk_conformance::assert_sdk_conformance("aha", &tools);
+}
+
+fn hosted_client(
+    platform: &Arc<FakePlatform>,
+    responses: Vec<AhaHttpResponse>,
+) -> (AhaClient, Arc<FixtureTransport>) {
+    let transport = Arc::new(FixtureTransport::new(responses));
+    let resolver = Arc::new(AhaArtifactResolver::from_host(platform.host()));
+    (
+        AhaClient::with_transport(&config(), transport.clone(), resolver),
+        transport,
+    )
+}
+
+async fn hosted_attach(client: &AhaClient, filepath: &str, filename: Option<&str>) -> Value {
+    client
+        .execute(AhaOperation::AttachFile {
+            resource_type: "to_do",
+            resource_id: "77",
+            filepath,
+            filename,
+        })
+        .await
+        .expect("a result")
+}
+
+#[tokio::test]
+async fn attach_file_is_served_with_a_host_and_omitted_without_one() {
+    let platform = FakePlatform::new();
+    let toolset = build_aha_toolset("product", config(), &policy(&[]), Some(platform.host()))
+        .expect("hosted toolset");
+    let tools = toolset.tools(context()).await.expect("tools");
+    assert_eq!(tools.len(), 33);
+    let attach = tools
+        .iter()
+        .find(|tool| tool.name() == "attach_file")
+        .expect("attach_file");
+    assert!(!attach.is_read_only());
+    assert!(!attach.is_concurrency_safe());
+    assert!(attach.description().contains("at most 50 MiB"));
+    assert!(attach.description().contains("strictly below 300 MB"));
+    let only = AhaToolkitConfig::parse(&settings(Some(json!(["attach_file"])))).expect("selection");
+    assert!(build_aha_toolset("product", only, &policy(&[]), Some(platform.host())).is_ok());
+}
+
+#[tokio::test]
+async fn a_hosted_attachment_uploads_the_bytes_the_store_holds() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "shot.png", PNG);
+    let (client, transport) = hosted_client(
+        &platform,
+        vec![AhaHttpResponse::non_json_fixture(StatusCode::NO_CONTENT)],
+    );
+    assert_eq!(
+        hosted_attach(&client, "/bucket/shot.png", Some("sent.png")).await,
+        json!({})
+    );
+    let requests = transport.snapshots();
+    assert_eq!(requests.len(), 1);
+    assert_common_request(
+        &requests[0],
+        &Method::POST,
+        "/api/v1/tasks/77/attachments",
+        true,
+    );
+    assert!(
+        requests[0]
+            .content_type
+            .as_deref()
+            .is_some_and(|value| value.starts_with("multipart/form-data; boundary="))
+    );
+    assert!(
+        requests[0]
+            .content_length
+            .is_some_and(|length| length > PNG.len() as u64)
+    );
+    // A record: the description note first, then the upload.
+    let (client, transport) = hosted_client(
+        &platform,
+        vec![
+            ok(json!({"feature":{"description":{"id":"note/9"}}})),
+            AhaHttpResponse::fixture(
+                StatusCode::CREATED,
+                Some(json!({"attachment":{"id":"attachment-1"}})),
+            ),
+        ],
+    );
+    let result = client
+        .execute(AhaOperation::AttachFile {
+            resource_type: "feature",
+            resource_id: "ABC-1",
+            filepath: "/bucket/shot.png",
+            filename: None,
+        })
+        .await
+        .expect("attached");
+    assert_eq!(result, json!({"id":"attachment-1"}));
+    assert_eq!(transport.snapshots().len(), 2);
+}
+
+#[tokio::test]
+async fn hosted_read_failures_are_sentences_and_nothing_is_sent() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "ok.txt", b"hello");
+    platform.put("bucket", "empty.txt", b"");
+    platform.put("bucket", "big.bin", &vec![1_u8; (50 << 20) + 1]);
+    let (client, transport) = hosted_client(&platform, Vec::new());
+    for (path, name, expected) in [
+        ("/bucket/missing.txt", None, "was not found"),
+        ("/bucket/empty.txt", None, "empty"),
+        ("/bucket/big.bin", None, "50 MiB"),
+        ("/bucket/sub/dir.txt", None, "artifact path is not valid"),
+        ("bucket/ok.txt", None, "artifact path is not valid"),
+        ("/bucket/ok.txt", Some("a/b"), "cannot be sent to Aha"),
+    ] {
+        let text = hosted_attach(&client, path, name).await;
+        assert!(
+            text.as_str().expect("a sentence").contains(expected),
+            "{path}: {text}"
+        );
+    }
+    platform.fail_reads(OfficeFailure::AccessRefused);
+    let denied = hosted_attach(&client, "/bucket/ok.txt", None).await;
+    assert!(
+        denied
+            .as_str()
+            .expect("a sentence")
+            .contains("refused access"),
+        "{denied}"
+    );
+    platform.fail_reads(OfficeFailure::Unreachable);
+    let down = hosted_attach(&client, "/bucket/ok.txt", None).await;
+    assert!(
+        down.as_str()
+            .expect("a sentence")
+            .contains("could not be reached"),
+        "{down}"
+    );
+    assert!(transport.snapshots().is_empty(), "nothing reached Aha");
+}
+
+#[tokio::test]
+async fn a_lost_hosted_upload_is_an_unknown_outcome_and_never_retried() {
+    let platform = FakePlatform::new();
+    platform.put("bucket", "ok.txt", b"hello");
+    let (client, transport) = hosted_client(
+        &platform,
+        vec![AhaHttpResponse::fixture(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            None,
+        )],
+    );
+    let error = client
+        .execute(AhaOperation::AttachFile {
+            resource_type: "to_do",
+            resource_id: "77",
+            filepath: "/bucket/ok.txt",
+            filename: None,
+        })
+        .await
+        .expect_err("a 5xx effect is an unknown outcome");
+    assert_eq!(error.code(), AhaClientErrorCode::UnknownOutcome);
+    assert_eq!(transport.snapshots().len(), 1);
 }

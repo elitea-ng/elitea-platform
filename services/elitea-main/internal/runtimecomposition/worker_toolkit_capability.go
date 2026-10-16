@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/indexcatalog"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/rustonly"
 )
 
 const (
@@ -108,6 +109,9 @@ type WorkerToolkitCapability struct {
 	// supportedTools is the per-tool allow list of a partial Rust family,
 	// keyed by type; a type absent from it serves every tool.
 	supportedTools map[string]map[string]struct{}
+	// withheldReasons says why a type the pinned snapshot lists is withheld by
+	// this deployment's configuration; SupportsToolkitType returns the sentence.
+	withheldReasons map[string]string
 }
 
 // WorkerImplementationFromEnv reads which worker image this deployment runs.
@@ -118,13 +122,12 @@ type WorkerToolkitCapability struct {
 // render-capabilities.sh fails a default render that carries any such name).
 // The toolkit catalogue is served whether or not that plane is enabled.
 //
-// The default is python, because that is the worker
-// deploy/scripts/standalone-stack.sh starts when STANDALONE_WORKER is unset,
-// and — as of #865/#866 — deploy/helm/elitea/values.yaml's
-// worker.implementation default agrees. The chart still states the value
-// explicitly rather than relying on this default, so an operator who
-// overrides worker.implementation to run the lighter, narrower-coverage
-// Rust worker gets elitea-main agreeing with the image actually deployed.
+// The default is rust: the platform's end-state worker, and what
+// deploy/scripts/standalone-stack.sh starts when STANDALONE_WORKER is unset and
+// what deploy/helm/elitea/values.yaml's worker.implementation defaults to. The
+// Python worker is still selectable (set the variable to python) until it is
+// removed. The chart states the value explicitly rather than relying on this
+// default, so elitea-main always agrees with the image actually deployed.
 //
 // An unrecognised value is refused at startup. Falling back to a default would
 // mean a typo silently produces the wrong catalogue for the running worker,
@@ -136,7 +139,7 @@ func WorkerImplementationFromEnv(lookup LookupEnv) (string, error) {
 	value, _ := lookup("ELITEA_WORKER_IMPLEMENTATION")
 	switch value {
 	case "":
-		return PythonWorkerImplementation, nil
+		return RustWorkerImplementation, nil
 	case PythonWorkerImplementation, RustWorkerImplementation:
 		return value, nil
 	default:
@@ -281,19 +284,28 @@ func (c *WorkerToolkitCapability) Implementation() string {
 // importKey is the type's SDK registry key, from the toolkit catalogue. An
 // empty key means the SDK imports the toolkit unconditionally.
 //
-// A nil projection supports everything and gives no reason. That is the
-// deliberate reading of absence: a deployment that has not stated its worker
-// must keep serving the catalogue it served before this projection existed,
-// rather than losing every tile to a missing file.
+// A nil projection supports every type the SDK has and gives no reason: a
+// deployment that has not stated its worker keeps serving the catalogue it
+// served before this projection existed, rather than losing every tile to a
+// missing file. It does NOT support the types only the Rust worker serves
+// (docx, xlsx; ADR-0032 P4): absence of a statement is not a statement that
+// the Rust worker is there, and offering a tile no running worker can serve is
+// the failure this projection exists to prevent.
 func (c *WorkerToolkitCapability) SupportsToolkitType(
 	toolkitType string,
 	importKey string,
 ) (bool, string) {
 	if c == nil {
-		return true, ""
+		return rustonly.AbsentTypeVerdict(toolkitType)
 	}
 	switch c.implementation {
 	case PythonWorkerImplementation:
+		if _, rustOnly := rustOnlyToolkitTypeNames()[toolkitType]; rustOnly {
+			// A type the SDK does not have (ADR-0032 P4: docx, xlsx): only the
+			// Rust worker serves it, whatever its import key says.
+			return false, "This deployment's agent worker does not support the " +
+				toolkitType + " toolkit; only the Rust worker serves it."
+		}
 		if importKey == "" {
 			// A runtime toolkit: artifact, memory, mcp, sandbox, vectorstore.
 			// The SDK imports these with itself, so no import of them can fail.
@@ -309,6 +321,9 @@ func (c *WorkerToolkitCapability) SupportsToolkitType(
 	case RustWorkerImplementation:
 		if _, supported := c.supportedToolTypes[toolkitType]; supported {
 			return true, ""
+		}
+		if reason, withheld := c.withheldReasons[toolkitType]; withheld {
+			return false, reason
 		}
 		// A sentence for the person reading it in the UI (the Indexes tab
 		// and the toolkit catalogue show it verbatim). "Native worker" and
@@ -362,19 +377,70 @@ func (c *WorkerToolkitCapability) WithRustIndexTools() *WorkerToolkitCapability 
 // configuration load, and a Config that nonetheless says so indexes with
 // nothing, so the catalogue must not offer the tools either.
 func (c *WorkerToolkitCapability) ForIndexingRuntime(config Config) *WorkerToolkitCapability {
-	if config.RustIndexing() {
-		return c.WithRustIndexTools()
+	if !config.RustIndexing() {
+		return c.withoutMemory("This deployment's agent worker serves the memory toolkit only when it indexes with the Rust runtime (the vector store holds the memories).")
 	}
-	return c
+	widened := c.WithRustIndexTools()
+	if config.MemoryEmbeddingModel == "" {
+		return widened.withoutMemory("Memory needs an embedding model configured by the operator (worker.runtime.memoryEmbeddingModel).")
+	}
+	return widened
+}
+
+// withoutMemory is a Rust capability without the memory toolkit, with the
+// sentence the catalogue shows for it. The Rust worker keeps memories in
+// elitea-vector, reached with the claim's vector token (minted only under the
+// Rust indexing runtime) and embeds them with an operator-chosen model; a
+// worker lacking either would skip the toolkit in silence while the catalogue
+// offered the tile. A Python capability is returned unchanged (the SDK serves
+// memory from the toolkit's own pgvector database).
+func (c *WorkerToolkitCapability) withoutMemory(reason string) *WorkerToolkitCapability {
+	if c == nil || c.implementation != RustWorkerImplementation {
+		return c
+	}
+	types := make(map[string]struct{}, len(c.supportedToolTypes))
+	for toolkitType := range c.supportedToolTypes {
+		types[toolkitType] = struct{}{}
+	}
+	delete(types, "memory")
+	reasons := make(map[string]string, len(c.withheldReasons)+1)
+	for toolkitType, text := range c.withheldReasons {
+		reasons[toolkitType] = text
+	}
+	reasons["memory"] = reason
+	return &WorkerToolkitCapability{
+		implementation:        c.implementation,
+		unsupportedImportKeys: c.unsupportedImportKeys,
+		supportedToolTypes:    types,
+		supportedTools:        c.supportedTools,
+		withheldReasons:       reasons,
+	}
 }
 
 // SupportsTool reports whether the configured worker serves one TOOL of a
-// type it supports (SupportsToolkitType answers for the type). Only a Rust
-// family that serves a subset of the SDK's tools refuses one; every other
-// answer is yes, including a nil projection, for the reason
-// SupportsToolkitType gives.
+// type it supports (SupportsToolkitType answers for the type). It refuses:
+// a tool only the Rust worker serves, on a Python projection and on a nil one
+// (a deployment that has not stated its worker); and a tool a partial Rust
+// family does not serve. Every other answer is yes.
 func (c *WorkerToolkitCapability) SupportsTool(toolkitType, toolName string) (bool, string) {
-	if c == nil || c.implementation != RustWorkerImplementation {
+	if c != nil && c.implementation == PythonWorkerImplementation {
+		// The tools only the Rust worker serves (ADR-0032 P3 pptx authoring)
+		// are merged into the pinned argument schemas, so the Python worker's
+		// catalogue would list them. Marked unavailable they stay out of reach
+		// of a selection on a deployment that cannot run them.
+		if _, rustOnly := rustOnlyToolkitToolNames()[toolkitType][toolName]; rustOnly {
+			return false, "This deployment's agent worker does not support the " +
+				toolName + " tool of the " + toolkitType + " toolkit; only the Rust worker serves it."
+		}
+		return true, ""
+	}
+	if c == nil {
+		// The same reading of absence as SupportsToolkitType: the tools only the
+		// Rust worker serves are not offered on a deployment that has not said
+		// it runs one.
+		return rustonly.AbsentToolVerdict(toolkitType, toolName)
+	}
+	if c.implementation != RustWorkerImplementation {
 		return true, ""
 	}
 	tools, partial := c.supportedTools[toolkitType]

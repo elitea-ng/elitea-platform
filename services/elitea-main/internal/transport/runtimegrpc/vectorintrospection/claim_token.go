@@ -32,6 +32,9 @@ const (
 	MaxClaimTokenLifetime = 6 * time.Hour
 	// sourceToolkitIndex is the payload keyword of SOURCE_TOOLKIT_INDEX.
 	sourceToolkitIndex = "toolkit_index"
+	// sourceMemory is the payload keyword of SOURCE_MEMORY (the memory
+	// toolkit, worker unit M9).
+	sourceMemory = "memory"
 )
 
 // claimTokenCapabilities are the execution capabilities whose worker may use
@@ -53,7 +56,9 @@ func (i *ClaimTokenIssuer) QualifiesForVectorClaimToken(capabilityID string) boo
 	return slices.Contains(claimTokenCapabilities, capabilityID)
 }
 
-// claimTokenSources is what a worker claim token may read and write.
+// claimTokenSources is what every worker claim token may read and write. The
+// memory source is added to it only for a claim whose frozen toolkits include
+// a memory toolkit (VectorClaimTokenMint.MemorySource).
 var claimTokenSources = []string{sourceToolkitIndex}
 
 // HashClaimToken is the stored form of a well-formed claim token. A token of
@@ -109,6 +114,7 @@ func (i *ClaimTokenIssuer) IssueVectorClaimToken(ctx context.Context, fence runt
 		TokenSHA256:  hash,
 		Capabilities: claimTokenCapabilities,
 		Sources:      claimTokenSources,
+		MemorySource: sourceMemory,
 		MaxLifetime:  i.maxLifetime,
 	})
 	if err != nil {

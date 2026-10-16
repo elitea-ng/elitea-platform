@@ -8,7 +8,8 @@ use serde_json::{Value, json};
 
 use crate::host::{HostError, HostErrorCode};
 use crate::platform::{
-    ArtifactDeleteRequest, ArtifactListRequest, ArtifactReadRequest, ArtifactWriteRequest,
+    ArtifactDeleteRequest, ArtifactListRequest, ArtifactReadOutcome, ArtifactReadRequest,
+    ArtifactWriteRequest,
 };
 use crate::toolkits::invocation::{MaterializedToolsetError, admit_materialized_toolset};
 use crate::toolkits::policy::ToolAdmissionPolicy;
@@ -26,12 +27,12 @@ const READ_FILE_TOOL: &str = "read_file";
 const CREATE_FILE_TOOL: &str = "create_file";
 const DELETE_FILE_TOOL: &str = "delete_file";
 
-const MAX_FILENAME_BYTES: usize = 1_024;
+pub(super) const MAX_FILENAME_BYTES: usize = 1_024;
 const MAX_PREFIX_BYTES: usize = 1_024;
 /// Main's own write cap (`maxRuntimeArtifactWriteChars`), restated so an
 /// over-long document is refused with a sentence the model can act on instead
 /// of a transport error it cannot.
-const MAX_CONTENT_CHARS: usize = 64 * 1_024;
+pub(super) const MAX_CONTENT_CHARS: usize = 64 * 1_024;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 const DEFAULT_LIST_LIMIT: i32 = 200;
 
@@ -85,7 +86,8 @@ impl From<ArtifactConfigError> for ArtifactToolsetError {
     fn from(source: ArtifactConfigError) -> Self {
         Self {
             code: match source.code() {
-                ArtifactConfigErrorCode::InvalidConfiguration => {
+                ArtifactConfigErrorCode::InvalidConfiguration
+                | ArtifactConfigErrorCode::BucketName => {
                     ArtifactToolsetErrorCode::InvalidConfiguration
                 }
                 ArtifactConfigErrorCode::ResourceExhausted => {
@@ -163,10 +165,36 @@ pub fn build_artifact_toolset(
             ),
         }));
     }
+    tools.extend(super::extra_tools::build(
+        &include,
+        toolkit_name,
+        authority,
+        &bucket,
+    ));
     admit_materialized_toolset(toolkit_name, "artifact", policy, tools).map_err(Into::into)
 }
 
-fn tool_description(toolkit_name: &str, sentence: &str) -> Box<str> {
+/// The SDK's structured `content_too_large` answer for a file over the
+/// agent-path cap (see `ReadFileTool`).
+pub(super) fn over_limit_value(outcome: &ArtifactReadOutcome) -> Value {
+    json!({
+        "__result_status__": "content_too_large",
+        "read_limits": {
+            "max_output_chars": outcome.max_chars,
+            "full_read_allowed": false,
+        },
+        "context": {
+            "limit_chars": outcome.max_chars,
+            "actual_chars": outcome.char_length,
+            "actual_bytes": outcome.byte_length,
+            "requested": "full file read",
+        },
+        "total_lines": outcome.total_lines,
+        "file": outcome.name,
+    })
+}
+
+pub(super) fn tool_description(toolkit_name: &str, sentence: &str) -> Box<str> {
     format!("Toolkit: {toolkit_name}\n{sentence}")
         .chars()
         .take(MAX_DESCRIPTION_BYTES)
@@ -183,36 +211,55 @@ fn tool_description(toolkit_name: &str, sentence: &str) -> Box<str> {
 /// move differs: a refused bucket says stop asking, a missing file says check
 /// the name, a rejected document says write less, and an unavailable platform
 /// says tell the user nothing happened.
-fn artifact_failure_text(action: &str, error: &HostError) -> String {
+pub(super) fn artifact_failure_text(action: &str, error: &HostError) -> String {
+    format!("Could not {action}: {}", failure_cause(error, false))
+}
+
+/// The same, for a call that changes something: when the platform cannot be
+/// reached the change may still have been made, so the sentence says the
+/// outcome is unknown instead of that nothing happened.
+pub(super) fn artifact_effect_failure_text(action: &str, error: &HostError) -> String {
+    format!("Could not {action}: {}", failure_cause(error, true))
+}
+
+/// One sentence per cause, without the action. The bucket access list and the
+/// platform's own refusal are different advice, so they stay different.
+pub(super) fn failure_cause(error: &HostError, effect: bool) -> String {
     match error.code() {
-        HostErrorCode::AuthorizationFailed => format!(
-            "Could not {action}: this conversation is not allowed to use that bucket. \
-             Do not retry; tell the user."
-        ),
+        HostErrorCode::AuthorizationFailed => "this conversation is not allowed to use that \
+             bucket. Do not retry; tell the user."
+            .to_owned(),
         HostErrorCode::NotFound => {
-            format!("Could not {action}: no such file or bucket. Check the name with list_files.")
+            "no such file or bucket. Check the name with list_files.".to_owned()
         }
         // A refused document (main's 422) arrives as invalid input.
-        HostErrorCode::InvalidInput | HostErrorCode::ResourceExhausted => format!(
-            "Could not {action}: the content is empty, not text, or larger than this platform \
-             accepts. Shorten it and try once more."
-        ),
-        _ => format!(
-            "Could not {action}: the platform could not be reached. \
-             Tell the user it did not happen."
-        ),
+        HostErrorCode::InvalidInput => "the platform refused it as invalid. The content is \
+             empty or not text, or the name is not a valid file name. Nothing was changed."
+            .to_owned(),
+        HostErrorCode::ResourceExhausted => {
+            "it is larger than this platform accepts. Use less content. Nothing was changed."
+                .to_owned()
+        }
+        HostErrorCode::ExecutionEnded => {
+            "this conversation has ended, so nothing was changed.".to_owned()
+        }
+        _ if effect => "the platform could not be reached, so it is not known whether the \
+             change was made. Check the file with list_files before trying again, and tell \
+             the user."
+            .to_owned(),
+        _ => "the platform could not be reached. Tell the user it did not happen.".to_owned(),
     }
 }
 
 /// Reads one required string argument. Returns `None` so the caller answers
 /// the model rather than failing the turn — the same contract the failures
 /// above follow.
-fn string_argument(arguments: &Value, key: &str) -> Option<String> {
+pub(super) fn string_argument(arguments: &Value, key: &str) -> Option<String> {
     let value = arguments.as_object()?.get(key)?.as_str()?.trim();
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-fn optional_string(arguments: &Value, key: &str) -> Option<String> {
+pub(super) fn optional_string(arguments: &Value, key: &str) -> Option<String> {
     let value = arguments
         .as_object()?
         .get(key)
@@ -221,7 +268,7 @@ fn optional_string(arguments: &Value, key: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-fn optional_bool(arguments: &Value, key: &str) -> Option<bool> {
+pub(super) fn optional_bool(arguments: &Value, key: &str) -> Option<bool> {
     arguments
         .as_object()
         .and_then(|object| object.get(key))
@@ -235,7 +282,7 @@ fn optional_bool(arguments: &Value, key: &str) -> Option<bool> {
 /// anything: main resolves the name inside the CLAIM's project and applies the
 /// claim actor's own access list to it, so naming another bucket reaches
 /// exactly the buckets that person already reaches.
-fn target_bucket(arguments: &Value, configured: &str) -> String {
+pub(super) fn target_bucket(arguments: &Value, configured: &str) -> String {
     optional_string(arguments, "bucket_name").unwrap_or_else(|| configured.to_owned())
 }
 
@@ -248,7 +295,7 @@ fn target_bucket(arguments: &Value, configured: &str) -> String {
 /// `/reports/q3.md` is an
 /// ordinary key with a folder in it. The bucket-qualified form is a SEPARATE
 /// argument — see `parse_filepath`.
-fn normalized_key(name: &str) -> String {
+pub(super) fn normalized_key(name: &str) -> String {
     name.trim().trim_start_matches('/').to_owned()
 }
 
@@ -270,7 +317,7 @@ fn normalized_key(name: &str) -> String {
 /// `None` for anything that is not that form — no second segment, or an empty
 /// half — so the caller can answer the model with a sentence instead of
 /// addressing a bucket the model did not name.
-fn parse_filepath(filepath: &str) -> Option<(String, String)> {
+pub(super) fn parse_filepath(filepath: &str) -> Option<(String, String)> {
     let path = filepath.trim().trim_start_matches('/');
     let (bucket, key) = path.split_once('/')?;
     let key = key.trim();
@@ -341,17 +388,17 @@ fn listed(name: &str, include: &[String], skip: &[String]) -> bool {
         && !skip.iter().any(|pattern| glob_matches(pattern, name))
 }
 
-fn optional_line(arguments: &Value, key: &str) -> Option<i64> {
+pub(super) fn optional_line(arguments: &Value, key: &str) -> Option<i64> {
     arguments
         .as_object()
         .and_then(|object| object.get(key))
-        .and_then(Value::as_i64)
+        .and_then(crate::toolkits::families::integer_like::integer_like)
 }
 
 /// Lines `start..=end` (1-indexed, inclusive; `end` absent reads to the end)
 /// of `content`, as the SDK's partial read returns them. `None` when the range
 /// is empty or inverted, so the caller answers with a sentence.
-fn line_range(content: &str, start: Option<i64>, end: Option<i64>) -> Option<String> {
+pub(super) fn line_range(content: &str, start: Option<i64>, end: Option<i64>) -> Option<String> {
     let start = usize::try_from(start.unwrap_or(1).max(1)).ok()?;
     let lines: Vec<&str> = content.split_inclusive('\n').collect();
     let end = match end {
@@ -439,6 +486,7 @@ impl Tool for ListFilesTool {
             prefix: normalized_key(&folder),
             recursive: optional_bool(&arguments, "recursive").unwrap_or(false),
             limit: DEFAULT_LIST_LIMIT,
+            bucket_only: false,
         };
         let include = pattern_list(&arguments, "include");
         let skip = pattern_list(&arguments, "skip");
@@ -571,21 +619,7 @@ impl Tool for ReadFileTool {
             // slice that would fit — and it carries no content at all, because
             // a cap that reported itself and returned the file anyway would
             // have capped nothing.
-            Ok(outcome) if outcome.over_limit => Ok(json!({
-                "__result_status__": "content_too_large",
-                "read_limits": {
-                    "max_output_chars": outcome.max_chars,
-                    "full_read_allowed": false,
-                },
-                "context": {
-                    "limit_chars": outcome.max_chars,
-                    "actual_chars": outcome.char_length,
-                    "actual_bytes": outcome.byte_length,
-                    "requested": "full file read",
-                },
-                "total_lines": outcome.total_lines,
-                "file": outcome.name,
-            })),
+            Ok(outcome) if outcome.over_limit => Ok(over_limit_value(&outcome)),
             Ok(outcome) => {
                 let start = optional_line(&arguments, "start_line");
                 let end = optional_line(&arguments, "end_line");
@@ -718,7 +752,7 @@ impl Tool for CreateFileTool {
                     reason_code = error.reason_code(),
                     "the artifact write failed"
                 );
-                Ok(Value::String(artifact_failure_text(
+                Ok(Value::String(artifact_effect_failure_text(
                     "create the file",
                     &error,
                 )))
@@ -818,13 +852,28 @@ impl Tool for DeleteFileTool {
                     reason_code = error.reason_code(),
                     "the artifact delete failed"
                 );
-                Ok(Value::String(artifact_failure_text(
+                Ok(Value::String(artifact_effect_failure_text(
                     "delete the file",
                     &error,
                 )))
             }
         }
     }
+}
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    [
+        LIST_FILES_TOOL,
+        READ_FILE_TOOL,
+        CREATE_FILE_TOOL,
+        DELETE_FILE_TOOL,
+    ]
+    .into_iter()
+    .chain(super::extra_tools::tool_names())
+    .map(|name| (name, false))
+    .collect()
 }
 
 #[cfg(test)]

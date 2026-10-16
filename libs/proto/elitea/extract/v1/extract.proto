@@ -1,0 +1,229 @@
+syntax = "proto3";
+
+// elitea.extract.v1 is the contract between the Rust indexing worker and
+// elitea-doc-extractor, the document extraction sidecar (ADR-0030 I1
+// follow-up: PDF and Office extraction runs in a SEPARATE process).
+//
+// WHY A PROCESS. The worker's `kube-client` (its sandbox supervisor feature)
+// caps `smallvec < 1.16`, and the pure-Rust PDF backend needs `>= 1.16`; one
+// Cargo.lock cannot hold both. The extractor is its own crate with its own
+// lock. The split also puts the parser of untrusted documents behind a
+// process boundary: a crash or an OOM kill in the extractor is one skipped
+// document to the worker, never a dead worker.
+//
+// TRANSPORT. Local only: gRPC over a Unix domain socket in a directory the
+// two containers share (an emptyDir, a compose volume). No TLS and no
+// network listener — the socket directory is the only way in, and the
+// extractor opens no connection of its own. The peer IS checked: the
+// extractor reads the connecting process's credentials (SO_PEERCRED) and
+// serves only the configured worker uid(s); any other peer is refused
+// PERMISSION_DENIED. This is the pod-local Unix-socket sidecar exception to
+// the platform's gRPC-over-mTLS rule (AGENTS.md).
+//
+// FLOW. The worker streams one document per call: a header (name, media
+// type, declared length, the limits for this document), then the bytes in
+// chunks. The extractor answers with the text, or with a typed skip reason
+// the worker records in the run's summary. Anything that is not a statement
+// about the document (a malformed stream, no capacity, an internal failure)
+// is a gRPC status, which the worker reports as `extract_failed`.
+//
+// EMBEDDED PICTURES (ADR-0030 I4 part C). A request may ask for the pictures
+// embedded in a PDF, DOCX or PPTX (`ExtractHeader.images`); the answer then
+// carries them as bounded blobs beside the text, each with the byte offset in
+// the text where its description belongs. The text itself is exactly what an
+// extraction that did not ask would give: the pictures never add a marker to
+// it. A request that does not ask reads no picture at all. The bytes are the
+// document's own, passed through; the extractor decodes nothing it returns.
+
+package elitea.extract.v1;
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/extract/v1;extractv1";
+
+// DocumentExtractService is served by elitea-doc-extractor on its socket.
+service DocumentExtractService {
+  // Extract turns one document into text. The first message must be the
+  // header; every later message is a chunk of the document's bytes, in
+  // order. The extractor may answer before the stream ends (a document over
+  // the size limit is refused as soon as the limit is crossed).
+  rpc Extract(stream ExtractRequest) returns (ExtractResponse);
+  // Capabilities names the media types this build extracts, the limits it
+  // caps a request's own limits at, its capacity (how many documents it
+  // extracts at once, how long a request may wait for a slot) and its
+  // present load (slots held, slots held by an extraction that outran its
+  // timeout). A client sizes its own queue and its call deadline from it.
+  // It is also the health probe: an extractor that answers it is serving,
+  // and one whose every slot is held by an overrun is NOT healthy, whatever
+  // it answers — the probe (`elitea-doc-extractor healthcheck`) reads
+  // `overruns` against `concurrency` and fails, so the container is
+  // restarted. The extractor serves this RPC to its own uid as well as to
+  // the configured peer uids, because the probe is the binary asking itself;
+  // Extract is served to the configured peer uids only.
+  rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
+}
+
+message ExtractRequest {
+  oneof message {
+    ExtractHeader header = 1;
+    bytes chunk = 2;
+  }
+}
+
+message ExtractHeader {
+  // The document's name (its key in the source), for log lines and for the
+  // extractors that read an extension. Never a path the extractor opens.
+  string filename = 1;
+  // The media type the source declared (`application/pdf`, the Office
+  // types). The extractor reads the bytes as this type and never sniffs
+  // another.
+  string content_type = 2;
+  // The document's size in bytes when the caller knows it; 0 otherwise.
+  // A declared size over the input limit is refused before any chunk.
+  uint64 content_length = 3;
+  // The limits for this document. Each field at 0 means the extractor's
+  // configured default; a value above the extractor's own cap is lowered to
+  // the cap (the extractor protects itself, whatever a caller asks).
+  ExtractLimits limits = 4;
+  // Ask for the pictures embedded in the document (PDF, DOCX, PPTX; other
+  // types return none). Absent: none is read and none returned.
+  ExtractImages images = 5;
+}
+
+// The bounds on the pictures returned with one document. Each field at 0
+// means the extractor's configured default; a value above the extractor's own
+// cap is lowered to the cap.
+message ExtractImages {
+  // Pictures returned; later ones are counted in `ImagesSkipped.too_many`.
+  uint32 max_images = 1;
+  // Bytes of one picture; a larger one is counted in
+  // `ImagesSkipped.too_large`.
+  uint64 max_image_bytes = 2;
+  // Bytes of all returned pictures together; a picture that would cross it
+  // is counted in `ImagesSkipped.too_large`.
+  uint64 max_total_bytes = 3;
+}
+
+message ExtractLimits {
+  // Bytes of input accepted for one document.
+  uint64 max_input_bytes = 1;
+  // Pages read from a paged format (PDF, PPTX); a longer document is
+  // refused as TOO_MANY_PAGES, not truncated.
+  uint32 max_pages = 2;
+  // Bytes of extracted text returned; more is refused as OUTPUT_TOO_LARGE.
+  uint64 max_output_bytes = 3;
+  // Wall time for the extraction itself, after the bytes arrived. The
+  // extractor's parser takes whole seconds, so the figure is rounded UP to
+  // the next second (never under one) and the extraction is bounded from
+  // outside at that rounded figure plus a short grace, so the parser's own
+  // cooperative timeout fires first and an ordinary overrun ends by itself.
+  uint32 timeout_millis = 4;
+}
+
+message ExtractResponse {
+  oneof outcome {
+    ExtractedText text = 1;
+    ExtractSkip skip = 2;
+  }
+}
+
+message ExtractedText {
+  string text = 1;
+  // Which extractor produced it (`xberg`).
+  string extractor = 2;
+  // The embedded pictures, in document order. Empty unless the header asked.
+  repeated EmbeddedImage images = 3;
+  // Pictures found and not returned. Zero unless the header asked.
+  ImagesSkipped images_skipped = 4;
+}
+
+// One picture embedded in the document, as the document stores it.
+message EmbeddedImage {
+  bytes data = 1;
+  // The media type the BYTES say (`image/png`, `image/jpeg`, `image/gif`,
+  // `image/webp`, `image/bmp`), never the package's claim.
+  string media_type = 2;
+  // Position among the document's pictures, in document order.
+  uint32 ordinal = 3;
+  // Where its description belongs: a byte offset into `ExtractedText.text`,
+  // on a character boundary. Inline right after the picture's own
+  // `[Image: ...]` line when the text has one (DOCX); otherwise at the end of
+  // its page's or slide's text; otherwise at the end of the text. Several
+  // pictures may share an offset; their order is `ordinal`.
+  uint64 text_offset = 4;
+  // The page or slide (1-based) the picture is on; 0 when the format is not
+  // paged.
+  uint32 page = 5;
+  // The file name inside the package (`image1.png`); empty when the format
+  // has none.
+  string name = 6;
+}
+
+// Pictures found in the document and not returned, by reason.
+message ImagesSkipped {
+  // Over `ExtractImages.max_images`.
+  uint32 too_many = 1;
+  // Over `ExtractImages.max_image_bytes` or `max_total_bytes`.
+  uint32 too_large = 2;
+  // Not PNG, JPEG, GIF, WebP or BMP by its bytes (SVG, TIFF, EMF, ...), or a
+  // mask.
+  uint32 unsupported = 3;
+}
+
+// A document the extractor read and will not turn into text, and why. The
+// caller records the reason; the detail is the extractor's own sentence,
+// for its log line, never shown as the reason itself.
+message ExtractSkip {
+  SkipReason reason = 1;
+  string detail = 2;
+}
+
+enum SkipReason {
+  SKIP_REASON_UNSPECIFIED = 0;
+  // The input is over the input limit (declared or counted).
+  SKIP_REASON_TOO_LARGE = 1;
+  // The document has more pages than the page limit.
+  SKIP_REASON_TOO_MANY_PAGES = 2;
+  // The document is password-protected or uses an unsupported encryption.
+  SKIP_REASON_ENCRYPTED = 3;
+  // This build has no extractor for the media type.
+  SKIP_REASON_UNSUPPORTED = 4;
+  // The bytes are not what the media type says, or are damaged.
+  SKIP_REASON_CORRUPT = 5;
+  // The extraction ran past its wall-time limit.
+  SKIP_REASON_TIMEOUT = 6;
+  // The text is over the output limit.
+  SKIP_REASON_OUTPUT_TOO_LARGE = 7;
+  // The document parsed but holds no text (a scanned PDF, an empty sheet).
+  SKIP_REASON_EMPTY = 8;
+}
+
+message CapabilitiesRequest {}
+
+message CapabilitiesResponse {
+  // The media types this build extracts.
+  repeated string content_types = 1;
+  // The caps a request's limits are lowered to.
+  ExtractLimits limits = 2;
+  // The extractor's crate version.
+  string version = 3;
+  // Documents extracted at once. A client that keeps no more than this many
+  // calls in flight is never refused for capacity; more wait for a slot.
+  uint32 concurrency = 4;
+  // The longest a request waits for a slot before RESOURCE_EXHAUSTED. Apart
+  // from the extraction timeout: queueing is not a timeout.
+  uint32 slot_wait_millis = 5;
+  // The longest the extractor waits for a document's next chunk before
+  // DEADLINE_EXCEEDED.
+  uint32 stream_idle_millis = 6;
+  // Slots held at this moment: by an extraction under way, or by one that
+  // outran its timeout and cannot be killed (counted in `overruns` too).
+  // `concurrency - busy` requests would run at once without waiting.
+  uint32 busy = 7;
+  // Slots held by an extraction that outran its timeout, or whose request
+  // was cancelled while it ran, and that still runs. Such a slot comes back
+  // only when the thread ends. `overruns == concurrency` is a wedged
+  // process: it exits by itself, and the health probe fails on it.
+  uint32 overruns = 8;
+  // The caps a request's `ExtractImages` is lowered to. All zero from an
+  // extractor that does not return pictures.
+  ExtractImages image_limits = 9;
+}

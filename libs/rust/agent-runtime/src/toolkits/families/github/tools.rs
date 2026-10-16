@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use serde_json::{Map, Value, json};
 
+use crate::toolkits::families::office_host::SharedOfficeToolHost;
 use crate::toolkits::families::vcs_text::{
     self, MAX_BATCH_FILES, MAX_CONTEXT_LINES, MAX_OUTPUT_CHARS, MAX_PATTERN_BYTES,
     batch_skip_notice, guard_text_read, measure_result_chars, requested_label, slice_lines,
@@ -19,6 +20,7 @@ use super::client::{
     GitHubFileScope, validate_repository,
 };
 use super::config::{GitHubToolkitConfig, GitHubToolkitConfigError};
+use super::writes::{GitHubWriteTool, WriteKind};
 use crate::toolkits::families::connector_client::IntoAdk;
 
 const GET_ME: &str = "get_me";
@@ -41,6 +43,8 @@ const COMPARE_COMMITS: &str = "get_commits_diff";
 const SEARCH_CODE: &str = "search_code";
 const GET_WORKFLOW_STATUS: &str = "get_workflow_status";
 const LIST_PROJECT_ISSUES: &str = "list_project_issues";
+const GET_WORKFLOW_LOGS: &str = "get_workflow_logs";
+const SEARCH_PROJECT_ISSUES: &str = "search_project_issues";
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 /// Safe failure returned while constructing the first GitHub tool subset.
@@ -115,16 +119,26 @@ impl From<MaterializedToolsetError> for GitHubToolsetError {
     }
 }
 
-/// Build the first GitHub read-only profile.
+/// The effectful half of the toolset: the client the write tools share (and
+/// whose active branch the read tools follow) and the platform file store
+/// they may copy from.
+pub(in crate::toolkits) struct WriteBinding {
+    pub(in crate::toolkits) client: Arc<GitHubClient>,
+    pub(in crate::toolkits) office: Option<SharedOfficeToolHost>,
+}
+
+/// Build the GitHub toolset: the SDK's tools this runtime serves, 37 of 44.
+/// The index tools are served by the index toolset; `generic_github_api_call`
+/// (a `PyGithub` method dispatcher) is not ported (`SOURCE_PARITY.md`).
 ///
-/// Empty selection still means all 44 current SDK tools, so it is rejected
-/// until the full family is ported. A mixed explicit selection keeps only the
-/// implemented ordinary reads. This permits a restored SDK toolkit to retain
-/// its read capability without exposing an unimplemented effect.
-pub(crate) fn build_github_read_only_toolset(
+/// An empty selection means every tool served here, as for the other
+/// repository families. A selection naming tools that are not served keeps
+/// the ones that are, and logs the rest.
+pub(crate) fn build_github_toolset(
     toolkit_name: &str,
     config: GitHubToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
+    office: Option<SharedOfficeToolHost>,
 ) -> Result<BasicToolset, GitHubToolsetError> {
     let (selected, omitted_count) = supported_selection(config.selected_tools())?;
     if omitted_count > 0 {
@@ -136,23 +150,39 @@ pub(crate) fn build_github_read_only_toolset(
             selected_count = config.selected_tools().len(),
             materialized_count = selected.len(),
             omitted_count,
-            "unsupported GitHub tools were omitted from the native read-only toolset"
+            "GitHub tools this runtime does not serve were omitted from the native toolset"
         );
     }
     let repository = config.repository().to_owned();
-    let client: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(config)?);
-    build_with_api(toolkit_name, &repository, &selected, policy, &client)
+    let client = Arc::new(GitHubClient::new(config)?);
+    let api: Arc<dyn GitHubApi> = client.clone();
+    build_with_api(
+        toolkit_name,
+        &repository,
+        &selected,
+        policy,
+        &api,
+        Some(&WriteBinding { client, office }),
+    )
+}
+
+/// The tool names this family serves, reads first, then the effects.
+fn served_names() -> Vec<String> {
+    READ_NAMES
+        .iter()
+        .copied()
+        .chain(WriteKind::ALL.iter().map(|kind| kind.name()))
+        .map(str::to_owned)
+        .collect()
 }
 
 fn supported_selection(selected: &[Box<str>]) -> Result<(Vec<String>, usize), GitHubToolsetError> {
     if selected.is_empty() {
-        return Err(GitHubToolsetError {
-            code: GitHubToolsetErrorCode::UnsupportedSelection,
-        });
+        return Ok((served_names(), 0));
     }
     let supported = selected
         .iter()
-        .filter(|name| is_supported_read(name))
+        .filter(|name| is_supported(name))
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     if supported.is_empty() {
@@ -164,30 +194,33 @@ fn supported_selection(selected: &[Box<str>]) -> Result<(Vec<String>, usize), Gi
     Ok((supported, omitted_count))
 }
 
-fn is_supported_read(name: &str) -> bool {
-    matches!(
-        name,
-        GET_ME
-            | LIST_BRANCHES
-            | READ_FILE
-            | READ_MULTIPLE_FILES
-            | GREP_FILE
-            | LIST_MAIN_FILES
-            | LIST_ACTIVE_FILES
-            | LIST_DIRECTORY_FILES
-            | LIST_ISSUES
-            | GET_ISSUE
-            | SEARCH_ISSUES
-            | LIST_PULL_REQUESTS
-            | GET_PULL_REQUEST
-            | LIST_PULL_REQUEST_DIFFS
-            | LIST_COMMITS
-            | GET_COMMIT_CHANGES
-            | COMPARE_COMMITS
-            | SEARCH_CODE
-            | GET_WORKFLOW_STATUS
-            | LIST_PROJECT_ISSUES
-    )
+const READ_NAMES: [&str; 22] = [
+    GET_ME,
+    LIST_BRANCHES,
+    READ_FILE,
+    READ_MULTIPLE_FILES,
+    GREP_FILE,
+    LIST_MAIN_FILES,
+    LIST_ACTIVE_FILES,
+    LIST_DIRECTORY_FILES,
+    LIST_ISSUES,
+    GET_ISSUE,
+    SEARCH_ISSUES,
+    LIST_PULL_REQUESTS,
+    GET_PULL_REQUEST,
+    LIST_PULL_REQUEST_DIFFS,
+    LIST_COMMITS,
+    GET_COMMIT_CHANGES,
+    COMPARE_COMMITS,
+    SEARCH_CODE,
+    GET_WORKFLOW_STATUS,
+    LIST_PROJECT_ISSUES,
+    GET_WORKFLOW_LOGS,
+    SEARCH_PROJECT_ISSUES,
+];
+
+fn is_supported(name: &str) -> bool {
+    READ_NAMES.contains(&name) || WriteKind::from_name(name).is_some()
 }
 
 fn build_with_api(
@@ -196,9 +229,25 @@ fn build_with_api(
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
     client: &Arc<dyn GitHubApi>,
+    writer: Option<&WriteBinding>,
 ) -> Result<BasicToolset, GitHubToolsetError> {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::with_capacity(selected.len());
     for name in selected {
+        if let Some(kind) = WriteKind::from_name(name) {
+            let Some(writer) = writer else {
+                return Err(GitHubToolsetError {
+                    code: GitHubToolsetErrorCode::UnsupportedSelection,
+                });
+            };
+            tools.push(Arc::new(GitHubWriteTool::new(
+                kind,
+                toolkit_name,
+                repository,
+                Arc::clone(&writer.client),
+                writer.office.clone(),
+            )));
+            continue;
+        }
         let kind = match name.as_str() {
             GET_ME => GitHubReadToolKind::GetMe,
             LIST_BRANCHES => GitHubReadToolKind::ListBranches,
@@ -220,6 +269,8 @@ fn build_with_api(
             SEARCH_CODE => GitHubReadToolKind::SearchCode,
             GET_WORKFLOW_STATUS => GitHubReadToolKind::GetWorkflowStatus,
             LIST_PROJECT_ISSUES => GitHubReadToolKind::ListProjectIssues,
+            GET_WORKFLOW_LOGS => GitHubReadToolKind::GetWorkflowLogs,
+            SEARCH_PROJECT_ISSUES => GitHubReadToolKind::SearchProjectIssues,
             _ => {
                 return Err(GitHubToolsetError {
                     code: GitHubToolsetErrorCode::UnsupportedSelection,
@@ -258,6 +309,8 @@ enum GitHubReadToolKind {
     SearchCode,
     GetWorkflowStatus,
     ListProjectIssues,
+    GetWorkflowLogs,
+    SearchProjectIssues,
 }
 
 struct GitHubReadTool {
@@ -330,6 +383,12 @@ impl GitHubReadTool {
             GitHubReadToolKind::ListProjectIssues => {
                 "List one bounded GitHub Project V2 snapshot with fields and items."
             }
+            GitHubReadToolKind::GetWorkflowLogs => {
+                "Inspect one GitHub Actions run: its jobs and steps with status, conclusion and each job's logs_url. The log text itself is not downloaded."
+            }
+            GitHubReadToolKind::SearchProjectIssues => {
+                "Search one GitHub Project V2 with GitHub's item filter (for example status:Todo or label:bug) and return up to 100 matching items with fields and bodies."
+            }
         };
         let description = bounded_description(&format!(
             "Toolkit: {toolkit_name}\nRepository: {repository}\n{action}"
@@ -366,6 +425,8 @@ impl Tool for GitHubReadTool {
             GitHubReadToolKind::SearchCode => SEARCH_CODE,
             GitHubReadToolKind::GetWorkflowStatus => GET_WORKFLOW_STATUS,
             GitHubReadToolKind::ListProjectIssues => LIST_PROJECT_ISSUES,
+            GitHubReadToolKind::GetWorkflowLogs => GET_WORKFLOW_LOGS,
+            GitHubReadToolKind::SearchProjectIssues => SEARCH_PROJECT_ISSUES,
         }
     }
 
@@ -402,8 +463,11 @@ impl Tool for GitHubReadTool {
             GitHubReadToolKind::GetCommitChanges => get_commit_changes_schema(),
             GitHubReadToolKind::CompareCommits => compare_commits_schema(),
             GitHubReadToolKind::SearchCode => search_code_schema(),
-            GitHubReadToolKind::GetWorkflowStatus => get_workflow_status_schema(),
+            GitHubReadToolKind::GetWorkflowStatus | GitHubReadToolKind::GetWorkflowLogs => {
+                get_workflow_status_schema()
+            }
             GitHubReadToolKind::ListProjectIssues => list_project_issues_schema(),
+            GitHubReadToolKind::SearchProjectIssues => search_project_issues_schema(),
         })
     }
 
@@ -488,6 +552,10 @@ impl Tool for GitHubReadTool {
             }
             GitHubReadToolKind::ListProjectIssues => {
                 self.execute_list_project_issues(arguments).await
+            }
+            GitHubReadToolKind::GetWorkflowLogs => self.execute_get_workflow_logs(arguments).await,
+            GitHubReadToolKind::SearchProjectIssues => {
+                self.execute_search_project_issues(arguments).await
             }
         }
     }
@@ -848,6 +916,41 @@ fn get_workflow_status_schema() -> Value {
             "repo_name": optional_string_schema(512, "Optional repository in owner/name form.")
         },
         "required": ["run_id"],
+        "additionalProperties": false
+    })
+}
+
+fn search_project_issues_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "board_repo": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 512,
+                "description": "The organization and repository for the board (project). Example: 'org-name/repo-name'"
+            },
+            "project_number": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": i32::MAX,
+                "description": "The project number as shown in the project URL"
+            },
+            "search_query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4_096,
+                "description": "Search query for filtering issues. Examples: 'status:In Progress', 'release:v1.0'"
+            },
+            "items_count": {
+                "type": ["integer", "null"],
+                "minimum": 1,
+                "maximum": 100,
+                "default": 100,
+                "description": "Maximum number of items to retrieve"
+            }
+        },
+        "required": ["board_repo", "project_number", "search_query"],
         "additionalProperties": false
     })
 }
@@ -1224,19 +1327,51 @@ impl GitHubReadTool {
         &self,
         arguments: &Map<String, Value>,
     ) -> adk_core::Result<Value> {
-        reject_unknown_keys(arguments, &["run_id", "repo_name"])?;
-        let run_id = required_text(arguments, "run_id", 19)?;
-        if !run_id.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err(invalid_arguments());
-        }
-        let run_id = run_id
-            .parse::<u64>()
-            .ok()
-            .filter(|value| *value > 0 && i64::try_from(*value).is_ok())
-            .ok_or_else(invalid_arguments)?;
-        let repository = optional_text(arguments, "repo_name", 512)?;
+        let (run_id, repository) = workflow_run_arguments(arguments)?;
         self.client
             .get_workflow_status(run_id, repository)
+            .await
+            .map_err(GitHubClientError::into_adk)
+    }
+
+    async fn execute_get_workflow_logs(
+        &self,
+        arguments: &Map<String, Value>,
+    ) -> adk_core::Result<Value> {
+        let (run_id, repository) = workflow_run_arguments(arguments)?;
+        self.client
+            .get_workflow_logs(run_id, repository)
+            .await
+            .map_err(GitHubClientError::into_adk)
+    }
+
+    async fn execute_search_project_issues(
+        &self,
+        arguments: &Map<String, Value>,
+    ) -> adk_core::Result<Value> {
+        reject_unknown_keys(
+            arguments,
+            &[
+                "board_repo",
+                "project_number",
+                "search_query",
+                "items_count",
+            ],
+        )?;
+        let board_repository = required_text(arguments, "board_repo", 512)?;
+        validate_repository(board_repository).map_err(GitHubClientError::into_adk)?;
+        let project_number = required_positive_u64(arguments, "project_number")?;
+        let project_number = u32::try_from(project_number)
+            .ok()
+            .filter(|number| i32::try_from(*number).is_ok())
+            .ok_or_else(invalid_arguments)?;
+        let search_query = required_text(arguments, "search_query", 4 * 1_024)?;
+        let items_count = optional_positive_usize(arguments, "items_count")?.unwrap_or(100);
+        if items_count > 100 {
+            return Err(invalid_arguments());
+        }
+        self.client
+            .search_project_issues(board_repository, project_number, items_count, search_query)
             .await
             .map_err(GitHubClientError::into_adk)
     }
@@ -1334,14 +1469,17 @@ fn required_directory<'a>(
         .ok_or_else(invalid_arguments)
 }
 
+fn integer_value(value: &Value) -> Option<u64> {
+    crate::toolkits::families::integer_like::unsigned_like(value)
+}
+
 fn optional_positive_usize(
     arguments: &Map<String, Value>,
     key: &str,
 ) -> adk_core::Result<Option<usize>> {
     match arguments.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
+        Some(value) => integer_value(value)
             .and_then(|value| usize::try_from(value).ok())
             .filter(|value| *value > 0)
             .map(Some)
@@ -1352,9 +1490,24 @@ fn optional_positive_usize(
 fn required_positive_u64(arguments: &Map<String, Value>, key: &str) -> adk_core::Result<u64> {
     arguments
         .get(key)
-        .and_then(Value::as_u64)
+        .and_then(integer_value)
         .filter(|value| *value > 0 && i64::try_from(*value).is_ok())
         .ok_or_else(invalid_arguments)
+}
+
+fn workflow_run_arguments(arguments: &Map<String, Value>) -> adk_core::Result<(u64, Option<&str>)> {
+    reject_unknown_keys(arguments, &["run_id", "repo_name"])?;
+    let run_id = required_text(arguments, "run_id", 19)?;
+    if !run_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid_arguments());
+    }
+    let run_id = run_id
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0 && i64::try_from(*value).is_ok())
+        .ok_or_else(invalid_arguments)?;
+    let repository = optional_text(arguments, "repo_name", 512)?;
+    Ok((run_id, repository))
 }
 
 fn pull_request_arguments(arguments: &Map<String, Value>) -> adk_core::Result<(u64, Option<&str>)> {
@@ -1433,7 +1586,7 @@ fn invalid_arguments() -> AdkError {
 pub(in crate::toolkits) fn test_supported_names(names: &[String]) -> Vec<String> {
     names
         .iter()
-        .filter(|name| is_supported_read(name))
+        .filter(|name| is_supported(name))
         .cloned()
         .collect()
 }
@@ -1446,5 +1599,41 @@ pub(in crate::toolkits) fn test_build_with_api(
     policy: &Arc<ToolAdmissionPolicy>,
     client: &Arc<dyn GitHubApi>,
 ) -> Result<BasicToolset, GitHubToolsetError> {
-    build_with_api(toolkit_name, repository, selected, policy, client)
+    build_with_api(toolkit_name, repository, selected, policy, client, None)
+}
+
+/// The full toolset over `client` for the reads and `writer` for the effects.
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_writer(
+    toolkit_name: &str,
+    repository: &str,
+    selected: &[String],
+    policy: &Arc<ToolAdmissionPolicy>,
+    client: &Arc<dyn GitHubApi>,
+    writer: &WriteBinding,
+) -> Result<BasicToolset, GitHubToolsetError> {
+    build_with_api(
+        toolkit_name,
+        repository,
+        selected,
+        policy,
+        client,
+        Some(writer),
+    )
+}
+
+#[cfg(test)]
+pub(in crate::toolkits) fn test_served_names() -> Vec<String> {
+    served_names()
+}
+
+/// Every tool this family serves, with whether it needs the run's file store
+/// (`materialize::omitted_selection` reads it for the run's notice).
+pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
+    READ_NAMES
+        .iter()
+        .copied()
+        .chain(WriteKind::ALL.iter().map(|kind| kind.name()))
+        .map(|name| (name, false))
+        .collect()
 }

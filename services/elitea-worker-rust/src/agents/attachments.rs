@@ -79,6 +79,7 @@
 //! `item_id` for #607) without making the two services undeployable apart.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use adk_rust::{Content, Part};
 use base64::Engine as _;
@@ -364,6 +365,15 @@ pub(crate) struct AttachmentReference {
 }
 
 impl AttachmentReference {
+    /// A stored conversation attachment, by the bucket and key the platform
+    /// listed.
+    pub(crate) fn stored(bucket: &str, name: &str) -> Self {
+        Self {
+            bucket: bucket.to_owned(),
+            name: name.to_owned(),
+        }
+    }
+
     /// The bucket the object is stored in.
     #[must_use]
     pub(crate) fn bucket(&self) -> &str {
@@ -500,6 +510,199 @@ pub(crate) async fn read_attachment_documents(
         );
     }
     reads
+}
+
+/// The most objects one conversation listing asks for. Main serves at most this
+/// many per call, newest upload first, and says when it left more out; the
+/// listing is that one page and nothing here lists past it.
+const CONVERSATION_LISTING_LIMIT: i32 = 500;
+
+/// The Attachments module's channel to the conversation's stored files, over
+/// the same live claim that read this turn's own attachments.
+///
+/// Listing goes through the claim-bound artifact route (`list_artifacts`,
+/// which applies the actor's bucket access list), reading through the
+/// attachment route (`read_attachment_object`, which refuses any key outside
+/// the claim's own conversation). Neither names a project. No new internal
+/// route: both are the ones the `artifact` toolkit family and the turn's input
+/// already use.
+///
+/// NOTHING IS ASSUMED ABOUT WHERE THE FILES ARE. The listing sends an empty
+/// bucket and prefix, which main reads as "this claim's conversation, in the
+/// project's attachment bucket" (the project's storage policy, else main's
+/// `storage.DefaultAttachmentBucket`), newest upload first. The worker therefore
+/// needs neither the bucket's name nor the conversation's canonical id (a
+/// conversation can be addressed by uuid or by numeric id), and learns both
+/// from the answer.
+pub(crate) struct ClaimAttachmentSource {
+    platform: Arc<PlatformClient>,
+    authority: Arc<ClaimBoundRuntimeContextAuthority>,
+    current_turn: Vec<AttachmentReference>,
+}
+
+impl ClaimAttachmentSource {
+    pub(crate) fn new(
+        platform: Arc<PlatformClient>,
+        authority: Arc<ClaimBoundRuntimeContextAuthority>,
+        current_turn: Vec<AttachmentReference>,
+    ) -> Self {
+        Self {
+            platform,
+            authority,
+            current_turn,
+        }
+    }
+}
+
+/// The project's attachment bucket for the claim's conversation, learned from
+/// Main. Only the claim-bound LIST route resolves an empty bucket and echoes it
+/// (storage policy, else `storage.DefaultAttachmentBucket`), so the worker
+/// sends one bucketless list call asking for the name alone
+/// (`bucket_only`: nothing is listed, no keys are read or ordered) and keeps
+/// the answer for the run. The worker holds no bucket name of its own. The data
+/// tools move binary objects (xlsx, PNG) through the object API, which needs
+/// the name in its URL; the claim-bound text Read and Write do not accept an
+/// empty bucket.
+///
+/// The failures split as the Attachments listing's do: an authorization
+/// refusal (a claim with no canonical conversation, a scheduled or pipeline
+/// run) is `NotAvailable`, and nothing else is retried.
+pub(crate) struct ClaimAttachmentBucket {
+    platform: Arc<PlatformClient>,
+    authority: Arc<ClaimBoundRuntimeContextAuthority>,
+}
+
+impl ClaimAttachmentBucket {
+    pub(crate) fn new(
+        platform: Arc<PlatformClient>,
+        authority: Arc<ClaimBoundRuntimeContextAuthority>,
+    ) -> Self {
+        Self {
+            platform,
+            authority,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl elitea_agent_runtime::toolkits::AttachmentBucketResolver for ClaimAttachmentBucket {
+    async fn attachment_bucket(
+        &self,
+    ) -> Result<String, elitea_agent_runtime::toolkits::AttachmentBucketError> {
+        use elitea_agent_runtime::toolkits::AttachmentBucketError as Failure;
+        let request = crate::transport::runtime_context::ArtifactListRequest {
+            bucket: String::new(),
+            prefix: String::new(),
+            recursive: false,
+            limit: 1,
+            bucket_only: true,
+        };
+        match self
+            .platform
+            .list_artifacts(&self.authority, &request)
+            .await
+        {
+            Ok(outcome) if !outcome.bucket.is_empty() => Ok(outcome.bucket),
+            Ok(_) => Err(Failure::Unavailable),
+            Err(RuntimeContextError::AuthorizationFailed(_)) => Err(Failure::NotAvailable),
+            Err(error) => {
+                tracing::info!(
+                    event = "data_analysis_bucket_unresolved",
+                    error_code = error.code(),
+                    "the conversation's attachment bucket could not be resolved"
+                );
+                Err(Failure::Unavailable)
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl super::attachment_tools::AttachmentSource for ClaimAttachmentSource {
+    async fn list(
+        &self,
+    ) -> Result<super::attachment_tools::Listing, super::attachment_tools::SourceError> {
+        use super::attachment_tools::{ListedAttachment, Listing, SourceError};
+        let request = crate::transport::runtime_context::ArtifactListRequest {
+            bucket: String::new(),
+            prefix: String::new(),
+            recursive: false,
+            limit: CONVERSATION_LISTING_LIMIT,
+            bucket_only: false,
+        };
+        let outcome = match self
+            .platform
+            .list_artifacts(&self.authority, &request)
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                tracing::info!(
+                    event = "agent_attachments_listing_failed",
+                    error_code = error.code(),
+                    "the conversation's attachments could not be listed"
+                );
+                return Err(match error {
+                    RuntimeContextError::AuthorizationFailed(_) => SourceError::NotAvailable,
+                    _ => SourceError::Unavailable,
+                });
+            }
+        };
+        let key_prefix = outcome
+            .files
+            .iter()
+            .map(|file| file.name.as_str())
+            .chain(
+                self.current_turn
+                    .iter()
+                    .map(|reference| reference.name.as_str()),
+            )
+            .find_map(|name| name.split_once('/').map(|(prefix, _)| format!("{prefix}/")));
+        // Main's order is kept (newest upload first).
+        let mut attachments: Vec<ListedAttachment> = outcome
+            .files
+            .into_iter()
+            .map(|file| ListedAttachment {
+                reference: AttachmentReference {
+                    bucket: outcome.bucket.clone(),
+                    name: file.name,
+                },
+                size_bytes: file.byte_length,
+                modified_at: file.modified_at,
+            })
+            .collect();
+        // This message's own files are listed even if the page missed them.
+        for reference in &self.current_turn {
+            if !attachments
+                .iter()
+                .any(|entry| &entry.reference == reference)
+            {
+                attachments.push(ListedAttachment {
+                    reference: reference.clone(),
+                    size_bytes: 0,
+                    modified_at: String::new(),
+                });
+            }
+        }
+        Ok(Listing {
+            attachments,
+            truncated: outcome.truncated,
+            bucket: Some(outcome.bucket),
+            key_prefix,
+        })
+    }
+
+    async fn read(&self, reference: &AttachmentReference) -> AttachmentRead {
+        let mut reads = read_attachment_documents(
+            &self.platform,
+            &self.authority,
+            std::slice::from_ref(reference),
+        )
+        .await;
+        reads
+            .remove(reference)
+            .unwrap_or(AttachmentRead::Unreadable("unavailable"))
+    }
 }
 
 /// Project the admitted chunks with this turn's reads spliced in.

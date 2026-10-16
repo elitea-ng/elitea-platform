@@ -17,6 +17,7 @@
 
 pub mod acl;
 pub mod git;
+pub mod supported;
 
 pub use acl::{Acl, Caller, Principal, PrincipalKind};
 
@@ -32,6 +33,11 @@ pub enum SourceError {
     /// The source cannot be listed or a document cannot be read.
     #[error("{0}")]
     Unavailable(String),
+    /// The provider is rate limiting the caller and stayed so past the
+    /// source's backoff bound. Nothing is wrong with the document or the
+    /// credential: another run, later, can read it.
+    #[error("{0}")]
+    RateLimited(String),
     /// No document has this key.
     #[error("no document '{0}' in this source")]
     NotFound(String),
@@ -157,6 +163,10 @@ const EXTENSIONS: &[Row] = &[
     Row("png", Some("image/png"), Kind::Binary),
     Row("jpg", Some("image/jpeg"), Kind::Binary),
     Row("jpeg", Some("image/jpeg"), Kind::Binary),
+    Row("gif", Some("image/gif"), Kind::Binary),
+    Row("webp", Some("image/webp"), Kind::Binary),
+    Row("bmp", Some("image/bmp"), Kind::Binary),
+    Row("svg", Some("image/svg+xml"), Kind::Binary),
     Row("txt", Some("text/plain"), Kind::Text),
     Row("rst", Some("text/plain"), Kind::Text),
     Row("toml", Some("text/plain"), Kind::Text),

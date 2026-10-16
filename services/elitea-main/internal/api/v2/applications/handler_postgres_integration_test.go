@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,9 +36,9 @@ const postgresIntegrationDatabaseURL = "ELITEA_TEST_DATABASE_URL"
 
 func newHandlerTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(postgresIntegrationDatabaseURL)
+	databaseURL := testpg.DSN(os.Getenv(postgresIntegrationDatabaseURL))
 	if databaseURL == "" && os.Getenv("ELITEA_TEST_USE_SERVICE_DATABASE_URL") == "1" {
-		databaseURL = os.Getenv("DATABASE_URL")
+		databaseURL = testpg.DSN(os.Getenv("DATABASE_URL"))
 	}
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", postgresIntegrationDatabaseURL)

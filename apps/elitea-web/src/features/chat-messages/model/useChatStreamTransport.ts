@@ -219,16 +219,20 @@ export function useChatStreamTransport(
 
   const onFailed = useCallback(
     (frame: ExecutionEventData) => {
-      // The server reporting the EXECUTION failed — distinct from the stream
-      // dropping. A refusal can be the run's FIRST frame, so this must not
-      // assume a message exists to carry it; `recordStreamFailure` appends one
-      // when nothing is in flight.
+      if (!ownsRun() || (activeConversationRef.current !== undefined && activeConversationRef.current !== ownerRef.current)) return;
+      // The terminal body has no turn identity. Bind it to the admitted observer
+      // before detach clears that identity, including failures without progress.
+      const responseId = cancelRef.current?.messageGroupUuid, generation = generationRef.current, reason = runtimeFailureReason(frame);
+      if (responseId && generation) onAgentEventRef.current?.({
+        ...frame, type: 'execution.failed', message_id: responseId,
+        execution_generation: generation, response_metadata: {}, content: reason,
+      });
       refreshContext();
       const replayInto = takePendingReplay();
       if (replayInto !== undefined) setChatHistory((prev) => resetTurnForReplay(prev, replayInto));
-      failWith(runtimeFailureReason(frame), typeof frame['code'] === 'string' ? frame['code'] : undefined);
+      failWith(reason, typeof frame['code'] === 'string' ? frame['code'] : undefined);
     },
-    [failWith, refreshContext, setChatHistory, takePendingReplay],
+    [failWith, refreshContext, setChatHistory, takePendingReplay, ownsRun],
   );
 
   // A reattach that never opened (see PendingReplay.isArmed) is given up:

@@ -78,6 +78,11 @@ deploy/scripts/standalone-stack.sh check   # asserts the stack; read its last li
 open http://localhost:8084/app/
 ```
 
+The stack runs the native Rust agent worker by default; `STANDALONE_WORKER=python` selects
+the legacy Python worker (until it is removed). Anything the Rust worker cannot serve for
+an agent (an unported toolkit, a refused toolkit setting, an unavailable built-in
+capability) is named in a notice on that reply in the chat.
+
 `check` prints one line for each assertion. Its last line reports how many
 passed, how many failed, how many were skipped, and how many of the expected
 assertions reported a result at all. A skipped assertion exits non-zero unless

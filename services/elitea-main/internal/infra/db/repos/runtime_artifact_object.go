@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -58,6 +60,114 @@ func NewCurrentRuntimeArtifactRepository(
 		permissions: permissions,
 		store:       store,
 	}, nil
+}
+
+// AttachmentBucket names the project's chat attachment bucket from its storage
+// policy, or "" when the project has no policy row or the policy names none
+// (the caller then uses storage.DefaultAttachmentBucket). It reads the same
+// policy field the upload path reads, through the same repository method, so a
+// listing and an upload cannot disagree.
+func (repository *CurrentRuntimeArtifactRepository) AttachmentBucket(
+	ctx context.Context,
+	projectID int64,
+) (string, error) {
+	if repository == nil || repository.objects == nil || projectID <= 0 {
+		return "", errors.New("current runtime artifact repository is unavailable")
+	}
+	policy, err := repository.objects.GetProjectStoragePolicy(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("get runtime attachment bucket policy: %w", err)
+	}
+	if policy.AttachmentBucket == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(*policy.AttachmentBucket), nil
+}
+
+// maxAttachmentListingPages bounds how many store pages one attachment listing
+// reads to order a conversation's files by time (1,000 keys per page).
+const maxAttachmentListingPages = 20
+
+// ListAttachmentsNewestFirst lists one conversation's attachment objects,
+// NEWEST UPLOAD FIRST, at most `limit` of them. The store lists by key, so the
+// whole prefix (up to maxAttachmentListingPages pages) is read and ordered
+// here: cutting a key-ordered page and calling it "newest" would be false.
+// `truncated` is true when files were left out, whether by `limit` or by the
+// page bound. An absent bucket is not an error: nothing has been uploaded yet,
+// so the listing is empty.
+func (repository *CurrentRuntimeArtifactRepository) ListAttachmentsNewestFirst(
+	ctx context.Context,
+	projectID int64,
+	actorID int64,
+	bucket string,
+	prefix string,
+	limit int32,
+) ([]storage.RuntimeArtifactRecord, bool, error) {
+	if _, err := repository.authorizeBucket(
+		ctx, projectID, actorID, bucket, BucketAccessRead,
+	); err != nil {
+		if errors.Is(err, storage.ErrContentNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if err := storage.ValidateKeyPrefix(prefix); err != nil {
+		return nil, false, storage.ErrContentRejected
+	}
+	bucketRef, err := storage.NewBucketRef(strconv.FormatInt(projectID, 10), bucket)
+	if err != nil {
+		return nil, false, nil
+	}
+	var all []storage.ObjectInfo
+	token := ""
+	more := false
+	for page := 0; page < maxAttachmentListingPages; page++ {
+		result, err := repository.store.List(ctx, storage.ListQuery{
+			Bucket:            bucketRef,
+			KeyPrefix:         prefix,
+			Delimiter:         "/",
+			MaxKeys:           1000,
+			ContinuationToken: token,
+		})
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				return nil, false, nil
+			}
+			return nil, false, fmt.Errorf("list runtime attachments: %w", err)
+		}
+		all = append(all, result.Objects...)
+		more = result.IsTruncated
+		if !result.IsTruncated || result.NextContinuationToken == "" {
+			more = result.IsTruncated && result.NextContinuationToken == ""
+			break
+		}
+		token = result.NextContinuationToken
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		if !all[i].LastModified.Equal(all[j].LastModified) {
+			return all[i].LastModified.After(all[j].LastModified)
+		}
+		return all[i].Key < all[j].Key
+	})
+	truncated := more
+	if limit > 0 && int32(len(all)) > limit {
+		all = all[:limit]
+		truncated = true
+	}
+	records := make([]storage.RuntimeArtifactRecord, 0, len(all))
+	for _, object := range all {
+		mediaType := object.ContentType
+		if mediaType == "" {
+			mediaType = storage.MediaTypeFromKey(object.Key)
+		}
+		records = append(records, storage.RuntimeArtifactRecord{
+			Name:       object.Key,
+			MediaType:  mediaType,
+			ByteLength: object.Size,
+			ModifiedAt: object.LastModified,
+		})
+	}
+	return records, truncated, nil
 }
 
 // authorizeBucket resolves one bucket inside the claimed project and applies
@@ -114,6 +224,30 @@ func (repository *CurrentRuntimeArtifactRepository) authorizeBucket(
 	}
 	return row, nil
 }
+
+// RuntimeBucketIsSystem says whether the project's bucket is a SYSTEM bucket
+// (`bucket_type = 'system'`), for the runtime routes' refusal of system
+// buckets by name. An absent bucket is not a system bucket: the route's own
+// lookup then answers not-found as before.
+func (repository *CurrentRuntimeArtifactRepository) RuntimeBucketIsSystem(
+	ctx context.Context,
+	projectID int64,
+	bucket string,
+) (bool, error) {
+	if repository == nil || repository.buckets == nil {
+		return false, errors.New("current runtime artifact repository is unavailable")
+	}
+	row, err := repository.buckets.GetBucket(ctx, projectID, bucket)
+	if errors.Is(err, storage.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get runtime artifact bucket type: %w", err)
+	}
+	return row.ProjectID == projectID && row.BucketType == attachmentBucketType, nil
+}
+
+var _ storage.RuntimeSystemBucketSource = (*CurrentRuntimeArtifactRepository)(nil)
 
 // ListRuntimeArtifacts lists one bucket, from the OBJECT STORE rather than the
 // metadata table.

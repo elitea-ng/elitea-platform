@@ -51,6 +51,12 @@ var (
 	ErrContentNotFound     = errors.New("input content not found")
 	ErrContentRejected     = errors.New("input content materialization rejected")
 	ErrContentUnavailable  = errors.New("input content materialization unavailable")
+	// ErrSystemBucketNameTaken is a platform system bucket name (the
+	// attachment or index result bucket) held by a bucket a person made
+	// before the names were reserved (review round 3). No data migration
+	// moves it: the platform refuses to use it, with a message that says how
+	// to free the name.
+	ErrSystemBucketNameTaken = errors.New("a bucket of this platform-reserved name exists but is not a system bucket; rename or delete it so the platform can create its own")
 )
 
 // ContentClaim is the complete claim-bound authorization input. The workload
@@ -372,6 +378,7 @@ func (s *ContentServer) Routes() http.Handler {
 	}
 	if s.codePlatformPump != nil {
 		r.Post("/executions/{executionID}/generations/{generation}/code-platform/step", s.PostCodePlatformStep)
+		r.Post("/executions/{executionID}/generations/{generation}/code-platform/effects", s.PostCodePlatformEffects)
 	}
 	if s.nodeRecovery != nil {
 		r.Post("/executions/{executionID}/generations/{generation}/node-recovery/control", s.PostNodeRecoveryControl)

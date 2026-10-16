@@ -35,6 +35,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 )
 
@@ -241,10 +242,22 @@ type User struct {
 
 // Store reads and writes the directory.
 type Store struct {
-	pool *pgxpool.Pool
+	pool        *pgxpool.Pool
+	memoryUsers cleanupjournal.MemoryUserJournal
 }
 
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+
+// WithMemoryUserJournal wires the journal a SCIM group withdrawal writes to
+// when a person ends with no role in the project. A nil journal leaves
+// memories alone (a deployment that keeps none in the vector store); so does a
+// typed nil (cleanupjournal.UsableMemoryUserJournal).
+func (s *Store) WithMemoryUserJournal(journal cleanupjournal.MemoryUserJournal) *Store {
+	if usable := cleanupjournal.UsableMemoryUserJournal(journal); usable != nil {
+		s.memoryUsers = usable
+	}
+	return s
+}
 
 // NormalizeUserName reduces an address to the form it is stored and matched in.
 //

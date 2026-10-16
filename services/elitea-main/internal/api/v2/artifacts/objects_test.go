@@ -2,6 +2,8 @@ package artifacts_test
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 func newObjectTestRouter(h *artifacts.Handler) chi.Router {
@@ -644,5 +647,130 @@ func TestObjectKeyWithSlash_RoundTripsThroughRealRouter(t *testing.T) {
 	r.ServeHTTP(confirmRR, confirmReq)
 	if confirmRR.Code != http.StatusNotFound {
 		t.Fatalf("expected the deleted key to 404, got %d", confirmRR.Code)
+	}
+}
+
+// A store whose Put reports no LastModified (the real S3 backend) must not
+// leak the zero time: created_at comes from the persisted row.
+type timelessObjectStore struct{ *fakeStore }
+
+func (s timelessObjectStore) Put(ctx context.Context, ref storage.ObjectRef, body io.Reader, opts storage.PutOptions) (storage.ObjectInfo, error) {
+	info, err := s.fakeStore.Put(ctx, ref, body, opts)
+	info.LastModified = time.Time{}
+	return info, err
+}
+
+func uploadCreatedAt(t *testing.T, h *artifacts.Handler, query string) time.Time {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	newObjectTestRouter(h).ServeHTTP(rr, newUploadRequest(t, "/objects/1/reports"+query, "a.txt", []byte("x")))
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		CreatedAt time.Time `json:"created_at"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.CreatedAt.IsZero() || body.CreatedAt.Year() < 2000 {
+		t.Fatalf("created_at = %v; body=%s", body.CreatedAt, rr.Body.String())
+	}
+	return body.CreatedAt
+}
+
+func TestUploadObject_CreatedAtIsThePersistedRow(t *testing.T) {
+	_, repo, _ := newObjectTestHandler(t)
+	h := artifacts.NewHandler(repo, timelessObjectStore{newFakeStore()})
+	first := uploadCreatedAt(t, h, "")
+	row := repo.lastUpserted
+	if !first.Equal(row.CreatedAt) {
+		t.Fatalf("created_at = %v, row holds %v", first, row.CreatedAt)
+	}
+}
+
+// With overwrite the response reports what the row holds: the original
+// created_at, not a fresh clock reading.
+func TestUploadObject_OverwriteKeepsRowCreatedAt(t *testing.T) {
+	_, repo, _ := newObjectTestHandler(t)
+	h := artifacts.NewHandler(repo, timelessObjectStore{newFakeStore()})
+	first := uploadCreatedAt(t, h, "")
+	time.Sleep(5 * time.Millisecond)
+	second := uploadCreatedAt(t, h, "?overwrite=true")
+	if !second.Equal(first) {
+		t.Fatalf("overwrite created_at = %v, want the row's original %v", second, first)
+	}
+}
+
+func postUpload(t *testing.T, h *artifacts.Handler, query string, content []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	newObjectTestRouter(h).ServeHTTP(rr, newUploadRequest(t, "/objects/1/reports"+query, "a.txt", content))
+	return rr
+}
+
+// DATA LOSS regression: an overwrite that would exceed the project quota must
+// be refused WITHOUT destroying the previous version (bytes and row).
+func TestUploadObject_OverQuotaOverwriteKeepsOriginal(t *testing.T) {
+	h, repo, store := newObjectTestHandler(t)
+	limit := int64(10)
+	repo.setPolicy(repos.ProjectStoragePolicy{ProjectID: 1, MaxTotalBytes: &limit})
+
+	if rr := postUpload(t, h, "", []byte("origin")); rr.Code != http.StatusCreated {
+		t.Fatalf("seed upload = %d %s", rr.Code, rr.Body.String())
+	}
+	rr := postUpload(t, h, "?overwrite=true", []byte("0123456789ABCDEF")) // 16 > 10
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-quota overwrite = %d %s, want 413", rr.Code, rr.Body.String())
+	}
+	ref, _ := storage.NewObjectRef("1", "reports", "a.txt")
+	rc, info, err := store.Get(t.Context(), ref, nil)
+	if err != nil {
+		t.Fatalf("original object destroyed: %v", err)
+	}
+	got, _ := io.ReadAll(rc)
+	if string(got) != "origin" || info.Size != 6 {
+		t.Fatalf("original bytes = %q (size %d), want origin", got, info.Size)
+	}
+	if total, _ := repo.SumProjectBytes(t.Context(), 1); total != 6 {
+		t.Fatalf("metadata row total = %d, want the original 6", total)
+	}
+}
+
+// An overwrite that fits (projected = current - old + new) still succeeds.
+func TestUploadObject_OverwriteWithinQuotaSucceeds(t *testing.T) {
+	h, repo, _ := newObjectTestHandler(t)
+	limit := int64(10)
+	repo.setPolicy(repos.ProjectStoragePolicy{ProjectID: 1, MaxTotalBytes: &limit})
+	postUpload(t, h, "", []byte("origin"))
+	if rr := postUpload(t, h, "?overwrite=true", []byte("0123456789")); rr.Code != http.StatusCreated {
+		t.Fatalf("fitting overwrite = %d %s", rr.Code, rr.Body.String())
+	}
+	if total, _ := repo.SumProjectBytes(t.Context(), 1); total != 10 {
+		t.Fatalf("total = %d, want 10", total)
+	}
+}
+
+// The response carries created_at (first appearance) AND updated_at (this write).
+func TestUploadObject_ResponseHasUpdatedAt(t *testing.T) {
+	h, _, _ := newObjectTestHandler(t)
+	read := func(rr *httptest.ResponseRecorder) (c, u time.Time) {
+		var b struct {
+			C time.Time `json:"created_at"`
+			U time.Time `json:"updated_at"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &b); err != nil {
+			t.Fatal(err)
+		}
+		return b.C, b.U
+	}
+	c1, u1 := read(postUpload(t, h, "", []byte("a")))
+	if u1.IsZero() || !u1.Equal(c1) {
+		t.Fatalf("first write: created %v updated %v", c1, u1)
+	}
+	time.Sleep(5 * time.Millisecond)
+	c2, u2 := read(postUpload(t, h, "?overwrite=true", []byte("b")))
+	if !c2.Equal(c1) || !u2.After(u1) {
+		t.Fatalf("overwrite: created %v (want %v) updated %v (want after %v)", c2, c1, u2, u1)
 	}
 }

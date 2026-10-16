@@ -16,7 +16,9 @@
 //! * per provider (feature `providers`): its configuration (secrets
 //!   zeroized), its errors (data-free), its wire layer and its request
 //!   building and authentication — [`ado`], [`bitbucket`], [`github`], [`gitlab`];
-//!   and [`artifact`], the platform's own object API.
+//!   [`artifact`], the platform's own object API; and the Atlassian pair
+//!   [`confluence`] and [`jira`] over what [`atlassian`] shares (ADR-0030 I2);
+//!   and [`figma`] (ADR-0030 I3).
 //! * `ContentSource` connectors over those clients (feature
 //!   `content-source`): [`source`] holds what they share (egress guard,
 //!   bounded 429 backoff, listing and fetch caps); each provider module holds
@@ -30,11 +32,17 @@
 pub mod ado;
 #[cfg(feature = "providers")]
 pub mod artifact;
+#[cfg(feature = "providers")]
+pub mod atlassian;
 pub mod base_url;
 #[cfg(feature = "providers")]
 #[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
 pub mod bitbucket;
+#[cfg(feature = "providers")]
+pub mod confluence;
 pub mod egress;
+#[cfg(feature = "providers")]
+pub mod figma;
 #[cfg(any(feature = "providers", feature = "content-source"))]
 mod git_id;
 #[cfg(feature = "providers")]
@@ -43,10 +51,41 @@ pub mod github;
 #[cfg(feature = "providers")]
 #[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
 pub mod gitlab;
+#[cfg(feature = "providers")]
+pub mod jira;
+#[cfg(feature = "content-source")]
+pub mod pictures;
+#[cfg(feature = "content-source")]
+#[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
+pub mod qtest;
 mod reqwest_adapter;
 #[cfg(feature = "content-source")]
+pub mod sharepoint;
+#[cfg(feature = "providers")]
+pub mod sharepoint_site;
+#[cfg(feature = "content-source")]
 pub mod source;
+#[cfg(feature = "content-source")]
+#[allow(
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::doc_markdown // "TestRail" is a product name, not an identifier
+)]
+pub mod testmgmt;
+#[cfg(feature = "content-source")]
+#[allow(
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::doc_markdown // "TestRail" is a product name, not an identifier
+)]
+pub mod testrail;
 pub mod transport;
+#[cfg(feature = "content-source")]
+#[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
+pub mod xray;
+#[cfg(feature = "content-source")]
+#[allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
+pub mod zephyr;
 
 pub use reqwest_adapter::{BuildError, ClientPolicy};
 

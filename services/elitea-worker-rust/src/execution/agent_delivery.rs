@@ -195,6 +195,18 @@ impl FreshAgentDelivery {
         self.claim.matches_output_identity(frame.identity.as_ref())
     }
 
+    /// A nonterminal frame spooled by an earlier claim and beyond Main's watermark.
+    pub(crate) fn superseded_progress(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<bool, ProtocolError> {
+        Ok(
+            self.validate_output_frame(frame)? == ValidatedAgentOutputFrameKind::Progress
+                && frame.sequence > self.claim_handoff_watermark
+                && self.claim.supersedes_output_fence(frame),
+        )
+    }
+
     pub(crate) fn validate_output_frame(
         &self,
         frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
@@ -276,6 +288,10 @@ impl OutputRecoveryAgentDelivery {
             generation: command.generation,
             producer_id: self.recovery.producer_id().to_owned(),
         }
+    }
+
+    pub(crate) const fn claim_handoff_watermark(&self) -> u64 {
+        self.recovery.claim_handoff_watermark()
     }
 
     pub(crate) fn into_parts(self) -> (CommandDelivery, VerifiedAgentCommand, AgentOutputRecovery) {
@@ -384,6 +400,20 @@ impl NodeRecoveryAgentDelivery {
     pub(crate) fn output_watermark(&self) -> u64 {
         self.inspection.output_watermark()
     }
+    pub(crate) fn superseded_progress(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<bool, ProtocolError> {
+        if !self.inspection.matches_output_identity(frame) {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the node recovery output identity is invalid",
+            ));
+        }
+        Ok(validate_restored_agent_output_frame(&self.verified, frame)?
+            == ValidatedAgentOutputFrameKind::Progress
+            && frame.sequence > self.inspection.output_watermark()
+            && self.inspection.supersedes_output_fence(frame))
+    }
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -442,6 +472,38 @@ impl CheckpointAgentDelivery {
     }
     pub(crate) fn output_watermark(&self) -> u64 {
         self.inspection.output_watermark()
+    }
+
+    /// A nonterminal frame spooled by an earlier claim and beyond Main's watermark.
+    pub(crate) fn superseded_progress(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<bool, ProtocolError> {
+        Ok(
+            self.validate_output(frame)? == ValidatedAgentOutputFrameKind::Progress
+                && frame.sequence > self.inspection.output_watermark()
+                && self.inspection.supersedes_output_fence(frame),
+        )
+    }
+
+    /// The canonical failure that replaces a pending nonterminal frame.
+    pub(crate) fn failure_replacement(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+        failure: crate::protocol::output::RuntimeFailureKind,
+        occurred_at_unix_millis: i64,
+    ) -> Result<crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1, ProtocolError> {
+        if self.validate_output(frame)? != ValidatedAgentOutputFrameKind::Progress {
+            return Err(ProtocolError::AuthorizationFailed(
+                "only a nonterminal frame is replaced by a failure",
+            ));
+        }
+        self.inspection.failure_terminal_at(
+            &self.verified,
+            failure,
+            frame.sequence,
+            occurred_at_unix_millis,
+        )
     }
 
     pub(crate) fn terminal_replacement(

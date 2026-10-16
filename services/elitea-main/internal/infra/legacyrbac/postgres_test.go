@@ -3,6 +3,7 @@ package legacyrbac
 import (
 	"context"
 	"errors"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"reflect"
 	"testing"
@@ -107,7 +108,7 @@ func TestPostgresResolverRejectsIncompleteCachedTokenBeforeLookup(t *testing.T) 
 func TestPostgresResolverLegacyCompatibility(t *testing.T) {
 	const requireEnvironment = "ELITEA_REQUIRE_LEGACY_RBAC_POSTGRES_TEST"
 	required := os.Getenv(requireEnvironment) == "true"
-	databaseURL := os.Getenv("ELITEA_LEGACY_RBAC_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_LEGACY_RBAC_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		if required {
 			t.Fatal("ELITEA_REQUIRE_LEGACY_RBAC_POSTGRES_TEST requires ELITEA_LEGACY_RBAC_TEST_DATABASE_URL")

@@ -191,8 +191,8 @@ func TestIndexRegistryConcurrentFirstInitializeAdmitsExactlyOneRun(t *testing.T)
 	}
 }
 
-func TestIndexRegistryListIsScopedAndOldestFirst(t *testing.T) {
-	repo, _ := newRegistryTestRepo(t)
+func TestIndexRegistryListIsScopedAndNewestCreatedFirst(t *testing.T) {
+	repo, pool := newRegistryTestRepo(t)
 	ctx := context.Background()
 	for _, name := range []string{"b", "a", "c"} {
 		if err := repo.InitializeRegistryRun(ctx, registryRun(1, name)); err != nil {
@@ -204,9 +204,28 @@ func TestIndexRegistryListIsScopedAndOldestFirst(t *testing.T) {
 	if err := repo.InitializeRegistryRun(ctx, other); err != nil {
 		t.Fatal(err)
 	}
+	// Explicit, distinct created_at values: the order must not depend on clock
+	// resolution or insertion timing. "a" is oldest, "b" newest, "c" in between.
+	for name, ts := range map[string]string{
+		"a": "2026-01-01T00:00:00Z",
+		"c": "2026-01-02T00:00:00Z",
+		"b": "2026-01-03T00:00:00Z",
+	} {
+		if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.index_registry SET created_at = $1::timestamptz WHERE name = $2 AND toolkit_id = 19 AND project_id = 1`, ts, name); err != nil {
+			t.Fatal(err)
+		}
+	}
 	rows, err := repo.List(ctx, 1, 19)
-	if err != nil || len(rows) != 3 || rows[0].Name != "b" || rows[1].Name != "a" || rows[2].Name != "c" {
+	if err != nil || len(rows) != 3 || rows[0].Name != "b" || rows[1].Name != "c" || rows[2].Name != "a" {
 		t.Fatalf("list = %+v err=%v", rows, err)
+	}
+	// Equal created_at falls back to index_id DESC.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.index_registry SET created_at = '2026-01-01T00:00:00Z' WHERE toolkit_id = 19 AND project_id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	tied, err := repo.List(ctx, 1, 19)
+	if err != nil || len(tied) != 3 || tied[0].IndexID <= tied[1].IndexID || tied[1].IndexID <= tied[2].IndexID {
+		t.Fatalf("tied list = %+v err=%v", tied, err)
 	}
 	empty, err := repo.List(ctx, 2, 19)
 	if err != nil || empty == nil || len(empty) != 0 {

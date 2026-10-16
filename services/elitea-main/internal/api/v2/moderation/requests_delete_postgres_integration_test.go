@@ -291,15 +291,15 @@ func TestQueuePagesPastTheFirstHundredRows(t *testing.T) {
 	prepareUsers(t, pool)
 	const wanted = "e2e_app_request_probe_newest"
 	if _, err := pool.Exec(context.Background(), `
-INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status, created_at)
+INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status, created_at, updated_at)
 SELECT 4001, 1, 'Wikis', 'older_' || n, 'filler ' || n, 'pending',
-       TIMESTAMP '2026-08-01 09:00:00' + (n || ' minutes')::interval
+       TIMESTAMP '2026-08-01 09:00:00' + (n || ' minutes')::interval, now() AT TIME ZONE 'UTC'
 FROM generate_series(1, 104) AS n;`); err != nil {
 		t.Fatalf("seed 104 rows: %v", err)
 	}
 	if _, err := pool.Exec(context.Background(), `
-INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status, created_at)
-VALUES (4001, 1, 'Wikis', $1, 'the newest request', 'pending', TIMESTAMP '2026-08-02 09:00:00');`,
+INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status, created_at, updated_at)
+VALUES (4001, 1, 'Wikis', $1, 'the newest request', 'pending', TIMESTAMP '2026-08-02 09:00:00', now() AT TIME ZONE 'UTC');`,
 		wanted); err != nil {
 		t.Fatalf("seed the newest row: %v", err)
 	}

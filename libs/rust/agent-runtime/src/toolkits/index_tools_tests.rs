@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
 use super::families::index_tools::{
-    I1_INDEX_FAMILIES, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
+    INDEX_FAMILIES, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
     IndexToolFailure, IndexToolHost, IndexToolName, IndexToolSupport, IndexToolsWithheld,
     MAX_CATALOG_ENTRIES, SharedIndexCatalog, all_index_tools, build_index_toolset, doctype_for,
     is_index_family,
@@ -143,7 +143,7 @@ const INDEX_TOOL_NAMES: [&str; 5] = [
 #[test]
 fn the_index_tools_keep_the_sdk_schema_contract_in_every_i1_family() {
     let (authority, _) = lend(false);
-    for family in I1_INDEX_FAMILIES {
+    for family in INDEX_FAMILIES {
         let tools = all_index_tools("kit", family, &authority);
         let served: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
         assert_eq!(served, INDEX_TOOL_NAMES, "{family}");
@@ -163,7 +163,28 @@ fn names_doctypes_and_read_only_follow_the_sdk() {
     }
     assert_eq!(doctype_for("artifact"), "document");
     assert!(is_index_family("artifact"));
-    assert!(!is_index_family("jira"), "jira waits for I2");
+    for family in [
+        "confluence",
+        "jira",
+        "sharepoint",
+        "ado_wiki",
+        "ado_boards",
+        "ado_plans",
+        "figma",
+        "testrail",
+        "qtest",
+        "xray_cloud",
+        "zephyr_scale",
+        "zephyr_essential",
+        "zephyr_enterprise",
+    ] {
+        assert_eq!(doctype_for(family), "document");
+        assert!(is_index_family(family), "{family} is indexed since I2/I3");
+    }
+    assert!(!is_index_family("aha"), "aha has no indexing toolkit");
+    // The SDK's other Zephyr toolkits have no indexer.
+    assert!(!is_index_family("zephyr"));
+    assert!(!is_index_family("zephyr_squad"));
     for tool in IndexToolName::ALL {
         assert_eq!(IndexToolName::parse(tool.as_str()), Some(tool));
         assert_eq!(tool.is_read_only(), tool != IndexToolName::RemoveIndex);
@@ -626,9 +647,9 @@ fn bitbucket_tool(indexes: Option<Value>, selected: &[&str]) -> Value {
 
 /// Review round 2, finding 1: a family half that is skipped (a selection
 /// this runtime does not serve) no longer takes the toolkit's index tools
-/// down with it. GitHub's read-only port refuses the SDK's "all tools"
-/// default (an empty `selected_tools`): the five index tools are still
-/// served under the toolkit's name. A GitLab or Bitbucket selection naming
+/// down with it. GitHub's port refuses a selection of only
+/// `generic_github_api_call` (a `PyGithub` dispatcher it does not serve) and
+/// an index tool: `search_index` is still served under the toolkit's name. A GitLab or Bitbucket selection naming
 /// a tool the port does not serve (Bitbucket has no `delete_file`; the
 /// GitLab name is outside its port) is skipped as a family, and
 /// `search_index` beside it is still served. Without an index toolset the
@@ -636,8 +657,9 @@ fn bitbucket_tool(indexes: Option<Value>, selected: &[&str]) -> Value {
 #[tokio::test]
 async fn a_skipped_family_half_keeps_the_toolkits_index_tools() {
     let (authority, _) = lend(false);
-    // github, SDK default selection: the family is skipped, the index tools stay.
-    let version = json!({"tools": [github_tool(Some(catalog_value()), &[])]});
+    // github, a selection it serves none of: the family is skipped, the index
+    // tools stay.
+    let version = json!({"tools": [github_tool(Some(catalog_value()), &["generic_github_api_call", "search_index"])]});
     let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
         .expect("snapshot")
         .apply_policy(policy().as_ref());
@@ -652,13 +674,10 @@ async fn a_skipped_family_half_keeps_the_toolkits_index_tools() {
     .expect("materialized");
     assert_eq!(toolsets.len(), 1);
     assert_eq!(toolsets[0].name(), "repo");
-    let mut names = tool_names(&toolsets).await;
-    names.sort_unstable();
-    let mut expected: Vec<&str> = INDEX_TOOL_NAMES.to_vec();
-    expected.sort_unstable();
-    assert_eq!(names, expected);
+    assert_eq!(tool_names(&toolsets).await, ["search_index"]);
     // The same toolkit without a catalog is omitted, as before this stage.
-    let version = json!({"tools": [github_tool(None, &[])]});
+    let version =
+        json!({"tools": [github_tool(None, &["generic_github_api_call", "search_index"])]});
     let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
         .expect("snapshot")
         .apply_policy(policy().as_ref());
@@ -839,21 +858,16 @@ async fn an_index_only_selection_is_accepted_only_when_the_index_toolset_is_comp
             );
         }
     }
-    // The ADO families that are not indexing families keep refusing it
-    // whatever the toolkit carries: a catalog on `ado_boards` is not a
-    // catalog this stage reads.
+    // A family that is not an indexing family (aha) keeps refusing it
+    // whatever the toolkit carries: a catalog on `aha` is not a catalog this
+    // stage reads.
     let version = json!({"tools": [{
         "id": 7,
-        "type": "ado_boards",
-        "toolkit_name": "boards",
+        "type": "aha",
+        "toolkit_name": "ideas",
         "indexes": catalog_value(),
         "settings": {
-            "ado_configuration": {
-                "organization_url": "https://dev.azure.com/contoso/",
-                "token": "fixture-token"
-            },
-            "project": "Fabrikam Fiber",
-            "limit": 5,
+            "aha_configuration": {"base_url": "https://acme.aha.io", "api_key": "fixture-key"},
             "selected_tools": ["search_index"]
         }
     }]});
@@ -869,7 +883,7 @@ async fn an_index_only_selection_is_accepted_only_when_the_index_toolset_is_comp
     )
     .await
     .expect("materialized");
-    assert!(toolsets.is_empty(), "ado_boards never composes index tools");
+    assert!(toolsets.is_empty(), "aha never composes index tools");
 }
 
 /// Review round 1, finding 4: on a path that lends no artifact authority
@@ -988,5 +1002,80 @@ fn withheld_reasons_name_the_cause() {
         IndexToolSupport::lent_or(None, IndexToolsWithheld::NoVectorStore)
             .authority()
             .is_none()
+    );
+}
+
+/// The served families have one source of truth, shared with the Go
+/// `indexcatalog` tests and the worker's: a list that drifts fails.
+#[test]
+fn the_served_families_match_the_shared_fixture() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("families/index_served_families.json"))
+            .expect("the fixture is JSON");
+    let expected: Vec<&str> = fixture["families"]
+        .as_array()
+        .expect("families")
+        .iter()
+        .map(|family| family.as_str().expect("a name"))
+        .collect();
+    let mut served: Vec<&str> = INDEX_FAMILIES.into_iter().collect();
+    served.sort_unstable();
+    assert_eq!(served, expected);
+    for family in &expected {
+        assert!(is_index_family(family), "{family}");
+    }
+}
+
+/// Review C4: index tools plus a name the family does not serve (jira
+/// `["search_index", "made_up"]`) is index-only once `made_up` is pruned. The
+/// index tools are served, `made_up` is reported as a tool left out, and no
+/// "family not ported" line appears: the family IS ported.
+#[tokio::test]
+async fn index_tools_with_an_unknown_name_stand_alone_and_report_the_name() {
+    use super::materialize::LeftOutReason;
+    let (authority, _) = lend(false);
+    let version = json!({"tools": [{
+        "id": 51,
+        "type": "jira",
+        "toolkit_name": "tracker",
+        "indexes": catalog_value(),
+        "settings": {
+            "jira_configuration": {
+                "base_url": "https://tenant.atlassian.net/",
+                "hosting": "Auto",
+                "username": "",
+                "api_key": null,
+                "token": "jira-private-token"
+            },
+            "api_version": "Auto",
+            "limit": 5,
+            "verify_ssl": true,
+            "selected_tools": ["search_index", "made_up"]
+        }
+    }]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("snapshot")
+        .apply_policy(policy().as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy(),
+        &Map::new(),
+        None,
+        IndexToolSupport::Lent(&authority),
+    )
+    .await
+    .expect("materialized");
+    assert_eq!(materialized.toolsets.len(), 1);
+    assert_eq!(tool_names(&materialized.toolsets).await, ["search_index"]);
+    assert_eq!(
+        materialized.left_out.len(),
+        1,
+        "{:?}",
+        materialized.left_out
+    );
+    assert_eq!(materialized.left_out[0].tool_name(), Some("made_up"));
+    assert_eq!(
+        materialized.left_out[0].cause(),
+        LeftOutReason::ToolNotServed
     );
 }

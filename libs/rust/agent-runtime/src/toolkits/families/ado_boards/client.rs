@@ -19,6 +19,7 @@ use crate::toolkits::families::ado::work_items::{
     format_work_item_type_fields, get_work_item, id_text, transform_work_item, update_work_item,
     work_item_result, work_item_type_fields,
 };
+use crate::toolkits::families::attachment_host::AttachmentHost;
 use crate::toolkits::families::python_repr::repr as python_repr;
 
 const WIQL_API: &str = "7.1-preview.2";
@@ -49,8 +50,11 @@ pub(crate) struct GetComments<'a> {
 
 /// One claim-scoped boards client with the SDK's per-instance caches.
 pub(crate) struct AdoBoardsClient {
-    ado: AdoClient,
+    pub(super) ado: AdoClient,
     limit: i64,
+    /// The artifact store and chat model the run lends, when it lends them
+    /// (`attach_file_to_work_item`, `get_image_by_url`).
+    pub(super) attachments: Option<AttachmentHost>,
     relation_types: Mutex<Option<BTreeMap<String, String>>>,
     type_fields: Mutex<BTreeMap<String, Vec<FieldDefinition>>>,
 }
@@ -68,9 +72,17 @@ impl AdoBoardsClient {
         Self {
             ado,
             limit,
+            attachments: None,
             relation_types: Mutex::new(None),
             type_fields: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// The same client, lent the run's artifact store and chat model.
+    #[must_use]
+    pub(crate) fn with_attachments(mut self, attachments: Option<AttachmentHost>) -> Self {
+        self.attachments = attachments;
+        self
     }
 
     /// `search_work_items`: WIQL, then each matched item with the requested

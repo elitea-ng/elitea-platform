@@ -86,6 +86,7 @@ impl CarrierTransport for FixtureTransport {
         &self,
         request: Request,
         effect: bool,
+        _max_body: usize,
     ) -> Result<CarrierHttpResponse, CarrierClientError> {
         let header = |name: &str| {
             request
@@ -130,7 +131,7 @@ fn url(path: &str) -> String {
 async fn tool(transport: &Arc<FixtureTransport>, name: &str) -> Arc<dyn Tool> {
     let client =
         CarrierClient::with_transport(config(), Arc::clone(transport) as Arc<dyn CarrierTransport>);
-    let toolset = test_build_with_client("perf", &[name.to_owned()], &policy(), client)
+    let toolset = test_build_with_client("perf", &[name.to_owned()], &policy(), client, None)
         .expect("Carrier toolset");
     let readonly: Arc<dyn ReadonlyContext> = context();
     let tools = toolset.tools(readonly).await.expect("Carrier tools");
@@ -225,7 +226,7 @@ fn configuration_normalizes_origin_project_and_selection_without_network() {
 }
 
 #[test]
-fn selection_serves_fifteen_tools_and_omits_only_the_archive_tools() {
+fn selection_serves_every_sdk_name_and_refuses_the_rest() {
     let names = |values: &[&str]| {
         values
             .iter()
@@ -243,14 +244,15 @@ fn selection_serves_fifteen_tools_and_omits_only_the_archive_tools() {
             "get_report_by_id",
             "create_excel_report"
         ]))
-        .expect("mixed selection"),
-        vec!["get_tests".to_owned()]
+        .expect("every SDK name is a served name"),
+        vec![
+            "get_tests".to_owned(),
+            "get_report_by_id".to_owned(),
+            "create_excel_report".to_owned()
+        ]
     );
-    for refused in [
-        names(&["get_report_by_id"]),
-        names(&["create_ui_excel_report", "create_excel_report"]),
-        names(&["get_tests", "not_a_carrier_tool"]),
-    ] {
+    {
+        let refused = names(&["get_tests", "not_a_carrier_tool"]);
         let Err(error) = test_served_selection(&refused) else {
             panic!("{refused:?} must be refused");
         };
@@ -957,14 +959,16 @@ async fn unknown_arguments_and_provider_failures_are_redacted_errors() {
     assert_eq!(transport.requests().len(), 1);
 }
 
-#[tokio::test]
-async fn every_tool_keeps_the_sdk_contract() {
+/// The names of the tools a build serves for one set of lent capabilities.
+async fn served(
+    attachments: Option<super::families::attachment_host::AttachmentHost>,
+) -> Vec<String> {
     let transport = FixtureTransport::new(|_| ok(&json!({})));
     let client = CarrierClient::with_transport(config(), transport as Arc<dyn CarrierTransport>);
-    let toolset = test_build_with_client("gate", &[], &policy(), client).expect("Carrier toolset");
+    let toolset = test_build_with_client("gate", &[], &policy(), client, attachments)
+        .expect("Carrier toolset");
     let readonly: Arc<dyn ReadonlyContext> = context();
     let tools = toolset.tools(readonly).await.expect("Carrier tools");
-    assert_eq!(tools.len(), 15);
     for tool in &tools {
         assert!(
             tool.description().ends_with("\nToolkit: gate"),
@@ -972,5 +976,49 @@ async fn every_tool_keeps_the_sdk_contract() {
             tool.name()
         );
     }
+    tools.iter().map(|tool| tool.name().to_owned()).collect()
+}
+
+#[tokio::test]
+async fn the_spreadsheet_tools_need_the_artifact_store_and_the_writer() {
+    let without = served(None).await;
+    assert_eq!(without.len(), 16);
+    assert!(without.contains(&"get_report_by_id".to_owned()));
+    for omitted in ["create_excel_report", "create_ui_excel_report"] {
+        assert!(!without.contains(&omitted.to_owned()));
+    }
+    let platform = super::attachment_test_support::FakePlatform::new();
+    let with_host = served(Some(platform.host())).await;
+    if cfg!(feature = "toolkit-office") {
+        assert_eq!(with_host.len(), 18);
+    } else {
+        assert_eq!(with_host, without);
+    }
+    // A selection of only omitted tools builds nothing.
+    let transport = FixtureTransport::new(|_| ok(&json!({})));
+    let client = CarrierClient::with_transport(config(), transport as Arc<dyn CarrierTransport>);
+    let Err(error) = test_build_with_client(
+        "gate",
+        &["create_excel_report".to_owned()],
+        &policy(),
+        client,
+        None,
+    ) else {
+        panic!("a selection of only host-bound tools must not build without a host");
+    };
+    assert_eq!(error.code(), CarrierToolsetErrorCode::UnsupportedSelection);
+}
+
+#[cfg(feature = "toolkit-office")]
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let platform = super::attachment_test_support::FakePlatform::new();
+    let transport = FixtureTransport::new(|_| ok(&json!({})));
+    let client = CarrierClient::with_transport(config(), transport as Arc<dyn CarrierTransport>);
+    let toolset = test_build_with_client("gate", &[], &policy(), client, Some(platform.host()))
+        .expect("Carrier toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("Carrier tools");
+    assert_eq!(tools.len(), 18);
     super::sdk_conformance::assert_sdk_conformance("carrier", &tools);
 }

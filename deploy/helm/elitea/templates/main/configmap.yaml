@@ -66,8 +66,27 @@
   index routes read: the per-project pgvector index_meta rows (python) or the
   elitea_runtime.index_registry table (rust). An explicit env entry still wins.
 */ -}}
+{{- /*
+  The runtime comes from the "elitea.indexingRuntime" helper (the explicit
+  worker.indexingRuntime, python otherwise: the chart never switches to rust by
+  itself). guards.yaml refuses a main.env.ELITEA_INDEXING_RUNTIME override that
+  disagrees with it, and refuses an explicit rust whose prerequisites are
+  missing, because elitea-main refuses ELITEA_INDEXING_RUNTIME=rust with its
+  runtime plane off.
+*/ -}}
 {{- if not (get $env "ELITEA_INDEXING_RUNTIME") }}
-{{- $env = merge (deepCopy $env) (dict "ELITEA_INDEXING_RUNTIME" $.Values.worker.indexingRuntime) }}
+{{- $indexingRuntime := include "elitea.indexingRuntime" $ }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_INDEXING_RUNTIME" $indexingRuntime) }}
+{{- end }}
+{{- /*
+  ELITEA_MEMORY_EMBEDDING_MODEL (worker unit M9): the SAME value as the worker's
+  runtime.json memory_embedding_model, so elitea-main knows whether the memory
+  toolkit is actually served and withholds it from the catalogue with a reason
+  when no model is configured. Written only under the Rust indexing runtime when
+  set; an explicit env entry still wins.
+*/ -}}
+{{- if and (eq (include "elitea.indexingRuntime" $) "rust") (($.Values.worker.runtime | default dict).memoryEmbeddingModel) (not (get $env "ELITEA_MEMORY_EMBEDDING_MODEL")) }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_MEMORY_EMBEDDING_MODEL" (($.Values.worker.runtime).memoryEmbeddingModel | toString)) }}
 {{- end }}
 {{- /*
   The application engines' platform gRPC targets (#1243, #1244): where

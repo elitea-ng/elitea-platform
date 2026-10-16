@@ -85,6 +85,43 @@ impl DispatchJournal {
         .bind(activation.as_slice()).fetch_one(&self.pool).await?)
     }
 
+    /// Whether an execute submission may have left the Worker for this
+    /// activation: a row exists and its submission is no longer pending. A row
+    /// written before hydration (`register_unsubmitted`) says only that the
+    /// activation was reserved. Rows from earlier Workers read as submitted.
+    pub(crate) async fn submission_started(
+        &self,
+        scope: &DispatchScope,
+        activation: &[u8; 32],
+    ) -> Result<bool, DispatchError> {
+        Ok(sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM elitea_runtime.sandbox_dispatches WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id=$4 AND NOT submission_pending)",
+        )
+        .bind(&scope.tenant).bind(scope.project).bind(&scope.execution)
+        .bind(activation.as_slice()).fetch_one(&self.pool).await?)
+    }
+
+    /// Same answer as `contains_activation` for each id, in one `= ANY($4)` round trip.
+    pub(crate) async fn contains_activations(
+        &self,
+        scope: &DispatchScope,
+        activations: &[[u8; 32]],
+    ) -> Result<Vec<bool>, DispatchError> {
+        if activations.is_empty() || activations.len() > 8 {
+            return Err(DispatchError::Invalid);
+        }
+        let ids: Vec<&[u8]> = activations.iter().map(<[u8; 32]>::as_slice).collect();
+        let found: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT DISTINCT activation_id FROM elitea_runtime.sandbox_dispatches WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND activation_id = ANY($4::bytea[])",
+        )
+        .bind(&scope.tenant).bind(scope.project).bind(&scope.execution)
+        .bind(&ids).fetch_all(&self.pool).await?;
+        Ok(activations
+            .iter()
+            .map(|id| found.iter().any(|row| row.as_slice() == id.as_slice()))
+            .collect())
+    }
+
     /// Preserve the original request and audience across claim generations.
     pub(crate) async fn recorded(
         &self,
@@ -206,6 +243,51 @@ impl DispatchJournal {
         digest: &[u8; 32],
         audience: &str,
     ) -> Result<(), DispatchError> {
+        self.register_with(scope, activation, digest, audience, false)
+            .await
+    }
+
+    /// Register before hydration: the identity is durable for a stop, but no
+    /// submission has been sent. [`Self::mark_submission_started`] records the
+    /// moment before the first submission, durably, ahead of the effect.
+    pub(crate) async fn register_unsubmitted(
+        &self,
+        scope: &DispatchScope,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+        audience: &str,
+    ) -> Result<(), DispatchError> {
+        self.register_with(scope, activation, digest, audience, true)
+            .await
+    }
+
+    /// Record, before the first execute submission is sent, that one may now
+    /// reach the supervisor. Idempotent; the flag never returns to pending.
+    pub(crate) async fn mark_submission_started(
+        &self,
+        scope: &DispatchScope,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+        audience: &str,
+    ) -> Result<(), DispatchError> {
+        let count = sqlx::query("UPDATE elitea_runtime.sandbox_dispatches SET submission_pending=FALSE WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND generation=$4 AND activation_id=$5 AND request_digest=$6 AND audience=$7")
+            .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(scope.generation)
+            .bind(activation.as_slice()).bind(digest.as_slice()).bind(audience)
+            .execute(&self.pool).await?.rows_affected();
+        if count != 1 {
+            return Err(DispatchError::Conflict);
+        }
+        Ok(())
+    }
+
+    async fn register_with(
+        &self,
+        scope: &DispatchScope,
+        activation: &[u8; 32],
+        digest: &[u8; 32],
+        audience: &str,
+        submission_pending: bool,
+    ) -> Result<(), DispatchError> {
         if audience.is_empty()
             || audience.len() > 256
             || audience
@@ -214,10 +296,17 @@ impl DispatchJournal {
         {
             return Err(DispatchError::Invalid);
         }
-        sqlx::query("INSERT INTO elitea_runtime.sandbox_dispatches (tenant_id,project_id,execution_id,generation,activation_id,request_digest,audience) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING")
-            .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(scope.generation)
-            .bind(activation.as_slice()).bind(digest.as_slice()).bind(audience)
-            .execute(&self.pool).await?;
+        if submission_pending {
+            sqlx::query("INSERT INTO elitea_runtime.sandbox_dispatches (tenant_id,project_id,execution_id,generation,activation_id,request_digest,audience,submission_pending) VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE) ON CONFLICT DO NOTHING")
+                .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(scope.generation)
+                .bind(activation.as_slice()).bind(digest.as_slice()).bind(audience)
+                .execute(&self.pool).await?;
+        } else {
+            sqlx::query("INSERT INTO elitea_runtime.sandbox_dispatches (tenant_id,project_id,execution_id,generation,activation_id,request_digest,audience) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING")
+                .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(scope.generation)
+                .bind(activation.as_slice()).bind(digest.as_slice()).bind(audience)
+                .execute(&self.pool).await?;
+        }
         let row = sqlx::query("SELECT request_digest,audience FROM elitea_runtime.sandbox_dispatches WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND generation=$4 AND activation_id=$5")
             .bind(&scope.tenant).bind(scope.project).bind(&scope.execution).bind(scope.generation)
             .bind(activation.as_slice()).fetch_one(&self.pool).await?;

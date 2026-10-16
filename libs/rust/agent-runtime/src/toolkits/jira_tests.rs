@@ -22,8 +22,9 @@ use super::families::jira::tools::{
     JiraToolsetErrorCode, build_jira_toolset, test_build_with_api, test_catalog,
 };
 use super::materialize::{
-    ToolsetMaterializationErrorCode, materialize_configured_toolsets_reporting_refusals,
-    materialize_configured_toolsets_with_tokens_and_authorization, refused_toolkits_notice_text,
+    ToolsetMaterializationErrorCode, left_out_toolkits_notice_text,
+    materialize_configured_toolsets_reporting_refusals,
+    materialize_configured_toolsets_with_tokens_and_authorization,
 };
 use super::policy::ToolAdmissionPolicy;
 use super::snapshot::FrozenToolSnapshot;
@@ -343,18 +344,23 @@ async fn catalog_selection_policy_and_the_sdk_contract() {
             ("get_remote_links", true),
             ("link_issues", false),
             ("execute_generic_rq", false),
+            ("get_field_with_image_descriptions", true),
+            ("get_comments_with_image_descriptions", true),
+            ("get_attachments_content", true),
+            ("add_file_to_issue_description", false),
+            ("update_comment_with_file", false),
         ]
     );
     let (client, _) = client(&server_settings(), Vec::new());
     let api: Arc<dyn JiraApi> = Arc::new(client);
     let readonly: Arc<dyn ReadonlyContext> = context();
 
-    // Every SDK name selected: the family keeps the twelve it serves.
+    // Every SDK name selected: the family keeps the seventeen it serves.
     let names = super::sdk_conformance::sdk_tool_names("jira");
     let names = names.iter().map(String::as_str).collect::<Vec<_>>();
     let toolset = test_build_with_api("tracker", &names, &policy(&[]), &api).expect("all");
     let tools = toolset.tools(readonly.clone()).await.expect("tools");
-    assert_eq!(tools.len(), 12);
+    assert_eq!(tools.len(), 17);
     super::sdk_conformance::assert_sdk_conformance("jira", &tools);
     for tool in &tools {
         assert!(tool.description().starts_with("Toolkit: tracker\n"));
@@ -369,7 +375,7 @@ async fn catalog_selection_policy_and_the_sdk_contract() {
 
     // Empty selection is every served tool; a mixed one keeps the served.
     let all = test_build_with_api("tracker", &[], &policy(&[]), &api).expect("empty");
-    assert_eq!(all.tools(readonly.clone()).await.expect("tools").len(), 12);
+    assert_eq!(all.tools(readonly.clone()).await.expect("tools").len(), 17);
     let mixed = test_build_with_api(
         "tracker",
         &["get_attachments_content", "list_projects", "index_data"],
@@ -380,10 +386,10 @@ async fn catalog_selection_policy_and_the_sdk_contract() {
     let mixed = mixed.tools(readonly.clone()).await.expect("tools");
     assert_eq!(
         mixed.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
-        ["list_projects"]
+        ["list_projects", "get_attachments_content"]
     );
     for refused in [
-        &["update_comment_with_file"][..],
+        &["index_data"][..],
         &["not_a_jira_tool", "list_projects"][..],
     ] {
         let Err(error) = test_build_with_api("tracker", refused, &policy(&[]), &api) else {
@@ -398,7 +404,7 @@ async fn catalog_selection_policy_and_the_sdk_contract() {
         &api,
     )
     .expect("blocked");
-    assert_eq!(blocked.tools(readonly).await.expect("tools").len(), 11);
+    assert_eq!(blocked.tools(readonly).await.expect("tools").len(), 16);
 
     // The production builder applies the same selection rules.
     let config = JiraToolkitConfig::parse(&with(
@@ -407,7 +413,7 @@ async fn catalog_selection_policy_and_the_sdk_contract() {
         json!(["get_field_with_image_descriptions"]),
     ))
     .expect("config");
-    let Err(error) = build_jira_toolset("tracker", config, &policy(&[])) else {
+    let Err(error) = build_jira_toolset("tracker", config, &policy(&[]), None) else {
         panic!("an unserved-only selection has nothing to serve");
     };
     assert_eq!(error.code(), JiraToolsetErrorCode::UnsupportedSelection);
@@ -1281,8 +1287,8 @@ async fn a_refused_setting_is_named_to_the_user_not_silently_skipped() {
         1,
         "only the served toolkit binds"
     );
-    assert_eq!(materialized.refused.len(), 3);
-    let notice = refused_toolkits_notice_text(&materialized.refused).expect("a notice");
+    assert_eq!(materialized.left_out.len(), 3);
+    let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
     assert_eq!(
         notice,
         [

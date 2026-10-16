@@ -1,6 +1,4 @@
-import { useEffect, useRef } from 'react';
-
-import { dump } from 'js-yaml';
+import { useEffect } from 'react';
 
 import { FlowEditorConstants } from '../flow-editor/constants';
 import { usePipelineYamlStore } from '../../model/pipelineYamlStore';
@@ -23,7 +21,7 @@ import { usePipelineYamlStore } from '../../model/pipelineYamlStore';
  * establishes elsewhere, e.g. `features/agents/lib/useAgentAttachments.ts`'s
  * own identical `internalTools` parameter for the SAME underlying baseline
  * field). `dispatch(pipelineActions.setYamlCode(...))`/
- * `setYamlJsonObject(...)` become direct `usePipelineYamlStore` setter calls.
+ * `setYamlJsonObject(...)` become one ordered atomic store edit against current source.
  *
  * Must be called inside whatever owns the pipeline's live `internal_tools`
  * value on the pipeline configuration page (baseline: inside the Formik
@@ -31,40 +29,43 @@ import { usePipelineYamlStore } from '../../model/pipelineYamlStore';
  */
 export function usePipelineAttachmentYamlSync(hasAttachments: boolean): void {
   const yamlCode = usePipelineYamlStore((state) => state.yamlCode);
-  const yamlJsonObject = usePipelineYamlStore((state) => state.yamlJsonObject);
-  const setYamlCode = usePipelineYamlStore((state) => state.setYamlCode);
-  const setYamlJsonObject = usePipelineYamlStore((state) => state.setYamlJsonObject);
-
-  // Keep a ref so the effect always reads the latest YAML object without
-  // needing to re-run whenever any unrelated YAML change happens.
-  const yamlJsonObjectRef = useRef(yamlJsonObject);
-  yamlJsonObjectRef.current = yamlJsonObject;
+  const editPipelineYamlDocument = usePipelineYamlStore((state) => state.editPipelineYamlDocument);
 
   useEffect(() => {
-    const currentYamlObj = yamlJsonObjectRef.current;
-    const currentState = (currentYamlObj['state'] as Readonly<Record<string, unknown>> | undefined) ?? {
-      ...FlowEditorConstants.DefaultState,
-    };
-    const alreadyHasKey = FlowEditorConstants.STATE_INPUT_ATTACHMENTS in currentState;
-
-    if (hasAttachments && !alreadyHasKey) {
-      const updated = {
-        ...currentYamlObj,
-        state: {
-          ...currentState,
-          [FlowEditorConstants.STATE_INPUT_ATTACHMENTS]: { type: FlowEditorConstants.StateVariableTypes.List, default: [] },
-        },
-      };
-      setYamlCode(dump(updated));
-      setYamlJsonObject(updated);
-    } else if (!hasAttachments && alreadyHasKey) {
-      const remainingState = Object.fromEntries(
-        Object.entries(currentState).filter(([key]) => key !== FlowEditorConstants.STATE_INPUT_ATTACHMENTS),
-      );
-      const updated = { ...currentYamlObj, state: remainingState };
-      setYamlCode(dump(updated));
-      setYamlJsonObject(updated);
+    try {
+      editPipelineYamlDocument((currentYamlObj) => {
+        const authoredState = currentYamlObj['state'];
+        if (
+          Object.hasOwn(currentYamlObj, 'state') &&
+          (authoredState === null || typeof authoredState !== 'object' || Array.isArray(authoredState))
+        )
+          throw new Error('Expected an attachment state mapping');
+        const currentState = (authoredState as Readonly<Record<string, unknown>> | undefined) ?? {
+          ...FlowEditorConstants.DefaultState,
+        };
+        const alreadyHasKey = Object.hasOwn(currentState, FlowEditorConstants.STATE_INPUT_ATTACHMENTS);
+        if (hasAttachments && !alreadyHasKey) {
+          return {
+            ...currentYamlObj,
+            state: {
+              ...currentState,
+              [FlowEditorConstants.STATE_INPUT_ATTACHMENTS]: {
+                type: FlowEditorConstants.StateVariableTypes.List,
+                value: [],
+              },
+            },
+          };
+        }
+        if (!hasAttachments && alreadyHasKey) {
+          const remainingState = Object.fromEntries(
+            Object.entries(currentState).filter(([key]) => key !== FlowEditorConstants.STATE_INPUT_ATTACHMENTS),
+          );
+          return { ...currentYamlObj, state: remainingState };
+        }
+        return currentYamlObj;
+      });
+    } catch {
+      // Keep malformed/unsupported raw text intact; synchronization retries after a valid YAML edit.
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasAttachments, yamlCode, setYamlCode, setYamlJsonObject]);
+  }, [hasAttachments, yamlCode, editPipelineYamlDocument]);
 }

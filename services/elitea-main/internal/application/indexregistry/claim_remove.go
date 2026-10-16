@@ -93,7 +93,22 @@ const (
 	RemovalForbidden RemovalDisposition = "forbidden"
 	// RemovalActiveRun: the index's run is still active.
 	RemovalActiveRun RemovalDisposition = "active_run"
+	// RemovalSharedWriteRefused: the claim's execution is bound to a
+	// conversation in which personal memory was read (worker unit M9): a
+	// shared index is not changed from such a conversation.
+	RemovalSharedWriteRefused RemovalDisposition = "shared_write_refused"
 )
+
+// SharedWriteRefusedSentence is the refusal of every shared write (project
+// memory, a shared index) from a conversation that read personal memory.
+const SharedWriteRefusedSentence = "this conversation read personal memory, so it cannot write shared project memory or a shared index"
+
+// ConversationTaint answers whether the claim's execution is bound to a
+// conversation in which personal memory was read (*repos.VectorClaimTokens).
+// A doubt is an error, and an error refuses.
+type ConversationTaint interface {
+	ExecutionConversationTainted(ctx context.Context, executionID string, generation int64) (bool, error)
+}
 
 // ClaimRemovalRequest is what the worker names: the frozen toolkit, the index
 // by the name the model gave and by the registry id the frozen catalog carried
@@ -117,6 +132,17 @@ type ClaimRemover struct {
 	permissions PermissionChecker
 	registry    *Service
 	report      func(error)
+	taint       ConversationTaint
+}
+
+// WithConversationTaint makes the remover refuse a removal from a claim whose
+// conversation read personal memory (RemovalSharedWriteRefused). Without it
+// no conversation is consulted (a deployment without memory).
+func (r *ClaimRemover) WithConversationTaint(taint ConversationTaint) *ClaimRemover {
+	if r != nil && taint != nil {
+		r.taint = taint
+	}
+	return r
 }
 
 func NewClaimRemover(
@@ -182,6 +208,20 @@ func (r *ClaimRemover) RemoveIndex(
 	}
 	if !allowed {
 		return RemovalForbidden, nil
+	}
+	// An index is shared by the project: it is not removed from a
+	// conversation that read personal memory, like every other shared write.
+	if r.taint != nil {
+		if claim.Generation > math.MaxInt64 {
+			return "", ErrClaimUnauthorized
+		}
+		tainted, err := r.taint.ExecutionConversationTainted(ctx, claim.ExecutionID, int64(claim.Generation))
+		if err != nil {
+			return "", dependencyError(ctx, ErrClaimRemovalUnavailable, err)
+		}
+		if tainted {
+			return RemovalSharedWriteRefused, nil
+		}
 	}
 	scope := indexmetaapp.Request{
 		ProjectID: principal.ProjectID, ActorUserID: actorID, ToolkitID: request.ToolkitID,

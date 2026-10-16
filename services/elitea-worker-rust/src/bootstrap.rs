@@ -120,6 +120,11 @@ pub(crate) struct ProductionTransportBundle {
     /// The index.ingest.v1 runtime, when the deployment names a
     /// `vector_target` (ADR-0030 I1).
     pub(crate) index_runtime: Option<Arc<crate::indexing::IndexIngestRuntime>>,
+    /// The document extraction sidecar's client, when the deployment names
+    /// its socket: shared by the index runs and by the toolkit tools that
+    /// read a document as text (`SharePoint` `read_document`), so both queue
+    /// behind one permit pool.
+    pub(crate) extractor: Option<Arc<crate::transport::extractor_client::ExtractorClient>>,
 }
 
 impl ProductionTransportBundle {
@@ -303,9 +308,24 @@ impl ProductionTransportBundle {
             }))
         };
         let platform = Arc::new(PlatformClient::new(runtime_context));
+        let model_facade = Arc::new(model_facade);
+        // PDF and Office documents go to the extraction sidecar when the
+        // deployment names its socket; the dial is lazy, so a sidecar that is
+        // still starting costs nothing here. A client that cannot be built does
+        // not stop the worker: it runs without document reading.
+        let extractor = connect_extractor(
+            deployment.extractor_socket.as_deref(),
+            crate::transport::extractor_client::ExtractorClient::connect_lazy,
+        );
         let index_runtime = match deployment.vector_target.as_deref() {
-            Some(target) => Some(Arc::new(
-                crate::indexing::IndexIngestRuntime::new(
+            Some(target) => {
+                // Index runs read PDF and Office files through the sidecar a
+                // deployment names; a named sidecar that cannot be used is a
+                // configuration error for them (and only them).
+                if deployment.extractor_socket.is_some() && extractor.is_none() {
+                    return Err(ProductionBootstrapError::InvalidConfiguration);
+                }
+                let mut runtime = crate::indexing::IndexIngestRuntime::new(
                     target,
                     trust.ca_pem(),
                     trust.identity_pem(),
@@ -314,13 +334,30 @@ impl ProductionTransportBundle {
                     elitea_connectors::egress::HostAllowlist::parse(
                         deployment.index_egress_allowlist.as_deref(),
                     ),
-                    crate::indexing::IndexRunLimits::default(),
+                    crate::indexing::IndexRunLimits {
+                        max_model_calls: deployment
+                            .index_model_call_cap
+                            .unwrap_or(crate::indexing::DEFAULT_MAX_MODEL_CALLS),
+                        ..crate::indexing::IndexRunLimits::default()
+                    },
                 )
                 .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?
                 // The `remove_index` tool asks Main over the same control
                 // plane the claim came from (ADR-0030 I1).
-                .with_removal_control(Arc::clone(&control) as Arc<dyn IndexRemovalControl>),
-            )),
+                .with_removal_control(Arc::clone(&control) as Arc<dyn IndexRemovalControl>)
+                // The proposal chunker's chat model (ADR-0030 I4), bound per
+                // call over the same gateway channel.
+                .with_chat_models(Arc::clone(&model_facade)
+                    as Arc<dyn crate::indexing::model_steps::ChatModelBinder>);
+                if let Some(extractor) = extractor.as_ref() {
+                    runtime = runtime.with_extractor(Arc::clone(extractor));
+                }
+                // The `memory` toolkit's embedding model (unit M9).
+                if let Some(model) = deployment.memory_embedding_model.as_deref() {
+                    runtime = runtime.with_memory_embedding_model(model);
+                }
+                Some(Arc::new(runtime))
+            }
             None => None,
         };
         Ok(Self {
@@ -334,10 +371,38 @@ impl ProductionTransportBundle {
             output,
             input,
             platform,
-            model_facade: Arc::new(model_facade),
+            model_facade,
             agentstate,
             index_runtime,
+            extractor,
         })
+    }
+}
+
+/// The extraction sidecar's client for the socket a deployment names, if any.
+/// A socket that yields no client (the connector failed) is logged and
+/// answered `None`: the worker still starts, and the tools that read a
+/// document say they have no document reader. The connector is a parameter so
+/// that failure is testable.
+pub(crate) fn connect_extractor<E>(
+    socket: Option<&std::path::Path>,
+    connect: impl FnOnce(
+        &std::path::Path,
+    ) -> Result<crate::transport::extractor_client::ExtractorClient, E>,
+) -> Option<Arc<crate::transport::extractor_client::ExtractorClient>> {
+    let socket = socket?;
+    if let Ok(extractor) = connect(socket) {
+        tracing::info!(
+            event = "index_extractor_configured",
+            socket = %extractor.socket().display()
+        );
+        Some(Arc::new(extractor))
+    } else {
+        tracing::warn!(
+            event = "extractor_client_unavailable",
+            "the document extraction client could not be built; documents are not read"
+        );
+        None
     }
 }
 
@@ -395,16 +460,18 @@ async fn connect_private_grpc(
     private_ca: tonic::transport::Certificate,
     client_identity: tonic::transport::Identity,
 ) -> Result<Channel, ProductionBootstrapError> {
-    let endpoint = Endpoint::from_shared(format!("https://{target}"))
-        .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?
-        .tls_config(
-            ClientTlsConfig::new()
-                .ca_certificate(private_ca)
-                .identity(client_identity),
-        )
-        .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?
-        .connect_timeout(deadline)
-        .tcp_nodelay(true);
+    let endpoint = crate::transport::keepalive::with_keepalive(
+        Endpoint::from_shared(format!("https://{target}"))
+            .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?,
+    )
+    .tls_config(
+        ClientTlsConfig::new()
+            .ca_certificate(private_ca)
+            .identity(client_identity),
+    )
+    .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?
+    .connect_timeout(deadline)
+    .tcp_nodelay(true);
     tokio::time::timeout(deadline, endpoint.connect())
         .await
         .map_err(|_| ProductionBootstrapError::DependencyUnavailable)?
@@ -588,9 +655,9 @@ fn map_runtime_context_error(error: &RuntimeContextError) -> ProductionBootstrap
 
 fn map_model_error(error: ModelFacadeError) -> ProductionBootstrapError {
     match error {
-        ModelFacadeError::InvalidConfiguration | ModelFacadeError::InvalidInvocation => {
-            ProductionBootstrapError::InvalidConfiguration
-        }
+        ModelFacadeError::InvalidConfiguration
+        | ModelFacadeError::InvalidInvocation
+        | ModelFacadeError::InvalidClaimContext => ProductionBootstrapError::InvalidConfiguration,
         ModelFacadeError::ResourceExhausted => ProductionBootstrapError::ResourceExhausted,
         ModelFacadeError::DependencyUnavailable => ProductionBootstrapError::DependencyUnavailable,
     }
@@ -631,8 +698,13 @@ mod tests {
             spool_root: PathBuf::from("/runtime/spool"),
             spool_key_path: PathBuf::from("/runtime/spool.key"),
             sandbox_runtimes: Vec::new(),
+            public_base_url: None,
             vector_target: None,
             index_egress_allowlist: None,
+            extractor_socket: None,
+            index_model_call_cap: None,
+            memory_embedding_model: None,
+            toolkit_model_call_cap: None,
             agent_model_checkpoint_recovery: false,
             agent_node_recovery: false,
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),
@@ -735,5 +807,26 @@ mod tests {
             map_nats_error(&NatsJetStreamError::unavailable("provider text")),
             ProductionBootstrapError::DependencyUnavailable
         );
+    }
+
+    #[tokio::test]
+    async fn a_sidecar_client_that_cannot_be_built_does_not_stop_the_worker() {
+        use super::connect_extractor;
+        use crate::transport::extractor_client::ExtractorClient;
+        let socket = PathBuf::from("/run/doc-extractor.sock");
+        // No socket named: no client, nothing logged as a failure.
+        assert!(
+            connect_extractor(None, |_| Err::<ExtractorClient, ()>(())).is_none(),
+            "no sidecar named"
+        );
+        // A socket whose client cannot be built: the worker runs without one.
+        assert!(
+            connect_extractor(Some(&socket), |_| Err::<ExtractorClient, ()>(())).is_none(),
+            "a failed client is not fatal"
+        );
+        // A client that builds is used.
+        let extractor = connect_extractor(Some(&socket), ExtractorClient::connect_lazy)
+            .expect("a lazy client builds without the sidecar running");
+        assert_eq!(extractor.socket(), socket.as_path());
     }
 }

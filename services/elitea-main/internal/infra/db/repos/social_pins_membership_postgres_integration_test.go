@@ -103,8 +103,8 @@ func seedPinFixtures(t *testing.T, pool *pgxpool.Pool) map[string]int {
 		"application": `INSERT INTO p_1.applications (name) VALUES ('pin-app') RETURNING id`,
 		"toolkit":     `INSERT INTO p_1.elitea_tools (name) VALUES ('pin-toolkit') RETURNING id`,
 		"skill":       `INSERT INTO p_1.skills (name, description) VALUES ('pin-skill', 'd') RETURNING id`,
-		"configuration": `INSERT INTO p_1.configuration (uuid, project_id, elitea_title, type, section, data, meta, shared, status_ok, source)
-			VALUES (gen_random_uuid(), 1, 'pin-config', 'openapi', 'credentials', '{}', '{}', false, false, 'user') RETURNING id`,
+		"configuration": `INSERT INTO p_1.configuration (uuid, project_id, elitea_title, type, section, data, meta, shared, status_ok, source, created_at)
+			VALUES (gen_random_uuid(), 1, 'pin-config', 'openapi', 'credentials', '{}', '{}', false, false, 'user', now() AT TIME ZONE 'UTC') RETURNING id`,
 	} {
 		var id int
 		if err := pool.QueryRow(ctx, statement).Scan(&id); err != nil {
@@ -243,8 +243,8 @@ func TestSocialPinTypesWithNoTenantTableCannotBePinnedButCanBeCleared(t *testing
 	for _, entity := range []string{"prompt", "collection", "datasource"} {
 		requirePinStatus(t, pins.Pin(asUser("7"), "1", entity, "1"), http.StatusBadRequest, "Pin "+entity)
 		// A row left by an earlier release is removable by a member.
-		if _, err := pool.Exec(context.Background(), `INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id)
-			VALUES ($1, 1, 1, 7)`, entity); err != nil {
+		if _, err := pool.Exec(context.Background(), `INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at)
+			VALUES ($1, 1, 1, 7, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`, entity); err != nil {
 			t.Fatal(err)
 		}
 		if err := pins.Unpin(asUser("7"), "1", entity, "1"); err != nil {

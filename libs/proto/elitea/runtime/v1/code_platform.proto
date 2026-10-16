@@ -78,3 +78,29 @@ message CodePlatformStepResponseV1 {
   CodePlatformStepDispositionV1 disposition = 3; // JSON: idle, committed, unknown
   optional string effect_id = 4; // JSON null only for idle; exact owning 64 lowercase hex otherwise
 }
+
+// POST /runtime/content/executions/{executionID}/generations/{generation}/code-platform/effects.
+// A read-only, fenced question about Main's durable platform-call journal: does this dispatch
+// activation hold any call whose outcome is not known? Same claim/fence/lease authority and
+// 512-byte body bound as the step route. Selectors only; the response names no effect id,
+// state or count. JSON uses exact lowercase strings, not Proto bytes.
+message CodePlatformEffectsRequestV1 {
+  string schema = 1; // elitea.runtime.code-platform-effects-request.v1
+  uint32 revision = 2; // 1
+  string dispatch_activation = 3; // exact 64 lowercase hex, nonzero
+  string prepared_request_fingerprint = 4; // exact registered prepared fingerprint, 64 lowercase hex, nonzero
+}
+enum CodePlatformEffectsDispositionV1 {
+  CODE_PLATFORM_EFFECTS_DISPOSITION_V1_UNSPECIFIED = 0;
+  // No platform call of this activation is in dispatching or uncertain state, and no committed
+  // call has a non-terminal toolkit child. Also the answer for a job without registration.
+  CODE_PLATFORM_EFFECTS_DISPOSITION_V1_NONE = 1;
+  // At least one call is dispatching or uncertain, or a committed call's toolkit child execution
+  // is still PENDING, DISPATCHED, CLAIMED, RUNNING or SETTLING. A typed failure must not be settled.
+  CODE_PLATFORM_EFFECTS_DISPOSITION_V1_POSSIBLE = 2;
+}
+message CodePlatformEffectsResponseV1 {
+  string schema = 1; // elitea.runtime.code-platform-effects-response.v1
+  uint32 revision = 2; // 1
+  CodePlatformEffectsDispositionV1 disposition = 3; // JSON: none, possible
+}

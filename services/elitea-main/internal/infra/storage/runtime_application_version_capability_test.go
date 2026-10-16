@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -165,7 +166,7 @@ func mustNestedCapabilityURI(t *testing.T) *url.URL {
 // agent claim did, which is what let an index workload freeze and read any
 // agent version in the project it was admitted for.
 func TestPostgresAgentRuntimeContextRefusesIndexClaimIntegration(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the PostgreSQL agent runtime-context capability test")
 	}

@@ -25,8 +25,8 @@ func TestNotificationChangesArePerUserAndCarryMarkSeenAndDeletes(t *testing.T) {
 	// gets a stamp, and an old one is backdated past the settle window.
 	insert := func(user int, message string) int64 {
 		var id int64
-		if err := pool.QueryRow(ctx, `INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
-			VALUES (gen_random_uuid(), FALSE, 1, $1, jsonb_build_object('message', $2::text), 'test') RETURNING id`,
+		if err := pool.QueryRow(ctx, `INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
+			VALUES (gen_random_uuid(), FALSE, 1, $1, jsonb_build_object('message', $2::text), 'test', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`,
 			user, message).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
@@ -117,8 +117,8 @@ func TestNotificationBulkDeleteReachesTheDeltaAsTombstones(t *testing.T) {
 
 	insert := func(user int) int64 {
 		var id int64
-		if err := pool.QueryRow(ctx, `INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
-			VALUES (gen_random_uuid(), FALSE, 1, $1, '{}'::jsonb, 'test') RETURNING id`, user).Scan(&id); err != nil {
+		if err := pool.QueryRow(ctx, `INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
+			VALUES (gen_random_uuid(), FALSE, 1, $1, '{}'::jsonb, 'test', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`, user).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		backdate(t, pool, "centry.notifications", id, time.Hour)

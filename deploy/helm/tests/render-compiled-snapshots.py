@@ -32,7 +32,7 @@ def values():
     return {
         'postgresql': {'maxConnections': 250},
         'main': {'runtime': {'sandboxAudiences': ['dns:rust', 'dns:python'], 'rustCompiledSnapshots': dict(enabled=True, profilesSha256=PIN, **QUOTAS)}},
-        'worker': {'enabled': True, 'implementation': 'rust', 'runtime': {'sandboxRuntimes': [
+        'worker': {'enabled': True, 'implementation': 'rust', 'indexingRuntime': 'python', 'runtime': {'sandboxRuntimes': [
             dict(language='python', target='python:9446', audience='dns:python', image_digest=IMAGE,
                  policy_revision='python-v1', timeout_seconds=60,
                  preparation=dict(target='python-prep:9448', audience='dns:python-prep',

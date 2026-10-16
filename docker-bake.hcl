@@ -30,8 +30,8 @@ target "elitea-main" {
   # stage order.
   target     = "final"
   tags       = ["${REGISTRY}/elitea-main:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-main"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-main"]
+  cache-from = ["type=gha,scope=elitea-main-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-main-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -39,8 +39,8 @@ target "elitea-ui" {
   context    = "./apps/elitea-ui"
   dockerfile = "../deploy/docker/Containerfile.elitea-ui"
   tags       = ["${REGISTRY}/elitea-ui:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-ui"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-ui"]
+  cache-from = ["type=gha,scope=elitea-ui-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-ui-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -52,8 +52,8 @@ target "elitea-web" {
   context    = "."
   dockerfile = "apps/elitea-web/Containerfile"
   tags       = ["${REGISTRY}/elitea-web:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-web"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-web"]
+  cache-from = ["type=gha,scope=elitea-web-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-web-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -68,8 +68,8 @@ target "elitea-worker-python" {
   context    = "."
   dockerfile = "services/elitea-worker-python/Containerfile"
   tags       = ["${REGISTRY}/elitea-worker-python:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-worker-python"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-worker-python"]
+  cache-from = ["type=gha,scope=elitea-worker-python-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-worker-python-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -84,8 +84,8 @@ target "elitea-worker-rust" {
   context    = "."
   dockerfile = "services/elitea-worker-rust/Containerfile"
   tags       = ["${REGISTRY}/elitea-worker-rust:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-worker-rust"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-worker-rust"]
+  cache-from = ["type=gha,scope=elitea-worker-rust-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-worker-rust-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -95,8 +95,8 @@ target "elitea-scheduler" {
   context    = "."
   dockerfile = "services/elitea-scheduler/Containerfile"
   tags       = ["${REGISTRY}/elitea-scheduler:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-scheduler"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-scheduler"]
+  cache-from = ["type=gha,scope=elitea-scheduler-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-scheduler-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -107,8 +107,8 @@ target "elitea-subapp-host" {
   context    = "."
   dockerfile = "services/elitea-subapp-host/Containerfile"
   tags       = ["${REGISTRY}/elitea-subapp-host:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-subapp-host"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-subapp-host"]
+  cache-from = ["type=gha,scope=elitea-subapp-host-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-subapp-host-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -127,8 +127,8 @@ target "elitea-deepwiki-engine-native" {
   context    = "."
   dockerfile = "services/elitea-deepwiki-engine/Containerfile"
   tags       = ["${REGISTRY}/elitea-deepwiki-engine-native:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-deepwiki-engine-native"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-deepwiki-engine-native"]
+  cache-from = ["type=gha,scope=elitea-deepwiki-engine-native-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-deepwiki-engine-native-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -144,8 +144,8 @@ target "elitea-inventory-engine" {
   context    = "."
   dockerfile = "services/elitea-inventory-engine/Containerfile"
   tags       = ["${REGISTRY}/elitea-inventory-engine:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-inventory-engine"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-inventory-engine"]
+  cache-from = ["type=gha,scope=elitea-inventory-engine-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-inventory-engine-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -160,8 +160,26 @@ target "elitea-vector" {
   context    = "."
   dockerfile = "services/elitea-vector/Containerfile"
   tags       = ["${REGISTRY}/elitea-vector:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-vector"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-vector"]
+  cache-from = ["type=gha,scope=elitea-vector-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-vector-linux-amd64,ignore-error=true"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
+# elitea-doc-extractor (ADR-0030 I1): the Rust worker's document extraction
+# sidecar (PDF, Office) on a Unix socket, in its own process and its own
+# Cargo.lock because the worker's lock cannot hold the PDF backend. The same
+# distroless base and cargo-auditable build as elitea-vector. Repo-root
+# context: the Containerfile COPYs services/elitea-doc-extractor, libs/proto
+# (its build script compiles elitea.extract.v1) and libs/rust (path
+# dependencies).
+#
+# Not in `group "default"`, like the engines: it compiles from source.
+target "elitea-doc-extractor" {
+  context    = "."
+  dockerfile = "services/elitea-doc-extractor/Containerfile"
+  tags       = ["${REGISTRY}/elitea-doc-extractor:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-doc-extractor-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-doc-extractor-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -176,7 +194,7 @@ target "elitea-llm-gateway" {
   context    = "."
   dockerfile = "services/elitea-llm-gateway/Containerfile"
   tags       = ["${REGISTRY}/elitea-llm-gateway:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-llm-gateway"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-llm-gateway"]
+  cache-from = ["type=gha,scope=elitea-llm-gateway-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-llm-gateway-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }

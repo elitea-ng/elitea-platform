@@ -31,6 +31,22 @@ pub(crate) enum CodePlatformStep {
     Committed { call_effect: [u8; 32] },
     Unknown { call_effect: [u8; 32] },
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EffectsResponse {
+    schema: String,
+    revision: u8,
+    disposition: String,
+}
+/// Main's answer from the platform-call journal of one dispatch activation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CodePlatformEffects {
+    /// Every call the journal holds is receipted (or none exists): no platform
+    /// effect is outstanding for this activation.
+    None,
+    /// A call is dispatched or uncertain, or its toolkit child is still running.
+    Possible,
+}
 impl InputContentClient {
     pub(crate) async fn step_code_platform(
         &self,
@@ -38,11 +54,51 @@ impl InputContentClient {
         dispatch: [u8; 32],
         prepared_fingerprint: [u8; 32],
     ) -> Result<CodePlatformStep, InputContentError> {
+        let raw = self
+            .code_platform_exchange(
+                claim,
+                "step",
+                "elitea.runtime.code-platform-step-request.v1",
+                dispatch,
+                prepared_fingerprint,
+            )
+            .await?;
+        parse_step(&raw)
+    }
+    /// Read-only, fenced and authorized in Main's own transaction: whether the
+    /// durable platform-call journal of this activation holds an unresolved
+    /// call. It never reads or advances the retained runtime, so it answers
+    /// after the runtime is terminal and across a takeover.
+    pub(crate) async fn code_platform_effects(
+        &self,
+        claim: &ClaimBoundSandboxAuthority,
+        dispatch: [u8; 32],
+        prepared_fingerprint: [u8; 32],
+    ) -> Result<CodePlatformEffects, InputContentError> {
+        let raw = self
+            .code_platform_exchange(
+                claim,
+                "effects",
+                "elitea.runtime.code-platform-effects-request.v1",
+                dispatch,
+                prepared_fingerprint,
+            )
+            .await?;
+        parse_effects(&raw)
+    }
+    async fn code_platform_exchange(
+        &self,
+        claim: &ClaimBoundSandboxAuthority,
+        route: &str,
+        request_schema: &'static str,
+        dispatch: [u8; 32],
+        prepared_fingerprint: [u8; 32],
+    ) -> Result<Vec<u8>, InputContentError> {
         if dispatch == [0; 32] || prepared_fingerprint == [0; 32] {
             return Err(invalid());
         }
         let payload = serde_json::to_vec(&StepRequest {
-            schema: "elitea.runtime.code-platform-step-request.v1",
+            schema: request_schema,
             revision: 1,
             dispatch_activation: crate::sandbox::code_recovery::hex(&dispatch),
             prepared_request_fingerprint: crate::sandbox::code_recovery::hex(&prepared_fingerprint),
@@ -53,7 +109,7 @@ impl InputContentClient {
             .method(Method::POST)
             .version(Version::HTTP_2)
             .uri(format!(
-                "{}/executions/{}/generations/{generation}/code-platform/step",
+                "{}/executions/{}/generations/{generation}/code-platform/{route}",
                 self.config.origin,
                 utf8_percent_encode(execution, PATH_SEGMENT)
             ))
@@ -102,10 +158,27 @@ impl InputContentClient {
                     raw.extend_from_slice(&bytes);
                 }
             }
-            parse_step(&raw)
+            Ok(raw)
         })
         .await
         .map_err(|_| unavailable())?
+    }
+}
+fn parse_effects(raw: &[u8]) -> Result<CodePlatformEffects, InputContentError> {
+    if raw.is_empty() || raw.len() > 512 {
+        return Err(invalid());
+    }
+    // Derived struct decoding rejects duplicate known fields and unknown fields.
+    let response: EffectsResponse = serde_json::from_slice(raw).map_err(|_| invalid())?;
+    if response.schema != "elitea.runtime.code-platform-effects-response.v1"
+        || response.revision != 1
+    {
+        return Err(invalid());
+    }
+    match response.disposition.as_str() {
+        "none" => Ok(CodePlatformEffects::None),
+        "possible" => Ok(CodePlatformEffects::Possible),
+        _ => Err(invalid()),
     }
 }
 fn parse_step(raw: &[u8]) -> Result<CodePlatformStep, InputContentError> {
@@ -185,5 +258,37 @@ mod tests {
         assert!(parse_step(br#"{"schema":"elitea.runtime.code-platform-step-response.v1","revision":1,"disposition":"idle"}"#).is_err());
         assert!(parse_step(br#"{"schema":"elitea.runtime.code-platform-step-response.v1","revision":1,"revision":1,"disposition":"idle","effect_id":null}"#).is_err());
         assert!(parse_step(&[b' '; 513]).is_err());
+    }
+
+    #[test]
+    fn effects_response_is_closed_and_carries_no_identity() {
+        let body = |disposition: &str| {
+            format!(r#"{{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"{disposition}"}}"#)
+                .into_bytes()
+        };
+        assert_eq!(
+            parse_effects(&body("none")).unwrap(),
+            CodePlatformEffects::None
+        );
+        assert_eq!(
+            parse_effects(&body("possible")).unwrap(),
+            CodePlatformEffects::Possible
+        );
+        // Anything else is refused, never read as "no effect".
+        assert!(parse_effects(&body("idle")).is_err());
+        assert!(parse_effects(&body("")).is_err());
+        assert!(parse_effects(&body("None")).is_err());
+        assert!(
+            parse_effects(
+                br#"{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1}"#
+            )
+            .is_err()
+        );
+        assert!(parse_effects(br#"{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":2,"disposition":"none"}"#).is_err());
+        assert!(parse_effects(br#"{"schema":"elitea.runtime.code-platform-step-response.v1","revision":1,"disposition":"none"}"#).is_err());
+        assert!(parse_effects(br#"{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"none","effect_id":null}"#).is_err());
+        assert!(parse_effects(br#"{"schema":"elitea.runtime.code-platform-effects-response.v1","revision":1,"disposition":"none","disposition":"none"}"#).is_err());
+        assert!(parse_effects(&[b' '; 513]).is_err());
+        assert!(parse_effects(b"").is_err());
     }
 }

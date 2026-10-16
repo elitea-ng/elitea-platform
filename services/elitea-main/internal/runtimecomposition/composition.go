@@ -686,6 +686,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if admissionErr != nil {
 			return nil, fmt.Errorf("construct agent execution admission: %w", admissionErr)
 		}
+		// A sub-agent's memory toolkits are the run's too (worker unit M9):
+		// read from the same tenant-schema projection the nested-agent route
+		// freezes the child from.
+		admissionNestedVersions, nestedErr := repos.NewCurrentNestedApplicationVersionRepository(
+			dependencies.AdmissionPool,
+		)
+		if nestedErr != nil {
+			return nil, fmt.Errorf("construct nested application version reader: %w", nestedErr)
+		}
+		agentAdmissions.WithNestedMemoryToolkits(admissionNestedVersions)
 		agentTargets, targetErr := repos.NewCurrentAgentStartRepository(
 			dependencies.AdmissionPool,
 			catalogueProjectID,
@@ -2221,7 +2231,6 @@ func phaseOneGRPCPolicy(maxConcurrentStreams uint32) runtimegrpc.GRPCServerPolic
 	return runtimegrpc.GRPCServerPolicy{
 		MaxConcurrentStreams:  maxConcurrentStreams,
 		MaxConnections:        64,
-		MinClientPingInterval: 30 * time.Second,
 		KeepaliveTime:         time.Minute,
 		KeepaliveTimeout:      10 * time.Second,
 		MaxConnectionIdle:     5 * time.Minute,

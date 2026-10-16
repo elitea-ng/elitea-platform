@@ -216,6 +216,10 @@ const (
 	RemoveIndexDispositionV1_REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN RemoveIndexDispositionV1 = 3
 	// The index's run is still active; it cannot be deleted yet.
 	RemoveIndexDispositionV1_REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN RemoveIndexDispositionV1 = 4
+	// The claim's conversation read personal memory: a shared index is not
+	// changed from it (worker unit M9). An older worker reads this as a
+	// malformed disposition and removes nothing.
+	RemoveIndexDispositionV1_REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED RemoveIndexDispositionV1 = 5
 )
 
 // Enum value maps for RemoveIndexDispositionV1.
@@ -226,13 +230,15 @@ var (
 		2: "REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND",
 		3: "REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN",
 		4: "REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN",
+		5: "REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED",
 	}
 	RemoveIndexDispositionV1_value = map[string]int32{
-		"REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED": 0,
-		"REMOVE_INDEX_DISPOSITION_V1_REMOVED":     1,
-		"REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND":   2,
-		"REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN":   3,
-		"REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN":  4,
+		"REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED":          0,
+		"REMOVE_INDEX_DISPOSITION_V1_REMOVED":              1,
+		"REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND":            2,
+		"REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN":            3,
+		"REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN":           4,
+		"REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED": 5,
 	}
 )
 
@@ -443,9 +449,16 @@ type ClaimReceiptV1 struct {
 	// Carried only by ACCEPTED, RECOVER_AGENT_MODEL_CHECKPOINT and
 	// RECOVER_NODE_VISIT receipts of a capability that may use vectors, and
 	// only where Main serves vector token introspection. Absent otherwise.
-	VectorToken   *VectorClaimTokenV1 `protobuf:"bytes,17,opt,name=vector_token,json=vectorToken,proto3" json:"vector_token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	VectorToken *VectorClaimTokenV1 `protobuf:"bytes,17,opt,name=vector_token,json=vectorToken,proto3" json:"vector_token,omitempty"`
+	// Main reads the typed tool-run refusals of a toolkit.call_tool.v1 result
+	// (TOOLKIT_CALL_TOOL_STATUS_V1_EFFECT_REFUSED / _POLICY_REFUSED, and the
+	// AUTHORIZATION_FAILED run-credentials sentence). Set only on ACCEPTED
+	// receipts of that capability. A worker that does not see it (an older Main)
+	// sends the older shapes: UNKNOWN_TOOL with the fixed refusal sentence, and
+	// the generic authorization sentence.
+	ToolkitTypedRefusals bool `protobuf:"varint,18,opt,name=toolkit_typed_refusals,json=toolkitTypedRefusals,proto3" json:"toolkit_typed_refusals,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ClaimReceiptV1) Reset() {
@@ -574,6 +587,13 @@ func (x *ClaimReceiptV1) GetVectorToken() *VectorClaimTokenV1 {
 		return x.VectorToken
 	}
 	return nil
+}
+
+func (x *ClaimReceiptV1) GetToolkitTypedRefusals() bool {
+	if x != nil {
+		return x.ToolkitTypedRefusals
+	}
+	return false
 }
 
 // VectorClaimTokenV1 is a short-lived bearer bound to one claim: its
@@ -1557,7 +1577,7 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\x0fproposal_digest\x18\x02 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x0eproposalDigest\x12'\n" +
 	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\x122\n" +
 	"\x15settlement_receipt_id\x18\x04 \x01(\tR\x13settlementReceiptId\x12?\n" +
-	"\aoutcome\x18\x05 \x01(\x0e2%.elitea.runtime.v1.ExecutionOutcomeV1R\aoutcomeJ\x04\b\x06\x10\x10\"\xd2\a\n" +
+	"\aoutcome\x18\x05 \x01(\x0e2%.elitea.runtime.v1.ExecutionOutcomeV1R\aoutcomeJ\x04\b\x06\x10\x10\"\x88\b\n" +
 	"\x0eClaimReceiptV1\x12G\n" +
 	"\vdisposition\x18\x01 \x01(\x0e2%.elitea.runtime.v1.ClaimDispositionV1R\vdisposition\x12B\n" +
 	"\bidentity\x18\x02 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
@@ -1575,7 +1595,8 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"retirement\x12>\n" +
 	"\x1cclaim_started_at_unix_micros\x18\f \x01(\x03R\x18claimStartedAtUnixMicros\x12;\n" +
 	"\x1anode_recovery_receipt_json\x18\x10 \x01(\fR\x17nodeRecoveryReceiptJson\x12H\n" +
-	"\fvector_token\x18\x11 \x01(\v2%.elitea.runtime.v1.VectorClaimTokenV1R\vvectorTokenJ\x04\b\r\x10\x10\"\x90\x01\n" +
+	"\fvector_token\x18\x11 \x01(\v2%.elitea.runtime.v1.VectorClaimTokenV1R\vvectorToken\x124\n" +
+	"\x16toolkit_typed_refusals\x18\x12 \x01(\bR\x14toolkitTypedRefusalsJ\x04\b\r\x10\x10\"\x90\x01\n" +
 	"\x12VectorClaimTokenV1\x12\x16\n" +
 	"\x06bearer\x18\x01 \x01(\tR\x06bearer\x123\n" +
 	"\x16expires_at_unix_millis\x18\x02 \x01(\x03R\x13expiresAtUnixMillis\x12'\n" +
@@ -1660,13 +1681,14 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	" AuthorizeInvocationDispositionV1\x123\n" +
 	"/AUTHORIZE_INVOCATION_DISPOSITION_V1_UNSPECIFIED\x10\x00\x126\n" +
 	"2AUTHORIZE_INVOCATION_DISPOSITION_V1_AUTHORIZED_NOW\x10\x01\x12:\n" +
-	"6AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED\x10\x02*\xf2\x01\n" +
+	"6AUTHORIZE_INVOCATION_DISPOSITION_V1_ALREADY_AUTHORIZED\x10\x02*\xa8\x02\n" +
 	"\x18RemoveIndexDispositionV1\x12+\n" +
 	"'REMOVE_INDEX_DISPOSITION_V1_UNSPECIFIED\x10\x00\x12'\n" +
 	"#REMOVE_INDEX_DISPOSITION_V1_REMOVED\x10\x01\x12)\n" +
 	"%REMOVE_INDEX_DISPOSITION_V1_NOT_FOUND\x10\x02\x12)\n" +
 	"%REMOVE_INDEX_DISPOSITION_V1_FORBIDDEN\x10\x03\x12*\n" +
-	"&REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN\x10\x042\xbc\t\n" +
+	"&REMOVE_INDEX_DISPOSITION_V1_ACTIVE_RUN\x10\x04\x124\n" +
+	"0REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED\x10\x052\xbc\t\n" +
 	"\x15RuntimeControlService\x12x\n" +
 	"\x13AuthorizeSandboxJob\x12/.elitea.runtime.v1.AuthorizeSandboxJobRequestV1\x1a0.elitea.runtime.v1.AuthorizeSandboxJobResponseV1\x12\x96\x01\n" +
 	"\x1dAuthorizeRustCompiledSnapshot\x129.elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1\x1a:.elitea.runtime.v1.AuthorizeRustCompiledSnapshotResponseV1\x12c\n" +

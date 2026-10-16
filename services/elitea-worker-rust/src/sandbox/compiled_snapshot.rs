@@ -280,6 +280,12 @@ impl SnapshotProfile {
             dependency_bundle_sha256,
         })
     }
+    /// Return only the immutable root selected by the pinned release catalogue.
+    pub(crate) fn dependency_bundle_root(&self) -> Option<&str> {
+        self.dependency_bundle_sha256
+            .as_ref()
+            .map(ContentSha256::as_str)
+    }
     pub(crate) fn matches_dependency_cohort(&self, job: &super::request::PreparedJob) -> bool {
         self.dependency_bundle_sha256
             .as_ref()

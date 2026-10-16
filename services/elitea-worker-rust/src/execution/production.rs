@@ -147,14 +147,63 @@ pub async fn serve_from_config(
         ProductionAgentRuntime::from_bundle(bundle, tool_policy).map_err(|_| invalid_runtime())?;
     let shutdown_timeout = Duration::from_millis(deployment.limits.shutdown_timeout_millis);
     let (stop, stopped) = watch::channel(false);
-    let mut running = Box::pin(runtime.run(stopped));
+    let running = Box::pin(runtime.run(stopped));
     tracing::info!(event = "production_intake_started");
+    drive(
+        running,
+        &stop,
+        signals.receive(),
+        office_core_stuck(OFFICE_HEALTH_POLL, || elitea_office_core::health().stuck()),
+        shutdown_timeout,
+    )
+    .await
+}
 
+/// How often the worker asks the Office engine whether a library call has
+/// outlived its thread (ADR-0032 decision 3).
+const OFFICE_HEALTH_POLL: Duration = Duration::from_secs(5);
+
+/// Completes once `stuck` has reported a runaway library call.
+///
+/// The Office libraries cannot be cancelled: a call past its deadline returns
+/// an error to the tool, but its thread keeps running and keeps its slot. A
+/// slot held for more than three deadlines is a thread the library will not
+/// give back, and the process cannot clean it up, so the worker drains and
+/// exits non-zero and the orchestrator restarts the pod. (The Deployment has
+/// no probe that would do it, and a readiness failure would not restart a
+/// pull-based consumer.)
+async fn office_core_stuck(poll: Duration, stuck: impl Fn() -> bool) {
+    loop {
+        tokio::time::sleep(poll).await;
+        if stuck() {
+            return;
+        }
+    }
+}
+
+/// Run intake until it ends, a stop signal arrives or the Office engine is
+/// stuck. A signal and a stuck engine both stop claiming new work and give
+/// the in-flight work the shutdown deadline to drain; the stuck engine then
+/// ends the process with an error (non-zero exit) even when the drain
+/// succeeded, so the pod restarts.
+async fn drive<R>(
+    mut running: std::pin::Pin<Box<R>>,
+    stop: &watch::Sender<bool>,
+    signal: impl std::future::Future<Output = Result<(), ProductionServeError>>,
+    stuck: impl std::future::Future<Output = ()>,
+    shutdown_timeout: Duration,
+) -> Result<(), ProductionServeError>
+where
+    R: std::future::Future<Output = Result<(), ProductionAgentRuntimeError>>,
+{
     tokio::select! {
         result = &mut running => result.map_err(map_runtime_error),
-        requested = signals.receive() => {
+        requested = signal => {
             requested?;
             tracing::info!(event = "production_stop_requested");
+            // Analyses queued for a slot are told the worker is shutting down;
+            // the ones running finish within the drain.
+            elitea_agent_runtime::toolkits::close_analysis_gate();
             if stop.send(true).is_err() {
                 return running.await.map_err(map_runtime_error);
             }
@@ -162,6 +211,19 @@ pub async fn serve_from_config(
                 Ok(result) => result.map_err(map_runtime_error),
                 Err(_) => Err(shutdown_timeout_error()),
             }
+        }
+        () = stuck => {
+            tracing::error!(
+                event = "office_core_stuck",
+                error_code = "worker_serve.office_core_stuck",
+                "a document-library call will not give its thread back: draining and exiting"
+            );
+            elitea_agent_runtime::toolkits::close_analysis_gate();
+            if stop.send(true).is_ok() {
+                // Whatever the drain says, the process exits with the error.
+                let _ = tokio::time::timeout(shutdown_timeout, running).await;
+            }
+            Err(office_core_stuck_error())
         }
     }
 }
@@ -226,6 +288,7 @@ impl ProductionAgentRuntime {
             agentstate,
             sandbox,
             index_runtime,
+            extractor,
         } = bundle;
         let limits = deployment.limits;
         let output_config = OutputGrpcConfig {
@@ -282,6 +345,24 @@ impl ProductionAgentRuntime {
                 .map_err(|_| ProductionRuntimeBuildError)?;
         let terminal_recovery = AgentTerminalRecoveryConfig::new(limits.output_max_sessions)
             .map_err(|_| ProductionRuntimeBuildError)?;
+        // The Office families (ADR-0032 P3) reach the platform object API at
+        // `platform_origin`, and only it.
+        let office_runtime =
+            crate::transport::office_host::OfficeRuntime::new(&deployment.platform_origin)
+                .map(|runtime| {
+                    Arc::new(
+                        runtime
+                            .with_public_base_url(deployment.public_base_url.clone())
+                            .with_extractor(extractor.clone()),
+                    )
+                })
+                .ok();
+        if office_runtime.is_none() {
+            tracing::warn!(
+                event = "office_runtime_unavailable",
+                "the Office families are left out: the platform origin is unusable"
+            );
+        }
         let assembler = Arc::new(
             NativeRuntimeAssembler::postgres(
                 Arc::clone(&platform),
@@ -292,7 +373,13 @@ impl ProductionAgentRuntime {
                 CheckpointLimits::default(),
             )
             .with_sandbox(sandbox)
-            .with_index_runtime(index_runtime.clone()),
+            .with_index_runtime(index_runtime.clone())
+            .with_toolkit_model_call_cap(
+                deployment
+                    .toolkit_model_call_cap
+                    .unwrap_or(crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS),
+            )
+            .with_office_runtime(office_runtime.clone()),
         );
         let clock = Arc::new(SystemUnixMillisClock);
         let agent: ProductionAgentProcessor = native_agent_delivery_processor(
@@ -324,7 +411,8 @@ impl ProductionAgentRuntime {
             DirectToolkitRuntime::default(),
             platform,
             index_runtime,
-        );
+        )
+        .with_office(office_runtime);
         let processor = Arc::new(ExecutionDeliveryProcessor::new(
             command_authenticator,
             agent,
@@ -482,6 +570,14 @@ const fn signal_unavailable() -> ProductionServeError {
     }
 }
 
+const fn office_core_stuck_error() -> ProductionServeError {
+    ProductionServeError {
+        code: "worker_serve.office_core_stuck",
+        retryable: true,
+        message: "a document-library call did not finish; the worker drained and exited to be restarted",
+    }
+}
+
 const fn shutdown_timeout_error() -> ProductionServeError {
     ProductionServeError {
         code: "worker_serve.shutdown_timeout",
@@ -499,9 +595,13 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ProductionAgentRuntimeError, ProductionRuntimeBuildError, load_tool_policy,
-        shutdown_timeout_error,
+        ProductionAgentRuntimeError, ProductionRuntimeBuildError, ProductionServeError, drive,
+        load_tool_policy, office_core_stuck, shutdown_timeout_error,
     };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tokio::sync::watch;
 
     #[test]
     fn production_runtime_failures_are_data_free() {
@@ -557,5 +657,160 @@ mod tests {
                 assert!(!format!("{error:?} {error}").contains("secret-value"));
             }
         }
+    }
+
+    /// ADR-0032 decision 3: a stuck Office engine stops intake, lets the
+    /// in-flight work drain and ends the process with an error.
+    #[tokio::test(start_paused = true)]
+    async fn a_stuck_office_engine_drains_the_worker_and_exits_with_an_error() {
+        let (stop, mut stopped) = watch::channel(false);
+        let drained = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&drained);
+        // Intake that runs until told to stop, then takes a moment to drain.
+        let running = Box::pin(async move {
+            while !*stopped.borrow() {
+                if stopped.changed().await.is_err() {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            flag.store(true, Ordering::SeqCst);
+            Ok::<(), ProductionAgentRuntimeError>(())
+        });
+        let polls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&polls);
+        // The engine reports healthy twice, then stuck.
+        let stuck = office_core_stuck(Duration::from_secs(5), move || {
+            seen.fetch_add(1, Ordering::SeqCst) >= 2
+        });
+        let never = std::future::pending::<Result<(), ProductionServeError>>();
+        let result = drive(running, &stop, never, stuck, Duration::from_secs(30)).await;
+        let error = result.expect_err("a stuck engine ends the process with an error");
+        assert_eq!(error.code(), "worker_serve.office_core_stuck");
+        assert!(error.retryable());
+        assert_eq!(polls.load(Ordering::SeqCst), 3, "polled until stuck");
+        assert!(*stop.borrow(), "intake was told to stop claiming");
+        assert!(
+            drained.load(Ordering::SeqCst),
+            "in-flight work was allowed to drain"
+        );
+    }
+
+    /// A drain that never finishes does not hold a stuck worker up: the exit
+    /// comes at the shutdown deadline.
+    #[tokio::test(start_paused = true)]
+    async fn a_stuck_engine_does_not_wait_longer_than_the_shutdown_deadline() {
+        let (stop, _stopped) = watch::channel(false);
+        let running = Box::pin(std::future::pending::<
+            Result<(), ProductionAgentRuntimeError>,
+        >());
+        let started = tokio::time::Instant::now();
+        let result = drive(
+            running,
+            &stop,
+            std::future::pending::<Result<(), ProductionServeError>>(),
+            std::future::ready(()),
+            Duration::from_secs(30),
+        )
+        .await;
+        assert_eq!(
+            result.expect_err("an error").code(),
+            "worker_serve.office_core_stuck"
+        );
+        assert_eq!(started.elapsed(), Duration::from_secs(30));
+    }
+
+    /// A drain closes the worker-wide analysis gate, so a queued analysis is
+    /// told the worker is shutting down instead of waiting for a slot.
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_request_closes_the_analysis_gate() {
+        use elitea_agent_runtime::toolkits::AnalysisGate;
+        let (stop, mut stopped) = watch::channel(false);
+        let running = Box::pin(async move {
+            let _ = stopped.changed().await;
+            Ok::<(), ProductionAgentRuntimeError>(())
+        });
+        let result = drive(
+            running,
+            &stop,
+            std::future::ready(Ok(())),
+            std::future::pending::<()>(),
+            Duration::from_secs(30),
+        )
+        .await;
+        assert!(result.is_ok());
+        assert!(AnalysisGate::process().is_closed());
+    }
+
+    /// Without a stuck engine, a signal still drains and returns the drain's
+    /// own result, and a healthy engine never ends the worker.
+    #[tokio::test(start_paused = true)]
+    async fn a_signal_drains_as_before_and_a_healthy_engine_never_stops_the_worker() {
+        let (stop, mut stopped) = watch::channel(false);
+        let running = Box::pin(async move {
+            let _ = stopped.changed().await;
+            Ok::<(), ProductionAgentRuntimeError>(())
+        });
+        let healthy = office_core_stuck(Duration::from_secs(5), || false);
+        let result = drive(
+            running,
+            &stop,
+            async {
+                tokio::time::sleep(Duration::from_mins(1)).await;
+                Ok::<(), ProductionServeError>(())
+            },
+            healthy,
+            Duration::from_secs(30),
+        )
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+        assert!(*stop.borrow());
+    }
+
+    /// The probe the worker polls is the engine's own: a permit held for
+    /// more than three deadlines (a library call that will not return its
+    /// thread) trips it, and the same `drive` ends the process.
+    #[tokio::test]
+    async fn the_real_engine_probe_trips_on_a_call_that_never_gives_its_thread_back() {
+        let limits = elitea_office_core::Limits::default();
+        assert!(
+            !elitea_office_core::health().stuck(),
+            "healthy at the start"
+        );
+        let held = elitea_office_core::testing::hold_permit(
+            &limits,
+            Duration::from_millis(600),
+            Duration::from_millis(10),
+        )
+        .expect("a free permit");
+        let (stop, _stopped) = watch::channel(false);
+        let result = drive(
+            Box::pin(std::future::pending::<
+                Result<(), ProductionAgentRuntimeError>,
+            >()),
+            &stop,
+            std::future::pending::<Result<(), ProductionServeError>>(),
+            office_core_stuck(Duration::from_millis(5), || {
+                elitea_office_core::health().stuck()
+            }),
+            Duration::from_millis(50),
+        )
+        .await;
+        assert_eq!(
+            result.expect_err("stuck").code(),
+            "worker_serve.office_core_stuck"
+        );
+        assert!(*stop.borrow());
+        held.join().expect("the caller of the held call returns");
+        // The library thread keeps its permit until it exits; then it is healthy.
+        let mut waited = 0;
+        while elitea_office_core::health().stuck() && waited < 100 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            waited += 1;
+        }
+        assert!(
+            !elitea_office_core::health().stuck(),
+            "the permit was released"
+        );
     }
 }

@@ -59,6 +59,9 @@ export function reportHeadline(report: IndexingReport): IndexingReportHeadline |
   if (report.status === IndexingReportStatus.error && totals.indexed === 0) {
     return { icon: '❌', text: `Failed to index ${itemLabels.plural}` };
   }
+  if (report.status === IndexingReportStatus.cancelled && totals.indexed === 0) {
+    return { icon: '⏹️', text: `Stopped before any ${itemLabels.plural} were indexed` };
+  }
   if (report.isUpToDate) {
     const { unchanged } = totals;
     return { icon: '✅', text: `Up to date — ${String(unchanged)} ${pickItemNoun(unchanged, itemLabels)} unchanged` };

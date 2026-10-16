@@ -15,7 +15,7 @@
 # service builds against.
 [workspace]
 resolver = "3"
-members = ["adk-gateway", "agent-runtime", "code-parsers", "connectors", "content-source", "conversation", "doc-chunk", "doc-extract", "engine-core", "engine-sidecar", "graph-algos", "inventory-core", "llm-wire", "local-index", "local-tools", "model-client", "pg-migrate", "repo-ingest", "vector-index"]
+members = ["adk-gateway", "agent-runtime", "code-parsers", "connectors", "content-source", "conversation", "doc-chunk", "doc-extract", "engine-core", "engine-sidecar", "graph-algos", "inventory-core", "llm-wire", "local-index", "local-tools", "model-client", "office-core", "pg-migrate", "repo-ingest", "vector-index"]
 # Vendored crates are path dependencies, never members: their own tests,
 # benches and dev-dependencies are not built or resolved (vendor/README.md).
 exclude = ["vendor"]
@@ -35,6 +35,13 @@ publish = false
 [patch.crates-io]
 adk-agent = { path = "vendor/adk-agent" }
 adk-runner = { path = "vendor/adk-runner" }
+# Zavora-slide fixes (vendor/README.md): tables added to an opened slide
+# survive a save, and renders and PDFs use the bundled fonts only (ADR-0032
+# Risks).
+# Exact version kept (=0.1.1): the office-core isolation test asserts it.
+zavora-slide = { path = "vendor/zavora-slide" }
+zavora-slide-render = { path = "vendor/zavora-slide-render" }
+zavora-slide-pdf = { path = "vendor/zavora-slide-pdf" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

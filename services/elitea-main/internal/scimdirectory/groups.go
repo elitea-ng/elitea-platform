@@ -306,7 +306,7 @@ func (s *Store) UpdateBinding(ctx context.Context, id int64, displayName string,
 		if members, err = ledgerMembers(ctx, tx, id); err != nil {
 			return Group{}, err
 		}
-		if err := revokeMembers(ctx, tx, binding, members); err != nil {
+		if err := s.revokeMembers(ctx, tx, binding, members); err != nil {
 			return Group{}, err
 		}
 	}
@@ -382,7 +382,7 @@ func (s *Store) DeleteGroup(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
-	if err := revokeMembers(ctx, tx, binding, members); err != nil {
+	if err := s.revokeMembers(ctx, tx, binding, members); err != nil {
 		return err
 	}
 	// The ledger rows go with the binding: the foreign key in 0098 carries ON
@@ -449,13 +449,13 @@ func (s *Store) ProjectRoleNames(ctx context.Context, projectID int) ([]string, 
 // this group never granted are untouched.
 func (s *Store) ReplaceGroupMembers(ctx context.Context, id int64, members []int) (Group, error) {
 	return s.applyMembers(ctx, id, func(ctx context.Context, tx pgx.Tx, binding Group) error {
-		return replaceMembers(ctx, tx, binding, members)
+		return s.replaceMembers(ctx, tx, binding, members)
 	})
 }
 
 // replaceMembers is the body of a replace, so ApplyGroupOperations and
 // ReplaceGroupMembers cannot come to mean different things.
-func replaceMembers(ctx context.Context, tx pgx.Tx, binding Group, members []int) error {
+func (s *Store) replaceMembers(ctx context.Context, tx pgx.Tx, binding Group, members []int) error {
 	existing, err := ledgerMembers(ctx, tx, binding.ID)
 	if err != nil {
 		return err
@@ -470,7 +470,7 @@ func replaceMembers(ctx context.Context, tx pgx.Tx, binding Group, members []int
 			removed = append(removed, member)
 		}
 	}
-	if err := revokeMembers(ctx, tx, binding, removed); err != nil {
+	if err := s.revokeMembers(ctx, tx, binding, removed); err != nil {
 		return err
 	}
 	return grantMembers(ctx, tx, binding, members)
@@ -487,7 +487,7 @@ func (s *Store) AddGroupMembers(ctx context.Context, id int64, members []int) (G
 // RemoveGroupMembers withdraws the members named.
 func (s *Store) RemoveGroupMembers(ctx context.Context, id int64, members []int) (Group, error) {
 	return s.applyMembers(ctx, id, func(ctx context.Context, tx pgx.Tx, binding Group) error {
-		return revokeMembers(ctx, tx, binding, members)
+		return s.revokeMembers(ctx, tx, binding, members)
 	})
 }
 
@@ -549,12 +549,12 @@ func (s *Store) ApplyGroupOperations(ctx context.Context, id int64, operations [
 				}
 
 			case GroupReplaceMembers:
-				if err := replaceMembers(ctx, tx, binding, operation.Members); err != nil {
+				if err := s.replaceMembers(ctx, tx, binding, operation.Members); err != nil {
 					return err
 				}
 
 			case GroupRemoveMembers:
-				if err := revokeMembers(ctx, tx, binding, operation.Members); err != nil {
+				if err := s.revokeMembers(ctx, tx, binding, operation.Members); err != nil {
 					return err
 				}
 			}
@@ -720,8 +720,12 @@ func grantMembers(ctx context.Context, tx pgx.Tx, binding Group, members []int) 
 	return nil
 }
 
-// revokeMembers withdraws what this group gave, and only that.
-func revokeMembers(ctx context.Context, tx pgx.Tx, binding Group, members []int) error {
+// revokeMembers withdraws what this group gave, and only that. A person who
+// ends with no role left in the project has left it, and their personal
+// memories there go with them: the journal row is written in this transaction
+// (one call for all of them, after the loop), so it commits or rolls back with
+// the withdrawal.
+func (s *Store) revokeMembers(ctx context.Context, tx pgx.Tx, binding Group, members []int) error {
 	if len(members) == 0 {
 		return nil
 	}
@@ -736,6 +740,7 @@ func revokeMembers(ctx context.Context, tx pgx.Tx, binding Group, members []int)
 		return err
 	}
 
+	var left []int64
 	for _, member := range members {
 		var (
 			roleID  int
@@ -796,6 +801,22 @@ func revokeMembers(ctx context.Context, tx pgx.Tx, binding Group, members []int)
 			`DELETE FROM auth_core__project_user_role
 			  WHERE project_id = $1 AND user_id = $2 AND role_id = $3`,
 			binding.ProjectID, member, roleID); err != nil {
+			return err
+		}
+		var stillMember bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (
+			     SELECT 1 FROM auth_core__project_user_role
+			      WHERE project_id = $1 AND user_id = $2
+			 )`, binding.ProjectID, member).Scan(&stillMember); err != nil {
+			return err
+		}
+		if !stillMember {
+			left = append(left, int64(member))
+		}
+	}
+	if s.memoryUsers != nil && len(left) > 0 {
+		if _, err := s.memoryUsers.EnqueueMemoryUsers(ctx, tx, int64(binding.ProjectID), left...); err != nil {
 			return err
 		}
 	}

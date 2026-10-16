@@ -134,33 +134,33 @@ func seedResolvedVersionFixture(t *testing.T, pool *pgxpool.Pool) {
 	ctx, cancel := context.WithTimeout(context.Background(), credentialJourneyDeadline)
 	defer cancel()
 	if _, err := pool.Exec(ctx, strings.ReplaceAll(`
-INSERT INTO p_1.configuration (project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source)
+INSERT INTO p_1.configuration (project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, created_at)
 VALUES
   (1, 'Resolved canary model', 'resolved_canary_model', 'llm_model', 'llm',
-   '{"name":"resolved-canary-model"}'::jsonb, '{}'::jsonb, true, true, 'test'),
+   '{"name":"resolved-canary-model"}'::jsonb, '{}'::jsonb, true, true, 'test', now() AT TIME ZONE 'UTC'),
   (1, 'Resolved canary credential', 'resolved_canary_credential', 'github', 'credentials',
    '{"base_url":"https://api.github.com","access_token":"{{secret.`+resolvedCanaryVaultEntry+`}}"}'::jsonb,
-   '{}'::jsonb, false, true, 'test');
-INSERT INTO p_1.applications (id, name, description, owner_id)
-VALUES (71, 'Resolved canary agent', 'canary', 1);
+   '{}'::jsonb, false, true, 'test', now() AT TIME ZONE 'UTC');
+INSERT INTO p_1.applications (id, name, description, owner_id, created_at, updated_at)
+VALUES (71, 'Resolved canary agent', 'canary', 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC');
 INSERT INTO p_1.application_versions (
     id, application_id, name, status, author_id, uuid, llm_settings, instructions,
     conversation_starters, welcome_message, agent_type, meta, pipeline_settings
-) VALUES (
+, created_at) VALUES (
     81, 71, 'base', 'draft', $1, '80000000-0000-4000-8000-000000000081',
     '{"model_name":"resolved-canary-model"}'::jsonb,
     'Use {{secret.`+resolvedCanaryInstruction+`}} for the repo.',
     '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb
-);
-INSERT INTO p_1.application_variables (application_version_id, name, value)
-VALUES (81, 'token', '{{secret.`+resolvedCanaryVariable+`}}');
-INSERT INTO p_1.elitea_tools (id, type, name, description, settings, author_id, meta, owner_id)
+, now() AT TIME ZONE 'UTC');
+INSERT INTO p_1.application_variables (application_version_id, name, value, created_at)
+VALUES (81, 'token', '{{secret.`+resolvedCanaryVariable+`}}', now() AT TIME ZONE 'UTC');
+INSERT INTO p_1.elitea_tools (id, type, name, description, settings, author_id, meta, owner_id, created_at)
 VALUES (61, 'github', 'canary-gh', 'GitHub',
   '{"repository":"`+resolvedCanaryPlaintext+`",
     "github_configuration":{"elitea_title":"resolved_canary_credential","private":false},
-    "selected_tools":["read_file"]}'::jsonb, $1, '{}'::jsonb, 1);
-INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type, selected_tools)
-VALUES (61, 71, 81, 'agent', '["read_file"]'::jsonb);`, "$1", strconv.Itoa(credentialJourneyUserID))); err != nil {
+    "selected_tools":["read_file"]}'::jsonb, $1, '{}'::jsonb, 1, now() AT TIME ZONE 'UTC');
+INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type, selected_tools, created_at)
+VALUES (61, 71, 81, 'agent', '["read_file"]'::jsonb, now() AT TIME ZONE 'UTC');`, "$1", strconv.Itoa(credentialJourneyUserID))); err != nil {
 		t.Fatalf("seed the resolved version fixture: %v", err)
 	}
 	// The fixture check: every canary is in what the database holds.

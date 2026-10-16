@@ -17,21 +17,21 @@ func TestInternalNotificationLifecyclePreservesGlobalUserScopeAndIdempotentSeen(
 	var targetID int64
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO centry.notifications
-			(uuid, is_seen, project_id, user_id, meta, event_type, created_at)
+			(uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
 		VALUES
 			('20000000-0000-4000-8000-000000000001', FALSE, 8, 73,
-			 '{"message":"Budget 100%_safe indexing completed"}', 'budget_threshold', '2026-09-04 10:00:00.123456')
+			 '{"message":"Budget 100%_safe indexing completed"}', 'budget_threshold', '2026-09-04 10:00:00.123456', now() AT TIME ZONE 'UTC')
 		RETURNING id`).Scan(&targetID); err != nil {
 		t.Fatalf("seed target notification: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO centry.notifications
-			(uuid, is_seen, project_id, user_id, meta, event_type, created_at)
+			(uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
 		VALUES
 			('20000000-0000-4000-8000-000000000002', FALSE, 1, 73,
-			 '{"message":"Pipeline completed"}', 'pipeline_completed', '2026-09-04 10:00:01'),
+			 '{"message":"Pipeline completed"}', 'pipeline_completed', '2026-09-04 10:00:01', now() AT TIME ZONE 'UTC'),
 			('20000000-0000-4000-8000-000000000003', FALSE, 1, 74,
-			 '{"message":"Other user activity"}', 'budget_threshold', '2026-09-04 10:00:02')`); err != nil {
+			 '{"message":"Other user activity"}', 'budget_threshold', '2026-09-04 10:00:02', now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("seed notification isolation rows: %v", err)
 	}
 

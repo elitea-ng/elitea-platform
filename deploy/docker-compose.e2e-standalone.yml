@@ -132,11 +132,11 @@ services:
         i=0
         until rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret; do
           i=$((i + 1))
-          if [ "$i" -ge 30 ]; then
+          if [ "$$i" -ge 30 ]; then
             echo "rustfs alias set still failing after 30 attempts (60s) — giving up" >&2
             exit 1
           fi
-          echo "rustfs not ready yet (attempt $i/30), retrying in 2s..." >&2
+          echo "rustfs not ready yet (attempt $$i/30), retrying in 2s..." >&2
           sleep 2
         done &&
         rc mb --ignore-existing rustfs/elitea-artifacts
@@ -354,6 +354,12 @@ services:
       ELITEA_DEEPWIKI_CA_FILE: /certs/ca.crt
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "e2e-deepwiki-identity"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+      # Which worker this stack runs, stated explicitly: elitea-main's own default
+      # is rust, so a Python-worker base must say so or its toolkit catalogue
+      # would describe a worker that is not there. The Rust overlay
+      # (docker-compose.standalone-rust-agent.yml) overrides this with "rust".
+      ELITEA_WORKER_IMPLEMENTATION: "python"
+
       ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
       # ── The Inventory facade, on the same OIDC-only stack ────────────────
       # Same credential set, same reasoning: the API group's LocalValidator

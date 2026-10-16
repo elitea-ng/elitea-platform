@@ -1879,11 +1879,18 @@ impl AhaClient {
         let canonical = normalize_resource(resource_type);
         let plural = resource_plural(&canonical).ok_or_else(invalid_input)?;
         validate_identifier(resource_id)?;
-        let form = self
-            .artifacts
-            .multipart(filepath, nonempty(filename))
-            .await
-            .map_err(AhaClientError::from)?;
+        let form = match self.artifacts.multipart(filepath, nonempty(filename)).await {
+            Ok(form) => form,
+            // A host-backed read failure is a sentence the model reads (the
+            // admission layer reduces an error to a generic line); nothing
+            // was sent to Aha.
+            Err(error) => {
+                return match error.sentence() {
+                    Some(sentence) => Ok(Value::String(sentence.to_owned())),
+                    None => Err(AhaClientError::from(error)),
+                };
+            }
+        };
         let note_id = if canonical == "to_do" {
             None
         } else {

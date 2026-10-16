@@ -36,6 +36,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -93,8 +94,8 @@ func setFlag(t *testing.T, pool *pgxpool.Pool, section, key string, value any) {
 		t.Fatalf("marshal %s.%s: %v", section, key, err)
 	}
 	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO centry.platform_config (section, key, value)
-		VALUES ($1, $2, $3::jsonb)
+		INSERT INTO centry.platform_config (section, key, value, updated_at)
+		VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')
 		ON CONFLICT (section, key) DO UPDATE SET value = EXCLUDED.value`,
 		section, key, string(encoded)); err != nil {
 		t.Fatalf("set %s.%s: %v", section, key, err)
@@ -599,7 +600,7 @@ func TestAnUnreadableStoreDoesNotDisableMCPOrBlockPublishing(t *testing.T) {
 func newFlagsPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
+	databaseURL := testpg.DSN(os.Getenv(environment))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", environment)
 	}

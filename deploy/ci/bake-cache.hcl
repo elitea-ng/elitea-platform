@@ -59,6 +59,11 @@ target "elitea-inventory-engine" {
 target "elitea-vector" {
   cache-from = ["type=gha,scope=elitea-vector-linux-amd64"]
 }
+// elitea-doc-extractor (ADR-0030 I1): the Rust worker's PDF/Office sidecar
+// in the rust agent overlay.
+target "elitea-doc-extractor" {
+  cache-from = ["type=gha,scope=elitea-doc-extractor-linux-amd64"]
+}
 target "elitea-web" {
   cache-from = ["type=gha,scope=elitea-web-linux-amd64"]
 }
@@ -71,15 +76,9 @@ target "llm-mock" {
 target "mcp-mock" {
   cache-from = ["type=gha,scope=elitea-mock-mcp"]
 }
-target "mcp-mock-trust" {
-  cache-from = ["type=gha,scope=elitea-mock-mcp"]
-}
-// Same image, third consumer: `worker-trust` builds the python worker's
-// runtime-CA + mcp-mock-CA bundle and runs the mock's own image to reach the
-// certificate (#983).
-target "worker-trust" {
-  cache-from = ["type=gha,scope=elitea-mock-mcp"]
-}
+// `mcp-mock-trust` and `worker-trust` deliberately have NO target: they reuse
+// mcp-mock's image (compose `image:` only, no `build:`), so the mock is built
+// exactly once per run and every consumer carries the same TLS mint.
 target "qtest-mock" {
   cache-from = ["type=gha,scope=elitea-mock-qtest"]
 }
@@ -100,7 +99,14 @@ group "standalone" {
     "elitea-deepwiki-migrate",
     "elitea-inventory", "elitea-inventory-engine",
     "elitea-vector",
-    "elitea-web", "elitea-worker", "mcp-mock", "mcp-mock-trust", "worker-trust", "qtest-mock",
+    "elitea-web", "elitea-worker", "mcp-mock", "qtest-mock",
     "ado-mock",
   ]
+}
+
+// The standalone stack plus deploy/docker-compose.standalone-rust-agent.yml,
+// whose elitea-doc-extractor sidecar only that overlay defines (a group that
+// named it without the overlay would have no build context).
+group "standalone-rust" {
+  targets = ["standalone", "elitea-doc-extractor"]
 }

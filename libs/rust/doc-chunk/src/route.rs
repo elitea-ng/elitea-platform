@@ -1,4 +1,4 @@
-//! The extension router (`universal_chunker`) and the entry point.
+//! The extension router (`universal_chunker`) and the entry points.
 //!
 //! * markdown extensions -> `markdown`; HTML only when the caller says it
 //!   converted the page to markdown ([`ChunkOptions::html_converted`]), else
@@ -14,6 +14,8 @@
 use crate::code::{self, Code};
 use crate::config::ChunkParams;
 use crate::markdown::{self, Markdown};
+use crate::proposal::{self, ChunkDetails};
+use crate::statistical::{self, StatisticalSettings};
 use crate::{Chunk, ChunkError, ChunkingConfig, json};
 use elitea_content_source::{Kind, extension_of_mime, kind_of_extension};
 
@@ -24,6 +26,10 @@ pub enum Chunker {
     Text,
     Json,
     Code,
+    /// Embeds the text's splits to find topic boundaries (a model step).
+    Statistical,
+    /// Asks a chat model to restate the text as propositions (a model step).
+    Proposal,
 }
 
 /// What the caller knows about the text it hands over.
@@ -54,6 +60,88 @@ pub fn chunker_for_with(extension: &str, options: ChunkOptions) -> Chunker {
         Kind::Code => Chunker::Code,
         // HTML as written is text; see `ChunkOptions::html_converted`.
         Kind::Html | Kind::Text | Kind::Binary => Chunker::Text,
+    }
+}
+
+/// A document's chunking, decided: the chunks, or the model step that makes
+/// them. The caller fulfils a model step (it owns the model calls: the
+/// binding, the retries, the budget) and hands the answers back.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChunkPlan {
+    /// Chunked; no model needed.
+    Chunks(Vec<Chunk>),
+    /// The proposal chunker: one chat-model call per window.
+    Proposal(ProposalPlan),
+    /// The statistical chunker: the splits' embeddings.
+    Statistical(StatisticalPlan),
+}
+
+/// The proposal chunker's windows, waiting for a model's answer per window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProposalPlan {
+    windows: Vec<String>,
+}
+
+impl ProposalPlan {
+    /// The windows, in document order: one model call each.
+    #[must_use]
+    pub fn windows(&self) -> &[String] {
+        &self.windows
+    }
+
+    /// The chunks, given the [`ChunkDetails`] the model returned for each
+    /// window (in the order of [`ProposalPlan::windows`]).
+    ///
+    /// # Errors
+    /// [`ChunkError::InvalidModelStep`] when the answers are not one per
+    /// window.
+    pub fn chunks(&self, answers: &[Vec<ChunkDetails>]) -> Result<Vec<Chunk>, ChunkError> {
+        if answers.len() != self.windows.len() {
+            return Err(ChunkError::InvalidModelStep(format!(
+                "{} answers for {} windows",
+                answers.len(),
+                self.windows.len()
+            )));
+        }
+        let mut next = 1;
+        let mut out = Vec::new();
+        for (window, details) in self.windows.iter().zip(answers) {
+            out.extend(proposal::proposal_chunks(details, window, next));
+            next += details.len();
+        }
+        Ok(out)
+    }
+}
+
+/// The statistical chunker's splits, waiting for their embeddings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatisticalPlan {
+    splits: Vec<String>,
+    /// Each split's token count, from the split step.
+    counts: Vec<usize>,
+    settings: StatisticalSettings,
+}
+
+impl StatisticalPlan {
+    /// The splits to embed, in document order.
+    #[must_use]
+    pub fn splits(&self) -> &[String] {
+        &self.splits
+    }
+
+    /// Splits per embeddings request.
+    #[must_use]
+    pub fn batch_size(&self) -> usize {
+        self.settings.batch_size
+    }
+
+    /// The chunks, given one embedding per split.
+    ///
+    /// # Errors
+    /// [`ChunkError::InvalidModelStep`] when the vectors do not fit the
+    /// splits.
+    pub fn chunks(&self, vectors: &[Vec<f32>]) -> Result<Vec<Chunk>, ChunkError> {
+        statistical::statistical_chunks(&self.splits, &self.counts, vectors, &self.settings)
     }
 }
 
@@ -134,7 +222,7 @@ pub fn extension_of(source: &str) -> String {
 
 /// A set size: a positive number (zero and negative mean "default": the CSV
 /// and Excel loaders use -1 for "no limit").
-fn positive(value: Option<i64>) -> Option<usize> {
+pub(crate) fn positive(value: Option<i64>) -> Option<usize> {
     value
         .and_then(|n| usize::try_from(n).ok())
         .filter(|n| *n > 0)
@@ -150,25 +238,27 @@ fn chunker_named(
     extension: &str,
     options: ChunkOptions,
 ) -> Result<Chunker, ChunkError> {
-    match name.trim().to_ascii_lowercase().as_str() {
+    match crate::config::normalize_chunker_name(name).as_str() {
         "markdown" => Ok(Chunker::Markdown),
-        "text" => Ok(Chunker::Text),
+        "text" | "txt" => Ok(Chunker::Text),
         "json" => Ok(Chunker::Json),
+        // The SDK's `file_extension_by_chunker` resolves these names to a
+        // file type and parses by that extension (the ado_plans form sends
+        // `xml`, whose loader yields plain text). `html`/`csv` likewise.
+        "xml" | "html" | "csv" => Ok(chunker_for_with(
+            &format!(".{}", crate::config::normalize_chunker_name(name)),
+            options,
+        )),
         "code" | "code_parser" => Ok(Chunker::Code),
-        "universal" => Ok(chunker_for_with(extension, options)),
-        "statistical" => Err(ChunkError::RequiresModel {
-            chunker: "statistical",
-            reason: "it embeds sentences to find topic boundaries".to_owned(),
-        }),
-        "proposal" => Err(ChunkError::RequiresModel {
-            chunker: "proposal",
-            reason: "it asks a model to restate the text as propositions".to_owned(),
-        }),
+        // The empty name is the SDK's "no chunking tool": by extension.
+        "" | "universal" => Ok(chunker_for_with(extension, options)),
+        "statistical" => Ok(Chunker::Statistical),
+        "proposal" => Ok(Chunker::Proposal),
         other => Err(ChunkError::UnknownChunker(other.to_owned())),
     }
 }
 
-fn markdown_chunks(text: &str, params: &ChunkParams) -> Result<Vec<Chunk>, ChunkError> {
+pub(crate) fn markdown_chunks(text: &str, params: &ChunkParams) -> Result<Vec<Chunk>, ChunkError> {
     let default_headers = markdown::default_headers();
     let headers = params
         .headers_to_split_on
@@ -272,8 +362,10 @@ fn code_chunks(
 ///
 /// # Errors
 /// [`ChunkError::RequiresModel`] for the statistical and proposal chunkers
-/// and for `use_llm`; [`ChunkError::UnknownChunker`] for a `chunking_tool`
-/// that names none; [`ChunkError::Tokenizer`] if the encoding is unavailable.
+/// (a caller that can run model steps uses [`plan`]); `use_llm` is the
+/// image-file step ([`crate::plan_image`]) and has no effect on a document;
+/// [`ChunkError::UnknownChunker`] for a `chunking_tool` that names none;
+/// [`ChunkError::Tokenizer`] if the encoding is unavailable.
 pub fn chunk(
     document_text: &str,
     source: &str,
@@ -293,28 +385,78 @@ pub fn chunk_with(
     config: &ChunkingConfig,
     options: ChunkOptions,
 ) -> Result<Vec<Chunk>, ChunkError> {
+    match plan_with(document_text, source, config, options)? {
+        ChunkPlan::Chunks(chunks) => Ok(chunks),
+        ChunkPlan::Proposal(_) => Err(ChunkError::RequiresModel {
+            chunker: "proposal",
+            reason: "it asks a model to restate the text as propositions".to_owned(),
+        }),
+        ChunkPlan::Statistical(_) => Err(ChunkError::RequiresModel {
+            chunker: "statistical",
+            reason: "it embeds sentences to find topic boundaries".to_owned(),
+        }),
+    }
+}
+
+/// [`chunk`] for a caller that can run the model steps: the statistical and
+/// proposal chunkers come back as a [`ChunkPlan`] to fulfil instead of an
+/// error.
+///
+/// # Errors
+/// As [`chunk`], except the two model-step chunkers.
+pub fn plan(
+    document_text: &str,
+    source: &str,
+    config: &ChunkingConfig,
+) -> Result<ChunkPlan, ChunkError> {
+    plan_with(document_text, source, config, ChunkOptions::default())
+}
+
+/// [`plan`] with the caller's [`ChunkOptions`].
+///
+/// # Errors
+/// As [`plan`].
+pub fn plan_with(
+    document_text: &str,
+    source: &str,
+    config: &ChunkingConfig,
+    options: ChunkOptions,
+) -> Result<ChunkPlan, ChunkError> {
     let extension = extension_of(source);
     let own = config
         .own_params_for(&extension)
         .cloned()
         .unwrap_or_default();
     let params = config.params_for(&extension);
-    if params.use_llm == Some(true) {
-        return Err(ChunkError::RequiresModel {
-            chunker: "use_llm",
-            reason: format!("`use_llm` is set for {extension:?} and model steps are not ported"),
-        });
-    }
+    // `use_llm` is the picture step (`plan_image`, `plan_embedded`); it
+    // acts on the text BEFORE it reaches here, and has no effect on the
+    // chunking itself.
     let chunker = match params.chunker.as_deref() {
         Some(name) => chunker_named(name, &extension, options)?,
         None => chunker_for_with(&extension, options),
     };
-    match chunker {
-        Chunker::Markdown => markdown_chunks(document_text, &params),
-        Chunker::Text => text_chunks(document_text, &params),
-        Chunker::Json => json_chunks(document_text, &params, &own),
-        Chunker::Code => code_chunks(document_text, &extension, &params, &own),
-    }
+    let chunks = match chunker {
+        Chunker::Markdown => markdown_chunks(document_text, &params)?,
+        Chunker::Text => text_chunks(document_text, &params)?,
+        Chunker::Json => json_chunks(document_text, &params, &own)?,
+        Chunker::Code => code_chunks(document_text, &extension, &params, &own)?,
+        Chunker::Statistical => {
+            let settings = StatisticalSettings::from_params(&params.model_steps);
+            let (splits, counts) = statistical::split_text(document_text, &settings)?;
+            return Ok(ChunkPlan::Statistical(StatisticalPlan {
+                splits,
+                counts,
+                settings,
+            }));
+        }
+        Chunker::Proposal => {
+            let size = positive(params.model_steps.max_doc_tokens)
+                .unwrap_or(proposal::PROPOSAL_WINDOW_TOKENS);
+            let windows = proposal::split_windows(document_text, size)?;
+            return Ok(ChunkPlan::Proposal(ProposalPlan { windows }));
+        }
+    };
+    Ok(ChunkPlan::Chunks(chunks))
 }
 
 #[cfg(test)]
@@ -452,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn model_chunkers_and_use_llm_are_typed_outcomes() {
+    fn model_chunkers_are_typed_outcomes_and_use_llm_is_not_one() {
         let statistical = ChunkingConfig::from_value(&json!({"chunking_tool": "statistical"}))
             .unwrap_or_default();
         assert!(matches!(
@@ -473,21 +615,45 @@ mod tests {
         ));
         // Another extension is unaffected.
         assert!(chunk("plain", "a.txt", &proposal).is_ok());
-        let llm =
-            ChunkingConfig::from_value(&json!({".pdf": {"use_llm": true}})).unwrap_or_default();
-        assert!(matches!(
-            chunk("text", "a.pdf", &llm),
-            Err(ChunkError::RequiresModel {
-                chunker: "use_llm",
-                ..
-            })
-        ));
+        // `use_llm` is the picture step: it never makes a document need a
+        // model to be chunked, at the top level or for an extension.
+        for value in [json!({".pdf": {"use_llm": true}}), json!({"use_llm": true})] {
+            let llm = ChunkingConfig::from_value(&value).unwrap_or_default();
+            assert!(chunk("text", "a.pdf", &llm).is_ok(), "{value}");
+            assert!(plan("text", "a.pdf", &llm).is_ok(), "{value}");
+        }
         let nonsense =
             ChunkingConfig::from_value(&json!({"chunking_tool": "nope"})).unwrap_or_default();
         assert!(matches!(
             chunk("text", "a.txt", &nonsense),
             Err(ChunkError::UnknownChunker(_))
         ));
+    }
+
+    #[test]
+    fn the_ado_plans_form_chunking_tools_do_not_fail() {
+        // The ado_plans toolkit form offers `xml` (its default) and `''`.
+        // The SDK parses `xml` by its extension and treats `''` as no tool.
+        let text = "<steps><step>one</step></steps>";
+        let mut configs: Vec<(String, ChunkingConfig)> = ["xml", "XML", "html", "csv", "txt"]
+            .iter()
+            .map(|tool| {
+                let config = ChunkingConfig::from_value(&json!({ "chunking_tool": tool }))
+                    .expect("a valid config");
+                ((*tool).to_owned(), config)
+            })
+            .collect();
+        // The config reader drops an empty `chunking_tool`; the worker's
+        // `IndexParameters` path (`chunking_tool = Some("")`) sets it
+        // straight on the base chunker, which is the only way to reach the
+        // router's `""` arm.
+        let mut empty = ChunkingConfig::default();
+        empty.base.chunker = Some(String::new());
+        configs.push((String::new(), empty));
+        for (tool, config) in &configs {
+            let chunks = chunk(text, "case.md", config).expect(tool);
+            assert!(!chunks.is_empty(), "{tool:?}");
+        }
     }
 
     #[test]

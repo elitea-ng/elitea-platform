@@ -139,8 +139,8 @@ WHERE id = 1;
 
 INSERT INTO p_1.elitea_tools (
     id, type, name, settings, author_id, meta
-) VALUES
-    (2, 'github', 'without-indexes', '{}'::jsonb, 11, '{}'::jsonb),
+, created_at) VALUES
+    (2, 'github', 'without-indexes', '{}'::jsonb, 11, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
     (3, 'confluence', 'scheduled', '{}'::jsonb, 11, '{
       "indexes_meta": {
         "wiki": {
@@ -153,7 +153,7 @@ INSERT INTO p_1.elitea_tools (
           }
         }
       }
-    }'::jsonb);
+    }'::jsonb, now() AT TIME ZONE 'UTC');
 
 UPDATE p_2.elitea_tools
 SET settings = '{"pgvector_configuration":{"private":true}}'::jsonb,

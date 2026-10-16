@@ -1,0 +1,4 @@
+{
+  "note": "The toolkit types the Rust worker indexes and whose families carry the index tools (ADR-0030 I1 + I2 + I3). The single source of truth: Go indexcatalog.Families, agent-runtime INDEX_FAMILIES and the worker's SERVED_TOOLKIT_TYPES are each tested against it. Sorted. Add a family here and in all three, or a test fails.",
+  "families": ["ado_boards", "ado_plans", "ado_repos", "ado_wiki", "artifact", "bitbucket", "confluence", "figma", "github", "gitlab", "jira", "qtest", "sharepoint", "testrail", "xray_cloud", "zephyr_enterprise", "zephyr_essential", "zephyr_scale"]
+}

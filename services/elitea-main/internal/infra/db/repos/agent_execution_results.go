@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 
+	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
@@ -37,6 +39,8 @@ func newAgentExecutionResultsRepository(projects projectStore) (*AgentExecutionR
 }
 
 type currentAgentFullMessage struct {
+	PipelineStaticProof        json.RawMessage
+	PipelineStaticTools        json.RawMessage
 	ReplacePipelineProvisional bool
 	Content                    string
 	ResultReference            bool
@@ -65,6 +69,10 @@ type currentAgentTerminal struct {
 	FullMessage        *currentAgentFullMessage
 	HITLPause          *currentAgentHITLPause
 	AuthorizationPause *currentAgentAuthorizationPause
+	// SkippedCapabilities is what the turn was configured with but could not
+	// serve (display data, sanitized), read from whichever node event ended
+	// the turn: the final message or a pause.
+	SkippedCapabilities json.RawMessage
 	// AttachmentContents rides the terminal frame rather than being read back
 	// out of the durable node event the way FullMessage is (#607). It has to:
 	// the node event is the browser-facing `full_message`, and putting every
@@ -322,6 +330,7 @@ func loadCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, projectID int
 	default:
 		return currentAgentTerminal{}, outputapp.ErrAgentExecutionResultMismatch
 	}
+	terminal.SkippedCapabilities = skippedCapabilitiesFromMetadata(event.ResponseMetadata)
 	return terminal, nil
 }
 
@@ -332,11 +341,16 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 		return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
 	}
 	var metadata struct {
-		ResultRef          json.RawMessage `json:"result_ref_v1"`
-		ThreadID           string          `json:"thread_id"`
-		InvokedSkills      json.RawMessage `json:"invoked_skills"`
-		OutputLimitReached bool            `json:"output_limit_reached"`
-		ApplicationDetails struct {
+		ResultRef           json.RawMessage `json:"result_ref_v1"`
+		PipelineStaticProof json.RawMessage `json:"pipeline_static_v1"`
+		PipelineStaticTools json.RawMessage `json:"pipeline_static_tools_v1"`
+		HITLInterrupt       json.RawMessage `json:"hitl_interrupt"`
+		HITLInterrupts      json.RawMessage `json:"hitl_interrupts"`
+		Authorization       json.RawMessage `json:"authorization_requests"`
+		ThreadID            string          `json:"thread_id"`
+		InvokedSkills       json.RawMessage `json:"invoked_skills"`
+		OutputLimitReached  bool            `json:"output_limit_reached"`
+		ApplicationDetails  struct {
 			AgentType      string `json:"agent_type"`
 			VersionDetails struct {
 				AgentType string `json:"agent_type"`
@@ -346,6 +360,34 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 	if json.Unmarshal(responseMetadata, &metadata) != nil || resultReference != (len(metadata.ResultRef) != 0) || metadata.ThreadID == "" ||
 		len(content) > 4*1024*1024 || strings.ContainsRune(content, '\x00') {
 		return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
+	}
+	if len(metadata.PipelineStaticProof) != 0 || len(metadata.PipelineStaticTools) != 0 {
+		var interrupt map[string]json.RawMessage
+		var interrupts, authorization []json.RawMessage
+		if len(metadata.HITLInterrupt) != 0 && json.Unmarshal(metadata.HITLInterrupt, &interrupt) != nil ||
+			len(metadata.HITLInterrupts) != 0 && json.Unmarshal(metadata.HITLInterrupts, &interrupts) != nil ||
+			len(metadata.Authorization) != 0 && json.Unmarshal(metadata.Authorization, &authorization) != nil ||
+			len(interrupt) != 0 || len(interrupts) != 0 || len(authorization) != 0 {
+			return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
+		}
+	}
+	if len(metadata.PipelineStaticTools) != 0 {
+		_, kindErr := agentexecutionapp.ParseCurrentStaticInventoryRootKind(metadata.ApplicationDetails.AgentType, metadata.ApplicationDetails.VersionDetails.AgentType)
+		if len(metadata.PipelineStaticProof) != 0 || metadata.OutputLimitReached || kindErr != nil {
+			return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
+		}
+		if _, err := agentexecutionapp.ParseCurrentStaticToolInventory(metadata.PipelineStaticTools); err != nil {
+			return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
+		}
+	}
+	if len(metadata.PipelineStaticProof) != 0 {
+		kind, kindErr := agentexecutionapp.ParseCurrentStaticInventoryRootKind(metadata.ApplicationDetails.AgentType, metadata.ApplicationDetails.VersionDetails.AgentType)
+		if metadata.OutputLimitReached || kindErr != nil || kind != agentexecutionapp.CurrentStaticInventoryPipelineRoot {
+			return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
+		}
+		if _, err := agentexecutionapp.ParseCurrentPipelineStaticProof(metadata.PipelineStaticProof, metadata.ThreadID); err != nil {
+			return currentAgentFullMessage{}, outputapp.ErrAgentExecutionResultMismatch
+		}
 	}
 	invokedSkills, err := mergeCurrentAgentInvokedSkills(nil, metadata.InvokedSkills)
 	if err != nil {
@@ -360,6 +402,8 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 		InvokedSkills:              invokedSkills,
 		ResponseMetadata:           append(json.RawMessage(nil), responseMetadata...),
 		OutputLimitReached:         metadata.OutputLimitReached,
+		PipelineStaticProof:        bytes.Clone(metadata.PipelineStaticProof),
+		PipelineStaticTools:        bytes.Clone(metadata.PipelineStaticTools),
 	}, nil
 }
 
@@ -615,11 +659,14 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		rows, err := writer.FinalizeCurrentAgentFullMessage(
 			ctx,
 			sqlcgen.FinalizeCurrentAgentFullMessageParams{
-				ThreadID:           message.ThreadID,
-				ReferencesJson:     []byte(message.References),
-				InvokedSkills:      []byte(invokedSkills),
-				OutputLimitReached: message.OutputLimitReached,
-				MessageGroupID:     int64(messageGroupID),
+				ThreadID:            message.ThreadID,
+				ReferencesJson:      []byte(message.References),
+				InvokedSkills:       []byte(invokedSkills),
+				OutputLimitReached:  message.OutputLimitReached,
+				PipelineStaticProof: cloneJSONOrDefault(message.PipelineStaticProof, []byte("null")),
+				PipelineStaticTools: cloneJSONOrDefault(message.PipelineStaticTools, []byte("null")),
+				SkippedCapabilities: cloneJSONOrDefault(terminal.SkippedCapabilities, []byte("null")),
+				MessageGroupID:      int64(messageGroupID),
 			},
 		)
 		if err != nil || rows != 1 {
@@ -643,6 +690,7 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		rows, err := writer.FinalizeCurrentAgentMixedPause(ctx, sqlcgen.FinalizeCurrentAgentMixedPauseParams{
 			ThreadID: pause.ThreadID, HitlInterrupt: []byte(pause.Interrupt), HitlInterrupts: []byte(pause.Interrupts),
 			AuthorizationRequests: []byte(authorization.Requests), InvokedSkills: []byte(skills), MessageGroupID: int64(messageGroupID),
+			SkippedCapabilities: cloneJSONOrDefault(terminal.SkippedCapabilities, []byte("null")),
 		})
 		if err != nil || rows != 1 {
 			return fmt.Errorf("persist current agent mixed pause: %w", terminalWriteError(err))
@@ -658,11 +706,12 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		rows, err := writer.FinalizeCurrentAgentHITLPause(
 			ctx,
 			sqlcgen.FinalizeCurrentAgentHITLPauseParams{
-				ThreadID:       pause.ThreadID,
-				HitlInterrupt:  []byte(pause.Interrupt),
-				HitlInterrupts: []byte(pause.Interrupts),
-				InvokedSkills:  []byte(invokedSkills),
-				MessageGroupID: int64(messageGroupID),
+				ThreadID:            pause.ThreadID,
+				HitlInterrupt:       []byte(pause.Interrupt),
+				HitlInterrupts:      []byte(pause.Interrupts),
+				InvokedSkills:       []byte(invokedSkills),
+				MessageGroupID:      int64(messageGroupID),
+				SkippedCapabilities: cloneJSONOrDefault(terminal.SkippedCapabilities, []byte("null")),
 			},
 		)
 		if err != nil || rows != 1 {
@@ -683,6 +732,7 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 				AuthorizationRequests: []byte(pause.Requests),
 				InvokedSkills:         []byte(invokedSkills),
 				MessageGroupID:        int64(messageGroupID),
+				SkippedCapabilities:   cloneJSONOrDefault(terminal.SkippedCapabilities, []byte("null")),
 			},
 		)
 		if err != nil || rows != 1 {

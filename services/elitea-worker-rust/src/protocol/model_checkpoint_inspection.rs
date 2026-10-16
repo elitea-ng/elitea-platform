@@ -139,6 +139,21 @@ impl ModelCheckpointInspection {
         Ok(replacement)
     }
 
+    pub(crate) fn supersedes_output_fence(&self, frame: &super::ExecutionOutputFrameV1) -> bool {
+        self.claim.supersedes_output_fence(frame)
+    }
+
+    pub(crate) fn failure_terminal_at(
+        &self,
+        verified: &VerifiedAgentCommand,
+        failure: super::RuntimeFailureKind,
+        sequence: u64,
+        occurred_at_unix_millis: i64,
+    ) -> Result<super::ExecutionOutputFrameV1, crate::protocol::ProtocolError> {
+        self.claim
+            .failure_terminal_at(verified, failure, sequence, occurred_at_unix_millis)
+    }
+
     pub(crate) fn into_terminal_recovery(self) -> super::AcceptedTerminalClaimRecovery {
         self.claim.into_terminal_recovery()
     }

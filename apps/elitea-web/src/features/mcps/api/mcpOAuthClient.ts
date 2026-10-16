@@ -100,6 +100,8 @@ export interface ExchangeMcpOAuthTokenParams {
   scope?: string | undefined;
   toolkit_id?: string | undefined;
   toolkit_type?: string | undefined;
+  /** The protected-resource metadata URL the challenge advertised. Main uses it only when it is same-origin with the toolkit's URL. */
+  resource_metadata_url?: string | undefined;
   /**
    * NOT in the pinned `apps/elitea-ui` submodule snapshot (`a55f36cf`) —
    * added by the real upstream `frontends/EliteaUI` fix, commit `6ebe8ff7`
@@ -126,6 +128,8 @@ export interface RefreshMcpOAuthTokenParams {
   client_id?: string | undefined;
   client_secret?: string | undefined;
   toolkit_id?: string | undefined;
+  /** See `ExchangeMcpOAuthTokenParams.resource_metadata_url`. */
+  resource_metadata_url?: string | undefined;
   /**
    * Baseline: `mcpAuthFlow.helpers.js` `refreshAccessToken`/`getValidAccessToken`
    * (`used_dcr: usedDcr || undefined`, threaded through by commit `6ebe8ff7`

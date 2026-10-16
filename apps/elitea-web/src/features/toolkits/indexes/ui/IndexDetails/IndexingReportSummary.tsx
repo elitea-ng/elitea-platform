@@ -86,6 +86,16 @@ export function IndexingReportSummary(props: IndexingReportSummaryProps): ReactN
                 >
                   {group.label} ({group.count})
                 </Typography>
+                {group.code !== '' && (
+                  <Typography
+                    variant="bodySmall"
+                    color="text.secondary"
+                    title={group.code}
+                    sx={itemSx}
+                  >
+                    {group.code}
+                  </Typography>
+                )}
                 {group.items.map((item, itemIndex) => (
                   <Typography
                     key={`${item}-${String(itemIndex)}`}

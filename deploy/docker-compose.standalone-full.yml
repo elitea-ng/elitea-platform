@@ -260,7 +260,10 @@ services:
   # on the monitoring port from outside. Wait on `nats-health`, not on `nats`.
   nats:
     image: nats:2.12.0
-    command: ["-js", "-sd", "/data", "-m", "8222"]
+    command: ["-c", "/etc/nats-config/nats.conf"]
+    volumes:
+      - ./runtime/nats-local.conf:/etc/nats-config/nats.conf:ro
+      - standalone_nats_data:/data
 
   # The NATS readiness probe, from outside the scratch server container. It
   # idles, and its healthcheck reads http://nats:8222/healthz with JetStream
@@ -428,11 +431,11 @@ services:
         i=0
         until rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret; do
           i=$((i + 1))
-          if [ "$i" -ge 30 ]; then
+          if [ "$$i" -ge 30 ]; then
             echo "rustfs alias set still failing after 30 attempts (60s) — giving up" >&2
             exit 1
           fi
-          echo "rustfs not ready yet (attempt $i/30), retrying in 2s..." >&2
+          echo "rustfs not ready yet (attempt $$i/30), retrying in 2s..." >&2
           sleep 2
         done &&
         rc mb --ignore-existing rustfs/elitea-artifacts
@@ -1001,6 +1004,12 @@ services:
       ELITEA_DEEPWIKI_CA_FILE: /run/certs/ca.crt
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "standalone-deepwiki-identity"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+      # Which worker this stack runs, stated explicitly: elitea-main's own default
+      # is rust, so a Python-worker base must say so or its toolkit catalogue
+      # would describe a worker that is not there. The Rust overlay
+      # (docker-compose.standalone-rust-agent.yml) overrides this with "rust".
+      ELITEA_WORKER_IMPLEMENTATION: "python"
+
       # Where the provider calls BACK to upload the pages it generated: this
       # service on the compose network, plain HTTP — the minted bearer is the
       # credential; mTLS is on the hop the other way.
@@ -2011,22 +2020,25 @@ services:
   # (rustls-native-certs-0.8.4/src/lib.rs:50-57), so a bundle holding only the
   # mock would silently strip every public root from the consumer.
   mcp-mock-trust:
+    # No `build:` — the mock's image is built ONCE (by mcp-mock) and reused, so
+    # the trust anchor written here can only come from the mint being served.
     image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
-    build:
-      context: ./mock-mcp
-      dockerfile: Containerfile
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - cat /etc/ssl/certs/ca-certificates.crt /opt/mock-mcp/tls/ca.crt /runtime/runtime-ca.crt
         > /trust/mcp-mock-ca-bundle.pem
         && chmod 0644 /trust/mcp-mock-ca-bundle.pem
+        && python3 /opt/mock-mcp/verify-trust.py /trust/mcp-mock-ca-bundle.pem
     volumes:
       - standalone_mcp_mock_trust:/trust
       - standalone_runtime_worker:/runtime:ro
     depends_on:
       runtime-material:
         condition: service_completed_successfully
+      # The bundle is verified against the LIVE mock after it is written.
+      mcp-mock:
+        condition: service_healthy
     restart: "no"
 
   # The trust store the PYTHON worker runs on: runtime CA + mcp-mock CA (#983).
@@ -2050,10 +2062,13 @@ services:
   # that trusts only the mock, and the worker would then fail every INTERNAL
   # dial with a certificate error that reads like a platform outage.
   worker-trust:
+    # No `build:` — the mock's image is built ONCE (by mcp-mock) and reused, so
+    # the trust anchor written here can only come from the mint being served.
+    # Deliberately NOT gated on mcp-mock health and not verified live: this
+    # bundle feeds the PYTHON worker, which must not depend on the mock being up
+    # (the single-image reuse already guarantees the same mint). The live check
+    # is in mcp-mock-trust, whose bundle the NATIVE worker consumes.
     image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
-    build:
-      context: ./mock-mcp
-      dockerfile: Containerfile
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
@@ -2093,6 +2108,7 @@ volumes:
   inventory-engine-sock:
   standalone_pg_data:
   standalone_rustfs_data:
+  standalone_nats_data:
   # Qdrant's collections (ADR-0031). The only copy of the vectors: sources
   # are the source of truth, so `down -v` costs a re-index, not data.
   standalone_qdrant_data:

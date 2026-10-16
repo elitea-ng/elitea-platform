@@ -89,6 +89,13 @@ pub struct RuntimeDeployConfig {
     pub output_target: String,
     pub content_origin: String,
     pub platform_origin: String,
+    /// The deployment's PUBLIC base URL (`DEPLOYMENT_URL` on elitea-main), an
+    /// `http(s)` origin a person's browser can open. `platform_origin` is the
+    /// in-cluster edge and is never shown to a person; links the worker puts
+    /// in an answer (a chart's Markdown image) use this one, and are
+    /// root-relative when it is absent.
+    #[serde(default)]
+    pub public_base_url: Option<String>,
     /// `host:port` of elitea-vector (ADR-0031), reached with this worker's
     /// mTLS identity. Absent, the worker refuses `index.ingest.v1` as
     /// unsupported; an agent-only or validate-only deployment needs none.
@@ -100,6 +107,32 @@ pub struct RuntimeDeployConfig {
     /// source host (fail-closed), so a deployment names what it indexes.
     #[serde(default)]
     pub index_egress_allowlist: Option<String>,
+    /// The gateway embedding model the `memory` toolkit embeds memories and
+    /// queries with (worker unit M9). Needs `vector_target`. Absent, the
+    /// toolkit is skipped on this worker, as it was before it had a family.
+    /// Changing it strands the memories written under the old model: they
+    /// stay in the old model's vector space and are not searched.
+    #[serde(default)]
+    pub memory_embedding_model: Option<String>,
+    /// The Unix socket of `elitea-doc-extractor`, the document extraction
+    /// sidecar (ADR-0030 I1): where an index run sends a PDF or Office
+    /// document to be read, over `elitea.extract.v1`. Absent, such documents
+    /// are reported skipped `unsupported_type`, as before the sidecar
+    /// existed. An absolute path in a directory the two containers share.
+    #[serde(default)]
+    pub extractor_socket: Option<PathBuf>,
+    /// The model calls one index run may make in its model steps (a chat
+    /// call per proposal window, an embeddings request per batch of the
+    /// statistical chunker; ADR-0030 I4). Reaching it stops the run.
+    /// Absent, 2000. Zero is refused: use the bounds of the gateway budget
+    /// to forbid model use, not a cap that fails every such document.
+    #[serde(default)]
+    pub index_model_call_cap: Option<u32>,
+    /// The model completions one claim's toolkits may make in total (the
+    /// step-back index tools, the Office families' prompts). Separate from
+    /// the agent's own `max_model_turns`. Absent, 200. Zero is refused.
+    #[serde(default)]
+    pub toolkit_model_call_cap: Option<u32>,
     pub ca_path: PathBuf,
     pub certificate_path: PathBuf,
     pub private_key_path: PathBuf,
@@ -322,8 +355,20 @@ impl RuntimeDeployConfig {
         if let Some(target) = &self.vector_target {
             validate_grpc_target(target)?;
         }
+        if let Some(model) = &self.memory_embedding_model {
+            require_bounded_text(model, 256)?;
+            if self.vector_target.is_none() {
+                return Err(invalid_config());
+            }
+        }
         if let Some(allowlist) = &self.index_egress_allowlist {
             require_bounded_text(allowlist, MAX_ORIGIN_BYTES)?;
+        }
+        if let Some(socket) = &self.extractor_socket {
+            require_absolute_path(socket)?;
+        }
+        if self.index_model_call_cap == Some(0) || self.toolkit_model_call_cap == Some(0) {
+            return Err(invalid_config());
         }
         if self.sandbox_runtimes.len() > 4 {
             return Err(invalid_config());
@@ -400,6 +445,9 @@ impl RuntimeDeployConfig {
 
         self.content_origin = canonical_https_origin(&self.content_origin)?;
         self.platform_origin = canonical_https_origin(&self.platform_origin)?;
+        if let Some(public) = &self.public_base_url {
+            self.public_base_url = Some(canonical_public_origin(public)?);
+        }
         for path in [
             &self.ca_path,
             &self.certificate_path,
@@ -661,6 +709,24 @@ fn canonical_https_origin(value: &str) -> Result<String, RuntimeConfigError> {
     Ok(format!("https://{authority}"))
 }
 
+/// An `http` or `https` origin without credentials, path or query: what a
+/// browser opens. Unlike the worker's own endpoints it may be plain `http`
+/// (a development install behind no TLS).
+fn canonical_public_origin(value: &str) -> Result<String, RuntimeConfigError> {
+    require_bounded_text(value, MAX_ORIGIN_BYTES)?;
+    let uri = value.parse::<Uri>().map_err(|_| invalid_config())?;
+    let authority = uri.authority().ok_or_else(invalid_config)?;
+    if !matches!(uri.scheme_str(), Some("http" | "https")) {
+        return Err(invalid_config());
+    }
+    let scheme = uri.scheme_str().unwrap_or("https");
+    if authority.as_str().contains('@') || uri.query().is_some() || !matches!(uri.path(), "" | "/")
+    {
+        return Err(invalid_config());
+    }
+    Ok(format!("{scheme}://{authority}"))
+}
+
 fn require_bounded_text(value: &str, maximum: usize) -> Result<(), RuntimeConfigError> {
     if value.is_empty()
         || value.len() > maximum
@@ -831,6 +897,26 @@ mod tests {
     }
 
     #[test]
+    fn the_memory_embedding_model_is_optional_bounded_and_needs_a_vector_store() {
+        let mut value = config(Path::new("/runtime"));
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(loaded.memory_embedding_model, None);
+        assert!(loaded.validate().is_ok());
+        // A model with no vector store is a misconfiguration, not a quiet no-op.
+        value["memory_embedding_model"] = json!("text-embedding-3-small");
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(loaded.validate().is_err());
+        value["vector_target"] = json!("vector.internal:9470");
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(loaded.validate().is_ok());
+        for invalid in [json!(""), json!("a\nb"), json!("m".repeat(257))] {
+            value["memory_embedding_model"] = invalid;
+            let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+            assert!(loaded.validate().is_err());
+        }
+    }
+
+    #[test]
     fn sandbox_profiles_are_optional_and_require_bounded_unique_runtime_identity() {
         let base = config(Path::new("/runtime"));
         let loaded: super::RuntimeDeployConfig = serde_json::from_value(base.clone()).unwrap();
@@ -985,6 +1071,44 @@ mod tests {
         assert_eq!(loaded.limits.grpc_max_request_bytes(), 64 * 1024);
         assert_eq!(loaded.limits.grpc_max_response_bytes(), 80 * 1024);
         assert_eq!(loaded.limits.output_max_frame_bytes(), 64 * 1024);
+    }
+
+    #[test]
+    fn the_public_base_url_is_an_optional_http_origin() {
+        let root = tempdir().expect("temporary directory");
+        let root_path = root.path().canonicalize().expect("canonical root");
+        let path = root_path.join("runtime.json");
+        // Absent: links are root-relative.
+        write_config(&path, &config(&root_path));
+        assert_eq!(load_deploy_config(&path).unwrap().public_base_url, None);
+        for (given, canonical) in [
+            ("https://elitea.example.com", "https://elitea.example.com"),
+            ("https://elitea.example.com/", "https://elitea.example.com"),
+            ("http://localhost:8082", "http://localhost:8082"),
+        ] {
+            let mut value = config(&root_path);
+            value["public_base_url"] = json!(given);
+            write_config(&path, &value);
+            assert_eq!(
+                load_deploy_config(&path)
+                    .unwrap()
+                    .public_base_url
+                    .as_deref(),
+                Some(canonical)
+            );
+        }
+        for bad in [
+            "ftp://x.example",
+            "https://user@x.example",
+            "https://x.example/app",
+            "https://x.example?q=1",
+            "not a url",
+        ] {
+            let mut value = config(&root_path);
+            value["public_base_url"] = json!(bad);
+            write_config(&path, &value);
+            assert!(load_deploy_config(&path).is_err(), "{bad}");
+        }
     }
 
     #[test]

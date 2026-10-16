@@ -46,7 +46,10 @@ services:
   # on the monitoring port from outside. Wait on `nats-health`, not on `nats`.
   nats:
     image: nats:2.12.0
-    command: ["-js", "-sd", "/data", "-m", "8222"]
+    command: ["-c", "/etc/nats-config/nats.conf"]
+    volumes:
+      - ./runtime/nats-local.conf:/etc/nats-config/nats.conf:ro
+      - nats_data:/data
 
   # The NATS readiness probe, from outside the scratch server container. It
   # idles, and its healthcheck reads http://nats:8222/healthz with JetStream
@@ -246,6 +249,12 @@ services:
       ELITEA_DEEPWIKI_CLIENT_CERT_FILE: /certs/client.crt
       ELITEA_DEEPWIKI_CLIENT_KEY_FILE: /certs/client.key
       ELITEA_DEEPWIKI_CA_FILE: /certs/ca.crt
+      # Which worker this stack runs, stated explicitly: elitea-main's own default
+      # is rust, so a Python-worker base must say so or its toolkit catalogue
+      # would describe a worker that is not there. The Rust overlay
+      # (docker-compose.standalone-rust-agent.yml) overrides this with "rust".
+      ELITEA_WORKER_IMPLEMENTATION: "python"
+
       # The origin the PROVIDER calls back to for artifacts and models. The
       # engine derives the artifact API base by stripping `/llm/v1` off this,
       # so it is one value and not two.
@@ -473,3 +482,4 @@ volumes:
   # engine only.
   deepwiki-engine-sock:
   rustfs_data:
+  nats_data:

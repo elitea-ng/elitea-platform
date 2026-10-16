@@ -95,15 +95,15 @@ CREATE TABLE p_1.elitea_tools (
     shared_id INTEGER,
     meta JSONB NOT NULL
 );
-INSERT INTO p_1.elitea_tools (type, settings, author_id, meta) VALUES
-    ('github', '{}'::jsonb, 1, '{}'::jsonb),
-    ('mcp', '{}'::jsonb, 1, '{}'::jsonb),
-    ('mcp_flag', '{}'::jsonb, 1, '{"mcp":true}'::jsonb),
-    ('application', '{}'::jsonb, 1, '{}'::jsonb),
-    ('app_flag', '{}'::jsonb, 1, '{"application":true}'::jsonb),
-    ('both_flag', '{}'::jsonb, 1, '{"mcp":true,"application":true}'::jsonb),
-    ('mcp', '{}'::jsonb, 1, '{"application":true}'::jsonb),
-    ('application', '{}'::jsonb, 1, '{"mcp":true}'::jsonb);
+INSERT INTO p_1.elitea_tools (type, settings, author_id, meta, created_at) VALUES
+    ('github', '{}'::jsonb, 1, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    ('mcp', '{}'::jsonb, 1, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    ('mcp_flag', '{}'::jsonb, 1, '{"mcp":true}'::jsonb, now() AT TIME ZONE 'UTC'),
+    ('application', '{}'::jsonb, 1, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    ('app_flag', '{}'::jsonb, 1, '{"application":true}'::jsonb, now() AT TIME ZONE 'UTC'),
+    ('both_flag', '{}'::jsonb, 1, '{"mcp":true,"application":true}'::jsonb, now() AT TIME ZONE 'UTC'),
+    ('mcp', '{}'::jsonb, 1, '{"application":true}'::jsonb, now() AT TIME ZONE 'UTC'),
+    ('application', '{}'::jsonb, 1, '{"mcp":true}'::jsonb, now() AT TIME ZONE 'UTC');
 
 INSERT INTO centry.project (id, create_success, suspended)
 VALUES (2, TRUE, FALSE);
@@ -121,8 +121,8 @@ CREATE TABLE p_2.elitea_tools (
     shared_id INTEGER,
     meta JSONB NOT NULL
 );
-INSERT INTO p_2.elitea_tools (type, settings, author_id, meta)
-VALUES ('private_type', '{}'::jsonb, 2, '{}'::jsonb);`); err != nil {
+INSERT INTO p_2.elitea_tools (type, settings, author_id, meta, created_at)
+VALUES ('private_type', '{}'::jsonb, 2, '{}'::jsonb, now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatalf("prepare current toolkit types projects: %v", err)
 	}
 }
