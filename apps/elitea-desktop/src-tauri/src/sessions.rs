@@ -618,7 +618,6 @@ impl SessionStore {
     /// # Errors
     ///
     /// The store could not be written.
-    #[allow(dead_code)] // used by the take-back in the next commit
     pub async fn mark_reseed(
         &self,
         deployment: &str,

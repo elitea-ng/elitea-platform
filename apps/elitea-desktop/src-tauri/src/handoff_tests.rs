@@ -377,6 +377,8 @@ struct Harness {
     host: Arc<HandoffHost>,
     agents: Arc<AgentHost>,
     history: Arc<HistoryStore>,
+    sessions: Arc<crate::sessions::DesktopStateStore>,
+    emitter: Arc<VecEmitter>,
     events: Arc<Events>,
     policy: Arc<Policy>,
     workspace_id: String,
@@ -394,7 +396,7 @@ async fn harness_with(environment: Vec<(String, String)>) -> Harness {
 }
 
 async fn harness_env(env_source: Arc<dyn crate::handoff_settings::EnvSource>) -> Harness {
-    harness_lossy(env_source, None).await
+    harness_full(env_source, None, None).await
 }
 
 /// `drop_first`: the first `n` requests to a path are handled (committed)
@@ -403,13 +405,85 @@ async fn harness_lossy(
     env_source: Arc<dyn crate::handoff_settings::EnvSource>,
     drop_first: Option<(&'static str, usize)>,
 ) -> Harness {
+    harness_full(env_source, drop_first, None).await
+}
+
+/// The platform when the agent's own routes are served too (`convo`): the
+/// local turn, its commit, `/llm`, the trace routes, and one conversation
+/// whose groups are the local turns' and the cloud's.
+fn agent_platform(
+    platform: &Arc<Mutex<Platform>>,
+    convo: &Arc<Mutex<crate::d0::tests::Convo>>,
+    inner: &impl Fn(&Req) -> Res,
+    req: &Req,
+) -> Res {
+    let path = req.path.split('?').next().unwrap_or_default();
+    if req.method == "GET" && path == format!("{PREFIX}/conversation/prompt_lib/1/{CONVERSATION}") {
+        let p = platform.lock().unwrap();
+        let c = convo.lock().unwrap();
+        let mut groups: Vec<Value> = c.groups.iter().chain(p.groups.iter()).cloned().collect();
+        groups.sort_by_key(|g| g["id"].as_i64().unwrap_or(i64::MAX));
+        let mut detail = json!({
+            "id": 42, "uuid": CONVERSATION, "message_count": groups.len(),
+            "participants": [
+                {"id": 70, "entity_name": "user", "entity_meta": {"id": 1}},
+                {"id": 77, "entity_name": "application", "entity_meta": {"id": 5, "project_id": 1},
+                 "entity_settings": {"version_id": 9}}
+            ]
+        });
+        if let Some(limit) = crate::d0::tests::query_of(&req.path, "messages_limit")
+            .and_then(|v| v.parse::<usize>().ok())
+        {
+            if crate::d0::tests::query_of(&req.path, "sort_order").as_deref() == Some("asc") {
+                groups.truncate(limit);
+            } else {
+                groups = groups.into_iter().rev().take(limit).collect();
+            }
+            detail["message_groups"] = Value::Array(groups);
+        }
+        return Res::json(200, &detail);
+    }
+    let agent = [
+        "/local_turn/",
+        "/local_turn_commit/",
+        "/message_trace",
+        "/resolved_version/",
+    ]
+    .iter()
+    .any(|part| path.contains(part))
+        || path.starts_with("/llm/");
+    if agent {
+        inner(req)
+    } else {
+        handle(platform, req)
+    }
+}
+
+/// The shared harness. `drop_first` drops requests as above; `convo`, when
+/// provided, also serves the agent's own routes.
+async fn harness_full(
+    env_source: Arc<dyn crate::handoff_settings::EnvSource>,
+    drop_first: Option<(&'static str, usize)>,
+    convo: Option<Arc<Mutex<crate::d0::tests::Convo>>>,
+) -> Harness {
     let platform = Arc::new(Mutex::new(Platform {
         state: "LOCAL".into(),
         ..Platform::default()
     }));
+    let inner = convo.as_ref().map(|convo| {
+        crate::d0::tests::memory_platform_for(
+            CONVERSATION,
+            convo.clone(),
+            crate::d0::tests::memory_script(),
+        )
+    });
     let server = serve_dropping(drop_first, {
         let platform = platform.clone();
-        move |req| handle(&platform, req)
+        let convo = convo.clone();
+        move |req| match (&inner, &convo) {
+            (Some(inner), Some(convo)) => agent_platform(&platform, convo, inner, req),
+            _ => handle(&platform, req),
+        }
     })
     .await;
     platform.lock().unwrap().origin = server.origin.clone();
@@ -432,6 +506,8 @@ async fn harness_lossy(
     )));
     let credentials: Arc<dyn Credentials> = Arc::new(Creds(server.origin.clone()));
     let history = Arc::new(HistoryStore::open(app.path()).unwrap());
+    let sessions = Arc::new(crate::sessions::DesktopStateStore::open(app.path()).unwrap());
+    let emitter = Arc::new(VecEmitter::default());
     let http = crate::net::SharedHttp::new("0.1.0");
     let agents = Arc::new(
         AgentHost::new(HostDeps {
@@ -440,13 +516,13 @@ async fn harness_lossy(
             client_version: "0.1.0".into(),
             policy: policy.clone(),
             workspaces: workspaces.clone(),
-            emitter: Arc::new(VecEmitter::default()),
+            emitter: emitter.clone(),
             retry: RetryPolicy {
                 attempts: 2,
                 delay: Duration::from_millis(5),
             },
             history: Some(history.clone()),
-            sessions: None,
+            sessions: Some(sessions.clone()),
             index: None,
             sandbox_deny: crate::d0::turn::app_dirs_for_sandbox([Some(app.path().to_owned())]),
             app_id: None,
@@ -481,6 +557,8 @@ async fn harness_lossy(
         host,
         agents,
         history,
+        sessions,
+        emitter,
         events,
         policy,
         workspace_id,
@@ -1486,4 +1564,172 @@ async fn an_abandon_never_deletes_a_completed_handoff() {
     h.platform.lock().unwrap().epoch = 3;
     h.host.abandon(1, CONVERSATION).await;
     assert_eq!(h.platform.lock().unwrap().deletes, 0);
+}
+
+/// ADR-0034 x #1212: a take-back brings the cloud's turns into the
+/// conversation; the agent's session is marked, the next local turn
+/// re-seeds from the server, and its `/llm` request carries the cloud
+/// turns' messages and tool calls after the local ones.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
+    use crate::d0::turn::TurnRequest;
+    let convo = Arc::new(Mutex::new(crate::d0::tests::Convo::default()));
+    let h = harness_full(
+        Arc::new(crate::handoff_settings::FixedEnv(Vec::new())),
+        None,
+        Some(convo.clone()),
+    )
+    .await;
+    let local = |prompt: &str| TurnRequest {
+        workspace_id: h.workspace_id.clone(),
+        project_id: 1,
+        conversation_id: json!(CONVERSATION),
+        application_id: 5,
+        version_id: 9,
+        prompt: prompt.to_owned(),
+        plan_mode: false,
+        mentions: Vec::new(),
+        skills: Vec::new(),
+    };
+    let emitter = h.emitter.clone();
+    let run = |prompt: &'static str| {
+        let started = h.agents.start(local(prompt));
+        let emitter = emitter.clone();
+        async move {
+            let started = started.await.unwrap();
+            for _ in 0..500 {
+                if emitter
+                    .all()
+                    .iter()
+                    .any(|e| e.kind == "done" && e.turn_id == started.turn_id)
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("the turn did not finish");
+        }
+    };
+    let llm = |h: &Harness| -> Vec<Value> {
+        h._server
+            .seen()
+            .into_iter()
+            .filter(|r| r.path == "/llm/v1/chat/completions")
+            .map(|r| serde_json::from_str(&r.body).unwrap())
+            .collect()
+    };
+    let seeds = |h: &Harness| {
+        h._server
+            .seen()
+            .iter()
+            .filter(|r| r.path.contains("messages_limit=200"))
+            .count()
+    };
+
+    // A local turn: it writes hello.txt.
+    run("create hello.txt with hi").await;
+    assert_eq!(seeds(&h), 0);
+
+    // The thread goes to the cloud and two cloud turns come back.
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    let commit = cloud_turn(&h);
+    {
+        let mut p = h.platform.lock().unwrap();
+        // The helper wrote cloud turn 1 (groups 10 and 11); add turn 2.
+        p.groups.push(json!({"id": 12, "uuid": "q2", "meta": {}, "created_at": "2026-10-15 10:02:00.000000",
+            "message_items": [{"item_type": "text_message", "item_details": {"content": "Now add a changelog"}}]}));
+        p.groups.push(json!({"id": 13, "uuid": "a2", "reply_to_id": 12, "created_at": "2026-10-15 10:03:00.000000",
+            "meta": {"executed_by": "cloud_executor", "workspace_epoch": 2},
+            "message_items": [{"item_type": "text_message", "item_details": {"content": "Changelog added."}}]}));
+        assert!(commit.len() > 8);
+    }
+    {
+        let mut c = convo.lock().unwrap();
+        // Their tool calls, as the trace routes hold them.
+        c.steps.push(json!({"id": 901, "message_group_id": 11, "kind": "tool_call", "tool_name": "edit_file",
+            "tool_inputs": {"path": "README.md"}, "tool_output": "{\"edited\":true}", "is_error": false}));
+        c.steps.push(json!({"id": 902, "message_group_id": 13, "kind": "tool_call", "tool_name": "write_file",
+            "tool_inputs": {"path": "CHANGELOG.md"}, "tool_output": "{\"written\":true}", "is_error": false}));
+    }
+    h.host.reclaim(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply)
+        .await
+        .unwrap();
+    assert!(applied.released);
+    assert_eq!(applied.imported_turns, 2, "two cloud turns imported");
+
+    // The take-back marked the session: the next local turn re-seeds.
+    let origin = h.platform.lock().unwrap().origin.clone();
+    let info = h
+        .sessions
+        .store()
+        .info(&origin, 7, CONVERSATION)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !info.seeded_from_server,
+        "marked for re-seeding by the release"
+    );
+    let before = llm(&h).len();
+    run("what did the cloud do?").await;
+    assert_eq!(seeds(&h), 1, "one seed from the server");
+    let bodies = llm(&h);
+    let body = &bodies[before];
+    let text = body.to_string();
+    for wanted in [
+        "create hello.txt with hi", // the local turn
+        "Created hello.txt.",
+        "Make it greet the cloud", // cloud turn 1
+        "Done: README greets the cloud.",
+        "edit_file",           // its tool call
+        "Now add a changelog", // cloud turn 2
+        "Changelog added.",
+        "CHANGELOG.md",
+        "what did the cloud do?",
+    ] {
+        assert!(text.contains(wanted), "{wanted} in {text}");
+    }
+    // In order: the local turn first, the cloud's after it, the new prompt last.
+    let at = |needle: &str| text.find(needle).unwrap();
+    assert!(at("create hello.txt with hi") < at("Make it greet the cloud"));
+    assert!(at("Make it greet the cloud") < at("Now add a changelog"));
+    assert!(at("Now add a changelog") < at("what did the cloud do?"));
+    let tool_results: Vec<&str> = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .filter_map(|m| m["content"].as_str())
+        .collect();
+    assert_eq!(tool_results.len(), 3, "{tool_results:?}");
+    // The rows say who ran what.
+    let rows = h
+        .sessions
+        .store()
+        .rows(&crate::sessions::session_key(&origin, 7, CONVERSATION))
+        .await
+        .unwrap();
+    assert!(
+        rows.iter().any(|r| r.executed_by == "cloud_executor"),
+        "{rows:?}"
+    );
+    assert!(rows.iter().any(|r| r.executed_by == "desktop"));
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r.executed_by == "cloud_executor")
+            .map(|r| r.response_message_id.clone().unwrap())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        2
+    );
+    // And the next turn needs no seed.
+    run("thanks").await;
+    assert_eq!(seeds(&h), 1);
 }

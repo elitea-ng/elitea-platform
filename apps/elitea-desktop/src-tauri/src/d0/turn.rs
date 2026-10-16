@@ -1717,7 +1717,6 @@ impl AgentHost {
     /// A take-back brought the cloud's turns into the conversation: its
     /// agent session is marked so the next local turn re-seeds from the
     /// server and folds them in (`executed_by = 'cloud_executor'`).
-    #[allow(dead_code)] // used by the take-back in the next commit
     pub async fn mark_session_stale(&self, conversation_uuid: &str) {
         let Some(sessions) = &self.deps.sessions else {
             return;
