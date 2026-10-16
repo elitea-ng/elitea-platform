@@ -347,8 +347,9 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   `deploy/helm/tests/render-llm-path.sh`.
 
 - **2026-10-16 (live 4.45.1) — the boot window before the recovery install
-  REFUSES spend; it no longer serves it unmetered. Needs human sign-off (it
-  touches the fail-open/closed policy).** *Finding:* a gateway that booted
+  REFUSES spend; it no longer serves it unmetered. [human decision] (owner,
+  2026-10-16: "Refuse with 503", chosen over fixing readiness, doing both, or
+  keeping fail-open; it touches the fail-open/closed policy).** *Finding:* a gateway that booted
   while NATS was unreachable logged `READINESS GATED`, then `BUDGET ENFORCEMENT
   RECOVERED` ~15 s later. In between, `admissionVerdictFor` found no gate and
   admitted every request: no budget check, no rate limit (the limiter was
