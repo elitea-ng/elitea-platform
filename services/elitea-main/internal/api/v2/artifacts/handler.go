@@ -99,6 +99,10 @@ type Repository interface {
 	// (ADR-0034 decision 3), found by type whatever its name: every bucket
 	// route answers it 404 before the access list is read.
 	IsWorkspaceBucket(ctx context.Context, projectID int64, name string) (bool, error)
+	// BucketGate answers, in one lookup, IsWorkspaceBucket and the caller's
+	// exception (GetBucketPermission) for a bucket route's gate. userID 0
+	// is no caller.
+	BucketGate(ctx context.Context, projectID, userID int64, bucket string) (repos.BucketGate, error)
 }
 
 type Handler struct {

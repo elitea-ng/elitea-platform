@@ -189,16 +189,13 @@ func (h *Handler) requireS3BucketScoped(w http.ResponseWriter, r *http.Request, 
 	//
 	// The hidden workspace bucket (ADR-0034 decision 3) is absent, before the
 	// access list is read.
-	if hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, bucket); err != nil {
-		h.writeInternalS3(w, r, "check bucket type", err)
-		return repos.BucketRow{}, false
-	} else if hidden {
-		writeError(w, http.StatusNotFound, "NoSuchBucket", "bucket not found")
-		return repos.BucketRow{}, false
-	}
-	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
+	hidden, allowed, err := h.gateBucket(r.Context(), projectID, bucket, need)
 	if err != nil {
 		h.writeInternalS3(w, r, "authorize bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if hidden {
+		writeError(w, http.StatusNotFound, "NoSuchBucket", "bucket not found")
 		return repos.BucketRow{}, false
 	}
 	if !allowed {

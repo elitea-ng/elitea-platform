@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -603,7 +605,9 @@ func (s *Service) publish(ctx context.Context, request PublishRequest) (PublishR
 	// replicas the transaction's lock timeout gives ErrThreadBusy, and the
 	// retry converges on the replay path.
 	key := strconv.FormatInt(request.Thread.ProjectID, 10) + "/" + request.Thread.ConversationUUID
-	mine := &inflightPublish{signature: publishSignature(request), done: make(chan struct{})}
+	// err starts as errPublishInterrupted: if publishOnce panics, a waiter
+	// sees a failure and runs on its own, never a zero result as success.
+	mine := &inflightPublish{signature: publishSignature(request), done: make(chan struct{}), err: errPublishInterrupted}
 	for {
 		existing, busy := s.publishing.LoadOrStore(key, mine)
 		if !busy {
@@ -619,7 +623,10 @@ func (s *Service) publish(ctx context.Context, request PublishRequest) (PublishR
 			return PublishResult{}, ctx.Err()
 		}
 		if other.err == nil {
+			// A copy: the waiter must not share the leader's map or slice.
 			shared := other.result
+			shared.Refs = maps.Clone(other.result.Refs)
+			shared.Superseded = slices.Clone(other.result.Superseded)
 			shared.Replayed = true
 			return shared, nil
 		}
@@ -633,6 +640,10 @@ func (s *Service) publish(ctx context.Context, request PublishRequest) (PublishR
 	mine.result, mine.err = result, err
 	return result, err
 }
+
+// errPublishInterrupted is the result of a publish that did not return (it
+// panicked): a waiter retries on its own.
+var errPublishInterrupted = errors.New("workspace store: publish interrupted")
 
 // inflightPublish is one publish in flight, for identical retries to share.
 type inflightPublish struct {

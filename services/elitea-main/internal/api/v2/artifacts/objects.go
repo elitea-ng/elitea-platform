@@ -155,16 +155,13 @@ func (h *Handler) requireBucketChecked(w http.ResponseWriter, r *http.Request, p
 	// The hidden workspace bucket (ADR-0034 decision 3) is absent here, and
 	// the refusal comes BEFORE the access list and the system-bucket rule,
 	// so no answer differs from the one a missing bucket gets.
-	if hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, bucket); err != nil {
-		h.writeInternal(w, r, "check bucket type", err)
-		return repos.BucketRow{}, false
-	} else if hidden {
-		writeError(w, http.StatusNotFound, "NotFound", "bucket not found")
-		return repos.BucketRow{}, false
-	}
-	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
+	hidden, allowed, err := h.gateBucket(r.Context(), projectID, bucket, need)
 	if err != nil {
 		h.writeInternal(w, r, "authorize bucket", err)
+		return repos.BucketRow{}, false
+	}
+	if hidden {
+		writeError(w, http.StatusNotFound, "NotFound", "bucket not found")
 		return repos.BucketRow{}, false
 	}
 	if !allowed {
@@ -199,16 +196,13 @@ func (h *Handler) requireBucketChecked(w http.ResponseWriter, r *http.Request, p
 // requireBucketNoBody is requireBucket for HEAD responses, which must not
 // carry a body.
 func (h *Handler) requireBucketNoBody(w http.ResponseWriter, r *http.Request, projectID int64, bucket, need string) (repos.BucketRow, bool) {
-	if hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, bucket); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return repos.BucketRow{}, false
-	} else if hidden {
-		w.WriteHeader(http.StatusNotFound)
-		return repos.BucketRow{}, false
-	}
-	allowed, err := h.authorizeBucket(r.Context(), projectID, bucket, need)
+	hidden, allowed, err := h.gateBucket(r.Context(), projectID, bucket, need)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
+		return repos.BucketRow{}, false
+	}
+	if hidden {
+		w.WriteHeader(http.StatusNotFound)
 		return repos.BucketRow{}, false
 	}
 	if !allowed {

@@ -13,6 +13,7 @@ import (
 
 	v2artifacts "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
@@ -144,6 +145,10 @@ const suffixedWorkspaceBucket = storage.WorkspaceBucketName + "-0a1b2c3d"
 
 func (hiddenSuffixedBucketRepo) IsWorkspaceBucket(_ context.Context, _ int64, name string) (bool, error) {
 	return name == suffixedWorkspaceBucket, nil
+}
+
+func (hiddenSuffixedBucketRepo) BucketGate(_ context.Context, _, _ int64, name string) (repos.BucketGate, error) {
+	return repos.BucketGate{Workspace: name == suffixedWorkspaceBucket}, nil
 }
 
 // TestUserBucketOfTheReservedNameKeepsWorking: the gate is by type, never by

@@ -130,26 +130,29 @@ func callerUserID(ctx context.Context) (int64, bool) {
 	return user.OwningUserID()
 }
 
-// authorizeBucket answers whether the caller may act on one bucket.
-//
-// It reads the exception FIRST and asks about project-admin membership only
-// when the exception refuses, so the common path — no exception — costs one
-// indexed lookup and the admin query never runs.
-func (h *Handler) authorizeBucket(
+
+// gateBucket is a bucket route's first step, in one lookup: hidden is the
+// project's workspace bucket (answered 404 before any access answer, as for
+// a missing bucket), allowed is the access list's verdict.
+func (h *Handler) gateBucket(
 	ctx context.Context, projectID int64, bucket, need string,
-) (bool, error) {
-	userID, ok := callerUserID(ctx)
-	if !ok {
-		return true, nil
+) (hidden, allowed bool, err error) {
+	userID, caller := callerUserID(ctx)
+	if !caller {
+		userID = 0
 	}
-	permissions, found, err := h.repo.GetBucketPermission(ctx, projectID, userID, bucket)
+	gate, err := h.repo.BucketGate(ctx, projectID, userID, bucket)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	if accessPermitted(permissions, found, need) {
-		return true, nil
+	if gate.Workspace {
+		return true, false, nil
 	}
-	return h.repo.IsProjectAdmin(ctx, projectID, userID)
+	if !caller || accessPermitted(gate.Permissions, gate.Found, need) {
+		return false, true, nil
+	}
+	admin, err := h.repo.IsProjectAdmin(ctx, projectID, userID)
+	return false, admin, err
 }
 
 // visibleBuckets applies the listing filter — legacy's blacklist, see this

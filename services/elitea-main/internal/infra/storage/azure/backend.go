@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
@@ -53,6 +55,9 @@ type Backend struct {
 	// identity) client must mint a user-delegation SAS instead, which
 	// Azurite does not support. Capabilities() (S3) reads this.
 	usesSharedKey bool
+	// token is the token credential of the workload-identity path (nil with a
+	// shared key). Copy authorizes its copy source with it.
+	token azcore.TokenCredential
 }
 
 var _ storage.ObjectStore = (*Backend)(nil)
@@ -68,6 +73,7 @@ func New(_ context.Context, cfg Config) (*Backend, error) {
 
 	usesSharedKey := cfg.Key != ""
 	var client *azblob.Client
+	var token azcore.TokenCredential
 	if usesSharedKey {
 		cred, err := azblob.NewSharedKeyCredential(cfg.Account, cfg.Key)
 		if err != nil {
@@ -86,12 +92,14 @@ func New(_ context.Context, cfg Config) (*Backend, error) {
 		if err != nil {
 			return nil, fmt.Errorf("storage/azure: client: %w", err)
 		}
+		token = cred
 	}
 	return &Backend{
 		client:        client,
 		containerName: cfg.ContainerName,
 		keyPrefix:     cfg.KeyPrefix,
 		usesSharedKey: usesSharedKey,
+		token:         token,
 	}, nil
 }
 
@@ -487,16 +495,49 @@ const (
 	copyWait         = 2 * time.Minute
 )
 
-// Copy is Azure Copy Blob inside the backend's container (same account, so
-// the request's own authorization covers the source). A copy the service
-// answers as pending is polled until it succeeds, fails or times out.
+// storageScope is the OAuth scope of Azure Storage, for a copy source token.
+const storageScope = "https://storage.azure.com/.default"
+
+// maxSyncCopyBytes is Azure's limit for the synchronous Copy Blob From URL.
+const maxSyncCopyBytes = 256 << 20
+
+// Copy is Azure Copy Blob inside the backend's container.
+//
+//   - Shared key: an asynchronous Copy Blob; the same-account source is
+//     authorized by the request's own key. A copy the service answers as
+//     pending is polled until it succeeds, fails or times out.
+//   - Workload identity (Entra): the bare URL of a private blob is refused
+//     (403 CannotVerifyCopySource), so the copy is a synchronous Copy Blob
+//     From URL with CopySourceAuthorization "Bearer <token>" for the storage
+//     scope. A source above its 256 MiB limit answers ErrNotSupported.
+//
+// A refused copy source (403, CannotVerifyCopySource, AuthorizationFailure)
+// answers storage.ErrNotSupported, so a caller with a read-back fallback
+// (the workspace store's promote) degrades instead of failing.
 func (b *Backend) Copy(ctx context.Context, src, dst storage.ObjectRef) (storage.ObjectInfo, error) {
 	containerClient := b.containerClient()
 	source := containerClient.NewBlobClient(src.StorageKey(b.keyPrefix)).URL()
 	target := containerClient.NewBlobClient(dst.StorageKey(b.keyPrefix))
+	if b.token != nil {
+		info, err := b.Stat(ctx, src)
+		if err != nil {
+			return storage.ObjectInfo{}, err
+		}
+		if info.Size > maxSyncCopyBytes {
+			return storage.ObjectInfo{}, storage.ErrNotSupported
+		}
+		authorization, err := copySourceAuthorization(ctx, b.token)
+		if err != nil {
+			return storage.ObjectInfo{}, fmt.Errorf("storage/azure: copy source token: %w", err)
+		}
+		if _, err := target.CopyFromURL(ctx, source, &blob.CopyFromURLOptions{CopySourceAuthorization: &authorization}); err != nil {
+			return storage.ObjectInfo{}, copyError(err)
+		}
+		return b.Stat(ctx, dst)
+	}
 	started, err := target.StartCopyFromURL(ctx, source, nil)
 	if err != nil {
-		return storage.ObjectInfo{}, mapAzureError(err, "copy object")
+		return storage.ObjectInfo{}, copyError(err)
 	}
 	status := blob.CopyStatusType("")
 	if started.CopyStatus != nil {
@@ -524,4 +565,25 @@ func (b *Backend) Copy(ctx context.Context, src, dst storage.ObjectRef) (storage
 		return storage.ObjectInfo{}, fmt.Errorf("storage/azure: copy object: status %s", status)
 	}
 	return b.Stat(ctx, dst)
+}
+
+// copySourceAuthorization is the Bearer value of a copy source token.
+func copySourceAuthorization(ctx context.Context, credential azcore.TokenCredential) (string, error) {
+	token, err := credential.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{storageScope}})
+	if err != nil {
+		return "", err
+	}
+	return "Bearer " + token.Token, nil
+}
+
+// copyError maps a refused copy source to storage.ErrNotSupported (the
+// caller falls back to reading the bytes back), and anything else as usual.
+func copyError(err error) error {
+	var response *azcore.ResponseError
+	if bloberror.HasCode(err, bloberror.CannotVerifyCopySource, bloberror.AuthorizationFailure,
+		bloberror.AuthorizationPermissionMismatch) ||
+		(errors.As(err, &response) && response.StatusCode == 403) {
+		return fmt.Errorf("storage/azure: copy source refused: %w: %w", storage.ErrNotSupported, err)
+	}
+	return mapAzureError(err, "copy object")
 }

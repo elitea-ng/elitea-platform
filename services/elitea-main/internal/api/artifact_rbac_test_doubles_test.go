@@ -351,3 +351,10 @@ func (testPrincipalValidator) ValidatePrincipal(_ context.Context, user auth.Use
 func (alwaysSucceedsArtifactRepo) IsWorkspaceBucket(_ context.Context, _ int64, name string) (bool, error) {
 	return name == storage.WorkspaceBucketName, nil
 }
+
+// BucketGate answers the workspace check by the reserved name and no
+// exception, as IsWorkspaceBucket and GetBucketPermission above do.
+func (r alwaysSucceedsArtifactRepo) BucketGate(ctx context.Context, projectID, _ int64, bucket string) (repos.BucketGate, error) {
+	hidden, err := r.IsWorkspaceBucket(ctx, projectID, bucket)
+	return repos.BucketGate{Workspace: hidden}, err
+}

@@ -196,3 +196,51 @@ VALUES (1, $1, $1, 'local')`, storage.WorkspaceBucketName); err != nil {
 		t.Fatalf("the runtime plane served the hidden bucket: %v", err)
 	}
 }
+
+// BucketGate answers the workspace check (by type) and the caller's
+// exception in one query.
+func TestPostgresBucketGateIsOneLookup(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const project int64 = 1
+	for _, seed := range []struct{ name, kind string }{
+		{"elitea-workspaces-0a1b2c3d", "workspace"}, {"reports", "local"}, {"open", "local"},
+	} {
+		if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_storage.buckets (project_id, name, display_name, bucket_type) VALUES ($1, $2, $2, $3)`,
+			project, seed.name, seed.kind); err != nil {
+			t.Fatal(err)
+		}
+	}
+	permissions, err := NewArtifactBucketPermissionsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := permissions.ReplaceUserBucketPermissions(ctx, project, 7, map[string][]string{
+		"reports": {}, "elitea-workspaces-0a1b2c3d": {"read"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		user   int64
+		bucket string
+		want   BucketGate
+	}{
+		{"the workspace bucket, whatever the exception", 7, "elitea-workspaces-0a1b2c3d", BucketGate{Workspace: true, Found: true, Permissions: []string{"read"}}},
+		{"an empty exception (no access)", 7, "reports", BucketGate{Found: true, Permissions: []string{}}},
+		{"no exception", 7, "open", BucketGate{}},
+		{"no caller", 0, "reports", BucketGate{}},
+		{"no caller, the workspace bucket", 0, "elitea-workspaces-0a1b2c3d", BucketGate{Workspace: true}},
+		{"a missing bucket", 7, "missing", BucketGate{}},
+	} {
+		got, err := permissions.BucketGate(ctx, project, tc.user, tc.bucket)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got.Workspace != tc.want.Workspace || got.Found != tc.want.Found ||
+			len(got.Permissions) != len(tc.want.Permissions) || (got.Found && got.Permissions == nil) {
+			t.Fatalf("%s: %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
