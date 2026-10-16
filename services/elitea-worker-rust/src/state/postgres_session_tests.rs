@@ -16,6 +16,10 @@ use super::postgres_session::{
     SessionWriterAuthority, canonical_json, decode_event, encode_event, postgres_timestamp,
 };
 
+/// The client may start timing after the server's lock wait began (see the
+/// lock-timeout assertions below).
+const LOCK_WAIT_CLOCK_SKEW: Duration = Duration::from_millis(50);
+
 const TEST_DATABASE_URL: &str = "ELITEA_TEST_DATABASE_URL";
 static DATABASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const SESSION_MIGRATION: &str =
@@ -1045,7 +1049,17 @@ async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
         caused_by_lock_timeout(&error),
         "the failure is PostgreSQL's lock timeout, not another storage error"
     );
-    assert!(waited >= lock_timeout, "{waited:?}");
+    // PostgreSQL's lock_timeout runs on the SERVER, from when the statement
+    // starts waiting for the lock; this Instant starts on the client a little
+    // later (the request still has to reach the server). So the client can
+    // measure a few microseconds UNDER the timeout while the server waited
+    // all of it (seen in CI: 9.9992 s against 10 s). The 55P03 check above is
+    // what proves the lock timeout fired; this bound only checks the write
+    // was not refused early, so it allows the client/server clock skew.
+    assert!(
+        waited + LOCK_WAIT_CLOCK_SKEW >= lock_timeout,
+        "refused early: waited {waited:?}, lock timeout {lock_timeout:?}"
+    );
     assert!(waited < Duration::from_secs(5), "{waited:?}");
     holder.rollback().await.expect("release holder");
 
