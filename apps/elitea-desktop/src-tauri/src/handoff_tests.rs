@@ -1346,3 +1346,5 @@ async fn a_take_back_asked_during_a_cloud_turn_releases_with_the_later_epoch() {
     assert_eq!(h.platform.lock().unwrap().state, "LOCAL");
 }
 
+#[path = "handoff_live_tests.rs"]
+mod live;

@@ -478,7 +478,7 @@ noted). `conversation_uuid` is the server conversation's UUID.
 | `handoff_status_many` | `{conversation_uuids: string[]}` | `{statuses: Record<uuid, HandoffStatus>}` — for the sidebar: a thread this desktop never sent is `LOCAL` with no request; the rest from the host's records, refreshed at most once per project per call and cached 15 s |
 | `handoff_reclaim` | `{conversation_uuid}` | `{state: "RECLAIMING", epoch, cloud_sha}`, or `{state: "CLOUD_RUNNING", reclaim_pending: true, …}` while a cloud turn runs |
 | `handoff_preflight` | `{conversation_uuid}` | `{preflight_id, outcome: "fast_path" \| "conflicts", changed_paths, conflict_paths, skipped_paths, cloud_turns, modes, files: ChangedFile[], diffs_truncated: boolean}` |
-| `handoff_apply` | `{preflight_id, mode: "apply" \| "worktree" \| "discard"}` | `{applied, outcome: "applied" \| "worktree" \| "discarded", checkpoint_id, worktree_path, branch, imported_turns, released, copied: string[]}` |
+| `handoff_apply` | `{preflight_id, mode: "apply" \| "worktree" \| "discard"}` | `{applied, outcome: "applied" \| "worktree" \| "discarded", checkpoint_id, worktree_path, branch, imported_turns, released, release_refused: string \| null, copied: string[]}` |
 | `handoff_undo` | `{checkpoint_id}` | `{restored: string[]}` — restores the folder to before a take-back |
 | `handoff_erase` | `{conversation_uuid, project_id?}` | the server's answer; the local folder is kept |
 | `handoff_settings_get` | `{workspace_id}` | `{settings: FolderHandoffSettings, policy: HandoffPolicy, env_offered: EnvVar[], env_notice: string \| null}` |
@@ -603,11 +603,64 @@ type HandoffEvent = { conversation_uuid: string;
   its cloud turns into the thread history (`StoredTurn.origin: "cloud"`,
   changed files from the cloud commits' diffs). A release the server did
   not acknowledge (`released: false`) is kept and sent again by the next
-  `handoff_status`; until then the thread stays read-only.
+  `handoff_status`; until then the thread stays read-only. A release the
+  server refuses for good (`release_refused`: `handoff_erased` when the
+  cloud copy was erased meanwhile, `stale_epoch`, `handoff_not_found`) is
+  not kept: the thread follows the server's state (`LOCAL` after an erase,
+  so `released` is `true` and the cloud turns are still imported). The
+  release carries the epoch the preflight read, so a take-back asked while
+  a cloud turn ran (202 `reclaim_pending`, `RECLAIMING` one epoch later)
+  releases with the later epoch.
 - **Records.** What take-back needs is kept in the app data
   (`handoff/threads/<uuid>.json`, owner-only); a shadow repository in
   `handoff/shadow/`. Nothing is written into the folder but the take-back's
   own files.
+- **Store URLs.** The upload grant's `put.headers` are all sent (on S3 and
+  RustFS they bind `x-amz-checksum-sha256`, so the store refuses a PUT
+  without it or with other bytes). Main answers its streaming facade and
+  the multipart completion as origin-relative paths (`/api/v2/…`); they
+  are resolved against the deployment and carry the bearer. A presigned URL
+  on another host never does.
+
+### Cloud handoff: live run
+
+`src/handoff_live_tests.rs` runs this host against a real elitea-main
+(ignored by default). It covers policy → preview → send of a repository
+with staged, unstaged, untracked, ignored, excluded (`.env`, a project
+pattern) and explicitly included files and a harvested env variable; the
+state and the web's take-back request (its notification row); a cloud turn;
+take-back (reclaim, preflight with diffs, apply, release, import into the
+thread history, undo); take-back while a cloud turn runs; cancel during
+`HANDING_OFF`; erase in `CLOUD_IDLE`; an erase that beats the release; a
+stale epoch; and the quota. It needs:
+
+- elitea-main with a database (migrations applied) and an S3-compatible
+  store whose bucket reports default encryption (or the operator
+  attestation for a store that cannot report it); the platform
+  `cloud_executor` section enabled with `env_harvest` and
+  `allow_user_include`, the native client policy's `local_work_allowed` and
+  `local_work_cloud_handoff`, and a project `cloud_executor` setting with
+  `{"enabled": true, "env_harvest": true, "exclusions_add": ["secrets/**"]}`;
+- a native access token (`elnat_…`) of a project member with
+  `models.chat.messages.create`, and optionally a second member's;
+- `ELITEA_HANDOFF_LIVE_SIM`: a program that plays the cloud executor until
+  the worker serves workspace turns. `-project P -conversation UUID -bundle
+  FILE -commit SHA [-hold FILE]` writes a question and an answer, starts the
+  cloud turn on the answer, uploads and publishes `refs/elitea/cloud` as
+  `cloud_executor` and ends the turn (after FILE exists, with `-hold`)
+  through Main's `workspacehandoff`/`workspacestore` services; `-sql QUERY`
+  prints rows as JSON. It runs with Main's `DATABASE_URL` and `S3_*`
+  environment.
+
+```sh
+ELITEA_HANDOFF_LIVE_URL=http://127.0.0.1:39880 ELITEA_HANDOFF_LIVE_PROJECT=1 \
+ELITEA_HANDOFF_LIVE_TOKEN=elnat_… ELITEA_HANDOFF_LIVE_OTHER_TOKEN=elnat_… \
+ELITEA_HANDOFF_LIVE_SIM=/path/to/cloudturn-sim \
+cargo test --lib handoff::tests::live -- --ignored --test-threads=1
+```
+
+The quota case narrows the project setting to `max_project_workspace_gb: 0`
+for one send and restores it.
 
 ## App and native shell (`src/platform.rs`, `src/local_commands.rs`)
 
