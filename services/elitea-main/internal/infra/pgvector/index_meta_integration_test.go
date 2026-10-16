@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"strconv"
 	"strings"
@@ -19,7 +20,7 @@ import (
 // real PostgreSQL JSONB table. It does not exercise toolkit/configuration/vault
 // resolution, HTTP authorization/routing, PgVector provisioning, or the UI.
 func TestCurrentIndexMetaReaderRealPostgres(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the external index-meta reader test")
 	}

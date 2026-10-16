@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"log/slog"
 	"os"
@@ -33,7 +34,7 @@ const (
 var journalTemplate string
 
 func TestMain(m *testing.M) {
-	databaseURL := os.Getenv(databaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(databaseURLEnv))
 	if databaseURL == "" {
 		os.Exit(m.Run())
 	}
@@ -65,7 +66,7 @@ func TestMain(m *testing.M) {
 
 func newJournalPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(databaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(databaseURLEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", databaseURLEnv)
 	}

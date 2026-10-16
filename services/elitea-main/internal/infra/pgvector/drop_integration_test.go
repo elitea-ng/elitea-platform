@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 // TestPGXDropRealPostgres drops what Provision made, twice, and a schema-mode
 // project's schema, against a real server (#1211).
 func TestPGXDropRealPostgres(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the real PgVector drop test")
 	}
@@ -134,7 +135,7 @@ func databaseURLFor(base, database string) string {
 	if err != nil {
 		return base
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s", config.User, config.Password, config.Host, config.Port, database)
+	return testpg.DSN(fmt.Sprintf("postgres://%s:%s@%s:%d/%s", config.User, config.Password, config.Host, config.Port, database))
 }
 
 // TestPGXDropAsANonSuperuserAdminWithAConnectedProjectSession is the managed
@@ -143,7 +144,7 @@ func databaseURLFor(base, database string) string {
 // an admin cannot terminate that session unless it is a member of the role, so
 // a bare DROP DATABASE ... WITH (FORCE) fails.
 func TestPGXDropAsANonSuperuserAdminWithAConnectedProjectSession(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the real PgVector drop test")
 	}
@@ -236,7 +237,7 @@ func TestPGXDropAsANonSuperuserAdminWithAConnectedProjectSession(t *testing.T) {
 // under lock_timeout, gets SQLSTATE 55P03, and answers ErrDropLockTimeout with
 // nothing dropped; once the holder lets go, the same drop goes through.
 func TestPGXDropLockTimeoutAgainstARealLockHolder(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the real PgVector drop test")
 	}

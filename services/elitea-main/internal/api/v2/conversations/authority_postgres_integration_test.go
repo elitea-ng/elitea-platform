@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,7 +24,7 @@ import (
 
 func newChatAuthorityPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	dsn := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if dsn == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL for isolated chat authority PostgreSQL tests")
 	}

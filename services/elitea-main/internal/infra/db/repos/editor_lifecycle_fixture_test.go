@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ func TestEditorLifecycleFixtureGuard(t *testing.T) {
 
 func editorLifecyclePostgresPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	raw := os.Getenv(editorLifecycleFixtureURL)
+	raw := testpg.DSN(os.Getenv(editorLifecycleFixtureURL))
 	if raw == "" {
 		if required := os.Getenv(editorLifecycleFixtureRequired); required == "true" || required == "1" {
 			t.Fatal("ELITEA_EDITOR_TEST_DATABASE_URL is required for editor PostgreSQL acceptance")

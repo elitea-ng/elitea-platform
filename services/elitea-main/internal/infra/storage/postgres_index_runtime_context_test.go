@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/url"
 	"os"
 	"strings"
@@ -151,7 +152,7 @@ func TestPostgresRuntimeContextHidesInactiveOrMismatchedClaims(t *testing.T) {
 // intentionally leaves mTLS termination and PAT validation to their focused
 // component tests.
 func TestPostgresRuntimeContextAuthorizationIntegration(t *testing.T) {
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the PostgreSQL runtime-context authorization test")
 	}

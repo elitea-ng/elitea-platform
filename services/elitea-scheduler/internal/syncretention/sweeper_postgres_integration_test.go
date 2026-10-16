@@ -9,6 +9,7 @@ package syncretention
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/testpg"
 	"os"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ import (
 
 func newSyncPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	databaseURL := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if databaseURL == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the sync retention integration tests")
 	}

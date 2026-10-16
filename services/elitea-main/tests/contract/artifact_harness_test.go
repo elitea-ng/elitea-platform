@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http/httptest"
 	"os"
 	"sync/atomic"
@@ -101,7 +102,7 @@ func requireArtifactSuite(t *testing.T) *httptest.Server {
 func setupArtifactSuite() (teardown func()) {
 	noop := func() {}
 
-	databaseURL := os.Getenv(artifactTestDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(artifactTestDatabaseURLEnv))
 	s3Endpoint := os.Getenv("S3_ENDPOINT_URL")
 	if databaseURL == "" || s3Endpoint == "" {
 		return noop

@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"log/slog"
 	"os"
 	"strings"
@@ -436,7 +437,7 @@ func assertStepCompensated(t *testing.T, steps []projectprovisioning.StepStatus,
 func dropProvisionedVectorStore(t *testing.T, projectID int64) {
 	t.Helper()
 	t.Cleanup(func() {
-		databaseURL := os.Getenv(databaseURLEnv)
+		databaseURL := testpg.DSN(os.Getenv(databaseURLEnv))
 		if databaseURL == "" {
 			return
 		}

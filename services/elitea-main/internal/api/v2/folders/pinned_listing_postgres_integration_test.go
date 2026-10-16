@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -47,7 +48,7 @@ const pinnedListingDatabaseURL = "ELITEA_TEST_DATABASE_URL"
 
 func newPinnedListingPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(pinnedListingDatabaseURL)
+	databaseURL := testpg.DSN(os.Getenv(pinnedListingDatabaseURL))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the pinned-listing integration test", pinnedListingDatabaseURL)
 	}

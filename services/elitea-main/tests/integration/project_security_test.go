@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,7 +20,7 @@ import (
 
 func integrationPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("INTEGRATION_DATABASE_URL")
+	dsn := testpg.DSN(os.Getenv("INTEGRATION_DATABASE_URL"))
 	if dsn == "" {
 		t.Skip("INTEGRATION_DATABASE_URL is not set")
 	}

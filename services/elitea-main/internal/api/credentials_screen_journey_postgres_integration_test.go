@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -419,7 +420,7 @@ ON CONFLICT DO NOTHING`, editorRoleID, seeded); err != nil {
 // seed script runs here beyond the permission rows above.
 func newCredentialJourneyPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	if os.Getenv(credentialJourneyDatabaseURL) == "" {
+	if testpg.DSN(os.Getenv(credentialJourneyDatabaseURL)) == "" {
 		t.Skipf("set %s to run the credential screen journey", credentialJourneyDatabaseURL)
 	}
 	pool := newStatusOKIntegrationPool(t)

@@ -3,6 +3,7 @@ package toolkits
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"regexp"
 	"strings"
@@ -213,7 +214,7 @@ func contains(values []string, want string) bool {
 // is never mutated.
 func newToolkitsIntegrationPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(postgresIntegrationDatabaseURL)
+	databaseURL := testpg.DSN(os.Getenv(postgresIntegrationDatabaseURL))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", postgresIntegrationDatabaseURL)
 	}

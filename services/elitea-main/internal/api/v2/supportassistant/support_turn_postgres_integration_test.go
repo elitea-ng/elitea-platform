@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -73,7 +74,7 @@ const (
 var supportTemplate string
 
 func TestMain(m *testing.M) {
-	databaseURL := os.Getenv(supportDatabaseURLVariable)
+	databaseURL := testpg.DSN(os.Getenv(supportDatabaseURLVariable))
 	if databaseURL == "" {
 		// Every PostgreSQL test here skips itself. Run the rest.
 		os.Exit(m.Run())
@@ -257,7 +258,7 @@ SELECT setval(pg_get_serial_sequence('p_7.application_versions', 'id'), 100);
 // newSupportPool copies the template into a private database.
 func newSupportPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(supportDatabaseURLVariable)
+	databaseURL := testpg.DSN(os.Getenv(supportDatabaseURLVariable))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the support-assistant PostgreSQL integration test", supportDatabaseURLVariable)
 	}

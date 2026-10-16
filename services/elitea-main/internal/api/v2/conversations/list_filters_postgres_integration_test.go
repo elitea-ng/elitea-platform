@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,7 +39,7 @@ const listFiltersDatabaseURL = "ELITEA_TEST_DATABASE_URL"
 
 func newListFiltersPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(listFiltersDatabaseURL)
+	databaseURL := testpg.DSN(os.Getenv(listFiltersDatabaseURL))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the conversation-listing integration test", listFiltersDatabaseURL)
 	}

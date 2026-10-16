@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	neturl "net/url"
 	"os"
 	"strings"
@@ -139,7 +140,7 @@ func TestRunRefusesBadUsage(t *testing.T) {
 
 // TestRunAgainstPostgres lists, refuses an unconfirmed drop, then drops.
 func TestRunAgainstPostgres(t *testing.T) {
-	url := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	url := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if url == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the orphan command against Postgres")
 	}
@@ -355,7 +356,7 @@ func TestRunNamesTheFailingConnectionWithoutEchoingTheURL(t *testing.T) {
 // at all; the rest is dropped. The admin URL names no database, so the tool
 // connects to `postgres`.
 func TestRunRechecksEachIDBeforeItsDropAndLeavesTheJournalItsIDs(t *testing.T) {
-	url := os.Getenv("ELITEA_TEST_DATABASE_URL")
+	url := testpg.DSN(os.Getenv("ELITEA_TEST_DATABASE_URL"))
 	if url == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the orphan command against Postgres")
 	}

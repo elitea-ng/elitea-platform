@@ -7,8 +7,8 @@ package repos
 // (now(), clock_timestamp(), a DEFAULT now()) into such a column through the
 // SESSION time zone, so a writer is right only if it says AT TIME ZONE 'UTC'.
 //
-// Every pool in this package runs in a non-UTC session
-// (postgresIntegrationSessionTimeZone). The tests here pin that, and pin that
+// Every test connection in this module runs in a non-UTC session
+// (internal/testpg). The tests here pin that, and pin that
 // the writers and the conversation activity trigger (tenant/0150) store UTC
 // whatever the session says.
 
@@ -21,13 +21,14 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 )
 
 // naiveUTCSkew bounds how far a stored stamp may sit from the UTC clock read
 // around the write. A wrong zone is off by whole hours.
 const naiveUTCSkew = 5 * time.Minute
 
-// The guard is only a guard while the session is not UTC: a RuntimeParams
+// The guard is only a guard while the session is not UTC: a testpg.DSN
 // change that silently stopped applying would make every test in this
 // package pass on a UTC CI server again.
 func TestPostgresIntegrationSessionTimeZoneIsNotUTC(t *testing.T) {
@@ -42,10 +43,10 @@ SELECT current_setting('TimeZone'),
 		Scan(&zone, &offsetSeconds); err != nil {
 		t.Fatal(err)
 	}
-	if zone != postgresIntegrationSessionTimeZone() {
-		t.Fatalf("session TimeZone = %q, want %q", zone, postgresIntegrationSessionTimeZone())
+	if zone != testpg.TimeZone() {
+		t.Fatalf("session TimeZone = %q, want %q", zone, testpg.TimeZone())
 	}
-	if offsetSeconds == 0 && os.Getenv(postgresIntegrationTimeZoneEnv) == "" {
+	if offsetSeconds == 0 && os.Getenv(testpg.TimeZoneEnv) == "" {
 		t.Fatalf("session time zone %q is UTC-equivalent; the naive-timestamp guard needs an offset", zone)
 	}
 }
@@ -97,7 +98,7 @@ FROM p_1.chat_participant_mapping m WHERE m.conversation_id = $1::integer LIMIT 
 		// pgx returns a naive timestamp as that wall clock in time.UTC.
 		if stored.Before(before.Add(-naiveUTCSkew)) || stored.After(after.Add(naiveUTCSkew)) {
 			t.Errorf("%s = %v, want the UTC wall clock between %v and %v (session %s)",
-				name, *stored, before, after, postgresIntegrationSessionTimeZone())
+				name, *stored, before, after, testpg.TimeZone())
 		}
 	}
 	if !conversation.CreatedAt.IsZero() &&

@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"testing"
 	"testing/fstest"
@@ -134,7 +135,7 @@ func TestSandboxWholeCodeOwnerMigrationBootstrapAndUpgrade(t *testing.T) {
 
 func sandboxWholeCodeIsolatedDatabase(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	url := os.Getenv("ELITEA_AGENTSTATE_TEST_DATABASE_URL")
+	url := testpg.DSN(os.Getenv("ELITEA_AGENTSTATE_TEST_DATABASE_URL"))
 	if url == "" {
 		t.Skip("set ELITEA_AGENTSTATE_TEST_DATABASE_URL for the isolated Code owner migration test")
 	}

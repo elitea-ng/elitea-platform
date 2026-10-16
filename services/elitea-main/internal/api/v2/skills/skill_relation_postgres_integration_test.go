@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -656,7 +657,7 @@ func TestPlainUpdateStillWorksOnTheSameURL(t *testing.T) {
 // other *_postgres_integration_test.go in this repository uses.
 func newRelationPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(relationDatabaseURLVariable)
+	databaseURL := testpg.DSN(os.Getenv(relationDatabaseURLVariable))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the PostgreSQL service-integration test", relationDatabaseURLVariable)
 	}

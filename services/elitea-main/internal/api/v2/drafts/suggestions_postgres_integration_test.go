@@ -33,6 +33,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,7 +53,7 @@ const suggestionsDatabaseURLEnv = "ELITEA_TEST_DATABASE_URL"
 
 func newSuggestionsPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	databaseURL := os.Getenv(suggestionsDatabaseURLEnv)
+	databaseURL := testpg.DSN(os.Getenv(suggestionsDatabaseURLEnv))
 	if databaseURL == "" {
 		t.Skipf("set %s to run the draft-suggestions integration test", suggestionsDatabaseURLEnv)
 	}
