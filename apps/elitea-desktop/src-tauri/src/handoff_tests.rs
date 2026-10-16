@@ -1445,3 +1445,44 @@ async fn a_lost_begin_answer_does_not_strand_the_thread() {
         .unwrap();
     assert_eq!(sent.state, "CLOUD_IDLE");
 }
+
+/// A cancel that lands while `complete` is in flight does not abandon: the
+/// fresh cloud copy stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_during_complete_keeps_the_cloud_copy() {
+    let h = harness().await;
+    {
+        let host = Arc::downgrade(&h.host);
+        *h.events.1.lock().unwrap() = Some(Box::new(move |event| {
+            if event.phase == "publish"
+                && event.done == 1
+                && let Some(host) = host.upgrade()
+            {
+                assert!(host.cancel(CONVERSATION).unwrap());
+            }
+        }));
+    }
+    let sent = h
+        .host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    assert_eq!(sent.state, "CLOUD_IDLE");
+    {
+        let p = h.platform.lock().unwrap();
+        assert_eq!((p.deletes, p.state.as_str()), (0, "CLOUD_IDLE"));
+        assert!(p.segment.is_some());
+    }
+    assert!(h.host.is_away(CONVERSATION));
+}
+
+/// A failed `complete` whose server state is already past HANDING_OFF is
+/// not deleted (the delete would erase the cloud copy).
+#[tokio::test(flavor = "multi_thread")]
+async fn an_abandon_never_deletes_a_completed_handoff() {
+    let h = harness().await;
+    h.platform.lock().unwrap().state = "CLOUD_IDLE".into();
+    h.platform.lock().unwrap().epoch = 3;
+    h.host.abandon(1, CONVERSATION).await;
+    assert_eq!(h.platform.lock().unwrap().deletes, 0);
+}

@@ -942,20 +942,33 @@ impl HandoffHost {
 
     /// Cancel a begun handoff on the server (`DELETE` in `HANDING_OFF`,
     /// contract §6.3). Best effort: the server's 15-minute expiry is the
-    /// fallback.
+    /// fallback. The state is read first and only a `HANDING_OFF` thread is
+    /// deleted: a handoff that already completed (a lost `complete` answer)
+    /// holds the fresh cloud copy, which a delete would erase. A 404 or 409
+    /// is fine (nothing to cancel).
     async fn abandon(&self, project_id: i64, uuid: &str) {
-        let answer = self
-            .call(
-                Method::DELETE,
-                &format!("/api/v2/elitea_core/workspace_handoff/prompt_lib/{project_id}/{uuid}"),
-                None,
-            )
-            .await;
-        if let Err(error) = answer {
-            log::warn!(
+        let path = format!("/api/v2/elitea_core/workspace_handoff/prompt_lib/{project_id}/{uuid}");
+        // An unreadable state falls through to the delete: the server only
+        // accepts it in HANDING_OFF.
+        if let Ok(answer) = self.api.send(Method::GET, &path, None, &[]).await
+            && (200..300).contains(&answer.status)
+            && str_of(&answer.body, "state").is_some_and(|state| state != "HANDING_OFF")
+        {
+            return;
+        }
+        match self.api.send(Method::DELETE, &path, None, &[]).await {
+            Ok(answer)
+                if (200..300).contains(&answer.status)
+                    || answer.status == 404
+                    || answer.status == 409 => {}
+            Ok(answer) => log::warn!(
+                "a begun handoff could not be cancelled (HTTP {}); the server expires it",
+                answer.status
+            ),
+            Err(error) => log::warn!(
                 "a begun handoff could not be cancelled ({}); the server expires it",
                 error.code
-            );
+            ),
         }
     }
 
@@ -1111,10 +1124,27 @@ impl HandoffHost {
             }
         };
         self.emit(uuid, "begin", 1, 1, None);
-        let after_begin = self.after_begin(project_id, workspace_id, uuid, &begin, &snap, &written);
+        let completing = AtomicBool::new(false);
+        let mut after_begin = std::pin::pin!(self.after_begin(
+            project_id,
+            workspace_id,
+            uuid,
+            &begin,
+            &snap,
+            &written,
+            &completing
+        ));
         let outcome = tokio::select! {
-            outcome = after_begin => outcome,
-            () = switch.wait() => Err(cancelled()),
+            outcome = &mut after_begin => outcome,
+            () = switch.wait() => {
+                // Once `complete` is on its way the cloud holds the copy: a
+                // cancel no longer abandons, the send finishes.
+                if completing.load(Ordering::SeqCst) {
+                    after_begin.await
+                } else {
+                    Err(cancelled())
+                }
+            }
         };
         let (handoff_id, state, cloud_epoch) = match outcome {
             Ok(done) => done,
@@ -1161,6 +1191,7 @@ impl HandoffHost {
         begin: &Value,
         snap: &Snapshot,
         written: &elitea_workspace_store::bundle::Written,
+        completing: &AtomicBool,
     ) -> Result<(String, String, u64), HandoffError> {
         let handoff_id = str_of(begin, "handoff_id").ok_or_else(|| {
             HandoffError::new("invalid_response", "the begin answer has no handoff id")
@@ -1249,6 +1280,8 @@ impl HandoffHost {
         );
         self.emit(uuid, "publish", 0, 1, None);
         sync::publish(&store, &request, self.deps.backoff).await?;
+        // From here a cancel cannot take the handoff back.
+        completing.store(true, Ordering::SeqCst);
         self.emit(uuid, "publish", 1, 1, None);
         let complete = self
             .call(
