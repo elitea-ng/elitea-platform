@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,13 +19,16 @@ import (
 	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	workspacehandoffapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/workspacehandoff"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceexecutor"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 )
 
 // workspaceHandoffSweepInterval is how often the handoff sweeper runs.
@@ -207,9 +212,12 @@ func combineWorkspaceEncryption(a, b string) string {
 }
 
 // runWorkspaceHandoffSweeper runs the handoff's timed transitions and erasures
-// and the store's object sweep until ctx ends. Replicas run it side by side:
-// the claims are SKIP LOCKED and every transition is a compare-and-set.
-func runWorkspaceHandoffSweeper(ctx context.Context, composition workspaceHandoffComposition, logger *slog.Logger) {
+// and the store's object sweep until ctx ends, and, when the cloud executor
+// runs turns (lifecycle not nil), ends the running cloud turns whose
+// execution is already terminal. Replicas run it side by side: the claims
+// are SKIP LOCKED and every transition is a compare-and-set.
+func runWorkspaceHandoffSweeper(ctx context.Context, composition workspaceHandoffComposition,
+	lifecycle workspaceruntime.TurnLifecycle, logger *slog.Logger) {
 	if composition.Handoff == nil || composition.Store == nil {
 		return
 	}
@@ -227,6 +235,11 @@ func runWorkspaceHandoffSweeper(ctx context.Context, composition workspaceHandof
 			}
 			if _, err := composition.Store.SweepObjects(ctx, 100); err != nil && ctx.Err() == nil {
 				logger.Warn("workspace store sweep had failures", "err", err)
+			}
+			if lifecycle != nil {
+				if _, err := lifecycle.ReconcileFinished(ctx); err != nil && ctx.Err() == nil {
+					logger.Warn("cloud turn reconciliation had failures", "err", err)
+				}
 			}
 		}
 	}()
@@ -302,4 +315,163 @@ func workspaceStorageFromEnv(ctx context.Context, cfg storage.Config, lookup fun
 	inputs.DedicatedStore = store
 	inputs.DedicatedBucketName = dedicated
 	return inputs, nil
+}
+
+// deferredAgentCanceller is the handoff's turn canceller, bound to the
+// runtime's stop use case once the runtime plane is composed (the handoff is
+// composed first: the executor adapters are runtime dependencies). Unbound,
+// a cancel fails, which the handoff logs: no runtime, no cloud turn to stop.
+type deferredAgentCanceller struct {
+	mu   sync.RWMutex
+	next agentexecutionapi.CurrentAgentCanceller
+}
+
+func (d *deferredAgentCanceller) bind(next agentexecutionapi.CurrentAgentCanceller) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.next = next
+}
+
+func (d *deferredAgentCanceller) Cancel(ctx context.Context, request agentexecutionapp.CurrentAgentCancelRequest) (agentexecutionapp.CurrentAgentCancelOutcome, error) {
+	d.mu.RLock()
+	next := d.next
+	d.mu.RUnlock()
+	if next == nil {
+		return agentexecutionapp.CurrentAgentCancelOutcome{}, errors.New("no agent runtime is composed to cancel the cloud turn")
+	}
+	return next.Cancel(ctx, request)
+}
+
+// workspaceExecutorComposition is the cloud executor's adapter set; nil when
+// the handoff is not composed.
+type workspaceExecutorComposition struct {
+	adapter *workspaceexecutor.Adapter
+}
+
+// dependencies answers all four seams or none (the runtime refuses a partial
+// set, and opens the Local work fence only for a complete one).
+func (c workspaceExecutorComposition) dependencies() runtimecomposition.WorkspaceDependencies {
+	if c.adapter == nil {
+		return runtimecomposition.WorkspaceDependencies{}
+	}
+	return runtimecomposition.WorkspaceDependencies{
+		Store: c.adapter, Turns: c.adapter, Policies: c.adapter, Lifecycle: c.adapter,
+	}
+}
+
+// lifecycle is the reconciler the sweeper runs, only when the runtime plane
+// (and so the executor) is composed.
+func (c workspaceExecutorComposition) lifecycle(runtimeComposed bool) workspaceruntime.TurnLifecycle {
+	if c.adapter == nil || !runtimeComposed {
+		return nil
+	}
+	return c.adapter
+}
+
+// composeWorkspaceExecutor adapts the composed handoff to the executor seam
+// (ADR-0034 decisions 7, 9, 11, 14).
+func composeWorkspaceExecutor(pool *pgxpool.Pool, handoff workspaceHandoffComposition,
+	resources platformconfig.CloudExecutorResources, logger *slog.Logger) (workspaceExecutorComposition, error) {
+	if pool == nil || handoff.Handoff == nil || handoff.Store == nil {
+		return workspaceExecutorComposition{}, nil
+	}
+	parsed, err := parseCloudExecutorResources(resources)
+	if err != nil {
+		return workspaceExecutorComposition{}, err
+	}
+	repo, err := dbrepos.NewWorkspaceHandoffsRepository(pool)
+	if err != nil {
+		return workspaceExecutorComposition{}, err
+	}
+	adapter, err := workspaceexecutor.New(handoff.Handoff, handoff.Store, workspaceThreads{repo: repo}, parsed, logger)
+	if err != nil {
+		return workspaceExecutorComposition{}, err
+	}
+	return workspaceExecutorComposition{adapter: adapter}, nil
+}
+
+// workspaceThreads is workspaceexecutor.Threads over the handoffs repository.
+type workspaceThreads struct {
+	repo *dbrepos.WorkspaceHandoffsRepository
+}
+
+func (t workspaceThreads) Read(ctx context.Context, thread workspacehandoff.Thread) (workspacehandoff.Handoff, bool, error) {
+	return t.repo.Read(ctx, thread)
+}
+
+func (t workspaceThreads) Execution(ctx context.Context, executionID string, generation uint64) (workspaceexecutor.Execution, bool, error) {
+	execution, ok, err := t.repo.CloudTurnExecution(ctx, executionID, generation)
+	return workspaceexecutor.Execution(execution), ok, err
+}
+
+func (t workspaceThreads) FinishedCloudTurns(ctx context.Context, limit int) ([]workspacehandoff.Handoff, error) {
+	return t.repo.FinishedCloudTurns(ctx, limit)
+}
+
+// parseCloudExecutorResources reads the chart's sandbox limits: CPU as cores
+// or millicores ("2", "1.5", "500m"), memory and disk as bytes with an
+// optional binary or decimal suffix ("4Gi", "512Mi", "1G"). Empty is zero (the
+// worker's deployment default); anything else stops startup.
+func parseCloudExecutorResources(resources platformconfig.CloudExecutorResources) (workspaceexecutor.Resources, error) {
+	out := workspaceexecutor.Resources{}
+	if resources.TurnWallSeconds > 0 {
+		out.TurnWallSeconds = uint64(resources.TurnWallSeconds)
+	}
+	var err error
+	if out.CPUMillis, err = parseCPUMillis(resources.CPU); err != nil {
+		return out, fmt.Errorf("ELITEA_CLOUD_EXECUTOR_CPU: %w", err)
+	}
+	if out.MemoryBytes, err = parseQuantityBytes(resources.Memory); err != nil {
+		return out, fmt.Errorf("ELITEA_CLOUD_EXECUTOR_MEMORY: %w", err)
+	}
+	if out.DiskBytes, err = parseQuantityBytes(resources.Disk); err != nil {
+		return out, fmt.Errorf("ELITEA_CLOUD_EXECUTOR_DISK: %w", err)
+	}
+	return out, nil
+}
+
+func parseCPUMillis(raw string) (uint64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	if milli, ok := strings.CutSuffix(raw, "m"); ok {
+		value, err := strconv.ParseUint(milli, 10, 32)
+		if err != nil || value == 0 {
+			return 0, fmt.Errorf("%q is not a CPU quantity", raw)
+		}
+		return value, nil
+	}
+	cores, err := strconv.ParseFloat(raw, 64)
+	if err != nil || cores <= 0 || cores > 4096 {
+		return 0, fmt.Errorf("%q is not a CPU quantity", raw)
+	}
+	return uint64(cores*1000 + 0.5), nil
+}
+
+var quantitySuffixes = []struct {
+	suffix string
+	factor uint64
+}{
+	{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40},
+	{"k", 1e3}, {"K", 1e3}, {"M", 1e6}, {"G", 1e9}, {"T", 1e12},
+}
+
+func parseQuantityBytes(raw string) (uint64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	number, factor := raw, uint64(1)
+	for _, candidate := range quantitySuffixes {
+		if trimmed, ok := strings.CutSuffix(raw, candidate.suffix); ok {
+			number, factor = trimmed, candidate.factor
+			break
+		}
+	}
+	value, err := strconv.ParseUint(number, 10, 64)
+	if err != nil || value == 0 || value > (1<<50)/factor {
+		return 0, fmt.Errorf("%q is not a byte quantity", raw)
+	}
+	return value * factor, nil
 }

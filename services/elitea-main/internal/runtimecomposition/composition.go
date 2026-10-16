@@ -179,6 +179,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	if err := dependencies.Workspace.validate(); err != nil {
+		return nil, err
+	}
 	toolkitRoute, err := configuredToolkitRoute(config, dependencies.WorkerToolkitCapability)
 	if err != nil {
 		return nil, err
@@ -701,9 +704,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct nested application version reader: %w", nestedErr)
 		}
 		agentAdmissions.WithNestedMemoryToolkits(admissionNestedVersions)
-		agentTargets, targetErr := repos.NewCurrentAgentStartRepository(
+		agentTargets, targetErr := newCurrentAgentStartRepository(
 			dependencies.AdmissionPool,
 			catalogueProjectID,
+			dependencies.Workspace,
 		)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent start resolver: %w", targetErr)
@@ -1203,6 +1207,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		settlementOptions = append(settlementOptions,
 			executionapp.WithAfterSettleHooks(pipelineruns.NewSettlementHook(dependencies.PipelineRuns, dependencies.DomainEvents)))
 	}
+	settlementOptions = append(settlementOptions, workspaceSettlementHooks(dependencies.Workspace, dependencies.Logger)...)
 	settlements, err := executionapp.NewSettlementService(settlementsRepository, settlementOptions...)
 	if err != nil {
 		return nil, err
@@ -1379,10 +1384,19 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	var agentOutputIngestor output.AgentExecutionIngestor = agentOutput
 	var nodeEventOutputIngestor output.NodeEventIngestor = nodeEventOutput
+	// The ingestor chain's innermost link: agentOutput, or agentOutput wrapped
+	// to end a cloud turn once its result is projected (ADR-0034).
+	var agentOutputNext outputAgentExecutionIngestor = agentOutput
+	if agentOutput != nil && dependencies.Workspace.complete() {
+		agentOutputNext = finishingAgentExecutionIngestor{
+			next: agentOutput, lifecycle: dependencies.Workspace.Lifecycle, logger: dependencies.Logger,
+		}
+		agentOutputIngestor = agentOutputNext
+	}
 	if replayWake != nil {
 		if agentOutput != nil {
 			agentOutputIngestor = wakingAgentExecutionIngestor{
-				next: agentOutput,
+				next: agentOutputNext,
 				wake: replayWake,
 			}
 		}
