@@ -24,6 +24,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacestore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
@@ -92,6 +93,7 @@ func composeWorkspaceHandoff(
 	canceller agentexecutionapi.CurrentAgentCanceller,
 	recorder audit.Recorder,
 	groupAuth apimw.AuthConfig,
+	liveEvents workspacehandoff.StateEvents,
 	logger *slog.Logger,
 ) (workspaceHandoffComposition, error) {
 	if pool == nil || objectStore == nil || groupAuth.PrincipalValidator == nil || device == nil {
@@ -169,6 +171,9 @@ func composeWorkspaceHandoff(
 		return workspaceHandoffComposition{}, err
 	}
 	handoff.WithEnvVault(envVault)
+	// Live state changes for the web app and the desktop (scope B); nil when
+	// the deployment has no live-update plane, and the clients poll.
+	handoff.WithStateEvents(liveEvents)
 	route, err := workspacehandoffapi.NewRoute(handoff, store, dbrepos.NewConversationsRepo(pool), groupAuth,
 		legacyrbac.NewPostgresResolver(pool))
 	if err != nil {
@@ -315,6 +320,28 @@ func workspaceStorageFromEnv(ctx context.Context, cfg storage.Config, lookup fun
 	inputs.DedicatedStore = store
 	inputs.DedicatedBucketName = dedicated
 	return inputs, nil
+}
+
+// handoffLiveEvents publishes the handoff's state changes on the live-update
+// plane (events.WorkspaceChannel), each frame naming its audience for the SSE
+// relay to filter on and strip.
+type handoffLiveEvents struct {
+	publisher *events.Publisher
+}
+
+// newHandoffLiveEvents answers nil (no events) without a live-update bus.
+func newHandoffLiveEvents(bus events.Bus) workspacehandoff.StateEvents {
+	if bus == nil {
+		return nil
+	}
+	return handoffLiveEvents{publisher: events.NewWorkspacePublisher(bus)}
+}
+
+func (h handoffLiveEvents) HandoffChanged(ctx context.Context, projectID int64, audience []int64, event workspacehandoff.StateEvent) {
+	h.publisher.Emit(ctx, strconv.FormatInt(projectID, 10), workspacehandoff.EventType, struct {
+		workspacehandoff.StateEvent
+		Audience []int64 `json:"audience"`
+	}{StateEvent: event, Audience: audience})
 }
 
 // deferredAgentCanceller is the handoff's turn canceller, bound to the
