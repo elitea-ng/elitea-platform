@@ -63,9 +63,6 @@
 //! already reads carries it): a later turn that reads a different count
 //! (another device or the cloud wrote, or a message was deleted) re-seeds.
 
-// The lifecycle and Doctor users of this store arrive with the next stage.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -621,6 +618,7 @@ impl SessionStore {
     /// # Errors
     ///
     /// The store could not be written.
+    #[allow(dead_code)] // used by the take-back in the next commit
     pub async fn mark_reseed(
         &self,
         deployment: &str,

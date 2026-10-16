@@ -315,7 +315,7 @@ never ran with `turn_unknown`.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `thread_history` | `{workspace_id, conversation_id}` | `{turns: StoredTurn[]}` — the turns of that thread the host recorded for the signed-in account, oldest first. `[]` when it has none (the thread ran on the web or another machine, or before this version) or runs without a store. `conversation_id` is the id the turns started with or the conversation's UUID. Rejects `invalid_request`, `not_signed_in`, `storage`, or the platform's code when the user lookup fails. |
-| `thread_history_delete` | `{workspace_id, conversation_id}` | `{deleted: number}` — forgets that thread's stored turns (the signed-in account's only). The conversation on the server is untouched. |
+| `thread_history_delete` | `{workspace_id, conversation_id}` | `{deleted: number}` — forgets that thread's stored turns (the signed-in account's only) and the agent's session of that conversation (below). The conversation on the server is untouched. |
 
 ```ts
 type StoredTurn = {
@@ -361,6 +361,48 @@ and the conversation: another account or deployment never reads them.
 **Sign-out keeps the history** (it is keyed by user, so the next sign-in of
 the same account sees it again, and another account does not);
 `workspace_remove` deletes the workspace's rows for every account.
+
+## Agent session memory (`src/sessions.rs`, `src/seed.rs`)
+
+Every turn of a Local work thread sees the earlier ones: the model is sent
+the thread's user and assistant messages, tool calls and tool results, in
+order. The host keeps them as one adk **session** per conversation in
+`sessions.sqlite` in the app data directory (the runtime's `StateStore`;
+owner-only like `threads.sqlite`: `0700` directory, `0600` file created before
+SQLite opens it, no symlink followed, a symlinked, foreign or group/world
+accessible file refused, WAL). Nothing in this section is an agent-facing
+command except `session_info`.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `session_info` | `{conversation_uuid}` | `{turns, bytes, seeded_from_server} \| null` — the signed-in account's session of that conversation: how many turns it holds, its size in bytes, and whether it agrees with the server conversation. `null` without one (or without a store). Rejects `invalid_request`, `not_signed_in`, `storage`. For the Doctor and the context meter. |
+
+* **The server conversation is canonical; the session is a cache.** Keyed by
+  `sha256(deployment origin, user id, conversation UUID)`, never by workspace
+  or numeric id: another account or deployment never reads another's session.
+  Rows are adk `Event` JSON (plain `serde_json`) tagged with the turn's
+  execution id and `executed_by` (`desktop` | `cloud_executor`).
+* **Seeding.** A session that is missing, empty, marked for re-seeding, or
+  whose `server_cursor` (the conversation's message-group count when it last
+  agreed) differs from the conversation detail every turn already reads, is
+  rebuilt from the server before the turn: `GET conversation?messages_limit=200`
+  (a conversation with no messages costs no request), the answers' tool steps
+  from `message_traces` / `message_trace` (the newest 128), folded into events
+  (`seed.rs`). Answers whose meta says `executed_by: cloud_executor` keep that
+  tag. A take-back (`handoff_apply`, or a re-sent release) marks the thread's
+  session for re-seeding so the next local turn folds the cloud's turns in.
+* **Bounds.** A tool response is stored cut at 64 KiB (`…[truncated N bytes;
+  re-run or re-read]`); a session holds 32 MiB, past which the oldest whole
+  turns go (never half a call/response pair) and it re-seeds next time.
+* **A cancelled turn leaves nothing in the session; a turn the server refused
+  to save marks it for re-seeding.** A different `path_deny` drops the stored
+  tool responses' bodies and re-seeds without them.
+* **Lifecycle.** Deleted with the thread (`thread_history_delete`), with the
+  workspace (`workspace_remove`) and on a wipe (`host_wipe`); kept on a plain
+  sign-out. If the file is refused the turn still runs, seeded from the server
+  each time, and a warning is logged. The Doctor check `sessions` reports an
+  untrusted, loose, damaged or newer-schema file; `sessions.tighten` and
+  `sessions.move_aside` (moved aside, never deleted) repair it.
 
 ## Local index (`src/index.rs`, `libs/rust/local-index`)
 
@@ -697,14 +739,15 @@ for one send and restores it.
 
 ```ts
 type Check = {
-  id: string;            // credentials, dir.config, dir.data, dir.logs, history, workspaces,
+  id: string;            // credentials, dir.config, dir.data, dir.logs, history, sessions, workspaces,
                          // index.<workspace id> (one per workspace with a local index),
                          // deployment, session, local_work, pending_revokes
   title: string;
   status: "ok" | "warn" | "fail";
   message: string;       // for a person; never a secret
   fix_id?: string;       // credentials.tighten | credentials.move_aside | dir.tighten.{config,data,logs}
-                         // | history.tighten | history.move_aside | workspaces.drop_missing
+                         // | history.tighten | history.move_aside | sessions.tighten
+                         // | sessions.move_aside | workspaces.drop_missing
                          // | workspaces.move_aside | revokes.retry
                          // | index.tighten:<workspace id> | index.move_aside:<workspace id>
                          // | index.rebuild:<workspace id>

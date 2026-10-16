@@ -24,6 +24,7 @@ fn main() {
             "turn_changes",
             "thread_history",
             "thread_history_delete",
+            "session_info",
             "checkpoint_restore",
             "checkpoint_preview",
             "reveal_path",

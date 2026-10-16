@@ -105,6 +105,7 @@ pub async fn host_wipe(
     local: State<'_, LocalState>,
 ) -> Result<(), HostError> {
     local.agents.forget_identity();
+    local.agents.wipe_sessions().await;
     let result = state.auth.wipe().await;
     clear_webview_data(&window);
     result

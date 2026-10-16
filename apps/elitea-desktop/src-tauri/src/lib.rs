@@ -309,6 +309,7 @@ pub fn run() {
                     credentials: credentials.clone(),
                     workspaces: workspaces.clone(),
                     history: history.clone(),
+                    sessions: sessions.clone(),
                 },
                 auth: auth.clone(),
             }));
@@ -348,6 +349,7 @@ pub fn run() {
             local_commands::turn_changes,
             local_commands::thread_history,
             local_commands::thread_history_delete,
+            local_commands::session_info,
             local_commands::checkpoint_restore,
             local_commands::checkpoint_preview,
             local_commands::reveal_path,

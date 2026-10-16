@@ -1661,6 +1661,7 @@ async fn the_doctor_removes_a_vanished_workspace_the_way_the_app_does() {
         credentials: crate::credentials_file::CredentialsFile::new(h.app.path().join("config")),
         workspaces: workspaces.clone(),
         history: None,
+        sessions: None,
     };
     let message = doctor.fix("workspaces.drop_missing", true).unwrap();
     assert!(message.contains("Not removed"), "{message}");
@@ -2814,4 +2815,68 @@ fn no_store_host(h: &Harness) -> Arc<AgentHost> {
         })
         .unwrap(),
     )
+}
+
+#[tokio::test]
+async fn a_threads_session_goes_with_the_thread_and_with_its_workspace_but_not_with_a_sign_out() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    let info = h
+        .host
+        .session_info(CONVERSATION_UUID)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((info.turns, info.seeded_from_server), (1, true));
+    assert!(info.bytes > 0);
+    assert!(h.host.session_info("not-a-uuid").await.is_err());
+    assert!(!h.session_rows().is_empty());
+
+    // A plain sign-out keeps the session (like threads.sqlite).
+    h.host.forget_identity();
+    assert!(!h.session_rows().is_empty());
+
+    // Deleting the thread deletes its session.
+    assert_eq!(
+        h.host
+            .delete_thread_history(&h.workspace_id, "42")
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(h.session_rows().is_empty());
+    assert!(
+        h.host
+            .session_info(CONVERSATION_UUID)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Removing the workspace deletes the sessions of its threads.
+    run_turn(&h, "what file did you just create?").await;
+    assert!(!h.session_rows().is_empty());
+    h.host.remove_workspace(&h.workspace_id).await.unwrap();
+    assert!(h.session_rows().is_empty());
+}
+
+#[tokio::test]
+async fn a_wipe_deletes_every_session() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    assert!(!h.session_rows().is_empty());
+    h.host.wipe_sessions().await;
+    assert!(h.session_rows().is_empty());
+    // The next turn seeds again from the server and carries on.
+    run_turn(&h, "what file did you just create?").await;
+    assert_eq!(seed_requests(&h.server), 1);
+    let bodies = llm_bodies(&h.server);
+    assert!(
+        shape(bodies.last().unwrap()).len() > 1,
+        "the earlier turn was rebuilt"
+    );
 }

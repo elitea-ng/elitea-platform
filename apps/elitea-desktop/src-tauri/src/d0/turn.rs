@@ -1563,10 +1563,22 @@ impl AgentHost {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .forget_workspace(workspace_id);
-        if let Some(history) = &self.deps.history
-            && let Err(error) = history.delete_workspace(workspace_id)
-        {
-            log::warn!("could not delete a removed workspace's thread history: {error}");
+        if let Some(history) = &self.deps.history {
+            // The sessions of the workspace's threads go with them (a cache:
+            // a conversation used elsewhere rebuilds from the server).
+            match history.workspace_threads(workspace_id) {
+                Ok(threads) => {
+                    for (deployment, user_id, uuid) in threads {
+                        self.forget_session(&deployment, user_id, &uuid).await;
+                    }
+                }
+                Err(error) => {
+                    log::warn!("could not list a removed workspace's threads: {error}");
+                }
+            }
+            if let Err(error) = history.delete_workspace(workspace_id) {
+                log::warn!("could not delete a removed workspace's thread history: {error}");
+            }
         }
         Ok(())
     }
@@ -1665,10 +1677,110 @@ impl AgentHost {
             return Ok(0);
         };
         let owner = self.owner(&self.api).await?;
+        // The thread's agent sessions go with it.
+        let uuids = {
+            let (history, owner, workspace, conversation) = (
+                history.clone(),
+                owner.clone(),
+                workspace_id.to_owned(),
+                conversation.clone(),
+            );
+            tokio::task::spawn_blocking(move || {
+                history.thread_uuids(&owner, &workspace, &conversation)
+            })
+            .await
+            .map_err(|e| TurnError::new("internal", format!("the history read stopped: {e}")))?
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+        };
+        for uuid in uuids {
+            self.forget_session(&owner.origin, owner.user_id, &uuid)
+                .await;
+        }
         history
             .forget_thread(owner, workspace_id.to_owned(), conversation)
             .await
             .map_err(|e| TurnError::new("storage", e.to_string()))
+    }
+
+    /// Forget one conversation's agent session (best effort: a cache).
+    async fn forget_session(&self, deployment: &str, user_id: i64, conversation_uuid: &str) {
+        if let Some(sessions) = &self.deps.sessions
+            && let Err(error) = sessions
+                .store()
+                .delete_conversation(deployment, user_id, conversation_uuid)
+                .await
+        {
+            log::warn!("could not delete a conversation's agent session: {error}");
+        }
+    }
+
+    /// A take-back brought the cloud's turns into the conversation: its
+    /// agent session is marked so the next local turn re-seeds from the
+    /// server and folds them in (`executed_by = 'cloud_executor'`).
+    #[allow(dead_code)] // used by the take-back in the next commit
+    pub async fn mark_session_stale(&self, conversation_uuid: &str) {
+        let Some(sessions) = &self.deps.sessions else {
+            return;
+        };
+        let owner = match self.owner(&self.api).await {
+            Ok(owner) => owner,
+            Err(error) => {
+                log::warn!(
+                    "an agent session could not be marked for re-seeding: {}",
+                    log_reason(&error.code, error.status)
+                );
+                return;
+            }
+        };
+        if let Err(error) = sessions
+            .store()
+            .mark_reseed(&owner.origin, owner.user_id, conversation_uuid)
+            .await
+        {
+            log::warn!("an agent session could not be marked for re-seeding: {error}");
+        }
+    }
+
+    /// `session_info`: the size and state of a conversation's agent session
+    /// (`None` without one); for the Doctor and the context meter.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`, `not_signed_in`, or the store could not be read.
+    pub async fn session_info(
+        &self,
+        conversation_uuid: &str,
+    ) -> Result<Option<crate::sessions::SessionInfo>, TurnError> {
+        let uuid = uuid::Uuid::parse_str(conversation_uuid)
+            .map_err(|_| {
+                TurnError::new(
+                    "invalid_request",
+                    "conversation_uuid must be a conversation UUID",
+                )
+            })?
+            .hyphenated()
+            .to_string();
+        let Some(sessions) = &self.deps.sessions else {
+            return Ok(None);
+        };
+        let owner = self.owner(&self.api).await?;
+        sessions
+            .store()
+            .info(&owner.origin, owner.user_id, &uuid)
+            .await
+            .map_err(|e| TurnError::new("storage", e.to_string()))
+    }
+
+    /// A wipe (`host_wipe`: a revoked device, a refresh token the server no
+    /// longer honours) deletes every agent session. A plain sign-out keeps
+    /// them, like `threads.sqlite`.
+    pub async fn wipe_sessions(&self) {
+        if let Some(sessions) = self.deps.sessions.clone() {
+            let result = tokio::task::spawn_blocking(move || sessions.store().delete_all()).await;
+            if !matches!(result, Ok(Ok(_))) {
+                log::warn!("the agent sessions could not be deleted on wipe");
+            }
+        }
     }
 
     /// `approval_respond`. False when no such question is open.
