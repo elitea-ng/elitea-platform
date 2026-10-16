@@ -21,14 +21,21 @@ Every PR gets `/code-review` twice before merge, and CI must be green.
 
 ## Open items
 
-### #1301 (desktop): review findings
-1. A lost begin response strands the thread in HANDING_OFF. On a transport failure, abandon or check the state.
-2. A cancel that lands after complete erases the fresh cloud copy.
-3. The secret scan skips files with an early NUL byte. Decode UTF-16 and run high-confidence rules on binaries.
-4. Leave-on-laptop is checked before `path_deny`. PathDeny must win.
-5. Trusted worktree parents are never forgotten. Call `forget_worktree_parent` from `workspace_remove`.
+### #1301 (desktop): review findings, all fixed (head `3b65c2b72`)
+All five fixes are in, each with tests:
+1. A lost begin response no longer strands the thread.
+2. A cancel after complete keeps the cloud copy.
+3. The secret scan now covers UTF-16 and binary files.
+4. `path_deny` takes precedence over leave-on-laptop.
+5. `forget_worktree_parent` is called on `workspace_remove`.
 
-Check the branch head: a `wip(handoff)` commit lists which of these are done.
+The dependabot coverage gate also had a fix.
+
+`*.jks` and `*.keystore` were added to the default exclusions, both on the desktop and in the server's `cloudexecutor.go`. The ADR text in elitea-docs does not list them yet.
+
+**Left:**
+- CI on `3b65c2b72` was still queued at handover. Confirm it is green.
+- Then run the two `/code-review` passes again before merging.
 
 ### Executor (head `69f415c22`)
 1. **Audit RPC (`WorkspaceRecordEvent`): partial.**
