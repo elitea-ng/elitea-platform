@@ -1,4 +1,4 @@
-import { StaticPipelineContinuation } from './StaticPipelineContinueControls';
+import { useStaticPauseCards } from './StaticPipelineContinueControls';
 import { stopChatGeneration } from './hooks/useEditorTestTransport';
 /**
  * ChatBox — composition root for the chat experience. Composes entities/conversation
@@ -134,7 +134,7 @@ const ChatBoxInner = memo(function ChatBox({
 
   // Session-scoped bookkeeping of MCP servers declined/authenticated this
   // conversation (never persisted) — resets whenever the conversation changes.
-  const { sessionDeclinedMcpServersRef, sessionMcpAuthorizationBatchesRef } =
+  const { sessionDeclinedMcpServersRef } =
     useSessionMcpAuthorizationRefs(conversationUuid);
 
   // Real RTK/TanStack mutations the action handlers below trigger.
@@ -194,7 +194,6 @@ const ChatBoxInner = memo(function ChatBox({
     projectId,
     socketId: socketClient.socket.id,
     sessionDeclinedMcpServersRef,
-    sessionMcpAuthorizationBatchesRef,
     getMcpTokens: getAllTokens,
     startStreamedExecution, continueStreamedExecution, regenerateStreamedExecution,
   });
@@ -289,6 +288,8 @@ const ChatBoxInner = memo(function ChatBox({
     stopAll: stopGeneration,
   }), [handleClearRef, stopGeneration]);
 
+  const staticPause = useStaticPauseCards({ messages, setChatHistory: data.setChatHistory, projectId, conversationUuid, continueExecution: continueStreamedExecution, editorTest, isStreaming });
+
   // Early return
   if (hidden) return null;
 
@@ -309,10 +310,9 @@ const ChatBoxInner = memo(function ChatBox({
             onRegenerateAnswer: handleRegenerate,
             onSubmitEditedMessage: handleSubmitEditedMessage,
           })}
-          continuation={buildChatBoxContinuationProps({ onHitlResume: handleHitlResume, onContinueMcpExecution: handleContinueMcpExecution, onContinueTokenLimitExecution: handleContinueTokenLimit }, projectIdString)}
+          continuation={{ ...buildChatBoxContinuationProps({ onHitlResume: handleHitlResume, onContinueMcpExecution: handleContinueMcpExecution, onContinueTokenLimitExecution: handleContinueTokenLimit }, projectIdString), staticPause }}
           tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)}
         />
-        <StaticPipelineContinuation messages={messages} setChatHistory={data.setChatHistory} projectId={projectId} conversationUuid={conversationUuid} continueExecution={continueStreamedExecution} editorTest={editorTest} isStreaming={isStreaming} />
         {state.shouldShowStarters && (
           <ChatConversationStarters
             onSend={handleSendStarter}

@@ -1,8 +1,9 @@
 /**
  * Split out of `ChatBox.tsx` to stay under the file-length budget (§3.5) —
  * pure helper functions with no hooks/JSX: wire-shape participant
- * normalisation, `exactOptionalPropertyTypes`-safe object builders, and the
- * HITL child-thread-id derivation.
+ * normalisation and `exactOptionalPropertyTypes`-safe object builders. (The
+ * HITL child-thread-id derivation is gone: a decision is routed by the card's
+ * identity in `hooks/useChatBoxHandlers.hitl.ts`.)
  */
 import type { ComponentProps } from 'react';
 
@@ -22,20 +23,6 @@ export interface ChatBoxActiveConversation {
   readonly message_groups?: MessageGroupWire[];
   readonly isPlayback?: boolean; readonly isSending?: boolean;
   readonly meta?: Readonly<Record<string, unknown>>;
-}
-
-interface PendingHitlEntry {
-  readonly tool_call_id?: string;
-  readonly thread_id?: string;
-  readonly child_thread_id?: string;
-}
-
-/** Derives `continueHitl`'s Track-2 `childThreadId` from the matching pending interrupt entry, by `toolCallId`. */
-export function deriveHitlChildThreadId(pendingHitlMessage: { readonly hitlInterrupts?: readonly unknown[] | undefined } | undefined, toolCallId: string | undefined): string | undefined {
-  if (!toolCallId) return undefined;
-  const interrupts = pendingHitlMessage?.hitlInterrupts as readonly PendingHitlEntry[] | undefined;
-  const matched = interrupts?.find((entry) => entry.tool_call_id === toolCallId);
-  return matched?.thread_id || matched?.child_thread_id || undefined;
 }
 
 /** Builds the `getUserParticipant` result under `exactOptionalPropertyTypes`. */

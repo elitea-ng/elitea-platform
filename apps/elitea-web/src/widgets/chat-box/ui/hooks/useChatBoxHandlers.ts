@@ -10,14 +10,15 @@
  * DISCLOSED GAPS vs. baseline: payloads carry only fields this hook's deps
  * can supply — baseline's `generateMessagePayload`/
  * `generateApplicationStreamingPayload`/`getRegeneratePayload` still have
- * participant-specific gaps. `continueHitl`'s Track-1 "parallel fan-out"
- * decision-batching isn't ported (each decision resumes independently);
- * Track-2's independent fan-out-child resume IS (routes on `childThreadId`).
+ * participant-specific gaps. `continueHitl` decides ONE card
+ * (`decideHitlCard`): the card is queued, and the response's whole pending set
+ * resumes as one continuation once its last card is decided — today's route
+ * consumes the complete set. A legacy fan-out child still resumes alone.
  *
  * CONTINUATION TRANSPORT. `continueHitl` and `continueTokenLimit` resume over REST first — `POST
  * /api/v2/elitea_core/continue_predict/prompt_lib/{projectID}/{conversationID}`
  * with `execution_contract=agent.continue.hitl.v1` — and emits
- * `chat_continue_predict` only when that route refuses or is absent. The order
+ * `chat_continue_predict` only when no route answered at all. The order
  * matters: the socket client is a no-op stub whenever `vite_socket_server` is
  * empty. That is what the shipped deployment serves. So the socket alone left
  * every approval paused server-side. It never emits after a route that
@@ -38,15 +39,11 @@ import {
   revertContinuation,
   tryEmit,
 } from "./useChatBoxHandlers.helpers";
-import {
-  buildHitlContinueBody,
-  findHitlInterruptId,
-} from "./useChatBoxHandlers.hitl";
+import { decideHitlCard } from "./useChatBoxHandlers.hitl";
 import { createResumeMcpFlow } from "./useChatBoxHandlers.mcpAuth";
 import type {
   ChatBoxHandlerDeps,
   HitlInterruptAction,
-  StreamStartOutcome,
   UseChatBoxHandlersResult,
 } from "./useChatBoxHandlers.helpers";
 import {
@@ -106,142 +103,8 @@ export function useChatBoxHandlers(
   const regenerateAnswer = createRegenerateAnswer(deps);
   const deleteAnswer = createDeleteAnswer(deps);
   const clearChat = createClearChat(deps);
-  // `applyHitlOptimisticUpdate`/`buildHitlPayload` extracted (from `continueHitl`) to keep it under the complexity budget.
-  const applyHitlOptimisticUpdate = (
-    messageId: string,
-    action: HitlInterruptAction,
-  ): void => {
-    setChatHistory((prev) =>
-      prev.map((msg) => {
-        if (msg.id !== messageId) return msg;
-        if (action.childThreadId && Array.isArray(msg.hitlInterrupts)) {
-          const remaining = (
-            msg.hitlInterrupts as unknown as readonly {
-              tool_call_id?: string;
-            }[]
-          ).filter((entry) => entry.tool_call_id !== action.toolCallId);
-          return {
-            ...msg,
-            hitlInterrupts: remaining,
-            hitlInterrupt: remaining[0],
-            isStreaming: true,
-            isLoading: true,
-          };
-        }
-        return {
-          ...msg,
-          isLoading: true,
-          isStreaming: true,
-          exception: undefined,
-          hitlInterrupt: undefined,
-          hitlInterrupts: undefined,
-        };
-      }),
-    );
-  };
-  const buildHitlPayload = (
-    message: ChatMessage,
-    action: HitlInterruptAction,
-  ): Record<string, unknown> => {
-    const question =
-      action.action === "edit" ? (action.value ?? "") : action.action;
-    const threadId = action.childThreadId || message.threadId;
-    const base = buildChatContinuePayload(deps, {
-      messageId: message.id,
-      threadId,
-      question,
-    });
-    if (action.childThreadId) {
-      return {
-        ...base,
-        hitl_resume: true,
-        hitl_decisions: [
-          {
-            thread_id: action.childThreadId,
-            tool_call_id: action.toolCallId,
-            action: action.action,
-            value: action.value ?? "",
-          },
-        ],
-      };
-    }
-    const withValue =
-      action.action === "edit" || action.action === "block_with_comment"
-        ? { hitl_value: action.value ?? "" }
-        : {};
-    return {
-      ...base,
-      hitl_resume: true,
-      hitl_action: action.action,
-      ...withValue,
-    };
-  };
-  /**
-   * Resumes the pause over REST when the route can express it.
-   *
-   * Returns the route's outcome, or `undefined` when the route cannot express
-   * this resume. `started` means the run is live again, and `rejected` means
-   * the route refused it with a reason of its own; in both the socket must stay
-   * quiet, because a second resume runs the agent twice and the socket client
-   * is a stub on a deployment that serves only the route.
-   */
-  const resumeHitlOverRest = async (
-    message: ChatMessage,
-    action: HitlInterruptAction,
-  ): Promise<StreamStartOutcome | undefined> => {
-    if (!deps.continueStreamedExecution || !deps.conversationUuid) {
-      return undefined;
-    }
-    const body = buildHitlContinueBody({
-      projectId: deps.projectId,
-      conversationUuid: deps.conversationUuid,
-      messageId: message.id,
-      threadId: action.childThreadId || message.threadId,
-      action,
-      interruptId: findHitlInterruptId(message, action.toolCallId),
-    });
-    if (body === undefined) return undefined;
-    return deps.continueStreamedExecution({
-      conversationUuid: deps.conversationUuid,
-      contract: conversationApi.contracts.continueHitl,
-      body,
-    });
-  };
-  const continueHitl = async (action: HitlInterruptAction): Promise<void> => {
-    const message = [...deps.chatHistory]
-      .reverse()
-      .find(
-        (item) =>
-          Boolean(item.hitlInterrupt) || Boolean(item.hitlInterrupts?.length),
-      );
-    if (!message) return;
-    const payload = buildHitlPayload(message, action);
-    applyHitlOptimisticUpdate(message.id, action);
-    setStreamingInfo(message.questionId ?? message.id);
-    // REST first, socket second — the same order the START path takes. The
-    // Go continuation route is the only one a shipped deployment serves: the
-    // socket client is a no-op stub whenever `vite_socket_server` is empty.
-    const resumed = await resumeHitlOverRest(message, action);
-    if (resumed?.started) return;
-    // A refusal is the route's answer, not a missing transport: show it and
-    // put the card back instead of reporting an absent chat connection.
-    if (resumed && !resumed.started && resumed.reason === "rejected") {
-      revertContinuation(setChatHistory, message, resumed.message);
-      return;
-    }
-    // The optimistic patch above is irreversible unless the emit is checked:
-    // the approval card is already gone and the bubble already spinning. So a
-    // continuation that reached no transport left the run paused server-side,
-    // with no way back on screen.
-    if (
-      !tryEmit(
-        () => emitSocket("chat_continue_predict", payload),
-        "continueHitl",
-      )
-    ) {
-      revertContinuation(setChatHistory, message, undeliveredText());
-    }
-  };
+  // One card at a time; the set goes out when its last card is decided.
+  const continueHitl = (action: HitlInterruptAction): Promise<void> => decideHitlCard(deps, action);
   const resumeMcpFlow = createResumeMcpFlow(deps);
   const continueTokenLimit = async (messageId: string): Promise<void> => {
     const message = deps.chatHistory.find((item) => item.id === messageId);
