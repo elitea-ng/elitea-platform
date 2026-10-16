@@ -16,10 +16,20 @@
 #      holding the public key.
 #   3. Name the proxy network in the supervisor's workspace profile
 #      ("backend": {"kind": "docker", "proxy_network": "elitea-workspace-proxy", ...}).
+#   4. Run `deploy/scripts/standalone-stack.sh certs` (or
+#      deploy/scripts/gen-egress-proxy-certs.sh on its own, after
+#      gen-runtime-certs.sh). It issues the proxy's audit client certificate
+#      (DNS SAN elitea-egress-proxy, clientAuth) from the runtime CA into
+#      deploy/certs/egress-proxy/.
 #
-# The proxy reports its run summaries to elitea-main only where it has a
-# runtime-CA client certificate (the chart issues one); here the summaries
-# stay in the proxy's log (egress_proxy.run_summary).
+# The per-turn audit. The proxy reports its run summaries to elitea-main's
+# EgressAuditService on the control listener (elitea-main:9443) over mTLS,
+# presenting that certificate; elitea-main admits it by
+# ELITEA_EGRESS_AUDIT_CLIENTS=dns:elitea-egress-proxy and writes one audit
+# event per turn (summaries are kept in the database, migration 0169). Without
+# the certificate files the proxy refuses to start, rather than quietly
+# running without audit. To run without it, delete the six AUDIT_* / REPLICA_ID
+# lines of the proxy and the audit mount, and the elitea-main line.
 services:
   egress-proxy:
     image: ${ELITEA_EGRESS_PROXY_IMAGE:-ghcr.io/elitea-ng/elitea-egress-proxy:standalone}
@@ -36,7 +46,21 @@ services:
       # The compose networks are private ranges, which the proxy refuses
       # anyway; named here so the deny list reads complete.
       ELITEA_EGRESS_PROXY_DENY_CIDRS: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+      # The per-turn audit (see the header): mTLS to elitea-main's control
+      # listener, whose server certificate carries DNS:elitea-main.
+      ELITEA_EGRESS_PROXY_AUDIT_TARGET: elitea-main:9443
+      ELITEA_EGRESS_PROXY_AUDIT_SERVER_NAME: elitea-main
+      ELITEA_EGRESS_PROXY_AUDIT_CA_FILE: /etc/elitea-egress-proxy/audit/runtime-ca.crt
+      ELITEA_EGRESS_PROXY_AUDIT_CERT_FILE: /etc/elitea-egress-proxy/audit/audit-client.crt
+      ELITEA_EGRESS_PROXY_AUDIT_KEY_FILE: /etc/elitea-egress-proxy/audit/audit-client.key
+      ELITEA_EGRESS_PROXY_REPLICA_ID: egress-proxy
     volumes:
+      - type: bind
+        source: ./certs/egress-proxy
+        target: /etc/elitea-egress-proxy/audit
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: ${ELITEA_EGRESS_PROXY_PUBLIC_KEYS:?Set the directory of run-token public keys}
         target: /etc/elitea-egress-proxy/keys
@@ -53,6 +77,9 @@ services:
 
   elitea-main:
     environment:
+      # The proxy's client identity admitted to EgressAuditService on the
+      # control listener (deploy/scripts/gen-egress-proxy-certs.sh).
+      ELITEA_EGRESS_AUDIT_CLIENTS: "dns:elitea-egress-proxy"
       ELITEA_EGRESS_PROXY_URL: "http://${ELITEA_WORKSPACE_PROXY_ADDRESS:-172.31.251.2}:3128"
       ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE: /run/elitea-egress-token/signing.pem
     volumes:

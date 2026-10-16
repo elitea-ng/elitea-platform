@@ -268,6 +268,17 @@ scraping and no internal REST.
   (a resumed turn reuses the execution id with a new token) starts a new
   event. Rows are deleted 7 days after their last report
   (`ELITEA_EGRESS_AUDIT_RETENTION_DAYS` on elitea-main, 1 to 365).
+- **Compose.** `deploy/docker-compose.egress-proxy.yml` wires the same
+  audit. `deploy/scripts/gen-egress-proxy-certs.sh` (run by
+  `standalone-stack.sh certs`, after `gen-runtime-certs.sh`) issues the
+  proxy's client certificate from the compose runtime CA into
+  `deploy/certs/egress-proxy/` (DNS SAN `elitea-egress-proxy`, client use
+  only), and it re-issues it when the runtime CA rotates. The overlay mounts
+  that directory read-only into the proxy, points
+  `ELITEA_EGRESS_PROXY_AUDIT_TARGET` at `elitea-main:9443`, and sets
+  `ELITEA_EGRESS_AUDIT_CLIENTS=dns:elitea-egress-proxy` on elitea-main.
+  Without the files the proxy refuses to start, so a compose run never
+  silently loses the audit.
 - **Never in the way.** Reporting is a non-blocking queue (1024 summaries)
   with three tries per summary. A summary that cannot be delivered is
   counted (`egress_proxy_audit_reports_dropped`) and stays in this log. At
