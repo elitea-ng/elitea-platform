@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 
 use adk_rust::graph::Checkpoint;
 use chrono::Utc;
-use sqlx::ConnectOptions as _;
 
 use super::{
     APPLICATION_CAPABILITY_ID, CheckpointLimits, CheckpointWriterAuthority,

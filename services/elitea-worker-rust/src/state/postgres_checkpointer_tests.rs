@@ -10,8 +10,7 @@ use adk_rust::graph::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::json;
-use sqlx::postgres::PgConnectOptions;
-use sqlx::{ConnectOptions, PgPool};
+use sqlx::PgPool;
 
 use super::TestStateWriterLease;
 use super::postgres_checkpointer::{
@@ -28,7 +27,7 @@ const CHECKPOINT_MIGRATION: &str =
 
 struct IsolatedPostgres {
     pool: PgPool,
-    admin_options: PgConnectOptions,
+    admin_options: crate::test_pg::TestConnectOptions,
     database_name: String,
 }
 

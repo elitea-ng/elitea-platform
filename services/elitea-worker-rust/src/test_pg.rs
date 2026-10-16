@@ -15,18 +15,26 @@
 //! `ELITEA_TEST_SESSION_TIMEZONE`. Production pools never pass through here
 //! and keep sqlx's UTC session.
 //!
-//! Two guards keep it that way. `test_pg_guard_every_test_pool_comes_from_test_pg`
-//! fails test code that builds a Postgres pool or connection itself, parses
-//! `PgConnectOptions` other than through [`connect_options`], or reads a
-//! database URL with `std::env::var` instead of [`database_url_var`]. It
-//! matches spelling, so the shared fixtures (`IsolatedPostgres::create`,
-//! `install_schema`, `install_test_schema`, the pipeline fixture's `activate`)
-//! also call [`assert_test_session`] on the pool the test will use, which fails
-//! any UTC session however it was built.
+//! Three layers keep it that way:
+//!
+//! - **Types.** [`connect_options`] returns [`TestConnectOptions`], which has
+//!   no `.connect()`, and [`pool_options`] returns [`TestPoolOptions`], whose
+//!   `connect`/`connect_with` check `SHOW TimeZone` on the new pool before
+//!   handing it out. A pool from here is checked; nothing can forget.
+//! - **Text.** `test_pg_guard_every_test_pool_comes_from_test_pg` fails test
+//!   code that builds a Postgres pool or connection itself, parses
+//!   `PgConnectOptions` other than through [`connect_options`], or reads a
+//!   database URL with `std::env::var` instead of [`database_url_var`].
+//! - **Behaviour.** The shared fixtures (`IsolatedPostgres::create`,
+//!   `install_schema`, `install_test_schema`, the pipeline fixture's
+//!   `activate`) call [`assert_test_session`] on the pool a test hands them,
+//!   which fails a UTC pool however it was built.
 
 use std::env::VarError;
+use std::time::Duration;
 
 use sqlx::Executor as _;
+use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgConnection, PgPoolOptions};
 
 /// Overrides the session time zone every test connection uses.
@@ -51,10 +59,95 @@ pub(crate) fn database_url_var(name: &str) -> Result<String, VarError> {
     std::env::var(name)
 }
 
-/// `PgPoolOptions::new()` for tests: every connection the pool opens runs
-/// `SET TimeZone = '<zone>'` before it is handed out. Chain the usual
-/// settings onto it.
-pub(crate) fn pool_options() -> PgPoolOptions {
+/// Connection options for a test database. Deliberately NOT
+/// `PgConnectOptions`: that type has `.connect()`, which opens a session in
+/// sqlx's `UTC`. This one connects only through [`TestPoolOptions`] or
+/// [`connect`], both of which set the test zone.
+#[derive(Clone, Debug)]
+pub(crate) struct TestConnectOptions(PgConnectOptions);
+
+impl TestConnectOptions {
+    #[must_use]
+    pub(crate) fn database(self, database: &str) -> Self {
+        Self(self.0.database(database))
+    }
+
+    #[must_use]
+    pub(crate) fn disable_statement_logging(self) -> Self {
+        use sqlx::ConnectOptions as _;
+        Self(self.0.disable_statement_logging())
+    }
+
+    pub(crate) fn get_host(&self) -> &str {
+        self.0.get_host()
+    }
+
+    pub(crate) fn get_database(&self) -> Option<&str> {
+        self.0.get_database()
+    }
+
+    pub(crate) fn get_username(&self) -> &str {
+        self.0.get_username()
+    }
+}
+
+/// Parses a test database URL. The one sanctioned parse in test code: the
+/// guard refuses a raw `PgConnectOptions` parse there.
+pub(crate) fn connect_options(url: &str) -> Result<TestConnectOptions, sqlx::Error> {
+    url.parse().map(TestConnectOptions)
+}
+
+/// `PgPoolOptions` for tests. Every connection runs `SET TimeZone` before it
+/// is handed out, and [`Self::connect`]/[`Self::connect_with`] refuse the
+/// new pool unless `SHOW TimeZone` answers the test zone.
+#[must_use]
+pub(crate) struct TestPoolOptions(PgPoolOptions);
+
+impl TestPoolOptions {
+    pub(crate) fn max_connections(self, max: u32) -> Self {
+        Self(self.0.max_connections(max))
+    }
+
+    pub(crate) fn min_connections(self, min: u32) -> Self {
+        Self(self.0.min_connections(min))
+    }
+
+    pub(crate) fn acquire_timeout(self, timeout: Duration) -> Self {
+        Self(self.0.acquire_timeout(timeout))
+    }
+
+    pub(crate) fn idle_timeout(self, timeout: impl Into<Option<Duration>>) -> Self {
+        Self(self.0.idle_timeout(timeout))
+    }
+
+    /// Connects and checks the session zone of the new pool.
+    pub(crate) async fn connect_with(
+        self,
+        options: TestConnectOptions,
+    ) -> Result<PgPool, sqlx::Error> {
+        let pool = self.0.connect_with(options.0).await?;
+        check_test_session(&pool).await?;
+        Ok(pool)
+    }
+
+    /// [`Self::connect_with`] for a URL.
+    pub(crate) async fn connect(self, url: &str) -> Result<PgPool, sqlx::Error> {
+        self.connect_with(connect_options(url)?).await
+    }
+
+    /// A pool that never connects (a fixture's unreachable URL). There is no
+    /// session to check; any connection it does open still runs `SET TimeZone`.
+    pub(crate) fn connect_lazy(self, url: &str) -> Result<PgPool, sqlx::Error> {
+        Ok(self.0.connect_lazy_with(connect_options(url)?.0))
+    }
+}
+
+/// [`TestPoolOptions`]: chain the usual settings onto it.
+pub(crate) fn pool_options() -> TestPoolOptions {
+    TestPoolOptions(raw_pool_options())
+}
+
+fn raw_pool_options() -> PgPoolOptions {
     let statement = set_time_zone_statement(&time_zone());
     PgPoolOptions::new().after_connect(move |connection, _| {
         let statement = statement.clone();
@@ -67,42 +160,56 @@ pub(crate) fn pool_options() -> PgPoolOptions {
 
 /// One test connection in the test session time zone, for a test that needs
 /// a bare `PgConnection` rather than a pool.
-pub(crate) async fn connect(options: &PgConnectOptions) -> Result<PgConnection, sqlx::Error> {
+pub(crate) async fn connect(options: &TestConnectOptions) -> Result<PgConnection, sqlx::Error> {
     use sqlx::ConnectOptions as _;
-    let mut connection = options.connect().await?;
+    let mut connection = options.0.connect().await?;
     connection
         .execute(set_time_zone_statement(&time_zone()).as_str())
         .await?;
     Ok(connection)
 }
 
-/// `PgConnectOptions` parsed from a test database URL. The one sanctioned
-/// parse in test code: the guard refuses a raw `PgConnectOptions::from_str`
-/// there, because such options are one `.connect()` away from a UTC session.
-/// Hand the result to [`pool_options`]`().connect_with(…)` or [`connect`].
-pub(crate) fn connect_options(url: &str) -> Result<PgConnectOptions, sqlx::Error> {
-    url.parse()
+async fn session_zone(pool: &PgPool) -> Result<String, sqlx::Error> {
+    sqlx::query_scalar("SHOW TimeZone").fetch_one(pool).await
 }
 
-/// Panics unless `pool` runs in the test session time zone.
-///
-/// The text guard matches spellings; this matches behaviour. The shared
-/// fixtures call it on the pool the test is about to use, so a pool that was
-/// built by hand — however it was spelled — still runs in sqlx's `UTC` session
-/// and fails here.
-pub(crate) async fn assert_test_session(pool: &sqlx::PgPool, fixture: &str) {
-    let zone: String = sqlx::query_scalar("SHOW TimeZone")
-        .fetch_one(pool)
-        .await
-        .unwrap_or_else(|error| panic!("{fixture}: SHOW TimeZone on the test pool: {error}"));
-    assert_eq!(
-        zone,
-        time_zone(),
+fn wrong_zone_message(fixture: &str, zone: &str) -> String {
+    format!(
         "{fixture}: this test's PostgreSQL session runs in TimeZone {zone:?}, not the test zone \
          {:?}. The pool was not built by crate::test_pg::pool_options (or test_pg::connect), so \
          sqlx's startup TimeZone=UTC hides naive-timestamp defects; build it with \
          test_pg::pool_options()",
         time_zone()
+    )
+}
+
+/// The check [`TestPoolOptions`] runs: an error, not a panic, so a fixture's
+/// `Drop` cleanup that uses `if let Ok(..)` stays panic-free.
+async fn check_test_session(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let zone = session_zone(pool).await?;
+    if zone == time_zone() {
+        Ok(())
+    } else {
+        Err(sqlx::Error::Configuration(
+            wrong_zone_message("test_pg::pool_options", &zone).into(),
+        ))
+    }
+}
+
+/// Panics unless `pool` runs in the test session time zone.
+///
+/// The text guard matches spellings and the types cover pools built here;
+/// this matches behaviour. The shared fixtures call it on the pool a test
+/// hands them, so a pool built by hand — however it was spelled — still runs
+/// in sqlx's `UTC` session and fails here.
+pub(crate) async fn assert_test_session(pool: &PgPool, fixture: &str) {
+    let zone = session_zone(pool)
+        .await
+        .unwrap_or_else(|error| panic!("{fixture}: SHOW TimeZone on the test pool: {error}"));
+    assert!(
+        zone == time_zone(),
+        "{}",
+        wrong_zone_message(fixture, &zone)
     );
 }
 
@@ -113,7 +220,6 @@ fn set_time_zone_statement(zone: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr as _;
 
     #[test]
     fn test_pg_quotes_the_zone() {
@@ -133,7 +239,7 @@ mod tests {
             eprintln!("skipping test_pg session test: set ELITEA_TEST_DATABASE_URL");
             return;
         };
-        let options = PgConnectOptions::from_str(&url).expect("parse database URL");
+        let options = connect_options(&url).expect("parse database URL");
         let pool = pool_options()
             .max_connections(2)
             .connect_with(options.clone())
@@ -165,7 +271,7 @@ mod tests {
         // `options`, which is why a URL-only wrapper has no effect.
         let plain = PgPoolOptions::new() // test_pg:control
             .max_connections(1)
-            .connect_with(options.options([("TimeZone", time_zone())]))
+            .connect_with(options.0.clone().options([("TimeZone", time_zone())]))
             .await
             .expect("connect plain pool");
         let zone: String = sqlx::query_scalar("SHOW TimeZone")
@@ -177,6 +283,20 @@ mod tests {
             "sqlx's startup TimeZone=UTC no longer wins over options; revisit test_pg"
         );
         plain.close().await;
+
+        // A pool from test_pg is checked before it is handed out: options
+        // without the SET TimeZone hook (the shape of any bypass) are refused.
+        let unhooked = TestPoolOptions(PgPoolOptions::new()) // test_pg:control
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await;
+        match unhooked {
+            Err(sqlx::Error::Configuration(message)) => assert!(
+                message.to_string().contains("test_pg::pool_options"),
+                "{message}"
+            ),
+            other => panic!("a UTC pool came out of TestPoolOptions: {other:?}"),
+        }
     }
 
     /// The guard is guarded: test code that builds its own pool or reads a
@@ -386,6 +506,19 @@ mod tests {
                 "#[sqlx::test]\nasync fn t(pool: PgPool) {}",
                 true,
             ),
+            // The wrapper has no `.connect()` (it would not compile), and a
+            // reach through it to the inner options is refused by text too.
+            (
+                "a_tests.rs",
+                "let c = crate::test_pg::connect_options(&u)?.0.connect().await;",
+                true,
+            ),
+            (
+                "a_tests.rs",
+                "let p = sqlx::Pool::connect_with(crate::test_pg::connect_options(&u)?.0).await;",
+                true,
+            ),
+            ("a_tests.rs", "let p = sqlx::Pool::connect(&u).await;", true),
             (
                 "a_tests.rs",
                 "let o = crate::test_pg::connect_options(&u)?;",
@@ -435,12 +568,15 @@ mod tests {
         // `PoolOptions::new()` whose database type is inferred;
         // `Connection::connect` covers `PgConnection::connect` and
         // `sqlx::Connection::connect` with `PgConnection` inferred.
-        const MARKERS: [&str; 11] = [
+        // `Pool::connect` covers `PgPool::connect*` and `sqlx::Pool::connect*`
+        // with the database type inferred.
+        const MARKERS: [&str; 12] = [
             "PoolOptions::new(",
             "PoolOptions::<Postgres>::new(",
-            "PgPool::connect(",
-            "PgPool::connect_with(",
-            "PgPool::connect_lazy",
+            "Pool::connect(",
+            "Pool::connect_with(",
+            "Pool::connect_lazy",
+            ".0.connect(",
             "Connection::connect",
             "Pool::<Postgres>::connect",
             ".after_connect(",

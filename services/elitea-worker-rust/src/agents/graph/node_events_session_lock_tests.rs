@@ -13,7 +13,7 @@ use adk_rust::futures::StreamExt as _;
 use adk_rust::session::{AppendEventRequest, CreateRequest, GetRequest, SessionService};
 use adk_rust::{AdkIdentity, Agent, Content, Event, EventStream, InvocationContext};
 use async_trait::async_trait;
-use sqlx::{ConnectOptions as _, PgPool};
+use sqlx::PgPool;
 
 use super::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel};
 use crate::state::postgres_session_tests::{IsolatedPostgres, authority_for, install_schema};

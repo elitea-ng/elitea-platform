@@ -8,8 +8,7 @@ use adk_rust::session::{
 use adk_rust::{Content, Event};
 use chrono::{TimeZone as _, Utc};
 use serde_json::json;
-use sqlx::postgres::PgConnectOptions;
-use sqlx::{ConnectOptions as _, PgPool};
+use sqlx::PgPool;
 
 use super::TestStateWriterLease;
 use super::postgres_session::{
@@ -24,7 +23,7 @@ const SESSION_MIGRATION: &str =
 
 pub(crate) struct IsolatedPostgres {
     pub(crate) pool: PgPool,
-    admin_options: PgConnectOptions,
+    admin_options: crate::test_pg::TestConnectOptions,
     pub(crate) database_name: String,
 }
 

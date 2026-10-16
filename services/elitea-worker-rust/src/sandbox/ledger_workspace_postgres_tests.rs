@@ -1,7 +1,6 @@
 //! Required-mode disposable PG18 fixture; authored source, never runtime acceptance.
 use super::*;
 use crate::state::postgres_session_tests::IsolatedPostgres;
-use sqlx::ConnectOptions as _;
 use std::time::Duration;
 
 async fn database(install_workspace: bool) -> IsolatedPostgres {

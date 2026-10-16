@@ -157,15 +157,17 @@ func TestTheMigrationRepairsExistingRowsAndKeepsThem(t *testing.T) {
 
 	// The shape this service wrote before #533: the caller's user id in
 	// owner_id. User 1 is seeded by 001_initial, so the number is a real user
-	// and a wrong project.
+	// and a wrong project. The legacy shape is the owner_id value; the clock
+	// columns are named in UTC because their DEFAULT now() is the session clock.
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_2.applications (id, name, description, owner_id)
-		VALUES (1, 'legacy-shaped', 'owner_id holds the caller user id', 1)`); err != nil {
+		INSERT INTO p_2.applications (id, name, description, owner_id, created_at, updated_at)
+		VALUES (1, 'legacy-shaped', 'owner_id holds the caller user id', 1,
+		        now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("write the legacy-shaped application row: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_2.skills (id, name, description, owner_id, author_id)
-		VALUES (1, 'legacy-shaped skill', 'owner_id holds the literal 1', 1, 1)`); err != nil {
+		INSERT INTO p_2.skills (id, name, description, owner_id, author_id, created_at)
+		VALUES (1, 'legacy-shaped skill', 'owner_id holds the literal 1', 1, 1, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("write the legacy-shaped skill row: %v", err)
 	}
 
