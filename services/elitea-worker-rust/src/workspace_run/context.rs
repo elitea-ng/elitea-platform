@@ -60,6 +60,12 @@ pub(crate) struct WorkspaceRuntimeContext {
     /// Main: false.
     #[serde(default)]
     pub(crate) rewind: bool,
+    /// The commit a rewind moves the cloud ref back to: the commit the
+    /// regenerated turn started from, a first-parent ancestor of
+    /// `expected_old_cloud`. `null` with no rewind. Absent from an older Main
+    /// (which named none): the rewind goes to the first parent.
+    #[serde(default)]
+    pub(crate) rewind_to: Option<String>,
 }
 
 impl WorkspaceRuntimeContext {
@@ -90,6 +96,13 @@ impl WorkspaceRuntimeContext {
         }
         if self.rewind && self.expected_old_cloud.is_none() {
             return Err("a rewind without a cloud turn to rewind is malformed");
+        }
+        match (&self.rewind_to, self.rewind) {
+            (Some(_), false) => return Err("a rewind target without a rewind is malformed"),
+            (Some(to), true) if !sha1_hex(to) || self.expected_old_cloud.as_ref() == Some(to) => {
+                return Err("the rewind target is malformed");
+            }
+            _ => {}
         }
         if !self.network && !self.network_allowlist.is_empty() {
             return Err("a network allowlist without network is malformed");
@@ -149,6 +162,7 @@ pub(crate) fn fixture() -> WorkspaceRuntimeContext {
         has_upstream: true,
         env_secret: false,
         rewind: false,
+        rewind_to: None,
     }
 }
 
@@ -208,5 +222,35 @@ mod tests {
         let mut context = fixture();
         context.limits.unpacked_bytes = context.limits.max_unpacked_bytes + 1;
         assert!(context.validate().is_err());
+        let cloud = "1111111111111111111111111111111111111111".to_owned();
+        let mut context = fixture();
+        context.rewind_to = Some("2222222222222222222222222222222222222222".to_owned());
+        assert!(context.validate().is_err(), "a target without a rewind");
+        context.rewind = true;
+        context.expected_old_cloud = Some(cloud.clone());
+        assert_eq!(context.validate(), Ok(()));
+        context.rewind_to = Some(cloud);
+        assert!(
+            context.validate().is_err(),
+            "a target equal to the cloud commit"
+        );
+        context.rewind_to = Some("XYZ".to_owned());
+        assert!(context.validate().is_err());
+    }
+
+    /// Main serves `rewind` and `rewind_to` on every field now.
+    #[test]
+    fn the_rewind_target_parses() {
+        let mut raw = raw();
+        raw["expected_old_cloud"] = serde_json::json!("1111111111111111111111111111111111111111");
+        raw["rewind"] = serde_json::json!(true);
+        raw["rewind_to"] = serde_json::json!("2222222222222222222222222222222222222222");
+        let parsed: WorkspaceRuntimeContext = serde_json::from_value(raw).expect("parsed");
+        assert!(parsed.rewind);
+        assert_eq!(
+            parsed.rewind_to.as_deref(),
+            Some("2222222222222222222222222222222222222222")
+        );
+        assert_eq!(parsed.validate(), Ok(()));
     }
 }

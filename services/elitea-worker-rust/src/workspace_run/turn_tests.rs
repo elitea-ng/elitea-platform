@@ -283,6 +283,7 @@ impl WorkspaceCodec for FakeCodec {
         _git_dir: &Path,
         expect: &SegmentExpectation,
         cloud: &str,
+        to: Option<&str>,
         worktree: &Path,
         _max: u64,
         out: &Path,
@@ -292,10 +293,11 @@ impl WorkspaceCodec for FakeCodec {
         write_tree(worktree, &self.hydrated.lock().expect("hydrated"));
         let bytes = format!("rewind {cloud}").into_bytes();
         std::fs::write(out, &bytes).map_err(|_| CodecError::Io)?;
+        let target = to.unwrap_or(PARENT).to_owned();
         Ok((
-            PARENT.to_owned(),
+            target.clone(),
             BuiltSegment {
-                commit: PARENT.to_owned(),
+                commit: target,
                 path: out.to_path_buf(),
                 sha256: sha256_hex(&bytes),
                 bytes: bytes.len() as u64,
@@ -910,4 +912,37 @@ async fn a_regenerate_rewinds_the_cloud_ref_before_the_turn_runs() {
     let mut bad = first_turn();
     bad.rewind = true;
     assert!(bad.validate().is_err());
+}
+
+/// Main names the rewind target (the commit the regenerated turn started
+/// from, past a pause's commit): the rewind publishes exactly that move.
+#[tokio::test]
+async fn a_regenerate_rewinds_to_the_target_main_names() {
+    const STARTED_FROM: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
+    let context = WorkspaceRuntimeContext {
+        rewind: true,
+        rewind_to: Some(STARTED_FROM.to_owned()),
+        ..later_turn()
+    };
+    let turn = harness
+        .factory
+        .begin(
+            &context,
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("rewound");
+    {
+        let state = harness.store.state();
+        assert_eq!(state.publishes.len(), 1);
+        assert_eq!(state.publishes[0].old_cloud.as_deref(), Some(CLOUD));
+        assert_eq!(state.publishes[0].new_cloud, STARTED_FROM);
+    }
+    turn.finish(TurnEnd::Completed).await.expect("published");
+    let state = harness.store.state();
+    assert_eq!(state.publishes.len(), 2);
+    assert_eq!(state.publishes[1].old_cloud.as_deref(), Some(STARTED_FROM));
 }

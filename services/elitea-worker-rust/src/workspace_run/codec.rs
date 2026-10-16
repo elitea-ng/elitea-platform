@@ -144,22 +144,26 @@ pub(crate) trait WorkspaceCodec: Send + Sync {
     ) -> Result<Box<dyn super::file_redact::ParentTree + Send>, CodecError>;
 
     /// Regenerate of the newest cloud turn (ADR-0034 decision 7): in the
-    /// verified quarantine at `git_dir`, take `cloud`'s first parent P,
-    /// write P's tree into `worktree` (an empty directory) and a COMPACT
-    /// segment carrying `expect.refs` with `refs/elitea/cloud` moved back to
-    /// P into the file `out`. Returns P and the segment; the caller publishes
-    /// it through the normal compare-and-set (old `cloud`, new P) before
-    /// the turn starts.
+    /// verified quarantine at `git_dir`, take the commit P to rewind to —
+    /// `to` when Main names it (the commit the regenerated turn started
+    /// from; a turn that paused for input published more than one commit),
+    /// else `cloud`'s first parent — write P's tree into `worktree` (an
+    /// empty directory) and a COMPACT segment carrying `expect.refs` with
+    /// `refs/elitea/cloud` moved back to P into the file `out`. Returns P and
+    /// the segment; the caller publishes it through the normal
+    /// compare-and-set (old `cloud`, new P) before the turn starts.
     ///
     /// # Errors
     ///
-    /// `cloud` has no parent ([`CodecError::Integrity`]), or as
-    /// `hydrate`/`commit_and_bundle`.
+    /// `cloud` has no parent, or `to` is not on `cloud`'s first-parent chain
+    /// ([`CodecError::Integrity`]), or as `hydrate`/`commit_and_bundle`.
+    #[allow(clippy::too_many_arguments, reason = "one rewind, all of its inputs")]
     fn rewind(
         &self,
         git_dir: &Path,
         expect: &SegmentExpectation,
         cloud: &str,
+        to: Option<&str>,
         worktree: &Path,
         max_segment_bytes: u64,
         out: &Path,

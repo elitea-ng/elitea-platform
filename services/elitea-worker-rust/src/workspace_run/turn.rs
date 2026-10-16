@@ -241,17 +241,26 @@ impl WorkspaceRunFactory {
             let rewound = scratch.path().join("rewound");
             std::fs::create_dir_all(&rewound).map_err(|_| WorkspaceRunError::Internal)?;
             let out = scratch.path().join("rewind.bundle");
-            let (codec, git, tree, file, rewind_expect, from) = (
+            let (codec, git, tree, file, rewind_expect, from, to) = (
                 Arc::clone(&self.codec),
                 git_dir.clone(),
                 rewound.clone(),
                 out.clone(),
                 expect.clone(),
                 cloud.clone(),
+                context.rewind_to.clone(),
             );
             let max = limits.max_segment_bytes;
             let (parent, built) = tokio::task::spawn_blocking(move || {
-                codec.rewind(&git, &rewind_expect, &from, &tree, max, &file)
+                codec.rewind(
+                    &git,
+                    &rewind_expect,
+                    &from,
+                    to.as_deref(),
+                    &tree,
+                    max,
+                    &file,
+                )
             })
             .await
             .map_err(|_| WorkspaceRunError::Internal)?
