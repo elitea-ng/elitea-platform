@@ -43,9 +43,9 @@ spec:
             - name: NATS_ARGS
               value: {{ .Values.extraNatsArgs | quote }}
             - name: NATS_CONNECT_WAIT
-              value: {{ .Values.connectWait | int64 | quote }}
+              value: {{ include "nats-bootstrap.int" (list "connectWait" .Values.connectWait) }}
             - name: NATS_REPLICAS
-              value: {{ .Values.replicas | int64 | quote }}
+              value: {{ include "nats-bootstrap.int" (list "replicas" .Values.replicas) }}
             - name: NATS_ALERT_COOLDOWN
               value: {{ .Values.alertCooldown | quote }}
             - name: NATS_BUDGET_DUPE_WINDOW
@@ -57,27 +57,27 @@ spec:
             - name: NATS_DELTAS_MAX_AGE
               value: {{ .Values.deltas.maxAge | quote }}
             - name: NATS_DELTAS_MAX_BYTES
-              value: {{ .Values.deltas.maxBytes | int64 | quote }}
+              value: {{ include "nats-bootstrap.int" (list "deltas.maxBytes" .Values.deltas.maxBytes) }}
             - name: NATS_DELTAS_MAX_MSGS
-              value: {{ .Values.deltas.maxMsgs | int64 | quote }}
+              value: {{ include "nats-bootstrap.int" (list "deltas.maxMsgs" .Values.deltas.maxMsgs) }}
             - name: NATS_WRITEBACK_ACK_WAIT
               value: {{ .Values.deltas.writeback.ackWait | quote }}
             - name: NATS_WRITEBACK_MAX_DELIVER
-              value: {{ .Values.deltas.writeback.maxDeliver | int64 | quote }}
+              value: {{ include "nats-bootstrap.int" (list "deltas.writeback.maxDeliver" .Values.deltas.writeback.maxDeliver) }}
             - name: NATS_WRITEBACK_MAX_PENDING
-              value: {{ .Values.deltas.writeback.maxAckPending | int64 | quote }}
+              value: {{ include "nats-bootstrap.int" (list "deltas.writeback.maxAckPending" .Values.deltas.writeback.maxAckPending) }}
             - name: NATS_PRESENCE_TTL
               value: {{ .Values.presence.ttl | quote }}
             - name: NATS_RT_VALIDATE_MAX_MSGS
-              value: {{ .Values.runtime.validate.maxMsgs | int64 | quote }}
+              value: {{ include "nats-bootstrap.int" (list "runtime.validate.maxMsgs" .Values.runtime.validate.maxMsgs) }}
             - name: NATS_RT_VALIDATE_MAX_AGE
               value: {{ .Values.runtime.validate.maxAge | quote }}
             - name: NATS_RT_AGENT_MAX_MSGS
-              value: {{ .Values.runtime.agent.maxMsgs | int64 | quote }}
+              value: {{ include "nats-bootstrap.int" (list "runtime.agent.maxMsgs" .Values.runtime.agent.maxMsgs) }}
             - name: NATS_RT_AGENT_MAX_AGE
               value: {{ .Values.runtime.agent.maxAge | quote }}
             - name: NATS_RT_INDEX_MAX_MSGS
-              value: {{ .Values.runtime.index.maxMsgs | int64 | quote }}
+              value: {{ include "nats-bootstrap.int" (list "runtime.index.maxMsgs" .Values.runtime.index.maxMsgs) }}
             - name: NATS_RT_INDEX_MAX_AGE
               value: {{ .Values.runtime.index.maxAge | quote }}
             - name: NATS_RT_DEADLETTER_TTL

@@ -193,6 +193,38 @@ refuse "bootstrap: nats:// URL"               "is not tls://"                eli
 refuse "bootstrap: credential URL"            "user information"             elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=tls://u:p@elitea-nats:4222
 refuse "bootstrap: connectWait eats the deadline" "leaves the Job under a minute" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set connectWait=590
 refuse "bootstrap: an account left out"       "must be [main, gateway, runtime, worker]" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set 'accounts={main,gateway,runtime}'
+# A numeric value that is not an integer must fail the render: `int64` would
+# turn it into 0, which natscli reads as the server default (MaxAckPending
+# 1000, MaxBytes unbounded). Review of #1296.
+refuse "bootstrap: maxAckPending with a unit"  "deltas.writeback.maxAckPending must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set deltas.writeback.maxAckPending=40k
+refuse "bootstrap: maxBytes with a unit"       "deltas.maxBytes must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set deltas.maxBytes=1GiB
+printf 'deltas:\n  maxMsgs: 1.5\n' > "$TMP/fractional.yaml"   # a YAML float, not a --set string
+refuse "bootstrap: a fractional maxMsgs (YAML float)" "deltas.maxMsgs must be a whole number" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" -f "$TMP/fractional.yaml"
+refuse "bootstrap: a fractional maxMsgs (--set)" "deltas.maxMsgs must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set deltas.maxMsgs=1.5
+refuse "bootstrap: a runtime maxMsgs typo"     "runtime.agent.maxMsgs must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set runtime.agent.maxMsgs=1o24
+# The scheduler's write-back rule: never without a scrape path.
+refuse "elitea: a non-integer maxAckPending in the rule" "maxAckPending must be a positive integer" "${EL[@]}" --api-versions monitoring.coreos.com/v1 --set scheduler.metrics.prometheusRule.maxAckPending=40k
+# With the Prometheus Operator served, a rendered budget-writeback rule ALWAYS
+# comes with a scrape path (the PodMonitor, or the scrape annotations): a rule
+# over a metric nothing scrapes is an alert that cannot fire.
+monitoring_case() {
+  local name="$1" want_rule="$2" want_scrape="$3"; shift 3
+  local out
+  if ! out="$("$HELM" template "${EL[@]}" --api-versions monitoring.coreos.com/v1 "$@" 2>&1)"; then
+    echo "RENDER-FAILED	$name	$(echo "$out" | tail -1)" >> "$TMP/refusals"; return
+  fi
+  local rule=no scrape=no
+  echo "$out" | grep -q "name: elitea-scheduler-budget-writeback" && rule=yes
+  { echo "$out" | grep -q "^kind: PodMonitor" || echo "$out" | grep -q "prometheus.io/scrape: \"true\""; } && scrape=yes
+  if [ "$rule" = "$want_rule" ] && [ "$scrape" = "$want_scrape" ]; then
+    echo "ok	$name" >> "$TMP/refusals"
+  else
+    echo "WRONG-MONITORING	$name	rule=$rule scrape=$scrape, want rule=$want_rule scrape=$want_scrape" >> "$TMP/refusals"
+  fi
+}
+monitoring_case "elitea: Operator defaults scrape and alert together" yes yes
+monitoring_case "elitea: no scrape path, no rule" no no --set scheduler.metrics.podMonitor.enabled=false
+monitoring_case "elitea: annotations alone carry the rule" yes yes --set scheduler.metrics.podMonitor.enabled=false --set scheduler.metrics.scrapeAnnotations=true
 refuse "elitea: plaintext unacknowledged"     "allowPlaintext"               "${EL[@]}" --set nats.tls.enabled=false
 refuse "elitea: nats:// gateway URL"          "not tls://"                   "${EL[@]}" --set-string llmGateway.env.GATEWAY_NATS_URL=nats://elitea-nats:4222
 refuse "elitea: nats:// main URL"             "not tls://"                   "${EL[@]}" --set-string main.env.ELITEA_EVENTS_NATS_URL=nats://elitea-nats:4222

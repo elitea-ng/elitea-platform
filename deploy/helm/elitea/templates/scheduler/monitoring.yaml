@@ -1,6 +1,8 @@
 {{- if and .Values.scheduler.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
 {{- $metrics := .Values.scheduler.metrics | default dict }}
-{{- if (dig "podMonitor" "enabled" false $metrics) }}
+{{- $podMonitor := dig "podMonitor" "enabled" true $metrics }}
+{{- $scraped := or $podMonitor (dig "scrapeAnnotations" false $metrics) }}
+{{- if $podMonitor }}
 # Scrapes the scheduler's GET /metrics (budget write-back) on its health port.
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
@@ -8,6 +10,9 @@ metadata:
   name: {{ include "elitea-scheduler.fullname" . }}
   labels:
     {{- include "elitea-scheduler.labels" . | nindent 4 }}
+    {{- with (dig "podMonitor" "labels" dict $metrics) }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   selector:
     matchLabels:
@@ -18,27 +23,55 @@ spec:
       interval: {{ dig "podMonitor" "interval" "30s" $metrics }}
 ---
 {{- end }}
-{{- if (dig "prometheusRule" "enabled" true $metrics) }}
-# [human decision] 2026-10-16, "Isolate, then drop": a delta whose apply
-# fails on its own data (SQLSTATE class 22 or 23) is terminated, and its spend
-# is missing from gateway.llm_budget_accumulators and the usage ledger. Any
-# drop needs an operator.
+{{- /* A rule only with a scrape path: an alert over a metric nothing scrapes
+       could never fire. */ -}}
+{{- if and $scraped (dig "prometheusRule" "enabled" true $metrics) }}
+{{- $maxPending := dig "prometheusRule" "maxAckPending" 40000 $metrics }}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString $maxPending)) }}
+{{- fail (printf "scheduler.metrics.prometheusRule.maxAckPending must be a positive integer, and it is %v" $maxPending) }}
+{{- end }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: {{ include "elitea-scheduler.fullname" . }}-budget-writeback
   labels:
     {{- include "elitea-scheduler.labels" . | nindent 4 }}
+    {{- with (dig "prometheusRule" "labels" dict $metrics) }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   groups:
     - name: elitea-budget-writeback
       rules:
+        # [human decision] 2026-10-16, "Isolate, then drop": a delta whose
+        # apply fails on its own data (SQLSTATE class 22 or 23) is terminated,
+        # and its spend is missing from gateway.llm_budget_accumulators and the
+        # usage ledger. Any drop needs an operator. The series exist at 0 from
+        # the scheduler's first scrape, so increase() sees the first drop; the
+        # `unless ... offset` arm also catches a series that appears late (a
+        # restart between scrapes, or a new label value).
         - alert: EliteaBudgetWriteBackDroppedDelta
-          expr: sum by (reason, sqlstate_class) (increase(budget_writeback_dropped_total[15m])) > 0
+          expr: |
+            (sum by (reason, sqlstate_class) (increase(budget_writeback_dropped_total[15m])) > 0)
+            or
+            (sum by (reason, sqlstate_class) (budget_writeback_dropped_total unless budget_writeback_dropped_total offset 15m) > 0)
           labels:
             severity: critical
           annotations:
             summary: "The budget write-back dropped a spend delta"
-            description: "{{ "{{" }} $value {{ "}}" }} delta(s) were terminated in 15 minutes (reason {{ "{{" }} $labels.reason {{ "}}" }}, SQLSTATE class {{ "{{" }} $labels.sqlstate_class {{ "}}" }}). Their spend is NOT in gateway.llm_budget_accumulators. The scheduler's ERROR log line \"delta fails permanently\" names each event_id and amount."
+            description: "Delta(s) were terminated in the last 15 minutes (reason {{ "{{" }} $labels.reason {{ "}}" }}, SQLSTATE class {{ "{{" }} $labels.sqlstate_class {{ "}}" }}). Their spend is NOT in gateway.llm_budget_accumulators. The scheduler's ERROR log line \"delta fails permanently\" names each event_id and amount."
+        # A delayed redelivery keeps its ack-pending slot across EVERY
+        # redelivery until it is acked or terminated, so a long outage fills
+        # MaxAckPending at deltas/s x outage seconds. A full window only delays
+        # delivery (the deltas wait in the stream, nothing is lost), but it
+        # stalls write-back for every scope; page before it does.
+        - alert: EliteaBudgetWriteBackAckPendingNearlyFull
+          expr: max(budget_writeback_num_ack_pending) / {{ $maxPending }} > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "The budget write-back consumer is near its MaxAckPending"
+            description: "{{ "{{" }} $value | humanizePercentage {{ "}}" }} of budget-writeback's {{ $maxPending }} ack-pending slots are held by deliveries waiting on a redelivery. When the window is full, write-back stops taking new deltas for every scope until slots free. Check the scheduler's ERROR/WARN log for the failing apply (database, schema or grants) and /readyz/budget-writeback."
 {{- end }}
 {{- end }}

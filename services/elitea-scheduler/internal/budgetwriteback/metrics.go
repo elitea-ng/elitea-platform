@@ -44,8 +44,17 @@ type writeBackMetrics struct {
 
 type droppedKey struct{ reason, class string }
 
+// droppedReasonPermanent is the one reason a delta is dropped for.
+const droppedReasonPermanent = "permanent_apply_error"
+
+// newWriteBackMetrics pre-creates every drop series at 0. A counter series
+// that first appears at 1 makes increase() see no change, so the FIRST
+// dropped delta, the common single-poison case, would never page.
 func newWriteBackMetrics() *writeBackMetrics {
-	return &writeBackMetrics{dropped: map[droppedKey]int64{}}
+	return &writeBackMetrics{dropped: map[droppedKey]int64{
+		{droppedReasonPermanent, "22"}: 0,
+		{droppedReasonPermanent, "23"}: 0,
+	}}
 }
 
 func (m *writeBackMetrics) addDropped(reason, class string) {

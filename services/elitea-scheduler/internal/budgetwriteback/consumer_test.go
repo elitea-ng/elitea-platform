@@ -25,6 +25,7 @@ type fakeMessage struct {
 	acks        atomic.Int32
 	naks        atomic.Int32
 	term        atomic.Int32
+	inProgress  atomic.Int32
 	delivered   uint64 // NumDelivered metadata; 0 reads as 1
 	metadataErr error  // returned by Metadata, to exercise its failure path
 	delays      []time.Duration
@@ -54,6 +55,8 @@ func (m *fakeMessage) Data() []byte { return []byte(m.data) }
 func (m *fakeMessage) Ack() error   { m.acks.Add(1); return m.settleErr }
 func (m *fakeMessage) Nak() error   { m.naks.Add(1); return m.settleErr }
 func (m *fakeMessage) Term() error  { m.term.Add(1); return m.settleErr }
+
+func (m *fakeMessage) InProgress() error { m.inProgress.Add(1); return m.settleErr }
 
 // scriptedFetcher yields queued batches one per Fetch call, then blocks on ctx
 // so Run only makes forward progress on the scripted batches.

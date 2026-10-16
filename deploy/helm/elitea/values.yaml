@@ -2515,21 +2515,36 @@ scheduler:
   # budget_writeback_dropped_total{reason,sqlstate_class} (deltas dropped
   # because their apply fails permanently, [human decision] 2026-10-16; each is
   # spend missing from the accumulator), budget_writeback_num_ack_pending and
-  # budget_writeback_num_redelivered. Nothing collects them unless one of these
-  # is on: the bundled otel collector receives OTLP only.
+  # budget_writeback_num_redelivered. The bundled otel collector receives OTLP
+  # only, so a Prometheus must scrape them.
+  #
+  # Where the Prometheus Operator is served (monitoring.coreos.com/v1), the
+  # PodMonitor and the PrometheusRule render together by default: a rule over a
+  # metric nothing scrapes would be an alert that cannot fire. Elsewhere,
+  # nothing in this block renders except the opt-in pod annotations.
   metrics:
     # prometheus.io/scrape|port|path pod annotations, for an annotation-based
-    # Prometheus scrape.
+    # Prometheus scrape (no Operator).
     scrapeAnnotations: false
-    # A PodMonitor for the Prometheus Operator. Rendered only where the
-    # monitoring.coreos.com/v1 API exists.
+    # A PodMonitor for the Prometheus Operator. ON by default, rendered only
+    # where monitoring.coreos.com/v1 exists. Set false only if something else
+    # scrapes the health port (scrapeAnnotations, or your own monitor).
     podMonitor:
-      enabled: false
+      enabled: true
       interval: 30s
-    # The PrometheusRule alerting on any drop. Rendered only where the
-    # monitoring.coreos.com/v1 API exists; on by default there.
+      # Extra labels for the Prometheus' podMonitorSelector, for example
+      # release: kube-prometheus-stack.
+      labels: {}
+    # The PrometheusRule. Rendered only where monitoring.coreos.com/v1 exists
+    # AND a scrape path is configured (podMonitor or scrapeAnnotations).
     prometheusRule:
       enabled: true
+      # Extra labels for the Prometheus' ruleSelector.
+      labels: {}
+      # The budget-writeback consumer's MaxAckPending, as the nats-bootstrap
+      # chart sets it (deltas.writeback.maxAckPending). The near-full alert
+      # pages at 80% of it, before write-back stalls.
+      maxAckPending: 40000
 
 llmGateway:
   # The model hop. Chat and every embedding call go through it.

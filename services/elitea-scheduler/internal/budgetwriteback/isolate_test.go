@@ -3,6 +3,7 @@ package budgetwriteback
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -31,16 +32,24 @@ type ledgerDB struct {
 	ledger    map[string]int  // gateway.llm_usage_events rows, committed
 	failUsage map[string]error
 	failAll   error // every statement of every transaction fails with it
+	commitErr error // every Commit fails with it (and commits nothing)
 	txs       []*ledgerTx
+	// deadlines records each Begin's context deadline (zero = none).
+	deadlines []time.Duration
 }
 
 func newLedgerDB() *ledgerDB {
 	return &ledgerDB{claimed: map[string]bool{}, ledger: map[string]int{}, failUsage: map[string]error{}}
 }
 
-func (d *ledgerDB) Begin(context.Context) (Tx, error) {
+func (d *ledgerDB) Begin(ctx context.Context) (Tx, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	var left time.Duration
+	if deadline, ok := ctx.Deadline(); ok {
+		left = time.Until(deadline)
+	}
+	d.deadlines = append(d.deadlines, left)
 	tx := &ledgerTx{db: d, claims: map[string]bool{}}
 	d.txs = append(d.txs, tx)
 	return tx, nil
@@ -101,6 +110,9 @@ func (t *ledgerTx) ExecAffected(_ context.Context, sql string, args ...any) (int
 func (t *ledgerTx) Commit(context.Context) error {
 	if t.rolledBack {
 		return errors.New("commit after rollback")
+	}
+	if t.db.commitErr != nil {
+		return t.db.commitErr
 	}
 	t.db.mu.Lock()
 	defer t.db.mu.Unlock()
@@ -229,7 +241,8 @@ func TestApplyGroup_AnEnvironmentalFailureIsNeverDropped(t *testing.T) {
 		before := metrics.totalDropped()
 		db := newLedgerDB()
 		db.failAll = &pgconn.PgError{Code: code}
-		c := NewConsumer(nil, NewStore(db), quietLogger())
+		var log logRecords
+		c := NewConsumer(nil, NewStore(db), log.logger())
 		a, p, cc := threeMemberBatch()
 		c.processBatch(context.Background(), []Message{a, p, cc})
 		for name, m := range map[string]*fakeMessage{"a": a, "p": p, "c": cc} {
@@ -242,6 +255,133 @@ func TestApplyGroup_AnEnvironmentalFailureIsNeverDropped(t *testing.T) {
 		}
 		if metrics.totalDropped() != before {
 			t.Errorf("%s: an environmental failure was counted as a drop", code)
+		}
+		// The operator signal: one ERROR naming the environment.
+		if n := log.count(slog.LevelError, "reason", "environmental", "sqlstate_class", "42"); n != 1 {
+			t.Errorf("%s: %d ERROR records with reason=environmental sqlstate_class=42, want 1:\n%s", code, n, log.dump())
+		}
+	}
+	// A transient failure is not reported as the environment.
+	for _, code := range []string{"40001", "08006", "57P01"} {
+		db := newLedgerDB()
+		db.failAll = &pgconn.PgError{Code: code}
+		var log logRecords
+		c := NewConsumer(nil, NewStore(db), log.logger())
+		a, p, cc := threeMemberBatch()
+		c.processBatch(context.Background(), []Message{a, p, cc})
+		if n := log.count(slog.LevelError, "reason", "environmental"); n != 0 {
+			t.Errorf("%s: a transient failure logged reason=environmental:\n%s", code, log.dump())
+		}
+	}
+}
+
+// logRecords is a slog handler that keeps every record for assertions.
+type logRecords struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (l *logRecords) Enabled(context.Context, slog.Level) bool { return true }
+func (l *logRecords) Handle(_ context.Context, r slog.Record) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.records = append(l.records, r.Clone())
+	return nil
+}
+func (l *logRecords) WithAttrs([]slog.Attr) slog.Handler { return l }
+func (l *logRecords) WithGroup(string) slog.Handler      { return l }
+func (l *logRecords) logger() *slog.Logger               { return slog.New(l) }
+
+// count is the number of records at level carrying every key=value pair.
+func (l *logRecords) count(level slog.Level, kv ...string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, r := range l.records {
+		if r.Level != level {
+			continue
+		}
+		attrs := map[string]string{}
+		r.Attrs(func(a slog.Attr) bool { attrs[a.Key] = a.Value.String(); return true })
+		match := true
+		for i := 0; i+1 < len(kv); i += 2 {
+			if attrs[kv[i]] != kv[i+1] {
+				match = false
+			}
+		}
+		if match {
+			n++
+		}
+	}
+	return n
+}
+
+func (l *logRecords) dump() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var b strings.Builder
+	for _, r := range l.records {
+		b.WriteString(r.Level.String() + " " + r.Message)
+		r.Attrs(func(a slog.Attr) bool { b.WriteString(" " + a.String()); return true })
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// Each Apply runs under a deadline no later than applyTimeout, and the group's
+// messages get an InProgress before it (AckWait runs from the batch fetch).
+func TestApplyGroup_EachApplyHasItsOwnBoundedDeadlineAndResetsTheAckTimer(t *testing.T) {
+	db := newLedgerDB()
+	db.failUsage[poison] = &pgconn.PgError{Code: "22001"}
+	c := NewConsumer(nil, NewStore(db), quietLogger())
+	a, p, cc := threeMemberBatch()
+	c.processBatch(context.Background(), []Message{a, p, cc})
+	if len(db.deadlines) != 4 {
+		t.Fatalf("transactions = %d, want 4", len(db.deadlines))
+	}
+	for i, left := range db.deadlines {
+		if left <= 0 || left > applyTimeout {
+			t.Errorf("tx %d: deadline in %v, want set and at most %v", i, left, applyTimeout)
+		}
+	}
+	// Once before the group Apply, once more before each member's own.
+	for name, m := range map[string]*fakeMessage{"a": a, "p": p, "c": cc} {
+		if got := m.inProgress.Load(); got != 2 {
+			t.Errorf("%s: InProgress calls = %d, want 2 (the group, then its own apply)", name, got)
+		}
+	}
+}
+
+// A Commit that runs out of time is a transient failure: deferred, never
+// dropped, and nothing is applied.
+func TestApplyGroup_ATimedOutCommitIsDeferredNotDropped(t *testing.T) {
+	before := metrics.totalDropped()
+	db := newLedgerDB()
+	db.commitErr = context.DeadlineExceeded
+	c := NewConsumer(nil, NewStore(db), quietLogger())
+	a, p, cc := threeMemberBatch()
+	c.processBatch(context.Background(), []Message{a, p, cc})
+	for name, m := range map[string]*fakeMessage{"a": a, "p": p, "c": cc} {
+		if m.naks.Load() != 1 || m.term.Load() != 0 || m.acks.Load() != 0 {
+			t.Errorf("%s: nak=%d term=%d ack=%d, want one deferral", name, m.naks.Load(), m.term.Load(), m.acks.Load())
+		}
+	}
+	if len(db.txs) != 1 || db.committedMoney() != 0 || metrics.totalDropped() != before {
+		t.Fatalf("txs=%d money=%d dropped+%d, want one tx, nothing applied, nothing dropped",
+			len(db.txs), db.committedMoney(), metrics.totalDropped()-before)
+	}
+}
+
+// Both drop series exist at 0 from the first scrape, so increase() sees the
+// first drop (0 -> 1). A series that first appeared at 1 never paged.
+func TestDroppedSeriesRenderAtZeroOnAFreshInstance(t *testing.T) {
+	out := newWriteBackMetrics().render()
+	for _, want := range []string{
+		`budget_writeback_dropped_total{reason="permanent_apply_error",sqlstate_class="22"} 0`,
+		`budget_writeback_dropped_total{reason="permanent_apply_error",sqlstate_class="23"} 0`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("a fresh instance lacks %q:\n%s", want, out)
 		}
 	}
 }

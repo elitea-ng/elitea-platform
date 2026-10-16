@@ -416,22 +416,36 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   scheduler's `TestProcessBatch_DeferralBacksOffByDeliveryCount`. The
   `budget-writeback` consumer also gets an explicit `MaxAckPending` of 40000
   (`deltas.writeback.maxAckPending`, `NATS_WRITEBACK_MAX_PENDING`; the
-  `--defaults` value was 1000). A delayed redelivery keeps its pending slot
-  for the whole delay (up to 60s). So the slots needed are deferred deltas/s ×
-  60s. A billed request publishes one delta per scope it bills, the project
-  AND the member when it carries a member id (budget_gate.go). The 5k-user
-  peak of about 50 billed requests/s is therefore about 100 deltas/s, or about
-  6000 slots in a full outage. 40000 is about 6.7× that (corrected in the
-  third review; the first sizing counted one scope and said 6× for 20000,
-  which was 3.3×). The cost is a server-side pending-list entry per message,
-  nothing on the money path. A full window only delays delivery: nothing is
-  lost. The chart renders every numeric bootstrap value through
-  `int64 | quote`: a 7-digit YAML integer rendered as `1.073741824e+09`, which
-  natscli refuses, so on default values the bootstrap Job could not create the
-  deltas stream (live sets those two values with Argo CD `forceString`
-  parameters, which is why it ran). The scheduler serves `budget_writeback_num_ack_pending` and
-  `budget_writeback_num_redelivered` on `GET /metrics`. Both PersistHealthyDelta's
-  statement and the consumer's must equal
+  `--defaults` value was 1000).
+  - **Slot accounting.** A delayed Nak keeps its pending slot across EVERY
+    redelivery until the delta is acked or terminated.
+  - **So the slots scale with outage time.** During an outage that defers every
+    delta, slots = deferred deltas/s × outage seconds, not × the 60s delay
+    (this corrects the third review's sizing).
+  - **The rate.** A billed request publishes one delta per scope it bills: the
+    project, AND the member when it carries a member id (budget_gate.go). The
+    5k-user peak of about 50 billed requests/s is therefore about 100 deltas/s.
+  - **What 40000 covers.** At that rate 40000 slots cover about 400 seconds of
+    such an outage.
+  - **Why 40000 stays.** A full window only DELAYS delivery: the deltas wait in
+    the stream (72h MaxAge), and none is lost. The cost is a server-side
+    pending-list entry per message.
+  - **The page.** The scheduler chart's `EliteaBudgetWriteBackAckPendingNearlyFull`
+    (`max(budget_writeback_num_ack_pending) / maxAckPending > 0.8` for 5m)
+    pages before write-back stalls for every scope.
+  - **Rendering.** Every numeric bootstrap value renders through the
+    `nats-bootstrap.int` helper.
+    - It accepts an integer or a whole-number float and FAILS the render on
+      anything else ("40k", "1GiB", 1.5).
+    - Plain `int64` would turn those into 0, which natscli reads as the server
+      default: MaxAckPending 1000, MaxBytes unbounded.
+    - A 7-digit YAML integer used to render as `1.073741824e+09`, which natscli
+      refuses. So on default values the bootstrap Job could not create the
+      deltas stream (live sets those two values with Argo CD `forceString`
+      parameters, which is why it ran).
+  - **Metrics.** The scheduler serves `budget_writeback_num_ack_pending` and
+    `budget_writeback_num_redelivered` on `GET /metrics`.
+  - **Upsert parity.** Both PersistHealthyDelta's statement and the consumer's must equal
   `libs/proto/contracts/budget-writeback-guarded-upsert-v1.sql`, and one
   parity test in each module checks that.
 - **2026-10-16 — a delta that fails to apply PERMANENTLY is isolated, then
@@ -454,12 +468,26 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   event id and amount, and counted in
   `budget_writeback_dropped_total{reason="permanent_apply_error",sqlstate_class="22"|"23"}`
   on the scheduler's `/metrics`. A drop is real spend missing from the
-  accumulator, so alarm on any increase. The elitea chart ships a
-  `PrometheusRule` (`increase(...[15m]) > 0`) where the Prometheus Operator
-  exists, and opt-in scrape annotations or a `PodMonitor`. Every other error
-  stays a delayed `Nak`: connection 08, serialization or deadlock 40, lock
-  55P03, resources 53, operator 57, and an error with no SQLSTATE. Each
-  `Apply` runs under a 20s timeout, below the 30s AckWait.
+  accumulator, so alarm on any increase.
+  - **The alert, as fixed by the fourth review.**
+    - Both drop series are pre-created at 0. A counter that first appears at 1
+      shows no `increase()`, so the first drop never paged.
+    - The rule is `increase(...[15m]) > 0 or (... unless ... offset 15m) > 0`.
+      promtool proves that it fires on 0→1 and on a series that appears late.
+    - Where the Prometheus Operator exists, the chart renders the
+      `PrometheusRule` only with a scrape path: the `PodMonitor` (on by
+      default there) or the opt-in scrape annotations.
+  - **Errors that are not dropped.** Every other error stays a delayed `Nak`:
+    connection 08, serialization or deadlock 40, lock 55P03, resources 53,
+    operator 57, and an error with no SQLSTATE.
+  - **Timeouts.**
+    - Each `Apply` runs under a 20s timeout, below the 30s AckWait.
+    - The group's messages get `InProgress` just before it, because AckWait
+      runs from the batch fetch and groups apply one after another.
+    - A redelivery that still races an apply is SAFE: the `processed_event_ids`
+      claim in the same transaction makes it add nothing.
+    - A timed-out `Commit` is a transient failure: it is deferred, never
+      dropped.
   *Revision, [human decision] (owner, 2026-10-16: "Drop only 22/23, retry
   42"):* class 42 (42501 permission denied, 42P01 missing table, 42703
   missing column, 42P05, 42P10) is NOT dropped. It is the environment, not a

@@ -28,6 +28,7 @@ type Message interface {
 	Ack() error
 	Nak() error
 	NakWithDelay(delay time.Duration) error
+	InProgress() error
 	Term() error
 	Metadata() (*jetstream.MsgMetadata, error)
 }
@@ -287,8 +288,18 @@ func (c *Consumer) applyGroup(ctx context.Context, items []decoded) {
 		deltas[i] = it.delta
 	}
 
-	// Bounded below the consumer's AckWait (30s): a stalled database must not
-	// hold a group past its redelivery, or the same deltas run twice at once.
+	// AckWait (30s) runs from the FETCH, for the whole batch of up to 500, and
+	// the groups (and isolated members) apply one after another. So reset each
+	// group's ack timer before its own Apply: a later group then has the full
+	// AckWait for its transaction and is not redelivered mid-apply. The apply
+	// itself is bounded below AckWait. A redelivery that does race an apply
+	// is still SAFE: processed_event_ids dedup in the same transaction makes
+	// the second apply add nothing; resetting only avoids the wasted work.
+	for _, it := range items {
+		if err := it.msg.InProgress(); err != nil {
+			c.logger.Debug("budgetwriteback: in-progress ack failed", "event_id", it.delta.EventID, "err", err)
+		}
+	}
 	applyCtx, cancel := context.WithTimeout(ctx, applyTimeout)
 	outcome, err := c.store.Apply(applyCtx, deltas)
 	cancel()
@@ -316,7 +327,7 @@ func (c *Consumer) applyGroup(ctx context.Context, items []decoded) {
 			"event_id", items[0].delta.EventID, "scope", items[0].delta.Scope,
 			"scope_id", items[0].delta.ScopeID, "delta_nano_usd", items[0].delta.DeltaNanoUSD,
 			"sqlstate_class", class, "err", err)
-		metrics.addDropped("permanent_apply_error", class)
+		metrics.addDropped(droppedReasonPermanent, class)
 		c.term(items[0].msg)
 	case err != nil && environmentalApplyFailure(err):
 		// Class 42 ([human decision] 2026-10-16, "Drop only 22/23, retry
@@ -345,9 +356,14 @@ func (c *Consumer) applyGroup(ctx context.Context, items []decoded) {
 	}
 }
 
-// applyTimeout bounds one Apply transaction. It is below the consumer's
-// AckWait (30s, deploy/helm/nats-bootstrap deltas.writeback.ackWait) with room
-// for the acks, so a delta is never redelivered while its first apply runs.
+// applyTimeout bounds one Apply transaction, so a stalled database cannot hold
+// the drain loop. It is below the consumer's AckWait (30s,
+// deploy/helm/nats-bootstrap deltas.writeback.ackWait), and applyGroup resets
+// the group's ack timer (InProgress) just before the Apply, so a delta is not
+// normally redelivered while it applies. That is an efficiency property, not
+// the money invariant: exactly-once comes from the processed_event_ids claim
+// in the same transaction, which makes any redelivery add nothing. A timed-out
+// Apply rolls back and the group is deferred (transient), never dropped.
 const applyTimeout = 20 * time.Second
 
 func (c *Consumer) ackAll(items []decoded) {
