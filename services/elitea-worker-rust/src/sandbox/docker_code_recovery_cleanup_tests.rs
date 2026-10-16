@@ -88,7 +88,7 @@ impl CodeJobRuntime for Runtime {
     }
 }
 async fn ledger() -> JobLedger {
-    let url = std::env::var("ELITEA_CODE_OWNER_TEST_DATABASE_URL")
+    let url = crate::test_pg::database_url_var("ELITEA_CODE_OWNER_TEST_DATABASE_URL")
         .expect("explicit isolated agentstate database including owner columns required");
     JobLedger::new(
         PgPoolOptions::new()

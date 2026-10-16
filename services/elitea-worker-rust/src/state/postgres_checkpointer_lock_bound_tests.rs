@@ -60,7 +60,7 @@ fn checkpoint(checkpoint_id: &str) -> Checkpoint {
 
 #[tokio::test]
 async fn checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bound() {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("skipping checkpoint lock-bound test: set ELITEA_TEST_DATABASE_URL");
         return;
     };

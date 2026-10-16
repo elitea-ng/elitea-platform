@@ -81,8 +81,8 @@ VALUES ($1, 'application', '', $2::jsonb, '{}'::jsonb, 1, 1) RETURNING id`,
 		t.Fatalf("seed the sub-agent tool row: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id, entity_id)
-VALUES ($1, 'agent', $2, $3)`, parentVersionID, toolID, parentAppID); err != nil {
+INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id, entity_id, created_at)
+VALUES ($1, 'agent', $2, $3, now() AT TIME ZONE 'UTC')`, parentVersionID, toolID, parentAppID); err != nil {
 		t.Fatalf("seed the sub-agent mapping: %v", err)
 	}
 }
@@ -134,7 +134,7 @@ func TestPublishValidationFlagsSecretShapedVariable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.application_variables (application_version_id, name, value) VALUES ($1, 'api_key', 'sk-abcdefghijklmnopqrstuv')`,
+INSERT INTO p_1.application_variables (application_version_id, name, value, created_at) VALUES ($1, 'api_key', 'sk-abcdefghijklmnopqrstuv', now() AT TIME ZONE 'UTC')`,
 		fixture.versionID); err != nil {
 		t.Fatalf("seed secret variable: %v", err)
 	}

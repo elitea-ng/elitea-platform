@@ -633,8 +633,8 @@ func insertDecisionNotification(ctx context.Context, tx pgx.Tx, row requestRow) 
 	// moderation_state row stays `pending`. Every generated notification query
 	// in internal/db/queries binds both columns for the same reason.
 	if _, err := tx.Exec(ctx, `
-INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type, created_at)
-VALUES ($1::text::uuid, FALSE, $2, $3, $4, $5, now() AT TIME ZONE 'UTC')`,
+INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
+VALUES ($1::text::uuid, FALSE, $2, $3, $4, $5, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`,
 		uuid.NewString(), row.ProjectID, row.UserID, encoded, "moderation_"+row.Status,
 	); err != nil {
 		return fmt.Errorf("notify requester: %w", err)

@@ -219,7 +219,7 @@ fn checkpoint(checkpoint_id: &str, created_at: &str, step: usize) -> Checkpoint 
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One component story deliberately preserves lifecycle order.
 async fn postgres_checkpointer_round_trips_scopes_fences_prunes_and_releases_pool() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL checkpoint component test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -605,7 +605,7 @@ DROP FUNCTION block_agent_graph_checkpoint_insert();
 
 #[tokio::test]
 async fn postgres_application_subgraph_threads_are_admitted_fenced_and_durable() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL checkpoint component test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -707,7 +707,7 @@ async fn postgres_application_subgraph_threads_are_admitted_fenced_and_durable()
 
 #[cfg(feature = "sandbox-supervisor")]
 async fn preparation_receipt_database() -> IsolatedPostgres {
-    let database_url = env::var(TEST_DATABASE_URL)
+    let database_url = crate::test_pg::database_url_var(TEST_DATABASE_URL)
         .expect("ELITEA_TEST_DATABASE_URL is required for preparation receipt verification");
     let isolated = IsolatedPostgres::create(&database_url).await;
     sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
@@ -1027,7 +1027,7 @@ async fn sandbox_preparation_receipts_validate_recorded_body_and_schema_bound() 
 )]
 async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     use crate::sandbox::ledger::{JobLedger, JobScope, LedgerError, Phase};
-    let database_url = env::var(TEST_DATABASE_URL)
+    let database_url = crate::test_pg::database_url_var(TEST_DATABASE_URL)
         .expect("ELITEA_TEST_DATABASE_URL is required for sandbox ledger verification");
     let isolated = IsolatedPostgres::create(&database_url).await;
     sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
@@ -1380,7 +1380,9 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
         ledger::{JobLedger, JobScope, Phase},
     };
     use adk_sandbox::workspace::{DockerClient, Manifest, ManifestEntry};
-    let isolated = IsolatedPostgres::create(&env::var(TEST_DATABASE_URL).unwrap()).await;
+    let isolated =
+        IsolatedPostgres::create(&crate::test_pg::database_url_var(TEST_DATABASE_URL).unwrap())
+            .await;
     sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
         .execute(&isolated.pool)
         .await
@@ -1744,7 +1746,9 @@ async fn sandbox_submission(over_tls: bool) {
             (id == "fixture-key").then_some(self.0)
         }
     }
-    let isolated = IsolatedPostgres::create(&env::var(TEST_DATABASE_URL).unwrap()).await;
+    let isolated =
+        IsolatedPostgres::create(&crate::test_pg::database_url_var(TEST_DATABASE_URL).unwrap())
+            .await;
     sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
         .execute(&isolated.pool)
         .await
@@ -2269,7 +2273,8 @@ async fn sandbox_submission(over_tls: bool) {
 async fn sandbox_dispatch_journal_preserves_exact_pending_identity() {
     use crate::protocol::elitea::runtime::v1::ExecutionIdentityV1;
     use crate::sandbox::dispatch::{DispatchError, DispatchJournal, DispatchScope};
-    let database_url = env::var(TEST_DATABASE_URL).expect("ELITEA_TEST_DATABASE_URL is required");
+    let database_url = crate::test_pg::database_url_var(TEST_DATABASE_URL)
+        .expect("ELITEA_TEST_DATABASE_URL is required");
     let isolated = IsolatedPostgres::create(&database_url).await;
     sqlx::raw_sql("CREATE SCHEMA elitea_runtime")
         .execute(&isolated.pool)
@@ -2399,7 +2404,7 @@ async fn sandbox_dispatch_journal_preserves_exact_pending_identity() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // Keep takeover, original checkpoint identity, and stale writer checks in one scenario.
 async fn postgres_recursive_application_threads_preserve_takeover_and_completed_leaf() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL checkpoint component test: set {TEST_DATABASE_URL}");
         return;
     };

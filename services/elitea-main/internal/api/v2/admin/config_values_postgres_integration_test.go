@@ -182,7 +182,7 @@ func TestReadIsPerSectionAndOverlaysStoredValuesOnDefaults(t *testing.T) {
 	// Now store one value and re-read: the STORED value must win over the
 	// default, and every other key must keep its default.
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO centry.platform_config (section, key, value) VALUES ($1, $2, $3::jsonb)`,
+		`INSERT INTO centry.platform_config (section, key, value, updated_at) VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`,
 		"resources", "resources_documentation_title", `"Handbook"`); err != nil {
 		t.Fatalf("seed stored value: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestReadIsPerSectionAndOverlaysStoredValuesOnDefaults(t *testing.T) {
 func TestReadDropsStoredKeysTheSchemaNoLongerDeclares(t *testing.T) {
 	pool, router := newConfigEnvironment(t)
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO centry.platform_config (section, key, value) VALUES ($1, $2, $3::jsonb)`,
+		`INSERT INTO centry.platform_config (section, key, value, updated_at) VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`,
 		"resources", "resources_retired_card_title", `"Ghost"`); err != nil {
 		t.Fatalf("seed orphan value: %v", err)
 	}

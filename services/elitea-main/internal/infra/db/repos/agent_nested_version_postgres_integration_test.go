@@ -43,17 +43,17 @@ INSERT INTO applications (id, name, description, owner_id) VALUES
 INSERT INTO application_versions (
     id, application_id, name, status, author_id, uuid, llm_settings, instructions,
     conversation_starters, welcome_message, agent_type, meta, pipeline_settings
-) VALUES (
+, created_at) VALUES (
     42, 32, 'without_nesting', 'draft', 11,
     '80000000-0000-4000-8000-000000000032', '{}'::jsonb, 'Resolve names',
     '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb
-);
+, now() AT TIME ZONE 'UTC');
 INSERT INTO elitea_tools (
     id, type, name, description, settings, author_id, meta
-) VALUES (
+, created_at) VALUES (
     52, 'application', 'without_nesting', NULL,
     '{"application_id":32,"application_version_id":42}'::jsonb, 11, '{}'::jsonb
-);
+, now() AT TIME ZONE 'UTC');
 INSERT INTO entity_tool_mapping (
     id, tool_id, entity_id, entity_version_id, entity_type, selected_tools
 ) VALUES

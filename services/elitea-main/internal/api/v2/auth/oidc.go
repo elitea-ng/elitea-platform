@@ -830,7 +830,7 @@ func joinAccountByEmail(
 		     LIMIT 1
 		 )
 		 INSERT INTO auth_core__user (email, name, last_login)
-		 SELECT COALESCE((SELECT email FROM existing), $1::text), $2, now()
+		 SELECT COALESCE((SELECT email FROM existing), $1::text), $2, now() AT TIME ZONE 'UTC'
 		 ON CONFLICT (email) DO UPDATE SET last_login = (now() AT TIME ZONE 'UTC')
 		 WHERE auth_core__user.suspended = false
 		   AND `+identityrepo.AdoptionGuard("auth_core__user.id", 3, 4)+`

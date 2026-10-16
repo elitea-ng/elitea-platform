@@ -215,8 +215,8 @@ func TestToolkitRepositoryLifecycleAgainstPostgres(t *testing.T) {
 			t.Fatalf("attached=%#v", attached)
 		}
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id)
-			VALUES ($1, 'application', $2)`, 4242, toolkitID); err != nil {
+			INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id, created_at)
+			VALUES ($1, 'application', $2, now() AT TIME ZONE 'UTC')`, 4242, toolkitID); err != nil {
 			t.Fatalf("attach the fixture toolkit: %v", err)
 		}
 		attached, err = repo.AvailableTools(ctx, "1", "4242")
@@ -379,8 +379,8 @@ func TestToolkitInstanceListFiltersAgainstPostgres(t *testing.T) {
 		}
 		var id int
 		if err := pool.QueryRow(ctx, `
-			INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id, meta)
-			VALUES ($1, $2, NULLIF($3, ''), 1, 1, $4::jsonb) RETURNING id`,
+			INSERT INTO p_1.elitea_tools (name, type, description, owner_id, author_id, meta, created_at)
+			VALUES ($1, $2, NULLIF($3, ''), 1, 1, $4::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`,
 			seed.name, seed.typ, seed.desc, meta).Scan(&id); err != nil {
 			t.Fatalf("seed %q: %v", seed.name, err)
 		}

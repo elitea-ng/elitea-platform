@@ -379,7 +379,7 @@ func TestChatAuthorityMessageCanvasAndTokenOwner(t *testing.T) {
 		t.Fatalf("token row became author: %s", conversation.CreatedBy)
 	}
 	var messageID, messageUUID, canvasID, canvasUUID string
-	if err := pool.QueryRow(context.Background(), `INSERT INTO p_1.chat_message_group(conversation_id) VALUES ($1) RETURNING id::text,uuid::text`, conversation.ID).Scan(&messageID, &messageUUID); err != nil {
+	if err := pool.QueryRow(context.Background(), `INSERT INTO p_1.chat_message_group(conversation_id, created_at) VALUES ($1, now() AT TIME ZONE 'UTC') RETURNING id::text,uuid::text`, conversation.ID).Scan(&messageID, &messageUUID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(context.Background(), `INSERT INTO p_1.chat_message_items(message_group_id,item_type) VALUES ($1,'canvas_message') RETURNING id::text,uuid::text`, messageID).Scan(&canvasID, &canvasUUID); err != nil {
@@ -421,7 +421,7 @@ func TestChatAuthorityCanvasWritesRequireParticipant(t *testing.T) {
 		t.Fatal(err)
 	}
 	var messageID, canvasID, canvasUUID string
-	if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_message_group(conversation_id) VALUES ($1) RETURNING id::text`, conversation.ID).Scan(&messageID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_message_group(conversation_id, created_at) VALUES ($1, now() AT TIME ZONE 'UTC') RETURNING id::text`, conversation.ID).Scan(&messageID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_message_items(message_group_id,item_type) VALUES ($1,'canvas_message') RETURNING id::text,uuid::text`, messageID).Scan(&canvasID, &canvasUUID); err != nil {

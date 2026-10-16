@@ -23,7 +23,8 @@ struct Journal {
 }
 
 async fn database() -> IsolatedPostgres {
-    let url = env::var(TEST_DATABASE_URL).expect("ELITEA_TEST_DATABASE_URL is required");
+    let url = crate::test_pg::database_url_var(TEST_DATABASE_URL)
+        .expect("ELITEA_TEST_DATABASE_URL is required");
     let database = IsolatedPostgres::create(&url).await;
     install_test_schema(&database.pool).await;
     database

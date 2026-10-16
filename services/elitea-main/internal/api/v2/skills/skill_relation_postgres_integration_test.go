@@ -116,12 +116,12 @@ func newRelationFixture(t *testing.T) *relationFixture {
 	// its own version id. entity_version_id is a VERSION id, and a test that
 	// cannot tell the two apart cannot catch a writer that confuses them.
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_1.applications (name, description, owner_id) VALUES ('relation-decoy', '', 1)`); err != nil {
+		INSERT INTO p_1.applications (name, description, owner_id, created_at, updated_at) VALUES ('relation-decoy', '', 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("insert decoy application: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO p_1.applications (name, description, owner_id)
-		VALUES ('relation-fixture', '', 1) RETURNING id`).Scan(&fixture.applicationID); err != nil {
+		INSERT INTO p_1.applications (name, description, owner_id, created_at, updated_at)
+		VALUES ('relation-fixture', '', 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`).Scan(&fixture.applicationID); err != nil {
 		t.Fatalf("insert fixture application: %v", err)
 	}
 
@@ -130,8 +130,8 @@ func newRelationFixture(t *testing.T) *relationFixture {
 		var id int64
 		if err := pool.QueryRow(ctx, `
 			INSERT INTO p_1.application_versions
-				(application_id, name, status, author_id, agent_type, instructions)
-			VALUES ($1, $2, $3, 1, 'openai', 'Use the attached skills.')
+				(application_id, name, status, author_id, agent_type, instructions, created_at)
+			VALUES ($1, $2, $3, 1, 'openai', 'Use the attached skills.', now() AT TIME ZONE 'UTC')
 			RETURNING id`, fixture.applicationID, name, status).Scan(&id); err != nil {
 			t.Fatalf("insert version %q: %v", name, err)
 		}
@@ -175,13 +175,13 @@ func (f *relationFixture) seedSkill(t *testing.T, name, instructions string) {
 
 	var seeded seededSkill
 	if err := f.pool.QueryRow(ctx, `
-		INSERT INTO p_1.skills (name, description, owner_id, author_id)
-		VALUES ($1, $2, 1, 1) RETURNING id`, name, name+" description").Scan(&seeded.id); err != nil {
+		INSERT INTO p_1.skills (name, description, owner_id, author_id, created_at)
+		VALUES ($1, $2, 1, 1, now() AT TIME ZONE 'UTC') RETURNING id`, name, name+" description").Scan(&seeded.id); err != nil {
 		t.Fatalf("insert skill %q: %v", name, err)
 	}
 	if err := f.pool.QueryRow(ctx, `
-		INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id)
-		VALUES ($1, 'base', $2, 1) RETURNING id`, seeded.id, instructions).Scan(&seeded.versionID); err != nil {
+		INSERT INTO p_1.skill_versions (skill_id, name, instructions, author_id, created_at)
+		VALUES ($1, 'base', $2, 1, now() AT TIME ZONE 'UTC') RETURNING id`, seeded.id, instructions).Scan(&seeded.versionID); err != nil {
 		t.Fatalf("insert skill version for %q: %v", name, err)
 	}
 	f.skills[name] = seeded
@@ -529,8 +529,8 @@ func TestAttachRefusesAPublishedVersion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if _, err := fixture.pool.Exec(ctx, `
-		INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-		VALUES ($1, 'agent', $2, $3)`,
+		INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+		VALUES ($1, 'agent', $2, $3, now() AT TIME ZONE 'UTC')`,
 		fixture.publishedVersion, fixture.skills["Reviewer"].id, fixture.skills["Reviewer"].versionID); err != nil {
 		t.Fatalf("seed the published mapping: %v", err)
 	}
@@ -569,8 +569,8 @@ func TestAttachRefusesAnUnknownAgentVersion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if _, err := fixture.pool.Exec(ctx, `
-		INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id)
-		VALUES ($1, 'agent', $2, $3)`, unknownVersion, skill.id, skill.versionID); err != nil {
+		INSERT INTO p_1.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
+		VALUES ($1, 'agent', $2, $3, now() AT TIME ZONE 'UTC')`, unknownVersion, skill.id, skill.versionID); err != nil {
 		t.Fatalf("seed the orphan mapping: %v", err)
 	}
 	if recorder := fixture.patch(t, skill.id, fmt.Sprintf(

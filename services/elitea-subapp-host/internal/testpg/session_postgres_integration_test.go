@@ -3,6 +3,8 @@ package testpg
 import (
 	"context"
 	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +44,21 @@ func TestDSNReachesTheSession(t *testing.T) {
 		}
 		if zone != TimeZone() {
 			t.Errorf("%s DSN: session TimeZone = %q, want %q", name, zone, TimeZone())
+		}
+		// libpq reads the same DSN, so a psql, psycopg or other libpq child
+		// handed it runs in the same zone. libpq, unlike pgx, does not decode
+		// '+' as a space in a URI query.
+		psql, lookErr := exec.LookPath("psql")
+		if lookErr != nil {
+			t.Logf("%s DSN: psql is not on PATH, the libpq leg is not checked", name)
+			continue
+		}
+		output, runErr := exec.Command(psql, dsn, "-Atc", "SHOW TimeZone").CombinedOutput()
+		if runErr != nil {
+			t.Fatalf("%s DSN: libpq refused it: %v: %s", name, runErr, output)
+		}
+		if got := strings.TrimSpace(string(output)); got != TimeZone() {
+			t.Errorf("%s DSN through libpq: session TimeZone = %q, want %q", name, got, TimeZone())
 		}
 	}
 }

@@ -88,8 +88,8 @@ ON CONFLICT (id) DO NOTHING`, applicationID, agentName)
 	require.NoError(t, err, "seed application")
 
 	_, err = pool.Exec(ctx, `
-INSERT INTO p_1.chat_conversations (id, uuid, name, author_id)
-VALUES ($1, gen_random_uuid(), 'conversation', 1)
+INSERT INTO p_1.chat_conversations (id, uuid, name, author_id, created_at)
+VALUES ($1, gen_random_uuid(), 'conversation', 1, now() AT TIME ZONE 'UTC')
 ON CONFLICT (id) DO NOTHING`, applicationID)
 	require.NoError(t, err, "seed conversation")
 
@@ -102,8 +102,8 @@ ON CONFLICT (id) DO NOTHING`, applicationID, strconv.Itoa(applicationID))
 
 	_, err = pool.Exec(ctx, `
 INSERT INTO p_1.chat_message_group
-    (uuid, author_participant_id, conversation_id, task_id)
-VALUES (gen_random_uuid(), $1, $2, $3)`, applicationID, applicationID, executionID)
+    (uuid, author_participant_id, conversation_id, task_id, created_at)
+VALUES (gen_random_uuid(), $1, $2, $3, now() AT TIME ZONE 'UTC')`, applicationID, applicationID, executionID)
 	require.NoError(t, err, "seed message group")
 
 	for i := 0; i < requests; i++ {

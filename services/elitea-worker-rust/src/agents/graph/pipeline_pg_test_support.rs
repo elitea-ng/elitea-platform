@@ -182,7 +182,7 @@ pub(super) async fn activate(
     definition: &PipelineDefinition,
 ) -> Services {
     let options = sqlx::postgres::PgConnectOptions::from_str(
-        &std::env::var("ELITEA_TEST_DATABASE_URL").expect("database URL"),
+        &crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL").expect("database URL"),
     )
     .expect("parse database URL")
     .database(database);

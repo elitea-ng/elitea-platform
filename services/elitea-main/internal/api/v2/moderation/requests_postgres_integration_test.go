@@ -191,10 +191,10 @@ var (
 // pass on the strength of the other's setup.
 const requestsFixture = `
 INSERT INTO centry.moderation_state
-    (user_id, project_id, issue_type, entity_id, description, status, rejection_comment, created_at) VALUES
-    (4001, 1, 'Wikis',     'wikis_Wikis', 'We need the wiki toolkit for onboarding docs.', 'pending',  NULL, '2026-08-01 09:00:00'),
-    (4001, 1, 'Inventory', 'inventory',   'Asset tracking for the hardware lab.',          'approved', NULL, '2026-08-02 09:00:00'),
-    (4002, 2, 'Wikis',     'wikis_Wikis', 'Second team wants the same toolkit.',           'rejected', 'Not licensed for this tenant.', '2026-08-03 09:00:00');
+    (user_id, project_id, issue_type, entity_id, description, status, rejection_comment, created_at, updated_at) VALUES
+    (4001, 1, 'Wikis',     'wikis_Wikis', 'We need the wiki toolkit for onboarding docs.', 'pending',  NULL, '2026-08-01 09:00:00', now() AT TIME ZONE 'UTC'),
+    (4001, 1, 'Inventory', 'inventory',   'Asset tracking for the hardware lab.',          'approved', NULL, '2026-08-02 09:00:00', now() AT TIME ZONE 'UTC'),
+    (4002, 2, 'Wikis',     'wikis_Wikis', 'Second team wants the same toolkit.',           'rejected', 'Not licensed for this tenant.', '2026-08-03 09:00:00', now() AT TIME ZONE 'UTC');
 `
 
 func prepareFixture(t *testing.T, pool *pgxpool.Pool) {
@@ -367,8 +367,8 @@ func TestQueuePagesWithoutRepeatingOrDroppingRows(t *testing.T) {
 	pool := newModerationPool(t)
 	prepareUsers(t, pool)
 	if _, err := pool.Exec(context.Background(), `
-INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status, created_at)
-SELECT 4001, 1, 'Wikis', 'wikis_Wikis', 'burst ' || n, 'pending', '2026-08-04 12:00:00'
+INSERT INTO centry.moderation_state (user_id, project_id, issue_type, entity_id, description, status, created_at, updated_at)
+SELECT 4001, 1, 'Wikis', 'wikis_Wikis', 'burst ' || n, 'pending', '2026-08-04 12:00:00', now() AT TIME ZONE 'UTC'
 FROM generate_series(1, 10) AS n;`); err != nil {
 		t.Fatalf("seed burst: %v", err)
 	}
@@ -764,9 +764,9 @@ const (
 // reads, and it is the one a provisioning side effect would most plausibly
 // touch without adding a row.
 const configurationsFixture = `
-INSERT INTO p_1.configuration (project_id, elitea_title, label, type, section, data, status_ok) VALUES
-    (1, 'OpenAI GPT-4o',     'openai', 'openai', 'llm',       '{"name":"gpt-4o"}',           true),
-    (1, 'OpenAI Embeddings', 'openai', 'openai', 'embedding', '{"name":"text-embedding-3"}', false);
+INSERT INTO p_1.configuration (project_id, elitea_title, label, type, section, data, status_ok, created_at) VALUES
+    (1, 'OpenAI GPT-4o',     'openai', 'openai', 'llm',       '{"name":"gpt-4o"}',           true, now() AT TIME ZONE 'UTC'),
+    (1, 'OpenAI Embeddings', 'openai', 'openai', 'embedding', '{"name":"text-embedding-3"}', false, now() AT TIME ZONE 'UTC');
 `
 
 func prepareConfigurations(t *testing.T, pool *pgxpool.Pool) {

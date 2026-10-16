@@ -604,8 +604,8 @@ func TestSupportScopeUsesTheEnvironmentWithNoPlatformConfigTable(t *testing.T) {
 func storeSupportProjectID(t *testing.T, pool *pgxpool.Pool, projectID int) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `
-INSERT INTO centry.platform_config (section, key, value)
-VALUES ($1, $2, $3::text::jsonb)
+INSERT INTO centry.platform_config (section, key, value, updated_at)
+VALUES ($1, $2, $3::text::jsonb, now() AT TIME ZONE 'UTC')
 ON CONFLICT (section, key) DO UPDATE SET value = EXCLUDED.value`,
 		platformconfig.SectionSupportAssistant,
 		platformconfig.KeySupportProjectID,

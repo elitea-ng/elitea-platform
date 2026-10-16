@@ -627,7 +627,8 @@ INSERT INTO centry.notifications (
     user_id,
     meta,
     event_type,
-    created_at
+    created_at,
+    updated_at
 )
 SELECT $1::text::uuid,
        FALSE,
@@ -650,6 +651,7 @@ SELECT $1::text::uuid,
            'message', notification.message
        ),
        'index_data_changed',
+       now() AT TIME ZONE 'UTC',
        now() AT TIME ZONE 'UTC'
 FROM notification
 ON CONFLICT (uuid) DO NOTHING

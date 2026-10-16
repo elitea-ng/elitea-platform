@@ -675,7 +675,7 @@ mod preparation_recovery {
     }
 
     async fn fixture(register_execute_dispatch: bool) -> Fixture {
-        let url = std::env::var("ELITEA_TEST_DATABASE_URL")
+        let url = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL")
             .expect("ELITEA_TEST_DATABASE_URL is required");
         let database = IsolatedPostgres::create(&url).await;
         sqlx::raw_sql("CREATE SCHEMA elitea_runtime")

@@ -68,7 +68,7 @@ func editorLifecyclePostgresPool(t *testing.T) *pgxpool.Pool {
 		t.Skip("set ELITEA_EDITOR_TEST_DATABASE_URL to run the disposable editor PostgreSQL fixture")
 	}
 	for _, key := range []string{"ELITEA_TEST_DATABASE_URL", "ELITEA_TEST_USE_SERVICE_DATABASE_URL", "DATABASE_URL"} {
-		if os.Getenv(key) != "" {
+		if os.Getenv(key) != "" { // testpg:not-a-database: a presence check that refuses to connect
 			t.Fatalf("refuse existing TestMain/service database configuration: %s", key)
 		}
 	}

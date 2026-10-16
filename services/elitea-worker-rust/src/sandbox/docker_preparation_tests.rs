@@ -373,7 +373,7 @@ fn supervisor(pool: sqlx::PgPool, runtime: Runtime) -> DockerSupervisor {
 }
 async fn database() -> IsolatedPostgres {
     let database = IsolatedPostgres::create(
-        &std::env::var(DATABASE_URL)
+        &crate::test_pg::database_url_var(DATABASE_URL)
             .expect("Set ELITEA_TEST_DATABASE_URL for preparation lifecycle tests"),
     )
     .await;

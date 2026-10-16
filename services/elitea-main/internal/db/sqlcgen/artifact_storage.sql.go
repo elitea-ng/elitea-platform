@@ -208,11 +208,11 @@ func (q *Queries) GetArtifactProjectStoragePolicy(ctx context.Context, projectID
 
 const insertArtifactBucketExpiryNotification = `-- name: InsertArtifactBucketExpiryNotification :execrows
 INSERT INTO centry.notifications (
-    uuid, is_seen, project_id, user_id, meta, event_type, created_at
+    uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at
 ) VALUES (
     $1::text::uuid, FALSE,
     $2::integer, $3::integer,
-    $4::jsonb, 'artifact_bucket_expiring', now() AT TIME ZONE 'UTC'
+    $4::jsonb, 'artifact_bucket_expiring', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'
 ) ON CONFLICT (uuid) DO NOTHING
 `
 

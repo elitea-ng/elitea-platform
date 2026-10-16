@@ -64,16 +64,16 @@ func seedChat(t *testing.T, pool *pgxpool.Pool, name string, private bool, autho
 	t.Helper()
 	ctx := context.Background()
 	var id int
-	if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_conversations (name, is_private, author_id)
-		VALUES ($1, $2, $3) RETURNING id`, name, private, author).Scan(&id); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_conversations (name, is_private, author_id, created_at)
+		VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC') RETURNING id`, name, private, author).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	for _, user := range users {
 		if _, err := pool.Exec(ctx, `WITH participant AS (
 			INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta)
 			VALUES (gen_random_uuid(), 'user', jsonb_build_object('id', $1::integer)) RETURNING id)
-			INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id)
-			SELECT $2, id FROM participant`, user, id); err != nil {
+			INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at)
+			SELECT $2, id, now() AT TIME ZONE 'UTC' FROM participant`, user, id); err != nil {
 			t.Fatal(err)
 		}
 	}

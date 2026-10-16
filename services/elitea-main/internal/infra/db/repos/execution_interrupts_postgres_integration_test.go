@@ -109,8 +109,8 @@ func (h *interruptHarness) seedConversation() int64 {
 	h.t.Helper()
 	var conversationID int64
 	if err := h.pool.QueryRow(h.t.Context(), `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'interrupts', 7, 'agent') RETURNING id`).Scan(&conversationID); err != nil {
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'interrupts', 7, 'agent', now() AT TIME ZONE 'UTC') RETURNING id`).Scan(&conversationID); err != nil {
 		h.t.Fatal(err)
 	}
 	for _, user := range []int64{interruptOwner, interruptAsker, interruptSuspended} {
@@ -118,13 +118,13 @@ VALUES (gen_random_uuid(), 'interrupts', 7, 'agent') RETURNING id`).Scan(&conver
 WITH participant AS (
   INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta)
   VALUES (gen_random_uuid(), 'user', jsonb_build_object('id', $2::bigint)) RETURNING id)
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) SELECT $1, id FROM participant`, conversationID, user)
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at) SELECT $1, id, now() AT TIME ZONE 'UTC' FROM participant`, conversationID, user)
 	}
 	h.exec(`
 WITH participant AS (
   INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta)
   VALUES (gen_random_uuid(), 'application', '{"id": 1}'::jsonb) RETURNING id)
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) SELECT $1, id FROM participant`, conversationID)
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at) SELECT $1, id, now() AT TIME ZONE 'UTC' FROM participant`, conversationID)
 	return conversationID
 }
 
@@ -143,11 +143,11 @@ WITH asker AS (
   JOIN p_1.chat_participant_mapping mapping ON mapping.participant_id = participant.id AND mapping.conversation_id = $1
   WHERE participant.entity_name = 'application'
 ), question AS (
-  INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
-  SELECT gen_random_uuid(), asker.id, $1 FROM asker RETURNING id
+  INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
+  SELECT gen_random_uuid(), asker.id, $1, now() AT TIME ZONE 'UTC' FROM asker RETURNING id
 )
-INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, reply_to_id, is_streaming)
-SELECT gen_random_uuid(), agent.id, $1, question.id, true FROM agent, question
+INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, reply_to_id, is_streaming, created_at)
+SELECT gen_random_uuid(), agent.id, $1, question.id, true, now() AT TIME ZONE 'UTC' FROM agent, question
 RETURNING uuid::text`, h.conversationID).Scan(&responseID); err != nil {
 		h.t.Fatal(err)
 	}

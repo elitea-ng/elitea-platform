@@ -227,7 +227,7 @@ async fn activation_survives_transcript_loss_and_changed_resume_snapshot() {
 
 #[tokio::test]
 async fn postgres_instruction_pause_survives_process_replacement() {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for PostgreSQL process replacement proof");
         return;
     };
@@ -269,7 +269,7 @@ async fn postgres_replacement_child() {
     );
     let phase = std::env::var("ELITEA_INSTRUCTION_TEST_PHASE").unwrap();
     let options = sqlx::postgres::PgConnectOptions::from_str(
-        &std::env::var("ELITEA_TEST_DATABASE_URL").unwrap(),
+        &crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL").unwrap(),
     )
     .unwrap()
     .database(&database);

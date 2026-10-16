@@ -95,8 +95,8 @@ func TestChatSyncTriggersStampAndBumpWithThrottle(t *testing.T) {
 	}
 	insertGroup := func() int64 {
 		var id int64
-		if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
-			VALUES (gen_random_uuid(), $1, $2) RETURNING id`, participantID, conversationID).Scan(&id); err != nil {
+		if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
+			VALUES (gen_random_uuid(), $1, $2, now() AT TIME ZONE 'UTC') RETURNING id`, participantID, conversationID).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		return id
@@ -253,8 +253,8 @@ func TestChatSyncMessageDeltaSurvivesAnOutOfOrderCommit(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT author_participant_id FROM p_1.chat_message_group WHERE uuid = $1::uuid`, groups[0]).Scan(&participantID); err != nil {
 		t.Fatal(err)
 	}
-	insert := `INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
-		VALUES (gen_random_uuid(), $1, $2::int) RETURNING uuid::text`
+	insert := `INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
+		VALUES (gen_random_uuid(), $1, $2::int, now() AT TIME ZONE 'UTC') RETURNING uuid::text`
 
 	// A stamps first and commits last.
 	txA, err := pool.Begin(ctx)
@@ -454,8 +454,8 @@ func TestChatNewMessageMovesTheConversationsUpdatedAt(t *testing.T) {
 	insertGroup := func() int64 {
 		t.Helper()
 		var id int64
-		if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id)
-			VALUES (gen_random_uuid(), $1, $2) RETURNING id`, participantID, older).Scan(&id); err != nil {
+		if err := pool.QueryRow(ctx, `INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, created_at)
+			VALUES (gen_random_uuid(), $1, $2, now() AT TIME ZONE 'UTC') RETURNING id`, participantID, older).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		return id

@@ -95,8 +95,8 @@ func TestProjectAuthorizationAndToolkitRedaction(t *testing.T) {
 	}
 
 	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO p_2.elitea_tools (name, type, description, owner_id, author_id, settings)
-		VALUES ('private-toolkit', 'github', '', 2, 2, '{"repository":"EliteaAI/elitea-platform","access_token":"must-not-leak"}')`); err != nil {
+		INSERT INTO p_2.elitea_tools (name, type, description, owner_id, author_id, settings, created_at)
+		VALUES ('private-toolkit', 'github', '', 2, 2, '{"repository":"EliteaAI/elitea-platform","access_token":"must-not-leak"}', now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("seed toolkit: %v", err)
 	}
 	h := v2toolkits.NewHandler(pool)

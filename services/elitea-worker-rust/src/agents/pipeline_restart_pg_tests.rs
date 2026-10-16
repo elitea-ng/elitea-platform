@@ -107,7 +107,7 @@ fn authorized_turn<'a>(
 
 async fn connect(database: &str) -> sqlx::PgPool {
     let options = sqlx::postgres::PgConnectOptions::from_str(
-        &std::env::var("ELITEA_TEST_DATABASE_URL").expect("database URL"),
+        &crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL").expect("database URL"),
     )
     .expect("parse database URL")
     .database(database);
@@ -150,7 +150,7 @@ fn model_requests(captured: &CapturedModelRequests) -> usize {
 
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_two_nested_agent_pauses_resume_across_process_replacement() {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!(
             "SKIP: set ELITEA_TEST_DATABASE_URL for the nested application restart PostgreSQL proof"
         );

@@ -94,8 +94,8 @@ func setFlag(t *testing.T, pool *pgxpool.Pool, section, key string, value any) {
 		t.Fatalf("marshal %s.%s: %v", section, key, err)
 	}
 	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO centry.platform_config (section, key, value)
-		VALUES ($1, $2, $3::jsonb)
+		INSERT INTO centry.platform_config (section, key, value, updated_at)
+		VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')
 		ON CONFLICT (section, key) DO UPDATE SET value = EXCLUDED.value`,
 		section, key, string(encoded)); err != nil {
 		t.Fatalf("set %s.%s: %v", section, key, err)

@@ -1224,14 +1224,14 @@ func seedPipeline(t *testing.T, pool *pgxpool.Pool, schema, name string, owner i
 	ctx := context.Background()
 	var applicationID int64
 	if err := pool.QueryRow(ctx, fmt.Sprintf(
-		`INSERT INTO %s.applications (name, description, owner_id) VALUES ($1, '', $2) RETURNING id`, schema),
+		`INSERT INTO %s.applications (name, description, owner_id, created_at, updated_at) VALUES ($1, '', $2, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`, schema),
 		name, owner).Scan(&applicationID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
 	var versionID int64
 	if err := pool.QueryRow(ctx, fmt.Sprintf(`
-INSERT INTO %s.application_versions (application_id, name, status, author_id, agent_type, llm_settings)
-VALUES ($1, 'latest', 'published', $2, 'pipeline', '{}'::jsonb)
+INSERT INTO %s.application_versions (application_id, name, status, author_id, agent_type, llm_settings, created_at)
+VALUES ($1, 'latest', 'published', $2, 'pipeline', '{}'::jsonb, now() AT TIME ZONE 'UTC')
 RETURNING id`, schema), applicationID, owner).Scan(&versionID); err != nil {
 		t.Fatalf("seed pipeline version: %v", err)
 	}
@@ -1242,8 +1242,8 @@ RETURNING id`, schema), applicationID, owner).Scan(&versionID); err != nil {
 func seedStreamingResponse(t *testing.T, pool *pgxpool.Pool, schema, conversationUUID string) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), fmt.Sprintf(`
-INSERT INTO %[1]s.chat_message_group (uuid, conversation_id, author_participant_id, is_streaming, meta)
-SELECT gen_random_uuid(), conversation.id, mapping.participant_id, TRUE, '{}'::jsonb
+INSERT INTO %[1]s.chat_message_group (uuid, conversation_id, author_participant_id, is_streaming, meta, created_at)
+SELECT gen_random_uuid(), conversation.id, mapping.participant_id, TRUE, '{}'::jsonb, now() AT TIME ZONE 'UTC'
   FROM %[1]s.chat_conversations AS conversation
   JOIN %[1]s.chat_participant_mapping AS mapping ON mapping.conversation_id = conversation.id
  WHERE conversation.uuid = $1::uuid
@@ -1260,8 +1260,8 @@ func setMaintenance(t *testing.T, pool *pgxpool.Pool, enabled bool) {
 		value = "true"
 	}
 	if _, err := pool.Exec(context.Background(), `
-INSERT INTO centry.platform_config (section, key, value)
-VALUES ('maintenance', 'maintenance_enabled', $1::jsonb)
+INSERT INTO centry.platform_config (section, key, value, updated_at)
+VALUES ('maintenance', 'maintenance_enabled', $1::jsonb, now() AT TIME ZONE 'UTC')
 ON CONFLICT (section, key) DO UPDATE SET value = EXCLUDED.value`, value); err != nil {
 		t.Fatalf("write the maintenance switch: %v", err)
 	}

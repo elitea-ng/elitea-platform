@@ -1,4 +1,3 @@
-use std::env;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -264,7 +263,7 @@ fn postgres_timestamp_retains_payload_nanoseconds_at_relational_precision() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One ordered component story proves the durable authority handoff.
 async fn postgres_session_component_story() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL session component test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -492,7 +491,7 @@ async fn postgres_session_component_story() {
 
 #[tokio::test]
 async fn postgres_session_full_context_survives_writer_replacement() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL full context test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -579,7 +578,7 @@ async fn postgres_session_full_context_survives_writer_replacement() {
 
 #[tokio::test]
 async fn superseded_recovery_markers_do_not_exhaust_active_view_or_erase_replay_evidence() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL session component test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -732,7 +731,7 @@ async fn assert_retained_recovery_view(service: &PostgresSessionService, pool: &
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One ordered story verifies repeated retirement, quota, and immutable replay.
 async fn model_history_snapshots_release_capacity_without_losing_controls_or_replay() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL session component test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -977,7 +976,7 @@ async fn session_timeouts_are_bounded_at_activation() {
 
 #[tokio::test]
 async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL session lock-bound test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -1073,7 +1072,7 @@ async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
 
 #[tokio::test]
 async fn an_idle_session_transaction_releases_its_writer_locks() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL session idle-bound test: set {TEST_DATABASE_URL}");
         return;
     };

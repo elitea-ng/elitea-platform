@@ -362,7 +362,7 @@ fn percentile(samples: &mut [Duration], percentile: usize) -> Duration {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One claim lifecycle: prepare, receipt read, takeover, fencing.
 async fn batched_preparation_costs_two_transactions_and_refuses_a_superseded_claim() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL fan-out preparation test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -498,7 +498,7 @@ async fn batched_preparation_costs_two_transactions_and_refuses_a_superseded_cla
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One family lifecycle: prepare, fencing, receipt read.
 async fn application_families_prepare_in_two_transactions_and_keep_their_own_threads() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL application family test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -609,7 +609,7 @@ async fn application_families_prepare_in_two_transactions_and_keep_their_own_thr
 
 #[tokio::test]
 async fn concurrent_parent_appends_against_one_head_admit_exactly_one() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL parent append race test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -678,7 +678,7 @@ async fn concurrent_parent_appends_against_one_head_admit_exactly_one() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One parent lifecycle across crash windows and claims.
 async fn every_visit_appends_at_most_two_parent_rows_across_crash_windows() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL parent-row budget test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -852,7 +852,7 @@ async fn every_visit_appends_at_most_two_parent_rows_across_crash_windows() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)] // Three measured scenarios report one budget table.
 async fn fanout_load_meets_the_postgres_budgets() {
-    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+    let Ok(database_url) = crate::test_pg::database_url_var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL fan-out load test: set {TEST_DATABASE_URL}");
         return;
     };
@@ -1038,7 +1038,7 @@ const SENSITIVE_MARKER: &str = "fanout-sensitive-prompt-9c41";
 /// tests cannot change callsite interest while the logs are captured.
 #[test]
 fn fanout_and_checkpoint_spans_carry_counts_and_no_sensitive_values() {
-    if env::var(TEST_DATABASE_URL).is_err() {
+    if crate::test_pg::database_url_var(TEST_DATABASE_URL).is_err() {
         eprintln!("skipping PostgreSQL fan-out log capture: set {TEST_DATABASE_URL}");
         return;
     }
@@ -1095,7 +1095,10 @@ async fn fanout_log_child() {
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_writer(std::io::stdout)
         .init();
-    let database = IsolatedPostgres::create(&env::var(TEST_DATABASE_URL).expect("database")).await;
+    let database = IsolatedPostgres::create(
+        &crate::test_pg::database_url_var(TEST_DATABASE_URL).expect("database"),
+    )
+    .await;
     install_test_schema(&database.pool).await;
     let thread = "log-root";
     let writer = root(&database.pool, thread, "log-1", 1).await;

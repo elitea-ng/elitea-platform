@@ -109,7 +109,7 @@ func TestSweepRemovesOnlyExpiredTombstonesInEveryTenant(t *testing.T) {
 		}
 	}
 	// A notification delete writes its tombstone through 0144's trigger.
-	if _, err := pool.Exec(ctx, `INSERT INTO centry.notifications (project_id, user_id, event_type) VALUES (1, 5, 'x'), (1, 5, 'y');
+	if _, err := pool.Exec(ctx, `INSERT INTO centry.notifications (project_id, user_id, event_type, created_at, updated_at) VALUES (1, 5, 'x', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'), (1, 5, 'y', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC');
 		DELETE FROM centry.notifications`); err != nil {
 		t.Fatal(err)
 	}

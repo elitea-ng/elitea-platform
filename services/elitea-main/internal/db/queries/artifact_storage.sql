@@ -166,9 +166,9 @@ SELECT owner_id FROM centry.project WHERE id = $1;
 
 -- name: InsertArtifactBucketExpiryNotification :execrows
 INSERT INTO centry.notifications (
-    uuid, is_seen, project_id, user_id, meta, event_type, created_at
+    uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at
 ) VALUES (
     sqlc.arg('notification_uuid')::text::uuid, FALSE,
     sqlc.arg('project_id')::integer, sqlc.arg('user_id')::integer,
-    sqlc.arg('meta')::jsonb, 'artifact_bucket_expiring', now() AT TIME ZONE 'UTC'
+    sqlc.arg('meta')::jsonb, 'artifact_bucket_expiring', now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'
 ) ON CONFLICT (uuid) DO NOTHING;

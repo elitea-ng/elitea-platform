@@ -82,7 +82,7 @@ WHERE execution_id=$1 AND generation=$2 AND command_id=$3 AND state='RUNNING' AN
 	if err != nil {
 		return err
 	}
-	tag, err = tx.Exec(ctx, fmt.Sprintf(`UPDATE %s SET meta=jsonb_set(COALESCE(meta,'{}'::jsonb),'{node_recovery_required_v1}',$2::jsonb),updated_at=clock_timestamp() WHERE id=$1 AND is_streaming=TRUE`, schema+".chat_message_group"), groupID, []byte(raw))
+	tag, err = tx.Exec(ctx, fmt.Sprintf(`UPDATE %s SET meta=jsonb_set(COALESCE(meta,'{}'::jsonb),'{node_recovery_required_v1}',$2::jsonb),updated_at=(clock_timestamp() AT TIME ZONE 'UTC') WHERE id=$1 AND is_streaming=TRUE`, schema+".chat_message_group"), groupID, []byte(raw))
 	if err != nil {
 		return err
 	}

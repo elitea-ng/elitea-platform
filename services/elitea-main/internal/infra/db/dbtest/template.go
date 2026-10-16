@@ -102,6 +102,10 @@ type Spec struct {
 	// Tenants lists the project IDs whose tenant history must be applied. The
 	// seed must create the matching centry.project rows and p_<id> schemas.
 	Tenants []int64
+	// WithoutNaiveClockProbe leaves out NaiveClockProbeSQL, the trigger that
+	// refuses a naive timestamp written in the session's local time. Every
+	// template has it unless a test needs to write such a value on purpose.
+	WithoutNaiveClockProbe bool
 }
 
 // Fingerprint returns the content identity of the schema that a build
@@ -125,7 +129,11 @@ func (s Spec) fingerprintMaterial() (string, error) {
 
 	// A version tag lets a later change to the build steps invalidate every
 	// template that an older revision left on a developer machine.
-	write("elitea-dbtest-template-v1\n")
+	write("elitea-dbtest-template-v2\n")
+	write("naive clock probe %t %d\n", !s.WithoutNaiveClockProbe, len(NaiveClockProbeSQL))
+	if !s.WithoutNaiveClockProbe {
+		material.WriteString(NaiveClockProbeSQL)
+	}
 
 	for _, scope := range []migrate.Scope{migrate.ScopeShared, migrate.ScopeTenant} {
 		manifest, err := migrate.LoadManifest(s.Files, scope)
@@ -304,6 +312,11 @@ func applySchema(ctx context.Context, adminPool *pgxpool.Pool, scratchName strin
 	for _, tenant := range spec.Tenants {
 		if err := runner.CheckHead(ctx, migrate.ScopeTenant, strconv.FormatInt(tenant, 10)); err != nil {
 			return fmt.Errorf("dbtest: verify tenant migration head for project %d: %w", tenant, err)
+		}
+	}
+	if !spec.WithoutNaiveClockProbe {
+		if _, err := pool.Exec(ctx, NaiveClockProbeSQL); err != nil {
+			return fmt.Errorf("dbtest: install the naive clock probe: %w", err)
 		}
 	}
 	return nil

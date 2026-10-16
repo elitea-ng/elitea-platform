@@ -225,8 +225,8 @@ RETURNING token_id`, candidate.TokenID, candidate.Expires, now.UTC()).Scan(&clai
 	}
 
 	if _, err := tx.Exec(ctx, `
-INSERT INTO centry.notifications (is_seen, project_id, user_id, meta, event_type, created_at)
-VALUES (FALSE, $1, $2, $3::jsonb, $4, now() AT TIME ZONE 'UTC')`,
+INSERT INTO centry.notifications (is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
+VALUES (FALSE, $1, $2, $3::jsonb, $4, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`,
 		candidate.ProjectID, candidate.UserID, meta, PATExpiryNotificationEventType,
 	); err != nil {
 		return false, fmt.Errorf("insert token %d expiry notification: %w", candidate.TokenID, err)

@@ -13,7 +13,7 @@ async fn database(install_workspace: bool) -> IsolatedPostgres {
         Ok("1"),
         "required workspace PostgreSQL mode must be explicit"
     );
-    let url = std::env::var("ELITEA_TEST_DATABASE_URL")
+    let url = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL")
         .expect("a disposable loopback PG18 administrator is required");
     let options = PgConnectOptions::from_str(&url)
         .expect("parse fixture administrator")

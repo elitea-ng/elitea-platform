@@ -168,14 +168,14 @@ func seedAgent(t *testing.T, pool *pgxpool.Pool, schema, name, description strin
 	ctx := context.Background()
 	var applicationID int64
 	if err := pool.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %q.applications (name, description, owner_id, meta)
-		VALUES ($1, $2, 1, '{}'::jsonb) RETURNING id`, schema), name, description).Scan(&applicationID); err != nil {
+		INSERT INTO %q.applications (name, description, owner_id, meta, created_at, updated_at)
+		VALUES ($1, $2, 1, '{}'::jsonb, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`, schema), name, description).Scan(&applicationID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
 	var versionID int64
 	if err := pool.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %q.application_versions (application_id, name, status, author_id, agent_type)
-		VALUES ($1, 'latest', 'draft', 7, 'react') RETURNING id`, schema), applicationID).Scan(&versionID); err != nil {
+		INSERT INTO %q.application_versions (application_id, name, status, author_id, agent_type, created_at)
+		VALUES ($1, 'latest', 'draft', 7, 'react', now() AT TIME ZONE 'UTC') RETURNING id`, schema), applicationID).Scan(&versionID); err != nil {
 		t.Fatalf("seed application version: %v", err)
 	}
 	for _, tag := range tags {
@@ -214,8 +214,8 @@ func seedToolkit(t *testing.T, pool *pgxpool.Pool, schema, name, toolkitType str
 	}
 	var toolkitID int64
 	if err := pool.QueryRow(context.Background(), fmt.Sprintf(`
-		INSERT INTO %q.elitea_tools (name, type, description, owner_id, author_id, meta, settings)
-		VALUES ($1, $2, 'seeded toolkit', 1, 7, $3::jsonb, jsonb_build_object('selected_tools', $4::jsonb))
+		INSERT INTO %q.elitea_tools (name, type, description, owner_id, author_id, meta, settings, created_at)
+		VALUES ($1, $2, 'seeded toolkit', 1, 7, $3::jsonb, jsonb_build_object('selected_tools', $4::jsonb), now() AT TIME ZONE 'UTC')
 		RETURNING id`, schema), name, toolkitType, meta, string(selected)).Scan(&toolkitID); err != nil {
 		t.Fatalf("seed toolkit: %v", err)
 	}
@@ -227,8 +227,8 @@ func seedToolkit(t *testing.T, pool *pgxpool.Pool, schema, name, toolkitType str
 func seedMCPToolkitWithURL(t *testing.T, pool *pgxpool.Pool, schema, toolkitType, url string) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), fmt.Sprintf(`
-		INSERT INTO %q.elitea_tools (name, type, description, owner_id, author_id, meta, settings)
-		VALUES ($1, $1, 'seeded mcp toolkit', 1, 7, '{}'::jsonb, jsonb_build_object('url', $2::text))`, schema),
+		INSERT INTO %q.elitea_tools (name, type, description, owner_id, author_id, meta, settings, created_at)
+		VALUES ($1, $1, 'seeded mcp toolkit', 1, 7, '{}'::jsonb, jsonb_build_object('url', $2::text), now() AT TIME ZONE 'UTC')`, schema),
 		toolkitType, url); err != nil {
 		t.Fatalf("seed mcp toolkit: %v", err)
 	}
@@ -683,8 +683,8 @@ func TestMCPMasterSwitchClosesEveryEndpoint(t *testing.T) {
 	}
 
 	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO centry.platform_config (section, key, value)
-		VALUES ('mcp_configuration', 'mcp_enabled', 'false'::jsonb)
+		INSERT INTO centry.platform_config (section, key, value, updated_at)
+		VALUES ('mcp_configuration', 'mcp_enabled', 'false'::jsonb, now() AT TIME ZONE 'UTC')
 		ON CONFLICT (section, key) DO UPDATE SET value = EXCLUDED.value`); err != nil {
 		t.Fatalf("switch MCP off: %v", err)
 	}

@@ -399,8 +399,8 @@ CREATE TABLE public.auth_core__token (
 );
 INSERT INTO public.auth_core__token (id, user_id, expires)
 VALUES
-    (501, 11, clock_timestamp() + INTERVAL '1 day'),
-    (502, 15, clock_timestamp() + INTERVAL '1 day');
+    (501, 11, (clock_timestamp() AT TIME ZONE 'UTC') + INTERVAL '1 day'),
+    (502, 15, (clock_timestamp() AT TIME ZONE 'UTC') + INTERVAL '1 day');
 
 CREATE TABLE public.auth_core__role (
     id INTEGER PRIMARY KEY,

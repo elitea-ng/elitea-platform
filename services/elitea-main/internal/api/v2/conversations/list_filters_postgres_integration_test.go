@@ -119,7 +119,7 @@ func seedConversation(t *testing.T, pool *pgxpool.Pool, name, source string, aut
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO p_1.chat_conversations (name, author_id, meta, source) VALUES ($1, $2, $3::jsonb, $4)`,
+		`INSERT INTO p_1.chat_conversations (name, author_id, meta, source, created_at) VALUES ($1, $2, $3::jsonb, $4, now() AT TIME ZONE 'UTC')`,
 		name, author, string(encoded), source); err != nil {
 		t.Fatalf("seed %q: %v", name, err)
 	}

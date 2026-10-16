@@ -88,7 +88,7 @@ func likePublicCatalogueAgent(t *testing.T, pool *pgxpool.Pool, schema string, a
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`
-INSERT INTO %s.social_likes (entity_name, entity_id, user_id) VALUES ('application', $1, $2)
+INSERT INTO %s.social_likes (entity_name, entity_id, user_id, created_at) VALUES ('application', $1, $2, now() AT TIME ZONE 'UTC')
 ON CONFLICT DO NOTHING`, schema), appID, userID); err != nil {
 		t.Fatalf("seed like: %v", err)
 	}

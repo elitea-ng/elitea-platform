@@ -48,8 +48,8 @@ WHERE id = $1::bigint`, created.ID, minutesAgo); err != nil {
 	}
 	var conversationID int
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), 'recall reservation', $1::int, 'elitea')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), 'recall reservation', $1::int, 'elitea', now() AT TIME ZONE 'UTC')
 RETURNING id`, userID).Scan(&conversationID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}

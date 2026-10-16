@@ -282,7 +282,7 @@ func seedModel(t *testing.T, pool *pgxpool.Pool, title string, data map[string]a
 			(uuid, project_id, elitea_title, type, section, data, meta, shared,
 			 status_ok, source, created_at, updated_at)
 		VALUES (gen_random_uuid(), $1, $2, 'llm_model', 'llm', $3::jsonb, '{}'::jsonb, false,
-			 $4, 'user', now(), now())
+			 $4, 'user', (now() AT TIME ZONE 'UTC'), (now() AT TIME ZONE 'UTC'))
 		RETURNING id`, storedCheckProject),
 		storedCheckProject, title, string(encoded), statusOK).Scan(&id); err != nil {
 		t.Fatalf("seed the model row: %v", err)
@@ -768,7 +768,7 @@ func TestThePlatformStoredRoutesRefuseARowThisSurfaceDoesNotOwn(t *testing.T) {
 			(id, uuid, project_id, elitea_title, type, section, data, meta, shared,
 			 status_ok, source, created_at, updated_at)
 		VALUES ($1, gen_random_uuid(), $2, 'Tenant OpenAI', 'open_ai', 'ai_credentials',
-			'{}'::jsonb, '{}'::jsonb, true, true, 'user', now(), now())`, storedCheckOther),
+			'{}'::jsonb, '{}'::jsonb, true, true, 'user', (now() AT TIME ZONE 'UTC'), (now() AT TIME ZONE 'UTC'))`, storedCheckOther),
 		foreignID, storedCheckOther); err != nil {
 		t.Fatalf("seed the other tenant's credential: %v", err)
 	}

@@ -18,7 +18,7 @@ const DATABASE_GUARD: &str = "ELITEA_TEST_DATABASE_GUARD";
 
 async fn required_database() -> Option<IsolatedPostgres> {
     let required = env::var(REQUIRE_RECEIPTS).ok();
-    let url = env::var(TEST_DATABASE_URL).ok();
+    let url = crate::test_pg::database_url_var(TEST_DATABASE_URL).ok();
     if url.is_none() && required.is_none() {
         eprintln!(
             "receipt PG proof not run: root must set required mode and disposable database guard"
@@ -31,7 +31,7 @@ async fn required_database() -> Option<IsolatedPostgres> {
         "receipt PG proofs require explicit required mode"
     );
     assert_eq!(
-        env::var(DATABASE_GUARD).ok().as_deref(),
+        std::env::var(DATABASE_GUARD).ok().as_deref(),
         Some("disposable-pg18"),
         "receipt PG proofs require the disposable-PG18 guard"
     );

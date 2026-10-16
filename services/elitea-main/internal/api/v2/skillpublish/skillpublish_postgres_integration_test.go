@@ -108,14 +108,14 @@ func seedSkill(t *testing.T, pool *pgxpool.Pool, schema, name, description, inst
 	ctx := context.Background()
 	var skillID int
 	if err := pool.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %q.skills (name, description, owner_id, author_id, meta)
-		VALUES ($1, $2, 1, 7, '{}'::jsonb) RETURNING id`, schema), name, description).Scan(&skillID); err != nil {
+		INSERT INTO %q.skills (name, description, owner_id, author_id, meta, created_at)
+		VALUES ($1, $2, 1, 7, '{}'::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, schema), name, description).Scan(&skillID); err != nil {
 		t.Fatalf("seed skill: %v", err)
 	}
 	var versionID int
 	if err := pool.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %q.skill_versions (skill_id, name, instructions, author_id, status, meta)
-		VALUES ($1, 'base', $2, 7, 'draft', '{}'::jsonb) RETURNING id`, schema),
+		INSERT INTO %q.skill_versions (skill_id, name, instructions, author_id, status, meta, created_at)
+		VALUES ($1, 'base', $2, 7, 'draft', '{}'::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, schema),
 		skillID, instructions).Scan(&versionID); err != nil {
 		t.Fatalf("seed skill version: %v", err)
 	}
@@ -141,15 +141,15 @@ func seedAgent(t *testing.T, pool *pgxpool.Pool, schema, name string) int {
 	ctx := context.Background()
 	var applicationID int
 	if err := pool.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %q.applications (name, description, owner_id, meta)
-		VALUES ($1, 'seeded', 1, '{"icon_meta": {"color": "blue"}}'::jsonb) RETURNING id`, schema), name).
+		INSERT INTO %q.applications (name, description, owner_id, meta, created_at, updated_at)
+		VALUES ($1, 'seeded', 1, '{"icon_meta": {"color": "blue"}}'::jsonb, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`, schema), name).
 		Scan(&applicationID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
 	var versionID int
 	if err := pool.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO %q.application_versions (application_id, name, status, author_id, agent_type)
-		VALUES ($1, 'latest', 'draft', 7, 'react') RETURNING id`, schema), applicationID).Scan(&versionID); err != nil {
+		INSERT INTO %q.application_versions (application_id, name, status, author_id, agent_type, created_at)
+		VALUES ($1, 'latest', 'draft', 7, 'react', now() AT TIME ZONE 'UTC') RETURNING id`, schema), applicationID).Scan(&versionID); err != nil {
 		t.Fatalf("seed application version: %v", err)
 	}
 	return versionID
@@ -874,8 +874,8 @@ func setFlag(t *testing.T, pool *pgxpool.Pool, section, key string, value any) {
 		t.Fatalf("marshal %s.%s: %v", section, key, err)
 	}
 	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO centry.platform_config (section, key, value)
-		VALUES ($1, $2, $3::jsonb)
+		INSERT INTO centry.platform_config (section, key, value, updated_at)
+		VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')
 		ON CONFLICT (section, key) DO UPDATE SET value = EXCLUDED.value`,
 		section, key, string(encoded)); err != nil {
 		t.Fatalf("set %s.%s: %v", section, key, err)

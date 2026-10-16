@@ -32,8 +32,8 @@ func TestApplicationsRepoPostgres_ListReportsThePublishState(t *testing.T) {
 	// the only version, so this also proves an agent whose base version is
 	// still a draft is reported as published.
 	if _, err := pool.Exec(testContext(t), `
-INSERT INTO p_1.application_versions (application_id, name, status, author_id, agent_type)
-VALUES ($1, 'v1', 'published', 1, 'openai')`, published.ID); err != nil {
+INSERT INTO p_1.application_versions (application_id, name, status, author_id, agent_type, created_at)
+VALUES ($1, 'v1', 'published', 1, 'openai', now() AT TIME ZONE 'UTC')`, published.ID); err != nil {
 		t.Fatalf("seed the published version: %v", err)
 	}
 

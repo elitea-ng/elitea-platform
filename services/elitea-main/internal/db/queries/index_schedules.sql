@@ -46,7 +46,8 @@ INSERT INTO centry.notifications (
     user_id,
     meta,
     event_type,
-    created_at
+    created_at,
+    updated_at
 ) VALUES (
     sqlc.arg('notification_uuid')::text::uuid,
     FALSE,
@@ -54,6 +55,7 @@ INSERT INTO centry.notifications (
     sqlc.arg('user_id')::integer,
     sqlc.arg('meta')::jsonb,
     'index_data_changed',
+    now() AT TIME ZONE 'UTC',
     now() AT TIME ZONE 'UTC'
 )
 ON CONFLICT (uuid) DO NOTHING;

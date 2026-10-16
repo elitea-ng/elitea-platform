@@ -58,8 +58,8 @@ func seedExportTranscript(t *testing.T, pool *pgxpool.Pool, name string, count i
 	ctx := context.Background()
 
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
-VALUES (gen_random_uuid(), $1, 7, 'agent')
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), $1, 7, 'agent', now() AT TIME ZONE 'UTC')
 RETURNING id::text, uuid::text`, name).Scan(&numericID, &conversationUUID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
@@ -76,8 +76,8 @@ WITH participant AS (
     VALUES (gen_random_uuid(), 'user', '{"id": 42, "project_id": 1, "name": "autotest_author"}'::jsonb)
     RETURNING id
 ), mapping AS (
-    INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id)
-    SELECT $1::int, participant.id FROM participant
+    INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, created_at)
+    SELECT $1::int, participant.id, now() AT TIME ZONE 'UTC' FROM participant
     RETURNING participant_id
 )
 SELECT participant_id FROM mapping`, numericID).Scan(&participantID); err != nil {
@@ -93,8 +93,8 @@ WITH grp AS (
             TIMESTAMP '2026-01-01 00:00:00' + ($2::int * INTERVAL '1 minute'))
     RETURNING id
 ), item AS (
-    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id)
-    SELECT gen_random_uuid(), 'text_message', 0, grp.id FROM grp
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, grp.id, now() AT TIME ZONE 'UTC' FROM grp
     RETURNING id
 )
 INSERT INTO p_1.chat_messages_text (id, content)
