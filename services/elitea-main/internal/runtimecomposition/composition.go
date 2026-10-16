@@ -712,11 +712,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if recoveryErr != nil {
 			return nil, recoveryErr
 		}
-		if config.ExecutionInterruptsAPIEnabled {
-			executionInterrupts, recoveryErr = repos.NewExecutionInterruptRepository(dependencies.AdmissionPool)
-			if recoveryErr != nil {
-				return nil, fmt.Errorf("construct execution interrupt repository: %w", recoveryErr)
-			}
+		// The per-interrupt decision ledger is always on with the agent runtime
+		// (fanout-interrupt-decisions v1.1, decision D3: no flag).
+		executionInterrupts, recoveryErr = repos.NewExecutionInterruptRepository(dependencies.AdmissionPool)
+		if recoveryErr != nil {
+			return nil, fmt.Errorf("construct execution interrupt repository: %w", recoveryErr)
 		}
 		agentCancellation, cancelErr := repos.NewCurrentAgentCancelRepository(dependencies.AdmissionPool)
 		if cancelErr != nil {
@@ -2089,6 +2089,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if nodeRecoveryStore != nil {
 		contentServer.WithNodeRecoveryControl(nodeRecoveryStore).WithNodeRecoveryResults(nodeRecoveryStore)
+	}
+	if executionInterrupts != nil {
+		// Private claim-fenced decision fetch/ACK (fanout-interrupt-decisions
+		// v1.1 §7) on the same mTLS listener as node recovery control.
+		contentServer.WithExecutionInterrupts(executionInterrupts)
 	}
 	if config.AgentExecutionDispatchEnabled && dependencies.ObjectStore != nil && sandboxGrants != nil {
 		sandboxSpoolDir, err = os.MkdirTemp("", "elitea-sandbox-bundles-")

@@ -113,4 +113,40 @@ type Resolved struct {
 	InterruptID  string
 	State        State
 	Revision     int64
+	// Action is set for DECIDED only; the value is never carried.
+	Action *Action
+}
+
+// ResolvedSchema names fanout-interrupt-resolved.v1.
+const ResolvedSchema = "elitea.pipeline.fanout-interrupt-resolved.v1"
+
+// ResolvedMetadataJSON writes response_metadata.interrupt_resolved_v1 of the
+// agent_hitl_resolved frame canonically: the action of a decision, null for a
+// cancel or supersede, and never the value.
+func (r Resolved) ResolvedMetadataJSON() ([]byte, error) {
+	var action any
+	switch r.State {
+	case StateDecided:
+		if r.Action == nil || !r.Action.Valid() {
+			return nil, ErrLedgerFault
+		}
+		action = string(*r.Action)
+	case StateCancelled, StateSuperseded:
+		if r.Action != nil {
+			return nil, ErrLedgerFault
+		}
+	default:
+		return nil, ErrLedgerFault
+	}
+	if !ValidDigest(r.InterruptKey) || r.InterruptID == "" || len(r.InterruptID) > MaxInterruptIDBytes || r.Revision < 1 {
+		return nil, ErrLedgerFault
+	}
+	return canonicalOf(map[string]any{
+		"action":        action,
+		"interrupt_id":  r.InterruptID,
+		"interrupt_key": r.InterruptKey,
+		"revision":      r.Revision,
+		"schema":        ResolvedSchema,
+		"state":         string(r.State),
+	})
 }

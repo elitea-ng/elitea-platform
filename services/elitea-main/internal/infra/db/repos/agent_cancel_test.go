@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -77,7 +78,7 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 	} {
 		t.Run(name, func(t *testing.T) {
 			executor := &currentAgentCancelExecutorStub{
-				scriptedExecutor: &scriptedExecutor{},
+				scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{{err: pgx.ErrNoRows}}}, // no ledger row: the stop still asks
 				cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
 					ResponseMessageGroupID: 51,
 					QuestionMessageGroupID: &questionID,
@@ -97,6 +98,9 @@ func TestCurrentAgentCancelRepositoryProjectsRetainedSalvagedAndDeletedResponses
 			}
 			if outcome.Deleted != projection.Deleted || outcome.Salvaged != projection.Salvaged || outcome.Replay {
 				t.Fatalf("outcome=%+v projection=%+v", outcome, projection)
+			}
+			if calls := executor.rowCalls; len(calls) != 1 || !strings.Contains(calls[0].sql, "execution_interrupt_responses") {
+				t.Fatalf("stop did not close interrupt cards in its transaction: %+v", calls)
 			}
 			if projects.projectID != 2 || projects.options.AccessMode != pgx.ReadWrite ||
 				executor.cancelParams.ProjectID != 2 || executor.cancelParams.ActorUserID != 7 ||

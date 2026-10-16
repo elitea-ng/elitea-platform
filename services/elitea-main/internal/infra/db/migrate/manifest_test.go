@@ -703,7 +703,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// source; execution_jobs and vector_claim_tokens get memory_toolkit_ids,
 	// and elitea_runtime.memory_conversation_taints is created (worker unit
 	// M9). No data, no permission.
-	require.EqualValues(t, 166, Head(shared))
+	//
+	// 167: shared/0167_execution_interrupt_wakes.sql, park and wake for the
+	// per-interrupt decision ledger (fanout-interrupt-decisions v1.1 §8): the
+	// park columns on execution_interrupt_responses and
+	// elitea_runtime.execution_interrupt_wakes with the partial unique index
+	// "one active continuation per response". No data, no permission.
+	require.EqualValues(t, 167, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

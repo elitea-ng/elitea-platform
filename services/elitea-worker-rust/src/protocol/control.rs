@@ -2518,6 +2518,8 @@ fn build_claim_request(
     Ok(ClaimCommandRequestV1 {
         agent_model_checkpoint_recovery: false,
         node_recovery: false,
+        // Set by the fan-out decision client (2a-2 task 8); false until then.
+        fanout_interrupt_decisions: false,
         workload_session_id: workload_session_id.to_owned(),
         producer_id: producer_id.to_owned(),
         signed_command: Some(verified.signed().clone()),

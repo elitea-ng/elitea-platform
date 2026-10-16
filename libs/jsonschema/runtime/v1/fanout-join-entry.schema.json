@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-join-entry.v1",
+  "title": "Fan-out join entry",
+  "description": "One entry of the ordered collection a Parallel or Map node joins (contract v1.1 section 8a). A Parallel entry names branch_id, a Map entry names the 0-based index. A succeeded entry carries the member's outputs; a failed entry carries a typed error with no raw model or tool text, and optionally the member's partial_outputs. The canonical error object is at most 512 bytes (enforced by its field bounds). outputs and partial_outputs count toward the 512 KiB member value bound and the 8 MiB joined bound.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "node",
+    "status"
+  ],
+  "properties": {
+    "branch_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 63
+    },
+    "node": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+    },
+    "status": {
+      "enum": [
+        "succeeded",
+        "failed"
+      ]
+    },
+    "outputs": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+      },
+      "additionalProperties": {}
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message_safe",
+        "support_ref"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$"
+        },
+        "message_safe": {
+          "description": "Fixed catalog text for the code. Printable ASCII without quote or backslash, so the canonical error object stays within 512 bytes.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 370,
+          "pattern": "^[\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]+$"
+        },
+        "support_ref": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$"
+        }
+      }
+    },
+    "partial_outputs": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+      },
+      "additionalProperties": {}
+    }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "required": [
+            "branch_id"
+          ],
+          "not": {
+            "required": [
+              "index"
+            ]
+          }
+        },
+        {
+          "required": [
+            "index"
+          ],
+          "not": {
+            "required": [
+              "branch_id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "succeeded"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "outputs"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "error"
+              ]
+            },
+            {
+              "required": [
+                "partial_outputs"
+              ]
+            }
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "error"
+        ],
+        "not": {
+          "required": [
+            "outputs"
+          ]
+        }
+      }
+    }
+  ]
+}
