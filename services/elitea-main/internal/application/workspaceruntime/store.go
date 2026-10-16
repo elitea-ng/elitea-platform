@@ -46,6 +46,11 @@ var (
 	ErrUnavailable = errors.New("workspace store is temporarily unavailable")
 	// ErrInvalidRequest: a request outside the contract's bounds.
 	ErrInvalidRequest = errors.New("invalid workspace store request")
+	// ErrThreadBusy: another change to the thread is being saved right now
+	// (workspacestore.ErrThreadBusy). Nothing was compared, so it is NOT a
+	// ref conflict: the transport answers a retryable status (ABORTED) and
+	// the worker resends the SAME publish after a backoff.
+	ErrThreadBusy = errors.New("workspace thread is busy")
 )
 
 // RefusalCode is a typed business refusal, mapped one to one onto

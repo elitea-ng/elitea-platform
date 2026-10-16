@@ -20,16 +20,24 @@ import (
 )
 
 type fakeTurns struct {
-	turn  workspaceruntime.Turn
-	ok    bool
-	calls atomic.Int32
-	seen  workspaceruntime.TurnClaim
+	turn        workspaceruntime.Turn
+	ok          bool
+	err         error
+	handedOff   bool
+	calls       atomic.Int32
+	handedCalls atomic.Int32
+	seen        workspaceruntime.TurnClaim
 }
 
 func (f *fakeTurns) ResolveCloudTurn(_ context.Context, claim workspaceruntime.TurnClaim) (workspaceruntime.Turn, bool, error) {
 	f.calls.Add(1)
 	f.seen = claim
-	return f.turn, f.ok, nil
+	return f.turn, f.ok, f.err
+}
+
+func (f *fakeTurns) HandedOff(context.Context, workspaceruntime.TurnClaim) (bool, error) {
+	f.handedCalls.Add(1)
+	return f.handedOff, nil
 }
 
 type fakePolicies struct {
@@ -84,13 +92,37 @@ func TestRuntimeContextServesNoWorkspaceFieldWithoutTheAccept(t *testing.T) {
 	response := redeem(t, server, "")
 	require.Equal(t, http.StatusOK, response.Code)
 	require.Len(t, responseKeys(t, response.Body.Bytes()), 3)
-	// The handoff is not even looked up for a worker that cannot read it.
+	// The cloud turn is never started for a worker that cannot read it.
 	require.Zero(t, turns.calls.Load())
 
 	response = redeem(t, server, runtimeContextFieldSecretsHeader)
 	keys := responseKeys(t, response.Body.Bytes())
 	require.NotContains(t, keys, "workspace")
 	require.Zero(t, turns.calls.Load())
+}
+
+// A worker that cannot run a workspace turn is refused a turn of a handed-off
+// thread (it would run without the files), and nothing is started.
+func TestRuntimeContextRefusesAHandedOffTurnToAWorkerWithoutWorkspaceRuns(t *testing.T) {
+	t.Parallel()
+	turns, policies := cloudTurn(), enabledPolicy()
+	turns.handedOff = true
+	server := workspaceTokenServer(t, turns, policies)
+	response := redeem(t, server, runtimeContextFieldSecretsHeader)
+	require.Equal(t, http.StatusForbidden, response.Code)
+	require.Zero(t, turns.calls.Load())
+	require.Equal(t, int32(1), turns.handedCalls.Load())
+}
+
+// A thread the cloud does not own for this turn (a take back, another turn)
+// refuses the redemption instead of serving a turn without its workspace.
+func TestRuntimeContextRefusesATurnTheThreadIsNotTheCloudsFor(t *testing.T) {
+	t.Parallel()
+	turns, policies := cloudTurn(), enabledPolicy()
+	turns.err = workspaceruntime.ErrNotCloudTurn
+	server := workspaceTokenServer(t, turns, policies)
+	response := redeem(t, server, "workspace")
+	require.Equal(t, http.StatusForbidden, response.Code)
 }
 
 func TestRuntimeContextServesTheWorkspaceFieldToAWorkerThatAsks(t *testing.T) {
@@ -107,7 +139,7 @@ func TestRuntimeContextServesTheWorkspaceFieldToAWorkerThatAsks(t *testing.T) {
 
 	var field map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(keys["workspace"], &field))
-	require.ElementsMatch(t, []string{"thread", "epoch", "expected_old_cloud", "limits", "network", "shell", "network_allowlist", "has_upstream", "env_secret", "rewind"}, mapKeys(field))
+	require.ElementsMatch(t, []string{"thread", "epoch", "expected_old_cloud", "limits", "network", "shell", "network_allowlist", "has_upstream", "env_secret", "rewind", "rewind_to"}, mapKeys(field))
 	var decoded workspaceruntime.RuntimeContext
 	require.NoError(t, json.Unmarshal(keys["workspace"], &decoded))
 	require.Equal(t, uint64(2), decoded.Epoch)
@@ -175,7 +207,8 @@ func TestRuntimeContextWithoutAComposedResolverIgnoresTheAccept(t *testing.T) {
 func TestRuntimeContextServesTheRegenerateRewind(t *testing.T) {
 	t.Parallel()
 	turns, policies := cloudTurn(), enabledPolicy()
-	turns.turn.Rewind = true
+	parent := "2222222222222222222222222222222222222222"
+	turns.turn.Rewind, turns.turn.RewindTo = true, &parent
 	server := workspaceTokenServer(t, turns, policies)
 	response := redeem(t, server, "workspace")
 	require.Equal(t, http.StatusOK, response.Code)
@@ -184,7 +217,19 @@ func TestRuntimeContextServesTheRegenerateRewind(t *testing.T) {
 	require.NotNil(t, decoded.Workspace)
 	require.True(t, decoded.Workspace.Rewind)
 	require.Equal(t, *turns.turn.CloudSHA, *decoded.Workspace.ExpectedOldCloud)
+	require.Equal(t, parent, *decoded.Workspace.RewindTo)
 
+	// A rewind with no target, a target equal to the cloud commit, or a
+	// target without a rewind is refused.
+	turns.turn.RewindTo = nil
+	require.NotEqual(t, http.StatusOK, redeem(t, server, "workspace").Code)
+	same := *turns.turn.CloudSHA
+	turns.turn.RewindTo = &same
+	require.NotEqual(t, http.StatusOK, redeem(t, server, "workspace").Code)
+	turns.turn.Rewind, turns.turn.RewindTo = false, &parent
+	require.NotEqual(t, http.StatusOK, redeem(t, server, "workspace").Code)
+
+	turns.turn.Rewind = true
 	turns.turn.CloudSHA = nil
 	response = redeem(t, server, "workspace")
 	require.NotEqual(t, http.StatusOK, response.Code)

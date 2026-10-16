@@ -18,7 +18,9 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/workspace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -51,6 +53,8 @@ type fakeStore struct {
 	claims    []workspaceruntime.ClaimRef
 	cloud     string
 	env       map[string]string
+	// busy answers ErrThreadBusy to this many publishes first.
+	busy int
 }
 
 func (f *fakeStore) check(claim workspaceruntime.ClaimRef) error {
@@ -120,6 +124,10 @@ func (f *fakeStore) Publish(_ context.Context, claim workspaceruntime.ClaimRef, 
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.busy > 0 {
+		f.busy--
+		return workspaceruntime.PublishResult{}, workspaceruntime.ErrThreadBusy
+	}
 	if _, ok := f.uploaded[request.SegmentSHA256]; !ok {
 		return workspaceruntime.PublishResult{}, workspaceruntime.Refuse(workspaceruntime.RefusalSegmentMissing)
 	}
@@ -434,5 +442,27 @@ func TestEnvSecretStreamsTheThreadEnvWithinTheResponseBound(t *testing.T) {
 	store.env = map[string]string{"bad name": "x"}
 	if frames := envFrames(t, client, 2); frames[0].GetRejection() == nil {
 		t.Fatalf("invalid: %v", frames)
+	}
+}
+
+// A publish that meets another change of the thread (workspacestore's
+// thread_busy) is a retryable ABORTED status, not a ref-conflict refusal: the
+// worker resends the same publish, which then applies once.
+func TestPublishAnswersThreadBusyAsARetryableStatusNotAConflict(t *testing.T) {
+	store := newStore()
+	store.busy = 1
+	client := dial(t, store, verifier{})
+	store.uploaded[digest([]byte("segment"))] = []byte("segment")
+	old := cloudSHA
+	response, err := client.WorkspacePublish(context.Background(), publishRequest(2, &old))
+	if status.Code(err) != codes.Aborted || response != nil {
+		t.Fatalf("busy publish = %v %v, want ABORTED", response, err)
+	}
+	if got := status.Convert(err).Message(); got != workspace.ThreadBusyMessage {
+		t.Fatalf("busy message = %q", got)
+	}
+	response, err = client.WorkspacePublish(context.Background(), publishRequest(2, &old))
+	if err != nil || response.GetRefusal() != nil || response.GetSeq() != 4 || len(store.publishes) != 1 {
+		t.Fatalf("retried publish = %v %v", response, err)
 	}
 }

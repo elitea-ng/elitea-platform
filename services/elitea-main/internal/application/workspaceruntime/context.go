@@ -18,6 +18,13 @@ const RuntimeContextField = "workspace"
 // any tool runs.
 var ErrCloudExecutorDisabled = errors.New("the cloud executor is disabled for this project")
 
+// ErrNotCloudTurn: the claimed execution belongs to a handed-off thread, but
+// the cloud executor does not own the thread for THIS turn now (another cloud
+// turn runs, a take back or an erase moved it on, or the thread changed hands
+// after the turn was admitted). The redemption is refused like
+// ErrCloudExecutorDisabled: such a turn must not run outside the workspace.
+var ErrNotCloudTurn = errors.New("the thread is not owned by the cloud executor for this turn")
+
 // TurnClaim is the claimed execution as the runtime-context authorizer
 // resolved it.
 type TurnClaim struct {
@@ -49,16 +56,43 @@ type Turn struct {
 	EnvSecret bool
 	// Rewind: this execution regenerates the newest cloud turn (ADR-0034
 	// decision 7; the server allows only the newest). CloudSHA is that
-	// turn's commit; the worker moves refs/elitea/cloud back to its parent
-	// through the normal publish compare-and-set before the turn runs.
-	Rewind bool
+	// turn's commit; the worker moves refs/elitea/cloud back to RewindTo
+	// (the commit that turn started from: its parent, or further back when
+	// the turn paused for input and published twice) through the normal
+	// publish compare-and-set before the turn runs.
+	Rewind   bool
+	RewindTo *string
 }
 
-// TurnResolver reads the claimed execution's handoff state. It returns
-// false (and no error) when the execution is not a cloud turn of a
-// handed-off thread in CLOUD_RUNNING.
+// TurnResolver reads the claimed execution's handoff state.
+//
+// ResolveCloudTurn is called at claim (the runtime-context redemption). For a
+// turn of a handed-off thread it STARTS the cloud turn (CLOUD_IDLE →
+// CLOUD_RUNNING, the answer stamped as the cloud executor's) and answers it;
+// a repeated redemption of the same claim answers the same turn. It returns
+// false (and no error) when the conversation is not a handed-off thread, and
+// ErrNotCloudTurn or ErrCloudExecutorDisabled when it is one the turn may not
+// run in.
+//
+// HandedOff answers, without changing anything, whether the claimed
+// execution's conversation is a handed-off thread (a handoff row in any
+// state but LOCAL): a worker that cannot run a workspace turn is refused it.
 type TurnResolver interface {
 	ResolveCloudTurn(ctx context.Context, claim TurnClaim) (Turn, bool, error)
+	HandedOff(ctx context.Context, claim TurnClaim) (bool, error)
+}
+
+// TurnLifecycle ends cloud turns. FinishExecution runs after an execution's
+// result is projected and after its settlement commits (completion, failure,
+// cancellation, a pause for input): when executionID is a thread's running
+// cloud turn, the thread goes back to CLOUD_IDLE (or to RECLAIMING when a
+// take back waits). It is idempotent: an execution that is no running cloud
+// turn is a no-op. ReconcileFinished does the same for every running cloud
+// turn whose execution is already terminal (a hook that never ran, e.g. a
+// crash between the commit and the hook).
+type TurnLifecycle interface {
+	FinishExecution(ctx context.Context, executionID string) error
+	ReconcileFinished(ctx context.Context) (int, error)
 }
 
 // Policy is the effective cloud-executor policy (decision 11): the platform
@@ -113,8 +147,10 @@ type RuntimeContext struct {
 	// WorkspaceEnvSecret (contract 6.4). The values are never in this field.
 	EnvSecret bool `json:"env_secret"`
 	// Rewind: regenerate the newest cloud turn: move refs/elitea/cloud from
-	// ExpectedOldCloud back to its parent first (decision 7).
-	Rewind bool `json:"rewind"`
+	// ExpectedOldCloud back to RewindTo first (decision 7). RewindTo is null
+	// unless Rewind is set; it is a first-parent ancestor of ExpectedOldCloud.
+	Rewind   bool    `json:"rewind"`
+	RewindTo *string `json:"rewind_to"`
 }
 
 // ContextResolver builds the `workspace` field for one claimed execution.
@@ -151,7 +187,7 @@ func (r *ContextResolver) ResolveWorkspaceContext(ctx context.Context, claim Tur
 		return nil, nil
 	}
 	if !ValidThreadUUID(turn.ThreadUUID) || turn.Epoch == 0 || turn.Epoch > math.MaxInt64 ||
-		(turn.CloudSHA != nil && !ValidSHA1(*turn.CloudSHA)) || (turn.Rewind && turn.CloudSHA == nil) {
+		(turn.CloudSHA != nil && !ValidSHA1(*turn.CloudSHA)) || !validRewind(turn) {
 		return nil, ErrInvalidRequest
 	}
 	policy, err := r.policies.EffectiveCloudPolicy(ctx, claim.ProjectID, turn.ThreadUUID)
@@ -175,10 +211,14 @@ func (r *ContextResolver) ResolveWorkspaceContext(ctx context.Context, claim Tur
 		return nil, ErrInvalidRequest
 	}
 	slices.Sort(allowlist)
-	var expected *string
+	var expected, rewindTo *string
 	if turn.CloudSHA != nil {
 		value := *turn.CloudSHA
 		expected = &value
+	}
+	if turn.Rewind {
+		value := *turn.RewindTo
+		rewindTo = &value
 	}
 	return &RuntimeContext{
 		Thread:           turn.ThreadUUID,
@@ -203,7 +243,31 @@ func (r *ContextResolver) ResolveWorkspaceContext(ctx context.Context, claim Tur
 		HasUpstream:      turn.HasUpstream,
 		EnvSecret:        turn.EnvSecret,
 		Rewind:           turn.Rewind,
+		RewindTo:         rewindTo,
 	}, nil
+}
+
+// validRewind: a rewind names the cloud commit it moves from and a different
+// valid commit it moves to; no rewind names neither.
+func validRewind(turn Turn) bool {
+	if !turn.Rewind {
+		return turn.RewindTo == nil
+	}
+	return turn.CloudSHA != nil && turn.RewindTo != nil && ValidSHA1(*turn.RewindTo) && *turn.RewindTo != *turn.CloudSHA
+}
+
+// RefusesUnaccepted reports whether a worker that did not accept the
+// `workspace` field must be refused this claim: the claimed execution is a
+// turn of a handed-off thread, which may run only in its workspace.
+func (r *ContextResolver) RefusesUnaccepted(ctx context.Context, claim TurnClaim) (bool, error) {
+	if r == nil {
+		return false, nil
+	}
+	handedOff, err := r.turns.HandedOff(ctx, claim)
+	if err != nil {
+		return false, errors.Join(ErrUnavailable, err)
+	}
+	return handedOff, nil
 }
 
 func allowlistIf(network bool, allowlist []string) []string {
