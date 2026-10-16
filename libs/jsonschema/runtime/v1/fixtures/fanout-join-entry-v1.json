@@ -1,0 +1,1 @@
+{"branch_id":"jira_branch","node":"jira_agent","outputs":{"count":2,"details":{"ids":["OPS-1","OPS-2"]},"summary":"Two open incidents"},"status":"succeeded"}

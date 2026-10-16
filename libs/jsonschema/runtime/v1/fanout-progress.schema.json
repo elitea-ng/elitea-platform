@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-progress.v1",
+  "title": "agent_fanout_progress frame metadata",
+  "description": "Non-terminal coalesced progress frame of one fan-out activation (response_metadata.fanout_progress_v1, contract v1.1 section 9.1). One coalescer flush (at most 65536 bytes of buffered delta text) is sent as one or more frames; the text of all members of one frame is at most 8192 UTF-8 bytes in total. Members are ordered by strictly ascending ordinal, each ordinal at most fanout_v1.total. Web routes each entry to the member accordion whose agent_fanout_member start frame carried the same call_id. Never carries lifecycle, cards or failures.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "fanout_v1",
+    "members"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.fanout-progress.v1"
+    },
+    "fanout_v1": {
+      "description": "Activation scope of the frame: the fanout_v1 fields that every member shares. The member identity is per entry.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "node",
+        "activation",
+        "total"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "parallel",
+            "map"
+          ]
+        },
+        "node": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+        },
+        "activation": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 16,
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "parallel"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "total": {
+                "maximum": 16
+              }
+            }
+          }
+        }
+      ]
+    },
+    "members": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ordinal",
+          "call_id",
+          "text"
+        ],
+        "properties": {
+          "ordinal": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          "call_id": {
+            "type": "string",
+            "minLength": 68,
+            "maxLength": 68,
+            "pattern": "^fo1_[0-9a-f]{64}$"
+          },
+          "text": {
+            "description": "Losslessly concatenated delta text of this member since its previous progress entry. Model output: never logged.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        }
+      }
+    }
+  }
+}
