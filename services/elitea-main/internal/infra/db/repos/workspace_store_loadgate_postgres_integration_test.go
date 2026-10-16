@@ -53,6 +53,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -91,6 +92,9 @@ type loadGateSample struct {
 	backends     int
 	// waits names the lock waits seen, as wait_event: left(query, 60).
 	waits []string
+	// otherWaits names the non-lock waits of active backends (IO, LWLock,
+	// IPC: a WAL flush, a buffer read), one entry per waiting backend.
+	otherWaits []string
 }
 
 func loadGateMaxConns(t *testing.T) int32 {
@@ -189,10 +193,13 @@ SELECT count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event NOT IN ('e
        count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event = 'extend'),
        count(*) FILTER (WHERE wait_event_type = 'Lock' AND wait_event = 'advisory'), count(*),
        COALESCE(array_agg(DISTINCT wait_event || ': ' || left(regexp_replace(query, '\s+', ' ', 'g'), 60))
-                FILTER (WHERE wait_event_type = 'Lock'), '{}')
+                FILTER (WHERE wait_event_type = 'Lock'), '{}'),
+       COALESCE(array_agg(wait_event_type || ':' || wait_event)
+                FILTER (WHERE state = 'active' AND wait_event_type IN ('IO', 'LWLock', 'IPC')), '{}')
 FROM pg_stat_activity
 WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'`).
-			Scan(&sample.lockWaiters, &sample.extendWaiters, &sample.quotaWaiters, &sample.backends, &sample.waits); err != nil {
+			Scan(&sample.lockWaiters, &sample.extendWaiters, &sample.quotaWaiters, &sample.backends, &sample.waits,
+				&sample.otherWaits); err != nil {
 			t.Errorf("sample: %v", err)
 			return samples, maxPoolConns
 		}
@@ -311,6 +318,27 @@ func (run loadGateRun) report(t *testing.T, name string, indexes []int) (p50, p9
 	for wait, count := range waits {
 		t.Logf("%s: lock wait seen in %d samples: %s", name, count, wait)
 	}
+	// The non-lock waits seen while the publishes ran, most frequent first:
+	// a stall on the runner's disk shows as IO:WALSync / LWLock:WALWrite.
+	other := map[string]int{}
+	for _, sample := range run.samples {
+		for _, wait := range sample.otherWaits {
+			other[wait]++
+		}
+	}
+	names := make([]string, 0, len(other))
+	for wait := range other {
+		names = append(names, wait)
+	}
+	sort.Slice(names, func(i, j int) bool { return other[names[i]] > other[names[j]] })
+	if len(names) > 5 {
+		names = names[:5]
+	}
+	top := make([]string, 0, len(names))
+	for _, wait := range names {
+		top = append(top, fmt.Sprintf("%s x%d", wait, other[wait]))
+	}
+	t.Logf("%s: non-lock waits in samples: %s", name, strings.Join(top, ", "))
 	// Where the slowest 1% started, to tell a cold start (all at the
 	// beginning) from a stall in the middle.
 	slow := []time.Duration{}

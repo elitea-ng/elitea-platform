@@ -91,7 +91,7 @@ jobs:
             echo 'Gated at 300/s: p99 < 50 ms, no row lock waits between threads, no pool growth.'
             echo 'Logged, not gated: 1,000/s and the all-at-once burst.'
             echo '```'
-            grep -E 'n=[0-9]+ wall=|pool in window' loadgate.log | sed -E 's/^.*_test\.go:[0-9]+: //'  || true
+            grep -E 'n=[0-9]+ wall=|pool in window|non-lock waits' loadgate.log | sed -E 's/^.*_test\.go:[0-9]+: //'  || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$status" -ne 0 ]; then
