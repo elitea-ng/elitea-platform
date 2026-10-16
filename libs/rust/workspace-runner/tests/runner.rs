@@ -187,3 +187,70 @@ async fn the_harvested_env_reaches_run_command_only_when_sent() {
     assert!(!without.to_string().contains("s3cr3t-value"), "{without}");
     assert!(elitea_workspace_runner::parse_env_line(r#"{"env":{},"x":1}"#).is_err());
 }
+
+/// Item 2: the worker's pre-dispatch question, and a HITL-approved call.
+/// Destructive and escaping commands (ADR-0029 addendum item 3) are asked;
+/// network use is not; an approved call runs, the same call unapproved is
+/// still deferred.
+#[tokio::test(flavor = "multi_thread")]
+async fn destructive_commands_are_classified_and_run_only_when_approved() {
+    if !git_available() {
+        return;
+    }
+    let source = tempfile::tempdir().unwrap();
+    fs::create_dir_all(source.path().join("dir")).unwrap();
+    fs::write(source.path().join("dir/a.txt"), "a\n").unwrap();
+    let mut archive = Vec::new();
+    workspace_archive::write_tree(source.path(), &mut archive, LIMITS).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    unpack(&mut archive.as_slice(), workspace.path(), LIMITS).unwrap();
+    let session = open_session(&RunnerConfig {
+        root: workspace.path().to_path_buf(),
+        data_dir: data.path().to_path_buf(),
+        policy: RunnerPolicy {
+            shell: true,
+            network: true,
+            ..RunnerPolicy::default()
+        },
+        env: Vec::new(),
+    })
+    .unwrap();
+    let classify = |command: &str| {
+        let line = json!({"classify": {"command": command}}).to_string();
+        let session = std::sync::Arc::clone(&session);
+        async move { elitea_workspace_runner::handle_line(&session, &line).await }
+    };
+    for asked in [
+        "rm -rf dir",
+        "git push origin main",
+        "git push --force",
+        "git reset --hard HEAD~1",
+        "npm publish",
+        "sudo apt install x",
+        "echo hi > /etc/hosts",
+    ] {
+        assert_eq!(classify(asked).await["ask"], true, "{asked}");
+    }
+    for routine in [
+        "ls -la",
+        "cargo test",
+        "curl https://example.com",
+        "rm dir/a.txt",
+    ] {
+        assert_eq!(classify(routine).await["ask"], false, "{routine}");
+    }
+    let run = |approved: bool, call_id: &str| {
+        let line = json!({"tool": "run_command", "call_id": call_id, "approved": approved,
+            "args": {"command": "rm -rf dir", "sandbox": "workspace-write"}})
+        .to_string();
+        let session = std::sync::Arc::clone(&session);
+        async move { elitea_workspace_runner::handle_line(&session, &line).await }
+    };
+    let deferred = run(false, "c-1").await;
+    assert_eq!(deferred["status"], "error", "{deferred}");
+    assert!(workspace.path().join("dir/a.txt").exists());
+    let ran = run(true, "c-2").await;
+    assert_eq!(ran["status"], "ok", "{ran}");
+    assert!(!workspace.path().join("dir").exists());
+}

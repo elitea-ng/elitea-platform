@@ -1272,3 +1272,289 @@ fn a_denial_comment_survives_into_the_next_resume_of_the_same_message() {
         "the first card's own words were lost on the way to the second resume"
     );
 }
+
+/// The cloud workspace's sandbox, as the HITL gate sees it: a destructive
+/// command is classified as asked; every call is recorded with whether it
+/// arrived approved.
+#[derive(Default)]
+struct GateSandbox {
+    calls: Mutex<Vec<(String, Value, bool)>>,
+}
+
+#[async_trait::async_trait]
+impl crate::workspace_run::sandbox::WorkspaceSandbox for GateSandbox {
+    async fn push_tree(
+        &self,
+        _worktree: &std::path::Path,
+    ) -> Result<(), crate::workspace_run::sandbox::SandboxRunError> {
+        Ok(())
+    }
+
+    async fn call_tool(
+        &self,
+        tool: &str,
+        call_id: &str,
+        args: Value,
+    ) -> Result<Value, crate::workspace_run::sandbox::SandboxRunError> {
+        self.call_tool_approved(tool, call_id, args, false).await
+    }
+
+    async fn call_tool_approved(
+        &self,
+        _tool: &str,
+        call_id: &str,
+        args: Value,
+        approved: bool,
+    ) -> Result<Value, crate::workspace_run::sandbox::SandboxRunError> {
+        self.calls
+            .lock()
+            .expect("calls")
+            .push((call_id.to_owned(), args, approved));
+        Ok(json!({"status": "ok"}))
+    }
+
+    async fn classify_command(
+        &self,
+        command: &str,
+        _cwd: Option<&str>,
+    ) -> Result<bool, crate::workspace_run::sandbox::SandboxRunError> {
+        Ok(command.starts_with("rm -rf") || command.starts_with("git push"))
+    }
+
+    async fn pull_tree(
+        &self,
+        _worktree: &std::path::Path,
+    ) -> Result<(), crate::workspace_run::sandbox::SandboxRunError> {
+        Ok(())
+    }
+
+    async fn destroy(&self) -> Result<(), crate::workspace_run::sandbox::SandboxRunError> {
+        Ok(())
+    }
+}
+
+/// The model's one call, then a final text once results are back.
+struct CommandLlm {
+    command: String,
+    turns: Mutex<u32>,
+}
+
+#[async_trait::async_trait]
+impl adk_rust::Llm for CommandLlm {
+    fn name(&self) -> &'static str {
+        "fixture-model"
+    }
+
+    async fn generate_content(
+        &self,
+        _request: adk_rust::LlmRequest,
+        _stream: bool,
+    ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        let mut turns = self.turns.lock().expect("turns");
+        *turns += 1;
+        let content = if *turns == 1 {
+            Content {
+                role: "model".to_owned(),
+                parts: vec![Part::FunctionCall {
+                    name: "run_command".to_owned(),
+                    args: json!({"command": self.command}),
+                    id: Some("call-1".to_owned()),
+                    thought_signature: None,
+                }],
+            }
+        } else {
+            Content::new("model").with_text("done")
+        };
+        Ok(Box::pin(adk_rust::futures::stream::once(async move {
+            Ok(adk_rust::LlmResponse::new(content))
+        })))
+    }
+}
+
+async fn workspace_turn(
+    sessions: Arc<InMemorySessionService>,
+    model: Arc<dyn adk_rust::Llm>,
+    sandbox: Arc<GateSandbox>,
+    run_config: adk_rust::RunConfig,
+    user_content: Content,
+) -> Vec<Event> {
+    let sandbox: Arc<dyn crate::workspace_run::sandbox::WorkspaceSandbox> = sandbox;
+    let gate = Arc::new(crate::workspace_run::tools::WorkspaceCommandGate::new(
+        Arc::clone(&sandbox),
+    ));
+    let agent = LlmAgentBuilder::new("elitea-agent")
+        .model(model)
+        .toolset(crate::workspace_run::tools::provider(sandbox, true).toolset())
+        .tool_call_confirmation(gate)
+        .build()
+        .expect("agent");
+    let runner = Runner::builder()
+        .app_name("elitea-agent-v1")
+        .agent(Arc::new(agent))
+        .session_service(sessions)
+        .run_config(run_config)
+        .build()
+        .expect("runner");
+    let mut stream = runner
+        .run(
+            adk_rust::UserId::new("user-1").expect("user"),
+            adk_rust::SessionId::new("session-1").expect("session"),
+            user_content,
+        )
+        .await
+        .expect("stream");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event.expect("event"));
+    }
+    events
+}
+
+async fn workspace_sessions() -> Arc<InMemorySessionService> {
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: Some("session-1".to_owned()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .expect("session");
+    sessions
+}
+
+/// Item 2 (ADR-0034 decision 9, ADR-0029 addendum item 3): a destructive
+/// `run_command` in the cloud is a HITL interrupt BEFORE anything runs; the
+/// approved call replays in the continuation and reaches the runner marked
+/// approved; a routine command never asks. The workspace command's catalog
+/// entry is conditional (not a name-wide confirmation) and replays approved.
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pause and its resume, end to end"
+)]
+async fn a_destructive_workspace_command_pauses_for_approval_and_replays_approved() {
+    // Routine: runs, unasked, unapproved.
+    let routine = Arc::new(GateSandbox::default());
+    let events = workspace_turn(
+        workspace_sessions().await,
+        Arc::new(CommandLlm {
+            command: "cargo test".to_owned(),
+            turns: Mutex::new(0),
+        }),
+        Arc::clone(&routine),
+        adk_rust::RunConfig::default(),
+        Content::new("user").with_text("test it"),
+    )
+    .await;
+    assert!(
+        events
+            .iter()
+            .all(|event| event.actions.tool_confirmation.is_none())
+    );
+    assert_eq!(routine.calls.lock().expect("calls").len(), 1);
+    assert!(!routine.calls.lock().expect("calls")[0].2);
+
+    // Destructive: an interrupt, and the runner never saw the call.
+    let sessions = workspace_sessions().await;
+    let sandbox = Arc::new(GateSandbox::default());
+    let events = workspace_turn(
+        Arc::clone(&sessions),
+        Arc::new(CommandLlm {
+            command: "rm -rf build".to_owned(),
+            turns: Mutex::new(0),
+        }),
+        Arc::clone(&sandbox),
+        adk_rust::RunConfig::default(),
+        Content::new("user").with_text("clean up"),
+    )
+    .await;
+    let card = events
+        .iter()
+        .find_map(|event| event.actions.tool_confirmation.as_ref())
+        .expect("a HITL interrupt");
+    assert_eq!(card.tool_name, "run_command");
+    assert_eq!(card.function_call_id.as_deref(), Some("call-1"));
+    assert!(
+        sandbox.calls.lock().expect("calls").is_empty(),
+        "nothing ran"
+    );
+
+    // The catalog the worker composes for a workspace turn.
+    let catalog = SensitiveToolCatalog::default()
+        .with_workspace_command()
+        .expect("workspace catalog");
+    assert_eq!(
+        catalog.tool_names().count(),
+        0,
+        "not a name-wide confirmation"
+    );
+    assert_eq!(catalog.replays_approved("run_command"), Some(true));
+    assert!(catalog.policy_for("run_command").is_some());
+
+    // The person approves: the continuation replays the call, approved.
+    let stored = sessions
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: "session-1".to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("stored");
+    let all = stored.events().all();
+    let confirmation = all
+        .iter()
+        .rev()
+        .find(|event| event.actions.tool_confirmation.is_some())
+        .expect("persisted card");
+    let request = confirmation
+        .actions
+        .tool_confirmation
+        .as_ref()
+        .expect("card");
+    let (interrupt_id, _) = sensitive_call_identity(
+        &confirmation.invocation_id,
+        "call-1",
+        &request.tool_name,
+        &request.args,
+    )
+    .expect("identity");
+    let replay = DirectHitlDecision::from_payload(&multi_call_payload(
+        "approve",
+        "",
+        &interrupt_id,
+        "call-1",
+    ))
+    .expect("decision")
+    .resolve(stored.as_ref())
+    .expect("resolved")
+    .into_direct_replay(&catalog)
+    .expect("an approved workspace command replays");
+    let prepared = replay.bind(Arc::new(CommandLlm {
+        command: "unused".to_owned(),
+        turns: Mutex::new(1),
+    }));
+    let (model, input, _) = prepared.into_parts(Vec::new());
+    let (user_content, run_config) = input.into_parts();
+    let resumed = workspace_turn(
+        Arc::clone(&sessions),
+        model,
+        Arc::clone(&sandbox),
+        run_config,
+        user_content,
+    )
+    .await;
+    assert!(
+        resumed
+            .iter()
+            .all(|event| event.actions.tool_confirmation.is_none())
+    );
+    let calls = sandbox.calls.lock().expect("calls").clone();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].0, "call-1");
+    assert_eq!(calls[0].1["command"], "rm -rf build");
+    assert!(calls[0].2, "the runner is told the person approved it");
+}

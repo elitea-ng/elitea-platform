@@ -217,6 +217,34 @@ pub trait WorkspaceRunner: Send + Sync {
     /// The JSON result the model reads. A tool failure is a result
     /// (`status: error`), not an `Err`; `Err` is the runner itself failing.
     async fn call(&self, tool: &str, call_id: &str, args: Value) -> Result<Value, HostError>;
+
+    /// As [`Self::call`], for a call a person approved through the server's
+    /// HITL interrupt (ADR-0034 decision 9): the runner runs it although its
+    /// rules would ask. The default ignores the approval.
+    async fn call_approved(
+        &self,
+        tool: &str,
+        call_id: &str,
+        args: Value,
+        approved: bool,
+    ) -> Result<Value, HostError> {
+        let _ = approved;
+        self.call(tool, call_id, args).await
+    }
+}
+
+/// Whether the run this call belongs to carries an APPROVE decision for
+/// exactly this call id (the direct HITL resume of an interrupted call). The
+/// decision is the run's, set by the host from the person's answer, never a
+/// model argument; ADK has already matched it to the call's argument
+/// fingerprint before the tool runs.
+fn approved_call(ctx: &dyn ToolContext) -> bool {
+    ctx.run_config().is_some_and(|config| {
+        config
+            .tool_confirmation_decisions
+            .get(ctx.function_call_id())
+            == Some(&adk_core::ToolConfirmationDecision::Approve)
+    })
 }
 
 /// One workspace tool bound to the runner.
@@ -253,7 +281,12 @@ impl Tool for WorkspaceTool {
         Ok(
             match self
                 .runner
-                .call(self.spec.name, ctx.function_call_id(), args)
+                .call_approved(
+                    self.spec.name,
+                    ctx.function_call_id(),
+                    args,
+                    approved_call(ctx.as_ref()),
+                )
                 .await
             {
                 Ok(value) => value,
