@@ -3,6 +3,7 @@ package runtimecomposition
 import (
 	"context"
 	"testing"
+	"time"
 
 	egressauditapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
@@ -36,19 +37,23 @@ func TestEgressAuditClientsParseAndRequireTheRuntime(t *testing.T) {
 	}
 }
 
-// The composition root builds the service over the shared audit recorder,
-// and the Runtime's Close writes what the merger holds
-// (unit-suite-blind-to-composition-root).
+// The composition root builds the service over the shared audit recorder and
+// the shared store; the Runtime's Close stops the sweep and writes nothing (a
+// turn that is not written stays in the store for the next Main).
 func TestComposedEgressAuditWritesThroughTheAuditRecorder(t *testing.T) {
 	if server, merger, err := newEgressAudit(Config{}, Dependencies{}); server != nil || merger != nil || err != nil {
 		t.Fatal("no clients: nothing is composed")
 	}
-	if _, _, err := newEgressAudit(Config{EgressAuditClients: []string{"dns:elitea-egress-proxy"}}, Dependencies{}); err == nil {
+	clients := Config{EgressAuditClients: []string{"dns:elitea-egress-proxy"}}
+	if _, _, err := newEgressAudit(clients, Dependencies{}); err == nil {
 		t.Fatal("clients without an audit recorder are refused")
 	}
 	recorder := &egressAuditRecorder{}
-	server, merger, err := newEgressAudit(Config{EgressAuditClients: []string{"dns:elitea-egress-proxy"}},
-		Dependencies{AuditRecorder: recorder})
+	if _, _, err := newEgressAudit(clients, Dependencies{AuditRecorder: recorder}); err == nil {
+		t.Fatal("clients without a summary store are refused: the summaries are never held in memory")
+	}
+	store := egressauditapp.NewMemoryStore()
+	server, merger, err := newEgressAudit(clients, Dependencies{AuditRecorder: recorder, EgressAuditStore: store})
 	if err != nil || server == nil || merger == nil {
 		t.Fatalf("%v %v %v", server, merger, err)
 	}
@@ -56,12 +61,31 @@ func TestComposedEgressAuditWritesThroughTheAuditRecorder(t *testing.T) {
 		t.Fatal("a nil server must stay a nil interface")
 	}
 	runtime := &Runtime{egressAudit: merger}
-	merger.Report(reportFor("exec-9"))
+	if err := merger.Report(context.Background(), reportFor("exec-9")); err != nil {
+		t.Fatal(err)
+	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if len(recorder.events) != 1 || recorder.events[0].EntityName != "exec-9" {
-		t.Fatalf("events: %+v", recorder.events)
+	if len(recorder.events) != 0 || store.Rows() != 1 {
+		t.Fatalf("Close writes nothing and keeps the row: events %+v rows %d", recorder.events, store.Rows())
+	}
+}
+
+func TestEgressAuditRetentionParses(t *testing.T) {
+	lookup := func(value string) LookupEnv {
+		return func(name string) (string, bool) { return value, name == EgressAuditRetentionEnv }
+	}
+	if d, err := egressAuditRetention(lookup("")); d != 0 || err != nil {
+		t.Fatalf("default: %v %v", d, err)
+	}
+	if d, err := egressAuditRetention(lookup("14")); d != 14*24*time.Hour || err != nil {
+		t.Fatalf("14 days: %v %v", d, err)
+	}
+	for _, bad := range []string{"0", "-1", "366", "a week", "1.5"} {
+		if _, err := egressAuditRetention(lookup(bad)); err == nil {
+			t.Fatalf("%q must be refused", bad)
+		}
 	}
 }
 

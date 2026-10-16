@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"strings"
 	"testing"
 
@@ -16,9 +17,18 @@ import (
 	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
 )
 
-type captured struct{ reports []app.Report }
+type captured struct {
+	reports []app.Report
+	err     error
+}
 
-func (c *captured) Report(r app.Report) { c.reports = append(c.reports, r) }
+func (c *captured) Report(_ context.Context, r app.Report) error {
+	if c.err != nil {
+		return c.err
+	}
+	c.reports = append(c.reports, r)
+	return nil
+}
 
 func peerContext(dnsNames ...string) context.Context {
 	certificate := &x509.Certificate{DNSNames: dnsNames}
@@ -103,5 +113,18 @@ func TestMalformedReportsAreRefused(t *testing.T) {
 	}
 	if _, err := NewServer(sink, nil); err == nil {
 		t.Fatal("no identity is refused")
+	}
+}
+
+// A report the store could not keep is answered UNAVAILABLE, so the proxy
+// retries it instead of treating it as delivered.
+func TestReportThatCannotBeStoredIsRetryable(t *testing.T) {
+	sink := &captured{err: errors.New("database down")}
+	server, err := NewServer(sink, []string{"dns:elitea-egress-proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.ReportRunSummary(peerContext("elitea-egress-proxy"), valid()); status.Code(err) != codes.Unavailable {
+		t.Fatalf("a store failure: %v", err)
 	}
 }

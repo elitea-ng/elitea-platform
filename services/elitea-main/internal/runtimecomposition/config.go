@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
 
@@ -147,6 +148,10 @@ type Config struct {
 	// control listener (ELITEA_EGRESS_AUDIT_CLIENTS, ADR-0034 decision 9).
 	// Empty leaves the service unregistered.
 	EgressAuditClients []string
+	// EgressAuditRetention is how long the stored per-turn summaries are
+	// kept (ELITEA_EGRESS_AUDIT_RETENTION_DAYS, default 7, at most 365).
+	// Zero takes the default.
+	EgressAuditRetention time.Duration
 
 	ControlAddress string
 	OutputAddress  string
@@ -333,6 +338,9 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	if config.EgressAuditClients, err = egressAuditClients(lookup); err != nil {
+		return Config{}, err
+	}
+	if config.EgressAuditRetention, err = egressAuditRetention(lookup); err != nil {
 		return Config{}, err
 	}
 	if raw, ok := lookup("ELITEA_RUNTIME_SANDBOX_AUDIENCES"); ok && raw != "" {

@@ -20,20 +20,30 @@
 //   - every replica it heard from has sent its last report and no report has
 //     arrived for Settle (a replica that served the run late still gets in);
 //   - or MaxHold has passed since the token expired (a replica that crashed
-//     never sends its last report; its latest snapshot is used);
-//   - or Main shuts down (Close), with what it has.
+//     never sends its last report; its latest snapshot is used).
+//
+// Main shutting down writes nothing: the turn stays in the store for the next
+// sweep, here or on another Main replica.
 //
 // A report for a turn already written starts a new event (a resumed turn
 // reuses the execution id with a new token).
 //
-// # Main replicas
+// # Where the summaries live
 //
-// The merge is in memory. With several Main replicas, proxy replicas whose
-// connections landed on different Main replicas are merged on each, so one
-// turn can produce one event per Main replica, each covering a disjoint set
-// of proxy replicas (it says how many). The numbers never double count:
-// snapshots are per proxy replica and each proxy replica reports to one Main
-// connection at a time.
+// In a Store shared by every Main replica (the Postgres table
+// elitea_runtime.egress_run_summaries, shared migration 0169), never in a
+// replica's memory. Every report is an upsert, so which Main replica a proxy
+// replica's connection lands on does not matter, and a Main restart loses
+// nothing: the rows are still there and the next sweep, on any replica,
+// writes the turn. Every Main replica sweeps; the store's ClaimDue hands a due
+// turn's rows to exactly ONE of them (a single UPDATE ... RETURNING), so a
+// turn yields exactly one audit event however many Main replicas run.
+//
+// Delivery is at most once past the claim: a Main that dies between claiming
+// a turn and recording its event loses that one event (the proxy's own log
+// keeps the summary, and the recorder behind this package is itself an async
+// best-effort queue). A claimed row is kept for Config.Retention and deleted
+// by the sweep after it.
 package egressaudit
 
 import (
@@ -97,6 +107,32 @@ type Turn struct {
 	LastReport   time.Time     `json:"last_report"`
 }
 
+// Row is one stored (execution, replica) snapshot.
+type Row struct {
+	Report
+	FirstReport time.Time
+	UpdatedAt   time.Time
+}
+
+// Store is the shared place the replicas' snapshots live in. Its
+// implementations must make ClaimDue atomic across callers: a row it returns
+// is returned to no other call, whatever the number of Main replicas
+// (the Postgres store claims with one UPDATE ... RETURNING).
+type Store interface {
+	// Upsert replaces the (execution, replica) snapshot with report, stamped
+	// now. A report for a row already claimed re-opens it as a new turn. A
+	// non-final report never replaces a final one of the same open turn.
+	Upsert(ctx context.Context, report Report, now time.Time) error
+	// ClaimDue claims every open turn that is due at now and returns all of
+	// its rows. A turn is due when every replica's row is final and the last
+	// report is at least settle old, or when its latest token expiry is at
+	// least maxHold past.
+	ClaimDue(ctx context.Context, now time.Time, settle, maxHold time.Duration) ([]Row, error)
+	// DeleteOlderThan deletes the rows last updated before cutoff, claimed or
+	// not, and reports how many.
+	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
 // Config tunes the merger. Zero values take the defaults.
 type Config struct {
 	// Settle is how long the merger waits after the last report once every
@@ -106,12 +142,16 @@ type Config struct {
 	// when a replica never sent its last report. Default 10 min (a proxy
 	// replica sweeps every 5 s and logs the final summary within seconds).
 	MaxHold time.Duration
-	// MaxPending bounds the turns held in memory; past it the oldest turn
-	// is written early. Default 10000.
-	MaxPending int
-	// Tick is the sweep interval of Run. Default 5 s.
+	// Retention is how long the store keeps a row after its last report.
+	// Default 7 days.
+	Retention time.Duration
+	// Tick is the sweep interval of Start. Default 5 s.
 	Tick time.Duration
 }
+
+// DefaultRetention is how long the rows are kept when Config.Retention is
+// zero.
+const DefaultRetention = 7 * 24 * time.Hour
 
 func (c Config) withDefaults() Config {
 	if c.Settle <= 0 {
@@ -120,8 +160,8 @@ func (c Config) withDefaults() Config {
 	if c.MaxHold <= 0 {
 		c.MaxHold = 10 * time.Minute
 	}
-	if c.MaxPending <= 0 {
-		c.MaxPending = 10_000
+	if c.Retention <= 0 {
+		c.Retention = DefaultRetention
 	}
 	if c.Tick <= 0 {
 		c.Tick = 5 * time.Second
@@ -129,40 +169,41 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
-type pending struct {
-	projectID   int64
-	expiresAt   time.Time
-	replicas    map[string]Report
-	done        map[string]bool
-	firstReport time.Time
-	lastReport  time.Time
-}
+// retentionEvery is how often the sweep deletes expired rows.
+const retentionEvery = time.Minute
 
-// Merger merges reports per turn and writes one audit event per turn. It is
-// safe for concurrent use.
+// storeTimeout bounds one store call of the background sweep.
+const storeTimeout = 30 * time.Second
+
+// Merger stores reports and writes one audit event per turn. It is safe for
+// concurrent use, and any number of Mergers over one Store (one per Main
+// replica) write each turn once between them.
 type Merger struct {
 	cfg      Config
+	store    Store
 	recorder audit.Recorder
 	logger   *slog.Logger
 	now      func() time.Time
 
-	mu      sync.Mutex
-	pending map[string]*pending
-	closed  bool
+	retentionMu   sync.Mutex
+	lastRetention time.Time
 
 	stop     chan struct{}
 	stopOnce sync.Once
 	done     chan struct{}
+	started  bool
+	startMu  sync.Mutex
 }
 
-// New builds a merger that writes to recorder. Start the sweep with Start.
-func New(recorder audit.Recorder, logger *slog.Logger, cfg Config) *Merger {
+// New builds a merger over store that writes to recorder. Start the sweep
+// with Start.
+func New(store Store, recorder audit.Recorder, logger *slog.Logger, cfg Config) *Merger {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Merger{
-		cfg: cfg.withDefaults(), recorder: recorder, logger: logger, now: time.Now,
-		pending: map[string]*pending{}, stop: make(chan struct{}), done: make(chan struct{}),
+		cfg: cfg.withDefaults(), store: store, recorder: recorder, logger: logger, now: time.Now,
+		stop: make(chan struct{}), done: make(chan struct{}),
 	}
 }
 
@@ -172,72 +213,46 @@ func (m *Merger) WithClock(now func() time.Time) *Merger {
 	return m
 }
 
-// Report records one replica's snapshot. It never blocks on the audit write.
-func (m *Merger) Report(report Report) {
-	now := m.now()
-	var flush []Turn
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		m.write([]Turn{merge(report.ExecutionID, &pending{
-			projectID: report.ProjectID, replicas: map[string]Report{report.ReplicaID: report},
-			done: map[string]bool{report.ReplicaID: report.Final || report.ReplicaShutdown}, firstReport: now, lastReport: now,
-		})})
-		return
-	}
-	p, ok := m.pending[report.ExecutionID]
-	if !ok {
-		if len(m.pending) >= m.cfg.MaxPending {
-			flush = append(flush, m.evictOldestLocked())
-		}
-		p = &pending{projectID: report.ProjectID, replicas: map[string]Report{}, done: map[string]bool{}, firstReport: now}
-		m.pending[report.ExecutionID] = p
-	}
-	p.replicas[report.ReplicaID] = report
-	p.done[report.ReplicaID] = report.Final || report.ReplicaShutdown
-	p.lastReport = now
-	if report.TokenExpiresAt.After(p.expiresAt) {
-		p.expiresAt = report.TokenExpiresAt
-	}
-	m.mu.Unlock()
-	m.write(flush)
+// Report stores one replica's snapshot. An error means it was NOT stored; the
+// proxy retries it.
+func (m *Merger) Report(ctx context.Context, report Report) error {
+	return m.store.Upsert(ctx, report, m.now())
 }
 
-func (m *Merger) evictOldestLocked() Turn {
-	var oldestID string
-	var oldest *pending
-	for id, p := range m.pending {
-		if oldest == nil || p.firstReport.Before(oldest.firstReport) {
-			oldestID, oldest = id, p
-		}
+// Sweep claims every turn that is due at now, writes one audit event for
+// each, and (at most once a minute) deletes the rows past retention.
+func (m *Merger) Sweep(ctx context.Context) error {
+	now := m.now()
+	rows, err := m.store.ClaimDue(ctx, now, m.cfg.Settle, m.cfg.MaxHold)
+	if err != nil {
+		return fmt.Errorf("claim due egress turns: %w", err)
 	}
-	delete(m.pending, oldestID)
-	return merge(oldestID, oldest)
+	m.write(mergeRows(rows))
+	return m.expire(ctx, now)
 }
 
-// Sweep writes every turn that is due at now.
-func (m *Merger) Sweep() {
-	now := m.now()
-	var due []Turn
-	m.mu.Lock()
-	for id, p := range m.pending {
-		allDone := true
-		for _, done := range p.done {
-			allDone = allDone && done
-		}
-		settled := allDone && now.Sub(p.lastReport) >= m.cfg.Settle
-		expired := !p.expiresAt.IsZero() && now.Sub(p.expiresAt) >= m.cfg.MaxHold
-		if settled || expired {
-			due = append(due, merge(id, p))
-			delete(m.pending, id)
-		}
+func (m *Merger) expire(ctx context.Context, now time.Time) error {
+	m.retentionMu.Lock()
+	if !m.lastRetention.IsZero() && now.Sub(m.lastRetention) < retentionEvery {
+		m.retentionMu.Unlock()
+		return nil
 	}
-	m.mu.Unlock()
-	m.write(due)
+	m.lastRetention = now
+	m.retentionMu.Unlock()
+	if _, err := m.store.DeleteOlderThan(ctx, now.Add(-m.cfg.Retention)); err != nil {
+		return fmt.Errorf("delete expired egress summaries: %w", err)
+	}
+	return nil
 }
 
 // Start runs the sweep until Close.
 func (m *Merger) Start() {
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+	if m.started {
+		return
+	}
+	m.started = true
 	go func() {
 		defer close(m.done)
 		ticker := time.NewTicker(m.cfg.Tick)
@@ -247,43 +262,55 @@ func (m *Merger) Start() {
 			case <-m.stop:
 				return
 			case <-ticker.C:
-				m.Sweep()
+				ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+				if err := m.Sweep(ctx); err != nil {
+					m.logger.Warn("egress_audit.sweep_failed", "error", err.Error())
+				}
+				cancel()
 			}
 		}
 	}()
 }
 
-// Close stops the sweep and writes every held turn with what it has. A
-// report after Close is written at once, unmerged.
+// Close stops the sweep. It writes nothing: a turn not yet written stays in
+// the store for the next sweep, on this Main replica after a restart or on
+// another.
 func (m *Merger) Close() {
 	m.stopOnce.Do(func() {
 		close(m.stop)
 	})
+	m.startMu.Lock()
+	started := m.started
+	m.startMu.Unlock()
+	if !started {
+		return
+	}
 	select {
 	case <-m.done:
 	case <-time.After(5 * time.Second):
 	}
-	m.mu.Lock()
-	m.closed = true
-	all := make([]Turn, 0, len(m.pending))
-	for id, p := range m.pending {
-		all = append(all, merge(id, p))
+}
+
+// mergeRows groups the claimed rows by execution and merges each group.
+func mergeRows(rows []Row) []Turn {
+	groups := map[string][]Row{}
+	var order []string
+	for _, row := range rows {
+		if _, ok := groups[row.ExecutionID]; !ok {
+			order = append(order, row.ExecutionID)
+		}
+		groups[row.ExecutionID] = append(groups[row.ExecutionID], row)
 	}
-	m.pending = map[string]*pending{}
-	m.mu.Unlock()
-	m.write(all)
+	sort.Strings(order)
+	turns := make([]Turn, 0, len(order))
+	for _, id := range order {
+		turns = append(turns, merge(id, groups[id]))
+	}
+	return turns
 }
 
-// Pending is the number of turns held, for tests and metrics.
-func (m *Merger) Pending() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.pending)
-}
-
-func merge(executionID string, p *pending) Turn {
-	turn := Turn{ExecutionID: executionID, ProjectID: p.projectID, Replicas: len(p.replicas),
-		FirstReport: p.firstReport, LastReport: p.lastReport, Complete: true}
+func merge(executionID string, rows []Row) Turn {
+	turn := Turn{ExecutionID: executionID, Replicas: len(rows), Complete: true}
 	type hp struct {
 		host string
 		port int
@@ -294,13 +321,22 @@ func merge(executionID string, p *pending) Turn {
 	}
 	reached := map[hp]*HostReached{}
 	refused := map[hr]*HostRefused{}
-	for replica, report := range p.replicas {
-		turn.Complete = turn.Complete && p.done[replica]
-		turn.Connections += report.Connections
-		turn.BytesUp += report.BytesUp
-		turn.BytesDown += report.BytesDown
-		turn.OtherHosts += report.OtherHosts
-		for _, h := range report.HostsReached {
+	for i, row := range rows {
+		if i == 0 || row.FirstReport.Before(turn.FirstReport) {
+			turn.FirstReport = row.FirstReport
+		}
+		if row.UpdatedAt.After(turn.LastReport) {
+			turn.LastReport = row.UpdatedAt
+		}
+		if turn.ProjectID == 0 {
+			turn.ProjectID = row.ProjectID
+		}
+		turn.Complete = turn.Complete && (row.Final || row.ReplicaShutdown)
+		turn.Connections += row.Connections
+		turn.BytesUp += row.BytesUp
+		turn.BytesDown += row.BytesDown
+		turn.OtherHosts += row.OtherHosts
+		for _, h := range row.HostsReached {
 			key := hp{h.Host, h.Port}
 			if r, ok := reached[key]; ok {
 				r.Connections += h.Connections
@@ -311,7 +347,7 @@ func merge(executionID string, p *pending) Turn {
 			copied := h
 			reached[key] = &copied
 		}
-		for _, h := range report.HostsRefused {
+		for _, h := range row.HostsRefused {
 			key := hr{hp{h.Host, h.Port}, h.Reason}
 			if r, ok := refused[key]; ok {
 				r.Count += h.Count

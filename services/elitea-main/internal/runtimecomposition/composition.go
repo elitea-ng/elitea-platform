@@ -15,6 +15,7 @@ import (
 	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	egressaudit "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	indexregistryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexregistry"
@@ -172,6 +173,11 @@ type Dependencies struct {
 	// uses). Required when Config.EgressAuditClients is set: the egress
 	// proxy's per-turn summaries are written through it.
 	AuditRecorder audit.Recorder
+	// EgressAuditStore holds the proxy's per-turn summaries, shared by every
+	// Main replica (repos.NewEgressRunSummaries, shared/0169). Required when
+	// Config.EgressAuditClients is set: the summaries are never held in a
+	// replica's memory.
+	EgressAuditStore egressaudit.Store
 }
 
 func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtime, error) {

@@ -3,7 +3,9 @@ package runtimecomposition
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
@@ -19,8 +21,27 @@ const EgressAuditClientsEnv = "ELITEA_EGRESS_AUDIT_CLIENTS"
 
 const maxEgressAuditClients = 16
 
+// EgressAuditRetentionEnv is how many days the stored per-turn egress
+// summaries are kept (default 7, 1 to 365).
+const EgressAuditRetentionEnv = "ELITEA_EGRESS_AUDIT_RETENTION_DAYS"
+
+func egressAuditRetention(lookup LookupEnv) (time.Duration, error) {
+	raw, _ := lookup(EgressAuditRetentionEnv)
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil || days < 1 || days > 365 {
+		return 0, errors.New(EgressAuditRetentionEnv + " is a whole number of days from 1 to 365")
+	}
+	return time.Duration(days) * 24 * time.Hour, nil
+}
+
 // newEgressAudit builds the service and its merger when clients are
-// configured. The merger writes through Dependencies.AuditRecorder.
+// configured. The merger keeps the proxy's summaries in
+// Dependencies.EgressAuditStore (shared by every Main replica) and writes the
+// turn's event through Dependencies.AuditRecorder.
 func newEgressAudit(config Config, dependencies Dependencies) (*egressaudit.Server, *app.Merger, error) {
 	if len(config.EgressAuditClients) == 0 {
 		return nil, nil, nil
@@ -28,7 +49,11 @@ func newEgressAudit(config Config, dependencies Dependencies) (*egressaudit.Serv
 	if dependencies.AuditRecorder == nil {
 		return nil, nil, errors.New(EgressAuditClientsEnv + " is set, but no audit recorder is composed")
 	}
-	merger := app.New(dependencies.AuditRecorder, dependencies.Logger, app.Config{})
+	if dependencies.EgressAuditStore == nil {
+		return nil, nil, errors.New(EgressAuditClientsEnv + " is set, but no egress summary store is composed")
+	}
+	merger := app.New(dependencies.EgressAuditStore, dependencies.AuditRecorder, dependencies.Logger,
+		app.Config{Retention: config.EgressAuditRetention})
 	server, err := egressaudit.NewServer(merger, config.EgressAuditClients)
 	if err != nil {
 		return nil, nil, fmt.Errorf("construct the egress audit service: %w", err)

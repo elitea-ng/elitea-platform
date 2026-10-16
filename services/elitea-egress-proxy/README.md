@@ -246,17 +246,28 @@ scraping and no internal REST.
   needs no restart.
 - **Merge.** A report is a cumulative snapshot of one replica's view of one
   run, keyed by the pod name (`ELITEA_EGRESS_PROXY_REPLICA_ID`). elitea-main
-  keeps the latest snapshot per replica, so a retried report never counts
-  twice, and writes ONE audit event per turn (`event_type` `tool`,
-  `entity_type` `execution`, the execution id as the entity name, the hosts
-  reached and refused in the action) when every replica it heard from has
-  sent `final` or `replica_shutdown` and 30 seconds passed, or 10 minutes
-  after the token expired (a crashed replica's last snapshot is used, and the
-  event says `partial`), or when elitea-main stops. The whole merged summary
-  is also logged as `egress_audit.turn_summary`.
-- **Several elitea-main replicas.** The merge is in memory, so proxy replicas
-  whose connections landed on different elitea-main replicas produce one
-  event each, over disjoint proxy replicas; the counts never double.
+  upserts it into `elitea_runtime.egress_run_summaries` (one row per
+  execution and proxy replica; shared migration 0169), so a retried report
+  never counts twice. Every elitea-main replica sweeps that table and writes
+  ONE audit event per turn (`event_type` `tool`, `entity_type` `execution`,
+  the execution id as the entity name, the hosts reached and refused in the
+  action) when every replica that reported has sent `final` or
+  `replica_shutdown` and 30 seconds passed, or 10 minutes after the token
+  expired (a crashed replica's last snapshot is used, and the event says
+  `partial`). The whole merged summary is also logged as
+  `egress_audit.turn_summary`. If elitea-main cannot store a report it
+  answers `UNAVAILABLE` and the proxy retries.
+- **Several elitea-main replicas, and restarts.** The summaries are in the
+  database, not in a replica's memory. A proxy replica's reports may land on
+  any elitea-main replica; whichever sweeps a due turn first claims it with
+  one `UPDATE ... RETURNING` and is the only one that writes its event. A
+  restart of elitea-main loses nothing that was reported: the next sweep, on
+  any replica, finishes the turn. (An elitea-main that dies between claiming
+  a turn and recording its event loses that one event; the merged summary is
+  still in the proxy's log.) A report for a turn that was already written
+  (a resumed turn reuses the execution id with a new token) starts a new
+  event. Rows are deleted 7 days after their last report
+  (`ELITEA_EGRESS_AUDIT_RETENTION_DAYS` on elitea-main, 1 to 365).
 - **Never in the way.** Reporting is a non-blocking queue (1024 summaries)
   with three tries per summary. A summary that cannot be delivered is
   counted (`egress_proxy_audit_reports_dropped`) and stays in this log. At

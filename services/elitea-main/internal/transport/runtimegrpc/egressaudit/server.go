@@ -33,9 +33,10 @@ const (
 	maxReasonBytes = 64
 )
 
-// Reporter receives validated reports (*app.Merger).
+// Reporter stores validated reports (*app.Merger). An error means the report
+// was not stored; the service answers UNAVAILABLE and the proxy retries.
 type Reporter interface {
-	Report(app.Report)
+	Report(context.Context, app.Report) error
 }
 
 // Server is the audit service.
@@ -78,7 +79,9 @@ func (s *Server) ReportRunSummary(ctx context.Context, request *runtimev1.Report
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	s.reporter.Report(report)
+	if err := s.reporter.Report(ctx, report); err != nil {
+		return nil, status.Error(codes.Unavailable, "The summary could not be stored; retry.")
+	}
 	return &runtimev1.ReportRunSummaryResponseV1{}, nil
 }
 

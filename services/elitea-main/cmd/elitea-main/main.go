@@ -1845,6 +1845,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// The egress proxy's per-turn summaries (ELITEA_EGRESS_AUDIT_CLIENTS)
 			// go to the same audit trail as the API's.
 			AuditRecorder: auditRecorder,
+			// ...and their per-turn summaries live in the database, so every
+			// Main replica merges the same rows and one writes the event.
+			EgressAuditStore: dbrepos.NewEgressRunSummaries(pool),
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)
