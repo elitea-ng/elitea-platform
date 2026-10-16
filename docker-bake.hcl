@@ -112,6 +112,19 @@ target "elitea-subapp-host" {
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
+# The egress proxy (ADR-0034 decision 9): the host-allowlist boundary for
+# cloud-executor sandboxes. Repo-root context, because the module replaces
+# libs/go/egresslib; standard library otherwise.
+target "elitea-egress-proxy" {
+  context    = "."
+  dockerfile = "services/elitea-egress-proxy/Containerfile"
+  target     = "final"
+  tags       = ["${REGISTRY}/elitea-egress-proxy:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-egress-proxy-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-egress-proxy-linux-amd64,ignore-error=true"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
 # The Rust-native DeepWiki engine (ADR-0026), the only engine sidecar the
 # chart runs (`deepwiki.engine.runner: native` or `fixture`). One binary on
 # distroless base-nossl-debian13 plus libgcc_s, built with cargo-auditable.
