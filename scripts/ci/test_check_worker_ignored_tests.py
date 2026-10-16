@@ -21,9 +21,9 @@ jobs:
         run: cargo test --locked --lib --all-features sandbox::docker_supervisor::deadline_tests -- --ignored
       - name: Postgres-only
         run: |
-          cargo test --locked --lib --all-features \\
+          cargo test --locked --lib --all-features -- --ignored --skip sandbox_supervisor_ \\
             state::postgres_checkpointer_tests:: \\
-            agents::graph:: -- --ignored --skip sandbox_supervisor_
+            agents::graph::
       - name: Exact
         run: cargo test --locked --lib --all-features -p worker one::exact -- --ignored --exact  # comment
 """
@@ -106,6 +106,12 @@ class IgnoredTestGuard(unittest.TestCase):
         code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
         self.assertEqual(code, 1)
         self.assertIn("unrun::test is #[ignore]", out)
+
+    def test_two_cargo_test_names_are_refused(self):
+        workflow = "run: cargo test --lib a:: b:: -- --ignored\n" + WORKFLOW
+        with self.assertRaises(SystemExit) as raised:
+            run(workflow=workflow)
+        self.assertIn("cargo takes one test name before `--`", str(raised.exception))
 
     def test_a_stale_allowlist_entry_fails(self):
         code, out = run(allow=ALLOW + "gone::test  # used to run manually somewhere else\n")

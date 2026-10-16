@@ -100,6 +100,7 @@ def parse_invocations(text: str, source: str) -> list[Invocation]:
             raise SystemExit(f"{source}: cannot parse {command!r}: {error}") from error
         tokens = tokens[2:]
         invocation = Invocation(source=f"{source}: {command.strip()}")
+        cargo_names = 0
         libtest = False
         index = 0
         while index < len(tokens):
@@ -119,7 +120,12 @@ def parse_invocations(text: str, source: str) -> list[Invocation]:
                 pass
             else:
                 invocation.filters.append(token)
+                cargo_names += 0 if libtest else 1
             index += 1
+        if cargo_names > 1:
+            # cargo refuses this ("unexpected argument"), so it selects nothing.
+            raise SystemExit(f"{source}: cargo takes one test name before `--`; put the "
+                             f"other filters after it: {command.strip()}")
         # `-- --list --ignored` enumerates the tests (this check's own input); it runs none.
         if "--list" in tokens:
             continue

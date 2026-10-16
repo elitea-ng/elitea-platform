@@ -328,20 +328,20 @@ jobs:
       # dispatch journal, workspace receipts, direct-tool journal, run-root
       # fencing and the sandbox receipt fixtures in postgres_checkpointer_tests.
       # `--skip sandbox_supervisor_` leaves the three Docker cases to the step
-      # below.
+      # below. The filters go after `--`: cargo takes ONE test name, libtest
+      # takes any number.
       - name: Verify Code owner recovery and journals with PostgreSQL
         env:
           ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
           ELITEA_CODE_OWNER_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/agentstate_code_owner?sslmode=disable"
           ELITEA_TEST_WORKSPACE_POSTGRES_REQUIRED: "1"
         run: |
-          cargo test --locked --lib --all-features \
+          cargo test --locked --lib --all-features -- --ignored --skip sandbox_supervisor_ \
             agents::graph::node_recovery_runtime::tests::code_owner_tests:: \
             sandbox::ledger::code_recovery::tests:: \
             sandbox::docker_supervisor::code_recovery_cleanup::tests:: \
             sandbox::ledger::workspace::postgres_tests:: \
-            state::postgres_checkpointer_tests:: \
-            -- --ignored --skip sandbox_supervisor_
+            state::postgres_checkpointer_tests::
 
       # The three sandbox_supervisor_* tests drive real containers through the
       # Docker supervisor. They need a code runner image by ID: the
