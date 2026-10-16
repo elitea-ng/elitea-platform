@@ -2863,6 +2863,7 @@ fn invalid_arguments() -> AdkError {
 pub(crate) fn tool_catalog() -> Vec<(&'static str, bool)> {
     CarrierToolKind::ALL
         .iter()
+        .filter(|kind| cfg!(feature = "toolkit-office") || !kind.needs_spreadsheet())
         .map(|kind| (kind.name(), kind.needs_spreadsheet()))
         .collect()
 }

@@ -1244,6 +1244,13 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if h.refuseBlockedToolkitType(w, r, "create_toolkit", createdType) {
 		return
 	}
+	// A create with no settings at all has no bucket either (review S2): a
+	// file-store toolkit is judged as if it sent empty settings. An update
+	// without settings is a rename and stays unjudged.
+	if _, hasSettings := body["settings"].(map[string]any); !hasSettings &&
+		h.refuseMissingToolkitBucket(w, "create_toolkit", createdType, map[string]any{}) {
+		return
+	}
 	// The credential gate, between the type refusal and the write, so a refused
 	// save persists nothing. validateToolkitCreate above only checks that a
 	// github body NAMES a `github_configuration` key; this is the only thing on

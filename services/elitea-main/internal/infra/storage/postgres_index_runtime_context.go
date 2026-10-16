@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -57,15 +58,70 @@ func (r *PostgresContentRepository) AuthorizeAgentRuntimeContext(
 // person reaches, through the same per-bucket access list. Writes and deletes
 // stay agent-only: the direct path runs read-only tools alone, and these
 // routes are where that is enforced for the platform side too.
+//
+// Only a tool run OF AN ARTIFACT TOOLKIT is admitted: the worker lends the
+// artifact read routes to that family alone, so a run of any other toolkit
+// (a github or jira tool test) has no business reading a bucket. The job row
+// records no toolkit, so the toolkit is resolved server-side: the run's
+// frozen settings entry (written by Main at admission from the project's
+// elitea_tools row, never from the request) names its id, and that id must
+// be a live `artifact` toolkit of the claimed project.
 func (r *PostgresContentRepository) AuthorizeArtifactReadRuntimeContext(
 	ctx context.Context,
 	claim ContentClaim,
 ) (RuntimeContextAuthorization, error) {
-	return r.authorizeRuntimeContext(ctx, claim, artifactReadRuntimeContextCapabilityFilter)
+	authorization, err := r.authorizeRuntimeContext(ctx, claim, artifactReadRuntimeContextCapabilityFilter)
+	if err != nil {
+		return RuntimeContextAuthorization{}, err
+	}
+	// The frozen toolkit of a tool run; an agent turn joins no such entry.
+	var toolkitID int64
+	var toolRun bool
+	err = r.store.QueryRow(ctx, `
+SELECT j.capability_id = 'toolkit.call_tool.v1',
+       COALESCE((
+           SELECT CASE
+                      WHEN convert_from(e.content_bytes, 'UTF8')::jsonb ->> 'type' = 'artifact'
+                      THEN (convert_from(e.content_bytes, 'UTF8')::jsonb ->> 'id')::bigint
+                  END
+           FROM elitea_runtime.input_bundle_entries AS e
+           WHERE e.input_bundle_id = j.input_bundle_id
+             AND e.semantic_role = 'toolkit.call_tool.settings'
+       ), 0)
+FROM elitea_runtime.execution_jobs AS j
+WHERE j.execution_id = $1 AND j.generation = $2`,
+		claim.ExecutionID, claim.Generation,
+	).Scan(&toolRun, &toolkitID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RuntimeContextAuthorization{}, ErrContentUnauthorized
+	}
+	if err != nil {
+		return RuntimeContextAuthorization{}, fmt.Errorf("authorize artifact read: resolve the tool run's toolkit: %w", err)
+	}
+	if !toolRun {
+		return authorization, nil
+	}
+	if toolkitID <= 0 {
+		return RuntimeContextAuthorization{}, ErrContentUnauthorized
+	}
+	schema := pgx.Identifier{"p_" + strconv.FormatInt(authorization.ResourceProjectID, 10)}.Sanitize()
+	var artifact bool
+	err = r.store.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM `+schema+`.elitea_tools WHERE id = $1 AND type = 'artifact')`,
+		toolkitID,
+	).Scan(&artifact)
+	if err != nil {
+		return RuntimeContextAuthorization{}, fmt.Errorf("authorize artifact read: resolve the toolkit: %w", err)
+	}
+	if !artifact {
+		return RuntimeContextAuthorization{}, ErrContentUnauthorized
+	}
+	return authorization, nil
 }
 
 // artifactReadRuntimeContextCapabilityFilter is the agent filter plus the
-// interactive tool-run shape; like it, it binds no parameter.
+// interactive tool-run shape; like it, it binds no parameter. The tool run's
+// toolkit is checked after it (AuthorizeArtifactReadRuntimeContext).
 const artifactReadRuntimeContextCapabilityFilter = `
   AND (
       j.capability_id IN (

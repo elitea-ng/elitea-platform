@@ -295,6 +295,14 @@ type AttachmentListingSource interface {
 	) ([]RuntimeArtifactRecord, bool, error)
 }
 
+// RuntimeSystemBucketSource says whether a bucket of the project is a SYSTEM
+// bucket (`bucket_type = 'system'`: the chat attachment bucket, the index
+// result bucket, ...). A source without it serves no named-bucket route: the
+// system-bucket refusal below cannot be applied, so nothing is served.
+type RuntimeSystemBucketSource interface {
+	RuntimeBucketIsSystem(ctx context.Context, projectID int64, bucket string) (bool, error)
+}
+
 // ArtifactReadRuntimeContextAuthorizer authorizes the two artifact READ
 // routes for an agent turn OR an interactive toolkit tool run (see
 // PostgresContentRepository.AuthorizeArtifactReadRuntimeContext). An
@@ -332,36 +340,72 @@ type runtimeArtifactPrincipal struct {
 	actorID   int64
 }
 
-// authorize runs the shared half of all four calls: the agent-scoped claim
-// check, the project identity, and the actor identity the access list is
-// about. It returns nothing else, so no caller can accidentally read a
-// request-supplied value in place of one of them.
-func (service *RuntimeArtifactObjectService) authorize(
-	ctx context.Context,
-	claim ContentClaim,
-	stage string,
-) (runtimeArtifactPrincipal, error) {
-	_, principal, err := service.authorizeWithConversation(ctx, claim, stage)
-	return principal, err
-}
-
-// authorizeRead is authorize for a named-bucket listing and a read: the same
+// authorizeRead is authorizeWithConversation for a named-bucket listing and a
+// read: the same
 // project, actor and access list, from a claim that may also be a user's
 // toolkit tool run when the authorizer admits one.
 func (service *RuntimeArtifactObjectService) authorizeRead(
 	ctx context.Context,
 	claim ContentClaim,
 	stage string,
-) (runtimeArtifactPrincipal, error) {
+) (RuntimeContextAuthorization, runtimeArtifactPrincipal, error) {
 	if service == nil {
-		return service.authorize(ctx, claim, stage)
+		return service.authorizeWithConversation(ctx, claim, stage)
 	}
 	reads, ok := service.authorizer.(ArtifactReadRuntimeContextAuthorizer)
 	if !ok {
-		return service.authorize(ctx, claim, stage)
+		return service.authorizeWithConversation(ctx, claim, stage)
 	}
-	_, principal, err := service.authorizeClaim(ctx, claim, stage, reads.AuthorizeArtifactReadRuntimeContext)
-	return principal, err
+	return service.authorizeClaim(ctx, claim, stage, reads.AuthorizeArtifactReadRuntimeContext)
+}
+
+// refuseSystemBucket is the named-bucket routes' system-bucket rule (review
+// S1). A system bucket is the platform's own (chat attachments, index
+// results), not a bucket a person made, and the per-bucket access list was
+// never written for it: by name, a claim reaches none of it. The ONE
+// exception is a read of the claim's own conversation's attachment, by its
+// `/{attachment bucket}/{conversation}/{file}` path, which is what the model
+// is shown for each attachment of the turn: exactly the scoping the
+// attachment object route applies (conversationScopedAttachmentKey). Listing
+// a conversation's attachments goes through the bucketless listing.
+func (service *RuntimeArtifactObjectService) refuseSystemBucket(
+	ctx context.Context,
+	authorization RuntimeContextAuthorization,
+	principal runtimeArtifactPrincipal,
+	bucket string,
+	readKey string,
+	stage string,
+) error {
+	source, ok := service.artifacts.(RuntimeSystemBucketSource)
+	if !ok {
+		return ErrContentUnauthorized
+	}
+	system, err := source.RuntimeBucketIsSystem(ctx, principal.projectID, bucket)
+	if err != nil {
+		return service.sourceError(ctx, err, stage)
+	}
+	if !system {
+		return nil
+	}
+	if readKey == "" || !canonicalConversationIdentity(authorization.ConversationID) ||
+		!conversationScopedAttachmentKey(authorization.ConversationID, readKey) {
+		return ErrContentUnauthorized
+	}
+	attachments, ok := service.artifacts.(AttachmentListingSource)
+	if !ok {
+		return ErrContentUnauthorized
+	}
+	attachmentBucket, err := attachments.AttachmentBucket(ctx, principal.projectID)
+	if err != nil {
+		return service.sourceError(ctx, err, stage)
+	}
+	if attachmentBucket == "" {
+		attachmentBucket = DefaultAttachmentBucket
+	}
+	if bucket != attachmentBucket {
+		return ErrContentUnauthorized
+	}
+	return nil
 }
 
 func (service *RuntimeArtifactObjectService) authorizeWithConversation(
@@ -443,8 +487,13 @@ func (service *RuntimeArtifactObjectService) List(
 	if !addressableAttachmentBucket(bucket) || !addressableArtifactPrefix(prefix) {
 		return RuntimeArtifactListContext{}, ErrContentRejected
 	}
-	principal, err := service.authorizeRead(ctx, claim, runtimeContextStageArtifactList)
+	authorization, principal, err := service.authorizeRead(ctx, claim, runtimeContextStageArtifactList)
 	if err != nil {
+		return RuntimeArtifactListContext{}, err
+	}
+	if err := service.refuseSystemBucket(
+		ctx, authorization, principal, bucket, "", runtimeContextStageArtifactList,
+	); err != nil {
 		return RuntimeArtifactListContext{}, err
 	}
 	records, truncated, err := service.artifacts.ListRuntimeArtifacts(
@@ -550,8 +599,13 @@ func (service *RuntimeArtifactObjectService) Read(
 	if !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
 		return RuntimeArtifactReadContext{}, ErrContentNotFound
 	}
-	principal, err := service.authorizeRead(ctx, claim, runtimeContextStageArtifactRead)
+	authorization, principal, err := service.authorizeRead(ctx, claim, runtimeContextStageArtifactRead)
 	if err != nil {
+		return RuntimeArtifactReadContext{}, err
+	}
+	if err := service.refuseSystemBucket(
+		ctx, authorization, principal, bucket, name, runtimeContextStageArtifactRead,
+	); err != nil {
 		return RuntimeArtifactReadContext{}, err
 	}
 	record, err := service.artifacts.ReadRuntimeArtifact(
@@ -620,8 +674,13 @@ func (service *RuntimeArtifactObjectService) Write(
 		utf8.RuneCountInString(content) > maxRuntimeArtifactWriteChars {
 		return RuntimeArtifactWriteContext{}, ErrContentRejected
 	}
-	principal, err := service.authorize(ctx, claim, runtimeContextStageArtifactWrite)
+	authorization, principal, err := service.authorizeWithConversation(ctx, claim, runtimeContextStageArtifactWrite)
 	if err != nil {
+		return RuntimeArtifactWriteContext{}, err
+	}
+	if err := service.refuseSystemBucket(
+		ctx, authorization, principal, bucket, "", runtimeContextStageArtifactWrite,
+	); err != nil {
 		return RuntimeArtifactWriteContext{}, err
 	}
 	record, err := service.artifacts.WriteRuntimeArtifact(
@@ -651,8 +710,13 @@ func (service *RuntimeArtifactObjectService) Delete(
 	if !addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
 		return RuntimeArtifactDeleteContext{}, ErrContentNotFound
 	}
-	principal, err := service.authorize(ctx, claim, runtimeContextStageArtifactDelete)
+	authorization, principal, err := service.authorizeWithConversation(ctx, claim, runtimeContextStageArtifactDelete)
 	if err != nil {
+		return RuntimeArtifactDeleteContext{}, err
+	}
+	if err := service.refuseSystemBucket(
+		ctx, authorization, principal, bucket, "", runtimeContextStageArtifactDelete,
+	); err != nil {
 		return RuntimeArtifactDeleteContext{}, err
 	}
 	if err := service.artifacts.DeleteRuntimeArtifact(

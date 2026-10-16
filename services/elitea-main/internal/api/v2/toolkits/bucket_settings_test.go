@@ -45,6 +45,27 @@ func TestAFileStoreToolkitIsNotSavedWithoutABucket(t *testing.T) {
 	}
 }
 
+// Review S2: a create that sends no settings at all is a missing bucket too.
+func TestAFileStoreToolkitCreatedWithoutSettingsIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ toolkitType, field string }{
+		{"pptx", "bucket_name"}, {"docx", "bucket_name"}, {"xlsx", "bucket_name"}, {"artifact", "bucket"},
+	} {
+		repo := &defaultsRecordingRepo{storedType: tc.toolkitType}
+		router := newDefaultsRouter(t, repo)
+		for _, payload := range []string{
+			`{"name": "kit", "type": "` + tc.toolkitType + `"}`,
+			`{"name": "kit", "type": "` + tc.toolkitType + `", "settings": null}`,
+		} {
+			assertMissingBucket(t, postToolkit(t, router, payload), tc.toolkitType+" create "+payload, tc.field)
+		}
+		if len(repo.creates) != 0 {
+			t.Fatalf("%s: a refused create was written", tc.toolkitType)
+		}
+	}
+}
+
 func TestAFileStoreToolkitWithABucketSaves(t *testing.T) {
 	t.Parallel()
 

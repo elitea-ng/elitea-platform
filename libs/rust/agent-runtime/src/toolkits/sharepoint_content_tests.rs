@@ -293,7 +293,7 @@ fn client(graph: &Arc<FakeGraph>) -> Arc<dyn SharePointApi> {
 
 /// The Office host of the tests: artifacts in a map, and a document reader
 /// that returns the bytes as text unless told to fail.
-struct FakeHost {
+pub(super) struct FakeHost {
     objects: Mutex<BTreeMap<(String, String), Vec<u8>>>,
     read_failure: Mutex<Option<OfficeFailure>>,
     extraction_failure: Mutex<Option<TextExtractionFailure>>,
@@ -303,7 +303,7 @@ struct FakeHost {
 }
 
 impl FakeHost {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             objects: Mutex::new(BTreeMap::new()),
             read_failure: Mutex::new(None),
@@ -321,7 +321,7 @@ impl FakeHost {
         self
     }
 
-    fn shared(self: &Arc<Self>) -> SharedOfficeToolHost {
+    pub(super) fn shared(self: &Arc<Self>) -> SharedOfficeToolHost {
         self.clone()
     }
 }
@@ -2759,11 +2759,14 @@ async fn a_missing_token_keeps_every_new_tool_behind_the_authorization_guard() {
         &serde_json::Map::new(),
     )
     .expect("guarded configuration");
+    // The readers and the upload act through the Office host (review C2: they
+    // are left out without one), so the guard is proven with a host lent.
+    let host = FakeHost::new().shared();
     let materialized = super::families::sharepoint::tools::build_sharepoint_toolset(
         "Project SharePoint",
         config,
         &policy(&[]),
-        None,
+        Some(&host),
     )
     .expect("guarded tools");
     assert_eq!(materialized.delegated_authorization.tool_names().count(), 5);

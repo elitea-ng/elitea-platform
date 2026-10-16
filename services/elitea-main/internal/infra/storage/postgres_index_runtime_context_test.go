@@ -166,6 +166,7 @@ func TestPostgresRuntimeContextAuthorizationIntegration(t *testing.T) {
     resource_project_id INTEGER NOT NULL,
     actor_id TEXT NOT NULL,
     principal_ref TEXT NOT NULL DEFAULT '',
+    input_bundle_id TEXT NOT NULL DEFAULT '',
     desired_state TEXT NOT NULL,
     capability_id TEXT NOT NULL,
     PRIMARY KEY (execution_id, generation)
@@ -255,15 +256,40 @@ VALUES ('claim-agent', 'execution-agent', 1, 'session-1', $1, 'producer-1', $2, 
 	// Tool runs: one in the shape toolkitcalltool.Service writes (actor and
 	// principal the requesting user's id), and three that are not a user's
 	// run — a system actor, a principal that is not the actor, a zero id.
-	for _, job := range []struct{ id, actor, principal string }{
-		{"execution-tool", "17", "17"},
-		{"execution-tool-system", "system", "system"},
-		{"execution-tool-mismatch", "17", "18"},
-		{"execution-tool-zero", "0", "0"},
+	// The tool run's frozen toolkit (its settings entry) and the project's
+	// live toolkits, which the artifact read authorization resolves.
+	for _, statement := range []string{
+		`CREATE TABLE elitea_runtime.input_bundle_entries (
+    input_bundle_id TEXT NOT NULL,
+    semantic_role TEXT NOT NULL,
+    content_bytes BYTEA NOT NULL
+)`,
+		`CREATE SCHEMA p_42`,
+		`CREATE TABLE p_42.elitea_tools (id BIGINT PRIMARY KEY, type TEXT NOT NULL)`,
+		`INSERT INTO p_42.elitea_tools VALUES (5, 'artifact'), (6, 'github')`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, job := range []struct{ id, actor, principal, frozen string }{
+		{"execution-tool", "17", "17", `{"id": 5, "type": "artifact"}`},
+		{"execution-tool-system", "system", "system", `{"id": 5, "type": "artifact"}`},
+		{"execution-tool-mismatch", "17", "18", `{"id": 5, "type": "artifact"}`},
+		{"execution-tool-zero", "0", "0", `{"id": 5, "type": "artifact"}`},
+		// A tool run of a non-artifact toolkit, and one whose frozen entry
+		// claims artifact for a toolkit the project holds as github.
+		{"execution-tool-github", "17", "17", `{"id": 6, "type": "github"}`},
+		{"execution-tool-forged", "17", "17", `{"id": 6, "type": "artifact"}`},
 	} {
 		if _, err := pool.Exec(ctx, `INSERT INTO elitea_runtime.execution_jobs
-    (execution_id, generation, resource_project_id, actor_id, principal_ref, desired_state, capability_id)
-VALUES ($1, 1, 42, $2, $3, 'RUNNING', 'toolkit.call_tool.v1')`, job.id, job.actor, job.principal); err != nil {
+    (execution_id, generation, resource_project_id, actor_id, principal_ref, desired_state, capability_id, input_bundle_id)
+VALUES ($1, 1, 42, $2, $3, 'RUNNING', 'toolkit.call_tool.v1', 'bundle-' || $1)`, job.id, job.actor, job.principal); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO elitea_runtime.input_bundle_entries
+    (input_bundle_id, semantic_role, content_bytes)
+VALUES ('bundle-' || $1, 'toolkit.call_tool.settings', convert_to($2, 'UTF8'))`, job.id, job.frozen); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `INSERT INTO elitea_runtime.execution_claims
@@ -298,6 +324,13 @@ VALUES ($1, $1, 1, 'session-1', $2, 'producer-1', $3, clock_timestamp() + interv
 	for _, id := range []string{"execution-tool-system", "execution-tool-mismatch", "execution-tool-zero"} {
 		_, err := repository.AuthorizeArtifactReadRuntimeContext(ctx, toolClaim(id))
 		require.ErrorIs(t, err, ErrContentUnauthorized, "%s is not a user's tool run", id)
+	}
+	// Only an artifact toolkit's run reads a bucket (review C5).
+	for _, id := range []string{"execution-tool-github", "execution-tool-forged"} {
+		_, err := repository.AuthorizeRuntimeContext(ctx, toolClaim(id))
+		require.NoError(t, err, "%s is a user's tool run", id)
+		_, err = repository.AuthorizeArtifactReadRuntimeContext(ctx, toolClaim(id))
+		require.ErrorIs(t, err, ErrContentUnauthorized, "%s is not an artifact toolkit's run", id)
 	}
 	_, err = repository.AuthorizeArtifactReadRuntimeContext(ctx, ContentClaim{
 		PeerCertificate: certificateWithURI(identity), ExecutionID: "execution-1",

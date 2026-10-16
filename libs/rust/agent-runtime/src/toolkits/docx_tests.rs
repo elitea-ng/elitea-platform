@@ -1059,7 +1059,7 @@ async fn an_office_toolkit_without_a_bucket_is_left_out_not_fatal() {
         ArtifactToolAuthority::new(platform).with_office(Arc::clone(&host) as SharedOfficeToolHost);
     let version = json!({"tools": [
         {"id": 1, "type": "docx", "toolkit_name": "nobucket",
-         "settings": {"selected_tools": ["read_document"]}},
+         "settings": {"selected_tools": ["read_document", "not_a_docx_tool"]}},
         {"id": 2, "type": "xlsx", "toolkit_name": "blank",
          "settings": {"bucket_name": "  "}},
         {"id": 3, "type": "pptx", "toolkit_name": "deck",
@@ -1090,6 +1090,17 @@ async fn an_office_toolkit_without_a_bucket_is_left_out_not_fatal() {
         .map(|toolkit| toolkit.toolkit_name().to_owned())
         .collect();
     assert_eq!(refused, ["nobucket", "blank", "files"]);
+    // Review C3: a REFUSED toolkit is named once, at toolkit level; the
+    // tools it selected (served or not) get no per-tool lines of their own.
+    assert!(
+        materialized
+            .left_out
+            .iter()
+            .filter(|toolkit| toolkit.toolkit_name() == "nobucket")
+            .all(|toolkit| toolkit.tool_name().is_none()),
+        "{:?}",
+        materialized.left_out
+    );
     let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
     assert!(
         notice.contains("toolkit 'nobucket' (docx) is not enabled on this worker: the toolkit has no usable bucket"),

@@ -448,4 +448,29 @@ VALUES ($1, $2, $3, '{}'::text[])`, project, blocked, bucketName); err != nil {
 	}); !errors.Is(err, storage.ErrContentUnauthorized) {
 		t.Fatalf("a refused claim's list err = %v, want ErrContentUnauthorized", err)
 	}
+
+	// Review S1: a SYSTEM bucket (the chat attachment bucket) is not reached
+	// by name, whatever the access list says; the row's bucket_type decides.
+	if _, err := buckets.CreateBucket(ctx, NewBucketInput{
+		ProjectID: project, Name: storage.DefaultAttachmentBucket,
+		DisplayName: storage.DefaultAttachmentBucket, BucketType: "system",
+	}); err != nil {
+		t.Fatalf("create the attachment bucket: %v", err)
+	}
+	if system, err := source.RuntimeBucketIsSystem(ctx, project, storage.DefaultAttachmentBucket); err != nil || !system {
+		t.Fatalf("the attachment bucket is system = %v, %v", system, err)
+	}
+	if system, err := source.RuntimeBucketIsSystem(ctx, project, bucketName); err != nil || system {
+		t.Fatalf("a user bucket is system = %v, %v", system, err)
+	}
+	if _, err := service.List(ctx, claim, storage.RuntimeArtifactListRequest{
+		Bucket: storage.DefaultAttachmentBucket,
+	}); !errors.Is(err, storage.ErrContentUnauthorized) {
+		t.Fatalf("a system bucket listing err = %v, want ErrContentUnauthorized", err)
+	}
+	if _, err := service.Write(ctx, claim, storage.RuntimeArtifactWriteRequest{
+		Bucket: storage.DefaultAttachmentBucket, Name: "x/notes.txt", Content: "x",
+	}); !errors.Is(err, storage.ErrContentUnauthorized) {
+		t.Fatalf("a system bucket write err = %v, want ErrContentUnauthorized", err)
+	}
 }

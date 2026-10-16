@@ -593,10 +593,16 @@ async fn materialize_all(
         // serve) is left out alone: the toolkit's index tools, which depend
         // on none of the family's settings, are still served (review round
         // 2). Without an index toolset such a toolkit is omitted as before.
-        // Whether the family half was built or refused for a setting: either
-        // way the stored selection's unserved tools are named in the notice.
+        // The selection's unserved tools are reported for a built family or
+        // stand-alone index tools; a REFUSED toolkit only at toolkit level (C3).
         let mut report_selection = false;
-        let family = if index_toolset.is_some() && index_tools_stand_alone(reference, artifacts)? {
+        let stand_alone = index_toolset
+            .as_ref()
+            .map(|_| index_tools_stand_alone(reference, artifacts))
+            .transpose()?
+            .flatten();
+        let family = if let Some(selection_index_only) = stand_alone {
+            report_selection = selection_index_only;
             None
         } else {
             match materialize(reference, policy, delegated_tokens, artifacts).await {
@@ -607,43 +613,10 @@ async fn materialize_all(
                     report_selection = true;
                     Some(toolset)
                 }
-                Err(ToolsetMaterializationError {
-                    refusal: Some(setting),
-                    ..
-                }) => {
-                    report_selection = true;
-                    tracing::warn!(
-                        event = "agent_toolkit_refused",
-                        reason_code = "unsupported_setting",
-                        toolkit_type = reference.tool_type(),
-                        toolkit_id = reference.tool_id(),
-                        reason = setting.reason(),
-                        index_tools_kept = index_toolset.is_some(),
-                        "agent toolkit configuration asks for a setting this runtime refuses; the toolkit's own tools were left out"
-                    );
-                    on_refused(reference, ToolkitSkip::Setting(setting));
+                Err(error) => {
+                    leave_family_out(reference, error, index_toolset.is_some(), on_refused)?;
                     None
                 }
-                Err(error)
-                    if error.code() == ToolsetMaterializationErrorCode::UnsupportedToolkit =>
-                {
-                    tracing::warn!(
-                        event = "agent_toolkit_skipped",
-                        reason_code = "unsupported_toolkit_family",
-                        toolkit_type = reference.tool_type(),
-                        toolkit_id = reference.tool_id(),
-                        index_tools_kept = index_toolset.is_some(),
-                        "agent toolkit is unavailable in this runtime and its own tools were omitted from the native toolsets"
-                    );
-                    on_refused(
-                        reference,
-                        ToolkitSkip::UnsupportedFamily {
-                            index_tools_kept: index_toolset.is_some(),
-                        },
-                    );
-                    None
-                }
-                Err(error) => return Err(error),
             }
         };
         if report_selection {
@@ -674,6 +647,45 @@ async fn materialize_all(
         delegated_authorization,
         left_out: Vec::new(),
     })
+}
+
+/// Report a family half that was not built: refused for a setting (named to
+/// the run) or skipped as unsupported. Any other failure fails the run.
+fn leave_family_out(
+    reference: &FrozenToolReference<'_>,
+    error: ToolsetMaterializationError,
+    index_tools_kept: bool,
+    on_refused: &mut (dyn FnMut(&FrozenToolReference<'_>, ToolkitSkip<'_>) + Send),
+) -> Result<(), ToolsetMaterializationError> {
+    if let Some(setting) = error.refusal {
+        tracing::warn!(
+            event = "agent_toolkit_refused",
+            reason_code = "unsupported_setting",
+            toolkit_type = reference.tool_type(),
+            toolkit_id = reference.tool_id(),
+            reason = setting.reason(),
+            index_tools_kept,
+            "agent toolkit configuration asks for a setting this runtime refuses; the toolkit's own tools were left out"
+        );
+        on_refused(reference, ToolkitSkip::Setting(setting));
+        return Ok(());
+    }
+    if error.code() != ToolsetMaterializationErrorCode::UnsupportedToolkit {
+        return Err(error);
+    }
+    tracing::warn!(
+        event = "agent_toolkit_skipped",
+        reason_code = "unsupported_toolkit_family",
+        toolkit_type = reference.tool_type(),
+        toolkit_id = reference.tool_id(),
+        index_tools_kept,
+        "agent toolkit is unavailable in this runtime and its own tools were omitted from the native toolsets"
+    );
+    on_refused(
+        reference,
+        ToolkitSkip::UnsupportedFamily { index_tools_kept },
+    );
+    Ok(())
 }
 
 /// The `memory` toolkit's toolset when the host lends an authority that
@@ -870,6 +882,21 @@ fn prune_unserved_selection(
     reference: &FrozenToolReference<'_>,
     settings: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let pruned = prune_unserved_names(reference, settings)?;
+    let kept = pruned.get("selected_tools")?.as_array()?;
+    kept.iter()
+        .filter_map(serde_json::Value::as_str)
+        .any(|name| !super::families::index_tools::is_sdk_index_tool_name(name.trim()))
+        .then_some(pruned)
+}
+
+/// The stored settings with every selected name the family does not serve
+/// removed (index tools are kept); `None` when nothing is removed, when an
+/// entry is malformed (the family refuses it) or when nothing would remain.
+fn prune_unserved_names(
+    reference: &FrozenToolReference<'_>,
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
     let catalog = family_tool_catalog(reference.tool_type())?;
     let names = settings.get("selected_tools")?.as_array()?;
     let served = |name: &str| {
@@ -884,12 +911,7 @@ fn prune_unserved_selection(
             kept.push(value.clone());
         }
     }
-    if kept.len() == names.len()
-        || !kept
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .any(|name| !super::families::index_tools::is_sdk_index_tool_name(name.trim()))
-    {
+    if kept.len() == names.len() || kept.is_empty() {
         return None;
     }
     let mut pruned = settings.clone();
@@ -972,16 +994,27 @@ fn report_unserved_selected_tools(
 }
 
 /// Whether, with the index toolset composed, this toolkit has no family
-/// half: its stored selection is index-only, or it is an `artifact` toolkit
-/// on a path lending no artifact authority (logged, since the family's own
-/// tools are then left out while its index tools are served).
+/// half: `Some(true)` when its stored selection is index-only (its other
+/// names, if any, are then reported as tools left out), `Some(false)` when it
+/// is an `artifact` toolkit on a path lending no artifact authority (logged,
+/// since the family's own tools are then left out while its index tools are
+/// served), `None` when the family half is built.
 fn index_tools_stand_alone(
     reference: &FrozenToolReference<'_>,
     artifacts: Option<&ArtifactToolAuthority>,
-) -> Result<bool, ToolsetMaterializationError> {
+) -> Result<Option<bool>, ToolsetMaterializationError> {
     let settings = reference.settings().ok_or_else(invalid_configuration)?;
     if selection_is_index_only(settings).map_err(|_| invalid_configuration())? {
-        return Ok(true);
+        return Ok(Some(true));
+    }
+    // A selection of index tools plus names the family does not serve (jira
+    // `["search_index", "made_up"]`) is index-only too once those names are
+    // pruned (review C4): the index tools are served and `made_up` is reported
+    // as a tool left out, never as a family this runtime does not port.
+    if let Some(pruned) = prune_unserved_names(reference, settings)
+        && selection_is_index_only(&pruned).map_err(|_| invalid_configuration())?
+    {
+        return Ok(Some(true));
     }
     if reference.tool_type() == "artifact" && artifacts.is_none() {
         tracing::warn!(
@@ -991,9 +1024,9 @@ fn index_tools_stand_alone(
             toolkit_id = reference.tool_id(),
             "this path lends no artifact authority, so the artifact toolkit serves only its index tools"
         );
-        return Ok(true);
+        return Ok(Some(false));
     }
-    Ok(false)
+    Ok(None)
 }
 
 /// The index toolset of an indexing family whose frozen toolkit carries
@@ -2029,5 +2062,390 @@ mod materialize_tests {
             pruned[3].is_none(),
             "an index-only remainder is not widened"
         );
+    }
+}
+
+/// What the reporting materializer builds and reports for one toolkit, end to
+/// end (reviews C2, C6).
+#[cfg(test)]
+mod materialize_matrix_tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
+
+    use adk_core::ReadonlyContext;
+    use serde_json::{Value, json};
+
+    use super::{
+        LeftOutReason, family_tool_catalog, materialize,
+        materialize_configured_toolsets_reporting_refusals,
+    };
+    use crate::toolkits::families::index_tools::{IndexToolSupport, IndexToolsWithheld};
+    use crate::toolkits::policy::ToolAdmissionPolicy;
+    use crate::toolkits::snapshot::FrozenToolSnapshot;
+
+    const MADE_UP: &str = "made_up_tool_nobody_serves";
+
+    /// Settings each family builds from without a network call (its own
+    /// test fixtures), keyed by stored type. Every family that refused a
+    /// selection naming one tool it does not serve is here.
+    #[allow(clippy::too_many_lines, reason = "one fixture row per toolkit family")]
+    fn family_settings() -> Vec<(&'static str, Value)> {
+        let mut table = vec![
+            (
+                "slack",
+                json!({"slack_configuration": {"name": null, "slack_token": "xoxb-fixture", "channel_id": "C12345678"}}),
+            ),
+            (
+                "postman",
+                json!({"postman_configuration": {"base_url": "https://api.postman.example.test", "workspace_id": "workspace/one", "api_key": "fixture"}, "collection_id": "collection/one"}),
+            ),
+            (
+                "rally",
+                json!({"rally_configuration": {"server": "rally.example.test", "api_key": "fixture", "username": null, "password": null}, "workspace": null, "project": null}),
+            ),
+            (
+                "salesforce",
+                json!({"api_version": "v59.0", "salesforce_configuration": {"client_id": "client", "client_secret": "secret", "base_url": "https://tenant.my.salesforce.com"}}),
+            ),
+            (
+                "service_now",
+                json!({"servicenow_configuration": {"base_url": "https://example.service-now.com", "username": "u", "password": "p"}}),
+            ),
+            (
+                "sonar",
+                json!({"sonar_configuration": {"configuration_type": "sonar", "url": "https://sonar.example.test/", "sonar_token": "fixture"}, "sonar_project_name": "elitea:runtime"}),
+            ),
+            (
+                "yagmail",
+                json!({"host": "smtp.example.test", "username": "bot@example.test", "password": "fixture"}),
+            ),
+            (
+                "zephyr",
+                json!({"base_url": "https://zephyr.example.test", "username": "u", "password": "p"}),
+            ),
+            (
+                "zephyr_squad",
+                json!({"account_id": "acct", "access_key": "access", "secret_key": "secret"}),
+            ),
+            (
+                "zephyr_scale",
+                json!({"zephyr_configuration": {"base_url": "https://jira.example.test", "token": "fixture"}}),
+            ),
+            (
+                "zephyr_enterprise",
+                json!({"zephyr_configuration": {"base_url": "https://zephyr.example.test/zephyr/", "token": "fixture"}}),
+            ),
+            (
+                "report_portal",
+                json!({"report_portal_configuration": {"configuration_type": "report_portal", "endpoint": "https://reportportal.example.test/", "project": "quality", "api_key": "fixture"}}),
+            ),
+            (
+                "azure",
+                json!({"subscription_id": "00000000-1111-2222-3333-444444444444", "tenant_id": "tenant.example", "client_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "client_secret": "secret"}),
+            ),
+            (
+                "azure_search",
+                json!({"azure_search_configuration": {"configuration_type": "azure_search", "endpoint": "https://fixture.search.windows.net", "api_base": null, "api_key": "fixture"}, "index_name": "documents-v1"}),
+            ),
+            (
+                "elastic",
+                json!({"url": "https://elastic.example.test", "api_key": "fixture"}),
+            ),
+            (
+                "google_places",
+                json!({"google_places_configuration": {"configuration_type": "google_places", "api_key": "fixture"}, "results_count": 5}),
+            ),
+            (
+                "keycloak",
+                json!({"base_url": "https://keycloak.example.test", "realm": "tenant", "client_id": "client", "client_secret": "secret"}),
+            ),
+            (
+                "k8s",
+                json!({"url": "https://k8s.example.test", "token": "fixture"}),
+            ),
+            (
+                "testio",
+                json!({"testio_configuration": {"endpoint": "https://api.test.io/", "api_key": "fixture"}}),
+            ),
+            (
+                "xray_cloud",
+                json!({"xray_configuration": {"base_url": "", "client_id": "client", "client_secret": "secret"}}),
+            ),
+            (
+                "carrier",
+                json!({"carrier_configuration": {"url": "https://carrier.example.test/", "organization": "perf", "private_token": "fixture"}, "project_id": 7}),
+            ),
+            (
+                "figma",
+                json!({"figma_configuration": {"token": "fixture"}}),
+            ),
+            (
+                "aha",
+                json!({"aha_configuration": {"base_url": "https://tenant.example.test", "api_key": "fixture"}}),
+            ),
+            (
+                "bitbucket",
+                json!({"bitbucket_configuration": {"url": "https://bitbucket.example.test/ctx/", "username": "bot", "password": "fixture"}, "project": "PROJ", "repository": "app", "branch": "main", "cloud": null}),
+            ),
+            (
+                "gitlab",
+                json!({"gitlab_configuration": {"url": "https://gitlab.example.test/", "private_token": "fixture"}, "repository": "team/project/", "branch": "main"}),
+            ),
+            (
+                "gitlab_org",
+                json!({"gitlab_configuration": {"url": "https://gitlab.example.test", "private_token": "fixture"}, "branch": "main"}),
+            ),
+            (
+                "github",
+                json!({"github_configuration": {"configuration_type": "github", "base_url": "https://github.example.test/api/v3/", "access_token": "fixture"}, "repository": "https://github.example.test/EliteaAI/elitea-platform.git", "active_branch": "main", "base_branch": "main"}),
+            ),
+            (
+                "jira",
+                json!({"jira_configuration": {"base_url": "https://tenant.atlassian.net/", "hosting": "Auto", "username": "", "api_key": null, "token": "fixture"}, "api_version": "Auto", "verify_ssl": true}),
+            ),
+            (
+                "confluence",
+                json!({"confluence_configuration": {"base_url": "https://tenant.atlassian.net/wiki/", "hosting": "Cloud", "username": "bot@example.test", "api_key": "fixture"}, "space": "'DOCS'", "api_version": "1"}),
+            ),
+            (
+                "qtest",
+                json!({"qtest_configuration": {"base_url": "https://qtest.example.test/", "qtest_api_token": "fixture"}, "qtest_project_id": 7}),
+            ),
+            (
+                "testrail",
+                json!({"testrail_configuration": {"url": "https://tr.example.test/testrail/", "email": "qa@example.test", "password": "fixture"}}),
+            ),
+            (
+                "ado_wiki",
+                json!({"ado_configuration": {"organization_url": "https://dev.azure.com/contoso/", "token": "fixture"}, "project": "Fabrikam"}),
+            ),
+            (
+                "ado_repos",
+                json!({"ado_configuration": {"organization_url": "https://dev.azure.com/contoso/", "token": "fixture"}, "project": "Fabrikam", "repository_id": "repo", "base_branch": "main", "active_branch": "main"}),
+            ),
+            (
+                // No delegated token: every tool is the authorization guard,
+                // and the readers and upload still need the Office host.
+                "sharepoint",
+                json!({"sharepoint_configuration": {"client_id": "client-id", "client_secret": "secret", "site_url": "https://tenant.sharepoint.com/sites/default", "oauth_discovery_endpoint": "https://login.example.test/.well-known/openid-configuration", "configuration_uuid": "00000000-0000-4000-8000-000000000123", "scopes": ["Sites.Read.All"]}, "site_path": "teams/project"}),
+            ),
+        ];
+        if cfg!(feature = "toolkit-sql") {
+            table.push(("sql", json!({"dialect": "postgres", "database_name": "db", "sql_configuration": {"host": "database.example.test", "port": null, "username": "u", "password": "p"}})));
+        }
+        table
+    }
+
+    fn policy() -> Arc<ToolAdmissionPolicy> {
+        Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("policy"))
+    }
+
+    /// One reporting materialization of `tool_type` with `selected`: the tool
+    /// names built, the tool names reported left out, and how many toolkits
+    /// were left out whole.
+    async fn run(
+        tool_type: &str,
+        settings: &Value,
+        selected: &[&str],
+    ) -> Result<(Vec<String>, Vec<(String, LeftOutReason)>, usize), String> {
+        let mut settings = settings.clone();
+        settings["selected_tools"] = json!(selected);
+        let version = json!({"tools": [{"id": 3, "type": tool_type, "toolkit_name": "kit", "settings": settings}]});
+        let policy = policy();
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+                .expect("snapshot")
+                .apply_policy(&policy);
+        let materialized = materialize_configured_toolsets_reporting_refusals(
+            &snapshot,
+            &policy,
+            &serde_json::Map::new(),
+            None,
+            IndexToolSupport::Withheld(IndexToolsWithheld::NoVectorStore),
+        )
+        .await
+        .map_err(|error| format!("{tool_type}: {error:?}"))?;
+        let context: Arc<dyn ReadonlyContext> =
+            Arc::new(adk_tool::SimpleToolContext::new("matrix"));
+        let mut built = Vec::new();
+        for toolset in &materialized.toolsets {
+            for tool in toolset.tools(Arc::clone(&context)).await.expect("tools") {
+                built.push(tool.name().to_owned());
+            }
+        }
+        let reported = materialized
+            .left_out
+            .iter()
+            .filter_map(|toolkit| {
+                toolkit
+                    .tool_name()
+                    .map(|name| (name.to_owned(), toolkit.cause()))
+            })
+            .collect();
+        let whole = materialized
+            .left_out
+            .iter()
+            .filter(|toolkit| toolkit.tool_name().is_none())
+            .count();
+        Ok((built, reported, whole))
+    }
+
+    /// Review C6: every formerly strict family, end to end. `[served,
+    /// unknown]` builds the toolkit with exactly the served tool and reports
+    /// the unknown one; the toolkit itself is never left out.
+    #[tokio::test]
+    async fn a_served_and_an_unknown_name_build_the_served_tool_and_report_the_unknown() {
+        let mut failures = Vec::new();
+        for (tool_type, settings) in family_settings() {
+            let catalog = family_tool_catalog(tool_type).expect(tool_type);
+            let served = catalog
+                .iter()
+                .find(|(_, needs_file_store)| !needs_file_store)
+                .map_or_else(
+                    || panic!("{tool_type} serves a host-free tool"),
+                    |(name, _)| *name,
+                );
+            match run(tool_type, &settings, &[served, MADE_UP]).await {
+                Err(error) => failures.push(error),
+                Ok((built, reported, whole)) => {
+                    if whole != 0
+                        || built != [served]
+                        || reported != [(MADE_UP.to_owned(), LeftOutReason::ToolNotServed)]
+                    {
+                        failures.push(format!(
+                            "{tool_type}: built={built:?} reported={reported:?} whole={whole}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Review C2: for every family, what the notice reports left out is
+    /// exactly what the build did not serve. Selecting the whole catalogue
+    /// (and one unknown name) on a path that lends no file store, each name
+    /// is either built or reported, never both and never neither.
+    #[tokio::test]
+    async fn every_name_is_either_built_or_reported_never_both() {
+        let mut failures = Vec::new();
+        for (tool_type, settings) in family_settings() {
+            let catalog = family_tool_catalog(tool_type).expect(tool_type);
+            let mut selected: Vec<&str> = catalog.iter().map(|(name, _)| *name).collect();
+            selected.push(MADE_UP);
+            let (built, reported, whole) = match run(tool_type, &settings, &selected).await {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    failures.push(error);
+                    continue;
+                }
+            };
+            if whole != 0 {
+                failures.push(format!("{tool_type} was left out whole"));
+                continue;
+            }
+            let built: BTreeSet<&str> = built.iter().map(String::as_str).collect();
+            let reported: BTreeSet<&str> = reported.iter().map(|(name, _)| name.as_str()).collect();
+            let both: Vec<&&str> = built.intersection(&reported).collect();
+            if !both.is_empty() {
+                failures.push(format!("{tool_type}: built AND reported {both:?}"));
+            }
+            let selected: BTreeSet<&str> = selected.into_iter().collect();
+            let accounted: BTreeSet<&str> = built.union(&reported).copied().collect();
+            let lost: Vec<&&str> = selected.difference(&accounted).collect();
+            if !lost.is_empty() {
+                failures.push(format!("{tool_type}: neither built nor reported {lost:?}"));
+            }
+            for (name, needs_file_store) in &catalog {
+                if reported.contains(name) != *needs_file_store {
+                    failures.push(format!(
+                        "{tool_type}.{name}: needs_file_store={needs_file_store} but reported={}",
+                        reported.contains(name)
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// Review C1: every key of `family_tool_catalog` reaches a family in
+    /// `materialize`, never the unsupported fallthrough, so the catalogue and
+    /// the dispatch cannot disagree in either direction.
+    #[tokio::test]
+    async fn every_catalogued_type_is_dispatched() {
+        use super::ToolsetMaterializationErrorCode;
+        let document: Value = serde_json::from_str(include_str!(
+            "../../../../../services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
+        ))
+        .expect("capability");
+        let settings: BTreeMap<&str, Value> = family_settings().into_iter().collect();
+        let authority = dispatch_authority();
+        let policy = policy();
+        let mut checked = 0;
+        for tool_type in document["supported_tool_types"].as_array().expect("types") {
+            let tool_type = tool_type.as_str().expect("type");
+            // memory dispatches in materialize_all (no family half).
+            if tool_type == "memory" || family_tool_catalog(tool_type).is_none() {
+                continue;
+            }
+            let fixture = settings.get(tool_type).cloned();
+            let has_fixture = fixture.is_some()
+                || matches!(
+                    tool_type,
+                    "artifact" | "pptx" | "docx" | "xlsx" | "imagegen"
+                );
+            let mut toolkit = fixture.unwrap_or_else(|| json!({}));
+            toolkit["bucket_name"] = json!("bucket");
+            toolkit["bucket"] = json!("bucket");
+            // One served tool, so a family that refuses an empty selection
+            // (SharePoint) builds rather than answering unsupported.
+            let first = family_tool_catalog(tool_type).expect(tool_type)[0].0;
+            toolkit["selected_tools"] = json!([first]);
+            let version = json!({"tools": [{"id": 3, "type": tool_type, "toolkit_name": "kit", "settings": toolkit}]});
+            let snapshot =
+                FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+                    .expect("snapshot")
+                    .apply_policy(&policy);
+            let reference = snapshot.iter().next().expect("reference");
+            let result = materialize(
+                reference,
+                &policy,
+                &serde_json::Map::new(),
+                Some(&authority),
+            )
+            .await;
+            match result {
+                // A family with a working fixture must BUILD.
+                Err(error) if has_fixture => {
+                    panic!("{tool_type} did not build from its fixture: {error:?}")
+                }
+                // Without one (a credential this test does not carry), its
+                // own config refusal proves the dispatch reached it.
+                Err(error) => assert_ne!(
+                    error.code(),
+                    ToolsetMaterializationErrorCode::UnsupportedToolkit,
+                    "{tool_type} has a catalogue but no dispatch arm"
+                ),
+                Ok(_) => {}
+            }
+            checked += 1;
+        }
+        assert!(
+            checked >= 40,
+            "only {checked} catalogued types were checked"
+        );
+    }
+
+    /// The artifact authority with an Office host that also serves images:
+    /// the families built on a host (Office, imagegen) are unsupported
+    /// without one, by design, which is not a missing dispatch arm.
+    fn dispatch_authority() -> crate::toolkits::families::artifact::ArtifactToolAuthority {
+        use crate::toolkits::families::office_host::SharedOfficeToolHost;
+        let host: SharedOfficeToolHost =
+            Arc::new(crate::toolkits::imagegen_tests::FakeHost::default());
+        crate::toolkits::families::artifact::ArtifactToolAuthority::new(Arc::new(
+            crate::toolkits::imagegen_tests::NoPlatform,
+        ))
+        .with_office(host)
     }
 }
