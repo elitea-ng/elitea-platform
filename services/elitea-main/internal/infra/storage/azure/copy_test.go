@@ -99,3 +99,38 @@ func TestCopyErrorMapsARefusedSourceToNotSupported(t *testing.T) {
 		t.Fatalf("a 500 = %v, want an error, not the fallback", err)
 	}
 }
+
+type failingToken struct{}
+
+func (failingToken) GetToken(context.Context, policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	return azcore.AccessToken{}, errors.New("token endpoint unreachable")
+}
+
+// A copy-source token that cannot be had degrades to the caller's read-back
+// fallback (ErrNotSupported), as a refused copy source does.
+func TestCopyWithoutATokenFallsBack(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "7")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		t.Errorf("unexpected %s: no copy may be sent without a token", r.Method)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	// The client's own requests use a working token; only the copy-source
+	// token fails.
+	client, err := azblob.NewClient(server.URL+"/", &fakeToken{}, &azblob.ClientOptions{
+		ClientOptions: azcore.ClientOptions{Transport: server.Client()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &Backend{client: client, containerName: "c", token: failingToken{}}
+	src, _ := storage.NewObjectRef("7", "elitea-workspaces", "t/seg/a.seg.upload-1")
+	dst, _ := storage.NewObjectRef("7", "elitea-workspaces", "t/seg/a.seg")
+	if _, err := backend.Copy(context.Background(), src, dst); !errors.Is(err, storage.ErrNotSupported) {
+		t.Fatalf("Copy without a token = %v, want ErrNotSupported (the read-back fallback)", err)
+	}
+}

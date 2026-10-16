@@ -528,7 +528,9 @@ func (b *Backend) Copy(ctx context.Context, src, dst storage.ObjectRef) (storage
 		}
 		authorization, err := copySourceAuthorization(ctx, b.token)
 		if err != nil {
-			return storage.ObjectInfo{}, fmt.Errorf("storage/azure: copy source token: %w", err)
+			// No token, no authorized copy: the caller falls back to the
+			// read-back, as for a refused copy source.
+			return storage.ObjectInfo{}, fmt.Errorf("storage/azure: copy source token: %w: %w", storage.ErrNotSupported, err)
 		}
 		if _, err := target.CopyFromURL(ctx, source, &blob.CopyFromURLOptions{CopySourceAuthorization: &authorization}); err != nil {
 			return storage.ObjectInfo{}, copyError(err)
