@@ -169,6 +169,17 @@ impl AuthService {
         )
     }
 
+    /// The native client's device id from the stored session (`None`
+    /// signed out, or when the server named none): the device a handoff
+    /// is sent from (ADR-0034).
+    pub fn device_id(&self) -> Option<String> {
+        load_session(self.store.as_ref())
+            .ok()
+            .flatten()
+            .map(|session| session.device_id)
+            .filter(|id| !id.is_empty())
+    }
+
     // ---- state ---------------------------------------------------------
 
     pub fn state(&self) -> Result<HostState, HostError> {

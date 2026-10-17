@@ -4,10 +4,14 @@
  * the row's actions on hover — expandable to the threads run in it, which
  * line up under the folder's name. The section header carries "Open folder";
  * with no folder yet, an "Open a folder" row stands in as the empty state.
+ *
+ * The cloud badges of the visible thread rows (every open folder's shown
+ * threads that have a known UUID) come from ONE batched
+ * `handoff_status_many` read for the whole section.
  */
 import { useState } from 'react';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined';
@@ -24,7 +28,9 @@ import MenuItem from '@mui/material/MenuItem';
 import Tooltip from '@mui/material/Tooltip';
 
 import type { Project } from '@/entities/project';
+import { readThreadUuids, useHandoffIpc, useHandoffStatusMany } from '@/features/workspace-handoff';
 import { readThreads, threadsQueryKey, useWorkspaceIpc, type WorkspaceThread } from '@/features/workspace';
+import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
@@ -32,6 +38,7 @@ import type { ShellAction } from '../lib/shellActions';
 import { WORKSPACE_LIST_KEY } from '../model/useShellActions';
 import type { ShellLocation } from '../model/useShellLocation';
 import { CHILD_INDENT, ShellRow, SectionCaption } from './rows';
+import { ThreadCloudBadge } from './ThreadCloudBadge';
 import { modKey } from './shortcutLabel';
 
 const THREADS_SHOWN = 8;
@@ -42,11 +49,25 @@ interface SectionProps {
   projects: readonly Project[];
 }
 
-function FolderThreads({ workspace, location, run }: { workspace: Workspace } & Omit<SectionProps, 'projects'>): React.JSX.Element {
-  const threads = useQuery({ queryKey: threadsQueryKey(workspace.id), queryFn: () => readThreads(workspace.id) });
-  const [all, setAll] = useState(false);
+const threadsQuery = (workspaceId: string) => ({ queryKey: threadsQueryKey(workspaceId), queryFn: () => readThreads(workspaceId) });
+
+/** The threads a folder shows: all of them, or the first few. */
+const shownThreads = (list: readonly WorkspaceThread[], all: boolean): readonly WorkspaceThread[] => (all ? list : list.slice(0, THREADS_SHOWN));
+
+interface FolderThreadsProps extends Omit<SectionProps, 'projects'> {
+  workspace: Workspace;
+  all: boolean;
+  onToggleAll: () => void;
+  /** The batch's statuses, by UUID. */
+  statuses: Readonly<Record<string, HandoffStatus>>;
+}
+
+function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }: FolderThreadsProps): React.JSX.Element {
+  const threads = useQuery(threadsQuery(workspace.id));
+  // The UUIDs the thread pages read (handoff is keyed by them), to badge a row without opening it.
+  const uuids = readThreadUuids(workspace.id);
   const list: WorkspaceThread[] = threads.data ?? [];
-  const shown = all ? list : list.slice(0, THREADS_SHOWN);
+  const shown = shownThreads(list, all);
   const here = location.workspaceId === workspace.id;
   return (
     <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }} aria-label={t('desktop.shell.threadsOf', 'Threads in {{name}}', { name: workspace.name })}>
@@ -58,6 +79,7 @@ function FolderThreads({ workspace, location, run }: { workspace: Workspace } & 
             label={thread.title === '' ? t('desktop.shell.untitledThread', 'Untitled thread') : thread.title}
             selected={here && location.conversationId === thread.id}
             onClick={() => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id })}
+            trailing={uuids[thread.id] === undefined ? undefined : <ThreadCloudBadge status={statuses[uuids[thread.id] as string]} />}
           />
         </li>
       ))}
@@ -67,7 +89,7 @@ function FolderThreads({ workspace, location, run }: { workspace: Workspace } & 
             indent={CHILD_INDENT}
             muted
             label={all ? t('desktop.shell.showFewer', 'Show fewer') : t('desktop.shell.showAll', 'Show all ({{n}})', { n: list.length })}
-            onClick={() => setAll((value) => !value)}
+            onClick={onToggleAll}
           />
         </li>
       )}
@@ -150,7 +172,25 @@ export function LocalWorkSection({ location, run, projects }: SectionProps): Rea
   const ipc = useWorkspaceIpc();
   const list = useQuery({ queryKey: WORKSPACE_LIST_KEY, queryFn: () => ipc?.list() ?? Promise.resolve([]), enabled: ipc !== undefined });
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [expandedAll, setExpandedAll] = useState<ReadonlySet<string>>(new Set());
   const workspaces = list.data ?? [];
+  const toggleIn = (set: (update: (current: ReadonlySet<string>) => ReadonlySet<string>) => void, id: string): void =>
+    set((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  // One status read for every visible thread row with a known UUID (the same thread lists the folders read).
+  const openFolders = workspaces.filter((workspace) => !collapsed.has(workspace.id));
+  const threadLists = useQueries({ queries: openFolders.map((workspace) => threadsQuery(workspace.id)) });
+  const visibleUuids = openFolders.flatMap((workspace, index) => {
+    const uuids = readThreadUuids(workspace.id);
+    return shownThreads(threadLists[index]?.data ?? [], expandedAll.has(workspace.id))
+      .map((thread) => uuids[thread.id])
+      .filter((uuid): uuid is string => uuid !== undefined);
+  });
+  const statuses = useHandoffStatusMany(useHandoffIpc(), visibleUuids);
   const projectName = (id: number | null): string =>
     id === null ? t('desktop.shell.noProject', 'No project') : (projects.find((p) => p.id === id)?.name ?? '');
   const openFolder = (): void => run({ type: 'open_folder' });
@@ -172,13 +212,7 @@ export function LocalWorkSection({ location, run, projects }: SectionProps): Rea
         {workspaces.map((workspace) => {
           const open = !collapsed.has(workspace.id);
           const project = projectName(workspace.project_id);
-          const toggle = (): void =>
-            setCollapsed((current) => {
-              const next = new Set(current);
-              if (next.has(workspace.id)) next.delete(workspace.id);
-              else next.add(workspace.id);
-              return next;
-            });
+          const toggle = (): void => toggleIn(setCollapsed, workspace.id);
           return (
             <li key={workspace.id} data-testid="shell-folder">
               <ShellRow
@@ -192,7 +226,16 @@ export function LocalWorkSection({ location, run, projects }: SectionProps): Rea
                 trailingOnHover
                 trailing={<FolderMenu workspace={workspace} projects={projects} run={run} />}
               />
-              {open && <FolderThreads workspace={workspace} location={location} run={run} />}
+              {open && (
+                <FolderThreads
+                  workspace={workspace}
+                  location={location}
+                  run={run}
+                  all={expandedAll.has(workspace.id)}
+                  onToggleAll={() => toggleIn(setExpandedAll, workspace.id)}
+                  statuses={statuses}
+                />
+              )}
             </li>
           );
         })}

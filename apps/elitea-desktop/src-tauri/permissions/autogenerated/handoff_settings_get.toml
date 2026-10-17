@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-handoff-settings-get"
+description = "Enables the handoff_settings_get command without any pre-configured scope."
+commands.allow = ["handoff_settings_get"]
+
+[[permission]]
+identifier = "deny-handoff-settings-get"
+description = "Denies the handoff_settings_get command without any pre-configured scope."
+commands.deny = ["handoff_settings_get"]

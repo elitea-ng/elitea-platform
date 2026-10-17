@@ -68,6 +68,9 @@ pub struct LocalWorkPolicy {
     /// Whether the desktop may build and use a local index of a workspace
     /// (ADR-0029 decision 7). Only with `allowed`: the host gates on both.
     pub local_index: bool,
+    /// `local_work_cloud_handoff` (ADR-0034 decision 11): this device may
+    /// send a Local work thread to the cloud executor. Off when absent.
+    pub cloud_handoff: bool,
 }
 
 impl Default for LocalWorkPolicy {
@@ -81,6 +84,7 @@ impl Default for LocalWorkPolicy {
             command_deny: Vec::new(),
             path_deny: Vec::new(),
             local_index: false,
+            cloud_handoff: false,
         }
     }
 }
@@ -112,6 +116,11 @@ mod tests {
             serde_json::from_value(serde_json::json!({"allowed": true, "local_index": true}))
                 .expect("parse");
         assert!(on.local_index);
+        assert!(!on.cloud_handoff, "absent is off");
+        let handoff: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true, "cloud_handoff": true}))
+                .expect("parse");
+        assert!(handoff.cloud_handoff);
         assert!(SandboxMode::ReadOnly < SandboxMode::WorkspaceWrite);
         assert!(SandboxMode::WorkspaceWrite < SandboxMode::FullAccess);
     }

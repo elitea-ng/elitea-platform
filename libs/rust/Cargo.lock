@@ -1797,12 +1797,14 @@ dependencies = [
  "elitea-agent-runtime",
  "elitea-content-source",
  "elitea-doc-extract",
+ "elitea-workspace-store",
  "encoding_rs",
  "globset",
  "grep-regex",
  "grep-searcher",
  "ignore",
  "landlock",
+ "regex",
  "rustix",
  "serde",
  "serde_json",
@@ -1899,6 +1901,28 @@ dependencies = [
  "tonic-prost-build",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "elitea-workspace-store"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "flate2",
+ "gix-features",
+ "gix-hash",
+ "gix-object",
+ "gix-odb",
+ "gix-pack",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

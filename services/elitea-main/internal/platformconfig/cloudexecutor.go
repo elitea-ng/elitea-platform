@@ -49,7 +49,8 @@ const (
 // (decision 5): never uploaded unless the user includes a file explicitly.
 func DefaultCloudExecutorExclusions() []string {
 	return []string{".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", ".npmrc", ".pypirc", ".netrc",
-		".aws/**", ".ssh/**", "*.p12", "*.pfx", "*.kdbx", "credentials*.json"}
+		".aws/**", ".ssh/**", "*.p12", "*.pfx", "*.kdbx", "*.jks", "*.keystore",
+		"credentials*.json"}
 }
 
 // DefaultCloudExecutorEnvDeny is the platform default list of environment

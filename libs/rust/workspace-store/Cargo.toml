@@ -1,0 +1,43 @@
+[package]
+name = "elitea-workspace-store"
+description = "The Elitea workspace store client (ADR-0034 decision 2): git bundle v2 segments (COMPACT) written and read with gix, verified before any ref or file is touched, SHA-256 content addresses, the ref allowlist, and the store transport with retries and a fault-injecting test transport. Shared by the desktop host and the cloud worker."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# The desktop's REST transport (ADR-0034 decision 14) over a host-built
+# reqwest 0.12 client. No TLS feature is named: the binary's own reqwest
+# picks the TLS stack. The cloud worker uses its gRPC runtime plane instead.
+rest = ["dep:reqwest"]
+
+[dependencies]
+async-trait = "0.1.92"
+bytes = "1.12.1"
+# Pack entries are zlib streams.
+flate2 = "1.1.10"
+# Objects, packs and indexes through gix's crates, not the `gix` umbrella:
+# no repository config is read, no filter, hook or helper can run, and the
+# object database is opened at an `objects/` directory only.
+gix-features = { version = "0.50.0", default-features = false }
+gix-hash = { version = "0.27.0", features = ["sha1"] }
+gix-object = { version = "0.65.0", features = ["sha1"] }
+gix-odb = { version = "0.85.0", features = ["sha1"] }
+gix-pack = { version = "0.75.0", default-features = false, features = ["streaming-input", "sha1"] }
+reqwest = { version = "0.12.28", default-features = false, optional = true }
+serde = { version = "1.0.228", features = ["derive"] }
+# Default features only: the desktop host links this crate and must not
+# build serde_json with `preserve_order` (ADR-0029 decision 2).
+serde_json = "1.0.151"
+sha2 = "0.10.9"
+thiserror = "2.0.21"
+tokio = { version = "1.53.1", features = ["sync", "time"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

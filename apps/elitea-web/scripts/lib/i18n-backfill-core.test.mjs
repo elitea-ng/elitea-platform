@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractCallSites, isDesktopOnlyPath, planBackfill, planCatalogueSplit, routeNewKeys } from './i18n-backfill-core.mjs';
+import { ROUTE_CATALOGUES, extractCallSites, isDesktopOnlyPath, planBackfill, planCatalogueSplit, planRouteCatalogues, routeNewKeys } from './i18n-backfill-core.mjs';
 
 /** Table-driven coverage of every decision this module makes (same
  * 100%-of-decision-logic floor F2's scripts/lib/*-core.mjs modules carry). */
@@ -337,6 +337,7 @@ describe('desktop catalogue split', () => {
     expect(isDesktopOnlyPath('src/pages/workspace/WorkspacesPage.tsx')).toBe(true);
     expect(isDesktopOnlyPath('src/features/workspace/ui/TurnTranscript.tsx')).toBe(true);
     expect(isDesktopOnlyPath('src/features/workspace-index/ui/IndexStatusChip.tsx')).toBe(true);
+    expect(isDesktopOnlyPath('src/features/workspace-handoff/ui/SendToCloudDialog.tsx')).toBe(true);
     expect(isDesktopOnlyPath('src/widgets/desktop-shell/ui/DesktopFrame.tsx')).toBe(true);
     expect(isDesktopOnlyPath('src\\entries\\desktop\\DesktopShell.tsx')).toBe(true);
     expect(isDesktopOnlyPath('src/pages/workspace/desktopEntry.tsx')).toBe(false);
@@ -375,5 +376,22 @@ describe('desktop catalogue split', () => {
       entry('b', 'src/widgets/sidebar/Y.tsx'),
     ]);
     expect(routed).toEqual({ shared: { b: 'B', c: 'C' }, desktop: { a: 'A' } });
+  });
+});
+
+describe('planRouteCatalogues', () => {
+  const route = { file: 'src/pages/chat/i18n/en.chatCloud.json', prefix: 'pages.chat.cloud.' };
+
+  it('passes keys that sit only in their route catalogue', () => {
+    expect(planRouteCatalogues({ 'a.b': 'x' }, { 'd.e': 'y' }, [{ ...route, keys: { 'pages.chat.cloud.badge': 'B' } }])).toEqual([]);
+  });
+
+  it('flags a prefixed key in another catalogue and a key without the prefix', () => {
+    const problems = planRouteCatalogues({ 'pages.chat.cloud.badge': 'B' }, { 'pages.chat.cloud.x': 'X' }, [{ ...route, keys: { 'pages.chat.other': 'O' } }]);
+    expect(problems.map((p) => p.key)).toEqual(['pages.chat.other', 'pages.chat.cloud.badge', 'pages.chat.cloud.x']);
+  });
+
+  it('declares the chat cloud notice catalogue', () => {
+    expect(ROUTE_CATALOGUES).toContainEqual(route);
   });
 });

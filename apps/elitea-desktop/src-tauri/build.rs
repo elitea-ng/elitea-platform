@@ -42,6 +42,18 @@ fn main() {
             "app_ready",
             "doctor_run",
             "doctor_fix",
+            "handoff_preview",
+            "handoff_send",
+            "handoff_status",
+            "handoff_reclaim",
+            "handoff_preflight",
+            "handoff_apply",
+            "handoff_undo",
+            "handoff_erase",
+            "handoff_cancel",
+            "handoff_status_many",
+            "handoff_settings_get",
+            "handoff_settings_set",
         ]),
     ))
     .expect("tauri build configuration is valid");

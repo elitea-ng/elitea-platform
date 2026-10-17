@@ -10,10 +10,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { recordThread, WorkspaceIpcProvider } from '@/features/workspace';
+import { HandoffIpcProvider, rememberThreadUuid } from '@/features/workspace-handoff';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { BROWSER_PLATFORM, type AppIpc } from '@/shared/desktop/appEvents';
 import { createFakeAppIpc, MACOS_PLATFORM, type FakeAppIpc } from '@/shared/desktop/appEvents.fake';
+import { createFakeHandoffIpc, type FakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { clearNamespace } from '@/shared/lib/storage';
@@ -24,7 +26,7 @@ const globals = globalThis as unknown as Record<string, unknown>;
 const APP: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: 42, is_git: true };
 const DOCS: Workspace = { id: 'w2', path: '/Users/me/docs', name: 'docs', project_id: null, is_git: false };
 
-function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace } = {}) {
+function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace; handoffIpc?: FakeHandoffIpc } = {}) {
   const rootRoute = createRootRoute({
     component: () => (
       <DesktopFrame permissions={new Set()} projects={[{ id: 42, name: 'Marketing', suspended: false }]} selectedProjectId="42" onSelectProject={() => undefined}>
@@ -46,7 +48,7 @@ function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Wo
   const tree = (
     <AppProviders>
       <WorkspaceIpcProvider ipc={ipc}>
-        <RouterProvider router={router} />
+        {options.handoffIpc === undefined ? <RouterProvider router={router} /> : <HandoffIpcProvider ipc={options.handoffIpc}>{<RouterProvider router={router} />}</HandoffIpcProvider>}
       </WorkspaceIpcProvider>
     </AppProviders>
   );
@@ -88,6 +90,25 @@ describe('DesktopFrame sidebar', () => {
     // A folder collapses to its row.
     await user.click(within(folders[0] as HTMLElement).getAllByRole('button')[0] as HTMLElement);
     expect(within(folders[0] as HTMLElement).queryAllByTestId('shell-thread')).toHaveLength(0);
+  });
+
+  it('badges a thread that runs in the cloud or is on its way back, and no other', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    recordThread('w1', { id: '78', title: 'quick overview', updatedAt: 2 });
+    recordThread('w1', { id: '79', title: 'no uuid yet', updatedAt: 3 });
+    rememberThreadUuid('w1', '77', 'u-77');
+    rememberThreadUuid('w1', '78', 'u-78');
+    const handoffIpc = createFakeHandoffIpc();
+    handoffIpc.setStatusOf('u-77', { state: 'CLOUD_IDLE', epoch: 2, executor: 'cloud', read_only: true, sent_from_here: true });
+    handoffIpc.setStatusOf('u-78', { state: 'RECLAIMING', epoch: 3, executor: 'returning', read_only: true, sent_from_here: true });
+    mount({ handoffIpc });
+
+    const folders = await screen.findAllByTestId('shell-folder');
+    const rows = await within(folders[0] as HTMLElement).findAllByTestId('shell-thread');
+    await waitFor(() => expect(rows.map((row) => row.textContent)).toEqual(['no uuid yet', 'quick overviewReturning', 'fix the buildIn cloud']));
+    // One batched read for every visible row with a UUID, not a call per row.
+    expect(handoffIpc.calls.statusManys).toEqual([['u-77', 'u-78']]);
+    expect(handoffIpc.calls.statuses).toEqual([]);
   });
 
   it('opens a folder from the sidebar and lands in it', async () => {

@@ -397,7 +397,7 @@ jobs:
             type=gha,scope=elitea-code-runner-verification-linux-amd64
             type=gha,scope=elitea-code-runner-default-linux-amd64
             type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: type=gha,mode=max,scope=elitea-code-runner-verification-linux-amd64,ignore-error=true
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-verification-linux-amd64,ignore-error=true' || '' }}
 
       - name: Build the code runner Deno/Pyodide image
         uses: docker/build-push-action@v7
@@ -413,7 +413,7 @@ jobs:
             type=gha,scope=elitea-code-runner-verification-linux-amd64
             type=gha,scope=elitea-code-runner-default-linux-amd64
             type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: type=gha,mode=max,scope=elitea-code-runner-default-linux-amd64,ignore-error=true
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-default-linux-amd64,ignore-error=true' || '' }}
 
       # The Rust language image (vendored Cargo tree + the Rust adapter): the
       # Docker PID-limit test compiles and runs user Rust code in it.
@@ -431,7 +431,7 @@ jobs:
             type=gha,scope=elitea-code-runner-verification-linux-amd64
             type=gha,scope=elitea-code-runner-default-linux-amd64
             type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: type=gha,mode=max,scope=elitea-code-runner-rust-runtime-linux-amd64,ignore-error=true
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-rust-runtime-linux-amd64,ignore-error=true' || '' }}
 
       # The helper starts its own disposable postgres:18 container
       # (--pull=never; the service above already pulled the image), generates

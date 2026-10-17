@@ -14,6 +14,8 @@ mod d0;
 mod discovery;
 mod doctor;
 mod error;
+mod handoff;
+mod handoff_settings;
 mod history;
 mod index;
 mod local_commands;
@@ -219,7 +221,11 @@ pub fn run() {
                 }
             };
             let workspaces = Arc::new(WorkspaceStore::new(data_dir.clone()));
+            // A linked worktree (a take-back's, ADR-0034) is used by host
+            // git only when its repository is a workspace the person opened.
+            handoff::trust_open_workspaces(workspaces.clone());
             let policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
+            let handoff_policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
             // The local workspace indexes (ADR-0029 decision 7), opened on
             // first use; kept across sign-out and wipe (src/index.rs).
             let index = Arc::new(
@@ -249,6 +255,32 @@ pub fn run() {
                 })
                 .map_err(|error| error.message)?,
             );
+            // The desktop ⇄ cloud handoff (ADR-0034).
+            let handoff = handoff::HandoffHost::new(handoff::HandoffDeps {
+                agents: agents.clone(),
+                http: http.clone(),
+                credentials: Arc::new(AuthCredentials(auth.clone())),
+                client_version: env!("CARGO_PKG_VERSION").to_owned(),
+                workspaces: workspaces.clone(),
+                policy: handoff_policy,
+                history: history.clone(),
+                data_dir: data_dir.clone(),
+                events: Arc::new(handoff::MainWindowHandoffEvents(app.handle().clone())),
+                device_id: {
+                    let auth = auth.clone();
+                    Arc::new(move || auth.device_id())
+                },
+                backoff: elitea_workspace_store::sync::Backoff::default(),
+                git_global_config: None,
+                // The env harvest offers the person's login-shell environment.
+                env_source: Arc::new(handoff_settings::LoginShellEnv {
+                    shell: None,
+                    timeout: handoff_settings::LOGIN_SHELL_TIMEOUT,
+                }),
+            })
+            .map_err(|error| error.message)?;
+            let handoff = Arc::new(handoff);
+            app.manage(handoff::HandoffState(handoff.clone()));
             app.manage(Arc::new(doctor::Doctor {
                 local: doctor::LocalDoctor {
                     hooks: Arc::new(AppDoctorHooks {
@@ -269,6 +301,7 @@ pub fn run() {
                 history,
                 agents,
                 index,
+                handoff: Some(handoff),
             });
             app.manage(AppState { auth });
             app.manage(Arc::new(Attention::new(app.handle().clone())));
@@ -317,6 +350,18 @@ pub fn run() {
             app_events::app_ready,
             doctor::doctor_run,
             doctor::doctor_fix,
+            handoff::handoff_preview,
+            handoff::handoff_send,
+            handoff::handoff_status,
+            handoff::handoff_reclaim,
+            handoff::handoff_preflight,
+            handoff::handoff_apply,
+            handoff::handoff_undo,
+            handoff::handoff_erase,
+            handoff::handoff_cancel,
+            handoff::handoff_status_many,
+            handoff::handoff_settings_get,
+            handoff::handoff_settings_set,
         ])
         .build(tauri::generate_context!());
     let app = match built {
