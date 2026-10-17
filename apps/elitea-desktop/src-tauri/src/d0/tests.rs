@@ -3,8 +3,9 @@
 //! with one local and one remote tool (the 409 confirmation path included)
 //! → commit; the refusals; event sequencing; changes and undo.
 
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -127,7 +128,7 @@ fn sse(chunks: &[Value]) -> Res {
     }
 }
 
-fn tool_call(id: &str, name: &str, args: &Value) -> Res {
+pub(crate) fn tool_call(id: &str, name: &str, args: &Value) -> Res {
     sse(&[
         json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": id, "type": "function",
             "function": {"name": name, "arguments": args.to_string()}}]}}]}),
@@ -151,7 +152,7 @@ fn platform(details: Value, withheld: &'static [&'static str]) -> impl Fn(&Req) 
         if path == "/api/v2/elitea_core/conversation/prompt_lib/1/42" {
             return Res::json(
                 200,
-                &json!({"id": 42, "uuid": "99999999-2222-4333-8444-555555555555", "participants": [
+                &json!({"id": 42, "message_count": 0, "uuid": "99999999-2222-4333-8444-555555555555", "participants": [
                     {"id": 70, "entity_name": "user", "entity_meta": {"id": 1}},
                     {"id": 77, "entity_name": "application", "entity_meta": {"id": 5, "project_id": 1},
                      "entity_settings": {"version_id": 9}}
@@ -237,34 +238,26 @@ struct Harness {
     policy: Arc<Policy>,
     app: tempfile::TempDir,
     index: Arc<crate::index::IndexRegistry>,
+    workspaces: Arc<WorkspaceStore>,
+    decision: UiDecision,
 }
 
-/// A host on the mock platform; approvals answered `decision` by the UI.
-async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision) -> Harness {
-    let app = tempfile::tempdir().unwrap();
-    let folder = tempfile::tempdir().unwrap();
-    let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
-    let workspace_id = workspaces.add(folder.path()).unwrap().id;
-    // The UI binds a folder before it offers a session.
-    workspaces.bind_project(&workspace_id, 1).unwrap();
-    let emitter = Arc::new(VecEmitter::default());
-    let policy = Arc::new(Policy(std::sync::Mutex::new(policy)));
-    let credentials = Arc::new(StaticCredentials::new(server.origin.clone()));
-    let index = Arc::new(crate::index::IndexRegistry::new(
-        workspaces.clone(),
-        policy.clone(),
-        Arc::new(elitea_local_index::service::NoEvents),
-    ));
-    // The app's resolved directories, as lib.rs passes them: config and
-    // logs exist, the cache does not yet, data is the workspaces' parent.
-    for dir in ["config", "logs"] {
-        std::fs::create_dir_all(app.path().join(dir)).unwrap();
-    }
+/// A host over the app directory `app`: the same stores a restart finds,
+/// the UI answering every approval with `decision`.
+fn build_host(
+    app: &std::path::Path,
+    workspaces: &Arc<WorkspaceStore>,
+    credentials: &Arc<StaticCredentials>,
+    policy: &Arc<Policy>,
+    emitter: &Arc<VecEmitter>,
+    index: &Arc<crate::index::IndexRegistry>,
+    decision: UiDecision,
+) -> Arc<AgentHost> {
     let sandbox_deny = super::turn::app_dirs_for_sandbox([
-        Some(app.path().join("config")),
-        Some(app.path().to_owned()),
-        Some(app.path().join("logs")),
-        Some(app.path().join("cache")),
+        Some(app.join("config")),
+        Some(app.to_owned()),
+        Some(app.join("logs")),
+        Some(app.join("cache")),
     ]);
     let host = Arc::new(
         AgentHost::new(HostDeps {
@@ -278,8 +271,9 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
                 attempts: 3,
                 delay: Duration::from_millis(10),
             },
-            history: Some(Arc::new(
-                crate::history::HistoryStore::open(app.path()).unwrap(),
+            history: Some(Arc::new(crate::history::HistoryStore::open(app).unwrap())),
+            sessions: Some(Arc::new(
+                crate::sessions::DesktopStateStore::open(app).unwrap(),
             )),
             index: Some(index.clone()),
             sandbox_deny,
@@ -307,6 +301,39 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
             }
         }
     });
+    host
+}
+
+/// A host on the mock platform; approvals answered `decision` by the UI.
+async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision) -> Harness {
+    let app = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
+    let workspace_id = workspaces.add(folder.path()).unwrap().id;
+    // The UI binds a folder before it offers a session.
+    workspaces.bind_project(&workspace_id, 1).unwrap();
+    let emitter = Arc::new(VecEmitter::default());
+    let policy = Arc::new(Policy(std::sync::Mutex::new(policy)));
+    let credentials = Arc::new(StaticCredentials::new(server.origin.clone()));
+    let index = Arc::new(crate::index::IndexRegistry::new(
+        workspaces.clone(),
+        policy.clone(),
+        Arc::new(elitea_local_index::service::NoEvents),
+    ));
+    // The app's resolved directories, as lib.rs passes them: config and
+    // logs exist, the cache does not yet, data is the workspaces' parent.
+    for dir in ["config", "logs"] {
+        std::fs::create_dir_all(app.path().join(dir)).unwrap();
+    }
+    let host = build_host(
+        app.path(),
+        &workspaces,
+        &credentials,
+        &policy,
+        &emitter,
+        &index,
+        decision,
+    );
     Harness {
         server,
         credentials,
@@ -317,6 +344,8 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
         policy,
         app,
         index,
+        workspaces,
+        decision,
     }
 }
 
@@ -1632,6 +1661,7 @@ async fn the_doctor_removes_a_vanished_workspace_the_way_the_app_does() {
         credentials: crate::credentials_file::CredentialsFile::new(h.app.path().join("config")),
         workspaces: workspaces.clone(),
         history: None,
+        sessions: None,
     };
     let message = doctor.fix("workspaces.drop_missing", true).unwrap();
     assert!(message.contains("Not removed"), "{message}");
@@ -1991,4 +2021,862 @@ async fn the_doctor_index_hooks_work_on_a_current_thread_runtime() {
     });
     assert!(gone, "the work ran with the index closed");
     assert!(!dir.exists());
+}
+
+// ---------------------------------------------------------------------------
+// Multi-turn memory (#1212): the desktop session store, through the real host
+// ---------------------------------------------------------------------------
+
+const CONVERSATION_UUID: &str = "99999999-2222-4333-8444-555555555555";
+
+/// The conversation the platform keeps between turns: what each commit
+/// writes is what a later seed reads back.
+#[derive(Default)]
+pub(crate) struct Convo {
+    pub(crate) groups: Vec<Value>,
+    pub(crate) steps: Vec<Value>,
+    next_id: i64,
+    executions: i64,
+    /// Commits to refuse with a 500 (`remaining`).
+    refuse_commits: usize,
+    /// The model blocks while this is set (a cancel test).
+    pending: HashMap<String, (String, String)>,
+}
+
+impl Convo {
+    pub(crate) fn id(&mut self) -> i64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
+    /// A group of the transcript, as the legacy projection builds it.
+    pub(crate) fn group(
+        &mut self,
+        uuid: &str,
+        reply_to: Option<i64>,
+        text: &str,
+        meta: &Value,
+    ) -> i64 {
+        let id = self.id();
+        let mut group = json!({
+            "id": id, "uuid": uuid,
+            "created_at": format!("2026-10-15 10:{:02}:00.000000", id % 60),
+            "meta": meta,
+            "message_items": [{"item_type": "text_message", "item_details": {"content": text}}],
+        });
+        if let Some(reply_to) = reply_to {
+            group["reply_to_id"] = json!(reply_to);
+        }
+        self.groups.push(group);
+        id
+    }
+
+    /// A trace step of an answer group.
+    pub(crate) fn step(&mut self, group: i64, name: &str, inputs: &Value, output: &str) {
+        let id = self.id();
+        self.steps.push(json!({
+            "id": id, "message_group_id": group, "kind": "tool_call", "tool_name": name,
+            "tool_inputs": inputs, "tool_output": output, "is_error": false,
+        }));
+    }
+}
+
+pub(crate) type Script = Box<dyn Fn(&Value) -> Res + Send + Sync>;
+
+pub(crate) fn query_of(path: &str, key: &str) -> Option<String> {
+    let query = path.split_once('?')?.1;
+    url::form_urlencoded::parse(query.as_bytes())
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.into_owned())
+}
+
+/// The platform of the memory tests: one conversation whose groups grow with
+/// every commit, a `/llm` that `script` answers from the request body, and
+/// the routes a seed reads (`messages_limit`, `message_traces`,
+/// `message_trace`).
+pub(crate) fn memory_platform(convo: Arc<Mutex<Convo>>, script: Script) -> impl Fn(&Req) -> Res {
+    memory_platform_for(CONVERSATION_UUID, convo, script)
+}
+
+/// [`memory_platform`] for the conversation `uuid` (numeric id 42).
+pub(crate) fn memory_platform_for(
+    uuid: &str,
+    convo: Arc<Mutex<Convo>>,
+    script: Script,
+) -> impl Fn(&Req) -> Res {
+    let uuid = uuid.to_owned();
+    let details = agent_details();
+    let base = platform(details.clone(), &[]);
+    move |req: &Req| {
+        let path = req.path.split('?').next().unwrap_or_default();
+        let mut state = convo.lock().unwrap();
+        if path == "/api/v2/elitea_core/conversation/prompt_lib/1/42"
+            || path == format!("/api/v2/elitea_core/conversation/prompt_lib/1/{uuid}")
+        {
+            let mut detail = json!({
+                "id": 42, "uuid": uuid, "message_count": state.groups.len(),
+                "participants": [
+                    {"id": 70, "entity_name": "user", "entity_meta": {"id": 1}},
+                    {"id": 77, "entity_name": "application", "entity_meta": {"id": 5, "project_id": 1},
+                     "entity_settings": {"version_id": 9}}
+                ]
+            });
+            if let Some(limit) =
+                query_of(&req.path, "messages_limit").and_then(|v| v.parse::<usize>().ok())
+            {
+                let newest: Vec<Value> = state.groups.iter().rev().take(limit).cloned().collect();
+                detail["message_groups"] = Value::Array(newest);
+            }
+            return Res::json(200, &detail);
+        }
+        if path == "/api/v2/elitea_core/message_traces/prompt_lib/1/42" {
+            let wanted: Vec<i64> = query_of(&req.path, "message_group_ids")
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|id| id.parse().ok())
+                .collect();
+            let rows: Vec<Value> = state
+                .steps
+                .iter()
+                .filter(|step| wanted.contains(&step["message_group_id"].as_i64().unwrap()))
+                .map(|step| {
+                    let mut light = step.clone();
+                    light.as_object_mut().unwrap().remove("tool_inputs");
+                    light.as_object_mut().unwrap().remove("tool_output");
+                    light
+                })
+                .collect();
+            return Res::json(200, &json!({"total": null, "rows": rows}));
+        }
+        if let Some(step_id) = path.strip_prefix("/api/v2/elitea_core/message_trace/prompt_lib/1/")
+        {
+            let found = state
+                .steps
+                .iter()
+                .find(|step| step["id"].as_i64() == step_id.parse::<i64>().ok());
+            return found.map_or_else(
+                || Res::json(404, &json!({"error": "not_found", "message": "step"})),
+                |step| Res::json(200, step),
+            );
+        }
+        if path == format!("/api/v2/elitea_core/local_turn/prompt_lib/1/{uuid}") {
+            let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+            state.executions += 1;
+            let execution = format!("{:032x}", state.executions);
+            let response = format!("11111111-2222-4333-8444-{:012x}", state.executions);
+            state.pending.insert(
+                execution.clone(),
+                (
+                    body["question_id"].as_str().unwrap_or_default().to_owned(),
+                    response.clone(),
+                ),
+            );
+            return Res::json(
+                200,
+                &json!({
+                    "execution_id": execution, "question_id": body["question_id"],
+                    "response_message_id": response, "conversation_uuid": uuid,
+                    "participant_id": 77, "expires_at": "2026-10-20T00:00:00Z", "created": true,
+                    "memory_recall": {"text": "", "count": 0, "memory_ids": []}
+                }),
+            );
+        }
+        if let Some(execution) =
+            path.strip_prefix("/api/v2/elitea_core/local_turn_commit/prompt_lib/1/")
+        {
+            if state.refuse_commits > 0 {
+                state.refuse_commits -= 1;
+                return Res::json(500, &json!({"error": "internal", "message": "later"}));
+            }
+            let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+            let Some((question, response)) = state.pending.get(execution).cloned() else {
+                return Res::json(404, &json!({"error": "not_found", "message": "execution"}));
+            };
+            let meta = json!({"executed_by": "desktop", "local_execution_id": execution});
+            let q = state.group(
+                &question,
+                None,
+                body["user_message"]["content"].as_str().unwrap_or_default(),
+                &meta,
+            );
+            let a = state.group(
+                &response,
+                Some(q),
+                body["assistant_message"]["content"]
+                    .as_str()
+                    .unwrap_or_default(),
+                &meta,
+            );
+            if let Some(calls) = body["tool_calls"].as_object() {
+                let mut calls: Vec<&Value> = calls.values().collect();
+                calls.sort_by_key(|call| {
+                    call["timestamp_start"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned()
+                });
+                for call in calls {
+                    state.step(
+                        a,
+                        call["tool_name"].as_str().unwrap_or_default(),
+                        &call["tool_inputs"],
+                        call["tool_output"].as_str().unwrap_or_default(),
+                    );
+                }
+            }
+            return Res::json(
+                200,
+                &json!({"execution_id": execution, "created": true,
+                        "conversation_uuid": uuid, "question_message_id": question,
+                        "response_message_id": response, "memories_used": 0,
+                        "committed_at": "2026-10-15T00:00:00Z"}),
+            );
+        }
+        if path == "/llm/v1/chat/completions" {
+            drop(state);
+            let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+            return script(&body);
+        }
+        drop(state);
+        base(req)
+    }
+}
+
+fn last_message(body: &Value) -> &Value {
+    body["messages"]
+        .as_array()
+        .and_then(|m| m.last())
+        .unwrap_or(&Value::Null)
+}
+
+pub(crate) fn say(text: &str) -> Res {
+    sse(&[
+        json!({"choices": [{"delta": {"content": text}}]}),
+        json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+    ])
+}
+
+/// "create hello.txt with hi" writes the file; any message after a tool
+/// result is the answer; other questions are answered from what the model
+/// was given (`hello.txt` is named only if the history carried it).
+pub(crate) fn memory_script() -> Script {
+    Box::new(|body: &Value| {
+        let last = last_message(body);
+        if last["role"] == "tool" {
+            return say("Created hello.txt.");
+        }
+        let prompt = last["content"].as_str().unwrap_or_default();
+        if prompt.contains("create hello.txt") {
+            return tool_call(
+                "call-hello",
+                "write_file",
+                &json!({"path": "hello.txt", "content": "hi"}),
+            );
+        }
+        let messages = body["messages"].to_string();
+        if prompt.contains("what file") {
+            return say(if messages.contains("hello.txt") {
+                "hello.txt"
+            } else {
+                "I do not know."
+            });
+        }
+        if prompt.contains("what was in it") {
+            return say(
+                if messages.contains("\"content\":\"hi\"")
+                    || messages.contains("content\\\":\\\"hi")
+                {
+                    "It contained hi."
+                } else {
+                    "I do not know."
+                },
+            );
+        }
+        say("ok")
+    })
+}
+
+fn turn(h: &Harness, prompt: &str) -> TurnRequest {
+    TurnRequest {
+        prompt: prompt.to_owned(),
+        ..request(&h.workspace_id)
+    }
+}
+
+/// Run one turn and wait for its `done`.
+async fn run_turn(h: &Harness, prompt: &str) -> String {
+    let started = h.host.start(turn(h, prompt)).await.unwrap();
+    until_done_of(&h.emitter, &started.turn_id).await;
+    started.turn_id
+}
+
+fn llm_bodies(server: &MockServer) -> Vec<Value> {
+    seen(server, "/llm/v1/chat/completions")
+        .iter()
+        .map(|req| serde_json::from_str(&req.body).unwrap())
+        .collect()
+}
+
+fn seed_requests(server: &MockServer) -> usize {
+    server
+        .seen()
+        .iter()
+        .filter(|req| req.path.contains("messages_limit="))
+        .count()
+}
+
+/// `(role, content text, tool names)` of a request body, without the system message.
+fn shape(body: &Value) -> Vec<(String, String, Vec<String>)> {
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] != "system")
+        .map(|m| {
+            (
+                m["role"].as_str().unwrap().to_owned(),
+                m["content"].as_str().unwrap_or_default().to_owned(),
+                m["tool_calls"]
+                    .as_array()
+                    .map(|calls| {
+                        calls
+                            .iter()
+                            .map(|c| c["function"]["name"].as_str().unwrap().to_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+impl Harness {
+    /// The app quits and starts again over the same data directory: the host
+    /// and every store are rebuilt; with `wipe_sessions` the session file is
+    /// gone first (a new device, wiped data).
+    async fn restarted(self, wipe_sessions: bool) -> Self {
+        let Self {
+            server,
+            credentials,
+            host,
+            emitter,
+            workspace_id,
+            folder,
+            policy,
+            app,
+            index,
+            workspaces,
+            decision,
+        } = self;
+        // Release the UI responder's hold on the old host, then the host.
+        emitter.on_event.lock().unwrap().take();
+        let weak = Arc::downgrade(&host);
+        drop(host);
+        for _ in 0..500 {
+            if weak.strong_count() == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(weak.strong_count(), 0, "the old host is gone");
+        if wipe_sessions {
+            for path in crate::sessions::session_files(app.path()) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        let host = build_host(
+            app.path(),
+            &workspaces,
+            &credentials,
+            &policy,
+            &emitter,
+            &index,
+            decision,
+        );
+        Self {
+            server,
+            credentials,
+            host,
+            emitter,
+            workspace_id,
+            folder,
+            policy,
+            app,
+            index,
+            workspaces,
+            decision,
+        }
+    }
+
+    /// The session store's rows, read by a second connection.
+    fn session_rows(&self) -> Vec<(String, String, Option<String>, String)> {
+        let conn = rusqlite::Connection::open_with_flags(
+            self.app.path().join(crate::sessions::FILE_NAME),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut statement = conn
+            .prepare(
+                "SELECT turn_execution_id, executed_by, response_message_id, author
+                 FROM events ORDER BY seq",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn second_turn_sees_the_first() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    run_turn(&h, "what file did you just create?").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 3);
+    // Turn 1 saw only its own prompt (and then its own tool result).
+    assert_eq!(shape(&bodies[0]).len(), 1);
+    // Turn 2's request carries turn 1 whole, in order: the user message, the
+    // tool call, its result, the assistant message, then the new question.
+    let second = shape(&bodies[2]);
+    assert_eq!(
+        second
+            .iter()
+            .map(|(role, _, _)| role.as_str())
+            .collect::<Vec<_>>(),
+        ["user", "assistant", "tool", "assistant", "user"],
+        "{second:?}"
+    );
+    assert!(second[0].1.contains("create hello.txt with hi"));
+    assert_eq!(second[1].2, ["write_file"]);
+    let result = bodies[2]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "tool")
+        .unwrap();
+    assert!(
+        result["content"].as_str().unwrap().contains("hello.txt"),
+        "{result}"
+    );
+    assert_eq!(second[3].1, "Created hello.txt.");
+    assert!(second[4].1.contains("what file did you just create?"));
+    // The tool-call id pairs the call with its result.
+    let call_id = bodies[2]["messages"][2]["tool_calls"][0]["id"].clone();
+    assert_eq!(result["tool_call_id"], call_id);
+    // The warm turn paid for no seed (the new conversation had nothing to
+    // seed, and the session agreed with the server after turn 1's commit).
+    assert_eq!(seed_requests(&h.server), 0);
+    // The turn used the real store: tagged rows, committed answer ids.
+    let rows = h.session_rows();
+    assert!(rows.len() >= 8, "{rows:?}");
+    assert!(rows.iter().all(|r| r.1 == "desktop" && r.2.is_some()));
+    assert_eq!(
+        rows.iter()
+            .map(|r| r.0.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        2,
+        "two turns, tagged with their execution ids"
+    );
+    assert_eq!(rows[0].3, "user");
+}
+
+#[tokio::test]
+async fn history_survives_restart() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    run_turn(&h, "what file did you just create?").await;
+    let before = h.server.seen().len();
+    let h = h.restarted(false).await;
+    run_turn(&h, "and what was in it?").await;
+    let bodies = llm_bodies(&h.server);
+    let third = shape(bodies.last().unwrap());
+    // Turns 1 and 2 are in turn 3's request: 2 + 2 messages and the tool pair.
+    let roles: Vec<&str> = third.iter().map(|(role, _, _)| role.as_str()).collect();
+    assert_eq!(
+        roles,
+        [
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "user",
+            "assistant",
+            "user"
+        ],
+        "{third:?}"
+    );
+    assert_eq!(third[5].1, "hello.txt");
+    // No server seed was needed after the restart: the store was reopened.
+    assert_eq!(seed_requests(&h.server), 0);
+    let after: Vec<String> = h.server.seen()[before..]
+        .iter()
+        .map(|r| r.path.clone())
+        .collect();
+    assert!(
+        !after
+            .iter()
+            .any(|p| p.contains("message_trace") || p.contains("messages_limit")),
+        "{after:?}"
+    );
+    // The answer proves it read the earlier turns.
+    let answer = h
+        .emitter
+        .all()
+        .iter()
+        .filter(|e| e.kind == "text_delta")
+        .map(|e| e.payload["text"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(answer.contains("It contained hi."), "{answer}");
+}
+
+#[tokio::test]
+async fn cold_session_seeds_from_server() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo.clone(), memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    run_turn(&h, "what file did you just create?").await;
+    // sessions.sqlite deleted (a new device, wiped data).
+    let h = h.restarted(true).await;
+    assert_eq!(seed_requests(&h.server), 0);
+    run_turn(&h, "and what was in it?").await;
+    // Seeded once, from messages_limit=200, with the answers' tool steps.
+    assert_eq!(seed_requests(&h.server), 1);
+    let limit = h
+        .server
+        .seen()
+        .iter()
+        .find(|r| r.path.contains("messages_limit="))
+        .and_then(|r| query_of(&r.path, "messages_limit"))
+        .unwrap();
+    assert_eq!(limit, "200");
+    assert!(
+        h.server
+            .seen()
+            .iter()
+            .any(|r| r.path.contains("/message_traces/"))
+    );
+    let bodies = llm_bodies(&h.server);
+    let third = shape(bodies.last().unwrap());
+    let roles: Vec<&str> = third.iter().map(|(role, _, _)| role.as_str()).collect();
+    assert_eq!(
+        roles,
+        [
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "user",
+            "assistant",
+            "user"
+        ],
+        "{third:?}"
+    );
+    assert_eq!(
+        third[1].2,
+        ["write_file"],
+        "the tool call came back from the server"
+    );
+    assert_eq!(third[5].1, "hello.txt");
+    // The seeded rows say who ran them, and the next turn needs no seed.
+    run_turn(&h, "anything else?").await;
+    assert_eq!(seed_requests(&h.server), 1);
+    drop(convo);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_turn_leaves_no_session_events() {
+    let slow = Arc::new(AtomicBool::new(false));
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let inner = memory_platform(convo, memory_script());
+    let server = serve({
+        let slow = slow.clone();
+        move |req: &Req| {
+            if req.path == "/llm/v1/chat/completions" && slow.load(Ordering::SeqCst) {
+                tokio::task::block_in_place(|| {
+                    for _ in 0..250 {
+                        if !slow.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                });
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    let kept = h.session_rows().len();
+    assert!(kept > 0);
+    // The next turn stalls in the model; the person stops it.
+    slow.store(true, Ordering::SeqCst);
+    let started = h
+        .host
+        .start(turn(&h, "what file did you just create?"))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    h.host.cancel(&started.turn_id).unwrap();
+    slow.store(false, Ordering::SeqCst);
+    until_done_of(&h.emitter, &started.turn_id).await;
+    let committed = h
+        .emitter
+        .all()
+        .iter()
+        .rev()
+        .find(|e| e.kind == "done" && e.turn_id == started.turn_id)
+        .map(|e| e.payload["committed"].clone());
+    assert_eq!(committed, Some(json!(false)));
+    // The user message the runner appended is gone with the rest of the turn.
+    assert_eq!(h.session_rows().len(), kept, "{:?}", h.session_rows());
+    assert!(
+        h.session_rows().iter().all(|r| r.0 != started.execution_id),
+        "nothing of the cancelled execution stays"
+    );
+    // And the next turn does not see the cancelled question.
+    run_turn(&h, "what file did you just create?").await;
+    let bodies = llm_bodies(&h.server);
+    let last = shape(bodies.last().unwrap());
+    assert_eq!(
+        last.iter()
+            .filter(|(_, c, _)| c.contains("what file did you just create?"))
+            .count(),
+        1,
+        "{last:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_commit_forces_a_reseed_from_the_server() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo.clone(), memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    // Turn 2: the server refuses to save it.
+    convo.lock().unwrap().refuse_commits = 1;
+    let second = run_turn(&h, "what file did you just create?").await;
+    let done = h
+        .emitter
+        .all()
+        .iter()
+        .find(|e| e.kind == "done" && e.turn_id == second)
+        .map(|e| e.payload["committed"].clone());
+    assert_eq!(done, Some(json!(false)));
+    assert_eq!(
+        seed_requests(&h.server),
+        0,
+        "no seed while the session agreed"
+    );
+    // Turn 3 re-seeds from the server: which never got turn 2, so the model
+    // is not told about a turn the server does not hold (it holds turn 1).
+    run_turn(&h, "and what was in it?").await;
+    assert_eq!(
+        seed_requests(&h.server),
+        1,
+        "a refused commit means re-seed"
+    );
+    let bodies = llm_bodies(&h.server);
+    let third = shape(bodies.last().unwrap());
+    let all = format!("{third:?}");
+    assert!(all.contains("create hello.txt with hi"), "{all}");
+    assert!(!all.contains("what file did you just create?"), "{all}");
+    assert_eq!(
+        convo.lock().unwrap().groups.len(),
+        4,
+        "turns 1 and 3 were saved"
+    );
+    // After turn 3's commit the session agrees with the server again.
+    run_turn(&h, "ok?").await;
+    assert_eq!(seed_requests(&h.server), 1);
+}
+
+#[tokio::test]
+async fn a_conversation_that_grew_elsewhere_is_seeded_before_the_turn() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo.clone(), memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    // Another device (or the cloud executor) writes to the conversation.
+    {
+        let mut convo = convo.lock().unwrap();
+        let q = convo.group("q-other", None, "from the web: make it blue", &json!({}));
+        let a = convo.group(
+            "a-other",
+            Some(q),
+            "Done on the web.",
+            &json!({"executed_by": "cloud_executor", "workspace_epoch": 2}),
+        );
+        convo.step(
+            a,
+            "write_file",
+            &json!({"path": "web.txt"}),
+            "{\"written\":true}",
+        );
+    }
+    run_turn(&h, "what file did you just create?").await;
+    assert_eq!(seed_requests(&h.server), 1);
+    let bodies = llm_bodies(&h.server);
+    let body = bodies.last().unwrap().to_string();
+    assert!(body.contains("from the web: make it blue") && body.contains("Done on the web."));
+    assert!(body.contains("web.txt"), "the cloud turn's tool call");
+    assert!(
+        body.contains("create hello.txt with hi"),
+        "the desktop turn too"
+    );
+    let rows = h.session_rows();
+    assert!(rows.iter().any(|r| r.1 == "cloud_executor"), "{rows:?}");
+    assert!(rows.iter().any(|r| r.1 == "desktop"));
+}
+
+#[tokio::test]
+async fn a_path_deny_change_withholds_earlier_tool_outputs() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    h.policy
+        .set(Some(json!({"allowed": true, "path_deny": ["secrets/**"]})));
+    run_turn(&h, "what file did you just create?").await;
+    let bodies = llm_bodies(&h.server);
+    let last = bodies.last().unwrap().to_string();
+    assert!(last.contains("create hello.txt with hi"), "messages stay");
+    assert!(last.contains("output withheld"), "{last}");
+    assert!(
+        !last.contains("hello.txt\\\",\\\"content"),
+        "no body: {last}"
+    );
+    // The re-seed after the change did not bring the bodies back.
+    assert_eq!(seed_requests(&h.server), 1);
+}
+
+#[tokio::test]
+async fn a_refused_session_store_still_runs_the_turn_seeded_from_the_server() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    // The store file turns group-readable: the next launch refuses it.
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut emitter_off = h;
+        emitter_off = emitter_off.restarted(false).await;
+        std::fs::set_permissions(
+            emitter_off.app.path().join(crate::sessions::FILE_NAME),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        assert!(crate::sessions::DesktopStateStore::open(emitter_off.app.path()).is_err());
+        // A host without the store: the turn runs, seeded from the server.
+        let host = no_store_host(&emitter_off);
+        let started = host
+            .start(turn(&emitter_off, "what file did you just create?"))
+            .await
+            .unwrap();
+        until_done_of(&emitter_off.emitter, &started.turn_id).await;
+        let bodies = llm_bodies(&emitter_off.server);
+        let last = shape(bodies.last().unwrap());
+        assert_eq!(last.len(), 5, "{last:?}");
+        assert_eq!(last[3].1, "Created hello.txt.");
+        assert_eq!(seed_requests(&emitter_off.server), 1);
+    }
+}
+
+fn no_store_host(h: &Harness) -> Arc<AgentHost> {
+    Arc::new(
+        AgentHost::new(HostDeps {
+            http: crate::net::SharedHttp::new("0.1.0"),
+            credentials: h.credentials.clone(),
+            client_version: "0.1.0".into(),
+            policy: h.policy.clone(),
+            workspaces: h.workspaces.clone(),
+            emitter: h.emitter.clone(),
+            retry: RetryPolicy {
+                attempts: 3,
+                delay: Duration::from_millis(10),
+            },
+            history: None,
+            sessions: None,
+            index: None,
+            sandbox_deny: super::turn::app_dirs_for_sandbox([Some(h.app.path().to_owned())]),
+            app_id: Some(TEST_APP_ID.to_owned()),
+        })
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn a_threads_session_goes_with_the_thread_and_with_its_workspace_but_not_with_a_sign_out() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    let info = h
+        .host
+        .session_info(CONVERSATION_UUID)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((info.turns, info.seeded_from_server), (1, true));
+    assert!(info.bytes > 0);
+    assert!(h.host.session_info("not-a-uuid").await.is_err());
+    assert!(!h.session_rows().is_empty());
+
+    // A plain sign-out keeps the session (like threads.sqlite).
+    h.host.forget_identity();
+    assert!(!h.session_rows().is_empty());
+
+    // Deleting the thread deletes its session.
+    assert_eq!(
+        h.host
+            .delete_thread_history(&h.workspace_id, "42")
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(h.session_rows().is_empty());
+    assert!(
+        h.host
+            .session_info(CONVERSATION_UUID)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Removing the workspace deletes the sessions of its threads.
+    run_turn(&h, "what file did you just create?").await;
+    assert!(!h.session_rows().is_empty());
+    h.host.remove_workspace(&h.workspace_id).await.unwrap();
+    assert!(h.session_rows().is_empty());
+}
+
+#[tokio::test]
+async fn a_wipe_deletes_every_session() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "create hello.txt with hi").await;
+    assert!(!h.session_rows().is_empty());
+    h.host.wipe_sessions().await;
+    assert!(h.session_rows().is_empty());
+    // The next turn seeds again from the server and carries on.
+    run_turn(&h, "what file did you just create?").await;
+    assert_eq!(seed_requests(&h.server), 1);
+    let bodies = llm_bodies(&h.server);
+    assert!(
+        shape(bodies.last().unwrap()).len() > 1,
+        "the earlier turn was rebuilt"
+    );
 }

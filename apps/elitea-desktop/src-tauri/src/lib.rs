@@ -25,6 +25,8 @@ mod menu;
 mod net;
 mod pkce;
 mod platform;
+mod seed;
+mod sessions;
 mod settings;
 mod store;
 mod tokens;
@@ -54,6 +56,7 @@ use crate::index::{IndexRegistry, MainWindowIndexEvents};
 use crate::local_commands::{
     AppDoctorHooks, AuthCredentials, LocalState, MainWindowEvents, StoredPolicy,
 };
+use crate::sessions::DesktopStateStore;
 use crate::settings::SettingsFiles;
 use crate::tokens::TokenEndpoint;
 use crate::workspaces::WorkspaceStore;
@@ -220,6 +223,18 @@ pub fn run() {
                     None
                 }
             };
+            // The agent's session memory; turns run without it (seeded from
+            // the server every time) when the file is refused.
+            let sessions = match DesktopStateStore::open(&data_dir) {
+                Ok(store) => {
+                    log::info!("session store: {}", store.store().path().display());
+                    Some(Arc::new(store))
+                }
+                Err(error) => {
+                    log::warn!("running without the session store: {error}");
+                    None
+                }
+            };
             let workspaces = Arc::new(WorkspaceStore::new(data_dir.clone()));
             // A linked worktree (a take-back's, ADR-0034) is used by host
             // git only when its repository is a workspace the person opened.
@@ -246,6 +261,7 @@ pub fn run() {
                     emitter: Arc::new(MainWindowEvents(app.handle().clone())),
                     retry: RetryPolicy::default(),
                     history: history.clone(),
+                    sessions: sessions.clone(),
                     index: Some(index.clone()),
                     // The stored sign-in, the history, other workspaces'
                     // checkpoints and indexes, and the logs stay out of
@@ -293,6 +309,7 @@ pub fn run() {
                     credentials: credentials.clone(),
                     workspaces: workspaces.clone(),
                     history: history.clone(),
+                    sessions: sessions.clone(),
                 },
                 auth: auth.clone(),
             }));
@@ -332,6 +349,7 @@ pub fn run() {
             local_commands::turn_changes,
             local_commands::thread_history,
             local_commands::thread_history_delete,
+            local_commands::session_info,
             local_commands::checkpoint_restore,
             local_commands::checkpoint_preview,
             local_commands::reveal_path,

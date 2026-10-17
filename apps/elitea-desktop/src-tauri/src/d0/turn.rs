@@ -27,7 +27,6 @@ use std::time::Duration;
 use adk_agent::LlmAgentBuilder;
 use adk_core::{Agent, Content, Event, Part, RunConfig, StreamingMode, Toolset};
 use adk_runner::Runner;
-use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use async_trait::async_trait;
 use elitea_agent_runtime::host::{
     EventSink, ExecutionGuard, HostError, LocalExecutionGuard, LocalStop, ModelRequest,
@@ -59,15 +58,17 @@ use super::recorder::{FileChange, Recorder};
 use super::remote_tools::{
     RemoteContext, RemoteToolProvider, RetryPolicy, TOOLSET_NAME as REMOTE_TOOLSET,
 };
+use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
 use super::tools::{ObservedToolset, ToolObserver};
 use crate::history::{HistoryStore, NewTurn, Owner, StoredTurn, TurnTap};
 use crate::index::IndexRegistry;
+use crate::sessions::DesktopStateStore;
 use crate::workspaces::{Workspace, WorkspaceStore};
 
-const APP_NAME: &str = "elitea-desktop";
-const AGENT_NAME: &str = "elitea_agent";
-const USER_ID: &str = "local";
+const APP_NAME: &str = crate::sessions::APP_NAME;
+const AGENT_NAME: &str = AGENT_AUTHOR;
+const USER_ID: &str = crate::sessions::ADK_USER;
 /// How long one tool call may take (an approval can keep it waiting).
 const TOOL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
@@ -169,6 +170,10 @@ pub struct HostDeps {
     pub retry: RetryPolicy,
     /// The local thread history; `None` runs without one.
     pub history: Option<Arc<HistoryStore>>,
+    /// The agent's session memory (`sessions.sqlite`, the runtime's
+    /// `StateStore`); `None` runs every turn on an in-memory session seeded
+    /// from the server conversation.
+    pub sessions: Option<Arc<DesktopStateStore>>,
     /// The workspaces' local indexes; `None` offers no index tools.
     pub index: Option<Arc<IndexRegistry>>,
     /// The app's own directories as Tauri resolved them (config, data,
@@ -1032,6 +1037,28 @@ impl AgentHost {
         )?;
         events.status(Phase::Starting, None);
         let question_id = uuid::Uuid::new_v4().to_string();
+        // The conversation's session: reopened from the store, seeded from
+        // the server when it is behind (a take-back, a new device, a refused
+        // commit). Held (tagged with the question until the server names the
+        // execution) so no second turn of the conversation writes to it.
+        let owner = self.owner(&api).await.ok();
+        let mut memory = SessionPlan::open(
+            self.deps.sessions.as_ref(),
+            owner.as_ref(),
+            &api,
+            request.project_id,
+            &policy,
+            &answering,
+            &question_id,
+        )
+        .await
+        .map_err(|error| match error {
+            SessionError::Api(error) => TurnError::from(error),
+            SessionError::Busy => TurnError::new(
+                "conversation_busy",
+                "Another turn of this conversation is still running.",
+            ),
+        })?;
         let started = api
             .start_turn(
                 request.project_id,
@@ -1044,6 +1071,7 @@ impl AgentHost {
             )
             .await;
         let started = started?;
+        memory.retag(&started.execution_id);
         Ok(Prepared {
             conversation,
             conversation_uuid: answering.conversation_uuid,
@@ -1058,6 +1086,7 @@ impl AgentHost {
             policy,
             claim,
             api,
+            memory,
         })
     }
 
@@ -1079,6 +1108,7 @@ impl AgentHost {
             policy,
             claim,
             api,
+            mut memory,
             ..
         } = prepared;
         let recorder = entry.recorder.clone();
@@ -1094,7 +1124,7 @@ impl AgentHost {
         let sink = Arc::new(TurnSink::default());
         let run = self.run_agent(
             &request, &events, &workspace, &admitted, &project, &invoked, &started, &recorder,
-            &sink, &api,
+            &sink, &api, &memory,
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -1124,6 +1154,10 @@ impl AgentHost {
         let conversation_id = request.conversation_id.clone();
         let Some(result) = outcome else {
             let _ = sink.finish(RunOutcome::Stopped).await;
+            // Nothing of a cancelled turn is saved: nothing of it stays.
+            memory
+                .settle(&started.execution_id, Err(Refusal::Cancelled))
+                .await;
             drop(claim);
             let changes = recorder.changes(session.workspace());
             self.index_changed(&request.workspace_id, changes.len());
@@ -1177,6 +1211,17 @@ impl AgentHost {
         });
         let committed = api
             .commit_turn(request.project_id, &started.execution_id, &body)
+            .await;
+        // The session holds what the server holds, or is marked to be
+        // rebuilt from it.
+        memory
+            .settle(
+                &started.execution_id,
+                match &committed {
+                    Ok(_) => Ok(started.response_message_id.as_str()),
+                    Err(_) => Err(Refusal::NotSaved),
+                },
+            )
             .await;
         // Free before `done`: the UI may send the next turn as soon as it sees it.
         drop(claim);
@@ -1239,6 +1284,7 @@ impl AgentHost {
         recorder: &Arc<Recorder>,
         sink: &Arc<TurnSink>,
         api: &Arc<PlatformApi>,
+        memory: &SessionPlan,
     ) -> Result<String, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
         // This turn's framing nonce: the untrusted blocks end only at a
@@ -1361,18 +1407,10 @@ impl AgentHost {
         );
         let agent = plan.wrap(agent);
 
-        // StateStore: an in-memory session for this one turn.
-        let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
-        let session_id = started.execution_id.clone();
-        sessions
-            .create(CreateRequest {
-                app_name: APP_NAME.to_owned(),
-                user_id: USER_ID.to_owned(),
-                session_id: Some(session_id.clone()),
-                state: HashMap::new(),
-            })
-            .await
-            .map_err(|_| failed("internal", "The agent session could not be created."))?;
+        // StateStore: the conversation's session (`session.rs`): the runner
+        // folds its events into the model request and appends this turn's.
+        let sessions = memory.service.clone();
+        let session_id = memory.session_id.clone();
         let run_config = RunConfig {
             streaming_mode: StreamingMode::None,
             ..RunConfig::default()
@@ -1525,10 +1563,22 @@ impl AgentHost {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .forget_workspace(workspace_id);
-        if let Some(history) = &self.deps.history
-            && let Err(error) = history.delete_workspace(workspace_id)
-        {
-            log::warn!("could not delete a removed workspace's thread history: {error}");
+        if let Some(history) = &self.deps.history {
+            // The sessions of the workspace's threads go with them (a cache:
+            // a conversation used elsewhere rebuilds from the server).
+            match history.workspace_threads(workspace_id) {
+                Ok(threads) => {
+                    for (deployment, user_id, uuid) in threads {
+                        self.forget_session(&deployment, user_id, &uuid).await;
+                    }
+                }
+                Err(error) => {
+                    log::warn!("could not list a removed workspace's threads: {error}");
+                }
+            }
+            if let Err(error) = history.delete_workspace(workspace_id) {
+                log::warn!("could not delete a removed workspace's thread history: {error}");
+            }
         }
         Ok(())
     }
@@ -1627,10 +1677,109 @@ impl AgentHost {
             return Ok(0);
         };
         let owner = self.owner(&self.api).await?;
+        // The thread's agent sessions go with it.
+        let uuids = {
+            let (history, owner, workspace, conversation) = (
+                history.clone(),
+                owner.clone(),
+                workspace_id.to_owned(),
+                conversation.clone(),
+            );
+            tokio::task::spawn_blocking(move || {
+                history.thread_uuids(&owner, &workspace, &conversation)
+            })
+            .await
+            .map_err(|e| TurnError::new("internal", format!("the history read stopped: {e}")))?
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+        };
+        for uuid in uuids {
+            self.forget_session(&owner.origin, owner.user_id, &uuid)
+                .await;
+        }
         history
             .forget_thread(owner, workspace_id.to_owned(), conversation)
             .await
             .map_err(|e| TurnError::new("storage", e.to_string()))
+    }
+
+    /// Forget one conversation's agent session (best effort: a cache).
+    async fn forget_session(&self, deployment: &str, user_id: i64, conversation_uuid: &str) {
+        if let Some(sessions) = &self.deps.sessions
+            && let Err(error) = sessions
+                .store()
+                .delete_conversation(deployment, user_id, conversation_uuid)
+                .await
+        {
+            log::warn!("could not delete a conversation's agent session: {error}");
+        }
+    }
+
+    /// A take-back brought the cloud's turns into the conversation: its
+    /// agent session is marked so the next local turn re-seeds from the
+    /// server and folds them in (`executed_by = 'cloud_executor'`).
+    pub async fn mark_session_stale(&self, conversation_uuid: &str) {
+        let Some(sessions) = &self.deps.sessions else {
+            return;
+        };
+        let owner = match self.owner(&self.api).await {
+            Ok(owner) => owner,
+            Err(error) => {
+                log::warn!(
+                    "an agent session could not be marked for re-seeding: {}",
+                    log_reason(&error.code, error.status)
+                );
+                return;
+            }
+        };
+        if let Err(error) = sessions
+            .store()
+            .mark_reseed(&owner.origin, owner.user_id, conversation_uuid)
+            .await
+        {
+            log::warn!("an agent session could not be marked for re-seeding: {error}");
+        }
+    }
+
+    /// `session_info`: the size and state of a conversation's agent session
+    /// (`None` without one); for the Doctor and the context meter.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`, `not_signed_in`, or the store could not be read.
+    pub async fn session_info(
+        &self,
+        conversation_uuid: &str,
+    ) -> Result<Option<crate::sessions::SessionInfo>, TurnError> {
+        let uuid = uuid::Uuid::parse_str(conversation_uuid)
+            .map_err(|_| {
+                TurnError::new(
+                    "invalid_request",
+                    "conversation_uuid must be a conversation UUID",
+                )
+            })?
+            .hyphenated()
+            .to_string();
+        let Some(sessions) = &self.deps.sessions else {
+            return Ok(None);
+        };
+        let owner = self.owner(&self.api).await?;
+        sessions
+            .store()
+            .info(&owner.origin, owner.user_id, &uuid)
+            .await
+            .map_err(|e| TurnError::new("storage", e.to_string()))
+    }
+
+    /// A wipe (`host_wipe`: a revoked device, a refresh token the server no
+    /// longer honours) deletes every agent session. A plain sign-out keeps
+    /// them, like `threads.sqlite`.
+    pub async fn wipe_sessions(&self) {
+        if let Some(sessions) = self.deps.sessions.clone() {
+            let result = tokio::task::spawn_blocking(move || sessions.store().delete_all()).await;
+            if !matches!(result, Ok(Ok(_))) {
+                log::warn!("the agent sessions could not be deleted on wipe");
+            }
+        }
     }
 
     /// `approval_respond`. False when no such question is open.
@@ -1905,6 +2054,8 @@ struct Prepared {
     claim: WorkspaceClaim,
     /// The platform client of this turn, on its pinned credentials.
     api: Arc<PlatformApi>,
+    /// The conversation's session, held by this turn.
+    memory: SessionPlan,
 }
 
 fn model_failure(text: &str) -> TurnError {

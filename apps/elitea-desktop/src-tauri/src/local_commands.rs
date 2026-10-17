@@ -597,6 +597,16 @@ pub async fn thread_history(
     })
 }
 
+/// The size and state of a conversation's agent session, or `null` without
+/// one (`sessions.rs`): for the Doctor and the context meter.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn session_info(
+    state: State<'_, LocalState>,
+    conversation_uuid: String,
+) -> Result<Option<crate::sessions::SessionInfo>, IpcError> {
+    Ok(state.agents.session_info(&conversation_uuid).await?)
+}
+
 #[derive(Serialize)]
 pub struct HistoryDeleted {
     deleted: usize,
