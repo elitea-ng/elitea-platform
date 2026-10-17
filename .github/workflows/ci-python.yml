@@ -532,4 +532,4 @@ jobs:
         run: |
           cat "${RUNNER_TEMP}/natstest-serve.log" || true
           log="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["log"])' "${RUNNER_TEMP}/natsenv.json" 2>/dev/null || true)"
-          [ -n "$log" ] && cat "$log" || true
+          if [ -n "$log" ]; then cat "$log" || true; fi
