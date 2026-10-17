@@ -15,6 +15,7 @@ import (
 	"time"
 
 	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -464,6 +465,9 @@ ON CONFLICT (id) DO NOTHING;
 SELECT create_tenant_schema('p_1');
 SELECT create_tenant_schema('p_2');`); err != nil {
 		t.Fatalf("create the tenant schemas: %v", err)
+	}
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 
 	var defaultExpression *string
