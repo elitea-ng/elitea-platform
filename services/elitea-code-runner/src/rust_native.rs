@@ -158,6 +158,10 @@ pub(crate) struct CargoPayload {
     profile: CargoRuntime,
     objects: [CargoObject; 2],
 }
+/// The release of the compiler that built this binary (build.rs reads `rustc -V`).
+/// It also compiles the bundles: both run in the same pinned `rust-runtime` image.
+pub(crate) const RUSTC_RELEASE: &str = env!("ELITEA_RUSTC_RELEASE");
+
 impl CargoPayload {
     fn validate(&self) -> Result<()> {
         let target = Platform {
@@ -171,7 +175,7 @@ impl CargoPayload {
             || !hash_shape(&self.declaration_sha256)
             || !image_shape(&self.profile.preparation_image)
             || !image_shape(&self.profile.execution_image)
-            || self.profile.rust_revision != "1.97.1"
+            || self.profile.rust_revision != RUSTC_RELEASE
             || self.profile.target != target
             || !policy_shape(&self.profile.policy_revision)
         {
@@ -563,7 +567,7 @@ async fn retain_in(workspace: &Path, image: &CargoImage) -> Result<PreparationRe
                 profile: CargoRuntime {
                     preparation_image: job.preparer_image_digest.clone(),
                     execution_image: job.execution_image_digest.clone(),
-                    rust_revision: "1.97.1".into(),
+                    rust_revision: RUSTC_RELEASE.into(),
                     os: job.platform.os.clone(),
                     arch: job.platform.arch.clone(),
                     target: job.platform.target()?.into(),
@@ -797,3 +801,25 @@ pub(crate) fn execution_profile(
 #[cfg(all(test, target_os = "linux"))]
 #[path = "rust_native_tests.rs"]
 mod tests;
+
+// Not Linux-only: the recorded release must match the pin on every host.
+#[cfg(test)]
+mod release_tests {
+    use super::RUSTC_RELEASE;
+
+    #[test]
+    fn the_recorded_release_is_the_compiler_that_built_this_binary() {
+        let parts: Vec<_> = RUSTC_RELEASE.split('.').collect();
+        assert_eq!(parts.len(), 3, "{RUSTC_RELEASE}");
+        assert!(
+            parts.iter().all(|part| part.parse::<u32>().is_ok()),
+            "{RUSTC_RELEASE}"
+        );
+        let pin = include_str!("../rust-toolchain.toml")
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("channel = \""))
+            .and_then(|rest| rest.strip_suffix('"'))
+            .expect("rust-toolchain.toml names a channel");
+        assert_eq!(RUSTC_RELEASE, pin, "built by another compiler than the pin");
+    }
+}

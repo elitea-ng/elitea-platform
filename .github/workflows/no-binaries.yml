@@ -37,6 +37,15 @@ jobs:
           fetch-depth: 1
       - name: Scan for binary / oversize tracked files
         run: bash scripts/no-binaries-check.sh
+      # One Rust version everywhere (PR #1297): every rust-toolchain.toml, every
+      # `FROM rust:` image (same digest in every stage) and every crate's
+      # rust-version, held to the repository-root pin. This workflow has no
+      # path filter, so the gate runs on whatever file moved. The second
+      # command proves the gate red, once per assertion, on a broken copy.
+      - name: One Rust toolchain across cargo, CI and images
+        run: |
+          bash scripts/ci/check-rust-toolchain.sh
+          bash scripts/ci/check-rust-toolchain-test.sh
       # Every tracked shell file must at least parse. That is worth little on
       # its own, and it is worth having for EVERY tracked shell file: launchers
       # used to get this check one at a time, and the set they belong to grew

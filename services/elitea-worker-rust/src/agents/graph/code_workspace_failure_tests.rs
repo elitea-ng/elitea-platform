@@ -90,7 +90,7 @@ fn workspace_guard_classes_use_typed_status_without_message_inference() {
         (tonic::Code::Internal, NodeFailureClass::Unknown),
     ] {
         assert_eq!(
-            CodeWorkspaceFailure::sandbox(&SandboxCallError::Submission { code }).class(),
+            CodeWorkspaceFailure::sandbox(&SandboxCallError::coded(code)).class(),
             expected,
         );
     }
@@ -167,7 +167,7 @@ fn acquisition_denial_preserves_original_started_identity_without_authorizing_re
 fn hydration_authentication_and_authorization_loss_stop_the_original_started_attempt() {
     for code in [tonic::Code::Unauthenticated, tonic::Code::PermissionDenied] {
         let failure = workspace_attempt_failure(
-            CodeWorkspaceFailure::sandbox(&SandboxCallError::Submission { code }),
+            CodeWorkspaceFailure::sandbox(&SandboxCallError::coded(code)),
             CodeAttemptPhase::Hydration,
             [7; 32],
             true,
@@ -195,9 +195,7 @@ fn hydration_authentication_and_authorization_loss_stop_the_original_started_att
 fn workspace_stop_retains_typed_control_decision_for_fresh_and_started_attempts() {
     for started in [false, true] {
         let failure = workspace_attempt_failure(
-            CodeWorkspaceFailure::sandbox(&SandboxCallError::Submission {
-                code: tonic::Code::Cancelled,
-            }),
+            CodeWorkspaceFailure::sandbox(&SandboxCallError::coded(tonic::Code::Cancelled)),
             CodeAttemptPhase::Hydration,
             [7; 32],
             started,
@@ -229,9 +227,7 @@ fn workspace_stop_retains_typed_control_decision_for_fresh_and_started_attempts(
 fn workspace_deadline_or_unknown_response_reconciles_the_same_dispatch() {
     for error in [
         CodeWorkspaceFailure::deadline(),
-        CodeWorkspaceFailure::sandbox(&SandboxCallError::Submission {
-            code: tonic::Code::Internal,
-        }),
+        CodeWorkspaceFailure::sandbox(&SandboxCallError::coded(tonic::Code::Internal)),
         CodeWorkspaceFailure::sandbox(&SandboxCallError::InvalidReceipt),
     ] {
         let failure = workspace_attempt_failure(error, CodeAttemptPhase::Hydration, [7; 32], true)
@@ -271,12 +267,12 @@ fn cold_compile_workspace_failure_remains_typed_without_classifying_legacy_text(
         (tonic::Code::Cancelled, NodeFailureClass::Cancelled),
     ] {
         let preparation = CodePreparationFailure::from(CodeWorkspaceFailure::sandbox(
-            &SandboxCallError::Submission { code },
+            &SandboxCallError::coded(code),
         ));
         assert_eq!(preparation.class(), expected);
         assert_eq!(preparation.phase(), CodeAttemptPhase::Hydration);
         let failure = workspace_attempt_failure(
-            CodeWorkspaceFailure::sandbox(&SandboxCallError::Submission { code }),
+            CodeWorkspaceFailure::sandbox(&SandboxCallError::coded(code)),
             preparation.phase(),
             [7; 32],
             true,
