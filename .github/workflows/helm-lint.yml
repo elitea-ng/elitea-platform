@@ -341,6 +341,26 @@ jobs:
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-nats-security.sh
 
+      # The budget write-back alerts FIRE (fourth review of #1296): promtool
+      # unit tests over the rule the elitea chart renders. The drop alert must
+      # page on the first drop (0 -> 1) and on a series that appears late; the
+      # ack-pending alert at 80% of MaxAckPending. Pinned Prometheus release,
+      # verified by SHA-256; SCHEDULER_ALERTS_REQUIRE_PROMTOOL makes a missing
+      # binary fail instead of skip.
+      - name: Scheduler alerts — promtool proves the budget write-back rules fire
+        env:
+          PROMETHEUS_VERSION: "3.15.0"
+          PROMETHEUS_SHA256: "2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0"
+          SCHEDULER_ALERTS_REQUIRE_PROMTOOL: "1"
+        run: |
+          tarball="${RUNNER_TEMP}/prometheus.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          echo "${PROMETHEUS_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" -C "${RUNNER_TEMP}"
+          PROMTOOL="${RUNNER_TEMP}/prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" \
+            bash deploy/helm/tests/render-scheduler-alerts.sh
+
       # `helm lint` covers every chart. The `template` job below covers only the
       # charts its matrix names, and a chart in neither list is never rendered
       # and never schema-checked, with nothing reporting the hole.
