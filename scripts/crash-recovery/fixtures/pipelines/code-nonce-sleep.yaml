@@ -1,0 +1,37 @@
+# Crash fixture for P10 (Code execution). The first node records its own start time and a random nonce on its
+# first lines, then sleeps; the result carries both, so the harness can prove the result came from the run that
+# was in flight at the cut (I2 start-time sentinel) and not from a re-run. The second node is the downstream
+# sentinel ("9999"): it runs only after the first node's single result. {{sleep_ms}} is filled by seed.py.
+state:
+  input: {type: str}
+  messages: {type: list}
+  probe: {type: dict}
+entry_point: sleeper
+nodes:
+  - id: sleeper
+    type: code
+    language: javascript
+    code:
+      type: fixed
+      value: |
+        export default async function run(state) {
+          const started_at_ms = Date.now();
+          const nonce = crypto.randomUUID();
+          await new Promise(resolve => setTimeout(resolve, {{sleep_ms}}));
+          return {started_at_ms, nonce, count: 2};
+        }
+    input: [input]
+    output: [probe]
+    transition: sentinel_9999
+  - id: sentinel_9999
+    type: code
+    language: javascript
+    code:
+      type: fixed
+      value: |
+        export default async function run(state) {
+          return "CRASHRESULT " + JSON.stringify(state.probe) + " SENTINEL9999";
+        }
+    input: [probe]
+    output: [messages]
+    transition: END

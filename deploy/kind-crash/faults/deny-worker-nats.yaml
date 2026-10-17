@@ -1,0 +1,43 @@
+# KX-06: Worker -> NATS partition for about 90 s.
+#
+#   kubectl --context kind-elitea-crash apply  -f deploy/kind-crash/faults/deny-worker-nats.yaml
+#   sleep 90
+#   kubectl --context kind-elitea-crash delete -f deploy/kind-crash/faults/deny-worker-nats.yaml
+#
+# The chart's elitea-worker-netpol is Ingress-only (verified in a helm render), so
+# the Worker pods have no egress policy today. This policy selects them for Egress,
+# which turns everything not listed below into a deny. NATS is not listed.
+#
+# Needs a CNI that enforces NetworkPolicy. Run the probe in README.md first. The
+# NATS pod label (app.kubernetes.io/name=nats) is the upstream chart's and is UNVERIFIED:
+# check `kubectl -n elitea get pod elitea-nats-0 --show-labels` before use.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: crash-deny-worker-nats
+  namespace: elitea
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: elitea-worker-python
+  policyTypes:
+    - Egress
+  egress:
+    # DNS.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Every other pod in the namespace (Main, edge, PostgreSQL, Supervisor), NATS excluded.
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: NotIn
+                values: ["nats"]

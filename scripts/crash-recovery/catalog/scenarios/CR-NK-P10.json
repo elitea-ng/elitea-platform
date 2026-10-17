@@ -1,0 +1,47 @@
+{
+  "id": "CR-NK-P10",
+  "cell": "NATS x P10 (chat 855)",
+  "matrix_cell": "NATS x P10",
+  "now": "R\u00b7U",
+  "target": "R",
+  "fixture": "code-nonce-sleep-50",
+  "trigger": {
+    "kind": "obs",
+    "until": "code_runtime_running",
+    "timeout_s": 120,
+    "params": {
+      "sleep_s": 50,
+      "min_age_s": 3,
+      "remaining_s": 30
+    }
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "nats"
+    },
+    {
+      "action": "start",
+      "target": "nats",
+      "after_s": 2,
+      "healthy": false
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      0
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 300
+  },
+  "browser": true,
+  "notes": "Broker SIGKILL with the store kept (named volume). A claimed run does not depend on NATS.",
+  "gap": null,
+  "repeat": 3,
+  "tier": "T0"
+}

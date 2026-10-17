@@ -27,6 +27,11 @@ It keeps TWO REQUEST JOURNALS, and serves both (issue #470 for the first):
   GET    /tool/__journal      the recorded TOOL calls, newest last
   DELETE /tool/__journal      empty it
 
+MOCK_LLM_TOOL_DELAY_MS (default 0 = none, at most MAX_DELAY_MS) holds the
+response of GET /tool/status and POST /tool/items for that long AFTER the call
+is journaled: the effect has happened and the HTTP call is still in flight, so
+a crash test can kill a process in exactly that window.
+
 Two journals rather than one because the questions are different and the
 windows are different: "which model did the gateway ask" is answered by the
 first, "did the agent run this tool" only by the second, and a spec bounding
@@ -75,6 +80,12 @@ PER-REQUEST MODES, SELECTED BY THE PROMPT (see `_script_for`):
   [[mock:slow]]       stream a long, scripted reply one word at a time with a
                       per-chunk delay, so a test can act while the turn is
                       still open (press Stop, navigate away, drop the stream).
+                      MOCK_LLM_SLOW_FIRST_CHUNK_DELAY_MS (default 0) holds the
+                      whole response back, headers included, until that long
+                      after the request is journaled: the call stays "before
+                      the first token" so a crash test can kill the Worker in
+                      that window. Applies to slow mode only, streaming or
+                      unary.
   [[mock:call_tool <operationId>]]
                       answer with a CALL to that operation of an attached
                       toolkit, then — once the tool result comes back — with a
@@ -157,6 +168,37 @@ PREFIX = os.environ.get("MOCK_LLM_PREFIX", "MOCK:")
 # show the finished answer without ever painting a partial one, which would
 # make an incremental assertion flaky rather than wrong.
 CHUNK_DELAY_SECONDS = float(os.environ.get("MOCK_LLM_CHUNK_DELAY_MS", "0")) / 1000.0
+# The crash-test delays below are parsed strictly, unlike the knobs above: a
+# typo'd value that silently became "no delay" would make a crash test pass
+# without ever killing anything in flight. Refused at import instead.
+MAX_DELAY_MS = 300_000
+
+
+def _delay_seconds_from_env(name: str) -> float:
+    """`name` as whole milliseconds in [0, MAX_DELAY_MS], returned as seconds.
+
+    Unset or empty is 0. A negative, fractional, non-numeric or oversized value
+    raises, so the process refuses to start rather than run with a delay the
+    operator did not ask for.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return 0.0
+    try:
+        millis = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a whole number of milliseconds, got {raw!r}") from None
+    if millis < 0 or millis > MAX_DELAY_MS:
+        raise ValueError(f"{name} must be between 0 and {MAX_DELAY_MS} ms, got {millis}")
+    return millis / 1000.0
+
+
+# How long GET /tool/status and POST /tool/items stay in flight AFTER their
+# journal entry is written. See the module docstring.
+TOOL_DELAY_SECONDS = _delay_seconds_from_env("MOCK_LLM_TOOL_DELAY_MS")
+# How long a `[[mock:slow]]` response is withheld after the request is
+# journaled, so the model call stays before its first token.
+SLOW_FIRST_CHUNK_DELAY_SECONDS = _delay_seconds_from_env("MOCK_LLM_SLOW_FIRST_CHUNK_DELAY_MS")
 
 # ── Per-request modes ────────────────────────────────────────────────────────
 # Read the module docstring for WHY the selector is the prompt and not
@@ -1296,6 +1338,8 @@ class Handler(BaseHTTPRequestHandler):
                 "operation": TOOL_STATUS_OPERATION,
                 "at": time.time(),
             })
+            if TOOL_DELAY_SECONDS:
+                time.sleep(TOOL_DELAY_SECONDS)
             self._send(200, TOOL_STATUS_BODY)
             return
         if path == "/v1/models":
@@ -1451,6 +1495,12 @@ class Handler(BaseHTTPRequestHandler):
         created = int(time.time())
         completion_id = "chatcmpl-mock"
 
+        # Withheld AFTER the journal entry and BEFORE any byte of the response,
+        # headers included, so a client sees a call that has been received and
+        # has produced nothing yet.
+        if script.mode == "slow" and SLOW_FIRST_CHUNK_DELAY_SECONDS:
+            time.sleep(SLOW_FIRST_CHUNK_DELAY_SECONDS)
+
         # `script` is set for every path that reaches here: only /v1/embeddings
         # leaves it None, and that path returned above.
         if request.get("stream"):
@@ -1481,6 +1531,8 @@ class Handler(BaseHTTPRequestHandler):
             "body": raw.decode("utf-8", "replace")[:1024],
             "at": time.time(),
         })
+        if TOOL_DELAY_SECONDS:
+            time.sleep(TOOL_DELAY_SECONDS)
         self._send(201, TOOL_CREATE_BODY)
 
     def _images_generations(self) -> None:

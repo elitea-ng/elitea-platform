@@ -1,0 +1,48 @@
+{
+  "id": "CR-MK-P10-prep",
+  "cell": "Main x P10, prepared job executing",
+  "matrix_cell": "Main x P10",
+  "now": "R/F2\u00b7U",
+  "target": "R",
+  "fixture": "python-prepared-sleep-50",
+  "trigger": {
+    "kind": "obs",
+    "until": "prepared_execution_running",
+    "timeout_s": 300,
+    "params": {
+      "sleep_s": 50,
+      "min_age_s": 3,
+      "remaining_s": 30
+    }
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "main"
+    },
+    {
+      "action": "start",
+      "target": "main",
+      "after_s": 2,
+      "healthy": true
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      0,
+      1
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "budget_s": 480,
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    }
+  },
+  "notes": "The prepared artifact is committed; no re-download after recovery (I2P).",
+  "gap": null,
+  "repeat": 3,
+  "browser": false,
+  "tier": "T0b"
+}
