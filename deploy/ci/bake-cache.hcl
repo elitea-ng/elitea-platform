@@ -12,10 +12,11 @@
 //
 // READ side only. The WRITE side (cache-to) is derived from these lines by
 // .github/actions/build-stack-images at run time, because what a run may
-// write depends on where it runs: main exports every layer (mode=max), a pull
-// request exports only the final image layers (mode=min). The repository's
-// Actions cache is capped at 10 GB and a pull request's builder-stage layers
-// are, for an unchanged service, byte-identical copies of main's.
+// write depends on where it runs: a push to main exports every layer
+// (mode=max), every other run (pull requests included) exports nothing. The
+// repository's Actions cache is capped at 10 GB, and pull-request copies of
+// main's layers were what evicted main's. Keep cache-to OUT of this file: a
+// cache-to here would write from every run.
 //
 // The worker service's scope depends on WHICH worker the stack runs:
 // bake-cache-rust.hcl overrides it for the native runtime.

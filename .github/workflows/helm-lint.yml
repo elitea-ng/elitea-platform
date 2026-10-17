@@ -508,6 +508,7 @@ jobs:
           fi
 
           # Compare as sorted sets: order in either list is not a defect.
+          # shellcheck disable=SC2086 # intentional word splitting: $1 is a space-separated list
           normalise() { printf '%s\n' $1 | sort -u | tr '\n' ' '; }
           dirs="$(normalise "$dirs")"
           published="$(normalise "$published")"

@@ -147,7 +147,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           # This job lints nine modules now, so the cache key reads every module
           # that has a go.sum. tools/uictl has none — it declares no external
           # dependency. The block below is a literal string, so a comment
@@ -218,7 +224,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           cache-dependency-path: |
             services/elitea-main/go.sum
             services/elitea-scheduler/go.sum
@@ -469,7 +481,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           cache-dependency-path: |
             services/elitea-main/go.sum
             libs/go/*/go.sum
@@ -512,7 +530,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           cache-dependency-path: services/elitea-main/go.sum
       - name: Run database integration tests
         env:
@@ -554,7 +578,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version-file: services/elitea-main/go.mod
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           cache-dependency-path: services/elitea-main/go.sum
       - name: Check compiled snapshot publication and recovery
         env:
