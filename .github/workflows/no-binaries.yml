@@ -88,7 +88,13 @@ jobs:
       # as an error (#338).
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           cache-dependency-path: services/elitea-main/go.sum
       # -count=1 is required, not tidiness. The gate reads YAML from deploy/,
       # which is outside this module, so the Go test cache does not notice an
@@ -398,3 +404,67 @@ jobs:
             fi
           fi
           python scripts/ci/check_landed_line_survival.py --tip "${tip}"
+
+  # The 10 GB Actions cache. Measured 2026-10-16 it held 10.7 GB in 809
+  # entries, GitHub evicted entries within minutes, and the largest writers
+  # were PULL REQUESTS: setup-go caches of 0.3-1.2 GB per pull request and
+  # ~2.9 GB of pull-request BuildKit blobs, every one of them evicting the
+  # main-branch entry each pull request should have been reading. The rule
+  # since then is "pull requests read, a push to main writes"; this job holds
+  # it, for every workflow and composite action, with the negative cases in
+  # scripts/ci/test_check_workflow_cache_writes.py.
+  #
+  # actionlint over EVERY workflow runs here too: no other job lints the
+  # whole directory, and a cache condition that does not parse is a cache
+  # condition that never gates. The binary is pinned by version and checksum.
+  #
+  # It lives here because this workflow has no path filter: a cache step can
+  # be added to any workflow in any pull request.
+  workflow-cache-writes:
+    name: Workflow caches are written from main only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install the checker's one dependency
+        run: python -m pip install --disable-pip-version-check pyyaml==6.0.3
+      # Read the COUNT of scenarios, not the exit status alone: `unittest`
+      # exits 0 when it collects nothing (#534).
+      - name: The checker still refuses every pull-request writer it exists for
+        run: |
+          set -euo pipefail
+          expected="$(grep -c '^    def test_' scripts/ci/test_check_workflow_cache_writes.py)"
+          if [ "${expected}" -lt 30 ]; then
+            echo "::error::found ${expected} scenario(s) in the suite, expected at least 30 — the pattern stopped matching, so this step checked nothing"
+            exit 1
+          fi
+          output="$(python -m unittest discover -s scripts/ci -p 'test_check_workflow_cache_writes.py' -v 2>&1)"
+          printf '%s\n' "${output}"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+          if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
+            echo "::error::the suite file holds ${expected} scenario(s) and unittest ran ${ran:-none}"
+            exit 1
+          fi
+          echo "cache-write checker: ${ran} of ${expected} scenarios ran"
+      - name: No workflow cache step writes from a pull request
+        run: python scripts/ci/check_workflow_cache_writes.py
+      - name: actionlint over every workflow
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -o "${RUNNER_TEMP}/${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}" actionlint
+          # The runner image ships shellcheck, which actionlint runs over every
+          # `run:` script; a missing one would silently skip that half.
+          command -v shellcheck >/dev/null || { echo "::error::shellcheck is not on the runner; actionlint would skip every run: script"; exit 1; }
+          count="$(find .github/workflows -name '*.yml' -o -name '*.yaml' | wc -l)"
+          [ "${count}" -ge 10 ] || { echo "::error::found ${count} workflow file(s); the glob stopped matching"; exit 1; }
+          "${RUNNER_TEMP}/actionlint" -color
+          echo "actionlint: ${count} workflow file(s) clean"

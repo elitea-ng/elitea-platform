@@ -518,16 +518,40 @@ jobs:
           # entry. It is a hit rate, never a source of truth — the scan still
           # builds and reads the image it is given.
           cache-from: type=gha,scope=${{ matrix.image.name }}-linux-amd64
-          # mode=max on a PUSH to main, mode=min otherwise — the daily schedule
-          # also carries the main ref and must not export every layer nightly.
-          # The same write policy as .github/actions/build-stack-images.
-          cache-to: type=gha,mode=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }},scope=${{ matrix.image.name }}-linux-amd64,ignore-error=true
+          # mode=max on a PUSH to main, NOTHING otherwise (an empty cache-to
+          # exports no cache). The daily schedule also carries the main ref and
+          # must not export every layer nightly, and a pull request's mode=min
+          # export was evicted from the 10 GB cache before its next push could
+          # read it — evicting main's on the way (measured 2026-10-16). The
+          # same write policy as .github/actions/build-stack-images.
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('type=gha,mode=max,scope={0}-linux-amd64,ignore-error=true', matrix.image.name) || '' }}
+
+      # The vulnerability DB cache trivy-action keeps itself (`cache-trivy-
+      # <date>`, ~95 MB) is saved by a full actions/cache from EVERY ref, so
+      # each pull request that ran on a new day wrote its own copy. The same
+      # key is restored here instead, and saved only on a push to main; the
+      # action's own cache is off (`cache: "false"` below). trivy reads the
+      # directory through TRIVY_CACHE_DIR, which the action always sets to
+      # its `cache-dir` input (default `<workspace>/.cache/trivy`).
+      - name: Date for the trivy DB cache key
+        id: trivy-date
+        run: echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+      - name: Restore the trivy DB (pull requests read, main writes)
+        uses: ./.github/actions/main-write-cache
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: cache-trivy-${{ steps.trivy-date.outputs.date }}
+          restore-keys: cache-trivy-
 
       # exit-code 0 on purpose: this step collects the report, and the step
       # below is the gate. Splitting them lets the gate print every finding.
       - name: Scan the shipping image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
+          # The DB cache is the step above. This also turns off setup-trivy's
+          # binary cache, so the pinned binary is downloaded each run.
+          cache: "false"
+          cache-dir: ${{ github.workspace }}/.cache/trivy
           image-ref: ${{ matrix.image.name }}:ci-scan
           scanners: vuln
           severity: HIGH,CRITICAL
