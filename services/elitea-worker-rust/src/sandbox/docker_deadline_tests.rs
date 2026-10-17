@@ -132,6 +132,8 @@ struct RuntimeState {
     terminations: AtomicUsize,
     cleanups: AtomicUsize,
     observed: Notify,
+    /// The envelope the runtime adapter reports once the runtime stopped.
+    receipt: std::sync::Mutex<Option<Vec<u8>>>,
 }
 
 impl Runtime {
@@ -147,6 +149,7 @@ impl Runtime {
             terminations: AtomicUsize::new(0),
             cleanups: AtomicUsize::new(0),
             observed: Notify::new(),
+            receipt: std::sync::Mutex::new(None),
         }))
     }
 
@@ -235,7 +238,7 @@ impl CodeJobRuntime for Runtime {
         self.assert_identity(identity, true);
         self.0.receipts.fetch_add(1, Ordering::SeqCst);
         self.0.observed.notify_one();
-        Ok(None)
+        Ok(self.0.receipt.lock().unwrap().clone())
     }
 
     async fn terminate(&self, identity: &CodeJobIdentity) -> Result<(), SandboxError> {
@@ -658,5 +661,77 @@ async fn phase_deadline_migration_and_old_writer_preserve_conservative_legacy_bu
     assert_eq!(timestamps(&database.pool, 64).await, (None, None));
     assert_eq!(runtime.0.receipts.load(Ordering::SeqCst), 1);
     runtime.assert_counts(0, 0, 1);
+    database.pool.close().await;
+}
+
+/// FU-214: after a Supervisor restart, a dispatched job whose runtime the
+/// adapter proves lost becomes one durable `sandbox.runtime_lost` failure; the
+/// runner's own `failed` envelope stays `sandbox.code_failed`. Neither starts
+/// or re-signals a runtime.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_lost_runtime_and_a_user_failure_persist_distinct_terminal_codes() {
+    let database = database(true).await;
+    for (key, receipt, expected) in [
+        (
+            61,
+            crate::sandbox::runtime_loss::envelope(
+                crate::sandbox::runtime_loss::RECEIPT_STATUS,
+                Some(255),
+            )
+            .unwrap(),
+            crate::sandbox::runtime_loss::FAILURE_CODE,
+        ),
+        (
+            62,
+            br#"{"revision":1,"status":"failed","exit_code":1,"stdout":"","stderr":"Error"}"#
+                .to_vec(),
+            "sandbox.code_failed",
+        ),
+    ] {
+        let request = request();
+        let scope = scope(&request, key);
+        let runtime = Runtime::new(&scope);
+        *runtime.0.receipt.lock().unwrap() = Some(receipt);
+        let supervisor = DockerSupervisor::new(
+            JobLedger::new(database.pool.clone()),
+            runtime.clone(),
+            OWNER.into(),
+            1,
+        )
+        .unwrap();
+        supervisor.ledger.reserve(&scope).await.unwrap();
+        let first = claim(&supervisor.ledger, &scope, "first-owner").await;
+        runtime
+            .prepare(
+                &scope.runtime_identity().unwrap(),
+                &request.manifest().unwrap(),
+            )
+            .await
+            .unwrap();
+        supervisor
+            .ledger
+            .bind_runtime(&first, RUNTIME_ID)
+            .await
+            .unwrap();
+        supervisor.ledger.mark_dispatched(&first).await.unwrap();
+        // The first Supervisor is gone; the replacement reconciles.
+        expire_lease(&database.pool, key).await;
+        let record = terminal(
+            tokio::time::timeout(WAIT, supervisor.reconcile_dispatched(&scope))
+                .await
+                .expect("the stopped runtime must reconcile"),
+        );
+        assert_eq!(record.phase, Phase::Failed);
+        assert_eq!(record.failure_code.as_deref(), Some(expected));
+        // A reconcile reads the durable terminal record, never the runtime again.
+        let again = terminal(supervisor.reconcile_dispatched(&scope).await);
+        assert_eq!(again.failure_code.as_deref(), Some(expected));
+        assert_eq!(runtime.0.receipts.load(Ordering::SeqCst), 1);
+        // Never re-signalled or terminated; cleaned once per terminal read.
+        assert_eq!(runtime.0.prepares.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.0.terminations.load(Ordering::SeqCst), 0);
+        assert!(runtime.0.dispatches.load(Ordering::SeqCst) <= 1);
+    }
     database.pool.close().await;
 }
