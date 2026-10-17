@@ -794,13 +794,9 @@ impl OrdinaryNativeAgentAssembler {
             model_name: profile.model_name().to_owned(),
             system_instruction: system_instruction.to_owned(),
             max_tokens: profile.max_tokens(),
-            reasoning_effort: profile.reasoning_effort().map(|effort| {
-                if output_continuation {
-                    ModelReasoningEffort::Low
-                } else {
-                    model_reasoning_effort(effort)
-                }
-            }),
+            reasoning_effort: profile
+                .reasoning_effort()
+                .map(|effort| continuation_reasoning_effort(effort, output_continuation)),
             temperature: profile.temperature(),
             max_model_turns: profile.step_limit(),
         };
@@ -1111,6 +1107,41 @@ fn invalid_tool_authorization_catalog() -> NativeAgentAssemblyError {
         NativeAgentAssemblyErrorCode::InvalidConfiguration,
         "the configured delegated authorization catalog is invalid",
     )
+}
+
+/// The reasoning effort an output continuation's model call runs at.
+///
+/// Which knob each model family gets, and why:
+///
+/// - **An effort is set** (the catalogue marks the model `supports_reasoning`;
+///   Main defaults it to `medium` then, `normalizeCurrentAgentModelFamily`):
+///   the continuation runs at `low`. That is the SAME parameter the model
+///   already receives, at a lower value: `reasoning_effort` on the
+///   OpenAI-compatible wire, and the minimum 2048-token thinking budget (or
+///   adaptive `low`) on native Anthropic.
+/// - **The effort is `none`**: it stays `none`. Turning it into `low` would
+///   enable reasoning the user turned off, and `validate_invocation` refuses
+///   a non-`none` effort beside a temperature, so every Continue would fail at
+///   binding.
+/// - **No effort** (the common case: the catalogue does not mark the model
+///   `supports_reasoning`, so Main sends `reasoning_effort: null`): NO knob is
+///   sent. Nothing proves one is safe. The catalogue has no field that names a
+///   vLLM/Qwen-style model, so `chat_template_kwargs.enable_thinking` cannot be
+///   targeted. The gateway also drops that field: its chat-request decode keeps
+///   no extra parameters. And `reasoning_effort` on a model the catalogue says
+///   does not reason is an unsupported parameter. On native Anthropic, no
+///   effort already means thinking off. For this family only the direct-answer
+///   prompt reduces reasoning. The cap in `AgentEventProjector::finish_after_eos`
+///   ends a second reasoning-only cut.
+const fn continuation_reasoning_effort(
+    effort: ReasoningEffort,
+    output_continuation: bool,
+) -> ModelReasoningEffort {
+    match effort {
+        ReasoningEffort::None => ModelReasoningEffort::None,
+        _ if output_continuation => ModelReasoningEffort::Low,
+        effort => model_reasoning_effort(effort),
+    }
 }
 
 const fn model_reasoning_effort(effort: ReasoningEffort) -> ModelReasoningEffort {

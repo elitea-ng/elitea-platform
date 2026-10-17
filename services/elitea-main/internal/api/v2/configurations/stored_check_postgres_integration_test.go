@@ -56,6 +56,7 @@ import (
 
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 )
@@ -154,6 +155,12 @@ SELECT create_tenant_schema('p_%d');
 SELECT create_tenant_schema('p_%d');`,
 		storedCheckProject, storedCheckOther, storedCheckProject, storedCheckOther)); err != nil {
 		t.Fatalf("create the tenant schemas: %v", err)
+	}
+	// The naive-clock probe the dbtest template installs, after the last
+	// schema statement: a writer that stores the session-local clock in a
+	// `timestamp` WITHOUT time zone column fails instead of passing unread.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

@@ -231,10 +231,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            libs/proto/pyproject.toml
-            services/elitea-worker-python/pyproject.toml
+          # No `cache: pip`. Every install in this job passes --no-cache-dir
+          # (a file:// SDK wheel must not be reused across revisions), so the
+          # pip cache held ~4 MB and was saved from every pull request.
 
       # Tier 2 of the elitea-sdk compatibility gates builds and runs a Go test
       # server from services/elitea-llm-gateway. Go lives HERE rather than the
@@ -253,10 +252,16 @@ jobs:
       # tag and ci-gateway.yml together.
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version: "1.26"
           # The series, at its latest patch: go.mod sets the security floor
           # (1.26.9), and the runner cache can lag behind it.
           check-latest: true
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           cache-dependency-path: services/elitea-llm-gateway/go.sum
 
       - name: Install current binary indexing prerequisites
@@ -468,8 +473,19 @@ jobs:
       # reads every `go-version:` line in this file, about the gateway alone.
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version-file: go.work
-          cache-dependency-path: libs/go/natsconn/go.sum
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
+          # natsconn has no go.sum (its deps resolve through go.work.sum); the
+          # old libs/go/natsconn/go.sum matched nothing, so setup-go never
+          # cached this job.
+          cache-dependency-path: |
+            libs/go/natsconn/go.mod
+            go.work.sum
 
       # render-secure-conf.sh renders the NATS chart with helm.
       - name: Set up Helm
@@ -516,4 +532,4 @@ jobs:
         run: |
           cat "${RUNNER_TEMP}/natstest-serve.log" || true
           log="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["log"])' "${RUNNER_TEMP}/natsenv.json" 2>/dev/null || true)"
-          [ -n "$log" ] && cat "$log" || true
+          if [ -n "$log" ]; then cat "$log" || true; fi

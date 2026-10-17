@@ -43,6 +43,8 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "26"
+          # semantic-release runs from npx; nothing here wants a cache.
+          package-manager-cache: false
 
       - name: Semantic Release
         id: semantic
@@ -694,13 +696,15 @@ jobs:
           VERSION="${{ needs.release.outputs.new_release_version }}"
           IMAGE="${{ env.REGISTRY }}/${{ matrix.image.name }}"
 
-          TAGS="--tag ${IMAGE}:${VERSION}"
+          # An array, not a "--tag a --tag b" string split by an unquoted
+          # expansion: the same argv, and no element can be split or globbed.
+          tags=(--tag "${IMAGE}:${VERSION}")
           if [[ "$VERSION" != *"-"* ]]; then
             MAJOR_MINOR="${VERSION%.*}"
-            TAGS="$TAGS --tag ${IMAGE}:latest --tag ${IMAGE}:${MAJOR_MINOR}"
+            tags+=(--tag "${IMAGE}:latest" --tag "${IMAGE}:${MAJOR_MINOR}")
           fi
 
-          docker buildx imagetools create $TAGS \
+          docker buildx imagetools create "${tags[@]}" \
             "${IMAGE}:${VERSION}-linux-amd64" \
             "${IMAGE}:${VERSION}-linux-arm64"
 

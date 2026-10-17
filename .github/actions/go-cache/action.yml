@@ -1,0 +1,82 @@
+name: Go build and module cache (pull requests read, main writes)
+description: >-
+  Restores the Go build cache and module cache that `actions/setup-go` used to
+  cache itself, keyed the same way (OS, architecture, the resolved Go version,
+  and a hash of the job's go.sum files), and saves them only on a push to main.
+  Use it straight after `actions/setup-go` with `cache: false`.
+#
+# Why setup-go's own cache is off: it saves from EVERY ref. Measured
+# 2026-10-16, pull-request setup-go entries were the largest writers in the
+# 10 GB Actions cache (1155 MB for one ref) and main held none at all — every
+# pull request's copy had evicted main's, which is the one each of them should
+# have been reading. See .github/actions/main-write-cache for the rule.
+#
+# The key spells what setup-go keyed on, under its own prefix so it cannot be
+# mistaken for (or collide with) a setup-go entry:
+#
+#   go-v1-<os>-<arch>-<go version>-<hash of cache-dependency-path>
+#
+# The restore-keys fall back to the newest entry for the same Go version, so a
+# go.sum bump restores the closest older cache instead of starting cold.
+inputs:
+  cache-dependency-path:
+    description: >-
+      Newline-separated go.sum paths or globs, as setup-go's input of the same
+      name took them. Every line must match at least one file.
+    required: true
+outputs:
+  cache-hit:
+    description: "'true' on an exact-key hit."
+    value: ${{ steps.cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve the Go cache paths and key
+      id: go
+      shell: bash
+      env:
+        DEPS: ${{ inputs.cache-dependency-path }}
+      run: |
+        set -euo pipefail
+        command -v go >/dev/null || { echo "::error::go is not on PATH; run actions/setup-go before this action"; exit 1; }
+        # Expanded from the workspace root, as setup-go did, whatever the
+        # caller's working directory.
+        cd "$GITHUB_WORKSPACE"
+        files=()
+        while IFS= read -r pattern; do
+          pattern="${pattern#"${pattern%%[![:space:]]*}"}"; pattern="${pattern%"${pattern##*[![:space:]]}"}"
+          [ -n "$pattern" ] || continue
+          matched=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            files+=("$f"); matched=1
+          done < <(compgen -G "$pattern" || true)
+          # setup-go warned and cached nothing on an unresolved path; this
+          # names it too, so a stale path is visible in the log.
+          [ "$matched" = 1 ] || echo "::warning::go-cache: cache-dependency-path '$pattern' matches no file"
+        done <<< "$DEPS"
+        if [ "${#files[@]}" -eq 0 ]; then
+          echo "::warning::go-cache: cache-dependency-path names no file; running without a Go cache (as setup-go did)"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if command -v sha256sum >/dev/null; then sha() { sha256sum "$@"; }; else sha() { shasum -a 256 "$@"; }; fi
+        hash="$(printf '%s\n' "${files[@]}" | LC_ALL=C sort -u | while IFS= read -r f; do sha "$f"; done | sha | cut -c1-64)"
+        {
+          echo "gocache=$(go env GOCACHE)"
+          echo "gomodcache=$(go env GOMODCACHE)"
+          echo "version=$(go env GOVERSION)"
+          echo "hash=$hash"
+        } >> "$GITHUB_OUTPUT"
+        echo "go cache key inputs (${#files[@]} file(s)):"; printf '  %s\n' "${files[@]}" | LC_ALL=C sort -u
+    - name: Restore the Go caches (save on a push to main)
+      id: cache
+      if: steps.go.outputs.skip != 'true'
+      uses: ./.github/actions/main-write-cache
+      with:
+        path: |
+          ${{ steps.go.outputs.gocache }}
+          ${{ steps.go.outputs.gomodcache }}
+        key: go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-${{ steps.go.outputs.hash }}
+        restore-keys: |
+          go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-

@@ -1,5 +1,6 @@
 use super::*;
 use std::os::unix::fs::{PermissionsExt, symlink};
+
 fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(30)
 }
@@ -62,7 +63,7 @@ fn envelope(
         profile: CargoRuntime {
             preparation_image: job.preparer_image_digest.clone(),
             execution_image: job.execution_image_digest.clone(),
-            rust_revision: "1.97.1".into(),
+            rust_revision: RUSTC_RELEASE.into(),
             os: "linux".into(),
             arch: job.platform.arch.clone(),
             target: job.platform.target().unwrap().into(),
