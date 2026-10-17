@@ -15,6 +15,9 @@ import check_worker_ignored_tests as guard  # noqa: E402
 WORKFLOW = """
 jobs:
   test:
+    defaults:
+      run:
+        working-directory: services/elitea-worker-rust
     steps:
       - name: Plain run
         run: cargo test --locked --all-targets --all-features
@@ -215,7 +218,10 @@ class IgnoredTestGuard(unittest.TestCase):
         self.assertIn("`echo` is the command, not cargo", out)
 
     def test_cargo_after_a_separator_is_its_own_command(self):
-        workflow = with_step("- run: cd services/elitea-worker-rust && cargo test --lib unrun::test -- --ignored")
+        workflow = with_step("""
+            - working-directory: .
+              run: cd services/elitea-worker-rust && cargo test --lib unrun::test -- --ignored
+        """)
         code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
         self.assertEqual(code, 0, out)
 
@@ -248,6 +254,122 @@ class IgnoredTestGuard(unittest.TestCase):
         code, out = run(workflow=workflow)
         self.assertEqual(code, 0, out)
         self.assertIn("a GitHub expression (e.g. `${{ matrix.* }}`) chooses its filters", out)
+
+    # --- where cargo runs ---------------------------------------------------------
+
+    def test_a_run_in_another_jobs_directory_is_not_credited(self):
+        workflow = WORKFLOW + textwrap.indent(textwrap.dedent("""
+            libs:
+              defaults:
+                run:
+                  working-directory: libs/rust
+              steps:
+                - run: cargo test --lib unrun::test -- --ignored
+        """).lstrip("\n"), "  ")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("cargo runs in `libs/rust`, not services/elitea-worker-rust", out)
+
+    def test_a_step_working_directory_overrides_the_job(self):
+        workflow = with_step("""
+            - working-directory: services/elitea-code-runner
+              run: cargo test --lib unrun::test -- --ignored
+        """)
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("cargo runs in `services/elitea-code-runner`", out)
+
+    def test_a_cd_away_from_the_worker_is_followed(self):
+        workflow = with_step("- run: cd ../elitea-vector && cargo test --lib unrun::test -- --ignored")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("cargo runs in `services/elitea-vector`", out)
+
+    def test_a_cd_on_an_earlier_line_persists(self):
+        workflow = with_step("""
+            - run: |
+                cd ..
+                cargo test --lib unrun::test -- --ignored
+        """)
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("cargo runs in `services`", out)
+
+    def test_a_cd_to_a_variable_cannot_be_resolved(self):
+        workflow = with_step("- run: cd \"$CRATE\" && cargo test --lib unrun::test -- --ignored")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("a directory this check cannot resolve", out)
+
+    def test_env_chdir_moves_only_that_command(self):
+        workflow = with_step("- run: env -C ../elitea-vector cargo test --lib unrun::test -- --ignored")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("cargo runs in `services/elitea-vector`", out)
+
+    def test_the_workflow_default_directory_is_used(self):
+        workflow = textwrap.dedent("""
+            defaults:
+              run:
+                working-directory: services/elitea-worker-rust
+            jobs:
+              t:
+                steps:
+                  - run: cargo test --lib unrun::test -- --ignored
+        """)
+        code, out = run(workflow=workflow, listing="     Running unittests src/lib.rs (x)\nunrun::test: test\n",
+                        allow="")
+        self.assertEqual(code, 0, out)
+
+    # --- spellings of -p, refused selectors, background runs -------------------------
+
+    def test_attached_package_forms_are_read(self):
+        for spelling in ("-pelitea-agent-runtime", "-p=elitea-agent-runtime"):
+            workflow = with_step(f"- run: cargo test {spelling} --lib unrun::test -- --ignored")
+            code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+            self.assertEqual(code, 1, (spelling, out))
+            self.assertIn("`-p elitea-agent-runtime` runs another crate's tests", out)
+        workflow = with_step("- run: cargo test -pelitea-worker-rust --lib unrun::test -- --ignored")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 0, out)
+
+    def test_selectors_this_check_does_not_model_are_refused(self):
+        for selector, why in (("--manifest-path ../x/Cargo.toml", "builds the crate a manifest names"),
+                              ("--doc", "runs doctests only"),
+                              ("--bench b", "runs a benchmark target"),
+                              ("--benches", "runs benchmark targets"),
+                              ("--example e", "runs an example target"),
+                              ("--examples", "runs example targets")):
+            workflow = with_step(f"- run: cargo test {selector} unrun::test -- --ignored")
+            code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+            self.assertEqual(code, 1, (selector, out))
+            self.assertIn(why, out)
+
+    def test_a_backgrounded_run_is_not_credited(self):
+        workflow = with_step("- run: cargo test --lib unrun::test -- --ignored &")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("its failure is tolerated", out)
+
+    # --- valid spellings that must be credited ---------------------------------------
+
+    def test_redirections_are_not_a_background_run(self):
+        for redirect in ("2>&1 | tee log", "> log 2>&1", "&> log", ">&2", "|& tee log"):
+            workflow = with_step(f"- run: cargo test --lib unrun::test -- --ignored {redirect}")
+            code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+            self.assertEqual(code, 0, (redirect, out))
+
+
+    def test_a_rustup_toolchain_override_is_still_cargo_test(self):
+        workflow = with_step("- run: cargo +1.97.1 test --lib unrun::test -- --ignored")
+        code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+        self.assertEqual(code, 0, out)
+
+    def test_env_time_and_timeout_prefixes_run_cargo(self):
+        for prefix in ("env X=1", "env -u Y X=1", "time", "timeout 600", "nice -n 5"):
+            workflow = with_step(f"- run: {prefix} cargo test --lib unrun::test -- --ignored")
+            code, out = run(workflow=workflow, listing=LIST + "unrun::test: test\n")
+            self.assertEqual(code, 0, (prefix, out))
 
     # --- target selection --------------------------------------------------------
 

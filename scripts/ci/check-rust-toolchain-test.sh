@@ -55,6 +55,12 @@ expect() {
   failed=$((failed + 1))
 }
 
+put() { # put <file> <content printf format>: write and stage a file in the copy
+  mkdir -p "$WORK/tree/$(dirname "$1")"
+  printf '%b' "$2" > "$WORK/tree/$1"
+  git -C "$WORK/tree" add -A
+}
+
 edit() { # edit <file> <sed expression>
   sed -i.bak -E "$2" "$WORK/tree/$1" && rm -f "$WORK/tree/$1.bak"
   git -C "$WORK/tree" add -A
@@ -99,8 +105,44 @@ fresh; edit services/elitea-code-runner/Containerfile 's#^COPY adapters/rust ./a
 expect "(b) a COPY --from= image" fail "rust:1.96-trixie, expected exactly"
 fresh; printf 'target "x" {\n  contexts = { toolchain = "docker-image://rust:1.96-trixie" }\n}\n' > "$WORK/tree/deploy/ci/extra.hcl"; git -C "$WORK/tree" add -A
 expect "(b) a bake docker-image:// context" fail "deploy/ci/extra.hcl:2: rust:1.96-trixie"
+fresh; put services/elitea-vector/Containerfile.extra 'FROM \\\n    rust:1.96-trixie AS b\n'
+expect "(b) FROM with the image on a continuation line" fail "services/elitea-vector/Containerfile.extra:1: rust:1.96-trixie"
+fresh
+# shellcheck disable=SC2016 # ${...} is Dockerfile text for the gate to resolve, not shell
+put services/elitea-vector/Containerfile.extra 'ARG RUST_IMAGE=rust:1.96-trixie\nFROM ${RUST_IMAGE} AS b\n'
+expect "(b) an ARG default used in FROM" fail "services/elitea-vector/Containerfile.extra:2: rust:1.96-trixie"
+fresh
+# shellcheck disable=SC2016 # ${...} is Dockerfile text for the gate to resolve, not shell
+put services/elitea-vector/Containerfile.extra 'ARG BASE\nFROM ${BASE:-rust:1.96-trixie} AS b\n'
+expect "(b) a \${VAR:-default} in FROM" fail "Containerfile.extra:2: rust:1.96-trixie"
+fresh; put services/elitea-vector/Containerfile.extra 'FROM scratch\nRUN --mount=type=cache,from=rust:1.96-trixie,target=/x true\n'
+expect "(b) RUN --mount=...,from=" fail "Containerfile.extra:2: rust:1.96-trixie"
+fresh; put services/elitea-vector/Containerfile.extra 'FROM mirror.gcr.io/library/rust:1.97.1-trixie AS b\n'
+expect "(b) a mirror.gcr.io prefix" fail "mirror.gcr.io/library/rust:1.97.1-trixie, expected exactly"
+fresh; put services/elitea-vector/Containerfile.extra 'FROM public.ecr.aws/docker/library/rust:1.97.1-trixie AS b\n'
+expect "(b) a public.ecr.aws prefix" fail "public.ecr.aws/docker/library/rust:1.97.1-trixie"
+fresh; put services/elitea-vector/Containerfile.extra 'FROM ghcr.io/someone/rust:1.97.1-trixie AS b\n'
+expect "(b) another registry's rust" fail "ghcr.io/someone/rust:1.97.1-trixie"
+fresh; put deploy/docker-compose.extra.yml 'services:\n  build:\n    image: docker.io/library/rust:1.96-trixie\n'
+expect "(b) a compose image: key" fail "deploy/docker-compose.extra.yml:3: docker.io/library/rust:1.96-trixie"
+fresh; put .github/workflows/extra.yml 'on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    container:\n      image: rust:1.96\n    steps:\n      - run: true\n'
+expect "(b) a workflow container image" fail ".github/workflows/extra.yml:6: rust:1.96"
+fresh; put .github/workflows/extra.yml 'on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    container: rust:1.96\n    steps:\n      - run: true\n'
+expect "(b) a workflow container: shorthand" fail ".github/workflows/extra.yml:5: rust:1.96"
+fresh; put deploy/helm/elitea/templates/extra.yaml 'spec:\n  template:\n    spec:\n      containers:\n        - name: b\n          image: {{ .Values.x | default "rust:1.96-trixie" }}\n          {{- if .Values.y }}\n        - image: "rust:1.96-trixie"\n          {{- end }}\n'
+expect "(b) a Helm template that does not parse is read line by line" fail "deploy/helm/elitea/templates/extra.yaml:8: rust:1.96-trixie"
+fresh; put deploy/docker-compose.extra.yml 'services:\n  a:\n    image: debian:trixie\n---\nservices:\n  b:\n    image: rust:1.96\n'
+expect "(b) the second document of a multi-document file" fail "deploy/docker-compose.extra.yml:7: rust:1.96"
+fresh; put services/new-service/Containerfile 'FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder\n'
+expect "(b) a NEW file with a correct rust image must be listed" fail "services/new-service/Containerfile: references the rust image (1x) but is not in RUST_IMAGE_FILES"
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS runtime-libraries/FROM debian:trixie AS runtime-libraries/'
+expect "(b) a listed file that lost a rust reference" fail "services/elitea-vector/Containerfile: found 1 rust image reference(s), expected at least 2"
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:([^ ]+) AS builder$/FROM rust:\1 AS rust/'; printf 'COPY --from=rust /x /y\nFROM rust AS again\n' >> "$WORK/tree/services/elitea-vector/Containerfile"; git -C "$WORK/tree" add -A
+expect "(b) a stage named rust is a stage, not an image" pass ""
+fresh; put deploy/docker-compose.extra.yml 'services:\n  a:\n    image: docker.io/rustfs/rustfs:1.0.0\n  b:\n    image: ghcr.io/elitea-ng/elitea-rustfs:1\n  c:\n    image: trust:1\n  d:\n    image: ghcr.io/elitea-ng/elitea-worker-rust:standalone\n'
+expect "(b) rustfs, elitea-rustfs, trust and elitea-worker-rust are not rust" pass ""
 fresh; for f in services/elitea-vector/Containerfile services/elitea-inventory-engine/Containerfile; do edit "$f" 's/^FROM rust:/FROM docker.io\/library\/rustlang:/'; done
-expect "(b)(d) image references below the floor" fail "rust image reference(s), expected at least"
+expect "(b)(d) image references below the floor" fail "services/elitea-inventory-engine/Containerfile: found 0 rust image reference(s), expected at least 2"
 
 # (c) MSRV
 fresh; edit services/elitea-vector/Cargo.toml 's/^rust-version = "1\.95"/rust-version = "1.96"/'
@@ -125,6 +167,16 @@ fresh; edit services/elitea-code-runner/fixtures/cargo-native-v2.json 's/"rust_r
 expect "(e) a native bundle fixture records another release" fail "cargo-native-v2.json:1: toolchain release 1.96.0"
 fresh; printf 'fn probe() { let _ = "rustc 1.98.0 (abc 2026-09-01)"; }\n' > "$WORK/tree/services/elitea-code-runner/new_probe.rs"; git -C "$WORK/tree" add -A
 expect "(e) a NEW file with an off-pin rustc line" fail "services/elitea-code-runner/new_probe.rs:1: toolchain release 1.98.0"
+fresh; put services/elitea-code-runner/probe.py "if profile['rust_revision'] == '1.98.0':\n    pass\n"
+expect "(e) a single-quoted Python release" fail "services/elitea-code-runner/probe.py:1: toolchain release 1.98.0"
+fresh; put services/elitea-code-runner/probe.yaml 'profile:\n  rust_revision: 1.98.0\n'
+expect "(e) an unquoted YAML release" fail "services/elitea-code-runner/probe.yaml:2: toolchain release 1.98.0"
+fresh; edit services/elitea-main/internal/infra/storage/sandbox_native_bundle.go 's/p\.Profile\.Rust != "1\.97\.1"/"1.98.0" != p.Profile.Rust/'
+expect "(e) a reversed Go comparison" fail "sandbox_native_bundle.go:219: toolchain release 1.98.0"
+fresh; edit services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs 's/self\.profile\.rust_revision != "1\.97\.1"/self.profile.rust_revision != RUST_RELEASE/'
+expect "(e) a checker literal moved to a constant (test data cannot stand in)" fail "cargo_dependency_bundle.rs: carries no toolchain release literal on its comparison line"
+fresh; edit scripts/runtime/rust_compiled_release_manifest.py 's/profile\["rust_revision"\] == RUST_RELEASE/profile["rust_revision"] == OTHER/'
+expect "(e) the audit stops comparing its constant" fail "rust_compiled_release_manifest.py: no longer checks"
 fresh; edit services/elitea-main/internal/infra/storage/sandbox_native_bundle.go 's/Profile\.Rust != "1\.97\.1"/Profile.Rust != wantRust/'
 expect "(e) a validator whose literal moved out of sight" fail "sandbox_native_bundle.go: carries no toolchain release literal"
 fresh; for f in services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs scripts/runtime/test_rust_compiled_release_manifest.py services/elitea-code-runner/fixtures/cargo-native-v2.json services/elitea-main/internal/infra/storage/testdata/native-cargo-v2.json services/elitea-worker-rust/src/sandbox/native-cargo-v2.json; do git -C "$WORK/tree" rm -qf "$f"; done
@@ -135,9 +187,9 @@ fresh; git -C "$WORK/tree" rm -qf -r --cached .
 expect "(d) an empty tree is refused" fail "there is nothing to check"
 
 total=$((passed + failed))
-expected_cases="$(grep -c '^fresh; ' "$0")"
+expected_cases="$(grep -cE '^fresh(;|$)' "$0")"
 echo "${passed}/${total} gate cases behave (${expected_cases} declared)"
-if [ "$failed" -ne 0 ] || [ "$total" -ne "$expected_cases" ] || [ "$total" -lt 30 ]; then
+if [ "$failed" -ne 0 ] || [ "$total" -ne "$expected_cases" ] || [ "$total" -lt 50 ]; then
   echo "ERROR: the Rust toolchain gate did not behave in every case" >&2
   exit 1
 fi

@@ -51,7 +51,7 @@ import yaml
 
 # cargo flags that consume the next token, so it is not a test-name filter.
 CARGO_VALUE_FLAGS = {
-    "-p", "--package", "--features", "-F", "--manifest-path", "-j", "--jobs",
+    "--features", "-F", "-j", "--jobs",
     "--bench", "--example", "--target", "--target-dir",
     "--profile", "--color", "--message-format", "--config", "-Z", "--exclude",
 }
@@ -164,6 +164,21 @@ def credited_step(step: dict, job: dict) -> str | None:
 # The crate whose ignored tests this check counts. A cargo run in another
 # package runs none of them.
 WORKER_PACKAGE = "elitea-worker-rust"
+# The directory cargo must run in: its Cargo.toml is the worker's. A run from
+# libs/rust or the code runner builds another workspace's tests.
+WORKER_DIRECTORY = "services/elitea-worker-rust"
+# Commands that run their arguments as a command: `env X=1 cargo`, `time cargo`.
+PREFIX_COMMANDS = {"env", "time", "nice", "timeout", "command", "exec", "nohup"}
+# cargo test selectors this check does not model; with none of --lib/--test/
+# --bins it would read the target set as "every target", which these are not.
+REFUSED_SELECTORS = {
+    "--manifest-path": "builds the crate a manifest names, not necessarily the worker; run from its directory",
+    "--doc": "runs doctests only",
+    "--bench": "runs a benchmark target",
+    "--benches": "runs benchmark targets",
+    "--example": "runs an example target",
+    "--examples": "runs example targets",
+}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 SEPARATORS = {"&&", "||", ";", "|", "&"}
 
@@ -174,7 +189,9 @@ def commands(line: str, source: str) -> list[tuple[list[str], bool]]:
     `tolerated` is true when the command's failure is swallowed by a following
     `|| ...`. Pipes keep failing (the runner's bash uses -o pipefail).
     """
-    lexer = shlex.shlex(line, posix=True, punctuation_chars="|&;")
+    # `<>` are punctuation too, so a redirection (`2>&1`, `>&2`, `&>log`)
+    # lexes as one `>&`/`&>` token instead of a background `&`.
+    lexer = shlex.shlex(line, posix=True, punctuation_chars="|&;<>")
     lexer.whitespace_split = True
     lexer.commenters = "#"
     try:
@@ -184,11 +201,18 @@ def commands(line: str, source: str) -> list[tuple[list[str], bool]]:
     found: list[tuple[list[str], bool]] = []
     words: list[str] = []
     for token in tokens + [";"]:
+        if set(token) & set("<>"):
+            words.append(token)  # a redirection operator, part of this command
+            continue
+        if token == "|&":
+            token = "|"  # pipes stderr too; still a pipe
         if token in SEPARATORS or set(token) <= set("|&;"):
             if words:
                 found.append((words, False))
                 words = []
-            if token == "||" and found:
+            # `a || b` swallows a's failure; `a &` backgrounds it, so the step
+            # never sees its exit status either.
+            if token in {"||", "&"} and found:
                 found[-1] = (found[-1][0], True)
             continue
         words.append(token)
@@ -196,14 +220,54 @@ def commands(line: str, source: str) -> list[tuple[list[str], bool]]:
 
 
 def program(words: list[str]) -> list[str]:
-    """The command's own words: leading VAR=value assignments removed."""
+    """The command's own words: VAR=value assignments and prefix commands removed.
+
+    `env X=1 cargo …`, `time cargo …` and `timeout 600 cargo …` run cargo, and
+    so does `cargo +1.97.1 test …` (handled by the caller).
+    """
     index = 0
-    while index < len(words) and ASSIGNMENT.match(words[index]):
-        index += 1
+    while index < len(words):
+        word = words[index]
+        if ASSIGNMENT.match(word):
+            index += 1
+        elif word in PREFIX_COMMANDS:
+            index += 1
+            # Their own options and operands: `env -u X`, `timeout 600`, `nice -n 5`.
+            while index < len(words):
+                option = words[index]
+                if option in {"-u", "--unset", "-C", "--chdir", "-n", "--adjustment", "-s", "--signal", "-k",
+                              "--kill-after"}:
+                    index += 2
+                elif option.startswith("-") or (word in {"timeout", "nice"} and option[:1].isdigit()):
+                    index += 1
+                else:
+                    break
+        else:
+            break
     return words[index:]
 
 
-def parse_command(line: str, source: str) -> tuple[list[Invocation], list[Uncredited]]:
+def change_directory(cwd: str, target: str) -> str:
+    """The cwd after `cd target` from cwd; '' when it cannot be known statically."""
+    if not target or target.startswith(("$", "~", "-")) or "${{" in target:
+        return ""
+    if target.startswith("/"):
+        return ""
+    joined = Path(cwd or ".") / target
+    parts: list[str] = []
+    for part in joined.parts:
+        if part == "..":
+            if not parts:
+                return ""
+            parts.pop()
+        elif part not in {".", ""}:
+            parts.append(part)
+    return "/".join(parts) or "."
+
+
+def parse_command(line: str, source: str, cwd: str = WORKER_DIRECTORY
+                  ) -> tuple[list[Invocation], list[Uncredited], str]:
+    """Invocations on one logical line, and the cwd the next line starts in."""
     found: list[Invocation] = []
     refused: list[Uncredited] = []
     for words, tolerated in commands(line, source):
@@ -211,6 +275,17 @@ def parse_command(line: str, source: str) -> tuple[list[Invocation], list[Uncred
         text = " ".join(words)
         if not argv:
             continue
+        if argv[0] in {"cd", "pushd"}:
+            cwd = change_directory(cwd, argv[1] if len(argv) > 1 else "")
+            continue
+        # `env -C dir cargo …` runs cargo elsewhere; follow it for this command only.
+        here = cwd
+        for i, word in enumerate(words[:-1]):
+            if word in {"-C", "--chdir"} and "env" in words[:i]:
+                here = change_directory(cwd, words[i + 1])
+        # `cargo +1.97.1 test`: rustup's toolchain override, still cargo test.
+        if argv[0] == "cargo" and len(argv) > 1 and argv[1].startswith("+"):
+            argv = [argv[0], *argv[2:]]
         # The ledger wrapper, run directly or by a Python interpreter.
         script = argv[1] if len(argv) > 1 and Path(argv[0]).name.startswith("python") else argv[0]
         if Path(script).name == "test_sandbox_ledger.py":
@@ -231,13 +306,17 @@ def parse_command(line: str, source: str) -> tuple[list[Invocation], list[Uncred
         invocation, why_not = parse_cargo_test(argv[2:], f"{source}: {text}")
         if invocation is None and why_not is None:
             continue
+        if why_not is None and here != WORKER_DIRECTORY:
+            why_not = (f"cargo runs in `{here}`, not {WORKER_DIRECTORY}, so it builds another crate's tests"
+                       if here else "cargo runs in a directory this check cannot resolve "
+                       "(a `cd` to a variable or an expression)")
         if why_not:
             refused.append(Uncredited(text, why_not))
         elif tolerated:
             refused.append(Uncredited(text, "its failure is tolerated (`||`)"))
         else:
             found.append(invocation)
-    return found, refused
+    return found, refused, cwd
 
 
 def parse_cargo_test(tokens: list[str], source: str) -> tuple[Invocation | None, str | None]:
@@ -260,6 +339,9 @@ def parse_cargo_test(tokens: list[str], source: str) -> tuple[Invocation | None,
         value = None
         if "=" in token and token.startswith("--"):
             token, value = token.split("=", 1)
+        elif not libtest and token.startswith("-p") and len(token) > 2:
+            # -pNAME and -p=NAME: cargo's attached short-option forms.
+            token, value = "-p", token[2:].removeprefix("=")
 
         def operand() -> str:
             nonlocal index
@@ -282,6 +364,8 @@ def parse_cargo_test(tokens: list[str], source: str) -> tuple[Invocation | None,
             ignored = True
         elif not libtest and token == "--no-run":
             no_run = True
+        elif not libtest and token in REFUSED_SELECTORS:
+            return None, f"`{token}` {REFUSED_SELECTORS[token]}"
         elif not libtest and token in {"-p", "--package"}:
             packages.append(operand())
         elif not libtest and token == "--lib":
@@ -325,15 +409,26 @@ def parse_workflow(text: str, source: str) -> tuple[list[Invocation], list[Uncre
         raise SystemExit(f"{source}: no `jobs:` mapping; not a workflow")
     found: list[Invocation] = []
     refused: list[Uncredited] = []
+
+    def default_directory(owner: object) -> str | None:
+        if not isinstance(owner, dict):
+            return None
+        run = (owner.get("defaults") or {}).get("run") or {}
+        return run.get("working-directory") if isinstance(run, dict) else None
+
+    workflow_directory = default_directory(document)
     for job_id, job in jobs.items():
+        job_directory = default_directory(job)
         for number, step in enumerate((job or {}).get("steps") or [], 1):
             script = step.get("run") if isinstance(step, dict) else None
             if not isinstance(script, str):
                 continue
             where = f"{source}: jobs.{job_id}.steps[{number}] ({step.get('name', 'unnamed')})"
             why_not = credited_step(step, job)
+            directory = step.get("working-directory") or job_directory or workflow_directory or "."
+            cwd = change_directory(".", str(directory).replace("${{ github.workspace }}", "."))
             for line in logical_lines(script):
-                invocations, uncredited = parse_command(line, where)
+                invocations, uncredited, cwd = parse_command(line, where, cwd)
                 if why_not:
                     refused += [Uncredited(i.source, why_not) for i in invocations]
                     refused += [Uncredited(f"{where}: {u.command}", why_not) for u in uncredited]
