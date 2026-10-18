@@ -65,6 +65,8 @@ elitea-llm-wire = { path = "../../../libs/rust/llm-wire" }
 # adk-runner are PATCHED (below); the runtime refuses to compile without it.
 adk-agent = { version = "~2.2.0", default-features = false }
 adk-core = { version = "~2.2.0", default-features = false }
+# The in-memory checkpointer of `sessions::DesktopStateStore` (until pipelines run locally); the runtime links the same crate.
+adk-graph = { version = "~2.2.0", default-features = false }
 adk-runner = { version = "~2.2.0", default-features = false, features = ["context-compaction"] }
 adk-session = { version = "~2.2.0", default-features = false }
 adk-tool = { version = "~2.2.0", default-features = false }

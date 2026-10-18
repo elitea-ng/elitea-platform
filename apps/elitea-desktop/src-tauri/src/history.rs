@@ -265,8 +265,14 @@ pub fn stored_changes(changes: &[FileChange]) -> Value {
 /// The refusals of the credentials file, for the database: an existing
 /// file must be ours, regular and owner-only.
 fn inspect(path: &Path) -> Result<(), HostError> {
+    inspect_private(path, "the thread history")
+}
+
+/// [`inspect`] for any of the app's owner-only databases (`what` names it
+/// in the log and the error: `sessions.sqlite` uses it too).
+pub(crate) fn inspect_private(path: &Path, what: &str) -> Result<(), HostError> {
     let refuse = |why: &str| {
-        log::warn!("refusing the thread history {}: {why}", path.display());
+        log::warn!("refusing {what} {}: {why}", path.display());
         HostError::Storage(format!("{} {why}", path.display()))
     };
     let meta = match fs::symlink_metadata(path) {
@@ -790,6 +796,69 @@ impl HistoryStore {
             )?;
             tx.commit()?;
             Ok(added)
+        })
+    }
+
+    /// The conversation UUIDs one thread of `owner` is known by (its turns'
+    /// own, and `conversation` when it is one): what the agent's session
+    /// memory is keyed by.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be read.
+    pub fn thread_uuids(
+        &self,
+        owner: &Owner,
+        workspace_id: &str,
+        conversation: &str,
+    ) -> Result<Vec<String>, HostError> {
+        self.flush();
+        self.with("could not read the thread history", |conn| {
+            let uuid = thread_uuid(conn, owner, workspace_id, conversation)?;
+            let mut statement = conn.prepare(&format!(
+                "SELECT DISTINCT conversation_uuid FROM turns
+                 WHERE {THREAD} AND conversation_uuid IS NOT NULL"
+            ))?;
+            let mut uuids: Vec<String> = statement
+                .query_map(
+                    params![
+                        owner.origin,
+                        owner.user_id,
+                        workspace_id,
+                        conversation,
+                        uuid
+                    ],
+                    |row| row.get(0),
+                )?
+                .collect::<rusqlite::Result<_>>()?;
+            uuids.push(uuid);
+            uuids.sort();
+            uuids.dedup();
+            Ok(uuids)
+        })
+    }
+
+    /// Every thread a workspace has turns in, whoever's: deployment, user
+    /// and conversation UUID.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be read.
+    pub fn workspace_threads(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<(String, i64, String)>, HostError> {
+        self.flush();
+        self.with("could not read the workspace's history", |conn| {
+            let mut statement = conn.prepare(
+                "SELECT DISTINCT origin, user_id, conversation_uuid FROM turns
+                 WHERE workspace_id = ?1 AND conversation_uuid IS NOT NULL",
+            )?;
+            statement
+                .query_map(params![workspace_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })?
+                .collect()
         })
     }
 

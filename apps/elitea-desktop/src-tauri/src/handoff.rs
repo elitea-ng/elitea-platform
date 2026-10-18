@@ -1703,6 +1703,15 @@ impl HandoffHost {
             }
             Err(_) => (0, false, None),
         };
+        // The take-back's release was acknowledged: the cloud's turns are in
+        // the conversation now, so the agent's session re-seeds from the
+        // server before the next local turn.
+        if acknowledged {
+            self.deps
+                .agents
+                .mark_session_stale(&conversation_uuid)
+                .await;
+        }
         Ok(ApplyAnswer {
             applied: applied.applied,
             outcome,
@@ -1758,9 +1767,22 @@ impl HandoffHost {
 
     async fn retry_release(&self, record: ThreadRecord) {
         match self.release(&record).await {
-            Ok(Released::Acknowledged(_)) => self.records.remove(&record.conversation_uuid),
+            Ok(Released::Acknowledged(_)) => {
+                self.records.remove(&record.conversation_uuid);
+                self.deps
+                    .agents
+                    .mark_session_stale(&record.conversation_uuid)
+                    .await;
+            }
             Ok(Released::Refused(_)) => {
-                self.settle_refused_release(&record).await;
+                // A take-back that settled to LOCAL imports the cloud's turns,
+                // so the session re-seeds before the next local turn.
+                if self.settle_refused_release(&record).await {
+                    self.deps
+                        .agents
+                        .mark_session_stale(&record.conversation_uuid)
+                        .await;
+                }
             }
             Err(_) => {}
         }

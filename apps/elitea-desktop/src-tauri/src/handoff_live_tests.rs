@@ -190,6 +190,7 @@ async fn live_harness() -> LiveHarness {
     let credentials: Arc<dyn Credentials> =
         Arc::new(LiveCreds(live.origin.clone(), live.token.clone()));
     let history = Arc::new(HistoryStore::open(app.path()).unwrap());
+    let sessions = Arc::new(crate::sessions::DesktopStateStore::open(app.path()).unwrap());
     let http = crate::net::SharedHttp::new("0.1.0");
     let agents = Arc::new(
         AgentHost::new(HostDeps {
@@ -204,6 +205,7 @@ async fn live_harness() -> LiveHarness {
                 delay: Duration::from_millis(5),
             },
             history: Some(history.clone()),
+            sessions: Some(sessions.clone()),
             index: None,
             sandbox_deny: crate::d0::turn::app_dirs_for_sandbox([Some(app.path().to_owned())]),
             app_id: None,

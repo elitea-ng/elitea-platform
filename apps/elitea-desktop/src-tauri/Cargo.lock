@@ -1388,6 +1388,7 @@ version = "0.1.0"
 dependencies = [
  "adk-agent",
  "adk-core",
+ "adk-graph",
  "adk-runner",
  "adk-session",
  "adk-tool",
