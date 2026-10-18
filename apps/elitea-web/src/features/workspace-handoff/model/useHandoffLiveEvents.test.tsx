@@ -53,7 +53,7 @@ describe('useHandoffLiveEvents', () => {
     await waitFor(() => {
       expect(registry.getOpen()).toHaveLength(1);
     });
-    expect(registry.getSources()[0]?.url).toBe('/api/v2/elitea_core/events/prompt_lib/7');
+    expect(registry.getSources()[0]?.url).toBe('/api/v2/events/prompt_lib/7');
 
     registry.emit(HANDOFF_EVENT, JSON.stringify({ conversation_uuid: UUID, state: 'CLOUD_RUNNING', epoch: 2, reclaim_pending: true }));
     await waitFor(() => {
@@ -65,6 +65,27 @@ describe('useHandoffLiveEvents', () => {
     // A reordered, older frame never wins over the newer read.
     registry.emit(HANDOFF_EVENT, JSON.stringify({ conversation_uuid: UUID, state: 'CLOUD_IDLE', epoch: 1, reclaim_pending: false }));
     expect(client.getQueryData(handoffInfoKey('7', UUID))).toMatchObject({ state: 'CLOUD_RUNNING', reclaim_pending: true });
+  });
+
+  it('when the thread is local again, re-reads the thread details, not the other threads', async () => {
+    const { client, wrapper } = setup();
+    client.setQueryData(handoffInfoKey('7', UUID), { state: 'CLOUD_RUNNING', epoch: 1, reclaim_pending: false });
+    const detailsKey = ['conversation', 'details', 7, 123] as const;
+    const otherMessagesKey = ['conversation', 'messageList', 7, 'another-uuid', 0, 20] as const;
+    client.setQueryData(detailsKey, { uuid: UUID });
+    client.setQueryData(otherMessagesKey, []);
+    renderHook(() => useHandoffLiveEvents(7), { wrapper });
+    await waitFor(() => {
+      expect(registry.getOpen()).toHaveLength(1);
+    });
+
+    registry.emit(HANDOFF_EVENT, JSON.stringify({ conversation_uuid: UUID, state: 'LOCAL', epoch: 2, reclaim_pending: false }));
+    await waitFor(() => {
+      expect(client.getQueryData(handoffInfoKey('7', UUID))).toMatchObject({ state: 'LOCAL', epoch: 2 });
+    });
+    expect(client.getQueryState(detailsKey)?.isInvalidated).toBe(true);
+    // The other thread's message list is not this thread's move.
+    expect(client.getQueryState(otherMessagesKey)?.isInvalidated).not.toBe(true);
   });
 
   it('opens no stream without a project', () => {

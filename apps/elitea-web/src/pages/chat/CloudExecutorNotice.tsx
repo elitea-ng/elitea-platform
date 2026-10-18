@@ -28,10 +28,10 @@ import DialogTitle from '@mui/material/DialogTitle';
 import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 
-import { HANDOFF_FALLBACK_POLL_MS, handoffInfoKey, useHandoffLiveEvents } from '@/features/workspace-handoff';
+import { handoffInfoKey, useHandoffLiveEvents } from '@/features/workspace-handoff';
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
-import { eraseWorkspaceHandoff, getWorkspaceHandoff, requestWorkspaceReclaim } from '@/shared/api/workspaceHandoffApi';
+import { eraseWorkspaceHandoff, getWorkspaceHandoff, requestWorkspaceReclaim, type WorkspaceHandoffInfo } from '@/shared/api/workspaceHandoffApi';
 import { i18n, t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
@@ -56,8 +56,7 @@ function useCanEditProjectSettings(projectId: string): boolean {
   return list?.some((entry) => entry.enabled && entry.name === PERMISSIONS.projectSettings.edit) === true;
 }
 
-// A slow fallback: the project stream's `workspace.handoff` frames update the read as the thread moves.
-const INFO_POLL_MS = HANDOFF_FALLBACK_POLL_MS;
+const INFO_POLL_MS = 10_000;
 
 type Toast = { readonly severity: 'success' | 'error'; readonly message: string };
 
@@ -118,7 +117,14 @@ function useHandoffInfo(projectId: string, conversationUuid: string): { readonly
   useHandoffLiveEvents(projectId);
   const info = useQuery({
     queryKey: handoffInfoKey(projectId, conversationUuid.toLowerCase()),
-    queryFn: () => getWorkspaceHandoff(projectId, conversationUuid),
+    queryFn: async () => {
+      const fresh = await getWorkspaceHandoff(projectId, conversationUuid);
+      // A read that left before a delivered frame may answer after it: the
+      // frame stays, the pre-commit answer does not move the thread backwards.
+      const previous = queryClient.getQueryData<WorkspaceHandoffInfo>(handoffInfoKey(projectId, conversationUuid.toLowerCase()));
+      if (previous !== undefined && previous.epoch > fresh.epoch) return previous;
+      return fresh;
+    },
     retry: false,
     refetchInterval: INFO_POLL_MS,
   });

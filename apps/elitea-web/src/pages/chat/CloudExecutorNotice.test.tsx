@@ -194,7 +194,7 @@ describe('CloudExecutorNotice live updates (ADR-0034 scope B)', () => {
     );
     mount();
     await waitFor(() => {
-      expect(registry.getOpen().some((source) => source.url === `${BASE}/elitea_core/events/prompt_lib/42`)).toBe(true);
+      expect(registry.getOpen().some((source) => source.url === `${BASE}/events/prompt_lib/42`)).toBe(true);
     });
     await waitFor(() => {
       expect(reads).toBeGreaterThan(0);
@@ -207,5 +207,19 @@ describe('CloudExecutorNotice live updates (ADR-0034 scope B)', () => {
     expect(await screen.findByText(/Take back requested/)).toBeInTheDocument();
     // The frame drove it: at most the one re-read it asked for, no poll.
     expect(reads - before).toBeLessThanOrEqual(1);
+  });
+
+  it('keeps a mixed-case UUID on the wire, lowercases it in the read, so the frame still reaches the notice', async () => {
+    const mixed = `${UUID.slice(0, 8)}${UUID.slice(8).toUpperCase()}`;
+    serve();
+    server.use(http.get(`${BASE}/elitea_core/workspace_handoff/prompt_lib/42/${mixed}`, () => HttpResponse.json({ state: 'CLOUD_RUNNING', epoch: 2 })));
+    mount({ conversationUuid: mixed });
+    await waitFor(() => {
+      expect(registry.getOpen().some((source) => source.url === `${BASE}/events/prompt_lib/42`)).toBe(true);
+    });
+    // The frame is newer than the server's answer (epoch 3 over 2): it must
+    // reach the notice through the lowercased key and stay after the re-read.
+    registry.emit('workspace.handoff', JSON.stringify({ conversation_uuid: UUID, state: 'CLOUD_RUNNING', epoch: 3, reclaim_pending: true }));
+    expect(await screen.findByText(/Take back requested/)).toBeInTheDocument();
   });
 });

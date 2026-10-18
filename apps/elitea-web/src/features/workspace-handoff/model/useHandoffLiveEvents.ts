@@ -1,36 +1,33 @@
 /**
- * Live handoff state changes (ADR-0034): elitea-main publishes one
- * `workspace.handoff` frame on the project SSE stream
- * (GET /elitea_core/events/prompt_lib/{projectId}) for every committed state
- * change of a thread, and relays it only to the thread's readers. A frame
- * carries the conversation, its state, epoch and whether a take back waits;
- * nothing else.
+ * Live handoff state changes (ADR-0034). The project SSE stream
+ * (GET /events/prompt_lib/{projectId}) will carry one `workspace.handoff`
+ * frame per committed state change of a thread, published by elitea-main
+ * when the server half of ADR-0034 lands (branch 5, the handoff executor).
+ * The frame carries the conversation, its state, epoch and whether a take
+ * back waits; nothing else. The stream reaches every reader of the project,
+ * not only the thread's readers.
  *
  * On a frame the Cloud executor notice's read is updated in place and every
- * status read of that thread (the page's and the desktop sidebar's batched
- * one) is invalidated, so the notice, the badges and the composer follow
- * without a poll. The polls stay, slowed to {@link HANDOFF_FALLBACK_POLL_MS},
- * for a frame the best-effort stream lost.
+ * status read of that thread is invalidated, so the notice, the badges and
+ * the composer follow without a poll. Until the stream publishes frames the
+ * polls stay the live path; the stream is best-effort either way.
  */
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
 import { useEventSource } from '@/shared/api/sse';
 import { getConfig } from '@/shared/config';
+import { WORKSPACE_HANDOFF_STATES } from '@/shared/api/workspaceHandoffApi';
+import type { WorkspaceHandoffState } from '@/shared/api/workspaceHandoffApi';
 
 import { handoffStatusKey, handoffStatusManyKey } from './useHandoffStatus';
 
 /** The SSE event name of a handoff state change. */
 export const HANDOFF_EVENT = 'workspace.handoff';
 
-/** How often the reads still poll, now that the stream carries the changes. */
-export const HANDOFF_FALLBACK_POLL_MS = 60_000;
-
-const STATES = ['LOCAL', 'HANDING_OFF', 'CLOUD_IDLE', 'CLOUD_RUNNING', 'RECLAIMING'] as const;
-
-export interface HandoffEvent {
+interface HandoffEvent {
   readonly conversation_uuid: string;
-  readonly state: (typeof STATES)[number];
+  readonly state: WorkspaceHandoffState;
   readonly epoch: number;
   readonly reclaim_pending: boolean;
 }
@@ -50,14 +47,18 @@ export function parseHandoffEvent(data: string): HandoffEvent | null {
   const frame = value as Record<string, unknown>;
   const { conversation_uuid: uuid, state, epoch, reclaim_pending: pending } = frame;
   if (typeof uuid !== 'string' || uuid === '' || typeof epoch !== 'number' || !Number.isInteger(epoch) || epoch < 0) return null;
-  if (typeof pending !== 'boolean' || !STATES.includes(state as HandoffEvent['state'])) return null;
-  return { conversation_uuid: uuid.toLowerCase(), state: state as HandoffEvent['state'], epoch, reclaim_pending: pending };
+  if (typeof pending !== 'boolean' || !WORKSPACE_HANDOFF_STATES.includes(state as WorkspaceHandoffState)) return null;
+  return { conversation_uuid: uuid.toLowerCase(), state: state as WorkspaceHandoffState, epoch, reclaim_pending: pending };
 }
 
 /** Apply one change: update the notice's read, refresh the status reads. */
-export function applyHandoffEvent(queryClient: QueryClient, projectId: string, event: HandoffEvent): void {
+function applyHandoffEvent(queryClient: QueryClient, projectId: string, event: HandoffEvent): void {
   queryClient.setQueryData(handoffInfoKey(projectId, event.conversation_uuid), (previous: unknown) => {
-    if (typeof previous !== 'object' || previous === null) return previous;
+    if (typeof previous !== 'object' || previous === null) {
+      // The first frame may land before the notice's first read: seed the read
+      // from the frame, or the in-flight fetch would leave the frame lost.
+      return { state: event.state, epoch: event.epoch, reclaim_pending: event.reclaim_pending };
+    }
     const current = previous as { epoch?: unknown };
     // An older frame (a reordered delivery) never overwrites a newer read.
     if (typeof current.epoch === 'number' && current.epoch > event.epoch) return previous;
@@ -66,8 +67,8 @@ export function applyHandoffEvent(queryClient: QueryClient, projectId: string, e
   void queryClient.invalidateQueries({ queryKey: handoffInfoKey(projectId, event.conversation_uuid) });
   void queryClient.invalidateQueries({ queryKey: handoffStatusKey(event.conversation_uuid) });
   void queryClient.invalidateQueries({ queryKey: handoffStatusManyKey() });
-  // Local again: the composer and the badge read the conversation.
-  if (event.state === 'LOCAL') void queryClient.invalidateQueries({ queryKey: ['conversation'] });
+  // Local again: the thread's details feed the composer and the badge.
+  if (event.state === 'LOCAL') void queryClient.invalidateQueries({ queryKey: ['conversation', 'details'] });
 }
 
 /**
@@ -80,12 +81,23 @@ export function useHandoffLiveEvents(projectId: string | number | null | undefin
   const config = getConfig();
   const serverUrl = config.status === 'ok' ? config.config.vite_server_url : null;
   const project = projectId === null || projectId === undefined || projectId === '' ? null : String(projectId);
-  const streamUrl = useMemo(() => (project !== null && serverUrl ? `${serverUrl}/elitea_core/events/prompt_lib/${project}` : null), [project, serverUrl]);
-  useEventSource(streamUrl, {
-    [HANDOFF_EVENT]: (event: MessageEvent) => {
-      const change = parseHandoffEvent(String(event.data));
-      if (change === null || project === null) return;
-      applyHandoffEvent(queryClient, project, change);
+  const streamUrl = useMemo(() => (project !== null && serverUrl ? `${serverUrl}/events/prompt_lib/${project}` : null), [project, serverUrl]);
+  useEventSource(
+    streamUrl,
+    {
+      [HANDOFF_EVENT]: (event: MessageEvent) => {
+        const change = parseHandoffEvent(String(event.data));
+        if (change === null || project === null) return;
+        applyHandoffEvent(queryClient, project, change);
+      },
     },
-  });
+    {
+      // CLOSED means the stream failed for good (403/500: the browser does not
+      // retry it). The polls keep the thread current meanwhile, so say so.
+      onError: (_event, readyState) => {
+        if (readyState !== 2) return;
+        console.warn('The handoff stream is closed; the fallback polls are the live path now.');
+      },
+    },
+  );
 }

@@ -22,7 +22,9 @@ async function fetchData<T>(url: string, options?: RequestInit): Promise<T> {
   return envelope.data;
 }
 
-export type WorkspaceHandoffState = 'LOCAL' | 'HANDING_OFF' | 'CLOUD_IDLE' | 'CLOUD_RUNNING' | 'RECLAIMING';
+/** The thread's states, as the banner and the live frames carry them. */
+export const WORKSPACE_HANDOFF_STATES = ['LOCAL', 'HANDING_OFF', 'CLOUD_IDLE', 'CLOUD_RUNNING', 'RECLAIMING'] as const;
+export type WorkspaceHandoffState = (typeof WORKSPACE_HANDOFF_STATES)[number];
 
 /** The banner state (contract 2.9). No row means `{state: 'LOCAL', epoch: 0}`. */
 export interface WorkspaceHandoffInfo {
