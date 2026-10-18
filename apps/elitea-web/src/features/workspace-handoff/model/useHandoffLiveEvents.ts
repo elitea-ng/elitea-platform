@@ -4,8 +4,9 @@
  * frame per committed state change of a thread, published by elitea-main
  * when the server half of ADR-0034 lands (branch 5, the handoff executor).
  * The frame carries the conversation, its state, epoch and whether a take
- * back waits; nothing else. The stream reaches every reader of the project,
- * not only the thread's readers.
+ * back waits; nothing else. The server half relays the frame to the
+ * thread's readers (its audience) on the project stream, which requires
+ * the project's stream permission; not every project viewer receives it.
  *
  * On a frame the Cloud executor notice's read is updated in place and every
  * status read of that thread is invalidated, so the notice, the badges and
@@ -33,7 +34,7 @@ interface HandoffEvent {
 }
 
 /** The Cloud executor notice's read of one thread (invalidate or update by it). */
-export const handoffInfoKey = (projectId: string, conversationUuid: string) => ['workspace-handoff', projectId, conversationUuid] as const;
+export const handoffInfoKey = (projectId: string, conversationUuid: string) => ['workspace-handoff', projectId, conversationUuid.toLowerCase()] as const;
 
 /** Parse one frame strictly; `null` for anything else. */
 export function parseHandoffEvent(data: string): HandoffEvent | null {
@@ -67,7 +68,7 @@ function applyHandoffEvent(queryClient: QueryClient, projectId: string, event: H
   void queryClient.invalidateQueries({ queryKey: handoffInfoKey(projectId, event.conversation_uuid) });
   void queryClient.invalidateQueries({ queryKey: handoffStatusKey(event.conversation_uuid) });
   void queryClient.invalidateQueries({ queryKey: handoffStatusManyKey() });
-  // Local again: the thread's details feed the composer and the badge.
+  // Local again: the details reads go stale (the frame carries no thread id to narrow the prefix), so the composer and the badge follow.
   if (event.state === 'LOCAL') void queryClient.invalidateQueries({ queryKey: ['conversation', 'details'] });
 }
 

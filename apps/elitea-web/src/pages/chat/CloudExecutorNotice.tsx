@@ -116,12 +116,12 @@ function useHandoffInfo(projectId: string, conversationUuid: string): { readonly
   // The desktop taking the thread back (or an erase elsewhere) moves it without this page doing anything: the live stream says so at once, the poll is the fallback.
   useHandoffLiveEvents(projectId);
   const info = useQuery({
-    queryKey: handoffInfoKey(projectId, conversationUuid.toLowerCase()),
+    queryKey: handoffInfoKey(projectId, conversationUuid),
     queryFn: async () => {
       const fresh = await getWorkspaceHandoff(projectId, conversationUuid);
       // A read that left before a delivered frame may answer after it: the
       // frame stays, the pre-commit answer does not move the thread backwards.
-      const previous = queryClient.getQueryData<WorkspaceHandoffInfo>(handoffInfoKey(projectId, conversationUuid.toLowerCase()));
+      const previous = queryClient.getQueryData<WorkspaceHandoffInfo>(handoffInfoKey(projectId, conversationUuid));
       if (previous !== undefined && previous.epoch > fresh.epoch) return previous;
       return fresh;
     },
@@ -155,7 +155,7 @@ export default function CloudExecutorNotice({ projectId, conversationUuid, execu
       setToast({ severity: 'success', message: t('pages.chat.cloud.erased', 'The cloud copy was erased') });
       // The conversation's `workspace_executor` is local again: read it, and the thread, afresh.
       void queryClient.invalidateQueries({ queryKey: ['conversation'] });
-      void queryClient.invalidateQueries({ queryKey: handoffInfoKey(projectId, conversationUuid.toLowerCase()) });
+      void queryClient.invalidateQueries({ queryKey: handoffInfoKey(projectId, conversationUuid) });
     },
     onError: () => {
       setConfirming(false);

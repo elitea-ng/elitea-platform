@@ -200,7 +200,7 @@ describe('CloudExecutorNotice live updates (ADR-0034 scope B)', () => {
       expect(reads).toBeGreaterThan(0);
     });
     expect(screen.queryByText(/Take back requested/)).not.toBeInTheDocument();
-    // The desktop takes the thread back; the next poll is a minute away.
+    // The desktop takes the thread back; the next poll is ten seconds away.
     pending = true;
     const before = reads;
     registry.emit('workspace.handoff', JSON.stringify({ conversation_uuid: UUID, state: 'CLOUD_RUNNING', epoch: 2, reclaim_pending: true }));
