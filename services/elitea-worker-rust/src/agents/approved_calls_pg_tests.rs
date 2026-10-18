@@ -11,6 +11,7 @@
 //! the older one in the store.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use adk_rust::Event;
@@ -229,13 +230,30 @@ async fn postgres_two_concurrent_resumes_run_the_approved_call_exactly_once() {
             approved_push_resume(reader.as_ref()).await,
             approved_push_resume(reader.as_ref()).await,
         ];
+        let failures = Arc::new(Mutex::new(Vec::new()));
         let mut racers = Vec::new();
         for (resume, claim) in resumes.into_iter().zip([3_u8, 4]) {
             let pool = db.pool.clone();
             let sandbox = Arc::clone(&sandbox);
+            let failures = Arc::clone(&failures);
             racers.push(tokio::spawn(async move {
-                let sessions = claim_sessions(&pool, claim).await.ok()?;
+                let sessions = match claim_sessions(&pool, claim).await {
+                    Ok(sessions) => sessions,
+                    Err(error) => {
+                        failures
+                            .lock()
+                            .expect("failures")
+                            .push(format!("claim {claim} activation: {error:?}"));
+                        return None;
+                    }
+                };
                 let (_, error) = resume_turn(&sessions, &sandbox, resume).await;
+                if let Some(error) = &error {
+                    failures
+                        .lock()
+                        .expect("failures")
+                        .push(format!("claim {claim} turn: {error:?}"));
+                }
                 Some(error.is_none())
             }));
         }
@@ -245,8 +263,9 @@ async fn postgres_two_concurrent_resumes_run_the_approved_call_exactly_once() {
                 completed += 1;
             }
         }
-        assert_eq!(runs(&sandbox), 1, "round {round}: exactly one run");
-        assert!(completed >= 1, "round {round}: one resume completes");
+        let failures = failures.lock().expect("failures").join("; ");
+        assert_eq!(runs(&sandbox), 1, "round {round}: exactly one run; {failures}");
+        assert!(completed >= 1, "round {round}: one resume completes; {failures}");
         db.pool.close().await;
     }
 }
