@@ -57,7 +57,7 @@ async fn claim_sessions(
 /// A database with the turn's session created and a `git push` paused for
 /// approval under claim 1; nothing has run.
 async fn paused_database() -> Option<(IsolatedPostgres, Arc<GateSandbox>)> {
-    let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the run-once ledger PostgreSQL proof");
         return None;
     };
