@@ -264,8 +264,15 @@ async fn postgres_two_concurrent_resumes_run_the_approved_call_exactly_once() {
             }
         }
         let failures = failures.lock().expect("failures").join("; ");
-        assert_eq!(runs(&sandbox), 1, "round {round}: exactly one run; {failures}");
-        assert!(completed >= 1, "round {round}: one resume completes; {failures}");
+        assert_eq!(
+            runs(&sandbox),
+            1,
+            "round {round}: exactly one run; {failures}"
+        );
+        assert!(
+            completed >= 1,
+            "round {round}: one resume completes; {failures}"
+        );
         db.pool.close().await;
     }
 }
