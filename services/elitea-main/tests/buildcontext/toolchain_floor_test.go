@@ -81,6 +81,12 @@ var toolchainFloors = []struct {
 		containerfile: "services/elitea-llm-gateway/Containerfile",
 		floor:         stdlibFloorGo126,
 	},
+	{
+		name:          "elitea-egress-proxy",
+		goFile:        "services/elitea-egress-proxy/go.mod",
+		containerfile: "services/elitea-egress-proxy/Containerfile",
+		floor:         stdlibFloorGo126,
+	},
 }
 
 var (

@@ -3629,6 +3629,153 @@ inventory:
   tolerations: []
   affinity: {}
 
+# ── elitea-egress-proxy (ADR-0034 decision 9) ───────────────────────────────
+#
+# The egress boundary for cloud-executor sandboxes whose project restricts the
+# network to a host allowlist. A NetworkPolicy cannot enforce host names, so a
+# workspace run in allowlist mode reaches the internet only through this
+# proxy: HTTP CONNECT for TLS and absolute-form http://, with a run token that
+# elitea-main signs at claim time as the proxy credential
+# (HTTPS_PROXY=http://run:<token>@elitea-egress-proxy.<namespace>.svc:3128).
+# The proxy verifies the token with the public keys below, matches host and
+# port against the token's allowlist, resolves the host itself, refuses every
+# private, metadata and cluster address and dials the checked IP. There is no
+# TLS interception. See services/elitea-egress-proxy/README.md.
+#
+# OFF by default. Phase B wires the worker, the runtime context and the
+# sandbox NetworkPolicy; until then nothing sends traffic to it.
+egressProxy:
+  enabled: false
+
+  image:
+    repository: ghcr.io/elitea-ng/elitea-egress-proxy
+    # Empty means the chart-wide image.tag.
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+  # At least 2 (the chart refuses less): the pods spread over nodes and zones
+  # when the cluster has them, and the PDB keeps one up through a drain.
+  replicaCount: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  service:
+    # The proxy port: the only port on the Service, and the only one the
+    # sandbox pods may reach.
+    port: 3128
+  # /healthz, /readyz and /metrics (Prometheus text). Not on the Service.
+  adminPort: 9090
+
+  # The run-token PUBLIC keys (PKIX "PUBLIC KEY" PEM, Ed25519). Set ONE of:
+  #   existingSecret  a Secret you manage, one PEM file per data key;
+  #   keys            the chart creates the Secret, e.g.
+  #                     keys:
+  #                       2026-10.pem: |
+  #                         -----BEGIN PUBLIC KEY-----
+  #                         ...
+  # The key id is derived from the key, so nothing else is configured. During a
+  # rotation, list the old and the new key; remove the old one after the
+  # longest run token has expired (README, "Key rotation"). The proxy reads the
+  # mounted Secret again on reloadInterval, without a restart.
+  publicKeys:
+    existingSecret: ""
+    keys: {}
+    reloadInterval: 30s
+
+  limits:
+    # Per replica: client connections to the proxy, and the header block of
+    # one request (a token travels base64-encoded in Proxy-Authorization).
+    maxConnections: 4096
+    maxHeaderBytes: 32768
+    # Per run, per replica: open connections, and bytes up and down together.
+    runMaxConnections: 64
+    runMaxBytes: 2147483648
+    # A connection with no bytes in either direction for idleTimeout closes;
+    # every connection closes after maxConnectionLifetime, or when the run
+    # token expires, whichever is first.
+    idleTimeout: 5m
+    maxConnectionLifetime: 1h
+  # How often an active run's summary (egress_proxy.run_summary) is logged.
+  # The final summary follows the token's expiry.
+  summaryInterval: 1m
+  logLevel: info
+
+  # Drain on SIGTERM: readiness fails, the proxy keeps accepting for
+  # drainDelaySeconds, then waits up to shutdownTimeoutSeconds for open
+  # tunnels. terminationGracePeriodSeconds must cover both, plus 5.
+  drainDelaySeconds: 5
+  shutdownTimeoutSeconds: 60
+  terminationGracePeriodSeconds: 75
+
+  networkPolicy:
+    enabled: true
+    # The namespace of the sandbox pods. Empty: sandboxKubernetes.executionNamespace.
+    clientNamespace: ""
+    # The labels of the workspace-run sandbox pods that may reach the proxy
+    # port (the label the supervisor sets on workspace runs).
+    clientPodLabels:
+      sandbox.elitea.ai/kind: workspace-run
+    # NetworkPolicyPeer entries admitted on the admin port, e.g. Prometheus:
+    #   - namespaceSelector:
+    #       matchLabels: {kubernetes.io/metadata.name: monitoring}
+    adminFrom: []
+    # REQUIRED with the policy on: the cluster's pod and service ranges. The
+    # policy excepts them from the proxy's egress, and the proxy refuses them
+    # itself.
+    podCidrs: []
+    serviceCidrs: []
+    # Always denied. RFC 1918, carrier-grade NAT (Alibaba metadata inside),
+    # link-local (cloud metadata), loopback, "this network", IETF protocol
+    # assignments, reserved, the Azure platform endpoint, IPv6 unique-local
+    # (AWS metadata inside), link-local and loopback.
+    denyCidrs:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 100.64.0.0/10
+      - 169.254.0.0/16
+      - 127.0.0.0/8
+      - 0.0.0.0/8
+      - 192.0.0.0/24
+      - 198.18.0.0/15
+      - 224.0.0.0/4
+      - 240.0.0.0/4
+      - 168.63.129.16/32
+      - fc00::/7
+      - fe80::/10
+      - ::1/128
+      - ff00::/8
+    # Allow IPv6 egress (::/0 minus the IPv6 deny ranges).
+    ipv6: true
+    # DNS goes to the cluster resolver only.
+    dnsNamespaceLabels:
+      kubernetes.io/metadata.name: kube-system
+    dnsPodLabels:
+      k8s-app: kube-dns
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  # Empty: a preferred anti-affinity on kubernetes.io/hostname.
+  affinity: {}
+  # Empty: spread over topology.kubernetes.io/zone (ScheduleAnyway).
+  topologySpreadConstraints: []
+
 # ── elitea-vector and Qdrant (ADR-0031) ─────────────────────────────────────
 #
 # elitea-vector is the only Qdrant client: a stateless gRPC facade over mTLS.

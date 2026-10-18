@@ -101,6 +101,7 @@ on:
       - "services/elitea-worker-rust/**"
       - "services/elitea-scheduler/**"
       - "services/elitea-subapp-host/**"
+      - "services/elitea-egress-proxy/**"
       - "services/elitea-llm-gateway/**"
       # Every image in the scan matrix below has its path here; one that was
       # missing once (the retired Python DeepWiki image) was re-measured only
@@ -140,6 +141,7 @@ on:
       - "services/elitea-worker-rust/**"
       - "services/elitea-scheduler/**"
       - "services/elitea-subapp-host/**"
+      - "services/elitea-egress-proxy/**"
       - "services/elitea-llm-gateway/**"
       - "services/elitea-deepwiki-engine/**"
       - "services/elitea-vector/**"
@@ -367,6 +369,13 @@ jobs:
             context: .
             dockerfile: ./services/elitea-subapp-host/Containerfile
             target: ""
+            expect_type: gobinary
+            blocking: true
+          # Repo ROOT context: the module replaces libs/go/egresslib.
+          - name: elitea-egress-proxy
+            context: .
+            dockerfile: ./services/elitea-egress-proxy/Containerfile
+            target: final
             expect_type: gobinary
             blocking: true
           # Repo ROOT context, not the module directory: the module replaces
