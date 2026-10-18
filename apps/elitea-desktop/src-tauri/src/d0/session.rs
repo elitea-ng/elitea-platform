@@ -100,6 +100,19 @@ impl SessionPlan {
             }
             (None, _) => None,
         };
+        // The per-conversation claim precedes the destructive re-seed: a
+        // second workspace turning this conversation is refused here, before
+        // it can wipe this session's events (the claim lives until the turn
+        // settles).
+        let scope = match &durable {
+            Some((state_store, key, _)) => Some(
+                state_store
+                    .store()
+                    .begin_turn(key, turn_tag)
+                    .map_err(|_| SessionError::Busy)?,
+            ),
+            None => None,
+        };
         // Is the session what the server has? If not it is rebuilt from the
         // server's transcript (a conversation with no groups has none to
         // read, so a new conversation costs no request).
@@ -134,17 +147,10 @@ impl SessionPlan {
                         log::warn!("the session could not be seeded: {error}");
                     }
                 }
-                let scope = store
-                    .begin_turn(&key, turn_tag)
-                    .map_err(|_| SessionError::Busy)?;
                 Ok(Self {
                     service: state_store.sessions(),
                     session_id: key.clone(),
-                    durable: Some(Durable {
-                        store,
-                        key,
-                        scope: Some(scope),
-                    }),
+                    durable: Some(Durable { store, key, scope }),
                     cursor_after,
                 })
             }

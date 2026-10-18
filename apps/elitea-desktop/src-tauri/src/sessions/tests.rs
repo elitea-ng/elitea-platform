@@ -309,8 +309,8 @@ async fn a_session_past_its_size_is_trimmed_and_asks_to_be_seeded_again() {
         .seed(&key, Vec::new(), Some("0".into()))
         .await
         .unwrap();
-    // Appends past 32 MiB: 10 turns of 4 MiB (each response is cut at 64 KiB
-    // as stored, so fill the session with many messages instead).
+    // Appends past 32 MiB: 40 turns of 1 MiB user text (user text is not cut
+    // at the 64 KiB tool-response cap, so the fill survives whole).
     let text = "y".repeat(1024 * 1024);
     let mut events = Vec::new();
     for turn in 0..40 {
@@ -751,6 +751,39 @@ async fn the_adk_service_creates_lists_and_deletes() {
             })
             .await
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_temp_state_key_is_never_persisted() {
+    let (_dir, state) = open();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    state.store().open_session(&me, "fp").await.unwrap();
+    let scope = state.store().begin_turn(&key, "exec-1").unwrap();
+    let service = state.sessions();
+    let mut event = call_event("inv", "c1");
+    event.actions.state_delta.insert(
+        format!("{}temp-runner", adk_session::KEY_PREFIX_TEMP),
+        json!(1),
+    );
+    event.actions.state_delta.insert("kept".into(), json!(2));
+    service.append_event(&key, event).await.unwrap();
+    drop(scope);
+    let rows = state.store().rows(&key).await.unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(
+        !rows[0]
+            .event
+            .actions
+            .state_delta
+            .contains_key("temp:temp-runner"),
+        "the temp key was stripped: {:?}",
+        rows[0].event.actions.state_delta
+    );
+    assert_eq!(
+        rows[0].event.actions.state_delta.get("kept"),
+        Some(&json!(2))
     );
 }
 

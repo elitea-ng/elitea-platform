@@ -1537,6 +1537,7 @@ mod tests {
         assert_eq!(check(&closed.checks(), "history").status, Status::Warn);
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_session_memory_is_checked_and_repaired_like_the_history() {
         use std::os::unix::fs::PermissionsExt as _;

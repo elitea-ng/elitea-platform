@@ -867,6 +867,99 @@ async fn a_lost_release_is_kept_and_sent_again_by_status() {
     );
 }
 
+/// ADR-0034 x #1212: a release that is refused once and sent again by
+/// `status` marks the agent's session, so the next local turn re-seeds from
+/// the server (the `apply` path is pinned by the take-back test; this is the
+/// retry path).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retried_release_marks_the_session_for_reseeding() {
+    use crate::d0::turn::TurnRequest;
+    let convo = Arc::new(Mutex::new(crate::d0::tests::Convo::default()));
+    let h = harness_full(
+        Arc::new(crate::handoff_settings::FixedEnv(Vec::new())),
+        None,
+        Some(convo.clone()),
+    )
+    .await;
+    let local = |prompt: &str| TurnRequest {
+        workspace_id: h.workspace_id.clone(),
+        project_id: 1,
+        conversation_id: json!(CONVERSATION),
+        application_id: 5,
+        version_id: 9,
+        prompt: prompt.to_owned(),
+        plan_mode: false,
+        mentions: Vec::new(),
+        skills: Vec::new(),
+    };
+    let emitter = h.emitter.clone();
+    let run = |prompt: &'static str| {
+        let started = h.agents.start(local(prompt));
+        let emitter = emitter.clone();
+        async move {
+            let started = started.await.unwrap();
+            for _ in 0..500 {
+                if emitter
+                    .all()
+                    .iter()
+                    .any(|e| e.kind == "done" && e.turn_id == started.turn_id)
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("the turn did not finish");
+        }
+    };
+    let seeds = |h: &Harness| {
+        h._server
+            .seen()
+            .iter()
+            .filter(|r| r.path.contains("messages_limit=200"))
+            .count()
+    };
+
+    // A local turn, so the conversation has a session.
+    run("create hello.txt with hi").await;
+    assert_eq!(seeds(&h), 0);
+
+    // The thread goes to the cloud, one cloud turn comes back.
+    h.host
+        .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
+        .await
+        .unwrap();
+    cloud_turn(&h);
+    h.host.reclaim(CONVERSATION).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION).await.unwrap();
+    h.platform.lock().unwrap().fail_release = true;
+    let applied = h
+        .host
+        .apply(&preflight.preflight_id, Mode::Apply)
+        .await
+        .unwrap();
+    assert!(!applied.released, "the release is refused once");
+
+    // `status` sends the release again: it lands, and the session is marked.
+    let status = h.host.status(CONVERSATION, None).await.unwrap();
+    assert_eq!(status["state"], "LOCAL");
+    let origin = h.platform.lock().unwrap().origin.clone();
+    let info = h
+        .sessions
+        .store()
+        .info(&origin, 7, CONVERSATION)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !info.seeded_from_server,
+        "marked for re-seeding by the retried release"
+    );
+
+    // And the next local turn re-seeds from the server.
+    run("what did the cloud do?").await;
+    assert_eq!(seeds(&h), 1, "one seed from the server");
+}
+
 #[test]
 fn a_version_1_history_gains_the_turn_origin_column() {
     use std::os::unix::fs::PermissionsExt as _;

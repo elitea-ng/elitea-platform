@@ -383,7 +383,7 @@ impl PlatformApi {
             id,
             conversation_uuid,
             numeric_id: number_of(detail.get("id")),
-            message_count: detail.get("message_count").and_then(Value::as_u64),
+            message_count: number_of(detail.get("message_count")),
         })
     }
 
@@ -449,29 +449,64 @@ impl PlatformApi {
             .map(i64::to_string)
             .collect::<Vec<_>>()
             .join(",");
+        // The route answers oldest-first and clamps `limit` at its own page
+        // (2000): one page is the OLDEST steps, so ask for the total and,
+        // past one page, take the newest [`crate::seed::SEED_TOOL_STEPS`]
+        // steps by offset.
+        let base = format!(
+            "/api/v2/elitea_core/message_traces/prompt_lib/{project_id}/{numeric}?kind=tool_call&message_group_ids={ids}&include_total=true"
+        );
         let listing = self
-            .send(
-                Method::GET,
-                &format!(
-                    "/api/v2/elitea_core/message_traces/prompt_lib/{project_id}/{numeric}?kind=tool_call&message_group_ids={ids}&limit=2000"
-                ),
-                None,
-                &[],
-            )
+            .send(Method::GET, &format!("{base}&limit=2000"), None, &[])
             .await;
-        let rows: Vec<Value> = match listing {
-            Ok(answer) if (200..300).contains(&answer.status) => answer
-                .body
-                .get("rows")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default(),
+        let (rows, total): (Vec<Value>, Option<u64>) = match listing {
+            Ok(answer) if (200..300).contains(&answer.status) => (
+                answer
+                    .body
+                    .get("rows")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+                answer.body.get("total").and_then(Value::as_u64),
+            ),
             Ok(_) | Err(_) => {
                 log::warn!(
                     "the conversation's tool steps could not be listed; seeding messages only"
                 );
                 return Ok((groups, steps));
             }
+        };
+        let rows = if total.is_some_and(|total| total > rows.len() as u64) {
+            let offset = total
+                .unwrap()
+                .saturating_sub(crate::seed::SEED_TOOL_STEPS as u64);
+            match self
+                .send(
+                    Method::GET,
+                    &format!(
+                        "{base}&limit={}&offset={offset}",
+                        crate::seed::SEED_TOOL_STEPS
+                    ),
+                    None,
+                    &[],
+                )
+                .await
+            {
+                Ok(answer) if (200..300).contains(&answer.status) => answer
+                    .body
+                    .get("rows")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+                Ok(_) | Err(_) => {
+                    log::warn!(
+                        "the conversation's newest tool steps could not be listed; seeding with the older page"
+                    );
+                    rows
+                }
+            }
+        } else {
+            rows
         };
         // The newest steps only, fetched a few at a time.
         let skip = rows.len().saturating_sub(crate::seed::SEED_TOOL_STEPS);
@@ -629,8 +664,9 @@ pub struct AnsweringParticipant {
     /// The conversation's numeric id (the traces routes take only it).
     pub numeric_id: Option<i64>,
     /// How many message groups the conversation holds (`message_count`):
-    /// what a desktop session compares its cursor with.
-    pub message_count: Option<u64>,
+    /// what a desktop session compares its cursor with. A number, or a
+    /// numeric string, as `id` above.
+    pub message_count: Option<i64>,
 }
 
 fn conversation_uuid(detail: &Value) -> Result<String, ApiError> {

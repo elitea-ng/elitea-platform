@@ -441,4 +441,23 @@ mod tests {
         assert_eq!(step.output.as_deref(), Some("text"));
         assert!(ToolStep::from_trace(&json!({"id": 5})).is_none());
     }
+
+    #[test]
+    fn a_json_string_tool_input_is_parsed_to_an_object() {
+        // The server may hold the input as a serialized JSON string.
+        let step = ToolStep::from_trace(&json!({
+            "id": 6, "message_group_id": 2, "tool_name": "write_file",
+            "tool_inputs": "{\"path\":\"a\",\"content\":\"x\"}",
+            "tool_output": "text", "is_error": false
+        }))
+        .unwrap();
+        assert_eq!(step.inputs, json!({"path": "a", "content": "x"}));
+        // An unparseable string falls back to an empty object.
+        let broken = ToolStep::from_trace(&json!({
+            "id": 7, "message_group_id": 2, "tool_name": "write_file",
+            "tool_inputs": "not json", "tool_output": "text", "is_error": false
+        }))
+        .unwrap();
+        assert_eq!(broken.inputs, json!({}));
+    }
 }

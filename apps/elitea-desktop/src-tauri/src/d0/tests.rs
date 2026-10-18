@@ -2037,9 +2037,12 @@ pub(crate) struct Convo {
     pub(crate) steps: Vec<Value>,
     next_id: i64,
     executions: i64,
-    /// Commits to refuse with a 500 (`remaining`).
+    /// Commits to refuse with a 500.
     refuse_commits: usize,
-    /// The model blocks while this is set (a cancel test).
+    /// The step listing to refuse with a 500 (a degraded seed).
+    traces_fail: bool,
+    /// Each execution's question and response ids, so the commit route
+    /// builds the transcript groups.
     pending: HashMap<String, (String, String)>,
 }
 
@@ -2130,6 +2133,9 @@ pub(crate) fn memory_platform_for(
             return Res::json(200, &detail);
         }
         if path == "/api/v2/elitea_core/message_traces/prompt_lib/1/42" {
+            if state.traces_fail {
+                return Res::json(500, &json!({"error": "internal", "message": "trace"}));
+            }
             let wanted: Vec<i64> = query_of(&req.path, "message_group_ids")
                 .unwrap_or_default()
                 .split(',')
@@ -2146,7 +2152,27 @@ pub(crate) fn memory_platform_for(
                     light
                 })
                 .collect();
-            return Res::json(200, &json!({"total": null, "rows": rows}));
+            // Like the route: oldest first, `limit` clamped at 2000,
+            // `total` present only when asked for.
+            let total = rows.len() as u64;
+            let limit = query_of(&req.path, "limit")
+                .and_then(|v| v.parse::<usize>().ok())
+                .map(|limit| limit.min(2000))
+                .unwrap_or(usize::MAX);
+            let offset = query_of(&req.path, "offset")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0);
+            let rows = rows
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .collect::<Vec<_>>();
+            let total = if query_of(&req.path, "include_total").is_some() {
+                Value::from(total)
+            } else {
+                Value::Null
+            };
+            return Res::json(200, &json!({"total": total, "rows": rows}));
         }
         if let Some(step_id) = path.strip_prefix("/api/v2/elitea_core/message_trace/prompt_lib/1/")
         {
@@ -2754,9 +2780,11 @@ async fn a_path_deny_change_withholds_earlier_tool_outputs() {
     let last = bodies.last().unwrap().to_string();
     assert!(last.contains("create hello.txt with hi"), "messages stay");
     assert!(last.contains("output withheld"), "{last}");
+    // Only the tool OUTPUTS are withheld: the tool call's input args stay,
+    // serialized with the keys alphabetical (content before path).
     assert!(
-        !last.contains("hello.txt\\\",\\\"content"),
-        "no body: {last}"
+        last.contains("content\\\":\\\"hi\\\",\\\"path\\\""),
+        "the input args stay: {last}"
     );
     // The re-seed after the change did not bring the bodies back.
     assert_eq!(seed_requests(&h.server), 1);
@@ -2878,5 +2906,225 @@ async fn a_wipe_deletes_every_session() {
     assert!(
         shape(bodies.last().unwrap()).len() > 1,
         "the earlier turn was rebuilt"
+    );
+}
+
+#[tokio::test]
+async fn a_seed_past_the_page_holds_the_newest_steps_not_the_oldest() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    {
+        let mut convo = convo.lock().unwrap();
+        let q = convo.group("q-big", None, "make the files", &json!({}));
+        let a = convo.group("a-big", Some(q), "All done.", &json!({}));
+        for i in 0..2001 {
+            convo.step(
+                a,
+                "write_file",
+                &json!({"path": format!("f{i}.txt")}),
+                "{\"written\":true}",
+            );
+        }
+    }
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "ok?").await;
+    let last = llm_bodies(&h.server).last().unwrap().to_string();
+    // Past one page (2000), the seed keeps the NEWEST 128 steps, not the
+    // tail of the oldest page: f1873..f2000, so f0 stays out.
+    assert!(
+        last.contains("f2000.txt"),
+        "the newest step was seeded: {last}"
+    );
+    assert!(
+        last.contains("f1873.txt"),
+        "the window's first step: {last}"
+    );
+    assert!(
+        !last.contains("f0.txt"),
+        "the oldest steps stayed out: {last}"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_step_listing_seeds_the_messages_only() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    {
+        let mut convo = convo.lock().unwrap();
+        let q = convo.group("q-x", None, "from the web: make it blue", &json!({}));
+        let a = convo.group("a-x", Some(q), "Done on the web.", &json!({}));
+        convo.step(
+            a,
+            "write_file",
+            &json!({"path": "web.txt"}),
+            "{\"written\":true}",
+        );
+        convo.traces_fail = true;
+    }
+    let server = serve(memory_platform(convo, memory_script())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "ok?").await;
+    let last = llm_bodies(&h.server).last().unwrap().to_string();
+    assert!(
+        last.contains("from the web: make it blue") && last.contains("Done on the web."),
+        "the messages were seeded: {last}"
+    );
+    assert!(
+        !last.contains("web.txt"),
+        "the failed listing left the step out: {last}"
+    );
+    assert!(
+        h.server
+            .seen()
+            .iter()
+            .any(|r| r.path.contains("/message_traces/")),
+        "the listing was asked for"
+    );
+}
+
+#[tokio::test]
+async fn a_conversation_without_a_numeric_id_seeds_the_messages_only() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    {
+        let mut convo = convo.lock().unwrap();
+        let q = convo.group("q-x", None, "from the web: make it blue", &json!({}));
+        let a = convo.group("a-x", Some(q), "Done on the web.", &json!({}));
+        convo.step(
+            a,
+            "write_file",
+            &json!({"path": "web.txt"}),
+            "{\"written\":true}",
+        );
+    }
+    let inner = memory_platform(convo, memory_script());
+    // A deployment whose detail carries no numeric id: the step listing has
+    // no route, so the seed keeps the messages only.
+    let server = serve(move |req: &Req| {
+        let mut res = inner(req);
+        if req
+            .path
+            .starts_with("/api/v2/elitea_core/conversation/prompt_lib/1/")
+            && let Ok(mut detail) = serde_json::from_str::<Value>(&res.body)
+            && detail
+                .as_object_mut()
+                .is_some_and(|object| object.remove("id").is_some())
+        {
+            res.body = detail.to_string();
+        }
+        res
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "ok?").await;
+    let last = llm_bodies(&h.server).last().unwrap().to_string();
+    assert!(
+        last.contains("from the web: make it blue") && last.contains("Done on the web."),
+        "the messages were seeded: {last}"
+    );
+    assert!(
+        !last.contains("web.txt"),
+        "no steps without the numeric id: {last}"
+    );
+    assert!(
+        !h.server
+            .seen()
+            .iter()
+            .any(|r| r.path.contains("/message_traces/")),
+        "the listing was never asked for"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_turn_is_refused_before_it_can_wipe_a_running_seed() {
+    let slow = Arc::new(AtomicBool::new(false));
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    {
+        let mut convo = convo.lock().unwrap();
+        let q = convo.group("q-x", None, "from the web: make it blue", &json!({}));
+        let a = convo.group("a-x", Some(q), "Done on the web.", &json!({}));
+        convo.step(
+            a,
+            "write_file",
+            &json!({"path": "web.txt"}),
+            "{\"written\":true}",
+        );
+    }
+    let inner = memory_platform(convo.clone(), memory_script());
+    let server = serve({
+        let slow = slow.clone();
+        move |req: &Req| {
+            if req.path == "/llm/v1/chat/completions" && slow.load(Ordering::SeqCst) {
+                tokio::task::block_in_place(|| {
+                    for _ in 0..250 {
+                        if !slow.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                });
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // The model stalls for the whole test; the first turn seeds, then blocks
+    // in the model.
+    slow.store(true, Ordering::SeqCst);
+    let started = h.host.start(turn(&h, "first?")).await.unwrap();
+    for _ in 0..500 {
+        if seed_requests(&h.server) == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(seed_requests(&h.server), 1, "the first turn re-seeded");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let rows_seeded = h.session_rows();
+    assert!(!rows_seeded.is_empty(), "{rows_seeded:?}");
+    // The conversation grows behind the seed (it would re-seed next).
+    {
+        let mut convo = convo.lock().unwrap();
+        let q = convo.group("q-late", None, "late question", &json!({}));
+        let _a = convo.group("a-late", Some(q), "Late answer.", &json!({}));
+    }
+    // A second workspace, the same conversation: its turn is refused by the
+    // per-conversation claim, before it can wipe the running seed.
+    let folder2 = tempfile::tempdir().unwrap();
+    let w2 = h.workspaces.add(folder2.path()).unwrap().id;
+    h.workspaces.bind_project(&w2, 1).unwrap();
+    let refused = h.host.start(request(&w2)).await.unwrap_err();
+    assert_eq!(refused.code, "conversation_busy");
+    assert_eq!(
+        h.session_rows(),
+        rows_seeded,
+        "the refused turn changed nothing"
+    );
+    assert_eq!(
+        seed_requests(&h.server),
+        1,
+        "the refused turn did not fetch the transcript"
+    );
+    // The first turn settles; the second one may go on and re-seed.
+    slow.store(false, Ordering::SeqCst);
+    h.host.cancel(&started.turn_id).unwrap();
+    until_done_of(&h.emitter, &started.turn_id).await;
+    let second = h
+        .host
+        .start(TurnRequest {
+            prompt: "go?".to_owned(),
+            ..request(&w2)
+        })
+        .await
+        .unwrap();
+    until_done_of(&h.emitter, &second.turn_id).await;
+    assert_eq!(seed_requests(&h.server), 2, "the second turn re-seeded");
+    let second_body = llm_bodies(&h.server)
+        .iter()
+        .find(|body| body.to_string().contains("go?"))
+        .unwrap_or(&Value::Null)
+        .to_string();
+    assert!(
+        second_body.contains("late question") && second_body.contains("Late answer."),
+        "the late groups were folded in: {second_body}"
     );
 }
