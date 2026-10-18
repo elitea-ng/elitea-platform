@@ -109,6 +109,19 @@ impl SensitiveToolPolicy {
     pub const fn policy_message(&self) -> &str {
         &self.policy_message
     }
+
+    /// The cloud workspace's `run_command` when its command is destructive
+    /// or escaping (ADR-0034 decision 9, ADR-0029 addendum item 3): asked
+    /// as a server HITL interrupt before it runs.
+    #[must_use]
+    pub fn workspace_command() -> Self {
+        Self {
+            toolkit_type: "local".into(),
+            toolkit_name: "local".into(),
+            action_name: "run_command".into(),
+            policy_message: "This command is destructive or reaches outside the workspace (a recursive delete, a history rewrite or push, a publish, privilege, or a write outside the workspace). Approve it to run it in the cloud workspace.".into(),
+        }
+    }
 }
 
 impl ToolAdmissionPolicy {

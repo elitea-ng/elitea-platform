@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package elitea.runtime.v1;
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+
+// The egress proxy's per-turn audit (ADR-0034 decision 9, "Host allowlist:
+// the egress proxy", Logging): Main's audit log receives, per turn, the hosts
+// a run reached and the hosts the proxy refused for it.
+//
+// Each proxy replica reports the summary it keeps for a run
+// (`egress_proxy.run_summary`) over gRPC on elitea-main's private, mTLS
+// control listener. Main admits only the proxy's configured client
+// certificate identity. A report is a CUMULATIVE snapshot of one replica's
+// view of one run, so a repeated or retried report replaces the previous one
+// and is never added to it. Main merges the replicas of one run by
+// `execution_id` and writes one audit event per turn when every replica it
+// heard from has sent its last report (`final`, or `replica_shutdown`), or
+// when the merge window closes.
+service EgressAuditService {
+  rpc ReportRunSummary(ReportRunSummaryRequestV1) returns (ReportRunSummaryResponseV1);
+}
+
+message EgressHostReachedV1 {
+  string host = 1;
+  uint32 port = 2;
+  int64 connections = 3;
+  int64 bytes_up = 4;
+  int64 bytes_down = 5;
+  reserved 6 to 10;
+}
+
+message EgressHostRefusedV1 {
+  string host = 1;
+  uint32 port = 2;
+  // One of the proxy's fixed refusal reasons (README, "Refusals").
+  string reason = 3;
+  int64 count = 4;
+  reserved 5 to 10;
+}
+
+message ReportRunSummaryRequestV1 {
+  // The reporting replica (its pod name): the merge key beside the run.
+  string replica_id = 1;
+  // From the verified run token: the execution and its project.
+  string execution_id = 2;
+  int64 project_id = 3;
+  // The run's token expired on this replica: no more reports for it.
+  bool final = 4;
+  // This replica is shutting down: its last report for the run.
+  bool replica_shutdown = 5;
+  int64 token_expires_at_unix = 6;
+  int64 connections = 7;
+  int64 bytes_up = 8;
+  int64 bytes_down = 9;
+  // At most 256 hosts in all (the proxy's per-run bound); the rest are
+  // counted in other_hosts.
+  repeated EgressHostReachedV1 hosts_reached = 10;
+  repeated EgressHostRefusedV1 hosts_refused = 11;
+  int64 other_hosts = 12;
+  reserved 13 to 20;
+}
+
+message ReportRunSummaryResponseV1 {
+  reserved 1 to 5;
+}

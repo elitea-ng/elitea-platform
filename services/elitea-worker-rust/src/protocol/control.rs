@@ -1187,6 +1187,25 @@ impl ClaimBoundRuntimeContextAuthority {
         self.index_removal.duplicate()
     }
 
+    /// The claim binding of the cloud executor's workspace-store calls
+    /// (ADR-0034): the same identity, fence and claim id `RemoveIndex`
+    /// carries, plus the thread and epoch the runtime context named. Main
+    /// verifies the live claim on every call.
+    #[must_use]
+    pub(crate) fn workspace_claim(
+        &self,
+        thread_uuid: &str,
+        epoch: u64,
+    ) -> crate::protocol::elitea::runtime::v1::WorkspaceClaimV1 {
+        crate::protocol::elitea::runtime::v1::WorkspaceClaimV1 {
+            identity: Some(self.index_removal.identity.clone()),
+            fence: Some(self.index_removal.fence.clone()),
+            claim_id: self.index_removal.claim_id.clone(),
+            thread_uuid: thread_uuid.to_owned(),
+            epoch,
+        }
+    }
+
     /// The elitea-vector token of the claim this authority was derived
     /// from, for the agent's toolkits.
     #[must_use]

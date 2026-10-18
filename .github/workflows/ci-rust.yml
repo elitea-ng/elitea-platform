@@ -15,6 +15,11 @@ on:
       # and the patched adk crates in libs/rust/vendor; they inherit package
       # fields and lints from the libs/rust workspace.
       - "libs/rust/**"
+      # The workspace-run Docker proofs create the egress network with it.
+      - "deploy/docker/workspace-egress.sh"
+      # ...and run the real egress proxy for the proxy-mode proof.
+      - "services/elitea-egress-proxy/**"
+      - "libs/go/egresslib/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The SDK schema gate reads both (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs;
@@ -55,6 +60,11 @@ on:
       # and the patched adk crates in libs/rust/vendor; they inherit package
       # fields and lints from the libs/rust workspace.
       - "libs/rust/**"
+      # The workspace-run Docker proofs create the egress network with it.
+      - "deploy/docker/workspace-egress.sh"
+      # ...and run the real egress proxy for the proxy-mode proof.
+      - "services/elitea-egress-proxy/**"
+      - "libs/go/egresslib/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The SDK schema gate reads both (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs;
@@ -521,4 +531,132 @@ jobs:
           if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ] || [ "${expected}" -lt 10 ]; then
             echo "::error::the guard's own suite ran ${ran:-no} of ${expected} scenario(s)"
             exit 1
+          fi
+
+  # ADR-0034 decision 9: the cloud executor's workspace runs on the real
+  # Docker runtime. The runner image is built HERE (never locally) and pushed
+  # to a throwaway registry so the run can name it by digest, as production
+  # does. Two opt-in proofs run against it
+  # (src/sandbox/workspace_run_docker_tests.rs):
+  #   * the supervisor bridge end to end: launcher, gRPC, the supervisor's
+  #     service and its Docker backend, the real runner (start, unpack, serve,
+  #     pack, destroy);
+  #   * the egress proof: network on reaches public HTTPS and DNS and NOT
+  #     RFC 1918, 169.254.169.254 or a service on the host (the stand-in for
+  #     Main); network off has no network and no DNS.
+  #   * the proxy proof (host-allowlist mode): on the internal proxy network,
+  #     with a run token for example.com, the real elitea-egress-proxy lets
+  #     the run reach example.com and refuses www.iana.org (off the
+  #     allowlist), a direct connection, DNS, and a fronted tunnel (CONNECT
+  #     example.com, SNI www.iana.org); the proxy's log must show the
+  #     host-not-allowed and sni-mismatch refusals.
+  # ELITEA_REQUIRE_WORKSPACE_DOCKER_TESTS=1 turns a missing variable into a
+  # failure: a skipped proof must not read as a passing one.
+  workspace-run-docker:
+    name: Workspace runs on Docker (bridge and egress proof)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      registry:
+        image: registry:2.8.3
+        ports:
+          - 5000:5000
+    defaults:
+      run:
+        working-directory: services/elitea-worker-rust
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show pinned toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: services/elitea-worker-rust
+
+      - name: Build and push the workspace runner image
+        working-directory: .
+        run: |
+          set -euo pipefail
+          docker build -f libs/rust/workspace-runner/Containerfile \
+            -t localhost:5000/elitea-workspace-runner:ci .
+          docker push localhost:5000/elitea-workspace-runner:ci
+          image="$(docker inspect --format '{{index .RepoDigests 0}}' localhost:5000/elitea-workspace-runner:ci)"
+          case "$image" in *@sha256:*) ;; *) echo "::error::no digest for the runner image: $image"; exit 1 ;; esac
+          echo "ELITEA_WORKSPACE_RUNNER_TEST_IMAGE=$image" >> "$GITHUB_ENV"
+
+      - name: Create the workspace egress network
+        working-directory: .
+        run: |
+          set -euo pipefail
+          sudo ELITEA_WORKSPACE_EGRESS_DNS="1.1.1.1 9.9.9.9" bash deploy/docker/workspace-egress.sh
+          echo "ELITEA_WORKSPACE_EGRESS_NETWORK=elitea-workspace-egress" >> "$GITHUB_ENV"
+          echo "ELITEA_WORKSPACE_EGRESS_DNS=1.1.1.1,9.9.9.9" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+          cache: false
+
+      - name: Start the egress proxy on the proxy network
+        working-directory: .
+        run: |
+          set -euo pipefail
+          keys="${RUNNER_TEMP}/egress-keys"
+          # A throwaway key pair and one token for example.com (test tool;
+          # production tokens are minted by elitea-main).
+          go run ./libs/go/egresslib/cmd/egress-test-token -keys-dir "$keys" \
+            -execution ci-proxy-proof -project 1 -allow example.com -ttl 30m > "${RUNNER_TEMP}/egress-token"
+          chmod 0644 "$keys/test.pem"
+          docker build -f services/elitea-egress-proxy/Containerfile -t elitea-egress-proxy:ci .
+          docker run -d --name egress-proxy --network bridge \
+            -e ELITEA_EGRESS_PROXY_PUBLIC_KEYS=/keys \
+            -e ELITEA_EGRESS_PROXY_DENY_CIDRS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16 \
+            -v "$keys:/keys:ro" elitea-egress-proxy:ci
+          docker network connect --ip 172.31.251.2 elitea-workspace-proxy egress-proxy
+          for _ in $(seq 1 30); do
+            docker logs egress-proxy 2>&1 | grep -q egress_proxy.started && break
+            sleep 1
+          done
+          docker logs egress-proxy 2>&1 | grep -q egress_proxy.started
+          {
+            echo "ELITEA_WORKSPACE_PROXY_NETWORK=elitea-workspace-proxy"
+            echo "ELITEA_WORKSPACE_PROXY_URL=http://172.31.251.2:3128"
+            echo "ELITEA_WORKSPACE_PROXY_TOKEN_FILE=${RUNNER_TEMP}/egress-token"
+          } >> "$GITHUB_ENV"
+
+      - name: Start a stand-in for Main on the host
+        run: |
+          set -euo pipefail
+          nohup python3 -m http.server 18080 --bind 0.0.0.0 > "${RUNNER_TEMP}/platform.log" 2>&1 &
+          for _ in $(seq 1 30); do curl -sf http://127.0.0.1:18080/ >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:18080/ >/dev/null
+          gateway="$(docker network inspect elitea-workspace-egress --format '{{(index .IPAM.Config 0).Gateway}}')"
+          echo "ELITEA_WORKSPACE_EGRESS_PLATFORM_URL=http://${gateway}:18080/" >> "$GITHUB_ENV"
+
+      - name: Run the Docker workspace-run proofs
+        env:
+          ELITEA_REQUIRE_WORKSPACE_DOCKER_TESTS: "1"
+        run: cargo test --locked --lib --all-features sandbox::workspace_run_docker_tests -- --ignored --test-threads=1
+
+      - name: The proxy refused the off-allowlist host and the fronted tunnel
+        if: always()
+        working-directory: .
+        run: |
+          set -euo pipefail
+          docker logs egress-proxy > "${RUNNER_TEMP}/egress-proxy.log" 2>&1 || true
+          for reason in host-not-allowed sni-mismatch; do
+            if ! grep -q "\"reason\":\"$reason\"" "${RUNNER_TEMP}/egress-proxy.log"; then
+              echo "::error::the egress proxy logged no $reason refusal"
+              tail -50 "${RUNNER_TEMP}/egress-proxy.log"
+              exit 1
+            fi
+          done
+          # The token never reaches the proxy's log.
+          if grep -qF "$(cat "${RUNNER_TEMP}/egress-token")" "${RUNNER_TEMP}/egress-proxy.log"; then
+            echo "::error::the run token is in the egress proxy's log"; exit 1
           fi

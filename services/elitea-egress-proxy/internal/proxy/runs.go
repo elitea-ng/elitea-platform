@@ -11,8 +11,9 @@ import (
 	"github.com/EliteaAI/elitea-platform/libs/go/egresslib/runtoken"
 )
 
-// SummaryEvent is the stable message of a run summary log line. Phase B
-// forwards these lines to Main's audit log; do not rename it.
+// SummaryEvent is the stable message of a run summary log line. The same
+// summary goes to Main's audit log through the Runs sink (SetSink); do not
+// rename it.
 const SummaryEvent = "egress_proxy.run_summary"
 
 // ConnectionEvent is the stable message of a per-connection log line.
@@ -84,6 +85,33 @@ type Runs struct {
 
 	mu   sync.Mutex
 	runs map[string]*run
+
+	// sink receives every summary that is logged (elitea-main's audit
+	// reporter). It must not block. Set before Run starts.
+	sink func(Summary)
+}
+
+// Summary is one run's summary on this replica: cumulative since the run's
+// first connection here.
+type Summary struct {
+	ExecutionID     string
+	ProjectID       int64
+	Final           bool
+	ReplicaShutdown bool
+	TokenExpiresAt  time.Time
+	Connections     int64
+	BytesUp         int64
+	BytesDown       int64
+	HostsReached    []HostReached
+	HostsRefused    []HostRefused
+	OtherHosts      int64
+}
+
+// SetSink sets the function that receives every summary. Call it before Run.
+func (rs *Runs) SetSink(sink func(Summary)) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.sink = sink
 }
 
 // NewRuns builds the run registry.
@@ -186,10 +214,7 @@ func (r *run) spend(n int, limit int64) bool {
 // and that has no open connection. A run with a final summary is dropped.
 // With shutdown set, it logs every run that changed, marked replica_shutdown.
 func (rs *Runs) Sweep(now time.Time, interval time.Duration, shutdown bool) {
-	type pending struct {
-		attrs []slog.Attr
-	}
-	var out []pending
+	var out []Summary
 	rs.mu.Lock()
 	for id, r := range rs.runs {
 		expired := !now.Before(r.expiresAt) && r.active == 0
@@ -197,16 +222,20 @@ func (rs *Runs) Sweep(now time.Time, interval time.Duration, shutdown bool) {
 		if !expired && !due {
 			continue
 		}
-		out = append(out, pending{attrs: r.summaryAttrs(expired, shutdown)})
+		out = append(out, r.summary(expired, shutdown))
 		r.dirty = false
 		r.lastEmitted = now
 		if expired {
 			delete(rs.runs, id)
 		}
 	}
+	sink := rs.sink
 	rs.mu.Unlock()
-	for _, p := range out {
-		rs.logger.LogAttrs(context.Background(), slog.LevelInfo, SummaryEvent, p.attrs...)
+	for _, summary := range out {
+		rs.logger.LogAttrs(context.Background(), slog.LevelInfo, SummaryEvent, summary.attrs()...)
+		if sink != nil {
+			sink(summary)
+		}
 	}
 }
 
@@ -229,8 +258,8 @@ func (rs *Runs) Run(ctx context.Context, interval time.Duration, now func() time
 	}
 }
 
-// summaryAttrs builds the summary of one run. Caller holds rs.mu.
-func (r *run) summaryAttrs(final, shutdown bool) []slog.Attr {
+// summary builds the summary of one run. Caller holds rs.mu.
+func (r *run) summary(final, shutdown bool) Summary {
 	reached := make([]HostReached, 0, len(r.reached))
 	for hp, st := range r.reached {
 		reached = append(reached, HostReached{Host: hp.host, Port: hp.port, Connections: st.connections, BytesUp: st.bytesUp, BytesDown: st.bytesDown})
@@ -254,17 +283,25 @@ func (r *run) summaryAttrs(final, shutdown bool) []slog.Attr {
 		}
 		return refused[i].Reason < refused[j].Reason
 	})
+	return Summary{
+		ExecutionID: r.executionID, ProjectID: r.projectID, Final: final, ReplicaShutdown: shutdown,
+		TokenExpiresAt: r.expiresAt, Connections: r.connections, BytesUp: r.bytesUp, BytesDown: r.bytesDown,
+		HostsReached: reached, HostsRefused: refused, OtherHosts: r.otherHosts,
+	}
+}
+
+func (s Summary) attrs() []slog.Attr {
 	return []slog.Attr{
-		slog.String("execution_id", r.executionID),
-		slog.Int64("project_id", r.projectID),
-		slog.Bool("final", final),
-		slog.Bool("replica_shutdown", shutdown),
-		slog.Time("token_expires_at", r.expiresAt),
-		slog.Int64("connections", r.connections),
-		slog.Int64("bytes_up", r.bytesUp),
-		slog.Int64("bytes_down", r.bytesDown),
-		slog.Any("hosts_reached", reached),
-		slog.Any("hosts_refused", refused),
-		slog.Int64("other_hosts", r.otherHosts),
+		slog.String("execution_id", s.ExecutionID),
+		slog.Int64("project_id", s.ProjectID),
+		slog.Bool("final", s.Final),
+		slog.Bool("replica_shutdown", s.ReplicaShutdown),
+		slog.Time("token_expires_at", s.TokenExpiresAt),
+		slog.Int64("connections", s.Connections),
+		slog.Int64("bytes_up", s.BytesUp),
+		slog.Int64("bytes_down", s.BytesDown),
+		slog.Any("hosts_reached", s.HostsReached),
+		slog.Any("hosts_refused", s.HostsRefused),
+		slog.Int64("other_hosts", s.OtherHosts),
 	}
 }

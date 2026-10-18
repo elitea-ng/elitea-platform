@@ -34,7 +34,7 @@ assert accounts['elitea-code']['metadata']['namespace'] == 'code-execution'
 assert accounts['elitea-sandbox-supervisor']['metadata']['namespace'] == 'platform'
 assert accounts['elitea-sandbox-supervisor']['automountServiceAccountToken'] is True
 assert by_kind['Role']['rules'] == [
-    dict(apiGroups=[''], resources=['pods'], verbs=['create', 'get', 'patch', 'delete']),
+    dict(apiGroups=[''], resources=['pods'], verbs=['create', 'get', 'list', 'patch', 'delete']),
     dict(apiGroups=[''], resources=['pods/exec'], verbs=['create', 'get']),
     dict(apiGroups=[''], resources=['pods/log'], verbs=['get']),
 ]

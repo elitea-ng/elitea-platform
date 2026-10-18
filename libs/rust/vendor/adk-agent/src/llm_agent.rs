@@ -205,6 +205,15 @@ fn build_final_llm_event(
     event
 }
 
+/// Elitea patch (ADR-0034): whether one concrete tool call must be confirmed
+/// by a person before it runs. Asked only for a call the name-based
+/// [`ToolConfirmationPolicy`] does not confirm.
+#[async_trait]
+pub trait ToolCallConfirmation: Send + Sync {
+    /// `true` when this call (name and arguments) must be confirmed.
+    async fn requires_confirmation(&self, tool_name: &str, args: &serde_json::Value) -> bool;
+}
+
 /// An LLM-powered agent that orchestrates tool calls and sub-agent delegation.
 ///
 /// `LlmAgent` is the primary agent type in ADK. It sends requests to an LLM,
@@ -259,6 +268,9 @@ pub struct LlmAgent {
     /// after this many consecutive failures within a single invocation.
     circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
+    /// Elitea patch (ADR-0034): an argument-aware confirmation check, asked
+    /// for calls the name policy does not already confirm.
+    tool_call_confirmation: Option<Arc<dyn ToolCallConfirmation>>,
     /// Per-agent tool execution strategy override. When `Some`, overrides the
     /// `RunConfig` strategy for this agent's dispatch loop.
     tool_execution_strategy: Option<ToolExecutionStrategy>,
@@ -706,6 +718,7 @@ pub struct LlmAgentBuilder {
     tool_retry_budgets: std::collections::HashMap<String, RetryBudget>,
     circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
+    tool_call_confirmation: Option<Arc<dyn ToolCallConfirmation>>,
     tool_execution_strategy: Option<ToolExecutionStrategy>,
     input_guardrails: GuardrailSet,
     output_guardrails: GuardrailSet,
@@ -758,6 +771,7 @@ impl LlmAgentBuilder {
             tool_retry_budgets: std::collections::HashMap::new(),
             circuit_breaker_threshold: None,
             tool_confirmation_policy: ToolConfirmationPolicy::Never,
+            tool_call_confirmation: None,
             tool_execution_strategy: None,
             input_guardrails: GuardrailSet::new(),
             output_guardrails: GuardrailSet::new(),
@@ -1130,6 +1144,16 @@ impl LlmAgentBuilder {
         self
     }
 
+    /// Elitea patch (ADR-0034): ask `check` whether one concrete call needs
+    /// confirmation (its name AND arguments), for calls the name policy does
+    /// not already confirm. A call it confirms interrupts exactly as a
+    /// policy-confirmed one does, before any tool runs, and a recorded
+    /// decision for that call (by id and argument fingerprint) answers it.
+    pub fn tool_call_confirmation(mut self, check: Arc<dyn ToolCallConfirmation>) -> Self {
+        self.tool_call_confirmation = Some(check);
+        self
+    }
+
     /// Require confirmation for all tool calls.
     pub fn require_tool_confirmation_for_all(mut self) -> Self {
         self.tool_confirmation_policy = ToolConfirmationPolicy::Always;
@@ -1376,6 +1400,7 @@ impl LlmAgentBuilder {
             tool_retry_budgets: self.tool_retry_budgets,
             circuit_breaker_threshold: self.circuit_breaker_threshold,
             tool_confirmation_policy: self.tool_confirmation_policy,
+            tool_call_confirmation: self.tool_call_confirmation,
             tool_execution_strategy: self.tool_execution_strategy,
             input_guardrails: Arc::new(self.input_guardrails),
             output_guardrails: Arc::new(self.output_guardrails),
@@ -2434,6 +2459,7 @@ impl Agent for LlmAgent {
         let tool_retry_budgets = self.tool_retry_budgets.clone();
         let circuit_breaker_threshold = self.circuit_breaker_threshold;
         let tool_confirmation_policy = self.tool_confirmation_policy.clone();
+        let tool_call_confirmation = self.tool_call_confirmation.clone();
         let tool_guardrails = Arc::clone(&self.tool_guardrails);
         let output_guardrails = self.output_guardrails.clone();
         let agent_tool_execution_strategy = self.tool_execution_strategy;
@@ -3135,9 +3161,20 @@ impl Agent for LlmAgent {
                     // so check before parallel dispatch.
                     let mut confirmation_interrupted = false;
                     for call in &fc_parts {
+                        let by_arguments = match tool_call_confirmation.as_ref() {
+                            Some(check)
+                                if call.guardrail_denial.is_none()
+                                    && !tool_confirmation_policy.requires_confirmation(&call.name)
+                                    && !ctx.requires_tool_confirmation(&call.name) =>
+                            {
+                                check.requires_confirmation(&call.name, &call.args).await
+                            }
+                            _ => false,
+                        };
                         if call.guardrail_denial.is_none()
                             && (tool_confirmation_policy.requires_confirmation(&call.name)
-                                || ctx.requires_tool_confirmation(&call.name))
+                                || ctx.requires_tool_confirmation(&call.name)
+                                || by_arguments)
                             && static_confirmation_decision(
                                 &confirmation_decisions,
                                 &confirmation_fingerprints,

@@ -86,7 +86,7 @@ ports = {p["name"]: p["containerPort"] for p in c["ports"]}
 assert ports == {"proxy": 3128, "admin": 9090}, ports
 assert c["livenessProbe"]["httpGet"] == {"path": "/healthz", "port": "admin"}
 assert c["readinessProbe"]["httpGet"] == {"path": "/readyz", "port": "admin"}
-env = {e["name"]: e["value"] for e in c["env"]}
+env = {e["name"]: e.get("value") for e in c["env"]}
 assert env["ELITEA_EGRESS_PROXY_LISTEN_ADDR"] == ":3128"
 assert env["ELITEA_EGRESS_PROXY_ADMIN_ADDR"] == ":9090"
 keydir = env["ELITEA_EGRESS_PROXY_PUBLIC_KEYS"]
@@ -128,11 +128,14 @@ proxy_in, admin_in = nps["ingress"]
 assert proxy_in["ports"] == [{"port": 3128, "protocol": "TCP"}]
 assert proxy_in["from"] == [{
     "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "code-execution"}},
-    "podSelector": {"matchLabels": {"sandbox.elitea.ai/kind": "workspace-run"}},
+    "podSelector": {"matchLabels": {"sandbox.elitea.ai/kind": "workspace-run", "sandbox.elitea.ai/egress": "proxy"}},
 }], proxy_in["from"]
 assert admin_in["ports"] == [{"port": 9090, "protocol": "TCP"}]
 assert admin_in["from"] == [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}}]
-dns, internet = nps["egress"]
+main_rule, dns, internet = nps["egress"]
+# The run summaries: elitea-main's pods, on the control port only.
+assert main_rule["ports"] == [{"port": 9443, "protocol": "TCP"}], main_rule
+assert main_rule["to"][0]["podSelector"]["matchLabels"]["app.kubernetes.io/name"] == "elitea-main", main_rule
 assert dns["to"] == [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}},
                       "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}}}]
 assert sorted((p["protocol"], p["port"]) for p in dns["ports"]) == [("TCP", 53), ("UDP", 53)]
@@ -156,6 +159,101 @@ then
   note "the Deployment, PDB, Service, ServiceAccount, Secret and NetworkPolicy hold together"
 else
   fail "the enabled render does not hold together (assertion above)"
+fi
+
+echo "== elitea-main signs the run tokens"
+if python3 - "$work/on.yaml" "$work/off.yaml" <<'PY'
+import sys
+import yaml
+
+def docs(path):
+    return [d for d in yaml.safe_load_all(open(path)) if d]
+
+def main_container(ds):
+    deps = [d for d in ds if d["kind"] == "Deployment" and d["metadata"]["name"].endswith("elitea-main")]
+    assert len(deps) == 1, [d["metadata"]["name"] for d in deps]
+    pod = deps[0]["spec"]["template"]["spec"]
+    return pod, [c for c in pod["containers"] if c["name"] == "elitea-main"][0]
+
+on, off = docs(sys.argv[1]), docs(sys.argv[2])
+pod, c = main_container(on)
+env = {e["name"]: e.get("value") for e in c["env"]}
+assert env["ELITEA_EGRESS_PROXY_URL"] == "http://elitea-egress-proxy.platform.svc.cluster.local:3128", env
+assert env["ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE"] == "/etc/elitea/egress-token/signing.pem"
+assert "ELITEA_EGRESS_PROXY_DEFAULT_TURN_WALL" not in env
+mounts = {m["name"]: m for m in c["volumeMounts"]}
+assert mounts["egress-token-signing-key"]["mountPath"] == "/etc/elitea/egress-token"
+assert mounts["egress-token-signing-key"]["readOnly"] is True
+vol = {v["name"]: v for v in pod["volumes"]}["egress-token-signing-key"]["secret"]
+assert vol["secretName"] == "elitea-egress-token-signing" and vol["defaultMode"] == 0o400
+assert vol["items"] == [{"key": "signing.pem", "path": "signing.pem"}]
+
+# The proxy pod never references the signing key Secret.
+proxy = [d for d in on if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-egress-proxy"][0]
+assert "elitea-egress-token-signing" not in yaml.safe_dump(proxy)
+
+_, c_off = main_container(off)
+assert not [e for e in c_off.get("env", []) if e["name"].startswith("ELITEA_EGRESS")]
+assert "egress-token-signing-key" not in {m["name"] for m in c_off["volumeMounts"]}
+PY
+then
+  note "elitea-main gets the proxy URL and only the signing key; the proxy never mounts it"
+else
+  fail "elitea-main's egress wiring is wrong (assertion above)"
+fi
+
+echo "== the proxy reports run summaries to elitea-main over mTLS"
+helm template t "$chart" "${base[@]}" -f "$fixture" --set egressProxy.audit.enabled=false > "$work/noaudit.yaml"
+if python3 - "$work/on.yaml" "$work/noaudit.yaml" <<'PY'
+import json
+import sys
+import yaml
+
+def docs(path):
+    return [d for d in yaml.safe_load_all(open(path)) if d]
+
+def by(ds, kind, name):
+    found = [d for d in ds if d["kind"] == kind and d["metadata"]["name"] == name]
+    assert len(found) == 1, f"want one {kind}/{name}, found {len(found)}"
+    return found[0]
+
+on, off = docs(sys.argv[1]), docs(sys.argv[2])
+cert = by(on, "Certificate", "elitea-egress-proxy-audit-client")["spec"]
+assert cert["dnsNames"] == ["elitea-egress-proxy"] and cert["usages"] == ["client auth"]
+assert cert["secretName"] == "elitea-egress-proxy-audit-client-tls"
+assert cert["issuerRef"]["name"] == "elitea-runtime-ca"
+
+pod = by(on, "Deployment", "elitea-egress-proxy")["spec"]["template"]["spec"]
+c = pod["containers"][0]
+env = {e["name"]: e for e in c["env"]}
+assert env["ELITEA_EGRESS_PROXY_AUDIT_TARGET"]["value"] == "elitea-main:9443", env["ELITEA_EGRESS_PROXY_AUDIT_TARGET"]
+assert env["ELITEA_EGRESS_PROXY_AUDIT_SERVER_NAME"]["value"] == "elitea-main"
+assert env["ELITEA_EGRESS_PROXY_AUDIT_CERT_FILE"]["value"] == "/etc/elitea-egress-proxy/audit-tls/tls.crt"
+assert env["ELITEA_EGRESS_PROXY_REPLICA_ID"]["valueFrom"]["fieldRef"]["fieldPath"] == "metadata.name"
+vols = {v["name"]: v for v in pod["volumes"]}
+assert vols["audit-client-tls"]["secret"]["secretName"] == "elitea-egress-proxy-audit-client-tls"
+assert pod["terminationGracePeriodSeconds"] >= 5 + 60 + 5 + 10
+
+cm = [d for d in on if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("elitea-main-config")][0]
+assert cm["data"]["ELITEA_EGRESS_AUDIT_CLIENTS"] == "dns:elitea-egress-proxy", cm["data"].get("ELITEA_EGRESS_AUDIT_CLIENTS")
+
+main_np = [d for d in on if d["kind"] == "NetworkPolicy" and d["metadata"]["name"] == "elitea-main-netpol"]
+assert main_np, [d["metadata"]["name"] for d in on if d["kind"] == "NetworkPolicy"]
+rules = [r for r in main_np[0]["spec"]["ingress"] if any(
+    p.get("podSelector", {}).get("matchLabels", {}).get("app.kubernetes.io/name") == "elitea-egress-proxy" for p in r.get("from", []))]
+assert len(rules) == 1 and rules[0]["ports"] == [{"port": 9443, "protocol": "TCP"}], rules
+
+# Off: no certificate, no env, no admitted identity, no peer.
+assert not [d for d in off if d["kind"] == "Certificate" and d["metadata"]["name"] == "elitea-egress-proxy-audit-client"]
+c_off = by(off, "Deployment", "elitea-egress-proxy")["spec"]["template"]["spec"]["containers"][0]
+assert not [e for e in c_off["env"] if "AUDIT" in e["name"]]
+cm_off = [d for d in off if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("elitea-main-config")][0]
+assert "ELITEA_EGRESS_AUDIT_CLIENTS" not in cm_off["data"]
+PY
+then
+  note "the proxy's client certificate, env and egress rule, and elitea-main's admitted identity and ingress, render together"
+else
+  fail "the egress audit wiring is wrong (assertion above)"
 fi
 
 expect_refusal() {
@@ -190,6 +288,95 @@ expect_refusal "a malformed deny CIDR" "is not an explicit CIDR block" \
 expect_refusal "one replica" "replicaCount must be at least 2" --set egressProxy.replicaCount=1
 expect_refusal "a grace period shorter than the drain" "terminationGracePeriodSeconds must be at least" \
   --set egressProxy.terminationGracePeriodSeconds=30
+expect_refusal "a grace period without the audit's last reports" "plus 10 for the last audit reports" \
+  --set egressProxy.terminationGracePeriodSeconds=75
+expect_refusal "the audit identity is elitea-vector's" "must differ from vector.mtls.clientDnsName" \
+  --set vector.enabled=true --set vector.qdrant.apiKeySecret.name=q --set postgresql.maxConnections=1000 \
+  --set egressProxy.audit.clientDnsName=elitea-vector
+# The default values keep elitea-main's runtime plane off.
+if out="$(helm template t "$chart" --namespace platform -f "$fixture" \
+    --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1 \
+    --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true 2>&1)"; then
+  fail "the audit without elitea-main's runtime rendered"
+elif printf '%s' "$out" | grep -qF "egressProxy.audit.enabled needs main.runtime.enabled"; then
+  note "refused: the audit without elitea-main's runtime"
+else
+  fail "the audit without the runtime was refused for the wrong reason: $(printf '%s' "$out" | tail -1)"
+fi
+
+expect_refusal "no signing key for elitea-main" "needs elitea-main's run-token signing key" \
+  --set egressProxy.signingKey.existingSecret=
+expect_refusal "the signing key Secret is the public key Secret" "must not be egressProxy.publicKeys.existingSecret" \
+  --set egressProxy.publicKeys.keys=null --set egressProxy.publicKeys.existingSecret=elitea-egress-token-signing
+
+echo "== a signing key without the proxy is refused"
+if out="$(helm template t "$chart" "${base[@]}" --set egressProxy.signingKey.existingSecret=x 2>&1)"; then
+  fail "a signing key with egressProxy off rendered"
+elif printf '%s' "$out" | grep -qF "egressProxy.enabled is false"; then
+  note "refused: a signing key with the proxy off"
+else
+  fail "refused for the wrong reason: $(printf '%s' "$out" | tail -1)"
+fi
+
+echo "== a proxy-mode workspace run reaches only the proxy port"
+runs=(--set sandboxKubernetes.enabled=true --set sandboxKubernetes.workspaceRuns.enabled=true --set sandboxKubernetes.executionNamespace=code-execution)
+helm template t "$chart" "${base[@]}" -f "$fixture" "${runs[@]}" > "$work/runs.yaml"
+helm template t "$chart" "${base[@]}" "${runs[@]}" > "$work/runs-noproxy.yaml"
+# Direct mode alongside: both policies, each selecting its own label.
+helm template t "$chart" "${base[@]}" -f "$fixture" "${runs[@]}" \
+  --set sandboxKubernetes.workspaceRuns.egress.enabled=true \
+  --set egressProxy.networkPolicy.podCidrs=null --set egressProxy.networkPolicy.serviceCidrs=null \
+  --set 'sandboxKubernetes.workspaceRuns.egress.podCidrs[0]=10.244.0.0/16' \
+  --set 'sandboxKubernetes.workspaceRuns.egress.serviceCidrs[0]=10.96.0.0/12' > "$work/both.yaml"
+if python3 - "$work/runs.yaml" "$work/runs-noproxy.yaml" "$work/both.yaml" <<'PY'
+import sys
+import yaml
+
+def docs(path):
+    return [d for d in yaml.safe_load_all(open(path)) if d]
+
+def policies(ds):
+    return {d["metadata"]["name"]: d for d in ds if d["kind"] == "NetworkPolicy"}
+
+runs, noproxy, both = (docs(p) for p in sys.argv[1:4])
+found = policies(runs)
+p = found["elitea-workspace-run-proxy-egress"]
+assert p["metadata"]["namespace"] == "code-execution"
+spec = p["spec"]
+assert spec["podSelector"] == {"matchLabels": {"sandbox.elitea.ai/kind": "workspace-run", "sandbox.elitea.ai/egress": "proxy"}}
+assert spec["policyTypes"] == ["Egress"]
+assert spec["egress"] == [{
+    "to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "platform"}},
+            "podSelector": {"matchLabels": {"app.kubernetes.io/name": "elitea-egress-proxy", "app.kubernetes.io/instance": "t"}}}],
+    "ports": [{"protocol": "TCP", "port": 3128}],
+}], spec["egress"]
+# No DNS, no ipBlock: only the proxy pods.
+assert "53" not in yaml.safe_dump(spec) and "ipBlock" not in yaml.safe_dump(spec)
+# Deny-all is unchanged; the direct-mode policy does not render without workspaceRuns.egress.
+assert found["elitea-code-deny-network"]["spec"]["egress"] == []
+assert "elitea-workspace-run-egress" not in found
+assert "elitea-workspace-run-proxy-egress" not in policies(noproxy)
+
+found = policies(both)
+direct = found["elitea-workspace-run-egress"]["spec"]["podSelector"]["matchLabels"]
+proxy = found["elitea-workspace-run-proxy-egress"]["spec"]["podSelector"]["matchLabels"]
+assert direct["sandbox.elitea.ai/egress"] == "public" and proxy["sandbox.elitea.ai/egress"] == "proxy"
+# The proxy took the cluster ranges from workspaceRuns.egress.
+dep = [d for d in both if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-egress-proxy"][0]
+env = {e["name"]: e.get("value") for e in dep["spec"]["template"]["spec"]["containers"][0]["env"]}
+deny = set(env["ELITEA_EGRESS_PROXY_DENY_CIDRS"].split(","))
+assert {"10.244.0.0/16", "10.96.0.0/12"} <= deny, deny
+np = [r for r in found["elitea-egress-proxy-netpol"]["spec"]["egress"] if "ipBlock" in r["to"][0]][0]["to"][0]["ipBlock"]["except"]
+assert "10.244.0.0/16" in np and "10.96.0.0/12" in np
+PY
+then
+  note "proxy mode: one policy, the proxy pods on 3128 only; direct mode keeps its own; the CIDRs are shared"
+else
+  fail "the workspace-run proxy-mode policy is wrong (assertion above)"
+fi
+expect_refusal "different cluster ranges in the two places" "name different cluster ranges" \
+  --set sandboxKubernetes.enabled=true --set sandboxKubernetes.workspaceRuns.enabled=true \
+  --set 'sandboxKubernetes.workspaceRuns.egress.podCidrs[0]=10.0.0.0/16'
 
 echo "== clientNamespace overrides the execution namespace"
 helm template t "$chart" "${base[@]}" -f "$fixture" --set egressProxy.networkPolicy.clientNamespace=workspaces \

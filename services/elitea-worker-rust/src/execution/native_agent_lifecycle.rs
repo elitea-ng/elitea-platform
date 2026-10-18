@@ -487,7 +487,7 @@ where
     RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
 {
-    let (mut run, mut native, mut projector, completion_selector) = started.into_parts();
+    let (mut run, mut native, mut projector, mut completion_selector) = started.into_parts();
 
     let mut probe = run.lease_state_probe();
     let mut pauses = AgentPauseAccumulator::default();
@@ -523,14 +523,26 @@ where
             if occurred_at_unix_millis <= 0 {
                 return Box::pin(run.close_no_ack("agent_lifecycle.invalid_clock", false)).await;
             }
-            successful_terminal = pause.selection;
-            match Box::pin(run.publish_result_event(pause.event, occurred_at_unix_millis)).await {
-                Ok(AgentProgressPublishOutcome::Acknowledged { .. }) => None,
-                Ok(AgentProgressPublishOutcome::Rejected { .. }) => {
-                    Some(RuntimeFailureKind::Cancelled)
-                }
-                Err(error) => {
-                    return Box::pin(run.close_no_ack(error.code(), error.retryable())).await;
+            // ADR-0034 decision 7: a cloud-executor turn publishes its work
+            // so far before the pause is reported; a failed publish fails the
+            // turn instead of pausing it.
+            if let Err(error) = completion_selector.paused().await {
+                tracing::warn!(
+                    error_code = error.code().as_str(),
+                    "the paused turn's workspace could not be published"
+                );
+                Some(assembly_failure(&error))
+            } else {
+                successful_terminal = pause.selection;
+                match Box::pin(run.publish_result_event(pause.event, occurred_at_unix_millis)).await
+                {
+                    Ok(AgentProgressPublishOutcome::Acknowledged { .. }) => None,
+                    Ok(AgentProgressPublishOutcome::Rejected { .. }) => {
+                        Some(RuntimeFailureKind::Cancelled)
+                    }
+                    Err(error) => {
+                        return Box::pin(run.close_no_ack(error.code(), error.retryable())).await;
+                    }
                 }
             }
         }

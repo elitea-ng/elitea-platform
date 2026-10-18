@@ -106,7 +106,7 @@ enum Backend {
 
 #[derive(Debug, thiserror::Error)]
 #[error("sandbox supervisor could not {0}")]
-pub struct StartupError(&'static str);
+pub struct StartupError(pub(super) &'static str);
 
 impl Config {
     #[expect(
@@ -288,15 +288,44 @@ pub async fn run_profiles(paths: &[PathBuf]) -> Result<(), StartupError> {
         return Err(StartupError("validate runtime profile count"));
     }
     let mut configs = Vec::with_capacity(paths.len());
+    let mut workspace_profiles = Vec::new();
     for path in paths {
         let raw = read_regular_file(path, 64 * 1024, false, "sandbox configuration")
             .map_err(|_| StartupError("read configuration"))?;
+        // ADR-0034: a `workspace` profile serves workspace runs, not Code
+        // jobs, and has its own shape.
+        if super::workspace_run_profile::is_workspace_profile(&raw) {
+            let config = super::workspace_run_profile::WorkspaceProfileConfig::parse(&raw)?;
+            workspace_profiles.push(config);
+            continue;
+        }
         let config: Config =
             serde_json::from_slice(&raw).map_err(|_| StartupError("parse configuration"))?;
         config.validate()?;
         configs.push(config);
     }
-    validate_profiles(&configs)?;
+    if !configs.is_empty() {
+        validate_profiles(&configs)?;
+    }
+    let endpoints: Vec<(&str, u16)> = configs
+        .iter()
+        .map(|config| (config.owner.as_str(), config.listen_address.port()))
+        .chain(
+            workspace_profiles
+                .iter()
+                .map(super::workspace_run_profile::WorkspaceProfileConfig::endpoint),
+        )
+        .collect();
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        if endpoints[..index]
+            .iter()
+            .any(|prior| prior.0 == endpoint.0 || prior.1 == endpoint.1)
+        {
+            return Err(StartupError(
+                "validate distinct runtime owners and listener ports",
+            ));
+        }
+    }
     let configs = configs
         .into_iter()
         .map(|config| {
@@ -307,6 +336,9 @@ pub async fn run_profiles(paths: &[PathBuf]) -> Result<(), StartupError> {
     let mut tasks = tokio::task::JoinSet::new();
     for (config, compiled) in configs {
         tasks.spawn(run_config(config, compiled));
+    }
+    for config in workspace_profiles {
+        tasks.spawn(super::workspace_run_profile::run(config, shutdown_signal()));
     }
     while let Some(result) = tasks.join_next().await {
         result.map_err(|_| StartupError("join runtime profile"))??;
@@ -615,7 +647,7 @@ async fn connect_receipts(config: &Config) -> Result<sqlx::PgPool, StartupError>
     Ok(pool)
 }
 
-async fn shutdown_signal() -> Result<(), StartupError> {
+pub(super) async fn shutdown_signal() -> Result<(), StartupError> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|_| StartupError("register termination signal"))?;
     tokio::select! {

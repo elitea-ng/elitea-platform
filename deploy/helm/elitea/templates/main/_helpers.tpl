@@ -1290,6 +1290,11 @@ ELITEA_RUNTIME_CONTENT_TLS_CLIENT_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | 
      one DNS SAN is vector.mtls.clientDnsName. */}}
 ELITEA_VECTOR_INTROSPECTION_CLIENTS: {{ include "elitea-vector.clientIdentity" . | quote }}
 {{- end }}
+{{- if include "elitea-egress-proxy.auditEnabled" . }}
+{{/* ADR-0034 decision 9: the egress proxy's client identity, admitted to
+     EgressAuditService on the control listener above. */}}
+ELITEA_EGRESS_AUDIT_CLIENTS: {{ printf "dns:%s" (lower .Values.egressProxy.audit.clientDnsName) | quote }}
+{{- end }}
 {{- end -}}
 {{- end }}
 

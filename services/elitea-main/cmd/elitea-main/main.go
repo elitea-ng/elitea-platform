@@ -1811,6 +1811,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				return fmt.Errorf("compose current Configurations lifecycle: %w", err)
 			}
 		}
+		workspaceEgress, egressErr := loadWorkspaceEgress(os.Getenv, logger)
+		if egressErr != nil {
+			return fmt.Errorf("compose the workspace egress proxy: %w", egressErr)
+		}
 		runtimeRoot, err = runtimecomposition.New(ctx, runtimeConfig, runtimecomposition.Dependencies{
 			AdmissionPool:                    runtimePools.Admission,
 			ControlPool:                      runtimePools.Control,
@@ -1845,6 +1849,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// runtimecomposition.Dependencies.PipelineRuns' own doc comment.
 			PipelineRuns: pipelineRunsRepo,
 			DomainEvents: domainEvents,
+			// ADR-0034 decision 9: how a project host allowlist is enforced
+			// (the egress proxy and its run-token signing key).
+			Workspace: runtimecomposition.WorkspaceDependencies{Egress: workspaceEgress},
+			// The egress proxy's per-turn summaries (ELITEA_EGRESS_AUDIT_CLIENTS)
+			// go to the same audit trail as the API's.
+			AuditRecorder: auditRecorder,
+			// ...and their per-turn summaries live in the database, so every
+			// Main replica merges the same rows and one writes the event.
+			EgressAuditStore: dbrepos.NewEgressRunSummaries(pool),
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)

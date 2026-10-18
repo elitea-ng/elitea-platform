@@ -139,6 +139,13 @@ impl From<RuntimeContextError> for NativeAgentAssemblyError {
 #[async_trait]
 pub(crate) trait NativeAgentCompletionSelector: Send {
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError>;
+
+    /// The run paused for input (a HITL interrupt) and `select` will not be
+    /// called. A cloud-executor turn publishes its work so far here
+    /// (ADR-0034 decision 7); every other turn has nothing to do.
+    async fn paused(&mut self) -> Result<(), NativeAgentAssemblyError> {
+        Ok(())
+    }
 }
 
 /// Post-authorization assembly input with one runtime-context redemption.

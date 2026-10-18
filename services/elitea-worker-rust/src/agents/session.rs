@@ -300,6 +300,9 @@ pub(crate) struct OrdinaryRuntimeBindings {
     /// The Smart Tools Selection index for the system prompt, when the mode
     /// is on and has enough tools to be worth it.
     lazy_tools_index: Option<String>,
+    /// The cloud workspace's argument-aware confirmation (ADR-0034): a
+    /// destructive or escaping `run_command` is a HITL interrupt.
+    tool_call_confirmation: Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>>,
 }
 
 impl OrdinaryRuntimeBindings {
@@ -322,7 +325,36 @@ impl OrdinaryRuntimeBindings {
             toolkit_attribution: ToolkitAttributionCatalog::default(),
             application_runtime,
             lazy_tools_index: None,
+            tool_call_confirmation: None,
         }
+    }
+
+    /// Ask a person before a destructive or escaping `run_command` of the
+    /// cloud workspace (ADR-0034 decision 9): `gate` decides per call, and
+    /// the workspace command joins the sensitive catalog as a CONDITIONAL
+    /// entry, so its interrupt is projected and resumed like any sensitive
+    /// tool's, and an approved call replays in the continuation's workspace.
+    ///
+    /// # Errors
+    ///
+    /// The catalog already names a `local.run_command`.
+    pub(crate) fn with_workspace_gate(
+        mut self,
+        gate: Arc<dyn adk_rust::agent::ToolCallConfirmation>,
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        self.sensitive_tools =
+            std::mem::take(&mut self.sensitive_tools).with_workspace_command()?;
+        self.tool_call_confirmation = Some(gate);
+        Ok(self)
+    }
+
+    #[must_use]
+    fn with_tool_call_confirmation(
+        mut self,
+        gate: Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>>,
+    ) -> Self {
+        self.tool_call_confirmation = gate;
+        self
     }
 
     #[must_use]
@@ -392,6 +424,14 @@ impl OrdinaryRuntimeBindings {
     #[must_use]
     pub(crate) fn with_toolkit_attribution(mut self, catalog: ToolkitAttributionCatalog) -> Self {
         self.toolkit_attribution = catalog;
+        self
+    }
+
+    /// Add the cloud executor's workspace toolset (ADR-0034), after the
+    /// configured toolkits.
+    #[must_use]
+    pub(crate) fn with_workspace_toolset(mut self, toolset: Arc<dyn Toolset>) -> Self {
+        self.toolsets.push(toolset);
         self
     }
 
@@ -834,6 +874,17 @@ impl OrdinaryNativeAgentPlan {
 
     pub(super) fn session_id(&self) -> &str {
         self.session_id.as_ref()
+    }
+
+    /// The root session's identity, the one the Runner and the direct HITL
+    /// resume read and write.
+    pub(super) fn session_identity(&self) -> Result<AdkIdentity, NativeAgentAssemblyError> {
+        let app_name = adk_rust::AppName::new(APP_NAME).map_err(|_| invalid_configuration())?;
+        Ok(AdkIdentity::new(
+            app_name,
+            self.user_id.clone(),
+            self.session_id.clone(),
+        ))
     }
 
     pub(super) fn resource_project_id(&self) -> &str {
@@ -1623,6 +1674,20 @@ impl SessionService for RunnerSessionService {
 pub(crate) struct OrdinaryAgentCompletion<M> {
     model: M,
     thread_id: String,
+    /// ADR-0034: the cloud executor's workspace, published once the run
+    /// completes or pauses, and never when it fails.
+    workspace: Option<Arc<crate::workspace_run::turn::WorkspaceTurn>>,
+}
+
+impl<M> OrdinaryAgentCompletion<M> {
+    #[must_use]
+    pub(crate) fn with_workspace(
+        mut self,
+        workspace: Option<Arc<crate::workspace_run::turn::WorkspaceTurn>>,
+    ) -> Self {
+        self.workspace = workspace;
+        self
+    }
 }
 
 #[async_trait]
@@ -1631,9 +1696,46 @@ where
     M: BoundOrdinaryAgentModel,
 {
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
-        let content = self.model.take_completed_text()?;
+        let mut content = match self.model.take_completed_text() {
+            Ok(content) => content,
+            Err(error) => {
+                if let Some(workspace) = &self.workspace {
+                    let _ = workspace
+                        .finish(crate::workspace_run::turn::TurnEnd::Failed)
+                        .await;
+                }
+                return Err(error);
+            }
+        };
+        if let Some(workspace) = &self.workspace {
+            let stamp = workspace
+                .finish(crate::workspace_run::turn::TurnEnd::Completed)
+                .await
+                .map_err(|error| super::workspace::publish_error(&error))?;
+            // The visible turn notice of contract 6.4: which files held
+            // harvested values (names, never values) and what was done.
+            if let Some(notice) = stamp
+                .as_ref()
+                .and_then(|stamp| crate::workspace_run::file_redact::notice(&stamp.redactions))
+            {
+                if !content.is_empty() {
+                    content.push_str("\n\n");
+                }
+                content.push_str(&notice);
+            }
+        }
         CompletedAgentBrowserOutput::ordinary(content, self.thread_id)
             .map_err(|error| completed_output_error(&error))
+    }
+
+    async fn paused(&mut self) -> Result<(), NativeAgentAssemblyError> {
+        if let Some(workspace) = &self.workspace {
+            workspace
+                .finish(crate::workspace_run::turn::TurnEnd::Paused)
+                .await
+                .map_err(|error| super::workspace::publish_error(&error))?;
+        }
+        Ok(())
     }
 }
 
@@ -2343,7 +2445,11 @@ where
         AssembledNativeAgentInvocation::new(
             invocation,
             projector,
-            OrdinaryAgentCompletion { model, thread_id },
+            OrdinaryAgentCompletion {
+                model,
+                thread_id,
+                workspace: None,
+            },
         ),
         evidence,
     ))
@@ -2382,6 +2488,7 @@ fn build_runtime_agent(
         instruction_plan,
         // Already part of the bound model's system instruction (ordinary.rs).
         lazy_tools_index: _,
+        tool_call_confirmation,
     } = runtime;
     let mut delegated_authorization = delegated_authorization;
     let (model, toolsets) = crate::toolkits::bind_authorization_model_tools(
@@ -2430,6 +2537,9 @@ fn build_runtime_agent(
     }
     if internal_tools.ask_user_enabled() {
         builder = builder.require_tool_confirmation(ASK_USER_TOOL_NAME);
+    }
+    if let Some(gate) = tool_call_confirmation {
+        builder = builder.tool_call_confirmation(gate);
     }
     let ApplicationRuntimeProjection {
         presentations: application_tools,
@@ -2579,6 +2689,7 @@ async fn prepare_direct_resume(
         instruction_plan,
         // Already part of the bound model's system instruction (ordinary.rs).
         lazy_tools_index: _,
+        tool_call_confirmation,
     } = runtime;
     let resolved = match start {
         DirectResumeStart::Sensitive(decisions) => decisions
@@ -2669,7 +2780,8 @@ async fn prepare_direct_resume(
         )
         .with_internal_tools(internal_tools)
         .with_instruction_plan(instruction_plan)
-        .with_toolkit_attribution(toolkit_attribution),
+        .with_toolkit_attribution(toolkit_attribution)
+        .with_tool_call_confirmation(tool_call_confirmation),
         parallel_applications,
     })
 }
@@ -2743,7 +2855,11 @@ where
     Ok(AssembledNativeAgentInvocation::new(
         NativeAgentInvocation::new_direct_hitl(runner, user_id, session_id, prepared.run_input),
         projector,
-        OrdinaryAgentCompletion { model, thread_id },
+        OrdinaryAgentCompletion {
+            model,
+            thread_id,
+            workspace: None,
+        },
     ))
 }
 

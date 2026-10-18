@@ -28,6 +28,16 @@ const (
 	ReasonRunConnectionLimit   = "run-connection-limit"
 	ReasonRunByteLimit         = "run-byte-limit"
 	ReasonDraining             = "draining"
+
+	// The ClientHello peek of a CONNECT tunnel (clienthello.go). These come
+	// after the 200: the tunnel closes, and the reason is in the log line,
+	// the counter and the run summary, never in a header.
+	ReasonSNIMismatch          = "sni-mismatch"
+	ReasonSNIMissing           = "sni-missing"
+	ReasonNotTLS               = "not-tls"
+	ReasonSNITimeout           = "sni-timeout"
+	ReasonClientHelloTooLarge  = "client-hello-too-large"
+	ReasonClientHelloMalformed = "client-hello-malformed"
 )
 
 var allReasons = []string{
@@ -35,6 +45,8 @@ var allReasons = []string{
 	ReasonUnsupported, ReasonBadTarget, ReasonHostNotAllowed, ReasonPortNotAllowed,
 	ReasonIPLiteralNotAllowed, ReasonResolveFailed, ReasonAddressNotPublic,
 	ReasonRunConnectionLimit, ReasonRunByteLimit, ReasonDraining,
+	ReasonSNIMismatch, ReasonSNIMissing, ReasonNotTLS, ReasonSNITimeout,
+	ReasonClientHelloTooLarge, ReasonClientHelloMalformed,
 }
 
 // The outcomes of a connection that passed every check.

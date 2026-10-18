@@ -272,6 +272,7 @@ jobs:
           bash deploy/helm/tests/render-worker.sh
           bash deploy/helm/tests/render-worker-sandbox.sh
           bash deploy/helm/tests/render-sandbox-kubernetes.sh
+          bash deploy/helm/tests/render-workspace-egress.sh
 
       # ADR-0030 I1: the document extraction sidecar in the worker pod. The
       # socket path the worker dials and the directory the sidecar binds in

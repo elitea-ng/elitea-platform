@@ -75,6 +75,13 @@ where
             Self::Pipeline(completion) => completion.select().await,
         }
     }
+
+    async fn paused(&mut self) -> Result<(), NativeAgentAssemblyError> {
+        match self {
+            Self::Direct(completion) => completion.paused().await,
+            Self::Pipeline(completion) => completion.paused().await,
+        }
+    }
 }
 
 /// Strict router over the concrete direct-agent and pipeline assemblers.
@@ -129,6 +136,17 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
     ) -> Self {
         self.direct = self.direct.with_office_runtime(office_runtime.clone());
         self.pipeline = self.pipeline.with_office_runtime(office_runtime);
+        self
+    }
+
+    /// Lend the cloud executor's workspace runs to direct agents (ADR-0034);
+    /// a pipeline refuses a workspace turn.
+    #[must_use]
+    pub(crate) fn with_workspace_runs(
+        mut self,
+        workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
+    ) -> Self {
+        self.direct = self.direct.with_workspace_runs(workspace_runs);
         self
     }
 

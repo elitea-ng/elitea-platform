@@ -73,3 +73,30 @@ func TestBadValuesAreErrorsNotDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestAuditConfigIsAllOrNothing(t *testing.T) {
+	env := func(values map[string]string) func(string) string {
+		return func(key string) string {
+			if key == Prefix+"PUBLIC_KEYS" {
+				return "/keys"
+			}
+			return values[key]
+		}
+	}
+	c, err := FromEnv(env(map[string]string{
+		Prefix + "AUDIT_TARGET": "elitea-main:9443", Prefix + "AUDIT_CA_FILE": "/ca", Prefix + "AUDIT_CERT_FILE": "/crt",
+		Prefix + "AUDIT_KEY_FILE": "/key", Prefix + "REPLICA_ID": "pod-1",
+	}))
+	if err != nil || c.Audit.Target != "elitea-main:9443" || c.Audit.ReplicaID != "pod-1" || c.Audit.Timeout <= 0 {
+		t.Fatalf("%+v %v", c.Audit, err)
+	}
+	for name, values := range map[string]map[string]string{
+		"target without material": {Prefix + "AUDIT_TARGET": "elitea-main:9443"},
+		"material without target": {Prefix + "AUDIT_CA_FILE": "/ca"},
+		"target without port":     {Prefix + "AUDIT_TARGET": "elitea-main", Prefix + "AUDIT_CA_FILE": "/ca", Prefix + "AUDIT_CERT_FILE": "/c", Prefix + "AUDIT_KEY_FILE": "/k"},
+	} {
+		if _, err := FromEnv(env(values)); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+}

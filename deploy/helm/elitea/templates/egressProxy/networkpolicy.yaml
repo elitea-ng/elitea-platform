@@ -4,7 +4,7 @@
 {{- $n := $e.networkPolicy }}
 {{- $v4 := list }}
 {{- $v6 := list }}
-{{- range concat ($n.denyCidrs | default list) ($n.podCidrs | default list) ($n.serviceCidrs | default list) }}
+{{- range concat ($n.denyCidrs | default list) (include "elitea-egress-proxy.clusterCidrs" . | fromJsonArray) }}
 {{- if contains ":" . }}{{ $v6 = append $v6 . }}{{ else }}{{ $v4 = append $v4 . }}{{ end }}
 {{- end }}
 # The egress proxy's own boundary (ADR-0034 decision 9).
@@ -53,6 +53,15 @@ spec:
         {{- toYaml $adminPeers | nindent 8 }}
     {{- end }}
   egress:
+    {{- if include "elitea-egress-proxy.auditEnabled" . }}
+    # elitea-main's control listener, for the run summaries (the cluster
+    # ranges are excepted below, so this is the one in-cluster destination).
+    - to:
+        {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-main.selectorLabels" .)) | nindent 8 }}
+      ports:
+        - port: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.controlAddress }}
+          protocol: TCP
+    {{- end }}
     - to:
         - namespaceSelector:
             matchLabels:

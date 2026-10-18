@@ -899,7 +899,10 @@ case "${1:-}" in
     # After the runtime's: elitea-vector's certificate is signed by the
     # runtime CA (elitea-main's control listener trusts only that root for
     # token introspection), and is re-issued when that CA rotates.
-    exec "${REPO_ROOT}/deploy/scripts/gen-vector-certs.sh"
+    "${REPO_ROOT}/deploy/scripts/gen-vector-certs.sh"
+    # Also off the runtime CA: the egress proxy's client certificate for
+    # elitea-main's EgressAuditService (docker-compose.egress-proxy.yml).
+    exec "${REPO_ROOT}/deploy/scripts/gen-egress-proxy-certs.sh"
     ;;
 
   up)
