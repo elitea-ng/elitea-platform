@@ -15,6 +15,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { BROWSER_PLATFORM, type AppIpc } from '@/shared/desktop/appEvents';
 import { createFakeAppIpc, MACOS_PLATFORM, type FakeAppIpc } from '@/shared/desktop/appEvents.fake';
+import { installTestEventSource } from '@/shared/api/sse/testing';
 import { createFakeHandoffIpc, type FakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
@@ -109,6 +110,33 @@ describe('DesktopFrame sidebar', () => {
     // One batched read for every visible row with a UUID, not a call per row.
     expect(handoffIpc.calls.statusManys).toEqual([['u-77', 'u-78']]);
     expect(handoffIpc.calls.statuses).toEqual([]);
+  });
+
+  it('subscribes each bound project to the live handoff stream, once each, and skips the unbound folders', async () => {
+    const registry = installTestEventSource();
+    try {
+      const APP2: Workspace = { id: 'w4', path: '/Users/me/code/app2', name: 'app2', project_id: 42, is_git: true };
+      mount({ handoffIpc: createFakeHandoffIpc(), workspaces: [APP, APP2, DOCS] });
+      await screen.findAllByTestId('shell-folder');
+      await waitFor(() => {
+        expect(registry.getOpen().filter((source) => source.url === 'https://elitea.example/events/prompt_lib/42')).toHaveLength(1);
+      });
+      // The unbound folder (project_id null) opens no stream.
+      expect(registry.getOpen().filter((source) => source.url.includes('/events/prompt_lib/'))).toHaveLength(1);
+    } finally {
+      registry.restore();
+    }
+  });
+
+  it('opens no handoff stream without the handoff host', async () => {
+    const registry = installTestEventSource();
+    try {
+      mount();
+      await screen.findAllByTestId('shell-folder');
+      expect(registry.getOpen().filter((source) => source.url.includes('/events/prompt_lib/'))).toHaveLength(0);
+    } finally {
+      registry.restore();
+    }
   });
 
   it('opens a folder from the sidebar and lands in it', async () => {

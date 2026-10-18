@@ -16,7 +16,7 @@ import type { HandoffIpc, HandoffStatus } from '@/shared/desktop/handoffIpc';
 const HANDOFF_POLL_MS = 5000;
 
 /** Prefix of every status read of one thread (invalidate by it). */
-export const handoffStatusKey = (conversationUuid: string | undefined) => ['workspace', 'handoff', 'status', conversationUuid ?? ''] as const;
+export const handoffStatusKey = (conversationUuid: string | undefined) => ['workspace', 'handoff', 'status', (conversationUuid ?? '').toLowerCase()] as const;
 
 export interface UseHandoffStatus {
   /** `undefined` while the first read is pending, or when it failed. */

@@ -28,9 +28,10 @@ import DialogTitle from '@mui/material/DialogTitle';
 import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 
+import { handoffInfoKey, useHandoffLiveEvents } from '@/features/workspace-handoff';
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
-import { eraseWorkspaceHandoff, getWorkspaceHandoff, requestWorkspaceReclaim } from '@/shared/api/workspaceHandoffApi';
+import { eraseWorkspaceHandoff, getWorkspaceHandoff, requestWorkspaceReclaim, type WorkspaceHandoffInfo } from '@/shared/api/workspaceHandoffApi';
 import { i18n, t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
@@ -112,10 +113,18 @@ function Actions({ returning, isOwner, canErase, requesting, onTakeBack, onErase
 
 function useHandoffInfo(projectId: string, conversationUuid: string): { readonly requested: boolean } {
   const queryClient = useQueryClient();
-  // Read every few seconds: the desktop taking the thread back (or an erase elsewhere) moves it without this page doing anything.
+  // The desktop taking the thread back (or an erase elsewhere) moves it without this page doing anything: the live stream says so at once, the poll is the fallback.
+  useHandoffLiveEvents(projectId);
   const info = useQuery({
-    queryKey: ['workspace-handoff', projectId, conversationUuid],
-    queryFn: () => getWorkspaceHandoff(projectId, conversationUuid),
+    queryKey: handoffInfoKey(projectId, conversationUuid),
+    queryFn: async () => {
+      const fresh = await getWorkspaceHandoff(projectId, conversationUuid);
+      // A read that left before a delivered frame may answer after it: the
+      // frame stays, the pre-commit answer does not move the thread backwards.
+      const previous = queryClient.getQueryData<WorkspaceHandoffInfo>(handoffInfoKey(projectId, conversationUuid));
+      if (previous !== undefined && previous.epoch > fresh.epoch) return previous;
+      return fresh;
+    },
     retry: false,
     refetchInterval: INFO_POLL_MS,
   });
@@ -146,7 +155,7 @@ export default function CloudExecutorNotice({ projectId, conversationUuid, execu
       setToast({ severity: 'success', message: t('pages.chat.cloud.erased', 'The cloud copy was erased') });
       // The conversation's `workspace_executor` is local again: read it, and the thread, afresh.
       void queryClient.invalidateQueries({ queryKey: ['conversation'] });
-      void queryClient.invalidateQueries({ queryKey: ['workspace-handoff', projectId, conversationUuid] });
+      void queryClient.invalidateQueries({ queryKey: handoffInfoKey(projectId, conversationUuid) });
     },
     onError: () => {
       setConfirming(false);

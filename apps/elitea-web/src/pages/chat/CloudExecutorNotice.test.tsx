@@ -10,6 +10,8 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
+import { resetConfigForTests } from '@/shared/config/get-config';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
@@ -163,5 +165,61 @@ describe('CloudExecutorNotice', () => {
     expect(screen.getByTestId('cloud-executor-badge')).toHaveTextContent('Returning to desktop');
     expect(screen.queryByRole('button', { name: 'Take back' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Erase cloud copy' })).toBeInTheDocument();
+  });
+});
+
+describe('CloudExecutorNotice live updates (ADR-0034 scope B)', () => {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  let registry: TestEventSourceRegistry;
+  beforeEach(() => {
+    registry = installTestEventSource();
+    globals['elitea_ui_config'] = { vite_server_url: BASE, vite_base_uri: '/', vite_public_project_id: 'public-1' };
+    resetConfigForTests();
+  });
+  afterEach(() => {
+    registry.restore();
+    delete globals['elitea_ui_config'];
+    resetConfigForTests();
+  });
+
+  it('shows a take back as soon as the project stream says so, without waiting for a poll', async () => {
+    let reads = 0;
+    let pending = false;
+    serve();
+    server.use(
+      http.get(HANDOFF, () => {
+        reads += 1;
+        return HttpResponse.json({ state: 'CLOUD_RUNNING', epoch: 2, reclaim_pending: pending });
+      }),
+    );
+    mount();
+    await waitFor(() => {
+      expect(registry.getOpen().some((source) => source.url === `${BASE}/events/prompt_lib/42`)).toBe(true);
+    });
+    await waitFor(() => {
+      expect(reads).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText(/Take back requested/)).not.toBeInTheDocument();
+    // The desktop takes the thread back; the next poll is ten seconds away.
+    pending = true;
+    const before = reads;
+    registry.emit('workspace.handoff', JSON.stringify({ conversation_uuid: UUID, state: 'CLOUD_RUNNING', epoch: 2, reclaim_pending: true }));
+    expect(await screen.findByText(/Take back requested/)).toBeInTheDocument();
+    // The frame drove it: at most the one re-read it asked for, no poll.
+    expect(reads - before).toBeLessThanOrEqual(1);
+  });
+
+  it('keeps a mixed-case UUID on the wire, lowercases it in the read, so the frame still reaches the notice', async () => {
+    const mixed = `${UUID.slice(0, 8)}${UUID.slice(8).toUpperCase()}`;
+    serve();
+    server.use(http.get(`${BASE}/elitea_core/workspace_handoff/prompt_lib/42/${mixed}`, () => HttpResponse.json({ state: 'CLOUD_RUNNING', epoch: 2 })));
+    mount({ conversationUuid: mixed });
+    await waitFor(() => {
+      expect(registry.getOpen().some((source) => source.url === `${BASE}/events/prompt_lib/42`)).toBe(true);
+    });
+    // The frame is newer than the server's answer (epoch 3 over 2): it must
+    // reach the notice through the lowercased key and stay after the re-read.
+    registry.emit('workspace.handoff', JSON.stringify({ conversation_uuid: UUID, state: 'CLOUD_RUNNING', epoch: 3, reclaim_pending: true }));
+    expect(await screen.findByText(/Take back requested/)).toBeInTheDocument();
   });
 });
