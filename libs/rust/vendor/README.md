@@ -107,6 +107,14 @@ Published source commit: `74765eb04930648795b53c3db689ddd10032c31e`.
 `retain_prepared_history` lets the agent retain history prepared by successful model callbacks.
 Its default is false. Elitea enables it when its durable compaction callbacks own prepared history.
 
+`tool_call_confirmation` (ADR-0034, the cloud executor) adds an argument-aware
+confirmation check to `LlmAgentBuilder`: a `ToolCallConfirmation` asked, in the
+pre-dispatch confirmation pass, for a call the name-based
+`ToolConfirmationPolicy` does not already confirm. A call it confirms interrupts
+exactly as a policy-confirmed one does, and a recorded decision for that call id
+and argument fingerprint answers it. Unset, nothing changes. The worker uses it
+to ask before a destructive `run_command` of a cloud workspace.
+
 `with_session_event_refresh` reloads the session view after each persisted event.
 Its default is false. Elitea enables it to use its durable active-history projection.
 All stream fragments still reach the caller. Partial fragments do not accumulate in the refreshed session.

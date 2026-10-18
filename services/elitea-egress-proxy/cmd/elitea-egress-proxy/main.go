@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-egress-proxy/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-egress-proxy/internal/config"
 	"github.com/EliteaAI/elitea-platform/services/elitea-egress-proxy/internal/proxy"
 )
@@ -58,6 +59,24 @@ func run() int {
 	if err != nil {
 		logger.Error("egress_proxy.config_invalid", "error", err.Error())
 		return 1
+	}
+
+	// The per-turn audit (ADR-0034 decision 9): every run summary also goes to
+	// elitea-main's EgressAuditService over mTLS.
+	var reporter *audit.Reporter
+	if cfg.Audit.Target != "" {
+		reporter, err = audit.Dial(cfg.Audit, logger)
+		if err != nil {
+			logger.Error("egress_proxy.config_invalid", "error", err.Error())
+			return 1
+		}
+		srv.Runs().SetSink(reporter.Submit)
+		metrics.Gauge("egress_proxy_audit_reports_delivered", "Run summaries delivered to elitea-main since start.", reporter.Delivered)
+		metrics.Gauge("egress_proxy_audit_reports_dropped", "Run summaries that could not be delivered to elitea-main since start (they stay in this log).", reporter.Dropped)
+		reporter.Start()
+		logger.Info("egress_proxy.audit_enabled", "target", cfg.Audit.Target)
+	} else {
+		logger.Warn("egress_proxy.audit_disabled", "reason", "no ELITEA_EGRESS_PROXY_AUDIT_TARGET: run summaries stay in this log only")
 	}
 
 	ln, err := net.Listen("tcp", cfg.ListenAddr)
@@ -114,6 +133,11 @@ func run() int {
 	}
 	stopLoops()
 	srv.Runs().Sweep(time.Now(), cfg.SummaryInterval, true)
+	if reporter != nil {
+		auditCtx, auditCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		reporter.Close(auditCtx)
+		auditCancel()
+	}
 	adminCtx, adminCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer adminCancel()
 	_ = admin.Shutdown(adminCtx)

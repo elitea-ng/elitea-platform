@@ -10,8 +10,11 @@
 //  4. resolves the host itself and refuses the request when ANY resolved
 //     address is not public (libs/go/egresslib/addrcheck) or falls in an
 //     operator deny range (the cluster's pod and service ranges);
-//  5. dials the checked IP literal, so DNS rebinding cannot swap the address;
-//  6. relays bytes: a CONNECT tunnel, or one absolute-form http:// request.
+//  5. for a CONNECT, answers 200, then peeks the client's TLS ClientHello and
+//     refuses the tunnel when its server_name is not the CONNECT host
+//     (clienthello.go);
+//  6. dials the checked IP literal, so DNS rebinding cannot swap the address;
+//  7. relays bytes: a CONNECT tunnel, or one absolute-form http:// request.
 //
 // It never terminates TLS: the sandbox verifies the destination's certificate
 // end to end. It never follows a redirect: a forwarded response goes back as
@@ -20,6 +23,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -49,6 +53,21 @@ const TokenUser = "run"
 // copyBufferBytes is the relay buffer of one direction.
 const copyBufferBytes = 32 << 10
 
+// The bounds of the ClientHello peek of a CONNECT tunnel. A client that has
+// not sent a whole ClientHello within ClientHelloTimeout of the 200, or whose
+// ClientHello (record headers included) needs more than ClientHelloMaxBytes,
+// is refused. A real ClientHello, post-quantum key shares included, is under
+// 2 KiB.
+const (
+	ClientHelloTimeout  = 10 * time.Second
+	ClientHelloMaxBytes = 16 << 10
+)
+
+// alertAccessDenied is a plaintext fatal TLS alert, access_denied (49). The
+// proxy sends it when it refuses a ClientHello, so the client reports
+// "access denied" rather than an unexplained EOF.
+var alertAccessDenied = []byte{0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 49}
+
 // Options configures a Server.
 type Options struct {
 	Keys      KeySource
@@ -69,6 +88,11 @@ type Options struct {
 	Metrics *Metrics
 	// Now replaces time.Now, for tests.
 	Now func() time.Time
+
+	// The ClientHello peek bounds; zero means ClientHelloTimeout and
+	// ClientHelloMaxBytes. Tests lower them.
+	clientHelloTimeout  time.Duration
+	clientHelloMaxBytes int
 }
 
 // Server is the proxy. Build it with New, run it with Serve, stop it with
@@ -106,6 +130,12 @@ func New(opts Options) (*Server, error) {
 	}
 	if opts.Dialer == nil {
 		opts.Dialer = &net.Dialer{Timeout: opts.DialTimeout}
+	}
+	if opts.clientHelloTimeout <= 0 {
+		opts.clientHelloTimeout = ClientHelloTimeout
+	}
+	if opts.clientHelloMaxBytes <= 0 {
+		opts.clientHelloMaxBytes = ClientHelloMaxBytes
 	}
 	switch {
 	case opts.MaxConnections <= 0, opts.MaxHeaderBytes <= 0, opts.RunMaxConnections <= 0,
@@ -375,11 +405,34 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dialCtx, cancel := context.WithTimeout(r.Context(), s.opts.DialTimeout)
-	upstream, err := addrcheck.DialFirst(dialCtx, s.opts.Dialer, "tcp", ips, strconv.Itoa(port))
-	cancel()
+	deadline := rec.start.Add(s.opts.MaxConnectionLifetime)
+	lifetimeOutcome := OutcomeLifetime
+	if claims.ExpiresAt.Before(deadline) {
+		deadline, lifetimeOutcome = claims.ExpiresAt, OutcomeTokenExpired
+	}
+	dial := func() (net.Conn, error) {
+		dialCtx, cancel := context.WithTimeout(r.Context(), s.opts.DialTimeout)
+		defer cancel()
+		return addrcheck.DialFirst(dialCtx, s.opts.Dialer, "tcp", ips, strconv.Itoa(port))
+	}
+
+	if connect {
+		// The session opens before the dial: the ClientHello peek runs inside
+		// it, so the idle timeout, the lifetime and Shutdown cover a client
+		// that never sends one. The dial comes only after the peek passed.
+		sess := s.newSession(rn, nil, deadline, lifetimeOutcome)
+		defer s.endSession(sess, rec)
+		reached = s.tunnel(w, sess, rec, target, dial, func(reason string) {
+			s.runs.refused(claims, hp, reason)
+			rec.outcome, rec.reason = OutcomeRefused, reason
+			s.opts.Metrics.refusal(reason)
+		})
+		return
+	}
+
+	upstream, err := dial()
 	if err != nil {
-		rec.outcome, rec.reason = OutcomeUpstreamError, "dial-failed"
+		rec.outcome, rec.reason = OutcomeUpstreamError, ReasonDialFailed
 		s.opts.Metrics.outcome(OutcomeUpstreamError)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusBadGateway)
@@ -387,21 +440,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reached = true
-
-	deadline := rec.start.Add(s.opts.MaxConnectionLifetime)
-	lifetimeOutcome := OutcomeLifetime
-	if claims.ExpiresAt.Before(deadline) {
-		deadline, lifetimeOutcome = claims.ExpiresAt, OutcomeTokenExpired
-	}
 	sess := s.newSession(rn, upstream, deadline, lifetimeOutcome)
 	defer s.endSession(sess, rec)
-
-	if connect {
-		s.tunnel(w, sess)
-	} else {
-		s.forward(w, r, sess)
-	}
+	s.forward(w, r, sess)
 }
+
+// ReasonDialFailed is the log reason of an upstream-error outcome when the
+// checked address did not accept the connection. It is not a refusal.
+const ReasonDialFailed = "dial-failed"
 
 // proxyToken reads the token from the one Proxy-Authorization header. present
 // reports that a header was sent, so a malformed credential is told apart
@@ -436,18 +482,20 @@ func truncate(s string, n int) string {
 	return s
 }
 
-// session is one upstream connection and the client side it serves.
+// session is one upstream connection and the client side it serves. A
+// tunnel's session opens before its upstream exists (the ClientHello peek
+// runs first); attach sets the upstream.
 type session struct {
 	srv      *Server
 	run      *run
-	upstream net.Conn
 	deadline time.Time
 	onLife   string
 
-	mu      sync.Mutex
-	client  net.Conn // set for a tunnel
-	outcome string
-	closed  bool
+	mu       sync.Mutex
+	upstream net.Conn
+	client   net.Conn // set for a tunnel
+	outcome  string
+	closed   bool
 
 	lastActivity atomic.Int64 // UnixNano
 	up, down     atomic.Int64
@@ -482,10 +530,12 @@ func (s *Server) endSession(sess *session, rec *record) {
 	if outcome == "" {
 		outcome = OutcomeOK
 	}
+	// An outcome the handler already set (a peek refusal, a failed dial) was
+	// counted where it was set.
 	if rec.outcome == "" {
 		rec.outcome = outcome
+		s.opts.Metrics.outcome(rec.outcome)
 	}
-	s.opts.Metrics.outcome(rec.outcome)
 }
 
 func (sess *session) touch() { sess.lastActivity.Store(sess.srv.opts.Now().UnixNano()) }
@@ -501,10 +551,25 @@ func (sess *session) stop(outcome string) {
 		return
 	}
 	sess.closed = true
-	_ = sess.upstream.Close()
+	if sess.upstream != nil {
+		_ = sess.upstream.Close()
+	}
 	if sess.client != nil {
 		_ = sess.client.Close()
 	}
+}
+
+// attach sets the upstream of a tunnel. It reports false, and closes c, when
+// the session was stopped meanwhile.
+func (sess *session) attach(c net.Conn) bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.closed {
+		_ = c.Close()
+		return false
+	}
+	sess.upstream = c
+	return true
 }
 
 func (sess *session) isClosed() bool {
@@ -577,56 +642,163 @@ func (sess *session) relay(dst io.Writer, src io.Reader, up bool, flush func()) 
 	}
 }
 
-// tunnel answers 200 to a CONNECT and splices the two connections.
-func (s *Server) tunnel(w http.ResponseWriter, sess *session) {
+// tunnel answers 200 to a CONNECT, peeks the ClientHello, dials, and
+// splices the two connections. It reports whether the destination was
+// dialled.
+//
+// The order is 200, peek, check, dial. A client sends its ClientHello only
+// after the 200, so the peek cannot come first; dialling only after the check
+// means a refused tunnel never opens an upstream connection, and the
+// destination never sees a byte of it. The cost: a failed dial can no longer
+// answer 502, so the tunnel closes after the 200 (logged as upstream-error,
+// dial-failed).
+func (s *Server) tunnel(w http.ResponseWriter, sess *session, rec *record, target runtoken.Target,
+	dial func() (net.Conn, error), refuse func(reason string)) bool {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		sess.stop(OutcomeUpstreamError)
 		w.WriteHeader(http.StatusInternalServerError)
-		return
+		return false
 	}
 	client, brw, err := hj.Hijack()
 	if err != nil {
 		sess.stop(OutcomeUpstreamError)
-		return
+		return false
 	}
-	// The server may have set deadlines on the connection; the watchdog owns
-	// the timeouts from here.
+	// The server may have set deadlines on the connection; the peek and then
+	// the watchdog own the timeouts from here.
 	_ = client.SetDeadline(time.Time{})
 	sess.mu.Lock()
 	if sess.closed {
 		sess.mu.Unlock()
 		_ = client.Close()
-		return
+		return false
 	}
 	sess.client = client
 	sess.mu.Unlock()
 
 	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection established\r\n\r\n"); err != nil {
 		sess.stop(OutcomeOK)
-		return
+		return false
+	}
+
+	// brw.Reader holds any bytes the client sent after its CONNECT headers.
+	prefix, reason, proceed := s.peekClientHello(sess, client, brw.Reader, target)
+	if !proceed {
+		if reason != "" {
+			refuse(reason)
+		}
+		sess.stop("")
+		return false
+	}
+
+	upstream, err := dial()
+	if err != nil {
+		rec.outcome, rec.reason = OutcomeUpstreamError, ReasonDialFailed
+		s.opts.Metrics.outcome(OutcomeUpstreamError)
+		sess.stop("")
+		return false
+	}
+	if !sess.attach(upstream) {
+		return true
 	}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	// brw.Reader holds any bytes the client sent after its CONNECT headers.
+	// Every peeked byte goes to the destination first, unchanged, and counts
+	// against the run's budget like any other byte.
+	up := io.MultiReader(bytes.NewReader(prefix), brw.Reader)
 	go func() {
 		defer wg.Done()
-		if err := sess.relay(sess.upstream, brw.Reader, true, nil); err == nil {
-			closeWrite(sess.upstream)
+		if err := sess.relay(upstream, up, true, nil); err == nil {
+			closeWrite(upstream)
 		} else {
 			sess.stop("")
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		if err := sess.relay(client, sess.upstream, false, nil); err == nil {
+		if err := sess.relay(client, upstream, false, nil); err == nil {
 			closeWrite(client)
 		} else {
 			sess.stop("")
 		}
 	}()
 	wg.Wait()
+	return true
+}
+
+// peekClientHello reads the client's first bytes, at most clientHelloMaxBytes
+// within clientHelloTimeout, and decides on them:
+//
+//   - a ClientHello whose server_name is the CONNECT host (ASCII
+//     case-insensitive, one trailing dot ignored) passes;
+//   - a ClientHello without server_name passes only when the CONNECT host is
+//     an IP literal (sni-missing otherwise); a server_name on an IP-literal
+//     CONNECT must be that literal (sni-mismatch otherwise);
+//   - with ECH the server_name checked is the outer one, the ECH public name
+//     (see clienthello.go);
+//   - bytes that do not start with a TLS handshake record are not-tls on port
+//     443, and pass unchanged on every other port;
+//   - a malformed or oversize ClientHello, or none in time, is refused.
+//
+// It returns the bytes read, to be replayed to the destination, and whether
+// the tunnel proceeds. A refusal has a reason; a client that closed, or a
+// session the watchdog stopped, has none. A refused ClientHello gets a TLS
+// access_denied alert before the close.
+func (s *Server) peekClientHello(sess *session, client net.Conn, br *bufio.Reader,
+	target runtoken.Target) (prefix []byte, reason string, proceed bool) {
+	limit := s.opts.clientHelloMaxBytes
+	_ = client.SetReadDeadline(time.Now().Add(s.opts.clientHelloTimeout))
+	defer func() { _ = client.SetReadDeadline(time.Time{}) }()
+
+	refuseTLS := func(reason string) ([]byte, string, bool) {
+		_ = client.SetWriteDeadline(time.Now().Add(time.Second))
+		_, _ = client.Write(alertAccessDenied)
+		_ = client.SetWriteDeadline(time.Time{})
+		return nil, reason, false
+	}
+	buf := make([]byte, 0, 2048)
+	chunk := make([]byte, 4096)
+	for {
+		room := limit - len(buf)
+		if room <= 0 {
+			return refuseTLS(ReasonClientHelloTooLarge)
+		}
+		n, err := br.Read(chunk[:min(room, len(chunk))])
+		if n > 0 {
+			buf = append(buf, chunk[:n]...)
+			hello, complete, perr := scanClientHello(buf, limit)
+			switch {
+			case errors.Is(perr, errNotTLS):
+				if target.Port == 443 {
+					return nil, ReasonNotTLS, false
+				}
+				return buf, "", true
+			case errors.Is(perr, errHelloTooLarge):
+				return refuseTLS(ReasonClientHelloTooLarge)
+			case perr != nil:
+				return refuseTLS(ReasonClientHelloMalformed)
+			case complete && !hello.hasServerName && target.IP == nil:
+				return refuseTLS(ReasonSNIMissing)
+			case complete && hello.hasServerName && !sameHost(hello.serverName, target.Host):
+				return refuseTLS(ReasonSNIMismatch)
+			case complete:
+				return buf, "", true
+			}
+		}
+		if err != nil {
+			if sess.isClosed() {
+				return nil, "", false
+			}
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				return refuseTLS(ReasonSNITimeout)
+			}
+			// The client went away before its ClientHello was complete.
+			return nil, "", false
+		}
+	}
 }
 
 func closeWrite(c net.Conn) {

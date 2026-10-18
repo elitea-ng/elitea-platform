@@ -4,23 +4,24 @@
 # cloud-executor sandboxes in allowlist mode.
 #
 # Build context is the REPO ROOT (docker-bake.hcl, publish.yml,
-# ci-image-scan.yml): the module replaces libs/go/egresslib, which lives
-# outside the service directory. go.work is not copied, and the build sets
-# GOWORK=off, so the image builds the module exactly as go.mod states.
-#
-# The module is standard library plus egresslib, so it has no go.sum and no
-# `go mod download` step.
+# ci-image-scan.yml): the module replaces libs/go/egresslib and
+# libs/proto/gen/go (the EgressAuditService client), which live outside the
+# service directory. go.work is not copied, and the build sets GOWORK=off,
+# so the image builds the module exactly as go.mod and go.sum state.
 FROM golang:1.26-trixie AS builder
 WORKDIR /src
 COPY libs/go/egresslib ./libs/go/egresslib
-COPY services/elitea-egress-proxy/ ./services/elitea-egress-proxy/
+COPY libs/proto/gen/go ./libs/proto/gen/go
+COPY services/elitea-egress-proxy/go.mod services/elitea-egress-proxy/go.sum ./services/elitea-egress-proxy/
 WORKDIR /src/services/elitea-egress-proxy
+RUN --mount=type=cache,target=/go/pkg/mod GOWORK=off go mod download
+COPY services/elitea-egress-proxy/ ./
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 # VERSION is declared for build-time labelling; no version symbol exists in
 # the source tree, so it is NOT injected via -X.
 ARG VERSION=dev
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOWORK=off GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/elitea-egress-proxy ./cmd/elitea-egress-proxy
 

@@ -5,6 +5,8 @@ sandboxKubernetes:
   executionNamespace: code-execution
 egressProxy:
   enabled: true
+  signingKey:
+    existingSecret: elitea-egress-token-signing
   publicKeys:
     keys:
       current.pem: |

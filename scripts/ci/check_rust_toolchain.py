@@ -31,6 +31,7 @@ MIN_RELEASE_LITERALS = 6
 # that per file instead, and a NEW file that references rust is reported too
 # (it must be added here, deliberately, or stop referencing rust).
 RUST_IMAGE_FILES = {
+    "libs/rust/workspace-runner/Containerfile": 1,
     "services/elitea-code-runner/Containerfile": 2,
     "services/elitea-deepwiki-engine/Containerfile": 2,
     "services/elitea-doc-extractor/Containerfile": 2,

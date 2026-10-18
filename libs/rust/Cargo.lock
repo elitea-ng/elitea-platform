@@ -1904,6 +1904,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-workspace-runner"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "elitea-agent-runtime",
+ "elitea-local-tools",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "elitea-workspace-store"
 version = "0.1.0"
 dependencies = [

@@ -131,6 +131,23 @@ spec:
               value: {{ printf "%vs" $e.shutdownTimeoutSeconds | quote }}
             - name: ELITEA_EGRESS_PROXY_LOG_LEVEL
               value: {{ $e.logLevel | quote }}
+            {{- if $e.audit.enabled }}
+            # The per-turn audit: run summaries to elitea-main over mTLS.
+            - name: ELITEA_EGRESS_PROXY_AUDIT_TARGET
+              value: {{ include "elitea-egress-proxy.auditTarget" . | quote }}
+            - name: ELITEA_EGRESS_PROXY_AUDIT_SERVER_NAME
+              value: {{ include "elitea-egress-proxy.auditServerName" . | quote }}
+            - name: ELITEA_EGRESS_PROXY_AUDIT_CA_FILE
+              value: {{ printf "%s/ca.crt" $e.audit.mountPath | quote }}
+            - name: ELITEA_EGRESS_PROXY_AUDIT_CERT_FILE
+              value: {{ printf "%s/tls.crt" $e.audit.mountPath | quote }}
+            - name: ELITEA_EGRESS_PROXY_AUDIT_KEY_FILE
+              value: {{ printf "%s/tls.key" $e.audit.mountPath | quote }}
+            - name: ELITEA_EGRESS_PROXY_REPLICA_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -147,6 +164,11 @@ spec:
             - name: public-keys
               mountPath: /etc/elitea-egress-proxy/keys
               readOnly: true
+            {{- if $e.audit.enabled }}
+            - name: audit-client-tls
+              mountPath: {{ $e.audit.mountPath }}
+              readOnly: true
+            {{- end }}
           {{- with $e.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -156,4 +178,10 @@ spec:
           secret:
             secretName: {{ include "elitea-egress-proxy.keysSecretName" . }}
             defaultMode: 0444
+        {{- if $e.audit.enabled }}
+        - name: audit-client-tls
+          secret:
+            secretName: {{ $e.audit.clientSecretName }}
+            defaultMode: 0440
+        {{- end }}
 {{- end }}

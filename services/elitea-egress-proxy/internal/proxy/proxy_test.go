@@ -191,10 +191,10 @@ func TestDNSRebindingIsRefusedAndTheCheckedAddressIsDialled(t *testing.T) {
 	echo := echoServer(t)
 	// Public on the first lookup, then the metadata address, then private.
 	h.resolver.set("rebind.example", []string{"203.0.113.30"}, []string{"169.254.169.254"}, []string{"10.0.0.7"})
-	h.dialer.route("203.0.113.30:443", echo)
-	auth := basic(h.token("exec-rebind", []string{"rebind.example"}, time.Hour))
+	h.dialer.route("203.0.113.30:8443", echo)
+	auth := basic(h.token("exec-rebind", []string{"rebind.example:8443"}, time.Hour))
 
-	resp, c, br := h.rawConnect("rebind.example:443", auth)
+	resp, c, br := h.rawConnect("rebind.example:8443", auth)
 	if resp.StatusCode != 200 {
 		t.Fatalf("first CONNECT: %d", resp.StatusCode)
 	}
@@ -205,11 +205,11 @@ func TestDNSRebindingIsRefusedAndTheCheckedAddressIsDialled(t *testing.T) {
 	}
 	_ = c.Close()
 
-	h.expectRefused("rebind.example:443", auth, 403, ReasonAddressNotPublic)
-	h.expectRefused("rebind.example:443", auth, 403, ReasonAddressNotPublic)
+	h.expectRefused("rebind.example:8443", auth, 403, ReasonAddressNotPublic)
+	h.expectRefused("rebind.example:8443", auth, 403, ReasonAddressNotPublic)
 
 	// One resolution per request, and only the checked public literal dialled.
-	if got := h.dialer.dialedAddrs(); len(got) != 1 || got[0] != "203.0.113.30:443" {
+	if got := h.dialer.dialedAddrs(); len(got) != 1 || got[0] != "203.0.113.30:8443" {
 		t.Fatalf("dialled %v, want only the checked literal", got)
 	}
 	if n := h.resolver.callCount("rebind.example"); n != 3 {
@@ -352,7 +352,7 @@ func TestAbsoluteFormForwardStripsHopByHopAndNeverFollowsRedirects(t *testing.T)
 
 func openTunnel(t *testing.T, h *harness, auth string) (net.Conn, *bufio.Reader) {
 	t.Helper()
-	resp, c, br := h.rawConnect("echo.example:443", auth)
+	resp, c, br := h.rawConnect("echo.example:8443", auth)
 	if resp.StatusCode != 200 {
 		_ = c.Close()
 		t.Fatalf("CONNECT echo.example: %d %q", resp.StatusCode, resp.Header.Get(RefusalHeader))
@@ -360,27 +360,29 @@ func openTunnel(t *testing.T, h *harness, auth string) (net.Conn, *bufio.Reader)
 	return c, br
 }
 
+// echoRoute routes echo.example:8443 to an echo server. The echo tunnels
+// carry plain bytes, which the ClientHello peek passes only off port 443.
 func echoRoute(t *testing.T, h *harness) {
 	t.Helper()
 	h.resolver.set("echo.example", []string{"203.0.113.40"})
-	h.dialer.route("203.0.113.40:443", echoServer(t))
+	h.dialer.route("203.0.113.40:8443", echoServer(t))
 }
 
 func TestRunConnectionLimit(t *testing.T) {
 	h := newHarness(t, func(o *Options) { o.RunMaxConnections = 2 })
 	echoRoute(t, h)
-	auth := basic(h.token("exec-conns", []string{"echo.example"}, time.Hour))
+	auth := basic(h.token("exec-conns", []string{"echo.example:8443"}, time.Hour))
 	c1, _ := openTunnel(t, h, auth)
 	c2, _ := openTunnel(t, h, auth)
-	h.expectRefused("echo.example:443", auth, 429, ReasonRunConnectionLimit)
+	h.expectRefused("echo.example:8443", auth, 429, ReasonRunConnectionLimit)
 
 	// Another run is not affected.
-	other, _ := openTunnel(t, h, basic(h.token("exec-other", []string{"echo.example"}, time.Hour)))
+	other, _ := openTunnel(t, h, basic(h.token("exec-other", []string{"echo.example:8443"}, time.Hour)))
 	_ = other.Close()
 
 	_ = c1.Close()
 	waitFor(t, 2*time.Second, "the slot to free", func() bool {
-		resp, c, _ := h.rawConnect("echo.example:443", auth)
+		resp, c, _ := h.rawConnect("echo.example:8443", auth)
 		defer func() { _ = c.Close() }()
 		return resp.StatusCode == 200
 	})
@@ -390,7 +392,7 @@ func TestRunConnectionLimit(t *testing.T) {
 func TestRunByteLimit(t *testing.T) {
 	h := newHarness(t, func(o *Options) { o.RunMaxBytes = 1000 })
 	echoRoute(t, h)
-	auth := basic(h.token("exec-bytes", []string{"echo.example"}, time.Hour))
+	auth := basic(h.token("exec-bytes", []string{"echo.example:8443"}, time.Hour))
 	c, br := openTunnel(t, h, auth)
 	defer func() { _ = c.Close() }()
 	_, _ = c.Write(make([]byte, 400))
@@ -402,7 +404,7 @@ func TestRunByteLimit(t *testing.T) {
 	if _, err := io.ReadAll(br); err != nil && !isClosedErr(err) {
 		t.Fatalf("read after the budget: %v", err)
 	}
-	h.expectRefused("echo.example:443", auth, 403, ReasonRunByteLimit)
+	h.expectRefused("echo.example:8443", auth, 403, ReasonRunByteLimit)
 	waitFor(t, 2*time.Second, "the byte-limit outcome", func() bool {
 		return strings.Contains(h.logs.String(), `"outcome":"byte-limit"`)
 	})
@@ -416,7 +418,7 @@ func TestIdleTimeoutAndLifetime(t *testing.T) {
 	t.Run("idle", func(t *testing.T) {
 		h := newHarness(t, func(o *Options) { o.IdleTimeout = 150 * time.Millisecond })
 		echoRoute(t, h)
-		c, br := openTunnel(t, h, basic(h.token("exec-idle", []string{"echo.example"}, time.Hour)))
+		c, br := openTunnel(t, h, basic(h.token("exec-idle", []string{"echo.example:8443"}, time.Hour)))
 		defer func() { _ = c.Close() }()
 		start := time.Now()
 		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -431,7 +433,7 @@ func TestIdleTimeoutAndLifetime(t *testing.T) {
 	t.Run("lifetime", func(t *testing.T) {
 		h := newHarness(t, func(o *Options) { o.MaxConnectionLifetime = 300 * time.Millisecond })
 		echoRoute(t, h)
-		c, br := openTunnel(t, h, basic(h.token("exec-life", []string{"echo.example"}, time.Hour)))
+		c, br := openTunnel(t, h, basic(h.token("exec-life", []string{"echo.example:8443"}, time.Hour)))
 		defer func() { _ = c.Close() }()
 		start := time.Now()
 		closed := false
@@ -459,7 +461,7 @@ func TestIdleTimeoutAndLifetime(t *testing.T) {
 		echoRoute(t, h)
 		now := time.Now()
 		exp := now.Truncate(time.Second).Add(2 * time.Second)
-		c, br := openTunnel(t, h, basic(h.tokenAt("exec-exp", []string{"echo.example"}, now.Truncate(time.Second), exp)))
+		c, br := openTunnel(t, h, basic(h.tokenAt("exec-exp", []string{"echo.example:8443"}, now.Truncate(time.Second), exp)))
 		defer func() { _ = c.Close() }()
 		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 		_, err := br.ReadByte()
@@ -509,7 +511,7 @@ func TestTheTokenNeverReachesTheLogs(t *testing.T) {
 	h := newHarness(t)
 	roots := tlsDestination(t, h)
 	echoRoute(t, h)
-	allow := []string{"example.com", "echo.example"}
+	allow := []string{"example.com", "echo.example:8443"}
 	tok := h.token("exec-secret", allow, time.Hour)
 	now := time.Now().Truncate(time.Second)
 	expired := h.tokenAt("exec-secret", allow, now.Add(-2*time.Hour), now.Add(-time.Hour))
@@ -599,7 +601,7 @@ func TestRunSummary(t *testing.T) {
 func TestGracefulDrain(t *testing.T) {
 	h := newHarness(t)
 	echoRoute(t, h)
-	auth := basic(h.token("exec-drain", []string{"echo.example"}, time.Hour))
+	auth := basic(h.token("exec-drain", []string{"echo.example:8443"}, time.Hour))
 	c, br := openTunnel(t, h, auth)
 
 	shutdownDone := make(chan error, 1)
@@ -642,7 +644,7 @@ func TestGracefulDrain(t *testing.T) {
 func TestForcedShutdownClosesTunnels(t *testing.T) {
 	h := newHarness(t)
 	echoRoute(t, h)
-	c, br := openTunnel(t, h, basic(h.token("exec-force", []string{"echo.example"}, time.Hour)))
+	c, br := openTunnel(t, h, basic(h.token("exec-force", []string{"echo.example:8443"}, time.Hour)))
 	defer func() { _ = c.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

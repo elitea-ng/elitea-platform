@@ -28,10 +28,53 @@ also uses.
 3. Match host and port against the allowlist in the token.
 4. Resolve the host. Refuse the request when any resolved address is not
    public, or is in `ELITEA_EGRESS_PROXY_DENY_CIDRS`.
-5. Dial the checked IP literal. DNS rebinding cannot change the address
+5. For a `CONNECT`, answer 200, then read the client's TLS ClientHello and
+   check its server name (SNI) against the `CONNECT` host. See "The
+   ClientHello check" below.
+6. Dial the checked IP literal. DNS rebinding cannot change the address
    between the check and the connect.
-6. Relay the bytes: a `CONNECT` tunnel, or one absolute-form `http://`
-   request.
+7. Relay the bytes: a `CONNECT` tunnel, or one absolute-form `http://`
+   request. The bytes that the check read go to the destination first,
+   unchanged.
+
+### The ClientHello check
+
+The proxy does not decrypt a tunnel. The first TLS handshake message, the
+ClientHello, is plaintext in every TLS version, so the proxy reads it before
+it opens the upstream connection:
+
+- The `server_name` must equal the `CONNECT` host. The comparison ignores
+  ASCII case and one trailing dot on either side. Otherwise the reason is
+  `sni-mismatch`.
+- A ClientHello without `server_name` is refused (`sni-missing`) when the
+  `CONNECT` host is a name. It is allowed when the host is an IP literal. A
+  `server_name` on an IP-literal `CONNECT` must be that literal.
+- A first byte that is not a TLS handshake record (0x16) is refused on port
+  443 (`not-tls`). On every other allowed port, non-TLS bytes pass through
+  unchanged.
+- A ClientHello can span several TLS records and several TCP reads. The proxy
+  reassembles it. A ClientHello that does not parse is refused
+  (`client-hello-malformed`). The parser is strict on purpose, so that a
+  parser difference with the destination cannot hide a name.
+- The peek is bounded. The client has 10 seconds after the 200 to send the
+  whole ClientHello (`sni-timeout`). The ClientHello, record headers
+  included, can take at most 16 KiB (`client-hello-too-large`). A real
+  ClientHello is under 2 KiB. The client must speak first on every port: a
+  protocol in which the server speaks first (SMTP, for example) gets no byte
+  through and is closed after the 10 seconds (`sni-timeout`). Passing such a
+  silent tunnel through would let a client wait out the check and then send
+  a fronted ClientHello.
+- With Encrypted Client Hello (ECH), the ClientHello on the wire is the outer
+  one. Its `server_name` is the public name of the ECH configuration, and
+  that is the name the proxy checks. An ECH client whose public name is not
+  the `CONNECT` host is refused.
+
+The order is 200, then the check, then the dial. A client sends its
+ClientHello only after the 200, and a refused tunnel never opens an upstream
+connection. A refused ClientHello gets a TLS `access_denied` alert, then the
+tunnel closes. Because the 200 comes before the dial, a `CONNECT` whose dial
+fails closes after the 200 instead of answering 502. Its log line has outcome
+`upstream-error` and reason `dial-failed`.
 
 ## Protocol support
 
@@ -90,12 +133,24 @@ them, so the token never leaves the proxy.
   Kubernetes API access and no service-account token.
 
 The proxy is not a content filter. A run can send any data to a host that its
-allowlist names. Inside a `CONNECT` tunnel the proxy cannot see the TLS server
-name or the HTTP `Host`, so a shared front end (a CDN that serves many
-tenants on one address) can route a tunnel to a name that the allowlist does
-not hold. Do not allow a shared front-end name when that matters. On a
-forwarded `http://` request, the `Host` that the destination receives is the
-host that the proxy checked.
+allowlist names.
+
+The proxy checks the TLS server name (SNI) of each `CONNECT` tunnel against
+the `CONNECT` host, so classic domain fronting through the SNI is closed. Two
+gaps remain:
+
+- **The HTTP `Host` inside the tunnel.** It is encrypted, and the proxy does
+  not intercept TLS. A shared front end (a CDN that serves many tenants on one
+  address) can still route a request by its inner `Host` header to a name
+  that the allowlist does not hold.
+- **ECH.** With Encrypted Client Hello the proxy checks the outer SNI, which
+  is the public name of the ECH configuration. The real destination is in the
+  encrypted inner ClientHello. A client can reach any name behind a front end
+  whose ECH public name is the allowed host.
+
+Do not allow a shared front-end name when that matters. On a forwarded
+`http://` request, the `Host` that the destination receives is the host that
+the proxy checked.
 
 ## Limits
 
@@ -111,11 +166,14 @@ limits on each replica.
 | Token expiry | in the token | turn wall time | The connection closes (`token-expired`); later requests get 407 |
 | Client connections per replica | `ELITEA_EGRESS_PROXY_MAX_CONNECTIONS` | 4096 | 503, `proxy-connection-limit` |
 | Request header block | `ELITEA_EGRESS_PROXY_MAX_HEADER_BYTES` | 32 KiB | 431; an upstream response over it gets 502 |
+| Time to send the ClientHello after the 200 | fixed | 10s | The tunnel closes, `sni-timeout` |
+| Size of the ClientHello, record headers included | fixed | 16 KiB | The tunnel closes, `client-hello-too-large` |
 
 ## Refusals
 
-A refusal has a status and the `X-Elitea-Egress-Refused` header. The header
-value is one of a fixed set. The body is one short line of fixed text.
+A refusal before the 200 has a status and the `X-Elitea-Egress-Refused`
+header. The header value is one of a fixed set. The body is one short line of
+fixed text.
 
 | Status | Reason |
 | --- | --- |
@@ -123,8 +181,15 @@ value is one of a fixed set. The body is one short line of fixed text.
 | 403 | `host-not-allowed`, `port-not-allowed`, `ip-literal-not-allowed`, `address-not-public`, `run-byte-limit`, `protocol-not-supported` |
 | 400 | `bad-target`, `protocol-not-supported` (a request that is not a proxy request) |
 | 429 | `run-connection-limit` |
-| 502 | `resolve-failed`; a failed dial has no reason header |
+| 502 | `resolve-failed`; a failed dial of an `http://` request has no reason header (a `CONNECT` closes after the 200) |
 | 503 | `proxy-connection-limit`, `draining` |
+| none: after the 200, the tunnel closes | `sni-mismatch`, `sni-missing`, `not-tls`, `sni-timeout`, `client-hello-too-large`, `client-hello-malformed` |
+
+A ClientHello refusal comes after the 200, so it has no status and no header.
+The client gets a TLS `access_denied` alert (none for `not-tls`), then the
+tunnel closes. The reason is in the connection log line, in
+`egress_proxy_refusals_total{reason}` and in the run summary's
+`hosts_refused`.
 
 ## Configuration
 
@@ -143,6 +208,11 @@ parse stops the start. The proxy never falls back to a default for it.
 | `SUMMARY_INTERVAL` | `1m` | How often an active run's summary is logged |
 | `DRAIN_DELAY`, `SHUTDOWN_TIMEOUT` | `5s`, `60s` | The SIGTERM drain |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+| `AUDIT_TARGET` | empty | elitea-main's control listener, `host:port`. Empty: summaries stay in the log |
+| `AUDIT_SERVER_NAME` | the target host | The SAN of elitea-main's control-server certificate |
+| `AUDIT_CA_FILE`, `AUDIT_CERT_FILE`, `AUDIT_KEY_FILE` | required with `AUDIT_TARGET` | The runtime CA, and this proxy's client certificate and key |
+| `REPLICA_ID` | the hostname | This replica's name in its reports (the chart sets the pod name) |
+| `AUDIT_TIMEOUT` | `5s` | One report call |
 
 In the Helm chart, set `egressProxy.*` in `deploy/helm/elitea/values.yaml`.
 It is off by default.
@@ -159,8 +229,61 @@ Logs are JSON on stdout. Two messages are stable names:
   `SUMMARY_INTERVAL` while the run is active, and with `final: true` after the
   run's token expires. At shutdown it logs one with `replica_shutdown: true`
   for each run that changed since its last summary.
-  Each replica logs its own summary; a consumer merges them by
-  `execution_id`. Phase B forwards these lines to Main's audit log.
+  Each replica logs its own summary.
+
+### The per-turn audit in elitea-main
+
+Every summary the proxy logs also goes to elitea-main's
+`elitea.runtime.v1.EgressAuditService` (`libs/proto/elitea/runtime/v1/egress_audit.proto`),
+over gRPC on elitea-main's private mTLS control listener. There is no log
+scraping and no internal REST.
+
+- **Identity.** The proxy presents its own client certificate, with one DNS
+  SAN (`egressProxy.audit.clientDnsName`, issued from the runtime CA by
+  `egressProxy.audit.issuerRef`). elitea-main admits only that identity
+  (`ELITEA_EGRESS_AUDIT_CLIENTS=dns:elitea-egress-proxy`, rendered by the
+  chart). The certificate is read again on every connection, so a renewal
+  needs no restart.
+- **Merge.** A report is a cumulative snapshot of one replica's view of one
+  run, keyed by the pod name (`ELITEA_EGRESS_PROXY_REPLICA_ID`). elitea-main
+  upserts it into `elitea_runtime.egress_run_summaries` (one row per
+  execution and proxy replica; shared migration 0169), so a retried report
+  never counts twice. Every elitea-main replica sweeps that table and writes
+  ONE audit event per turn (`event_type` `tool`, `entity_type` `execution`,
+  the execution id as the entity name, the hosts reached and refused in the
+  action) when every replica that reported has sent `final` or
+  `replica_shutdown` and 30 seconds passed, or 10 minutes after the token
+  expired (a crashed replica's last snapshot is used, and the event says
+  `partial`). The whole merged summary is also logged as
+  `egress_audit.turn_summary`. If elitea-main cannot store a report it
+  answers `UNAVAILABLE` and the proxy retries.
+- **Several elitea-main replicas, and restarts.** The summaries are in the
+  database, not in a replica's memory. A proxy replica's reports may land on
+  any elitea-main replica; whichever sweeps a due turn first claims it with
+  one `UPDATE ... RETURNING` and is the only one that writes its event. A
+  restart of elitea-main loses nothing that was reported: the next sweep, on
+  any replica, finishes the turn. (An elitea-main that dies between claiming
+  a turn and recording its event loses that one event; the merged summary is
+  still in the proxy's log.) A report for a turn that was already written
+  (a resumed turn reuses the execution id with a new token) starts a new
+  event. Rows are deleted 7 days after their last report
+  (`ELITEA_EGRESS_AUDIT_RETENTION_DAYS` on elitea-main, 1 to 365).
+- **Compose.** `deploy/docker-compose.egress-proxy.yml` wires the same
+  audit. `deploy/scripts/gen-egress-proxy-certs.sh` (run by
+  `standalone-stack.sh certs`, after `gen-runtime-certs.sh`) issues the
+  proxy's client certificate from the compose runtime CA into
+  `deploy/certs/egress-proxy/` (DNS SAN `elitea-egress-proxy`, client use
+  only), and it re-issues it when the runtime CA rotates. The overlay mounts
+  that directory read-only into the proxy, points
+  `ELITEA_EGRESS_PROXY_AUDIT_TARGET` at `elitea-main:9443`, and sets
+  `ELITEA_EGRESS_AUDIT_CLIENTS=dns:elitea-egress-proxy` on elitea-main.
+  Without the files the proxy refuses to start, so a compose run never
+  silently loses the audit.
+- **Never in the way.** Reporting is a non-blocking queue (1024 summaries)
+  with three tries per summary. A summary that cannot be delivered is
+  counted (`egress_proxy_audit_reports_dropped`) and stays in this log. At
+  shutdown the proxy delivers its `replica_shutdown` summaries for up to
+  10 seconds.
 
 `/metrics` on the admin port serves Prometheus text:
 `egress_proxy_connections_total{outcome}`, `egress_proxy_refusals_total{reason}`,
@@ -169,6 +292,50 @@ Logs are JSON on stdout. Two messages are stable names:
 and `egress_proxy_key_reload_errors_total`.
 
 ## Operating notes
+
+### Creating the key pair
+
+The run tokens are signed by elitea-main with a dedicated Ed25519 key. The
+private half goes to elitea-main only; the public half goes to the proxy.
+They are two Secrets, so the proxy never holds the private key.
+
+```bash
+# OpenSSL 3 (macOS's /usr/bin/openssl is LibreSSL and has no ed25519 genpkey:
+# use Homebrew's openssl@3).
+openssl genpkey -algorithm ed25519 -out signing.pem
+openssl pkey -in signing.pem -pubout -out signing.pub.pem
+
+kubectl -n <release namespace> create secret generic elitea-egress-token-signing \
+  --from-file=signing.pem=signing.pem
+kubectl -n <release namespace> create secret generic elitea-egress-proxy-keys \
+  --from-file=2026-10.pem=signing.pub.pem
+shred -u signing.pem   # keep no copy outside the Secret
+```
+
+Then set, in the chart values:
+
+```yaml
+egressProxy:
+  enabled: true
+  signingKey:
+    existingSecret: elitea-egress-token-signing   # mounted into elitea-main only
+  publicKeys:
+    existingSecret: elitea-egress-proxy-keys       # mounted into the proxy
+```
+
+(or paste the public PEM into `egressProxy.publicKeys.keys`). The chart
+refuses `egressProxy.enabled` without a signing key Secret, a signing key
+without the proxy, and the same Secret for both. At start, elitea-main logs
+`workspace egress proxy enabled` with the `key_id`; it must be one of the
+`key_ids` the proxy logs in `egress_proxy.started`.
+
+elitea-main reads `ELITEA_EGRESS_PROXY_URL` (the chart sets
+`http://elitea-egress-proxy.<namespace>.svc.cluster.local:3128`) and
+`ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE`. With either missing, a cloud turn
+whose project has a host allowlist is refused with
+`workspace_run.egress_proxy_unavailable` (reason
+`egress_proxy_not_enabled` or `egress_token_signing_key_not_configured`);
+it is never widened to direct egress.
 
 ### Key rotation
 
@@ -180,8 +347,9 @@ The key id is derived from the public key, so no id is configured. To rotate:
    the old public key. Each replica reads the Secret again within
    `KEYS_RELOAD_INTERVAL` and logs `egress_proxy.keys_changed`. Check that
    `egress_proxy_token_keys` is 2 on every replica.
-3. Point elitea-main's `ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE` Secret at
-   `next.pem` and roll elitea-main.
+3. Replace the `signing.pem` data of elitea-main's signing-key Secret
+   (`egressProxy.signingKey.existingSecret`) with `next.pem` and roll
+   elitea-main.
 4. Wait for the longest token that the old key signed to expire: the longest
    turn wall time, and never more than 24 hours.
 5. Remove the old public key from the set.
@@ -194,12 +362,20 @@ A key reload that fails keeps the last good set and increments
 On SIGTERM, `/readyz` fails at once, and the proxy keeps accepting for
 `DRAIN_DELAY`. Then it stops accepting and waits up to `SHUTDOWN_TIMEOUT` for
 open tunnels. It closes the rest and logs their outcome as `shutdown`. The
-chart refuses a `terminationGracePeriodSeconds` shorter than the drain.
+chart refuses a `terminationGracePeriodSeconds` shorter than the drain plus
+the 10 seconds of last audit reports.
 
 ### Network shape
 
 - The sandbox in allowlist mode reaches only the proxy port. It has no direct
-  egress and no DNS (phase B ships that sandbox policy).
+  egress and no DNS. On Kubernetes the run's Pod carries
+  `sandbox.elitea.ai/egress: proxy`, which only
+  `elitea-workspace-run-proxy-egress` selects (the proxy pods, the proxy
+  port); its `dnsPolicy` is `None` with a loopback nameserver, and the worker
+  hands the sandbox the proxy's address as an IP literal. On Docker the run
+  joins an internal network on which only the proxy is reachable
+  (`deploy/docker/workspace-egress.sh`, `ELITEA_WORKSPACE_PROXY_NETWORK`).
+- The proxy reaches elitea-main's control port, for the audit reports.
 - The proxy accepts on its proxy port only from the workspace-run pods in the
   execution namespace. It accepts on the admin port only from
   `egressProxy.networkPolicy.adminFrom`.

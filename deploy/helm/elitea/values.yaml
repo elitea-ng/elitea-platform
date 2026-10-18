@@ -3684,6 +3684,25 @@ egressProxy:
     keys: {}
     reloadInterval: 30s
 
+  # elitea-main's run-token SIGNING key: the private half of the pair whose
+  # public half is in publicKeys above (services/elitea-egress-proxy/README.md,
+  # "Creating the key pair"). REQUIRED with egressProxy.enabled. A Secret you
+  # create; the chart never renders private key material. It is mounted into
+  # elitea-main only (ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE), never into the
+  # proxy, so it must not be the Secret named in publicKeys.existingSecret.
+  # elitea-main logs the key id at start; compare it with the proxy's
+  # egress_proxy.started key_ids.
+  signingKey:
+    existingSecret: ""
+    # The data key that holds the PKCS#8 PEM Ed25519 private key.
+    key: signing.pem
+    mountPath: /etc/elitea/egress-token
+  # The run-token lifetime base for a project policy that leaves the turn's
+  # wall time to the worker default (a Go duration). Empty: 1h, the worker's
+  # default. Set it to worker.runtime.workspaceRuns' turn wall time when you
+  # change that. Main adds a 2-minute grace for the workspace hydration.
+  defaultTurnWall: ""
+
   limits:
     # Per replica: client connections to the proxy, and the header block of
     # one request (a token travels base64-encoded in Proxy-Authorization).
@@ -3704,26 +3723,59 @@ egressProxy:
 
   # Drain on SIGTERM: readiness fails, the proxy keeps accepting for
   # drainDelaySeconds, then waits up to shutdownTimeoutSeconds for open
-  # tunnels. terminationGracePeriodSeconds must cover both, plus 5.
+  # tunnels, then delivers its last run summaries to elitea-main (up to 10 s).
+  # terminationGracePeriodSeconds must cover all three, plus 5.
   drainDelaySeconds: 5
   shutdownTimeoutSeconds: 60
-  terminationGracePeriodSeconds: 75
+  terminationGracePeriodSeconds: 80
+
+  # The per-turn audit (ADR-0034 decision 9): every run summary goes to
+  # elitea-main's EgressAuditService over gRPC on its private mTLS control
+  # listener, and elitea-main writes one audit event per turn (hosts reached
+  # and refused). Needs main.runtime.enabled. Off: the summaries stay in the
+  # proxy's log (egress_proxy.run_summary).
+  audit:
+    enabled: true
+    # The proxy's client certificate. EXACTLY ONE DNS SAN: elitea-main admits
+    # it as "dns:<clientDnsName>" (ELITEA_EGRESS_AUDIT_CLIENTS, rendered by
+    # this chart) and no other workload may report.
+    clientDnsName: elitea-egress-proxy
+    clientSecretName: elitea-egress-proxy-audit-client-tls
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+    issuerRef:
+      # NOT created by this chart. An issuer backed by the RUNTIME CA (the CA
+      # elitea-main's control listener verifies clients against), as for
+      # vector.mtls.issuerRef.
+      name: elitea-runtime-ca
+      kind: ClusterIssuer
+    mountPath: /etc/elitea-egress-proxy/audit-tls
+    # Empty: <elitea-main fullname>:<main.runtime control port>.
+    target: ""
+    # The SAN of elitea-main's control-server certificate. Empty: the
+    # target's host.
+    serverName: ""
 
   networkPolicy:
     enabled: true
     # The namespace of the sandbox pods. Empty: sandboxKubernetes.executionNamespace.
     clientNamespace: ""
     # The labels of the workspace-run sandbox pods that may reach the proxy
-    # port (the label the supervisor sets on workspace runs).
+    # port: the supervisor sets both on a workspace run in proxy mode
+    # (services/elitea-worker-rust/src/sandbox/workspace_run.rs). A run in
+    # direct mode carries egress=public and is not admitted.
     clientPodLabels:
       sandbox.elitea.ai/kind: workspace-run
+      sandbox.elitea.ai/egress: proxy
     # NetworkPolicyPeer entries admitted on the admin port, e.g. Prometheus:
     #   - namespaceSelector:
     #       matchLabels: {kubernetes.io/metadata.name: monitoring}
     adminFrom: []
     # REQUIRED with the policy on: the cluster's pod and service ranges. The
     # policy excepts them from the proxy's egress, and the proxy refuses them
-    # itself.
+    # itself. Empty: sandboxKubernetes.workspaceRuns.egress.podCidrs and
+    # serviceCidrs (the same cluster, the same ranges). Set in both places,
+    # they must be equal; the chart refuses two different answers.
     podCidrs: []
     serviceCidrs: []
     # Always denied. RFC 1918, carrier-grade NAT (Alibaba metadata inside),
@@ -4511,6 +4563,17 @@ worker:
     # image_digest, policy_revision, and timeout_seconds.
     # The target hostname must match the supervisor certificate SAN.
     sandboxRuntimes: []
+    # ADR-0034 decision 9, the cloud executor (Rust worker only): the sandbox
+    # supervisor's `workspace` profile this worker starts workspace runs on,
+    # and the worker's ceilings for them. Empty: a handed-off thread's cloud
+    # turn fails with workspace_run.unavailable. The audience must also be in
+    # main.runtime.sandboxAudiences (Main signs its grants); the profile file
+    # itself is supervisor material (purpose "workspace", see
+    # services/elitea-worker-rust/src/sandbox/workspace_run_profile.rs).
+    # Fields: target (host:port, mTLS), audience, scratch_root (an absolute
+    # directory on the worker's disk for segments and checkouts),
+    # cpu_millis, memory_bytes, max_disk_bytes, turn_wall_seconds.
+    workspaceRuns: {}
     # The model completions ONE claim's toolkits may make in total (Rust
     # worker): the step-back index tools, the Office/document tools' prompts
     # and image generation/editing (one unit per call, n images included).
@@ -4762,6 +4825,41 @@ sandboxKubernetes:
   supervisorServiceAccount: elitea-sandbox-supervisor
   # This cap includes running Pods and completed Pods awaiting receipt cleanup.
   maxPods: 128
+  # ADR-0034: the cloud executor's workspace runs, one Pod per cloud turn in
+  # the execution namespace (disk-backed /workspace, the workspace runner
+  # image). Toolkit Code Pods are not affected by anything below.
+  workspaceRuns:
+    enabled: false
+    # Egress for workspace runs whose project has the network on (the Pod
+    # carries sandbox.elitea.ai/egress=public). Off: every workspace run is
+    # as denied as a Code Pod, whatever the project says.
+    egress:
+      enabled: false
+      # Required: the cluster's own ranges, denied so a workspace run cannot
+      # reach in-cluster services (Main, NATS, PostgreSQL, the store).
+      podCidrs: []
+      serviceCidrs: []
+      # Always denied: RFC 1918, carrier-grade NAT, link-local (cloud
+      # metadata 169.254.169.254), loopback, IPv6 unique-local (fd00:ec2::254)
+      # and link-local, and the IPv6 loopback.
+      denyCidrs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+        - 127.0.0.0/8
+        - 0.0.0.0/8
+        - fc00::/7
+        - fe80::/10
+        - ::1/128
+      # Allow IPv6 egress (::/0 minus the IPv6 deny ranges).
+      ipv6: true
+      # DNS goes to the cluster resolver only.
+      dnsNamespaceLabels:
+        kubernetes.io/metadata.name: kube-system
+      dnsPodLabels:
+        k8s-app: kube-dns
   # Optional Python resolver boundary. Execution keeps its deny-all policy.
   preparation:
     enabled: false

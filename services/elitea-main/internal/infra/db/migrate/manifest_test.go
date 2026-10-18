@@ -712,7 +712,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// segment log (elitea_runtime.workspace_refs, workspace_segments) and the
 	// `workspace` bucket type (ADR-0034 decisions 2 and 3). No foreign key, no
 	// permission, no data.
-	require.EqualValues(t, 168, Head(shared))
+	//
+	// 169: shared/0169_egress_run_summaries.sql, elitea_runtime.egress_run_summaries,
+	// the egress proxy's per-turn audit summaries (one row per execution and
+	// proxy replica), shared by every Main replica so a turn yields one audit
+	// event and a Main restart loses nothing (ADR-0034 decision 9). A new
+	// table, no data, no permission.
+	require.EqualValues(t, 169, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
