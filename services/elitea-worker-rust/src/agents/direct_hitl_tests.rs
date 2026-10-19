@@ -479,6 +479,23 @@ fn exact_partial_replay_suffix_is_restartable_but_completed_output_is_stale() {
         .expect("exact persisted result");
     assert!(completed.has_persisted_result());
 
+    // A later continuation of the same decision appends the same marker again
+    // and dies before its first model answer: the recorded result stays the
+    // decision's result, so the effect is served and never re-run.
+    let mut marker_again = Event::with_id("resume-user-2", "invocation-3");
+    marker_again.author = "user".to_owned();
+    marker_again.llm_response.content = events
+        .iter()
+        .find(|event| event.id == "resume-user")
+        .and_then(|event| event.llm_response.content.clone());
+    let mut after_second_marker = events.clone();
+    after_second_marker.push(marker_again);
+    let again = DirectHitlDecision::from_payload(&direct_payload("approve", "", &interrupt_id))
+        .expect("second continuation decision")
+        .resolve(&session(after_second_marker))
+        .expect("recorded result survives a second marker");
+    assert!(again.has_persisted_result());
+
     let mut final_output = Event::with_id("resume-final", "invocation-2");
     final_output.author = "elitea-agent".to_owned();
     final_output.llm_response.content = Some(Content::new("model").with_text("already complete"));

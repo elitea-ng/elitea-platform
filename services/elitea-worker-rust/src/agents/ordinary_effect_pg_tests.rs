@@ -28,6 +28,7 @@ const PHASE_ENV: &str = "ELITEA_ROOT_EFFECT_PG_PHASE";
 const PENDING_ENV: &str = "ELITEA_ROOT_EFFECT_PG_PENDING";
 const PENDING_MARKER: &str = "ROOT_EFFECT_PENDING=";
 const EXIT_AFTER_DISPATCH: i32 = 86;
+const EXIT_AFTER_OUTCOME: i32 = 87;
 const GENERATION: u64 = 3;
 const DONE: &str = "root finished after the approved change";
 
@@ -37,6 +38,14 @@ fn phases(scenario: &str) -> &'static [(&'static str, i32)] {
         "block" => &[("start", 0), ("block", 0)],
         "crash_after_dispatch" => &[("start", 0), ("crash", EXIT_AFTER_DISPATCH), ("recover", 0)],
         "stale" => &[("start", 0), ("stale", 0)],
+        // The tool runs and its result is persisted; the Worker dies at the next model
+        // request, twice; the third Worker continues with the recorded result.
+        "crash_after_outcome_twice" => &[
+            ("start", 0),
+            ("outcome_crash", EXIT_AFTER_OUTCOME),
+            ("outcome_crash_again", EXIT_AFTER_OUTCOME),
+            ("outcome_recover", 0),
+        ],
         other => panic!("unknown scenario {other}"),
     }
 }
@@ -99,6 +108,11 @@ async fn postgres_root_blocked_effectful_call_never_runs() {
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_root_worker_replaced_after_dispatch_refuses_as_may_have_started() {
     run_scenario("crash_after_dispatch").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_root_recorded_outcome_survives_two_replaced_workers_without_a_rerun() {
+    run_scenario("crash_after_outcome_twice").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -442,6 +456,51 @@ async fn postgres_root_effect_child() {
             );
             assert_eq!(calls.load(Ordering::Acquire), 0, "recover: never repeated");
             assert_eq!(captured.lock().expect("captured").len(), 0);
+        }
+        "outcome_crash" | "outcome_crash_again" => {
+            // The second Worker's tool dies if it is ever called: reaching the model
+            // request (exit 87) instead proves the recorded outcome was served.
+            let (assembler, _, _) = worker(
+                &pool,
+                vec![TestModelGatewayOutcome::ExitProcess(EXIT_AFTER_OUTCOME)],
+                phase == "outcome_crash_again",
+            );
+            let invocation = assembler
+                .assemble(turn(
+                    &decision(&card(), "approve", "", 46),
+                    &format!("execution-{phase}"),
+                    if phase == "outcome_crash" { 2 } else { 3 },
+                ))
+                .await
+                .unwrap_or_else(|error| panic!("{phase}: assemble refused: {error}"));
+            let _ = run_turn(invocation).await;
+            panic!("{phase}: the Worker did not die at the model request");
+        }
+        "outcome_recover" => {
+            let (assembler, _, calls) = worker(
+                &pool,
+                vec![TestModelGatewayOutcome::Response(text_response(DONE))],
+                false,
+            );
+            let invocation = assembler
+                .assemble(turn(
+                    &decision(&card(), "approve", "", 46),
+                    "execution-outcome-recover",
+                    4,
+                ))
+                .await
+                .unwrap_or_else(|error| panic!("outcome_recover: assemble refused: {error}"));
+            let (browser, failure) = run_turn(invocation).await;
+            assert!(failure.is_none(), "outcome_recover: {failure:?}");
+            assert!(
+                said(&browser, DONE),
+                "outcome_recover: the Agent finishes: {browser:?}"
+            );
+            assert_eq!(
+                calls.load(Ordering::Acquire),
+                0,
+                "outcome_recover: never re-run"
+            );
         }
         "stale" => {
             let (assembler, _, calls) = worker(

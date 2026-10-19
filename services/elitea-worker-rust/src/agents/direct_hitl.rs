@@ -1355,6 +1355,10 @@ impl ResolvedDirectHitlDecision {
         {
             return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
         }
+        // A block cannot answer a call an earlier approval already dispatched.
+        if blocked_result.is_some() && (self.dispatched || self.decided_result.is_some()) {
+            return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
+        }
         let mut approvals = vec![(self.call_id.clone(), self.fingerprint.clone())];
         let mut blocked = Vec::with_capacity(1 + self.replay_calls.len());
         // The decided call already ran and its outcome was recorded: serve it.
@@ -1382,6 +1386,28 @@ impl ResolvedDirectHitlDecision {
             if call.call_id == self.call_id {
                 continue;
             }
+            // Every call of the message, sensitive or not, ran at most once: a
+            // recorded outcome is served, and one dispatched without an outcome
+            // may only run again when re-running is harmless.
+            let denied = call
+                .settled
+                .as_ref()
+                .is_some_and(|settled| settled.decision == ToolConfirmationDecision::Deny);
+            if !denied {
+                if let Some(response) = self.sibling_results.get(&call.call_id) {
+                    blocked.push(BlockedToolReplay {
+                        call_id: call.call_id.clone(),
+                        tool_name: call.tool_name.clone(),
+                        arguments: call.arguments.clone(),
+                        response: response.clone(),
+                        confirmation_decision: ToolConfirmationDecision::Approve,
+                    });
+                } else if (self.dispatched || self.dispatched_siblings.contains(&call.call_id))
+                    && sensitive_tools.reruns_after_dispatch(&call.tool_name) != Some(true)
+                {
+                    return Err(DirectHitlError::new(DirectHitlErrorCode::MayHaveStarted));
+                }
+            }
             let Some(settled) = call.settled.as_ref() else {
                 continue;
             };
@@ -1396,21 +1422,7 @@ impl ResolvedDirectHitlDecision {
                 // An earlier card's approved sibling runs with this replay unless the
                 // dispatched replay already recorded its outcome (served as stored), or
                 // dispatched it without one (it may have run; never repeated).
-                ToolConfirmationDecision::Approve => {
-                    if let Some(response) = self.sibling_results.get(&call.call_id) {
-                        blocked.push(BlockedToolReplay {
-                            call_id: call.call_id.clone(),
-                            tool_name: call.tool_name.clone(),
-                            arguments: call.arguments.clone(),
-                            response: response.clone(),
-                            confirmation_decision: ToolConfirmationDecision::Approve,
-                        });
-                    } else if (self.dispatched || self.dispatched_siblings.contains(&call.call_id))
-                        && sensitive_tools.reruns_after_dispatch(&call.tool_name) != Some(true)
-                    {
-                        return Err(DirectHitlError::new(DirectHitlErrorCode::MayHaveStarted));
-                    }
-                }
+                ToolConfirmationDecision::Approve => {}
                 ToolConfirmationDecision::Deny => blocked.push(BlockedToolReplay {
                     call_id: call.call_id.clone(),
                     tool_name: call.tool_name.clone(),
@@ -1566,12 +1578,12 @@ impl DirectHitlReplay {
         &self.decision_invocation_id
     }
 
-    /// The approved calls this replay will really execute: every decided
-    /// approval that is not served from a local or recorded result.
-    pub(crate) fn executed_approved_call_ids(&self) -> BTreeSet<String> {
-        self.approvals
+    /// The calls this replay will really execute: every call of the message
+    /// that is not served from a local or recorded result.
+    pub(crate) fn executed_call_ids(&self) -> BTreeSet<String> {
+        self.calls
             .iter()
-            .map(|(call_id, _)| call_id)
+            .map(|call| &call.call_id)
             .filter(|call_id| {
                 !self
                     .blocked
@@ -2435,10 +2447,10 @@ fn persisted_replay_state_with_confirmation(
     let mut sibling_results = BTreeMap::new();
     for event in events.iter().filter(|event| semantic_event(event)) {
         if exact_replay_user_event(event, user_content) {
+            // Every continuation of this decision appends the same marker. What
+            // an earlier one dispatched or recorded stays true: a later marker
+            // only names the invocation that continues it.
             replay_invocation = Some(event.invocation_id.as_str());
-            call_pending = false;
-            result_persisted = None;
-            sibling_results.clear();
             continue;
         }
         if result_persisted.is_none()
@@ -2489,10 +2501,21 @@ fn persisted_replay_state_with_confirmation(
             ReplayResumeMode::ExecuteCall
         },
         dispatched: call_pending && result_persisted.is_none(),
+        // The replayed message dispatched every call it carries together.
+        dispatched_siblings: if call_pending {
+            replay_calls
+                .iter()
+                .filter(|call| {
+                    call.call_id != call_id && !sibling_results.contains_key(&call.call_id)
+                })
+                .map(|call| call.call_id.clone())
+                .collect()
+        } else {
+            BTreeSet::new()
+        },
         result: result_persisted,
         sibling_results,
         decided_result: None,
-        dispatched_siblings: BTreeSet::new(),
     })
 }
 

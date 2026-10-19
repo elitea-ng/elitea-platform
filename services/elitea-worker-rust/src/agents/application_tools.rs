@@ -3648,10 +3648,10 @@ impl LazyNestedAgent {
                 .map_err(|error| direct_hitl_execution_error(&error))?;
                 let bound = self.bind_model()?;
                 let replay_pending = replay.emits_pending_call();
-                // Every approved call that will really run journals its dispatch
+                // Every call of the replay that will really run journals its dispatch
                 // in the root session first, so a later continuation never runs
                 // it twice and serves its recorded outcome instead.
-                let executed = replay.executed_approved_call_ids();
+                let executed = replay.executed_call_ids();
                 let toolsets = if executed.is_empty() {
                     self.toolsets.clone()
                 } else {

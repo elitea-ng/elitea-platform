@@ -47,6 +47,11 @@ fn phases(scenario: &str) -> &'static [(&'static str, i32)] {
         "crash_after_dispatch" => &[("start", 0), ("crash", EXIT_AFTER_DISPATCH), ("recover", 0)],
         "crash_after_outcome" => &[("start", 0), ("crash", EXIT_AFTER_OUTCOME), ("recover", 0)],
         "stale" => &[("start", 0), ("stale", 0)],
+        "block_after_dispatch" => &[
+            ("start", 0),
+            ("crash", EXIT_AFTER_DISPATCH),
+            ("block_late", 0),
+        ],
         other => panic!("unknown scenario {other}"),
     }
 }
@@ -104,6 +109,11 @@ async fn postgres_approved_effectful_call_in_an_agent_node_runs_once_and_a_repea
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_blocked_effectful_call_in_an_agent_node_never_runs() {
     run_scenario("block").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_block_after_a_dispatched_approval_is_refused_not_reported_as_blocked() {
+    run_scenario("block_after_dispatch").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -423,7 +433,9 @@ async fn postgres_effect_child() {
         "crash" => {
             let (outcomes, mode) = match scenario.as_str() {
                 "crash_before_dispatch" => (Vec::new(), ToolMode::ExitOnConnect),
-                "crash_after_dispatch" => (Vec::new(), ToolMode::ExitInExecute),
+                "crash_after_dispatch" | "block_after_dispatch" => {
+                    (Vec::new(), ToolMode::ExitInExecute)
+                }
                 // The tool runs and its outcome is recorded; the Worker dies at the
                 // child's next model request, before the parent continues.
                 "crash_after_outcome" => (
@@ -515,6 +527,30 @@ async fn postgres_effect_child() {
                 request.contains("written"),
                 "recover: the model sees the recorded outcome: {request}"
             );
+        }
+        "block_late" => {
+            let (assembler, captured, calls) = worker(
+                &pool,
+                vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                    "unexpected blocked summary",
+                ))],
+                ToolMode::Normal,
+            );
+            if let Ok(invocation) = assembler
+                .assemble(authorized_turn(
+                    &decision(&card(), "block_with_comment", "too late", 47),
+                    "execution-block-late",
+                    3,
+                ))
+                .await
+            {
+                assert!(
+                    failure_code(invocation).await.is_some(),
+                    "block_late: a block of a dispatched call must not complete"
+                );
+            }
+            assert_eq!(calls.load(Ordering::Acquire), 0, "block_late: never runs");
+            assert_eq!(model_requests(&captured), 0, "block_late: no model call");
         }
         "stale" => {
             let (assembler, _, calls) = worker(&pool, Vec::new(), ToolMode::Normal);

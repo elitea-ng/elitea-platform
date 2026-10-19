@@ -127,9 +127,12 @@ pub(super) fn model_history(mut request: LlmRequest) -> adk_rust::Result<LlmRequ
 /// the shape of the original turn (call, result) and nothing the provider could
 /// read as an instruction. Only that exact text for a tool this history calls
 /// is removed.
+const CONFIRMATION_NOTICE_PREFIX: &str = "Tool confirmation required for '";
+const CONFIRMATION_NOTICE_SUFFIX: &str = "'. Provide approve/deny decision to continue.";
+
 fn is_confirmation_notice(content: &Content, called: &std::collections::HashSet<String>) -> bool {
-    const PREFIX: &str = "Tool confirmation required for '";
-    const SUFFIX: &str = "'. Provide approve/deny decision to continue.";
+    const PREFIX: &str = CONFIRMATION_NOTICE_PREFIX;
+    const SUFFIX: &str = CONFIRMATION_NOTICE_SUFFIX;
     if content.role != "model" && content.role != "assistant" {
         return false;
     }
@@ -262,6 +265,15 @@ mod tests {
             role: role.into(),
             parts,
         }
+    }
+
+    /// The vendored ADK writes the notice this projection removes; a changed
+    /// text there must fail here instead of reaching the provider again.
+    #[test]
+    fn the_removed_notice_is_the_text_the_vendored_adk_writes() {
+        let adk = include_str!("../../../../libs/rust/vendor/adk-agent/src/llm_agent.rs");
+        let expected = format!("\"{CONFIRMATION_NOTICE_PREFIX}{{}}{CONFIRMATION_NOTICE_SUFFIX}\"");
+        assert!(adk.contains(&expected), "ADK no longer writes {expected}");
     }
 
     #[test]
