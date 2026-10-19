@@ -63,7 +63,7 @@ useSessionMcpAuthorizationRefs}.ts`, `src/shared/i18n/en.json` (35 keys, written
 
 ## 3. Tests
 
-Vitest node project over `src/features/chat-messages src/widgets/chat-box src/entities/message src/pages/chat`:
+Full Web vitest (node project) on the merged head `13fcc9719`: **1748 files, 17585 passed, 6 expected-fail, 1 failed** — `src/shared/api/themePreference.test.ts` "keeps the mark in memory when storage refuses the write", which fails identically on clean `origin/main` `f4e6157aa` locally (Node 24 `localStorage`; not touched here). Earlier scoped run over `src/features/chat-messages src/widgets/chat-box src/entities/message src/pages/chat`:
 **116 files, 1282 passed, 2 expected-fail (pre-existing `it.fails` in `canvasFileSource.test.ts`, #5846/#5845), 0 skipped.**
 
 New or rewritten (counts): breadcrumbs golden 12, owner/instance golden 7, approval buckets 8 (nested `Pipeline ▸
@@ -84,6 +84,11 @@ Other gates (local): `tsc --noEmit` 0 errors; `oxlint --deny-warnings` clean; `i
 `check-testid-namespace`, `check-stale-disclosure`, `check-visual-coverage`, `check-contract-coverage`, `theme-gate` OK;
 `check-bundle-secrets` OK. Not run: the Playwright streaming e2e lane (needs the full standalone stack; machine load
 around 40-50); the changed specs only swap selectors.
+
+`PipelineTestChatCodeDebug.test.tsx` (3 cases) clicked a `debug_probe` accordion: the old grouping treated a pipeline
+Code node (`original_name` only) as a sub-agent. The current UI renders plain pipeline nodes as flat, node-labelled
+chips (`getSubAgentName`, EliteaUI #5389), so the test now asserts no accordion and opens the receipt from the flat
+row; the download path is unchanged.
 
 ## 4. Performance
 
@@ -163,9 +168,11 @@ same response is Main's contract (FU-228); the result on pm1084 is recorded in �
 
 ### 8.2 New Web (production-profile stack `pm1084`)
 
-Pending: the stack is being rebuilt after a Docker restart (coordinator, 18:46). Image ready:
-`elitea-web:trackw-00cddc4e2`, Id `sha256:11817352d3d7…`, built from branch head `00cddc4e2`; extracted SPA assets
-contain the branch-unique strings `chat-static-pause-panel` and `pause_progress`. Image → head: the image is valid for every later head whose `git diff --name-only 00cddc4e2 <head>` touches no Web build input (`apps/elitea-web/**`: `src/`, `public/`, `package*.json`, `index.html`, `vite.config.ts`, `tsconfig.json`, `scripts/`, `nginx/`, `Containerfile`); `00cddc4e2..c877d89a3` changes only `services/elitea-worker-rust/docs/source-mapping/{README.md,web-hitl-approvals-parity-20261016.md}`.
+Image for the pass: `elitea-web:trackw-13fcc9719`, Id `sha256:0d017774eb09…`, built from `13fcc9719` (this branch
+merged with `main` `f4e6157aa`); extracted SPA assets contain the branch-only strings `chat-static-pause-panel` and
+`pause_progress`. It supersedes `elitea-web:trackw-00cddc4e2`. The image stays valid for every later head whose
+`git diff --name-only 13fcc9719 <head>` touches no Web build input (`apps/elitea-web/**`). Results: pending (stack not
+yet free).
 
 ## 9. Visual gaps (deferred)
 
