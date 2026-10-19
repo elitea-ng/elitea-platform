@@ -31,10 +31,19 @@ describe('strict fixed Parallel admission', () => {
     { branches: [refs[0], { id: 'right', node: 'right_participant' }] },
     { max_concurrency: 0 }, { max_concurrency: 9 }, { max_concurrency: 3 }, { max_concurrency: 1.5 }, { max_concurrency: '2' },
     { wait: 'any' }, { wait: null }, { error_policy: 'fail_fast' }, { error_policy: null },
+    { on_error: 'fail' }, { on_error: null }, { join: 'collect' }, { join: 'merge' }, { join: 'merge', on_error: 'continue' },
+    { error_policy: 'fail_after_drain', on_error: 'continue' },
     { output: [] }, { output: ['10', '2'] }, { output: ['note'] }, { output: ['undeclared'] }, { output: ['messages'] },
     { input: [] }, { input_mapping: {} }, { reduction: 'ordered_collection' }, { transition: 7 },
   ])('refuses malformed or foreign Parallel configuration %j', (patch) => {
     expect(graphParallelIssues(changed(patch)).length).toBeGreaterThan(0);
+  });
+  it.each([
+    { on_error: 'continue' }, { on_error: 'stop' }, { join: 'append' }, { join: 'keyed' },
+    { on_error: 'stop', join: 'merge' }, { error_policy: 'fail_after_drain', join: 'merge' },
+    { error_policy: 'fail_after_drain', on_error: 'stop' },
+  ])('admits the v1.1 On Error and Join settings %j', (patch) => {
+    expect(graphParallelIssues(changed(patch))).toEqual([]);
   });
   it('refuses the private Parallel output channels even when declared as lists', () => {
     for (const key of ['__elitea_parallel_resume_v1', '__elitea_parallel_agent_inputs_v1']) {

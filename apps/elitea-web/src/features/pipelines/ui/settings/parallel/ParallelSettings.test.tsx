@@ -16,13 +16,46 @@ describe('fixed Parallel settings and YAML roundtrip', () => {
     const screen = renderExtensionCard(EditableParallelSettings, parallelYaml);
     expect(await screen.findByLabelText('Branch 1 result key')).toHaveValue('stable_left');
     expect(screen.getByLabelText('Branch 1 Agent node')).toHaveValue('Agent_left');
-    expect(screen.getByLabelText('Error policy')).toHaveValue('fail_after_drain');
+    expect(screen.getByLabelText('On Error')).toHaveValue('continue');
+    expect(screen.getByLabelText('Join')).toHaveValue('append');
     expect(screen.getByText(/Task mapping: variable/u)).toBeVisible();
     expect(screen.getByText(/Task mapping: fstring/u)).toBeVisible();
     expect(screen.queryByLabelText('Reduction')).toBeNull();
     expect(screen.queryByLabelText('Child item channel')).toBeNull();
     expect(usePipelineYamlStore.getState().yamlCode).toBe(parallelYaml);
     expect(owner()).not.toHaveProperty('error_policy');
+    expect(owner()).not.toHaveProperty('on_error');
+    expect(owner()).not.toHaveProperty('join');
+  });
+  it('round-trips On Error and Join as the exact YAML keys and offers merge only with stop', async () => {
+    const screen = renderExtensionCard(EditableParallelSettings, parallelYaml);
+    const user = userEvent.setup();
+    const join = await screen.findByLabelText('Join');
+    expect([...(join as HTMLSelectElement).options].map((option) => option.value)).toEqual(['append', 'keyed']);
+    await user.selectOptions(screen.getByLabelText('On Error'), 'stop');
+    await user.selectOptions(screen.getByLabelText('Join'), 'merge');
+    expect(owner()).toMatchObject({ on_error: 'stop', join: 'merge' });
+    expect([...(screen.getByLabelText('On Error') as HTMLSelectElement).options].map((option) => option.value)).toEqual(['stop']);
+    const saved = usePipelineYamlStore.getState().yamlCode;
+    expect(saved).toContain('on_error: stop');
+    expect(saved).toContain('join: merge');
+    expect(saved).not.toContain('undefined');
+    const reopened = parsePipelineYamlDocument(saved).yamlJsonObject as YamlPipelineDocument;
+    expect(reopened.nodes?.[0]).toMatchObject({ on_error: 'stop', join: 'merge' });
+    cleanup();
+    const again = renderExtensionCard(EditableParallelSettings, saved);
+    expect(await again.findByLabelText('On Error')).toHaveValue('stop');
+    expect(again.getByLabelText('Join')).toHaveValue('merge');
+  });
+  it('reads the legacy fail_after_drain as Stop and turns Continue into removing it', async () => {
+    const yaml = parallelYaml.replace('    wait: all', '    wait: all\n    error_policy: fail_after_drain');
+    const screen = renderExtensionCard(EditableParallelSettings, yaml);
+    const user = userEvent.setup();
+    expect(await screen.findByLabelText('On Error')).toHaveValue('stop');
+    await user.selectOptions(screen.getByLabelText('On Error'), 'continue');
+    expect(owner()).not.toHaveProperty('error_policy');
+    expect(owner()).not.toHaveProperty('on_error');
+    expect(screen.getByLabelText('On Error')).toHaveValue('continue');
   });
   it('saves concurrency and branch order, then reopens exact mappings, child identity, opaque state, and authored state order', async () => {
     const screen = renderExtensionCard(EditableParallelSettings, parallelYaml);
@@ -107,10 +140,10 @@ describe('fixed Parallel settings and YAML roundtrip', () => {
     expect(usePipelineYamlStore.getState().yamlCode).toBe(yaml);
   });
   it('keeps invalid authored policies visible and disables every settings action during playback', async () => {
-    const yaml = parallelYaml.replace('    wait: all', '    wait: unsupported\n    error_policy: fail_fast');
+    const yaml = parallelYaml.replace('    wait: all', '    wait: unsupported\n    on_error: fail_fast');
     const screen = renderExtensionCard(EditableParallelSettings, yaml, true);
     expect(await screen.findByLabelText('Wait policy')).toHaveValue('unsupported');
-    expect(screen.getByLabelText('Error policy')).toHaveValue('fail_fast');
+    expect(screen.getByLabelText('On Error')).toHaveValue('fail_fast');
     for (const field of screen.getAllByRole('textbox')) expect(field).toBeDisabled();
     for (const field of screen.getAllByRole('combobox')) expect(field).toBeDisabled();
     expect(screen.getByLabelText('Maximum concurrent branches')).toBeDisabled();

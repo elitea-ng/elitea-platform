@@ -55,7 +55,7 @@ describe('fixed Parallel parse support is separate from authoring readiness', ()
   it('seeds only strict Parallel fields with explicit empty branch and output choices', () => {
     const seeded = generateNodeIdByType('parallel', []);
     expect(seeded.id).toBe('Parallel_1');
-    expect(InitialNodeData['parallel']).toEqual({ branches: [], max_concurrency: 1, wait: 'all', error_policy: 'fail_after_drain', output: [], transition: 'END' });
+    expect(InitialNodeData['parallel']).toEqual({ branches: [], max_concurrency: 1, wait: 'all', on_error: 'continue', join: 'append', output: [], transition: 'END' });
     expect(seeded).not.toHaveProperty('input');
     expect(seeded).not.toHaveProperty('input_mapping');
     expect(seeded).not.toHaveProperty('reduction');
