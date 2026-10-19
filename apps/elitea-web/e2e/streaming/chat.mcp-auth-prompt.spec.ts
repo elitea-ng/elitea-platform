@@ -287,7 +287,7 @@ test('an MCP server that demands authorization is named by its toolkit in the ag
         tool_name: operation,
         server_url: AUTH_MCP_URL,
       })]);
-    await expect(page.getByRole('button', { name: 'Skip Auth', exact: true })).toBeVisible();
+    await expect(page.getByTestId('toolkit-authorization-skip-button')).toBeVisible();
 
     const said = await turnText(page, projectId, conversationId);
     expect(

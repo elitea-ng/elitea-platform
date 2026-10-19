@@ -7,7 +7,7 @@
  * see `ApplicationAnswer.tsx`'s module doc).
  */
 import type { ReactNode, SyntheticEvent } from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
@@ -18,12 +18,17 @@ import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { ActionView } from '../ActionView';
 import type { ActionViewProps } from '../ActionView';
 import { SubAgentAccordion } from '../sub-agent-section/SubAgentAccordion';
+import type { SubAgentTool } from '../sub-agent-section/subAgentIcon.helpers';
 
 import { convertJsonToString } from '@/shared/lib/json';
 import type { ToolActionDraft } from '@/entities/message/lib/toolActions';
 
 import { partitionActionsIntoBlocks } from '../../lib/subAgentGrouping';
-import type { SubAgentGroupable } from '../../lib/subAgentGrouping';
+import type { PartitionedBlock, SubAgentGroupable } from '../../lib/subAgentGrouping';
+import { getActionOwnerPath, getSubAgentInstanceKey, getSubAgentName } from '../../lib/executionHierarchy';
+import { computeBreadcrumbs, selectRichestAgentPath } from '../../lib/subAgentBreadcrumbs';
+import { subAgentActionOutputText } from '../../lib/subAgentActionOutput';
+import type { SubAgentTypeByName } from '../../lib/approvalBuckets';
 
 /** Loosely-typed defensive read of a `SubAgentGroupable`'s richer runtime fields (id/content/status/toolOutputs/...). */
 export function asDraft(action: SubAgentGroupable): ToolActionDraft {
@@ -35,19 +40,38 @@ export function actionKey(action: SubAgentGroupable, index: number): string {
   return draft.id || `${draft.type}-${index}`;
 }
 
+/** Owner of an action: the reference's `getSubAgentName` (`''` = coordinator). */
 function deriveActionName(action: SubAgentGroupable): string {
-  const draft = asDraft(action);
-  return draft.parent_agent_name || draft.original_name || '';
+  return getSubAgentName(asDraft(action));
 }
 
+/** One key per sub-agent INSTANCE (owner path call ids), never the bare name. */
 function deriveActionInstanceKey(action: SubAgentGroupable): string {
-  const draft = asDraft(action);
-  return draft.parent_agent_call_id || deriveActionName(action);
+  return getSubAgentInstanceKey(asDraft(action));
 }
 
-function toActionViewAction(action: SubAgentGroupable): ActionViewProps['action'] {
+/**
+ * The reference's `classifyWrapper` (`ApplicationThinkView.jsx`): the
+ * delegation wrapper erroring without deferring marks its instance paused.
+ */
+function classifyWrapper(action: SubAgentGroupable, name: string): 'paused' | 'active' | null {
   const draft = asDraft(action);
-  const toolOutputs = draft.toolOutputs === undefined ? undefined : convertJsonToString(draft.toolOutputs);
+  const isInner = Boolean(draft.parent_agent_name || draft.toolMeta?.['parent_agent_name']);
+  const isWrapper = draft.type === 'tool' && !isInner && (draft.name === name || draft.original_name === name);
+  if (!isWrapper) return null;
+  const deferred = Boolean(draft['hitlDeferred'] || draft.toolMeta?.['hitl_deferred']);
+  return draft.status === 'error' && !deferred ? 'paused' : 'active';
+}
+
+const TERMINAL_STATUSES = new Set(['complete', 'error', 'cancelled']);
+
+function toActionViewAction(action: SubAgentGroupable, inSubAgent = false): ActionViewProps['action'] {
+  const draft = asDraft(action);
+  // Inside a sub-agent group a saved child's `{response}` envelope shows as
+  // the child's own result (`subAgentActionOutputText`).
+  const toolOutputs = draft.toolOutputs === undefined
+    ? undefined
+    : inSubAgent ? subAgentActionOutputText(draft.toolOutputs) : convertJsonToString(draft.toolOutputs);
   return {
     type: draft.type,
     status: draft.status,
@@ -148,49 +172,127 @@ const thinkingSlotSx = {
 /** @public Props for `ApplicationAnswerThinking`. */
 export interface ApplicationAnswerThinkingProps {
   readonly actions: readonly SubAgentGroupable[];
-  /** Keeps the panel open while the turn is still running (baseline: `expanded={isStreaming || expanded}`). */
+  /** True only while work is really running; a parked (all-paused) turn is not streaming. */
   readonly isStreaming?: boolean;
+  /** The participant's tools — header icons (reference `resolveSubAgentIcon`). */
+  readonly tools?: readonly SubAgentTool[] | undefined;
+  readonly subAgentTypeByName?: SubAgentTypeByName | undefined;
+  /** Instance keys (`getSubAgentInstanceKey` shape) that own a still-pending card. */
+  readonly pendingInstanceKeys?: ReadonlySet<string> | undefined;
 }
 
-export function ApplicationAnswerThinking({ actions, isStreaming = false }: ApplicationAnswerThinkingProps): ReactNode {
+type SubBlock = Extract<PartitionedBlock, { kind: 'sub' }>;
+
+/** One labelled instance of the thinking tree. */
+interface DecoratedSub {
+  readonly block: SubBlock;
+  readonly label: string;
+  readonly agentType: string;
+}
+
+function blockAgentType(block: SubBlock, byName: SubAgentTypeByName | undefined): string {
+  const participant = byName?.[block.name];
+  if (participant) return participant === 'pipeline' ? 'pipeline' : 'application';
+  let best = '';
+  for (const action of block.actions) {
+    const draft = asDraft(action);
+    const type = draft.toolMeta?.['toolkit_type'] ?? draft.toolMeta?.['agent_type'];
+    if (type === 'pipeline') return 'pipeline';
+    if (type === 'application' || (typeof draft.toolMeta?.['agent_type'] === 'string' && draft.toolMeta['agent_type'])) best = 'application';
+  }
+  return best;
+}
+
+/**
+ * Labels per instance (reference `partitionIntoBlocks`): the breadcrumb of
+ * the richest owner path, else the legacy `${name} (${ordinal})` for
+ * same-name blocks without any path.
+ */
+function decorate(blocks: readonly PartitionedBlock[], byName: SubAgentTypeByName | undefined): Map<string, DecoratedSub> {
+  const subs = blocks.filter((block): block is SubBlock => block.kind === 'sub');
+  const totals = new Map<string, number>();
+  for (const block of subs) totals.set(block.name, (totals.get(block.name) ?? 0) + 1);
+  const paths = new Map(subs.map((block) => [block.instanceKey, selectRichestAgentPath(block.actions.map((action) => getActionOwnerPath(asDraft(action))))]));
+  const crumbs = computeBreadcrumbs(subs.map((block) => ({ instanceKey: block.instanceKey, agentPath: paths.get(block.instanceKey) ?? [] })));
+  const seen = new Map<string, number>();
+  const result = new Map<string, DecoratedSub>();
+  for (const block of subs) {
+    const seq = (seen.get(block.name) ?? 0) + 1;
+    seen.set(block.name, seq);
+    const fallback = (totals.get(block.name) ?? 0) > 1 ? `${block.name} (${seq})` : block.name;
+    result.set(block.instanceKey, { block, label: crumbs.get(block.instanceKey) ?? fallback, agentType: blockAgentType(block, byName) });
+  }
+  return result;
+}
+
+/** Running while the instance still has non-terminal work and its wrapper has not returned. */
+function blockRunning(block: SubBlock): boolean {
+  return block.actions.some((action) => !TERMINAL_STATUSES.has(asDraft(action).status));
+}
+
+function ThinkBlocks({ blocks, decorated, isStreaming, tools, pendingInstanceKeys }: {
+  readonly blocks: readonly PartitionedBlock[];
+  readonly decorated: ReadonlyMap<string, DecoratedSub>;
+  readonly isStreaming: boolean;
+  readonly tools: readonly SubAgentTool[] | undefined;
+  readonly pendingInstanceKeys: ReadonlySet<string> | undefined;
+}): ReactNode {
+  // Coordinator runs and sub-agent instances interleave in timeline order
+  // (reference `StreamingThinkBlocks`), never coordinator-first.
+  return blocks.map((block, index) => {
+    if (block.kind === 'coord') {
+      return block.actions.map((action, actionIndex) => (
+        <ActionView key={`coord-${index}-${actionKey(action, actionIndex)}`} action={toActionViewAction(action)} />
+      ));
+    }
+    const entry = decorated.get(block.instanceKey);
+    const paused = block.pausedForResume || Boolean(pendingInstanceKeys?.has(block.instanceKey));
+    return (
+      <SubAgentAccordion
+        key={`sa-${block.instanceKey}`}
+        name={block.name}
+        label={entry?.label}
+        tools={tools}
+        agentType={entry?.agentType}
+        running={isStreaming && blockRunning(block)}
+        paused={paused}
+      >
+        {block.actions.map((action, actionIndex) => (
+          <ActionView key={`${block.instanceKey}-${actionKey(action, actionIndex)}`} action={toActionViewAction(action, true)} />
+        ))}
+      </SubAgentAccordion>
+    );
+  });
+}
+
+export function ApplicationAnswerThinking({
+  actions,
+  isStreaming = false,
+  tools,
+  subAgentTypeByName,
+  pendingInstanceKeys,
+}: ApplicationAnswerThinkingProps): ReactNode {
   /*
-   * THE PANEL'S OWN OPEN STATE, which it did not have.
-   *
-   * It used to spread `expanded` onto the accordion only while streaming
-   * (`{...(isStreaming ? { expanded: true } : {})}`) and pass no `onChange`.
-   * MUI decides controlled-vs-uncontrolled ONCE, on the first render, from
-   * `expanded !== undefined` (`@mui/utils`'s `useControlled`, whose
-   * `isControlled` is a `useRef`). This component mounts with its first
-   * action, which arrives WHILE the turn streams — so it mounted controlled,
-   * for the whole life of that message. When the turn settled `expanded` went
-   * back to `undefined`: the panel closed, and because a controlled
-   * `Accordion` toggles only through `onChange`, which was never passed,
-   * clicking the summary did nothing at all. Every tool call and every
-   * reasoning step of a turn the user WATCHED was then unreachable until the
-   * page was reloaded, when the same component mounted uncontrolled and
-   * behaved. That is the defect the toolkit journey caught as a permanently
-   * hidden `chat-tool-action` row.
-   *
-   * The state is local and always defined, so the accordion is controlled for
-   * its whole lifetime and the transition never happens. The value is the
-   * baseline's own (`ApplicationThinkView.jsx`: `expanded={isStreaming ||
-   * expanded}`): forced open while the turn runs, the reader's choice after.
+   * The panel's own open state is always defined, so the accordion stays
+   * controlled for its whole life (MUI fixes controlled-vs-uncontrolled on
+   * first render). Reference rule (`ApplicationThinkView.jsx`):
+   * `expanded={isStreaming || expanded}`, `onChange` disabled while truly
+   * streaming, and a live tree stays expanded once it settles or parks —
+   * the reader may then collapse it.
    */
   const [openedByReader, setOpenedByReader] = useState(false);
+  useEffect(() => {
+    if (isStreaming) setOpenedByReader(true);
+  }, [isStreaming]);
   const handleToggle = useCallback((_event: SyntheticEvent, value: boolean) => {
     setOpenedByReader(value);
   }, []);
 
   const blocks = useMemo(
-    () =>
-      partitionActionsIntoBlocks(actions, {
-        deriveName: deriveActionName,
-        deriveInstanceKey: deriveActionInstanceKey,
-        classifyWrapper: () => null,
-      }),
+    () => partitionActionsIntoBlocks(actions, { deriveName: deriveActionName, deriveInstanceKey: deriveActionInstanceKey, classifyWrapper }),
     [actions],
   );
-  const coordActions = useMemo(() => blocks.flatMap((block) => (block.kind === 'coord' ? block.actions : [])), [blocks]);
+  const decorated = useMemo(() => decorate(blocks, subAgentTypeByName), [blocks, subAgentTypeByName]);
 
   if (!actions.length) return null;
 
@@ -201,17 +303,14 @@ export function ApplicationAnswerThinking({ actions, isStreaming = false }: Appl
       showMode="left"
       defaultExpanded={false}
       expanded={isStreaming || openedByReader}
-      onChange={handleToggle}
+      {...(isStreaming ? {} : { onChange: handleToggle })}
       slotSx={{ root: { width: '100%' }, ...thinkingSlotSx }}
       items={[
         {
           title: t('features.chatMessages.thoughtFor', 'Thought for {{duration}}', { duration: thoughtDuration(actions) }),
           content: (
             <Box sx={{ width: '100%' }}>
-              {coordActions.map((action, index) => (
-                <ActionView key={actionKey(action, index)} action={toActionViewAction(action)} />
-              ))}
-              <SubAgentAccordion blocks={blocks} />
+              <ThinkBlocks blocks={blocks} decorated={decorated} isStreaming={isStreaming} tools={tools} pendingInstanceKeys={pendingInstanceKeys} />
             </Box>
           ),
         },

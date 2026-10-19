@@ -8,7 +8,6 @@ import {
   buildUserParticipant,
   deriveChatBoxIds,
   deriveChatBoxInputState,
-  deriveHitlChildThreadId,
   flattenChatBoxProps,
   optField,
   pickIdAndUuid,
@@ -72,29 +71,6 @@ describe('buildAgentEditorProps', () => {
   });
 });
 
-describe('deriveHitlChildThreadId', () => {
-  it('returns undefined when toolCallId is falsy', () => {
-    expect(deriveHitlChildThreadId({ hitlInterrupts: [] }, undefined)).toBeUndefined();
-  });
-
-  it('returns thread_id from matching entry', () => {
-    const msg = { hitlInterrupts: [{ tool_call_id: 'tc1', thread_id: 'tid1' }] };
-    expect(deriveHitlChildThreadId(msg, 'tc1')).toBe('tid1');
-  });
-
-  it('falls back to child_thread_id', () => {
-    const msg = { hitlInterrupts: [{ tool_call_id: 'tc1', child_thread_id: 'ctid' }] };
-    expect(deriveHitlChildThreadId(msg, 'tc1')).toBe('ctid');
-  });
-
-  it('returns undefined when no match', () => {
-    expect(deriveHitlChildThreadId({ hitlInterrupts: [{ tool_call_id: 'other' }] }, 'tc1')).toBeUndefined();
-  });
-
-  it('returns undefined for undefined message', () => {
-    expect(deriveHitlChildThreadId(undefined, 'tc1')).toBeUndefined();
-  });
-});
 
 describe('buildUserParticipant', () => {
   it('includes all defined fields', () => {
