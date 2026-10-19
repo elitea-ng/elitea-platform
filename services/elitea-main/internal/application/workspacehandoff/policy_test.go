@@ -16,7 +16,7 @@ func strPtr(value string) *string { return &value }
 
 func TestNarrowOnlyNarrows(t *testing.T) {
 	ceiling := platformconfig.DefaultCloudExecutorSettings()
-	ceiling.Enabled = true
+	ceiling.Enabled, ceiling.ProjectDefaultEnabled = true, true
 	full := Narrow(ceiling, ProjectSetting{}, true, true)
 	if !full.Enabled || !full.Shell || !full.Network || full.HistoryFullAllowed ||
 		full.Limits.MaxSegmentBytes != 200<<20 || full.Limits.MaxProjectWorkspaceBytes != 50<<30 ||
@@ -75,7 +75,7 @@ func TestNarrowOnlyNarrows(t *testing.T) {
 
 func TestNarrowNamesWhyItIsOff(t *testing.T) {
 	on := platformconfig.DefaultCloudExecutorSettings()
-	on.Enabled = true
+	on.Enabled, on.ProjectDefaultEnabled = true, true
 	off := on
 	off.Enabled = false
 	for name, tc := range map[string]struct {
@@ -94,6 +94,54 @@ func TestNarrowNamesWhyItIsOff(t *testing.T) {
 		if got.DisabledReason != tc.want || got.Enabled != (tc.want == "") {
 			t.Fatalf("%s: enabled %v reason %q, want %q", name, got.Enabled, got.DisabledReason, tc.want)
 		}
+	}
+}
+
+// The enabled dimension over its three inputs: the platform switch, the
+// platform's project default and the project's explicit value (nil = unset).
+// The explicit value wins under a platform that is on; unset follows the
+// default; the platform's off always wins.
+func TestNarrowEnabledMatrix(t *testing.T) {
+	for _, tc := range []struct {
+		global, projectDefault bool
+		explicit               *bool
+		want                   bool
+		reason                 string
+	}{
+		{false, false, nil, false, DisabledPlatformOff},
+		{false, false, boolPtr(true), false, DisabledPlatformOff},
+		{false, false, boolPtr(false), false, DisabledPlatformOff},
+		{false, true, nil, false, DisabledPlatformOff},
+		{false, true, boolPtr(true), false, DisabledPlatformOff},
+		{false, true, boolPtr(false), false, DisabledPlatformOff},
+		{true, false, nil, false, DisabledProjectOff},
+		{true, false, boolPtr(true), true, ""},
+		{true, false, boolPtr(false), false, DisabledProjectOff},
+		{true, true, nil, true, ""},
+		{true, true, boolPtr(true), true, ""},
+		{true, true, boolPtr(false), false, DisabledProjectOff},
+	} {
+		ceiling := platformconfig.DefaultCloudExecutorSettings()
+		ceiling.Enabled, ceiling.ProjectDefaultEnabled = tc.global, tc.projectDefault
+		explicit := "unset"
+		if tc.explicit != nil {
+			explicit = map[bool]string{true: "on", false: "off"}[*tc.explicit]
+		}
+		got := Narrow(ceiling, ProjectSetting{Enabled: tc.explicit}, true, true)
+		if got.Enabled != tc.want || got.DisabledReason != tc.reason {
+			t.Errorf("global %v, default %v, project %s: enabled %v reason %q, want %v %q",
+				tc.global, tc.projectDefault, explicit, got.Enabled, got.DisabledReason, tc.want, tc.reason)
+		}
+		// The device switch and the storage check still only turn it off.
+		if off := Narrow(ceiling, ProjectSetting{Enabled: tc.explicit}, false, true); off.Enabled {
+			t.Errorf("global %v, default %v, project %s: the device switch off left it on", tc.global, tc.projectDefault, explicit)
+		}
+	}
+	// The other switches keep their narrow-only rule whatever the default.
+	ceiling := platformconfig.DefaultCloudExecutorSettings()
+	ceiling.Enabled, ceiling.ProjectDefaultEnabled, ceiling.Shell = true, true, false
+	if got := Narrow(ceiling, ProjectSetting{Shell: boolPtr(true)}, true, true); got.Shell {
+		t.Fatalf("a project turned the shell on under a platform that has it off")
 	}
 }
 
@@ -121,7 +169,7 @@ func (d deviceSwitch) Policy(context.Context) (platformconfig.NativeClientPolicy
 // says so: without the option Main claims nothing.
 func TestNoExecutorIsReportedOnlyWhenKnown(t *testing.T) {
 	on := platformconfig.DefaultCloudExecutorSettings()
-	on.Enabled = true
+	on.Enabled, on.ProjectDefaultEnabled = true, true
 	off := on
 	off.Enabled = false
 	for name, tc := range map[string]struct {

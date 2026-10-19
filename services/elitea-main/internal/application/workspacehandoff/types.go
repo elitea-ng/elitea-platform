@@ -167,7 +167,9 @@ type Policy struct {
 const (
 	// DisabledPlatformOff: the platform ceiling (cloud_executor.enabled) is off.
 	DisabledPlatformOff = "platform_off"
-	// DisabledProjectOff: the project's cloud_executor setting turns it off.
+	// DisabledProjectOff: the project's cloud_executor setting turns it off,
+	// or the project set nothing and the platform's project default
+	// (cloud_executor.project_default_enabled) is off.
 	DisabledProjectOff = "project_off"
 	// DisabledDeviceOff: the native client policy (local_work.allowed or
 	// local_work_cloud_handoff) does not allow handoff.

@@ -50,7 +50,18 @@ INSERT INTO centry.platform_config (section, key, value, updated_at) VALUES ('cl
 			t.Fatalf("seed platform %s: %v", key, err)
 		}
 	}
+	// The platform on, its project default unset (off): a project that set
+	// nothing, as every project that existed before the key, is off.
 	got, err := policy.Effective(ctx, 1)
+	if err != nil || got.Enabled || got.DisabledReason != workspacehandoff.DisabledProjectOff {
+		t.Fatalf("platform on, default off = %+v, %v; want project_off", got, err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO centry.platform_config (section, key, value, updated_at)
+VALUES ('cloud_executor', 'project_default_enabled', 'true'::jsonb, now() AT TIME ZONE 'UTC')`); err != nil {
+		t.Fatal(err)
+	}
+	got, err = policy.Effective(ctx, 1)
 	if err != nil || !got.Enabled || got.Limits.MaxSegmentBytes != 100<<20 || len(got.NetworkAllowlist) != 2 {
 		t.Fatalf("platform only = %+v, %v", got, err)
 	}
@@ -82,6 +93,33 @@ VALUES (gen_random_uuid(), 1, 'Cloud executor', 'cloud_executor', 'cloud_executo
 		slices.Contains(got.ExclusionsPlatform, "secrets/**") ||
 		!slices.Equal(got.ExclusionsPlatform, platformconfig.DefaultCloudExecutorExclusions()) {
 		t.Fatalf("exclusions split = platform %v, project %v", got.ExclusionsPlatform, got.ExclusionsProject)
+	}
+	// An explicit off in the row wins over the default that is on.
+	if _, err := pool.Exec(ctx, `UPDATE p_1.configuration SET data = data || '{"enabled": false}'::jsonb WHERE type = 'cloud_executor'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := policy.Effective(ctx, 1); err != nil || got.Enabled || got.DisabledReason != workspacehandoff.DisabledProjectOff {
+		t.Fatalf("explicit off = %+v, %v", got, err)
+	}
+	// An explicit on wins over a default that is off, and the platform's off
+	// wins over it.
+	if _, err := pool.Exec(ctx, `UPDATE p_1.configuration SET data = data || '{"enabled": true}'::jsonb WHERE type = 'cloud_executor'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE centry.platform_config SET value = 'false'::jsonb WHERE section = 'cloud_executor' AND key = 'project_default_enabled'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := policy.Effective(ctx, 1); err != nil || !got.Enabled {
+		t.Fatalf("explicit on under a default off = %+v, %v", got, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE centry.platform_config SET value = 'false'::jsonb WHERE section = 'cloud_executor' AND key = 'enabled'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := policy.Effective(ctx, 1); err != nil || got.Enabled || got.DisabledReason != workspacehandoff.DisabledPlatformOff {
+		t.Fatalf("explicit on under the platform off = %+v, %v", got, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE centry.platform_config SET value = 'true'::jsonb WHERE section = 'cloud_executor' AND key = 'enabled'`); err != nil {
+		t.Fatal(err)
 	}
 	off, _ := workspacehandoff.NewPolicyService(repo, repo, devicePolicy{cloudHandoff: false}, true, platformconfig.CloudExecutorResources{})
 	if got, _ := off.Effective(ctx, 1); got.Enabled {

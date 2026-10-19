@@ -302,9 +302,13 @@ Send to cloud needs four switches, all on. If one is off, the desktop says which
 | Switch | Where | Reason shown when off |
 |---|---|---|
 | Cloud executor: **Enabled** | Admin, Configuration, *Cloud executor* (`cloud_executor.enabled`) | `platform_off` |
-| The project's *Cloud executor* setting | Project settings, Configurations. Optional: it can only narrow the platform values | `project_off` |
+| The project's own on/off: its explicit value, or else **Default for Projects** | Default: Admin, Configuration, *Cloud executor* (`cloud_executor.project_default_enabled`, off unless you turn it on). Explicit: the project's `cloud_executor` setting (`enabled`) | `project_off` |
 | Native client policy: `local_work_allowed` and `local_work_cloud_handoff` | Admin, Configuration, *Native client policy*, Local work | `device_off` |
 | A configured executor and confirmed bucket encryption | Steps 2 to 4 | `no_executor`, `storage_encryption_unconfirmed` |
+
+**Enabled** always wins: while it is off, Send to cloud is off in every project, whatever the project says. While it is on, a project that turned it on or off keeps its choice, and a project that never chose follows **Default for Projects**. That includes every project that existed before this switch, so turning **Enabled** on with the default off (the default) turns Send to cloud on nowhere yet. Turn it on per project, or turn the default on to open it everywhere and let projects opt out. `project_off` covers both an explicit off and a default that is off.
+
+The project setting's other fields (shell, network and its allowlist, history, caps, exclusions and environment rules) can only narrow the platform values.
 
 The *Cloud executor* section also sets the sandbox ceilings: shell, network and its host allowlist, full history, the segment and file caps, idle retention and return grace, and the exclusions and environment rules.
 
@@ -338,6 +342,7 @@ To prove the refusal, point `sandboxKubernetes.runtimeClass.name` at a RuntimeCl
 | Symptom | Cause |
 |---|---|
 | "turned off for this deployment" (`platform_off`) | The *Cloud executor* section is not enabled |
+| "turned off for this project" (`project_off`) | The project turned it off, or never chose and **Default for Projects** is off |
 | "no cloud executor set up" (`no_executor`) | `sandboxKubernetes.workspaceRuns` or the supervisor is off. For a supervisor outside the chart, set `main.env.ELITEA_CLOUD_EXECUTOR_CONFIGURED: "true"` |
 | "could not confirm that its storage is encrypted" | No default encryption rule, or the IAM policy lacks `s3:GetEncryptionConfiguration`. See Main's start-up log line `cloud executor: default encryption at rest ... is not confirmed` |
 | The supervisor crash-loops with `workspace_run_runtime_class_refused` | The RuntimeClass is missing or not isolating, or the chart's ClusterRole was removed |

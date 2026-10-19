@@ -143,8 +143,14 @@ const MinIdleRetention = 24 * time.Hour
 // when the platform has it off, can only shrink the allowlist and lower the
 // caps, and the device switch and the encryption check can only turn the
 // executor off.
+//
+// `enabled` is the one switch that is not narrow-only: under a platform that
+// has the executor on, the project's explicit value wins either way, and a
+// project that set none follows the platform's project default
+// (ProjectDefaultEnabled). The platform's off still always wins.
 func Narrow(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting, device, encrypted bool) Policy {
 	and := func(platform bool, value *bool) bool { return platform && (value == nil || *value) }
+	projectOn := ProjectEnabled(ceiling, project)
 	lower := func(platform int64, value *int64) int64 {
 		if value != nil && *value >= 0 && *value < platform {
 			return *value
@@ -152,8 +158,8 @@ func Narrow(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting
 		return platform
 	}
 	policy := Policy{
-		Enabled:            and(ceiling.Enabled, project.Enabled) && device && encrypted,
-		DisabledReason:     disabledReason(ceiling.Enabled, project.Enabled, device, encrypted),
+		Enabled:            ceiling.Enabled && projectOn && device && encrypted,
+		DisabledReason:     disabledReason(ceiling.Enabled, projectOn, device, encrypted),
 		Shell:              and(ceiling.Shell, project.Shell),
 		Network:            and(ceiling.Network, project.Network),
 		HistoryFullAllowed: ceiling.HistoryFullAllowed && (project.History == nil || *project.History == HistoryFull),
@@ -211,13 +217,24 @@ func Narrow(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting
 	return policy
 }
 
+// ProjectEnabled answers the project's own `enabled`, before the platform
+// switch: its explicit value, or the platform's project default when it set
+// none.
+func ProjectEnabled(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting) bool {
+	if project.Enabled != nil {
+		return *project.Enabled
+	}
+	return ceiling.ProjectDefaultEnabled
+}
+
 // disabledReason answers why the executor is off, the first that applies,
-// or "" when it is on.
-func disabledReason(platform bool, project *bool, device, encrypted bool) string {
+// or "" when it is on. project_off covers both an explicit off and a project
+// that set nothing under a project default that is off.
+func disabledReason(platform, project, device, encrypted bool) string {
 	switch {
 	case !platform:
 		return DisabledPlatformOff
-	case project != nil && !*project:
+	case !project:
 		return DisabledProjectOff
 	case !device:
 		return DisabledDeviceOff
