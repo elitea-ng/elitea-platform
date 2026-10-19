@@ -170,7 +170,8 @@ function parsePage(filePath: string): ParsedPage {
     relPath: relative(CONTENT_DIR, filePath),
     frontmatter,
     headingIds: extractHeadingIds(body),
-    h1Lines: extractH1Lines(body),
+    // prose, not body: a `# comment` line inside a bash or YAML fence is not a heading.
+    h1Lines: extractH1Lines(prose),
     internalLinks: extractInternalLinks(prose),
     screenshotIds: extractScreenshotIds(prose),
     mermaidBlocks: extractMermaidBlocks(body),
