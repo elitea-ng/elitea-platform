@@ -216,12 +216,18 @@ async fn backend(
             let client = kube::Client::try_from(cluster)
                 .map_err(|_| StartupError("construct Kubernetes TLS client"))?;
             Arc::new(
-                super::kubernetes::workspace_run::KubernetesWorkspaceRuns::new(
+                super::kubernetes::workspace_run::KubernetesWorkspaceRuns::connect(
                     client,
                     namespace.clone(),
                     runtime_class.clone(),
                     node_selector.clone(),
-                ),
+                )
+                .await
+                .map_err(|_| {
+                    StartupError(
+                        "verify the workspace RuntimeClass isolates (handler runsc, gvisor or kata*; see workspace_run_runtime_class_refused)",
+                    )
+                })?,
             )
         }
     })

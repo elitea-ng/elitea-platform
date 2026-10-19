@@ -4718,6 +4718,11 @@ sandboxKubernetes:
   supervisorServiceAccount: elitea-sandbox-supervisor
   # This cap includes running Pods and completed Pods awaiting receipt cleanup.
   maxPods: 128
+  # ADR-0034: the RuntimeClass workspace-run Pods run under. The supervisor
+  # reads it (a ClusterRole grants `get` on this one name) and refuses every
+  # workspace run unless its handler is runsc or gvisor (gVisor) or kata*.
+  runtimeClass:
+    name: gvisor
   # ADR-0034: the cloud executor's workspace runs, one Pod per cloud turn in
   # the execution namespace (disk-backed /workspace, the workspace runner
   # image). Toolkit Code Pods are not affected by anything below.
